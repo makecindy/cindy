@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { createHostCodexAuthTokenReader } from './codex-token-reader.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { beginAppSessionBoundary, commitVolatileAppSession } from '../../../desktop/src/main/appSessionState.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 const TEST_TIMEOUT_MS = 60_000;
 
@@ -41,6 +42,7 @@ function fixture() {
 }
 
 test('the Codex token reader reads the login only through an authenticated oauth-bearer state', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   profile(t);
   commitVolatileAppSession('cloud', 'reader-owner', true);
   const f = fixture();
@@ -59,6 +61,7 @@ test('the Codex token reader reads the login only through an authenticated oauth
 });
 
 test('every read is fenced to the owner, the realm, this agent and the session boundary', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   profile(t);
   const owner = () => commitVolatileAppSession('cloud', 'reader-owner', true);
   const changed = /Codex authentication owner changed/;

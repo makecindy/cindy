@@ -15,6 +15,7 @@ import path from 'node:path';
 import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -36,6 +37,7 @@ const providerConfig = {
 };
 
 test('the Host graph hands the vision bridge to Maker and Pi and owns the controller until it closes', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-vision-graph-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'vision-graph-owner' });

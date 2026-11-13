@@ -28,6 +28,7 @@ import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/mak
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_SOURCE_CONTENT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS } from '@cindy/maker-core';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
 function createFakeMaker() {
@@ -152,6 +153,7 @@ const scheduledInput = (overrides = {}) => ({ sessionId: 'scheduled-task',
   onAccepted() {}, ...overrides });
 
 test('scheduled input waits behind user input, deduplicates and retains its origin through dispatch', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   await enqueue(h, 'scheduled-task', { clientId: 'user', text: 'user input' });
   const bridge = h.queue.schedulerQueue();
@@ -172,6 +174,7 @@ test('scheduled input waits behind user input, deduplicates and retains its orig
 });
 
 test('removing a scheduled queue row notifies the runner once and never starts that input', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   await enqueue(h, 'scheduled-task', { clientId: 'user', text: 'user input' });
   let discarded = 0; let accepted = 0;
@@ -189,6 +192,7 @@ test('removing a scheduled queue row notifies the runner once and never starts t
 });
 
 test('scheduler preparation failure reaches the runner before any model or user-row write', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   let failure;
   const result = await h.queue.schedulerQueue().enqueuePrompt(scheduledInput({
@@ -202,6 +206,7 @@ test('scheduler preparation failure reaches the runner before any model or user-
 });
 
 test('a cancelled scheduler acceptance rolls back before vendor dispatch', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   let rollback = 0;
   const result = await h.queue.schedulerQueue().enqueuePrompt(scheduledInput({
@@ -214,6 +219,7 @@ test('a cancelled scheduler acceptance rolls back before vendor dispatch', async
 });
 
 test('an outgoing scheduler cannot restore queues after its input runtime is disposed', async t => {
+  t = lifoCleanup(t);
   let restored = 0;
   const h = createHarness({ loadQueueSnapshot: async () => { restored++; return []; } });
   t.after(() => h.queue.dispose());
@@ -227,6 +233,7 @@ test('an outgoing scheduler cannot restore queues after its input runtime is dis
 
 for (const blockedRead of [1, 2]) {
   test(`stop during scheduler admission read ${blockedRead} prevents late enqueue`, async t => {
+    t = lifoCleanup(t);
     let release, entered;
     const gate = new Promise(resolve => { release = resolve; });
     const reading = new Promise(resolve => { entered = resolve; });
@@ -322,6 +329,7 @@ test('reopens a stored conversation with its SDK identity after a Host restart',
 // either direction, while the runtime retains the task's current armed state.
 for (const cold of [false, true]) for (const queuedPlan of [false, true]) {
   test(`queued messages use latest settings but retain Plan=${queuedPlan} (${cold ? 'cold' : 'live'} runtime)`, async t => {
+    t = lifoCleanup(t);
     const settings = { agentKind: 'claude-code', workingDir: '/tmp', model: 'model-a',
       providerId: 'provider-a', permissionMode: 'bypassPermissions', effort: 'low', fastMode: true, planModeEnabled: queuedPlan };
     const h = createHarness({ readSession: async id => ({ id, ...settings }) });
@@ -359,6 +367,7 @@ for (const cold of [false, true]) for (const queuedPlan of [false, true]) {
 // Minimum input: complete one turn, change cwd/resources, then send once more.
 for (const refresh of ['working-directory', 'project-resources']) {
   test(`shared send preserves replies and queue ownership across ${refresh} refresh`, async t => {
+    t = lifoCleanup(t);
     let cwd = '/tmp/original';
     const h = createHarness({ readSession: async id => ({ id, agentKind: 'claude-code',
       workingDir: cwd, model: 'stored', providerId: 'xd', sdkSessionId: 'same-transcript' }) });
@@ -399,6 +408,7 @@ for (const refresh of ['working-directory', 'project-resources']) {
 // no provider/user row before it settles; failed storage retains a retryable head.
 for (const writeFails of [false, true]) {
   test(`shared send awaits the durable startup marker (${writeFails ? 'write fails' : 'write succeeds'})`, async t => {
+    t = lifoCleanup(t);
     let release, entered;
     const writing = new Promise(resolve => { entered = resolve; });
     const gate = new Promise(resolve => { release = resolve; });
@@ -430,6 +440,7 @@ for (const writeFails of [false, true]) {
 // Unit, real SQLite trigger + real queue: reject the start marker, retain input,
 // and prove that neither the provider nor user-message persistence was reached.
 test('production startup marker failure prevents dispatch and leaves input recoverable', async t => {
+  t = lifoCleanup(t);
   const sqlite = new Database(':memory:');
   sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER);
     INSERT INTO sessions(id) VALUES ('marker-failure');
@@ -455,6 +466,7 @@ test('production startup marker failure prevents dispatch and leaves input recov
 for (const facts of [{ remoteHostId: 'ssh-host' }, { agentDeviceId: 'another-device' },
   { orcaRole: 'lead' }, { botId: 'teammate' }, { source: 'review' }, { grouped: true }]) {
   test(`shared send refuses an unsupported stored task: ${JSON.stringify(facts)}`, async t => {
+    t = lifoCleanup(t);
     const h = createHarness({ readSession: async id => ({ id, agentKind: 'claude-code',
       model: 'm', workingDir: '/tmp', providerId: 'xd', ...facts }),
       assertProviderExecutionSupported: () => {
@@ -693,6 +705,7 @@ test('an MCP App message restores user history without treating page text as con
 // to the next send's authorization reader, not handcrafted history rows. A lost
 // delivery/intent field would otherwise silently drop the earlier restriction.
 test('the next turn restores the user receipt actually persisted by the Host', async t => {
+  t = lifoCleanup(t);
   const h = createHarness();
   t.after(() => h.queue.dispose());
   await enqueue(h, 'receipt-chain', { clientId: 'request', text: 'Deploy the app. Do not delete files.' });
@@ -713,6 +726,7 @@ test('the next turn restores the user receipt actually persisted by the Host', a
 // coverage above alone could miss these dispatch branches (unit, injected rows).
 for (const delivery of ['send', 'schedule', 'steer']) {
   test(`history authorization is restored for ${delivery}`, async t => {
+    t = lifoCleanup(t);
     const history = [{ clientId: 'owner-request', role: 'user', content: 'Deploy the app.',
       agentMeta: { autoReviewUserText: 'Deploy the app.', delivery: 'turn' } },
     { clientId: 'owner-restriction', role: 'user', content: 'Do not delete files.',
@@ -744,6 +758,7 @@ for (const delivery of ['send', 'schedule', 'steer']) {
 // Authorization is a persistence-sensitive read: an in-flight history write
 // must finish before restoring intent. Only model I/O is faked (unit).
 test('steer drains pending history before restoring authorization', async t => {
+  t = lifoCleanup(t);
   let release, entered, saved = false, reads = 0;
   const started = new Promise(resolve => { entered = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
@@ -774,6 +789,7 @@ test('steer drains pending history before restoring authorization', async t => {
 });
 
 test('delegated input cannot dispatch when authorization history is unavailable', async t => {
+  t = lifoCleanup(t);
   const h = createHarness({ readAuthorizationHistory: async () => { throw new Error('history unavailable'); } });
   t.after(() => h.queue.dispose());
   await h.queue.enqueue('history-error', { clientId: 'app', text: 'delete everything',
@@ -807,6 +823,7 @@ test('a remote input keeps its source device and tells the model', async () => {
 // context, while provenance stays on every stored row. Previously Host rebuilt
 // the note for every input; the one-message provenance test cannot catch that.
 test('a remote device note is deduplicated until the native context is compacted', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   const send = async (clientId, count) => {
     await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', controllerPlatform: 'ios', channel: 'maker:input:enqueue' },
@@ -833,6 +850,7 @@ test('a remote device note is deduplicated until the native context is compacted
 // recovery ports must link the accepted row and reuse its id on explicit retry;
 // repository-level row tests alone cannot detect an unwired executor port.
 test('Pi native entry is linked after persistence and reused by explicit retry', async t => {
+  t = lifoCleanup(t);
   let linked;
   const h = createHarness({
     readSession: async id => ({ id, status: 'active', agentKind: 'pi', model: 'fixture-model', workingDir: '/tmp' }),
@@ -872,6 +890,7 @@ test('Pi native entry is linked after persistence and reused by explicit retry',
 // SQLITE_BUSY after acceptance; missing-row linking must behave the same way.
 for (const failure of ['database error', 'missing row']) {
   test(`Pi entry ${failure} does not pause reply persistence or the next input`, async t => {
+    t = lifoCleanup(t);
     const h = createHarness({
       readSession: async id => ({ id, status: 'active', agentKind: 'pi', model: 'fixture-model', workingDir: '/tmp' }),
       linkPiUserEntry: async () => {
@@ -899,6 +918,7 @@ for (const failure of ['database error', 'missing row']) {
 // Shared steer must carry protected coordinator metadata and use the send
 // transaction's note memory. Prior direct Host steer lost both (unit, real queue).
 test('steer shares note memory and preserves question classification and persisted UUID', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   const remote = fn => runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', controllerPlatform: 'ios', channel: 'maker:input:steer' }, fn);
   await remote(() => enqueue(h, 'steer-notes', { clientId: 'first', text: 'start' }));
@@ -922,6 +942,7 @@ test('steer shares note memory and preserves question classification and persist
 // Unit: real queue/factory, a held context read is the minimal race input.
 for (const invalidation of ['owner', 'turn', 'app-context']) {
   test(`steer refuses ${invalidation} invalidated while preparing App context`, async t => {
+    t = lifoCleanup(t);
     let owner = {}, preparing = false, valid = true, consumed = 0, entered, release;
     const started = new Promise(resolve => { entered = resolve; });
     const gate = new Promise(resolve => { release = resolve; });
@@ -1100,6 +1121,7 @@ test('Host rejects unsupported or missing attachments before queue acceptance an
 });
 
 test('stopping Host during image ingest rejects the preparation and compensates staged refs', async t => {
+  t = lifoCleanup(t);
   const h = attachmentHarness(t);
   let entered; let release;
   const entering = new Promise(resolve => { entered = resolve; });
@@ -1124,6 +1146,7 @@ test('stopping Host during image ingest rejects the preparation and compensates 
 // sender; unresolved transfer references cannot appear accepted with no file.
 for (const attachmentPath of ['/tmp/host-attachment.txt', 'oss://unresolved-attachment']) {
   test(`shared send handles attachment reference ${attachmentPath}`, async t => {
+    t = lifoCleanup(t);
     const h = createHarness(); t.after(() => h.queue.dispose());
     await h.queue.enqueue('attachment', { clientId: 'attached', text: 'read this',
       files: [{ path: attachmentPath, name: 'host-attachment.txt', category: 'file', ext: 'txt' }] });
@@ -1309,6 +1332,7 @@ test('the projection carries every field the renderer reads', () => {
 // coverage enters enqueue/updateContent and checks projection, dispatch and storage.
 // Standalone input-queue.test.mjs regression run: 2.23s on the local macOS host.
 test('queued composer content stays readable while storage retains its structured payload', async t => {
+  t = lifoCleanup(t);
   const h = createHarness();
   t.after(() => h.queue.dispose());
   await enqueue(h, 'display', { clientId: 'running', text: 'running' });
@@ -1478,6 +1502,7 @@ test('restores persisted execution settings when the composer omits them', async
 // across two runtime instances. A restart must neither lose pending work nor
 // replay the already accepted turn, including an HTTP retry with its old id.
 test('restart restores a paused durable queue and deduplicates accepted input', async (t) => {
+  t = lifoCleanup(t);
   const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-queue-'));
   let sqlite;
   const reopen = () => {
@@ -1711,6 +1736,7 @@ test('durable remote input retains authenticated provenance and strips forged pr
  * - tier：unit（假引擎，真实的改动记录存储与临时目录，不调模型）。
  */
 test('a queued user turn opens its change record and Git baseline between the user row and dispatch, and closes both at done', async t => {
+  t = lifoCleanup(t);
   const { configureUserDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
   const { captureKnownFileBefore, waitForTurnChangeSetPersistence } = await import('../../../desktop/src/main/turn-change-set/store.ts');
   const { turnChangeSetSessionDirectory } = await import('../../../desktop/src/main/turn-change-set/storagePaths.ts');
@@ -1786,6 +1812,7 @@ for (const [label, terminal, state] of [
   ['a silent-stop done', { type: 'done', data: { silentStop: true } }, 'complete'],
 ]) {
   test(`the change record of ${label} is stored as ${state}`, async t => {
+    t = lifoCleanup(t);
     const f = await changeRecordFixture(t);
     const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
     const id = `task-${state}-${label.length}`;
@@ -1802,6 +1829,7 @@ for (const [label, terminal, state] of [
 }
 
 test('a durable user turn that is not dispatched drops its change record and Git baseline', async t => {
+  t = lifoCleanup(t);
   const f = await changeRecordFixture(t);
   const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
   const create = h.maker.createSession;
@@ -1832,6 +1860,7 @@ test('a durable user turn that is not dispatched drops its change record and Git
 // a replacement drops the previous instance's unfinished record; a late close of an
 // instance that is no longer bound changes nothing.
 test('close cleanup follows the bound instance, not the task id', async t => {
+  t = lifoCleanup(t);
   const f = await changeRecordFixture(t);
   const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
   const create = h.maker.createSession;

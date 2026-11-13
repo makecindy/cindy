@@ -22,12 +22,14 @@ import test from 'node:test';
 
 import { setCindySkillEnabled } from '../../../desktop/src/main/skillhub/activationPreferences.ts';
 import { learnFixture as fixture, learnDescriptor, inside } from './learn-fixture.mjs';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
 const TEST_TIMEOUT_MS = 120_000;
 
 test('Claude and Pi get the published built-in learn', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = await fixture(t);
   const descriptor = learnDescriptor(f);
   assert.ok(descriptor, 'the bundled learn Skill was published into the fixture');
@@ -88,6 +90,7 @@ test('Codex gets no snapshot: its own Skill listing has no learn', {
 });
 
 test('no snapshot when the turn, the session or the Skill does not qualify', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = await fixture(t);
   const descriptor = learnDescriptor(f);
   const qualified = '/cindy:learn how we deploy';
@@ -118,6 +121,7 @@ test('no snapshot when the turn, the session or the Skill does not qualify', { t
 });
 
 test('no snapshot when the desktop never published the built-in Skills', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = await fixture(t, { publish: false });
   assert.equal(learnDescriptor(f), undefined);
   for (const kind of ['claude-code', 'pi', 'codex']) {

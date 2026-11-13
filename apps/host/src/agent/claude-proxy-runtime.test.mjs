@@ -25,6 +25,7 @@ import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/claude-gateway-config.ts';
 import { readClaudeSessionRoute } from '../../../desktop/src/main/maker-host/claude-session-route-registry.ts';
 import { authenticatePiProxySession } from '../../../desktop/src/main/maker-host/pi-proxy-session-auth.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -92,6 +93,7 @@ function upgradeStatus(endpoint, headers = []) {
 }
 
 test('the Host loopback proxy listens on 127.0.0.1 and admits only the credentials Cindy gave its agents', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-gate');
   const runtime = await env.start();
   assert.equal(runtime.isReady(), true);
@@ -128,6 +130,7 @@ test('the Host loopback proxy listens on 127.0.0.1 and admits only the credentia
 });
 
 test('the public provider placeholder is not an inbound credential on the Host', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-placeholder');
   const runtime = await env.start();
   const res = await post(runtime, { 'x-api-key': CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY });
@@ -136,6 +139,7 @@ test('the public provider placeholder is not an inbound credential on the Host',
 });
 
 test('without a Codex runtime, subscription routes are refused locally and never reach the gateway', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-subscription');
   const runtime = await env.start();
   const claude = await post(runtime, { 'x-api-key': GATEWAY_KEY }, { model: 'chatgpt/gpt-5.4', max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] });
@@ -151,6 +155,7 @@ test('without a Codex runtime, subscription routes are refused locally and never
 });
 
 test('with the subscription bridge, the proxy hands ChatGPT routes to it and never to the gateway', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-bridge');
   const calls = [];
   const answer = (res, lane) => {
@@ -189,6 +194,7 @@ test('with the subscription bridge, the proxy hands ChatGPT routes to it and nev
 });
 
 test('closing the runtime forgets the route records and Pi tokens of its tasks; the next runtime has a new secret', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-close');
   const first = await env.start();
   env.tasks.set('sdk-1', 'task-1');
@@ -208,6 +214,7 @@ test('closing the runtime forgets the route records and Pi tokens of its tasks; 
 });
 
 test('an Auto classifier request that fails reaches the agent as the error it is', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-classifier');
   const runtime = await env.start();
   env.tasks.set('sdk-auto', 'task-auto');
@@ -220,6 +227,7 @@ test('an Auto classifier request that fails reaches the agent as the error it is
 });
 
 test('a non-Claude model loses the Anthropic-only field its upstream rejects; a Claude model keeps it', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-strip');
   const runtime = await env.start();
   const body = model => ({ model, max_tokens: 8, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hi' }] });

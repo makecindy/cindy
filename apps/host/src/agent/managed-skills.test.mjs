@@ -23,6 +23,7 @@ import { createManagedSkills } from '../../../desktop/src/main/maker-host/manage
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { beginAppSessionBoundary } from '../../../desktop/src/main/appSessionState.ts';
 import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -99,6 +100,7 @@ test('approved plugin Skills are listed from their snapshot; a tampered snapshot
 });
 
 test('listing managed Skills during an owner switch fails like the desktop instead of returning nothing', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const { catalog } = await installSkillPlugin(t, 'managed-skills-switch');
   t.after(beginAppSessionBoundary());
   await assert.rejects(catalog.listCindyManagedSkills(), { message: 'Skill owner is changing' });

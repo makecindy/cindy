@@ -38,6 +38,7 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { sessions } from '../../desktop/src/main/localDb/schema.ts';
 import { listSideChats } from '../../desktop/src/main/maker-orchestration/side-chat-list.ts';
+import { lifoCleanup } from './test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -166,6 +167,7 @@ test('every registered entry is bound or explicitly unsupported; unsupported ans
 });
 
 test('the auth state a proxy stamps from equals the app-session stamp the route compares', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   // Production order: configureHostOwner commits the app session, then main.ts
   // publishes runtime.owner and projects auth from the session generation.
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-ipc-'));
@@ -179,6 +181,7 @@ test('the auth state a proxy stamps from equals the app-session stamp the route 
 });
 
 test('side-chat binding returns the contract shape from a real database, unchanged by JSON', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const sqlite = new Database(':memory:');
   t.after(() => sqlite.close());
   sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))
@@ -240,6 +243,7 @@ test('every object in a registered result has a shape table equal to the registr
 });
 
 test('desktop proxy and Host route agree over real HTTP with the production bindings', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const sqlite = new Database(':memory:');
   t.after(() => sqlite.close());
   sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))

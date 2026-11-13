@@ -18,6 +18,7 @@ import { PINNED_SKILL_INVOCATION } from '@cindy/maker-core';
 import { createInputQueue } from './input-queue.mjs';
 import { setCindySkillEnabled } from '../../../desktop/src/main/skillhub/activationPreferences.ts';
 import { learnFixture, learnDescriptor } from './learn-fixture.mjs';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 const waitFor = async check => {
   for (let attempt = 0; attempt < 400; attempt++) {
@@ -102,6 +103,7 @@ async function harness(t) {
 const forged = (root) => ({ version: 1, sessionInstanceId: 'forged-instance', resolvedSkillPath: path.join(root, 'elsewhere', 'SKILL.md') });
 
 test('a /cindy:learn turn pins the published built-in learn and records the same snapshot', async t => {
+  t = lifoCleanup(t);
   const h = await harness(t);
   const learn = fs.realpathSync(learnDescriptor(h.f).absolutePath);
   const { session, pin, grant } = await h.turn('learn-task', { clientId: 'learn-1', text: '/cindy:learn how we deploy' });
@@ -115,6 +117,7 @@ test('a /cindy:learn turn pins the published built-in learn and records the same
 });
 
 test('client-supplied snapshots change neither the pinned file nor the recorded snapshot', async t => {
+  t = lifoCleanup(t);
   const h = await harness(t);
   const learn = fs.realpathSync(learnDescriptor(h.f).absolutePath);
   const evil = forged(h.f.root);

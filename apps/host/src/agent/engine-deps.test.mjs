@@ -23,6 +23,7 @@ import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/
 import { CodexCredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-host/codex-credential-switch.ts';
 import { readPiGlobalContext } from '../../../../packages/maker-core/src/agents/pi/global-context.ts';
 import { createMainI18n } from '../../../desktop/src/main/i18n.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
 const TEST_TIMEOUT_MS = 120_000;
@@ -71,12 +72,14 @@ function buildGraph(t, ownerId, extra = {}) {
 }
 
 test('Claude gets the desktop read-only allowed tools', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-allowed');
   assert.deepEqual(graph.agent.deps.claudeAllowedTools, getDesktopClaudeReadOnlyAllowedTools());
   assert.ok(graph.agent.deps.claudeAllowedTools.length > 0);
 });
 
 test('Claude subagent usage goes through the process-wide bridge the loopback proxy fills', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-usage');
   t.after(() => claudeSubagentUsageBridge.clear());
   const prompt = 'Summarize the fixture repository layout';
@@ -98,6 +101,7 @@ function fakeSession(id, { agentKind = 'codex', hostKey = 'local', remoteHostId,
 }
 
 test('a Codex credential-mode switch closes the idle local sessions of that host only', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-switch-idle', { isSessionInTurn: () => false });
   const closed = [];
   graph.maker.listActiveSessions = () => [
@@ -115,6 +119,7 @@ test('a Codex credential-mode switch closes the idle local sessions of that host
 });
 
 test('a Codex credential-mode switch is refused while a session is busy, by its own turn or the Host tracker', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const inTurn = new Set(['tracked']);
   const graph = buildGraph(t, 'engine-deps-switch-busy', { isSessionInTurn: id => inTurn.has(id) });
   const closed = [];
@@ -154,6 +159,7 @@ test('the three Host lines are the desktop constructor lines', { timeout: TEST_T
 });
 
 test('Claude gets the MCP duplicate choices main.ts builds from the plugin gateway reads', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const resolveLocalMcpDuplicateChoices = async () => ({ skipHostServers: [], denyNativeServers: [] });
   const graph = buildGraph(t, 'engine-deps-mcp-duplicates', { resolveLocalMcpDuplicateChoices });
   assert.equal(graph.agent.deps.resolveLocalMcpDuplicateChoices, resolveLocalMcpDuplicateChoices);
@@ -167,6 +173,7 @@ test('Claude gets the MCP duplicate choices main.ts builds from the plugin gatew
 });
 
 test('Claude checks explicit subagent models with the Host gateway key and provider views', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-subagent-access');
   const resolve = graph.agent.deps.resolveClaudeSubagentModelAccess;
   assert.equal(typeof resolve, 'function');
@@ -184,6 +191,7 @@ test('Claude checks explicit subagent models with the Host gateway key and provi
 });
 
 test('Pi reads the user\'s own global context from the home the desktop uses', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-pi-context');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-home-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -193,6 +201,8 @@ test('Pi reads the user\'s own global context from the home the desktop uses', {
     if (saved.PI_CODING_AGENT_DIR === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved.PI_CODING_AGENT_DIR;
   });
   process.env.HOME = home;
+  // In-process reads go through os.homedir(), which reads USERPROFILE on Windows.
+  t.mock.method(os, 'homedir', () => home);
   delete process.env.PI_CODING_AGENT_DIR;
   fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
   fs.writeFileSync(path.join(home, '.pi', 'agent', 'AGENTS.md'), 'fixture global context');
@@ -207,6 +217,7 @@ test('Pi reads the user\'s own global context from the home the desktop uses', {
 });
 
 test('Pi resolves its live models and descriptors from the Host selectable catalog', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-pi-models');
   const deps = graph.pi.deps;
   const models = deps.resolvePiRuntimeModels();
@@ -232,6 +243,7 @@ test('Pi resolves its live models and descriptors from the Host selectable catal
 });
 
 test('Pi learns cache compatibility in the profile file the desktop uses and reads it back', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-pi-compat');
   const profile = graphProfiles.get(graph);
   const deps = graph.pi.deps;
@@ -273,6 +285,7 @@ test('Pi learns cache compatibility in the profile file the desktop uses and rea
 });
 
 test('Pi gets the desktop startup hint and extension dialog strings in the system language', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const deps = buildGraph(t, 'engine-deps-pi-strings').pi.deps;
   // What i18n.desktop.ts gives when the system reports this language and the window has not set one.
   const desktop = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);

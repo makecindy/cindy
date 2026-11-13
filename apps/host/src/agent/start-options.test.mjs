@@ -27,6 +27,7 @@ import { createSessionContextBudget } from '../../../desktop/src/main/maker-host
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.ts';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.ts';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../../../desktop/src/main/mcp-integrations/codexBuiltinToolPolicy.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -146,6 +147,7 @@ test('a start whose catalog refresh fails, or whose owner changes during it, is 
 });
 
 test('a start refreshes the model lists after the catalog wait and passes the disabled plugins', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const order = [];
   const { start } = setup(t, 'start-options-plugins', async () => { order.push('catalog'); }, () => { order.push('models'); });
   const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-work-'));

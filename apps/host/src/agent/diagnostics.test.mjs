@@ -26,6 +26,7 @@ import { createHostAgentGraph } from './runtime.ts';
 import { listCodexProcessPids, resolveAgentProcessRegistration } from '../../../desktop/src/main/process-monitor/codex-process-registry.ts';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../../../desktop/src/main/logger.ts';
 import { reapCodexToolTreesSync } from '../../../desktop/src/main/codex-tool-tree-reaper.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -71,6 +72,7 @@ function buildGraph(t, ownerId) {
 }
 
 test('the three engines the Host assembles register their processes as the desktop does, and Claude gets the desktop cc-debug files', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'diagnostics-registration');
   // PIDs no process holds here: only the in-memory registry is touched.
   const claude = graph.agent.deps.registerLocalAgentProcess({ pid: 999_991, kind: 'claude', role: 'task-host', sessionId: 'claude-task' });
@@ -147,6 +149,7 @@ function startFake(t, recorded, script, name) {
 }
 
 test('Host exit reaps only the tool trees below the Host\'s own registered app-servers', { skip: process.platform === 'win32', timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'diagnostics-reaper');
   // Every process this test starts, by the PID recorded when it started; nothing else is stopped.
   const recorded = new Set();

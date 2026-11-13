@@ -18,6 +18,7 @@ import { createCodexAuthBoundary } from './codex-auth-boundary.ts';
 import { createCodexLocalCliAuth } from './runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -65,6 +66,7 @@ test('an invalidation follows the desktop onInvalidatedBroadcast, and still anno
 });
 
 test('the Host Codex adapter runs the hooks after its own login and logout, and not across an owner change', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-auth-boundary-'));
   t.after(() => { configureHostOwner({ userDataDir: profile, ownerId: null }); fs.rmSync(profile, { recursive: true, force: true }); });
   configureHostOwner({ userDataDir: profile, ownerId: 'boundary-owner-a' });
@@ -100,6 +102,7 @@ test('the Host Codex adapter runs the hooks after its own login and logout, and 
 // finishing during it does not bind; a login started during it waits for it; and an invalidation
 // that rewrote the marker in between is overruled by the logout's last commit.
 test('the Host Codex logout wins over a login and an invalidation running alongside it', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const { createHostCodexAccounts } = await import('./provider-config.ts');
   const { invalidateHostCodexLogin, readHostCodexInvalidation } = await import('./codex-invalidation.ts');
   const { readInvalidatedSystemCodexAuthMarker } = await import('../../../desktop/src/main/maker-host/codex-auth-invalidation.ts');

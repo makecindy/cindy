@@ -18,6 +18,7 @@ import path from 'node:path';
 import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -43,6 +44,7 @@ const shape = table => Object.fromEntries(Object.entries(table).map(([event, mat
   [event, matchers.map(matcher => [matcher.matcher ?? null, matcher.hooks.length])]));
 
 test('the Claude agent the Host assembles gets the desktop hooks: read-image, Bash gate, desktop-input guard', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-claude-hooks-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'claude-hooks-owner' });

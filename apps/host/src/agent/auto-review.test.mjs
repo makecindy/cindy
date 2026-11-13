@@ -23,6 +23,7 @@ import { getModelAccessCredentialsStore } from '../../../desktop/src/main/model-
 import { ownerScopedUserDataPath } from '../../../desktop/src/main/appSessionState.ts';
 import { setXdGatewayModels } from '../../../desktop/src/main/maker-host/active-catalog.ts';
 import { resolveAutoReviewDecision, withAutoReviewContext } from '../../../../packages/maker-core/src/agents/shared/auto-review-decision.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -96,6 +97,7 @@ const loopRequest = {
 };
 
 test('the engines and Maker get the Host reviewers under the keys the desktop uses', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-auto-review-graph-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'auto-review-graph' });
@@ -129,6 +131,7 @@ test('the engines and Maker get the Host reviewers under the keys the desktop us
 });
 
 test('without the authorization context the action is not reviewed and needs confirmation', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = await fixture(t);
   const decision = await f.decide();
   assert.equal(decision.verdict, 'ask');
@@ -137,6 +140,7 @@ test('without the authorization context the action is not reviewed and needs con
 });
 
 test('the dedicated gateway candidate reviews the action', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = await fixture(t);
   f.review.setContextResolver(async request => request);
   const decision = await f.decide();
@@ -158,6 +162,7 @@ for (const [name, options, answer, expectRequests] of [
   ['a customized auxiliary chain fails as well', { customChain: ['litellm-deepseek-v4-flash'], catalog: true }, () => ({ status: 500 }), n => n >= 3],
 ]) {
   test(`unavailable review needs confirmation: ${name}`, { timeout: TEST_TIMEOUT_MS }, async t => {
+    t = lifoCleanup(t);
     if (options.catalog) {
       setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', agents: ['claude-code', 'codex', 'pi'] }]);
       t.after(() => setXdGatewayModels([]));
@@ -175,6 +180,7 @@ for (const [name, options, answer, expectRequests] of [
 }
 
 test('unavailable review needs confirmation: every candidate times out', { timeout: 90_000 }, async t => {
+  t = lifoCleanup(t);
   const f = await fixture(t);
   f.review.setContextResolver(async request => request);
   f.gateway.set(() => 'hang');
@@ -187,6 +193,7 @@ test('unavailable review needs confirmation: every candidate times out', { timeo
 // The two review paths resolve profile references with their pin, so the legacy profile
 // chain (an error on the Host) is never read: reaching the model proves it here.
 test('the tool-loop reviewer asks the customized auxiliary chain and stops on its answer', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = await fixture(t, { customChain: ['litellm-deepseek-v4-flash'] });
   f.gateway.set(() => ({ status: 200, content: 'STOP' }));
   const decision = await f.review.toolLoopReviewer(loopRequest, { signal: new AbortController().signal });
@@ -197,6 +204,7 @@ test('the tool-loop reviewer asks the customized auxiliary chain and stops on it
 });
 
 test('an Auto review falls back to the customized auxiliary chain after the dedicated candidates', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   // The fallback dispatches exact catalog routes: the account's gateway models must list it.
   setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', agents: ['claude-code', 'codex', 'pi'] }]);
   t.after(() => setXdGatewayModels([]));
@@ -210,6 +218,7 @@ test('an Auto review falls back to the customized auxiliary chain after the dedi
 });
 
 test('an unavailable tool-loop review lets the task continue, as on the desktop', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = await fixture(t, { customChain: ['litellm-deepseek-v4-flash'] });
   f.gateway.set(() => ({ status: 500 }));
   assert.equal(await f.review.toolLoopReviewer(loopRequest, { signal: new AbortController().signal }), 'continue');
@@ -219,6 +228,7 @@ test('an unavailable tool-loop review lets the task continue, as on the desktop'
 // Host graph sets the desktop's coordinator, which keeps the task on Auto and moves its later
 // approvals to the Cindy reviewer, only for a Claude task whose stored mode is Auto.
 test('a failing native Auto classifier moves an Auto Claude task to the Cindy reviewer', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const { notifyAutoPermissionClassifierUnavailable } = await import('../../../desktop/src/main/maker-host/claude-auto-permission-fallback.ts');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-auto-review-classifier-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));

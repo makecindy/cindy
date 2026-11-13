@@ -18,6 +18,7 @@ import test from 'node:test';
 import { createHostGitSnapshot } from './git-snapshot.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { listShadowSavepoints } from '../../../desktop/src/main/git-snapshot/gitSnapshotService.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -49,6 +50,7 @@ function setup(t, ownerId) {
 }
 
 test('a Host turn keeps the desktop savepoint chain in the task repository without a model call', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const { repo, snapshot } = setup(t, 'snapshot-owner');
   const head = git(repo, 'rev-parse', 'HEAD');
 
@@ -69,6 +71,7 @@ test('a Host turn keeps the desktop savepoint chain in the task repository witho
 });
 
 test('a Host turn that is not dispatched leaves no after-edit savepoint', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const { repo, snapshot } = setup(t, 'snapshot-owner-abort');
   await snapshot.onTurnStart('task-2');
   snapshot.onTurnAbort('task-2');
