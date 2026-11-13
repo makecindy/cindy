@@ -244,13 +244,10 @@ export function createHostCodexRuntime(options: {
     getCodexSubagentIdentity: ({ childThreadId }) => proxy.getObservedCodexSubagentIdentity(childThreadId),
     armCodexHttpRecovery: proxy.armCodexHttpRecovery,
     registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => { check(); proxy.registerChildThread(parentThreadId, childThreadId); },
-    createCodexAuthTokenReader: providerId => async () => {
-      check(); const auth = await native.readForDispatch(providerId); check();
-      if (!auth.accountId) throw new Error('Codex account identity is unavailable');
-      return { accessToken: auth.accessToken, chatgptAccountId: auth.accountId };
-    },
   };
-  return { deps, proxy, native, readRoute, modelContext, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
+  return { deps, proxy, native, readRoute, modelContext,
+    /** Whether this runtime still belongs to the current owner (the agent graph's Codex token reader). */
+    isCurrent: current, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
     invalidateNative, authBoundary, systemAuthPath, systemLogin,
     /** What this runtime's Codex processes carry to its proxies (tests; never logged). */
     inboundToken: () => inbound.token(),

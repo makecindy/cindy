@@ -1,6 +1,7 @@
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
 import { createHostClaudeSubagentModelAccess } from './subagent-model-access.js';
+import { createHostCodexAuthTokenReader } from './codex-token-reader.js';
 import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
 /** Node assembly of the shared Maker agents, provider configuration and MCP transports.
  * Native login, settings and platform integrations are assembled by the owning runtime. */
@@ -101,6 +102,8 @@ export interface HostAgentGraphOptions {
   publishVisionBridgeNotice?: (notice: VisionBridgeNotice) => void;
   /** The account gateway's rejected-key report (model-access.ts), for the one-shot review requests. */
   reportGatewayKeyRejected?: (key: string) => void;
+  /** The account realm (main.ts), as the desktop's getActiveAuthRealm for the Codex token reader. */
+  readAuthRealm?: () => string | null;
 }
 
 export const LOGGER = createMakerLogger('maker');
@@ -611,6 +614,15 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         auth: codexAuth,
         ...options.mcpRuntime.codexDeps,
         ...options.codexRuntime?.deps,
+        // As the desktop (maker-host/index.ts): each read is fenced to the owner, the realm and
+        // this agent's runtime, and takes the login's own credentials only from an authenticated
+        // oauth-bearer state of this agent's auth adapter.
+        createCodexAuthTokenReader: createHostCodexAuthTokenReader({
+          codexAuthAdapter: codexAuth,
+          readOneShotCreds: providerId => options.codexRuntime?.native.readOneShotCreds(providerId) ?? null,
+          isCodexAgentCurrent: () => options.codexRuntime?.isCurrent() ?? false,
+          readAuthRealm: () => options.readAuthRealm?.() ?? null,
+        }),
         ...codexModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
         ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),

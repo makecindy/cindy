@@ -58,6 +58,11 @@ export function createHostCodexCredentials(profileDir: string, accounts: ReturnT
         return accessToken;
       } catch { return null; }
     },
+    /** The desktop adapter's readOneShotCreds: this login's token and its ChatGPT account id. */
+    readOneShotCreds(id = 'openai'): { accessToken: string; accountId: string } | null {
+      const value = read(id);
+      return value?.accountId ? { accessToken: value.accessToken, accountId: value.accountId } : null;
+    },
     async readForDispatch(id = 'openai') {
       const value = read(id);
       if (!value) throw new Error('Codex account requires login');

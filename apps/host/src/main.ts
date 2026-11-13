@@ -726,6 +726,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       gateway,
       makerMemory,
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
+      readAuthRealm: () => account.realm,
       // Vision-bridge notices, which the desktop sends its windows; the client maps them to
       // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
       publishVisionBridgeNotice: notice => eventHub.publish(notice),
