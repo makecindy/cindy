@@ -17,11 +17,21 @@ it('consumes the marker for the task the user asked to reveal', () => {
   expect(marker.consume('task-a')).toBe(false);
 });
 
+it('keeps the reveal for its own task when another task is merely re-declared', () => {
+  const marker = createUserRevealMarker();
+  marker.mark('task-a');
+  // 同任务的普通重声明(例如 subagentsAvailable 解析完)不是落点:标记继续等。
+  expect(marker.consume('task-b')).toBe(false);
+  expect(marker.target()).toBe('task-a');
+  expect(marker.consume('task-a')).toBe(true);
+  expect(marker.target()).toBe(null);
+});
+
 it('drops a superseded reveal instead of handing it to a later task switch', () => {
   const marker = createUserRevealMarker();
   marker.mark('task-a');
-  // 慢查询期间另一个任务先提交:这次用户手势已被顶掉。
-  expect(marker.consume('task-b')).toBe(false);
+  // 慢查询期间用户去了别的任务:落地提交把标记作废。
+  marker.cancel();
   // 以后再普通切到 task-a 不能算用户开栏。
   expect(marker.consume('task-a')).toBe(false);
 });
