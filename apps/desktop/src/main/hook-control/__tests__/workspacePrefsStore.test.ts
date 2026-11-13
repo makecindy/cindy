@@ -668,6 +668,15 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('feishu', null, 'app').model).toBeNull();
   });
 
+  // PR #10291 review(第十轮): 表满(256 行)时改名要写「新行 + 墓碑」, 超限抛错后偏好留在旧名称下。
+  it('偏好表已满时项目改名仍能把偏好挪过去', () => {
+    for (let index = 0; index < 256; index += 1) {
+      setWorkspacePref('feishu', null, `p${index}`, { model: 'm' });
+    }
+    expect(moveWorkspacePrefsToRenamed([{ from: 'p0', to: 'renamed' }])).toEqual(['feishu']);
+    expect(getWorkspacePref('feishu', null, 'renamed').model).toBe('m');
+  });
+
   it('项目改名: 新名称下已有偏好时不覆盖; 来源偏好一并挪过去', () => {
     setWorkspacePref('feishu', null, 'xdmaker', { model: 'old' });
     setWorkspacePref('feishu', null, '主仓库', { model: 'new' });

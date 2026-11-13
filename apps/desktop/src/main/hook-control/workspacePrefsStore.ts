@@ -110,6 +110,14 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
   );
 }
 
+/**
+ * 条数上限只数真正的偏好行。项目改名留下的清空墓碑是过渡记录(镜像后即消失), 不占名额 ——
+ * 否则表快满时改个项目名, 「新行 + 墓碑」会超限而整次搬移失败, 偏好留在旧名称下读不到。
+ */
+function exceedsPrefsCap(entries: readonly WorkspacePrefsEntry[]): boolean {
+  return entries.filter((entry) => entry.renameTombstone !== true).length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES;
+}
+
 function emptyStore(): StoreFile {
   return { version: 1, migrated: {}, entries: [] };
 }
@@ -294,7 +302,7 @@ export function setWorkspacePref(
   // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null。
   // 镜像回执必须对上 rev，才允许 markWorkspacePrefMirrored 清墓碑或去掉 dirty。
   const entries = [...rest, nextRow];
-  if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
+  if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
@@ -405,7 +413,7 @@ export function replaceChannelWorkspacePrefs(
   }
   const kept = store.entries.filter((e) => e.channel !== channel);
   const entries = [...kept, ...incoming];
-  if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
+  if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
@@ -481,7 +489,7 @@ export function importWorkspacePrefsIfNeeded(
   const entries = combined.filter(
     (row) => row.channel !== channel || retainedChannelRows.has(row),
   );
-  if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
+  if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, migrated: { ...store.migrated, [channel]: true }, entries });
@@ -527,7 +535,7 @@ export function applyIncomingServerWorkspacePrefs(
   }
   const prunedChannel = pruneRedundantBlankRows(nextChannel);
   const entries = [...other, ...prunedChannel];
-  if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
+  if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
@@ -701,7 +709,7 @@ export function moveWorkspacePrefsToRenamed(
     }
   }
   if (touched.size === 0) return [];
-  if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
+  if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
