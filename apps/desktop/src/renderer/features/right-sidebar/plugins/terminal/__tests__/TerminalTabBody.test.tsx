@@ -28,7 +28,11 @@ const entry = {
 };
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, options?: Record<string, unknown>) => (
+      options ? `${key} ${JSON.stringify(options)}` : key
+    ),
+  }),
 }));
 vi.mock('@/components/ui/spinner', () => ({ Spinner: () => null }));
 vi.mock('../lib/xtermPool', () => ({
@@ -115,9 +119,9 @@ afterEach(() => {
 
 describe('TerminalTabBody exit display', () => {
   it.each([
-    [{ code: 1, signal: '0' }, 'rightSidebar.terminal.processExited'],
-    [{ code: null, signal: '9' }, 'rightSidebar.terminal.processKilled'],
-  ])('distinguishes exit code from a real signal: %o', async (exit, messageKey) => {
+    [{ code: 1, signal: '0' }, 'rightSidebar.terminal.processExited', { code: 1 }],
+    [{ code: null, signal: '9' }, 'rightSidebar.terminal.processKilled', { signal: '9' }],
+  ])('distinguishes exit code from a real signal: %o', async (exit, messageKey, interpolation) => {
     render(
       <TerminalTabBody
         state={{ created: true, exited: null, title: '', shellId: '', shellDisplayName: '' }}
@@ -130,7 +134,7 @@ describe('TerminalTabBody exit display', () => {
     await act(async () => {
       onExitHandler?.({ id: 'terminal-1', exit });
     });
-    expect(screen.getByText(messageKey)).toBeTruthy();
+    expect(screen.getByText(`${messageKey} ${JSON.stringify(interpolation)}`)).toBeTruthy();
   });
 });
 
