@@ -341,6 +341,16 @@ describe('cloud companion restore', () => {
     expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
   });
 
+  it('restores a legacy name even when a single-prefixed alias exists', async () => {
+    const { service } = setup();
+    await storage.write({ type: 'project', name: 'legacy-note', title: 'Local', description: 'd', body: 'local body' });
+
+    await service.restoreRaw('bot-1', 'project_project-legacy-note.md', '---\ntitle: Legacy\n---\nold body');
+
+    expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
+    expect((await storage.read('project_legacy-note.md')).body).toBe('local body');
+  });
+
   it('rejects filenames outside the memory naming rule', async () => {
     const { service } = setup();
     await expect(service.restoreRaw('bot-1', '../evil.md', 'x')).rejects.toThrow();

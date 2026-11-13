@@ -365,6 +365,7 @@ export class MemoryStorage {
    *  - `project-x` / `project_x` / `project_x.md` (索引原样) 都命中 `project_project-x.md`
    *  - 没有同 key 的存量分片时才按规范文件名新建 (并拒绝带 type 前缀的新 slug)
    * 同 key 命中多个存量分片时报 ambiguous-address, 不猜; 传完整文件名可指定其中一个。
+   * 带 `.md` 的完整文件名是显式目标: 原样落盘 (已存在就写它, 不存在就建它), 不重定向到别名。
    */
   async resolveFilename(type: MemoryType, rawName: string): Promise<string> {
     if (!isMemoryType(type)) {
@@ -391,7 +392,9 @@ export class MemoryStorage {
     const matches = (await fs.readdir(this.dir))
       .filter((filename) => parseFilename(filename)?.type === type)
       .filter((filename) => addressKey(type, filename) === key);
-    if (explicit && matches.includes(supplied)) return supplied;
+    // 显式文件名就是目标: 已存在写它, 不存在按原名新建 — 云端恢复旧双前缀分片靠这条。
+    // 不重定向到同 key 的别名, 否则 create 会撞 already-exists, 恢复永久失败 (#10274 review)
+    if (explicit) return supplied;
     if (matches.length > 1) {
       throw new MemoryError(
         'ambiguous-address',
@@ -400,7 +403,6 @@ export class MemoryStorage {
       );
     }
     if (matches.length === 1) return matches[0];
-    if (explicit) return supplied;
     return buildFilename(type, name);
   }
 

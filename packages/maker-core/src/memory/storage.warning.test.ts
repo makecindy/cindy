@@ -219,6 +219,17 @@ describe('MemoryStorage · 分片地址解析', () => {
     expect((await storage.read(legacy)).body).toBe('restored');
   });
 
+  it('显式文件名不重定向到同 key 的别名, 云端恢复不会撞 already-exists', async () => {
+    await storage.write(opts('note'));
+
+    const restored = await storage.write(opts('project_project-note.md', 'restored'));
+    expect(restored.filename).toBe('project_project-note.md');
+    expect((await storage.read('project_project-note.md')).body).toBe('restored');
+    expect((await storage.read('project_note.md')).body).toBe('v1');
+    // 两份同 key 分片共存后, 裸 slug 不再自动选址
+    await expect(storage.write(opts('note', 'v2', 'update'))).rejects.toThrow(/ambiguous-address/);
+  });
+
   it('重复 .md 后缀会被拒绝, 不写出 parseFilename 认不出的分片', async () => {
     await expect(storage.write(opts('note.md.md'))).rejects.toThrow(/invalid-slug/);
     expect(await missing('project_note.md.md')).toBe(true);
