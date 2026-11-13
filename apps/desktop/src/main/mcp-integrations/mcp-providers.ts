@@ -148,6 +148,7 @@ import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 import { resolveSessionTeammate } from '../maker-ipc/sessionTeammate.js';
+import { selectReplyQuote } from '../maker-ipc/selectedReplyQuote.desktop.js';
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
@@ -931,10 +932,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
         setSessionRuntime: wrap((service, params) => service.setSessionRuntime(params)),
       },
-      setReplyQuote: async (context, messageId) => {
-        const { selectReplyQuote } = await import('../maker-ipc/selectedReplyQuote.desktop.js');
-        return selectReplyQuote(context, messageId);
-      },
+      setReplyQuote: selectReplyQuote,
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
