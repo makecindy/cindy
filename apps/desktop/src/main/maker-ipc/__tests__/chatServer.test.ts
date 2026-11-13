@@ -1,3 +1,4 @@
+import { createGroupAssistantTasks } from '../groupAssistantTask.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const avatarUpload = vi.hoisted(() => vi.fn());
 vi.mock('../../ossPublicUpload.js', () => ({ uploadPublicAsset: avatarUpload }));
@@ -1985,6 +1986,10 @@ describe('Chat Server result delivery and refresh', () => {
           const before = BigInt(new URLSearchParams(route.split('?')[1]).get('before')!);
           return { body: history.filter(m => BigInt(m.seq) < before && !m.threadRootId) };
         }
+        if (route.startsWith(`/conversations/${roomId}/messages?threadRootId=`)) {
+          const params = new URLSearchParams(route.split('?')[1]);
+          return { body: history.filter(m => m.threadRootId === params.get('threadRootId') && BigInt(m.seq) < BigInt(params.get('before')!)) };
+        }
         const single = /\/messages\/([0-9a-f-]{36})$/.exec(route);
         if (single && method === 'GET') return { body: history.find(m => m.id === single[1]) ?? {} };
         if (route === `/conversations/${roomId}/messages` && method === 'POST') return { body: { id: '70000000-0000-4000-8000-0000000000c1', revision: 1 } };
@@ -2051,6 +2056,72 @@ describe('Chat Server result delivery and refresh', () => {
       expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
     });
 
+    // Unit regression for §9: the service previously filtered background by Thread but dispatched
+    // every Thread into the main task. Two roots + main are the minimal isolation matrix; restart
+    // must retain the same bindings and watermarks rather than replay old mixed context.
+    it('isolates main and Thread inputs and reuses each binding after restart', async () => {
+      const rootA = message(1, peerId, 'Topic A');
+      const rootB = message(2, peerId, 'Topic B');
+      history.push(rootA, rootB, message(3, peerId, 'A background', { threadRootId: rootA.id }),
+        message(4, peerId, 'B background', { threadRootId: rootB.id }));
+      assistantStore.value[roomId] = { sessionId: 'legacy-main', projectDir: null, deliveredSeq: { main: '2', [rootA.id]: '99' } };
+      const send = async (n: number, text: string, threadRootId: string | null) => {
+        history.push(message(n, selfId, text, { threadRootId }));
+        queue.push(request(n));
+        await vi.advanceTimersByTimeAsync(3000);
+        const input = dispatched().at(-1)!;
+        await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId, resultText: 'Done' });
+        return input;
+      };
+      const a = await send(5, 'Work A', rootA.id);
+      const b = await send(6, 'Work B', rootB.id);
+      const main = await send(7, 'Work main', null);
+      expect(new Set([a.targetSessionId, b.targetSessionId, main.targetSessionId]).size).toBe(3);
+      expect(main.targetSessionId).toBe('legacy-main');
+      expect(a.message).toContain('A background');
+      expect(a.message).not.toContain('Topic B');
+      expect(b.message).toContain('B background');
+      expect(b.message).not.toContain('Work A');
+      expect(main.message).not.toContain('Work B');
+      expect(verifiedOwnerRequestText(a.autoReviewUserText)).toBe('Work A');
+      service.dispose();
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      const again = await send(8, 'Continue A', rootA.id);
+      expect(again.targetSessionId).toBe(a.targetSessionId);
+      expect(again.message).not.toContain('A background');
+      expect(again.message).not.toContain('Work B');
+      expect((await send(9, 'Continue B', rootB.id)).targetSessionId).toBe(b.targetSessionId);
+      expect((await send(10, 'Continue main', null)).targetSessionId).toBe(main.targetSessionId);
+    });
+
+    // Unit: exercise the production binding entry with simultaneous same-Thread requests. Existing
+    // service tests are sequential; this guards duplicate task creation and lifecycle replacement.
+    it('serializes same-Thread creation and replaces only the unavailable or moved binding', async () => {
+      let dir: string | null = null;
+      let count = 0;
+      const removed = new Set<string>();
+      const store = { read: () => structuredClone(assistantStore.value) as Record<string, import('../chatServerWorkspaces.js').ChatAssistantSessionRecord>,
+        save: (value: Record<string, import('../chatServerWorkspaces.js').ChatAssistantSessionRecord>) => { assistantStore.value = structuredClone(value); } };
+      const tasks = createGroupAssistantTasks({ current: () => true, store: () => store,
+        folders: { forWork: async () => ({ dir, auto: false }) },
+        ensureSession: async ({ sessionId }) => ({ ok: true, sessionId: sessionId && !removed.has(sessionId) ? sessionId : `task-${++count}` }) });
+      const group = { id: roomId, name: 'Room', project: null };
+      const [a, same, b] = await Promise.all([tasks.forRequest(group, () => true, 'a'), tasks.forRequest(group, () => true, 'a'), tasks.forRequest(group, () => true, 'b')]);
+      expect(a.sessionId).toBe(same.sessionId);
+      expect(b.sessionId).not.toBe(a.sessionId);
+      tasks.noteDelivered(roomId, a.sessionId, 'a', '9');
+      removed.add(a.sessionId); // ensureSession replaces both archived and deleted tasks.
+      const replaced = await tasks.forRequest(group, () => true, 'a');
+      expect(replaced.sessionId).not.toBe(a.sessionId);
+      expect(replaced.delivered).toEqual({});
+      tasks.noteDelivered(roomId, a.sessionId, 'a', '10'); // late old delivery cannot advance replacement
+      expect((await tasks.forRequest(group, () => true, 'b')).sessionId).toBe(b.sessionId);
+      dir = '/projects/moved';
+      const moved = await tasks.forRequest(group, () => true, 'a');
+      expect(moved.sessionId).not.toBe(replaced.sessionId);
+      expect(moved.delivered).toEqual({});
+    });
+
     // One task per group: under the project folder found from the group's repository, reused while
     // the folder stays, each later request carrying only what the group said since the last one (this
     // task's own answers are already in it). A folder chosen later opens a new task.
@@ -2111,6 +2182,51 @@ describe('Chat Server result delivery and refresh', () => {
         && body?.content?.[0]?.namespace === 'cindy.task');
       expect(card?.[2].content[0].data).toMatchObject({ taskId: 'task-9', title: 'Fix CI', requesterName: 'Chris', botName: 'Cindy' });
       expect(fixture.requests.filter(r => r.url.endsWith(`/conversations/${roomId}/messages`)).every(r => r.actor === cindyId)).toBe(true);
+    });
+
+    // Unit regression: getGroup must not turn request ownership into personal-mask identity.
+    // Existing tests covered the member list, but never a public reply carrying actingFor.
+    it('keeps public Cindy replies visible with their real identity and task ownership', async () => {
+      const card = (requester: string) => message(requester === selfId ? 40 : 41, cindyId, '', {
+        actingFor: { actorId: requester, name: 'requester' },
+        content: [{ type: 'card', namespace: 'cindy.task', schemaRevision: 2,
+          data: { deviceId: null, taskId: 'task-9', title: 'Fix CI', state: 'running', requesterName: 'Chris', botName: 'Cindy' }, fallback: 'Fix CI' }],
+      });
+      const attribution = { ownerActorId: peerId, botActorId: teammateId, botName: 'Luna' };
+      const replies = [message(39, cindyId, 'Public answer', { actingFor: { actorId: peerId, name: 'Ann' } }),
+        card(selfId), card(peerId), message(42, peerId, 'Personal reply', { maskAttribution: attribution })];
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: replies, cursor: '1' } };
+        if (route === `/conversations/${roomId}/messages?limit=100`) return { body: replies };
+        if (route === `/conversations/${roomId}/executions`) return { body: [
+          { ...request(39, peerId), status: 'running' }, { ...request(40), status: 'needs_input' }] };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.messages.map(m => m.authorName)).toEqual(['Cindy', 'Cindy', 'Cindy', 'Ann']);
+      expect(result.group.messages[1].liveTask?.openable).toBe(true);
+      expect(result.group.messages[2].liveTask?.openable).toBeUndefined();
+      expect(result.group.messages[3].maskAttribution).toEqual(attribution);
+      expect(result.group.round.speakers.map(s => [s.executionId, s.executionStatus, s.sessionId])).toEqual([
+        [request(39).id, 'running', null], [request(40).id, 'needs_input', null],
+      ]);
+    });
+
+    // A stopping own execution must not enable stop while a peer is still running (P2 review regression).
+    it.each([selfId, peerId].flatMap(requester => ['running', 'stopping'].map(status => [requester, status])))('separates public execution visibility from stop permission for %s (%s)', async (requester, status) => {
+      members = cindyMembers.map(m => ({ ...m, role: 'member' }));
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupSingleSpeaker: 1 }, groupAssistantActorId: cindyId } };
+        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(50, requester), status }, { ...request(51, peerId), status: 'running' }] };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
+      expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;

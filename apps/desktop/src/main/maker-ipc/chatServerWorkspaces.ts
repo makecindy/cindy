@@ -102,7 +102,8 @@ const assistantSession = z.object({
 export type ChatAssistantSessionRecord = z.infer<typeof assistantSession>;
 /**
  * The group's Cindy on this computer (bot-group-chat.md「群里的 Cindy」): one ordinary visible task
- * per group, by room ID. Local only; another computer of the same account keeps its own.
+ * per conversation: room ID for the main group (including legacy records), room ID + Thread root
+ * for a Thread. Local only; another computer of the same account keeps its own.
  */
 export function chatServerAssistantSessions(endpoint: string, actorId: string, current: () => boolean) {
   const file = ownerScopedUserDataPath('chat-workspace-settings', createHash('sha256').update(`${endpoint}\n${actorId}`).digest('hex'), 'group-cindy-sessions.json');

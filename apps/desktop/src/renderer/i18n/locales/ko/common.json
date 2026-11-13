@@ -18884,6 +18884,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "권한 모드",
       "noAvailableModels": "사용 가능한 {{agent}} 모델이 없습니다. 설정에서 제공자 연결과 자격 증명을 확인하세요.",
+      "savedModelUnavailable": "이전에 선택한 모델 또는 연결 소스를 사용할 수 없습니다.",
+      "reselectModel": "모델 다시 선택",
       "effortLabel": "추론 강도",
       "initialTaskLabel": "초기 작업",
       "initialTaskPlaceholder": "처음 맡길 일을 입력하세요. 비워 두면 대기하며 Lead가 배분합니다",
