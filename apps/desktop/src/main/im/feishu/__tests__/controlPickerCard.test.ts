@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { setMainLocale } from '../../../i18n.desktop';
 import type { ControlProject } from '../../shared/controlProjects';
 import { createCardBuilders } from '../../shared/cardBuilders';
 import { ui } from '../uiText';
+
+// 控制文案跟随界面语言; 本文件断言的是中文原文。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 // cardBuilders 工厂只依赖 ui 文案包 + effort 查询函数 — 用 feishu 真实文案包
 // 构造, effort 固定 'high'(本测试不涉及 model picker)。

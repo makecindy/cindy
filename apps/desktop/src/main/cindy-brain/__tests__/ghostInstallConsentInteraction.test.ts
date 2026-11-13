@@ -53,6 +53,19 @@ const INSTALL: Omit<GhostInstallConsentRequest, 'requestId'> = {
 };
 
 describe('plugin install confirmation card', () => {
+  // #9496: task/IM installation confirmation uses a separate text presenter.
+  // Unit: one Host capability must be readable without changing its projection.
+  it('renders host permissions as readable text in task installation confirmation', () => {
+    const permission: GhostPermissionItem = { key: 'ui:host:capability:draft', kind: 'panel', labelKey: 'uiHost',
+      detailKey: 'uiHostAccess', detailArgs: { subject: 'capability:draft', access: 'draft' } };
+    const before = JSON.stringify(permission);
+    const text = renderGhostInstallConsentText({ ...INSTALL, facts: { ...INSTALL.facts,
+      kind: 'install', permissions: [permission] } }, key => key === 'settings.ghosts.perm.hostUi.capabilities.draft'
+      ? 'Read and edit the message draft' : translate(key));
+    expect(text.description).toContain('Read and edit the message draft');
+    expect(text.description).not.toContain('capability:draft');
+    expect(JSON.stringify(permission)).toBe(before);
+  });
   it('renders the source on the first line and the permission list below', () => {
     expect(renderGhostInstallConsentText(INSTALL, translate)).toEqual({
       title: 'Install Weather?',

@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { permissionItemIcon } from '@/features/plugin/lib/permissionItemIcon';
+import { permissionItemDetail } from '../../shared/ghostPermissionDetail';
 import { cn } from '@/lib/utils';
 import type { GhostPermissionItem } from '../../shared/ghost';
 import type {
@@ -50,9 +51,7 @@ function ConsentPermissionRow({
 }) {
   const { t } = useTranslation();
   const Icon = permissionItemIcon(item);
-  const hostDetail = item.detailKey
-    ? t(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs)
-    : null;
+  const hostDetail = permissionItemDetail(item, t);
   return (
     <li className={cn('flex items-start gap-2.5 py-1.5', change === 'removed' && 'opacity-60')}>
       <Icon
