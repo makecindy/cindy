@@ -707,7 +707,12 @@ import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
+import { createGroupProjectFolders } from './groupProjectFolder.js';
+import { botGroups as localBotGroups } from '../localDb/schema.js';
+import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
+import { botGroupFolderPath } from './botGroupWorkDir.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
+import { modelDisplayNames, usageModelKey } from '../menubar/collect.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
 import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
 import { getBotGroupStepNotificationBody, getInputHandoffNotificationBody } from '../sessionNotificationCopy.js';
@@ -719,7 +724,7 @@ import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from './pluginTaskDefaultRoute.js';
 import { validateExistingLocalProjectDirectory } from '../mcp-integrations/createProject.js';
-import { findRepositoryFolders } from './groupProjectFolder.js';
+import { findRepositoryFolders, folderRepositories } from './groupProjectFolder.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
 import { runGit } from '../git-review/gitRunner.js';
 import { createDesktopGroupProjectCheckouts } from './groupProjectCheckout.desktop.js';
@@ -13749,8 +13754,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   botGroupChatServiceHolder?.dispose();
   // 分工 steps run in the group's folder, the 项目文件夹, or one worktree per plan (bot-group-chat.md §7.5).
   const botGroupAttachments = createBotGroupAttachmentStore({ ownerRoot: () => ownerScopedUserDataPath(), log });
+  const localGroupFolders = createGroupProjectFolders({
+    chosen: () => null, workspaceRoot: readDialogueWorkspaceSettings,
+    validate: async dir => { try { return (await statWorkingDirectory(dir)).isDirectory() ? { ok: true as const, dir } : { ok: false as const }; } catch { return { ok: false as const }; } },
+  });
+  const localGroupFolder = async (groupId: string) => {
+    const scope = captureDataOwnerBroadcastScope();
+    const current = () => isDataOwnerBroadcastScopeCurrent(scope);
+    const db = getDbClient().drizzle;
+    const [group] = await db.select().from(localBotGroups).where(eq(localBotGroups.id, groupId)).limit(1);
+    if (!group) throw new Error('WORKDIR_UNAVAILABLE');
+    if (group.projectDir) return group.projectDir;
+    const legacy = botGroupFolderPath(ownerScopedUserDataPath(), groupId);
+    const existing = await statWorkingDirectory(legacy).then(s => s.isDirectory(), () => false);
+    const dir = existing ? legacy : (await localGroupFolders.forWork({ id: groupId, name: group.name }, { signIn: false, isCurrent: current })).dir;
+    if (!dir) throw new Error('WORKDIR_UNAVAILABLE');
+    if (!current()) throw new Error('OWNER_CHANGED');
+    await db.update(localBotGroups).set({ projectDir: dir }).where(eq(localBotGroups.id, groupId));
+    return dir;
+  };
   const botGroupWorkDir = createBotGroupWorkDir({
     ownerRoot: () => ownerScopedUserDataPath(),
+    defaultFolder: localGroupFolder,
     detectRepo: async (dir) => {
       const detected = await worktreeManager.detectCwd(dir);
       return { gitInstalled: detected.gitInstalled, isGitRepo: detected.isGitRepo };
@@ -13818,7 +13843,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     ensureLane: async (input) => {
       try {
-        return await ensureBotGroupLaneSession(input);
+        return await ensureBotGroupLaneSession({ ...input, projectDir: input.projectDir ?? (input.chatAccess ? undefined : await localGroupFolder(input.groupId)) });
       } catch (error) {
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
@@ -13899,23 +13924,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // A group task card follows its task (bot-group-chat.md §10): title, live phase and recorded PR.
     readGroupTaskStatus: async (taskId) => {
-      const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status })
+      const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status, model: sessions.model })
         .from(sessions).where(eq(sessions.id, taskId)).limit(1);
       if (!row || row.status === 'deleted') return null;
+      // The model as the model picker names it, else its id.
+      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false }).catch(() => []);
+      const model = modelDisplayNames(providers).get(usageModelKey(row.model)) ?? row.model;
       const runtime = await tryGetOrcaCollabService()?.getSessionRuntime({ targetSessionId: taskId }).catch(() => undefined);
       const phase = runtime?.ok && typeof runtime.runtime.phase === 'string' ? runtime.runtime.phase : 'idle';
       const pr = (await listPrRefs(taskId).catch(() => [])).find(ref => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(ref.url));
       const state = botGroupLiveTaskStateOfPhase(phase);
-      return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}) };
+      return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}), ...(model ? { model } : {}) };
     },
     // A group's GitHub repository without a registered checkout gets Cindy's own.
     groupCheckouts: createDesktopGroupProjectCheckouts(log),
     // A group's GitHub repository picks this computer's checkout among the registered projects.
     findProjectDirsForRepo: async (repo) => findRepositoryFolders(
       (await listRecentWorkdirs()).filter(row => row.exists).map(row => row.path), repo, {
-        origin: async (dir) => (await runGit(['remote', 'get-url', 'origin'], { cwd: dir, timeoutMs: 3000, allowedExitCodes: [0, 2, 128] })).stdout.trim() || null,
+        remotes: async (dir) => (await runGit(['config', '--get-regexp', '^remote\\..*\\.url$'], { cwd: dir, timeoutMs: 3000, allowedExitCodes: [0, 1, 128] })).stdout
+          .split('\n').map(line => line.trim().split(/\s+/)[1] ?? '').filter(Boolean),
         isMainCheckout: async (dir) => (await fsp.stat(path.join(dir, '.git'))).isDirectory(),
       }),
+    // A folder chosen in group management fills in the group's repository when it has none.
+    repositoriesOfFolder: async (dir) => folderRepositories(
+      (await runGit(['config', '--get-regexp', '^remote\\..*\\.url$'], { cwd: dir, timeoutMs: 3000, allowedExitCodes: [0, 1, 128] })).stdout
+        .split('\n').flatMap(line => {
+          const match = /^remote\.(.+)\.url\s+(\S+)/.exec(line.trim());
+          return match ? [{ name: match[1]!, url: match[2]! }] : [];
+        })),
     captureOwnerScope: captureDataOwnerBroadcastScope,
     isOwnerScopeCurrent: (scope) =>
       isDataOwnerBroadcastScopeCurrent(scope as ReturnType<typeof captureDataOwnerBroadcastScope>),

@@ -28,6 +28,9 @@ import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
 import { chatServerAssistantSessions, chatServerTaskCards, chatServerWorkspaces } from './chatServerWorkspaces.js';
+import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { botGroupFolderPath } from './botGroupWorkDir.js';
+import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
 import { createGroupProjectFolders } from './groupProjectFolder.js';
 import { createGroupTaskCards } from './groupTaskCards.js';
 import { createGroupAssistantTasks, formatGroupRequest, type GroupAssistantTask } from './groupAssistantTask.js';
@@ -73,7 +76,7 @@ import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-hi
 import { createOthersReadOverlay, isReadByOthers, parseReadReceiptFrame, projectMessageReaders } from '@cindy/maker-shared/chat-read-receipts';
 import { readAllRoomMessages } from '../companion-cloud/room.js';
 import type { ChatMaskState, ChatMaskSettings, ChatMaskMention } from '../../shared/botGroupChat.js';
-import { isGithubRepository } from '../../shared/cindyMakePersonalRemote.js';
+import { groupRepositoryKey, groupRepositoryLabel, parseGroupRepository, readGroupRepository, type GroupRepository } from '../../shared/botGroupChat.js';
 
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null; homeDeviceId?: string | null; disabled?: boolean }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
@@ -95,7 +98,7 @@ interface Room {
   id: string; name: string; topic: string; description: string; response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential';
   allow_mention_all_bots?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
   /** The group's shared project (servers with `groupProject`); each computer keeps its own folder. */
-  project?: { kind: 'github'; repo: string } | null;
+  project?: GroupRepository | null;
   /** The group's own Cindy is on (servers with `groupAssistant`); absent means on. */
   assistant?: boolean;
 }
@@ -124,6 +127,8 @@ interface Execution {
   trigger?: unknown; trigger_type?: string | null;
   created_at?: string;
   context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
+  /** Which of the requester's computers runs it, in which task and with which model (shown to the requester only). */
+  executor?: { deviceId?: string; sessionId?: string; model?: string } | null;
 }
 interface ServerPlan {
   activeExecution?: { id: string; status: string };
@@ -136,6 +141,10 @@ interface ServerPlan {
   created_at: string; updated_at: string;
 }
 interface Running {
+  /** The group's Cindy: this computer, the task and model it reports to the requester's other devices. */
+  executor?: { deviceId: string; sessionId: string; model?: string };
+  /** A server replica refused `executor` (mid-rollout): this turn renews without it. */
+  executorRefused?: boolean;
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number; durationMs?: number;
   /** The conversation this turn answers in (see executionLane); unknown until its source is read. */
   lane?: string;
@@ -276,6 +285,10 @@ const mediaNames = (m: Message) => m.deleted ? '' : m.content.flatMap(b => b.typ
  * two hours; time waiting on the user is not counted. A hung lane is ended by its own idle watchdog.
  */
 const TURN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+/** How long the computers a request to the group's Cindy was not sent from leave it to the one it was. */
+const ASSISTANT_SENDER_HEAD_START_MS = 8_000;
+/** A message sent this recently from this computer is taken to be the request now waiting. */
+const ASSISTANT_SENDER_WINDOW_MS = 60_000;
 /** One server message holds this much text. */
 const CHAT_MESSAGE_TEXT_MAX = 8000;
 /** Splits long text into message-sized pieces, preferring a line break near the limit; '' → []. */
@@ -428,6 +441,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   let supportsDissolve = false;
   let supportsMessageReaders = false;
+  /** The server keeps where the group's Cindy runs a turn (`capabilities.executionExecutor`). */
+  let supportsExecutor = false;
   let supportsListRemoval = false;
   /** Receipts that arrived after the snapshot in use; see `createOthersReadOverlay`. */
   const othersRead = createOthersReadOverlay();
@@ -510,6 +525,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let singleSpeaker = false;
   /** The server keeps a group's shared GitHub project (capability groupProject). */
   let supportsGroupProject = false;
+  /** The group's repository may be on another git host (GitLab, CNB, ...), not only GitHub. */
+  let supportsGroupProjectGit = false;
   /** A reply's @ wakes the teammates it names (capability groupTeammateMentions). */
   let supportsTeammateMentions = false;
   /**
@@ -525,10 +542,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const memberName = (m: Member, members: readonly Member[]) => isAssistant(m) ? BOT_GROUP_ASSISTANT_NAME : chatGroupMemberName(m, members);
   /** Where a group's work happens on this computer (`groupProjectFolder.ts`, bot-group-chat.md §7.5). */
   const projectFolders = createGroupProjectFolders({
+    workspaceRoot: readDialogueWorkspaceSettings,
     chosen: roomId => workspaces().read(roomId)?.projectDir ?? null,
+    fallback: room => workspaces().read(room.id)?.fallbackDir ??
+      (existsSync(botGroupFolderPath(ownerScopedUserDataPath(), room.id)) ? botGroupFolderPath(ownerScopedUserDataPath(), room.id) : null),
+    bindFallback: (roomId, dir) => workspaces().save(roomId, { projectDir: null, plans: {}, ...workspaces().read(roomId), fallbackDir: dir }),
     get findRegistered() { return deps.findProjectDirsForRepo; },
     get checkouts() { return deps.groupCheckouts; },
     get validate() { return deps.validateProjectDir; },
+    owner: () => current(),
   });
   const pendingPlanCancels = new Map<string, Map<string, boolean>>();
   async function cancelPlanning(roomId: string, sourceId: string, failed = false) {
@@ -1019,6 +1041,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       localProfilesRead = profileRevision;
       const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
+      supportsExecutor = (me.capabilities as { executionExecutor?: number } | undefined)?.executionExecutor === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       personalMask = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
@@ -1029,6 +1052,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
       supportsGroupProject = (me.capabilities as { groupProject?: number } | undefined)?.groupProject === 1;
+      supportsGroupProjectGit = supportsGroupProject && (me.capabilities as { groupProjectGit?: number } | undefined)?.groupProjectGit === 1;
       supportsTeammateMentions = (me.capabilities as { groupTeammateMentions?: number } | undefined)?.groupTeammateMentions === 1;
       const assistant = (me.capabilities as { groupAssistant?: number } | undefined)?.groupAssistant === 1
         ? (me as { groupAssistantActorId?: unknown }).groupAssistantActorId : undefined;
@@ -1941,6 +1965,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
         activity: e.plan_id ? 'step' : 'reply' };
+      // Where the group's Cindy runs it: this computer, or another of the requester's as it reported.
+      const executor = run?.executor ?? (e.executor?.deviceId ? e.executor : undefined);
+      if (executor?.deviceId) speaker.executor = { deviceId: executor.deviceId, here: executor.deviceId === selfDeviceId,
+        ...(executor.sessionId ? { sessionId: executor.sessionId } : {}), ...(executor.model ? { model: executor.model } : {}) };
       speakers.push(speaker);
     }
     // The organizer is visibly 「正在看」 while this device decides whether to arrange (§7.2),
@@ -1992,7 +2020,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           avatarUrl: m.avatar?.startsWith('https://') ? m.avatar : null,
           name: memberName(m, ownerMembers), avatar: m.groupAvatar ? '' : p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
       }), organizerBotId: direct ? null : ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => isCompanion(m) && m.state === 'joined')?.id), projectDir: folder.dir, ...(folder.dir && folder.auto ? { projectDirAuto: true } : {}),
-      ...(!direct && supportsGroupProject ? { supportsGroupProject: true, project: s.room.project ?? null } : {}),
+      ...(!direct && supportsGroupProject ? { supportsGroupProject: true, project: readGroupRepository(s.room.project), ...(supportsGroupProjectGit ? { supportsGroupProjectGit: true } : {}) } : {}),
       ...(!direct && assistantActorId ? { supportsGroupAssistant: true, assistantEnabled: s.room.assistant !== false } : {}),
       // Only servers that tell a 分工 from a queue (kind) can hand one on by itself.
       ...(singleSpeaker ? { autoContinue: workspace?.autoContinue === true } : {}), lastMessage: last && lastView ? {
@@ -2194,12 +2222,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     changed(s.room.id);
   }
   async function updateExecution(run: Running, action: string, extra: Record<string, unknown> = {}) {
-    return api(`/conversations/${run.execution.conversation_id}/${run.execution.mask_owner_id ? 'mask/' : ''}executions/${run.execution.id}`, 'POST', {
+    const send = (withExecutor: boolean) => api(`/conversations/${run.execution.conversation_id}/${run.execution.mask_owner_id ? 'mask/' : ''}executions/${run.execution.id}`, 'POST', {
       // Each heartbeat must extend the lease rather than replay a cached receipt.
       // Terminal retries keep their operation ID and immutable result body.
       operationId: action === 'heartbeat' ? randomUUID() : `chat:${run.execution.id}:${run.execution.epoch}:${action}`,
       executorId, epoch: run.execution.epoch, action, ...extra,
+      ...(withExecutor ? { executor: run.executor } : {}),
     }, run.execution.bot_id);
+    const withExecutor = action === 'heartbeat' && supportsExecutor && !!run.executor && !run.executorRefused;
+    try { return await send(withExecutor); }
+    catch (error) {
+      // While the server is being rolled out an older replica refuses the unknown field: renew the
+      // lease without it at once, and keep this turn's later heartbeats plain.
+      if (!withExecutor || !(error instanceof ChatResponseError) || error.status !== 400) throw error;
+      run.executorRefused = true;
+      deps.log?.warn('Group execution location was refused; renewing without it', { executionId: run.execution.id, ...chatErrorDiagnostic(error) });
+      return send(false);
+    }
   }
   function postCapabilityNotice(run: Running, code: BotGroupCapabilityNoticeCode, threadRootId?: string): Promise<void> {
     if (!current() || running.get(run.execution.id) !== run || run.execution.mask_owner_id) return Promise.resolve();
@@ -2722,11 +2761,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     folders: projectFolders, get ensureSession() { return deps.ensureGroupAssistantSession; },
   });
   /** What a request says when the group's repository is not on this computer yet: why, and what to do. */
-  function checkoutNote(repo: string, pending: NonNullable<GroupAssistantTask['pending']>): string {
-    const key = pending.status === 'git-missing' ? 'gitMissing' : pending.status === 'sign-in-required'
-      ? pending.signInOpened ? 'signInOpened' : 'signIn' : 'unavailable';
+  function checkoutNote(repository: GroupRepository, pending: NonNullable<GroupAssistantTask['pending']>): string {
+    const key = pending.status === 'preparing' ? 'preparing' : pending.status === 'git-missing' ? 'gitMissing'
+      : pending.status === 'access-required' ? 'accessRequired'
+        : pending.status === 'sign-in-required' ? pending.signInOpened ? 'signInOpened' : 'signIn' : 'unavailable';
     const guide = t(`bots.groupChat.assistant.checkout.installGit.${process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux'}`);
-    return t(`bots.groupChat.assistant.checkout.${key}`).replaceAll('{{repo}}', () => repo).replaceAll('{{guide}}', () => guide);
+    const host = repository.kind === 'github' ? 'github.com' : repository.host;
+    return t(`bots.groupChat.assistant.checkout.${key}`).replaceAll('{{repo}}', () => groupRepositoryLabel(repository))
+      .replaceAll('{{host}}', () => host).replaceAll('{{guide}}', () => guide);
   }
   /**
    * The group's messages a request to the group's Cindy carries as background: those of its
@@ -2810,7 +2852,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       });
       const words = bodyText(source).trim();
       const message = formatGroupRequest({ words, heading, background,
-        ...(task.pending && s.room.project ? { note: checkoutNote(s.room.project.repo, task.pending) } : {}) });
+        ...(task.pending && readGroupRepository(s.room.project) ? { note: checkoutNote(readGroupRepository(s.room.project)!, task.pending) } : {}) });
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
@@ -2828,8 +2870,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         } });
       if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));
       assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
+      // The requester's other devices learn at once where this runs; later renewals repeat it.
+      if (selfDeviceId) {
+        const model = (await deps.readGroupTaskStatus?.(sessionId).catch(() => null))?.model;
+        run.executor = { deviceId: selfDeviceId, sessionId, ...(model ? { model } : {}) };
+        if (live()) void checkLease(run);
+      }
       changed(roomId);
     } catch (error) {
+      // Never silent: a request that does not reach the task says why in the log.
+      deps.log?.warn('Group Cindy request was not delivered', { executionId: execution.id, sessionId: run.sessionId || null,
+        live: live(), ...chatErrorDiagnostic(error) });
       await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
         outcome: 'error', resultText: '', failureCode: botGroupRuntimeFailureCode(error) }, true);
     }
@@ -2880,10 +2931,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // answered as a group and never subscribed: nothing may run without a visible group entry to watch or stop it.
       if (!ownDirectRoom && !isGroupRoom(s.room)) throw new Error('INVALID_EXECUTION_TRIGGER');
       subscribe(execution.conversation_id, s.cursor);
-      // In a group with a repository a teammate does things only for its owner. For anyone else it
-      // only talks, even with a `tools` grant: work on the project is done by the requester's own
-      // Cindy in the group, on their computer with their own logins (bot-group-chat.md §7.5).
-      if (!ownDirectRoom && s.room.project && !execution.mask_owner_id && execution.access_mode === 'tools') toolsOff = true;
+      // Regular group requests from other members only chat. AI reply mode
+      // retains its separate explicit per-member grant and authority checks.
+      if (!ownDirectRoom && !execution.mask_owner_id && execution.access_mode !== 'owner') toolsOff = true;
       if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
       if (ownDirectRoom) { await runDirectExecution(run, bot.id, s.room.id); return; }
       if (await runInCardTask(run, s, sourceRead)) return;
@@ -2911,7 +2961,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             const key = `${run.plan.id}:${execution.access_mode}:${execution.access_revision}`;
             run.workspace = settings.plans[key] ?? (execution.access_mode === 'owner' ? settings.plans[run.plan.id] : undefined);
             if (!run.workspace) {
-              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: (await projectFolders.shown(s.room)).dir });
+              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: (await projectFolders.forWork(s.room, { signIn: false, isCurrent: current })).dir });
               if (!prepared?.ok) throw new Error('WORKDIR_UNAVAILABLE');
               run.workspace = prepared;
               if (!current()) throw new Error('OWNER_CHANGED');
@@ -2928,10 +2978,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (source?.origin === 'system') throw new Error('INVALID_EXECUTION_TRIGGER');
         // Plan steps belong to the main group; a Thread request gets the Thread's own lane.
         const threadRootId = run.plan || digest ? undefined : source?.threadRootId ?? undefined;
-        // A reply to the owner's own request works in the group's project folder when this computer
-        // has one, like an ordinary task there. Other members' requests never enter it: work in the
-        // folder runs with the owner's logins (bot-group-chat.md §7.5).
-        const projectDir = !run.plan && !digest && !execution.mask_owner_id && execution.access_mode === 'owner'
+        // Folder identity is shared; toolsOff above enforces the caller's authority.
+        const projectDir = !ownDirectRoom
           ? (await projectFolders.forWork(s.room, { signIn: false, isCurrent: () => current() && running.get(execution.id) === run })).dir : null;
         const lane = await deps.ensureLane({ botId: bot.id, groupId: s.room.id, title: s.room.name,
           ...(projectDir ? { projectDir } : {}),
@@ -2939,7 +2987,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(digest ? { personalDigest: true } : {}),
           // A queue turn talks in its own lane (no project folder); a division of work runs in its work directory.
           ...(run.plan?.kind === 'talk' ? { talkPlanId: run.plan.id }
-            : run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? '', sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}),
+            : run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? (execution.access_mode === 'chat' ? projectDir ?? '' : ''), sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}),
           ...(threadRootId ? { threadRootId } : {}) });
         if (!lane.ok) throw new Error(botGroupRuntimeFailureCode({ code: lane.errorCode, message: lane.message }));
         if (lane.replacedSessionId) void deps.closeLanes?.([lane.replacedSessionId]);
@@ -3329,6 +3377,37 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     hints.set(`room:${run.execution.conversation_id}`, { roomId: run.execution.conversation_id });
     queuedHints.set(botId, hints);
   }
+  /**
+   * The group's Cindy answers on the computer the request was sent from (bot-group-chat.md §9):
+   * every computer of the account may take its requests, so the others hold back for a moment and
+   * only take a request nobody here sent once it is still waiting after that. A request sent from a
+   * phone has no such computer and goes to whichever takes it first.
+   */
+  const sentHere = new Map<string, number>();
+  let lastSentHere = 0;
+  let assistantWaitingSince: number | undefined;
+  function noteSentHere(messageId: string) {
+    lastSentHere = Date.now();
+    sentHere.set(messageId, lastSentHere);
+    if (sentHere.size > 200) sentHere.delete(sentHere.keys().next().value!);
+  }
+  /** False while this computer gives the computer the request was sent from a head start; wakes the poll when it ends. */
+  function mayTakeAssistantRequest(actorId: string, request?: { sourceId: string; createdAt?: string }): boolean {
+    const now = Date.now();
+    let since: number;
+    if (request) {
+      if (sentHere.has(request.sourceId)) return true;
+      since = Date.parse(request.createdAt ?? '') || now;
+    } else {
+      // Not knowing which request is waiting: a message sent here just before it counts as its source.
+      if (now - lastSentHere < ASSISTANT_SENDER_WINDOW_MS) return true;
+      since = assistantWaitingSince ??= now;
+    }
+    const wait = since + ASSISTANT_SENDER_HEAD_START_MS - now;
+    if (wait <= 0) return true;
+    setTimeout(() => { if (current()) workPolling.wake([actorId]); }, wait).unref?.();
+    return false;
+  }
   /** Leases one execution: the oldest the server offers, or exactly `executionId`. */
   async function claim(actorId: string, executionId?: string): Promise<Execution | null> {
     const payload = { operationId: randomUUID(), executorId, accessPolicyVersion: 1, planVersion: 1, ...(directRoomClaims ? { directRoomVersion: 1 } : {}),
@@ -3348,7 +3427,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
       if (masked.execution) return masked.execution;
     }
-    return (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', payload, actorId)).execution;
+    if (assistant && !executionId && !mayTakeAssistantRequest(actorId)) return null;
+    const claimed = (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', payload, actorId)).execution;
+    if (assistant && !executionId) assistantWaitingSince = undefined;
+    return claimed;
   }
 
   /**
@@ -3393,6 +3475,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         let lane: string;
         try { lane = await executionLane(row, true); } catch { continue; }
         if (lanes.has(lane)) { hints.delete(row.id); continue; }
+        if (actorId === assistantActorId && !mayTakeAssistantRequest(actorId, { sourceId: row.source_message_id, createdAt: row.created_at })) continue;
         // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
         if (!mayRequest()) return;
         const execution = await claim(actorId, row.id);
@@ -3508,6 +3591,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         await cancelExecution(run);
         return;
       }
+      // A heartbeat that did not get through keeps the turn: the lease outlives a missed renewal and the
+      // next one retries. Dropping it here left the group's Cindy task empty (2026-11-13 field report).
+      if (!(error instanceof ChatResponseError) || retryableResponse(error)) {
+        deps.log?.warn('Group execution heartbeat failed; retrying', { executionId: run.execution.id, ...chatErrorDiagnostic(error) });
+        return;
+      }
+      deps.log?.warn('Group execution lease lost', { executionId: run.execution.id, ...chatErrorDiagnostic(error) });
       // An in-flight heartbeat must not discard a result that became ready while
       // it was awaiting its response; retry the terminal operation for its receipt.
       if (!run.settlement && running.get(run.execution.id) === run) {
@@ -4047,6 +4137,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     if (prepared?.ok) prepared.commit();
     sendJournal.confirm(journalKey, signature, result.id);
+    noteSentHere(result.id);
     deps.log?.info?.('Chat group send confirmed', { groupId: i.groupId, messageId: result.id,
       trace: createHash('sha256').update(i.clientId).digest('hex').slice(0, 16), durationMs: Date.now() - started });
     // The message exists: the send is answered now and its receipt answers any retry, so the
@@ -4164,7 +4255,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     updateGroup: input => safe(async () => {
       const i = z.object({ groupId: id, name: z.string().min(1).max(40).optional(), replyMode: z.enum(['all', 'mentioned']).optional(),
         speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional(), autoContinue: z.boolean().optional(), expectedRevision: z.number().int().positive().optional(),
-        githubRepo: z.string().trim().max(200).refine(isGithubRepository).nullable().optional() }).parse(input);
+        repository: z.string().trim().max(600).nullable().optional() }).parse(input);
       i.groupId = await resolveGroup(i.groupId);
       // Local only, so saved before any server read: a handoff deciding meanwhile must already see it.
       if (i.autoContinue !== undefined) workspaces().save(i.groupId, { projectDir: null, plans: {}, ...workspaces().read(i.groupId), autoContinue: i.autoContinue });
@@ -4174,15 +4265,38 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (projectDir) { const checked = await deps.validateProjectDir?.(projectDir); if (!checked?.ok) throw new Error('INVALID_DIRECTORY'); projectDir = checked.dir; }
       const organizerId = i.organizerBotId ? actors.find(a => a.externalId === i.organizerBotId)?.id ?? id.parse(i.organizerBotId) : i.organizerBotId;
       if (i.allowMentionAllBots !== undefined && !supportsMentionAudiences) throw new Error('CHAT_UNAVAILABLE');
-      if (i.githubRepo !== undefined && !supportsGroupProject) throw new Error('CHAT_UNAVAILABLE');
-      const project = i.githubRepo === undefined ? undefined : i.githubRepo ? { kind: 'github' as const, repo: i.githubRepo } : null;
+      if (i.repository !== undefined && !supportsGroupProject) throw new Error('CHAT_UNAVAILABLE');
+      const project = i.repository === undefined ? undefined : i.repository ? parseGroupRepository(i.repository) : null;
+      if (project === null && i.repository) throw new Error('INVALID_REPOSITORY');
+      // Only GitHub on servers that keep no other host: said plainly rather than refused as malformed.
+      if (project?.kind === 'git' && !supportsGroupProjectGit) throw new Error('REPOSITORY_HOST_UNSUPPORTED');
       if (i.allowMentionAllBots !== undefined || i.name !== undefined || i.replyMode !== undefined || i.speakingMode !== undefined || organizerId !== undefined || project !== undefined) await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: i.expectedRevision ?? s.room.revision,
         name: i.name, responseMode: i.replyMode, speakingMode: i.speakingMode, organizerId, allowMentionAllBots: i.allowMentionAllBots, project }, managementActor(s));
       if (projectDir !== undefined) workspaces().save(i.groupId, { ...workspaces().read(i.groupId) ?? { plans: {} }, projectDir });
+      // A folder chosen here that is a GitHub checkout names the group's repository when it has none
+      // (owners and admins only: it is shared with the whole group). A different one is only pointed
+      // out. The folder is saved either way; filling in is best effort.
+      let folderRepository: { repo: string; filled: boolean } | undefined;
+      if (projectDir && project === undefined && supportsGroupProject) {
+        const repos = (await deps.repositoriesOfFolder?.(projectDir).catch(() => []) ?? [])
+          .filter(repo => repo.kind === 'github' || supportsGroupProjectGit);
+        const current = readGroupRepository(s.room.project);
+        const manager = managementActor(s);
+        if (repos[0] && !current && manager) {
+          const filled = await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: s.room.revision,
+            project: repos[0] }, manager).then(() => true, error => {
+            deps.log?.warn('Group repository was not filled in from the chosen folder', { groupId: i.groupId, ...chatErrorDiagnostic(error) });
+            return false;
+          });
+          if (filled) folderRepository = { repo: groupRepositoryLabel(repos[0]), filled: true };
+        } else if (repos[0] && current && !repos.some(repo => groupRepositoryKey(repo) === groupRepositoryKey(current))) {
+          folderRepository = { repo: groupRepositoryLabel(repos[0]), filled: false };
+        }
+      }
       changed(i.groupId);
       // Turned on while a step waits for 继续: go on now rather than at the next change.
       if (i.autoContinue) autoContinuePlans(i.groupId);
-      return { ok: true as const };
+      return { ok: true as const, ...(folderRepository ? { folderRepository } : {}) };
     }),
     // Stop stops what is yours: your requests and arrangements, and your teammates' work for
     // others. An owner or admin may stop everything (`all`). Work you may not stop is left running.
