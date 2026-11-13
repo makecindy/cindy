@@ -41,6 +41,7 @@ export type GhostGrantLane =
   | 'save_dir'
   | 'reveal_path'
   | 'fs_write'
+  | 'fs_delete'
   | 'workspace'
   | 'forge_source'
   | 'outside_workdir';
