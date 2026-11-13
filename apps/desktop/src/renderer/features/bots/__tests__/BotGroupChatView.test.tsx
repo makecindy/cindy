@@ -41,7 +41,8 @@ vi.mock('@/components/chat/FileLightbox', () => ({
 const mocks = vi.hoisted(() => ({
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
-    options && 'name' in options ? `${key}:${String(options.name)}`
+    key === 'bots.groupChat.assistant.actingFor' ? `${options?.name} · for ${options?.person}`
+      : options && 'name' in options ? `${key}:${String(options.name)}`
       : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
   locationState: null as { createdGroupInvite?: string | null } | null,
@@ -5884,6 +5885,20 @@ it('does not reread group history for busy-only online presence', async () => {
 });
 
 // Multi-member requests retain chronology and controls follow the requester, not bot ownership.
+// Unit regression: the same Cindy has concurrent requests; each live row must name its requester.
+it('names the requester on each running and queued Cindy execution', async () => {
+  const group = detail({ serverBacked: true, round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'ann-work', requesterName: 'Ann', isSelfRequested: false, executionStatus: 'running' },
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'chris-work', requesterName: 'Chris', isSelfRequested: true, executionStatus: 'queued' },
+  ] } });
+  group.members = group.members.map(member => member.botId === 'mimi' ? { ...member, name: 'Cindy', assistant: true } : member);
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group });
+  renderView();
+  const work = await screen.findAllByTestId('bot-group-work');
+  expect(within(work[0]!).getByText('Cindy · for Ann')).toBeTruthy();
+  expect(within(work[1]!).getByText('Cindy · for Chris')).toBeTruthy();
+});
+
 it('places live work before later messages and leaves another request read-only', async () => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
     messages: [msg({ id: 'request', sequence: 1, createdAt: 10, content: 'First request' }), msg({ id: 'later', sequence: 2, createdAt: 30, content: 'Later message' })],

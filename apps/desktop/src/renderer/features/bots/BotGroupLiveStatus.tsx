@@ -189,7 +189,7 @@ function BotGroupSingleProgressStrip({
   const waiting = live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input';
   if (!step && !lead) return null;
   const member = step ? step.member : lead?.member;
-  const name = step ? step.displayName : lead?.displayName ?? '';
+  const name = lead?.displayName ?? step?.displayName ?? '';
   // A queue turn is someone speaking, not a numbered step of work.
   const workStep = step && step.plan.kind !== 'talk' ? step : null;
   // The Session's compact detail may still be the previous turn's silence marker (NO_REPLY);

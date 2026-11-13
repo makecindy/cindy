@@ -537,6 +537,8 @@ export interface BotGroupSpeaker {
   sourceMessageId?: string;
   /** Authenticated projection of requester identity; absence on old hosts grants no control. */
   isSelfRequested?: boolean;
+  /** Public requester name for the group's Cindy, matching its completed-message attribution. */
+  requesterName?: string;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';

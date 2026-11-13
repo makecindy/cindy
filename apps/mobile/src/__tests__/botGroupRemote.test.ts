@@ -229,9 +229,9 @@ describe('parseBotGroupChatData', () => {
 
   it.each([true, false, undefined, 'true'])('retains requester permission without granting it to old or malformed hosts (%s)', isSelfRequested => {
     const parsed = parseBotGroupChatData(chatData({ round: { status: 'running', speakers: [{
-      botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'work', requestedAt: 123, sourceMessageId: 'source', isSelfRequested,
+      botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'work', requestedAt: 123, sourceMessageId: 'source', requesterName: 'Ann', isSelfRequested,
     }] } }))!;
-    expect(parsed.round.speakers[0]).toMatchObject({ requestedAt: 123, sourceMessageId: 'source' });
+    expect(parsed.round.speakers[0]).toMatchObject({ requestedAt: 123, sourceMessageId: 'source', requesterName: 'Ann' });
     expect(parsed.round.speakers[0]?.isSelfRequested === true).toBe(isSelfRequested === true);
   });
 

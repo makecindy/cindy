@@ -196,6 +196,18 @@ describe('direct group plans', () => {
     await expect(client.actPlan(id(1), { ...page.plans![0], supportsPendingSkip: undefined },
       { action: 'skip', position: 1 }, 'old-server')).rejects.toThrow('PLAN_CLOSED');
   });
+  it('projects live Cindy requester names from members rather than companion ownership', async () => {
+    const { client } = fixture();
+    const page = await client.load(id(1));
+    page.snapshot.members.push({ ...page.snapshot.members[0]!, id: id(12), kind: 'bot', name: 'Cindy', assistant: true });
+    const requester = page.snapshot.members.find(member => member.id === id(10))!;
+    requester.name = 'Ann'; requester.displayName = 'Ann'; requester.nickname = null;
+    page.executions = [{ id: id(50), bot_id: id(12), requester_id: id(10), source_message_id: id(20), epoch: 1, status: 'running' }];
+    expect(chatGroupView(page, id(10)).round.speakers[0]).toMatchObject({ requesterName: 'Ann', isSelfRequested: true });
+    page.snapshot.members.at(-1)!.assistant = false;
+    expect(chatGroupView(page, id(10)).round.speakers[0]).not.toHaveProperty('requesterName');
+  });
+
   it('projects the exact queued attempt and sends it with the displayed revision', async () => {
     const { client, state, request } = fixture();
     Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0,

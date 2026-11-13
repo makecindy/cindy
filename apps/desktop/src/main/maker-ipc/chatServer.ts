@@ -1922,6 +1922,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Keep execution identity across computers and concurrent threads. Only the executing
     // computer resolves a lane; authenticated peers retrieve it through the group resource.
     const speakers: BotGroupSpeaker[] = [];
+    const speakerRequesterName = (botId: string, requesterId: string | undefined) => {
+      const bot = s.members.find(member => member.id === botId);
+      const requester = s.members.find(member => member.id === requesterId);
+      return bot && isAssistant(bot) && requester ? { requesterName: memberName(requester, ownerMembers) } : {};
+    };
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
       const run = running.get(e.id);
       // created_at is the enqueue time, not the start of work; showing it as elapsed time
@@ -1929,6 +1934,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
         executionId: e.id, sourceMessageId: e.source_message_id, isSelfRequested: e.requester_id === selfId,
+        ...speakerRequesterName(e.bot_id, e.requester_id),
         ...(e.created_at && Number.isFinite(Date.parse(e.created_at)) ? { requestedAt: Date.parse(e.created_at) } : {}), ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
         activity: e.plan_id ? 'step' : 'reply' };
@@ -1937,7 +1943,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The organizer is visibly 「正在看」 while this device decides whether to arrange (§7.2),
     // as the local service showed it. It works on the auxiliary model, not in a lane session.
     const deciding = planning.get(roomId);
-    if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning', isSelfRequested: true, sourceMessageId: deciding.sourceMessageId, requestedAt: deciding.requestedAt });
+    if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning', isSelfRequested: true, sourceMessageId: deciding.sourceMessageId, requestedAt: deciding.requestedAt, ...speakerRequesterName(deciding.botId, selfId) });
     // Sidebar refresh must not download every attachment in every group's history.
     const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
     const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;

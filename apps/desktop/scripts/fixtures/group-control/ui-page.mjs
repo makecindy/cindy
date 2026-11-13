@@ -69,6 +69,7 @@ export default {
     'work-unknown': { about: 'Remote work with no readable task: generic activity, no invented thinking', data: { ...base, messages: 2, workState: 'unknown' } },
     'work-remote': { about: 'Authenticated remote target projection, scenario data (not a live device-link run)', data: { ...base, messages: 2, workState: 'testing', workRemote: true } },
     'work-parallel': { about: 'Two concurrent execution rows, separate task entries and one group stop', data: { ...base, messages: 2, workState: 'testing', workParallel: true } },
+    'work-requesters': { about: 'Cindy progress keeps each requester visible', data: { ...base, members: [{ botId: 'a', name: 'Cindy' }, { botId: 'b', name: 'Cindy' }], messages: 3, workState: 'testing', workParallel: true, workReadonly: true, workRequesterNames: ['nana', 'chris'] } },
     'work-chronology': { about: 'Concurrent work follows request time; another requester remains read-only', data: { ...base, messages: 3, workState: 'testing', workParallel: true, workReadonly: true } },
     'work-parallel-stopping': { about: 'Last execution is stopping while the first still runs: the group stop control remains available', data: { ...base, messages: 2, workState: 'testing', workParallel: true, workLastStopping: true } },
     'body-answer': {

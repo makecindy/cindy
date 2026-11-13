@@ -107,9 +107,11 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
               && candidate.executionStatus !== 'stopping').length === 1))
           && !speaker.stopping && speaker.executionStatus !== 'queued' && speaker.executionStatus !== 'stopping') : undefined;
         const step = plan?.steps.find(step => step.position === plan.currentStep);
+        const identity = identityFor(member.botId, member.name);
+        const displayName = speaker.requesterName ? t('groupChat.assistant.actingFor', { name: identity.name, person: speaker.requesterName }) : identity.name;
         return <BotGroupSpeakerRow key={`${accountGeneration}:${group.id}:${deviceId}:${speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}`}
           deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
-          identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
+          identity={{ ...identity, name: displayName, ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
           executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
           workStep={plan && step ? { position: step.position + 1, total: plan.steps.length, task: step.task } : undefined}
           revealWaiting={speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId} footer={speaker === controlSpeaker ? stopControl : undefined}

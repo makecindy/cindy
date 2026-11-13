@@ -187,6 +187,21 @@ function workGroup(): BotGroupRemoteChatData {
 async function renderWork(group: BotGroupRemoteChatData, online = true, controls: { onStop?: () => Promise<void>; stopping?: boolean } = {}) {
   await act(async () => root.render(el(BotGroupWorkArea, { group, deviceId: 'mac', online, identityFor: (botId, name) => ({ botId, name }), onError: vi.fn(), ...controls })));
 }
+// Unit regression: two people request the same Cindy; queued and running rows retain distinct attribution.
+it('names each requester on concurrent Cindy progress rows', async () => {
+  await i18n.changeLanguage('en');
+  const group = workGroup();
+  group.members[0]!.name = 'Cindy';
+  group.round.speakers = [
+    { ...group.round.speakers[0]!, requesterName: 'Ann' },
+    { ...group.round.speakers[0]!, requesterName: 'Chris', executionId: 'e2', executionStatus: 'running' },
+  ];
+  await renderWork(group, false);
+  const rows = node.querySelectorAll('[data-testid="botGroup.speaking"]');
+  expect(rows[0]?.textContent).toContain('Cindy · for Ann');
+  expect(rows[1]?.textContent).toContain('Cindy · for Chris');
+  expect(rows[0]?.getAttribute('aria-label')).toContain('Cindy · for Ann');
+});
 // 测试价值：生产工作区必须逐 execution 连续可读（群聊 §5）；旧覆盖只验证按 Bot 收起。
 // 最小失败输入：同一 Bot 排队 + 运行、另一位等待；两个自有 lane 的确认不在过程折叠内。
 // tier: unit，沿用本文件内存远端与真实工作区入口。

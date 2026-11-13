@@ -2116,10 +2116,18 @@ describe('Chat Server result delivery and refresh', () => {
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;
     // group management sees the switch, and an older server none of it.
     it('projects the group Cindy and its switch', async () => {
+      queue = [request(1), request(2, peerId)];
+      const serve = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${roomId}/executions`
+        ? { body: queue.map(work => ({ ...work, status: 'running' })) } : serve(route, method, body));
       const result = await service.getGroup(roomId);
       if (!result.ok) throw new Error(result.errorCode);
       expect(result.group).toMatchObject({ supportsGroupAssistant: true, assistantEnabled: true, organizerBotId: null });
       expect(result.group.members.find(m => m.actorId === cindyId)).toMatchObject({ assistant: true, name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', isOwned: false });
+      expect(result.group.round.speakers).toEqual(expect.arrayContaining([
+        expect.objectContaining({ requesterName: 'Chris', isSelfRequested: true }),
+        expect.objectContaining({ requesterName: 'Ann', isSelfRequested: false }),
+      ]));
       expect((await service.chatServer!.manage({ groupId: roomId, action: { type: 'update', name: 'Room', topic: '', description: '', expectedRevision: 1, assistant: false } })).ok).toBe(true);
       expect(fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH')?.[2]).toMatchObject({ assistant: false, expectedRevision: 1 });
     });

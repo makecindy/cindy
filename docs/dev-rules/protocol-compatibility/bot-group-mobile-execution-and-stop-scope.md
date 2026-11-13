@@ -26,3 +26,7 @@ invoke／result，无需调整中转内核或部署。原生 fingerprint、数�
 旧 host 缺少时序字段时回退 source／startedAt／列表末尾。旧端忽略新字段。默认停止收窄为本人请求，
 不再以 bot 归属代替 requester；管理员仍需显式 all。没有新增 channel、relay 帧或服务端字段，
 官方与自建中转透传已有资源；不涉及原生指纹、数据库或凭证。
+
+群 Cindy 的 speaker 同时可选提供 `requesterName`，从既有 execution 的 requester 与成员名称投影，
+进行态沿用完成消息的「Cindy · 替 某人」身份。旧端忽略字段，旧 Host 缺失时保留原名称；
+不以伙伴主人、当前阅读者或最近一条消息猜测请求者。不新增服务端字段或网络读取。

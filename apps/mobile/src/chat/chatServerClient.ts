@@ -56,6 +56,7 @@ export interface ChatRoom {
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
 export interface ChatMember {
+  assistant?: boolean;
   id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string;
   ownerActorId: string; ownerName: string; avatar: string | null;
   role: 'owner' | 'admin' | 'member' | 'guest';
@@ -440,11 +441,16 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
   // No server-provided start time here: created_at is the enqueue time, so omit startedAt
   // rather than presenting queued time as elapsed work.
-  const speakers = executions.map(row => ({ botId: row.bot_id, sessionId: null, executionId: row.id,
+  const speakers = executions.map(row => {
+    const bot = page.snapshot.members.find(member => member.id === row.bot_id);
+    const requester = page.snapshot.members.find(member => member.id === row.requester_id);
+    return { botId: row.bot_id, sessionId: null, executionId: row.id,
     sourceMessageId: row.source_message_id, isSelfRequested: row.requester_id === selfId,
+    ...(bot?.kind === 'bot' && bot.assistant === true && requester ? { requesterName: memberName(requester, ownerMembers) } : {}),
     ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { requestedAt: Date.parse(row.created_at) } : {}),
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
-    activity: row.plan_id ? 'step' as const : 'reply' as const }));
+    activity: row.plan_id ? 'step' as const : 'reply' as const };
+  });
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
   const open = plans.find(plan => ['proposed', 'running', 'waiting'].includes(plan.status));
   const currentStep = open?.steps.find(step => step.position === open.currentStep);
