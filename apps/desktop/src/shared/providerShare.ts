@@ -26,6 +26,7 @@ export interface ProviderShareReceivedSnapshot {
   active?: boolean;
   /** Per-region remaining display budget measured by Main's wall and monotonic clocks. */
   regionBudget?: Partial<Record<ProviderShareReceived['owner']['region'], ProviderShareRegionBudget>>;
+  unavailableShareIds?: readonly string[];
 }
 
 /**

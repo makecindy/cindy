@@ -2233,7 +2233,7 @@
     "login-bg-gradient-linear": "CSS none: preserve disabled gradient; no numeric DTCG value",
     "login-brand-accent": "protected register-only singleton",
     "login-brand-accent-pressed": "protected register-only singleton",
-    "chat-input-placeholder-subtle": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
+    "chat-input-placeholder-subtle": "Runtime alias: follows var(--chat-input-placeholder) in the existing registration (placeholder tier itself, no extra opacity; 2026-11-11 maintainer ruling A-06)",
     "annotation-accent": "protected register-only singleton",
     "settings-social-card-pressed-bg": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
     "button-primary-hover": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
@@ -2423,7 +2423,6 @@
         "chat-input-border-focus": "themes.cindy-dark.chat-input-border-focus",
         "chat-input-chip-border": "themes.cindy-dark.chat-input-chip-border",
         "chat-input-text": "themes.cindy-dark.chat-input-text",
-        "chat-input-placeholder-subtle": "themes.cindy-dark.chat-input-placeholder-subtle",
         "thinking-body-text": "themes.cindy-dark.thinking-body-text",
         "color-primary": "themes.cindy-dark.color-primary",
         "caret-accent": "themes.cindy-dark.caret-accent",
@@ -2604,7 +2603,6 @@
         "chat-input-border-focus": "themes.cindy-light.chat-input-border-focus",
         "chat-input-chip-border": "themes.cindy-light.chat-input-chip-border",
         "chat-input-text": "themes.cindy-light.chat-input-text",
-        "chat-input-placeholder-subtle": "themes.cindy-light.chat-input-placeholder-subtle",
         "thinking-body-text": "themes.cindy-light.thinking-body-text",
         "color-primary": "themes.cindy-light.color-primary",
         "caret-accent": "themes.cindy-light.caret-accent",
@@ -3307,6 +3305,7 @@
         "settings-theme-auto-dark": "themes.one-dark-pro.settings-theme-auto-dark",
         "sidebar-action-icon": "themes.one-dark-pro.sidebar-action-icon",
         "sidebar-item-active": "themes.one-dark-pro.sidebar-item-active",
+        "sidebar-item-active-border": "themes.one-dark-pro.sidebar-item-active-border",
         "splash-bg": "themes.one-dark-pro.splash-bg",
         "splash-text": "themes.one-dark-pro.splash-text",
         "splash-text-destructive": "themes.one-dark-pro.splash-text-destructive",
@@ -3775,7 +3774,7 @@
       {
         "id": "text-tertiary-hsl",
         "category": "",
-        "use": "Tertiary, HSL form"
+        "use": "Secondary tier (`--text-secondary`), HSL form — sidebar muted / welcome text"
       },
       {
         "id": "text-disabled",

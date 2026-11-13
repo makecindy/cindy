@@ -37,7 +37,7 @@ export function registerTeammateHomeTools(
   registry.register({
     name: 'get_teammate_home',
     category: 'bots',
-    description: 'Read which computer runs a teammate (its main computer) and which computers it can move to. A teammate belongs to the account: its chat and profile are the same on every computer; the main computer only decides where its agent runs. Use the exact teammate id from list_agents (without a device prefix). Cross-computer: answers for teammates running on any of the user\'s computers.',
+    description: 'Read which computer runs a buddy (its main computer) and which computers it can move to. A buddy belongs to the account: its chat and profile are the same on every computer; the main computer only decides where its agent runs. Use the exact buddy id from list_agents (without a device prefix). Cross-computer: answers for buddies running on any of the user\'s computers.',
     inputShape: { teammate_id: z.string().min(1).max(200) },
     handler: async ({ teammate_id }: { teammate_id: string }) => {
       const callerSessionId = deps.getSessionContext().sessionId;
@@ -49,7 +49,7 @@ export function registerTeammateHomeTools(
   registry.register({
     name: 'move_teammate_home',
     category: 'bots',
-    description: 'Move a teammate to another of the user\'s computers when the user asks (change its main computer). Pick target_device_id from get_teammate_home choices. Its chat history, profile, memories, skills, todos and routines move with it; files and logins stay on their computers. If it is still replying the move fails with BUSY unless when_busy is "wait" (finish the reply first, up to about 4 minutes) or "stop" (stop the reply). A missing answer may still have moved it: read get_teammate_home before retrying. Cross-computer write: follows the task\'s permission mode.',
+    description: 'Move a buddy to another of the user\'s computers when the user asks (change its main computer). Pick target_device_id from get_teammate_home choices. Its chat history, profile, memories and skills move with it; files and logins stay on their computers. If it is still replying the move fails with BUSY unless when_busy is "wait" (finish the reply first, up to about 4 minutes) or "stop" (stop the reply). A missing answer may still have moved it: read get_teammate_home before retrying. Cross-computer write: follows the task\'s permission mode.',
     inputShape: {
       teammate_id: z.string().min(1).max(200),
       target_device_id: z.string().min(1).max(200),

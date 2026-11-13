@@ -10,11 +10,16 @@
  * 对标 Codex Desktop 去掉大小 / 数量 / 类型校验后,rejection 的触发源收敛为
  * "文件本身不可用"(fileEmpty / readFailed);这里用空文件触发。
  */
+import { useLayoutEffect } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../shared/ghost';
 
 const toastWarning = vi.hoisted(() => vi.fn());
 const stageChatAttachment = vi.hoisted(() => vi.fn());
+const cleanupStaged = vi.hoisted(() => vi.fn(async () => {}));
+const plugins = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[], call: vi.fn() }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => plugins.ghosts, readInstalledGhostsSnapshot: () => plugins.ghosts }));
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: vi.fn() },
@@ -60,15 +65,30 @@ function deferred<T>(): {
   };
 }
 
+function enableAttachmentProvider(extensions = ['.pdf']) {
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'parse', name: 'Parse', kind: 'chip',
+      version: '1', entry: 'main.js', tools: [{ name: 'parse', description: 'Parse' }], mcpApps: {
+        ui: { resources: [], tools: { parse: { visibility: ['app'] } } }, host: { contributions: [
+          { id: 'parse', title: 'Parse attachment', position: 'composer.attachment', tool: 'parse', accept: { extensions } },
+        ] },
+      } } };
+  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); plugins.ghosts = [ghost];
+}
+
 beforeEach(() => {
   dataOwnerTesting.reset();
   setComposerDraftOwner(null);
   toastWarning.mockClear();
   stageChatAttachment.mockReset();
+  plugins.ghosts = []; plugins.call.mockReset();
+  cleanupStaged.mockClear();
   stageChatAttachment.mockResolvedValue({ success: true, path: '/cache/setup.exe.bin' });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     getFilePath: (f: { name: string }) => `/tmp/${f.name}`,
     stageChatAttachment,
+    cleanupStagedChatAttachments: cleanupStaged,
+    maker: { mcpApps: plugins.call },
   };
 });
 
@@ -79,6 +99,126 @@ afterEach(() => {
 });
 
 describe('useAttachments inline rejections', () => {
+  // B, unit: the real add/drop hook must keep the user's file while processing,
+  // append text through the same draft and discard late output after removal.
+  // Existing read/cache failures do not exercise plugin processing.
+  it('keeps the original attachment during processing and applies the result to its own draft', async () => {
+    enableAttachmentProvider();
+    const pending = deferred<unknown>(); plugins.call.mockReturnValue(pending.promise);
+    const { result } = renderHook(() => useAttachments(undefined, 'plugin-attachment'));
+    await act(async () => { await result.current.addFiles(fileListOf([{ name: 'input.pdf', size: 5 }])); });
+    expect(result.current.attachments.map(file => file.name)).toEqual(['input.pdf']);
+    expect(plugins.call).toHaveBeenCalledWith(null, expect.objectContaining({ op: 'plugin-action',
+      input: { attachment: { name: 'input.pdf', uri: '/tmp/input.pdf', size: 5, mimeType: 'application/pdf' } } }));
+    await act(async () => pending.resolve({ handled: true, text: 'Extracted text' }));
+    expect(JSON.stringify(getDraft('plugin-attachment')?.text)).toContain('Extracted text');
+    expect(result.current.attachments).toEqual([]);
+    act(() => discardDraft('plugin-attachment'));
+  });
+  // Unit, #9987: addFiles must adopt a valid result across an unrelated roster
+  // broadcast. Removal/revocation coverage does not rebuild the provider entry;
+  // the minimal failure is a cloned roster while its tool call is pending.
+  it('applies the attachment result after an unrelated plugin refresh rebuilds the roster', async () => {
+    enableAttachmentProvider();
+    const key = 'plugin-unrelated-refresh';
+    const pending = deferred<unknown>();
+    plugins.call.mockReturnValue(pending.promise);
+    const { result } = renderHook(() => useAttachments(undefined, key));
+    await act(async () => { await result.current.addFiles(fileListOf([{ name: 'input.pdf', size: 5 }])); });
+    expect(plugins.call).toHaveBeenCalledTimes(1);
+    plugins.ghosts = [...structuredClone(plugins.ghosts), {
+      enabled: true, dir: '/ordinary', approval: { state: 'approved', revision: 'ordinary' },
+      manifest: { schemaVersion: 3, id: 'ordinary', name: 'Ordinary', kind: 'chip', version: '1', entry: 'main.js' },
+    }];
+    await act(async () => pending.resolve({ handled: true, text: 'Extracted after refresh', files: [
+      { name: 'output.txt', path: '/cache/output.txt.bin', size: 1, mimeType: 'text/plain' },
+    ] }));
+    expect(JSON.stringify(getDraft(key)?.text)).toContain('Extracted after refresh');
+    expect(result.current.attachments.map(file => file.name)).toEqual(['output.txt']);
+    expect(getDraft(key)?.attachments).toEqual(result.current.attachments);
+    expect(cleanupStaged).not.toHaveBeenCalledWith(['/cache/output.txt.bin']);
+    act(() => discardDraft(key));
+  });
+  it.each(['remove', 'revoke', 'disable', 'update'] as const)('discards late output and releases staged files after %s', async kind => {
+    enableAttachmentProvider();
+    const pending = deferred<unknown>();
+    plugins.call.mockImplementation((_session, input) => input.op === 'plugin-action' ? pending.promise : Promise.resolve({}));
+    const key = `plugin-late-${kind}`;
+    const { result } = renderHook(() => useAttachments(undefined, key));
+    await act(async () => { await result.current.addFiles(fileListOf([{ name: 'input.pdf', size: 5 }])); });
+    if (kind === 'remove') act(() => result.current.removeFile(result.current.attachments[0].id));
+    else {
+      plugins.ghosts = structuredClone(plugins.ghosts);
+      if (kind === 'revoke') plugins.ghosts[0].approvedHostUi = [];
+      else if (kind === 'disable') plugins.ghosts[0].enabled = false;
+      else plugins.ghosts[0].approval = { state: 'approved', revision: 'two' };
+    }
+    await act(async () => pending.resolve({ handled: true, text: 'Late text', files: [
+      { name: 'output.txt', path: '/cache/output.txt.bin', size: 1, mimeType: 'text/plain' },
+    ] }));
+    expect(JSON.stringify(getDraft(key)?.text)).not.toContain('Late text');
+    expect(result.current.attachments.map(file => file.name)).toEqual(kind === 'remove' ? [] : ['input.pdf']);
+    expect(cleanupStaged).toHaveBeenCalledWith(['/cache/output.txt.bin']);
+    act(() => discardDraft(key));
+  });
+  // Unit, #9987: removal/revocation did not cover editing the same attachment id.
+  // Saving image annotations during an in-flight provider call must win, and
+  // returned staged files must be released without deleting the annotated image.
+  it('preserves saved image annotations when the attachment provider finishes late', async () => {
+    enableAttachmentProvider(['.png']);
+    const key = 'plugin-late-annotation';
+    const pending = deferred<unknown>();
+    plugins.call.mockImplementation((_session, input) => input.op === 'plugin-action' ? pending.promise : Promise.resolve({}));
+    const cleanupImages = vi.fn(async () => {});
+    Object.assign(window.electronAPI, {
+      cacheImageFromPath: vi.fn(async () => ({ url: 'cindy-media://blobs/photo.png' })),
+      cleanupCachedImages: cleanupImages,
+    });
+    const { result } = renderHook(() => useAttachments(key));
+    await act(async () => { await result.current.addFiles(fileListOf([{ name: 'photo.png', size: 5 }])); });
+    expect(plugins.call).toHaveBeenCalledWith(key, expect.objectContaining({ op: 'plugin-action' }));
+    const id = result.current.attachments[0].id;
+    act(() => result.current.updateFile(id, { annotationStrokes: [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }] }] }));
+    const annotated = result.current.attachments[0];
+    await act(async () => pending.resolve({ handled: true, text: 'Outdated extraction', files: [
+      { name: 'output.txt', path: '/cache/output.txt.bin', size: 1, mimeType: 'text/plain' },
+    ] }));
+    expect(result.current.attachments).toEqual([annotated]);
+    expect(getDraft(key)?.attachments).toEqual([annotated]);
+    expect(JSON.stringify(getDraft(key)?.text)).not.toContain('Outdated extraction');
+    expect(cleanupStaged).toHaveBeenCalledWith(['/cache/output.txt.bin']);
+    expect(cleanupImages).not.toHaveBeenCalled();
+    act(() => discardDraft(key));
+  });
+  it('does not restore sent files from a pending draft mirror', async () => {
+    const key = 'draft-mirror-send';
+    clearDraft(key);
+    Object.assign(window.electronAPI, {
+      cacheImageFromPath: vi.fn(async () => ({ url: 'cindy-media://blobs/photo.png' })),
+    });
+    let sent = false;
+    const { result, unmount } = renderHook(() => {
+      const attachments = useAttachments(key, key);
+      // PR #8937: send can clear the tray before the selected file's draft effect runs.
+      useLayoutEffect(() => {
+        if (!sent && attachments.attachments.length > 0) {
+          sent = true;
+          attachments.clearFiles();
+        }
+      }, [attachments.attachments, attachments.clearFiles]);
+      return attachments;
+    });
+    await act(async () => {
+      await result.current.addFiles(fileListOf([{ name: 'photo.png', size: 7 }]));
+    });
+    expect(sent).toBe(true);
+    expect(result.current.attachments).toHaveLength(0);
+    expect(getDraft(key)?.attachments ?? []).toHaveLength(0);
+    unmount();
+    expect(getDraft(key)?.attachments ?? []).toHaveLength(0);
+    clearDraft(key);
+  });
+
   it('routes an empty (0-byte) file to rejections, not a toast', async () => {
     const { result } = renderHook(() => useAttachments());
 

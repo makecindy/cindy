@@ -13,9 +13,11 @@ import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { previewRewindAtMessage, commitRewindAtMessage, type RewindCommitOptions } from '../maker-orchestration/rewind.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { getGoalController } from '../goal-host/index.js';
-import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../device-link/broadcast-tap.js';
 import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
 import {
   listVisibleSubagentObservationIdentities,
@@ -31,14 +33,30 @@ import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
 import { MAKER_INVOKE } from './channels.js';
-import { withSessionInputStoppedForRewind } from './register.js';
+import {
+  withSessionInputStoppedForRewind,
+  prepareSessionForHistoryAction,
+  releaseSessionAfterHistoryAction,
+} from './register.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { pruneWithdrawnWorkingMemoryForSession } from './botWorkingMemory.js';
 
 const log = createLogger('maker-ipc/rewind');
 const STOPPED_REWIND_RETRY_MS = 100;
 const STOPPED_REWIND_TIMEOUT_MS = 15_000;
+
+function assertRewindOwner(scope: RewindCommitOptions['ownerScope']) {
+  if (scope && !isDataOwnerBroadcastScopeCurrent(scope)) {
+    throwIpcError('PRECONDITION_FAILED', 'Account changed while preparing rewind');
+  }
+}
+
+// Rewind can now start a cold task, so a local caller must be the trusted top-level
+// page like the other history actions; device-link has its own authenticated channel.
+function assertTrustedRewindCaller(event: Electron.IpcMainInvokeEvent) {
+  if (!isDeviceLinkInvoke()) {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+  }
+}
 
 async function commitAfterStopping(
   sessionId: string,
@@ -70,12 +88,18 @@ async function commitAfterPersistBarrier(
   // reload its target and transaction boundary from the durable store.
   await drainPersistQueue();
   return withSendToSessionLock(sessionId, async () => {
-    const result = await commitRewindAtMessage(sessionId, clientId, opts);
-    advanceSessionRewindGeneration(sessionId);
-    // 被撤回轮次产生的伙伴工作记忆条目一并清掉(与删除路径同一失效模式);提交成功
-    // 后按数据库现状对账,失败不影响 rewind,渲染时的统一过滤仍兜底。
-    await pruneWithdrawnWorkingMemoryForSession(sessionId, ownerScopedUserDataPath()).catch(() => 0);
-    return result;
+    let committed = false;
+    try {
+      assertRewindOwner(opts.ownerScope);
+      await prepareSessionForHistoryAction(sessionId, 'rewind');
+      assertRewindOwner(opts.ownerScope);
+      const result = await commitRewindAtMessage(sessionId, clientId, opts);
+      committed = true;
+      advanceSessionRewindGeneration(sessionId);
+      return result;
+    } finally {
+      await releaseSessionAfterHistoryAction(sessionId, { rewindCommitted: committed });
+    }
   });
 }
 
@@ -89,14 +113,25 @@ export function registerMakerRewindIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.REWIND_PREVIEW,
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       sessionId: unknown,
       clientId: unknown,
     ) => {
+      assertTrustedRewindCaller(event);
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      const ownerScope = captureDataOwnerBroadcastScope();
       try {
-        return await previewRewindAtMessage(sid, cid);
+        return await withSendToSessionLock(sid, async () => {
+          try {
+            assertRewindOwner(ownerScope);
+            await prepareSessionForHistoryAction(sid, 'rewind');
+            assertRewindOwner(ownerScope);
+            return await previewRewindAtMessage(sid, cid);
+          } finally {
+            await releaseSessionAfterHistoryAction(sid);
+          }
+        });
       } catch (err) {
         log.warn('rewind:preview failed', { sid, cid, error: String(err) });
         wrapErr(err);
@@ -107,11 +142,12 @@ export function registerMakerRewindIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.REWIND_COMMIT,
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       sessionId: unknown,
       clientId: unknown,
       opts?: unknown,
     ) => {
+      assertTrustedRewindCaller(event);
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
       const ownerScope = captureDataOwnerBroadcastScope();

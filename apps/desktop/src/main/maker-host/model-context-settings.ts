@@ -1,3 +1,4 @@
+import { createModelContextProviderResolver } from './modelContextProvider.js';
 import { isCodexGatewayWireModel, type AgentKind, type Catalog, type Effort } from '@cindy/model-providers';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -12,26 +13,10 @@ import { resolveRouteContextWindowBounds } from '../../shared/sessionContextWind
 import type { SessionContextWindowBounds } from '../../shared/sessionContextWindowBounds.js';
 
 /** Shared settings identity for startup, refresh and history protection of implicit routes. */
-export function resolveDesktopModelContextProviderId(
-  catalog: Pick<Catalog, 'providers'>,
-  agent: AgentKind,
-  providerId: string | null | undefined,
-  modelId: string,
-): string | null {
-  const source = resolveModelContextProviderId(catalog, agent, providerId, modelId);
-  if (source || providerId) return source;
-  // Implicit Claude sessions use the gateway whenever a gateway key exists; only without one
-  // do they fall back to the local Claude Code login (same order as the Claude auth adapter).
-  // Codex's ordinary implicit models instead inherit subscription-first spawn credentials.
-  const defaultSource = agent === 'claude-code'
-    ? gatewayDefaultRouteDecision(agent, readClaudeApiKey()) ? 'xd'
-      : hasClaudeNativeLogin() ? 'anthropic' : null
-    : agent === 'codex'
-      ? isCodexGatewayWireModel(modelId) ? 'xd'
-        : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly() ? 'openai' : 'xd'
-      : null;
-  return resolveModelContextProviderId(catalog, agent, providerId, modelId, defaultSource);
-}
+export const resolveDesktopModelContextProviderId = createModelContextProviderResolver({
+  readGatewayKey: readClaudeApiKey, hasClaudeNativeLogin,
+  hasCodexOAuthLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
+});
 
 /** 取两个可选上限中更紧的那个（都缺省时返回 null = 跟随目录默认）。 */
 function tighterBudget(

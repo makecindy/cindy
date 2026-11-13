@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
   afterAuth: () => {},
   bodies: [] as Record<string, unknown>[],
 }));
-vi.mock('../outbound-fetch.js', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn() }));
 vi.mock('@cindy/maker-core', async () => {
   const { standardSpeedRequest } = await import(
     '../../../../../../packages/maker-core/src/agents/shared/fast-mode-policy.js'

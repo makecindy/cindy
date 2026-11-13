@@ -206,6 +206,10 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
       "chatgpt/gpt-5.6-sol",
       "chatgpt/gpt-5.6-terra",
       "chatgpt/gpt-6-astra",
+      "chatgpt/gpt-6-luna",
+      "chatgpt/gpt-6-sol",
+      "chatgpt/gpt-6.1-sol",
+      "chatgpt/gpt-6.1-terra",
     ]);
     expect(
       provider("openai").models.pi?.some(

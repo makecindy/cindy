@@ -64,7 +64,7 @@ export function remoteBotCreatedTaskIds(value: unknown, botId: string): string[]
 export function parseRemoteBots(value: unknown, deviceId: string, deviceName: string): RemoteBot[] {
   const response = record(value);
   if (response.collectionId !== 'teammates' || !Array.isArray(response.items)) {
-    throw new Error('Invalid teammate collection');
+    throw new Error('Invalid buddy collection');
   }
   return response.items.map((value: unknown) => {
     const item = record(value);
@@ -78,7 +78,7 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
       !ref.id ||
       !text(display.title)
     ) {
-      throw new Error('Invalid teammate identity');
+      throw new Error('Invalid buddy identity');
     }
     const link = Array.isArray(item.links)
       ? item.links.find((value: unknown) => {

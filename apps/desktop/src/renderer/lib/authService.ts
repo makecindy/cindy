@@ -134,7 +134,11 @@ export function createAuthService(): AuthService {
         log.info('initialize requested');
         initializeTask = (async () => {
           const raw = await window.electronAPI.authInitialize();
-          if (version !== startVersion && snapshot) {
+          // Startup may broadcast a pending boundary before returning its
+          // committed owner. A higher Main-owned generation supersedes that
+          // push; same/older generations must still preserve a later boundary.
+          if (version !== startVersion && snapshot
+            && !(raw.ownerGeneration > snapshot.ownerGeneration)) {
             log.info('discarded stale initialize response');
             return snapshot;
           }
