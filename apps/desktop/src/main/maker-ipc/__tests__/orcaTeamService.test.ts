@@ -1881,6 +1881,45 @@ describe('OrcaTeamService', () => {
     expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '另一个问题' });
   });
 
+  // 终态已清 autoBridge 条目后，改写排队回报仍须把面板上挂着的旧问题清掉。
+  it('invalidates the projected report via source tracking after runtime state was cleared', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '选 A 还是 B' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked' });
+
+    // 终态结算会清掉 autoBridge 条目；来源追踪独立于它存活。
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '结果' });
+    service.clearAutoBridgeState('worker-session-1');
+
+    // 改写仍命中：面板不再挂着已失效的旧「等回复」。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toBeNull();
+  });
+
+  // 迟到的旧派活回执只在旧 state 上记账，不得覆盖新一轮派活的面板。
+  it('does not let a late old-dispatch receipt overwrite the new round panel', async () => {
+    const { deps, getWorker, service } = createDeps();
+    // 第一轮派活，回报回执悬而未决。
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一轮' });
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    // 新一轮派活已开始（清回报、置 running）。
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第二轮' });
+    // 旧回执迟到落地。
+    await finish(true, {
+      delivered: false,
+      queuedMessageId: 'queued-old',
+      report: { state: 'blocked', question: '第一轮的旧问题' },
+    });
+
+    // 面板保持新一轮的空标记，不被旧回报洗回旧结论。
+    expect(getWorker().latestReport).toBeNull();
+  });
+
   // progress 只是进度，不是本轮结论：终态不得拿它做映射，否则后续报的结论会被跳过。
   it('never maps a progress report into the worker status at the terminal', async () => {
     const { deps, getWorker, service } = createDeps();
