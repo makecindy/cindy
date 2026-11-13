@@ -3,6 +3,38 @@ import type { MemorySettings, writeMemorySetting } from '../maker-host/memory-se
 import type { MemoryChangeParts } from '../maker-ipc/deferredCodexRestart.js';
 
 export type NativeMemoryPatch = Partial<Omit<MemorySettings, 'maker'>>;
+
+export const MEMORY_SETTINGS_CONFLICT_CODE = 'MEMORY_SETTINGS_CONFLICT' as const;
+
+/**
+ * Cindy Memory and the Claude Code/Codex native stores are mutually exclusive
+ * while Cindy Memory is enabled. Keep this policy in the settings domain so
+ * every entry point can return the same actionable result without attempting
+ * a partial write.
+ */
+export function getMemorySettingsConflict(
+  next: Pick<MemorySettings, 'maker'>,
+  patch: NativeMemoryPatch,
+): {
+  ok: false;
+  errorCode: typeof MEMORY_SETTINGS_CONFLICT_CODE;
+  message: string;
+  conflictingFields: Array<'claudeCode' | 'codex'>;
+  requires: { maker: false };
+} | undefined {
+  if (!next.maker) return undefined;
+  const conflictingFields = (['claudeCode', 'codex'] as const)
+    .filter((key) => patch[key] !== undefined);
+  if (!conflictingFields.length) return undefined;
+  return {
+    ok: false,
+    errorCode: MEMORY_SETTINGS_CONFLICT_CODE,
+    message: 'Cindy 记忆开启时不能同时修改 Claude Code 或 Codex 原生记忆。请先将 maker 设为 false，再修改这些字段；本次未应用任何字段。',
+    conflictingFields: [...conflictingFields],
+    requires: { maker: false },
+  };
+}
+
 interface Deps {
   makerMemory: Pick<MakerMemoryManager, 'isEnabled' | 'enable' | 'disable' | 'syncNativeAgentsOff'>;
   maker: { setAgentMemory(kind: 'claude-code' | 'codex' | 'pi', enabled: boolean): Promise<unknown> };

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createAppSettingsService } from '../service';
-import { updateMakerMemorySettings } from '../memory';
+import { getMemorySettingsConflict, updateMakerMemorySettings } from '../memory';
 import { runMemoryChangeWithCodexRestart } from '../../maker-ipc/deferredCodexRestart';
 import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 
@@ -31,6 +31,23 @@ describe('app settings service', () => {
     expect(update).not.toHaveBeenCalled();
     await expect(service({ operation: 'update', section: 'test', patch: { enabled: true } }, async () => {})).rejects.toThrow('disk unavailable');
     expect(await service({ operation: 'reset', section: 'test' }, async () => {})).toMatchObject({ ok: false, errorCode: 'RESET_NOT_SUPPORTED' });
+  });
+
+  it('preserves actionable section errors for mutually exclusive memory fields', async () => {
+    const conflict = getMemorySettingsConflict({ maker: true }, { claudeCode: true, codex: true });
+    expect(conflict).toMatchObject({
+      ok: false,
+      errorCode: 'MEMORY_SETTINGS_CONFLICT',
+      conflictingFields: ['claudeCode', 'codex'],
+      requires: { maker: false },
+    });
+    const update = vi.fn(() => conflict);
+    const service = createAppSettingsService([{ id: 'memory', title: '记忆', description: '', effective: 'immediate',
+      schema: z.strictObject({ maker: z.boolean().optional(), claudeCode: z.boolean().optional(), codex: z.boolean().optional() }),
+      read: () => ({ maker: true, claudeCode: false, codex: false }), update }]);
+    await expect(service({ operation: 'update', section: 'memory', patch: { maker: true, claudeCode: true, codex: true } }, async () => {}))
+      .resolves.toMatchObject({ ok: false, errorCode: 'MEMORY_SETTINGS_CONFLICT', message: expect.stringContaining('maker'), result: conflict });
+    expect(update).toHaveBeenCalledOnce();
   });
 });
 

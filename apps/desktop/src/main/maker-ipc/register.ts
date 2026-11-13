@@ -778,7 +778,7 @@ import {
   type MemorySettings,
   writeMemorySetting,
 } from '../maker-host/memory-settings-store.js';
-import { updateMakerMemorySettings, type NativeMemoryPatch } from '../app-settings/memory.js';
+import { getMemorySettingsConflict, updateMakerMemorySettings, type NativeMemoryPatch } from '../app-settings/memory.js';
 import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import {
   assertCollabProjectEnabled,
@@ -25914,8 +25914,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     read: () => ({ ...memorySettingsWire(), runtime: { maker: maker.makerMemory?.isEnabled() ?? null } }),
     update: async patch => {
       const next = { ...readMemorySettingsState().value, ...patch };
-      if (next.maker && (patch.claudeCode !== undefined || patch.codex !== undefined))
-        throwIpcError('INVALID_PARAMS', 'Disable Cindy memory before changing native memory, as in Settings');
+      const memoryConflict = getMemorySettingsConflict(next, patch);
+      if (memoryConflict) return memoryConflict;
       let result: unknown;
       if (patch.maker !== undefined) {
         const nativePatch: NativeMemoryPatch = {};

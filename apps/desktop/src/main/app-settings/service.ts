@@ -41,9 +41,15 @@ export function createAppSettingsService(sections: readonly AppSettingsSection[]
       await assertCurrent();
       result = await section.reset();
     }
-    if (result && typeof result === 'object' && 'ok' in result && result.ok === false) return {
-      ok: false, errorCode: 'SETTINGS_NOT_APPLIED', message: '设置尚未完成，请按返回状态处理后重新读取。', result,
-    };
+    if (result && typeof result === 'object' && 'ok' in result && result.ok === false) {
+      const failure = result as { errorCode?: unknown; message?: unknown };
+      return {
+        ok: false,
+        errorCode: typeof failure.errorCode === 'string' ? failure.errorCode : 'SETTINGS_NOT_APPLIED',
+        message: typeof failure.message === 'string' ? failure.message : '设置尚未完成，请按返回状态处理后重新读取。',
+        result,
+      };
+    }
     await assertCurrent();
     const state = await section.read();
     await assertCurrent();
