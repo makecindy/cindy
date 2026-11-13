@@ -17,11 +17,15 @@ const h = vi.hoisted(() => ({
   cached: false,
   lastReplyAt: 0,
   devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
+  deviceListStatus: 'ready' as 'loading' | 'ready' | 'error',
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
   cloudView: vi.fn(),
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => h.cloud }));
-vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => h.devices }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => h.devices,
+  useDeviceLinkDeviceListRequestState: () => ({ status: h.deviceListStatus, error: null }),
+}));
 vi.mock('../CloudCompanionOfflineView', () => ({
   CloudCompanionOfflineView: (props: unknown) => { h.cloudView(props); return <div>cloud-offline-view</div>; },
 }));
@@ -73,6 +77,7 @@ beforeEach(() => {
   h.lastReplyAt = 0;
   h.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
   h.devices = null;
+  h.deviceListStatus = 'ready';
   h.cloudView.mockReset();
   h.pin.mockReset();
   h.merge.mockReset();
@@ -206,6 +211,7 @@ it('keeps the open chat through a brief drop, then shows the cloud conversation 
 it('calls a main computer that is not listed offline, and "control off" only when it reports remote control off', async () => {
   h.listed = false;
   const home = { deviceId: 'home', name: 'Home', online: true, isSelf: false };
+  h.devices = [{ deviceId: 'home', online: false, remoteControlEnabled: true }];
   const actor = { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home', homeDevice: home };
   h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [actor] };
   const { rerender } = render(<RemoteBotSessionView />);
@@ -215,9 +221,44 @@ it('calls a main computer that is not listed offline, and "control off" only whe
   h.cloud = { ...h.cloud, actors: [{ ...actor, homeDevice: { ...home, remoteControlEnabled: true } }] };
   rerender(<RemoteBotSessionView />);
   expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ controlOff: false }));
+  h.devices = [{ deviceId: 'home', online: true, remoteControlEnabled: false }];
   h.cloud = { ...h.cloud, actors: [{ ...actor, homeDevice: { ...home, remoteControlEnabled: false } }] };
   rerender(<RemoteBotSessionView />);
   expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ controlOff: true }));
+});
+
+it.each(['loading', 'error'] as const)('does not confirm offline when the target row is missing and the device directory is %s', async status => {
+  h.listed = false;
+  h.deviceListStatus = status;
+  const home = { deviceId: 'home', name: 'Home', online: true, isSelf: false, remoteControlEnabled: true };
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home', homeDevice: home }] };
+  render(<RemoteBotSessionView />);
+  await waitFor(() => expect(h.cloudView).not.toHaveBeenCalled());
+  expect(screen.queryByText('cloud-offline-view')).toBeNull();
+  expect(screen.getByText('bots.remote.preparing')).toBeTruthy();
+});
+
+it('does not confirm offline when an online home is missing its target row', async () => {
+  h.listed = false;
+  h.deviceListStatus = 'ready';
+  const home = { deviceId: 'home', name: 'Home', online: true, isSelf: false, remoteControlEnabled: true };
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home', homeDevice: home }] };
+  render(<RemoteBotSessionView />);
+  await waitFor(() => expect(h.cloudView).not.toHaveBeenCalled());
+  expect(screen.queryByText('cloud-offline-view')).toBeNull();
+});
+
+it('shows the cloud conversation when the missing target row is explicitly offline', async () => {
+  h.listed = false;
+  h.deviceListStatus = 'ready';
+  h.devices = [{ deviceId: 'home', online: false, remoteControlEnabled: true }];
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  render(<RemoteBotSessionView />);
+  await screen.findByText('cloud-offline-view');
+  expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ controlOff: false }));
 });
 
 it('reads "control off" from the live device list, so a stale snapshot neither hides it nor invents it', async () => {
@@ -234,7 +275,7 @@ it('reads "control off" from the live device list, so a stale snapshot neither h
   // Switched on again, and a computer that is simply offline (it reports off too) stays "offline".
   h.devices = [{ deviceId: 'home', online: true, remoteControlEnabled: true }];
   rerender(<RemoteBotSessionView />);
-  expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ controlOff: false }));
+  expect(screen.queryByText('cloud-offline-view')).toBeNull();
   h.devices = [{ deviceId: 'home', online: false, remoteControlEnabled: false }];
   rerender(<RemoteBotSessionView />);
   expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ controlOff: false }));
