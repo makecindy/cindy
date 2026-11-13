@@ -144,6 +144,46 @@ describe('builtin provisioning physical market identity', () => {
     expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
   });
 
+  // An absent/uninstalled ledger is not positive root evidence. Exercise all
+  // destructive seed paths with the pre-namespace receipt and actual registry.
+  it.each([
+    ['absent', 'replace'], ['uninstalled', 'replace'],
+    ['absent', 'audience'], ['uninstalled', 'audience'],
+    ['absent', 'orphan'], ['uninstalled', 'orphan'],
+  ])('preserves pending identity with %s ledger during %s', async (ledgerState, action) => {
+    const fixture = await harness();
+    const legacyReceipt = { ...fixture.receipt };
+    delete legacyReceipt.namespace;
+    await fixture.receipts.write(legacyReceipt, { relId: fixture.relId });
+    Object.assign(fixture.registry.instances['builtin-test']!, {
+      namespace: null, namespaceState: 'pending', source: 'legacy', pluginId: null,
+    });
+    fixture.registryStore.write(fixture.registry);
+    if (ledgerState === 'absent') {
+      await fs.promises.unlink(path.join(path.dirname(fixture.stateRoot), 'market', 'ledger.v1.json'));
+    } else {
+      const record = fixture.ledger.installationForAuthorization({ ghostId: 'builtin-test', namespace: 'xd' })!;
+      fixture.ledger.upsertInstallation({ ...record, installed: false });
+    }
+    if (action === 'audience') fs.writeFileSync(path.join(fixture.seedRoot, 'provisioning.json'),
+      JSON.stringify({ ghosts: { 'builtin-test': { audience: { userIds: ['someone-else'] } } } }));
+    if (action === 'orphan') {
+      await writeMinimalSeed(fixture.seedRoot, 'another-seed');
+      fs.renameSync(fixture.seedDir, path.join(path.dirname(fixture.seedRoot), 'withdrawn-seed'));
+    }
+    const before = fixture.receipts.read(fixture.relId);
+    const outcome = await provisionBuiltinGhosts(fixture.deps);
+    expect(outcome.updated).not.toContain('builtin-test');
+    expect(outcome.approved).not.toContain('builtin-test');
+    expect(outcome.removed).not.toContain('builtin-test');
+    expect(outcome.retryPending).toBe(true);
+    expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
+    expect(fixture.receipts.read(fixture.relId)).toEqual(before);
+    expect(fixture.manager.readInstanceForContent(fixture.relId)).toMatchObject({
+      namespace: null, namespaceState: 'pending', instanceKey: 'builtin-test',
+    });
+  });
+
   it.each(['restore', 'wrong-source', 'changed-bytes'])('a retained organization overwritten by a root seed: %s', async mode => {
     const fixture = await harness();
     fixture.manager.list();

@@ -28,14 +28,10 @@ export function builtinSeedStoreInstall(
   } else if (!instance && receipt && hasDeliveryNamespace(receipt)) {
     namespace = receipt.namespace;
   } else {
-    // An old bundled install may predate receipts. The migration lookup only
-    // vetoes replacement: it never selects another namespace or grants identity.
-    const candidates = deps.ledger.createNamespaceMigrationLookup()(id);
-    if (candidates.kind === 'invalid' ||
-        (candidates.kind === 'found' && candidates.records.some(record => record.installed))) {
-      throw new Error('Builtin installation namespace awaits market evidence');
-    }
-    return null;
+    // Missing market records cannot establish root identity. Leave old pending
+    // installations to the namespace migration instead of replacing their bytes
+    // or publishing a root receipt (including audience/orphan reclamation).
+    throw new Error('Builtin installation namespace awaits trusted evidence');
   }
   const lookup = deps.ledger.lookupInstallationForAuthorization({ ghostId: id, namespace });
   if (lookup.kind === 'invalid') throw new Error('Plugin market ledger is unreadable');
