@@ -63,7 +63,7 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
           { id: 'qa-done', sequence: 2, kind: 'message', planId: plan.id, authorKind: 'bot', authorBotId: members[0].botId,
           authorName: members[0].name, content: '调研结果已整理好，可以继续核对。', createdAt: NOW - 25_000 }],
         round: { status: talk ? 'idle' : 'running', canContinue: false, speakers: talk ? [] : [
-          { botId: members[1].botId, sessionId: 'qa-work', activity: 'step', executionId: 'qa-e2-work', executionStatus: 'running', startedAt: NOW - 20_000 },
+          { botId: members[1].botId, sessionId: 'qa-work', activity: 'step', executionId: 'qa-e2-work', isSelfRequested: true, requestedAt: NOW - 20_000, executionStatus: 'running', startedAt: NOW - 20_000 },
         ] },
       } }] };
   }
@@ -72,12 +72,14 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
       id: groupId, name: '群内执行 · 模拟数据', serverBacked: true, replyMode: 'mentioned', speakingMode: 'auto',
       members, plans: [], supportsScopedStop: !groupId.endsWith('-legacy'), canStopAll: !groupId.endsWith('-member'), createdAt: NOW, updatedAt: NOW,
       messages: [{ id: 'qa-start', sequence: 1, kind: 'message', authorKind: 'user', isSelf: true,
-        content: '请一起核对移动端群内执行，确认每位伙伴的进展与等待操作都可以完整阅读。', createdAt: NOW - 40_000 }],
+        content: '请一起核对移动端群内执行，确认每位伙伴的进展与等待操作都可以完整阅读。', createdAt: NOW - 40_000 },
+        { id: 'qa-followup', sequence: 2, kind: 'message', authorKind: 'user', isSelf: false, authorName: 'Alex',
+          content: '我也有一项需要一起核对。', createdAt: NOW - 25_000 }],
       round: { status: running ? 'running' : 'idle', canContinue: false, othersActive: true, speakers: running ? [
-        { botId: 'qa-research', sessionId: 'qa-research', activity: 'reply', executionId: 'qa-e1', executionStatus: 'running', startedAt: NOW - 30_000 },
-        { botId: 'qa-design', sessionId: 'qa-permission', activity: 'reply', executionId: 'qa-e2', executionStatus: 'needs_input', startedAt: NOW - 20_000 },
-        { botId: 'qa-check', sessionId: 'qa-question', activity: 'reply', executionId: 'qa-e3', executionStatus: 'needs_input', startedAt: NOW - 10_000 },
-        { botId: 'qa-research', sessionId: null, activity: 'reply', executionId: 'qa-e4', executionStatus: 'queued' },
+        { botId: 'qa-research', sessionId: 'qa-research', activity: 'reply', executionId: 'qa-e1', isSelfRequested: false, requestedAt: NOW - 30_000, executionStatus: 'running', startedAt: NOW - 30_000 },
+        { botId: 'qa-design', sessionId: 'qa-permission', activity: 'reply', executionId: 'qa-e2', isSelfRequested: true, requestedAt: NOW - 20_000, executionStatus: 'needs_input', startedAt: NOW - 20_000 },
+        { botId: 'qa-check', sessionId: 'qa-question', activity: 'reply', executionId: 'qa-e3', isSelfRequested: true, requestedAt: NOW - 10_000, executionStatus: 'needs_input', startedAt: NOW - 10_000 },
+        { botId: 'qa-research', sessionId: null, activity: 'reply', executionId: 'qa-e4', isSelfRequested: true, requestedAt: NOW - 5_000, executionStatus: 'queued' },
       ] : [] },
     } }] };
 }

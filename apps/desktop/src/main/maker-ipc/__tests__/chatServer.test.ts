@@ -3455,9 +3455,9 @@ describe('Chat Server result delivery and refresh', () => {
     });
 
     it.each([
-      ['a member stops only their own requests and teammates', 'member', undefined, [['own', undefined], ['bot', otherBot]]],
+      ['a member stops only their own requests', 'member', undefined, [['own', undefined]]],
       ['an owner may stop everyone', 'owner', 'all', [['own', undefined], ['bot', undefined], ['foreign', undefined]]],
-      ['an owner who did not ask for all stops only their own', 'owner', undefined, [['own', undefined], ['bot', otherBot]]],
+      ['an owner who did not ask for all stops only their own', 'owner', undefined, [['own', undefined]]],
       ['a member whose own teammate is admin stops everyone as that teammate', 'member', 'all', [['own', undefined], ['bot', otherBot], ['foreign', otherBot]], 'admin'],
     ] as const)('%s', async (_label, role, scope, expected, botRole?: string) => {
       const ids = { own: '40000000-0000-4000-8000-00000000000a', bot: '40000000-0000-4000-8000-00000000000b', foreign: '40000000-0000-4000-8000-00000000000c' };

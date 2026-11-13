@@ -5204,7 +5204,7 @@ it('keeps only the current public progress note between tool calls', () => {
 it('keeps waiting work inspectable without inventing an elapsed time', async () => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'], round: {
     status: 'running', canContinue: false, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'waiting', sessionId: 'lane-mimi', executionStatus: 'needs_input' },
+      { botId: 'mimi', activity: 'reply', executionId: 'waiting', isSelfRequested: true, sessionId: 'lane-mimi', executionStatus: 'needs_input' },
     ],
   } }) });
   renderView();
@@ -5224,11 +5224,11 @@ it('opens the exact remote execution and leaves other members’ private tasks u
     homeDevice: { deviceId: 'studio', name: 'Studio', online: true, isSelf: false, remoteControlEnabled: true },
   }] });
   mocks.remoteInvoke.mockResolvedValue({ ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, blocks: [{ primitive: 'bot-group-chat', data: {
-    id: 'g1', round: { speakers: [{ executionId: 'other-thread', sessionId: 'wrong-lane' }, { executionId: 'this-turn', sessionId: 'correct-lane' }] },
+    id: 'g1', round: { speakers: [{ executionId: 'other-thread', sessionId: 'wrong-lane' }, { executionId: 'this-turn', isSelfRequested: true, sessionId: 'correct-lane' }] },
   } }] });
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi', 'xiaoman'], round: {
     status: 'running', canContinue: false, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'this-turn', sessionId: null, startedAt: Date.now() - 10_000 },
+      { botId: 'mimi', activity: 'reply', executionId: 'this-turn', isSelfRequested: true, sessionId: null, startedAt: Date.now() - 10_000 },
       { botId: 'xiaoman', activity: 'reply', executionId: 'theirs', sessionId: null, startedAt: Date.now() - 10_000 },
     ],
   } }) });
@@ -5247,8 +5247,8 @@ it.each([false, true])('keeps the group stop control enabled for another running
     canStopAll: admin,
     speakingBotIds: ['mimi', 'xiaoman'],
     round: { status: 'running', canContinue: false, othersActive: admin, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'first-running', sessionId: 'lane-mimi', startedAt: Date.now() - 10_000, executionStatus: 'running' },
-      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', sessionId: 'lane-xiaoman', startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
+      { botId: 'mimi', activity: 'reply', executionId: 'first-running', isSelfRequested: true, sessionId: 'lane-mimi', startedAt: Date.now() - 10_000, executionStatus: 'running' },
+      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', isSelfRequested: true, sessionId: 'lane-xiaoman', startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
     ] },
   }) });
   renderView();
@@ -5273,7 +5273,7 @@ it.each(['reply', 'step'] as const)('shows a queued %s without generation or wor
     ...(activity === 'step' ? withPlan(queuedPlan, []) : {}),
     speakingBotIds: ['mimi'],
     round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity,
-      executionId: 'queued-execution', executionStatus: 'queued', sessionId: null, startedAt: Date.now() - 120_000 }] },
+      executionId: 'queued-execution', isSelfRequested: true, executionStatus: 'queued', sessionId: null, startedAt: Date.now() - 120_000 }] },
   }) });
   renderView();
   const strip = await screen.findByTestId('bot-group-progress');
@@ -5287,7 +5287,7 @@ it.each(['reply', 'step'] as const)('shows a queued %s without generation or wor
 it('shows newly queued work immediately in the timeline', async () => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'],
     round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity: 'reply',
-      executionId: 'just-queued', executionStatus: 'queued', sessionId: null, startedAt: Date.now() }] },
+      executionId: 'just-queued', isSelfRequested: true, executionStatus: 'queued', sessionId: null, startedAt: Date.now() }] },
   }) });
   renderView();
   const row = await screen.findByTestId('bot-group-progress');
@@ -5881,4 +5881,23 @@ it('does not reread group history for busy-only online presence', async () => {
     await act(async () => { emit(false); emit(true); await vi.advanceTimersByTimeAsync(60); });
     expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads + 2);
   } finally { view.unmount(); vi.useRealTimers(); }
+});
+
+// Multi-member requests retain chronology and controls follow the requester, not bot ownership.
+it('places live work before later messages and leaves another request read-only', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    messages: [msg({ id: 'request', sequence: 1, createdAt: 10, content: 'First request' }), msg({ id: 'later', sequence: 2, createdAt: 30, content: 'Later message' })],
+    round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: 'mine-lane', activity: 'reply', executionId: 'mine-work', requestedAt: 20, isSelfRequested: true },
+      { botId: 'xiaoman', sessionId: 'other-lane', activity: 'reply', executionId: 'other-work', requestedAt: 40, isSelfRequested: false },
+    ] },
+  }) });
+  renderView();
+  const work = await screen.findAllByTestId('bot-group-work');
+  const later = screen.getByText('Later message');
+  expect(work[0]!.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(later.compareDocumentPosition(work[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(work[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeTruthy();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.viewProcess' })).toBeNull();
 });

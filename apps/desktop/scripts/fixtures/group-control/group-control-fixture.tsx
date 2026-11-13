@@ -35,6 +35,7 @@ interface GroupData {
   workState?: 'thinking' | 'reading-file' | 'testing' | 'waiting' | 'stopping' | 'unknown' | 'queued';
   workRemote?: boolean;
   workParallel?: boolean;
+  workReadonly?: boolean;
   workQueuedStep?: boolean;
   workLastStopping?: boolean;
   workNoStart?: boolean;
@@ -370,8 +371,8 @@ function groupFrom(data: GroupData) {
       createdAt: 1700000000000 + i,
     })),
     hasMoreBefore: false,
-    round: data.workState ? { status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
-      ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 41_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
+    round: data.workState ? { status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', isSelfRequested: true, requestedAt: 1700000000000.5, sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
+      ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', isSelfRequested: !data.workReadonly, requestedAt: 1700000000001.5, sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 41_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
       : { status: 'idle', speakers: [], canContinue: false },
   };
 }

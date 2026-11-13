@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import type { BotGroupRemoteChatData, BotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
@@ -17,18 +17,19 @@ import { lineHeight, spacing, typeScale } from '@/theme/tokens';
 
 /** Live work is separate from messages. Only an owned companion's computer can
  * resolve its execution to a task; another member's private task is never queried. */
-export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError }: {
+export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError, speakers: shownSpeakers }: {
   group: BotGroupRemoteChatData; deviceId: string; online: boolean;
   identityFor(botId: string, name: string): BotGroupIdentity;
   onStop?(scope?: 'all'): Promise<void>;
   stopping?: boolean;
+  speakers?: readonly BotGroupSpeaker[];
   onError(message: string | null): void;
 }) {
   const { accountGeneration } = useAuth();
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { invoke, openLink, connectionEpoch, presenceVersion, getPresenceAvailability, subscribe, unsubscribe, onRemoteResourceChanged } = useDeviceLink();
-  const candidates = group.round.speakers.flatMap(speaker => {
+  const candidates = (shownSpeakers ?? group.round.speakers).flatMap(speaker => {
     const member = group.members.find(member => member.botId === speaker.botId);
     return !speaker.sessionId && speaker.executionId && member?.isOwned && member.homeDeviceId
       ? [{ executionId: speaker.executionId, deviceId: member.homeDeviceId }] : [];
@@ -73,25 +74,28 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
   if (group.round.status !== 'running' || !group.round.speakers.length) return null;
-  const speakers = group.round.speakers.filter(speaker => group.members.some(member => member.botId === speaker.botId));
+  const speakers = (shownSpeakers ?? group.round.speakers).filter(speaker => group.members.some(member => member.botId === speaker.botId));
   if (!speakers.length) return null;
-  const stopPending = stopping || speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
+  const stopPending = stopping || group.round.speakers.filter(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId || group.canStopAll).every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
   const stopButton = (onPress: (() => void) | undefined) => <Pressable testID="botGroup.work.stop" accessibilityRole="button"
     accessibilityLabel={t('groupChat.composer.stop')} accessibilityState={{ disabled: stopPending, busy: stopPending }}
     disabled={stopPending} style={styles.stop} onPress={onPress}>
     <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
   </Pressable>;
-  const stopControl = online && onStop ? group.supportsScopedStop && group.canStopAll && group.round.othersActive
+  const canStopMine = group.round.speakers.some(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId);
+  const controlSpeaker = [...group.round.speakers].reverse().find(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId)
+    ?? (group.supportsScopedStop && group.canStopAll && group.round.othersActive ? group.round.speakers.at(-1) : undefined);
+  const stopControl = online && onStop && controlSpeaker && speakers.includes(controlSpeaker) ? group.supportsScopedStop && group.canStopAll && group.round.othersActive
       ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}
           disabled={stopPending} testID="botGroup.work.stopMenu" sections={[{ id: 'scope', options: [
-            { id: 'mine', title: t('groupChat.progress.stopMine') },
+            ...(canStopMine ? [{ id: 'mine', title: t('groupChat.progress.stopMine') }] : []),
             { id: 'all', title: t('groupChat.progress.stopAll'), subtitle: t('groupChat.progress.stopAllHint'), destructive: true },
           ] }]} onSelect={id => { void onStop(id === 'all' ? 'all' : undefined); }}>
           {stopButton}
         </BotGroupMenu>
       : stopButton(() => { void onStop(); }) : null;
   return <View testID="botGroup.work" style={styles.container}>
-      {speakers.map((speaker, index) => {
+      {speakers.map((speaker) => {
         const member = group.members.find(member => member.botId === speaker.botId);
         if (!member) return null;
         const target = speaker.executionId && resolved?.scope === scope ? resolved.targets.get(speaker.executionId) : undefined;
@@ -108,7 +112,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
           identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
           executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
           workStep={plan && step ? { position: step.position + 1, total: plan.steps.length, task: step.task } : undefined}
-          revealWaiting={member.isOwned !== false} footer={index === speakers.length - 1 ? stopControl : undefined}
+          revealWaiting={speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId} footer={speaker === controlSpeaker ? stopControl : undefined}
           activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
       })}
   </View>;

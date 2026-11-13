@@ -3483,3 +3483,20 @@ it('shows the real step start and handoff time and keeps missing timing absent',
   expect(card.textContent).not.toContain('groupChat.plan.stepRunning');
   vi.useRealTimers();
 });
+
+// Request time orders live work; owning the bot does not grant control of a foreign request.
+it.each([20, 40])('interleaves concurrent work and keeps another requester read-only (request at %s)', async requestedAt => {
+  await render(group({ serverBacked: true, messages: [
+    message('early', 1, { createdAt: 10 }), message('later', 2, { createdAt: 30 }),
+  ], round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, executionId: 'my-work', activity: 'reply', requestedAt: 20, isSelfRequested: true },
+    { botId: 'abu', sessionId: null, executionId: 'their-work', activity: 'reply', requestedAt, isSelfRequested: false },
+  ] } }));
+  const work = [byId('speaker.mimi.reply')!, byId('speaker.abu.reply')!];
+  const later = byId('botGroup.row.later')!;
+  expect(work).toHaveLength(2);
+  expect(work[0]!.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect((requestedAt > 30 ? later.compareDocumentPosition(work[1]!) : work[1]!.compareDocumentPosition(later)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(work[0]!.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
+  expect(work[1]!.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});

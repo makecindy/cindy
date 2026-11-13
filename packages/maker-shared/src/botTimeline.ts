@@ -160,3 +160,25 @@ export function formatBotMessageGroupTime(
     minute: '2-digit',
   }).format(value);
 }
+
+/** Place live work among messages without changing persisted message order or keys.
+ * Unknown timestamps on old hosts fall back to the source message, then the tail. */
+export function botGroupWorkAnchors<T extends { executionId?: string; requestedAt?: number; startedAt?: number; sourceMessageId?: string }>(
+  messages: readonly { id: string; createdAt: number; process?: { executionId: string } }[], speakers: readonly T[],
+): Map<string | null, T[]> {
+  const anchors = new Map<string | null, T[]>();
+  const time = (speaker: T) => speaker.requestedAt ?? speaker.startedAt;
+  const completed = new Set(messages.flatMap(message => message.process ? [message.process.executionId] : []));
+  for (const speaker of [...speakers].filter(speaker => !speaker.executionId || !completed.has(speaker.executionId)).sort((a, b) => (time(a) ?? Infinity) - (time(b) ?? Infinity))) {
+    const at = time(speaker);
+    let anchor: string | null = messages.at(-1)?.id ?? null;
+    if (at !== undefined && Number.isFinite(at)) {
+      anchor = null;
+      for (const message of messages) if (message.createdAt <= at) anchor = message.id;
+    } else if (messages.some(message => message.id === speaker.sourceMessageId)) anchor = speaker.sourceMessageId!;
+    const list = anchors.get(anchor) ?? [];
+    list.push(speaker);
+    anchors.set(anchor, list);
+  }
+  return anchors;
+}

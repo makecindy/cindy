@@ -69,6 +69,7 @@ export default {
     'work-unknown': { about: 'Remote work with no readable task: generic activity, no invented thinking', data: { ...base, messages: 2, workState: 'unknown' } },
     'work-remote': { about: 'Authenticated remote target projection, scenario data (not a live device-link run)', data: { ...base, messages: 2, workState: 'testing', workRemote: true } },
     'work-parallel': { about: 'Two concurrent execution rows, separate task entries and one group stop', data: { ...base, messages: 2, workState: 'testing', workParallel: true } },
+    'work-chronology': { about: 'Concurrent work follows request time; another requester remains read-only', data: { ...base, messages: 3, workState: 'testing', workParallel: true, workReadonly: true } },
     'work-parallel-stopping': { about: 'Last execution is stopping while the first still runs: the group stop control remains available', data: { ...base, messages: 2, workState: 'testing', workParallel: true, workLastStopping: true } },
     'body-answer': {
       about: '#6550: component body is readable; literal punctuation and surrounding Markdown are retained',
@@ -375,6 +376,13 @@ export default {
         assert.ok(!(await strip.innerText()).includes(elapsed), 'unknown start time must not display elapsed time');
         const timeline = page.getByTestId('bot-group-timeline');
         await timeline.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).last().waitFor();
+      }
+      if (ui.case === 'work-chronology') {
+        const rows = page.getByTestId('bot-group-work');
+        assert.equal(await rows.count(), 2);
+        assert.equal(await rows.nth(1).getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+        const order = await page.getByTestId('bot-group-timeline').evaluate(el => [...el.querySelectorAll('[data-testid="bot-group-work"], [data-bot-group-message-id]')].map(row => row.getAttribute('data-bot-group-message-id') ?? 'work'));
+        assert.ok(order.indexOf('work') < order.lastIndexOf('m2'), 'earlier live work precedes later messages');
       }
       if (ui.case === 'work-parallel-stopping') {
         const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });

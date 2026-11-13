@@ -532,6 +532,11 @@ export interface BotGroupSpeaker {
   botId: string;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
+  /** Enqueue time positions this execution in chat; never use it as work elapsed. */
+  requestedAt?: number;
+  sourceMessageId?: string;
+  /** Authenticated projection of requester identity; absence on old hosts grants no control. */
+  isSelfRequested?: boolean;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';

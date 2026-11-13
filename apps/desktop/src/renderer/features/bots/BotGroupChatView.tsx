@@ -1,3 +1,4 @@
+import { botGroupWorkAnchors } from '@cindy/maker-shared/botTimeline';
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
@@ -1237,7 +1238,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     ? group.round.speakers.flatMap((speaker) => {
         const member = memberById.get(speaker.botId);
         const target = speaker.executionId ? workTargets.get(speaker.executionId) : undefined;
-        return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
+        return member ? [{ ...speaker, isSelfRequested: speaker.isSelfRequested ?? (!group.serverBacked && !speaker.executionId), member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
       })
     : []), [running, group, memberById, workTargets]);
   const stepSpeaker = runningStep
@@ -1245,6 +1246,21 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     : undefined;
   const stepLive = useAgentIslandActivity(stepSpeaker?.sessionId ?? '');
   const planRunningSince = runningStep ? stepLive?.startedAtMs ?? runningStep.plan.updatedAt : null;
+
+  const controlSpeaker = [...speakers].reverse().find(speaker => speaker.isSelfRequested) ?? (group?.canStopAll ? speakers.at(-1) : undefined);
+  const workAnchors = botGroupWorkAnchors(rows, speakers);
+  const renderWork = (anchor: string | null) => sharing || group?.archived || group?.dissolvedAt ? null : (workAnchors.get(anchor) ?? []).map(speaker => (
+    <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
+      {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
+        <BotGroupProgressStrip step={speaker === stepSpeaker && runningStep ? {
+          ...runningStep, member: speaker.member, displayName: speaker.displayName,
+        } : null} speakers={[speaker]} onStop={scope => void stopRound(scope)}
+          canStopMine={speakers.some(candidate => candidate.isSelfRequested)} showStop={speaker === controlSpeaker} stopPending={stopping || !speakers.some(candidate => (candidate.isSelfRequested || group?.canStopAll) && !candidate.stopping && candidate.executionStatus !== 'stopping')}
+          canStopAll={!!group?.canStopAll && !!group.round.othersActive && speaker === controlSpeaker} stopping={stopping} />
+        <BotGroupSpeakerInteraction speaker={speaker} />
+      </>}
+    </Fragment>
+  ));
 
   const resetDrag = () => {
     dragCounterRef.current = 0;
@@ -1417,6 +1433,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               </p>
             </div>
           ) : null}
+          {renderWork(null)}
           {rows.map((message) => {
             const rowLayout = layout.get(message.id);
             const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
@@ -1475,6 +1492,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   onPlanAutoContinue={isOpenPlanCard && plan?.autoContinue !== undefined && !group.archived && !group.dissolvedAt
                     ? onPlanAutoContinue : undefined}
                 />
+                {renderWork(message.id)}
               </Fragment>
             );
           })}
@@ -1492,27 +1510,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               />
             </div>
           ) : null}
-          {speakers.map(speaker => speaker.activity === 'planning'
-            ? <BotGroupSpeakingLine key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />
-            : <BotGroupSpeakerInteraction key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />)}
-      {running && (runningStep || speakers.length > 0) && !sharing && !group.archived ? (
-        <BotGroupProgressStrip
-          key={runningStep ? `step:${runningStep.plan.id}:${runningStep.step.position}` : speakingKey}
-          step={runningStep ? {
-            ...runningStep,
-            member: memberById.get(runningStep.step.botId),
-            displayName: (() => {
-              const member = memberById.get(runningStep.step.botId);
-              return member ? botGroupMemberDisplayName(member) : runningStep.step.botName;
-            })(),
-          } : null}
-          speakers={speakers}
-          onStop={scope => void stopRound(scope)}
-          canStopAll={!!group.canStopAll && !!group.round.othersActive}
-          stopping={stopping}
-        />
-      ) : null}
-
         </div>
       </div>
       <div className="relative shrink-0">
@@ -1555,7 +1552,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
             members={group.members}
-            running={running}
+            running={running && (!group.serverBacked || speakers.some(speaker => speaker.isSelfRequested))}
             planState={botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}

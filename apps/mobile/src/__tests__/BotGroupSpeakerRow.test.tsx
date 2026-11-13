@@ -180,8 +180,8 @@ it.each([
 function workGroup(): BotGroupRemoteChatData {
   return { id: 'group', members: [{ botId: 'abu', name: '阿布', isOwned: true }, { botId: 'other', name: '其他伙伴', isOwned: false }],
     round: { status: 'running', speakers: [
-      { botId: 'abu', sessionId: 's1', executionId: 'e1', executionStatus: 'queued', activity: 'reply' },
-      { botId: 'other', sessionId: 's2', executionId: 'e2', executionStatus: 'running', activity: 'reply' },
+      { botId: 'abu', sessionId: 's1', executionId: 'e1', isSelfRequested: true, executionStatus: 'queued', activity: 'reply' },
+      { botId: 'other', sessionId: 's2', executionId: 'e2', isSelfRequested: false, executionStatus: 'running', activity: 'reply' },
     ] } } as BotGroupRemoteChatData;
 }
 async function renderWork(group: BotGroupRemoteChatData, online = true, controls: { onStop?: () => Promise<void>; stopping?: boolean } = {}) {
@@ -200,7 +200,7 @@ it('shows every execution directly, including two executions for the same teamma
   expect(node.textContent).toContain('其他伙伴');
 });
 
-it('keeps both owned confirmations outside process folds and never reads another owner’s lane', async () => {
+it('keeps confirmations for my requests outside process folds and never reads another requester’s lane', async () => {
   h.invoke.mockResolvedValue([]);
   const group = workGroup();
   group.round.speakers.push({ ...group.round.speakers[0], executionId: 'e3', sessionId: 's3', executionStatus: 'needs_input' });
@@ -301,4 +301,16 @@ it.each([true, false])('labels only an unambiguous current step execution (ident
   expect(rows[0].textContent).not.toContain('Only the current execution');
   expect(rows[1].textContent?.includes('Only the current execution')).toBe(identified);
   expect(rows[2].textContent).not.toContain('Only the current execution');
+});
+
+it('keeps my own companion read-only when someone else requested its work', async () => {
+  const group = workGroup();
+  group.serverBacked = true;
+  group.round.speakers[0].isSelfRequested = false;
+  group.round.speakers[0].executionStatus = 'needs_input';
+  h.pending.s1 = [{ request: { requestId: 'foreign-request', kind: 'permission' } }];
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  expect(node.querySelectorAll('[data-testid="panel"]')).toHaveLength(0);
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+  expect(h.subscribe).not.toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
 });

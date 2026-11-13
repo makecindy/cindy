@@ -771,7 +771,7 @@ describe('group lifecycle contract', () => {
 });
 
 // Missing mobile stop path: preserve server revision and actor ownership; unit tier.
-it('stops my requests and companions without stopping another member’s work', async () => {
+it('stops only my requests even when my companion works for another member', async () => {
   const ownBot = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(11) };
   const planId = id(40);
   const execution = (n: number, bot: number, requester: number, plan_id: string | null = null) => ({ id: id(n), bot_id: id(bot), requester_id: id(requester), status: 'running', plan_id });
@@ -787,7 +787,6 @@ it('stops my requests and companions without stopping another member’s work', 
   const writes = request.mock.calls.filter(([, method]) => method === 'POST');
   expect(writes).toEqual([
     [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }, undefined],
-    [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, id(12)],
     [`/conversations/${id(1)}/executions/${id(31)}/control`, 'POST', { operationId: `stop-operation:execution:${id(31)}`, action: 'stop' }, undefined],
   ]);
 });
@@ -795,10 +794,12 @@ it('stops my requests and companions without stopping another member’s work', 
 it('projects waiting and stopping executions without inventing task IDs or losing concurrent turns', () => {
   const common = { source_message_id: id(20), bot_id: id(12), epoch: 1 };
   const page = { snapshot: snapshot(), messages: [], before: null, executions: [
-    { ...common, id: id(30), status: 'needs_input' }, { ...common, id: id(31), status: 'stopping' },
+    { ...common, id: id(30), status: 'needs_input', requester_id: id(11), created_at: '2026-11-13T00:00:00Z' }, { ...common, id: id(31), status: 'stopping' },
     { ...common, id: id(32), status: 'succeeded' },
   ] };
   const view = chatGroupView(page, id(11));
+  expect(view.round.speakers[0]).toMatchObject({ sourceMessageId: id(20), isSelfRequested: true, requestedAt: Date.parse('2026-11-13T00:00:00Z') });
+  expect(view.round.speakers[1]?.isSelfRequested).toBe(false);
   expect(view.round.status).toBe('running');
   expect(view.round.speakers.map(speaker => [speaker.executionId, speaker.executionStatus, speaker.sessionId])).toEqual([
     [id(30), 'needs_input', null], [id(31), 'stopping', null],

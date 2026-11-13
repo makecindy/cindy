@@ -441,6 +441,8 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   // No server-provided start time here: created_at is the enqueue time, so omit startedAt
   // rather than presenting queued time as elapsed work.
   const speakers = executions.map(row => ({ botId: row.bot_id, sessionId: null, executionId: row.id,
+    sourceMessageId: row.source_message_id, isSelfRequested: row.requester_id === selfId,
+    ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { requestedAt: Date.parse(row.created_at) } : {}),
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
     activity: row.plan_id ? 'step' as const : 'reply' as const }));
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
@@ -465,7 +467,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
     hasMoreBefore: page.before !== null, round: { status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
-        && execution.requester_id !== selfId && !members.some(member => member.id === execution.bot_id && member.ownerActorId === selfId)) }, supportsAttachments: true };
+        && execution.requester_id !== selfId) }, supportsAttachments: true };
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
@@ -906,7 +908,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const everything = scope === 'all';
       const asManager = manager?.id === self ? undefined : manager?.id;
       const humanIsManager = snapshot.members.some(member => member.id === self && member.state === 'joined' && ['owner', 'admin'].includes(member.role));
-      const ownBots = new Set(snapshot.members.filter(member => member.state === 'joined' && member.kind === 'bot' && member.ownerActorId === self).map(member => member.id));
+
       const plans = await call<ChatPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
       const refusedPlans = new Map<string, unknown>();
@@ -928,15 +930,15 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }
       const executions = await call<ChatExecution[]>(`/conversations/${room}/executions`);
       for (const execution of executions.filter(execution => ['queued', 'running', 'needs_input'].includes(execution.status) && !(execution.plan_id && stoppedPlans.has(execution.plan_id)))) {
-        const asBot = !everything && execution.requester_id !== self && ownBots.has(execution.bot_id);
-        if (!everything && execution.requester_id !== self && !asBot) {
+
+        if (!everything && execution.requester_id !== self) {
           if (execution.requester_id) continue;
           if (humanIsManager) { unknownRequester = true; continue; }
         }
         try {
           await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
             { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
-            asBot ? execution.bot_id : everything && execution.requester_id !== self ? asManager : undefined);
+            everything && execution.requester_id !== self ? asManager : undefined);
           stopped = true;
         } catch (error) { if (!refused(error)) throw error; refusedExecutions.set(execution.id, error); }
       }

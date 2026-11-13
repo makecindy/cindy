@@ -19,3 +19,10 @@ channel、allowlist 或部署；原生 fingerprint、数据库无变化。
 只增加远程资源业务字段，不新增 channel、allowlist、握手、帧或协议版本；官方／自建中转均透传原有加密
 invoke／result，无需调整中转内核或部署。原生 fingerprint、数据库和服务端不变。回滚后旧手机与旧宿主继续默认停止路径。
 回归入口：`botGroupRemoteResourceProvider.test.ts`、Mobile `chatServerClient.test.ts`、`BotGroupChatScreen.test.tsx`。
+
+2026-11-13：speaker 追加可选 `requestedAt`（入队时间，仅用于时序，不能作为工作用时）、
+`sourceMessageId` 与 `isSelfRequested`（由已鉴权 host 根据 requester 投影）。两端将进行态插入消息时序，
+已呈现最终 process 的 execution 不再重复显示进行态。新端对缺失 requester 字段的服务端执行只读，
+旧 host 缺少时序字段时回退 source／startedAt／列表末尾。旧端忽略新字段。默认停止收窄为本人请求，
+不再以 bot 归属代替 requester；管理员仍需显式 all。没有新增 channel、relay 帧或服务端字段，
+官方与自建中转透传已有资源；不涉及原生指纹、数据库或凭证。
