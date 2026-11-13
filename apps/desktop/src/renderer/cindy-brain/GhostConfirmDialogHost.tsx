@@ -29,6 +29,7 @@ export function GhostConfirmDialogHost() {
   useEffect(() => {
     const pending = new Map<string, AbortController>();
     let dismiss: (() => void) | undefined;
+    let disconnect: (() => void) | undefined;
     const off = window.electronAPI.ghosts?.onConfirmRequest?.((payload) => {
       if (!payload || typeof payload.requestId !== 'string' || typeof payload.body !== 'string') {
         return;
@@ -37,6 +38,11 @@ export function GhostConfirmDialogHost() {
       if (pending.has(requestId)) return;
       const abort = new AbortController(); pending.set(requestId, abort);
       dismiss ??= window.electronAPI.ghosts?.onConfirmDismissed?.(({ requestId }) => pending.get(requestId)?.abort());
+      if (window.electronAPI.hostConnection?.client === 'browser') {
+        disconnect ??= window.electronAPI.hostConnection.onStateChanged(state => {
+          if (state.status !== 'connected') for (const pendingAbort of pending.values()) pendingAbort.abort();
+        });
+      }
       void (async () => {
         let confirmed = false;
         try {
@@ -67,7 +73,7 @@ export function GhostConfirmDialogHost() {
           confirmed = confirmed && !abort.signal.aborted;
         } finally {
           pending.delete(requestId);
-          if (!pending.size) { dismiss?.(); dismiss = undefined; }
+          if (!pending.size) { dismiss?.(); dismiss = undefined; disconnect?.(); disconnect = undefined; }
           // 无论如何都要回包:不回的话插件那侧会一直挂到 main 的 90 秒兜底超时。
           // 回包失败(窗口正在关等)也不额外处理——那条超时就是为此存在的。
           try {
@@ -78,7 +84,7 @@ export function GhostConfirmDialogHost() {
         }
       })();
     });
-    return () => { off?.(); dismiss?.(); dismiss = undefined; for (const abort of pending.values()) abort.abort(); };
+    return () => { off?.(); dismiss?.(); dismiss = undefined; disconnect?.(); disconnect = undefined; for (const abort of pending.values()) abort.abort(); };
   }, [confirm, t]);
 
   return null;
