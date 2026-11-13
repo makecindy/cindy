@@ -26,7 +26,7 @@ import {
 import { readExistingTextSync } from '../executor/files';
 import type { ExecutorAction, ExecutorGateDecision } from '../executor/gate';
 import { resolveExecutorShell } from '../executor/shell';
-import type { ExecutorAgentProjection, ExecutorWorkspace } from '../executor/workspace';
+import { ExecutorPathError, type ExecutorAgentProjection, type ExecutorWorkspace } from '../executor/workspace';
 
 export const EXEC_SERVER_WS_PATH = '/ws/exec-server';
 /** exec-server 单行(一条 JSON-RPC 消息)上限：大文件读写的 base64 也在这里面。 */
@@ -534,7 +534,13 @@ export class ExecServerRelay {
     let actions: ExecutorAction[] = [];
     if (message && typeof message.method === 'string' && message.id !== undefined) {
       this.counts.requests += 1;
-      message.params = mapExecServerParams(message.params, this.deps.workspace, message.method, false);
+      try {
+        message.params = mapExecServerParams(message.params, this.deps.workspace, message.method, false);
+      } catch (error) {
+        if (!(error instanceof ExecutorPathError)) throw error;
+        this.rejectInvalidPath(connId, message.id, error.message);
+        return;
+      }
       data = JSON.stringify(message);
       actions = execServerActions(message.method, message.params, this.deps.cwd);
       if (message.method === 'process/start') {
@@ -642,6 +648,11 @@ export class ExecServerRelay {
       id,
       error: { code: -32001, message: this.deps.workspace.mapTextForAgent(decision.reason ?? 'Not allowed in this workspace.') },
     }));
+  }
+
+  private rejectInvalidPath(connId: string, id: unknown, message: string): void {
+    this.counts.rejected += 1;
+    this.sendMessage(connId, JSON.stringify({ id, error: { code: -32602, message: this.deps.workspace.mapTextForAgent(message) } }));
   }
 
   private enqueueOutput(connId: string, connection: Connection, line: string): void {
