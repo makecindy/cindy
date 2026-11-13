@@ -7121,9 +7121,12 @@ export function ChatInput({
       // 暂存的同引擎选择会把确认窗口带到发送边界，main 在那里按「任务预算 + 模型级上限」
       // 收敛后的窗口逐值校验。本机路由先向 main 要这个值；目录窗口只是退路，设过上限时它会
       // 比 main 的值大，确认就永远对不上。
+      // 只有 Agent 真在本机执行才问本机 main：任务在本机但 Agent 跑在另一台电脑（agentDeviceId）
+      // 或 SSH 主机时，发送边界按执行端窗口校验，本机同路由的窗口会把确认值覆盖错。
+      const agentRunsLocally = !remoteDeviceId && !effectiveAgentDeviceId && !remoteHostId;
       const stagedEffectiveWindow =
         stagingSameAgentSelection && verifiedTargetContextWindow === undefined &&
-        !remoteDeviceId && targetAgentKind
+        agentRunsLocally && targetAgentKind
           ? normalizeSessionContextWindowBounds(
             await window.electronAPI.maker
               .getSessionContextWindowBounds(sessionId, {
@@ -7245,6 +7248,7 @@ export function ChatInput({
       currentModelAgentKind,
       runtimeAgentKind,
       deviceLinkDeviceId,
+      effectiveAgentDeviceId,
       piCaps.capabilities,
     ],
   );
