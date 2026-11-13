@@ -87,70 +87,70 @@ function channelRank(channel: HookPrefsChannel): number {
 }
 
 /**
+ * 共享那一份里这个项目的配置现在「归谁」: 没配置过 -> 谁都可以拿(Infinity); 用户或 IM 里
+ * 改过 -> 谁也不能顶替(-1); 否则是原样并入它的那个渠道的顺位。
+ */
+function sharedOwnerRank(workspace: string): number {
+  const configured =
+    !isBlank(getSharedProjectPref(workspace)) ||
+    getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, workspace) !== null;
+  if (!configured) return Number.POSITIVE_INFINITY;
+  const origin = getSharedPrefOrigin(workspace);
+  return origin === null ? -1 : channelRank(origin);
+}
+
+/**
  * 把一个渠道原有的按渠道偏好并入共享那一份(每个渠道只做一次)。返回是否并入过。
  *
- * 一个项目的 Agent / 模型 / 思考强度 / 来源整组取自固定顺序里第一个配置过它的渠道:
- * - 共享那份还没有这个项目 -> 整行拿过来, 连同它的模型来源, 并记下是从哪个渠道来的;
- * - 已经有了, 而且是排在后面的渠道原样并入的(那个渠道先连上了, 之后没人改过) -> 顶替它,
- *   这样结果不取决于哪个机器人先连上; 用户或 IM 里改过的行不带标记, 不会被顶替;
+ * 一个项目的 Agent / 模型 / 思考强度 / 来源是一组, 整组取自固定顺序里第一个配置过它的渠道
+ * (只选过来源、没填别的也算配置过):
+ * - 共享那份还没有这个项目 -> 整组拿过来, 并记下是从哪个渠道来的;
+ * - 已经有了, 而且是排在后面的渠道原样并入的(那个渠道先连上了, 之后没人改过) -> 整组顶替,
+ *   这样结果不取决于哪个机器人先连上; 用户或 IM 里改过的不带标记, 不会被顶替;
  * - 其余情况只把权限档收紧到两者里更严的一档。
  * 权限档在任何情况下都取更严的, 合并不放宽任何项目。
  */
 export function adoptChannelPrefs(channel: HookPrefsChannel): boolean {
   if (isSharedPrefsAdopted(channel)) return false;
   const rows = listWorkspacePrefs(channel).filter((row) => !isBlank(row));
-  // 同一个项目可能有多行(Slack 多 team): 不带 team 的行在前, 其余按原顺序。
+  const sources = listWorkspaceProviderSources().filter((entry) => entry.channel === channel);
+  // 同一个项目可能有多行(Slack 多 team): 不带 team 的在前, 其余按原顺序; 第一行代表这个渠道。
   rows.sort((a, b) => Number((a.teamId ?? null) !== null) - Number((b.teamId ?? null) !== null));
-  const seen = new Set<string>();
-  for (const row of rows) {
-    if (seen.has(row.workspace)) {
-      // 同一渠道里这个项目的其它 team 行: 只参与权限收紧。
-      tightenSharedPermission(row.workspace, row.permissionMode);
+  sources.sort((a, b) => Number(a.teamId !== null) - Number(b.teamId !== null));
+  const workspaces = new Set([...rows.map((row) => row.workspace), ...sources.map((entry) => entry.workspace)]);
+  for (const workspace of workspaces) {
+    const projectRows = rows.filter((row) => row.workspace === workspace);
+    const row = projectRows[0];
+    const route =
+      row !== undefined
+        ? getWorkspaceProviderRoute(channel, row.teamId ?? null, workspace)
+        : (sources.find((entry) => entry.workspace === workspace) ?? null);
+    const permissionMode = projectRows.reduce<string | null>(
+      (strictest, entry) => stricterPermission(strictest, entry.permissionMode),
+      null,
+    );
+    if (channelRank(channel) >= sharedOwnerRank(workspace)) {
+      tightenSharedPermission(workspace, permissionMode);
       continue;
     }
-    seen.add(row.workspace);
-    const shared = getSharedProjectPref(row.workspace);
-    const origin = getSharedPrefOrigin(row.workspace);
-    const takeOver = isBlank(shared) || (origin !== null && channelRank(channel) < channelRank(origin));
-    if (!takeOver) {
-      tightenSharedPermission(row.workspace, row.permissionMode);
-      continue;
-    }
-    setSharedProjectPref(row.workspace, {
-      agentKind: row.agentKind,
-      model: row.model,
-      effort: row.effort,
-      permissionMode: stricterPermission(shared.permissionMode, row.permissionMode),
+    const shared = getSharedProjectPref(workspace);
+    setSharedProjectPref(workspace, {
+      agentKind: row?.agentKind ?? null,
+      model: row?.model ?? null,
+      effort: row?.effort ?? null,
+      permissionMode: stricterPermission(shared.permissionMode, permissionMode),
     });
-    // 来源与 (Agent, 模型) 是一组: 跟着这一行一起换, 这个渠道没配来源就清掉原来的。
-    const route = getWorkspaceProviderRoute(channel, row.teamId ?? null, row.workspace);
-    if (route !== null || getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, row.workspace) !== null) {
+    // 来源与 (Agent, 模型) 是一组: 一起换, 这个渠道没配来源就清掉原来的。
+    if (route !== null || getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, workspace) !== null) {
       setWorkspaceProviderSource(
         SHARED_PREFS_CHANNEL,
         null,
-        row.workspace,
+        workspace,
         route?.providerId ?? null,
         route?.agentDeviceId ?? null,
       );
     }
-    setSharedPrefOrigin(row.workspace, channel);
-  }
-  // 只选过来源、没填其它字段的项目(设置页可以单独换来源): 没有偏好行, 但来源同样要带过来。
-  // 共享那份已经有这个项目的配置时不带 —— 来源必须和它那一组 (Agent, 模型) 配套。
-  const sources = listWorkspaceProviderSources().filter((entry) => entry.channel === channel);
-  sources.sort((a, b) => Number(a.teamId !== null) - Number(b.teamId !== null));
-  for (const entry of sources) {
-    if (seen.has(entry.workspace)) continue;
-    seen.add(entry.workspace);
-    if (!isBlank(getSharedProjectPref(entry.workspace))) continue;
-    if (getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, entry.workspace) !== null) continue;
-    setWorkspaceProviderSource(
-      SHARED_PREFS_CHANNEL,
-      null,
-      entry.workspace,
-      entry.providerId,
-      entry.agentDeviceId ?? null,
-    );
+    setSharedPrefOrigin(workspace, channel);
   }
   markSharedPrefsAdopted(channel);
   return true;
@@ -188,34 +188,44 @@ export function projectSharedOntoChannel(
   teamIds: ReadonlyArray<string | null>,
 ): boolean {
   let changed = false;
+  let failure: unknown = null;
+  const write = (teamId: string | null, workspace: string, patch: HookPrefsPatch): void => {
+    try {
+      setWorkspacePref(channel, teamId, workspace, patch);
+      changed = true;
+    } catch (err) {
+      failure ??= err;
+    }
+  };
   const shared = listSharedProjectPrefs();
   const sharedNames = new Set(shared.map((row) => row.workspace));
+  // 先清: 共享那份里已经清空的项目, 渠道行也清空(写成全空行, 镜像后服务端随之删除)。
+  for (const row of listWorkspacePrefs(channel)) {
+    if (sharedNames.has(row.workspace) || isBlank(row)) continue;
+    write(row.teamId ?? null, row.workspace, {
+      agentKind: null,
+      model: null,
+      effort: null,
+      permissionMode: null,
+    });
+  }
   for (const teamId of teamIds) {
     for (const row of shared) {
       const current = listWorkspacePrefs(channel).find(
         (entry) => entry.workspace === row.workspace && (entry.teamId ?? null) === teamId,
       );
       if (current !== undefined && sameValues(current, row)) continue;
-      setWorkspacePref(channel, teamId, row.workspace, {
+      write(teamId, row.workspace, {
         agentKind: row.agentKind,
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
       });
-      changed = true;
     }
   }
-  // 共享那份里已经清空的项目, 渠道行也清空(写成全空行, 镜像后服务端随之删除)。
-  for (const row of listWorkspacePrefs(channel)) {
-    if (sharedNames.has(row.workspace) || isBlank(row)) continue;
-    setWorkspacePref(channel, row.teamId ?? null, row.workspace, {
-      agentKind: null,
-      model: null,
-      effort: null,
-      permissionMode: null,
-    });
-    changed = true;
-  }
+  // 有的行写不下去时: 写成的那部分照常返回「改过」让调用方去推; 一行都没写成才把错误抛出去 ——
+  // 这样同一个写不下去的状态不会让调用方一遍遍地重新对齐、重新拉服务端快照。
+  if (failure !== null && !changed) throw failure;
   return changed;
 }
 

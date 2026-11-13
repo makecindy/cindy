@@ -182,6 +182,44 @@ describe('sharedProjectPrefs', () => {
     expect(getWorkspaceProviderSource('shared', null, 'source-only')).toBe('tg-provider');
   });
 
+  // 时序(评审指出): 只选过来源也算「配置过这个项目」, 同样按固定顺序、与连接先后无关。
+  // 最小失败输入: 两种先后 —— 后面的渠道先并入来源、前面的渠道后到; 前面的渠道只有来源、
+  // 后面的渠道后到且带着模型。
+  it('只有来源的项目也按固定顺序归属: 前面的渠道后到会顶替, 后面的渠道后到顶替不了', () => {
+    setWorkspaceProviderSource('telegram', null, 'late-feishu', 'tg-provider');
+    setWorkspaceProviderSource('feishu', null, 'early-feishu', 'feishu-provider');
+    markWorkspacePrefsMigrated('telegram');
+    setWorkspacePref('telegram', null, 'early-feishu', { model: 'tg-model', permissionMode: 'ask' });
+    // Telegram 先连上; 飞书的 early-feishu 来源此时已在本机, 但飞书还没并入。
+    expect(adoptReadyChannels()).toEqual(['telegram']);
+    expect(getWorkspaceProviderSource('shared', null, 'late-feishu')).toBe('tg-provider');
+    expect(getSharedProjectPref('early-feishu').model).toBe('tg-model');
+
+    setWorkspaceProviderSource('feishu', null, 'late-feishu', 'feishu-late-provider');
+    markWorkspacePrefsMigrated('feishu');
+    expect(adoptReadyChannels()).toEqual(['feishu']);
+
+    expect(getWorkspaceProviderSource('shared', null, 'late-feishu')).toBe('feishu-late-provider');
+    // 飞书对 early-feishu 只选过来源(模型跟随默认): 整组归飞书, Telegram 的模型让位, 权限仍取更严的。
+    expect(getSharedProjectPref('early-feishu')).toMatchObject({ model: null, permissionMode: 'ask' });
+    expect(getWorkspaceProviderSource('shared', null, 'early-feishu')).toBe('feishu-provider');
+  });
+
+  // 持久化上限(评审指出): 渠道已经写满时, 清掉一个项目再配另一个不得因为旧行还没推完而
+  // 写不下去(那样新配置永远同步不出去)。对齐完成后再对齐一次不得再报告有改动。
+  it('渠道写满后清一个再配一个仍能对齐, 对齐后不再产生写入', () => {
+    for (let index = 0; index < 256; index += 1) setSharedProjectPref(`p${index}`, { model: 'm' });
+    expect(projectSharedOntoChannel('telegram', [null])).toBe(true);
+    setSharedProjectPref('p0', { model: null });
+    setSharedProjectPref('replacement', { model: 'm' });
+
+    expect(projectSharedOntoChannel('telegram', [null])).toBe(true);
+    expect(getWorkspacePref('telegram', null, 'replacement').model).toBe('m');
+    expect(getWorkspacePref('telegram', null, 'p0').model).toBeNull();
+    expect(projectSharedOntoChannel('telegram', [null])).toBe(false);
+
+  });
+
   // 时序(评审指出): 在 IM 里把一个项目的设置全部清回默认时, 快照里这一行是全空的, 本机不存
   // 全空行 —— 不能因此当成「快照里没有这一行」而把旧值又写回去。
   it('服务端快照里明确清空的行并回共用那份; 快照里没有的行不算', () => {

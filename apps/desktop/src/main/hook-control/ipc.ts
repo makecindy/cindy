@@ -57,6 +57,7 @@ import {
   markWorkspacePrefsMigrated,
   isSharedPrefsAdopted,
   moveWorkspacePrefsToRenamed,
+  setSharedPrefOrigin,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
@@ -327,10 +328,11 @@ function syncSharedProjectPrefs(): void {
       if (!isSharedPrefsAdopted(channel) || channelLiveBindingKey(channel) === null) continue;
       changed = projectSharedOntoChannel(channel, channelProjectionTeams(channel));
     } catch (err) {
+      // 一行都没写成(没有新东西可推): 只记日志, 不启动镜像 —— 否则镜像结束又回到这里, 原地打转。
       log.warn(
         `shared project prefs sync (${channel}) failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-      changed = true;
+      changed = false;
     }
     if (changed) void mirrorWorkspacePrefs(channel);
   }
@@ -1376,6 +1378,8 @@ export function registerHookControlIpc(): void {
       let entries: ReturnType<typeof setWorkspaceProviderSource>;
       try {
         entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId, agentDeviceId);
+        // 用户在设置页亲手换了共用那份的来源: 这个项目的配置不再算「升级时原样并入」。
+        if (channel === 'shared') setSharedPrefOrigin(workspace, null);
       } catch (err) {
         log.warn(
           `workspace provider source write failed: ${err instanceof Error ? err.message : String(err)}`,

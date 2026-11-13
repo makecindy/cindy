@@ -57,11 +57,6 @@ export interface WorkspacePrefsEntry {
    * 只有带这个标记的全空行才会被抄回来的值顶掉; 用户主动清空的设置不受改名影响。
    */
   renameTombstone?: boolean;
-  /**
-   * 只用于共用那一份(channel = shared): 这一行是升级时从哪个渠道原样并入的, 之后没人改过。
-   * 排在它前面的渠道稍后才并入时, 凭这个标记按固定顺序顶替; 任何一次写入都会去掉标记。
-   */
-  adoptedFrom?: HookPrefsChannel;
 }
 
 interface StoreFile {
@@ -69,6 +64,11 @@ interface StoreFile {
   migrated: Partial<Record<HookPrefsChannel, boolean>>;
   /** 该渠道原有的按渠道偏好是否已经并入共享那一份(一次性)。 */
   sharedAdopted?: Partial<Record<HookPrefsChannel, boolean>>;
+  /**
+   * 共用那一份里, 某个项目的配置(偏好行与模型来源)是升级时从哪个渠道原样并入的、之后没人改过。
+   * 排在它前面的渠道稍后才并入时凭它按固定顺序顶替; 用户或 IM 里一改就去掉。
+   */
+  sharedOrigin?: Record<string, HookPrefsChannel>;
   entries: WorkspacePrefsEntry[];
 }
 
@@ -126,8 +126,7 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
       (typeof r.rev === 'number' && Number.isInteger(r.rev) && r.rev >= 0 && r.rev <= 1_000_000_000)) &&
     (r.dirty === undefined || typeof r.dirty === 'boolean') &&
     (r.dirtyPatch === undefined || isDirtyPatch(r.dirtyPatch)) &&
-    (r.renameTombstone === undefined || typeof r.renameTombstone === 'boolean') &&
-    (r.adoptedFrom === undefined || (isChannel(r.adoptedFrom) && r.adoptedFrom !== SHARED_PREFS_CHANNEL))
+    (r.renameTombstone === undefined || typeof r.renameTombstone === 'boolean')
   );
 }
 
@@ -141,7 +140,9 @@ function exceedsPrefsCap(entries: readonly WorkspacePrefsEntry[]): boolean {
   // Slack 多 workspace 时每个 workspace 各有一整份, 所以再按 team 分开算。
   const counts = new Map<string, number>();
   for (const entry of entries) {
-    if (entry.renameTombstone === true) continue;
+    // 全空行是「待清空」的过渡记录(推给服务端后即消失), 同样不占名额: 表满时清掉一个项目
+    // 再配另一个, 不该因为旧行还没推完而写不下去。
+    if (entry.renameTombstone === true || isBlankRow(entry)) continue;
     const scope = `${entry.channel}::${entry.teamId ?? ''}`;
     const count = (counts.get(scope) ?? 0) + 1;
     if (count > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) return true;
@@ -174,10 +175,24 @@ function readStore(fp: string): StoreFile {
         if ((r.sharedAdopted as Record<string, unknown>)[channel] === true) sharedAdopted[channel] = true;
       }
     }
+    const sharedOrigin: NonNullable<StoreFile['sharedOrigin']> = {};
+    if (r.sharedOrigin && typeof r.sharedOrigin === 'object' && !Array.isArray(r.sharedOrigin)) {
+      for (const [workspace, channel] of Object.entries(r.sharedOrigin as Record<string, unknown>)) {
+        if (
+          HOOK_WORKSPACE_ALIAS_RE.test(workspace) &&
+          isChannel(channel) &&
+          channel !== SHARED_PREFS_CHANNEL &&
+          Object.keys(sharedOrigin).length < HOOK_WORKSPACE_PREFS_MAX_ENTRIES
+        ) {
+          sharedOrigin[workspace] = channel;
+        }
+      }
+    }
     return {
       version: 1,
       migrated,
       ...(Object.keys(sharedAdopted).length > 0 ? { sharedAdopted } : {}),
+      ...(Object.keys(sharedOrigin).length > 0 ? { sharedOrigin } : {}),
       entries,
     };
   } catch {
@@ -272,25 +287,26 @@ export function markWorkspacePrefsMigrated(channel: HookPrefsChannel): void {
   writeStore(fp, { ...store, migrated: { ...store.migrated, [channel]: true } });
 }
 
-/** 共用那一份里某个项目的行是从哪个渠道原样并入的(被改过或不存在则为 null)。 */
+/** 共用那一份里某个项目的配置是从哪个渠道原样并入的(改过或没记过则为 null)。 */
 export function getSharedPrefOrigin(workspace: string): HookPrefsChannel | null {
-  const row = readStore(filePath()).entries.find((entry) =>
-    sameKey(entry, SHARED_PREFS_CHANNEL, null, workspace),
-  );
-  return row?.adoptedFrom ?? null;
+  return readStore(filePath()).sharedOrigin?.[workspace] ?? null;
 }
 
-/** 给共用那一份里的行记上「从这个渠道原样并入」; 行不存在时什么也不做。 */
-export function setSharedPrefOrigin(workspace: string, channel: HookPrefsChannel): void {
+/** 记下 / 去掉(channel = null)共用那一份里某个项目「从哪个渠道原样并入」的标记。 */
+export function setSharedPrefOrigin(workspace: string, channel: HookPrefsChannel | null): void {
   const fp = filePath();
   const store = readStore(fp);
-  let found = false;
-  const entries = store.entries.map((entry) => {
-    if (!sameKey(entry, SHARED_PREFS_CHANNEL, null, workspace)) return entry;
-    found = true;
-    return { ...entry, adoptedFrom: channel };
-  });
-  if (found) writeStore(fp, { ...store, entries });
+  if ((store.sharedOrigin?.[workspace] ?? null) === channel) return;
+  writeStore(fp, withSharedOrigin(store, workspace, channel));
+}
+
+function withSharedOrigin(store: StoreFile, workspace: string, channel: HookPrefsChannel | null): StoreFile {
+  const sharedOrigin = { ...store.sharedOrigin };
+  if (channel === null) delete sharedOrigin[workspace];
+  else sharedOrigin[workspace] = channel;
+  const next: StoreFile = { ...store, sharedOrigin };
+  if (Object.keys(sharedOrigin).length === 0) delete next.sharedOrigin;
+  return next;
 }
 
 export function isSharedPrefsAdopted(channel: HookPrefsChannel): boolean {
@@ -375,7 +391,6 @@ export function setWorkspacePref(
   };
   // 用户亲手写过这一行, 它就不再是改名留下的墓碑(哪怕写进去的仍是全空)。
   delete nextRow.renameTombstone;
-  delete nextRow.adoptedFrom;
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
   // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null。
   // 镜像回执必须对上 rev，才允许 markWorkspacePrefMirrored 清墓碑或去掉 dirty。
@@ -386,7 +401,9 @@ export function setWorkspacePref(
   if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }
-  writeStore(fp, { ...store, entries });
+  // 共用那一份被写过(设置页或 IM 里改的)就不再算「原样并入」。
+  const nextStore = channel === SHARED_PREFS_CHANNEL ? withSharedOrigin(store, workspace, null) : store;
+  writeStore(fp, { ...nextStore, entries });
   return {
     prefs: entries.filter((e) => e.channel === channel).map(toHookPrefs),
     row: toHookPrefs(nextRow),
