@@ -10996,7 +10996,9 @@ assertRouteCurrent();
       const compactRateLimit = isTerminalRateLimitRetryExhaustion(text, signals.errorStatus, error?.codexErrorInfo);
       const tag = codexErrorInfoTag(error?.codexErrorInfo);
       if (tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded' || tag === 'unauthorized' || tag === 'cyberPolicy') return false;
-      if (/\bcontent_policy_violation\b/i.test(text)) return false;
+      if (/\b(?:content_policy_violation|request_too_large)\b/i.test(text)) return false;
+      // Preserve the existing capacity backoff and SDK-owned overload handling.
+      if (parseOverloadError(text, signals.errorStatus, tag)) return false;
       // A terminal turn alone does not prove an upstream compact request failed:
       // transport loss/timeouts can leave its result unknown. Accept explicit
       // endpoint rejection/failure responses (including the observed 502/503),

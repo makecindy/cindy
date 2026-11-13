@@ -11879,6 +11879,10 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } } },
       { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: {} } },
       { message: '{"code":"400"}', codexErrorInfo: 'usageLimitExceeded' },
+      { message: '{"code":"400","type":"request_too_large"}' },
+      { message: '{"code":"400","type":"request_too_large"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","type":"overloaded_error"}' },
+      { message: '{"code":"400"}', codexErrorInfo: 'serverOverloaded' },
     ] as const)('keeps unsafe or non-status LiteLLM errors terminal: %j', async (sample) => {
       const { host, handle, events } = await start();
       try {
@@ -11892,6 +11896,39 @@ describe('CodexAgent MCP thread context hooks', () => {
         expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
         expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
       } finally { await handle.close(); }
+    });
+    // #10145 unit adapter control: wrapper code 400 must preserve the original
+    // four capacity retries before model work. The compact negative table above
+    // covers its contrasting progress guard: contextCompaction is model work,
+    // so a capacity failure there stays terminal instead of replaying history.
+    it('preserves bounded capacity backoff for LiteLLM wrappers before model work', async () => {
+      const { host, handle, events } = await start();
+      vi.useFakeTimers();
+      try {
+        const error = { message: '{"code":"400"}', codexErrorInfo: 'serverOverloaded' as const };
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          const turnId = handle.getCurrentTurnId?.() ?? '';
+          fail(host, turnId, error);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+          expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(attempt);
+          if (attempt <= 4) {
+            expect(events.filter(e => e.type === 'error').at(-1)?.data).toMatchObject({
+              isTerminal: false, willRetry: true, message: expect.stringContaining(`auto-retry ${attempt}/4`),
+            });
+            await vi.advanceTimersByTimeAsync(40_000);
+            expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(attempt + 1);
+            expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart).at(-1)![1]).toMatchObject({
+              threadId: nativeId, input: [{ type: 'text', text: 'Finish my existing work.' }],
+            });
+          } else {
+            await vi.advanceTimersByTimeAsync(40_000);
+            expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(5);
+            expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(true);
+            expect(handle.isTurnRunning?.()).toBe(false);
+          }
+        }
+      } finally { await handle.close(); vi.useRealTimers(); }
     });
     it('retains a recorded summary recovery when completion has no replacement error', async () => {
       const { host, handle } = await start();
@@ -11928,6 +11965,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: 'Error running remote compact task', additionalDetails: '{"code":"400","type":"model_not_found"}', codexErrorInfo: 'badRequest' as const },
       { message: 'Error running remote compact task', additionalDetails: '{"code":"400","type":"connection_error"}', codexErrorInfo: 'badRequest' as const },
       { message: '{"code":"400","cause":{"code":"429","upstream":{"code":"529"}}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","type":"request_too_large"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","type":"overloaded_error"}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400"}', codexErrorInfo: 'serverOverloaded' as const },
     ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
       const { host, handle, events } = await start();
       try {
