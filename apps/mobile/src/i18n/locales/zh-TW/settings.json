@@ -47,6 +47,12 @@
     "footer": "日誌儲存在手機上，最多 7 天、8 MB，不會自動上傳。匯出的完整日誌不含對話內文和憑證；上傳只傳送篩選後的執行記錄和版本資訊。"
   },
   "title": "設定",
+  "promptRecommendation": {
+    "label": "輸入建議",
+    "description": "回覆後建議下一句，僅在這支手機上生效。",
+    "saveFailed": "設定已在本次使用中生效，但未能儲存。",
+    "reset": "恢復預設"
+  },
   "appearance": {
     "title": "外觀",
     "modeLabel": "顯示模式",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "文言（預設）",
+        "prose": "雅正文言",
         "tang-poetry": "唐詩",
         "song-ci": "宋詞",
         "yuan-qu": "元曲",
@@ -424,7 +430,11 @@
       "voice": "長按說話",
       "scrollKeys": "右搖桿",
       "scroll": "捲動",
-      "page": "翻頁"
+      "page": "翻頁",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字鍵上/下",
+      "triggerScroll": "捲動目前內容",
+      "sendText": "傳送已輸入文字",
+      "taskHint": "組合鍵與 Start 僅用於任務頁。設為語音鍵時，優先按住說話；放開後文字留在輸入框。"
     }
   }
 }

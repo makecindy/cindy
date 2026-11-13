@@ -313,6 +313,7 @@
     "memberLimit": "Ein Gruppenchat braucht 2–6 Freunde",
     "memberUnavailable": "Einer dieser Freunde ist nicht verfügbar. Wähle einen anderen und versuch es erneut.",
     "mentionUnavailable": "Ein erwähntes Mitglied ist nicht mehr verfügbar. Wähle vor dem erneuten Senden, wen du erwähnen möchtest.",
+    "mentionAmbiguous": "Mehrere Mitglieder heißen „{{name}}“. Wähle die gemeinte Person aus der @-Liste.",
     "notFound": "Dieser Gruppenchat existiert nicht mehr",
     "hostNotReady": "Cindy wird noch vorbereitet. Versuch es gleich noch einmal.",
     "planOpen": "Eine Arbeitsaufteilung läuft bereits. Beende oder stoppe sie, bevor du eine weitere startest.",

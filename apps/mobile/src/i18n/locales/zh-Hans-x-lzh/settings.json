@@ -47,6 +47,12 @@
     "footer": "日志存于手机，至多 7 天、8 MB，不自动上呈。所输之完整日志不含言谈内文与凭证；上呈仅遣筛后之执行记录与版本信息。"
   },
   "title": "规制",
+  "promptRecommendation": {
+    "label": "输入之议",
+    "description": "答毕荐续语，唯此机适用。",
+    "saveFailed": "此番已生效，然未存妥。",
+    "reset": "复默认"
+  },
   "appearance": {
     "title": "仪容",
     "modeLabel": "显示之式",
@@ -424,7 +430,11 @@
       "voice": "长按而言",
       "scrollKeys": "右摇杆",
       "scroll": "卷动",
-      "page": "翻页"
+      "page": "翻页",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字键上下",
+      "triggerScroll": "卷动所见",
+      "sendText": "遣所输之字",
+      "taskHint": "此诸捷键唯于差事页可用。若设为语音键，则以言为先；释之，字仍留于输入框。"
     }
   }
 }

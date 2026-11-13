@@ -47,17 +47,41 @@ import {
   requireString,
 } from '../utils/ipcValidate.js';
 import {
+  clearWorkspaceProviderSourcesFor,
+  moveWorkspaceProviderSourcesToRenamed,
   listWorkspaceProviderSources,
   setWorkspaceProviderSource,
 } from './workspaceProviderSourceStore.js';
 import {
   applyIncomingServerWorkspacePrefs,
+  clearWorkspacePrefsFor,
   listWorkspacePrefs,
   markWorkspacePrefsMigrated,
-  setWorkspacePref,
+  isSharedPrefsAdopted,
+  moveWorkspacePrefsToRenamed,
+  noteSharedPrefEdited,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
+import { lookupWorkspaces, retiredAliasPairs } from './projectWorkspaces.js';
+import {
+  readImDefaultSettingsState,
+  resetImDefaultSettingsChannel,
+  resetImDefaultSettingsGlobal,
+} from '../im/defaultSettingsStore.js';
+import {
+  OFFICIAL_PREFS_CHANNELS,
+  absorbChannelChange,
+  adoptReadyChannels,
+  clearLegacyGlobalDefaultsOnce,
+  listSharedProjectPrefs,
+  projectSharedOntoChannel,
+  rowsAfterServerSnapshot,
+  setSharedProjectPref,
+} from './sharedProjectPrefs.js';
+import { createProjectWorkspaceSync } from './projectWorkspaceSync.js';
+import { loadImProjectCatalog, registerImProjectDirectory } from './projectCatalog.js';
+import { onProjectCatalogChanged } from '../projectCatalogEvents.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
@@ -75,10 +99,9 @@ import {
   HOOK_WORKSPACE_ALIAS_RE,
   HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES,
   type HookPrefsPatch,
-  type HookPrefsView,
   type HookWorkspacePrefs,
   type NeutralHookProvider,
-  type ProviderPrefsView,
+  type SharedProjectPrefsView,
   type SlackHookView,
   type TelegramHookBehaviorPatch,
   type TelegramHookBehaviorState,
@@ -216,64 +239,14 @@ function broadcastStatus(view: SlackHookView): void {
   }
 }
 
-function broadcastPrefs(view: HookPrefsView): void {
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed() && isAppContentWindow(w)) {
-      w.webContents.send(HOOK_CONTROL_EVENT.PREFS_CHANGED, view);
-    }
-  }
-}
-
-function broadcastProviderPrefs(view: ProviderPrefsView): void {
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed() && isAppContentWindow(w)) {
-      w.webContents.send(HOOK_CONTROL_EVENT.PROVIDER_PREFS_CHANGED, view);
-    }
-  }
-}
-
-function slackAccountBound(view: SlackHookView): boolean {
-  if (!view.enabled) return false;
-  // 明确未绑定（在线 revoke / none）才关掉编辑。
-  if (view.binding?.state === 'none') return false;
-  if (view.binding?.state === 'confirmed') return true;
-  if (view.bindings.some((b) => !b.displaced)) return true;
-  // 单绑定冷启动：live binding 要等 bind.update，掉线重启时仍是 null。
-  // 开关开着且没有 none，视为上次已绑定，允许离线编辑。
-  return true;
-}
-
-function slackLocalPrefsView(): HookPrefsView {
-  const snap = ensureInstances().manager.snapshot();
-  return { bound: slackAccountBound(snap), prefs: listWorkspacePrefs('slack') };
-}
-
-function providerLocalPrefsView(provider: Exclude<HookPrefsChannel, 'slack'>): ProviderPrefsView {
-  const lane = ensureInstances().manager.snapshot()[provider];
-  const confirmed = lane.bindings?.[0] ?? (lane.binding?.state === 'confirmed' ? lane.binding : null);
-  return {
-    provider,
-    bindingId: confirmed?.bindingId ?? null,
-    scopeId: confirmed?.scopeId ?? null,
-    bound: confirmed !== null,
-    prefs: listWorkspacePrefs(provider),
-  };
-}
-
 function parseWorkspacePrefsWrite(payload: unknown): {
   workspace: string;
-  teamId: string | null;
   patch: HookPrefsPatch;
 } {
   const p = requireObject(payload);
   const workspace = requireString(p.workspace, 'workspace');
   if (!HOOK_WORKSPACE_ALIAS_RE.test(workspace)) {
     throwIpcError('INVALID_PARAMS', 'workspace must match the alias format');
-  }
-  const teamId =
-    p.teamId === undefined || p.teamId === null ? null : requireString(p.teamId, 'teamId');
-  if (teamId !== null && teamId.length > 64) {
-    throwIpcError('INVALID_PARAMS', 'teamId too long');
   }
   const rawPatch = requireObject(p.patch);
   const patch: HookPrefsPatch = {};
@@ -288,7 +261,7 @@ function parseWorkspacePrefsWrite(payload: unknown): {
     }
     patch[field] = value as string | null;
   }
-  return { workspace, teamId, patch };
+  return { workspace, patch };
 }
 
 const remotePrefsSnapshotGenerations = new Map<HookPrefsChannel, number>();
@@ -327,16 +300,102 @@ function snapshotWorkspaceProviderSources(): string {
   }
 }
 
+function broadcastSharedPrefs(): void {
+  let view: SharedProjectPrefsView;
+  try {
+    view = { prefs: listSharedProjectPrefs() };
+  } catch (err) {
+    log.warn(`shared project prefs read failed: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed() && isAppContentWindow(w)) {
+      w.webContents.send(HOOK_CONTROL_EVENT.SHARED_PREFS_CHANGED, view);
+    }
+  }
+}
+
+/** 共用配置投影到某个渠道时要写哪些 team 的行: Slack 多 workspace 时每个在用的 team 一行。 */
+function channelProjectionTeams(channel: HookPrefsChannel): Array<string | null> {
+  if (channel !== 'slack') return [null];
+  const snap = ensureInstances().manager.snapshot();
+  if (!snap.serverMultiTeam) return [null];
+  const teamIds = snap.bindings.filter((binding) => !binding.displaced).map((binding) => binding.teamId);
+  return teamIds.length > 0 ? teamIds : [null];
+}
+
+/**
+ * 让各渠道给服务端看的那份与共用配置一致(见 sharedProjectPrefs.ts)。只管已并入且此刻
+ * 连着的渠道: 没连着的等它下次连上时, 重连镜像结束后会再走到这里。
+ */
+function syncSharedProjectPrefs(): void {
+  for (const channel of OFFICIAL_PREFS_CHANNELS) {
+    // 各渠道互不牵连: 一个渠道写不下去, 排在它后面的照常对齐; 已经写下去的那部分也照常推送。
+    let changed: boolean;
+    try {
+      if (!isSharedPrefsAdopted(channel) || channelLiveBindingKey(channel) === null) continue;
+      changed = projectSharedOntoChannel(channel, channelProjectionTeams(channel));
+    } catch (err) {
+      // 一行都没写成(没有新东西可推): 只记日志, 不启动镜像 —— 否则镜像结束又回到这里, 原地打转。
+      log.warn(
+        `shared project prefs sync (${channel}) failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      changed = false;
+    }
+    if (changed) void mirrorWorkspacePrefs(channel);
+  }
+}
+
+/**
+ * 某个渠道落完一份服务端快照之后: 第一次(刚把服务端那份导入本机)把它并入共用配置,
+ * 之后把快照带来的改动(用户在 IM 里用 /model 卡改的)并回共用配置, 再让各渠道对齐。
+ */
+function settleChannelIntoShared(
+  channel: HookPrefsChannel,
+  snapshot: { before: HookWorkspacePrefs[]; server: HookWorkspacePrefs[] } | null,
+): void {
+  try {
+    let sharedChanged = false;
+    if (!isSharedPrefsAdopted(channel)) {
+      sharedChanged = adoptReadyChannels().length > 0;
+    } else if (snapshot !== null) {
+      sharedChanged =
+        absorbChannelChange(
+          snapshot.before,
+          rowsAfterServerSnapshot(listWorkspacePrefs(channel), snapshot.server),
+        ).length > 0;
+    }
+    if (sharedChanged) {
+      broadcastSharedPrefs();
+      rebroadcastWorkspaceProviderSources();
+    }
+  } catch (err) {
+    log.warn(
+      `shared project prefs update (${channel}) failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  syncSharedProjectPrefs();
+}
+
+/** 重连镜像拉到服务端快照那一刻, 这个渠道本机的行(用来看出快照带来了哪些改动)。 */
+const mirrorRowsBeforeSnapshot = new Map<
+  HookPrefsChannel,
+  { before: HookWorkspacePrefs[]; server: HookWorkspacePrefs[] }
+>();
+
 function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWorkspacePrefs[]): void {
   try {
     const sourcesBefore = snapshotWorkspaceProviderSources();
+    const rowsBefore = listWorkspacePrefs(channel);
     applyIncomingServerWorkspacePrefs(channel, prefs);
+    applyRetiredProjectNames();
     rebroadcastWorkspaceProviderSources(sourcesBefore);
     remotePrefsSnapshotGenerations.set(
       channel,
       (remotePrefsSnapshotGenerations.get(channel) ?? 0) + 1,
     );
     markWorkspacePrefsMigrated(channel);
+    settleChannelIntoShared(channel, { before: rowsBefore, server: prefs });
   } catch (err) {
     log.warn(
       `local workspace prefs replace (${channel}) failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -383,9 +442,14 @@ const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
   getRemoteSnapshotGeneration: (channel) => remotePrefsSnapshotGenerations.get(channel) ?? 0,
   getRemotePrefs: async (channel) => {
     const manager = ensureInstances().manager;
-    return channel === 'slack'
+    const remote = await (channel === 'slack'
       ? manager.getWorkspacePrefs()
-      : manager.getProviderWorkspacePrefs(channel);
+      : manager.getProviderWorkspacePrefs(channel));
+    mirrorRowsBeforeSnapshot.set(channel, {
+      before: listWorkspacePrefs(channel),
+      server: remote.prefs,
+    });
+    return remote;
   },
   setRemotePrefs: async (channel, workspace, patch, teamId) => {
     const manager = ensureInstances().manager;
@@ -393,10 +457,13 @@ const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
     else await manager.setProviderWorkspacePrefs(channel, workspace, patch);
   },
   onLocalPrefsChanged: (channel) => {
-    if (channel === 'slack') broadcastPrefs(slackLocalPrefsView());
-    else broadcastProviderPrefs(providerLocalPrefsView(channel));
     // 重连镜像同样经 applyIncomingServerWorkspacePrefs 落快照, 可能清掉配对来源(issue #5912)。
     rebroadcastWorkspaceProviderSources();
+    // 快照可能把改名前旧名称下的行带回来; 没有可挪的行时什么也不做。
+    applyRetiredProjectNames();
+    const snapshot = mirrorRowsBeforeSnapshot.get(channel) ?? null;
+    mirrorRowsBeforeSnapshot.delete(channel);
+    settleChannelIntoShared(channel, snapshot);
   },
   onError: (channel, err) => {
     log.warn(
@@ -404,6 +471,74 @@ const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
     );
   },
 });
+
+/**
+ * 项目改过名时, 把按旧名称存的偏好与来源挪到现用名称下。可重复执行: 服务端快照
+ * 落地后(它可能把旧名称下的行带回来)与每次项目整理后各跑一次。
+ */
+function applyRetiredProjectNames(): void {
+  if (!store) return;
+  try {
+    const config = store.get();
+    const pairs = retiredAliasPairs(config.workspaces, config.retiredWorkspaces ?? {});
+    if (pairs.length === 0) return;
+    const sources = moveWorkspaceProviderSourcesToRenamed(pairs);
+    if (sources !== null) broadcastWorkspaceProviderSources(sources);
+    for (const channel of moveWorkspacePrefsToRenamed(pairs)) {
+      void mirrorWorkspacePrefs(channel);
+    }
+    broadcastSharedPrefs();
+  } catch (err) {
+    log.warn(
+      `moving IM project preferences to the renamed project failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * 项目从侧栏移除(或它的名称转给了别的目录)后, 清掉按这个名称存的模型、权限与来源。
+ * 不清的话, 日后同名的新项目会悄悄继承上一个项目的配置, 包括「完全访问」。
+ */
+function forgetReleasedProjectSettings(names: readonly string[]): void {
+  if (names.length === 0) return;
+  try {
+    const sources = clearWorkspaceProviderSourcesFor(names);
+    if (sources !== null) broadcastWorkspaceProviderSources(sources);
+    const channels = clearWorkspacePrefsFor(names);
+    broadcastSharedPrefs();
+    for (const channel of channels) void mirrorWorkspacePrefs(channel);
+  } catch (err) {
+    log.warn(
+      `clearing settings of removed IM projects failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** 官方 IM 机器人可选的项目跟随侧栏项目(见 projectWorkspaces.ts)。 */
+const projectWorkspaceSync = createProjectWorkspaceSync({
+  getStore: () => store,
+  loadCatalog: loadImProjectCatalog,
+  registerDirectory: async (directory) => {
+    // 升级前配置的目录此刻不在(外接盘没插)也照样登记 —— 侧栏本来就能显示暂时不可用的项目。
+    const registered = await registerImProjectDirectory(directory, { requireExisting: false });
+    // 不能当项目的目录(对话托管目录、任务 worktree、伙伴的项目)跳过; 其余失败(存储没就绪、
+    // 写库失败)抛出去, 这次不算迁移完成, 下次整理再试 —— 否则这个目录会从机器人那里永久消失。
+    if (!registered.ok && registered.errorCode !== 'INVALID_ARGS' && registered.errorCode !== 'NOT_A_DIRECTORY') {
+      throw new Error(`${registered.errorCode}: ${registered.message}`);
+    }
+  },
+  onSynced: ({ changed, mappingChanged, releasedNames }) => {
+    if (!store || !manager) return;
+    forgetReleasedProjectSettings(releasedNames);
+    applyRetiredProjectNames();
+    // 名称清单变了要让服务端知道: 在线时重发 hello(它以最新一帧为准); 不在线时
+    // 下次建连的 hello 自带新清单, 不需要为此重建连接。
+    if (mappingChanged) manager.refreshHello();
+    if (changed) broadcastStatus(manager.snapshot());
+  },
+  log,
+});
+let disposeProjectCatalogListener: (() => void) | null = null;
 
 function broadcastTelegramBehavior(view: TelegramHookBehaviorState): void {
   for (const w of BrowserWindow.getAllWindows()) {
@@ -505,7 +640,11 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
           url: meta.url,
           enabled: meta.enabled,
           ...(provider === 'x' ? { companionBotId: config.xCompanionBotId ?? null } : {}),
-          workspaces: config.workspaces,
+          // 现用名称 + 改名前的旧名称(只供查找): 服务端可能还按旧名称派发。
+          workspaces: lookupWorkspaces(config.workspaces, config.retiredWorkspaces ?? {}),
+          retiredWorkspaceNames: Object.keys(config.retiredWorkspaces ?? {}).filter(
+            (name) => !Object.hasOwn(config.workspaces, name),
+          ),
           createdAt: 0,
         };
       },
@@ -628,12 +767,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       notifyStatus: broadcastStatus,
       notifyPrefs: (view) => {
         persistUnsolicitedServerPrefs('slack', view.prefs);
-        broadcastPrefs(slackLocalPrefsView());
       },
       notifyProviderPrefs: (view) => {
         if (view.provider === 'slack') return;
         persistUnsolicitedServerPrefs(view.provider, view.prefs);
-        broadcastProviderPrefs(providerLocalPrefsView(view.provider));
       },
       onHookReadyForPrefsMirror: (provider) => {
         void mirrorWorkspacePrefs(provider);
@@ -643,6 +780,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       getAccountFingerprint: currentAccountFingerprint,
       accountInitiallyActive: false,
       listRecentSessions: () => listRecentHookSessions(store!.get().workspaces),
+      syncProjectWorkspaces: () => projectWorkspaceSync.run(),
       // /model /effort 实时问答的数据源: 与会话内模型选择器**同一套规则**——
       // live providers(含自定义供应商 + 实时连接态)-> 仅已连接供应商 ->
       // 可见性过滤(renderer 镜像到 main 的 override + 目录 defaultEnabled,
@@ -805,9 +943,17 @@ export function readXCompanionSummary(): { available: boolean; visible: boolean;
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
 export function registerHookControlIpc(): void {
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, () => ({
-    hook: hookControlAvailable() ? ensureInstances().manager.snapshot() : disabledHookView(),
-  }));
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, () => {
+    if (!hookControlAvailable()) return { hook: disabledHookView() };
+    const hook = ensureInstances().manager.snapshot();
+    // 打开设置页时顺手与侧栏项目对齐; 有变化经状态广播推给页面。
+    projectWorkspaceSync.schedule();
+    return { hook };
+  });
+  disposeProjectCatalogListener?.();
+  disposeProjectCatalogListener = onProjectCatalogChanged(() => {
+    if (store && hookControlAvailable()) projectWorkspaceSync.schedule();
+  });
 
   // 开关即绑定(设置页 toggle 直接调, 无确认弹窗): 开 = 连接 + 置自动绑定意图
   // (连上后 main 自动发起 OIDC 弹浏览器); 关 = 解除绑定并断开(再开需重新
@@ -945,16 +1091,14 @@ export function registerHookControlIpc(): void {
     },
   );
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_WORKSPACES, (_e, payload) => {
+  // 添加项目: 登记进侧栏的项目列表, 再按项目列表整理一次机器人可选的项目。
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.ADD_PROJECT, async (_e, payload) => {
     requireHookControl();
-    const { store: s, manager: m } = ensureInstances();
-    const p = requireObject(payload);
-    const workspaces = requireObject(p.workspaces) as Record<string, string>;
-    translateValidation(() => s.setWorkspaces(workspaces));
-    // 别名清单变更要让 server 侧感知: 在线时直接重发 hello(server 以最新
-    // 一帧为准, 连接不动 —— 整条重建会让设置页状态/偏好区闪烁); 未连接时
-    // 回退重建, 下次建连的 hello 自带新清单
-    if (!m.refreshHello()) m.sync();
+    const { manager: m } = ensureInstances();
+    const directory = requireString(requireObject(payload).directory, 'directory');
+    const registered = await registerImProjectDirectory(directory);
+    if (!registered.ok) throwIpcError('INVALID_PARAMS', registered.message);
+    await projectWorkspaceSync.run();
     return { hook: m.snapshot() };
   });
 
@@ -969,7 +1113,7 @@ export function registerHookControlIpc(): void {
       // 把缺字段当 null 会让 renderer 的一次调用疏忽静默清掉用户已保存的设置。
       const alias = requireNullableString(p.alias, 'alias');
       translateValidation(() => s.setProviderDefaultWorkspace(provider, alias));
-      // 与 SET_WORKSPACES 同款: 默认目录也走 hello, 在线时重发一帧即可让 server
+      // 默认项目也走 hello, 在线时重发一帧即可让 server
       // 感知(它以最新一帧为准), 不重建连接 —— 重建会让设置页状态与偏好区闪烁。
       if (!m.refreshHello()) m.sync();
       return { hook: m.snapshot() };
@@ -1062,56 +1206,40 @@ export function registerHookControlIpc(): void {
     return { hook: mgr.snapshot() };
   });
 
-  // 目录偏好本机正本: 设置页读写本地文件, 不依赖 hook WS。连上后 best-effort
-  // 镜像到 server, 只供 /model 卡展示与遥控。
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PREFS_GET, async () => {
-    requireHookControl();
-    ensureInstances();
-    return { prefs: slackLocalPrefsView() };
-  });
-
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PREFS_SET, async (_e, payload) => {
-    requireHookControl();
-    ensureInstances();
+  // 项目的 Agent / 模型 / 思考强度 / 权限档所有官方机器人共用一份: 设置页读写这一份,
+  // 写完投影到各渠道并镜像给各自的服务端。
+  const writeSharedProjectPref = (payload: unknown): void => {
     const parsed = parseWorkspacePrefsWrite(payload);
     try {
-      setWorkspacePref('slack', parsed.teamId, parsed.workspace, parsed.patch);
+      adoptReadyChannels();
+      setSharedProjectPref(parsed.workspace, parsed.patch);
     } catch (err) {
       log.warn(
-        `local slack workspace prefs write failed: ${err instanceof Error ? err.message : String(err)}`,
+        `shared project prefs write failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       throwIpcError('INTERNAL', 'failed to persist workspace prefs');
     }
-    const view = slackLocalPrefsView();
-    broadcastPrefs(view);
-    void mirrorWorkspacePrefs('slack');
-    return { prefs: view };
-  });
+    broadcastSharedPrefs();
+    syncSharedProjectPrefs();
+  };
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_GET, async (_e, payload) => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SHARED_PREFS_GET, async () => {
     requireHookControl();
     ensureInstances();
-    const provider = requireNeutralProvider(payload);
-    return { prefs: providerLocalPrefsView(provider) };
-  });
-
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_SET, async (_e, payload) => {
-    requireHookControl();
-    ensureInstances();
-    const provider = requireNeutralProvider(payload);
-    const parsed = parseWorkspacePrefsWrite(payload);
     try {
-      setWorkspacePref(provider, parsed.teamId, parsed.workspace, parsed.patch);
+      if (adoptReadyChannels().length > 0) syncSharedProjectPrefs();
+      return { prefs: { prefs: listSharedProjectPrefs() } satisfies SharedProjectPrefsView };
     } catch (err) {
-      log.warn(
-        `local ${provider} workspace prefs write failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      throwIpcError('INTERNAL', 'failed to persist workspace prefs');
+      log.warn(`shared project prefs read failed: ${err instanceof Error ? err.message : String(err)}`);
+      throwIpcError('INTERNAL', 'failed to read workspace prefs');
     }
-    const view = providerLocalPrefsView(provider);
-    broadcastProviderPrefs(view);
-    void mirrorWorkspacePrefs(provider);
-    return { prefs: view };
+  });
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SHARED_PREFS_SET, async (_e, payload) => {
+    requireHookControl();
+    ensureInstances();
+    writeSharedProjectPref(payload);
+    return { prefs: { prefs: listSharedProjectPrefs() } satisfies SharedProjectPrefsView };
   });
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_GET, async (_e, payload) => {
@@ -1227,8 +1355,14 @@ export function registerHookControlIpc(): void {
     async (_e, payload) => {
       const p = requireObject(payload);
       const channel = requireString(p.channel, 'channel');
-      if (channel !== 'slack' && channel !== 'telegram' && channel !== 'x' && channel !== 'feishu') {
-        throwIpcError('INVALID_PARAMS', 'channel must be slack, telegram, x or feishu');
+      if (
+        channel !== 'slack' &&
+        channel !== 'telegram' &&
+        channel !== 'x' &&
+        channel !== 'feishu' &&
+        channel !== 'shared'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'channel must be slack, telegram, x, feishu or shared');
       }
       // 输入设界(codex review): 即使 renderer 被攻破, 也不允许任意长度/格式的键
       // 无限追加条目撑爆本地文件 —— workspace 按别名正则(与 prefs 同规), 其余限长。
@@ -1272,6 +1406,8 @@ export function registerHookControlIpc(): void {
       let entries: ReturnType<typeof setWorkspaceProviderSource>;
       try {
         entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId, agentDeviceId);
+        // 用户在设置页亲手换了共用那份的来源: 这个项目的配置不再算「升级时原样并入」。
+        if (channel === 'shared') noteSharedPrefEdited(workspace);
       } catch (err) {
         log.warn(
           `workspace provider source write failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1320,6 +1456,30 @@ export function startHookControlAccount(): void {
   // 群窗口生命周期入口在 manager.activateAccount 内执行并纳入账号级
   // pendingAccountOps；当前永久保留模式下该入口是兼容 no-op。
   ensureInstances().manager.activateAccount();
+  // 账号的项目存储此时已就绪: 先把机器人可选的项目与侧栏对齐。
+  void projectWorkspaceSync.run();
+  // 旧版「新对话配置」留在盘上的全局默认: 升级时清一次(见 clearLegacyGlobalDefaultsOnce)。
+  try {
+    const cleared = clearLegacyGlobalDefaultsOnce({
+      // 官方 Slack 以前另读一份自己的默认(同样早已没有设置入口), 一并清掉。
+      isCustomized: () =>
+        readImDefaultSettingsState().isCustomized || readImDefaultSettingsState('slack').isCustomized,
+      reset: () => {
+        resetImDefaultSettingsGlobal();
+        resetImDefaultSettingsChannel('slack');
+      },
+    });
+    if (cleared) log.info('legacy global IM defaults cleared on upgrade');
+  } catch (err) {
+    log.warn(`clearing legacy global IM defaults failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // 各渠道原有的按渠道偏好并入共用的那一份(每个渠道只做一次)。
+  try {
+    if (adoptReadyChannels().length > 0) broadcastSharedPrefs();
+  } catch (err) {
+    log.warn(`shared project prefs adoption failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  syncSharedProjectPrefs();
 }
 
 /** Close hook ingress before the old account DB is disposed. */
@@ -1330,6 +1490,7 @@ export async function stopHookControlAccount(): Promise<void> {
 /** Stop and discard all state tied to the current data owner; IPC stays registered. */
 export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
   mirrorWorkspacePrefs.invalidateOwnerBoundary();
+  mirrorRowsBeforeSnapshot.clear();
   unregisterSlackToolBridge();
   registerGroupImageReader(null);
   resetGroupContextCursorsSafely(options);
@@ -1340,6 +1501,8 @@ export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boole
 export function disposeHookControl(): void {
   disposeAuthListener?.();
   disposeAuthListener = null;
+  disposeProjectCatalogListener?.();
+  disposeProjectCatalogListener = null;
   observedAuthRealm = null;
   // App quit is not an account unbind: preserve the durable cursor and only
   // discard the in-memory cache so the next process resumes incrementally.

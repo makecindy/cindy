@@ -3,8 +3,8 @@
  *
  * 设计：
  *   - 单一 `registerTerminalHandlers()` 入口，由 `register.ts` 在 maker IPC 注册末尾调一次。
- *   - 内部构造 PtyManager 单例（per main 进程），sink 走 `webContents.send`，把 PTY
- *     data / exit 推回创建它的 owner 窗口。
+ *   - 复用进程级 HostTerminalService 的 PtyManager，与宿主命令共用会话注册表；
+ *     绑定 UI sink，通过 `webContents.send` 把 PTY data / exit 推回 owner 窗口。
  *   - 所有失败统一走 `throwIpcError(code, message)`（rule 13），renderer 侧用
  *     `extractIpcError` 反解 code。
  *
@@ -25,12 +25,14 @@ import {
   type ShellId,
 } from '../terminal/shellResolver.js';
 import {
-  PtyManager,
+  type PtyManager,
+  type PtyOwner,
   type CreateOptions,
   type CreateResult,
   type DataPayload,
   type ExitPayload,
 } from '../terminal/ptyManager.js';
+import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import {
   getDefaultShellPref,
   setDefaultShellPref,
@@ -77,20 +79,19 @@ interface RemoteTicket {
  * 必须只调一次（重复注册会被 ipcMain 抛错）。返回 PtyManager 实例供调用方在
  * shutdown 流程里手动 dispose（如果需要）。
  */
-export function registerTerminalHandlers(options?: TerminalHandlersOptions): PtyManager {
-  const manager = new PtyManager({
-    sink: {
-      emitData: (target: WebContents, payload: DataPayload) => {
-        if (!target.isDestroyed()) target.send(TERMINAL_PUSH.DATA, payload);
-      },
-      emitExit: (target: WebContents, payload: ExitPayload) => {
-        if (!target.isDestroyed()) target.send(TERMINAL_PUSH.EXIT, payload);
-      },
+export function registerTerminalHandlers(options?: TerminalHandlersOptions): PtyManager<PtyOwner> {
+  const service = getDesktopHostTerminalService();
+  service.bindUi({
+    emitData: (target: WebContents, payload: DataPayload) => {
+      if (!target.isDestroyed()) target.send(TERMINAL_PUSH.DATA, payload);
     },
-    resolveFallbackOwner: options?.getFallbackOwner
-      ? () => options.getFallbackOwner?.() ?? null
-      : undefined,
-  });
+    emitExit: (target: WebContents, payload: ExitPayload) => {
+      if (!target.isDestroyed()) target.send(TERMINAL_PUSH.EXIT, payload);
+    },
+  }, options?.getFallbackOwner
+    ? () => options.getFallbackOwner?.() ?? null
+    : undefined);
+  const manager = service.manager;
 
   const tickets = new Map<string, RemoteTicket>();
   let accountEpoch = 0;
@@ -222,7 +223,7 @@ export function registerTerminalHandlers(options?: TerminalHandlersOptions): Pty
     const identity = manager.remoteIdentity(id);
     // Closing a popped-out tab from the main window must still release its PTY.
     // That path supplies the task identity; a bare id grants only the current owner access.
-    const ownsOperation = manager.isOwner(id, event.sender) || (closingContext !== undefined
+    const ownsOperation = manager.isOwned(id, event.sender) || (closingContext !== undefined
       && identity?.context === remoteContextKey(parseRemoteContext(closingContext)));
     if (event.sender.isDestroyed() || !ownsOperation || !identity || identity.ownerKey !== remoteOwnerKey()) {
       throwIpcError('PERMISSION_DENIED', 'Terminal owner is no longer valid');

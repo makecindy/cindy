@@ -96,6 +96,7 @@ import {
   type VoiceInputMicrophonePermissionCache,
 } from './permissions.js';
 import { systemAudioMuteGuard } from './SystemAudioMuteGuard.js';
+import { VoiceInputOperationQueue } from './VoiceInputOperationQueue.js';
 import {
   awaitGlobalOverlayPasteContext,
   getVoiceInputAccessibilityPermissionSnapshot,
@@ -220,6 +221,8 @@ export type VoiceInputAudioFileTranscriptionResult = {
 };
 
 type ActiveVoiceInput = {
+  admission: { cancelled: boolean };
+  recordingId?: string;
   controller: VoiceInputController;
   provider: AsrProvider;
   sourceLanguage?: string;
@@ -279,6 +282,7 @@ type VoiceInputSystemPermissions = {
 };
 
 type StartPayload = {
+  recordingId?: string;
   sourceLanguage?: string;
   refinementEnabled?: boolean;
   refinementContext?: DictationRefinementContext;
@@ -299,6 +303,22 @@ export type DictionaryAdviceIpcResult =
   | { ok: false; error: string };
 
 const activeByWebContentsId = new Map<number, ActiveVoiceInput>();
+// Scope opaque renderer recording IDs to their sender; old callers retain
+// their numeric window lease. Pending recordings own a lease before runId exists.
+const recordingAudioOwners = new Map<number, Map<string, { owner: symbol; muteGeneration: number }>>();
+function audioOwner(webContentsId: number, recordingId?: string, acquiring = false): number | symbol {
+  if (recordingId === undefined) return webContentsId;
+  if (typeof recordingId !== 'string' || recordingId.length === 0 || recordingId.length > 128) {
+    throw new Error('Invalid voice recording ID');
+  }
+  let owners = recordingAudioOwners.get(webContentsId);
+  if (!owners) { owners = new Map(); recordingAudioOwners.set(webContentsId, owners); }
+  let owner = owners.get(recordingId);
+  if (!owner) { owner = { owner: Symbol('dictation-audio'), muteGeneration: 0 }; owners.set(recordingId, owner); }
+  if (acquiring) owner.muteGeneration++;
+  return owner.owner;
+}
+const voiceInputOperations = new VoiceInputOperationQueue();
 const destroyedWebContentsListeners = new Set<number>();
 let appRestoreRegistered = false;
 let cachedMicrophonePermission: VoiceInputMicrophonePermissionCache | null = null;
@@ -525,17 +545,27 @@ function registerVoiceInputWebContentsDestroyedCleanup(sender: WebContents): voi
   sender.once('destroyed', () => {
     destroyedWebContentsListeners.delete(webContentsId);
     const active = activeByWebContentsId.get(webContentsId);
-    if (!active) return;
     unregisterActiveInlineVoiceInputWebContents(webContentsId);
     activeByWebContentsId.delete(webContentsId);
     void (async () => {
-      await active.controller.cancel();
-      await disposeVoiceInputProvider(active.provider, 'web_contents_destroyed', {
-        sourceLanguage: active.sourceLanguage,
-        refinementEnabled: active.refinementEnabled,
-      });
-      await restoreSystemAudioForSender(webContentsId);
-    })();
+      try {
+        if (active) {
+          active.admission.cancelled = true;
+          await active.controller.cancel();
+        }
+      } finally {
+        if (active) {
+          await disposeVoiceInputProvider(active.provider, 'web_contents_destroyed', {
+            sourceLanguage: active.sourceLanguage,
+            refinementEnabled: active.refinementEnabled,
+          });
+        }
+        for (const id of [...(recordingAudioOwners.get(webContentsId)?.keys() ?? [])]) {
+          await restoreSystemAudioForSender(webContentsId, id);
+        }
+        await restoreSystemAudioForSender(webContentsId);
+      }
+    })().catch(() => log.warn('voice input cleanup failed after window closed', { webContentsId }));
   });
 }
 
@@ -2153,21 +2183,24 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.handle('voice-input:mute-system-audio', async (event): Promise<VoiceInputActionResult> => {
+  ipcMain.handle('voice-input:mute-system-audio', async (event, payload?: { recordingId?: string }): Promise<VoiceInputActionResult> => {
     if (hasVoiceConversationLease()) return { ok: false, error: VOICE_CONVERSATION_ACTIVE_MESSAGE };
     try {
-      await systemAudioMuteGuard.mute(event.sender.id);
+      if (event.sender.isDestroyed()) throw new Error('Voice input window was closed.');
+      registerVoiceInputWebContentsDestroyedCleanup(event.sender);
+      await systemAudioMuteGuard.mute(audioOwner(event.sender.id, payload?.recordingId, true));
       return { ok: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn('system audio mute failed', { error: message });
+      await restoreSystemAudioForSender(event.sender.id, payload?.recordingId);
       return { ok: false, error: message };
     }
   });
 
-  ipcMain.handle('voice-input:restore-system-audio', async (event): Promise<VoiceInputActionResult> => {
+  ipcMain.handle('voice-input:restore-system-audio', async (event, payload?: { recordingId?: string }): Promise<VoiceInputActionResult> => {
     try {
-      await systemAudioMuteGuard.restore(event.sender.id);
+      await releaseSystemAudioForSender(event.sender.id, payload?.recordingId);
       return { ok: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2176,28 +2209,41 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  const startVoiceInput = async (event: Electron.IpcMainInvokeEvent, payload: StartPayload | undefined): Promise<StartResult> => {
+  const startVoiceInput = async (
+    event: Electron.IpcMainInvokeEvent,
+    payload: StartPayload | undefined,
+    ownerScopeKey: ReturnType<typeof activeOwnerScopeKey>,
+    auxiliaryChainSnapshot: ReturnType<typeof getEffectiveAuxiliaryModelChainSnapshot>,
+  ): Promise<StartResult> => {
     // Bind this run to the owner that initiated it before any cancellation,
     // readiness, or credential await. A later account switch must fail closed
     // at the final refiner dispatch instead of using the new owner's route.
-    const ownerScopeKey = activeOwnerScopeKey();
-    const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
+    const isStartCurrent = () => !event.sender.isDestroyed()
+      && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
+    const invalidStart = { ok: false as const, error: 'Voice input window or account changed before startup.' };
+    if (!isStartCurrent()) return invalidStart;
+    if (payload?.recordingId !== undefined) audioOwner(event.sender.id, payload.recordingId);
     const isInlineSender = !isGlobalVoiceInputOverlaySender(event.sender);
     const existing = activeByWebContentsId.get(event.sender.id);
     if (existing) {
       await existing.controller.cancel();
       unregisterActiveInlineVoiceInputWebContents(event.sender.id);
       activeByWebContentsId.delete(event.sender.id);
-      disposeVoiceInputProviderLater(existing.provider, 'replaced_existing_run', {
+      await disposeVoiceInputProvider(existing.provider, 'replaced_existing_run', {
         sourceLanguage: existing.sourceLanguage,
         refinementEnabled: existing.refinementEnabled,
       });
     }
+    if (!isStartCurrent()) return invalidStart;
     if (isInlineSender) {
       registerActiveInlineVoiceInputWebContents(event.sender);
     }
 
     const readiness = await refreshVoiceInputReadinessCache('start');
+    if (!isStartCurrent()) {
+      unregisterActiveInlineVoiceInputWebContents(event.sender.id);
+      return invalidStart;
+    }
     if (!readiness.ok) {
       unregisterActiveInlineVoiceInputWebContents(event.sender.id);
       return {
@@ -2230,6 +2276,10 @@ export function registerVoiceInputIpc(): void {
         : Promise.resolve({ refinerChainProfiles: [], refinerReadinessList: [], readyRefinerProfiles: [] }),
       resolveStartableAsrChain(),
     ]);
+    if (!isStartCurrent()) {
+      unregisterActiveInlineVoiceInputWebContents(event.sender.id);
+      return invalidStart;
+    }
     const primaryRefinerProfile = refinerChainProfiles[0] ?? null;
     const primaryRefinerReadiness = refinerReadinessList[0] ?? null;
     const canRefine = readyRefinerProfiles.length > 0;
@@ -2289,6 +2339,7 @@ export function registerVoiceInputIpc(): void {
       provider = new FallbackAsrProvider(startableAsrChain.map((kind) => ({
         kind,
         create: () => {
+          if (!isStartCurrent()) throw new Error(invalidStart.error);
           // BYOK live 谓词(PR #744 review 第二十一/二十五轮):后备转写档在前一档
           // 失败后才被 connect,可能距会话开始数分钟 —— create 时刻按当前 override
           // 以 (来源, 模型) 双查,停用即抛错让 fallback 落到下一家。managed 模式
@@ -2314,8 +2365,9 @@ export function registerVoiceInputIpc(): void {
       return { ok: false, error: message };
     }
     let runId = '';
+    const admission = { cancelled: false };
     const emit = (message: VoiceInputRendererEvent): void => {
-      if (event.sender.isDestroyed()) return;
+      if (event.sender.isDestroyed() || admission.cancelled) return;
       event.sender.send('voice-input:event', message);
     };
     let refiner: DictationRefiner | undefined;
@@ -2338,7 +2390,10 @@ export function registerVoiceInputIpc(): void {
               // changing the local auxiliary chain must not cancel it. The
               // owner fence still prevents a previous account's text from
               // being sent after an account switch.
-              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),
+              beforeDispatch: () => {
+                if (admission.cancelled) throw new Error('voice input cancelled');
+                assertVoiceInputOwnerScopeCurrent(ownerScopeKey);
+              },
               timeoutMs: VOICE_INPUT_MANAGED_REFINER_IDLE_TIMEOUT_MS,
               voiceContext,
               onUsage: ({ servedModel, ...usage }) => {
@@ -2375,6 +2430,7 @@ export function registerVoiceInputIpc(): void {
               profile,
               createVoiceInputTextModelClient(profile, {
                 beforeDispatch: () => {
+                  if (admission.cancelled) throw new Error('voice input cancelled');
                   assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
                   assertRefinerRouteAvailable(profile);
                 },
@@ -2455,6 +2511,9 @@ export function registerVoiceInputIpc(): void {
           if (runId) emit({ type: 'draft', runId, text, segment, source });
         },
         onSubmitted: (text, segment) => {
+          // Cancel is admitted synchronously while provider teardown is queued.
+          // Refusing the range also prevents stop from launching refinement.
+          if (admission.cancelled || event.sender.isDestroyed()) return undefined;
           if (runId) emit({ type: 'submitted', runId, text, segment });
           return makeEditableRange(text, segment);
         },
@@ -2487,6 +2546,15 @@ export function registerVoiceInputIpc(): void {
 
     try {
       runId = await controller.start();
+      if (!isStartCurrent()) {
+        await controller.cancel();
+        await disposeVoiceInputProvider(provider, 'sender_or_owner_changed_before_active', {
+          sourceLanguage: payload?.sourceLanguage,
+          refinementEnabled: Boolean(refiner),
+        });
+        unregisterActiveInlineVoiceInputWebContents(event.sender.id);
+        return invalidStart;
+      }
       // The ASR session now exists server-side; warm the refiner prompt
       // cache in the background so the (large, mostly static) prompt prefix
       // is hot by the time the user stops speaking. Best effort by design.
@@ -2501,15 +2569,9 @@ export function registerVoiceInputIpc(): void {
           reason: refinerAuthErrorReason,
         });
       }
-      if (event.sender.isDestroyed()) {
-        await controller.cancel();
-        await disposeVoiceInputProvider(provider, 'sender_destroyed_before_active', {
-          sourceLanguage: payload?.sourceLanguage,
-          refinementEnabled: Boolean(refiner),
-        });
-        return { ok: false, error: 'Voice input window was closed.' };
-      }
       activeByWebContentsId.set(event.sender.id, {
+        admission,
+        recordingId: payload?.recordingId,
         controller,
         provider,
         sourceLanguage: payload?.sourceLanguage,
@@ -2550,9 +2612,25 @@ export function registerVoiceInputIpc(): void {
   };
   ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
     if (hasVoiceConversationLease()) return { ok: false, error: VOICE_CONVERSATION_ACTIVE_MESSAGE };
+    const ownerScopeKey = activeOwnerScopeKey();
+    const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
     // Reserve before the first await, including readiness/auth and provider connection.
     pendingDictationStarts++;
-    try { return await startVoiceInput(event, payload); }
+    // Hold the window's lane through provider connection and registration. A
+    // replacement composer must clean the pending run before registering its own.
+    try {
+      return await voiceInputOperations.run(event.sender.id,
+        async () => {
+          try {
+            const result = await startVoiceInput(event, payload, ownerScopeKey, auxiliaryChainSnapshot);
+            if (!result.ok) await restoreSystemAudioForSender(event.sender.id, payload?.recordingId);
+            return result;
+          } catch (error) {
+            await restoreSystemAudioForSender(event.sender.id, payload?.recordingId);
+            throw error;
+          }
+        });
+    }
     finally { pendingDictationStarts--; }
   });
 
@@ -2564,7 +2642,7 @@ export function registerVoiceInputIpc(): void {
 
   ipcMain.handle('voice-input:audio-drain', (): { ok: true } => ({ ok: true }));
 
-  ipcMain.handle('voice-input:stop', async (event): Promise<{ ok: true } | { ok: false; error: string }> => {
+  const stopVoiceInput = async (event: Electron.IpcMainInvokeEvent): Promise<{ ok: true } | { ok: false; error: string }> => {
     const active = activeByWebContentsId.get(event.sender.id);
     if (!active) {
       await restoreSystemAudioForSender(event.sender.id);
@@ -2580,15 +2658,17 @@ export function registerVoiceInputIpc(): void {
     } finally {
       unregisterActiveInlineVoiceInputWebContents(event.sender.id);
       activeByWebContentsId.delete(event.sender.id);
-      disposeVoiceInputProviderLater(active.provider, 'stop_completed', {
+      await disposeVoiceInputProvider(active.provider, 'stop_completed', {
         sourceLanguage: active.sourceLanguage,
         refinementEnabled: active.refinementEnabled,
       });
-      await restoreSystemAudioForSender(event.sender.id);
+      await restoreSystemAudioForSender(event.sender.id, active.recordingId);
     }
-  });
+  };
+  ipcMain.handle('voice-input:stop', (event) =>
+    voiceInputOperations.run(event.sender.id, () => stopVoiceInput(event)));
 
-  ipcMain.handle('voice-input:cancel', async (event, payload?: { runId?: string }): Promise<{ ok: true }> => {
+  const cancelVoiceInput = async (event: Electron.IpcMainInvokeEvent, payload?: { runId?: string }): Promise<{ ok: true }> => {
     const active = activeByWebContentsId.get(event.sender.id);
     const requestedRunId = typeof payload?.runId === 'string' ? payload.runId : undefined;
     log.debug('voice input cancel requested', {
@@ -2597,17 +2677,28 @@ export function registerVoiceInputIpc(): void {
       activeRunId: active?.controller.id,
       hasActiveRun: Boolean(active),
     });
-    if (active && (!requestedRunId || active.controller.id === requestedRunId)) {
-      await active.controller.cancel();
-      unregisterActiveInlineVoiceInputWebContents(event.sender.id);
-      activeByWebContentsId.delete(event.sender.id);
-      disposeVoiceInputProviderLater(active.provider, 'cancel_completed', {
-        sourceLanguage: active.sourceLanguage,
-        refinementEnabled: active.refinementEnabled,
-      });
+    // A late reply from an unmounted composer owns neither the current run nor
+    // its system-audio lease. Do not unmute a replacement recording either.
+    if (requestedRunId && active?.controller.id !== requestedRunId) return { ok: true };
+    try {
+      if (active) await active.controller.cancel();
+    } finally {
+      if (active) {
+        unregisterActiveInlineVoiceInputWebContents(event.sender.id);
+        activeByWebContentsId.delete(event.sender.id);
+        await disposeVoiceInputProvider(active.provider, 'cancel_completed', {
+          sourceLanguage: active.sourceLanguage,
+          refinementEnabled: active.refinementEnabled,
+        });
+      }
+      await restoreSystemAudioForSender(event.sender.id, active?.recordingId);
     }
-    await restoreSystemAudioForSender(event.sender.id);
     return { ok: true };
+  };
+  ipcMain.handle('voice-input:cancel', (event, payload?: { runId?: string }) => {
+    const active = activeByWebContentsId.get(event.sender.id);
+    if (active && (!payload?.runId || payload.runId === active.controller.id)) active.admission.cancelled = true;
+    return voiceInputOperations.run(event.sender.id, () => cancelVoiceInput(event, payload));
   });
 }
 
@@ -2651,22 +2742,6 @@ async function disposeVoiceInputProvider(
   }
 }
 
-function disposeVoiceInputProviderLater(
-  provider: AsrProvider,
-  reason: string,
-  options?: DisposeVoiceInputProviderOptions,
-): void {
-  // 兜底: disposeVoiceInputProvider 内部已经 catch 了 provider.dispose 的异常,
-  // 这里的 catch 是防止未来在 disposeVoiceInputProvider 里加了未捕获逻辑导致
-  // unhandled rejection。
-  void disposeVoiceInputProvider(provider, reason, options).catch((error) => {
-    log.warn('voice input provider dispose (later) failed', {
-      reason,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-}
-
 function makeEditableRange(text: string, segment: SpeechSegment): EditableRange {
   return {
     id: segment.id,
@@ -2687,11 +2762,27 @@ function makeRefinedSegment(text: string, range: EditableRange): SpeechSegment {
   };
 }
 
-async function restoreSystemAudioForSender(webContentsId: number): Promise<void> {
+async function restoreSystemAudioForSender(webContentsId: number, recordingId?: string): Promise<void> {
   try {
-    await systemAudioMuteGuard.restore(webContentsId);
+    await releaseSystemAudioForSender(webContentsId, recordingId);
   } catch (error) {
     log.warn('system audio restore failed', { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function releaseSystemAudioForSender(webContentsId: number, recordingId?: string): Promise<void> {
+  const owner = audioOwner(webContentsId, recordingId);
+  const lease = recordingId === undefined ? undefined : recordingAudioOwners.get(webContentsId)?.get(recordingId);
+  const muteGeneration = lease?.muteGeneration;
+  await systemAudioMuteGuard.restore(owner);
+  if (recordingId !== undefined) {
+    const owners = recordingAudioOwners.get(webContentsId);
+    // A later mute may already be queued with this symbol behind our restore.
+    // Keep its identity reachable for renderer restore and window destruction.
+    if (owners?.get(recordingId) === lease && lease?.muteGeneration === muteGeneration) {
+      owners?.delete(recordingId);
+    }
+    if (owners?.size === 0) recordingAudioOwners.delete(webContentsId);
   }
 }
 

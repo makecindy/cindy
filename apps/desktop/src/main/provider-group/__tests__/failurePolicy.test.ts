@@ -72,6 +72,9 @@ describe('decideProviderGroupFailure — the task’s bound subscription account
     ['account state unreadable', {
       message: '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable',
     }, switchTo('failed')],
+    ['unrelated login wording is not the known executor rejection', {
+      message: 'Another service requires login',
+    }, switchTo('failed')],
     ['account cannot serve this request', {
       message: '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account cannot be used for this request',
     }, switchTo('failed')],
@@ -85,6 +88,16 @@ describe('decideProviderGroupFailure — the task’s bound subscription account
   ])('%s', (_name, signals, expected) => {
     for (const phase of PHASES) expect(decideProviderGroupFailure(signals, phase)).toEqual(expected);
   });
+});
+
+// The old bridge used the same message for a provider-id mismatch, a missing
+// reader and a signed-out account. The log alone must not cool a healthy member.
+it.each([
+  'The selected OpenAI subscription account requires login',
+  'OpenAI/ChatGPT upstream request failed: The selected OpenAI subscription account requires login',
+])('keeps an ambiguous old Pi rejection out of auth cooling: %s', message => {
+  for (const phase of PHASES)
+    expect(decideProviderGroupFailure({ message, sdkError: message }, phase)).toEqual(switchTo('failed'));
 });
 
 describe('decideProviderGroupFailure — that computer cannot be reached or cannot take the task', () => {

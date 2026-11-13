@@ -47,6 +47,12 @@
     "footer": "日誌存於手機，至多 7 天、8 MB，不自動上呈。所輸之完整日誌不含言談內文與憑證；上呈僅遣篩後之執行記錄與版本資訊。"
   },
   "title": "規制",
+  "promptRecommendation": {
+    "label": "輸入之議",
+    "description": "答畢薦續語，唯此機適用。",
+    "saveFailed": "此番已生效，然未存妥。",
+    "reset": "復預設"
+  },
   "appearance": {
     "title": "儀容",
     "modeLabel": "顯示之式",
@@ -424,7 +430,11 @@
       "voice": "長按而言",
       "scrollKeys": "右搖桿",
       "scroll": "捲動",
-      "page": "翻頁"
+      "page": "翻頁",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字鍵上下",
+      "triggerScroll": "捲動所見",
+      "sendText": "遣所輸之字",
+      "taskHint": "此諸捷鍵唯於差事頁可用。若設為語音鍵，則以言為先；釋之，字仍留於輸入框。"
     }
   }
 }

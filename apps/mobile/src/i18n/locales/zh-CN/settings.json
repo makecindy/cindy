@@ -47,6 +47,12 @@
     "footer": "日志保存在手机上，最多 7 天、8 MB，不会自动上传。导出的完整日志不含对话正文和凭证；上传只发送筛选后的运行记录和版本信息。"
   },
   "title": "设置",
+  "promptRecommendation": {
+    "label": "输入建议",
+    "description": "回复后建议下一句，仅在这台手机上生效。",
+    "saveFailed": "设置已在本次使用中生效，但未能保存。",
+    "reset": "恢复默认"
+  },
   "appearance": {
     "title": "外观",
     "modeLabel": "显示模式",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "文言（默认）",
+        "prose": "雅正文言",
         "tang-poetry": "唐诗",
         "song-ci": "宋词",
         "yuan-qu": "元曲",
@@ -424,7 +430,11 @@
       "voice": "长按说话",
       "scrollKeys": "右摇杆",
       "scroll": "滚动",
-      "page": "翻页"
+      "page": "翻页",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字键上/下",
+      "triggerScroll": "滚动当前内容",
+      "sendText": "发送已输入文字",
+      "taskHint": "组合键和 Start 仅用于任务页。设为语音键时，优先按住说话；松开后文字留在输入框。"
     }
   }
 }

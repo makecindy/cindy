@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { homedir } from 'node:os';
 import type { IpcMainInvokeEvent, WebContents } from 'electron';
 import type { IPty } from 'node-pty';
@@ -36,6 +36,7 @@ vi.mock('../../terminal/terminalPrefsStore.js', () => ({
 import { TERMINAL_INVOKE } from '../channels';
 import { registerTerminalHandlers } from '../terminal-handlers';
 import { remoteLaunch } from '../../terminal/remoteTerminal';
+import { getDesktopHostTerminalService } from '../../terminal/terminalService.desktop';
 
 // Real app-session boundaries with memory-only storage/metadata: protect the SSH
 // lifetime through the actual runtime subscription, not a copied auth predicate.
@@ -103,6 +104,12 @@ beforeEach(() => {
   };
   manager = registerTerminalHandlers({ remote });
 });
+// The production service is process-wide; release sessions between cases without
+// replacing its manager or reloading app-session subscriptions.
+afterEach(() => {
+  getDesktopHostTerminalService().disposeScoped();
+  for (const session of manager.list()) manager.dispose(session.id);
+});
 async function prepare(sourceEvent = source, extra: Record<string, unknown> = {}) {
   return invoke(TERMINAL_INVOKE.DESCRIBE_REMOTE, sourceEvent, { id: params.id, ...context, ...extra });
 }
@@ -131,6 +138,37 @@ describe('terminal local compatibility', () => {
 });
 
 describe('remote ticket IPC', () => {
+  // Merge regression: IPC and managed commands now share one production registry.
+  // Previous cases never mixed their lifetimes. Minimal input: SSH + UI + a scoped
+  // program, then remote invalidation; unit with fake spawn and real service/handlers.
+  it('shares the service registry while SSH restart and account cleanup preserve other lifetimes', async () => {
+    const service = getDesktopHostTerminalService();
+    expect(manager).toBe(service.manager);
+    create(source, (await prepare()).ticket);
+    const identity = manager.remoteIdentity(params.id);
+    const launch = mocks.spawn.mock.calls[0].slice(0, 2);
+    exit({ exitCode: 0 });
+    invoke(TERMINAL_INVOKE.RESTART, source, params.id);
+    const sshPty = pty;
+    expect(mocks.spawn.mock.calls[1].slice(0, 2)).toEqual(launch);
+    expect(manager.remoteIdentity(params.id)).toEqual(identity);
+    invoke(TERMINAL_INVOKE.CREATE, source, { id: 'local', cwd: homedir() });
+    const localPty = pty;
+    const scope = { key: 'managed', revision: 'r1', defaultCwd: homedir(),
+      environment: { EXPLICIT: 'managed-only' }, assertCurrent() {} };
+    const job = await service.start(scope, { program: { command: 'example', args: ['--version'] } });
+    const managedPty = pty;
+    output('managed output');
+    expect(manager.list()).toHaveLength(3);
+    invalidate();
+    expect(sshPty.kill).toHaveBeenCalledOnce();
+    expect(manager.has(params.id)).toBe(false);
+    expect(manager.has('local')).toBe(true);
+    expect(localPty.kill).not.toHaveBeenCalled();
+    expect(managedPty.kill).not.toHaveBeenCalled();
+    expect(service.list(scope)).toMatchObject([{ id: job.id, status: 'running', shellId: 'program' }]);
+    expect(service.read(scope, job.id).chunks).toMatchObject([{ data: 'managed output' }]);
+  });
   it('spawns using authoritative cwd and only reattaches the same task in the current account', async () => {
     const { ticket } = await prepare();
     const result = create(source, ticket);

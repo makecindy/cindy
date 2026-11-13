@@ -512,7 +512,7 @@ import { ComposerFrame, nativeComposerFrameAvailable } from '@/session/ComposerF
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
-import { useHandheldVoiceKey } from '@/handheld/handheldMode';
+import { useHandheldSessionControls, useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -7484,6 +7484,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sendLatestRef.current = send;
   });
 
+  const handheldSendTarget = useHandheldSessionControls(sessionId, () => {
+    if (!navigation.isFocused() || !canUseComposer || !composerSendTargetEnabledRef.current
+      || !draftRef.current.trim() || !composerDraftHydrated
+      || sendInFlightRef.current || messageEditSubmittingRef.current
+      || voiceRecordingActiveRef.current || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current || voiceState === 'listening' || voiceIsProcessing) return;
+    playHaptic('commit');
+    void sendLatestRef.current?.();
+  }, !(contextSheetOpen || modelSheetOpen || permissionSheetOpen || settingsOpen || sideChatsOpen
+    || searchOpen || extraDirBrowseOpen || sessionListDrawerOverlayMounted || shareSelectionActive));
+
   const applyProjectionIfCurrent = useCallback((projection: InputProjection, expectedEpoch: number) => {
     remoteSessionStore.setInputProjectionIfCurrent(sessionId, projection, expectedEpoch);
   }, [sessionId]);
@@ -7879,6 +7890,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ) : composerShowSendButton ? (
         <RouteActionButton
           ref={sendButtonRef}
+          nativeID={handheldSendTarget}
           accessibilityLabel={voiceIsListening ? t('session.screen.voiceStopAndSend') : t('session.screen.sendMessage')}
           accessibilityHint={composerLayout.send.disabledReason ?? composerLayout.guidanceText}
           disabled={composerSendDisabled}
@@ -8876,7 +8888,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return ids;
   }, [pendingUploads]);
   // 单张点按即同步入队，再关闭面板；不等待鉴权或上传才占用附件槽位。
-  const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset) => {
+  const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset, dismiss?: (afterClose: () => void) => void) => {
     if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || uploadingMediaAssetIds.has(asset.id)) return;
     if (attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
       setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
@@ -8907,8 +8919,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         };
       },
     }], { token: auth.getAccessToken() });
-    setContextSheetOpen(false);
-    requestAnimationFrame(() => composerInputRef.current?.focus());
+    const restoreEditing = () => {
+      // The sheet hides the keyboard while WebView can retain DOM focus.
+      // Release it after dismissal so focus() can open the keyboard again.
+      composerInputRef.current?.blur();
+      requestAnimationFrame(() => composerInputRef.current?.focus());
+    };
+    if (dismiss) dismiss(restoreEditing);
+    else {
+      setContextSheetOpen(false);
+      restoreEditing();
+    }
   }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, t]);
   // 勾选态按「映射的附件仍在列表里」现算,附件被单独移除 / 发送清空后角标自动消失。
   const selectedMediaAssetIds = useMemo(() => {
@@ -13330,6 +13351,7 @@ interface RouteActionButtonProps {
   disabled?: boolean;
   disabledStyle?: StyleProp<ViewStyle>;
   hitSlop?: PressableProps['hitSlop'];
+  nativeID?: string;
   onLayout?: PressableProps['onLayout'];
   onLongPress?: () => void;
   onPress?: () => void;
@@ -13358,6 +13380,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
   disabled = false,
   disabledStyle,
   hitSlop,
+  nativeID,
   onLayout,
   onLongPress,
   onPress,
@@ -13409,6 +13432,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
       delayLongPress={delayLongPress}
       disabled={interactionDisabled}
       hitSlop={hitSlop}
+      nativeID={nativeID}
       onLayout={onLayout}
       onLongPress={interactionDisabled ? undefined : onLongPress}
       onPress={interactionDisabled ? undefined : handlePress}

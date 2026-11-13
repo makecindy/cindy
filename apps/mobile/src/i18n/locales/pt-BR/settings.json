@@ -47,6 +47,12 @@
     "footer": "Os logs ficam neste celular por até 7 dias ou 8 MB e nunca são enviados automaticamente. Os logs exportados não incluem o texto das conversas nem credenciais; os envios incluem apenas registros de execução filtrados e informações de versão."
   },
   "title": "Configurações",
+  "promptRecommendation": {
+    "label": "Sugestões de entrada",
+    "description": "Sugerir o que escrever após uma resposta. Aplica-se apenas a este celular.",
+    "saveFailed": "A configuração está ativa por enquanto, mas não pôde ser salva.",
+    "reset": "Restaurar padrão"
+  },
   "appearance": {
     "title": "Aparência",
     "modeLabel": "Modo de aparência",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prosa clássica (padrão)",
+        "prose": "Prosa clássica",
         "tang-poetry": "Poesia Tang",
         "song-ci": "Ci dos Song",
         "yuan-qu": "Qu dos Yuan",
@@ -424,7 +430,11 @@
       "voice": "Segurar para falar",
       "scrollKeys": "Analógico direito",
       "scroll": "Rolar",
-      "page": "Mudar de página"
+      "page": "Mudar de página",
+      "triggerScrollKeys": "L2 / R2 + direcional cima/baixo",
+      "triggerScroll": "Rolar conteúdo visível",
+      "sendText": "Enviar texto digitado",
+      "taskHint": "Estes atalhos funcionam nas páginas de sessão. Um botão atribuído à voz tem prioridade; ao soltá-lo, o texto fica na caixa de mensagem."
     }
   }
 }

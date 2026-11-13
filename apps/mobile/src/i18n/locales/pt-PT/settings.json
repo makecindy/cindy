@@ -47,6 +47,12 @@
     "footer": "Os registos ficam neste telemóvel durante um máximo de 7 dias ou até 8 MB e nunca são carregados automaticamente. Os registos exportados excluem o texto das conversas e as credenciais; os carregamentos enviam apenas registos de execução filtrados e informações da versão."
   },
   "title": "Definições",
+  "promptRecommendation": {
+    "label": "Sugestões de escrita",
+    "description": "Sugerir o que escrever após uma resposta. Aplica-se apenas a este telemóvel.",
+    "saveFailed": "A definição está ativa por agora, mas não foi possível guardá-la.",
+    "reset": "Repor predefinição"
+  },
   "appearance": {
     "title": "Aspeto",
     "modeLabel": "Modo de aspeto",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prosa clássica (predefinição)",
+        "prose": "Prosa clássica",
         "tang-poetry": "Poesia Tang",
         "song-ci": "Ci dos Song",
         "yuan-qu": "Qu dos Yuan",
@@ -424,7 +430,11 @@
       "voice": "Manter premido para falar",
       "scrollKeys": "Manípulo direito",
       "scroll": "Deslocar",
-      "page": "Mudar de página"
+      "page": "Mudar de página",
+      "triggerScrollKeys": "L2 / R2 + direcional cima/baixo",
+      "triggerScroll": "Deslocar conteúdo visível",
+      "sendText": "Enviar texto escrito",
+      "taskHint": "Estes atalhos funcionam nas páginas de sessão. Um botão atribuído à voz tem prioridade; ao soltá-lo, o texto fica na caixa de mensagem."
     }
   }
 }

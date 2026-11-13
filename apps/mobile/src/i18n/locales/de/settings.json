@@ -47,6 +47,12 @@
     "footer": "Logs bleiben bis zu 7 Tage oder bis zu einer Größe von 8 MB auf diesem Smartphone und werden nie automatisch hochgeladen. Exportierte Logs enthalten weder Gesprächstexte noch Zugangsdaten. Bei Uploads werden nur gefilterte Ausführungsprotokolle und Versionsinfos gesendet."
   },
   "title": "Einstellungen",
+  "promptRecommendation": {
+    "label": "Eingabevorschläge",
+    "description": "Nach einer Antwort Vorschläge für die nächste Eingabe anzeigen. Gilt nur auf diesem Smartphone.",
+    "saveFailed": "Die Einstellung gilt vorerst, konnte aber nicht gespeichert werden.",
+    "reset": "Auf Standard zurücksetzen"
+  },
   "appearance": {
     "title": "Darstellung",
     "modeLabel": "Darstellung",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Klassische Prosa (Standard)",
+        "prose": "Klassische Prosa",
         "tang-poetry": "Tang-Lyrik",
         "song-ci": "Song-Ci",
         "yuan-qu": "Yuan-Qu",
@@ -424,7 +430,11 @@
       "voice": "Gedrückt halten zum Sprechen",
       "scrollKeys": "Rechter Stick",
       "scroll": "Scrollen",
-      "page": "Seite vor / zurück"
+      "page": "Seite vor / zurück",
+      "triggerScrollKeys": "L2 / R2 + Steuerkreuz auf/ab",
+      "triggerScroll": "Sichtbaren Inhalt scrollen",
+      "sendText": "Eingegebenen Text senden",
+      "taskHint": "Diese Kurzbefehle gelten auf Sitzungsseiten. Ist eine Taste der Spracheingabe zugewiesen, hat diese Vorrang; beim Loslassen bleibt der Text im Nachrichtenfeld."
     }
   }
 }

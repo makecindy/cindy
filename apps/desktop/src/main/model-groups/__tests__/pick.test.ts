@@ -355,6 +355,18 @@ describe('createModelGroupResolver with sources on other computers', () => {
     expect((await own.resolver.resolve({ selection })).trace[1]).toMatchObject({ state: 'picked', why: 'soonest', limitedUntilMs: NOW + 10 * HOUR });
   });
 
+  // 2026-11-13：进行中的任务里选模式，任务换不了电脑，只在任务所在的位置里挑；别处的来源不选、也不去读那边的目录。
+  it('picks only at the running task\'s location when one is given', async () => {
+    const local = { agentKind: 'codex', providerId: 'b', model: 'gpt' } as const;
+    const { deps, resolver } = make(groups('order', [REMOTE, local]));
+    const here = await resolver.resolve({ selection, location: { agentDeviceId: null } });
+    expect(here).toMatchObject({ outcome: 'routed', route: { providerId: 'b' } });
+    expect(here.outcome === 'routed' && 'agentDeviceId' in here.route).toBe(false);
+    expect(deps.remoteViews).not.toHaveBeenCalled();
+    const there = await resolver.resolve({ selection, location: { agentDeviceId: 'dev-2' } });
+    expect(there).toMatchObject({ outcome: 'routed', route: { providerId: 'a', agentDeviceId: 'dev-2' } });
+  });
+
   it('keeps a candidate saved without a location on this computer and reads nothing elsewhere', async () => {
     const saved = normalizeModelGroupsConfig({ routes: [{ id: 'r1', name: '旧路线', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'a', model: 'gpt' }] }] });
     const { deps, resolver } = make(saved);

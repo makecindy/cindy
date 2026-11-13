@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { providerShareGuestPeer } from '@cindy/device-link';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -36,6 +37,8 @@ const h = vi.hoisted(() => ({
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
   pool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
   legacyLoggedIn: new Set<string>(),
+  poolModels: null as import('@cindy/model-providers').CatalogModel[] | null,
+  disabledModels: {} as Record<string, true>,
   migrateLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
 }));
 vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
@@ -49,12 +52,17 @@ vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
 });
 vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../subscription-accounts/runtime.js')>();
-  return { ...actual, hasConnectedSubscriptionPool: () => Boolean(h.pool && !h.pool.disconnected) };
+  return { ...actual, hasConnectedSubscriptionPool: () => Boolean(h.pool && !h.pool.disconnected),
+    readSubscriptionPoolCodexModels: () => h.poolModels };
 });
 vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../codex-account-auth.desktop.js')>();
   return { ...actual, codexAccountState: (id: string) => ({ authenticated: h.legacyLoggedIn.has(id) }) };
 });
+vi.mock('../model-disable-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../model-disable-store.js')>(),
+  readModelDisableOverrides: () => ({ disabledModels: h.disabledModels, disabledProviders: {} }),
+}));
 
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
 
@@ -166,6 +174,7 @@ vi.mock('../generic-oauth.desktop.js', () => ({
   configureGenericOAuth: () => undefined,
   hasGenericOAuthLogin: () => false,
   readCachedGenericOAuthAccessToken: () => null,
+  readGenericOAuthAccessToken: async () => null,
   resetGenericOAuthMemoryCache: () => undefined,
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
@@ -238,6 +247,7 @@ import {
   setActiveCatalogChangedListener,
   setCustomProviderConfigs,
   setCustomProviders,
+  setDiscoveredCodexModels,
 } from '../active-catalog.js';
 import {
   __testing,
@@ -248,7 +258,9 @@ import {
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
   syncLocalCatalogOverridesIntoActiveCatalog,
+  refreshDiscoveredCodexModels,
 } from '../createDesktopProviderService.js';
+import { createGuestProviderRouteBinder, guestProviderModelIds } from '../../remote-agent/host/providerAccess.js';
 import {
   buildCodexCustomProviderArgs,
   deriveCodexCustomProviderRoutes,
@@ -273,6 +285,59 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Unit regression: a revoked default login cleared the supplier catalog even
+  // after the pool selected a healthy second account. Existing coverage only
+  // projected legacy connection aliases, not ordinary pool accounts.
+  it('keeps healthy pooled membership at the guest startup entry after default auth invalidation', async () => {
+    const previous = getActiveCatalog();
+    const model = (id: string): import('@cindy/model-providers').CatalogModel => ({
+      id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
+    });
+    h.pool = { strategy: 'least', accounts: ['default', 'second'].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
+    h.poolModels = [model('healthy-model')];
+    try {
+      setDiscoveredCodexModels([model('default-only')]);
+      await refreshDiscoveredCodexModels(false);
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      for (const options of [{}, { catalog: getActiveCatalog() }, { getCatalog: getActiveCatalog }]) {
+        const views = await service.listProviders({ ...options, snapshotOnly: true });
+        expect(guestProviderModelIds(views, 'openai', 'codex')).toContain('healthy-model');
+        expect(guestProviderModelIds(views, 'openai', 'codex')).not.toContain('default-only');
+      }
+      h.poolModels = ['healthy-model', 'unshared-model', 'disabled-model', 'other-group-model'].map(model);
+      h.disabledModels = { 'openai:disabled-model': true };
+      const binder = createGuestProviderRouteBinder({
+        readProviders: () => service.listProviders({ snapshotOnly: true }),
+        guestAccess: () => ({ providerId: 'openai', memberId: 'member' }),
+        ownerAllowed: () => true, providerAllowed: () => true,
+        modelAccess: {
+          allows: (_provider, id) => id !== 'unshared-model',
+          read: () => ({ models: ['healthy-model', 'disabled-model', 'other-group-model'], providerModels: null }),
+        },
+      });
+      const route = await binder({ kind: 'codex', hostSessionId: 'pool-guest', sessionId: 'pool-task', providerId: 'openai',
+        controller: providerShareGuestPeer('share', 'member', 'device'), isCurrent: () => true,
+        relayModelAccess: { models: ['healthy-model', 'unshared-model', 'disabled-model'], allows: async () => true } });
+      try { expect(route?.modelIds).toEqual(['healthy-model']); }
+      finally { route?.release(); }
+      h.poolModels = [model('recovered-default'), model('healthy-model')];
+      expect(getDesktopSelectableCatalog().providers.find(p => p.id === 'openai')?.models.codex?.map(m => m.id))
+        .toEqual(['recovered-default', 'healthy-model']);
+      h.poolModels = [model('healthy-model'), model('gpt-history[1m]')];
+      expect(guestProviderModelIds(await service.listProviders({ snapshotOnly: true }), 'openai', 'codex'))
+        .toEqual(['healthy-model']);
+      expect(guestProviderModelIds(await service.listProviders({ snapshotOnly: true, getCatalog: getActiveCatalog }), 'openai', 'codex'))
+        .toEqual(['healthy-model', 'gpt-history[1m]']);
+      h.poolModels = [];
+      expect(guestProviderModelIds(await service.listProviders({ snapshotOnly: true }), 'openai', 'codex')).toEqual([]);
+    } finally {
+      h.pool = null;
+      h.poolModels = null;
+      h.disabledModels = {};
+      setDiscoveredCodexModels([]);
+      setActiveCatalog(previous);
+    }
+  });
   // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
   // Codex connections and keep their model membership under the canonical supplier.
   // Regression: the picker was covered but explicit/lazy full-catalog reads used by

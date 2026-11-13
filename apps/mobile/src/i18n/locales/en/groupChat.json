@@ -313,6 +313,7 @@
     "memberLimit": "A group chat needs 2–6 buddies",
     "memberUnavailable": "One of these buddies is unavailable. Choose another and try again.",
     "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
+    "mentionAmbiguous": "More than one member is named “{{name}}”. Pick who you mean from the @ list.",
     "notFound": "This group chat no longer exists",
     "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
     "planOpen": "A work split is underway. Finish or stop it before starting another.",

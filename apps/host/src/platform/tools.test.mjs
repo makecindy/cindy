@@ -9,6 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createHostPlatformTools } from './tools.ts';
+import { createHostToolService } from '../agent/host-tools.ts';
+import { createHostConfirmations } from '../host-confirmations.ts';
 import { createPlatformClientHandoff } from './client-handoff.mjs';
 import { createHostService } from '../service.mjs';
 import { configureHostOwner } from '../agent/claude-auth.mjs';
@@ -75,6 +77,31 @@ test('new MCP attachment sees the same browser target without recreating the bac
   assert.equal(f.jobs.length, 2);
   assert.equal(f.settings.readBrowserBackendSettings().kind, 'user-browser');
   assert.equal(f.tools.clientHandoffReady, false);
+});
+
+// Integration, #9825 / architecture-invariants §5: the upstream Node platform
+// providers must also reach the plugin gateway. Existing tests only attached an
+// Agent client. One approved browser call must use that same retained target.
+test('plugin gateway and Agent attachment share the supplied Node browser provider', async t => {
+  const f = await fixture(t);
+  const ghost = { enabled: true, dir: '/fixture/browser', approvedHostToolGroups: ['browser'],
+    approval: { state: 'approved', revision: 'r1' }, manifest: { id: 'browser', name: 'Browser', agent: { hostTools: ['browser'] } } };
+  const confirmations = createHostConfirmations({ current: () => true });
+  const service = createHostToolService({ profileDir: f.profileDir, ownerId: 'fixture-owner', current: () => true,
+    owner: () => ({ dataOwnerId: 'fixture-owner', ownerGeneration: 1 }), getGhost: () => ghost,
+    getSession: () => undefined, manager: {}, confirmations, t: key => key });
+  service.providers.push(...f.tools.providers);
+  service.services.replace(service.providers);
+  t.after(() => { service.close(); confirmations.close(); });
+  const agent = await f.client('task-a');
+  const expected = await tabs(agent);
+  const call = () => service.request('browser', { type: 'host-tool-request', server: 'cindy_browser',
+    tool: 'browser', args: { action: 'tabs' } }, () => true);
+  assert.deepEqual(await call(), expected);
+  assert.equal(f.jobs.length, 2);
+  ghost.enabled = false;
+  assert.match(JSON.stringify(await call()), /PERMISSION_DENIED/);
+  assert.equal(f.jobs.length, 2);
 });
 
 test('owner boundary drops an in-flight browser result and refuses later dispatch', async t => {

@@ -47,6 +47,12 @@
     "footer": "Les journaux restent sur ce téléphone jusqu'à 7 jours ou 8 Mo et ne sont jamais envoyés automatiquement. Les journaux exportés excluent le texte des conversations et les identifiants ; les envois ne transmettent que des enregistrements d'exécution filtrés et des informations de version."
   },
   "title": "Paramètres",
+  "promptRecommendation": {
+    "label": "Suggestions de saisie",
+    "description": "Suggérer quoi écrire après une réponse. Uniquement sur ce téléphone.",
+    "saveFailed": "Le réglage est actif pour le moment, mais n’a pas pu être enregistré.",
+    "reset": "Rétablir le réglage par défaut"
+  },
   "appearance": {
     "title": "Apparence",
     "modeLabel": "Mode d'apparence",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prose classique (par défaut)",
+        "prose": "Prose classique",
         "tang-poetry": "Poésie Tang",
         "song-ci": "Ci des Song",
         "yuan-qu": "Qu des Yuan",
@@ -424,7 +430,11 @@
       "voice": "Maintenir pour parler",
       "scrollKeys": "Stick droit",
       "scroll": "Faire défiler",
-      "page": "Page précédente / suivante"
+      "page": "Page précédente / suivante",
+      "triggerScrollKeys": "L2 / R2 + croix haut/bas",
+      "triggerScroll": "Faire défiler le contenu visible",
+      "sendText": "Envoyer le texte saisi",
+      "taskHint": "Ces raccourcis fonctionnent dans les pages de session. Un bouton affecté à la voix conserve cette priorité ; le relâcher laisse le texte dans la zone de message."
     }
   }
 }

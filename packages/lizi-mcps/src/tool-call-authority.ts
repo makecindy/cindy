@@ -8,8 +8,14 @@ export type ToolCallAuthorization =
   | { ok: true; run?<T>(operation: () => Promise<T>): Promise<T> }
   | { ok: false; errorCode: string; message: string };
 
+export type HostToolCaller =
+  | { kind: 'task'; sessionId: string | undefined }
+  | { kind: 'plugin'; pluginId: string; dataOwnerId: string | null; ownerGeneration: number };
+
 export type ToolCallAuthorizer = (input: {
   sessionId: string | undefined;
+  /** Attested by the Host. Absent retains the existing task caller semantics. */
+  caller?: HostToolCaller;
   server: 'cindy_helper' | 'cindy_scheduler' | 'cindy_orca';
   tool: string;
   args: unknown;
