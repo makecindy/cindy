@@ -256,7 +256,7 @@ import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } fro
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
-import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
+import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, CodexNativeInitializationStoppedError, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
 import { AppServerRequestTimeoutError, type RequestProgressDeadline } from './app-server/client.js';
 import { useCodexHistoryHome, type CodexExternalAuth } from './app-server/external-auth.js';
@@ -1747,6 +1747,7 @@ export class CodexAgent extends BaseAgent {
    * "1 agent N host" 是 codex 端做不到 "1 server N transport" 的必然后果。
    */
   private hosts = new Map<string, AppServerHost>();
+  private skillDiscoveryHosts = new Set<AppServerHost>();
   private archiveHostKeys = new Set<string>();
 
   /** Project the host's durable task status through Codex's own storage API. */
@@ -1977,10 +1978,39 @@ export class CodexAgent extends BaseAgent {
     forceReload: boolean,
     remoteHostId?: string,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
-    return this.withHostOperation(async () => remoteHostId
-      ? { key: hostKey(remoteHostId), host: await this.getHost(remoteHostId) }
-      : this.getUtilityHost(),
-    host => this.listSkillsForHost(host, workingDir, forceReload));
+    const discoverySignal = this.routeResolutionAbort.signal;
+    try {
+      return await this.withHostOperation(async () => remoteHostId
+        ? { key: hostKey(remoteHostId), host: await this.getHost(remoteHostId) }
+        : this.getUtilityHost(),
+      host => this.listSkillsForHost(host, workingDir, forceReload));
+    } catch (error) {
+      if (remoteHostId || !(error instanceof AgentNotAuthenticatedError)) throw error;
+      discoverySignal.throwIfAborted();
+      const env = await buildCodexEnv(this.deps.auth, this.deps.runtimeConfig);
+      discoverySignal.throwIfAborted();
+      const host = new AppServerHost({
+        createTransport: () => createStdioTransport({
+          binaryPath: this.deps.binaryPath,
+          env: useCodexHistoryHome(env, env.CODEX_HOME ?? path.join(os.homedir(), '.codex')),
+          extraArgs: [
+            ...(this.deps.disableCodexPluginRuntime ? ['--disable', 'plugins', '--disable', 'remote_plugin'] : []),
+            '-c', 'cli_auth_credentials_store="ephemeral"',
+          ],
+          onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({ pid, role: 'control-plane-service' }),
+        }),
+        requireEphemeralAuth: true,
+        logger: this.deps.logger,
+        clientInfo: { name: 'cindy', version: '0.0.0' },
+      });
+      this.skillDiscoveryHosts.add(host);
+      try {
+        return await this.listSkillsForHost(host, workingDir, forceReload, CRITICAL_THREAD_RPC_TIMEOUT_MS);
+      } finally {
+        await host.retire('Codex skill discovery complete', { throwOnTransportError: true });
+        this.skillDiscoveryHosts.delete(host);
+      }
+    }
   }
 
   /**
@@ -5720,6 +5750,11 @@ assertRouteCurrent();
         reviewMode ? undefined : botRuntimeSkillPolicy(opts.botRuntimeProfile),
       ),
     );
+    // Host Skills of this session (e.g. 群协作 for a group's Cindy task) as explicit per-thread paths,
+    // like a Bot's own Skills: Codex has no plugin-root mount. Local, non-Review threads only.
+    const hostSkillPaths = reviewMode || hostedGuest || opts.remoteHostId ? [] : (opts.hostSkills ?? []).map((skill) => skill.filePath);
+    if (hostSkillPaths.length) capabilityRoutingConfig = mergeCodexSkillConfigOverrides(capabilityRoutingConfig,
+      { 'skills.config': hostSkillPaths.map((skillPath) => ({ path: skillPath, enabled: true })) });
     // 受邀者(另一个账号)不读本机用户的技能停用偏好(本机技能在上面已整体关闭)。
     const disabledSkillPaths = opts.remoteHostId || isolatedBotProfile(opts.botRuntimeProfile) || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
@@ -10995,7 +11030,10 @@ assertRouteCurrent();
       // Try the same model/account summary once; explicit exhausted quota stays terminal.
       const compactRateLimit = isTerminalRateLimitRetryExhaustion(text, signals.errorStatus, error?.codexErrorInfo);
       const tag = codexErrorInfoTag(error?.codexErrorInfo);
-      if (tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded' || tag === 'unauthorized') return false;
+      if (tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded' || tag === 'unauthorized' || tag === 'cyberPolicy') return false;
+      if (/\b(?:content_policy_violation|request_too_large)\b/i.test(text)) return false;
+      // Preserve the existing capacity backoff and SDK-owned overload handling.
+      if (parseOverloadError(text, signals.errorStatus, tag)) return false;
       // A terminal turn alone does not prove an upstream compact request failed:
       // transport loss/timeouts can leave its result unknown. Accept explicit
       // endpoint rejection/failure responses (including the observed 502/503),
@@ -11003,16 +11041,69 @@ assertRouteCurrent();
       const info = error?.codexErrorInfo;
       // The shared redaction helper deliberately extracts only auth/rate-limit
       // statuses. Parse Codex's explicit HTTP failure wording locally as well.
-      const statusMatch = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i.exec(text);
-      const textStatus = statusMatch ? Number(statusMatch[1]) : signals.errorStatus;
-      const httpStatus = info && typeof info === 'object' && 'httpConnectionFailed' in info
-        ? info.httpConnectionFailed.httpStatusCode ?? textStatus
-        : textStatus;
-      const rejectedRequest = [400, 404, 405, 422, 500, 501, 502, 503].includes(httpStatus ?? 0);
+      const explicitStatuses = Array.from(text.matchAll(/\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/gi), match => Number(match[1]));
+      // A status field describes the upstream result; the wrapper's code does
+      // not. Use the shared signal extractor's boundaries, without limiting
+      // contextual statuses to its auth/rate-limit subset.
+      const contextualStatuses = Array.from(text.matchAll(/(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?)["']?\s*(?:[:=]\s*)?["']?(\d{3})["']?(?=$|[\s,;:}\]])/gi), match => Number(match[1]));
+      // Numeric code fields and rejection phrases can carry an upstream status.
+      // Collect every value for vetoes without adding new recovery formats.
+      const embeddedStatuses = [
+        ...Array.from(text.matchAll(/(?:^|[\s,{;])["']?code["']?\s*(?:[:=]\s*)?["']?(\d{3})["']?(?=$|[\s,;:}\]])/gi), match => Number(match[1])),
+        ...Array.from(text.matchAll(/\brequest\s+rejected\s*\(\s*(\d{3})\s*\)/gi), match => Number(match[1])),
+      ];
+      // LiteLLM can carry the rejection only in its provider code or JSON code
+      // field. Keep explicit HTTP/auth/rate-limit statuses authoritative.
+      // A missing model cannot be repaired by summarizing with that same model.
+      if (/\b(?:invalid model name|model_not_found)\b|\bmodel\b[^\n]{0,80}\b(?:not.{0,4}(?:found|exist)|does not exist)\b/i.test(text)) return false;
+      const liteLlmBadRequest = /\bcode\s*:\s*provider_invalid_request\s*\/\s*400\b|"code"\s*:\s*"400"/i.test(text);
+      const textStatus = explicitStatuses[0] ?? signals.errorStatus ?? contextualStatuses[0] ?? (liteLlmBadRequest ? 400 : undefined);
+      // All HTTP-bearing wire variants carry the authoritative status, as in
+      // the existing classifier; retry exhaustion is not necessarily a 429.
+      const httpInfo: { httpStatusCode?: number | null } | undefined =
+        info && typeof info === 'object' && (tag === 'httpConnectionFailed'
+          || tag === 'responseStreamConnectionFailed' || tag === 'responseStreamDisconnected'
+          || tag === 'responseTooManyFailedAttempts') ? Object.values(info)[0] : undefined;
+      const httpStatus = httpInfo?.httpStatusCode ?? textStatus;
+      const rejectionStatuses = [400, 404, 405, 422, 500, 501, 502, 503];
+      const rejectedRequest = rejectionStatuses.includes(httpStatus ?? 0);
+      // An outer rejection cannot hide a later disallowed upstream status.
+      const responseStatuses = [...explicitStatuses, ...contextualStatuses, ...embeddedStatuses, httpStatus]
+        .filter((status): status is number => status !== undefined);
+      const disallowedStatus = responseStatuses.some(status => !rejectionStatuses.includes(status)
+        && !(status === 429 && compactRateLimit));
+      // Match the existing provider quota contract: an outer 400 must not hide
+      // a contextual upstream payment status. Bare numbers are not statuses.
+      const paymentRequired = /(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b)/i.test(text);
+      // As with the shared signal extractor, require a field/phrase boundary:
+      // a forbidden upstream status must beat the wrapper's bad-request code.
+      const forbiddenResponse = /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?403["']?(?=$|[\s,;:}\]])|\brequest\s+rejected\s*\(\s*403\s*\)/i.test(text);
+      // A compact rejection is a provider failure, not a tool error. Preserve
+      // the existing provider auth markers without widening the translator.
+      const authenticationFailure = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|\bpermission_error\b|api key not valid|令牌|鉴权失败/i.test(text);
+      // Billing depletion is terminal even when no generic quota marker exists.
+      const billingDepletion = /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i.test(text);
+      // A standard rate-limit type alone does not prove daemon retries ended.
+      const unexhaustedRateLimit = !compactRateLimit && /\brate_limit_error\b/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
+        || /\bconnection_error\b/i.test(text)
+        || parseReconnectAttemptMessage(text) !== null
+        // Only the shared classifier's transport markers apply here; explicit
+        // 502/503 responses remain eligible for the existing summary fallback.
+        || /\b(?:EPIPE|AggregateError)\b|upstream unreachable|fetch failed|socket hang up|stream ended before a terminal|Connection error|upstream stream error|Gateway Time-?out/i.test(text)
+        || responseStatuses.some(status => status === 408 || status === 504)
+        // Preserve the provider classifier's network/timeout code contract.
+        || /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ETIMEDOUT|ABORT_ERR|TimeoutError|AbortError)\b/i.test(text)
         || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
       return !uncertainTransport
+        && !disallowedStatus
         && !isAuthRelatedErrorMessage(text)
+        && !authenticationFailure
+        && !matchesDeterministicUsageExhaustionText(text)
+        && !billingDepletion
+        && !unexhaustedRateLimit
+        && !paymentRequired
+        && !forbiddenResponse
         && ((rejectedRequest && !signals.usageLimit) || compactRateLimit)
         && !isRemoteCompactEncryptedContentError(text);
     };
@@ -11112,8 +11203,12 @@ assertRouteCurrent();
         recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
           ? recoveryState.pendingAutomaticRecovery
           : null;
-      if (recoveryState && pendingRecovery && isCodexModelUnavailableError(turn.error)) {
-        // An authoritative model rejection can arrive after a recovery intent.
+      const rejectedSummaryRecovery = pendingRecovery?.reason === SUMMARY_RECOVERY
+        && !!turn.error && !canRecoverRemoteCompaction(turn.id, turn.error);
+      if (recoveryState && pendingRecovery
+        && (isCodexModelUnavailableError(turn.error) || rejectedSummaryRecovery)) {
+        // The authoritative error can refine a preliminary rejection into an
+        // exhausted account or another failure that must not trigger a summary.
         recoveryState.pendingAutomaticRecovery = null;
         pendingRecovery = null;
       }
@@ -11121,7 +11216,7 @@ assertRouteCurrent();
         turn.status === 'failed'
         && (!terminalErroredTurnIds.has(turn.id) || pendingRecovery)
       ) {
-        if (!pendingRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error)) {
+        if (!pendingRecovery && !rejectedSummaryRecovery && turn.error && recordAutomaticRecoveryIntent(turn.id, turn.error)) {
           recoveryState = overloadRetry;
           pendingRecovery =
             recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
@@ -15598,6 +15693,10 @@ assertRouteCurrent();
   async dispose(): Promise<void> {
     this.routeResolutionAbort.abort(new Error('Codex route selection cancelled by dispose'));
     this.routeResolutionAbort = new AbortController();
+    const skillDiscoveryRetirement = Promise.allSettled(Array.from(this.skillDiscoveryHosts, async (host) => {
+      await host.retire('CodexAgent.dispose()', { throwOnTransportError: true });
+      this.skillDiscoveryHosts.delete(host);
+    }));
     this.deps.logger.error('codex dispose called', {
       hostCount: this.hosts.size,
       inflightCount: this.hostPromises.size,
@@ -15660,6 +15759,7 @@ assertRouteCurrent();
     // codexHome 也跟着 host 走: 下次 ensureStarted() 会用新 server 的返回值重新填,
     // 防止用户中途切 CODEX_HOME (改 auth / 重登) 后这边还拿着老路径。
     this.codexHome = null;
+    await skillDiscoveryRetirement;
     if (retirements.length > 0) {
       // 并发 shutdown — 互不依赖, 一起更快收完。失败不阻断其他。
       await Promise.allSettled(retirements);

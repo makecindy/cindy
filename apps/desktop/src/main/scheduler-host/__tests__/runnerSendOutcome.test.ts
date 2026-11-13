@@ -1,5 +1,5 @@
 import type { ScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
 
 import type {
   AgentEvent,
@@ -694,6 +694,10 @@ describe('MakerScheduleRunner send outcome policy', () => {
   });
 
   it('projects tool-loop terminal errors to a safe scheduler notification', async () => {
+    // 终止原因文案随界面语言（imBot.text.shared.*），这里固定中文以核对投影内容。
+    const { setMainLocale } = await import('../../i18n.desktop');
+    setMainLocale('zh-CN');
+    onTestFinished(() => setMainLocale('en'));
     const h = createSessionHarness(async (_message, opts) => {
       await opts?.onAccepted?.();
       return { accepted: true };

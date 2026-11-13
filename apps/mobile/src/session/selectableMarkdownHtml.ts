@@ -1,6 +1,7 @@
 import {
   isMobileMarkdownImageDirectUrl,
   parseMobileMarkdown,
+  mobileMarkdownListMarkerText,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
   type MobileMarkdownInlineMark,
@@ -459,9 +460,9 @@ function renderBlock(block: MobileMarkdownBlock, ctx: RenderContext): string {
     case 'blockquote':
       return `<blockquote>${renderInlines(block.inlines, ctx)}</blockquote>`;
     case 'list_item': {
-      const marker = block.checked === true ? '✓' : block.checked === false ? '□' : block.ordered ? block.marker : '•';
+      const marker = block.checked === true ? '✓' : block.checked === false ? '□' : mobileMarkdownListMarkerText(block).trim();
       return [
-        '<div class="list-row">',
+        `<div class="list-row"${block.depth ? ` style="margin-left:${block.depth}em"` : ''}>`,
         `<span class="list-marker">${escapeHtml(marker)}</span>`,
         `<span class="list-text">${renderInlines(block.inlines, ctx)}</span>`,
         '</div>',

@@ -1424,8 +1424,9 @@ export class AgentInputCoordinator {
 
   /**
    * Teammate principal only: an automatic resume/retry of the owner's own accepted input
-   * still speaks for that owner request. It is never fresh owner input for owner-only
-   * Host actions such as app update.
+   * still speaks for that owner request, and so does a host envelope (a companion group
+   * round) carrying the owner's words the host verified. Neither is fresh owner input for
+   * owner-only Host actions such as app update.
    */
   isActiveInputOwnerContinuation(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
@@ -1433,12 +1434,12 @@ export class AgentInputCoordinator {
     // still use isActiveInputOwnerAuthored), but task actions retain its scope.
     const relayed = !!item && !item.sourcePlugin && !item.sharedTaskAuthor
       && verifiedOwnerRequestText(item.autoReviewUserText) !== undefined;
-    return relayed || this.activeInputHasOwnerAuthor(sessionId, true);
+    return relayed || this.activeInputHasOwnerAuthor(sessionId, true, true);
   }
 
-  private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean): boolean {
+  private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean, allowHostEnvelope = false): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
-    return this.inputHasOwnerAuthor(item, allowContinuation);
+    return this.inputHasOwnerAuthor(item, allowContinuation, allowHostEnvelope);
   }
 
   /** Only the exact input held by this coordinator may use companion group recovery. */
@@ -1466,7 +1467,8 @@ export class AgentInputCoordinator {
     return this.inputHasOwnerAuthor(item, true);
   }
 
-  private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean): boolean {
+  private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean,
+    allowHostEnvelope = false): boolean {
     // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
     const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
     if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
@@ -1474,8 +1476,15 @@ export class AgentInputCoordinator {
     // A continuation keeps its source's author only when it names that source; the
     // host-generated "continue" text is never fresh owner input.
     const continuation = allowContinuation && !!item.retrySourceClientId;
+    // The host wrapped the input in a model-only envelope (`agentOmitsTriggerPrefix`, never
+    // accepted from renderer or device-link input) and kept beside it only the owner words it
+    // verified (a companion group round the owner started). The words below decide; an
+    // envelope without them, e.g. another member's message, has no owner author.
+    const hostEnvelope = allowHostEnvelope && item.agentOmitsTriggerPrefix === true
+      && item.originalSyntheticTrigger === 'generic';
     if (item.clientId.startsWith('plugin-task:')) return false;
-    if (item.originalSyntheticTrigger && !(continuation && item.originalSyntheticTrigger === 'continue')) return false;
+    if (item.originalSyntheticTrigger && !hostEnvelope
+      && !(continuation && item.originalSyntheticTrigger === 'continue')) return false;
     // Automatic continuations and zero-output retries are never fresh owner input.
     if (item.autoResume && !continuation) return false;
     const text = item.autoReviewUserText;
@@ -6933,9 +6942,13 @@ export class AgentInputCoordinator {
     preferProviderGroup = true,
   ): AutoResumeInfo | null {
     if (!this.deps.onResumableTurnError) return null;
-    // 容量错误已经走到终态：组能接管时直接交接，不再叠加主进程的同机重试。
+    // 容量/额度错误到达终态时先交给供应商组；组异步拒绝后，
+    // resumeAfterProviderGroupDeclined 以 preferProviderGroup=false 回到原有恢复。
     // 其他中断仍先走自愈(如断线后在原电脑恢复)；不能交给组的输入也保持原有处理。
-    if (preferProviderGroup && this.getProviderGroupSwitchCandidate(sessionId, item, message, signals) === 'overload') return null;
+    if (preferProviderGroup) {
+      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+      if (cause === 'overload' || cause === 'usage-limit') return null;
+    }
     try {
       return (
         this.deps.onResumableTurnError(sessionId, { ...(signals ?? {}), message }, item) ?? null

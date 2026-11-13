@@ -118,10 +118,16 @@ export async function readNativeAccountUsage(provider: SubscriptionProvider, dir
       claudeUsage: usage ? parseClaudeOAuthUsageResponse(usage.rateLimits, Date.now()) : null,
     };
   }
-  const rateLimits = await codexAccountRpc(directory, 'account/rateLimits/read', {});
+  const rateLimits = await codexAccountRpc(directory, 'account/rateLimits/read', {}) as {
+    rateLimits?: { planType?: unknown };
+  } | null;
   return {
     codexUsage: providerGroupCodexUsageFromReads(null, rateLimits, Date.now()),
     codexCredits: codexCredits(rateLimits),
+    // Legacy auth adapters expose identity but no plan. Preserve metadata from
+    // this same profile's quota response before the scheduler sanitizes it.
+    codexPlan: typeof rateLimits?.rateLimits?.planType === 'string'
+      ? rateLimits.rateLimits.planType.trim() || undefined : undefined,
   };
 }
 
@@ -198,6 +204,7 @@ export function codexAccountRpc(
   directory: string,
   method: string,
   params: unknown,
+  canDispatch?: () => boolean,
 ): Promise<unknown> {
   const binary = getReadyBinaryPath('codex');
   if (!binary) return Promise.reject(new Error('Codex CLI unavailable'));
@@ -239,6 +246,9 @@ export function codexAccountRpc(
         if (message.error) return finish(new Error('Codex account request failed'));
         if (message.id === 1) {
           send({ method: 'initialized', params: {} });
+          // Startup may await configuration/auth refresh. A reset must still use
+          // the exact credential observed before spawning this control connection.
+          if (canDispatch && !canDispatch()) return finish(new Error('Codex account changed before dispatch'));
           send({ id: 2, method, params });
         } else if (message.id === 2) finish(undefined, message.result);
       }

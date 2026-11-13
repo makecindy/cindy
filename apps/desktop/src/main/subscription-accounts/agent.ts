@@ -308,7 +308,8 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             let unregister = () => {};
             try {
               lease = await acquireSubscriptionAccount(poolProvider, options.model, keys, false, {
-                remote: !!options.deviceHosted, accountId: imported, resuming: !!options.resumeSessionId,
+                remote: !!options.deviceHosted, ownComputer: !!options.deviceHosted && !options.deviceHosted.guest,
+                accountId: imported, resuming: !!options.resumeSessionId,
                 ...(tried.size ? { exclude: tried } : {}),
               });
               if (!lease) {
