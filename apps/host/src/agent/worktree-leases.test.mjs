@@ -2,8 +2,7 @@
  * 测试价值
  * - 生产入口与可观察结果：Host 的启动钩子（start-options.ts 的 prepareStartOptions、onStartFailed、
  *   onStartCleanupSucceeded、onClose，经 runtime.ts 交给 Maker）在 profile 里写下和删掉的租约文件，
- *   以及桌面用同一份代码（runtimeLeasesCore 的 readWorktreeRuntimePaths，桌面绑定只多一个 Electron
- *   app）读到的受保护目录。
+ *   以及桌面用同一份代码（runtimeLeases 的 readWorktreeRuntimePaths，两端在启动时配置相同的 profile 和 app-data 路径）读到的受保护目录。
  * - 规则依据：桌面 maker-host/index.ts 对每个本机任务在共享 Skill 链接之前取租约、取后复查已取消的
  *   预建，并在启动失败（运行时确定没起来）、启动清理成功和关闭时释放；同一 profile 的窗口回收
  *   worktree 前读这些租约。Host 不在桌面的实例登记表里，它的租约靠写入进程的进程号和进程身份受保护。
@@ -25,8 +24,8 @@ import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { createHostModelContext } from './model-context.ts';
 import { createHostAgentGraph } from './runtime.ts';
 import { createHostStartOptions } from './start-options.ts';
-import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
-import { createWorktreeRuntimeLeases } from '../../../desktop/src/main/worktree/runtimeLeasesCore.ts';
+import { configureAppDataDir, configureUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import * as desktopRuntimeLeases from '../../../desktop/src/main/worktree/runtimeLeases.ts';
 import { createPrecreatedCancellation } from '../../../desktop/src/main/worktree/precreatedCancellationCore.ts';
 import { physicalWorktreeKey } from '../../../desktop/src/main/worktree/resourceLock.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
@@ -48,11 +47,13 @@ function fixture(t) {
   for (const dir of [profile, appData, worktree, plain]) fs.mkdirSync(dir, { recursive: true });
   // The desktop window sharing this profile: its instance registry exists from its startup.
   fs.mkdirSync(path.join(profile, '.dev-instances'), { recursive: true });
+  configureUserDataDir(profile);
+  configureAppDataDir(appData);
   const app = { getPath: name => (name === 'appData' ? appData : profile) };
   return {
     root, profile, appData, worktree, plain,
     leaseDir: path.join(profile, 'worktree-runtime-leases'),
-    desktop: createWorktreeRuntimeLeases({ app }),
+    desktop: desktopRuntimeLeases,
     desktopCancellation: createPrecreatedCancellation({ app }),
   };
 }
@@ -64,7 +65,7 @@ function age(file, ms) {
   fs.utimesSync(file, then, then);
 }
 
-// runtimeLeasesCore counts evidence older than the boot (minus a 10-minute margin) as abandoned
+// runtimeLeases counts evidence older than the boot (minus a 10-minute margin) as abandoned
 // before it looks at the heartbeat grace. Fix the uptime so an aged lease is judged by the grace
 // alone, whatever this machine's real uptime is.
 function upFor(t, seconds) {
