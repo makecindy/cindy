@@ -2693,12 +2693,16 @@ it('releases execution process space across idle and the next round without oute
 
 // PR #7806 integration fixture: the real screen/work area consumes server state.
 // A stop receipt alone must not hide work; only the next idle snapshot clears both surfaces.
-it('keeps one group stop for concurrent work and clears header and strip on the idle snapshot', async () => {
+it.each([false, true])('keeps one group stop for concurrent work and clears header and strip on the idle snapshot (newest first: %s)', async newestFirst => {
   const active = group({ round: { status: 'running', canContinue: false, speakers: [
     { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
     { botId: 'mimi', sessionId: 's-mimi', activity: 'reply', executionStatus: 'stopping', stopping: true },
   ] } });
+  active.round.speakers[0]!.timelineAt = newestFirst ? 2000 : 1000;
+  active.round.speakers[1]!.timelineAt = newestFirst ? 1000 : 2000;
   await render(active);
+  // Unit / #10345: source order differs from timeline order; stop follows the newest row.
+  expect(byId(newestFirst ? 'speaker.abu.reply' : 'speaker.mimi.reply')!.contains(byId('botGroup.work.stop'))).toBe(true);
   expect(node.textContent).toContain('groupChat.list.running');
   expect(all('botGroup.work.stop')).toHaveLength(1);
   expect(byId('botGroup.work.stop')!.disabled).toBe(false);

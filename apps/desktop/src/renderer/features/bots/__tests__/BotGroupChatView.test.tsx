@@ -5242,18 +5242,20 @@ it('opens the exact remote execution and leaves other members’ private tasks u
 
 // A stopping last row must not disable the group control while an earlier
 // execution is still stoppable (Greptile review #4375066338).
-it.each([false, true])('keeps the group stop control enabled for another running execution (admin: %s)', async admin => {
+it.each([[false, false], [false, true], [true, false], [true, true]])('keeps the group stop control enabled for another running execution (admin: %s, newest first: %s)', async (admin, newestFirst) => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
     canStopAll: admin,
     speakingBotIds: ['mimi', 'xiaoman'],
     round: { status: 'running', canContinue: false, othersActive: admin, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'first-running', sessionId: 'lane-mimi', startedAt: Date.now() - 10_000, executionStatus: 'running' },
-      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', sessionId: 'lane-xiaoman', startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
+      { botId: 'mimi', activity: 'reply', executionId: 'first-running', sessionId: 'lane-mimi', timelineAt: Date.now() - (newestFirst ? 1000 : 10000), startedAt: Date.now() - 10_000, executionStatus: 'running' },
+      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', sessionId: 'lane-xiaoman', timelineAt: Date.now() - (newestFirst ? 10000 : 1000), startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
     ] },
   }) });
   renderView();
   const buttons = await screen.findAllByRole('button', { name: 'bots.groupChat.progress.stop' });
   expect(buttons).toHaveLength(1);
+  // Unit / #10345: the latest timeline execution owns the one group-wide control.
+  expect(buttons[0]!.closest('[data-testid="bot-group-progress"]')?.textContent).toContain(newestFirst ? '咪咪' : '小满');
   expect((buttons[0] as HTMLButtonElement).disabled).toBe(false);
   if (admin) {
     fireEvent.pointerDown(buttons[0]!, { button: 0, ctrlKey: false });

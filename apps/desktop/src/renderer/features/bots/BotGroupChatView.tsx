@@ -1241,6 +1241,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
       })
     : []), [running, group, memberById, workTargets]);
+  const stopSpeaker = interleaveBotGroupWork([], speakers.filter(speaker => speaker.activity !== 'planning')).at(-1)?.value;
   const stepSpeaker = runningStep
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === runningStep.step.botId)
     : undefined;
@@ -1428,7 +1429,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                 {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
                   <BotGroupProgressStrip step={step} speakers={[speaker]} onStop={scope => void stopRound(scope)}
                     canStop={group.round.canStop} canStopAll={!!group.canStopAll && !!group.round.othersActive} stopping={stopping}
-                    showStop={speaker === speakers.filter(item => item.activity !== 'planning').at(-1)}
+                    showStop={speaker === stopSpeaker}
                     stopPending={stopping || speakers.filter(item => item.activity !== 'planning').every(item => item.stopping || item.executionStatus === 'stopping')} />
                   <BotGroupSpeakerInteraction speaker={speaker} />
                 </>}

@@ -489,7 +489,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   let profiles: Array<typeof botProfiles.$inferSelect> = [];
   const workspaces = () => chatServerWorkspaces(config.baseUrl, selfId, current);
-  const planning = new Map<string, { botId: string; controller: AbortController }>();
+  const planning = new Map<string, { botId: string; controller: AbortController; timelineAt: number }>();
   // Invalidate even a send still preparing/uploading its attachments. Its delayed
   // receipt must not start an arrangement after a newer message or control action.
   let nextIntentVersion = 0;
@@ -1934,7 +1934,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The organizer is visibly 「正在看」 while this device decides whether to arrange (§7.2),
     // as the local service showed it. It works on the auxiliary model, not in a lane session.
     const deciding = planning.get(roomId);
-    if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning' });
+    if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning', timelineAt: deciding.timelineAt });
     // Sidebar refresh must not download every attachment in every group's history.
     const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
     const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;
@@ -2099,7 +2099,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     planning.get(s.room.id)?.controller.abort();
     const controller = new AbortController();
-    const pending = { botId: localBot(organizer.id)?.id ?? organizer.id, controller };
+    const pending = { botId: localBot(organizer.id)?.id ?? organizer.id, controller, timelineAt: Date.now() };
     planning.set(s.room.id, pending); changed(s.room.id);
     let explicit = forced;
     try {

@@ -4785,9 +4785,14 @@ describe('Chat Server result delivery and refresh', () => {
       deps.decidePlan = vi.fn(() => new Promise(resolve => { decide = resolve; })) as typeof deps.decidePlan;
       expect(await send('latency-plan-c')).toMatchObject({ ok: true });
       await vi.advanceTimersByTimeAsync(0);
+      const planningAt = Date.now();
       const deciding = await service.getGroup(roomId);
       expect(deciding).toMatchObject({ ok: true, group: { planningBotId: botId, speakingBotIds: [botId],
-        round: { status: 'running', speakers: [{ botId, sessionId: null, activity: 'planning' }] } } });
+        round: { status: 'running', speakers: [{ botId, sessionId: null, activity: 'planning', timelineAt: planningAt }] } } });
+      // Unit / #10345: refreshing a slow arrangement must not move its timeline position.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: {
+        round: { speakers: [{ timelineAt: planningAt }] } } });
       decide(null);
       await vi.advanceTimersByTimeAsync(0);
       const decided = await service.getGroup(roomId);

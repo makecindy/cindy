@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
@@ -78,7 +79,8 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
   if (!enabled || group.round.status !== 'running' || !group.round.speakers.length) return children?.(EMPTY_WORK_ROWS) ?? null;
-  const speakers = group.round.speakers.filter(speaker => group.members.some(member => member.botId === speaker.botId));
+  const speakers = interleaveBotGroupWork([], group.round.speakers.filter(speaker =>
+    group.members.some(member => member.botId === speaker.botId))).flatMap(entry => entry.kind === 'work' ? [entry.value] : []);
   if (!speakers.length) return children?.(EMPTY_WORK_ROWS) ?? null;
   const stopPending = stopping || speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
   const stopButton = (onPress: (() => void) | undefined) => <Pressable testID="botGroup.work.stop" accessibilityRole="button"
