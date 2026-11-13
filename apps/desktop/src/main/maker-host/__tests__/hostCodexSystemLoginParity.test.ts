@@ -276,9 +276,12 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     expect(open!.desktop).toMatchObject({ link: 'file' });
   });
 
-  it('an unproven local file of the same account is relinked', async () => {
+  it('an unproven local file of the same account is relinked, except on Windows where it is kept', async () => {
     const [open] = await both({ local: 'file-same-account', binding: 'none' });
-    expect(open!.desktop).toMatchObject({ link: 'symlink-to-system' });
+    // Windows keeps a standalone login file whatever its account (desktop auth-adapters.ts
+    // reconcileWithSystemCodex, step 8; Host codex-system-login.ts step 8). both() has already
+    // asserted that the Host equals the desktop on this platform.
+    expect(open!.desktop).toMatchObject({ link: process.platform === 'win32' ? 'file' : 'symlink-to-system' });
   });
 
   it('an explicit disconnect suppresses the system login until it is replaced', async () => {

@@ -251,8 +251,12 @@ const ALLOWED_DIFFERENCES: Record<string, { desktop: 'result'; host: string }> =
   'managed llama.cpp': { desktop: 'result', host: 'Error: [LOCAL_LLAMACPP_NOT_READY] Reconnect llama.cpp in Settings → Model Providers.' },
 };
 
+// The fake Pi is a script with a shebang; the probe starts the binary without a shell, which
+// Windows cannot do for a script. Cases that need the probe to run are POSIX only.
+const fakePiRuns = process.platform !== 'win32';
+
 describe('Host and desktop Pi native providers', () => {
-  it('report a failed probe as null without caching it, then probe again', async () => {
+  it.skipIf(!fakePiRuns)('report a failed probe as null without caching it, then probe again', async () => {
     fs.writeFileSync(probeFail, '');
     const first = await settle(host.resolvePiNativeProviders!({ workingDir: workingDir(), providerId: 'xd', model: 'claude-sonnet-4-5' }));
     expect(first).toHaveProperty('result');
@@ -285,7 +289,7 @@ describe('Host and desktop Pi native providers', () => {
     expect(differences).toEqual(ALLOWED_DIFFERENCES);
     expect(shapes).toEqual(EXPECTED_SHAPES);
     // The probe ran once for this binary (the previous case); every later start reused it.
-    expect(probes().filter(line => line === '--list-models')).toHaveLength(2);
+    if (fakePiRuns) expect(probes().filter(line => line === '--list-models')).toHaveLength(2);
   });
 
   it('refuse SuperGrok without the proxy before probing, on both sides', async () => {

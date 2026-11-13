@@ -8,7 +8,9 @@
  * - 规则依据：放行表第 19 行 P10–P13（审核方：对照测试覆盖“一边持锁、另一边等待”；“更新 Pi 本体”写进
  *   例外清单，Host 上报错，见第 34 行与第二节“引擎二进制的路径”）。
  * - 断言方式：每一步两边的读取逐项相等；不同之处按名字写死在 ALLOWED_DIFFERENCES 里。
- * - tier：integration（真实 Pi 进程；临时 profile；HOME 指向新建的空目录且跑完仍为空）。
+ * - tier：integration（真实 Pi 进程，不在 CI 的单测里，在桌面 integration 层手动跑：
+ *   `node scripts/test-workspaces.mjs --tier integration`（apps/desktop 的 integration 层）或直接 vitest run 本文件；临时 profile；进程内的 os.homedir()
+ *   与子进程的 HOME 都指向新建的空目录，跑完仍为空）。Pi 的包装脚本是 sh，Windows 上整组跳过。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,7 +20,18 @@ import type { AgentDeps } from '@cindy/maker-core';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 });
 
-const h = vi.hoisted(() => ({ userDataDir: '', desktopPi: '' }));
+const h = vi.hoisted(() => ({ userDataDir: '', desktopPi: '', home: '' }));
+
+// In-process reads of the user home go through os.homedir(); assigning process.env.HOME does not
+// reach it in a worker thread or on Windows. Child Pi processes still get HOME through their env.
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  const homedir = () => {
+    if (!h.home) throw new Error('homedir read before the fixture home was set');
+    return h.home;
+  };
+  return { ...actual, default: { ...actual, homedir }, homedir };
+});
 
 vi.mock('electron', () => ({
   app: { getPath: () => h.userDataDir, getAppPath: () => h.userDataDir, isPackaged: false },
@@ -36,6 +49,7 @@ import { mutateAuthorizedPiManagedPackage } from '../pi-managed-package-mutation
 const realPi = path.resolve(__dirname, '../../../../../pi-bin', `${process.platform}-${process.arch}`, 'pi');
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'host-pi-packages-parity-')));
 const home = path.join(root, 'home');
+h.home = home;
 const timeline = path.join(root, 'timeline.log');
 const previousHome = process.env.HOME;
 
@@ -108,7 +122,8 @@ const reads = async (side: 'desktop' | 'host') => {
 };
 const ends = () => fs.readFileSync(timeline, 'utf8').split('\n').filter(line => / end (install|remove)$/.test(line));
 
-describe('Host and desktop Pi packages on one profile', () => {
+// The Pi wrappers below are sh scripts that the production code starts without a shell.
+describe.skipIf(process.platform === 'win32')('Host and desktop Pi packages on one profile', () => {
   it('read the same packages after each side changes them, and wait for each other', async () => {
     const alpha = localPackage('fixture-alpha');
     const beta = localPackage('fixture-beta');

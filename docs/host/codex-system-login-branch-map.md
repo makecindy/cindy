@@ -14,7 +14,7 @@ Host 不留进程内状态。每次对账都读标记（`restoreInvalidationStat
 | 第 5 步 1205–1232 | 健康的硬链接：标记为共享，换成符号链接；健康的符号链接：返回（开发版共享 Release 时拷快照） | 同；快照分支不实现（只属于未打包桌面） | 硬链接换符号链接 |
 | 第 6 步 1234–1251 | 普通文件且有显式的隔离归属 → 保留 | 同 | 在 Cindy 里登录的保留 |
 | 第 7 步 1253–1269 | 系统登录没有账号且不是硬链接 → 返回；旧版显式归属且账号不同 → 迁成实例隔离并保留 | 同 | 账号不同的旧版显式归属 |
-| 第 8 步 1271–1281 | Windows 上的普通文件保留 | 同（M1 不在 Windows 发布，未测） | — |
+| 第 8 步 1271–1281 | Windows 上的普通文件保留（条件后半句：不需要给开发版拷 Release 快照，`shouldSnapshotReleaseCodexAuth`，打包版恒为假） | 同；后半句不实现：只在未打包桌面为真，安装版 Host 对应打包版，源码运行的 Host 不对账 | 同账号本地文件：Windows 上两边都保留普通文件，其余平台两边都重链（CI 的 Windows 作业） |
 | 第 9 步 1283–1353 | 再查一次登录进行中；`relinkSharedCodexAuth`；记结果日志 | 同；快照分支不实现 | 同账号本地文件重链；link-unsupported；swap-failed-intact |
 | 第 10 步 `claimDetectedCodexOAuthBinding` 1061–1135 | 登录中、会话边界、会话换代、仍在作废、本地被抑制 → 不认领；有恢复 owner 时只恢复给他；否则认领给当前 owner；成功后 `onOAuthBindingClaimed` | `claim()`；`onBindingClaimed` 让 Pi 的 MCP 桥失效（桌面另两项是重置 openai 模型的自动刷新冷却、补拉 Codex 模型，Host 没有这两套机制，见放行表第二节） | 全新 profile 认领；换 owner 时不认领给出让方；恢复只给原 owner |
 | `reconcileWithSystemCodexAfterLogin` 1142–1146 | 登录后等在途的对账结束，再对一次 | `reconcileAfterLogin()`，在 Host 的 `triggerLogin` 成功后 | Host `codex-system-login.test.mjs`（m1-cp14） |

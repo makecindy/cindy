@@ -537,7 +537,9 @@ describe('an explicit disconnect', () => {
     expect(settled(afterHost)).toMatchObject({ authenticated: false, marker: { reason: 'user_disconnected' }, revoked: true });
   });
 
-  it('then a new login in Cindy: both read the new login, the disconnect marker stays as the suppression sentinel', async () => {
+  // The Host side logs in through a fake Codex CLI that is a sh script; the account service starts
+  // it without a shell, which Windows cannot do for a script. The desktop half needs no CLI.
+  it.skipIf(process.platform === 'win32')('then a new login in Cindy: both read the new login, the disconnect marker stays as the suppression sentinel', async () => {
     const byDesktop = profile();
     const adapter = new DesktopCodexAuthAdapter();
     await adapter.logout();
