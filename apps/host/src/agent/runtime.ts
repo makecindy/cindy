@@ -1,4 +1,5 @@
-import { getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
+import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
+import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
 import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
 /** Node assembly of the shared Maker agents, provider configuration and MCP transports.
  * Native login, settings and platform integrations are assembled by the owning runtime. */
@@ -30,7 +31,7 @@ import { isNativeProviderAuthBound, bindNativeProviderAuth, unbindNativeProvider
 import { GatewayCodexRestartService } from '../../../desktop/src/main/maker-ipc/gatewayCodexRestart.js';
 import { createDeferredRestartSettledWake } from '../../../desktop/src/main/maker-ipc/deferredRestartQueueWiring.js';
 import { refreshCodexGatewayRuntime } from '../../../desktop/src/main/maker-host/codexGatewayRefresh.js';
-import { isLocalSessionBusy } from '../../../desktop/src/main/maker-host/codex-credential-switch.js';
+import { isLocalSessionBusy, prepareLocalCodexCredentialModeSwitch } from '../../../desktop/src/main/maker-host/codex-credential-switch.js';
 import type { createHostProviderConfig } from './provider-config.js';
 import type { createHostMcpRuntime } from './mcp-runtime.js';
 import type { createHostCodexRuntime } from './codex-runtime.js';
@@ -557,8 +558,14 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    // As the desktop: first-party read-only tools go through the SDK allowedTools.
+    claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
     reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
     toolLoopReviewer: autoReview.toolLoopReviewer,
+    // The process-wide usage bridge the loopback proxy (anthropicCompatProxyHostCore) fills, as on
+    // the desktop: concurrent external-model subagents report their real usage.
+    registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
+    getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
     // Skills the user disabled in Cindy, from the profile's activation preferences.
     getDisabledSkillPaths: readDisabledSkillPaths,
     ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
@@ -596,6 +603,18 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
         registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        // As the desktop: a credential-mode switch of the shared local app-server refuses busy
+        // sessions and soft-closes idle ones first.
+        prepareCodexLocalCredentialModeSwitch: async (ctx) => {
+          await prepareLocalCodexCredentialModeSwitch({
+            maker,
+            isSessionInTurn: options.isSessionInTurn,
+            hostKey: ctx.hostKey,
+            fromMode: ctx.fromMode,
+            fromModeEffective: ctx.fromModeEffective,
+            toMode: ctx.toMode,
+          });
+        },
         reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
