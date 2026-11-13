@@ -125,6 +125,15 @@ export type UtilityTextCandidate = {
   transport: UtilityModelTransport;
   profile: UtilityModelProfile;
   execute: (prompt: string, opts?: UtilityTextRequestOptions) => Promise<string>;
+  /**
+   * Whether this route can see the provider's terminal state.
+   *
+   * Direct HTTP routes parse `finish_reason` / `incomplete_details.reason` /
+   * `stop_reason` from the body they return, so they can honour
+   * `requireCompleteOutput`. A route that only yields a string cannot, and a
+   * strict caller must not treat it as complete by default.
+   */
+  reportsTerminalState?: boolean;
 };
 
 export type UtilityTextRequestOptions = {
@@ -148,6 +157,18 @@ export type UtilityTextRequestOptions = {
   responseInstructions?: string;
   /** Reject unusable output before selecting a winner, so the configured chain can continue. */
   validateResponse?: (text: string) => boolean;
+  /**
+   * Reject a response the provider cut short at its output budget.
+   *
+   * Off by default: most callers can live with a partial answer. The
+   * composer's enhance action turns the answer into the user's draft, so a
+   * truncated rewrite would silently drop the constraints at its end — that
+   * caller turns this on and the chain falls back to the next candidate.
+   *
+   * Only the routes that apply the caller's `maxTokens` can be cut short by
+   * it, and those are the routes whose terminal state is observable here.
+   */
+  requireCompleteOutput?: boolean;
   /** Final ownership/config guard immediately before an explicit HTTP dispatch. */
   beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
@@ -581,6 +602,7 @@ export async function requestDedicatedAutoReviewCandidateText(
       // The Gateway alias is not a catalog model: keep its fixed Chat request
       // with no reasoning fields and let the Gateway apply the alias policy.
       execute: (text, requestOpts) => requestProviderHttpText({
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         targets: {
           'chat-completions': {
             endpoint: joinProxyPath(baseUrl, '/v1/chat/completions'),
@@ -685,6 +707,19 @@ async function runDefaultProfileCandidates(
     // owner-scoped v5 deny，避免订阅状态/模型目录刚变化后继续向网关下单。
     if (isUtilityRoutePaymentRequired(candidate.profile)) {
       attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+      continue;
+    }
+    // A strict caller turns the answer into user-visible state, so a route that
+    // cannot report the provider's terminal state is not usable for it. This
+    // loop executes profile candidates directly (the default automatic chain),
+    // so it needs the same rule as `executeCandidates` — otherwise a profile
+    // reference would bypass it entirely.
+    if (opts?.requireCompleteOutput && candidate.reportsTerminalState === false) {
+      log.debug('utility text candidate skipped: terminal state unobservable', {
+        providerId: candidate.providerId,
+        model: candidate.model,
+      });
+      attempts.push(skippedAttempt(candidate.profile, 'unsupported_transport'));
       continue;
     }
     // Profile candidates may spend time awaiting credential discovery before
@@ -1008,6 +1043,7 @@ async function requestExplicitProviderText(
       onText: opts.onText,
       responseInstructions: opts.responseInstructions,
       validateResponse: opts.validateResponse,
+      requireCompleteOutput: opts.requireCompleteOutput,
       beforeDispatch: opts.beforeDispatch,
       routeStillCurrent,
     });
@@ -1130,6 +1166,7 @@ async function requestExplicitProviderText(
         systemPrompt: requestOpts?.systemPrompt,
         onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         beforeDispatch: async () => {
           if (requestOpts?.beforeDispatch && !(await requestOpts.beforeDispatch({
             providerId: provider.id, agentKind, model,
@@ -1206,6 +1243,8 @@ async function requestBuiltinProviderText(
     onText?: (text: string) => void;
     responseInstructions?: string;
     validateResponse?: (text: string) => boolean;
+    /** Carry the caller's strict-output flag into the built-in HTTP routes. */
+    requireCompleteOutput?: boolean;
     beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
     routeStillCurrent?: () => boolean;
   },
@@ -1263,6 +1302,7 @@ async function requestBuiltinProviderText(
       transport: 'litellm-chat-completions',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         targets: {
           'chat-completions': {
             endpoint: joinProxyPath(baseUrl, '/v1/chat/completions'),
@@ -1348,6 +1388,7 @@ async function requestBuiltinProviderText(
       transport: 'codex-responses',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         targets: {
           responses: {
             endpoint: joinProxyPath(routing.upstream, '/responses'),
@@ -1415,6 +1456,7 @@ async function requestBuiltinProviderText(
       transport: 'codex-responses',
       profile,
       execute: (text, requestOpts) => requestProviderHttpText({
+        requireCompleteOutput: requestOpts?.requireCompleteOutput,
         targets: {
           responses: {
             endpoint: joinProxyPath(routing.upstream, '/responses'),
@@ -1486,6 +1528,18 @@ async function executeCandidates(
         attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
         continue;
       }
+    // A strict caller turns the answer into user-visible state, so a route that
+    // cannot report the provider's terminal state is not usable for it. Skip
+    // that candidate instead of dispatching: the chain then falls back to the
+    // models the user configured, never to a substitute.
+    if (opts?.requireCompleteOutput && candidate.reportsTerminalState === false) {
+      log.debug('utility text candidate skipped: terminal state unobservable', {
+        providerId: candidate.providerId,
+        model: candidate.model,
+      });
+      attempts.push(skippedAttempt(candidate.profile, 'unsupported_transport'));
+      continue;
+    }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
       validateUtilityResponse(text, opts);
@@ -1544,6 +1598,10 @@ async function resolveCodexCandidate(
       model: profile.model,
       transport: profile.transport,
       profile,
+      // `maker.oneShot` yields the text only: neither the transport nor this
+      // layer can tell whether the provider stopped at the output budget, so a
+      // strict caller skips this candidate instead of accepting a half answer.
+      reportsTerminalState: false,
       execute: (prompt, opts) => maker.oneShot(agentKind, prompt, {
         model: profile.model,
         maxTokens: opts?.maxTokens,
@@ -1593,6 +1651,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         systemPrompt: opts?.systemPrompt,
         onText: opts?.onText,
         responseInstructions: opts?.responseInstructions,
+        requireCompleteOutput: opts?.requireCompleteOutput,
         beforeDispatch: opts?.beforeDispatch
           ? () => opts.beforeDispatch!({
             providerId: utilityProfileRouteProviderId(profile),
@@ -1619,6 +1678,8 @@ async function requestLiteLlmText(input: {
   systemPrompt?: string;
   onText?: (text: string) => void;
   responseInstructions?: string;
+  /** Refuse text the provider cut short at the output budget. */
+  requireCompleteOutput?: boolean;
   /** Async final dispatch fence, including owner/settings checks. */
   beforeDispatch?: () => Promise<boolean>;
   /** Synchronous owner entitlement fence immediately before the HTTP request. */
@@ -1669,7 +1730,7 @@ async function requestLiteLlmText(input: {
         }),
       });
     };
-    let response = await send();
+    const response = await send();
     if (!response.ok) {
       // This path always carries the Cindy AI key to the Cindy gateway.
       if (response.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
@@ -1703,6 +1764,14 @@ async function requestLiteLlmText(input: {
     if (!text) {
       log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(parsed));
       throw new UtilityTextExecutionError({ reason: 'empty_response' });
+    }
+    // `parsed` is the body behind `text`, including a budget retry, so its
+    // terminal state describes the answer that is about to be returned.
+    if (input.requireCompleteOutput && answerIncompleteByProvider('chat-completions', parsed)) {
+      log.warn('utility text response did not complete', {
+        model: input.model,
+      });
+      throw new UtilityTextExecutionError({ reason: 'request_failed' });
     }
     return text;
   } catch (error) {
@@ -1820,6 +1889,14 @@ async function requestProviderHttpText(input: {
   onText?: (text: string) => void;
   /** Additional output-shape instructions. */
   responseInstructions?: string;
+  /**
+   * Refuse a body the provider cut short at the output budget.
+   *
+   * The terminal state is read from the body that produced the returned text,
+   * so a budget retry is judged on its own response and not on the one before
+   * it.
+   */
+  requireCompleteOutput?: boolean;
   /** Session/owner/config guard, evaluated immediately before each HTTP dispatch. */
   beforeDispatch?: () => Promise<boolean>;
   /** Re-read the credential captured by the request closure after the async guard. */
@@ -2050,6 +2127,28 @@ async function requestProviderHttpText(input: {
     // The step was accepted by the provider; remember it even when the model
     // produced no usable text, because the wording itself was not rejected.
     if (input.steps.length > 1) rememberUtilityStep(memoryKey, step);
+    // A budget retry replaced the body, so the terminal state has to be read
+    // from the body that produced the text below — not from the one before
+    // the retry.
+    const finalParsed = responseStructure(step.wire, raw);
+    if (
+      input.requireCompleteOutput
+      && text
+      && (answerIncompleteByProvider(step.wire, finalParsed)
+        || streamEndedWithoutCompletion(step.wire, finalParsed)
+        || sseStreamDidNotComplete(step.wire, raw))
+    ) {
+      // The provider stopped early — at the output budget, or because it
+      // filtered the content, or the stream reported a terminal failure:
+      // either way the text is the beginning of the answer, not the answer.
+      // Refusing this candidate lets the chain fall back instead of handing a
+      // half answer to the caller.
+      log.warn('utility text response did not complete', {
+        wire: step.wire,
+        model: targetFor(step).model,
+      });
+      throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    }
     log.info('utility text request accepted', {
       wire: step.wire,
       step: utilityRequestStepKey(step),
@@ -2216,6 +2315,101 @@ function wireResponseText(wire: ProviderWire, raw: string): string {
  * 网关可以无视;此时放大预算重试一次就能拿到正文,不该直接丢掉候选。
  * 判据只认「输出被长度上限截断」这一个形状(各 wire 的对应字段见下),不猜模型。
  */
+/**
+ * 严格模式下『这个 Responses 响应并没有正常收尾』的判定。
+ *
+ * `readUtilityTextStream` 的失败事件检查只在调用方传了 `onText` 时才跑（它会读流
+ * 而不是 `response.text()`），所以不消费增量的调用方（比如输入框增强）会把
+ * "已吐出部分正文、随后 `response.failed`" 的流当成完整答案。这里只认终态里
+ * 明确写明的失败，缺字段或缺 status 时不指认——不拿缺失信息当失败。
+ */
+function streamEndedWithoutCompletion(wire: ProviderWire, terminal: unknown): boolean {
+  if (wire !== 'responses') return false;
+  if (typeof terminal !== 'object' || terminal === null) return false;
+  const status = (terminal as { status?: unknown }).status;
+  return status === 'failed' || status === 'cancelled' || status === 'incomplete';
+}
+
+/**
+ * 严格模式下『这条 SSE 流根本不完整』的判定，覆盖所有 wire。
+ *
+ * 终态字段只在事件里带 `response` 对象时才看得到：`{type:"error"}` 事件没有，
+ * 流也可能在 `response.created` 之后直接 EOF。调用方不消费增量时
+ * `readUtilityTextStream` 也没机会做这些检查，所以严格模式自己扫一遍事件：
+ * 出现错误事件，或者一路没有成功终态，都不当完整答案。
+ * 非 SSE 的缓冲响应（JSON）不适用这条，直接放行。
+ *
+ * Chat 与 Messages 网关同样可能回 SSE，它们的失败帧与成功终态形状和
+ * Responses 不同，所以按 wire 分别认：
+ *
+ * - Chat 的失败帧是 `{"error":{...}}`（没有 type 字段，见
+ *   packages/responses-chat-bridge/src/handler.ts 按 `event.error` 判失败），
+ *   成功终态是 `[DONE]` 或带 `finish_reason` 的 choices；
+ * - Messages 的失败帧是 `{"type":"error","error":{"type":"overloaded_error"}}`，
+ *   成功终态是 `message_stop`。
+ */
+function sseStreamDidNotComplete(wire: ProviderWire, raw: string): boolean {
+  const head = raw.trimStart();
+  if (!head.startsWith('data:') && !head.startsWith('event:')) return false;
+  let sawSuccessTerminal = false;
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith('event:')) {
+      // Some gateways only name the terminal in the event line. The data line
+      // that follows carries the same shape, but a stream may also end there.
+      const name = line.slice(6).trim();
+      if (name === 'error') return true;
+      if (SSE_SUCCESS_EVENT_NAMES.has(name)) sawSuccessTerminal = true;
+      continue;
+    }
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload) continue;
+    if (payload === '[DONE]') {
+      sawSuccessTerminal = true;
+      continue;
+    }
+    const event = safeJsonParse(payload) as Record<string, unknown> | null;
+    if (!event || typeof event !== 'object') continue;
+    if (sseEventReportsFailure(event)) return true;
+    if (sseEventIsSuccessTerminal(wire, event)) sawSuccessTerminal = true;
+  }
+  return !sawSuccessTerminal;
+}
+
+/** Event names that mean "the stream ended successfully" on the wire. */
+const SSE_SUCCESS_EVENT_NAMES = new Set(['response.completed', 'message_stop', 'done']);
+
+/**
+ * A failure frame, in any of the shapes the supported wires use.
+ *
+ * `{"type":"error"}` is the Responses / Messages shape; `{"error":{...}}` is
+ * the Chat shape (the Chat bridge detects it the same way, see
+ * packages/responses-chat-bridge/src/handler.ts).
+ */
+function sseEventReportsFailure(event: Record<string, unknown>): boolean {
+  if (event.type === 'error') return true;
+  const error = event.error;
+  return typeof error === 'object' && error !== null;
+}
+
+/**
+ * A success terminal frame, in the shape this wire uses.
+ *
+ * Chat ends with `[DONE]` or with a choice that carries `finish_reason`;
+ * Messages ends with `message_stop`; Responses ends with `response.completed`.
+ */
+function sseEventIsSuccessTerminal(wire: ProviderWire, event: Record<string, unknown>): boolean {
+  const type = event.type;
+  if (type === 'response.completed' || type === 'message_stop') return true;
+  if (wire !== 'chat-completions') return false;
+  const choices = event.choices;
+  return Array.isArray(choices)
+    && choices.some((choice) => (
+      typeof choice === 'object' && choice !== null
+        && (choice as { finish_reason?: unknown }).finish_reason != null
+    ));
+}
+
 function outputBudgetExhausted(wire: ProviderWire, parsed: unknown): boolean {
   if (typeof parsed !== 'object' || parsed === null) return false;
   if (wire === 'responses') {
@@ -2226,6 +2420,45 @@ function outputBudgetExhausted(wire: ProviderWire, parsed: unknown): boolean {
     return (parsed as { stop_reason?: unknown }).stop_reason === 'max_tokens';
   }
   return chatCompletionEmptyFingerprint(parsed).finishReason === 'length';
+}
+
+/**
+ * True when the provider's terminal state says this is not the whole answer.
+ *
+ * Wider than outputBudgetExhausted on purpose: that one also decides whether
+ * a bigger budget is worth another attempt, and a filtered answer must not
+ * trigger that retry — a bigger budget cannot un-filter content. This one is
+ * only consulted when a caller asked for a complete output, where any
+ * "the provider stopped early" reason has to refuse the candidate instead of
+ * handing a fragment to the caller.
+ *
+ * `content_filter` is classified the same way the Responses↔Chat bridge
+ * classifies it (packages/responses-chat-bridge/src/chat-sse-translator.ts):
+ * the body carries a fragment, not the answer. The Messages route's `refusal`
+ * and `model_context_window_exceeded` are classified the way the
+ * Responses↔Anthropic bridge classifies them
+ * (packages/responses-anthropic-bridge/src/responses-sse-translator.ts).
+ */
+function answerIncompleteByProvider(wire: ProviderWire, parsed: unknown): boolean {
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  if (wire === 'responses') {
+    const reason = (parsed as { incomplete_details?: { reason?: unknown } }).incomplete_details?.reason;
+    return reason === 'max_output_tokens' || reason === 'content_filter';
+  }
+  if (wire === 'anthropic-messages') {
+    // `refusal` (the model declined) and `model_context_window_exceeded` (the
+    // prompt did not fit) are not answers either. The Anthropic↔Responses
+    // bridge already classifies both as incomplete
+    // (packages/responses-anthropic-bridge/src/responses-sse-translator.ts),
+    // so the native Messages route has to agree with it: a body that carries
+    // only the beginning of the answer must not be handed back as a rewrite.
+    const stopReason = (parsed as { stop_reason?: unknown }).stop_reason;
+    return stopReason === 'max_tokens'
+      || stopReason === 'refusal'
+      || stopReason === 'model_context_window_exceeded';
+  }
+  const finishReason = chatCompletionEmptyFingerprint(parsed).finishReason;
+  return finishReason === 'length' || finishReason === 'content_filter';
 }
 
 /**
@@ -2324,6 +2557,7 @@ async function requestCustomProviderText(input: {
   beforeDispatch?: () => Promise<boolean>;
   credentialStillCurrent?: () => boolean | Promise<boolean>;
   routeStillCurrent?: () => boolean;
+  requireCompleteOutput?: boolean;
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
@@ -2392,6 +2626,7 @@ async function requestCustomProviderText(input: {
     beforeDispatch: input.beforeDispatch,
     credentialStillCurrent: input.credentialStillCurrent,
     routeStillCurrent: input.routeStillCurrent,
+    requireCompleteOutput: input.requireCompleteOutput,
   });
 }
 

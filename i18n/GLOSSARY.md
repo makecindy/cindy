@@ -543,6 +543,10 @@ Irreversible group termination, distinct from archive, leave and personal list r
 
 伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。
 
+### Enhance prompt
+
+输入框内把用户已输入的指令补全为更完整、可执行的提示词。与语音转写的「润色」、模型推荐的「输入建议」是三件不同的事，勿混用。
+
 ### Face ID verification
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。

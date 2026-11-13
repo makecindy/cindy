@@ -145,7 +145,7 @@ const appCapabilities = vi.mocked(getAppCapabilities);
 const readKey = vi.mocked(readClaudeApiKey);
 const readCodexCreds = vi.mocked(getChatgptBridgeAuth);
 const readCodexDispatchAuth = vi.mocked(getChatgptBridgeAuthForDispatch);
-const codexAuthorizationCurrent = vi.fn((_providerId: string) => true);
+const codexAuthorizationCurrent = vi.fn<(providerId: string) => boolean>(() => true);
 const readGrokToken = vi.mocked(getGrokAccessToken);
 const grokCredentialGeneration = vi.mocked(getGrokOAuthCredentialGeneration);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
@@ -888,6 +888,468 @@ describe('utility one-shot candidates', () => {
     const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
     expect(result).toMatchObject({ ok: false, reason: 'empty_response' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe('requireCompleteOutput(截断的正文不能当成功结果)', () => {
+    const truncatedChat = {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'length' }],
+      }),
+    } as never;
+
+    it('默认关闭:截断的非空正文仍按旧行为返回', async () => {
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce(truncatedChat);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 200 });
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框，搜索框要' });
+    });
+
+    it('开启后:被输出预算截断的正文被拒绝,候选链可以回退', async () => {
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce(truncatedChat);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+      expect(result).toMatchObject({ ok: false });
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:完整正文照常返回', async () => {
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '给这个页面加一个搜索框' }, finish_reason: 'stop' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框' });
+    });
+
+    it('预算重试后按重试那份响应的终态判定,不用重试前的', async () => {
+      readKey.mockReturnValue('proxy-key');
+      // 第一份:思考烧光预算且正文为空 → 触发放大预算重试
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '', reasoning_content: '在想…' }, finish_reason: 'length' }],
+          usage: { completion_tokens: 800 },
+        }),
+      } as never);
+      // 第二份(放大预算后):正文有了,但仍被长度截断
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'length' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        maxTokens: 800,
+        requireCompleteOutput: true,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.ok).toBe(false);
+    });
+
+    const failedResponsesStream = {
+      ok: true,
+      text: async () => 'data: {"type":"response.output_text.delta","delta":"给这个页面加一个搜索框，搜索框要"}\n'
+        + 'data: {"type":"response.failed","response":{"status":"failed"}}\n',
+    } as never;
+
+    /** The custom provider route uses the Responses wire, which is the shape here. */
+    const responsesRoute = () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'tapsvc',
+          name: 'Tap Service',
+          source: 'user',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header' },
+          },
+          models: { codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }] },
+        }],
+      } as never);
+      readCustomKey.mockReturnValue('custom-secret');
+    };
+
+    it('开启后:正文已吐出但流以 response.failed 收尾 → 拒绝,不把半截正文当成功', async () => {
+      // 不传 onText 的调用方拿不到 `readUtilityTextStream` 的失败事件检查,
+      // 所以严格模式必须自己看终态:这里只看 `response` 的 status。
+      responsesRoute();
+      fetchMock.mockResolvedValueOnce(failedResponsesStream);
+
+      const result = await requestUtilityText(makerMock(false), 'review', {
+        providerId: 'tapsvc',
+        agentKind: 'codex',
+        model: 'custom-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected the failed stream to be refused');
+      expect(result.attempts).toHaveLength(1);
+    });
+
+    it('默认关闭:同一个失败流仍按旧行为返回正文(本次不扩大影响面)', async () => {
+      responsesRoute();
+      fetchMock.mockResolvedValueOnce(failedResponsesStream);
+
+      const result = await requestUtilityText(makerMock(false), 'review', {
+        providerId: 'tapsvc',
+        agentKind: 'codex',
+        model: 'custom-mini',
+        maxTokens: 200,
+      });
+
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框，搜索框要' });
+    });
+
+    it('开启后:Responses SSE 以 error 事件或缺失终态收尾也被拒绝', async () => {
+      // 终态字段只在事件里带 `response` 时才看得到：error 事件没有，流也可能在
+      // `response.created` 之后直接 EOF。两种情况都不能当完整答案。
+      const cases = [
+        'data: {"type":"response.output_text.delta","delta":"给这个页面加一个"}\n'
+          + 'data: {"type":"error","error":{"message":"upstream reset"}}\n',
+        'data: {"type":"response.output_text.delta","delta":"给这个页面加一个"}\n'
+          + 'data: {"type":"response.created","response":{"status":"in_progress"}}\n',
+      ];
+
+      for (const body of cases) {
+        responsesRoute();
+        fetchMock.mockResolvedValueOnce({ ok: true, text: async () => body } as never);
+
+        const result = await requestUtilityText(makerMock(false), 'review', {
+          providerId: 'tapsvc',
+          agentKind: 'codex',
+          model: 'custom-mini',
+          maxTokens: 200,
+          requireCompleteOutput: true,
+        });
+
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    /**
+     * Chat / Messages 网关也可能回 SSE。它们的失败帧与成功终态形状和 Responses
+     * 不同，而 `responseStructure()` 对这两条线路返回 null，所以严格模式必须
+     * 自己按 wire 扫事件，否则「先吐出正文、后报错」的流会被当成完整改写。
+     */
+    const sseRoute = (wireProtocol: 'openai-chat' | 'anthropic-messages') => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'tapsvc',
+          name: 'Tap Service',
+          source: 'user',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header', wireProtocol },
+          },
+          models: { codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }] },
+        }],
+      } as never);
+      readCustomKey.mockReturnValue('custom-secret');
+    };
+
+    const requestOverSse = (requireCompleteOutput: boolean) => requestUtilityText(makerMock(false), 'review', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'custom-mini',
+      maxTokens: 200,
+      ...(requireCompleteOutput ? { requireCompleteOutput: true } : {}),
+    });
+
+    it('开启后:Chat SSE 带 error 事件后跟正文 → 拒绝,不把半截正文当成功', async () => {
+      sseRoute('openai-chat');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"choices":[{"delta":{"content":"给这个页面加一个"}}]}\n'
+          + 'data: {"error":{"message":"rate limited","status":429}}\n'
+          + 'data: [DONE]\n',
+      } as never);
+
+      const result = await requestOverSse(true);
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:Messages SSE 带 overloaded_error 后跟正文 → 拒绝', async () => {
+      sseRoute('anthropic-messages');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"type":"content_block_delta","index":0,'
+          + '"delta":{"type":"text_delta","text":"给这个页面加一个"}}\n'
+          + 'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n',
+      } as never);
+
+      const result = await requestOverSse(true);
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:SSE 缺成功终态直接 EOF → 拒绝', async () => {
+      sseRoute('openai-chat');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"choices":[{"delta":{"content":"给这个页面加一个"}}]}\n',
+      } as never);
+
+      const result = await requestOverSse(true);
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:带成功终态的 SSE 照常返回正文', async () => {
+      sseRoute('openai-chat');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"choices":[{"delta":{"content":"给这个页面加一个"}}]}\n'
+          + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n'
+          + 'data: [DONE]\n',
+      } as never);
+
+      const result = await requestOverSse(true);
+
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个' });
+    });
+
+    it('默认关闭:同一份失败流仍按旧行为返回正文(本次不扩大影响面)', async () => {
+      sseRoute('openai-chat');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"choices":[{"delta":{"content":"给这个页面加一个"}}]}\n'
+          + 'data: {"error":{"message":"rate limited","status":429}}\n'
+          + 'data: [DONE]\n',
+      } as never);
+
+      const result = await requestOverSse(false);
+
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个' });
+    });
+
+    it('开启后:default 链里的 codex profile 候选被跳过(profile 循环也要遵守严格模式)', async () => {
+      // 默认自动链走 `runDefaultProfileCandidates`,它直接执行候选；严格模式若不在这条
+      // 循环里生效，profile 引用会绕开「看不到终态就用」的限制。
+      chainState.refs = ['codex-gpt-5.4-mini'];
+      getProfiles.mockReturnValue([{
+        id: 'codex-gpt-5.4-mini',
+        model: 'gpt-5.4-mini',
+        transport: 'codex-responses',
+        auth: 'codex',
+        settingsTab: 'connections',
+        missingCredentialMessage: 'codex missing',
+      }]);
+      const maker = makerMock(true);
+
+      const result = await requestUtilityText(maker, 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(vi.mocked(maker.oneShot)).not.toHaveBeenCalled();
+      if (result.ok) throw new Error('expected the strict chain to refuse the profile route');
+      expect(result.attempts[0]).toMatchObject({ status: 'skipped', reason: 'unsupported_transport' });
+    });
+
+    it('开启后:内置 xd 路由的截断正文同样被拒绝(严格开关要透传进内置适配器)', async () => {
+      // 内置路由是默认自动链的线路。适配器若没把 requireCompleteOutput 透传下去，
+      // 默认线路会在「看起来有正文」时放行半截改写。
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'xd',
+          name: 'Cindy AI',
+          source: 'builtin',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://gateway.example/v1', authStrategy: 'api-key-header' },
+          },
+          models: { codex: [{ id: 'xd-mini', name: 'XD Mini', contextWindow: 100_000 }] },
+        }],
+      } as never);
+      readKey.mockReturnValue('xd-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'length' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:被内容过滤的正文在 LiteLLM 线路被拒绝', async () => {
+      // `content_filter` 不是预算耗尽,放大预算也解不开 —— 但它同样意味着
+      // 「这不是完整答案」,严格模式必须拒,否则半截改写会覆盖完整草稿。
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'content_filter' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('默认关闭:被内容过滤的正文仍按旧行为返回(钉住影响面)', async () => {
+      readKey.mockReturnValue('proxy-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'content_filter' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 200 });
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框，搜索框要' });
+    });
+
+    it('开启后:被内容过滤的正文在内置 xd 线路同样被拒绝', async () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'xd',
+          name: 'Cindy AI',
+          source: 'builtin',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://gateway.example/v1', authStrategy: 'api-key-header' },
+          },
+          models: { codex: [{ id: 'xd-mini', name: 'XD Mini', contextWindow: 100_000 }] },
+        }],
+      } as never);
+      readKey.mockReturnValue('xd-key');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({
+          choices: [{ message: { content: '给这个页面加一个搜索框，搜索框要' }, finish_reason: 'content_filter' }],
+        }),
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
+
+    /** Cindy AI serves a Messages-native model in its own wire format. */
+    const anthropicMessagesRoute = () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'xd',
+          name: 'Cindy AI',
+          source: 'builtin',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://gateway.example/v1', authStrategy: 'api-key-header' },
+          },
+          models: {
+            codex: [{
+              id: 'xd-mini',
+              name: 'XD Mini',
+              contextWindow: 100_000,
+              nativeApi: 'anthropic-messages',
+            }],
+          },
+        }],
+      } as never);
+      readKey.mockReturnValue('xd-key');
+    };
+
+    /** A Messages answer body that carries text but ends on the given reason. */
+    const messagesAnswer = (stopReason: string) => ({
+      ok: true,
+      text: async () => JSON.stringify({
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: '给这个页面加一个搜索框' }],
+        model: 'xd-mini',
+        stop_reason: stopReason,
+        usage: { input_tokens: 12, output_tokens: 8 },
+      }),
+    } as never);
+
+    it('开启后:Messages 路线以 refusal 收尾的非空正文被拒绝', async () => {
+      // `refusal` 是模型拒答,不是答案。Responses↔Anthropic 桥早就把它归为
+      // incomplete;原生 Messages 路线若只认 max_tokens,半截正文会被当成改写
+      // 结果回填,覆盖用户草稿。
+      anthropicMessagesRoute();
+      fetchMock.mockResolvedValueOnce(messagesAnswer('refusal'));
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:Messages 路线以 model_context_window_exceeded 收尾的非空正文被拒绝', async () => {
+      anthropicMessagesRoute();
+      fetchMock.mockResolvedValueOnce(messagesAnswer('model_context_window_exceeded'));
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('默认关闭:Messages 路线的同一份拒答响应仍按旧行为返回(钉住影响面)', async () => {
+      anthropicMessagesRoute();
+      fetchMock.mockResolvedValueOnce(messagesAnswer('refusal'));
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+      });
+
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框' });
+    });
   });
 
   it('responses 的 SSE 终止事件被 max_output_tokens 截断 → 也放大预算重试', async () => {

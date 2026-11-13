@@ -5374,7 +5374,7 @@
     },
     "auxiliaryModels": {
       "title": "Modelos auxiliares",
-      "description": "Utilizado para nomear tarefas automaticamente e mudar nomes com IA, sugestões de prompts no editor, Ajuda, resumos de tarefas afixadas, títulos de IM / Feishu e verificações de contexto de grupo, scripts de tarefas agendadas, perguntas e respostas rápidas de plugins com “seguir predefinição” e aperfeiçoamento de voz BYOK.",
+      "description": "Utilizado para nomear tarefas automaticamente e mudar nomes com IA, sugestões de prompts no editor, Ajuda, resumos de tarefas afixadas, títulos de IM / Feishu e verificações de contexto de grupo, scripts de tarefas agendadas, perguntas e respostas rápidas de plugins com “seguir predefinição” e aperfeiçoamento de voz BYOK, e a ação de melhorar o prompt na caixa de entrada.",
       "automatic": "Recomendação automática",
       "customize": "Personalizado",
       "preferred": {
@@ -14515,6 +14515,21 @@
       "later": "Mais tarde",
       "ready": "As páginas interativas estão ativadas para a próxima chamada de ferramenta do plugin.",
       "updateHost": "Atualize o Cindy no computador de execução para aprovar páginas interativas aqui."
+    },
+    "composerEnhance": {
+      "enhance": "Melhorar o prompt",
+      "undo": "Anular a melhoria",
+      "success": "Prompt melhorado",
+      "working": "A melhorar…",
+      "failed": "Não foi possível melhorar o prompt",
+      "stale": "O rascunho mudou, por isso a melhoria não foi aplicada",
+      "undoUnavailable": "O conteúdo mudou, não é possível desfazer",
+      "unsupported": "Este rascunho usa um formato que ainda não pode ser melhorado (menções, citações, listas)",
+      "empty": "Escreva um rascunho para o melhorar",
+      "locked": "A caixa de entrada não pode ser editada agora",
+      "noAuxiliaryModel": "Nenhum modelo auxiliar disponível. Configure um nas definições para melhorar os prompts.",
+      "openSettings": "Abrir definições",
+      "tooLong": "O limite para melhorar um rascunho é de {{max}} caracteres. Encurte-o ou divida-o em vários pedidos mais pequenos."
     }
   },
   "onboarding": {

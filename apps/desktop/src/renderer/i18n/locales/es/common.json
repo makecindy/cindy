@@ -5374,7 +5374,7 @@
     },
     "auxiliaryModels": {
       "title": "Modelos auxiliares",
-      "description": "Se usan para nombrar tareas automáticamente y renombrarlas con IA, sugerir instrucciones en el cuadro de texto, ofrecer ayuda, resumir tareas fijadas, generar títulos de IM / Feishu y comprobar el contexto de grupos, crear scripts de tareas programadas, responder preguntas rápidas de complementos con la opción «usar el modelo predeterminado» y mejorar el texto dictado mediante BYOK.",
+      "description": "Se usan para nombrar tareas automáticamente y renombrarlas con IA, sugerir instrucciones en el cuadro de texto, ofrecer ayuda, resumir tareas fijadas, generar títulos de IM / Feishu y comprobar el contexto de grupos, crear scripts de tareas programadas, responder preguntas rápidas de complementos con la opción «usar el modelo predeterminado» y mejorar el texto dictado mediante BYOK, y la acción de mejorar el prompt del cuadro de entrada.",
       "automatic": "Recomendación automática",
       "customize": "Personalizado",
       "preferred": {
@@ -14515,6 +14515,21 @@
       "later": "Más tarde",
       "ready": "Las páginas interactivas están habilitadas para la próxima llamada a una herramienta del complemento.",
       "updateHost": "Actualiza Cindy en la computadora de ejecución para aprobar páginas interactivas aquí."
+    },
+    "composerEnhance": {
+      "enhance": "Mejorar el prompt",
+      "undo": "Deshacer la mejora",
+      "success": "Prompt mejorado",
+      "working": "Mejorando…",
+      "failed": "No se pudo mejorar el prompt",
+      "stale": "El borrador cambió, así que no se aplicó la mejora",
+      "undoUnavailable": "El contenido cambió, no se puede deshacer",
+      "unsupported": "Este borrador usa un formato que aún no se puede mejorar (menciones, citas, listas)",
+      "empty": "Escribe un borrador para mejorarlo",
+      "locked": "El cuadro de entrada no se puede editar ahora",
+      "noAuxiliaryModel": "No hay ningún modelo auxiliar disponible. Configura uno en Ajustes para mejorar los prompts.",
+      "openSettings": "Abrir ajustes",
+      "tooLong": "El límite para mejorar un borrador es de {{max}} caracteres. Acórtalo o divídelo en varias peticiones más pequeñas."
     }
   },
   "onboarding": {

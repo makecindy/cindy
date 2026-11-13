@@ -5316,7 +5316,7 @@
     },
     "auxiliaryModels": {
       "title": "Auxiliary models",
-      "description": "Used for automatic task naming and AI rename, composer prompt suggestions, Help, pinned task summaries, IM / Feishu titles and group-context checks, scheduled-task scripts, plugin quick Q&A “follow default”, and BYOK voice refinement.",
+      "description": "Used for automatic task naming and AI rename, composer prompt suggestions, Help, pinned task summaries, IM / Feishu titles and group-context checks, scheduled-task scripts, plugin quick Q&A “follow default”, and BYOK voice refinement, and the composer's enhance-prompt action.",
       "automatic": "Automatic recommendation",
       "customize": "Custom",
       "preferred": {
@@ -14393,6 +14393,21 @@
       "later": "Later",
       "ready": "Interactive pages are enabled for the next plugin tool call.",
       "updateHost": "Update Cindy on the execution computer to approve interactive pages here."
+    },
+    "composerEnhance": {
+      "enhance": "Enhance prompt",
+      "undo": "Undo enhancement",
+      "success": "Prompt enhanced",
+      "working": "Enhancing…",
+      "failed": "Could not enhance the prompt",
+      "stale": "The draft changed, so the enhancement was not applied",
+      "undoUnavailable": "The content changed, so it cannot be undone",
+      "unsupported": "This draft uses a format that cannot be enhanced yet (@mentions, quotes, lists)",
+      "empty": "Type a draft to enhance it",
+      "locked": "The composer is not editable right now",
+      "noAuxiliaryModel": "No auxiliary model is available. Configure one in Settings to enhance prompts.",
+      "openSettings": "Open settings",
+      "tooLong": "{{max}} characters is the limit for enhancing a draft. Shorten it, or split it into smaller requests."
     }
   },
   "onboarding": {

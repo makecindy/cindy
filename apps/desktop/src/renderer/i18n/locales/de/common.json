@@ -5316,7 +5316,7 @@
     },
     "auxiliaryModels": {
       "title": "Hilfsmodelle",
-      "description": "Wird für automatische Aufgabentitel und KI-Umbenennung, Prompt-Vorschläge im Eingabefeld, Hilfe, Zusammenfassungen angehefteter Aufgaben, IM-/Feishu-Titel und Gruppenkontextprüfungen, Skripte geplanter Aufgaben, Plugin-Schnellfragen mit „Standard folgen“ und BYOK-Sprachnachbearbeitung verwendet.",
+      "description": "Wird für automatische Aufgabentitel und KI-Umbenennung, Prompt-Vorschläge im Eingabefeld, Hilfe, Zusammenfassungen angehefteter Aufgaben, IM-/Feishu-Titel und Gruppenkontextprüfungen, Skripte geplanter Aufgaben, Plugin-Schnellfragen mit „Standard folgen“ und BYOK-Sprachnachbearbeitung verwendet, sowie die Prompt-Verbesserung im Eingabefeld.",
       "automatic": "Automatische Empfehlung",
       "customize": "Benutzerdefiniert",
       "preferred": {
@@ -14393,6 +14393,21 @@
       "later": "Später",
       "ready": "Interaktive Seiten sind für den nächsten Plugin-Toolaufruf aktiviert.",
       "updateHost": "Aktualisiere Cindy auf dem ausführenden Computer, um interaktive Seiten hier zu genehmigen."
+    },
+    "composerEnhance": {
+      "enhance": "Prompt verbessern",
+      "undo": "Verbesserung rückgängig machen",
+      "success": "Prompt verbessert",
+      "working": "Verbesserung…",
+      "failed": "Der Prompt konnte nicht verbessert werden",
+      "stale": "Der Entwurf hat sich geändert, die Verbesserung wurde nicht angewendet",
+      "undoUnavailable": "Der Inhalt hat sich geändert, Rückgängig ist nicht möglich",
+      "unsupported": "Dieser Entwurf nutzt ein noch nicht unterstütztes Format (@-Erwähnungen, Zitate, Listen)",
+      "empty": "Erst einen Entwurf eingeben, dann verbessern",
+      "locked": "Die Eingabe ist derzeit nicht bearbeitbar",
+      "noAuxiliaryModel": "Es ist kein Hilfsmodell verfügbar. Richte eines in den Einstellungen ein, um Prompts zu verbessern.",
+      "openSettings": "Einstellungen öffnen",
+      "tooLong": "{{max}} Zeichen ist das Limit für die Verbesserung eines Entwurfs. Kürze ihn oder teile ihn in mehrere kleinere Aufgaben."
     }
   },
   "onboarding": {

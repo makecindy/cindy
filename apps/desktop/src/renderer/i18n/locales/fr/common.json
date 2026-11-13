@@ -5374,7 +5374,7 @@
     },
     "auxiliaryModels": {
       "title": "Modèles auxiliaires",
-      "description": "Utilisés pour le nommage automatique des tâches et le renommage par IA, les suggestions de prompt dans la zone de saisie, l’Aide, les résumés des tâches épinglées, les titres IM / Feishu et les vérifications de contexte de groupe, les scripts des tâches planifiées, l’option « utiliser le modèle par défaut » des questions-réponses rapides des plugins, et l’amélioration du texte dicté via BYOK.",
+      "description": "Utilisés pour le nommage automatique des tâches et le renommage par IA, les suggestions de prompt dans la zone de saisie, l’Aide, les résumés des tâches épinglées, les titres IM / Feishu et les vérifications de contexte de groupe, les scripts des tâches planifiées, l’option « utiliser le modèle par défaut » des questions-réponses rapides des plugins, et l’amélioration du texte dicté via BYOK, et l'action d'amélioration du prompt de la zone de saisie.",
       "automatic": "Recommandation automatique",
       "customize": "Personnalisé",
       "preferred": {
@@ -14515,6 +14515,21 @@
       "later": "Plus tard",
       "ready": "Les pages interactives sont activées pour le prochain appel de l'outil de plugin.",
       "updateHost": "Mettez à jour Cindy sur l'ordinateur d'exécution pour approuver les pages interactives ici."
+    },
+    "composerEnhance": {
+      "enhance": "Améliorer le prompt",
+      "undo": "Annuler l’amélioration",
+      "success": "Prompt amélioré",
+      "working": "Amélioration…",
+      "failed": "Impossible d'améliorer le prompt",
+      "stale": "Le brouillon a changé, l'amélioration n'a pas été appliquée",
+      "undoUnavailable": "Le contenu a changé, impossible de l'annuler",
+      "unsupported": "Ce brouillon utilise un format encore non améliorable (mentions, citations, listes)",
+      "empty": "Saisissez d’abord un brouillon à améliorer",
+      "locked": "Le champ de saisie n'est pas modifiable pour le moment",
+      "noAuxiliaryModel": "Aucun modèle auxiliaire disponible. Configurez-en un dans les réglages pour améliorer les prompts.",
+      "openSettings": "Ouvrir les réglages",
+      "tooLong": "{{max}} caractères est la limite pour améliorer un brouillon. Raccourcissez-le ou divisez-le en plusieurs demandes plus petites."
     }
   },
   "onboarding": {
