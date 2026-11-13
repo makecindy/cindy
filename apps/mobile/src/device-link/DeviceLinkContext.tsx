@@ -1199,6 +1199,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         capabilities: [SHARED_TASK_CAPABILITY],
         deviceName: mobileDeviceName(),
         platform: Platform.OS,
+        app: 'cindy',
         appVersion: Constants.expoConfig?.version ?? '0.0.0',
         remoteControlEnabled: false,
         busy: false,

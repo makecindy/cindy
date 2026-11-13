@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 export interface PresenceEvent {
   deviceId: string;
   name: string;
+  app?: string;
   online: boolean;
   at: number;
 }
@@ -30,6 +31,7 @@ export function useRecentPresence(active: boolean): readonly PresenceEvent[] {
       setEvents((prev) => appendPresenceEvent(prev, {
         deviceId: snap.deviceId,
         name: snap.deviceName,
+        app: snap.app,
         online: snap.online,
         at: Date.now(),
       }));

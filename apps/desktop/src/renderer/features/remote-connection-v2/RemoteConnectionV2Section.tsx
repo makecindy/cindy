@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { History } from 'lucide-react';
+import { deviceLabel } from '@/components/settings/deviceLabels';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SettingsCard } from '@/components/ui/settings-rows';
@@ -70,7 +71,7 @@ function RecentActivity({ events }: { events: readonly PresenceEvent[] }) {
         {events.length ? (
           <ul className="max-h-72 overflow-y-auto pb-1.5">
             {events.map((e) => {
-              const title = t(e.online ? 'settings.remoteControl.v2.recent.online' : 'settings.remoteControl.v2.recent.offline', { name: e.name });
+              const title = t(e.online ? 'settings.remoteControl.v2.recent.online' : 'settings.remoteControl.v2.recent.offline', { name: deviceLabel(e, t) });
               return (
                 <li key={`${e.deviceId}:${e.at}`} className="flex items-baseline justify-between gap-3 px-3 py-1.5 text-12">
                   <span className="min-w-0 truncate text-[var(--text-primary)]" title={title}>
