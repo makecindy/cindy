@@ -176,6 +176,38 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
+  // discussion_r4560047246: the real stop promise must reject Send when
+  // readiness fails after PCM arrives. Existing failures happen before stop
+  // or after a runId exists, missing this pending-start continuation (unit).
+  it('rejects Send when readiness fails while stop waits for the pending start', async () => {
+    const h = mount();
+    const readiness = deferred<{ ok: false; error: string }>();
+    h.api.getReadinessCached.mockReturnValue({ ok: false });
+    h.api.getReadiness.mockReturnValue(readiness.promise);
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.result.current.start();
+    });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    expect(h.api.getReadiness).toHaveBeenCalledOnce();
+    expect(h.api.start).not.toHaveBeenCalled();
+    const send = vi.fn(); const failed = vi.fn();
+    let stopping!: Promise<void>;
+    await act(async () => {
+      stopping = h.result.current.stop({ waitForRefinement: true }).then(send, failed);
+    });
+    expect(send).not.toHaveBeenCalled();
+    await act(async () => {
+      readiness.resolve({ ok: false, error: 'readiness failed while sending' });
+      await stopping;
+    });
+    expect(h.result.current.state).toBe('error');
+    expect(send).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(new Error('readiness failed while sending'));
+    expect(h.api.start).not.toHaveBeenCalled();
+    expect(h.api.stop).not.toHaveBeenCalled();
+  });
+
   // #6656 / discussion_r4548420426. Unit: the real stop promise gates Send.
   // Existing tests only fail after stop IPC; ASR can fail earlier while the
   // worklet or append-audio barrier drains. That same attempt must reject.

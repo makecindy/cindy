@@ -5,6 +5,7 @@ import { useVoiceInput, type VoiceInputTextTarget } from '@/voice-input/useVoice
 import { isVoiceInputEventScopeActive } from '@/voice-input/eventScope';
 import { formatVoiceInputShortcut, isVoiceInputShortcutMatch, isVoiceInputShortcutRelease, type VoiceInputShortcut } from '@/voice-input/shortcut';
 import { playVoiceInputEndCue, playVoiceInputStartCue } from '@/voice-input/startCue';
+import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 
 // Both composers subscribe to the native shortcut. One gesture belongs to the
 // input focused at its start, including release after focus moves elsewhere.
@@ -139,6 +140,19 @@ export function useBotGroupVoiceInput({
       if (held) void stop();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Escape belongs to the recording, even when focus moved to an idle
+      // reply box or toolbar. Foreground popups and IME still own their keys.
+      if (event.key === 'Escape' && activeComposer === identity
+        && isVoiceInputEventScopeActive(latest.current.voice.getState())) {
+        if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229
+          || getTextPreviewHost() || document.querySelector('[data-mermaid-lightbox-overlay]')
+          || (event.target instanceof Element && event.target.closest('[role="alertdialog"], [data-morph-side]'))) return;
+        event.preventDefault();
+        event.stopPropagation();
+        clearPress();
+        void latest.current.voice.cancel();
+        return;
+      }
       if (!canHandle() || event.repeat || event.isComposing
         || !isVoiceInputShortcutMatch(event, latest.current.settings.shortcut)) return;
       event.preventDefault();

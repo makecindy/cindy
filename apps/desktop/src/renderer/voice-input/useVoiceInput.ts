@@ -1837,7 +1837,9 @@ export function useVoiceInput(
       restorePromise = restoreSystemAudioAndNotifyEndCue(options);
       if (startReady) {
         const startResult = await waitForStartReadyWhileStopping(startReady);
-        if (!isActiveStartAttempt(attemptId)) return;
+        // Readiness may have failed this same attempt while stop was waiting.
+        // Only cancellation/replacement skips its existing failure handling.
+        if (startAttemptIdRef.current !== attemptId) return;
         if (!startResult.ok) {
           invalidateStartAttempt();
           await restorePromise;

@@ -122,6 +122,48 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearArmedDetachedVoiceDraft(); events.clear(); shortcuts.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('group textarea dictation ownership (#6650)', () => {
+  // discussion_r4560047254: real hooks in two composers, with the idle
+  // composer mounted first. Existing shortcuts cover focus changes only on
+  // release; Escape must cancel the owner before document/thread dismissal.
+  it.each(['thread', 'toolbar'])('cancels the active group recording with Escape focused on %s', async focus => {
+    render(<><Harness id="thread" initial="reply draft" /><Harness id="group" initial="main draft" /><button>toolbar</button></>);
+    await start('group');
+    const target = focus === 'thread' ? input('thread') : screen.getByText('toolbar');
+    target.focus();
+    const dismiss = vi.fn(); document.addEventListener('keydown', dismiss);
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    try {
+      await act(async () => { fireEvent(target, escape); });
+      expect(escape.defaultPrevented).toBe(true);
+      expect(dismiss).not.toHaveBeenCalled();
+      expect(api.cancel).toHaveBeenCalledExactlyOnceWith({ runId: 'run' });
+      expect(screen.getByTestId('group-state').textContent).toBe('done');
+      expect(screen.getByTestId('thread-state').textContent).toBe('idle');
+      act(() => submit());
+      expect(input('group').value).toBe('main draft');
+      expect(input('thread').value).toBe('reply draft');
+    } finally { document.removeEventListener('keydown', dismiss); }
+  });
+
+  it.each([{ isComposing: true }, { keyCode: 229 }, { repeat: true }])('leaves Escape to composition or a held key (%j)', async flags => {
+    render(<><Harness id="group" /><Harness id="thread" /></>);
+    await start('group'); input('thread').focus();
+    await act(async () => { fireEvent.keyDown(input('thread'), { key: 'Escape', ...flags }); });
+    expect(api.cancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId('group-state').textContent).toBe('listening');
+  });
+
+  it.each([
+    { 'data-text-lightbox-card': '' }, { 'data-mermaid-lightbox-overlay': '' },
+    { role: 'alertdialog' }, { 'data-morph-side': 'top' },
+  ])('leaves Escape to the foreground popup (%j)', async surface => {
+    render(<><Harness id="group" /><div {...surface}><button>popup control</button></div></>);
+    await start('group'); const target = screen.getByText('popup control'); target.focus();
+    await act(async () => { fireEvent.keyDown(target, { key: 'Escape' }); });
+    expect(api.cancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId('group-state').textContent).toBe('listening');
+  });
+
   // PRRT_kwDOTgdRUs62LQUw: actual composer registration + real dictation hook.
   // A preview in an empty draft used to accept outbox restoration. Cover both
   // the initial gate and an edit hold obtained before recording starts (unit).
