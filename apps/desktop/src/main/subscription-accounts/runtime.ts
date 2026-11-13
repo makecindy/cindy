@@ -53,11 +53,13 @@ import {
   accountOwnerPrefix,
   defaultPool,
   readPool,
+  readLegacyCodexAccountId,
   readLegacyCodexProviderId,
   readAccountBinding,
   updatePool as updateStoredPool,
   writeAccountBindings,
 } from './store.js';
+import { legacyCodexAccountCanRun, openAiRouteAllowsModel } from './legacyAccountAccess.js';
 import {
   loginNativeAccount,
   readNativeAccount,
@@ -689,7 +691,7 @@ const ACCOUNT_SWITCH_PROBE_BUDGET_MS = 2_000;
  */
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
-  keys: { sessionId?: string; nativeSessionId?: string; model?: string },
+  keys: { sessionId?: string; nativeSessionId?: string; model?: string; legacyProviderId?: string },
   /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)，换号探测也认「让我的其他电脑用本机模型」。 */
   options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
@@ -700,13 +702,47 @@ export async function readSubscriptionSessionAccount(
   assertOwner(state);
   const pool = readPool(provider);
   if (!pool) return { providerId: provider, state: 'legacy' };
+  const legacyAccountId = provider === 'openai' && keys.legacyProviderId
+    ? readLegacyCodexAccountId(keys.legacyProviderId) : undefined;
+  // Only the executing computer can resolve its aliases. Both the original route and the
+  // merged destination must still admit this own-computer task; old or unrelated ids do not.
+  const legacyRouteAdmits = () => !!legacyAccountId && !!keys.legacyProviderId && !!keys.model
+    && options.remote === true && options.ownComputer === true
+    && readLegacyCodexAccountId(keys.legacyProviderId) === legacyAccountId
+    && legacyCodexAccountCanRun(keys.legacyProviderId, keys.model, {
+      remote: options.remote === true, ownComputer: options.ownComputer === true, newRoute: false,
+    }) && openAiRouteAllowsModel(keys.model, options);
+  if (keys.legacyProviderId && !legacyRouteAdmits())
+    return { providerId: provider, state: 'unavailable' };
+  const canReplace = async (accountId: string): Promise<boolean> => {
+    const budget = switchDeadline - performance.now();
+    if (budget <= 0) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const available = await Promise.race([
+        acquireSubscriptionAccount(provider, keys.model, [], false, {
+          remote: options.remote === true, ownComputer: options.ownComputer === true,
+          exclude: new Set([accountId]), dryRun: true,
+        }).then(() => true),
+        new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), budget); }),
+      ]);
+      return available && (!legacyAccountId || legacyRouteAdmits());
+    } catch {
+      return false;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      assertOwner(state);
+    }
+  };
   const binding = [
     keys.sessionId ? `task:${keys.sessionId}` : '',
     keys.nativeSessionId ? `native:${keys.nativeSessionId}` : '',
   ]
     .filter(Boolean)
     .map((key) => readAccountBinding(key, provider))
-    .find(Boolean);
+    .find(Boolean) ?? (legacyAccountId ? { accountId: legacyAccountId } : undefined);
+  if (legacyAccountId && binding?.accountId !== legacyAccountId)
+    return { providerId: provider, state: 'unavailable' };
   // With only the ordinary CLI default, the original readers are the task's account.
   const onlyDefault =
     !pool.disconnected && pool.accounts.length === 1 && pool.accounts[0].id === 'default' && !pool.accounts[0].paused;
@@ -716,15 +752,16 @@ export async function readSubscriptionSessionAccount(
       providerId: provider,
       state: onlyDefault || keys.nativeSessionId ? 'legacy' : 'unassigned',
     };
-  if (onlyDefault && binding.accountId === 'default')
+  if (onlyDefault && binding.accountId === 'default' && !legacyAccountId)
     return { providerId: provider, state: 'legacy' };
   const index = pool.accounts.findIndex((a) => a.id === binding.accountId);
+  if (pool.disconnected) return { providerId: provider, state: 'unavailable' };
   if (
-    pool.disconnected ||
     index < 0 ||
     (binding.accountId === 'default' && !defaultAccountBound(provider))
   )
-    return { providerId: provider, state: 'unavailable' };
+    return { providerId: provider, state: 'unavailable',
+      ...(legacyAccountId && await canReplace(legacyAccountId) ? { replacementProviderId: 'openai' as const } : {}) };
   const config = pool.accounts[index];
   const info = await snapshot(state, provider, config.id);
   assertOwner(state);
@@ -735,34 +772,17 @@ export async function readSubscriptionSessionAccount(
     provider === 'openai' ? 'codex' : 'claude-code',
   );
   // The controller hands the task off only when a fresh start here would take another account
-  // (same judgment as the local pre-send failover). Merged legacy connections never move.
+  // (same judgment as the local pre-send failover). Accounts merged from a legacy connection move
+  // too (2026-11-13): a task on the `openai` route bound to one is an ordinary pool task.
   const blocked = keys.model !== undefined && !config.paused
-    && !(provider === 'openai' && readLegacyCodexProviderId(config.id))
     && readSubscriptionAccountBlocked(provider, config.id, keys.model);
-  let switchAvailable = false;
-  const switchBudget = switchDeadline - performance.now();
-  if (blocked && switchBudget > 0) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      // Quota alone cannot authorize retiring native history: another account also needs an
-      // actual slot and the grants used by a fresh start. The probe reserves and binds nothing.
-      switchAvailable = await Promise.race([
-        acquireSubscriptionAccount(provider, keys.model, [], false, {
-          remote: options.remote === true, ownComputer: options.ownComputer === true,
-          exclude: new Set([config.id]), dryRun: true,
-        }).then(() => true),
-        new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), switchBudget); }),
-      ]);
-    } catch {
-      // A full/unreadable replacement keeps the original send path. Owner changes still reject.
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
-    assertOwner(state);
-  }
+  // Quota alone cannot authorize retiring native history. Probe actual replacement admission
+  // without reserving or rebinding, within the original query's shared budget.
+  const switchAvailable = (blocked || (!!legacyAccountId && config.paused)) && await canReplace(config.id);
   return {
     providerId: provider,
     state: 'bound',
+    ...(legacyAccountId && switchAvailable ? { replacementProviderId: 'openai' as const } : {}),
     account: {
       isDefault: config.id === 'default',
       number: index + 1,
@@ -1012,17 +1032,26 @@ function taskSubscriptionProvider(row: RemoteTaskAccountRow): SubscriptionProvid
  */
 async function readRemoteTaskAccount(
   provider: SubscriptionProvider,
-  row: RemoteTaskAccountRow & { agentDeviceId: string; sdkSessionId: string },
+  row: RemoteTaskAccountRow & { agentDeviceId: string },
   invokeRemote: RemoteSubscriptionInvoke,
 ): Promise<{ number: number; paused: boolean; blocked: boolean; available: boolean } | null> {
   const state = currentRuntime();
   const preSend = () => assertOwner(state);
+  const legacyProviderId = provider === 'openai' && row.providerId && row.providerId !== 'openai'
+    ? row.providerId : undefined;
   const reply = await invokeRemote(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
-    action: 'session', providerId: provider, nativeSessionId: row.sdkSessionId,
+    action: 'session', providerId: provider,
+    ...(row.sdkSessionId ? { nativeSessionId: row.sdkSessionId } : {}),
     ...(row.model ? { model: row.model } : {}),
+    ...(legacyProviderId ? { legacyProviderId } : {}),
   }], { preSend });
   assertOwner(state);
   const view = reply.ok ? parseSubscriptionSessionAccountView(reply.result, provider) : null;
+  // Old hosts may ignore the alias field and report a blocked binding. Only the new explicit
+  // destination admission permits changing a legacy task's saved source after its handoff.
+  if (legacyProviderId) return view?.replacementProviderId === 'openai'
+    ? { number: view.state === 'bound' ? view.account.number : 0, paused: false, blocked: true, available: true }
+    : null;
   // Older hosts lack the query. Do not guess another computer's account from local state.
   if (view?.state !== 'bound') return null;
   const { number, paused } = view.account;
@@ -1049,9 +1078,13 @@ export async function readRemoteSubscriptionAccountSwitch(
   row: RemoteTaskAccountRow,
   invokeRemote: RemoteSubscriptionInvoke,
 ): Promise<string | null> {
-  const provider = taskSubscriptionProvider(row);
+  const standardProvider = taskSubscriptionProvider(row);
+  const legacy = !standardProvider && !!row.providerId
+    && row.providerId !== 'openai' && row.providerId !== 'anthropic'
+    && ['codex', 'cc', 'claude-code', 'pi'].includes(row.agentKind);
+  const provider = standardProvider ?? (legacy ? 'openai' : null);
   if (!provider || row.remoteHostId || !row.agentDeviceId || isProviderShareAgentDeviceId(row.agentDeviceId)
-    || !row.sdkSessionId || !row.model) return null;
+    || (!row.sdkSessionId && !legacy) || !row.model) return null;
   const remote = await readRemoteTaskAccount(provider,
     { ...row, agentDeviceId: row.agentDeviceId, sdkSessionId: row.sdkSessionId }, invokeRemote);
   return remote?.blocked && remote.available ? `${row.agentDeviceId}#${remote.number}` : null;
@@ -1155,15 +1188,16 @@ export async function acquireSubscriptionAccount(
   const pendingKey = !control ? keys.map(key => keyOf(provider, key)).find(key => state.pendingStarts.has(key)) : undefined;
   const pending = pendingKey ? state.pendingStarts.get(pendingKey) : undefined;
   const boundAccount = binding && latest.accounts.find(a => a.id === binding.accountId);
-  const freshPausedBinding = options.resuming === false && boundAccount?.paused === true;
+  const freshPausedBinding = options.resuming === false && !!binding
+    && (!boundAccount || boundAccount.paused === true);
   // A fresh native session (handoff after a computer or account switch, a cleared task) carries no
   // history on the bound account. When that account cannot take this model now (remembered
   // failure, exhausted trusted quota or signed out), the pool policy picks another one, like a
-  // paused binding; with nowhere else to go the task keeps its account and admission. Resumes,
-  // explicit account routes and merged legacy connections never move here.
+  // paused binding; with nowhere else to go the task keeps its account and admission. Resumes and
+  // explicit account routes (a legacy connection id pins its own account) never move here; an
+  // `openai` task bound to an account merged from a legacy connection does (2026-11-13).
   const freshBlockedBinding = options.resuming === false && !control && !freshPausedBinding
     && !!boundAccount && !options.accountId
-    && !(provider === 'openai' && readLegacyCodexProviderId(boundAccount.id))
     && readSubscriptionAccountBlocked(provider, boundAccount.id, model);
   const buildMembers = (rebind: boolean) => latest.accounts.map((a) => {
     const imported = provider === 'openai' ? readLegacyCodexProviderId(a.id) : undefined;
