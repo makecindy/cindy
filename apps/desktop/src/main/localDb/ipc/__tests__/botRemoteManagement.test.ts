@@ -7,7 +7,7 @@ vi.mock('../botRemoteSessionAccess.js', () => ({ readRemoteBotSessionAccess: asy
 // These services belong to other settings pages and must not initialize here.
 vi.mock('../../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: vi.fn() }));
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', () => ({ resolveAvailableTaskModels: vi.fn() }));
-vi.mock('../bots.js', () => ({ createBotProfile: vi.fn(), createBotCanonicalSession: vi.fn(), getBotMemoryService: vi.fn(), getBotRemoteResourceSource: vi.fn(), getBotRemoteSettingsSource: vi.fn(), readBotSettingsProfile: vi.fn(), searchBotHistory: vi.fn(), setBotProfileAvatar: vi.fn(), updateBotProfile: vi.fn() }));
+vi.mock('../bots.js', () => ({ botProjectRepository: vi.fn(), createBotProfile: vi.fn(), createBotCanonicalSession: vi.fn(), getBotMemoryService: vi.fn(), getBotRemoteResourceSource: vi.fn(), getBotRemoteSettingsSource: vi.fn(), readBotSettingsProfile: vi.fn(), searchBotHistory: vi.fn(), setBotProfileAvatar: vi.fn(), updateBotProfile: vi.fn() }));
 vi.mock('../../../maker-ipc/botSkillService.js', () => ({ listBotSkillsForBot: vi.fn(), readBotSkillForBot: vi.fn(), saveBotSkillForSession: vi.fn(), deleteBotSkillForBot: vi.fn(),
   readBotSkillSourceForBot: vi.fn(async () => '---\nname: report\n---\nSteps'), saveBotSkillSourceForBot: vi.fn(), setBotSkillEnabledForBot: vi.fn() }));
 // The core Skill text pulls in the whole MCP package (~5 s to collect); no test here reads it.
