@@ -44,4 +44,17 @@ describe('explicit reply quote selection', () => {
     expect(await selectReplyQuote(context, 'u1')).toMatchObject({ errorCode: 'TURN_CHANGED' });
     expect(selectedReplyQuote(fixture.session, 2)).toBeUndefined();
   });
+  // Regression: coordinator persists silent continuation as user text with autoResume metadata.
+  // The host entry must reject that row while accepting identical text typed by the owner.
+  it('rejects automatic continuation without rejecting the same words from the owner', async () => {
+    await selectReplyQuote(context, null);
+    const continuation = { ...fixture.row, content: JSON.stringify({ text: '继续' }) };
+    fixture.read.mockResolvedValueOnce([{ ...continuation, agentMeta: JSON.stringify({ autoResume: true }) }]);
+    expect(await selectReplyQuote(context, 'u1')).toMatchObject({ errorCode: 'NOT_FOUND' });
+    expect(selectedReplyQuote(fixture.session, 1)).toBeUndefined();
+
+    fixture.read.mockResolvedValueOnce([continuation]);
+    expect(await selectReplyQuote(context, 'u1')).toEqual({ ok: true });
+    expect(selectedReplyQuote(fixture.session, 1)).toEqual({ clientId: 'u1', role: 'user', excerpt: '继续' });
+  });
 });

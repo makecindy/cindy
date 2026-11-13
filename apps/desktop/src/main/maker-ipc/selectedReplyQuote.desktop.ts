@@ -37,7 +37,8 @@ export async function selectReplyQuote(
     try { content = JSON.parse(row.content); } catch { /* Legacy plain text. */ }
     try { meta = JSON.parse(row.agentMeta ?? '{}') ?? {}; } catch { /* Legacy empty metadata. */ }
     const envelope = content && typeof content === 'object' ? content as Record<string, unknown> : null;
-    if (meta.botPrivateReply || meta.botGroupLane || meta.origin || meta.hookSource
+    if ((row.role === 'user' && meta.autoResume === true)
+      || meta.botPrivateReply || meta.botGroupLane || meta.origin || meta.hookSource
       || isAnsweredAsyncQuestionClientId(row.clientId) || envelope?.isSyntheticTrigger
       || envelope?.automationOrigin || envelope?.hookSource) {
       return fail('NOT_FOUND', '内部触发和渠道消息不能作为私聊引用。');
