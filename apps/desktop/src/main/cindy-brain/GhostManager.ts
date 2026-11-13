@@ -24,6 +24,7 @@ import {
   hasDeliveryNamespace,
   installedGhostStoragePart,
   isValidPluginInstallRelId,
+  LOCAL_PLUGIN_NAMESPACE,
   parsePluginInstallRelId,
   parsePluginStoragePart,
   PLUGIN_NS_INSTALL_ROOT,
@@ -965,6 +966,14 @@ export class GhostManager {
 
   private instanceRecordForAddress(id: string): PluginInstanceRecord | null {
     return this.instanceRegistryService.recordForAddress(id);
+  }
+
+  /** Physical provenance only; an unconfirmed namespace never grants capabilities. */
+  readInstanceForContent(relId: string): Readonly<PluginInstanceRecord> | null {
+    this.ensureCurrentOwnerContextSync();
+    const record = this.instanceRecordForAddress(relId);
+    if (this.instanceRegistryService.isBlocked()) throw new Error('Plugin instance registry is unavailable');
+    return record?.contentRelId === relId ? { ...record } : null;
   }
 
   /** Author management must not turn an unreadable installation scan into "not installed". */
@@ -4403,6 +4412,8 @@ export class GhostManager {
       expectedInstalledApproval: string;
       /** Main-selected instance key; never a renderer-supplied path or a logical namespace address. */
       expectedInstalledInstanceId?: string;
+      /** Host-only recovery of a retained market instance overwritten by this bundled source. */
+      seededMarketRecovery?: { pluginId: string; sourceDir: string };
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'manual' | 'agent-forge';
@@ -4437,6 +4448,7 @@ export class GhostManager {
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedInstalledInstanceId?: string;
+      seededMarketRecovery?: { pluginId: string; sourceDir: string };
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'manual' | 'agent-forge';
@@ -4529,7 +4541,23 @@ export class GhostManager {
     const approvalResult = this.readApproval(sourceRelId);
     if (selectedInstance && approvalResult.state === 'approved' &&
         hasDeliveryNamespace(approvalResult.receipt) && approvalResult.receipt.namespace !== opts.namespace) {
-      return { rejection: { code: 'state-changed', reason: '插件安装状态在检查后发生了变化，请重试' } };
+      const recovery = opts.seededMarketRecovery;
+      const mayRecover = recovery && opts.manifestSource === 'stored-release' &&
+        selectedInstance.namespaceState === 'unconfirmed' && selectedInstance.source === 'market' &&
+        selectedInstance.pluginId === recovery.pluginId && selectedInstance.contentRelId === manifest.id &&
+        typeof opts.namespace === 'string' && opts.namespace !== LOCAL_PLUGIN_NAMESPACE &&
+        approvalResult.receipt.namespace === null &&
+        this.options.isTrustedBundledId?.(manifest.id) === true &&
+        this.options.isTrustedBundledSource?.(manifest.id, recovery.sourceDir) === true;
+      // A retained namespace is an address, not an approval. Only the actual
+      // root seed may be replaced through this recovery path; the incoming
+      // market package still requires the normal consent and SHA checks.
+      if (!mayRecover || !approvalResult.receipt.packageSha256 ||
+          await hashApprovedDirectory(recovery.sourceDir) !== approvalResult.receipt.packageSha256 ||
+          await hashApprovedDirectory(sourceDir) !== approvalResult.receipt.packageSha256 ||
+          approvalTokenFor(this.readApproval(sourceRelId)) !== opts.expectedInstalledApproval) {
+        return { rejection: { code: 'state-changed', reason: '插件安装状态在检查后发生了变化，请重试' } };
+      }
     }
     if (previousRelId && (approvalResult.state !== 'approved' || approvalResult.receipt.namespace != null)) {
       return { rejection: { code: 'state-changed', reason: 'Simulator migration needs an approved root installation' } };

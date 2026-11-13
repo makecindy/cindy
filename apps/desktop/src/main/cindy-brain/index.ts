@@ -347,9 +347,9 @@ import {
   renameBuiltinTombstone,
   resolveBuiltinInstalledDir,
   seedIsNewerThanStore,
-  type BuiltinStoreInstallFact,
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
+import { builtinSeedStoreInstall, isRetainedSeedMarketTarget } from './builtinSeedStoreInstall.js';
 import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -634,7 +634,6 @@ import {
 } from '../plugin-market/ledger.js';
 import {
   installedMarketManifestIdentity,
-  verifyInstalledMarketManifest,
   type InstalledMarketManifestIdentity,
 } from '../plugin-market/installedManifestIdentity.js';
 import { createOrganizationPrefixStore } from '../plugin-market/organizationPrefixStore.js';
@@ -1917,7 +1916,9 @@ async function reconcileBuiltinGhostsLocked(
       },
       publishSeed: (id, seedDir, options) =>
         mutation.publishTrustedBundledSeed(id, seedDir, options),
-      storeInstall: builtinSeedStoreInstall,
+      storeInstall: (id, installedDir) => builtinSeedStoreInstall(id, installedDir, {
+        rootDir: brainRootDir(), manager, ledger: getPluginMarketLedger(),
+      }),
       onApplyStart: () => {
         tipShown = true;
         broadcastGhostProvisioning(true);
@@ -3769,40 +3770,6 @@ export async function diagnoseScheduleHookPluginForActiveOwner(
       return { pluginId, ...(name ? { name } : {}) };
     },
   });
-}
-
-/**
- * 内置种子对照的同 id 商店安装(builtinGhostProvisioner 的 storeInstall):只认服务端市场
- * 已装的根 namespace 记录。账本或该记录损坏时抛错,播种把该种子按本轮失败处理、不动已装字节。
- */
-function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinStoreInstallFact | null {
-  // 严格查询：账本文件或该插件的记录损坏时不能当成「没有商店来源」（那会让孤儿回收
-  // 把真实的商店安装当种子删掉），抛错让播种跳过本轮。
-  const lookup = getPluginMarketLedger().lookupInstallationForAuthorization({ ghostId: id, namespace: null });
-  if (lookup.kind === 'invalid') {
-    throw new Error('Plugin market ledger is unreadable');
-  }
-  const record = lookup.kind === 'found' ? lookup.record : null;
-  if (
-    !record?.installed ||
-    record.ghostId !== id ||
-    (record.source !== 'market' && record.source !== 'legacy-adopted') ||
-    (hasDeliveryNamespace(record) && record.namespace !== null)
-  ) {
-    return null;
-  }
-  const snapshot = readInstalledGhostManifestSnapshot(installedDir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
-  // ghost.json 相同不代表目录里还是商店包(旧播种器允许同版本种子覆盖,只改代码不改清单)。
-  // 批准回执里的包摘要才是落位那一刻的包身份:商店安装 = Release sha256,播种发布 = 目录摘要。
-  const relId = path.relative(brainRootDir(), installedDir).split(path.sep).join('/');
-  const evidence = getGhostManager().approvedInstallEvidence(relId);
-  return {
-    version: record.version,
-    ownsInstalledBytes:
-      snapshot.ok &&
-      verifyInstalledMarketManifest(record, installedMarketManifestIdentity(snapshot.snapshot)) &&
-      evidence?.packageSha256 === record.sha256,
-  };
 }
 
 /** Reuse the verified install ledger; an official label never establishes distribution identity. */
@@ -8509,6 +8476,19 @@ async function installOrUpdateMarketGhostPackageLocked(
     const installed = previousRelId
       ? allInstalled.find(ghost => installedGhostPhysicalRelId(ghost) === previousRelId && ghost.namespace == null)
       : directInstalled;
+    const retainedMarketRecord = installed && expected.pendingMarketRecord?.source === 'market' &&
+      installed.namespaceState === 'unconfirmed' && typeof marketNamespace === 'string'
+      ? getPluginMarketLedger().installationForAuthorization({ ghostId: expected.ghostId, namespace: marketNamespace })
+      : null;
+    const recoverySource = installed && retainedMarketRecord &&
+      retainedMarketRecord.pluginId === expected.pluginId && !expected.sourceChanged &&
+      isRetainedSeedMarketTarget(installed, retainedMarketRecord, manager) &&
+      builtinSeedYieldsToStoreVersion(expected.ghostId, expected.version)
+      ? builtinSeedRootDirs().map(root => path.join(root, expected.ghostId))
+        .find(source => isTrustedBuiltinSeedSource(builtinSeedRootDirs(), expected.ghostId, source))
+      : undefined;
+    const seededMarketRecovery = recoverySource && expected.pluginId
+      ? { pluginId: expected.pluginId, sourceDir: recoverySource } : undefined;
     if (previousRelId && !installed) throwIpcError('PRECONDITION_FAILED', 'Simulator migration source disappeared');
     const placementError = organizationMarketPlacementError({
       scope: expected.pendingMarketRecord?.scope ?? null,
@@ -8644,6 +8624,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
+          ...(seededMarketRecovery ? { seededMarketRecovery } : {}),
           ...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),
           ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
           ...(previousRelId ? { simulatorMarketRelease: expected.simulatorMarketRelease } : {}),

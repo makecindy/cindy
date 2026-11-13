@@ -14,8 +14,18 @@ import {
   renameBuiltinTombstone,
 } from '../builtinGhostProvisioner.js';
 import { isGhostInstallLockHeld } from '../ghostInstallLock.js';
+import { builtinSeedStoreInstall, isRetainedSeedMarketTarget } from '../builtinSeedStoreInstall.js';
+import { GhostManager, CINDY_OFFICIAL_GHOST_TRUST } from '../GhostManager.js';
+import { createGhostInstallReceipt, GhostInstallReceiptStore } from '../ghostInstallReceipt.js';
+import { PluginMarketLedger } from '../../plugin-market/ledger.js';
+import { validateGhostManifest, ghostInstallApprovalToken } from '../../../shared/ghost.js';
+import { writeTestCindyPackage } from './cindyPackageFixture.js';
+import { createPluginInstanceRegistryStore, pluginInstanceRegistryPath, emptyPluginInstanceRegistry } from '../pluginInstanceRegistry.js';
+import { pluginInstallStoragePart } from '../../../shared/pluginIdentity.js';
+import { createHash } from 'node:crypto';
 
 const tempDirs: string[] = [];
+const managers: GhostManager[] = [];
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-builtin-locale-'));
@@ -24,10 +34,154 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  for (const manager of managers.splice(0)) manager.disposeNotificationIndex();
   vi.restoreAllMocks();
   await Promise.all(
     tempDirs.splice(0).map((dir) => fs.promises.rm(dir, { recursive: true, force: true })),
   );
+});
+
+// #10296, unit: existing tests inject the store verdict and miss the root-only
+// production adapter. Use real legacy directories, receipts, registry and ledger;
+// assert unchanged bytes/approval/storage identity after restart and seed removal.
+describe('builtin provisioning physical market identity', () => {
+  async function harness(namespace: string | null = 'xd', relId = 'builtin-test') {
+    const root = fs.realpathSync.native(await makeTempDir());
+    const repoRoot = path.join(root, 'installed');
+    const stateRoot = path.join(root, 'installed-install-state');
+    const seedRoot = path.join(root, 'seeds');
+    const seedDir = await writeMinimalSeed(seedRoot, 'builtin-test');
+    const installedDir = await writeMinimalSeed(path.dirname(path.join(repoRoot, ...relId.split('/'))), 'builtin-test');
+    await fs.promises.writeFile(path.join(installedDir, 'main.js'), '// market content');
+    const manifestBytes = fs.readFileSync(path.join(installedDir, 'ghost.json'));
+    const validated = validateGhostManifest(JSON.parse(manifestBytes.toString('utf8')));
+    if (!validated.ok) throw new Error(validated.reason);
+    const receipt = createGhostInstallReceipt({ manifest: validated.manifest, localeResources: {},
+      enabled: false, trust: CINDY_OFFICIAL_GHOST_TRUST, skillContentSha256: {},
+      packageSha256: 'b'.repeat(64), namespace });
+    const receipts = new GhostInstallReceiptStore(() => stateRoot);
+    await receipts.write(receipt, { relId });
+    const ledger = new PluginMarketLedger(path.join(root, 'market', 'ledger.v1.json'));
+    ledger.upsertInstallation({ pluginId: `c${'a'.repeat(24)}`, ghostId: 'builtin-test',
+      namespace, releaseId: 'release-1', version: '1.0.0', sha256: 'b'.repeat(64),
+      scope: namespace === null ? 'public' : 'organization', organizationId: namespace === null ? null : 'org-1',
+      source: 'market', installed: true, updatedAt: '2026-11-13T00:00:00.000Z',
+      rawManifestSha256: createHash('sha256').update(manifestBytes).digest('hex') });
+    const registry = emptyPluginInstanceRegistry();
+    registry.instances[pluginInstallStoragePart(relId)] = { instanceKey: pluginInstallStoragePart(relId),
+      contentRelId: relId, ghostId: 'builtin-test', namespace, namespaceState: 'confirmed',
+      pluginId: `c${'a'.repeat(24)}`, source: 'market', receiptRevision: receipt.revision,
+      packageSha256: receipt.packageSha256!, active: true };
+    const registryStore = createPluginInstanceRegistryStore(pluginInstanceRegistryPath(stateRoot));
+    registryStore.write(registry);
+    const manager = new GhostManager({ getRootDir: () => repoRoot,
+      isTrustedBundledId: id => id === 'builtin-test',
+      isTrustedBundledSource: (id, source) => id === 'builtin-test' && path.resolve(source) === seedDir,
+      readUnconfirmedConfirmationEvidence: instance => ({
+        marketRecords: [{ namespace, organizationId: 'org-1', scope: 'organization',
+          packageSha256: ledger.installationForAuthorization({ ghostId: instance.ghostId, namespace })?.sha256 }],
+        currentOrganization: { organizationId: 'org-1', orgSlug: 'xd' }, packageSha256: instance.packageSha256,
+      }),
+    });
+    managers.push(manager);
+    fs.writeFileSync(path.join(repoRoot, PROVISIONING_STATE_FILE), JSON.stringify({ removed: [], seeded: ['builtin-test'] }));
+    const deps = { seedRootDirs: [seedRoot], repoRootDir: repoRoot,
+      storeInstall: (id: string, dir: string) => builtinSeedStoreInstall(id, dir, { rootDir: repoRoot, manager, ledger }) };
+    return { ...deps, deps, seedRoot, seedDir, repoRoot, installedDir, stateRoot, registryStore, registry, manager, ledger, receipt, receipts, relId };
+  }
+
+  it.each(['0.9.0', '1.0.0', 'not-semver', '2.0.0'])('preserves a legacy organization install against seed %s', async version => {
+    const fixture = await harness();
+    const seed = JSON.parse(fs.readFileSync(path.join(fixture.seedDir, 'ghost.json'), 'utf8'));
+    fs.writeFileSync(path.join(fixture.seedDir, 'ghost.json'), JSON.stringify({ ...seed, version }));
+    const before = fixture.receipts.read(fixture.relId);
+    expect((await provisionBuiltinGhosts(fixture.deps)).updated).toEqual([]);
+    expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
+    expect(fixture.receipts.read(fixture.relId)).toEqual(before);
+    expect(fixture.manager.list()).toEqual([expect.objectContaining({ instanceKey: 'builtin-test', namespace: 'xd',
+      namespaceState: 'confirmed', enabled: false, approval: expect.objectContaining({ state: 'approved', revision: fixture.receipt.revision }) })]);
+    expect((await provisionBuiltinGhosts(fixture.deps)).approved).toEqual([]);
+  });
+
+  it.each(['audience', 'orphan'])('does not reclaim a legacy organization install after %s changes', async mode => {
+    const fixture = await harness();
+    if (mode === 'audience') fs.writeFileSync(path.join(fixture.seedRoot, 'provisioning.json'),
+      JSON.stringify({ ghosts: { 'builtin-test': { audience: { userIds: ['someone-else'] } } } }));
+    else {
+      await writeMinimalSeed(fixture.seedRoot, 'another-seed');
+      fs.renameSync(fixture.seedDir, path.join(path.dirname(fixture.seedRoot), 'withdrawn-seed'));
+    }
+    expect((await provisionBuiltinGhosts(fixture.deps)).removed).toEqual([]);
+    expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
+    expect(fixture.receipts.read(fixture.relId)).toMatchObject({ state: 'approved', receipt: { namespace: 'xd', enabled: false } });
+  });
+
+  it('keeps new-layout organization bytes separate while a newer root seed updates', async () => {
+    const fixture = await harness(null, '_ns/_root/builtin-test');
+    const orgDir = await writeMinimalSeed(path.join(fixture.repoRoot, '_ns', 'xd'), 'builtin-test');
+    fs.writeFileSync(path.join(orgDir, 'main.js'), '// independent organization');
+    const seed = JSON.parse(fs.readFileSync(path.join(fixture.seedDir, 'ghost.json'), 'utf8'));
+    fs.writeFileSync(path.join(fixture.seedDir, 'ghost.json'), JSON.stringify({ ...seed, version: '2.0.0' }));
+    expect((await provisionBuiltinGhosts(fixture.deps)).updated).toHaveLength(1);
+    expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// brain');
+    expect(fs.readFileSync(path.join(orgDir, 'main.js'), 'utf8')).toBe('// independent organization');
+  });
+
+  it.each(['ledger', 'binding', 'pending'])('keeps bytes and approval when %s evidence is unavailable', async failure => {
+    const fixture = await harness();
+    if (failure === 'ledger') fs.writeFileSync(path.join(path.dirname(fixture.stateRoot), 'market', 'ledger.v1.json'), '{broken');
+    else {
+      const instance = fixture.registry.instances['builtin-test']!;
+      if (failure === 'binding') instance.pluginId = `c${'c'.repeat(24)}`;
+      else instance.namespaceState = 'pending';
+      fixture.registryStore.write(fixture.registry);
+    }
+    const outcome = await provisionBuiltinGhosts(fixture.deps);
+    expect(outcome.updated).toEqual([]);
+    expect(outcome.approved).toEqual([]);
+    expect(outcome.retryPending).toBe(true);
+    expect(fixture.receipts.read(fixture.relId)).toMatchObject({ state: 'approved', receipt: { revision: fixture.receipt.revision } });
+    expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
+  });
+
+  it.each(['restore', 'wrong-source', 'changed-bytes'])('a retained organization overwritten by a root seed: %s', async mode => {
+    const fixture = await harness();
+    fixture.manager.list();
+    const seed = validateGhostManifest(JSON.parse(fs.readFileSync(path.join(fixture.seedDir, 'ghost.json'), 'utf8')));
+    if (!seed.ok) throw new Error('bad seed fixture');
+    // Reproduce the released publisher, including its root receipt rewrite.
+    await fixture.manager.runExclusiveMutation(async mutation => {
+      await mutation.publishTrustedBundledSeed('builtin-test', fixture.seedDir, { disabled: true });
+      await mutation.approveTrustedBundledInstall(seed.manifest, false, { sourceDir: fixture.seedDir });
+    });
+    const [overwritten] = fixture.manager.list();
+    expect(overwritten).toMatchObject({ namespace: 'xd', namespaceState: 'unconfirmed', enabled: false });
+    const record = fixture.ledger.installationForAuthorization({ ghostId: 'builtin-test', namespace: 'xd' })!;
+    expect(isRetainedSeedMarketTarget(overwritten!, record, fixture.manager)).toBe(true);
+    expect((await provisionBuiltinGhosts(fixture.deps)).approved).toEqual([]);
+    const packageFile = await writeTestCindyPackage(path.join(fixture.repoRoot, '..', 'restore.cindy'),
+      JSON.parse(fs.readFileSync(path.join(fixture.seedDir, 'ghost.json'), 'utf8')), { 'main.js': '// restored market' });
+    const inspected = await fixture.manager.inspect(packageFile, 'stored-release');
+    if ('rejection' in inspected) throw new Error(inspected.rejection.reason);
+    if (mode === 'changed-bytes') fs.writeFileSync(path.join(fixture.installedDir, 'main.js'), '// changed after approval');
+    const result = await fixture.manager.update(packageFile, {
+      namespace: 'xd', expectedInstalledInstanceId: 'builtin-test', manifestSource: 'stored-release',
+      expectedInstalledApproval: ghostInstallApprovalToken(overwritten!.approval),
+      expectedPackageSha256: inspected.packageSha256,
+      seededMarketRecovery: { pluginId: mode === 'wrong-source' ? 'another-plugin' : record.pluginId, sourceDir: fixture.seedDir },
+    });
+    if (mode !== 'restore') {
+      expect(result).toMatchObject({ rejection: { code: 'state-changed' } });
+      expect(fixture.receipts.read(fixture.relId)).toMatchObject({ state: 'approved', receipt: { namespace: null } });
+      return;
+    }
+    if ('rejection' in result) throw new Error(result.rejection.reason);
+    expect(result.ghost).toMatchObject({ dir: fixture.installedDir, instanceKey: 'builtin-test', enabled: false });
+    fixture.ledger.upsertInstallation({ ...record, sha256: inspected.packageSha256 });
+    const confirmed = await fixture.manager.confirmUpdatedInstanceNamespace(result.ghost);
+    expect(confirmed).toMatchObject({ namespace: 'xd', namespaceState: 'confirmed', instanceKey: 'builtin-test', enabled: false });
+    expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// restored market');
+  });
 });
 
 async function writeMinimalSeed(seedRoot: string, id: string): Promise<string> {
