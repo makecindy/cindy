@@ -62,6 +62,18 @@ it('does not dispatch a reset after its credential guard expires during startup'
   expect(methods).toEqual(['initialize', 'initialized']);
 });
 
+// Existing pooled accounts use synchronous proofs. Do not insert a new yield between proof and write.
+it('preserves synchronous guarded dispatch before the next microtask', async () => {
+  let methodsAtNextMicrotask: string[] = [];
+  await codexAccountRpc('/second', 'account/rateLimitResetCredit/consume', { idempotencyKey: 'key' }, () => {
+    queueMicrotask(() => {
+      methodsAtNextMicrotask = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+    });
+    return true;
+  });
+  expect(methodsAtNextMicrotask).toEqual(['initialize', 'initialized', 'account/rateLimitResetCredit/consume']);
+});
+
 // #10408, unit: filesystem/source checks are asynchronous. A Promise is not authorization;
 // inspect actual CLI writes, including connection termination while the proof is pending.
 it.each([true, false])('waits for an asynchronous dispatch proof (allowed: %s)', async (allowed) => {

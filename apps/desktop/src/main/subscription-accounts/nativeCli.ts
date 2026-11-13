@@ -229,8 +229,12 @@ export function codexAccountRpc(
     const send = (message: unknown) => child.stdin.write(JSON.stringify(message) + '\n');
     const dispatch = async () => {
       try {
-        if (canDispatch && !await canDispatch())
-          return finish(new Error('Codex account changed before dispatch'));
+        if (canDispatch) {
+          const allowed = canDispatch();
+          // Existing synchronous proofs and the write must stay in the same synchronous segment.
+          if (!(typeof allowed === 'boolean' ? allowed : await allowed))
+            return finish(new Error('Codex account changed before dispatch'));
+        }
         // An asynchronous credential/source check can outlive this control connection.
         if (!settled) send({ id: 2, method, params });
       } catch {
