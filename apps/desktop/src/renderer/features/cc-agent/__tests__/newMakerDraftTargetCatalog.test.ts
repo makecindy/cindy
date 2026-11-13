@@ -151,7 +151,8 @@ function harness(options: {
       current = typeof next === 'function' ? next(current) : next;
     },
     dlSeedKeyRef, dlSeedCapabilitiesRef: { current: null }, dlSeedDefaultsRef: { current: null },
-    dlRuntimeTouchedRef: { current: true }, skipDefaultsRefetchRef: { current: false },
+    dlRuntimeTouchedRef: { current: true }, dlExplicitChoiceRef: { current: false },
+    skipDefaultsRefetchRef: { current: false },
     wtBranchReadSeqRef: { current: 0 }, wtBranchWriteSeqRef: { current: 0 },
     wtBranchPreferenceSavingRef: { current: false }, wtBranchTargetRef: { current: null },
     wtBranchSyncRef: { current: null }, wtBranchPreferenceErrorRef: { current: false },
@@ -250,7 +251,8 @@ describe('Agent location chosen on a controlled new-task draft', () => {
       normalizeDbAgentKind, dbToMakerAgentKind, modelCatalogKey, patchDraft,
       effectiveAgentDeviceId: undefined, isDeviceLinkDraft: true, deviceLinkInitial: null,
       controlledModelRoute: { catalogHostDeviceId: 'task-device' },
-      dlRuntimeTouchedRef, dlSeedKeyRef, dlSeedCapabilitiesRef: { current: null },
+      dlRuntimeTouchedRef, dlExplicitChoiceRef: { current: false },
+      dlSeedKeyRef, dlSeedCapabilitiesRef: { current: null },
     });
     select({
       vendor: 'codex', providerId: 'source', modelId: 'chosen', effort: 'high', fast: false,
@@ -308,15 +310,23 @@ describe('new task model resolves against the catalog it will use', () => {
     usesDeviceCatalog?: boolean;
     rememberedModel?: string;
     rememberedProviderId?: string | null;
+    /** 记忆里的来源是用户选的,还是自动播种的(agentDeviceDraftMemory 一直写这个标记)。 */
+    rememberedChosenByUser?: boolean;
     modelVisibilityOverrides?: Record<string, boolean>;
   }): DraftModelCalibrationResult {
     const shared = {
       usesDeviceCatalog: options.usesDeviceCatalog !== false,
       capabilityAgentKind: 'pi',
       effectiveAgentDeviceId: options.usesDeviceCatalog === false ? undefined : 'share:abc',
+      // 真实记忆总是带这个标记(rememberAgentDeviceSelection 每次都写):true = 用户选的,
+      // false = 自动播种的。缺标记的老记忆按「用户选的」处理,与设备快照同一保守口径。
       recallAgentDeviceSelection: () =>
         options.rememberedModel || options.rememberedProviderId
-          ? { model: options.rememberedModel, providerId: options.rememberedProviderId ?? null }
+          ? {
+              model: options.rememberedModel,
+              providerId: options.rememberedProviderId ?? null,
+              modelChosenByUser: options.rememberedChosenByUser !== false,
+            }
           : null,
       chatPrefs: {
         model: options.draftModel, effort: 'medium', permissionMode: 'auto',
@@ -365,6 +375,24 @@ describe('new task model resolves against the catalog it will use', () => {
       rememberedModel: 'shared-model',
     });
     expect(result.model).toBe('shared-model');
+  });
+
+  // Codex review #9369:记忆里那家来源若是**自动播种**的(modelChosenByUser === false),
+  // 它就不是用户选的来源 —— 清单发现失败时应当让位给目录里健康的那家,而不是把首条消息
+  // 钉在发不出去的来源上。健康过滤里的那道「显式选择例外」只对用户真选过的那家生效。
+  it('yields an automatically seeded source that failed discovery to a healthy source', () => {
+    const failed = providerWithModel('auto-source', 'stale-model');
+    failed.modelDiscoveryFailure = { kind: 'unauthorized', at: '2026-11-13T00:00:00Z' };
+    const result = calibrate({
+      targetProviders: [failed, providerWithModel('healthy-source', 'healthy-model')],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'local-model',
+      rememberedModel: 'stale-model',
+      rememberedProviderId: 'auto-source',
+      rememberedChosenByUser: false,
+    });
+    expect(result.model).toBe('healthy-model');
+    expect(result.providerId).toBe('healthy-source');
   });
 
   it('falls back to the local default when the target catalog offers nothing', () => {
@@ -460,6 +488,8 @@ describe('new task model resolves against the catalog it will use', () => {
       targetProviders: ProviderView[];
       model: string;
       rememberedProviderId?: string | null;
+      /** 记忆里的来源是用户选的,还是自动播种的。 */
+      rememberedChosenByUser?: boolean;
       /** 用户为这个目标**明确选过**的来源(清单发现失败时也保留)。 */
       pinnedProviderId?: string | null;
       calibrated?: DraftModelCalibrationResult | null;
@@ -477,7 +507,11 @@ describe('new task model resolves against the catalog it will use', () => {
         effectiveAgentDeviceId: 'share:abc',
         recallAgentDeviceSelection: () =>
           options.rememberedProviderId
-            ? { model: options.model, providerId: options.rememberedProviderId }
+            ? {
+                model: options.model,
+                providerId: options.rememberedProviderId,
+                modelChosenByUser: options.rememberedChosenByUser !== false,
+              }
             : null,
         chatEligibleSourcesForModel,
         filterHealthyDraftProviders,
@@ -524,6 +558,22 @@ describe('new task model resolves against the catalog it will use', () => {
         model: 'shared-model',
         rememberedProviderId: 'xd',
       })).toBe('xd');
+    });
+
+    // Codex review #9369:记忆里那家若是**自动播种**的,就不是用户选的来源 —— 它不该在
+    // 最终来源的挑选里优先(那会让首条消息继续落在一家用户没选过的来源上)。
+    it('does not prefer an automatically seeded remembered source', () => {
+      expect(initialProvider({
+        targetProviders: [
+          providerWithModel('xd', 'shared-model'),
+          providerWithModel('anthropic', 'shared-model', {
+            access: { kind: 'subscription', product: 'Claude' },
+          }),
+        ],
+        model: 'shared-model',
+        rememberedProviderId: 'xd',
+        rememberedChosenByUser: false,
+      })).toBe('anthropic');
     });
 
     // Codex review #9369:清单发现失败(unauthorized / regionBlocked)的来源手里握的是陈旧
@@ -972,13 +1022,14 @@ describe('the source follows the final model', () => {
  */
 describe('the explicit source is the user\'s own choice', () => {
   function explicitPin(bindings: {
+    /** 用户**明确选过**模型 / 来源(不是「动过这份草稿」)。 */
     touched?: boolean;
     dlSel?: { providerId: string | null } | null;
     /** 快照 / agent-device 记忆(agent-device 下 deviceDraftDefaults 即 recall)。 */
     snapshot?: RemoteDraftDefaults | null;
   }): string | null {
     return callback<() => string | null>('explicitDraftProviderId', {
-      dlRuntimeTouchedRef: { current: bindings.touched ?? false },
+      dlExplicitChoiceRef: { current: bindings.touched ?? false },
       dlSel: bindings.dlSel ?? null,
       deviceDraftDefaults: bindings.snapshot ?? null,
     })();
@@ -1020,14 +1071,14 @@ describe('the explicit source is the user\'s own choice', () => {
  * (Codex review #9369 第十三轮):标记写成 true,自动来的那家会被下游当显式来源钉死。
  */
 describe('the agent-device memory records the choice marker honestly', () => {
-  function rememberFlag(touched: boolean): boolean | undefined {
+  function rememberFlag(explicitChoice: boolean): boolean | undefined {
     const spy = vi.fn();
-    effect('标记跟着「控制端动过这份草稿」走', {
+    effect('标记跟着「用户明确选过模型 / 来源」走', {
       isAgentDeviceDraft: true,
       effectiveAgentDeviceId: 'dev-1',
       capabilityAgentKind: 'pi',
       dlSel: { model: 'shared-model', providerId: 'seeded', effort: null, fastMode: false },
-      dlRuntimeTouchedRef: { current: touched },
+      dlExplicitChoiceRef: { current: explicitChoice },
       rememberAgentDeviceSelection: spy,
     })();
     expect(spy).toHaveBeenCalledTimes(1);
@@ -1365,5 +1416,90 @@ describe('the remote draft holder follows the displayed model', () => {
       effort: 'high',
       fastMode: false,
     });
+  });
+});
+
+// Codex review #9369:Permission / Effort / Fast 只说明「动过这份草稿」,不说明用户选定了
+// 来源。控制端动过草稿时把 holder 里那家当成显式来源钉死,自动播种的那家一旦断连 / 清单
+// 发现失败,首条消息就对着发不出去的来源发 —— 与本机草稿同一口径:只有明确选了模型 /
+// 来源才打标,只改思考档 / Fast 不打标。
+describe('the seeded source is pinned only by an explicit model or source choice', () => {
+  function harness() {
+    const dlRuntimeTouchedRef = { current: false };
+    const dlExplicitChoiceRef = { current: false };
+    const dlSel: { model: string; providerId: string | null; effort: Effort; fastMode: boolean } = {
+      model: 'shared-model', providerId: 'seeded-source', effort: 'medium', fastMode: false,
+    };
+    const setDlSel = vi.fn((update: unknown) => {
+      const next = typeof update === 'function'
+        ? (update as (prev: typeof dlSel) => typeof dlSel)(dlSel)
+        : update;
+      if (next) Object.assign(dlSel, next);
+    });
+    const common = {
+      dlRuntimeTouchedRef,
+      dlExplicitChoiceRef,
+      setDlSel,
+      sshCodexDraftHostId: null,
+      patchSshDraftSelection: vi.fn(),
+      usesDeviceCatalog: true,
+      capabilities: null,
+      deviceDraftDefaults: null,
+      capabilityAgentKind: 'pi',
+      agentCatalogProviders: [],
+      markDefaultTupleCustomized: vi.fn(),
+      patchActiveTuplePrefs: vi.fn(),
+      patchActivePrefs: vi.fn(),
+      pushActiveDraftPref: vi.fn(),
+    };
+    // 显式来源(用户为这个目标**明确选过**的那家)。没有显式选择时是 null。
+    const explicitProviderId = () => callback<() => string | null>('explicitDraftProviderId', {
+      dlExplicitChoiceRef,
+      dlSel,
+      // 被控端 / 记忆都说「用户没选过模型」→ 那家是自动默认,不是显式来源。
+      deviceDraftDefaults: { providerId: 'seeded-source', modelChosenByUser: false },
+    })();
+    return { dlRuntimeTouchedRef, dlExplicitChoiceRef, dlSel, common, explicitProviderId };
+  }
+
+  it('does not pin the seeded source after a permission-only edit', () => {
+    const h = harness();
+    callback<(mode: string) => void>('handlePermissionModeDidChange', {
+      ...h.common, isDeviceLinkDraft: true,
+    })('auto');
+    expect(h.dlRuntimeTouchedRef.current).toBe(true);
+    expect(h.dlExplicitChoiceRef.current).toBe(false);
+    expect(h.explicitProviderId()).toBeNull();
+  });
+
+  it('does not pin the seeded source after an effort-only edit', () => {
+    const h = harness();
+    callback<(effort: Effort) => void>('handleEffortDidChange', h.common)('low');
+    expect(h.dlRuntimeTouchedRef.current).toBe(true);
+    expect(h.dlExplicitChoiceRef.current).toBe(false);
+    expect(h.explicitProviderId()).toBeNull();
+  });
+
+  it('does not pin the seeded source after a Fast-only edit', () => {
+    const h = harness();
+    callback<(enabled: boolean) => void>('handleFastModeChange', h.common)(true);
+    expect(h.dlRuntimeTouchedRef.current).toBe(true);
+    expect(h.dlExplicitChoiceRef.current).toBe(false);
+    expect(h.explicitProviderId()).toBeNull();
+  });
+
+  it('pins the source once the user picks a model explicitly', () => {
+    const h = harness();
+    callback<(modelId: string) => void>('handleModelDidChange', h.common)('other-model');
+    expect(h.dlExplicitChoiceRef.current).toBe(true);
+    expect(h.explicitProviderId()).toBe('seeded-source');
+  });
+
+  it('pins the source once the user picks a source explicitly', () => {
+    const h = harness();
+    callback<(providerId: string | null) => void>('handleProviderDidChange', h.common)('picked-source');
+    expect(h.dlExplicitChoiceRef.current).toBe(true);
+    expect(h.dlSel.providerId).toBe('picked-source');
+    expect(h.explicitProviderId()).toBe('picked-source');
   });
 });

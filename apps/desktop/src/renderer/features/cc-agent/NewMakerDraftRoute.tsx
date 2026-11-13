@@ -1626,12 +1626,18 @@ export function NewMakerDraftRoute() {
       ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
       : null;
     const wantedModel = remembered?.model || chatPrefs.model;
+    // 只有**用户明确选过**的那家才钉住健康过滤:记忆里 modelChosenByUser === false 说明
+    // 那是自动播种的,不是他选的 —— 它断连 / 清单失败时应当让位给目录里健康的那家,而不是
+    // 把首条消息钉在发不出去的来源上(Codex review #9369)。用户真选过的那家保留:他选的
+    // 就该生效,执行端按这一家报不可用(全失败时 filterHealthyDraftProviders 自己退回完整候选)。
+    const rememberedProviderId =
+      remembered?.modelChosenByUser === true ? remembered.providerId ?? null : null;
     // 目标目录里「清单发现失败」的来源(unauthorized / regionBlocked 这类确定性失败)
     // 同样不能当默认值:首条消息必然失败。本机自动路径已经剔掉这类来源,目标目录这条路
     // 同一口径 —— 用户为这个目标记下的来源保留,全失败时退回完整候选。
     const healthyCatalogProviders = filterHealthyDraftProviders(
       targetSelectableProviders,
-      remembered?.providerId ?? null,
+      rememberedProviderId,
     );
     // 目标目录里这个型号**能不能路由**:目录里有这个型号 ≠ 能路由 —— 来源可能没连上、
     // 被停用、runtime 被关、或该型号条目被停用。只看「有没有」会让草稿停在一个路由不出去
@@ -1648,7 +1654,7 @@ export function NewMakerDraftRoute() {
       // (PR #1076 review)。用户上次为这个目标选的那家优先,否则订阅优先(与校准同口径)。
       return {
         model: wantedModel,
-        providerId: pickDraftProviderForModel(wantedSources, remembered?.providerId ?? null),
+        providerId: pickDraftProviderForModel(wantedSources, rememberedProviderId),
       };
     }
     const picked = calibrateDraftModel({
@@ -1660,7 +1666,8 @@ export function NewMakerDraftRoute() {
       // 等于把一个目标目录里没有的 id 钉死(校准直接短路,选择器留空)。
       chosenByUser: false,
       // 同理:上次选中的来源属于目标目录;本机草稿里那个来源对目标目录没有意义。
-      preferredProviderId: remembered?.providerId ?? null,
+      // 自动播种的那家不算「上次选中的来源」——它没被选过,不该在目标目录里继续优先。
+      preferredProviderId: rememberedProviderId,
       providersLoading: deviceProvidersLoading,
     });
     // 目标目录里没有可用模型(空 / 全不可用)→ null,让调用方退回本机默认。
@@ -1807,6 +1814,7 @@ export function NewMakerDraftRoute() {
     dlSeedCapabilitiesRef,
     dlSeedDefaultsRef,
     dlRuntimeTouchedRef,
+    dlExplicitChoiceRef,
     skipDefaultsRefetchRef,
     remoteDraftRevisionRef,
   } = remoteDefaults;
@@ -1847,15 +1855,17 @@ export function NewMakerDraftRoute() {
   // 记住这次对运行 Agent 的电脑的选择(仅本次运行)，切走再切回时恢复。
   useEffect(() => {
     if (isAgentDeviceDraft && effectiveAgentDeviceId && dlSel) {
-      // 标记跟着「控制端动过这份草稿」走:自动播种 / holder 同步落进 holder 的那条不是
+      // 标记跟着「用户明确选过模型 / 来源」走:自动播种 / holder 同步落进 holder 的那条不是
       // 用户选的,如实记 false —— 否则下一次渲染会把它当显式来源钉死(Codex review #9369)。
-      // 选择器 handler 都在 setDlSel 前把 dlRuntimeTouchedRef 置位,effect 读到的就是本次
+      // 只改权限 / 思考档 / Fast 也**不算**显式选择(那些 handler 只置 dlRuntimeTouchedRef),
+      // 与本机草稿同口径:patchVendorPrefs 收到显式 model 才打标,只改档位 / Fast 不打标。
+      // 选择器 handler 都在 setDlSel 前把 dlExplicitChoiceRef 置位,effect 读到的就是本次
       // 变更的来源;播种 effect 反而会把 ref 清零。
       rememberAgentDeviceSelection(
         effectiveAgentDeviceId,
         capabilityAgentKind,
         dlSel,
-        dlRuntimeTouchedRef.current,
+        dlExplicitChoiceRef.current,
       );
     }
   }, [isAgentDeviceDraft, effectiveAgentDeviceId, capabilityAgentKind, dlSel]);
@@ -1889,10 +1899,12 @@ export function NewMakerDraftRoute() {
   // 计费路径(provider-sharing §5.3)。没有明确选择时是 null:那时发现失败的来源不配当
   // 默认值,按健康口径剔掉。
   const explicitDraftProviderId = useMemo<string | null>(() => {
-    // 本次运行里用户动过这份草稿(选模型 / 选来源 / 统一选择器):holder 里的那家就是他
-    // 当场选的。选择记忆要等 effect 才写进外部 Map,这里不跟着 dlSel 走的话会永远停在
-    // 播种时的旧值 —— 刚选的那家赶不上下一次渲染,校准再把它改回去(Codex review #9369)。
-    if (dlRuntimeTouchedRef.current) return dlSel?.providerId ?? null;
+    // 本次运行里用户**明确选过模型 / 来源**(统一选择器、模型下拉、来源下拉):holder 里的
+    // 那家就是他当场选的。选择记忆要等 effect 才写进外部 Map,这里不跟着 dlSel 走的话会
+    // 永远停在播种时的旧值 —— 刚选的那家赶不上下一次渲染,校准再把它改回去(Codex review #9369)。
+    // 只改了权限 / 思考档 / Fast 不算:那不表达他选定了来源,把自动播种的那家钉死会让
+    // 首条消息对着发不出去的来源发(Codex review #9369)。
+    if (dlExplicitChoiceRef.current) return dlSel?.providerId ?? null;
     // 静止状态下看快照:被控端草稿快照(remoteDraftState)或 agent-device 的本机记忆
     // (deviceDraftDefaults 对 agent-device 就是 recall)里的 providerId 都不一定来自用户。
     // · 自动默认会把建议的那家落进被控端快照(applySuggestedDefaultTuple,不经用户手),
@@ -2387,9 +2399,13 @@ export function NewMakerDraftRoute() {
     const calibrated = remoteCatalogCalibration;
     const calibratedProviderId =
       calibrated && calibrated.model === draftInitialModel ? calibrated.providerId : null;
-    const rememberedProviderId = effectiveAgentDeviceId
-      ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)?.providerId ?? null
+    // 只有**用户明确选过**的那家才优先:记忆里 modelChosenByUser === false 说明那是自动
+    // 播种的,不是他选的 —— 它一失效就不该继续把首条消息钉在它身上(Codex review #9369)。
+    const remembered = effectiveAgentDeviceId
+      ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
       : null;
+    const rememberedProviderId =
+      remembered?.modelChosenByUser === true ? remembered.providerId ?? null : null;
     return pickDraftProviderForModel(
       sources,
       calibratedProviderId && sources.some((provider) => provider.id === calibratedProviderId)
@@ -2911,6 +2927,7 @@ export function NewMakerDraftRoute() {
             ),
           );
           dlRuntimeTouchedRef.current = false;
+          dlExplicitChoiceRef.current = false;
           // deviceId 变化会让 defaults effect 重跑;我们已经 inline 拉过了,跳过那一次避免覆盖。
           skipDefaultsRefetchRef.current = true;
         } else {
@@ -2950,6 +2967,7 @@ export function NewMakerDraftRoute() {
         dlSeedKeyRef.current = null;
         dlSeedCapabilitiesRef.current = null;
         dlRuntimeTouchedRef.current = false;
+        dlExplicitChoiceRef.current = false;
         setRemoteDraftState({ status: 'loading', value: null });
       }
 
@@ -3313,6 +3331,8 @@ export function NewMakerDraftRoute() {
       }
       if (usesDeviceCatalog) {
         dlRuntimeTouchedRef.current = true;
+        // 换模型 = 明确选了模型(与本机草稿 modelChosenByVendor 同口径):来源随之钉住。
+        dlExplicitChoiceRef.current = true;
         // 远程草稿:只改 dlSel,绝不写本地 newMakerDraft。capabilities 未就绪时退化为仅换 model。
         if (!capabilities) {
           setDlSel((prev) => (prev ? { ...prev, model: newModelId } : prev));
@@ -3451,6 +3471,8 @@ export function NewMakerDraftRoute() {
       if (sshCodexDraftHostId) return; // SSH Codex has only the host's native source.
       if (usesDeviceCatalog) {
         dlRuntimeTouchedRef.current = true;
+        // 换来源 = 明确选了来源:他选的那家即便清单发现失败也不静默换成别家计费路径。
+        dlExplicitChoiceRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, providerId: newProviderId } : prev));
         return;
       }
@@ -3524,6 +3546,7 @@ export function NewMakerDraftRoute() {
       // 跨引擎选择同一条修法)。
       const seedSwitchedCatalog = (targetCatalogDeviceId: string) => {
         dlRuntimeTouchedRef.current = true;
+        dlExplicitChoiceRef.current = true;
         dlSeedKeyRef.current = `${targetCatalogDeviceId}:${dbToMakerAgentKind(
           normalizeDbAgentKind(selection.vendor),
         )}`;
@@ -3573,10 +3596,13 @@ export function NewMakerDraftRoute() {
         dlSeedKeyRef.current = null;
         dlSeedCapabilitiesRef.current = null;
         dlRuntimeTouchedRef.current = false;
+        dlExplicitChoiceRef.current = false;
         patchDraft({ agentDeviceId: null, agentDeviceName: null });
       }
       if (usesDeviceCatalog && !switchesAgentDevice) {
         dlRuntimeTouchedRef.current = true;
+        // 面板里选中的一行自带来源:模型与来源都是他当场选的。
+        dlExplicitChoiceRef.current = true;
         // ★ 跨引擎选择必须**前置**把 seed key 推到目标引擎(2026-08-17 review 第三轮 G1)。
         //
         // 病根:上面的 switchVendor 改了 draft.vendor → 下一次渲染 capabilityAgentKind 跟着变 →
