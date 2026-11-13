@@ -6804,7 +6804,7 @@
         "sectionTitle": "Réseau Agent expérimental",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Affiche la topologie des connexions et l’activité récente. La connexion est chiffrée si Agent-Net est activé sur les deux appareils et qu’ils sont associés via Agent-Net. Les autres appareils conservent leur connexion habituelle. Ce réglage concerne uniquement cet ordinateur."
+          "hint": "Fonction expérimentale. Son utilisation est déconseillée pour le moment. Affiche la topologie des connexions et l’activité récente. La connexion est chiffrée si Agent-Net est activé sur les deux appareils et qu’ils sont associés via Agent-Net. Les autres appareils conservent leur connexion habituelle. Ce réglage concerne uniquement cet ordinateur."
         },
         "empty": "Pas encore d’autres appareils. Connectez-vous avec le même compte sur un autre ordinateur ou téléphone et il apparaîtra ici.",
         "stats": {
