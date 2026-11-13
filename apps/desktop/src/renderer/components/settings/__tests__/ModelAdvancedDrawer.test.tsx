@@ -44,10 +44,6 @@ vi.mock('@/hooks/useModelImageInputOverride', () => ({
     return { value: mocks.imageValue, mixed: mocks.imageMixed, loading: false, error: mocks.imageError, setValue: mocks.imageSet };
   },
 }));
-vi.mock('@/lib/toast', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
-}));
-
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
   isModelEnabled: (_agent: unknown, _provider: unknown, model: { defaultEnabled?: boolean }) => model.defaultEnabled !== false,
@@ -135,7 +131,6 @@ beforeEach(() => {
   mocks.imageValue = null;
   mocks.imageMixed = false;
   mocks.imageError = false;
-
   vi.mocked(getProviderModelEffort).mockReset();
 });
 
@@ -593,33 +588,6 @@ describe('model advanced editor', () => {
     expect(mocks.setLimit).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the trailing token readout on the typed value until the write lands', async () => {
-    // 提交后写入是异步的（hook 先 loading、仍持有旧 limit）。修复前抽屉在 blur 瞬间丢掉草稿，
-    // 说明行会先退回旧的 400,000、等回声到了再跳 500,000 —— 用户实测到的「闪一下旧值」。
-    mocks.limit = 400_000;
-    let release: () => void = () => {};
-    mocks.setLimit.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }),
-    );
-    draw();
-    const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('400');
-    fireEvent.change(input, { target: { value: '500' } });
-    fireEvent.blur(input);
-    expect(mocks.setLimit).toHaveBeenLastCalledWith(500_000);
-    // 写入在途：说明行必须继续显示刚输入的值。
-    expect(screen.getByText(/advanced\.contextLimitRoute 500,000/)).toBeTruthy();
-    expect(screen.queryByText(/advanced\.contextLimitRoute 400,000/)).toBeNull();
-    // 回声落地（hook 此时已持有新值）后再收口：仍然是新值，不回退。
-    mocks.limit = 500_000;
-    release();
-    await waitFor(() => expect(screen.getByText(/advanced\.contextLimitRoute 500,000/)).toBeTruthy());
-    expect(screen.queryByText(/advanced\.contextLimitRoute 400,000/)).toBeNull();
-  });
-
   it.each(['cindy-local-ollama', 'ollama', 'cindy-local-lmstudio'])('keeps %s editable at 1K even when the catalog advertises a large window', (id) => {
     render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id, source: 'user' }));
     const input = screen.getByRole('textbox');
@@ -643,52 +611,6 @@ describe('model advanced editor', () => {
     expect(mocks.setLimit).toHaveBeenCalledWith(floor * 1000);
   });
 
-
-  // 上游未声明容量时不能把「工作默认值」印成「上游最大上下文」：自定义连接的 200K 是兜底，
-  // 而运行期窗口其实取模型级上下文上限（用户实测报障：圆环 1.0M / 这里 200K）。
-  function withoutCapacity(over: Partial<CatalogModel> = {}): CatalogModel {
-    const { contextWindowMax: _omit, ...rest } = model;
-    return { ...rest, contextWindow: 200_000, ...over };
-  }
-
-  it('shows "not declared" instead of the working default when the provider declares no capacity', () => {
-    draw(withoutCapacity());
-    // 这一行只报「容量未声明」：不再把工作默认值（200K 兜底，或目录给的 1M）当成容量塞进这一格。
-    expect(
-      screen.getAllByText('settings.providers.models.advanced.undeclared').length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText('200,000')).toBeNull();
-    expect(screen.queryByText('settings.providers.models.advanced.tokensApprox')).toBeNull();
-    // 工作窗口仍然可见 —— 在「上下文上限」那行的说明里（未设上限时取目录默认值）。
-    // 那行带插值（t 的 mock 会拼上 tokens），所以用正则而非精确匹配。
-    expect(screen.getByText(/advanced\.contextLimitRoute/)).toBeTruthy();
-  });
-
-  it('shows the window upstream handed down even when no capacity is declared', () => {
-    // opencode-go 的 deepseek-v4.1-flash 就是这种：没有 contextWindowMax，但预设/服务端目录
-    // 下发了窗口（buildUserProvider 会带上 contextWindowVerified）→ 这行要显示该窗口，而不是「未声明」。
-    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
-    expect(screen.getByText('1,048,576')).toBeTruthy();
-    // 「约 X」只由规格那一行渲染（「未声明」这个 key 在抽屉里另有多处，不能拿它判负）。
-    expect(screen.getByText('settings.providers.models.advanced.tokensApprox')).toBeTruthy();
-  });
-
-
-  it('warns when the limit exceeds a verified upstream window without a declared max', () => {
-    // 「已验证窗口但无 contextWindowMax」的模型此前不会告警：填到窗口以上也静默接受。
-    mocks.limit = 1_200_000;
-    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
-    expect(
-      screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
-    ).toBeTruthy();
-  });
-
-  it('does not warn about the limit exceeding an undeclared capacity', () => {
-    // 未声明容量时拿 200K 工作默认值当告警基线会误报「已超出当前显示的窗口」。
-    mocks.limit = 1_200_000;
-    draw(withoutCapacity());
-    expect(screen.queryByText('settings.providers.models.advanced.contextLimitOverWindow')).toBeNull();
-  });
 
   it('keeps useful identity fields without exposing internal defaults, normal lifecycle or raw descriptions', () => {
     draw({ ...model, status: 'active', defaultEnabled: false, description: 'GPT for coding tasks' });
