@@ -29,7 +29,7 @@ function client() {
   return {
     getStatus: vi.fn(() => 'online'), getConnectionEpoch: vi.fn(() => 1), getPeerLinkGeneration: vi.fn(() => 1),
     getReliableSendQueueDepth: vi.fn(() => 0), canSendPush: vi.fn(() => true), sendPush: vi.fn(),
-    sendInvokeResult: vi.fn(), sendLinkAccept: vi.fn(), closeLink: vi.fn(), onFrame: vi.fn(),
+    sendInvokeResult: vi.fn(), sendLinkAccept: vi.fn(), closeLink: vi.fn(), onFrame: vi.fn(), onInboundPeerReleased: vi.fn(() => () => {}),
   };
 }
 

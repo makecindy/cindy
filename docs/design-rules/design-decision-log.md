@@ -1125,3 +1125,9 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 - **C-12（A）**：设置页里与其他控件同行的短选项下拉（并发上限、权重、文言文字体）新增 120px 窄档 `width="xs"`；高度用 `size`、宽度用 `width`，不再用 className 自定。
 
 现行规则见 `DESIGN.md` §4 Buttons、Desktop settings controls、Inputs & Forms、§7、§14.6、§15.18。
+
+## 2026-11-13 · 远程连接拓扑：Agent-Net 与 Device Link 用图标和紫色区分
+
+用户反馈拓扑图设备名下面的「Agent-Net」「Device Link」字号、颜色完全一样，只能逐字读，希望更好看、区分更明显。这一页的绿、蓝、红、橙都已表示状态（连着、有消息、要处理、忙碌），黄色此前已否决，协议不能再借这几种颜色。先在真实页面（`pnpm ui:check` 的 fleet 形状，一半 Agent-Net、一半 Device Link）对比了三种做法：A 只加图标（全灰）、B 图标 + 紫色、C 图块右下角紫色盾牌角标。用户选 B。
+
+落地：新增 `--remote-agent-net-accent`（浅色 `#7C5CFF`、深色 `#A993FF`），只用于协议标识。Agent-Net 是 lucide `Waypoints` 图标 + 名称，紫色、500 字重；Device Link 是 lucide `Link2` 图标 + 名称，保持原来的灰色。设备名下面那行与设备卡片的「路径」行共用 `ProtocolMark`。紫色不进连线、图块、光晕和圆点，不表示连接状态。被取代：设备名下面的协议只写文字、两种协议同色。现行规范见 `DESIGN.md §2`「Remote connection V2 topology」与 §10 Semantic Exemption Colors。

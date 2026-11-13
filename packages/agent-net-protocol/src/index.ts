@@ -192,7 +192,8 @@ export interface TransportModeProof {
 export function transportModePayload(p: Omit<TransportModeProof, 'signature'>): string {
   return JSON.stringify(['cindy-agent-net/transport-mode/2', p.v, p.deviceId, p.to, p.requestId, p.enabled, p.at]);
 }
-export interface DeviceMetadata { platform?: string; appVersion?: string; busy?: boolean; deviceName?: string; }
+/** Self-reported App/platform labels are for presentation and routing, never authorization. */
+export interface DeviceMetadata { platform?: string; app?: string; appVersion?: string; busy?: boolean; deviceName?: string; }
 export interface DeviceView extends DeviceMetadata {
   certificate: DeviceCertificate;
   name: string;

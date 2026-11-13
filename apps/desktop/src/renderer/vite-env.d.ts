@@ -127,6 +127,7 @@ interface DeviceLinkDeviceView {
   selfName?: string | null;
   deviceInfo?: DeviceLinkDeviceInfo | null;
   platform: string | null;
+  app?: string;
   appVersion: string | null;
   lastSeenAt: string | null;
   online: boolean;
@@ -153,6 +154,7 @@ interface DeviceLinkPresenceSnapshot {
   selfName?: string | null;
   deviceInfo?: DeviceLinkDeviceInfo | null;
   platform: string;
+  app?: string;
   appVersion: string;
   lastSeenAt: number;
   remoteControlEnabled: boolean;

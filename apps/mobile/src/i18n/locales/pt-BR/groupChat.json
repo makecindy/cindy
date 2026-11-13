@@ -319,6 +319,7 @@
     "memberLimit": "Uma conversa em grupo precisa de 2 a 6 amigos",
     "memberUnavailable": "Um destes amigos está indisponível. Escolha outro e tente novamente.",
     "mentionUnavailable": "Um membro mencionado não está mais disponível. Escolha quem mencionar antes de enviar novamente.",
+    "mentionAmbiguous": "Há mais de um membro chamado “{{name}}”. Escolha quem você quer na lista de @.",
     "notFound": "Esta conversa em grupo não existe mais",
     "hostNotReady": "Cindy ainda está se preparando. Tente novamente em instantes.",
     "planOpen": "Uma divisão de trabalho está em andamento. Conclua ou pare antes de iniciar outra.",

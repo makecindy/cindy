@@ -11,7 +11,19 @@ export function decodeGzipBase64Text(contentBase64: string): string {
 
 /** 带输出上限的解码：边解边计数，超过 maxChars 立即中止，不先整段展开。 */
 export function decodeGzipBase64TextBounded(contentBase64: string, maxChars: number): string {
-  const inflator = new Inflate({ to: 'string' });
+  return inflateBase64TextBounded(contentBase64, maxChars, new Inflate({ to: 'string' }), 'gzip');
+}
+
+/**
+ * device-link 推送编码（push-deflate）：raw DEFLATE + 预置字典（ASCII 字符串），同样带输出上限。
+ * 推送须按序同步交给业务，这里在调用线程解码；被控端只压不超过 512 KiB 的推送，
+ * maxChars（PUSH_TRANSFER_MAX_CHARS）同时限住单条最坏的解压耗时与内存。
+ */
+export function decodeDeflateRawBase64TextBounded(contentBase64: string, maxChars: number, dictionary: string): string {
+  return inflateBase64TextBounded(contentBase64, maxChars, new Inflate({ to: 'string', raw: true, dictionary }), 'deflate');
+}
+
+function inflateBase64TextBounded(contentBase64: string, maxChars: number, inflator: Inflate, format: string): string {
   const chunks: string[] = [];
   let length = 0;
   // `to: 'string'` delivers text chunks at runtime; @types/pako only declares binary data.
@@ -23,7 +35,7 @@ export function decodeGzipBase64TextBounded(contentBase64: string, maxChars: num
     chunks.push(text);
   };
   inflator.push(base64ToUint8Array(contentBase64), true);
-  if (inflator.err) throw new Error(inflator.msg || 'gzip decode failed');
+  if (inflator.err) throw new Error(inflator.msg || `${format} decode failed`);
   return chunks.join('');
 }
 

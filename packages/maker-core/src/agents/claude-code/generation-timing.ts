@@ -223,12 +223,17 @@ export function observeClaudeSpeedEvent(
   const tools = state.tokenSpeedToolByIndex;
   const index = typeof event.index === 'number' ? event.index : 0;
   switch (event.type) {
-    case 'message_start':
+    case 'message_start': {
       tools.clear();
       // Claude models stream a summary; other providers behind the same protocol stream
       // their thinking in full.
-      speed.assumeThinkingSummaryScale(/claude/i.test(event.message?.model ?? '') ? CLAUDE_THINKING_SUMMARY_SCALE : 1);
+      const isClaudeModel = /claude/i.test(event.message?.model ?? '');
+      speed.assumeThinkingSummaryScale(
+        isClaudeModel ? CLAUDE_THINKING_SUMMARY_SCALE : 1,
+        isClaudeModel,
+      );
       return false;
+    }
     case 'content_block_start': {
       const type = event.content_block?.type;
       speed.start(now, type === 'thinking' || type === 'redacted_thinking' ? 'thinking' : 'visible');

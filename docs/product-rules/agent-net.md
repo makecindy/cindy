@@ -70,6 +70,18 @@
 ## 节点与能力
 
 - 用 Cindy 登录的每个 App 实例都是节点，同一台机器可以有多个节点。
+- **App 自报标识（2026-11-13 用户确认）。** presence 可选 `app` 标明节点来自哪个 App：
+  Cindy 桌面与手机显式报告 `cindy`，Cindy Friend 报告 `cindy-friend`；缺省（旧版 Cindy、V1 目录）
+  按 `cindy` 处理。值沿用 `ID_PATTERN` 的字符规则，最长 64 字符，允许未来未知 App。
+  与 `platform` 一样，它只用于显示和行为分流，不参与登录、证书准入或权限授予。
+- App 标识保存到设备目录元数据，离线及中转重启后仍保留；不放进在线 capabilities，不改变固定 11 字段设备证书。
+  只给 Cindy 电脑提供可控目标、远程桌面、远程控制授权请求、词典对等同步和拓扑远程切换；
+  其他 App 可以继续按现有授权作为控制端，不能因系统是 macOS / Windows / Linux 被当作另一台 Cindy 电脑。
+- 拓扑与「我的设备」对非 Cindy App 显示「App 名 · 设备名」，如「Cindy Friend · 主机名」；
+  已知名称走 i18n，未知标识原样显示，Cindy 与旧记录保持现有设备名。图标及手机/电脑外形仍由 `platform` 决定；
+  非 Cindy App 未开启被控不算异常，不显示「需要更新 Cindy」。协议与混版本验证见
+  [App 标识协议记录](../dev-rules/protocol-compatibility/agent-net-app-metadata.md)，界面场景为
+  `pnpm ui:check --page remote-connection-v2 --case app-nodes,app-nodes-list --theme all`。
 - 节点发布能力清单：硬件、服务及版本、状态。用户和 Agent 看到的是同一份。
 - 硬件接入不绑定具体产品：完整节点、轻节点、微节点、桥接子节点共用一份协议。
 - 摄像头、麦克风、位置这类能力默认关闭，由这台设备的主人逐项开启。

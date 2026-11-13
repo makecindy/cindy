@@ -13,7 +13,7 @@
  * controllerDeviceId 由 server 填的 `env.src` 提供(防伪造)。
  */
 
-import type { Topic } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1, type Topic } from '@cindy/device-link';
 import type { HistoryPageShape } from '../localDb/ipc/historyViewReader';
 
 /** legacy 老控制端(link-open)订阅的「全部」topic 标记。 */
@@ -60,6 +60,22 @@ interface HistoryViewRecord {
   shapeSeq: number;
 }
 const historyViewsByController = new Map<string, Map<string, HistoryViewRecord>>();
+/**
+ * history-relink-folded-v1: sessions that were read and folded when the controller's link
+ * ended. They stay folded until the next link's read of that session finishes (or fails),
+ * as if the link had not changed; the controller re-reads them after reconnecting. Removed on
+ * that read, on unsubscribe and when the controller is forgotten. Bounded per controller.
+ */
+const foldedAcrossLink = new Map<string, Set<string>>();
+const MAX_FOLDED_ACROSS_LINK = 256;
+const MAX_FOLDED_ACROSS_LINK_CONTROLLERS = 64;
+
+/** A raw list read or a failed page read: this controller gets full pushes for the session again. */
+export function forgetFoldedAcrossLink(deviceId: string, sessionId: string): void {
+  const sessions = foldedAcrossLink.get(deviceId);
+  if (!sessions?.delete(sessionId) || sessions.size > 0) return;
+  foldedAcrossLink.delete(deviceId);
+}
 
 /** Capture this subscription before reading; only its successful result may enable filtering. */
 export function prepareHistoryView(deviceId: string, sessionId: string) {
@@ -72,10 +88,13 @@ export function prepareHistoryView(deviceId: string, sessionId: string) {
   const isCurrent = () => historyViewsByController.get(deviceId)?.get(sessionId) === view;
   return {
     disable(): void {
-      if (isCurrent()) views.delete(sessionId);
+      if (!isCurrent()) return;
+      views.delete(sessionId);
+      forgetFoldedAcrossLink(deviceId, sessionId);
     },
     update(liveKeys: readonly string[], latest?: { workLines: boolean; shape?: HistoryPageShape }): void {
       if (!isCurrent()) return;
+      forgetFoldedAcrossLink(deviceId, sessionId);
       view.liveKeys = [...liveKeys];
       view.ready = true;
       if (latest) {
@@ -92,8 +111,26 @@ export function prepareHistoryView(deviceId: string, sessionId: string) {
   };
 }
 
-/** History opt-in belongs to one accepted link, unlike remembered routing topics. */
+/**
+ * History opt-in belongs to one accepted link, unlike remembered routing topics. A controller
+ * that declared history-relink-folded-v1 keeps its folded sessions folded until it re-reads.
+ */
 export function clearHistoryViews(deviceId: string): void {
+  const views = historyViewsByController.get(deviceId);
+  if (views && controllerSupports(deviceId, CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1)) {
+    const kept = foldedAcrossLink.get(deviceId) ?? new Set<string>();
+    for (const [sessionId, view] of views) {
+      if (!view.ready || view.liveKeys.some((key) => view.expanded.has(key))) continue;
+      kept.delete(sessionId);
+      kept.add(sessionId);
+      if (kept.size > MAX_FOLDED_ACROSS_LINK) kept.delete(kept.values().next().value!);
+    }
+    if (kept.size > 0) {
+      foldedAcrossLink.delete(deviceId);
+      foldedAcrossLink.set(deviceId, kept);
+      if (foldedAcrossLink.size > MAX_FOLDED_ACROSS_LINK_CONTROLLERS) foldedAcrossLink.delete(foldedAcrossLink.keys().next().value!);
+    }
+  }
   historyViewsByController.delete(deviceId);
 }
 
@@ -115,6 +152,15 @@ export function recordHistoryWorkPatch(deviceId: string, sessionId: string, seq:
   view.shape = shape;
   view.shapeSeq += 1;
   return true;
+}
+
+/** Folded across a link change and not re-read yet on the current link (see foldedAcrossLink). */
+export function keepsFoldedAcrossLink(deviceId: string, sessionId: string): boolean {
+  // Rechecked per link: a controller that came back without the declaration (older build) keeps
+  // the existing behavior.
+  return foldedAcrossLink.get(deviceId)?.has(sessionId) === true
+    && historyViewsByController.get(deviceId)?.get(sessionId)?.ready !== true
+    && controllerSupports(deviceId, CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1);
 }
 
 export function projectsHistoryDetails(deviceId: string, sessionId: string): boolean {
@@ -244,7 +290,9 @@ export function getControllerTopics(deviceId: string): string[] {
 /** 取消订阅指定 topics;该控制端 topic 清空后整条移除。空 topics 为 no-op。 */
 export function unsubscribe(deviceId: string, topics: readonly string[]): void {
   for (const topic of topics) {
-    if (topic.startsWith('session:')) historyViewsByController.get(deviceId)?.delete(topic.slice(8));
+    if (!topic.startsWith('session:')) continue;
+    historyViewsByController.get(deviceId)?.delete(topic.slice(8));
+    forgetFoldedAcrossLink(deviceId, topic.slice(8));
   }
   if (historyViewsByController.get(deviceId)?.size === 0) historyViewsByController.delete(deviceId);
   const e = registry.get(deviceId);
@@ -278,6 +326,7 @@ export function clearController(deviceId: string): boolean {
 /** 显式撤销/账号边界使用：释放 active topics，并删除断线恢复状态。 */
 export function forgetKnownController(deviceId: string): void {
   clearController(deviceId);
+  foldedAcrossLink.delete(deviceId);
   knownControllerIds.delete(deviceId);
   rememberedTopicsByController.delete(deviceId);
   rememberedCapabilitiesByController.delete(deviceId);
@@ -286,6 +335,7 @@ export function forgetKnownController(deviceId: string): void {
 /** 清空所有订阅(登出 / 关被控 / 退出)。 */
 export function clearAll(): void {
   historyViewsByController.clear();
+  foldedAcrossLink.clear();
   const held = new Set<StoredTopic>();
   for (const e of registry.values()) for (const t of e.topics) held.add(t);
   registry.clear();
@@ -378,6 +428,7 @@ export function getUpdateRelaunchControllers(): ActiveController[] {
 export const __testing = {
   reset(): void {
     historyViewsByController.clear();
+    foldedAcrossLink.clear();
     registry.clear();
     knownControllerIds.clear();
     rememberedTopicsByController.clear();

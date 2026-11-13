@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 

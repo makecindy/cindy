@@ -6804,7 +6804,7 @@
         "sectionTitle": "Rede experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Mostra a topologia das conexões e a atividade recente. A conexão é criptografada quando os dois dispositivos ativam o Agent-Net e foram pareados pelo Agent-Net. Os demais dispositivos usam a conexão habitual. Aplica-se apenas a este computador."
+          "hint": "Recurso experimental. O uso não é recomendado no momento. Mostra a topologia das conexões e a atividade recente. A conexão é criptografada quando os dois dispositivos ativam o Agent-Net e foram pareados pelo Agent-Net. Os demais dispositivos usam a conexão habitual. Aplica-se apenas a este computador."
         },
         "empty": "Ainda não há outros dispositivos. Entre com a mesma conta em outro computador ou celular e ele aparecerá aqui.",
         "stats": {
@@ -7070,7 +7070,11 @@
         "remoteSessionEnded": "O dispositivo remoto encerrou esta sessão"
       },
       "control": "Controle",
-      "standbyHint": "Outra instância do Cindy neste computador está usando a conexão remota. Feche-a e esta instância assumirá automaticamente."
+      "standbyHint": "Outra instância do Cindy neste computador está usando a conexão remota. Feche-a e esta instância assumirá automaticamente.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -7973,6 +7977,7 @@
         "install": "Instalar",
         "details": "Detalhes",
         "detailsAria": "Ver detalhes de {{name}}",
+        "loadingDetails": "Carregando detalhes…",
         "update": "Atualizar pelo marketplace",
         "updateTo": "Atualizar para v{{version}}",
         "installed": "Instalado",
@@ -11477,6 +11482,7 @@
         "memberLimit": "Uma conversa em grupo precisa de 2 a 6 amigos",
         "memberUnavailable": "Um destes amigos está indisponível. Escolha outro e tente novamente.",
         "mentionUnavailable": "Um membro mencionado não está mais disponível. Escolha quem mencionar antes de enviar novamente.",
+        "mentionAmbiguous": "Há mais de um membro chamado “{{name}}”. Escolha quem você quer na lista de @.",
         "notFound": "Esta conversa em grupo não existe mais",
         "hostNotReady": "Cindy ainda está se preparando. Tente novamente em instantes.",
         "planOpen": "Uma divisão de trabalho está em andamento. Conclua ou pare antes de iniciar outra.",
@@ -21654,8 +21660,8 @@
   "modelGroups": {
     "title": "Grupos de modelos",
     "description": "Combine várias fontes que já tem em Provedores em uma única opção. Escolha-a em “Grupos de modelos” no seletor de modelos e a Cindy decide qual fonte usar.",
-    "routes": "Rotas",
-    "routesDescription": "Uma rota contém várias fontes. Cada nova tarefa escolhe uma segundo a regra da rota.",
+    "routes": "Modos",
+    "routesDescription": "Um modo contém várias fontes. Cada nova tarefa escolhe uma segundo a regra do modo.",
     "sourceCount_one": "{{count}} fonte",
     "sourceCount_many": "{{count}} fontes",
     "sourceCount_other": "{{count}} fontes",
@@ -21678,8 +21684,10 @@
       }
     },
     "picker": {
-      "empty": "Ainda não há grupos de modelos. Combine várias fontes em uma rota nas Configurações para a escolher aqui.",
-      "manage": "Gerenciar grupos de modelos"
+      "empty": "Ainda não há grupos de modelos. Combine várias fontes em um modo nas Configurações para escolhê-lo aqui.",
+      "manage": "Gerenciar grupos de modelos",
+      "switched": "“{{name}}” trocou esta tarefa para {{model}}",
+      "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado."
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
@@ -21691,7 +21699,7 @@
       "soonestUntil": "Todas as fontes esgotaram a cota; esta recupera primeiro ({{reset}})",
       "standby": "Desta vez não é a vez dela",
       "standbyQuota": "Restam {{left}}% da cota, redefinida só a {{reset}}, por isso fica reservada",
-      "off": "Desativada nesta rota",
+      "off": "Desativada neste modo",
       "unavailable": "Sem conexão, ou este modelo não pode ser escolhido agora",
       "limited": "Cota esgotada",
       "limitedUntil": "Cota esgotada até {{reset}}",
@@ -21705,10 +21713,10 @@
       "separator": "; "
     },
     "settings": {
-      "newRoute": "Nova rota",
-      "newRouteName": "Nova rota",
-      "routesEmpty": "Ainda não há rotas. Crie uma e adicione várias fontes.",
-      "scopeNote": "Os grupos de modelos aplicam-se às novas tarefas iniciadas neste computador. A fonte é escolhida no início e não muda durante a tarefa.",
+      "newRoute": "Novo modo",
+      "newRouteName": "Novo modo",
+      "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",
+      "scopeNote": "Os grupos de modelos aplicam-se às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher um numa tarefa em andamento troca uma vez, na hora; depois ela não troca sozinha.",
       "back": "Voltar aos grupos de modelos",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
@@ -21720,14 +21728,14 @@
       "sources": "Fontes que pode usar",
       "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
       "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
-      "sourcesFull": "Uma rota aceita até {{count}} fontes.",
+      "sourcesFull": "Um modo aceita até {{count}} fontes.",
       "addSource": "Adicionar fonte",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem conexão",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",
-      "remove": "Remover desta rota",
-      "useSource": "Permitir que esta rota use {{name}}",
+      "remove": "Remover deste modo",
+      "useSource": "Permitir que este modo use {{name}}",
       "try": {
         "title": "Experimentar",
         "hint": "Veja qual fonte uma nova tarefa usaria agora. Nada é enviado e não se gasta cota.",
@@ -21735,11 +21743,11 @@
         "picked": "Usar esta",
         "standby": "De reserva",
         "skipped": "Ignorada",
-        "unavailable": "Nenhuma fonte desta rota pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
+        "unavailable": "Nenhuma fonte deste modo pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
       },
-      "deleteRoute": "Excluir esta rota",
+      "deleteRoute": "Excluir este modo",
       "deleteRouteConfirmTitle": "Excluir “{{name}}”?",
-      "deleteRouteConfirmDescription": "As exceções por horário de outras rotas que mudam para ela também são excluídas. As tarefas já iniciadas não são afetadas.",
+      "deleteRouteConfirmDescription": "As exceções por horário de outros modos que mudam para ele também são excluídas. As tarefas já iniciadas não são afetadas.",
       "delete": "Excluir",
       "cancel": "Cancelar",
       "saveFailed": "Não foi possível salvar. Tente novamente.",
@@ -21760,17 +21768,17 @@
         "addHours": "Adicionar",
         "sameHour": "O início e o fim não podem ser a mesma hora.",
         "full": "Até {{count}} exceções.",
-        "needOtherRoute": "Crie outra rota para poder mudar para ela por horário."
+        "needOtherRoute": "Crie outro modo para poder mudar para ele por horário."
       }
     },
     "overview": {
       "mapTitle": "Como as novas tarefas escolhem um modelo",
-      "mapDescription": "Da esquerda para a direita: a rota que segue e a fonte em que termina. Clique em uma rota para alterá-la.",
+      "mapDescription": "Da esquerda para a direita: o modo que segue e a fonte em que termina. Clique em um modo para alterá-lo.",
       "columnSources": "Fontes",
       "columnEmpty": "Nenhum ainda",
-      "openRoute": "Abrir a rota “{{name}}”",
+      "openRoute": "Abrir o modo “{{name}}”",
       "recentTitle": "Escolhas recentes",
-      "recentEmpty": "Nenhuma tarefa usou uma rota ainda.",
+      "recentEmpty": "Nenhuma tarefa usou um modo ainda.",
       "keptOriginal": "Não havia nenhum modelo disponível, então a tarefa manteve o modelo que você tinha escolhido.",
       "keptOriginalShort": "Seu modelo foi mantido",
       "latest": "O caminho que a última tarefa seguiu"

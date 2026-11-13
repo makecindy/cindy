@@ -834,6 +834,9 @@ function isEmptyUsage(value: unknown): boolean {
 /** 对方错误还原成本机能识别的错误(保留类名，供 Maker 判断登录失效等)。 */
 export function localizeRemoteError(error: unknown): Error {
   if (error instanceof RemoteAgentRemoteError) {
+    // The starter must distinguish M's confirmed startup rejection from local
+    // preparation/transport failures before retaining a recovery grant.
+    if (error.phase === 'start') return error;
     const local = new Error(error.message);
     local.name = error.name;
     return local;

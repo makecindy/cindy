@@ -401,6 +401,16 @@ it('retains notification capability and confirmed mode from a computer', () => {
   expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
 });
 
+// Unit / #10345: remote-host parsing must retain the stable anchor, never confuse it with elapsed work.
+it('retains a remote execution timeline anchor independently of elapsed start', () => {
+  for (const startedAt of [undefined, 60_000]) {
+    const parsed = parseBotGroupChatData(chatData({ round: { status: 'running', canContinue: false,
+      speakers: [{ botId: 'abu', sessionId: null, executionId: 'run', activity: 'reply', timelineAt: 40_000, startedAt }] } }))!;
+    expect(parsed.round.speakers[0]).toMatchObject({ timelineAt: 40_000 });
+    expect(parsed.round.speakers[0]?.startedAt).toBe(startedAt);
+  }
+});
+
 // Unit/protocol: missing fallbackMarkdown discarded the new native fixture's rich block.
 // Existing fixtures bypassed getRemoteResource; validate this scene via the real resource normalizer.
 it('opens the execution acceptance scene through the actual remote resource reader', async () => {
@@ -408,4 +418,14 @@ it('opens the execution acceptance scene through the actual remote resource read
   const resource = await getRemoteResource(async <T,>(_device: string, channel: string, args?: unknown[]) =>
     groupExecutionVisualFixture(channel, args ?? []) as T, { deviceId: 'mock', deviceName: 'Mock' }, ref, 'zh-CN', ['bot-group-chat']);
   expect(botGroupChatDataFromResource(resource)?.round.speakers).toHaveLength(4);
+});
+
+// Unit: the remote resource previously discarded execution source/thread routing.
+it('preserves topic ownership and unresolved sources across the computer bridge', () => {
+  const round = { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's1', activity: 'reply', sourceMessageId: 'reply', threadRootId: 'topic' },
+    { botId: 'abu', sessionId: 's2', activity: 'reply', sourceMessageId: 'main', threadRootId: null },
+    { botId: 'abu', sessionId: 's3', activity: 'reply', sourceMessageId: 'unknown' },
+  ] };
+  expect(parseBotGroupChatData({ ...chatData(), round })?.round.speakers).toEqual(round.speakers);
 });

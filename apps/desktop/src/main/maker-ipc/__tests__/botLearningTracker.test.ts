@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createBotLearningTracker } from '../botLearningTracker.js';
 import { botLearningRows } from '@cindy/maker-shared/bot-learning';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createProjectMemoryReceipts } from '../botProjectLearning.js';
 const memory = {
   kind: 'memory' as const,
   key: 'preference',
@@ -14,6 +18,64 @@ const skill = {
   action: 'updated' as const,
 };
 describe('teammate learning receipt ownership', () => {
+  // PR #10294: native file tools bypassed memory.beginWrite. Real files + production tracker
+  // protect persisted created/updated feedback on the original bubble; read-only/invalid files
+  // must not invent saves. Unit, minimal input: one old shard and one new shard, no MCP.
+  it('publishes confirmed native file changes on the original reply only', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-learning-'));
+    try {
+      const dir = path.join(root, '.cindy', 'memory');
+      await mkdir(dir, { recursive: true });
+      const shard = (body: string) => `---\ntitle: Tea\ndescription: Preferred drink\ntype: user\n---\n${body}`;
+      await writeFile(path.join(dir, 'user_tea.md'), shard('oolong'));
+      const read = vi.fn(await createProjectMemoryReceipts(root));
+      const tracker = createBotLearningTracker(), publish = vi.fn();
+      tracker.markProjectTeammate('s', read);
+      tracker.observe('s', 'i:1', publish);
+      await writeFile(path.join(dir, 'user_tea.md'), shard('sencha'));
+      await writeFile(path.join(dir, 'user_new.md'), shard('jasmine'));
+      // Another queued input rehydrates unchanged resources while this turn is still busy.
+      // It must neither scan nor replace the pre-write reader used for this reply.
+      const queuedReader = vi.fn(() => createProjectMemoryReceipts(root));
+      await tracker.prepareProjectTeammate('s', queuedReader);
+      expect(queuedReader).not.toHaveBeenCalled();
+      // Even a direct later registration cannot change an already-observed turn's reader.
+      tracker.markProjectTeammate('s', await createProjectMemoryReceipts(root));
+      await writeFile(path.join(dir, 'user_partial.md'), '---\ntitle: unfinished');
+      await writeFile(path.join(dir, 'README.md'), 'maintenance');
+      expect(publish).not.toHaveBeenCalled();
+      tracker.seal('s', 'i:1', 'reply');
+      expect(read).toHaveBeenCalledTimes(1);
+      await read.mock.results[0].value;
+      expect(publish).toHaveBeenCalledWith('reply', [
+        { kind: 'memory', key: 'user_new.md', title: 'Tea', action: 'created' },
+        { kind: 'memory', key: 'user_tea.md', title: 'Tea', action: 'updated' },
+      ]);
+      publish.mockClear();
+      tracker.markProjectTeammate('s', read);
+      tracker.observe('s', 'i:2', publish);
+      // Pi compaction writes an internal digest during an otherwise read-only turn.
+      // It is hidden by the memory settings, so it must not create a curated-save receipt.
+      await writeFile(path.join(dir, 'digest_compaction.md'),
+        '---\ntitle: Compaction\ndescription: Internal summary\ntype: digest\n---\nInternal only');
+      tracker.seal('s', 'i:2', 'next');
+      await read.mock.results[1].value;
+      expect(publish).not.toHaveBeenCalled();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('drops an ambiguous native snapshot when another turn has already begun', async () => {
+    let complete!: (receipts: typeof memory[]) => void;
+    const read = () => new Promise<typeof memory[]>(resolve => { complete = resolve; });
+    const tracker = createBotLearningTracker(), publish = vi.fn();
+    tracker.markProjectTeammate('s', read);
+    tracker.observe('s', 'i:1', publish);
+    tracker.seal('s', 'i:1', 'old');
+    tracker.observe('s', 'i:2', publish);
+    complete([memory]);
+    await Promise.resolve();
+    expect(publish).not.toHaveBeenCalled();
+  });
   it('withholds early saves, then publishes both rows on the corresponding reply', () => {
     const tracker = createBotLearningTracker(),
       publish = vi.fn();

@@ -48,6 +48,7 @@ import {
   setProviderViewsReader,
   resolveImplicitProviderOAuthRouteDecision,
   providerRoutingForModel,
+  sessionProviderRoutingForModel,
   resolveVisionBackendRoute,
   rewriteImplicitModelIdForRoute,
   rewriteSessionModelIdForRoute,
@@ -200,6 +201,31 @@ describe('Codex local auth policy', () => {
     expect(await resolveCodexLocalAuthPolicy('openai', 'gpt-5.4')).toBe('legacy-shared');
     expect(await resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('isolated');
     expect(await resolveCodexLocalAuthPolicy('xai', 'xai/grok-4.3')).toBe('legacy-shared');
+  });
+});
+
+// Unit: per-model Responses selection used to skip exec adaptation on Chat
+// connections. Explicit capabilities and native subscription routes must survive.
+describe('Codex per-model custom-tool capability', () => {
+  it.each([
+    { capability: undefined, authStrategy: 'oauth-token', source: 'user', expected: false },
+    { capability: true, authStrategy: 'api-key-header', source: 'user', expected: true },
+    { capability: false, authStrategy: 'api-key-header', source: 'user', expected: false },
+    { capability: undefined, authStrategy: 'oauth-passthrough', source: 'user', expected: undefined },
+    { capability: undefined, authStrategy: 'api-key-header', source: 'builtin', expected: undefined },
+  ] as const)('keeps $source / $authStrategy / $capability scoped to the effective protocol', ({ capability, authStrategy, source, expected }) => {
+    const provider = buildUserProvider({ id: 'protocol-override', name: 'Protocol override', runtimes: { codex: {
+      baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat', models: [
+        { id: 'responses', name: 'Responses', route: { baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-responses' } },
+        { id: 'chat', name: 'Chat' },
+      ],
+    } } });
+    provider.source = source;
+    provider.routing.codex!.authStrategy = authStrategy;
+    provider.routing.codex!.supportsResponsesCustomTools = capability;
+    expect(providerRoutingForModel(provider, 'codex', 'responses')?.supportsResponsesCustomTools).toBe(expected);
+    expect(providerRoutingForModel(provider, 'codex', 'chat')?.supportsResponsesCustomTools).toBe(capability);
+    expect(provider.routing.codex!.supportsResponsesCustomTools).toBe(capability);
   });
 });
 
@@ -2113,11 +2139,20 @@ describe('task interface snapshot', () => {
       const initial = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
       const first = sessionModelInterface('task', config.id, 'codex', initial, registry)!;
       expect(first.api).toBe('openai-responses');
+      // The connection defaults to Chat, but this selected model dispatches
+      // Responses: exec must still reach the existing function adapter.
+      expect(providerRoutingForModel(buildUserProvider(config, { modelRegistry: registry }), 'codex', 'k3.1-pro'))
+        .toMatchObject({ wireProtocol: 'openai-responses', supportsResponsesCustomTools: false });
       expect(first.defaults).toMatchObject({ contextWindow: 262144, maxOutputTokens: 262144 });
       registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
       const next = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
       configureSessionModelInterfaceStorage(() => directory); // real disk restore
       expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      const refreshed = buildUserProvider(config, { modelRegistry: registry });
+      expect(sessionProviderRoutingForModel('task', refreshed, 'codex', 'k3.1-pro'))
+        .toMatchObject({ wireProtocol: 'openai-responses', supportsResponsesCustomTools: false });
+      expect(sessionProviderRoutingForModel('new-task', refreshed, 'codex', 'k3.1-pro'))
+        .toMatchObject({ wireProtocol: 'openai-chat' });
       expect(sessionModelInterface('new-task', config.id, 'codex', next, registry)?.api).toBe('openai-completions');
       // Explicit image edits override pinned metadata, never the saved interface.
       // Reset removes the override rather than permanently rewriting the snapshot.

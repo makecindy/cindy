@@ -10,7 +10,7 @@
  * 组内按名字排,往返刷新不挪位置。
  */
 
-import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { isCindyApp, isMobilePlatform } from '@cindy/maker-shared/device-list';
 
 export type TopologyStatus = 'direct' | 'relay' | 'unlinked' | 'attention' | 'offline';
 export type AttentionReason = 'peer-control-off' | 'unresponsive';
@@ -46,6 +46,7 @@ export interface TopologyNode {
   encrypted?: boolean;
   name: string;
   platform: string | null;
+  app?: string;
   modelLabel: string | null;
   isMobile: boolean;
   status: TopologyStatus;
@@ -128,7 +129,7 @@ function deriveNode(
   let attention: AttentionReason | null = null;
   if (d.online && unresponsive.has(d.deviceId)) attention = 'unresponsive';
   // 手机 / 平板是控制端,没有被控能力,不算「没开被控」。
-  else if (d.online && !isMobile && !d.remoteControlEnabled) attention = 'peer-control-off';
+  else if (d.online && isCindyApp(d.app) && !isMobile && !d.remoteControlEnabled) attention = 'peer-control-off';
   const status: TopologyStatus = !d.online
     ? 'offline'
     : attention
@@ -142,6 +143,7 @@ function deriveNode(
     id: d.deviceId,
     name: d.name,
     platform: d.platform,
+    app: d.app,
     modelLabel: d.deviceInfo?.modelLabel?.trim() || null,
     isMobile,
     status,

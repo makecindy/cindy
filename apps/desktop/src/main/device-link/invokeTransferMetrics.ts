@@ -17,6 +17,8 @@ interface Counters {
   bytes: number;
   notModified: number;
   gzip: number;
+  /** 相对缓存基准的增量回包（`transfer.delta`）。 */
+  delta: number;
 }
 
 const counters = new Map<string, Counters>();
@@ -54,14 +56,16 @@ export const desktopInvokeTransferMetrics = {
     payloadBytes?: number;
     notModified?: boolean;
     gzip?: boolean;
+    delta?: boolean;
   }): void {
     if (event.phase !== 'result') return;
     const channel = REMOTE_INVOKE_ALLOWLIST.has(event.channel) ? event.channel : 'UNKNOWN';
-    const entry = counters.get(channel) ?? { results: 0, bytes: 0, notModified: 0, gzip: 0 };
+    const entry = counters.get(channel) ?? { results: 0, bytes: 0, notModified: 0, gzip: 0, delta: 0 };
     entry.results++;
     entry.bytes += event.payloadBytes ?? 0;
     if (event.notModified) entry.notModified++;
     if (event.gzip) entry.gzip++;
+    if (event.delta) entry.delta++;
     counters.set(channel, entry);
     if (!timer) {
       startedAt = Date.now();

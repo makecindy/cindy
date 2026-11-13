@@ -1,0 +1,51 @@
+const source = {};
+
+(async () => {
+const { DatabaseSync } = require('node:sqlite');
+let input = '';
+for await (const chunk of process.stdin) input += chunk;
+const event = JSON.parse(input);
+if (event.event !== 'schedule-pre-run' || !Number.isFinite(event.firedAt)) {
+  throw new Error('Missing schedule pre-run event');
+}
+const db = new DatabaseSync(source.databasePath, { readOnly: true });
+try {
+  function messageText(content) {
+    try {
+      const parsed = JSON.parse(content);
+      return typeof parsed === 'string' ? parsed
+        : typeof parsed?.text === 'string' ? parsed.text : '';
+    } catch { return content; }
+  }
+  function humanInput(row) {
+    let meta;
+    try { meta = JSON.parse(row.agent_meta || '{}'); } catch { return false; }
+    if (meta?.sourcePlugin || meta?.autoResume === true) return false;
+    const origin = meta?.origin;
+    // Host-attested owner group messages retain the hidden dispatch prefix. Count the
+    // actual owner text before rejecting synthetic envelopes (including attachments).
+    if (typeof meta?.autoReviewUserText === 'string' && meta.autoReviewUserText.trim()) return true;
+    if (origin?.groupThread || origin?.groupRequest) return true;
+    if (messageText(row.content).startsWith(source.syntheticPrefix)) return false;
+    return !origin?.kind || (origin.kind === 'scheduler'
+      && typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith('hook:'));
+  }
+  // Stream only this teammate's recent user rows; stop at the first human input.
+  const rows = db.prepare(
+    "SELECT m.content, m.agent_meta FROM bot_session_links l JOIN messages m ON m.session_id = l.session_id " +
+    "WHERE l.bot_id = ? AND m.role = 'user' AND m.rewind_at IS NULL " +
+    "AND m.created_at > ? AND m.created_at <= ?"
+  ).iterate(source.botId, event.firedAt - 24 * 60 * 60 * 1000, event.firedAt);
+  let activity = false;
+  for (const row of rows) {
+    if (humanInput(row)) { activity = true; break; }
+  }
+  if (!activity) {
+    console.log('No human messages in the last day; memory and skills review skipped.');
+    process.exitCode = 2;
+  }
+} finally {
+  db.close();
+}
+process.stdout.write('', () => process.exit(process.exitCode || 0));
+})().catch(error => { console.error(error); process.stderr.write('', () => process.exit(1)); });

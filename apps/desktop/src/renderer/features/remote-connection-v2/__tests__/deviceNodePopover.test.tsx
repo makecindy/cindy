@@ -11,9 +11,22 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => {
+  const { default: common } = await import('../../../i18n/locales/en/common.json');
+  return {
+    useTranslation: () => ({
+      t: (key: string, options?: { value?: number; version?: string }) => {
+        if (key === 'settings.remoteControl.v2.ms') return `${options?.value} ms`;
+        if (key === 'settings.devices.apps.cindy') return common.settings.devices.apps.cindy;
+        if (key === 'settings.devices.apps.cindyFriend') return common.settings.devices.apps.cindyFriend;
+        if (key === 'settings.remoteControl.v2.popover.version') {
+          return common.settings.remoteControl.v2.popover.version.replace('{{version}}', options?.version ?? '');
+        }
+        return key;
+      },
+    }),
+  };
+});
 
 import { DeviceNodePopover, HubNodePopover } from '../DeviceNodePopover';
 import { RemoteSwitchBatch } from '../RemoteSwitchBatch';
@@ -43,6 +56,31 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
 }
 
 const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.title' });
+
+// Non-Cindy Apps on desktop platforms must not be probed as outdated Cindy or
+// offered remote desktop. The real locale also exposes the fixed Cindy version
+// brand that a key-only translation stub missed. Minimal input: App + version. Unit.
+it.each(['cindy-friend', 'other-app'])('labels app=%s and excludes it from card and batch computer actions', app => {
+  const command = vi.fn();
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  const peer = node({ id: app, app, appVersion: '1.4.0', encrypted: true });
+  render(<><DeviceNodePopover node={peer} relayName="Cindy" onRemoteDesktop={vi.fn()} onSwitch={vi.fn()} />
+    <RemoteSwitchBatch nodes={[peer]} entries={new Map()} /></>);
+  const appName = app === 'cindy-friend' ? 'Cindy Friend' : app;
+  expect(screen.getByText(`${appName} · Work PC`)).toBeTruthy();
+  expect(screen.getByText(`Windows · ${appName} 1.4.0`)).toBeTruthy();
+  expect(remoteDesktop()).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+  expect(command).not.toHaveBeenCalled();
+});
+
+// App version routing must preserve both legacy omission and explicit Cindy.
+it.each([undefined, 'cindy'])('keeps the Cindy version label for app=%s', app => {
+  render(<DeviceNodePopover node={node({ id: `version-${app ?? 'legacy'}`, app, appVersion: '1.4.0', remoteControlEnabled: false })}
+    relayName="Cindy" onRemoteDesktop={vi.fn()} />);
+  expect(screen.getByText('Work PC')).toBeTruthy();
+  expect(screen.getByText('Windows · Cindy 1.4.0')).toBeTruthy();
+});
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -96,7 +134,9 @@ describe('DeviceNodePopover', () => {
     expect(screen.getByText('settings.remoteControl.v2.popover.' + key)).toBeTruthy();
     // 2026-11-08: route details must identify the actual protocol, not just direct versus relay.
     const protocol = encrypted === undefined ? '' : `settings.remoteControl.v2.protocol.${encrypted ? 'agentNet' : 'deviceLink'} · `;
-    expect(screen.getByText(protocol + 'settings.remoteControl.v2.path.direct')).toBeTruthy();
+    // 2026-11-13: 协议画成图标 + 名称后文字分在两段里，完整的「协议 · 路径」在这一行的悬停提示上。
+    const pathRow = screen.getByTitle(protocol + 'settings.remoteControl.v2.path.direct');
+    expect(pathRow.textContent?.replace(/\s/g, '')).toBe((protocol + 'settings.remoteControl.v2.path.direct').replace(/\s/g, ''));
     expect(!!screen.queryByText('settings.remoteControl.v2.popover.legacyEncryptionHint')).toBe(encrypted === false);
   });
   it('只展示信息:没有开关、没有删除,也没有「管理设备…」', () => {
@@ -153,6 +193,17 @@ describe('HubNodePopover', () => {
     self: { name: 'Studio Mac', platform: 'darwin' },
     relay: { name: 'Cindy', selfHosted: false, rttMs: 20, flow: null },
   } as unknown as TopologyModel;
+
+  // 2026-11-13 用户要求延迟显示整数。现有卡片测试只传整数，无法发现小数直接显示的回归。
+  // 真实设备与中转卡片入口，分别覆盖 186.252 向下和 186.752 向上取整。tier: unit。
+  it('rounds peer and relay latency to whole milliseconds', () => {
+    render(<>
+      <DeviceNodePopover node={node({ rttMs: 186.252 })} relayName="Cindy" onRemoteDesktop={vi.fn()} />
+      <HubNodePopover model={{ ...model, relay: { ...model.relay, rttMs: 186.752 } }} linkStatus="online" issue={null} standby={false} />
+    </>);
+    expect(screen.getByText('186 ms · settings.remoteControl.v2.popover.rttNote')).toBeTruthy();
+    expect(screen.getByText('settings.devices.linkStatus.online · 187 ms')).toBeTruthy();
+  });
 
   it('只展示与中转的连接、连接问题与待机说明,不重复提供同页管理入口', () => {
     render(<HubNodePopover model={model} linkStatus="online" issue="连接已失效" standby />);

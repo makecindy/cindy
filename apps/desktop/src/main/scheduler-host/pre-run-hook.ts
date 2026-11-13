@@ -23,6 +23,17 @@ import { execFile, spawn } from 'node:child_process';
 import type { PreRunHookRunResult, ScheduleWebhookEvent } from '@cindy/maker-scheduler';
 import { capAppend as capAppendBase, killProcessTree } from './proc-util';
 import os from 'node:os';
+import path from 'node:path';
+
+/** Platform port: Desktop uses utilityProcess; Node Host uses its own Node executable. */
+let spawnNodeScript = (script: string, cwd: string): ReturnType<typeof spawn> => {
+  if (process.versions.electron) throw new Error('Node script hook runtime is not configured');
+  return spawn(process.execPath, [script], { cwd, stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true, detached: process.platform !== 'win32' });
+};
+export function configurePreRunNodeScriptSpawner(spawner: typeof spawnNodeScript): void {
+  spawnNodeScript = spawner;
+}
 
 /** stdout / stderr 各自的截断上限(字节级近似,按 UTF-16 length 截)。 */
 const OUTPUT_CAP = 8 * 1024;
@@ -185,6 +196,9 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
   if (input.signal?.aborted) return abortedResult();
 
   const resolved = resolveHookCommand(input.command);
+  // A literal script path, never a shell expression or Node CLI option. This is separate
+  // from legacy xdt-node, whose Electron Node-mode behavior is unsuitable for shipped fuses.
+  const nodeScript = /^cindy-node-script\s+"([^"\r\n]+)"\s*$/.exec(input.command.trim());
   // 预检与真实执行共用同一个取消信号和超时预算。
   const syntaxError = await findShellSyntaxError(resolved.command, {
     signal: input.signal,
@@ -304,7 +318,7 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     input.signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
-      child = spawn(resolved.command, {
+      child = nodeScript ? spawnNodeScript(path.resolve(input.cwd || os.homedir(), nodeScript[1]), input.cwd || os.homedir()) : spawn(resolved.command, {
         shell: true,
         cwd: input.cwd?.trim() ? input.cwd : os.homedir(),
         windowsHide: true,

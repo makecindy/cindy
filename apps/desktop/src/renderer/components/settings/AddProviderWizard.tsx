@@ -1647,7 +1647,8 @@ export function AddProviderWizard({
         >
           {step === 1 && (
             <>
-              <div className="px-4 pb-3">
+              {/* Keep the input's outer focus ring inside the clipped body. */}
+              <div className="px-4 pb-3 pt-1">
                 <div className="relative">
                   <SettingsTextInput
                     surface="ivory"

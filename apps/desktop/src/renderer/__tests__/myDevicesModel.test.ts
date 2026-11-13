@@ -8,6 +8,11 @@ import {
 } from '@/components/settings/myDevicesModel';
 
 describe('canBeControlledPlatform（手机不展示「我控制它」）', () => {
+  // App routing: a Mac running another App is a controller, not another Cindy
+  // computer. Existing platform-only coverage missed this input. Unit.
+  it.each([undefined, 'cindy', 'cindy-friend', 'other-app'])('app=%s preserves legacy Cindy and hides computer controls for other Apps', app => {
+    expect(canBeControlledPlatform('darwin', app)).toBe(app === undefined || app === 'cindy');
+  });
   it('桌面平台可被控制', () => {
     expect(canBeControlledPlatform('darwin')).toBe(true);
     expect(canBeControlledPlatform('win32')).toBe(true);

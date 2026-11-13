@@ -14,6 +14,52 @@ import { DeviceLinkClient, SERVER_CAPABILITY_NOTIFY } from '@cindy/device-link';
 import { AgentNetSocket } from '../portableSocket.js';
 import type { PeerChannel, RosterEntry } from '../types.js';
 
+// Mixed-version protocol, unit: real signed roster and length-prefixed peer
+// frames through openWithBindings/dial. Existing recovery tests sent no peer
+// presence; an old frame must not overwrite the App learned from the directory.
+it('fills a legacy online presence from the directory and publishes later App updates', async () => {
+  const local = generateIdentity('local'), remote = generateIdentity('remote');
+  const { root, bootstrap } = createPrivateNetwork('App routing', local);
+  const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
+  const device: DeviceView = { certificate, name: 'Friend Mac', app: 'cindy-friend', online: false,
+    remoteControlEnabled: false, capabilities: [] };
+  const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {} });
+  let receive!: (bytes: Uint8Array) => void;
+  const channel: PeerChannel = { remoteId: Buffer.from(remote.transportKey, 'base64url').toString('hex'), send() {},
+    onData(callback) { receive = callback; }, onClose() {}, close() {}, path: () => 'relay' };
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate,
+      identity: local, connect: async () => uplink }, userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, connect: async () => channel, close: async () => undefined }) },
+  });
+  const delivered: Array<{ kind: string; payload?: { deviceId?: string; online?: boolean; app?: string } }> = [];
+  socket.on('message', message => delivered.push(JSON.parse(message.toString())));
+  const legacyPresence = () => {
+    const body = Buffer.from(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: {
+      deviceName: 'Friend Mac', platform: 'darwin', online: true, remoteControlEnabled: false, busy: false, lastSeenAt: 1,
+    } }));
+    const header = Buffer.alloc(4); header.writeUInt32BE(body.length);
+    receive(Buffer.concat([header, body]));
+  };
+  const lastPresence = () => delivered.filter(frame => frame.kind === 'presence-changed' && frame.payload?.online).at(-1)?.payload;
+  try {
+    socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: {
+      deviceName: 'Local', platform: 'test', app: 'cindy', appVersion: '1', remoteControlEnabled: true, busy: false,
+    } }));
+    await socket.dial(remote.deviceId);
+    legacyPresence();
+    expect(lastPresence()).toMatchObject({ deviceId: remote.deviceId, online: true, app: 'cindy-friend' });
+    uplink.devices = [{ ...device, app: 'future-app' }]; uplink.emit('directory');
+    expect(lastPresence()).toMatchObject({ app: 'future-app' });
+    legacyPresence();
+    expect(lastPresence()).toMatchObject({ app: 'future-app' });
+    uplink.devices = [{ ...device, app: undefined }]; uplink.emit('directory');
+    legacyPresence();
+    expect(lastPresence()).toMatchObject({ app: 'future-app' });
+  } finally { socket.close(); }
+});
+
 it('retires a failed LAN candidate and retries only that peer through the relay', async () => {
   const local = generateIdentity('local'), remote = generateIdentity('remote');
   const { root, bootstrap } = createPrivateNetwork('Unit network', local);

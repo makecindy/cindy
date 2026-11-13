@@ -14,6 +14,8 @@ export default {
     },
   },
   cases: {
+    'app-nodes': { about: 'Friend, unknown App and offline Friend keep their App label and platform icon; no Cindy remote actions or control-off warning', storage: V2_ON },
+    'app-nodes-list': { about: 'My devices labels other Apps without outbound computer actions; legacy Cindy stays unchanged' },
     default: {
       about: 'Eight other devices: direct (one exchanging messages), relay (receiving), not linked, needs attention and two folded offline',
       storage: V2_ON,
@@ -43,6 +45,36 @@ export default {
   },
   async check(page, ui) {
     await page.getByRole('switch', { name: await ui.t('settings.remoteControl.v2.switch.title') }).waitFor();
+    if (ui.case === 'app-nodes' || ui.case === 'app-nodes-list') {
+      const friend = `${await ui.t('settings.devices.apps.cindyFriend')} · Friend Mac`;
+      if (ui.case === 'app-nodes-list') {
+        await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).click();
+        const row = page.locator('[data-device-id="friend"]');
+        await row.getByText(friend, { exact: true }).waitFor();
+        await row.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} 1.4.0`, { exact: false }).waitFor();
+        assert.equal(await row.getByText(await ui.t('settings.remoteControl.myDevices.peerControlOff'), { exact: true }).count(), 0);
+        assert.equal(await row.getByText(await ui.t('settings.remoteControl.myDevices.controlIt'), { exact: true }).count(), 0);
+        await page.getByText('future-app · Lab Mac', { exact: true }).waitFor();
+        await page.getByText('Legacy Cindy', { exact: true }).waitFor();
+      } else {
+        await page.getByRole('button', { name: new RegExp(`^${friend}`) }).click();
+        const card = page.getByRole('dialog');
+        await card.getByText(friend, { exact: true }).waitFor();
+        await card.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} 1.4.0`, { exact: false }).waitFor();
+        assert.equal(await card.getByRole('button').count(), 0);
+        await ui.capture('friend-card');
+        await page.keyboard.press('Escape');
+        await page.getByText('future-app · Lab Mac', { exact: true }).waitFor();
+        await page.getByRole('button', { name: /^future-app · Lab Mac/ }).click();
+        const unknownCard = page.getByRole('dialog');
+        await unknownCard.getByText('future-app 1.4.0', { exact: false }).waitFor();
+        assert.equal(await unknownCard.getByRole('button').count(), 0);
+        await ui.capture('unknown-app-card');
+        await page.keyboard.press('Escape');
+        await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).waitFor();
+      }
+      return;
+    }
     if (ui.case === 'model-access-off' || ui.case === 'model-access-on') {
       const card = page.getByTestId('own-computer-model-access');
       await card.waitFor();
@@ -155,18 +187,27 @@ export default {
       await page.mouse.move(0, 0);
     }
     if (ui.case === 'default') {
+      // Fractional RTT samples must render as whole milliseconds in the topology and both cards.
+      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 3 }), { exact: true }).waitFor();
+      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 97 }), { exact: true }).waitFor();
+      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 25 }), { exact: true }).waitFor();
       // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).first().waitFor();
       // 拓扑卡片只展示连接信息(本机的配置在上方「我的设备」的本机卡片,其它设备不再列出)。
       await page.getByRole('button', { name: /^Work PC/ }).click();
       await page.getByRole('dialog').waitFor();
+      await page.getByRole('dialog').getByText(`${await ui.t('settings.remoteControl.v2.ms', { value: 3 })} · ${await ui.t('settings.remoteControl.v2.popover.rttNote')}`, { exact: true }).waitFor();
       await ui.capture('popover');
+      await page.keyboard.press('Escape');
+      await page.getByRole('button', { name: /^Home server/ }).click();
+      await page.getByRole('dialog').getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).waitFor();
+      await ui.capture('agent-net-card');
       await page.keyboard.press('Escape');
       // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。
       await page.getByRole('button', { name: 'Studio Mac', exact: true }).click();
       const hubCard = page.getByRole('dialog');
-      await hubCard.getByText(await ui.t('settings.devices.linkStatus.online')).waitFor();
+      await hubCard.getByText(`${await ui.t('settings.devices.linkStatus.online')} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`, { exact: true }).waitFor();
       await ui.capture('hub-card');
       await page.keyboard.press('Escape');
       // 要处理的设备:点开卡片,「状态」用红字写原因(没有单独的「需要处理」卡片)。

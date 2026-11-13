@@ -251,7 +251,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     for (const [id, peer] of this.peers) if (peer.info && next.has(id)) {
       const view = next.get(id)!;
-      peer.info = { ...peer.info, deviceName: view.name, selfName: view.selfName ?? peer.info.selfName };
+      peer.info = { ...peer.info, app: view.app ?? peer.info.app,
+        deviceName: view.name, selfName: view.selfName ?? peer.info.selfName };
       if (this.ready) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
     }
     for (const id of this.lanCandidates.keys()) if (!this.authorized(id)) this.lanCandidates.delete(id);
@@ -459,7 +460,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (deviceId === this.deviceId) return;
     const view = this.roster.get(deviceId);
     this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId, deviceName: view?.name ?? '', selfName: view?.selfName,
-      online, remoteControlEnabled: online && (view?.remoteControlEnabled ?? false), platform: view?.platform ?? '',
+      online, remoteControlEnabled: online && (view?.remoteControlEnabled ?? false), platform: view?.platform ?? '', app: view?.app,
       appVersion: view?.appVersion ?? '', busy: online && !!view?.busy, lastSeenAt: view?.lastSeenAt ?? Date.now() } });
   }
   private fromPeer(peer: Peer, frame: Envelope): void {
@@ -468,7 +469,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (d && frame.kind === 'presence-changed') return;
     if (frame.kind === 'presence-changed') {
       const reported = frame.payload as PresenceSnapshot, view = this.roster.get(peer.deviceId);
-      peer.info = { ...reported, deviceName: view?.name ?? reported.deviceName, selfName: reported.selfName ?? reported.deviceName,
+      peer.info = { ...reported, app: reported.app ?? view?.app ?? peer.info?.app,
+        deviceName: view?.name ?? reported.deviceName, selfName: reported.selfName ?? reported.deviceName,
         deviceId: peer.deviceId, online: true, lastSeenAt: Date.now() };
       this.deliver({ ...frame, payload: peer.info });
       return;

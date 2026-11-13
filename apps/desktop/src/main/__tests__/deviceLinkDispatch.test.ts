@@ -557,6 +557,7 @@ function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'on
       frameHandler = cb;
       return () => {};
     },
+    onInboundPeerReleased: () => () => {},
     sendLinkAccept: (dst: string, requestId: string) => calls.linkAccept.push({ dst, requestId }),
     closeLink: (dst: string, reason: string) => calls.closed.push({ dst, reason }),
     sendPush: (dst: string, channel: string, payload: unknown) => {

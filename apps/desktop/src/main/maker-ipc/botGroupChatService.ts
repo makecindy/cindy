@@ -513,9 +513,11 @@ export function resolveGroupMentions(
     });
     if (!match) continue;
     if (!match.botId) all = true;
-    // Same-named members are indistinguishable in text: address them all, as the composer's parser does.
-    else for (const twin of labels) {
-      if (twin.botId && twin.label.toLocaleLowerCase() === match.label.toLocaleLowerCase() && !ordered.includes(twin.botId)) ordered.push(twin.botId);
+    else {
+      // Same-named members are indistinguishable in text: one @ names one identity, so a shared
+      // name names nobody (as the composer's parser does); only a pick can tell them apart.
+      const twins = labels.filter((twin) => twin.botId && twin.label.toLocaleLowerCase() === match.label.toLocaleLowerCase());
+      if (twins.length === 1 && !ordered.includes(match.botId)) ordered.push(match.botId);
     }
   }
   return { all, botIds: structured.length > 0 ? structured : ordered };

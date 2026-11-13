@@ -7,6 +7,8 @@ import {
   setHistoryWorkPageReader,
   thinkingDeltaUpdatesWorkLine,
 } from '../historyViewPush';
+import { HistoryViewDeltaCache, parseHistoryViewDeltaOptions } from '@cindy/device-link';
+import { clearHistoryViewDeltas, encodeHistoryViewDelta } from '../historyViewDelta';
 
 let clock = 0;
 function at(): string {
@@ -256,5 +258,92 @@ describe('running work lines', () => {
     if (running?.type !== 'work') throw new Error('missing running item');
     expect(running.summary.lines!.map((line) => line.kind === 'tool' && line.descriptor.kind === 'file' ? line.descriptor.filePath : line.kind))
       .toEqual(['/b', '/c', '/d', '/e', '/z']);
+  });
+});
+
+/**
+ * history-view-delta-v1 contract, Host reader + messages:view encoding → JSON wire → the shared
+ * client restore. A wrong `same` would show stale history; a wrong suffix swap would make every
+ * controller re-read expanded details or reject work patches.
+ */
+describe('history view delta', () => {
+  afterEach(() => clearHistoryViewDeltas());
+
+  function controller(h: ReturnType<typeof host>, base?: string) {
+    const cache = new HistoryViewDeltaCache();
+    return async () => {
+      const prepared = cache.prepare('host-device', { channel: 'local-db:messages:view', args: ['s', { lazyDetails: true, workLines: true }] });
+      const options = prepared.payload.args[1] as { historyDelta: { version: 1; base?: string } };
+      if (base) options.historyDelta.base = base;
+      let shape: HistoryPageShape | undefined;
+      const page = await h.reader.page('s', undefined, true, { workLines: true, onShape: (value) => { shape = value; } });
+      const wire = JSON.parse(JSON.stringify(encodeHistoryViewDelta('controller', 's', 'true:true', parseHistoryViewDeltaOptions(options)!, page, shape)));
+      const result = { page: JSON.parse(JSON.stringify(page)) as HistoryViewPage<HistoryMessageSource>, wire, restored: prepared.decode(wire),
+        sameKeys: sameKeys(wire) };
+      basePage = result.page;
+      return result;
+    };
+  }
+  /** Base-page keys named by `same` runs: each run is `{ from, count }` into the previous page. */
+  let basePage: HistoryViewPage<HistoryMessageSource> | null = null;
+  const sameKeys = (wire: { items: Array<{ type: string; from?: number; count?: number }> }) => wire.items
+    .filter((item) => item.type === 'same')
+    .flatMap((item) => basePage!.items.slice(item.from!, item.from! + item.count!).map((value) => value.key));
+
+  it('sends only changed items and restores the exact full page, including a rewritten hidden body', async () => {
+    const source = [user(0), toolUse(1, 'Bash', { command: 'pnpm build' }), toolResult(2, 1, 'summary'),
+      assistant(3, 'Build started, checking tests.'), toolUse(4, 'Read', { file_path: '/repo/a.ts' })];
+    const h = host(source);
+    const read = controller(h);
+    const first = await read();
+    expect(first.restored).toEqual(first.page);
+    expect(first.sameKeys).toEqual([]);
+    const completed = first.page.items.filter((item) => !(item.type === 'work' && item.summary.isStreaming)).map((item) => item.key);
+    expect(completed).toHaveLength(3);
+
+    h.write(toolResult(5, 4, 'contents of a'));
+    const second = await read();
+    const revision = (page: HistoryViewPage<HistoryMessageSource>) => {
+      const item = page.items.find((value) => value.key === completed[1]);
+      return item?.type === 'work' ? item.summary.revision : undefined;
+    };
+    // The write changed every completed revision's suffix; the restore swaps it exactly.
+    expect(revision(second.page)).not.toBe(revision(first.page));
+    expect(second.sameKeys).toEqual(completed);
+    expect(second.restored).toEqual(second.page);
+
+    // Only the completed group's tool result changes: its stamp must make it travel again.
+    h.rewrite('m2', `summary\n${'full build log '.repeat(200)}`);
+    const third = await read();
+    expect(third.sameKeys).toEqual(completed.filter((key) => key !== completed[1]));
+    expect(third.restored).toEqual(third.page);
+  });
+
+  it('lets a prefetch page read without work lines serve as the base of the open view', async () => {
+    // The Host applies work lines only once the controller holds the task topic; a prefetch
+    // before that must still be usable, or the open view re-reads every body.
+    const h = host([user(0), assistant(1, 'Earlier answer'), user(2), assistant(3, 'Done.')]);
+    const cache = new HistoryViewDeltaCache();
+    const read = async (workLines: boolean) => {
+      const prepared = cache.prepare('host-device', { channel: 'local-db:messages:view', args: ['s', { lazyDetails: true, workLines: true }] });
+      let shape: HistoryPageShape | undefined;
+      const page = await h.reader.page('s', undefined, true, { workLines, onShape: (value) => { shape = value; } });
+      const wire = JSON.parse(JSON.stringify(encodeHistoryViewDelta('controller', 's', `true:${workLines}`,
+        parseHistoryViewDeltaOptions(prepared.payload.args[1])!, page, shape)));
+      return { page: JSON.parse(JSON.stringify(page)), wire, restored: prepared.decode(wire) };
+    };
+    await read(false);
+    const open = await read(true);
+    expect(open.wire.items).toEqual([{ type: 'same', from: 0, count: open.page.items.length }]);
+    expect(open.restored).toEqual(open.page);
+  });
+
+  it('answers a base it does not know (Host restarted, evicted) with a complete page', async () => {
+    const h = host([user(0), assistant(1, 'Earlier answer'), user(2), toolUse(3, 'Read', { file_path: '/repo/a.ts' })]);
+    const { wire, restored, page, sameKeys: same } = await controller(h, 'unknown-base')();
+    expect(same).toEqual([]);
+    expect(wire.historyDelta).toMatchObject({ version: 1, token: expect.any(String) });
+    expect(wire.historyDelta).not.toHaveProperty('base');
+    expect(restored).toEqual(page);
   });
 });

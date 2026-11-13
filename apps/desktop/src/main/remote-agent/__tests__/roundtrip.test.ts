@@ -20,7 +20,7 @@ import type {
   StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
+import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
 import { createServer } from 'node:http';
 import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +34,9 @@ import { credentialGrantFor, forgetCredentialGrants } from '../executor/credenti
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
+import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
+import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
+import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
@@ -1567,13 +1570,20 @@ describe('shared startup lease budget', () => {
     const prepare = deferred();
     const allocation = deferred();
     let allocations = 0;
+    const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
     const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false,
+      startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
+      switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
       blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
       runs.set(run.runId, run);
-      if (state.ready || sessions.get(run.runId) === 'sibling') started(run);
+      if (state.startFailure) {
+        if (state.closeLinkOnFailure) historyCloseEpoch.mockReturnValue(1);
+        emit(run, { t: 'start-failed', error: { code: 'AGENT_ERROR', message: state.startFailure, name: state.startFailureName } });
+      }
+      else if (state.ready || sessions.get(run.runId) === 'sibling') started(run);
     });
     vi.spyOn(RemoteAgentPoller.prototype, 'unregister').mockImplementation(() => {});
     const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
@@ -1583,6 +1593,11 @@ describe('shared startup lease budget', () => {
       // remoteBackgroundInvoke resolves `share:` before any transport and throws the share's own state.
       if (device === owner && state.ownerPaused) throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
       if (request.op === 'direct-locate') return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
+      if (request.op === 'direct-switch') {
+        if (state.pauseSwitch) await allocation.promise;
+        return { ok: true, result: state.switchAvailable ? { token: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          ...(!state.legacySwitch ? { generation: request.generation } : {}) } : {} };
+      }
       if (request.op === 'allocate') {
         const grant = ++allocations === 1 ? generation : '22222222-2222-4222-8222-222222222222';
         if (state.blockAllocation) await allocation.promise;
@@ -1617,18 +1632,20 @@ describe('shared startup lease budget', () => {
       remoteInvoke, renewSharedProviderLink: async () => undefined,
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
+        if (state.localFailure) throw new Error(state.localFailure);
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
           disposeSessionCtx: () => { disposed.push(ctx.sessionId!); } } as never;
       },
       makerMemory: () => undefined, captureKnownFileBefore: async () => undefined, noteOpaqueTurnChange() {},
+      groupSwitch: guestSwitch,
       logger: historyLogger,
     });
     historyInvoke.mockImplementation(remoteInvoke);
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, pendingClose, prepare, allocation, emit, started,
+    return { owner, target, generation, state, calls, runs, disposed, pendingClose, prepare, allocation, emit, started, guestSwitch,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
@@ -1640,6 +1657,132 @@ describe('shared startup lease budget', () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+
+  // Unit: real starter -> remote start-failed -> group startup recovery -> fresh
+  // open. Previously only running handles were covered; a pinned native resume
+  // released its grant before O could authorize the handoff (direct-execution §7).
+  it.each(['quota', 'auth', 'legacy-message', 'legacy-owner', 'no-spare', 'revoked', 'cancelled', 'takeover'] as const)(
+    'recovers a confirmed native startup failure without replaying its native ID: %s', async mode => {
+      const f = fixture(); f.state.duration = 60_000;
+      f.state.startFailure = mode === 'auth' ? '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] login required'
+        : mode === 'legacy-message' ? 'The task subscription account requires login or quota reset'
+          : '[SUBSCRIPTION_ACCOUNT_LIMITED] usage window exhausted; resets_at: 2000000000000';
+      const row = { agentKind: 'codex', model: 'm', providerId: 'openai', agentDeviceId: f.owner,
+        sdkSessionId: 'native-only-on-m' as string | null, remoteHostId: null, status: 'active', workingDir: project };
+      const service = createProviderGroupService({
+        guestSwitch: f.guestSwitch, directGuestSession: liveDirectGuestSession,
+        readSessionRow: async () => row, readBinding: () => null, now: () => Date.now(), log: historyLogger,
+        router: { resetTurn() {} },
+      } as unknown as ProviderGroupServiceDeps);
+      const failure = await f.open('historical', f.owner, 'm', row.sdkSessionId!).catch(error => error);
+      expect(failure).toBeInstanceOf(AgentStartupStoppedError);
+      expect(failure.message).toBe(f.state.startFailure);
+      expect(f.calls.some(call => call.op === 'direct-release')).toBe(false);
+      expect(service.mayHandleTurnError('historical', { message: f.state.startFailure })).toBe(true);
+      f.state.switchAvailable = mode !== 'no-spare';
+      f.state.legacySwitch = mode === 'legacy-owner';
+      f.state.pauseSwitch = ['revoked', 'cancelled', 'takeover'].includes(mode);
+      const pending = service.prepareGuestStartSwitch('historical');
+      await flush();
+      if (mode === 'revoked') guestPermission.epoch++;
+      if (mode === 'cancelled') cancelPendingRemoteStart('historical');
+      if (mode === 'takeover') service.noteUserAction('historical');
+      f.allocation.resolve();
+      const recovery = await pending;
+      const canRecover = ['quota', 'auth', 'legacy-message'].includes(mode);
+      expect(!!recovery).toBe(canRecover);
+      const switches = f.calls.filter(call => call.op === 'direct-switch');
+      expect(switches).toEqual([expect.objectContaining({ device: f.owner, sessionId: 'historical', generation: f.generation })]);
+      if (recovery) {
+        expect(recovery.isCurrent()).toBe(true);
+        expect(f.guestSwitch.takeForOpen('historical')).toBeTruthy();
+        let handoff = '';
+        const boundary = vi.fn(async () => 'boundary');
+        await relocateForFreshStart({
+          getSessionRow: async () => ({ ...row }) as never,
+          listMessagesForHandoff: async () => [{ role: 'user', content: 'keep the completed diagnosis', createdAt: 1 }],
+          applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+          setSessionProvider() {}, insertBoundaryMessage: boundary,
+          setPendingHandoff: (_id, text) => { handoff = text; },
+          applyResumeFallbackAtomically: async () => {}, log: historyLogger,
+        }, { sessionId: 'historical', agentDeviceId: f.owner, providerId: 'openai', sharedRelocation: true,
+          assertCurrent: () => { if (!recovery.isCurrent()) throw new Error('recovery superseded'); } });
+        expect(row.sdkSessionId).toBeNull();
+        expect(handoff).toContain('keep the completed diagnosis');
+        expect(boundary).toHaveBeenCalledWith('historical', expect.objectContaining({
+          fromSdkSessionId: 'native-only-on-m', nativeHistory: 'fallback', handoff,
+        }));
+        recovery.dispose();
+        f.state.startFailure = ''; f.state.ready = true;
+        const handle = await f.open('historical');
+        expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.owner]);
+        expect(f.calls.filter(call => call.op === 'open').at(-1)).toMatchObject({ payload: { json: {
+          groupSwitchToken: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', options: { model: 'm' },
+        } } });
+        await handle.close();
+      } else {
+        expect(f.guestSwitch.takeForOpen('historical')).toBeUndefined();
+        expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+      }
+      expect(f.calls.filter(call => call.op === 'direct-release')).toEqual([
+        expect.objectContaining({ generation: f.generation, sessionId: 'historical' }),
+      ]);
+      expect(liveDirectGuestSession('historical')).toBeNull();
+    },
+  );
+
+  it('does not turn a local preparation error into executor failure evidence', async () => {
+    const f = fixture();
+    f.state.localFailure = 'The task subscription account requires login or quota reset';
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow(f.state.localFailure);
+    expect(liveDirectGuestSession('historical')).toBeNull();
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'direct-switch')).toBe(false);
+    expect(f.calls.filter(call => call.op === 'direct-release')).toEqual([
+      expect.objectContaining({ generation: f.generation }),
+    ]);
+  });
+
+  it.each(['AgentStartupCleanupPendingError', 'Error'])(
+    'does not relocate an unconfirmed native process after %s', async name => {
+      const f = fixture();
+      f.state.startFailure = '[SUBSCRIPTION_ACCOUNT_LIMITED] usage window exhausted';
+      f.state.startFailureName = name;
+      await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('usage window');
+      expect(liveDirectGuestSession('historical')).toBeNull();
+      expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+    },
+  );
+
+  it('does not recreate a recovery grant after explicit link close during M startup', async () => {
+    const f = fixture();
+    f.state.startFailure = '[SUBSCRIPTION_ACCOUNT_LIMITED] usage window exhausted';
+    f.state.closeLinkOnFailure = true;
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('usage window');
+    expect(liveDirectGuestSession('historical')).toBeNull();
+    expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+    expect(f.calls.filter(call => call.op === 'direct-release')).toEqual([
+      expect.objectContaining({ generation: f.generation }),
+    ]);
+  });
+
+  it('retires only the failed startup generation when a new open takes over', async () => {
+    const f = fixture(); f.state.duration = 60_000;
+    f.state.startFailure = '[SUBSCRIPTION_ACCOUNT_LIMITED] usage window exhausted';
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('usage window');
+    const old = liveDirectGuestSession('historical')!.captureRecovery!()!;
+    f.state.startFailure = ''; f.state.ready = true;
+    const handle = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    try {
+      expect(old.isCurrent()).toBe(false);
+      expect(await old.requestSwitch()).toBeUndefined();
+      old.dispose!();
+      expect(f.calls.filter(call => call.op === 'direct-release')).toEqual([
+        expect.objectContaining({ generation: f.generation }),
+      ]);
+      expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+      expect(liveDirectGuestSession('historical')?.captureRecovery?.()?.isCurrent()).toBe(true);
+    } finally { await handle.close({ reason: 'account-boundary' }); }
+  });
 
   // Unit, F6: terminal cancellation must cross the create -> starter composition boundary.
   // Real starter + startRemote + runClient; native and transport IO use the existing fixture.

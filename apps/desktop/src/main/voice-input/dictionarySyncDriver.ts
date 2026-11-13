@@ -17,6 +17,7 @@
 
 import { MAX_FRAME_BYTES } from '@cindy/device-link';
 import type { MobileVoiceDictionarySnapshotResult } from '@cindy/maker-shared/device-link-contract';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { buildStateVersionVector, type VoiceDictionarySyncState } from '@cindy/voice-input-core';
 
 import { isDesktopPlatform } from '../device-link/controllerPlatform.js';
@@ -92,9 +93,10 @@ let lastEmittedAt = 0;
 export function shouldExchangeDictionaryWith(device: {
   online: boolean;
   platform: string | undefined | null;
+  app?: string;
   revoked: boolean;
 }): boolean {
-  return device.online && !device.revoked && isDesktopPlatform(device.platform);
+  return device.online && !device.revoked && isCindyApp(device.app) && isDesktopPlatform(device.platform);
 }
 
 export function initVoiceDictionarySync(next: DictionarySyncTransport): void {

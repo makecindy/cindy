@@ -6,13 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { app } from 'electron';
+import type { WindowsDeepLinkNative } from './windowsDeepLinkHandoff';
 
 const exec = promisify(execFile);
 const requireFromMain = createRequire(__filename);
 const binaryName = 'cindy-windows-taskbar.node';
 
-/** Main-owned bridge: no renderer input, exported handles or additional IPC. */
-export interface WindowsTaskbarNative {
+/** Main-owned Windows shell bridge; no native handles or methods reach renderer. */
+export interface WindowsTaskbarNative extends WindowsDeepLinkNative {
   setOverlayIcon(handle: Buffer, png: Buffer | null, description: string): void;
   taskbarButtonCreatedMessage(): number;
   windowDragOffset(handle: Buffer): { x: number; y: number };
@@ -21,6 +22,12 @@ export interface WindowsTaskbarNative {
 }
 
 let loading: Promise<WindowsTaskbarNative> | undefined;
+
+/** Synchronous only for the packaged second-instance handoff, before app.quit(). */
+export function loadPackagedWindowsShellNative(): WindowsTaskbarNative | null {
+  if (process.platform !== 'win32' || !app.isPackaged) return null;
+  return requireFromMain(path.join(process.resourcesPath, 'tools', 'windows-taskbar', binaryName)) as WindowsTaskbarNative;
+}
 
 export function loadWindowsTaskbarNative(): Promise<WindowsTaskbarNative> {
   // A missing compiler/addon must not trigger another build on every count change.
@@ -42,7 +49,7 @@ async function resolveBinary(): Promise<string> {
   if (!target) throw new Error('Unsupported Windows taskbar architecture');
   const source = path.join(app.getAppPath(), 'native', 'windows-taskbar');
   const digest = createHash('sha256').update(target);
-  for (const file of ['Cargo.toml', 'Cargo.lock', 'build.rs', path.join('src', 'lib.rs')]) {
+  for (const file of ['Cargo.toml', 'Cargo.lock', 'build.rs', path.join('src', 'lib.rs'), path.join('src', 'deep_link.rs')]) {
     digest.update(await fs.readFile(path.join(source, file)));
   }
   const directory = path.join(app.getPath('userData'), 'windows-taskbar', digest.digest('hex'));

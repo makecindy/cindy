@@ -1,9 +1,9 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 584,
+  "snapshotCount": 585,
   "categories": {
-    "literal": 291,
+    "literal": 292,
     "alias": 247,
     "hsl-triplet": 6,
     "runtime-derived-or-protected": 40
@@ -5758,6 +5758,14 @@
       "destination": "reference-candidate",
       "lightKind": "rgb",
       "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "remote-agent-net-accent",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
       "modeledAsSemantic": false
     }
   ]

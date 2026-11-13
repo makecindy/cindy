@@ -13,12 +13,13 @@ const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
   // Unit, #10223: successful catalog transport does not mean every native read
-  // succeeded. Publish retry evidence only for disconnected rows, so healthy or
-  // intentionally disconnected providers do not produce background recovery.
+  // succeeded. Model discovery can fail with authentication still connected;
+  // explicit failure evidence, rather than connection state, drives recovery.
   it.each([
     { connected: false, unavailable: true, expected: true },
     { connected: false, unavailable: false, expected: undefined },
-    { connected: true, unavailable: true, expected: undefined },
+    { connected: true, unavailable: true, expected: true },
+    { connected: true, unavailable: false, expected: undefined },
   ])('projects native read evidence (connected=$connected, unavailable=$unavailable)', async ({ connected, unavailable, expected }) => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,

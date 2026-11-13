@@ -21,9 +21,13 @@ import {
   acquireSubscriptionAccount,
   codexSubscriptionAccountForHistoryHome,
   observeSubscriptionAccountUsage,
+  refreshSubscriptionPool,
+  refreshSubscriptionPoolCodexModels,
+  hasConnectedSubscriptionPool,
+  hasUnavailableSubscriptionPoolAccount,
   type SubscriptionAccountLease,
 } from './runtime.js';
-import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexAccountId } from './store.js';
+import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexAccountId, readLegacyCodexProviderId } from './store.js';
 import { registerSessionSubscriptionAccount } from './session.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
@@ -260,6 +264,11 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             options?.credentialMode === 'gateway-key'
           )
             return target.refreshLocalModels(options);
+          if (provider === 'openai' && readPool(provider)?.accounts.some(a => !readLegacyCodexProviderId(a.id))) {
+            await refreshSubscriptionPool(provider);
+            await refreshSubscriptionPoolCodexModels(true);
+            return hasConnectedSubscriptionPool(provider) && !hasUnavailableSubscriptionPoolAccount(provider);
+          }
           const lease = await acquireSubscriptionAccount(provider, undefined, [], true);
           try {
             return await target.refreshLocalModels({

@@ -771,6 +771,25 @@
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
+      "id": "cindy-friend",
+      "status": "proposed",
+      "en": "Cindy Friend",
+      "translations": {
+        "zh-CN": "Cindy Friend",
+        "zh-TW": "Cindy Friend",
+        "ja": "Cindy Friend",
+        "ko": "Cindy Friend",
+        "fr": "Cindy Friend",
+        "es": "Cindy Friend",
+        "de": "Cindy Friend",
+        "pt-PT": "Cindy Friend",
+        "pt-BR": "Cindy Friend",
+        "zh-Hant-x-lzh": "Cindy Friend",
+        "zh-Hans-x-lzh": "Cindy Friend"
+      },
+      "note": "Agent-Net App name supplied by the product request; preserve the brand in every locale."
+    },
+    {
       "id": "cindy-make",
       "status": "proposed",
       "en": "Cindy Make",
@@ -2206,7 +2225,7 @@
         "ko": "모델 그룹"
       },
       "checkCase": false,
-      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一条条「路线」（几个来源加一种选法，可选推理强度，英文 Route；2026-11-11 原「模式」并入路线）；这个词只在模型组语境下这样用，不约束网络路由等其它语境。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。"
+      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。"
     },
     {
       "id": "model-id",

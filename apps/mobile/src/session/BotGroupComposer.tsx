@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { useConfirmLeaveWhileUploading } from '@/session/useConfirmLeaveWhileUploading';
 import { BOT_GROUP_MESSAGE_MAX_CHARS, type BotGroupMemberView, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -247,6 +248,15 @@ export function BotGroupComposer({
     const draftText = trimmed;
     const draftTracked = tracked;
     const draftDivision = division;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = ambiguousBotGroupMentionLabels(draft, {
+      members: mentionMembers.map((member) => ({ botId: member.botId, name: member.name })),
+      allLabels: [allLabel], allBotLabels, tracked: draftTracked,
+    });
+    if (ambiguousName) {
+      Alert.alert(t('groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
+      return;
+    }
     sendingRef.current = true;
     setSending(true);
     // Clear at once like any chat; a failed send puts the draft back if nothing new was typed.

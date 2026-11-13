@@ -40,6 +40,8 @@ import { bindGroupFastPolicy, bindLocalHostedGroupFastPolicy, groupFastPolicyFor
 import { groupFastPolicyStore } from '../../provider-group/fastPolicyStore.js';
 import { captureProviderManagementScope } from '../../provider-group/managementScope.js';
 import { createSubscriptionFastPolicy } from '../../maker-host/subscription-fast-policy.js';
+import { SUBSCRIPTION_ACCOUNTS_CHANNEL, parseSubscriptionSessionAccountView } from '../../../shared/subscriptionAccounts.js';
+import { hostSessionIdFor } from './sessionIdentity.js';
 import { getSessionProvider } from '../../maker-host/session-provider-store.js';
 import { remoteAgentPollerFor } from '../controller/service';
 import { RemoteAgentRunClient, type RemoteAgentInvoke } from '../controller/runClient.js';
@@ -88,6 +90,7 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
     ...(options.makerMemoryEnabled !== undefined ? { makerMemoryEnabled: options.makerMemoryEnabled } : {}),
     ...(options.makerMemorySwitchOwned ? { makerMemorySwitchOwned: true } : {}),
     ...(options.makerMemoryScopeKey ? { makerMemoryScopeKey: options.makerMemoryScopeKey } : {}),
+    ...(options.makerMemoryProjectDir ? { makerMemoryProjectDir: options.makerMemoryProjectDir } : {}),
     // 记忆在对方电脑上：没有快照时也给空快照，本机不读自己的记忆库。
     ...(options.makerMemoryEnabled ? { makerMemoryIndexSnapshot: options.makerMemoryIndexSnapshot ?? '' } : {}),
     // 插件同理在对方电脑上：Agent 用对方给的花名册快照(空串表示对方没有可用插件，也要原样传下去)。
@@ -398,7 +401,7 @@ export function installRemoteAgentHost(options: {
   };
   const directSwitchIssued = new Map<string, { generation: string; executorDeviceId: string;
     at: number; token: string }>();
-  const directSwitchPending = new Map<string, Promise<{ token?: string }>>();
+  const directSwitchPending = new Map<string, Promise<{ token?: string; generation?: string }>>();
   const directSwitchAttempts = new Map<string, number>();
   const revokeDirectRoute = (key: string, route: NonNullable<ReturnType<typeof directRoutes.get>>): Promise<void> => {
     directRoutes.delete(key);
@@ -1354,17 +1357,18 @@ export function installRemoteAgentHost(options: {
       },
       switch(controller, request) {
         const key = JSON.stringify([controller, request.sessionId]);
+        const current = restoreDirectRoute(controller, request.sessionId);
+        if (request.generation !== undefined && current?.generation !== request.generation) return Promise.resolve({});
         const pending = directSwitchPending.get(key);
         if (pending) return pending;
         if (allocations.has(key)) return Promise.resolve({});
-        const current = restoreDirectRoute(controller, request.sessionId);
         const previous = directSwitchIssued.get(key);
         if (current && previous?.generation === current.generation && Date.now() - previous.at < 2 * 60_000
           && ownedProviderShareGuestAccess(controller) && current.expiresAt > Date.now()
           && remoteModelAccess.allowsDelegatedExecution(current.groupProviderId, current.model, current.memberId)
           && readProviderGroup(current.groupProviderId)?.autoSwitch === true
           && liveDirectTargetAllowed(current)) {
-          return Promise.resolve({ token: previous.token });
+          return Promise.resolve({ token: previous.token, generation: current.generation });
         }
         const lastAttempt = directSwitchAttempts.get(key) ?? 0;
         if (Date.now() - lastAttempt < 10_000 || directSwitchPending.size >= 32) return Promise.resolve({});
@@ -1373,7 +1377,7 @@ export function installRemoteAgentHost(options: {
           if (Date.now() - at >= 2 * 60_000) directSwitchAttempts.delete(id);
         }
         if (directSwitchAttempts.size > 512) directSwitchAttempts.delete(directSwitchAttempts.keys().next().value!);
-        const work = (async (): Promise<{ token?: string }> => {
+        const work = (async (): Promise<{ token?: string; generation?: string }> => {
           const peer = parseProviderSharePeer(controller);
           const route = directRoutes.get(key);
           if (peer?.role !== 'guest' || !route || route.expiresAt <= Date.now()
@@ -1383,7 +1387,8 @@ export function installRemoteAgentHost(options: {
             const live = directRoutes.get(key);
             const access = ownedProviderShareGuestAccess(controller);
             const group = readProviderGroup(route.groupProviderId);
-            return live === route && route.expiresAt > Date.now()
+            return live === route && (request.generation === undefined || live.generation === request.generation)
+              && route.expiresAt > Date.now()
               && access?.providerId === route.groupProviderId
               && isRemoteProviderInvocationAllowed(route.groupProviderId)
               && remoteModelAccess.allowsDelegatedExecution(route.groupProviderId, route.model, route.memberId)
@@ -1393,7 +1398,7 @@ export function installRemoteAgentHost(options: {
           if (!valid()) return {};
           const issued = directSwitchIssued.get(key);
           if (issued?.generation === route.generation && Date.now() - issued.at < 2 * 60_000) {
-            return { token: issued.token };
+            return { token: issued.token, generation: route.generation };
           }
           for (const [id, item] of directSwitchIssued) {
             if (Date.now() - item.at >= 2 * 60_000) directSwitchIssued.delete(id);
@@ -1404,9 +1409,43 @@ export function installRemoteAgentHost(options: {
           const group = readProviderGroup(route.groupProviderId);
           const exclude = new Set(group?.members.filter((member) => member.kind === 'device'
             && member.agentDeviceId === route.executorDeviceId).map((member) => member.key) ?? [route.memberKey]);
-          const next = await groupRelay.plan({ kind: route.agentKind as 'claude-code' | 'codex' | 'pi',
+          // O may inspect its own M, but never expose the private account view to G.
+          // A blocked bound account plus a real replacement admission allows one
+          // fresh, isolated handoff on M. It never resumes the old account's ID.
+          let canChangeAccount = false;
+          if (route.providerId === 'openai' || route.providerId === 'anthropic') {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              const reply = await Promise.race([
+                remoteBackgroundInvoke(route.executorDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
+                  action: 'session', providerId: route.providerId,
+                  sessionId: hostSessionIdFor(controller, request.sessionId), model: route.model,
+                }]),
+                new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 2000); }),
+              ]);
+              const view = reply?.ok ? parseSubscriptionSessionAccountView(reply.result, route.providerId) : null;
+              canChangeAccount = view?.state === 'bound' && view.account.blocked === true
+                && view.account.switchAvailable === true;
+            } catch { /* Old/unreachable M: keep the established machine-switch path. */ }
+            finally { if (timer) clearTimeout(timer); }
+          }
+          if (!valid()) return {};
+          const plan = (avoid: ReadonlySet<string>) => groupRelay.plan({ kind: route.agentKind as 'claude-code' | 'codex' | 'pi',
             model: route.model, providerId: route.groupProviderId,
-            exclude, reshareKey: reshareKeyForGuest(controller) }).catch(() => null);
+            exclude: avoid, reshareKey: reshareKeyForGuest(controller) }).catch(() => null);
+          let next = await plan(canChangeAccount ? new Set() : exclude);
+          if (canChangeAccount) {
+            if (!valid()) return {};
+            if (next?.kind === 'member' && next.agentDeviceId === route.executorDeviceId) {
+              const token = host?.issueDirectGroupSwitchToken(controller, request.sessionId, exclude, true);
+              if (token) {
+                directSwitchIssued.set(key, { generation: route.generation,
+                  executorDeviceId: route.executorDeviceId, at: Date.now(), token });
+                return { token, generation: route.generation };
+              }
+              next = await plan(exclude);
+            }
+          }
           const canMove = next?.kind === 'member' || (next?.kind === 'local'
             && options.getMaker().listAvailableAgents().includes(route.agentKind as 'claude-code' | 'codex' | 'pi'));
           if (!valid() || !next || !canMove || (next.kind === 'member' && exclude.has(next.memberKey))) return {};
@@ -1415,7 +1454,7 @@ export function installRemoteAgentHost(options: {
           if (!token) return {};
           directSwitchIssued.set(key, { generation: route.generation,
             executorDeviceId: route.executorDeviceId, at: Date.now(), token });
-          return { token };
+          return { token, generation: route.generation };
         })().finally(() => { directSwitchPending.delete(key); });
         directSwitchPending.set(key, work);
         return work;

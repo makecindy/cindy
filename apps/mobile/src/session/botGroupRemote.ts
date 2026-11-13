@@ -347,9 +347,12 @@ function parseRound(value: unknown): BotGroupRoundView {
       if (!speaker || !botId) return [];
       return [{
         botId,
+        ...(id(speaker.sourceMessageId) ? { sourceMessageId: id(speaker.sourceMessageId)! } : {}),
+        ...(speaker.threadRootId === null ? { threadRootId: null } : id(speaker.threadRootId) ? { threadRootId: id(speaker.threadRootId)! } : {}),
         sessionId: optionalId(speaker.sessionId),
         activity: enumOf(speaker.activity, SPEAKER_ACTIVITIES) ?? 'reply',
         ...(id(speaker.executionId) ? { executionId: id(speaker.executionId)! } : {}),
+        ...(typeof speaker.timelineAt === 'number' && Number.isFinite(speaker.timelineAt) ? { timelineAt: speaker.timelineAt } : {}),
         ...(typeof speaker.startedAt === 'number' && Number.isFinite(speaker.startedAt) ? { startedAt: speaker.startedAt } : {}),
         ...(speaker.stopping === true ? { stopping: true } : {}),
         ...(['queued', 'running', 'needs_input', 'stopping'].includes(String(speaker.executionStatus))

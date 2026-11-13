@@ -224,6 +224,10 @@
       "light": "semantic.defaults.process-utility-icon.light",
       "dark": "semantic.defaults.process-utility-icon.dark"
     },
+    "remote-agent-net-accent": {
+      "light": "semantic.defaults.remote-agent-net-accent.light",
+      "dark": "semantic.defaults.remote-agent-net-accent.dark"
+    },
     "usage-heatmap-high": {
       "light": "component.defaults.usage-heatmap-high.light",
       "dark": "component.defaults.usage-heatmap-high.dark"

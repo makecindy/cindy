@@ -220,7 +220,17 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const now = deps.now();
     const target = modelGroupRouteFor(deps.config(), request.selection, now);
     if (target.outcome === 'missing') return { outcome: 'missing', groupName: target.groupName, trace: [] };
-    const { groupName, route, via } = target;
+    const { groupName, via } = target;
+    // 限定运行位置时(进行中的任务)，别的位置上的来源按停用处理：不选它们，也不为它们去读别处的目录。
+    const location = request.location;
+    const route = location
+      ? {
+          ...target.route,
+          candidates: target.route.candidates.map((candidate) => ((candidate.agentDeviceId ?? null) === location.agentDeviceId
+            ? candidate
+            : { ...candidate, off: true })),
+        }
+      : target.route;
     // 改走了另一条路线时，用那条路线自己的推理强度。
     const { effort } = route;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');

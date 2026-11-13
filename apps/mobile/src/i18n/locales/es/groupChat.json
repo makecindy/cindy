@@ -319,6 +319,7 @@
     "memberLimit": "Un chat grupal necesita de 2 a 6 amigos de equipo",
     "memberUnavailable": "Uno de estos amigos de equipo no está disponible. Elige otro y vuelve a intentarlo.",
     "mentionUnavailable": "Un miembro mencionado ya no está disponible. Elige a quién mencionar antes de volver a enviar.",
+    "mentionAmbiguous": "Hay más de un miembro llamado «{{name}}». Elige a quién te refieres en la lista de @.",
     "notFound": "Este chat grupal ya no existe",
     "hostNotReady": "Cindy todavía se está preparando. Inténtalo de nuevo en un momento.",
     "planOpen": "Hay una división del trabajo en curso. Finalízala o detenla antes de iniciar otra.",

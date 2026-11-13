@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { nodeRelayAuthCrypto } from "../../packages/device-link/src/nodeRelayCrypto";
 import { RelayFrameAuthenticator } from "../../packages/device-link/src/selfHostedRelayAuth";
 import { PLUGIN_SYNC_CHANNEL } from "../../packages/device-link/src/pluginSyncProtocol";
+import { deflateRawBase64Sync, inflateRawBase64TextBounded } from "../../packages/device-link/src/nodeCompression";
 import {
   createClient,
   createHost,
@@ -82,13 +83,20 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
     ? (JSON.parse(process.env.CINDY_TEST_FRAME_AUTH) as FrameAuthSpec)
     : null;
   const rejected: string[] = [];
+  // push-deflate-v1：两端都注入与 Desktop 相同的 Node 编解码，压缩推送经真实中转（含设备签名）送达。
+  const transferCodec = {
+    deflateRawBase64: (text: string, dictionary: string) => deflateRawBase64Sync(text, 4, dictionary).compressed.toString("base64"),
+    inflateRawBase64: inflateRawBase64TextBounded,
+  };
   const host = createClient(url, "interop-host", true, {
+    transferCodec,
     token: hostToken,
     authorizationScheme: scheme,
     timing,
     frameAuth: frameAuthSpec ? frameAuthFor(frameAuthSpec, "host", rejected) : undefined,
   });
   const controller = createClient(url, "interop-controller", false, {
+    transferCodec,
     token: controllerToken,
     authorizationScheme: scheme,
     timing,
@@ -141,6 +149,23 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
       { timeout: 10_000 },
     );
     expect(controller.client.getSelfDeviceId()).not.toBe(hostId);
+    // 链路已建立：较大的事件批走压缩形状，中转原样转发，控制端交给业务前还原。
+    const batch = { sessionId: "fixture-session", events: Array.from({ length: 8 }, (_, i) => ({
+      sessionId: "fixture-session", event: { type: "text", data: { text: `弱网流式正文 ${i} ✓`, isFinal: false } },
+    })) };
+    const pushes: unknown[] = [];
+    const stopPushes = controller.client.onFrame(frame => {
+      if (frame.kind === "push" && (frame.payload as { channel?: string }).channel === "maker:event:batch") pushes.push(frame.payload);
+    });
+    const wire: string[] = [];
+    const socket = controller.sockets.at(-1)!;
+    const onWire = (data: unknown) => wire.push(String(data));
+    socket.on("message", onWire);
+    try {
+      host.client.sendPush(controller.client.getSelfDeviceId()!, "maker:event:batch", batch);
+      await vi.waitFor(() => expect(pushes).toEqual([{ channel: "maker:event:batch", payload: batch }]), { timeout: 10_000 });
+      expect(wire.some(frame => frame.includes("deflateBase64"))).toBe(true);
+    } finally { stopPushes(); socket.off("message", onWire); }
     const before = recovery.state.completed;
     data.addMessage("interop-gap");
     controller.sockets.at(-1)!.terminate();

@@ -88,7 +88,7 @@ export default {
       assert.equal(await accounts.getByRole('switch').count(), 2);
       // Each account shows every window of its own quota once; no provider-level copy repeats one account.
       for (const identity of ['alex@example.com', 'work@example.com']) {
-        const row = accounts.locator('div.py-4').filter({ hasText: identity });
+        const row = accounts.getByTestId('subscription-account').filter({ hasText: identity });
         for (const name of [await ui.t('quotaCard.fiveHourLabel'), await ui.t('quotaCard.weeklyLabel'), await ui.t('quotaCard.modelWeeklyLabel', { model: 'Fable' })])
           // High-usage bars append a screen-reader severity note to their accessible name.
           assert.equal(await row.getByRole('progressbar', { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).count(), 1, `${identity}: ${name}`);
@@ -113,7 +113,7 @@ export default {
       await ui.capture('builtin-save-pending');
       await page.evaluate(() => window.providerSourcesFixture.keySaveControl.release());
       await page.getByRole('dialog').waitFor({ state: 'hidden' });
-      assert.equal(await page.getByRole('combobox').count(), 0, 'success must complete without restoring the draft');
+      assert.equal(await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.namePlaceholder')).count(), 0, 'success must complete without restoring the draft');
       return;
     }
     if (ui.case === 'wizard-reopen') {
@@ -121,7 +121,7 @@ export default {
       const dialog = page.getByRole('dialog');
       await add.click();
       await dialog.waitFor();
-      await dialog.getByRole('button', { name: /^Ollama/ }).click();
+      await dialog.getByTitle('Ollama', { exact: true }).click();
       await page.waitForFunction(() => window.providerSourcesFixture.refreshControl.pending);
       await dialog.waitFor({ state: 'hidden' });
       await add.click();

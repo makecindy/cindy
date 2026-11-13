@@ -57,7 +57,7 @@ const MAX_REPLY_DELIVER_ATTEMPTS = 30;
 const MAX_PUSH_DELIVER_ATTEMPTS = 30;
 
 export class RemoteAgentRemoteError extends Error {
-  constructor(readonly info: RemoteAgentErrorInfo) {
+  constructor(readonly info: RemoteAgentErrorInfo, readonly phase?: 'start') {
     super(info.message || info.code);
     this.name = info.name ?? 'RemoteAgentRemoteError';
   }
@@ -354,7 +354,7 @@ export class RemoteAgentRunClient implements PolledRun {
         this.started = null;
         return;
       case 'start-failed':
-        this.started?.reject(new RemoteAgentRemoteError(item.error));
+        this.started?.reject(new RemoteAgentRemoteError(item.error, 'start'));
         this.started = null;
         return;
       case 'event':

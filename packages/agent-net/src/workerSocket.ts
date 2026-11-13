@@ -3,7 +3,7 @@ import { Worker } from 'node:worker_threads';
 import WebSocket from 'ws';
 import type { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { delegationVisibleTo, type DeviceCertificate, type DeviceView, type Delegation } from '@cindy/agent-net-protocol';
-import { verifyDelegation } from '@cindy/agent-net-relay';
+import { DatagramSendQueue, verifyDelegation } from '@cindy/agent-net-relay';
 import { delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
 import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
@@ -42,9 +42,13 @@ export interface AgentNetUplinkKeepalive {
  * official and self-hosted relays answer them already; no protocol change.
  */
 export const AGENT_NET_UPLINK_KEEPALIVE: AgentNetUplinkKeepalive = { intervalMs: 15_000, timeoutMs: 45_000 };
+/** Bytes Main lets wait in one relay WebSocket; on top of it the queue-delay limit in DatagramSendQueue applies. */
+const RELAY_SEND_BUFFER_CAP_BYTES = 1024 * 1024;
 export type AgentNetWorkerSocketOptions = AgentNetSocketOptions & {
   log?: AgentNetSocketLog;
   uplinkKeepalive?: AgentNetUplinkKeepalive;
+  /** See MAX_DATAGRAM_QUEUE_DELAY_MS; only tests shorten it. */
+  uplinkMaxQueueDelayMs?: number;
 };
 /** The encrypted transport/parser runs off Main; privileged outbound sockets retain the host's proxy policy. */
 export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSocket {
@@ -63,6 +67,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   private readonly renewals = new Map<number, { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   /** Last logged route per peer, so the log records changes rather than every status snapshot. */
   private readonly loggedPaths = new Map<string, 'direct' | 'relay' | null>();
+  private readonly relayQueues = new WeakMap<WebSocket, DatagramSendQueue>();
   private constructor(private readonly options: AgentNetWorkerSocketOptions, private client: AgentNetClient) { super(); }
   static async open(options: AgentNetWorkerSocketOptions & { workerFile: string | URL }): Promise<AgentNetWorkerSocket> {
     options.assertCurrent?.();
@@ -83,7 +88,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
-      log: _log, uplinkKeepalive: _keepalive, ...portable } = options;
+      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, ...portable } = options;
     socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap });
     try { await ready; setImmediate(() => { if (!socket.closed) socket.emit('open'); }); return socket; }
     catch (error) { socket.dispose(1006); throw error; }
@@ -192,9 +197,26 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     }
     const ws = this.network.get(message.id);
     if (message.type === 'ws-close') { ws?.terminate(); this.network.delete(message.id); }
-    else if (message.type === 'ws-send' && ws?.readyState === WebSocket.OPEN && ws.bufferedAmount < 1024 * 1024) {
-      ws.send(typeof message.data === 'string' ? message.data : Buffer.from(message.data));
+    else if (message.type === 'ws-send' && ws?.readyState === WebSocket.OPEN && ws.bufferedAmount < RELAY_SEND_BUFFER_CAP_BYTES) {
+      this.sendToRelay(ws, message.data);
     }
+  }
+  /** Presence text bypasses the queue-age check; new datagrams stop joining a stalled queue. */
+  private sendToRelay(ws: WebSocket, data: string | Uint8Array): void {
+    let queue = this.relayQueues.get(ws);
+    if (!queue) {
+      queue = new DatagramSendQueue(ws, {
+        stalled: (waitedMs, bufferedBytes) => this.options.log?.warn(`agent-net relay send queue has not moved for ${Math.round(waitedMs)}ms`
+          + ` (${bufferedBytes} bytes waiting); dropping new datagrams until it does, the transport resends them`),
+        moving: (dropped, droppedBytes, bufferedBytes) => {
+          if (!this.closed) this.options.log?.info(`agent-net relay send queue moving again; dropped ${dropped} datagrams`
+            + ` (${Math.round(droppedBytes / 1024)} KiB, ${bufferedBytes} bytes still waiting)`);
+        },
+      }, this.options.uplinkMaxQueueDelayMs);
+      this.relayQueues.set(ws, queue);
+    }
+    if (typeof data === 'string') queue.sendControl(data);
+    else queue.sendDatagram(Buffer.from(data));
   }
   /** Pings an open relay connection; without a pong in time it is closed, and the worker's
    * normal relay reconnect takes over. Peer connections survive the swap. */

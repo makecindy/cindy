@@ -12,6 +12,7 @@ export function projectAgentNetDevice(device: AgentNetDeviceView, selfId: string
     selfName: device.selfName ?? null,
     deviceInfo: null,
     platform: device.platform ?? null,
+    app: device.app,
     appVersion: device.appVersion ?? null,
     lastSeenAt: typeof device.lastSeenAt === 'number' ? new Date(device.lastSeenAt).toISOString() : null,
     online: device.online,
@@ -67,7 +68,11 @@ export async function readCurrentDeviceDirectory(
     const old = devices.get(device.deviceId);
     // A paired device can turn V2 off and remain online through V1. An online V2
     // row, including an explicit control-off, is authoritative for its V2 path.
-    if (!device.online && old?.online) continue;
+    if (!device.online && old?.online) {
+      // Liveness can come from V1 while App identity remains durable V2 metadata.
+      if (device.app !== undefined) devices.set(device.deviceId, { ...old, app: device.app });
+      continue;
+    }
     devices.set(device.deviceId, { ...old, ...device, deviceInfo: old?.deviceInfo ?? device.deviceInfo });
   }
   return { ...legacy.value, devices: [...devices.values()] };

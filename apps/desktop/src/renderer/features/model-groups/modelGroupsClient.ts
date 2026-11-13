@@ -90,9 +90,11 @@ export function useModelGroups(enabled = true): { config: ModelGroupsConfig; loa
 export async function resolveModelGroup(
   selection: ModelGroupSelection,
   context?: ModelGroupResolveRequest['context'],
+  /** 进行中的任务：只在它所在的运行位置里选。 */
+  location?: ModelGroupResolveRequest['location'],
 ): Promise<ModelGroupResolveResult | null> {
   try {
-    return await window.electronAPI.modelGroups.resolve({ selection, ...(context ? { context } : {}) });
+    return await window.electronAPI.modelGroups.resolve({ selection, ...(context ? { context } : {}), ...(location ? { location } : {}) });
   } catch (err) {
     log.warn('model group resolve failed', err);
     return null;

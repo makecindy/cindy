@@ -313,6 +313,7 @@
     "memberLimit": "一群議須同伴 2–6 位",
     "memberUnavailable": "有同伴今不可用，易一位再試",
     "mentionUnavailable": "所點名之成員已不可用，請重擇後再遣",
+    "mentionAmbiguous": "名「{{name}}」者非一，請於 @ 列中擇之",
     "notFound": "此群議已不存",
     "hostNotReady": "Cindy 尚在籌備，請稍後再試",
     "planOpen": "方分職事，畢或止後方可另派",

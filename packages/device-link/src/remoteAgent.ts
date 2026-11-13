@@ -165,7 +165,7 @@ export type RemoteAgentRequest =
   /** G releases only the exact allocation whose direct open failed; a later generation is untouched. */
   | { op: 'direct-release'; sessionId: string; generation: string }
   /** A direct guest asks O for its one-use group failover token after a machine-scoped failure. */
-  | { op: 'direct-switch'; sessionId: string }
+  | { op: 'direct-switch'; sessionId: string; generation?: string }
   /** Executor reports content-free metering to the group owner with an idempotency key. */
   | { op: 'direct-usage'; shareId: string; memberId: string; guestDeviceId: string;
       sessionId: string; generation: string; usageId: string; agentKind: RemoteAgentKind; samples: RemoteAgentUsageSample[] }
@@ -533,8 +533,10 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         || typeof v.generation !== 'string' || !ID.test(v.generation)) invalid();
       return { op: 'direct-release', sessionId: v.sessionId, generation: v.generation };
     case 'direct-switch':
-      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
-      return { op: 'direct-switch', sessionId: v.sessionId };
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
+        || (v.generation !== undefined && (typeof v.generation !== 'string' || !ID.test(v.generation)))) invalid();
+      return { op: 'direct-switch', sessionId: v.sessionId,
+        ...(typeof v.generation === 'string' ? { generation: v.generation } : {}) };
     case 'direct-usage': {
       if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
         || typeof v.generation !== 'string' || !ID.test(v.generation)

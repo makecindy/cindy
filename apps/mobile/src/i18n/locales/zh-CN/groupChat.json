@@ -313,6 +313,7 @@
     "memberLimit": "一个群需要 2–6 位伙伴",
     "memberUnavailable": "有伙伴现在不可用，换一位再试",
     "mentionUnavailable": "点名的成员已不可用，请重新选择后发送",
+    "mentionAmbiguous": "有多位成员叫「{{name}}」，请从 @ 列表里选择要找的那位",
     "notFound": "这个群聊已不存在",
     "hostNotReady": "Cindy 还在准备中，请稍后重试",
     "planOpen": "正在分工，做完或停止后才能安排新的",

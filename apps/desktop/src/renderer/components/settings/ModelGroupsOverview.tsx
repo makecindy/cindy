@@ -20,6 +20,7 @@ import {
   modelGroupCandidateKey,
   type ModelGroupCandidate,
   type ModelGroupsConfig,
+  type ModelGroupTraceQuota,
 } from '../../../shared/modelGroups';
 
 const log = createLogger('ModelGroupsOverview');
@@ -76,16 +77,59 @@ function relatedNodes(id: string, edges: readonly MapEdge[]): Set<string> {
   return out;
 }
 
-/** 最近一次选中这个来源时记下的余量；读不到额度或已过重置时刻时为 null。 */
-function remainingFor(candidate: CandidateRef, decisions: readonly ModelGroupDecision[], now: number): number | null {
+/** 一份额度读数还剩多少；读不到或已过重置时刻时为 null。 */
+function leftOf(quota: ModelGroupTraceQuota | null | undefined, now: number): number | null {
+  if (!quota || (quota.resetAtMs !== null && quota.resetAtMs <= now)) return null;
+  return Math.max(0, Math.min(100, Math.round(100 - quota.usedPercent)));
+}
+
+/**
+ * 来源格子上的余量：先用此刻读到的额度(与「试一下」、新任务选路同一份)；读不到时退回最近一次选中它时记下的。
+ */
+function remainingFor(
+  candidate: CandidateRef,
+  live: ReadonlyMap<string, ModelGroupTraceQuota | null>,
+  decisions: readonly ModelGroupDecision[],
+  now: number,
+): number | null {
   const key = modelGroupCandidateKey(candidate);
+  const current = leftOf(live.get(key), now);
+  if (current !== null) return current;
   const last = decisions.find((item) => {
     const picked = decisionCandidate(item);
     return !!picked && modelGroupCandidateKey(picked) === key;
   });
-  const quota = last?.quota;
-  if (!quota || (quota.resetAtMs !== null && quota.resetAtMs <= now)) return null;
-  return Math.max(0, Math.min(100, Math.round(100 - quota.usedPercent)));
+  return leftOf(last?.quota, now);
+}
+
+/**
+ * 打开总览时读一次各条路线每个来源此刻的额度：与「试一下」同一个只看不选的解析(不推进轮流、不记录)。
+ * 只在路线或来源变了时重读，不轮询。
+ */
+function useLiveSourceQuota(config: ModelGroupsConfig): ReadonlyMap<string, ModelGroupTraceQuota | null> {
+  const [live, setLive] = useState<ReadonlyMap<string, ModelGroupTraceQuota | null>>(() => new Map());
+  const routesKey = config.routes
+    .map((route) => `${route.id}\u0001${route.candidates.map((candidate) => modelGroupCandidateKey(candidate)).join('\u0002')}`)
+    .join('\u0003');
+  useEffect(() => {
+    let cancelled = false;
+    const ids = routesKey ? routesKey.split('\u0003').map((entry) => entry.split('\u0001')[0]) : [];
+    void Promise.all(ids.map((id) => window.electronAPI.modelGroups.resolve({ selection: { type: 'route', id }, dryRun: true })
+      .catch((error: unknown) => { log.warn('model group source quota unavailable', error); return null; })))
+      .then((results) => {
+        if (cancelled) return;
+        const next = new Map<string, ModelGroupTraceQuota | null>();
+        for (const result of results) {
+          for (const entry of result?.trace ?? []) {
+            const key = modelGroupCandidateKey(entry);
+            if (!next.get(key)) next.set(key, entry.quota ?? null);
+          }
+        }
+        setLive(next);
+      });
+    return () => { cancelled = true; };
+  }, [routesKey]);
+  return live;
 }
 
 function leftTone(left: number): string {
@@ -148,9 +192,10 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   );
 }
 
-function RelationMap({ config, decisions, onOpenRoute, namesOf }: {
+function RelationMap({ config, decisions, liveQuota, onOpenRoute, namesOf }: {
   config: ModelGroupsConfig;
   decisions: readonly ModelGroupDecision[];
+  liveQuota: ReadonlyMap<string, ModelGroupTraceQuota | null>;
   onOpenRoute(id: string): void;
   namesOf: CandidateNames;
 }) {
@@ -165,7 +210,7 @@ function RelationMap({ config, decisions, onOpenRoute, namesOf }: {
       const id = nodeId('source', key);
       if (!sources.has(key)) {
         const names = namesOf(candidate);
-        sources.set(key, { id, kind: 'source', name: `${names.modelName} · ${names.sourceLabel}`, candidate, left: remainingFor(candidate, decisions, now) });
+        sources.set(key, { id, kind: 'source', name: `${names.modelName} · ${names.sourceLabel}`, candidate, left: remainingFor(candidate, liveQuota, decisions, now) });
       }
       return id;
     };
@@ -181,7 +226,7 @@ function RelationMap({ config, decisions, onOpenRoute, namesOf }: {
       ],
       edges: list,
     };
-  }, [config, decisions, namesOf, onOpenRoute, t]);
+  }, [config, decisions, liveQuota, namesOf, onOpenRoute, t]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -310,7 +355,8 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
     return <SettingsCard><SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.overview.recentEmpty')}</SettingsBlock></SettingsCard>;
   }
   return (
-    <SettingsCard data-testid="model-groups-recent">
+    // 各行共用一套列：时间长短不一(今天只写时刻、更早的写日期)时，模型那一列仍在同一位置对齐。
+    <SettingsCard data-testid="model-groups-recent" className="grid grid-cols-[minmax(0,1fr)_minmax(0,232px)_auto] gap-x-4">
       {decisions.slice(0, RECENT_ROWS).map((item) => {
         const routed = item.outcome === 'routed';
         const picked = decisionCandidate(item);
@@ -327,7 +373,7 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
           <SettingsBlock
             key={`${item.at}:${item.groupType}:${item.groupId}`}
             data-model-group-decision={item.outcome}
-            className="grid grid-cols-[minmax(0,1fr)_minmax(0,232px)_auto] items-center gap-x-4 py-3"
+            className="col-span-3 grid grid-cols-subgrid items-center py-3"
           >
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="truncate text-13 font-medium leading-[1.5] text-[var(--settings-section-sublabel)]" title={item.groupName}>{item.groupName}</span>
@@ -378,6 +424,7 @@ export function ModelGroupsOverview({ config, onOpenRoute }: {
     ...(decisions ?? []).flatMap((item) => decisionCandidate(item) ?? []),
   ], [config, decisions]);
   const namesOf = useModelGroupCandidateNames(candidates);
+  const liveQuota = useLiveSourceQuota(config);
 
   useEffect(() => {
     let cancelled = false;
@@ -395,7 +442,7 @@ export function ModelGroupsOverview({ config, onOpenRoute }: {
     <>
       <SettingsSection title={t('modelGroups.overview.mapTitle')} description={t('modelGroups.overview.mapDescription')}>
         <SettingsCard>
-          <RelationMap config={config} decisions={decisions ?? []} onOpenRoute={onOpenRoute} namesOf={namesOf} />
+          <RelationMap config={config} decisions={decisions ?? []} liveQuota={liveQuota} onOpenRoute={onOpenRoute} namesOf={namesOf} />
           {(decisions ?? []).some((item) => item.outcome === 'routed') && (
             <div className="flex items-center gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-2.5 text-12 leading-[1.33] text-[var(--text-tertiary)]">
               <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--text-secondary)]" />

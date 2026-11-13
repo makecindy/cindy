@@ -183,8 +183,14 @@ vi.mock("../rpc-client.js", () => {
         }
         if (response.success && command.type === "get_commands" &&
             !Array.isArray((response.data as { commands?: unknown } | undefined)?.commands)) {
-          return { success: true, data: { commands: captured.hasRefreshCommand
-            ? [{ name: 'cindy-native-provider-refresh', source: 'extension' }] : [] } };
+          // Match the real RPC envelope and provenance contract. Malformed
+          // defaults start catalog retries that can leak into a later case's
+          // shared request buffer on slower runners (Windows unit shard 1/4).
+          return { type: 'response', command: 'get_commands', success: true,
+            data: { commands: captured.hasRefreshCommand
+              ? [{ name: 'cindy-native-provider-refresh', source: 'extension',
+                sourceInfo: { path: path.join(String(captured.env.PI_CODING_AGENT_DIR),
+                  'extensions', 'cindy-native-provider-refresh.ts') } }] : [] } };
         }
         if (response.success && command.type === "set_model") {
           captured.runtimeProvider = String(command.provider);
@@ -262,6 +268,8 @@ function testSubagentRunnerHost() {
 
 describe("Pi provider-aware model routing", () => {
   let agentHome = "";
+  const openSessions = new Set<Awaited<ReturnType<PiAgent['startSession']>>>();
+  let restoreStartSession = () => {};
 
   /**
    * runtime 文件名带每运行时 nonce(dev + 打包版 / passive 共用 userData 时的跨实例隔离),
@@ -300,11 +308,32 @@ describe("Pi provider-aware model routing", () => {
     captured.requestHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), "pi-provider-home-"));
     cwd = mkdtempSync(path.join(tmpdir(), "pi-provider-cwd-"));
+    const startSession = PiAgent.prototype.startSession;
+    const spy = vi.spyOn(PiAgent.prototype, 'startSession').mockImplementation(async function(this: PiAgent, options) {
+      const handle = await startSession.call(this, options);
+      const close = handle.close.bind(handle);
+      openSessions.add(handle);
+      handle.close = async (closeOptions) => {
+        openSessions.delete(handle);
+        await close(closeOptions);
+      };
+      return handle;
+    });
+    restoreStartSession = () => { spy.mockRestore(); };
   });
 
-  afterEach(() => {
-    rmSync(agentHome, { recursive: true, force: true });
-    rmSync(cwd, { recursive: true, force: true });
+  afterEach(async () => {
+    // Closing only the mock RPC process does not dispose the real handle's
+    // retry lifecycle. Stop remaining sessions before deleting their fixtures;
+    // explicit closes remove themselves, so teardown never double-closes them.
+    try {
+      await Promise.all([...openSessions].map((handle) => handle.close()));
+    } finally {
+      openSessions.clear();
+      restoreStartSession();
+      rmSync(agentHome, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   // Standard: the actual Pi launch passes the host account to auth and both authenticated proxy scopes.

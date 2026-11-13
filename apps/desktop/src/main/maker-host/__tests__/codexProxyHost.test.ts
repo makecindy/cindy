@@ -6355,19 +6355,40 @@ describe('codex proxy host', () => {
     expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
   });
 
-  it('round-trips exec for a custom Responses Provider that lacks native custom tools', async () => {
+  // Regression: a model-level Responses override must select the same adapter as
+  // a Responses runtime default; otherwise Kimi rejects the native exec tool.
+  it.each(['openai-responses', 'openai-chat'] as const)('round-trips exec with a %s runtime default and an effective Responses model', async (wireProtocol) => {
     const host = await freshCodexProxyHost();
+    const received: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const upstream = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        received.push({ path: req.url ?? '', body: JSON.parse(Buffer.concat(chunks).toString()) });
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          id: 'resp_local', object: 'response', status: 'completed', output: [
+            { type: 'message', id: 'msg_local', role: 'assistant', content: [{ type: 'output_text', text: 'continued' }] },
+          ],
+        }));
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const baseUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
     const { buildUserProvider } = await import('@cindy/model-providers');
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    setCustomProviderKeyReader(() => 'fixture-key');
     setCustomProviders([buildUserProvider({
       id: 'stealth',
       name: 'Stealth',
       runtimes: {
         codex: {
-          baseUrl: 'http://127.0.0.1:43168/v1',
-          wireProtocol: 'openai-responses',
-          models: [{ id: 'stealth/ox-alpha', name: 'OX Alpha' }],
+          baseUrl,
+          wireProtocol,
+          models: [{ id: 'stealth/ox-alpha', name: 'OX Alpha', route: {
+            baseUrl, wireProtocol: 'openai-responses',
+          } }],
         },
       },
     })]);
@@ -6465,10 +6486,33 @@ describe('codex proxy host', () => {
         call_id: 'call_exec',
         input: 'text("local")',
       });
+      // Capture actual serialized HTTP bytes through the production proxy,
+      // including a resumed tool result and the upstream's following answer.
+      const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      const proxy = await actualProxy.createAnthropicCompatProxy(mockState.createAnthropicCompatProxy.mock.calls[0]![0]);
+      try {
+        const response = await fetch(`${proxy.url}/responses`, {
+          method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'thread-stealth-exec' },
+          body: JSON.stringify({ model: 'stealth/ox-alpha', stream: false,
+            tools: [{ type: 'custom', name: 'exec', description: 'run a command' }],
+            input: [events[3].item, { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'local result' }],
+          }),
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ output: [{ content: [{ text: 'continued' }] }] });
+        expect(received).toEqual([{ path: '/v1/responses', body: expect.objectContaining({
+          tools: [expect.objectContaining({ type: 'function', name: 'exec' })],
+          input: [expect.objectContaining({ type: 'function_call', name: 'exec', call_id: 'call_exec' }),
+            expect.objectContaining({ type: 'function_call_output', call_id: 'call_exec', output: 'local result' })],
+        }) }]);
+      } finally { await proxy.dispose(); }
     } finally {
       host.unregister('session-stealth-exec');
       clearSessionProvider('session-stealth-exec');
       setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
     }
   });
 

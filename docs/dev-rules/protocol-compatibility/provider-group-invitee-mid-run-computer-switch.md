@@ -31,3 +31,16 @@ G 重新打开时换一台。G 与 O 之间新增四项可选内容，O 与 M �
   `provider-group/guestRelay.ts`(运行中失败的冷却)、`provider-group/guestSwitch.ts` 与 `provider-group/service.ts`(G 侧凭证与
   自动交接)、`maker-ipc/sessionAgentSwitchHandler.ts`(仅内部可用的 `forceRelocation`)；回归见
   `remote-agent/__tests__/groupRelay.test.ts`、`provider-group/__tests__/service.test.ts`、`guestSwitch.test.ts`。
+
+直连旧任务启动自愈（2026-11-13）：`direct-switch { sessionId, generation? }` 增加可选 UUID 授权代次，
+新版 O 在进入及签发后检查匹配，并在成功结果回传 `generation`；旧 G 忽略回包新增字段，旧请求不带代次仍沿用原规则。
+新 G 的启动恢复必须收到匹配代次的结果；旧 O 忽略请求字段且不回传代次时，保留原启动错误与改选入口，不猜测凭证归属。
+G 只将 M 的明确 `start-failed` 且保留 `AgentStartupStoppedError`／`AgentNotAuthenticatedError` 标识的错误作为启动恢复来源；
+本机错误、未确认退出的原生进程或不明结果的传输失败不替代该证据。旧 M 不提供明确退出标识时仍保留原失败。
+O 向自己的 M 使用既有 `maker:subscription-accounts` 的 `session {providerId, sessionId, model}` 只读查询，
+确认绑定账号不可用且有替代账号时，可签发一次允许原 M 参与的凭证；其排除列表可能为空，仍是有效凭证，
+必须执行原直连位置退役。重开走已有交接和全新隔离会话，不复用旧账号的原生 ID。
+同机换号记入该受邀者／任务的恢复轮次，再次失败仍避开该物理 M。旧 M 缺回执时继续原换机路径。
+仅扩展现有 end-to-end 业务 payload，不改 relay envelope、握手、allowlist、加密、服务端或自建中转内核；
+两类中转均用已有通用帧转发。回归补在 `roundtrip.test.ts`、`groupRelay.test.ts`、`fastPolicyRuntime.test.ts`
+及 `packages/device-link/src/__tests__/remoteAgent.test.ts`。

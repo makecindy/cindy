@@ -48,6 +48,16 @@ it('merges V1-only devices with V2 presence and preserves an online legacy route
   expect(fake.legacy).toHaveBeenCalledTimes(1);
 });
 
+// App metadata must reach the shared mobile controllable-device predicate.
+// Unit: real directory adapter; the old fixtures never contained a non-Cindy App.
+it('projects App identity from the encrypted directory, including offline rows', async () => {
+  fake.directory.mockResolvedValue([{ ...encryptedDevice('friend', false), app: 'cindy-friend' },
+    { ...encryptedDevice('shared', false), app: 'cindy-friend' }]);
+  expect(await request()).toMatchObject({ handled: true, value: { devices: [
+    { deviceId: 'old' }, { deviceId: 'shared', app: 'cindy-friend', online: true }, { deviceId: 'friend', app: 'cindy-friend', online: false },
+  ] } });
+});
+
 it.each(['PATCH', 'DELETE'])('keeps a V1-only device on the existing %s management path', async method => {
   expect(await request('/api/device-link/devices/old', { method, body: { name: 'Renamed' } })).toEqual({ handled: false });
   expect(fake.mutation).not.toHaveBeenCalled();

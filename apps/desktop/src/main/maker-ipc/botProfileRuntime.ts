@@ -31,6 +31,7 @@ import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botI
 import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { botLearningTracker } from './botLearningTracker.js';
+import { createProjectMemoryReceipts } from './botProjectLearning.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -630,7 +631,8 @@ export async function hydrateBotProfileRuntime(
   // by the teammate's own memory setting rather than the global one.
   // Every V2 lane (group and plan lanes too, wherever they run) shares that one project memory.
   const projectMode = !!workspaceDir && readBotProjectMode(config);
-  if (projectMode && opts.id) botLearningTracker.markProjectTeammate(opts.id);
+  if (projectMode && opts.id) await botLearningTracker.prepareProjectTeammate(opts.id,
+    fullLane && config.memory !== false ? () => createProjectMemoryReceipts(workspaceDir) : undefined);
   // V2 (2026-11-10, owner): one capability set in every session of the teammate — its own chats,
   // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Its Skills
   // are the project's own; lanes still never take the owner's personal Skills, and a chat-only
@@ -1048,6 +1050,9 @@ export async function hydrateBotProfileRuntime(
     ...(projectContext ? { projectMode: true } : {}),
     ...(teammates.length > 0 ? { teammates } : {}),
     contextSections: [
+      ...(projectMode && config.memory === false ? [
+        `Memory is disabled for this Cindy task. Do not read, search, save or maintain memories in ${JSON.stringify(path.join(workspaceDir, '.cindy', 'memory'))}, even when project instructions describe a memory route. This runtime setting overrides the project's memory instructions.`,
+      ] : []),
       buildBotProfileContextPrompt(profile.displayName),
       // Hermes-style Bot Mode is a property of the owner's Bot Chat (the permanent
       // Chat and its private topics). Delegation children keep Cindy's normal

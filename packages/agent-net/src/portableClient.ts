@@ -292,7 +292,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
   }
   presence(remoteControlEnabled: boolean, capabilities: readonly string[], metadata: import('@cindy/agent-net-protocol').DeviceMetadata = {}): void {
     if (!this.closed && this.ws.readyState === 1) this.ws.send(JSON.stringify({ type: 'presence', remoteControlEnabled, capabilities,
-      platform: metadata.platform, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
+      platform: metadata.platform, app: metadata.app, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
   }
   close(): void {
     if (this.closed) return;

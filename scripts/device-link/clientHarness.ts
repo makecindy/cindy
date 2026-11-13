@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION,
   type DeviceLinkFrameAuth,
   type DeviceLinkTiming,
+  type DeviceLinkTransferCodec,
   type Envelope,
   type InvokePayload,
   type LinkOpenPayload,
@@ -27,6 +28,8 @@ export function createClient(
     desktop?: boolean;
     /** 自建中转的设备签名钩子(与 Desktop / Mobile 传给 DeviceLinkClient 的同一选项)。 */
     frameAuth?: () => DeviceLinkFrameAuth | null;
+    /** 与 Desktop / Mobile 注入的编解码同一选项；缺省时走未声明压缩能力的旧路径。 */
+    transferCodec?: DeviceLinkTransferCodec;
   } = {},
 ) {
   const sockets: WebSocket[] = [];
@@ -37,6 +40,7 @@ export function createClient(
     getToken: async () => options.token ?? `fixture-${id}`,
     authorizationScheme: options.authorizationScheme,
     frameAuth: options.frameAuth,
+    transferCodec: options.transferCodec,
     getHello: () => ({
       deviceName: `Integration ${id}`,
       platform: host || options.desktop ? "darwin" : "ios",

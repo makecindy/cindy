@@ -16,6 +16,7 @@ import {
 import { androidInstaller } from './androidInstaller';
 import type { AndroidInstallState } from './androidInstallController';
 import { indeterminateSweepRange, presentAndroidUpdate, type AndroidUpdatePresentation } from './androidUpdatePresentation';
+import { androidUpdateSheetFrameWidth } from './androidUpdateSheetLayout';
 
 const APP_ICON = require('../../assets/update/app-icon.jpg');
 const APP_ICON_SIZE = 48;
@@ -89,6 +90,7 @@ function AndroidUpdateCard({ state }: { state: AndroidInstallState }) {
         { paddingBottom: nativeSheet ? spacing.lg : Math.max(insets.bottom, spacing.md) + spacing.sm },
         // Short windows (landscape, split screen): the details scroll and the actions stay reachable.
         { maxHeight: nativeSheet ? nativeSheet.height : viewport.height - insets.top },
+        { width: androidUpdateSheetFrameWidth(Boolean(nativeSheet), viewport.width) },
       ]}
       testID="update.android"
     >
@@ -146,7 +148,7 @@ function AndroidUpdateCard({ state }: { state: AndroidInstallState }) {
         </View>
       </ScrollView>
 
-      <View style={styles.actions}>
+      <View style={styles.actions} testID="update.android.actions">
         <MainWindowActionButton
           grow
           numberOfLines={0}
@@ -233,7 +235,13 @@ function ProgressTrack({ value }: { value: number | null }) {
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  card: { paddingHorizontal: SHEET_HORIZONTAL_PADDING, paddingTop: spacing.sm },
+  // RNHostView measures this card by its contents. Stretch it explicitly so the
+  // loading row and the footer action use the full bottom-sheet width.
+  card: {
+    alignSelf: 'stretch',
+    paddingHorizontal: SHEET_HORIZONTAL_PADDING,
+    paddingTop: spacing.sm,
+  },
   // Foldable panes and floating windows use the compatibility shell, which has no Material container.
   cardCompatible: {
     backgroundColor: colors.surfaceElevated,
@@ -243,7 +251,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     paddingTop: spacing.xl,
   },
-  body: { flexGrow: 0, flexShrink: 1 },
+  body: { alignSelf: 'stretch', flexGrow: 0, flexShrink: 1, width: '100%' },
   cardFloating: { borderRadius: radius.container },
   header: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   appIcon: {
@@ -297,7 +305,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   ready: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
   readyText: { color: colors.textSecondary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl },
+  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl, width: '100%' },
   // Secondary actions in a paired row are filled chips without a stroke (same as CompanionCardButton).
   // Wrapped labels keep breathing room inside the pill and stay centered.
   actionButton: { paddingVertical: spacing.sm },

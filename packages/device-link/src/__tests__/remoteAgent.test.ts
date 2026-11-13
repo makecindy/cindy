@@ -21,6 +21,15 @@ import {
 const runId = '0f9c4a2e-6d1b-4c3a-9e8f-1a2b3c4d5e6f';
 const otherId = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d';
 
+// Unit: direct-switch's optional generation must survive the production parser
+// so an old startup cannot authorize recovery of a replacement allocation.
+it('preserves optional direct-switch generations and accepts legacy requests', () => {
+  const request = { op: 'direct-switch', sessionId: 'task' };
+  expect(parseRemoteAgentRequest(request)).toEqual(request);
+  expect(parseRemoteAgentRequest({ ...request, generation: runId })).toEqual({ ...request, generation: runId });
+  expect(() => parseRemoteAgentRequest({ ...request, generation: 'invalid' })).toThrow();
+});
+
 describe('subscription Fast policy wire compatibility', () => {
   it('advertises support only with an explicit capability', () => {
     const caps = { version: 1, maxRuns: 10, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };

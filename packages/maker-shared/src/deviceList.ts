@@ -42,6 +42,7 @@ export interface DeviceListDeviceLike {
   name: string;
   online: boolean;
   platform: string | null;
+  app?: string;
   remoteControlEnabled: boolean;
 }
 
@@ -71,7 +72,12 @@ export interface DeviceListPresentation {
 }
 
 export function isControllableDevice(device: DeviceListDeviceLike): boolean {
-  return device.online && device.remoteControlEnabled && !device.isSelf && !isMobilePlatform(device.platform);
+  return device.online && device.remoteControlEnabled && !device.isSelf && isCindyApp(device.app) && !isMobilePlatform(device.platform);
+}
+
+/** Self-reported UX routing only. Missing App labels preserve legacy Cindy behavior. */
+export function isCindyApp(app: string | null | undefined): boolean {
+  return app == null || app === 'cindy';
 }
 
 /**
@@ -99,7 +105,7 @@ export function toDeviceListItems<TDevice extends DeviceListDeviceLike>(
 ): DeviceListItem<TDevice>[] {
   return devices
     .map((device) => toDeviceListItem(device, now, revokedDevices, localizer))
-    .filter((item) => item.state !== 'self' && !isMobilePlatform(item.device.platform))
+    .filter((item) => item.state !== 'self' && isCindyApp(item.device.app) && !isMobilePlatform(item.device.platform))
     .map((item, index) => ({ index, item }))
     .sort((a, b) => compareDeviceListItems(a.item, b.item) || a.index - b.index)
     .map(({ item }) => item);

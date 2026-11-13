@@ -17,6 +17,8 @@ import path from 'node:path';
 import { BrowserWindow } from 'electron';
 
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
+import { getDbPathForUser } from '../localDb/index.js';
+import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { MEMORY_STORAGE_MIGRATION_RECEIPT, parseFilename } from '@cindy/maker-core';
 import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAliases.js';
@@ -37,6 +39,7 @@ import {
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate } from './botProjectTemplate.js';
 import { routeModelFields } from './botV2Carryover.js';
+import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import type { BotProjectRepositoryStatus } from '../../shared/botProjectMode.js';
@@ -426,8 +429,7 @@ export function botProjectMemoryReview(input: {
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
-    // A goal, not a procedure: the task picks its own tools and material.
-    prompt: `Look back at ${name}'s conversations from the last day (teammate id ${input.botId}) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly.`,
+    prompt: `Review ${name}'s conversations from the last day (teammate id ${input.botId}). Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`,
     cronExpr: '30 3 * * *',
     timezone: input.timezone,
     recurring: true,
@@ -437,12 +439,14 @@ export function botProjectMemoryReview(input: {
   };
 }
 
-/** Adds the review once; an owner's later edit or removal of it in the project is kept. */
+/** Upgrade only the supplied old prompt; preserve edits, schedule/model choices and removal. */
 export async function ensureBotProjectAutomations(input: {
   botId: string;
   displayName: string;
   workingDir: string;
   route?: BotModelRoute | null;
+  /** Receipt path: do not resurrect a review removed after the initial V2 upgrade. */
+  addMissing?: boolean;
 }): Promise<boolean> {
   // Loaded on use: the scheduler host is not part of the teammate profile store's import graph.
   const [{ getProjectAutomationLoader }, { t }] = await Promise.all([
@@ -450,13 +454,27 @@ export async function ensureBotProjectAutomations(input: {
   ]);
   const loader = getProjectAutomationLoader();
   const existing = await loader.loadProjectSchedules(input.workingDir);
-  if (existing?.some((config) => config.id === BOT_PROJECT_MEMORY_REVIEW_ID)) return false;
+  const current = existing?.find((config) => config.id === BOT_PROJECT_MEMORY_REVIEW_ID);
+  if (!current && input.addMissing === false) return false;
+  const suppliedHook = current?.preRunHook?.command === MEMORY_REVIEW_HOOK_COMMAND;
+  const legacyHook = current?.preRunHook?.command === LEGACY_MEMORY_REVIEW_HOOK_COMMAND;
+  if (current && !suppliedHook && !legacyHook && (current.preRunHook || !current.prompt?.startsWith('Look back at ')
+    || !current.prompt.endsWith(`'s conversations from the last day (teammate id ${input.botId}) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly.`))) return false;
+  const userId = getCurrentDbClientUserId();
+  if (!userId) throw new Error('Memory review requires the active account database');
+  const databasePath = getDbPathForUser(userId);
+  const preRunHook = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
+  if (suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) return false;
   // An existing file that cannot be read whole is kept: the upgrade fails and retries next start.
-  await loader.upsertSchedule(input.workingDir, botProjectMemoryReview({
+  const defaults = botProjectMemoryReview({
     ...input,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
-  }), { keepUnreadable: true });
+  });
+  await loader.upsertSchedule(input.workingDir, {
+    ...defaults, ...current, prompt: legacyHook ? current!.prompt : defaults.prompt,
+    preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
+  }, { keepUnreadable: true });
   return true;
 }
 

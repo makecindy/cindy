@@ -617,6 +617,16 @@
           "$value": "{reference.defaults.process-utility-icon.dark}"
         }
       },
+      "remote-agent-net-accent": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.remote-agent-net-accent.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.remote-agent-net-accent.dark}"
+        }
+      },
       "usage-model-1": {
         "light": {
           "$type": "color",
