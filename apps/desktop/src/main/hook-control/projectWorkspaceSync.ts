@@ -56,6 +56,8 @@ export function createProjectWorkspaceSync(deps: ProjectWorkspaceSyncDeps): Proj
       if (!ready || !ready.isCurrent() || deps.getStore() !== store) return;
       let failed = false;
       for (const directory of Object.values(store.get().workspaces)) {
+        // 逐个登记之间可能换了账号: 目录来自旧账号的配置, 不能登记进新账号的项目列表。
+        if (!ready.isCurrent() || deps.getStore() !== store) return;
         try {
           await deps.registerDirectory(directory);
         } catch (err) {

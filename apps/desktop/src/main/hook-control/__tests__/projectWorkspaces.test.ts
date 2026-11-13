@@ -63,6 +63,18 @@ describe('planProjectWorkspaces', () => {
     ]);
   });
 
+  // PR #10291 review(第九轮): 升级前的配置允许同一个目录有两个别名, 默认项目可能用其中任意
+  // 一个; 改名只记第一个时, 用另一个别名的默认项目会被清掉。
+  it('同一个目录的多个旧别名都记成改名', () => {
+    const result = plan({ a1: '/code/cindy', a2: '/code/cindy' }, [{ path: '/code/cindy', name: 'cindy' }]);
+    expect(result.workspaces).toEqual({ cindy: '/code/cindy' });
+    expect(result.renames).toEqual([
+      { from: 'a1', to: 'cindy' },
+      { from: 'a2', to: 'cindy' },
+    ]);
+    expect(result.retired).toEqual({ a1: '/code/cindy', a2: '/code/cindy' });
+  });
+
   it('侧栏里改名: 名称跟着改; 新来的同名项目不抢走旧项目的名字', () => {
     const renamed = plan({ cindy: '/code/cindy' }, [{ path: '/code/cindy', name: '主仓库' }]);
     expect(renamed.workspaces).toEqual({ 主仓库: '/code/cindy' });
@@ -262,6 +274,27 @@ describe('createProjectWorkspaceSync', () => {
       projectCatalogMigrated: true,
       workspaces: { cindy: '/code/cindy' },
     });
+  });
+
+  // PR #10291 review(第九轮): 迁移逐个登记目录的途中换了账号, 后面的目录会登记进新账号。
+  it('升级迁移途中换了账号: 立刻停下, 剩下的目录不再登记', async () => {
+    const mem = memoryStore({ workspaces: { a: '/code/a', b: '/code/b' } });
+    let current = true;
+    const registered: string[] = [];
+    const sync = createProjectWorkspaceSync({
+      getStore: () => mem.store,
+      loadCatalog: async () => ({ projects: [], isCurrent: () => current, isRemoved: () => false }),
+      registerDirectory: async (directory) => {
+        registered.push(directory);
+        current = false;
+      },
+      onSynced: vi.fn(),
+      log: { warn: () => {} },
+    });
+
+    await sync.run();
+    expect(registered).toEqual(['/code/a']);
+    expect(mem.state().projectCatalogMigrated).toBeUndefined();
   });
 
   it('项目存储没就绪或读取期间换了账号: 不动现有清单, 也不记成已迁移', async () => {

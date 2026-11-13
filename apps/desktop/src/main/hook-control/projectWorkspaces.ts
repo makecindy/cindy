@@ -199,15 +199,20 @@ export function planProjectWorkspaces(input: {
       taken.add(existing);
     }
   });
-  const renames: ProjectWorkspaceRename[] = [];
   projects.forEach((project, index) => {
     if (assigned.has(index)) return;
     const name = pickName(project, bases[index]!, isFreeFor(keyOf(project.path)));
     assigned.set(index, name);
     taken.add(name);
-    const previous = currentAliasByKey.get(keyOf(project.path));
-    if (previous !== undefined && previous !== name) renames.push({ from: previous, to: name });
   });
+  // 改名: 现用名称里每一个指着这个项目、又不是它新名称的, 都算(升级前的配置允许同一个目录
+  // 有两个别名; 默认项目用的可能是其中任意一个, 只记第一个的话另一个会被当成清单外清掉)。
+  const nameByKey = new Map(projects.map((project, index) => [keyOf(project.path), assigned.get(index)!] as const));
+  const renames: ProjectWorkspaceRename[] = [];
+  for (const [alias, directory] of Object.entries(input.current)) {
+    const name = nameByKey.get(keyOf(directory));
+    if (name !== undefined && name !== alias) renames.push({ from: alias, to: name });
+  }
 
   const workspaces: Record<string, string> = {};
   projects.forEach((project, index) => {
