@@ -204,16 +204,20 @@ export function buildFilename(type: MemoryType, slug: string): string {
  * 也不新建; 只有没有存量分片时才拒绝, 避免再增生双前缀。
  */
 function validateNoTypePrefix(type: MemoryType, slug: string): void {
+  // 提示里的示例必须自己也能过本校验, 否则调用方照着重试还是 invalid-slug (#10274 review P1)
+  const example = `brief-${type}`;
   if (slug === type) {
     throw new MemoryError(
       'invalid-slug',
-      `slug 不能等于 type 名 "${type}", 请传纯 slug (如 "${type}-brief")`,
+      `slug 不能等于 type 名 "${type}", 请传纯 slug (如 "${example}")`,
     );
   }
   if (slug.startsWith(`${type}_`) || slug.startsWith(`${type}-`)) {
+    const stripped = addressKey(type, slug);
+    const suggestion = SLUG_REGEX.test(stripped) && stripped !== type ? stripped : example;
     throw new MemoryError(
       'invalid-slug',
-      `slug "${slug}" 已带 type 前缀 "${type}${slug[type.length]}", 请传纯 slug (如 "${addressKey(type, slug) || type + '-brief'}")`,
+      `slug "${slug}" 已带 type 前缀 "${type}${slug[type.length]}", 请传纯 slug (如 "${suggestion}")`,
     );
   }
 }

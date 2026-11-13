@@ -161,6 +161,15 @@ describe('MemoryStorage · 分片地址解析', () => {
       () => true,
     );
 
+  /** 建议值必须能直接重发, 否则提示是死链 (#10274 review P1) */
+  async function suggestionOf(name: string): Promise<string> {
+    const err = await storage.write(opts(name)).catch((e: unknown) => e);
+    expect(String(err)).toMatch(/invalid-slug/);
+    const suggestion = /如 "([^"]+)"/.exec(String(err))?.[1];
+    expect(suggestion).toBeTruthy();
+    return suggestion as string;
+  }
+
   it('带前缀 slug / 索引文件名都命中存量双前缀分片, 不新建', async () => {
     await seedLegacyShard();
 
@@ -190,9 +199,21 @@ describe('MemoryStorage · 分片地址解析', () => {
     expect(await readFile(path.join(dir, 'project_fresh-note.md'), 'utf8')).toContain('v1');
   });
 
-  it('新建时拒绝 <type>- 前缀, 并给出可用的纯 slug', async () => {
-    await expect(storage.write(opts('project-fresh'))).rejects.toThrow(/invalid-slug.*fresh/);
+  it('新建时拒绝 <type>- 前缀, 建议的纯 slug 可直接重发', async () => {
+    const suggestion = await suggestionOf('project-fresh');
     expect(await missing('project_project-fresh.md')).toBe(true);
+    const result = await storage.write(opts(suggestion));
+    expect(result.filename).toBe(`project_${suggestion}.md`);
+  });
+
+  it('name 等于 type 或去前缀后等于 type 时, 建议值同样可直接重发', async () => {
+    for (const name of ['project', 'project_project']) {
+      const suggestion = await suggestionOf(name);
+      await expect(storage.write(opts(suggestion))).resolves.toMatchObject({
+        filename: `project_${suggestion}.md`,
+      });
+      await rm(path.join(dir, `project_${suggestion}.md`));
+    }
   });
 
   it('slug 长度以 storage 上限为准, 带 type 前缀与 .md 的索引写法不算超长', async () => {
