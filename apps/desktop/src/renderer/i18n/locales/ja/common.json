@@ -7863,6 +7863,7 @@
         "install": "インストール",
         "details": "詳細",
         "detailsAria": "{{name}} の詳細を表示",
+        "loadingDetails": "詳細を読み込み中…",
         "update": "マーケットから更新",
         "updateTo": "v{{version}} に更新",
         "installed": "インストール済み",

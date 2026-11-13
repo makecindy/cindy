@@ -7863,6 +7863,7 @@
         "install": "納",
         "details": "詳",
         "detailsAria": "觀 {{name}} 之詳情",
+        "loadingDetails": "方載詳情…",
         "update": "自坊更新",
         "updateTo": "更新至 v{{version}}",
         "installed": "已納",

@@ -7973,6 +7973,7 @@
         "install": "Instalar",
         "details": "Detalhes",
         "detailsAria": "Ver detalhes de {{name}}",
+        "loadingDetails": "A carregar detalhes…",
         "update": "Atualizar a partir do mercado",
         "updateTo": "Atualizar para v{{version}}",
         "installed": "Instalado",
