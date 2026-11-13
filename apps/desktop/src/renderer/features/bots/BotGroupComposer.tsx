@@ -180,6 +180,7 @@ export function BotGroupComposer({
   draftKey,
   members,
   running,
+  canStop = true,
   disabled = false,
   planState = null,
   divisionSteps = false,
@@ -204,6 +205,7 @@ export function BotGroupComposer({
   draftKey: string;
   members: readonly BotGroupMemberView[];
   running: boolean;
+  canStop?: boolean;
   /** Archived group: nothing can be sent. */
   disabled?: boolean;
   /** The group's open plan, for placeholders and the 「安排分工」 gate. */
@@ -304,7 +306,7 @@ export function BotGroupComposer({
   const tooManyAttachments = attachmentCount > BOT_GROUP_ATTACHMENTS_MAX;
   const canSend =
     !disabled && (trimmed.length > 0 || attachmentCount > 0) && !tooLong && !tooManyAttachments && hasMembers;
-  const showStop = !thread && running && trimmed.length === 0 && attachmentCount === 0;
+  const showStop = !thread && canStop && running && trimmed.length === 0 && attachmentCount === 0;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
   // Picking 引用回复 brings the caret here, ready to type the reply; picking the same message
@@ -357,16 +359,19 @@ export function BotGroupComposer({
    */
   const sendThreadReply = async () => {
     if (!canSend || sendingRef.current || getBotGroupThreadReplyAttempt(draftKey)?.sending || !sendReply) return;
-    groupMask?.participate();
     const files = attachmentState.attachments;
     const attachmentSignature = botGroupAttachmentSignature(files);
     const previous = getBotGroupThreadReplyAttempt(draftKey);
-    const attempt: BotGroupThreadReplyAttempt =
-      previous && previous.text === trimmed
+    const retry = previous && previous.text === trimmed
       && previous.attachmentSignature === attachmentSignature
-      && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions)
-        ? previous
-        : {
+      && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions) ? previous : null;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    // A retry is read against its own roster, like its targets: a later namesake does not hold it.
+    const [ambiguousName] = mention.ambiguous(text, retry?.roster);
+    if (ambiguousName) { setError(t('bots.groupChat.errors.mentionAmbiguous', { name: ambiguousName })); return; }
+    groupMask?.participate();
+    const attempt: BotGroupThreadReplyAttempt =
+      retry ?? {
             text: trimmed, draft: text, clientId: crypto.randomUUID(), attachmentSignature, files,
             mentions: mention.resolve(text), roster: members, tracked: mention.tracked, sending: true,
           };
@@ -481,6 +486,12 @@ export function BotGroupComposer({
     if (!canSend || sendingRef.current || textRef.current !== text || attachmentsRef.current !== attachmentState.attachments) return;
     if (!botGroupApi()) {
       toast.error(t('bots.groupChat.composer.sendFailed'));
+      return;
+    }
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = mention.ambiguous(text);
+    if (ambiguousName) {
+      toast.error(t('bots.groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
       return;
     }
     groupMask?.participate();
@@ -631,7 +642,7 @@ export function BotGroupComposer({
 
   return (
     <div className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
-      <div className={BOT_GROUP_COMPOSER_COLUMN}>
+      <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (

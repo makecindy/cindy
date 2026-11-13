@@ -1,3 +1,4 @@
+import type { TaskTag } from '@cindy/maker-shared';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import type { SessionSource } from './sessionSource';
@@ -53,6 +54,8 @@ export interface ConversationSearchFilters {
 export type ConversationSearchMatchKind = 'title' | 'content' | 'both';
 
 export interface ConversationSearchSessionSummary {
+  /** Optional for search responses from older hosts. */
+  tags?: TaskTag[];
   id: string;
   title: string;
   workingDir: string | null;

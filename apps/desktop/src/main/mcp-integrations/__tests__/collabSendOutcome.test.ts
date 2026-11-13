@@ -1,4 +1,7 @@
 import type { SessionSendResult } from '@cindy/maker-core';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockState = vi.hoisted(() => ({
@@ -61,23 +64,18 @@ vi.mock('@cindy/mcps', () => ({
   setSessionPathAuthorizer: vi.fn(),
   createLiziMcpProviders: vi.fn((config: Record<string, unknown>) => {
     mockState.capturedProvidersConfig = config;
-    return [
+    return ['cindy_orca', 'cindy_computer', 'cindy_android'].map((name) => (
       {
-        name: 'cindy_orca',
+        name,
         isEnabled: () => true,
         toClaudeSdkConfig: () => null,
-      },
-    ];
+      }
+    ));
   }),
 }));
 
-vi.mock('../../maker-host/plugins/builtin-plugins.js', () => ({
-  BUILTIN_LIZI_MCP_IDS: ['cindy_orca', 'cindy_helper'],
-  pluginIdForProviderName: (name: string) =>
-    name === 'cindy_orca'
-      ? 'collab'
-      : name,
-}));
+vi.mock('../computer.desktop.js', () => ({ getComputerMcpDeps: vi.fn(() => ({})) }));
+vi.mock('../android.js', () => ({ getAndroidMcpDeps: vi.fn(() => ({})) }));
 
 vi.mock('../../maker-host/index.js', () => ({
   getPluginRegistry: () => ({
@@ -88,6 +86,10 @@ vi.mock('../../maker-host/index.js', () => ({
 vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduler: () => null,
 }));
+// This collaboration fixture exercises provider wiring without Desktop history/IPC setup.
+vi.mock('../historyAttachment.desktop.js', () => ({ readDesktopHistoryAttachment: vi.fn() }));
+vi.mock('../../maker-ipc/fork.js', () => ({ forkTaskAtMessage: vi.fn() }));
+vi.mock('../../maker-ipc/rewind.js', () => ({ commitTaskRewind: vi.fn() }));
 
 vi.mock('../../im/index.js', () => ({
   feishuIm: mockState.personalFeishu,
@@ -143,12 +145,103 @@ import { createDesktopMcpProviders } from '../mcp-providers.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
-import { beginAppSessionBoundary, commitVolatileAppSession } from '../../appSessionState.js';
+import { beginAppSessionBoundary, commitVolatileAppSession, ownerScopedUserDataPath } from '../../appSessionState.js';
+import * as userDataPath from '../../userDataPath.js';
+import { createPluginRegistry, resetPluginRegistry } from '../../maker-host/plugins/index.js';
+import { getComputerMcpDeps } from '../computer.desktop.js';
+import { getAndroidMcpDeps } from '../android.js';
+import {
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+} from '../codexBuiltinToolPolicy.js';
 
 const botCapabilities = {
   list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
   select: vi.fn(async () => ({ ok: true as const, joined: true, effective: 'next-turn' as const })),
 };
+
+// #9940, unit: exercise the real Desktop provider gate, registry factory and
+// settings reader across owner commits. Existing registry tests only wrap a
+// fixed registry, so they miss providers constructed before login. Driver
+// factories are isolated; their injected call-time gates are also checked.
+describe('Desktop providers across account changes', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    'reads the current owner for %s without widening frozen or bridge policy',
+    async (agentKind) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-provider-owner-'));
+      const userData = vi.spyOn(userDataPath, 'getUserDataDir').mockReturnValue(root);
+      try {
+        commitVolatileAppSession('cloud', 'enabled-owner');
+        const enabledPath = ownerScopedUserDataPath();
+        fs.mkdirSync(enabledPath, { recursive: true });
+        fs.writeFileSync(path.join(enabledPath, 'builtin-tools-settings.json'), JSON.stringify({
+          builtinTools: { computer: { enabled: true }, android: { enabled: true } },
+        }));
+        commitVolatileAppSession('cloud', 'disabled-owner');
+        const disabledPath = ownerScopedUserDataPath();
+        fs.mkdirSync(disabledPath, { recursive: true });
+        fs.writeFileSync(path.join(disabledPath, 'builtin-tools-settings.json'), JSON.stringify({
+          builtinTools: { computer: { enabled: false }, android: { enabled: false } },
+        }));
+        commitVolatileAppSession('signed-out');
+        resetPluginRegistry();
+        const providers = createDesktopMcpProviders({
+          botCapabilities,
+          getMakerMemoryManager: vi.fn(),
+          lspPool: {} as never,
+          get pluginRegistry() { return createPluginRegistry(); },
+          invokeRemote: vi.fn(),
+        });
+        const machines = providers.filter((p) => ['cindy_computer', 'cindy_android'].includes(p.name));
+        expect(machines).toHaveLength(2);
+        const context = { agentKind, workingDir: path.join(root, 'project') };
+        const enabled = () => machines.map((p) => p.isEnabled?.(context));
+        const callContext = { agentKind };
+        const computerGate = vi.mocked(getComputerMcpDeps).mock.calls.at(-1)![0]!.isComputerUseEnabled!;
+        const androidGate = vi.mocked(getAndroidMcpDeps).mock.calls.at(-1)![0]!.isAndroidAutomationEnabled!;
+        const callable = () => [computerGate(callContext), androidGate(callContext)];
+        // Codex keeps its bridge-creation snapshot for busy turns; its outer
+        // provider gate still excludes disabled machine tools when rebuilt.
+        const disabledCalls = agentKind === 'codex' ? [true, true] : [false, false];
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+
+        commitVolatileAppSession('cloud', 'enabled-owner');
+        expect(enabled()).toEqual([true, true]);
+        expect(callable()).toEqual([true, true]);
+        for (const provider of machines) {
+          expect(provider.isEnabled?.({ ...context, workingDir: '' })).toBe(true);
+          expect(provider.isEnabled?.({ ...context, vendorOptions: {
+            [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['memory'],
+          } })).toBe(false);
+          expect(provider.isEnabled?.({ ...context, vendorOptions: {
+            [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['computer', 'android'],
+          } })).toBe(false);
+        }
+        await createPluginRegistry().setEnabled('computer', false);
+        await createPluginRegistry().setEnabled('android', false);
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+        await createPluginRegistry().setEnabled('computer', true);
+        await createPluginRegistry().setEnabled('android', true);
+        expect(enabled()).toEqual([true, true]);
+
+        commitVolatileAppSession('cloud', 'disabled-owner');
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+        expect(machines.map((p) => p.isEnabled?.({ ...context, workingDir: '' }))).toEqual([false, false]);
+        commitVolatileAppSession('signed-out');
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+      } finally {
+        commitVolatileAppSession('signed-out');
+        resetPluginRegistry();
+        userData.mockRestore();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
 function collabMeta(overrides: Record<string, unknown> = {}) {
   return {

@@ -13,20 +13,21 @@ import type { ProviderView } from '@cindy/model-providers';
 import { VOICE_INPUT_ASR_PROFILES } from '../../shared/voiceInputAsrProfiles';
 import {
   deriveRemoteReadiness,
-  pickVoiceInputDialogCopy,
   resolveRemoteProviderProbe,
   sourceReadyFromProviderList,
 } from '@/hooks/useVendorAuthGate';
 import { readinessFromBinaryStatus } from '@/hooks/useVendorReadiness';
 
 describe('readinessFromBinaryStatus（本地运行时就绪推导）', () => {
-  it('Codex 与 Pi 缺少本地二进制时都返回 binary-missing', () => {
+  // 断网首装后 Claude Code 也可能尚未安装,三个 agent 同一规则。
+  it('任一 agent 缺少本地二进制时都返回 binary-missing', () => {
+    expect(readinessFromBinaryStatus('cc', false)).toBe('binary-missing');
     expect(readinessFromBinaryStatus('codex', false)).toBe('binary-missing');
     expect(readinessFromBinaryStatus('pi', false)).toBe('binary-missing');
   });
 
-  it('Claude 不依赖该二进制轴，已就绪时不产生覆盖状态', () => {
-    expect(readinessFromBinaryStatus('cc', false)).toBeNull();
+  it('已就绪时不产生覆盖状态', () => {
+    expect(readinessFromBinaryStatus('cc', true)).toBeNull();
     expect(readinessFromBinaryStatus('codex', true)).toBeNull();
     expect(readinessFromBinaryStatus('pi', true)).toBeNull();
   });
@@ -87,13 +88,13 @@ describe('deriveRemoteReadiness（被控端就绪推导）', () => {
     ).toBe('binary-missing');
   });
 
-  it('cc:binary 随包,binaryReady 不参与判定', () => {
+  it('cc:被控端断网首装未装 Claude Code 时报组件缺失;null(跳过查询)不触发', () => {
     expect(
       deriveRemoteReadiness('cc', { binaryReady: false, sourceReady: true, authReady: null }),
-    ).toBe('ready');
+    ).toBe('binary-missing');
     expect(
-      deriveRemoteReadiness('cc', { binaryReady: false, sourceReady: false, authReady: null }),
-    ).toBe('unauthenticated');
+      deriveRemoteReadiness('cc', { binaryReady: null, sourceReady: true, authReady: null }),
+    ).toBe('ready');
   });
 });
 
@@ -155,31 +156,5 @@ describe('sourceReadyFromProviderList（隧道 provider:list 响应解析）', (
 describe('Codex voice input settings target', () => {
   it('routes the Codex ASR profile to Providers, matching the dialog copy', () => {
     expect(VOICE_INPUT_ASR_PROFILES['openai-realtime-whisper'].settingsTab).toBe('providers');
-  });
-});
-
-describe('pickVoiceInputDialogCopy（语音输入缺认证文案）', () => {
-  const copy: Parameters<typeof pickVoiceInputDialogCopy>[0] = {
-    'no-source': { title: 'no-source', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-    'voice-api-key-unauth': { title: 'gateway', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-    'voice-direct-api-key-unauth': { title: 'direct-key', description: '', confirmText: '', cancelText: '', settingsTab: 'api-keys' },
-    'codex-voice-unauth': { title: 'codex', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-    'codex-binary-missing': { title: 'binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-    'pi-binary-missing': { title: 'pi-binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-  };
-
-  it('api-key + providers 使用 XD Gateway 文案', () => {
-    expect(pickVoiceInputDialogCopy(copy, { auth: 'api-key', settingsTab: 'providers' }).title)
-      .toBe('gateway');
-  });
-
-  it('api-key + api-keys 使用直连 API key 文案', () => {
-    expect(pickVoiceInputDialogCopy(copy, { auth: 'api-key', settingsTab: 'api-keys' }).title)
-      .toBe('direct-key');
-  });
-
-  it('codex 认证失败继续使用 Codex 连接文案', () => {
-    expect(pickVoiceInputDialogCopy(copy, { auth: 'codex', settingsTab: 'connections' }))
-      .toEqual(expect.objectContaining({ title: 'codex', settingsTab: 'providers' }));
   });
 });

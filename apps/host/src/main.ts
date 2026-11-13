@@ -1,3 +1,7 @@
+import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
+import { clientMigrationContract } from './client-migration-contract.mjs';
+import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
+import { createHostPlatformTools } from './platform/tools.js';
 import { createHostCodexRuntime } from './agent/codex-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
@@ -37,9 +41,12 @@ import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStora
 import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { touchUserSendRow } from '../../desktop/src/main/localDb/sessionQueries.ts';
-import { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites,
+import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
+import { createProviderGroupStore } from '../../desktop/src/main/provider-group/storeCore.js';
+import { createProviderGroupBindings } from '../../desktop/src/main/provider-group/bindings.js';
 import { AGENT_BINARY_LAYOUT, readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRegion, resolveHostAppDataDir } from './profile-path.mjs';
@@ -75,6 +82,11 @@ import { initializeHostPluginRemoteAuthorization } from './plugins/remote-author
 import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
+import { createHostToolService } from './agent/host-tools.js';
+import { storageShareMessage } from '../../desktop/src/main/cindy-brain/storageService.js';
+import { createHostConfirmations } from './host-confirmations.js';
+import { createMainI18n } from '../../desktop/src/main/i18n.js';
+import { GHOST_HOST_TOOL_GROUPS } from '@cindy/plugin-protocol';
 import { toolAutoReviewAction } from '@cindy/maker-core';
 import { GhostGrantConfirmBridge } from '../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
 import { getGhostCard, listGhostCardsBySession } from '../../desktop/src/main/cindy-brain/cardStoreDb.js';
@@ -90,6 +102,7 @@ import {
 } from './profile-settings.mjs';
 import { createCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
+import { createPlatformClientBridge } from './platform/client-bridge.js';
 import { createSnapshotProcess } from './snapshot-process.mjs';
 import { configureGhostSnapshotProcess } from '../../desktop/src/main/cindy-brain/ghostSnapshotCapability.js';
 import { withCrossProcessLock } from '../../desktop/src/main/device-link/crossProcessLock.js';
@@ -103,10 +116,11 @@ import { applyLiveSessionSettings } from './agent/session-settings.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
-import { createHostMessageStore } from './message-store.js';
+import { createHostMessageStore, createHostMessageRecovery } from './message-store.js';
+import { createHostAttachments } from './attachments.js';
 import { createSubagentReadService } from '../../desktop/src/main/localDb/ipc/subagentReadService.js';
 import { configureUserDataDir, configureAppDataDir, getUserDataDir } from '../../desktop/src/main/userDataPath.js';
-import { messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
+import { botSessionLinks, messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
@@ -415,9 +429,13 @@ const listProviders = createProviderCatalog({
   readOwner: () => ({ ...getActiveAppSession(), pending: isAppSessionBoundaryPending() }),
 });
 let stopPluginAuthorization: (() => void) | null = null;
+let platformClient: ReturnType<typeof createPlatformClientBridge> | null = null;
+let platformTools: ReturnType<typeof createHostPlatformTools> | null = null;
 let plugins: Awaited<ReturnType<typeof createHostPluginRuntime>> | null = null;
 let pluginGateway: ReturnType<typeof createHostPluginGateway> | null = null;
 let pluginManager: ReturnType<typeof createHostGhostManager> | null = null;
+let hostTools: ReturnType<typeof createHostToolService> | null = null;
+let hostConfirmations: ReturnType<typeof createHostConfirmations> | null = null;
 let availabilityPolicy: ReturnType<typeof createAvailabilityPolicy> | null = null;
 let modelAccess: ReturnType<typeof createHostModelAccess> | null = null;
 const currentGateway = () => modelAccess?.gateway.credential && modelAccess.gateway.endpoint ? modelAccess.gateway : null;
@@ -486,6 +504,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // installing it here keeps them on the same connection as the host runtime.
   setCurrentDbClient(client, ownerId);
   activeOwner = ownerId;
+  await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
   closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
@@ -529,7 +548,28 @@ async function ensureRuntime(ownerId: string): Promise<void> {
         .catch(error => console.warn('[host] plugin reconciliation failed:', error.message));
     },
   });
+  const toolOwnerCurrent = () => activeOwnerScopeKey() === pluginOwner && !isAppSessionBoundaryPending();
+  const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
+  hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
+  hostTools = createHostToolService({ profileDir: dataDir, ownerId,
+    owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
+    current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null, manager: pluginManager,
+    files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
+    storage: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.storage; },
+    getSession: id => agentGraph?.maker.getSession(id), confirmations: hostConfirmations, t: i18n.t,
+    taskActions: {
+      input: id => inputQueue.taskActionInput(id),
+    },
+  });
   plugins = await createHostPluginRuntime({ profileDir: dataDir, ownerId, manager: pluginManager, credentials,
+    hostToolRequest: hostTools.request, onPluginStopped: hostTools.stopPlugin,
+    confirmStorageShare: async (facts, check) => {
+      if (!check() || !hostConfirmations) return false;
+      const confirmed = await hostConfirmations.confirm({ ghostId: facts.sourceId, ghostName: facts.sourceName,
+        body: `${storageShareMessage(i18n.t, facts)}\n\n${facts.sourceId}\n→ ${facts.targetId}`,
+        confirmText: i18n.t('settings.ghosts.connections.confirmAllow'), cancelText: null, danger: false });
+      return check() && confirmed;
+    },
     getLoginEmail: () => accountUser?.email ?? null,
     getUser: () => accountUser,
     account: {
@@ -608,6 +648,24 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     available: peer => deviceLink?.canAuthorize(peer) ?? false,
   });
 
+  platformClient = createPlatformClientBridge({ assertCurrent: plugins.assertCurrent, ownerId,
+    uploadRoots: async id => {
+      const meta = await agentGraph?.maker.getSessionMeta(id);
+      return meta?.workDir && !meta.remoteHostId ? [meta.workDir] : [];
+    },
+  });
+  platformTools = createHostPlatformTools({ profileDir: dataDir, client: platformClient,
+    assertCurrent: plugins.assertCurrent,
+    secretIo: providerConfig.recipeSecretIo,
+    browserExtensions: plugins.browserExtensions,
+    uploadRoots: async id => {
+      const meta = await agentGraph?.maker.getSessionMeta(id);
+      return meta?.workDir && !meta.remoteHostId ? [meta.workDir] : [];
+    },
+  });
+  hostTools.providers.push(...platformTools.providers);
+  hostTools.services.replace(hostTools.providers);
+
   const claudeBinary = harnessBinaryPath('claude-code');
   const codexBinary = harnessBinaryPath('codex');
   const piBinary = harnessBinaryPath('pi');
@@ -626,6 +684,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
     });
     agentGraph = createHostAgentGraph({
+      onSessionClose: (id: string) => platformTools?.closeSession(id),
       codexRuntime,
       providerConfig,
       mcpRuntime,
@@ -642,7 +701,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       storage: sessionStorage,
       gateway,
       makerMemory,
-      mcpProviders: await pluginGateway.prepareMcpProviders([...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
       userDataDir: dataDir,
     });
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
@@ -697,14 +756,26 @@ setSessionOpeningModelAdmission(async body => {
   return { ...body, ...execution, effort: execution.effort ?? '',
     agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind };
 });
+// Read the same owner-scoped group facts as Desktop. Host does not yet have the
+// assignment service, so no mutation port may report a successful group change.
+const hostProviderGroups = createProviderGroupStore({
+  withAvailabilityPolicyMutation: async () => { throw new Error('[UNSUPPORTED_CAPABILITY] Host cannot change provider groups'); },
+});
+const hostProviderBindings = createProviderGroupBindings(hostProviderGroups);
 const readSessionForRun = async (sessionId: string) => {
-  const rows = await getDbClient().drizzle.select().from(sessionTable)
+  const db = getDbClient();
+  const rows = await db.drizzle.select().from(sessionTable)
     .where(eq(sessionTable.id, sessionId)).limit(1);
   const row = rows[0];
   if (!row || row.status !== 'active') throw new Error('session is not active');
+  const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
+    .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
   const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
   return {
     id: row.id,
+    status: row.status, source: row.source, botId: botLink?.botId ?? null,
+    remoteHostId: row.remoteHostId, agentDeviceId: row.agentDeviceId,
+    orcaRole: row.orcaRole, orcaRemoteLead: row.orcaRemoteLead,
     agentKind,
     model: row.model,
     workingDir: row.workingDir,
@@ -790,8 +861,14 @@ const interactions = {
 const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
 
+const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
+  publish: (event: unknown) => eventHub.publish(event) });
+
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  createAttachments: ({ assertCurrent }: { assertCurrent(): void }) => createHostAttachments({
+    getOwner: getCurrentDbClientSnapshot, assertCurrent,
+  }),
   interactions,
   getMaker: () => {
     if (!agentGraph) throw new Error('agent runtime is not ready');
@@ -804,14 +881,23 @@ const inputQueue = createInputQueue({
     if (kind === 'codex') await agentGraph?.gatewayRestart.flushBeforeLocalCodexSessionStart();
   },
   readSession: readSessionForRun,
+  assertProviderExecutionSupported: (id: string, providerId?: string | null) => {
+    if (hostProviderBindings.readProviderGroupBinding(id)
+      || (providerId && hostProviderGroups.readProviderGroup(providerId))) {
+      throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups');
+    }
+  },
+  readSessionExtraDirs: readSessionExtraDirsFromDb,
+  readSessionWritableDirs: readSessionWritableDirsFromDb,
+  readMcpAppModelContext: async (id: string) => (await pluginGateway?.modelContext(id))
+    ?? { text: '', async assertCurrent() {}, consume() {} },
+  ackInterruptedTurnDispatched: ackSessionTurnEndedDurable,
+  ...messageRecovery,
   persistMessage: insertSessionMessage,
   persistQueueSnapshot: saveAgentInputQueueSnapshot,
   loadQueueSnapshot: loadAgentInputQueueSnapshot,
   getPersistedClientIds: getPersistedInputClientIds,
-  markStarted: async (sessionId: string) => {
-    markSessionTurnStarted(sessionId);
-    await drainSessionActiveTurnWrites(sessionId);
-  },
+  markStarted: markSessionTurnStartedDurable,
   markEnded: async (sessionId: string, endedAt: number) => {
     markSessionTurnEnded(sessionId, endedAt);
     await drainSessionActiveTurnWrites(sessionId);
@@ -872,8 +958,16 @@ function writeProfileAppearance(patch: unknown) {
 }
 
 const serverDeps = {
+  browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
+    if (!platformTools) throw new Error('HOST_RUNTIME_NOT_READY');
+    return platformTools.browserSettings[handler](undefined, payload);
+  },
   executeTaskTags: taskTags.executeTaskTags,
   searchConversations: executeConversationSearch,
+  rightSidebarTabs: createRightSidebarTabsService({
+    getDb: () => getDbClient().drizzle,
+    changed: sessionId => { eventHub.publish({ type: 'right_sidebar_tabs_changed', sessionId }); },
+  }),
   instanceId,
   isOwnerReady: () => runtime.state === 'ready' && account.authenticated && !isAppSessionBoundaryPending(),
   requestStop: () => stop(),
@@ -933,6 +1027,12 @@ const serverDeps = {
   probe: async () => ({
     status: 'ok',
     service: 'cindy-host',
+    clientProtocol: 1,
+    // Platform RPC now survives a client replacement, with live embedded pages
+    // deferring it. Full daily-client migration still requires the production
+    // adoption acceptance and feature parity (scheduler, companions and IM).
+    // The isolated platform acceptance must not open the whole-client gate.
+    clientHandoffReady: clientMigrationContract.ready,
     instanceId,
     pid: process.pid,
     region: resolveHostRegion(),
@@ -965,7 +1065,15 @@ const serverDeps = {
     if (!agentAuth) throw new Error('Agent runtime is unavailable');
     return agentAuth.invoke(channel, args, caller);
   },
-  releaseAuthCaller: (caller: string) => agentAuth?.releaseCaller(caller),
+  releaseAuthCaller: (caller: string) => { agentAuth?.releaseCaller(caller); hostConfirmations?.cancelCaller(caller); },
+  connectController: (caller: string, send: Parameters<NonNullable<typeof hostConfirmations>['connect']>[1]) =>
+    hostConfirmations?.connect(caller, send),
+  resolvePluginConfirmation: (caller: string, kind: 'confirm' | 'install', requestId: string, confirmed: boolean) =>
+    hostConfirmations?.resolve(caller, kind, requestId, confirmed) ?? false,
+  requestPluginTaskApproval: async (id: string, capability: string) => {
+    const group = GHOST_HOST_TOOL_GROUPS.find(value => capability === `host-tools:${value}`);
+    return { granted: !!group && !!hostTools && await hostTools.approveGroup(id, group, () => plugins?.current() === true, true) };
+  },
   cancelPendingAuth: async () => {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
@@ -1397,6 +1505,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     // Keep storage alive until all execution and memory writers have settled,
     // but still release every resource when any individual teardown fails.
     fileConfirmation.cleanupAll('session_closed');
+    hostConfirmations?.close(); hostTools?.close();
     stopPluginAuthorization?.(); stopPluginAuthorization = null;
     interactionBroker.dispose();
     await attempt(() => agentAuth?.close());
@@ -1409,10 +1518,15 @@ async function disposeOwnerRuntime(): Promise<void> {
     const drainedPlugins = stopPlugins?.then(() => {}, error => { errors.push(error); });
     const drainedApps = stopApps?.then(() => {}, error => { errors.push(error); });
     await attempt(() => remote?.stop());
+    // Settle disconnected platform calls before Maker awaits task-close hooks.
+    // Client-owned OS sessions are released by its authenticated socket teardown.
+    platformClient?.close();
     await attempt(() => inputQueue.dispose());
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     await attempt(() => codexRuntime?.close());
     await attempt(() => mcpRuntime?.close());
+    platformClient?.close(); platformClient = null;
+    await attempt(() => platformTools?.close());
     await attempt(closeClaudeCliProxyBridge);
     await attempt(() => makerMemory?.dispose());
     await attempt(() => drainedPlugins);
@@ -1420,9 +1534,12 @@ async function disposeOwnerRuntime(): Promise<void> {
     pluginManager?.disposeNotificationIndex();
     await attempt(() => closeStorage?.());
   } finally {
+    platformTools = null;
     plugins = null;
     pluginGateway = null;
     pluginManager = null;
+    hostTools = null;
+    hostConfirmations = null;
     agentGraph = null;
     mcpRuntime = null;
     codexRuntime = null;
@@ -1450,7 +1567,7 @@ async function disposeOwnerRuntime(): Promise<void> {
 let startup: Promise<void> = Promise.resolve();
 
 const service = createHostService(serverDeps);
-const server = createHostServer({ ...serverDeps, service,
+const server = createHostServer({ ...serverDeps, service, platformClient: () => platformClient,
   remoteControl: async (action: string, body: { deviceId?: string }) => {
     if (!deviceLink) throw new Error('Sign in and start the Host runtime first');
     if (action === 'status') return deviceLink.state();

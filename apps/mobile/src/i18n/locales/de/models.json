@@ -74,6 +74,10 @@
     "cancel": "So beibehalten"
   },
   "unified": {
+    "accountUnassigned": "Konto nicht zugewiesen",
+    "accountCount_one": "{{count}} Konto",
+    "accountCount_other": "{{count}} Konten",
+    "accountFallback": "Konto {{index}}",
     "favoriteConfiguration": "Diese Konfiguration als Favorit speichern",
     "savedConfiguration": "Als Favorit gespeichert · Zum Entfernen tippen",
     "currentConfiguration": "Aktuelle Konfiguration",
@@ -113,6 +117,12 @@
       "hour": "Std.",
       "minute": "Min.",
       "second": "Sek."
-    }
+    },
+    "quotaAverage": "Ø verbleibend {{percent}} %",
+    "quotaUpdating": "Kontingent wird aktualisiert",
+    "quotaResetSoon": "Bald zurückgesetzt",
+    "quotaResetIn": "Zurücksetzung in {{duration}}",
+    "quotaAverageHint": "Wochenkontingent · Konten gleich gewichtet",
+    "quotaResetHint": "Beim aktuellen Verbrauch bleibt beim Zurücksetzen voraussichtlich Kontingent übrig: gelb innerhalb von 24 Stunden, rot innerhalb von 6 Stunden."
   }
 }

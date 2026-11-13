@@ -80,7 +80,7 @@ export function redactSensitiveTextDeep(input: unknown): unknown {
 }
 
 export interface NonSecretErrorSignals {
-  errorStatus?: 401 | 429 | 529;
+  errorStatus?: 401 | 403 | 429 | 529;
   usageLimit: boolean;
 }
 
@@ -118,16 +118,22 @@ export function matchesDeterministicUsageExhaustionText(input: string): boolean 
  */
 export function extractNonSecretErrorSignals(input: string): NonSecretErrorSignals {
   const statusMatch =
-    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
+    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
       input,
-    ) ?? /\brequest\s+rejected\s*\(\s*(401|429|529)\s*\)/i.exec(input);
+    ) ?? /\brequest\s+rejected\s*\(\s*(401|403|429|529)\s*\)/i.exec(input);
   const usageLimit =
     /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
       input,
     );
 
+  // Do not promote an unstructured permission denial into the newly supported
+  // provider 403 signal. Callers still preserve an explicit SDK errorStatus.
+  const errorStatus = statusMatch
+    && !(statusMatch[1] === '403' && /permission denied/i.test(input))
+    ? Number(statusMatch[1]) as NonSecretErrorSignals['errorStatus']
+    : undefined;
   return {
-    ...(statusMatch ? { errorStatus: Number(statusMatch[1]) as 401 | 429 | 529 } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
     usageLimit,
   };
 }
@@ -261,8 +267,13 @@ export function canOfferCodexHistoryRecovery(input: {
 }
 
 const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'SUBSCRIPTION_ACCOUNT_LIMITED',
+  'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
+  'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
+  'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
+  'SUBSCRIPTION_ACCOUNTS_FULL',
   'HARNESS_SWITCH_NOT_READY',
   'DEVICE_LINK_BUSY',
   'DEVICE_LINK_CONTROL_DISABLED',
@@ -284,18 +295,70 @@ export function parseAgentErrorCode(message: string): { code: string; fallback: 
   // `LAZY_CREATE_FAILED:` envelope. Keep accepting that wrapper here so the
   // renderer can still select the actionable remote-provider guidance instead
   // of collapsing the whole failure to the generic "reply failed" card.
-  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
+  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:(?:LAZY_CREATE_FAILED|REHYDRATE_FAILED):\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
   if (!match || (!/^REMOTE_[A-Z_]+$/.test(match[1]) && !AGENT_CHAT_ERROR_CODES.has(match[1]))) {
     return null;
   }
-  return { code: match[1], fallback: match[2] || message };
+  // Released guest hosts and Pi use INVALID for a specific native-history
+  // rejection. Refine only its presentation; keep the wire error and ownership
+  // check intact. Other INVALID errors must not suggest a history recovery.
+  const code = match[1] === 'REMOTE_AGENT_INVALID'
+    && /^this conversation cannot be resumed on this computer\.?$/i.test(match[2].trim())
+    ? 'REMOTE_AGENT_RESUME_UNAVAILABLE' : match[1];
+  return { code, fallback: match[2] || message };
 }
 
-/** Resending unchanged content cannot fix these explicit configuration failures. */
+/**
+ * Presentation-only recognition of runHost's guest ownership refusal (#10187).
+ * Keep the exact message: other INVALID errors, including Pi's differently
+ * capitalized/punctuated refusal, have not established this recovery condition.
+ * This never authorizes clearing native ids, moving a task or consuming input.
+ */
+export function isRemoteAgentResumeRejectedError(message: string): boolean {
+  const parsed = parseAgentErrorCode(message);
+  return parsed?.code === 'REMOTE_AGENT_RESUME_UNAVAILABLE'
+    && parsed.fallback.trim() === 'this conversation cannot be resumed on this computer';
+}
+
+/** Resending unchanged content cannot fix these explicit configuration/startup failures. */
 export function requiresAgentErrorConfigurationChange(message: string): boolean {
   const code = parseAgentErrorCode(message)?.code;
-  return code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
+  return isRemoteAgentResumeRejectedError(message)
+    || code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
     || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
     || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
-    || code === 'DEVICE_LINK_CONTROL_DISABLED';
+    || code === 'DEVICE_LINK_CONTROL_DISABLED'
+    || code === 'REMOTE_AGENT_RESUME_UNAVAILABLE';
+}
+
+/** Presentation only: startup failures must not be mistaken for a new retry policy.
+ * Account identities are intentionally absent from the wire error. Old hosts have
+ * only an ambiguous message; never infer a login or limit cause from that text.
+ */
+export function localizeSubscriptionAccountError(
+  message: string,
+  translate: (key: string, options?: { resetAt: string }) => string,
+  locale?: string,
+): string | null {
+  const parsed = parseAgentErrorCode(message);
+  switch (parsed?.code) {
+    case 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED': return translate('chat.subscriptionAccountError.loginRequired');
+    case 'SUBSCRIPTION_ACCOUNT_SIGNING_IN': return translate('chat.subscriptionAccountError.signingIn');
+    case 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE': return translate('chat.subscriptionAccountError.unavailable');
+    case 'SUBSCRIPTION_ACCOUNT_LIMITED': {
+      const reset = Number(/(?:^|\n)resetAtMs=(\d{1,16})(?:\n|$)/.exec(parsed.fallback)?.[1]);
+      if (Number.isSafeInteger(reset) && reset > Date.now() && reset <= 8.64e15) {
+        // Classical editions use the corresponding script for Intl formatting.
+        const language = locale?.replace(/-x-lzh$/, '');
+        const resetAt = new Intl.DateTimeFormat(language, {
+          dateStyle: 'medium', timeStyle: 'short',
+        }).format(new Date(reset));
+        return translate('chat.subscriptionAccountError.limitedUntil', { resetAt });
+      }
+      return translate('chat.subscriptionAccountError.limited');
+    }
+  }
+  if (/(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?The task subscription account requires login or quota reset$/.test(message))
+    return translate('chat.subscriptionAccountError.legacy');
+  return null;
 }

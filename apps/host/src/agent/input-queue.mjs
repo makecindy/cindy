@@ -1,13 +1,18 @@
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
-import { createTurnExecutor, autoReviewAuthorizationOptions } from './turn-executor.mjs';
+import { createTurnExecutor } from './turn-executor.mjs';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
 import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
+import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
+import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
+import { createLogger } from '../../../desktop/src/main/logger.ts';
+
+const attachmentLog = createLogger('host-attachments');
 
 function storedSessionOptions(stored) {
   return { agentKind: makerKind(stored.agentKind), model: stored.model || '',
@@ -26,13 +31,14 @@ function composeInput(item, stored) {
   if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
-  const opts = item.createOpts ?? {};
-  const agentKind = makerKind(opts.agentKind || item.agentKind || stored.agentKind);
+  // Picker changes already persist through /sessions/update. Input fields are
+  // snapshots for presentation, not another authority over task settings.
+  const agentKind = makerKind(stored.agentKind);
   if (!['claude-code', 'codex', 'pi'].includes(agentKind)) throw new Error('invalid agent kind');
-  const model = item.model || opts.model || stored.model || '';
-  const workingDir = item.workingDir || opts.workingDir || stored.workingDir || '';
-  const effort = item.effort || opts.effort || stored.effort || '';
-  const permissionMode = item.permissionMode || opts.permissionMode || stored.permissionMode || '';
+  const model = stored.model || '';
+  const workingDir = stored.workingDir || '';
+  const effort = stored.effort || '';
+  const permissionMode = stored.permissionMode || '';
   const content = typeof item.persistedContent === 'string' ? item.persistedContent : text;
   // The renderer already separates visible composer text from its serialized
   // storage envelope. Keep that distinction in queue snapshots and projections.
@@ -92,6 +98,33 @@ export function createInputQueue(deps) {
       if (owner === undefined) owner = deps.getOwner();
       if (!isCurrent()) throw new Error('input runtime owner changed');
     }
+    const attachments = deps.createAttachments?.({ assertCurrent });
+    const attachmentOwnership = new QueuedAttachmentOwnershipRegistry(({ sessionId, clientId, error }) => {
+      attachmentLog.warn('attachment cleanup failed', { sessionId, clientId, error: errorText(error) });
+    });
+    // Discard callbacks precede the coordinator's new snapshot. Wait until
+    // that snapshot is queued and durable before releasing recoverable files.
+    function afterSnapshot(id, action) {
+      queueMicrotask(() => { void flushed(id).then(action).catch(error => {
+        attachmentLog.warn('attachment settlement deferred', { sessionId: id, error: errorText(error) });
+      }); });
+    }
+    async function prepareAttachments(id, item, admission) {
+      const check = () => {
+        assertCurrent();
+        if (closing || stateFor(id).closed || stateFor(id).admission !== admission) {
+          throw new Error('input cancelled before acceptance');
+        }
+      };
+      check();
+      const materialized = attachments ? await attachments.materialize(id, item, check) : { item };
+      try { check(); }
+      catch (error) { await materialized.cleanupBeforeAcceptance?.(); throw error; }
+      const ownerId = attachmentOwnership.register(id, item.clientId, materialized.cleanupLocalMaterialization, {
+        parts: materialized.materializedParts, cleanupAfterDurable: materialized.cleanupAfterAcceptance,
+      });
+      return { item: materialized.item, ownerId };
+    }
     function stateFor(id) {
       if (!states.has(id)) states.set(id, { commands: Promise.resolve(), writing: Promise.resolve(),
         admission: 0, closed: false, snapshot: [], persistenceError: null });
@@ -124,12 +157,17 @@ export function createInputQueue(deps) {
     }
     const executor = createTurnExecutor({ ...deps,
       assertCurrent, isCurrent,
+      prepareUserMessage: attachments?.prepareUserMessage,
+      isClearBoundaryCurrent: (id, boundary, generation) => coordinator.getClearBoundaryMs(id) === boundary
+        && (generation === undefined || coordinator.isGenerationCurrent(id, generation)),
+      isInputGenerationCurrent: (id, generation) => coordinator.isGenerationCurrent(id, generation),
       isExecutionPaused: id => coordinator.isExecutionPaused(id),
       isStoppingRuntime: () => closing,
       persistMessage: deps.persistMessage ?? (async () => {}),
       onPersistenceError: persistenceFailed,
-      onTerminal: (id, type, error, meta) => {
-        coordinator.onTurnEvent(id, type, error, undefined, meta);
+      onTerminal: (id, type, error, meta, direct) => {
+        if (direct) coordinator.wakeSession(id, 'host-turn-settled');
+        else coordinator.onTurnEvent(id, type, error, undefined, meta);
         deps.onSessionSettled?.(id);
       },
     });
@@ -148,16 +186,7 @@ export function createInputQueue(deps) {
           throw error;
         }
       },
-      steerToAgent: async (id, message, opts) => {
-        opts.signal?.throwIfAborted();
-        await opts[MCP_APP_MESSAGE_GUARD]?.();
-        await opts.beforeProviderStart?.();
-        assertCurrent(); opts.signal?.throwIfAborted();
-        const session = deps.getMaker().getSession(id);
-        if (!session) throw new Error('NO_ACTIVE_TURN');
-        const result = await session.steer(message, autoReviewAuthorizationOptions(opts));
-        if (!result || result.accepted === false) throw new Error(result?.reason || 'steer rejected');
-      },
+      steerToAgent: executor.steer,
       abortSession: id => {
         const promise = executor.abort(id);
         stateFor(id).aborting = promise;
@@ -176,6 +205,7 @@ export function createInputQueue(deps) {
       getRecoveryContextSnapshot: deps.getRecoveryContextSnapshot,
       hasPendingInteraction: id => (deps.interactions?.pending(id)?.length ?? 0) > 0,
       hasPendingCredentialSwitch: deps.hasPendingCredentialSwitch,
+      rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
       createUserMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
       touchUserSend: deps.touchUserSend ?? (async () => {}),
       emitProjection: publish,
@@ -183,12 +213,18 @@ export function createInputQueue(deps) {
       loadQueueSnapshot: deps.loadQueueSnapshot,
       loadClearBoundary: deps.loadClearBoundary,
       getPersistedClientIds: deps.getPersistedClientIds,
+      onUserMessagePersisting: (id, item) => attachmentOwnership.markPersistenceStarted(id, item.clientId),
+      onUserMessagePersisted: (id, item) => { void attachmentOwnership.settleDurable(id, item.clientId); },
+      onUserMessagePersistenceFailed: (id, item, options) => {
+        afterSnapshot(id, () => attachmentOwnership.markPersistenceFailed(id, item.clientId, options));
+      },
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
         await acceptedCallbacks.run(id, item);
       },
-      onDiscardedQueuedMessage: (_id, item) => {
+      onDiscardedQueuedMessage: (id, item) => {
+        afterSnapshot(id, () => attachmentOwnership.discardClient(id, item.clientId));
         acceptedCallbacks.discard(item.clientId);
         schedulePreparations.delete(item.clientId);
         const discarded = scheduleDiscardWatchers.get(item.clientId);
@@ -274,6 +310,9 @@ export function createInputQueue(deps) {
       return project(coordinator.getProjection(id));
     }
     const api = {
+      wireHostSession: session => { assertCurrent(); executor.wireHostSession(session); },
+      beginHostTurn: id => command(id, () => executor.beginHostTurn(id)),
+      taskActionInput: id => readTaskActionInput(id, sessionId => deps.getMaker()?.getSession(sessionId), coordinator),
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
@@ -318,15 +357,21 @@ export function createInputQueue(deps) {
           }
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
           if (known?.has(item?.clientId)) return api.projection(id);
-          const composed = composeInput(item, await deps.readSession(id));
-          assertCurrent();
-          if (admission !== state.admission || closing) throw new Error('input cancelled before acceptance');
-          state.lastUserActionAt = Date.now();
-          coordinator.setExecutionPaused(id, true);
-          coordinator.enqueue(id, composed);
-          await flushed(id);
-          if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
-          return api.projection(id);
+          const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
+          let accepted = false;
+          try {
+            state.lastUserActionAt = Date.now();
+            coordinator.setExecutionPaused(id, true);
+            coordinator.enqueue(id, prepared.item);
+            accepted = true;
+            if (prepared.ownerId) attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId);
+            await flushed(id);
+            await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
+            if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+            return api.projection(id);
+          } finally {
+            if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
+          }
         });
       },
       stop,
@@ -348,26 +393,53 @@ export function createInputQueue(deps) {
       clearError: id => command(id, () => coordinator.clearError(id)),
       steer(id, item) {
         return command(id, async (state, admission) => {
-          const composed = composeInput(item, await deps.readSession(id));
-          assertCurrent();
-          if (state.admission !== admission) throw new Error('input cancelled before acceptance');
-          return coordinator.steer(id, composed);
+          const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
+          const previous = prepared.ownerId
+            ? attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId) : null;
+          let accepted = false;
+          try {
+            accepted = await coordinator.steer(id, prepared.item);
+            if (accepted) {
+              await flushed(id);
+              await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
+            }
+            return accepted;
+          } finally {
+            if (!accepted && prepared.ownerId) {
+              attachmentOwnership.restoreCurrentOwner(id, item.clientId, previous);
+              await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
+            }
+          }
         });
       },
       remove: (id, clientId) => mutate(id, () => coordinator.remove(id, clientId)),
       updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
       updateContent(id, clientId, item) {
-        return command(id, async state => {
+        return command(id, async (state, admission) => {
           const old = coordinator.getProjection(id).pendingQueue.find(row => row.clientId === clientId);
           if (!old) return api.projection(id);
           const composed = composeInput({ ...old, ...item, clientId,
             persistedContent: item.persistedContent ?? item.text ?? old.persistedContent }, await deps.readSession(id));
-          assertCurrent();
-          coordinator.setExecutionPaused(id, true);
-          coordinator.updateContent(id, clientId, composed);
-          await flushed(id);
-          if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
-          return api.projection(id);
+          const prepared = await prepareAttachments(id, composed, admission);
+          let accepted = false;
+          try {
+            coordinator.setExecutionPaused(id, true);
+            const result = coordinator.updateContentWithResult(id, clientId, prepared.item);
+            accepted = result.updated;
+            if (accepted) {
+              const refs = attachments?.collectRefs(prepared.item) ?? new Set();
+              const survivor = attachmentOwnership.retainReferencedOwners(id, clientId, prepared.ownerId, ref => refs.has(ref));
+              if (survivor) attachmentOwnership.activateCurrentOwner(id, clientId, survivor);
+              else attachmentOwnership.restoreCurrentOwner(id, clientId, null);
+              afterSnapshot(id, () => attachmentOwnership.discardSuperseded(id, clientId));
+            }
+            await flushed(id);
+            await attachmentOwnership.markDurable(id, clientId);
+            if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+            return api.projection(id);
+          } finally {
+            if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, clientId, prepared.ownerId);
+          }
         });
       },
       move: (id, clientId, index) => mutate(id, () => coordinator.move(id, clientId, index)),
@@ -383,6 +455,7 @@ export function createInputQueue(deps) {
         coordinator.clearSession(id);
         coordinator.onSessionClosed(id);
         await executor.close(id);
+        await attachments?.closeSession(id);
         await flushed(id);
       },
       async dispose() {
@@ -391,7 +464,11 @@ export function createInputQueue(deps) {
           try { await stop(id); }
           finally {
             coordinator.onSessionClosed(id);
-            try { await executor.close(id); }
+            // close() can fail while draining writes, before Maker closes the
+            // runtime. Keep its temporary inputs until a confirmed close or
+            // the next process's orphan sweep; a finally cleanup could delete
+            // files still held by that runtime.
+            try { await executor.close(id); await attachments?.closeSession(id); }
             finally { await flushed(id); }
           }
         }));

@@ -14,6 +14,7 @@ import path from 'node:path';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
+import type { Socket } from 'node:net';
 import WebSocket from 'ws';
 import { API, encodeDatagrams, sharingOriginsPayload, delegationPayload, MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { startAgentNetRelay, type Bootstrap, type RelayHandle, type RelayOptions } from '../server.js';
@@ -23,6 +24,18 @@ import { AppError } from '@cindy/device-link-sharing/errors';
 import { AgentNetClient, authorization, submitJoin, pollJoin, submitTenantJoin, pollTenantJoin, encryptMedia, decryptMedia, type AgentNetUplink } from '../client.js';
 import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
 import { createHash } from 'node:crypto';
+
+// Integration: HTTPS and UDP can sit behind different load balancers. /info must
+// name the UDP host only when configured, and a malformed host must stop startup.
+it('advertises a configured STUN host next to the bound UDP port', async () => {
+  const plain = await fixture();
+  const plainInfo = await (await fetch(plain.relay.url + API + '/info')).json() as Record<string, unknown>;
+  expect(plainInfo.udpPort).toBe(plain.relay.udpAddress?.port); expect(plainInfo).not.toHaveProperty('stunHost');
+  const split = await fixture({ stunHost: 'agent-net-stun.example.test' });
+  expect(await (await fetch(split.relay.url + API + '/info')).json())
+    .toMatchObject({ udpPort: split.relay.udpAddress?.port, stunHost: 'agent-net-stun.example.test' });
+  await expect(startAgentNetRelay({ dataDir: split.dataDir, udpPort: 0, stunHost: 'agent-net-stun.example.test:3479' })).rejects.toThrow('INVALID_STUN_HOST');
+});
 
 // Bug: opaque media storage alone did not protect App attachments or authenticated video seeks.
 // Minimal input crosses an AEAD block boundary; this uses the real production HTTP and disk path.
@@ -402,6 +415,44 @@ describe('independent V2 relay', () => {
     const recoveredOwner = await f.client.connect(); const recoveredMember = await client.connect(); f.uplinks.push(recoveredOwner, recoveredMember);
     const after = nextPacket(recoveredOwner); recoveredMember.send('owner', opaque);
     expect(await after).toEqual(['member', opaque]);
+  });
+
+  // 2026-11-13: TCP toward a slow device only queues, so forwarded datagrams arrived minutes late.
+  // Real relay sockets: the member stops reading; once the relay's oldest write to it is older than the
+  // limit, newer datagrams are dropped (never delivered after it resumes) and its session stays open.
+  // Previously only a 1 MiB byte cap applied; each round below stays under it. Tier: integration.
+  it('drops datagrams toward a device whose connection stopped moving, without disconnecting it', async () => {
+    const warnings: string[] = [];
+    let movedAgain!: () => void;
+    const moved = new Promise<void>((resolve) => { movedAgain = resolve; });
+    const f = await fixture({ datagramQueueDelayMs: 30, logger: { error() {}, warn: (_fields, message) => { warnings.push(message); },
+      info: (_fields, message) => { if (message.includes('moving again')) movedAgain(); } } });
+    const m = await f.join();
+    let memberSocket!: Socket;
+    const member = new AgentNetClient(f.relay.url, m.identity, m.certificate, f.rootPublicKey, undefined, {
+      createWebSocket: (url, options) => {
+        const ws = new WebSocket(url, options);
+        ws.once('upgrade', (response) => { memberSocket = response.socket as Socket; });
+        return ws;
+      } });
+    const a = await f.client.connect(); const b = await member.connect(); f.uplinks.push(a, b);
+    const tags = new Map<number, number>();
+    b.onDatagram((_source, packet) => { tags.set(packet[0], (tags.get(packet[0]) ?? 0) + 1); });
+    const send = (tag: number, count: number, size: number) => {
+      for (let i = 0; i < count; i++) { const packet = new Uint8Array(size); packet[0] = tag; a.send('member', packet); }
+    };
+    const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+    memberSocket.pause();
+    for (let i = 0; i < 80 && warnings.length === 0; i++) { send(1, 4, 60_000); await sleep(35); }
+    expect(warnings).toEqual(['agent-net session send queue has not moved; dropping datagrams to it until it does']);
+    send(2, 8, 1_000);
+    await sleep(20);
+    memberSocket.resume();
+    await moved;
+    send(3, 1, 1_000);
+    await vi.waitFor(() => expect(tags.has(3)).toBe(true));
+    expect(tags.has(2)).toBe(false);
   });
 
   it.each(['provider-share', 'shared-task'] as const)('keeps %s independent and prevents a guest from accessing other devices', async (kind) => {

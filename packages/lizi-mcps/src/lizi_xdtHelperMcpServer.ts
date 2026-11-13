@@ -1,7 +1,13 @@
+import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
+import { registerTerminalTools, type TerminalToolCallbacks } from './xdt-helper/terminal.js';
+import { registerFileTools, type FileToolCallbacks } from './xdt-helper/files.js';
+import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/storage.js';
+import { registerHostServiceTools, type HostServicesToolCallbacks } from './xdt-helper/host_services.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
+import { registerThemePackageTool, type ThemePackageCallbacks } from './xdt-helper/theme_packages.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
 import { registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
@@ -37,6 +43,11 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js';
+import { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
+import { registerReadSessionAttachmentTool } from './xdt-helper/read_session_attachment.js';
+import { registerDeleteSessionTool, type DeleteSessionCallback } from './xdt-helper/delete_session.js';
+import { registerSessionHistoryTools, type SessionHistoryCallback } from './xdt-helper/session_history_control.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -162,25 +173,85 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings', 'terminal', 'files', 'storage', 'discovery'] as const;
 
 /**
  * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
  * 阶段就要能判断「这件事有没有工具、管不管得到另一台电脑」,不能等点进某个工具的参数
  * 说明才发现。改工具的作用范围时同步改这里(测试按类目全集守护)。
+ *
+ * 一句一行再拼接:每个类目的说明 30 天里被改四十多次,写成一整行时,任意两个改同一类目的
+ * PR 都会冲突。新增内容单独起一行,放在语义相关的句子旁边,不要接在已有句子后面。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
-  cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
-  settings: '管理 Cindy 的全局设置、默认模型与 API 供应商连接（添加、安全填写密钥、发现型号、测试连接），普通任务和伙伴共用。作用于运行任务的本机；先查询当前值和可选项，再修改或恢复默认。密钥通过电脑或手机的加密代输入卡交给宿主。SSH 主机编辑使用 cindy_ssh。',
-  auth: '本机窗口登录、保密输入与截图扫码（request_input_handoff）；MCP 设置表单（request_mcp_setup）；Grok 设备码登录、状态查询与取消（支持远程任务）。',
-  control: '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
-  github: '读取 PR、CI、评审变化与详情，明确管理任务关联。本机与同账号跨电脑；查询不会关联任务或启动跟进。',
-  history: '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；不要默认限制当前工作目录或创建日期。查询任务、工作目录、聊天记录、任务摘要与输入队列；任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；搜索还能查到主力电脑离线的伙伴的云端对话；其余本机。',
+  cindy: [
+    `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息；`,
+    `get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；`,
+    `get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。`,
+    `本机。`,
+  ].join(''),
+  settings: [
+    '管理 Cindy 的全局设置、默认模型与 API 供应商连接（添加、安全填写密钥、发现型号、测试连接），普通任务和伙伴共用。',
+    '作用于运行任务的本机；',
+    '先查询当前值和可选项，再修改或恢复默认。',
+    '密钥通过电脑或手机的加密代输入卡交给宿主。',
+    'SSH 主机编辑使用 cindy_ssh。',
+  ].join(''),
+  auth: [
+    '本机窗口登录、保密输入与截图扫码（request_input_handoff）；',
+    'MCP 设置表单（request_mcp_setup）；',
+    'Grok 设备码登录、状态查询与取消（支持远程任务）。',
+  ].join(''),
+  control: [
+    'list_projects(device) 可查询远程项目。',
+    '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
+    '归档/取消归档、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
+    '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+  ].join(''),
+  github: [
+    '读取 PR、CI、评审变化与详情，明确管理任务关联。',
+    '本机与同账号跨电脑；',
+    '查询不会关联任务或启动跟进。',
+  ].join(''),
+  history: [
+    '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；',
+    '不要默认限制当前工作目录或创建日期。',
+    'list_teammates 枚举伙伴及已保存的任务关系（含隐藏与暂停），list_sessions 包含隐藏任务并返回 hiddenAt。',
+    '查询任务、工作目录、聊天记录、任务摘要与输入队列；',
+    '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
+    '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
+    '任务附件（read_session_attachment）仅支持已有宿主授权的本机媒体和交接引用，历史文件路径与跨电脑附件返回 UNSUPPORTED_CAPABILITY，只返回分块字节和引用，不返回宿主路径。',
+    '搜索还能查到主力电脑离线的伙伴的云端对话；',
+    '其余本机。',
+  ].join(''),
+  terminal: '启动、列举、输入、续读和停止当前调用方的宿主终端与后台作业。仅执行电脑本机，作业独立于读取连接；SSH 工作区不在本机代跑远程命令。',
+  files: '通过同一宿主文件服务访问真实任务工作目录或用户亲选的插件目录；读、写、列举、删除与有界监听。',
+  storage: '插件自身 KV、私有文件、作品库、媒体与交接文件的统一调用接口；跨插件快照分享每次经宿主确认，仅同账号本机和同一组织范围。',
+  discovery: '只读发现执行宿主实际提供的服务与本插件的批准事实；仅本机，不安装、启停或撤销其他插件。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
-  handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属（来源不绑项目时按执行目录所在的已登记可见项目归属），传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建的任务与文件仍在本机，新建时可用 agent_device_id 选择 Agent 使用哪台电脑的远程或分享供应商（取 list_available_models 的 locations）。',
-  skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
-  app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
-  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、发现伙伴与主力电脑。发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；其余本机。',
+  handoff: [
+    '给已有任务发消息或新建任务。',
+    '新建可指定 title；',
+    '本机省略 project_path 继承来源归属（来源不绑项目时按执行目录所在的已登记可见项目归属），传已有项目路径切换项目，传 null 创建不绑项目的任务。',
+    '执行目录不隐式创建项目。',
+    '发给已有任务可跨电脑（deviceId::sessionId）；',
+    '新建用 device 指定任务和文件所在电脑，省略为本机；',
+    'provider_device_id 单独选择模型供应商位置（兼容 agent_device_id）；',
+    '项目和模型先用同一 device 查询。',
+  ].join(''),
+  skills: [
+    'Skill 的搜索、发布与学习。',
+    '本机与 SkillHub。',
+  ].join(''),
+  app_update: [
+    `检查与安装本机的 ${BRAND_NAME} 更新。`,
+    `本机。`,
+  ].join(''),
+  bots: [
+    '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、发现伙伴与主力电脑。',
+    '发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；',
+    '其余本机。',
+  ].join(''),
 };
 
 interface BotMessagingCallbacks {
@@ -205,6 +276,7 @@ function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
 interface HelperSurfaceAllow {
   /** null means every registered category. An empty set means none. */
   categories: ReadonlySet<string> | null;
+  tools?: ReadonlySet<string>;
 }
 
 function toolAllowed(
@@ -212,7 +284,7 @@ function toolAllowed(
   tool: { name: string; category: string },
 ): boolean {
   if (!allow.categories) return true;
-  return allow.categories.has(tool.category);
+  return allow.categories.has(tool.category) || allow.tools?.has(tool.name) === true;
 }
 
 function registerListToolsEntry(
@@ -302,44 +374,43 @@ function registerCallToolEntry(
   telemetry: {
     logger?: LiziMcpLogger;
     getSessionId: () => string | undefined;
+    getHostCaller: () => import('./types.js').LiziMcpSessionContext['hostCaller'];
     authorizeCall?: ToolCallAuthorizer;
   },
   allowedSurface: () => Promise<HelperSurfaceAllow>,
-): void {
-  server.tool(
-    'call_tool',
-    D_CALL_TOOL,
-    CALL_TOOL_INPUT,
-    async ({ name, args }, extra) => {
-      const allowed = await allowedSurface();
-      const definition = registry.get(name);
-      if (definition && !toolAllowed(allowed, definition)) {
-        return errorPayload(
-          'CAPABILITY_NOT_AVAILABLE',
-          '这个工具不属于当前任务的能力面；请重新调用 list_tools。',
-        );
-      }
-      const result = definition
-        ? await withToolCallAuthority(
-          telemetry.authorizeCall,
-          { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args },
-          () => registry.call(name, args, extra?.signal),
-        )
-        : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
-            available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
-          });
-      // errorCode 遥测:UNKNOWN_TOOL / INVALID_ARGS / 业务 errorCode 返回给模型自纠
-      // 之前在这里落一条日志,否则 agent 犯错→自纠 的事件在日志里完全不存在。
-      logToolResultErrorCode({
-        logger: telemetry.logger,
-        server: 'cindy_helper',
-        tool: name,
-        result,
-        sessionId: telemetry.getSessionId(),
-      });
-      return result;
-    },
-  );
+): HostToolRuntime['call'] {
+  const call: HostToolRuntime['call'] = async (name, args, signal) => {
+    const allowed = await allowedSurface();
+    const definition = registry.get(name);
+    if (definition && !toolAllowed(allowed, definition)) {
+      return errorPayload(
+        'CAPABILITY_NOT_AVAILABLE',
+        '这个工具不属于当前任务的能力面；请重新调用 list_tools。',
+      );
+    }
+    const result = definition
+      ? await withToolCallAuthority(
+        telemetry.authorizeCall,
+        { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args,
+          ...(telemetry.getHostCaller() ? { caller: telemetry.getHostCaller() } : {}) },
+        () => registry.call(name, args, signal),
+      )
+      : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
+          available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
+        });
+    // errorCode 遥测:UNKNOWN_TOOL / INVALID_ARGS / 业务 errorCode 返回给模型自纠
+    // 之前在这里落一条日志,否则 agent 犯错→自纠 的事件在日志里完全不存在。
+    logToolResultErrorCode({
+      logger: telemetry.logger,
+      server: 'cindy_helper',
+      tool: name,
+      result,
+      sessionId: telemetry.getSessionId(),
+    });
+    return result;
+  };
+  server.tool('call_tool', D_CALL_TOOL, CALL_TOOL_INPUT, ({ name, args }, extra) => call(name, args, extra?.signal));
+  return call;
 }
 
 /** Teammate discovery and a group lane's private message to its owner. */
@@ -351,7 +422,7 @@ function registerBotMessagingEntries(
   if (!deps.botMessaging) return;
   if (deps.botMessaging.sendToUser) registry.register({
     name: 'send_to_user', category: 'bots',
-    description: 'From a group, send a private message to your owner in this same teammate’s main chat. Use when your owner explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',
+    description: 'From a group, send a private message to the account user in this same buddy’s main chat. Use when that user explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',
     inputShape: { message: z.string().trim().min(1).max(16000), idempotency_key: z.string().regex(/^[\w-]{8,100}$/) },
     handler: async ({ message, idempotency_key }) => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -363,11 +434,11 @@ function registerBotMessagingEntries(
   });
   if (deps.botMessaging.listAgents) registry.register({
     name: 'list_agents', category: 'bots',
-    description: 'Discover teammates on this device and other authorized devices. To talk to one, pass its session_id (its main chat; deviceId::sessionId on another computer) to send_to_session. Device names distinguish namesakes; unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
+    description: 'Discover buddies on this device and other authorized devices. To talk to one, pass its session_id (its main chat; deviceId::sessionId on another computer) to send_to_session. Device names distinguish namesakes; unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
     inputShape: {},
     handler: async () => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
-      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active Cindy task is required');
       const result = await deps.botMessaging!.listAgents!({ callerSessionId });
       return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
     },
@@ -403,6 +474,10 @@ export type ControlDispatchOutcome =
 // ── Factory ────────────────────────────────────────────────────────────────
 
 export interface XdtHelperMcpDeps {
+  terminal?: TerminalToolCallbacks;
+  files?: FileToolCallbacks;
+  storage?: StorageToolCallbacks;
+  hostServices?: HostServicesToolCallbacks;
   github?: GithubToolCallbacks;
   getSessionProject?: import('./xdt-helper/get_current_session_id.js').GetCurrentSessionIdDeps['getSessionProject'];
   logger?: LiziMcpLogger;
@@ -445,6 +520,8 @@ export interface XdtHelperMcpDeps {
    * 路由的原语, 放在 essential 的 cindy_helper 下常开保证 skill 永不断。
    */
   sendToSession?: SendToSessionCallback;
+  /** Read-only catalog shared with ordinary task creation; does not enable collaboration. */
+  listAvailableModels?: ListAvailableModelsDeps['listAvailableModels'];
   /** 另一台电脑上的既有任务(send_to_session 的 deviceId::sessionId 目标)。 */
   sendToRemoteSession?: SendToRemoteSessionCallback;
   /** Cindy-managed Learn flow; registered in the skills category when supplied by the host. */
@@ -473,6 +550,7 @@ export interface XdtHelperMcpDeps {
   /** The calling teammate's linked projects; the host resolves the teammate from the caller Session. */
   teammateProjects?: TeammateProjectsCallback;
   appSettings?: AppSettingsCallbacks;
+  themePackages?: ThemePackageCallbacks;
   piRuntime?: PiRuntimeCallbacks;
   modelSettings?: AppModelsCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
@@ -505,6 +583,8 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  deleteSession?: DeleteSessionCallback;
+  sessionHistory?: SessionHistoryCallback;
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
   /**
    * 任务导入（与设置 → 任务导入同一实现）。host 注入后, control 类工具
@@ -524,12 +604,13 @@ export interface XdtHelperMcpSessionCtx {
   getSessionContext?: () => import('./types.js').LiziMcpSessionContext | undefined;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;
+  hostCaller?: import('./types.js').LiziMcpSessionContext['hostCaller'];
 }
 
 export function createXdtHelperMcpServer(
   deps: XdtHelperMcpDeps,
   sessionCtx: XdtHelperMcpSessionCtx,
-): McpServer {
+): HostToolMcpServer {
   const server = new McpServer({
     name: 'cindy_helper',
     version: '1.0.0',
@@ -550,6 +631,7 @@ export function createXdtHelperMcpServer(
     }
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
+      ...(sessionId && !remoteBotOnly ? { tools: new Set(['list_agents']) } : {}),
     });
     if (!sessionId) return allow(remoteBotOnly ? new Set() : defaultCategories);
     if (!deps.resolveSurface) return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
@@ -563,6 +645,10 @@ export function createXdtHelperMcpServer(
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
   };
 
+  if (deps.terminal) registerTerminalTools(registry, deps.terminal, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.files) registerFileTools(registry, deps.files, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.storage) registerStorageTools(registry, deps.storage, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.hostServices) registerHostServiceTools(registry, deps.hostServices, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.github) registerGithubTools(registry, deps.github, () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
@@ -640,6 +726,12 @@ export function createXdtHelperMcpServer(
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
   }
+  if (deps.deleteSession) registerDeleteSessionTool(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), deleteSession: deps.deleteSession,
+  });
+  if (deps.sessionHistory) registerSessionHistoryTools(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), call: deps.sessionHistory,
+  });
   if (deps.sessionImport) {
     registerSessionImportTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
@@ -649,6 +741,8 @@ export function createXdtHelperMcpServer(
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
   if (deps.history) {
+    registerReadSessionAttachmentTool(registry, { history: deps.history, getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx) });
+    registerListTeammatesTool(registry, { history: deps.history, getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx) });
     const historyDeps = {
       history: deps.history,
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
@@ -691,6 +785,11 @@ export function createXdtHelperMcpServer(
       submit: deps.githubIssue,
     });
   }
+
+  if (deps.listAvailableModels) registerListAvailableModelsTool(registry, {
+    listAvailableModels: deps.listAvailableModels,
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+  });
 
   // send_to_session: 仅 host 注入了 sendToSession 回调时注册到 handoff 类目(走 call_tool)。
   if (deps.sendToSession) {
@@ -736,6 +835,7 @@ export function createXdtHelperMcpServer(
   if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.themePackages) registerThemePackageTool(registry, deps.themePackages, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appModels && !sessionCtx.remoteHostId) registerAppDefaultModelTools(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     callbacks: deps.appModels, category: 'settings',
@@ -756,11 +856,12 @@ export function createXdtHelperMcpServer(
     });
   }
   registerListToolsEntry(server, registry, allowedSurface, sessionCtx);
-  registerCallToolEntry(server, registry, {
+  const call = registerCallToolEntry(server, registry, {
     logger: deps.logger,
     // per-call 解析:codex HTTP bridge 的 server factory 阶段 ctx 是空的,
     // tool-call 阶段由 AsyncLocalStorage 恢复,所以 sessionId 必须调用时再取。
     getSessionId: () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
+    getHostCaller: () => resolveLiziMcpSessionContext(sessionCtx).hostCaller,
     ...(deps.authorizeCall ? { authorizeCall: deps.authorizeCall } : {}),
   }, allowedSurface);
 
@@ -907,5 +1008,13 @@ export function createXdtHelperMcpServer(
       ] };
     });
   }
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
+    describe(name: string) {
+      const tool = registry.get(name);
+      return tool ? { name: tool.name, category: tool.category } : undefined;
+    },
+    call,
+    close: () => server.close(),
+  } });
 }

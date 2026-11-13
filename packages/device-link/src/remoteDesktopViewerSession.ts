@@ -31,7 +31,7 @@ interface ViewerConnectOptions {
    * Open a plugin live screen from the host's `screens` list. Needs a host
    * advertising `liveScreens`; the reported caps keep only what applies to it.
    */
-  screen?: { plugin: string; id: string };
+  screen?: { plugin: string; id: string; pluginIdentity?: string };
   onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
   onStart?: () => void;
 }
@@ -135,6 +135,7 @@ export class RemoteDesktopViewerSession {
             ? {
                 screen: {
                   plugin: options.screen.plugin,
+                  ...(options.screen.pluginIdentity === undefined ? {} : {pluginIdentity:options.screen.pluginIdentity}),
                   id: options.screen.id,
                 },
               }
@@ -167,7 +168,8 @@ export class RemoteDesktopViewerSession {
     if (
       options.screen &&
       (lease.screen?.plugin !== options.screen.plugin ||
-        lease.screen.id !== options.screen.id)
+        lease.screen.id !== options.screen.id ||
+        (options.screen.pluginIdentity !== undefined && lease.screen.pluginIdentity !== options.screen.pluginIdentity))
     ) {
       await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
       throw new Error("INVALID_RESPONSE");
@@ -205,12 +207,16 @@ export class RemoteDesktopViewerSession {
     }
   }
 
-  async heartbeat(): Promise<{ controlling: boolean }> {
+  /** `shape` is a live screen's upright size as the host sent it, unchecked. */
+  async heartbeat(): Promise<{ controlling: boolean; shape?: unknown }> {
     const lease = this.active;
     if (!lease) throw new Error("DESKTOP_LEASE_EXPIRED");
     const pendingAtStart = this.controlPending;
     const controlGeneration = this.controlGeneration;
-    const result = await this.request<{ controlling: boolean }>({
+    const result = await this.request<{
+      controlling: boolean;
+      shape?: unknown;
+    }>({
       op: "heartbeat",
       lease: lease.lease,
     });
@@ -231,7 +237,10 @@ export class RemoteDesktopViewerSession {
         await this.control(false);
       }
     }
-    return { controlling: lease.controlling };
+    return {
+      controlling: lease.controlling,
+      ...(result.shape === undefined ? {} : { shape: result.shape }),
+    };
   }
 
   /**

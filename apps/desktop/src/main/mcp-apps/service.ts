@@ -1,3 +1,4 @@
+import { createViewStateStorage } from './viewStateStore.js';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -25,6 +26,7 @@ export interface McpAppsServicePorts {
   review?(sessionId: string, serverId: string, tool: string, args: Record<string, unknown>,
     originDescription?: string, toolDefinition?: Pick<Tool, 'name' | 'description' | 'inputSchema'>): Promise<AutoReviewDecision>;
   allowPendingPage?(sessionId: string, requestId: string): void;
+  authorizeGlobalTool?: McpAppsHostDeps['authorizeTool'];
   send: McpAppsHostDeps['sendMessage'];
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
@@ -52,6 +54,22 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
     owner: currentOwner,
     config: readAppServer,
     revisionKey: getMcpAppRevisionKey,
+    viewState: (captured, sessionId, clientId, record) => {
+      const owner = currentOwner();
+      if (!owner || owner !== captured) throw new Error('MCP_APP_OWNER_CHANGED');
+      const pluginInstance = readAppServer(record.serverId)?.plugin?.instance ?? null;
+      return createViewStateStorage(owner.client, {
+        sessionId, clientId, serverId: record.serverId, serverRevision: record.serverRevision,
+        resourceUri: record.resourceUri, toolName: record.tool.name, pluginInstance,
+      }, () => {
+        const config = readAppServer(record.serverId);
+        if (currentOwner() !== owner || !config ||
+            appServerRevision(config, getMcpAppRevisionKey()) !== record.serverRevision ||
+            (config.plugin?.instance ?? null) !== pluginInstance)
+          throw Object.assign(new Error('MCP_APP_CARD_UNAVAILABLE'), { code: 'MCP_APP_CARD_UNAVAILABLE' });
+        config.plugin?.assertCurrent(sessionId);
+      });
+    },
     readCard: async (sessionId, clientId) => {
       const { owner, session } = await assertSession(sessionId);
       const [row] = await owner.client.drizzle
@@ -131,6 +149,10 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
       }
     },
     authorizeTool: async (sessionId, tool, args, signal, source) => {
+      if (sessionId === null) {
+        if (!ports.authorizeGlobalTool) throw new Error('MCP_APP_OWNER_ONLY');
+        return ports.authorizeGlobalTool(sessionId, tool, args, signal, source);
+      }
       const { owner, session } = await assertSession(sessionId);
       signal.throwIfAborted();
       if (session.planModeEnabled || session.permissionMode === 'plan')

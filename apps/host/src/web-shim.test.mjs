@@ -69,6 +69,18 @@ test('both auth API shapes use the same Host routes', async () => {
   assert.ok(b.calls.every(c => c.credentials === 'same-origin'));
 });
 
+test('plugin approval and confirmation use the authenticated Host routes', async () => {
+  const b = browser(() => ({ granted: true, handled: true }));
+  assert.equal((await b.api.ghosts.requestTaskApproval('demo', 'host-tools:terminal')).granted, true);
+  await b.api.ghosts.resolveInstallConsent('group-request', true);
+  await b.api.ghosts.resolveConfirm('command-request', false);
+  assert.deepEqual(b.calls.map(call => ({ url: call.url, body: call.body })), [
+    { url: '/api/ghosts/request-task-approval', body: { id: 'demo', capability: 'host-tools:terminal' } },
+    { url: '/api/ghosts/install-consent/resolve', body: { requestId: 'group-request', confirmed: true } },
+    { url: '/api/ghosts/confirm/resolve', body: { requestId: 'command-request', confirmed: false } },
+  ]);
+});
+
 test('entering the app preserves the actual Host auth verdict', async () => {
   for (const state of [
     { user: { id: 'test-user' }, mode: 'cloud', canEnterApp: true },
@@ -94,11 +106,15 @@ test('history events reach the browser preload subscribers exactly once', async 
     { seq: 2, type: 'error_persisted', sessionId: 'task', persistId: 'err' },
     { seq: 3, type: 'subagent_runs_changed', sessionId: 'task' },
     { seq: 4, type: 'task_tags_changed', payload: { tags: [{ id: 'tag', name: 'Review', color: 'blue' }] }, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 } },
+    { seq: 5, type: 'input_receipt', sessionId: 'task', inputClientId: 'stopped', clientId: 'stopped', status: 'interrupted' },
+    { seq: 6, type: 'text', sessionId: 'task', inputClientId: 'next', data: { text: 'next reply' } },
   ];
   const b = browser(() => ({}), source, () => new Response(new ReadableStream({ start(controller) {
     controller.enqueue(new TextEncoder().encode(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
   } })));
   const received = [];
+  const agentEvents = [];
+  b.api.maker.onEvent(event => agentEvents.push(event));
   b.api.localDb.messages.onDeleted(event => received.push(event));
   b.api.localDb.messages.onErrorPersisted(event => received.push(event));
   b.api.localDb.subagentRuns.onChanged(event => received.push(event));
@@ -108,6 +124,11 @@ test('history events reach the browser preload subscribers exactly once', async 
     frames[0], { sessionId: 'task', persistId: 'err' }, frames[2],
     { payload: frames[3].payload, ownerStamp: frames[3].ownerStamp },
   ]);
+  // Host stop receipts belong to /chat, not the Agent timeline. A real text
+  // event must still reach the renderer exactly once after that receipt.
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0].event.type, 'text');
+  assert.equal(agentEvents[0].event.data.text, 'next reply');
   b.close();
 });
 

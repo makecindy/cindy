@@ -66,7 +66,33 @@ pixels after the correction. Unlike blur strength, this clipping is observable
 in single-window captures. Both arm64 and x64 builds passed; only arm64 was run.
 Fullscreen/Spaces and other macOS releases remain unverified.
 
-### Independent task-sidebar material
+### Task-sidebar material (removed 2026-11-10, reinstated without color 2026-11-11)
+
+> **History.** On 2026-11-10 the masked sidebar view was removed so the sidebar would
+> share the main area's backdrop. On 2026-11-11 the user asked for the sidebar to stay
+> distinct but follow the same transparency and blur, in the main area's hue and
+> slightly deeper. The masked HUD view, `theme:set-sidebar-width` and `setSidebar`
+> below were reinstated; 0% desktop transparency still keeps the original backdrop on
+> every platform. Current behavior is specified in
+> [`design-rules/wallpaper.md`](design-rules/wallpaper.md).
+
+**Colorless material (2026-11-11).** Measured over a neutral gray desktop, the HUD
+material gave the sidebar a cooler hue than Cindy's surfaces (dark, 100%
+transparency: sidebar `#7F8083` vs main area `#BFBFBF`; light: `#D1D2D5` vs `#BFBFBF`).
+On macOS 27 the `NSVisualEffectView` layer tree is a `CABackdropLayer`
+(`sdrNormalize`, `gaussianBlur` radius 30, `colorSaturate` 1.6 dark / 1.9 light)
+beside a 40–48% gray tint layer, a lighten/darken blend layer and a 5%
+`CAChameleonLayer` desktop-tinting layer. The addon keeps only `gaussianBlur` and
+`sdrNormalize` and hides the sibling layers; the result matched the unveiled desktop
+exactly (`#BFBFBF`), leaving the color entirely to CSS. AppKit rebuilds these layers on
+appearance changes (and replaces them with an opaque gray in an inactive window), so
+a one-time hook on `NSVisualEffectView` strips them again after `updateLayer`,
+`layout` and `viewDidChangeEffectiveAppearance`, only for views the addon has marked
+(no class swap, so KVO and other views are unaffected), and the marked view's state
+is set to active. Verified live: light/dark switching and focus loss/regain keep the colorless
+blur. Width zero unmarks the view and restores its state and appearance. Any other layer
+layout is left untouched. Other macOS releases, Reduce Transparency and multiple
+displays remain unverified.
 
 The user requested that the original sidebar frost survive background blur zero.
 The sidebar uses Electron's existing `NSVisualEffectView` with `behindWindow`
@@ -167,10 +193,38 @@ a continuous desktop radius starting at zero. The toolkit's
 does not expose blur amount, whereas its in-app acrylic pipeline does. Do not
 substitute an in-app `CreateBackdropBrush` example for a behind-window test.
 
-No Windows device test was performed. A Windows prototype must check whether the
-host sample is already blurred, whether zero can be truly clear, and whether
-the result composes correctly with Electron's transparent content. Tint opacity
-and blur radius must be tested independently.
+No Windows device test was performed for the host backdrop brush path. A Windows
+prototype must check whether the host sample is already blurred, whether zero can be
+truly clear, and whether the result composes correctly with Electron's transparent
+content. Tint opacity and blur radius must be tested independently.
+
+### Device finding: transparent window with Acrylic (2026-11-11)
+
+Windows 11 build 26200, Electron 42.11.12, RTX 5080, two 4K displays (120 Hz and
+60 Hz). A frameless `transparent: true` window with `backgroundMaterial: 'acrylic'`
+that fills the work area flickers: whenever any window on either display is shown or
+hidden (a notification, a tooltip-sized tool window), DWM stops drawing what lies
+behind the window for one or more frames. The material then blurs nothing, the
+translucent sidebar turns into a flat dark fill, and the composed desktop reports a
+non-opaque pixel there (alpha 241 instead of 255). The running app spent about 99% of
+the time in that state, with brief returns to the correct one.
+
+An isolated Electron reproduction with the same window options, sampled at about
+120 Hz while a 3 px tool window on the other display was shown and hidden 24 times in
+3 seconds:
+
+| Window | Time in the wrong state |
+| --- | --- |
+| transparent, Acrylic, fills the work area | 146–266 ms |
+| transparent, Acrylic, 760×560 | 0 ms |
+| transparent, no material, fills the work area | 0 ms |
+| regular (`transparent: false`), Acrylic, maximized or work-area sized | 0 ms |
+
+Disabling delegated compositing made it worse (480 ms); requesting `thickFrame` on a
+transparent window changes nothing because Electron ignores it there. A regular
+frameless window keeps the same Acrylic look, so Windows uses one whenever a system
+backdrop is shown and keeps transparent windows for the clear desktop (no material)
+only.
 
 ## Linux
 

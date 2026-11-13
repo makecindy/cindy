@@ -1008,6 +1008,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
   function ensureEventStream() {
     if (eventConnection) return;
     eventConnection = startHostEventStream({
+      confirmations: true,
       open: (query, signal) => fetch(`/events${query}`, { credentials: 'same-origin', signal }),
       beforeEvents: async (signal) => {
         const auth = await requestHost('/api/auth/state', null, 'POST', signal);
@@ -1041,6 +1042,10 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
             'ghosts:runtime-changed': 'ghosts.onRuntimeChanged',
             'ghosts:card-updated': 'ghosts.onCardUpdated',
             'ghosts:notify': 'ghosts.onNotify',
+            'ghosts:confirm-request': 'ghosts.onConfirmRequest',
+            'ghosts:confirm-dismissed': 'ghosts.onConfirmDismissed',
+            'ghosts:install-consent:request': 'ghosts.onInstallConsentRequest',
+            'ghosts:install-consent:dismissed': 'ghosts.onInstallConsentDismissed',
             'maker:auth:state-changed': 'maker.auth.onStateChanged',
             'maker:auth:login-progress': 'maker.auth.onLoginProgress',
             'model-access:status-change': 'modelAccess.onStatusChange',
@@ -1092,6 +1097,11 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
           emit('localDb.subagentRuns.onChanged', parsed);
         } else if (parsed.type === 'input_projection') {
           emit('maker.onInputProjection', parsed.projection);
+        } else if (parsed.type === 'input_receipt') {
+          // /chat uses this transport receipt to end an interrupted input's
+          // stream. The renderer already receives the queue projection; this
+          // is not a model event and must not flush or alter its text stream.
+          return;
         } else if (parsed.type === 'project_aliases_changed') {
           emit('localDb.projectAliases.onChanged');
         } else {

@@ -52,10 +52,7 @@ function ReplySummary({ reply }: { reply: BotGroupThreadPreviewReply }) {
   return <>{reply.attachments.length > 1 ? t(key('attachmentsSummary'), { label, name: first.name, count: reply.attachments.length }) : `${label} · ${first.name}`}</>;
 }
 
-/**
- * One line under a root message, flush with its bubble: who replied, how many replies and when
- * the last one came. The newest replies stay readable as the button's description.
- */
+/** Thread summary; recent replies provide the button's accessible description. */
 export function BotGroupThreadPreview({ message, members, onOpen }: {
   message: BotGroupMessageView; members: readonly BotGroupMemberView[]; onOpen: () => void;
 }) {
@@ -77,7 +74,7 @@ export function BotGroupThreadPreview({ message, members, onOpen }: {
         ...(unread?.mentioned ? [t(key('mentionedYou'))] : [])].join(', ')}
       aria-describedby={replies.length ? linesId : undefined}
       onClick={onOpen} onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}
-      className={cn('group/thread flex min-h-6 min-w-0 max-w-full self-start select-none items-center gap-2 rounded-full text-left text-13 leading-5', FOCUS)}>
+      className={cn('group/thread flex min-h-6 min-w-0 max-w-full flex-wrap self-start select-none items-center gap-2 rounded-full text-left text-13 leading-5', FOCUS)}>
       {repliers.length ? (
         <span aria-hidden className="flex shrink-0 items-center -space-x-1.5">
           {repliers.map(reply => {

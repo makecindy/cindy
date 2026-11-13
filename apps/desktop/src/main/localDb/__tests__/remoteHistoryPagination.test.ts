@@ -50,11 +50,11 @@ describe.each(modes)('%s remote history visibility', (mode) => {
     CREATE TABLE messages (id TEXT PRIMARY KEY, client_id TEXT, session_id TEXT, role TEXT,
       content TEXT, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, created_at INTEGER, rewind_at INTEGER);
     CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, content);
-    CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, hidden_at INTEGER, status TEXT);
+    CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, hidden_at INTEGER, status TEXT, display_name TEXT DEFAULT 'Companion');
     CREATE TABLE bot_session_links (session_id TEXT PRIMARY KEY, bot_id TEXT, role TEXT DEFAULT 'canonical', route_key TEXT);
     CREATE TABLE embedding_jobs (source_id TEXT);
     CREATE TABLE chat_messages_vec_v1 (distance REAL);
-    INSERT INTO bot_profiles VALUES ('visible', NULL, 'active'), ('zero', 0, 'active'),
+    INSERT INTO bot_profiles(id, hidden_at, status) VALUES ('visible', NULL, 'active'), ('zero', 0, 'active'),
       ('hidden', 1, 'active'), ('archived', NULL, 'archived');
   `);
     // Hidden matches exceed both the FTS limit (50) and KNN over-fetch limit (250).
@@ -121,6 +121,20 @@ describe.each(modes)('%s remote history visibility', (mode) => {
     handlers.clear();
     db.close();
     state.client = null;
+  });
+
+  // Unit SQL fixture, #9801: remote directory visibility must precede LIMIT;
+  // the old source registry had no paginated teammate/relationship delivery.
+  it('paginates source-owned teammate metadata before the final visibility projection', async () => {
+    const execute = (args: Record<string, unknown>) => runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'owner', channel: 'local-db:history:query' },
+      () => handlers.get('local-db:history:query')!({}, { tool: 'list_teammates', args }),
+    );
+    const first = await execute({ limit: 1 });
+    expect(first).toMatchObject({ ok: true, teammates: [{ id: 'visible' }], hasMore: true });
+    expect(await projectRemoteSessionResult('local-db:history:query', first)).toEqual(first);
+    const last = await execute({ limit: 1, cursor: first.nextCursor });
+    expect(last).toMatchObject({ ok: true, teammates: [{ id: 'zero' }], hasMore: false });
   });
 
   const listArgs = {

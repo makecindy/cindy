@@ -8,7 +8,7 @@ import { prNumberLabel } from '@cindy/maker-shared';
  *     worktree 已删时兜底)→ working_dir HEAD(低信任,仅在无 PR 时最后兜底)。
  *     HEAD 变化(用户/agent 切分支)由 useSessionGitContext 实时推送刷新。
  *   - PR chip(最多 MAX_STATUS_QUERIES 条，固定与手动优先级在前):
- *     整组悬停显示 PR 信息，点击打开 PR；悬停面板右上角齿轮进入设置与关联管理(共享访客除外)。
+ *     整组悬停显示 PR 信息，点击固定浮窗；浮窗内链接打开 PR，右上角齿轮进入设置与关联管理(共享访客除外)。
  *
  * PR 状态视觉:用 lucide 图标形状区分四态(色弱友好),颜色只用已注册 token:
  *   open   GitPullRequest        --diff-add-fg(语义绿,规则 16 豁免色)
@@ -17,10 +17,10 @@ import { prNumberLabel } from '@cindy/maker-shared';
  *   closed GitPullRequestClosed  --error-fg(语义红)
  *   未知(查询失败)               GitPullRequest + --text-tertiary,汇总面板给原因
  *
- * 本机 gh 缺失 / 未登录时(prGuidanceFor):点击打开内置安装和设备码登录界面。
+ * 本机 gh 缺失 / 未登录时(prGuidanceFor):浮窗内提供内置安装和设备码登录入口。
  * 授权成功立即刷新状态。不复用 unresolved 的
  * `--status-bar-accent` 5px 角点(DESIGN.md 该点只表示未解决 review)。
- * SSH / device-link / review 只读任务不提供引导——点击无法兑现时仍打开 PR。
+ * SSH / device-link / review 只读任务不提供引导，仍可在浮窗内打开 PR 链接。
  */
 
 import {
@@ -33,6 +33,7 @@ import {
   CircleHelp,
   CircleMinus,
   Settings,
+  Copy,
   X,
 } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
@@ -41,6 +42,7 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { Tooltip } from '@/components/ui/tooltip';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { sessionPrUrl } from '@cindy/maker-shared';
@@ -213,6 +215,7 @@ function PrChip({
   const triggerHovered = useRef(false);
   const pointerFocus = useRef(false);
   const keyboardPreview = useRef(false);
+  const clickedOpen = useRef(false);
 
   const cancelOpen = () => {
     if (openTimer.current !== null) clearTimeout(openTimer.current);
@@ -231,6 +234,7 @@ function PrChip({
   );
   useEffect(() => {
     if (!summaryOpen) {
+      clickedOpen.current = false;
       cancelClose();
       cardHold.current = { pointer: false, focus: false, menu: false };
       panelHovered.current = false;
@@ -238,6 +242,7 @@ function PrChip({
   }, [summaryOpen]);
 
   const closeSummary = () => {
+    clickedOpen.current = false;
     cancelOpen();
     cancelClose();
     suppressHover.current = triggerHovered.current;
@@ -247,7 +252,7 @@ function PrChip({
     cancelOpen();
     cancelClose();
     const hold = cardHold.current;
-    if (keyboardPreview.current || hold.pointer || hold.focus || hold.menu) return;
+    if (clickedOpen.current || keyboardPreview.current || hold.pointer || hold.focus || hold.menu) return;
     closeTimer.current = setTimeout(() => {
       closeTimer.current = null;
       setSummary((current) => (current === prRef.id ? null : current));
@@ -269,23 +274,23 @@ function PrChip({
         ? t(failureCopyKey, { host: prRef.host })
         : t(failureCopyKey)
       : t('ccAgent.gitContext.pr.statusNotFetched');
-  // Installation and login are host-owned and independent of the task composer.
-  const ariaLabel = guidance
-    ? t(`ccAgent.gitContext.pr.guidance.${guidance}.aria`, { number: prRef.prNumber })
-    : t(
-        prRef.provider === 'gitlab'
-          ? 'ccAgent.gitContext.pr.gitlab.openAria'
-          : 'ccAgent.gitContext.pr.openAria',
-        { number: prRef.prNumber },
-      );
+  const ariaLabel = t(
+    prRef.provider === 'gitlab'
+      ? 'ccAgent.gitContext.pr.gitlab.summaryAria'
+      : 'ccAgent.gitContext.pr.summaryAria',
+    { number: prRef.prNumber },
+  );
 
   const handleClick = () => {
-    closeSummary();
-    if (guidance) {
-      setSetupOpen(true);
+    if (summaryOpen && clickedOpen.current) {
+      closeSummary();
       return;
     }
-    void window.electronAPI.openExternal(sessionPrUrl(prRef));
+    if (managerOpen) return;
+    cancelOpen();
+    cancelClose();
+    clickedOpen.current = true;
+    setSummary(prRef.id);
   };
 
   // Unknown counts stay distinct from a confirmed zero.
@@ -384,16 +389,16 @@ function PrChip({
                 closeSummary();
               }
               // The panel is portaled, so Tab cannot reach it on its own.
-              if (event.key === 'Tab' && !event.shiftKey && keyboardPreview.current) {
-                const gear = panelRef.current?.querySelector<HTMLElement>('[data-pr-manage]');
-                if (gear) {
+              if (event.key === 'Tab' && !event.shiftKey && summaryOpen) {
+                const link = panelRef.current?.querySelector<HTMLAnchorElement>('a');
+                if (link) {
                   event.preventDefault();
-                  gear.focus();
+                  link.focus();
                 }
               }
             }}
             onClick={(event) => {
-              // This is a navigation button; Radix must not toggle the preview.
+              // A click pins an existing hover preview instead of toggling it closed.
               event.preventDefault();
               handleClick();
             }}
@@ -467,7 +472,7 @@ function PrChip({
                 closeSummary();
                 pointerFocus.current = true; // Returning focus must not reopen the preview.
                 triggerRef.current?.focus();
-              } else if (event.key === 'Tab' && event.shiftKey && event.target === panelRef.current?.querySelector('[data-pr-manage]')) {
+              } else if (event.key === 'Tab' && event.shiftKey && event.target === panelRef.current?.querySelector('a')) {
                 event.preventDefault();
                 triggerRef.current?.focus();
               }
@@ -512,6 +517,22 @@ function PrChip({
                   </span>
                 )}
               </a>
+              <ChromeIconButton
+                aria-label={t('sharing.copyLink')}
+                className="-mt-1.5 shrink-0"
+                onClick={async () => {
+                  try {
+                    // PR/MR URLs are rendered locally, like the task/link copy actions;
+                    // the native IPC only accepts text previously issued by Main.
+                    await navigator.clipboard.writeText(sessionPrUrl(prRef));
+                    toast.success(t('ccAgent.sidebar.deepLink.copied'));
+                  } catch {
+                    toast.error(t('ccAgent.sidebar.deepLink.copyFailed'));
+                  }
+                }}
+              >
+                <Copy size={14} />
+              </ChromeIconButton>
               {canManage && (prCard?.settingsLabel && kind !== 'merged' && kind !== 'closed' ? (
                 <DropdownMenu onOpenChange={(open) => {
                   cardHold.current.menu = open;

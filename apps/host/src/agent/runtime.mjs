@@ -21,6 +21,7 @@ import { GatewayCodexRestartService } from '../../../desktop/src/main/maker-ipc/
 import { createDeferredRestartSettledWake } from '../../../desktop/src/main/maker-ipc/deferredRestartQueueWiring.js';
 import { refreshCodexGatewayRuntime } from '../../../desktop/src/main/maker-host/codexGatewayRefresh.js';
 import { isLocalSessionBusy } from '../../../desktop/src/main/maker-host/codex-credential-switch.js';
+import { getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 
 export const LOGGER = createMakerLogger('maker');
 
@@ -214,6 +215,7 @@ export function createHostAgentGraph(options) {
     readClaudeApiKey: () => options.gateway?.credential ?? null,
   }));
   const agent = options.binaryPath ? new ClaudeCodeAgent({
+    getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative),
     runtimeConfig: {
       get endpoint() { return options.gateway?.endpoint || undefined; },
@@ -222,23 +224,27 @@ export function createHostAgentGraph(options) {
     },
     binaryPath: options.binaryPath,
     logger: LOGGER,
+    getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
     ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   }) : null;
   const codex = options.codexBinaryPath
     ? new CodexAgent({
+        getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         auth: codexAuth,
         ...options.mcpRuntime.codexDeps,
         ...options.codexRuntime?.deps,
         runtimeConfig: {},
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
+        getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         mcpProviders,
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
     : null;
   const pi = options.piBinaryPath
     ? new PiAgent({
+        getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         auth: piAuth,
         prepareMcpBridge: options.mcpRuntime.preparePiMcpBridge,
         runtimeConfig: {
@@ -246,6 +252,7 @@ export function createHostAgentGraph(options) {
         },
         binaryPath: options.piBinaryPath,
         logger: LOGGER,
+        getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
         resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
@@ -267,7 +274,10 @@ export function createHostAgentGraph(options) {
   const maker = new Maker({
     agents,
     storage: options.storage,
-    lifecycleHooks: { onClose: id => options.codexRuntime?.closeSession(id) },
+    lifecycleHooks: { onClose: async id => {
+      try { await options.codexRuntime?.closeSession(id); }
+      finally { await options.onSessionClose?.(id); }
+    } },
     logger: LOGGER,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });

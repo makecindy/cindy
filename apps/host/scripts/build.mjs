@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
+import { clientMigrationContract } from '../src/client-migration-contract.mjs';
 
 const repo = fileURLToPath(new URL('../../..', import.meta.url));
 const host = path.join(repo, 'apps/host');
@@ -212,6 +213,8 @@ try {
     await fs.cp(electronRoot, path.join(resources, 'credential-runtime'), { recursive: true, dereference: true });
     metadata.electronBinary = path.join('resources', 'credential-runtime', path.relative(electronRoot, executable));
     await fs.copyFile(path.join(host, 'src/credentials/electron-codec.cjs'), path.join(bin, 'electron-codec.cjs'));
+    await build({ absWorkingDir: repo, entryPoints: ['apps/desktop/src/main/host-platform/power-worker.desktop.ts'],
+      outfile: path.join(bin, 'power-worker.cjs'), bundle: true, platform: 'node', format: 'cjs', target: 'node22', external: ['electron'] });
   }
   const common = { absWorkingDir: repo, bundle: true, platform: 'node', target: 'node22',
     plugins: nodePlugins, define: { __CINDY_HOST_RELEASE__: JSON.stringify(metadata) }, logLevel: 'warning' };
@@ -230,6 +233,7 @@ try {
     format: 'iife', globalName: 'CindyPluginBridge', target: 'es2022' });
   // The machine ID module is loaded through createRequire in both login paths.
   packages.set('node-machine-id', packageRoot('node-machine-id', hostRequire));
+  packages.set('node-pty', packageRoot('node-pty', desktopRequire));
   packages.set('sharp', packageRoot('sharp', desktopRequire));
   packages.set('playwright-core', packageRoot('playwright-core', hostRequire));
   for (const [name, source] of packages) {
@@ -245,6 +249,7 @@ try {
     : '#!/bin/sh\nset -eu\nHOST_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$HOST_ROOT/bin/node" "$HOST_ROOT/bin/host.mjs" "$@"\n';
   await fs.writeFile(path.join(staging, process.platform === 'win32' ? 'cindy-host.cmd' : 'cindy-host'), launcher, { mode: 0o755 });
   await fs.writeFile(path.join(staging, 'runtime-dependencies.json'), JSON.stringify(Object.fromEntries(dependencyRecords), null, 2) + '\n');
+  await fs.writeFile(path.join(staging, 'client-migration.json'), JSON.stringify(clientMigrationContract) + '\n');
   await fs.writeFile(path.join(staging, 'release.json'), JSON.stringify(metadata, null, 2) + '\n');
   // A checksum inventory supports verification after copying or distributing;
   // signing and publishing remain separate explicit release operations.

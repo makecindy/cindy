@@ -44,6 +44,8 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 // Fee-button accessibility is rendered by the real component; the unopened
 // native sheet is outside this suite's scope.
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
+// Card previews have their own regression suite; this suite preserves the message/source-label assertions.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
@@ -666,18 +668,40 @@ describe("sender source labels", () => {
 });
 
 describe("IM source card", () => {
-  it("renders local IM rows as a left-aligned Cindy card with the localized platform name", () => {
+  // #9266 unit/jsdom regression: render a real local iMessage row through the
+  // model and MessageRenderer; the existing Feishu case missed this platform.
+  it.each([
+    ["feishu", "飞书"],
+    ["imessage", "iMessage"],
+  ])("renders local %s rows as a left-aligned Cindy card", (im, platform) => {
     const html = render([
       msg("im", "clean text", {
         imSource: {
-          im: "feishu",
+          im,
           userText: "clean text",
           contentFormat: "user-text",
         },
       }),
     ]);
     expect(html).toContain("message.hookSource");
-    expect(html).toContain("Cindy · 来自 飞书");
+    expect(html).toContain(`Cindy · 来自 ${platform}`);
+    expect(html).toContain("message.agentBubble");
+    expect(html).not.toContain("message.userBubble");
+  });
+
+  // #9266 unit/jsdom: a host can persist an empty caption with attachments.
+  // Text-only cases miss the bubble gate that also hides the source header.
+  it.each([
+    ["imessage", "iMessage"],
+    ["feishu", "飞书"],
+  ])("retains the %s source header on attachment-only messages", (im, platform) => {
+    const html = render([
+      msg("im-file", { text: "", files: [{ name: "sample.txt", path: "/tmp/sample.txt" }] }, {
+        imSource: { im, userText: "", contentFormat: "user-text" },
+      }),
+    ]);
+    expect(html).toContain(`Cindy · 来自 ${platform}`);
+    expect(html).toContain("sample.txt");
     expect(html).toContain("message.agentBubble");
     expect(html).not.toContain("message.userBubble");
   });
@@ -694,7 +718,7 @@ describe("IM source card", () => {
         first,
         msg("im", "clean text", {
           imSource: {
-            im: "slack",
+            im: "imessage",
             userText: "clean text",
             contentFormat: "user-text",
           },

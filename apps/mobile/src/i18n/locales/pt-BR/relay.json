@@ -8,24 +8,24 @@
     "failed": "Não foi possível alterar as configurações do Agent-Net. Verifique a conexão com o relay e tente novamente."
   },
   "settings": {
-    "sectionTitle": "Serviço de retransmissão",
-    "currentLabel": "Serviço de retransmissão",
-    "official": "Retransmissor oficial do {{appName}}",
-    "switchToOfficial": "Voltar ao retransmissor oficial",
-    "officialHint": "Seus dispositivos se conectam pelo retransmissor oficial do {{appName}}. Quando um dos seus computadores usa um retransmissor próprio, ele aparece aqui: toque para entrar. Para entrar em um retransmissor que alguém compartilhou com você, escaneie o QR code com a câmera do celular.",
-    "selfHostedHint": "Seus dispositivos se conectam pelo seu próprio retransmissor em {{address}}. O login, os modelos, as tarefas compartilhadas e outros serviços continuam usando o {{appName}}.",
-    "removedHint": "Este celular foi removido do retransmissor, ou o retransmissor foi desativado. Volte ao retransmissor oficial ou conecte-se novamente pelo computador.",
-    "credentialMissingHint": "A credencial do retransmissor não está mais neste celular. Conecte-se novamente pelo computador ou volte ao retransmissor oficial.",
-    "confirmTitle": "Voltar ao retransmissor oficial?",
+    "sectionTitle": "Serviço de relay",
+    "currentLabel": "Serviço de relay",
+    "official": "Relay oficial do {{appName}}",
+    "switchToOfficial": "Voltar ao relay oficial",
+    "officialHint": "Seus dispositivos se conectam pelo relay oficial do {{appName}}. Quando um dos seus computadores usa um relay próprio, ele aparece aqui: toque para entrar. Para entrar em um relay que alguém compartilhou com você, escaneie o QR code com a câmera do celular.",
+    "selfHostedHint": "Seus dispositivos se conectam pelo seu próprio relay em {{address}}. O login, os modelos, as tarefas compartilhadas e outros serviços continuam usando o {{appName}}.",
+    "removedHint": "Este celular foi removido do relay ou o relay foi desativado. Volte ao relay oficial ou conecte-se novamente pelo computador.",
+    "credentialMissingHint": "A credencial do relay não está mais neste celular. Conecte-se novamente pelo computador ou volte ao relay oficial.",
+    "confirmTitle": "Voltar ao relay oficial?",
     "confirmBody": "Este celular sairá de “{{name}}” e usará o relay oficial do {{appName}}. Para usar esse relay novamente, entre nele pelo computador.",
     "confirmAction": "Voltar ao oficial",
     "switchFailed": "Não foi possível voltar ao relay oficial. Tente novamente em instantes.",
     "pushUnavailable": "Enquanto você usa seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este celular.",
     "accountManagedOn": "Gerenciado em “{{device}}”",
     "accountSwitchTitle": "Entrar em “{{name}}”?",
-    "accountSwitchBody": "Este retransmissor é da sua conta. “{{device}}” libera este celular automaticamente, sem link de compartilhamento. Enquanto você usar um retransmissor próprio, este celular não recebe as notificações de tarefas do computador.",
+    "accountSwitchBody": "Este relay é da sua conta. “{{device}}” libera este celular automaticamente, sem link de compartilhamento. Enquanto você usar um relay próprio, este celular não recebe as notificações de tarefas do computador.",
     "accountSwitchAction": "Entrar",
-    "sharedHint": "Seus dispositivos se conectam por um retransmissor compartilhado com você em {{address}} e alcançam só seus próprios dispositivos. Login, modelos, tarefas compartilhadas e outros serviços continuam usando o {{appName}}.",
+    "sharedHint": "Seus dispositivos se conectam por um relay compartilhado com você em {{address}} e alcançam só seus próprios dispositivos. Login, modelos, tarefas compartilhadas e outros serviços continuam usando o {{appName}}.",
     "sharedCurrent": "{{name}} (compartilhado por {{owner}})",
     "accountSharedBy": "Compartilhado por {{owner}} · entrou em “{{device}}”",
     "accountSharedOn": "Entrou em “{{device}}”"
@@ -48,13 +48,13 @@
     "joinedBody": "Este celular agora se conecta aos seus computadores por “{{name}}”.",
     "done": "Concluído",
     "retry": "Tentar novamente",
-    "signedOut": "Entre no {{appName}} primeiro e depois entre neste relay.",
+    "signedOut": "Faça login no {{appName}} primeiro e depois entre neste relay.",
     "signIn": "Entrar",
     "invalidLink": "Este link de compartilhamento é inválido ou expirou. Crie outro no computador.",
     "cancelled": "A entrada foi cancelada. Para entrar neste relay, crie um novo link de compartilhamento no computador.",
     "accountRequesting": "Pedindo a “{{device}}” para liberar…",
     "accountWaiting": "Entrando, aguardando “{{device}}”…",
-    "openOnComputer": "Este retransmissor foi compartilhado por outra conta. Abra este link no seu computador para entrar. Depois que o computador entrar, este celular o verá em Ajustes > Retransmissor e poderá entrar com um toque."
+    "openOnComputer": "Este relay foi compartilhado por outra conta. Abra este link no seu computador para entrar. Depois que o computador entrar, este celular o verá em Configurações > Serviço de relay e poderá entrar com um toque."
   },
   "errors": {
     "unreachable": "Não foi possível acessar este relay. Verifique se o celular e o computador estão na mesma rede ou se o celular consegue abrir este endereço.",
@@ -71,7 +71,7 @@
     "saveFailed": "A solicitação foi aprovada, mas não foi possível salvar a credencial do relay neste celular. Crie um novo link de compartilhamento no computador e tente novamente.",
     "credentialUnavailable": "Este celular não tem uma credencial de relay utilizável. Entre novamente ou volte ao relay oficial nas Configurações.",
     "ownerUnavailable": "“{{device}}” não respondeu. Verifique se o {{appName}} está aberto e on-line lá ou peça um link de compartilhamento.",
-    "relayUnavailable": "“{{device}}” não usa mais este retransmissor.",
-    "accountDirectoryUnavailable": "Não foi possível acessar o serviço de contas do {{appName}}, então os retransmissores da sua conta não foram carregados. Tente mais tarde ou peça um link de compartilhamento."
+    "relayUnavailable": "“{{device}}” não usa mais este relay.",
+    "accountDirectoryUnavailable": "Não foi possível acessar o serviço de contas do {{appName}}, então os relays da sua conta não foram carregados. Tente mais tarde ou peça um link de compartilhamento."
   }
 }

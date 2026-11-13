@@ -1,6 +1,6 @@
 {
   "back": "Back",
-  "syncing": "Syncing",
+  "syncing": "Syncing…",
   "selectOption": "Select {{label}}",
   "closePanel": "Close panel"
 }

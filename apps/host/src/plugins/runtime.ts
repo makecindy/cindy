@@ -1,5 +1,7 @@
 import { createRequire } from 'node:module';
 import { GhostManager } from '../../../desktop/src/main/cindy-brain/GhostManager.js';
+import { GhostBrowserExtensionSlot } from '../../../desktop/src/main/cindy-brain/browserExtensionSlot.js';
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { GhostRuntime } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.js';
 import { GhostPipeDispatcher } from '../../../desktop/src/main/cindy-brain/pipeDispatcher.js';
 import { createGhostExecutionPipe } from '../../../desktop/src/main/cindy-brain/executionPipe.js';
@@ -23,6 +25,9 @@ import { recordGhostCallMedia } from '../../../desktop/src/main/cindy-brain/ghos
 import type { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
 import type { Session } from '@cindy/maker-core';
 import { GhostFsSlot } from '../../../desktop/src/main/cindy-brain/fsSlot.js';
+import { getGhostPickedDirectory } from '../../../desktop/src/main/cindy-brain/pickGrantsStore.js';
+import { HostStorageService, type StorageShareFacts } from '../../../desktop/src/main/cindy-brain/storageService.js';
+import { createHostStorageProviders } from '../../../desktop/src/main/cindy-brain/storageProviders.js';
 import { GhostNotifySlot } from '../../../desktop/src/main/cindy-brain/notifySlot.js';
 import { getDirDepositVault, getSaveDepositVault } from '../../../desktop/src/main/cindy-brain/dirDeposit.js';
 import { PluginDownloadSlot } from '../../../desktop/src/main/cindy-brain/downloadSlot.js';
@@ -49,6 +54,7 @@ import { handleGhostConnectionsRequest } from '../../../desktop/src/main/cindy-b
 import type { User } from '../../../desktop/src/shared/authUser.js';
 import { hostOutbound } from '../outbound.mjs';
 import { prepareHostPluginAssets } from './assets.mjs';
+import type { GhostNodeRuntimeBrokerDeps } from '../../../desktop/src/main/cindy-brain/nodeRuntimeBroker.js';
 
 interface PluginRuntimeOptions {
   profileDir: string;
@@ -59,10 +65,13 @@ interface PluginRuntimeOptions {
   getUser?(): User | null;
   account?: PluginAccountPorts;
   confirmConnectionHost?(id: string, label: string, host: string): Promise<boolean>;
+  confirmStorageShare?(facts: StorageShareFacts, current: () => boolean): Promise<boolean>;
   appContext(): GhostAppContextResult;
   getSession(id: string): Session | undefined;
   requestFileConfirmation: GhostGrantConfirmBridge['request'];
   publish(channel: string, payload: unknown): void;
+  hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'];
+  onPluginStopped?(id: string): void;
   /** Built/release paths only, never plugin-provided. */
   assets?: Awaited<ReturnType<typeof prepareHostPluginAssets>>;
 }
@@ -144,11 +153,17 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     broadcast: payload => { if (current()) options.publish('ghosts:card-updated', payload); }, log,
   });
   const fsSlot = new GhostFsSlot({ getGhost, dataRootDir: () => root('ghost-fs'),
+    ownerKey: () => owner, resolvePickedDirectory: getGhostPickedDirectory,
     callInfo: id => current() ? cards.callInfoOf(id) : null,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
     getSessionSnapshot: async (id, instance) => current() ? resolveGhostFsSessionSnapshot(options.getSession, id, instance) : null,
     requestWriteConfirm: (id, payload) => { assertCurrent(); return options.requestFileConfirmation(id, payload); },
     writeSaveDeposit: (id, token, name, bytes) => getSaveDepositVault().write(id, token, name, bytes), log });
+  const storage = new HostStorageService({ ownerKey: () => owner, getGhost, handoff, listGhosts: () => options.manager.list(),
+    providers: createHostStorageProviders({ kv, files: fsSlot, library, handoff, media: files,
+      kvChanged: id => authorization.changes.emit(id, { source: 'kv' }) }),
+    confirmShare: (facts, check) => options.confirmStorageShare?.(facts, () => current() && check()) ?? Promise.resolve(false),
+  });
   const network = new GhostNetworkSlot({ getGhost, captureRequestGuard: guard,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
     readSecret: secret.readGhostSecret, getLoginEmail: options.getLoginEmail,
@@ -197,8 +212,24 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       },
     },
   });
+  // The execution owner, not a UI attachment, owns the browser bridge. The same
+  // slot keeps pairing/provenance rules and stops accepted jobs on owner change.
+  const browserExtensions = new GhostBrowserExtensionSlot({
+    getGhost, policyDir: () => root('browser-extension'), ownerScopeKey: () => owner,
+    isVerifiedOfficial: ghost => !hostRuntimeLayout().packaged || identity.isVerifiedPublicMarket(installedGhostStoragePart(ghost)),
+    sendToGhost: async (id, payload) => { assertCurrent(); return sandbox.deliver(id, payload, { failOnUncertain: true }); },
+    wake: async id => { const ghost = getGhost(id); return Boolean(ghost?.enabled && (await runtime.spawn(ghost)).ok); },
+    // No trusted native confirmation surface is attached to Node Host yet. A
+    // conflicting native registration is retained; never approve a takeover.
+    confirmNativeTakeover: async () => false,
+    log,
+  });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
+  const disposeRuntimeHostServices = (id: string) => {
+    fsSlot.disposePlugin(id); options.onPluginStopped?.(id);
+  };
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
+    hostToolRequest: options.hostToolRequest, onStopped: disposeRuntimeHostServices,
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
@@ -214,7 +245,8 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     send: (id, event) => { void sandbox.deliver(id, event); }, download: createDownloader(), guardedFetch: hostOutbound.guardedOutboundFetch });
   const notify = new GhostNotifySlot({ getGhost, broadcast: payload => options.publish('ghosts:notify', payload), log });
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
-    fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload) => fsSlot.handleFsRequest(id, payload),
+    hostTools: options.hostToolRequest,
+    fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload, check) => fsSlot.handleFsRequest(id, payload, check),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
     download: (id, payload, check) => download.handle(id, payload, check),
     node: (id, payload, check) => download.withNodeDownloads(id, payload as Record<string, unknown>, request => node.handleRequest(id, request), check),
@@ -227,6 +259,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       const result = pipe(id, payload, () => isCurrent(ghost));
       if (result) return track(result);
       const request = payload as { type?: string; kind?: string } | null;
+      if (request?.type === 'browser-extension-request') return track(browserExtensions.handleRequest(id, payload));
       if (request?.type === 'card-update') { cards.handleCardUpdate(id, payload); return Promise.resolve({ ok: true }); }
       if (request?.type === 'host-request' && request.kind === 'app-context') return Promise.resolve(options.appContext());
       if (request?.type === 'notify') return Promise.resolve(notify.handleNotify(id, payload));
@@ -281,12 +314,16 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     }),
   });
   const runtime = new GhostRuntime({ adapter: sandbox.adapter, log,
-    onStateChanged: (id, state) => { dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() }); } });
+    onStateChanged: (id, state) => {
+      if (state !== 'running' && state !== 'starting') disposeRuntimeHostServices(id);
+      dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() });
+    } });
   const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
   async function reconcileInstalled() {
     assertCurrent();
     const ghosts = await options.manager.listAsync(); assertCurrent();
+    browserExtensions.reconcile(ghosts.map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
     for (const [id, previous] of known) {
       if (previous === revision(getGhost(id))) continue;
       authorization.changes.emit(id, { source: 'manifest' });
@@ -317,6 +354,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         // Requests from old pages lose authority immediately, even if writing the
         // disabled receipt fails. Re-enabling is an explicit new transaction.
         suspended.add(key);
+        browserExtensions.reconcile(options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
         runtime.stop(key);
         await node.stopAndWait(key);
         await library.disposeGhost(key);
@@ -334,8 +372,10 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   async function dispose() {
     closed = true; stopSignal.abort(); runtime.destroyAll();
+    fsSlot.disposeAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
+    await finish(() => browserExtensions.dispose());
     await finish(() => authorization.close());
     await finish(() => enableChanges);
     await finish(() => reconciliation);
@@ -351,7 +391,8 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     if (errors.length) throw new AggregateError(errors, 'Plugin runtime cleanup failed');
   }
   return {
-    list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, network, secret, node, authorization,
+    list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, storage, network, secret, node, authorization,
+    browserExtensions,
     manager: options.manager, getGhost, current, assertCurrent, dispatcher, handoff, files,
     captureMutationOwner() { assertCurrent(); return getActiveAppSession(); },
     acquireMutationLease(expected: ActiveAppSession) {

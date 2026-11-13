@@ -3,12 +3,12 @@
     "retry": "再试",
     "empty": "此番无可示之处理记录",
     "unavailable": "未能读取处理记录",
-    "record": "办理录",
+    "record": "理事录",
     "operations": "操作录",
     "elapsed": "已理 {{duration}}",
     "took": "历时 {{duration}}",
     "processing": "方理",
-    "worked": "办理录",
+    "worked": "理事录",
     "thinking": "沉吟中",
     "thought": "已思",
     "failed_one": "{{count}} 次调用未成",
@@ -62,7 +62,7 @@
       "updated": "更",
       "searched": "寻",
       "fetched": "访",
-      "used": "呼",
+      "used": "调",
       "updateTodos": "更待办",
       "listed": "列",
       "inspect": "阅内容",
@@ -88,7 +88,7 @@
       "showCurrentDirectory": "览当前目录",
       "showDateTime": "览日期时间",
       "locateCommand": "查命令",
-      "inspectProcesses": "览处理程序",
+      "inspectProcesses": "览进程",
       "inspectPorts": "览端口",
       "queryDatabase": "查数据库",
       "ranCommand": "行命令",
@@ -189,5 +189,13 @@
     "working": "方劳作…",
     "worked": "已劳作 {{duration}}",
     "workDetails": "劳作之程"
+  },
+  "subscriptionAccountError": {
+    "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+    "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+    "loginRequired": "此差事所用订阅账号需要重新登录。请在执行差事的电脑上重新登录该账号，再重试。",
+    "signingIn": "此差事所用订阅账号正在登录，请完成登录后重试。",
+    "unavailable": "此差事所系订阅账号，无法用于本次请求。请于执行差事的电脑检查模型供方的账号设置，或另选模型来源。",
+    "legacy": "此差事所系订阅账号，暂不可用。请于执行差事的电脑检查登录与用量，或另选模型来源。此差事不自动更换账号。"
   }
 }

@@ -3,8 +3,8 @@
     "stored": "Bild übertragen",
     "failed": "Bildübertragung fehlgeschlagen. Versuche erneut, das vorhandene Bild zu übertragen.",
     "retry": "Übertragung wiederholen",
-    "retrying": "Wird zugestellt…",
-    "retryFailed": "Zustellung weiterhin nicht verfügbar. Prüfe, ob der Quellcomputer online ist."
+    "retrying": "Wird übertragen…",
+    "retryFailed": "Übertragung weiterhin nicht möglich. Prüfe, ob der Quellcomputer online ist."
   },
   "agentActionRow": {
     "noContent": "Nichts anzuzeigen",
@@ -84,7 +84,7 @@
       "gitWorktreePrune": "Worktrees bereinigen",
       "ghPrList": "Pull Requests auflisten",
       "ghPrView": "Pull Request anzeigen",
-      "ghPrChecks": "Pull-Request-Prüfungen prüfen",
+      "ghPrChecks": "Pull-Request-Checks prüfen",
       "ghPrStatus": "Pull-Request-Status prüfen",
       "ghPrDiff": "Pull-Request-Änderungen anzeigen",
       "ghPrCreate": "Pull Request erstellen",
@@ -125,16 +125,16 @@
   },
   "agentActions": {
     "part": {
-      "edited_one": "hat eine Datei bearbeitet",
-      "edited_other": "hat {{count}} Dateien bearbeitet",
-      "created_one": "hat eine Datei erstellt",
-      "created_other": "hat {{count}} Dateien erstellt",
-      "ran_one": "hat einen Befehl ausgeführt",
-      "ran_other": "hat {{count}} Befehle ausgeführt",
-      "read_one": "hat eine Datei gelesen",
-      "read_other": "hat {{count}} Dateien gelesen",
-      "updated_one": "hat die To-dos aktualisiert",
-      "updated_other": "hat die To-dos aktualisiert",
+      "edited_one": "eine Datei bearbeitet",
+      "edited_other": "{{count}} Dateien bearbeitet",
+      "created_one": "eine Datei erstellt",
+      "created_other": "{{count}} Dateien erstellt",
+      "ran_one": "einen Befehl ausgeführt",
+      "ran_other": "{{count}} Befehle ausgeführt",
+      "read_one": "eine Datei gelesen",
+      "read_other": "{{count}} Dateien gelesen",
+      "updated_one": "die To-dos aktualisiert",
+      "updated_other": "die To-dos aktualisiert",
       "searched_one": "gesucht",
       "searched_other": "gesucht",
       "fetched_one": "das Web abgerufen",
@@ -174,7 +174,7 @@
         "search": "Sucht",
         "web": "Durchsucht das Web",
         "command": "Führt Befehle aus",
-        "tools": "Nutzt Werkzeuge",
+        "tools": "Nutzt Tools",
         "delegate": "Delegiert Arbeit",
         "plan": "Aktualisiert den Plan"
       },
@@ -184,10 +184,18 @@
         "search": "Gesucht",
         "web": "Web durchsucht",
         "command": "Befehle ausgeführt",
-        "tools": "Werkzeuge genutzt",
+        "tools": "Tools genutzt",
         "delegate": "Arbeit delegiert",
         "plan": "Plan aktualisiert"
       }
     }
+  },
+  "subscriptionAccountError": {
+    "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+    "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+    "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
+    "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
+    "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",
+    "legacy": "Das dieser Aufgabe zugewiesene Abonnementkonto ist nicht verfügbar. Prüfe Anmeldung und Nutzung auf dem ausführenden Computer oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt."
   }
 }

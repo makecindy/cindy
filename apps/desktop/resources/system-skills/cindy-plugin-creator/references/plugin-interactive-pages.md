@@ -1,5 +1,8 @@
 ## 4.23 交互页面 MCP Apps（mcpApps.ui）
 
+需要独立页面、输入框/任务栏入口、消息展示或宿主草稿操作时，继续使用同一个 MCP Apps 资源，
+并阅读[插件界面扩展](plugin-host-ui.md)。该增量尚未发布，不能按本章历史版本下限判断支持。
+
 交互页面让一次工具结果变成可操作的页面。AI 根据用户意图打开页面；之后用户填写表单、
 查询数据或点击按钮，由页面脚本调用插件工具完成，不必每次等 AI 再说一句。页面使用
 官方 `@modelcontextprotocol/ext-apps` 的 `App`，插件的 `main.js` 提供工具和网络能力。
@@ -145,8 +148,10 @@ await app.connect();
 提供并随宿主升级，不用 CDN，不写死 SDK 地址；自带 SDK 的页面仍可用自己的副本。
 
 生成的页面不要等初始 `ontoolresult` 再渲染：加载器已接收它，重新连接不会
-重发最初的输入和结果。把首屏数据写进 HTML。卡片卸载再打开会从最初的工具结果恢复，
-不保证保留未提交的输入。
+重发最初的输入和结果。把首屏数据写进 HTML。离屏销毁与重建的触发条件、输入和浏览位置的保留办法，
+见[页面生命周期](examples/interactive-pages/REFERENCE.md#等待取消与页面生命周期)。
+
+小草稿和浏览位置可使用[内置页面状态辅助模块](#92-内置页面状态辅助模块)，不需要额外安装依赖。
 
 ### 6. 页面读 JSON，只更新需要的部分
 
@@ -248,6 +253,138 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 `_meta['cindy/file'].url`。不要自己拼只读地址，也不要把临时地址当持久引用。
 其他文件类型、体积限制和能力检测见[参考页](examples/interactive-pages/REFERENCE.md#文件)。
 
+### 9.1 宿主保存单张卡片的页面状态
+
+根 `_meta` 保存首屏数据；页面状态保存之后的页码、筛选、展开项和小草稿；
+插件 kv 保存插件级配置／偏好，业务数据仍放插件自己的存储或服务端。
+交互页面不能直接访问 `/kv`；通过工具把各卡片状态放进同一份 kv 会共享容量、
+遇到整份覆盖竞争，还需要工具审批和挂载后的额外读取，不用于替代此接口。
+
+在 `ui/initialize` 的响应里检测
+`hostCapabilities.experimental['cindy/view-state']`，其 `version` 为 1，
+`maxBytes` 为 65536，`maxSessionBytes` 为 1048576。
+支持时 `hostContext['cindy/view-state']` 是保存的对象或 null；读失败时不声明能力，
+不能把“没有能力”当作“没有旧状态”。旧宿主不支持时保留页面正常交互，使用插件自己的保存入口。
+恢复值仅在初始化时交还，不随 host-context-changed 推送，也不在保存后回传。
+
+以下是内层页面经现有 parent 桥接发送的原始请求（不要另起第二个初始化连接）：
+
+```js
+// 完成 ui/initialize 并检测上述能力后；id 在本页现有请求管理器中必须唯一。
+parent.postMessage({jsonrpc:'2.0', id:'save-draft-1',
+  method:'cindy/view-state/set', params:{state:{version:1, page:3, draft:'待提交'}}}, '*');
+// 宿主提交成功后回复 {jsonrpc:'2.0', id:'save-draft-1', result:{}}。
+// 接收器先确认 event.source === parent，再按 id 匹配成功或 error；超时不算已保存。
+```
+
+整体替换，传 `state:null` 清除；页面不能指定账号、任务或卡片键。
+根只能是 JSON 对象或 null，容器深度最多 16、节点最多 8192，大小按紧凑 JSON 的 UTF-8 计。
+拒绝执行电脑专用的 resource_link（cindy-media:/library:/handoff:），不要存凭证、令牌或临时文件地址。
+给状态带业务 `version`，页面升级时识别旧格式；恢复后结合当前数据校正页码等值，
+不要让晚到的工具结果覆盖用户的新输入。状态不交给模型、main.js、Node 或 MCP 服务端；
+确需让插件知道的内容仍由页面明确调用工具传递。
+
+变化时保存，可在页面防抖；不要等卸载才保存，隐藏后停止请求和计时器。
+成功表示本次值或本页更新值已经提交；宿主只合并在途写之后的待写值，
+被合并的请求一起收到同一次提交的成功或失败。每页最多 32 个未完成保存请求。
+`-32602` 表示此值不能保存（格式、大小、任务额度等），`-32603` 表示暂时无法保存；
+失败不改原持久值，不自动重试旧快照。卡片或账号失效沿用权限错误，旧宿主无此方法为 `-32601`。
+多端同时打开不会同步，最后提交的整份状态覆盖之前状态；重要协同编辑使用业务存储。
+
+删除消息会删除整批被删除消息的状态；删除任务会删除它及连带旁聊的状态。
+清空、rewind、归档和卸载插件保留状态，仍占任务额度；卸载插件不会删除页面状态，删除任务会删除。
+暂不可用的卡片不交还状态，恢复合法可见性后才可恢复；分叉／复制任务不带页面状态。
+删除是删除数据库记录，不承诺清除数据库旧页或历史备份。
+
+### 9.2 内置页面状态辅助模块
+
+`@cindy/ext-apps` 和 `@cindy/ext-apps/react` 是 Cindy 为页面提供的内置模块，随客户端升级，
+**不要 npm 安装**。使用打包器时将这两个名字标成 external，保留浏览器运行期 import。
+作者已有的精确、前缀、null 和 scopes 映射保持优先；React 由页面传入正在使用的实例，宿主不再加载一份。
+远程预算不足时先省略这两个附加模块，不能挤掉原来能带上的官方 SDK。
+执行端或查看端较旧、附加模块被省略时，动态 import 会失败；catch 后保留本地 UI，不能假报保存成功。
+静态 import 失败会使整个模块脚本不执行，不能靠它后面的 try/catch 退化。
+
+作者负责：选择字段；初始化恢复后结合当前业务数据校正；用户变化时调用 setter；
+默认对象带 `version`、格式改变时递增；模块缺失时做动态 import 退化。
+辅助模块负责无能力时保持本地值、默认 500ms 防抖、在途请求合并和错误处理。
+默认值或恢复值不会自动保存；恢复值不是对象、缺少 version 或版本不同则回默认值，原历史值不会被自动覆盖。
+页码超过现有总页数等业务校正仍由页面做，不要让晚到的工具结果覆盖用户已改的输入。
+
+原生 JS 在 `await app.connect()` 后创建一次：
+
+```js
+const mod = await import('@cindy/ext-apps').catch(() => null);
+const initial = { version: 1, page: 1, draft: '' };
+let local = initial;
+const state = mod ? mod.createViewState(app, initial) : {
+  get: () => local,
+  set: next => { local = typeof next === 'function' ? next(local) : next; },
+  flush: () => Promise.reject(new Error('VIEW_STATE_UNSUPPORTED')),
+  dispose() {}
+};
+render(state.get()); // 在第一次业务渲染前校验恢复值的字段和范围
+input.addEventListener('input', () => state.set(s => ({ ...s, draft: input.value })));
+done.addEventListener('click', async () => {
+  try { await state.flush(); showSaved(); }
+  catch { showSaveError('尚未确认保存'); }
+});
+// 加入页面现有 teardown 清理：state.dispose()；不要覆盖其它清理逻辑。
+```
+
+`set(value | updater)` 返回 void，更新本地状态且失败不回滚屏幕；使用完整不可变对象。
+同值不重发。`-32602` 只提示一次固定错误，不打印状态；暂时错误或断线也不自动重试。
+同一失败值重复 set/flush 不重试，下一次真实变化才再保存。
+`flush()` 取消防抖并等待调用时的值或本页更新值提交，失败则 reject；它不是业务提交。
+默认值也可通过显式 flush 保存；无能力时报 `VIEW_STATE_UNSUPPORTED`。
+`dispose()` 停止未发送的保存，不关闭 App；已发请求的取消不意味着没写入。不要等离屏才保存。
+
+React 在挂载组件前加载模块并固定 hook；传入的 React 必须与页面渲染器是同一份：
+
+```jsx
+const [core, hooks] = await Promise.all([
+  import('@cindy/ext-apps').catch(() => null),
+  import('@cindy/ext-apps/react').catch(() => null)
+]);
+const useViewState = core && hooks ? hooks.createViewStateHooks(React).useViewState
+  : (_app, initial) => React.useState(initial);
+const initial = { version: 1, draft: '' };
+function Editor({ app }) {
+  const [state, setState] = useViewState(app, initial, { debounceMs: 500 });
+  return <>
+    <textarea value={state.draft} onChange={e => setState(s => ({ ...s, draft: e.target.value }))}/>
+    <button onClick={async () => {
+      try {
+        if (!core) throw new Error('VIEW_STATE_UNSUPPORTED');
+        await core.flushViewState(app); showSaved();
+      } catch { showSaveError('尚未确认保存'); }
+    }}>完成</button>
+  </>;
+}
+```
+
+同一 App 实例共用一份 controller 和最新页面状态，不与自行发送状态 RPC 混用。
+可以同时挂载多个 hook，它们订阅同一个值；函数式 setter 总是基于最新值计算，
+一个组件修改后其它组件也会更新，卸载一个组件不影响其它组件或在途保存。
+原生 JS 与 React 也可共用同一 App；模块可用时，JS 用 `state.subscribe(render)` 监听本页变化，
+回调中用 `state.get()` 读取，订阅返回取消函数；取消订阅不会 dispose 共享 controller。
+这是同一页面里的共享，不是跨设备或跨卡片实时同步。
+React 18 及以上使用作者传入的 `useSyncExternalStore`；最低支持 React 16.8，
+缺少该 API 时用订阅加提交后复查的传统 hooks 回退，只保证旧版非并发渲染；
+并发渲染必须使用 React 18+ 并传入完整的 React 实例。
+重复调用 createViewState 或组件卸载再挂载不会退回初始化快照，默认值和防抖设置沿用首次创建；
+组件卸载不取消已发出的保存，页面关闭时再 dispose。React setter 会同步交出最新值，
+同一事件中随后调用 flushViewState 会确认这份值，不需要 flushSync。
+React 的 `app` 在连接前传 null，已连接后传 App；连接前用户已编辑时以编辑值为准。
+要首屏就是恢复值，先等 connect 完成再挂载业务界面；app 为 null 时不承诺隐藏默认界面。
+正常组件卸载且 App 仍连接时会尽力发送已修改值；页面关闭后不继续请求，未收到成功回执的最后输入不保证保存。
+`flushViewState(app)` 找到同一 App 的 controller，不要为“完成”按钮临时创建另一个。
+
+类型提示唯一来源是 [cindy-ext-apps.d.ts](examples/interactive-pages/cindy-ext-apps.d.ts)。
+把此声明放入作者项目 `types/cindy-ext-apps.d.ts`，TypeScript 的 include 加 `types/**/*.d.ts`；
+JS 可用 `// @ts-check` 和 `/// <reference path="./types/cindy-ext-apps.d.ts" />`（按文件位置调整）。
+它只提供编辑器类型，不是模块实现，也不能让旧宿主获得新能力。React 项目沿用已有的 JSX 类型。
+
 ### 10. 硬性规则与验收
 
 | 必须做到 | 原因和写法 |
@@ -263,7 +400,7 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 | 处理取消与卸载 | 用 AbortController 停止等待，关闭后不继续更新 DOM |
 | 支持浅色和深色 | 从 getHostContext 取主题，监听 onhostcontextchanged，不写死白底黑字 |
 | 明确结果归属 | 区分模型与页面调用，见 [§3](plugin-tools.md)；只供页面的数据放根 _meta |
-| 工具状态能跨进程回收接回 | 插件进程随时可能被回收，进程内存只当缓存；交给页面的引用和状态必须存入插件自己的持久存储，或能根据卡片最初的工具结果重建，确保进程重启、卡片重新挂载、换设备查看后仍能接回 |
+| 工具状态能跨进程回收接回 | 插件进程随时可能被回收，进程内存只当缓存；交给页面的引用和状态必须存入插件自己的持久存储，或能根据卡片最初的工具结果重建，确保进程重启、卡片重新挂载、换设备查看后仍能接回；离屏后的页面状态见[页面生命周期](examples/interactive-pages/REFERENCE.md#等待取消与页面生命周期) |
 
 使用 `new App(info, capabilities, {autoResize:true})` 自动报告尺寸，通过
 `app.getHostContext()` 取主题、styles.variables 和 locale。表单应能适应窄屏。

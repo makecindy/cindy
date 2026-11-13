@@ -14,8 +14,8 @@ function fixture() {
   const record = vi.fn(async (_id: string) => { void _id; });
   const capture = vi.fn(async (_caller: string) => { void _caller; return record; });
   const send = vi.fn(async (_params: unknown) => { void _params; return { ok: true, wakeKind: 'created', targetSessionId: 'new-task' }; });
-  const call = new Function('tryGetOrcaCollabService', 'captureBotCreatedTaskResponsibility', wired)(
-    () => ({ sendToSession: send }), capture,
+  const call = new Function('tryGetOrcaCollabService', 'captureBotCreatedTaskResponsibility', 'reportGroupTaskCreated', wired)(
+    () => ({ sendToSession: send }), capture, vi.fn(),
   ) as (params: { targetSessionId?: string; dispatcherSessionId: string; message: string; workingDir?: string }) => Promise<Record<string, unknown>>;
   return { call, record, capture, send };
 }
@@ -53,7 +53,7 @@ it('records no relationship when creation fails', async () => {
 });
 
 
-it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch'])('does not record an unverified creator/target after %s', async reason => {
+it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch', 'verified-remote'])('records only a verified ordinary creation after %s', async reason => {
   const captureSource = readFileSync(new URL('../../maker-ipc/botTaskCreation.ts', import.meta.url), 'utf8');
   const begin = captureSource.indexOf('export async function captureBotCreatedTaskResponsibility');
   const chunk = captureSource.slice(begin).replace('export ', '');
@@ -71,10 +71,11 @@ it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch'])('
     broadcastBotRemoteResourceChanged: vi.fn(),
   };
   const capture = new Function(...Object.keys(deps), js)(...Object.values(deps));
-  const recorder = await capture('caller');
+  const recorder = await capture('caller', reason === 'verified-remote' ? { remoteDeviceId: 'device' } : undefined);
   if (reason === 'owner-switch') {
     owner = 'owner-two';
     await expect(recorder('new-task')).rejects.toThrow('OWNER_SCOPE_CHANGED');
-  } else if (recorder) await recorder('new-task');
-  expect(save).not.toHaveBeenCalled();
+  } else if (recorder) await recorder(reason === 'verified-remote' ? 'device::new-task' : 'new-task');
+  if (reason === 'verified-remote') expect(save).toHaveBeenCalledWith('/synthetic-owner-home', 'creator', 'device::new-task', true, expect.any(Function), { created: true });
+  else expect(save).not.toHaveBeenCalled();
 });

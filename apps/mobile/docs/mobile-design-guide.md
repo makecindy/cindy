@@ -11,7 +11,7 @@
 承接桌面:**灰度为主、默认零阴影、pill 几何、字重克制**。在此之上叠加移动端约束:
 
 - **iOS 优先**,触控优先,跟随系统 light / dark 自动切换(`useColorScheme`)。
-- **灰度环境**:除已登记、各有限定用途的语义色外(品牌 teal 就绪态、Heart Orange 运行 / thinking 态、自动审批与伙伴未读的信息蓝、额度条、失败状态红和 Beta 渠道红色状态徽标等,见 §2 色表与根规范 `DESIGN.md` §2 / §15.13),界面全是黑白之间的灰阶。不引入未登记的装饰色;新增有色用途先在根规范 `DESIGN.md` §2 / §10 登记。
+- **灰度环境**:除已登记、各有限定用途的语义色外(品牌 teal 就绪态、Heart Orange 运行 / thinking 态、伙伴未读的信息蓝、额度条、失败状态红和 Beta 渠道红色状态徽标等,见 §2 色表与根规范 `DESIGN.md` §2 / §15.13),界面全是黑白之间的灰阶。不引入未登记的装饰色;新增有色用途先在根规范 `DESIGN.md` §2 / §10 登记。
   - 唯一的个性化例外:用户在设置里主动选择的「我的消息气泡颜色」,只染用户自己的消息气泡,默认仍是灰阶;规则见本文 §9「Personal message bubble colors」。
   - 模型选择器的账号额度条沿用桌面语义：剩余 ≥30% 用 `textSecondary`，10% < 剩余 <30% 用 `quotaBarWarn`，剩余 ≤10% 用 `quotaBarCrit`。额度专用语义在根规范 `DESIGN.md` §2 / §10 登记，不借用房主皇冠或任务错误 token。颜色只用于额度条，百分比文字继续保留；iOS / Android 共用真实比例绘制，不设置最小填充长度，0% 留空。
 - **圆角走四档阶梯**(与 `src/theme/tokens.ts` 的 `radius` 一致,守护测试拦截阶梯外值):`micro`(4,缩略图内 chip、勾选指示器等微元素)/ `control`(8,卡片内层控件)/ `container`(12,卡片 / 容器)/ `pill`(9999,交互元素)。**禁止**阶梯外中间值(0 / 3 / 6 / 28 等)与字面量圆角。根规范 `docs/design-rules/DESIGN.md` §5 的圆角清单约束的是桌面 surface;mobile 圆角阶梯以 `tokens.ts` 为准。两端档位差异(如 `micro 4` 不等于桌面只给键帽的 4px)是 `design-governance.md` §10「Mobile 用途差异」的待裁决项,裁决前保持现状。
@@ -47,12 +47,12 @@
 | `ctaText` | `#FFFFFF` | `#121212` | CTA 上的文字 |
 | `homeListFab` | `#0F0F0F` | `#E6E6E6` | 素雅新建对话 FAB:dark 比 cta 略收,避免主入口在深底上过跳 |
 | `statusReady` | `#19D2C1` | `#19D2C1` | 就绪 / 在线点(品牌 teal,**语义不变**) |
-| `statusAccent` | `#EA6B17` | `#EA6B17` | 运行 / thinking + 完全访问权限(Heart Orange,**语义不变**) |
+| `statusAccent` | `#EA6B17` | `#EA6B17` | 运行 / thinking(Heart Orange,**语义不变**) |
 | `quotaBarWarn` | `#F3A115` | `#F3A115` | 账号额度条剩余不足 30%、高于 10% 的填充，其他用途不复用 |
 | `quotaBarCrit` | `#EF4444` | `#EF4444` | 账号额度条剩余不超过 10% 的填充，其他用途不复用 |
 | `betaChannelBadgeBackground` | `#DF0C27` | `#DF0C27` | Beta 渠道开关已打开时,当前版本旁的状态徽标底色 |
 | `betaChannelBadgeForeground` | `#FFFFFF` | `#FFFFFF` | Beta 渠道状态徽标文字,与底色对比度 4.98:1 |
-| `permAutoAccent` | `#417CDD` | `#417CDD` | 自动审批权限模式强调 |
+| `permAutoAccent` | `#417CDD` | `#417CDD` | 历史 token；权限模式改用中性色 |
 | `botUnread` | `#417CDD` | `#417CDD` | **仅限**伙伴列表的未读点(桌面 `--bot-unread-bg` 的移动端镜像,见 `DESIGN.md` Bot Unread Badge) |
 | `errorText` | `#0F0F0F` | `#EDEDED` | 错误说明文字(跟随 textPrimary) |
 | `errorBorder` | `#858581` | `#8A8A8A` | 错误边框(跟随 borderStrong) |
@@ -284,9 +284,11 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
   不叠工作外圈或右侧重复蓝点；有准确未读数量时保留数字。离线头像降透明度；同名伙伴加「· 电脑名」。
   首次读取慢时显示同几何的骨架行。
 - **聊天顶栏 `ChatIdentityHeader`**:私聊与群聊共用。返回 + 32 标记 + 标题 16/22 600 + 副标题 12/18
-  三级色 + 设置;点身份区与设置打开同一份资料 / 设置。私聊副标题保留设备名,离线时前面加「离线 ·」。
-  伙伴 Todo 使用顶栏中的独立待办入口,只在宿主返回该能力链接时显示;复用44px玻璃按钮与原身份布局,
-  不替代设置,不影响群聊,不新增手机例行任务管理。（2026-11-08 起 V2 不再适用：伙伴待办已移除，顶栏与近况都不再有待办。）
+  三级色 + 操作入口；私聊副标题保留设备名,离线时前面加「离线 ·」。伙伴在设置前显示四宫格近况入口，
+  复用 44px 按钮、18px 图标与语义颜色；四宫格和身份区打开同一份 `CompanionGlanceSheet`，设置仍打开伙伴资料。
+  电脑默认只显示当前运行的一台，其余在线与离线电脑统一收在「显示更多（数量）」里；可展开与收起，重新打开近况默认收起。
+  近况沿用电脑、近期任务与输出内容：点任务进入所在电脑上的原任务页，点 PR 直接打开对应 PR 链接。
+  群聊的身份与设置行为不变。伙伴待办已移除，不恢复待办或添加通话入口。
 - **卡片外壳**:`surfaceElevated` 底 + 1px `border` + `radius.container` + 内边距 16。眉题 13/18 medium 二级色,
   标题 16/22 medium,状态行 13/18 二级色;只有运行中(`statusAccent` 呼吸)与失败(`statusError`)带颜色。
 - **卡片按钮 `CompanionCardButton`**:高 38(hitSlop 补到 44)、pill、15/20 medium,**文字始终居中**;一行里等宽
@@ -317,8 +319,9 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 ## 6. 图标
 
 - 库:**lucide-react-native**(统一,不混用其它图标库)。
-- **图标选择必须与桌面版保持一致**:同一动作 / 语义,手机和桌面用**同一个** lucide 图标。新增图标前先去桌面对应组件确认它用的是哪个(如权限模式用 `Hand`/`CodeXml`/`ClipboardList`/`Sparkles`/`TriangleAlert`,见桌面 `new-chat/PermissionSelector.tsx`),**不要**另选近似图标(如别用 `Shield` 系列代替)。这样跨端心智模型一致。
-  - 已沉淀的对齐映射:权限模式的图标 + 语义色见 `src/session/permissionPresentation.ts`(严格对照桌面 PermissionSelector:`auto`→`permAutoAccent`、`bypassPermissions`→`statusAccent`,其余中性)。
+- **图标选择必须与桌面版保持一致**:同一动作 / 语义,手机和桌面用**同一个** lucide 图标。新增图标前先去桌面对应组件确认它用的是哪个(如权限模式用 `Hand`/`CodeXml`/`ClipboardList`/`Sparkles`/`LockOpen`,见桌面 `new-chat/PermissionSelector.tsx`),**不要**另选近似图标。这样跨端心智模型一致。
+  - 已沉淀的对齐映射:权限模式的图标见 `src/session/permissionPresentation.ts`，严格对照桌面 PermissionSelector；所有档位统一中性色。
+  - 权限选择（2026-11-11）：收起时保留纯图标；列表用简短说明解释哪些操作直接允许、哪些由谁审批。自动审批明确说明由 AI 模型审批、可能需要额外等待，必要时由用户确认。直接选中完全访问后即生效，不追加确认弹窗。
   - **伙伴私聊回复**：消息下方的回复按钮使用 `ChatReplyIcon`，与 Desktop 共用同一款扁圆、下尾的纯气泡路径。复用原「添加到对话」操作，并从伙伴更多菜单移除重复入口；普通任务的「添加到对话」仍用 `MessageSquarePlus`。手机尚未提供的群聊／话题引用回复入口不因此新增。实现见 `src/session/CompanionMessageActions.tsx`。
   - **模型下拉对齐桌面 provider-aware 结构**:同一 model 可挂多家「供应商(来源)」,选行 = 选「来源 + 模型」,选择经 device-link 把 `model + providerId` 路由到被控端。**复用 `@cindy/model-providers` 的 `buildProviderSections` 作分段唯一真相**(`src/session/providerModelSections.ts`),被控端供应商目录经隧道 `maker:provider:list` 取(`src/device-link/useDeviceProviders.ts`);0 供应商 / 旧被控端回退 capabilities 扁平列表。**来源 mark 与桌面同源**:三个内置供应商(Claude / Codex / XD)用官方单色 SVG mark(path 常量在 `src/components/vendorIconPaths.ts`,与桌面 ClaudeMark / CodexMark / XDIncMark 逐字同源),自定义供应商回退首字母 monogram(`MobileProviderMark`)。早期「手机故意不搬品牌 SVG、全用 monogram」的决策已在「模型选择列表与桌面完全对齐」改造(2026-07)中推翻:react-native-svg 本就在依赖里,复制 path 常量零成本,而跨端一眼可辨的来源图标价值更高。唯一保留差异:monogram 容器用 pill 圆角(桌面 4px 方盒)——圆角走 §5 手机圆角阶梯,不引入阶梯外值。
   - **Agent 身份与厂牌分槽**:`MobileAgentMark` / `MobileVendorIcon` 只表示运行时 Agent，使用 Claude Code 像素脸或 Codex CLI `>_` 多瓣花；Anthropic / OpenAI 来源与模型品牌继续由 `MobileProviderMark` / `MobileModelIconMark` 表示。两类 mark 即使名称相近也不得互换。

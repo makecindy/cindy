@@ -48,7 +48,7 @@ vi.mock('@/session/UnifiedModelPickerView', () => ({
 vi.mock('@/session/useRemoteMobileFavorites', () => ({
   useRemoteMobileFavorites: () => ({ ready: true, items: state.favorites, save: state.saveFavorites }),
 }));
-vi.mock('@/session/useMobileModelQuotas', () => ({ useMobileModelQuotas: () => ({ quotas: {}, now: 0 }) }));
+vi.mock('@/session/useMobileModelQuotas', () => ({ useMobileModelQuotas: () => ({ quotas: {}, now: 0, quotaOf: () => undefined }) }));
 vi.mock('@/session/providerModelSections', () => ({ buildMobileModelSections: () => ({ activeSourceId: 'account' }) }));
 vi.mock('@/session/draftModelMemory', () => ({ useDraftModelMemoryVersion: () => 0 }));
 vi.mock('@/session/sessionModelMirror', () => ({ useSessionModelMirrorVersion: () => 0 }));

@@ -7,6 +7,9 @@ import type { ProviderGroupConfig } from '../../../shared/providerGroup.js';
 import type { RemoteAgentHostDeps } from '../../remote-agent/host/runHost.js';
 import type { ProviderShareUsageStore } from '../../device-link/providerShareUsageStore.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
+import { reshareKeyFor } from '../../remote-agent/host/groupRelay.js';
+import { createProviderGroupExternalLoad } from '../externalLoad.js';
+import type { ProviderGroupPickInput, ProviderGroupPickResult, ProviderGroupRouter } from '../router.js';
 import { providerShareGuestPeer, type ProviderShareOwned, type RemoteAgentFastPolicy, type RemoteAgentRequest } from '@cindy/device-link';
 
 const state = vi.hoisted(() => ({
@@ -24,6 +27,7 @@ const state = vi.hoisted(() => ({
   self: 'self',
   direct: false,
   planDevice: 'one',
+  plan: vi.fn(),
   approved: true,
   delegatedAllowed: true,
   modelChanged: undefined as (() => void) | undefined,
@@ -40,6 +44,9 @@ const state = vi.hoisted(() => ({
   supportsDirect: true,
   supportsFastCache: false,
   delegateCalls: [] as RemoteAgentRequest[],
+  accountView: undefined as unknown,
+  beforeAccount: undefined as undefined | (() => Promise<void>),
+  switchToken: vi.fn<(...args: unknown[]) => string>(() => randomUUID()),
 }));
 function ownedShareSnapshot(): readonly ProviderShareOwned[] | null {
   if (state.owner !== state.shareOwner) return null;
@@ -72,7 +79,9 @@ vi.mock('../../device-link/settings-store.desktop.js', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: state.revoked }),
   onDeviceLinkSettingChanged: () => () => {},
 }));
-vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
+vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
+  isRemoteProviderInvocationAllowed: () => true, isRemoteProviderOpenToOwnComputers: () => true, isOwnComputerModelUseEnabled: () => false,
+}));
 vi.mock('../../device-link/providerShareHost.js', () => ({
   getProviderShareHostLoadedSnapshot: ownedShareSnapshot,
   ownedProviderShareGuestAccess: ownedGuestAccess,
@@ -99,7 +108,7 @@ vi.mock('../../remote-agent/host/runHost.js', () => ({
   createRemoteAgentHost: (deps: RemoteAgentHostDeps) => { state.hostDeps = deps; return {
     dispose: state.stopHost,
     handle: async () => ({ version: 1 }),
-    issueDirectGroupSwitchToken: () => randomUUID(),
+    issueDirectGroupSwitchToken: (...args: unknown[]) => state.switchToken(...args),
   }; },
 }));
 vi.mock('../../remote-agent/controller/runClient.js', () => ({
@@ -109,8 +118,7 @@ vi.mock('../../remote-agent/controller/runClient.js', () => ({
 vi.mock('../../remote-agent/controller/service', () => ({ remoteAgentPollerFor: vi.fn() }));
 vi.mock('../guestRelay.js', () => ({
   createProviderGroupGuestRelay: () => ({
-    plan: async () => ({ kind: 'member', agentDeviceId: state.planDevice, providerId: 'openai',
-      memberKey: `device:${state.planDevice}:openai`, sameAccount: true }),
+    plan: (...args: unknown[]) => state.plan(...args),
     trackRun: () => ({ setRunning() {}, release() {} }),
     connect: (device: string) => {
       if (state.offline.has(device)) throw Error('executor offline');
@@ -173,6 +181,10 @@ vi.mock('../../device-link/index.js', () => ({
   ) => {
     const command = args[0];
     state.calls.push({ device, command });
+    if (command.action === 'session') {
+      await state.beforeAccount?.();
+      return { ok: true, result: state.accountView };
+    }
     if (command.op === 'caps') await state.beforeCaps?.();
     if (state.broken.has(device)) throw Error('[LINK_NOT_OPEN] disconnected');
     if (state.offline.has(device))
@@ -202,12 +214,15 @@ const { groupFastPolicyStore, createGroupFastPolicyStore } = await import('../fa
 const delegation = await import('../../device-link/providerShareDelegatedAccess.js');
 const { createProviderShareUsageStore } = await import('../../device-link/providerShareUsageStore.js');
 const { installRemoteAgentHost, disposeRemoteAgentHost } = await import('../../remote-agent/host/service.js');
+const realGuestRelay = await vi.importActual<typeof import('../guestRelay.js')>('../guestRelay.js');
 let sequence = 0;
 beforeEach(() => {
   state.stopHost = () => Promise.resolve();
   state.self = 'self';
   state.direct = false;
   state.planDevice = 'one';
+  state.plan.mockReset().mockImplementation(async () => ({ kind: 'member', agentDeviceId: state.planDevice,
+    providerId: 'openai', memberKey: `device:${state.planDevice}:openai`, sameAccount: true }));
   state.approved = true;
   state.delegatedAllowed = true;
   state.modelChanged = undefined;
@@ -233,6 +248,9 @@ beforeEach(() => {
   state.offline.clear();
   state.broken.clear();
   state.beforeCaps = undefined;
+  state.accountView = undefined;
+  state.beforeAccount = undefined;
+  state.switchToken.mockReset().mockImplementation(() => randomUUID());
   state.notify.mockReset().mockResolvedValue(undefined);
   state.config = {
     strategy: 'least',
@@ -417,6 +435,72 @@ describe('durable direct task routing', () => {
     await state.usage!.flush();
     await installDirectHost();
     expect(await locate('history')).toBeNull();
+  });
+
+  // Unit, direct-execution §7: real installed O service must fence both the
+  // startup's generation and M's account probe. Existing coverage only moved
+  // to another physical executor and never raced the probe with reauthorization.
+  it.each(['available', 'no-account', 'replaced', 'revoked'] as const)(
+    'permits one same-M account handoff only from current executor evidence: %s', async mode => {
+      await installDirectHost();
+      const first = await allocate('account-recovery');
+      state.accountView = { providerId: 'openai', state: 'bound', account: {
+        isDefault: false, number: 2, status: 'limited', paused: false,
+        blocked: true, switchAvailable: mode !== 'no-account',
+      } };
+      state.plan.mockImplementation(async ({ exclude }) => exclude.has('device:one:openai')
+        ? { kind: 'member', agentDeviceId: 'two', providerId: 'openai', memberKey: 'device:two:openai', sameAccount: true }
+        : { kind: 'member', agentDeviceId: 'one', providerId: 'openai', memberKey: 'device:one:openai', sameAccount: true });
+      const direct = state.hostDeps!.directGuestExecution!;
+      // Stale failures must not even query accounts or reuse the new token.
+      expect(await direct.switch(guestPeer, { op: 'direct-switch', sessionId: 'account-recovery',
+        generation: randomUUID() })).toEqual({});
+      expect(state.calls.some(call => call.command.action === 'session')).toBe(false);
+      if (mode === 'replaced') state.beforeAccount = async () => { await allocate('account-recovery'); };
+      if (mode === 'revoked') state.beforeAccount = async () => { state.approved = false; };
+      const result = await direct.switch(guestPeer, { op: 'direct-switch', sessionId: 'account-recovery',
+        generation: first!.generation });
+      expect(state.calls.find(call => call.command.action === 'session')).toMatchObject({ device: 'one', command: {
+        providerId: 'openai', model: 'gpt-5', sessionId: directTask('account-recovery'),
+      } });
+      if (mode === 'replaced' || mode === 'revoked') {
+        expect(result).toEqual({});
+        expect(state.switchToken).not.toHaveBeenCalled();
+      } else {
+        expect(result.token).toBeTruthy();
+        expect(state.switchToken).toHaveBeenCalledWith(guestPeer, 'account-recovery',
+          expect.any(Set), ...(mode === 'available' ? [true] : []));
+        expect(await locate('account-recovery')).toEqual({ deviceId: 'one' });
+      }
+    },
+  );
+
+  // Unit, provider-sharing §4.3 / direct-execution §7: the installed direct
+  // switch must use the real guest planner's per-person approval. The old
+  // fixture always returned a same-account member, hiding this missing identity.
+  it.each([true, false])('issues a direct switch only for a spare approved for this guest: approved=%s', async approved => {
+    await installDirectHost();
+    await allocate('reshare-recovery');
+    const spare = { ...state.config!.members[1]!, key: 'share:spare:openai' as const,
+      kind: 'share' as const, agentDeviceId: 'share:spare' };
+    state.config!.members[1] = spare;
+    const externalLoad = createProviderGroupExternalLoad({ now: Date.now });
+    const planner = realGuestRelay.createProviderGroupGuestRelay({
+      readGroup: () => state.config,
+      reshareAllows: (device, key) => approved && device === spare.agentDeviceId && key === reshareKeyFor('share', 'member'),
+      scope: () => ({ isCurrent: () => true, externalLoad, router: {
+        pick: async ({ exclude }: ProviderGroupPickInput): Promise<ProviderGroupPickResult> => exclude?.has(spare.key)
+          ? { kind: 'unavailable' as const, resolved: [] }
+          : { kind: 'member' as const, member: spare, label: 'spare', resolved: [] },
+      } as ProviderGroupRouter }),
+      connect: () => { throw Error('Switch planning must not start the spare'); },
+      now: Date.now, log: { warn() {} },
+    });
+    state.plan.mockImplementation(input => planner.plan(input));
+    const result = await state.hostDeps!.directGuestExecution!.switch(guestPeer,
+      { op: 'direct-switch', sessionId: 'reshare-recovery' });
+    expect(Boolean(result.token)).toBe(approved);
+    expect(await locate('reshare-recovery')).toEqual({ deviceId: 'one' });
   });
 
   it('retains historical affinity on release but clears it on accepted fresh O fallback', async () => {

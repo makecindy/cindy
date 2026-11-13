@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { groupWorkRuns, type MessageRenderItem, type ToolSegmentRenderItem, type RenderItem } from '@/components/chat/messageWorkGroups';
-import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
+import { readBotGroupProcessMessages, projectBotGroupProcess, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
+import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
+import { findFirstUnreadBotReplyClientId } from '../botConversationTimeline';
 
 const message = (id: string, role: ChatMessage['role'], content = id,
   extra: Partial<ChatMessage> = {}): MessageRenderItem => ({
@@ -21,6 +23,21 @@ const shape = (items: readonly RenderItem[]): string => items.map((item) => item
 const project = (items: RenderItem[], streaming: boolean) =>
   simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
 
+it('shows a historical scheduled final result so opening the chat can mark it read (#9835)', () => {
+  const previous = message('previous', 'assistant', 'Earlier answer', {
+    turnCompleted: true, createdAt: '2026-11-10T10:00:00.000Z',
+  });
+  const scheduled = message('schedule-result:run-1', 'assistant', 'Scheduled result', {
+    createdAt: '2026-11-10T10:01:00.000Z',
+  });
+  const visible = botProcessItems(groupWorkRuns([previous, scheduled], false), false);
+  expect(proseIds(visible)).toEqual(['previous', 'schedule-result:run-1']);
+  expect(latestSettledAssistantMs(visible)).toBe(Date.parse('2026-11-10T10:01:00.000Z'));
+  expect(proseIds(project([previous, { ...scheduled, message: {
+    ...scheduled.message, turnCompleted: false,
+  } }], false))).toEqual(['previous']);
+});
+
 // Unit regression: same production grouping and projection as MessageStream.
 // Existing tests expected progress to disappear; exercise the metadata handoff.
 it('keeps working prose through streaming metadata and tools, folding only after the answer', () => {
@@ -37,6 +54,74 @@ it('keeps working prose through streaming metadata and tools, folding only after
 });
 
 describe('teammate final-result presentation', () => {
+  // User screenshot: NEW split one portrait's process from its result. The old
+  // unread tests only selected a message ID, never its production render group.
+  // Unit tier: group real process/reply items, then assert the displayed boundary.
+  const unreadKey = (rows: RenderItem[], boundary = 5_000, streaming = false) => {
+    const items = botProcessItems(groupWorkRuns(rows, streaming), streaming);
+    const unread = findFirstUnreadBotReplyClientId(items.flatMap(item =>
+      item.type === 'message' ? [item.message] : []), boundary);
+    return { items, key: botUnreadBoundaryItemKey(items, unread, botTurnContinuations(items)) };
+  };
+
+  it('puts NEW before the same-turn process, including intervening media', () => {
+    const rows: RenderItem[] = [message('u', 'user'), tool('one'),
+      { type: 'tool_media', key: 'media-one', items: [{ kind: 'image', url: 'xdt-image://fixture.png' }] },
+      message('answer', 'assistant', 'Result', { createdAt: new Date(7_000).toISOString(), turnCompleted: true })];
+    const { items, key } = unreadKey(rows);
+    expect(key).toBe(items.find(item => item.type === 'work_group')?.key);
+    expect(key).not.toBe('msg-answer');
+  });
+
+  it.each([true, false])('does not cross a completed reply into a previous turn (user boundary=%s)', userBoundary => {
+    const { items, key } = unreadKey([message('u', 'user'), tool('one'),
+      message('old', 'assistant', 'Read result', { createdAt: new Date(4_000).toISOString(), turnCompleted: true }),
+      ...(userBoundary ? [message('u2', 'user')] : []), tool('two'),
+      message('answer', 'assistant', 'New result', { createdAt: new Date(7_000).toISOString(), turnCompleted: true })]);
+    const replyIndex = items.findIndex(item => item.key === 'msg-answer');
+    expect(key).toBe(items[replyIndex - 1]?.key);
+    expect(items[replyIndex - 1]?.type).toBe('work_group');
+  });
+
+  it('keeps NEW outside the process when live commentary folds on completion', () => {
+    const prefix = [message('u', 'user'), tool('one'), message('progress', 'assistant', 'Working', {
+      assistantPhase: 'commentary', createdAt: new Date(6_000).toISOString(),
+    })];
+    for (const streaming of [true, false]) {
+      const { items, key } = unreadKey([...prefix, message('answer', 'assistant', 'Result', {
+        assistantPhase: 'final_answer', createdAt: new Date(7_000).toISOString(),
+        isStreaming: streaming, turnCompleted: !streaming,
+      })], 5_000, streaming);
+      expect(key).toBe(items.find(item => item.type === 'work_group')?.key);
+    }
+  });
+
+  it('keeps a reply at its own boundary across an unloaded history gap or without a process', () => {
+    const answer = message('answer', 'assistant', 'Result', { createdAt: new Date(4_000_000).toISOString(), turnCompleted: true });
+    const oldTool = tool('old');
+    oldTool.toolCalls[0].createdAt = new Date(1_000).toISOString();
+    for (const rows of [[answer], [message('u', 'user'), oldTool, answer]]) {
+      expect(unreadKey(rows).key).toBe('msg-answer');
+    }
+    expect(unreadKey([answer], 5_000_000).key).toBeNull();
+  });
+
+  it('keeps NEW visible if the process was cropped out of the render window', () => {
+    const { items } = unreadKey([message('u', 'user'), tool('one'),
+      message('answer', 'assistant', 'Result', { createdAt: new Date(7_000).toISOString(), turnCompleted: true })]);
+    const reply = items.find(item => item.key === 'msg-answer')!;
+    expect(botUnreadBoundaryItemKey([reply], 'answer', botTurnContinuations(items))).toBe('msg-answer');
+    const first = message('first', 'assistant', 'First part', { createdAt: new Date(6_000).toISOString() });
+    const continuation = [items[1]!, first, reply];
+    expect(botUnreadBoundaryItemKey([first, reply], 'answer', botTurnContinuations(continuation))).toBe('msg-first');
+  });
+
+  it('does not pull an unread system-card result into the preceding process', () => {
+    const { key } = unreadKey([message('u', 'user'), tool('one'),
+      message('receipt', 'assistant', 'Delivered', { createdAt: new Date(7_000).toISOString(), systemCardType: 'bot-session-task-message' })]);
+    expect(key).toBe('msg-receipt');
+  });
+
   // #8864: the production projection must keep the process and answer under one
   // portrait without joining separate user/proactive turns. Existing UI fixtures
   // only covered a single turn. Unit tier; two tools and sealed answers suffice.
@@ -420,23 +505,25 @@ describe('continuous teammate process', () => {
     const loaded: RenderItem = { ...empty, children: [tool('older')] };
     expect(botProcessItems([empty], false)[0]?.key).toBe(botProcessItems([loaded], false)[0]?.key);
   });
-  it('keeps one stable disclosure and leaves the final reply outside', async () => {
+  it('keeps the standard switch card visible between stable process disclosures', async () => {
     const user = message('journal-user', 'user');
     const first = tool('first');
     const note = message('note', 'assistant', 'Found the cause', { assistantPhase: 'commentary' });
     const switched = message('switch', 'assistant', '', { systemCardType: 'agent-switch' });
     const stages = [[user, first], [user, first, note], [user, first, note, switched, tool('verify')]];
-    const keys = stages.map(rows => {
+    const keys = stages.map((rows, index) => {
       const result = botProcessItems(groupWorkRuns(rows, true), true);
       const groups = result.filter(item => item.type === 'work_group');
-      expect(groups).toHaveLength(1);
+      expect(groups).toHaveLength(index === 2 ? 2 : 1);
       expect(groups[0]).toMatchObject({ teammateJournal: true, isStreaming: true });
       return groups[0]!.key;
     });
     const done = botProcessItems(groupWorkRuns([...stages[2]!, message('final', 'assistant', 'Fixed and verified', { turnCompleted: true })], false), false);
     expect(done[1]?.key).toBe(keys[0]);
     expect(new Set(keys).size).toBe(1);
-    expect(proseIds(done)).toEqual(['final']);
+    expect(proseIds(done)).toEqual(['switch', 'final']);
+    expect(done).toContain(switched);
+    expect(done.map(item => item.type)).toEqual(['message', 'work_group', 'message', 'work_group', 'message']);
     expect(allKeys(done)).toEqual(expect.arrayContaining(['tools-first', 'msg-note', 'msg-switch', 'tools-verify']));
   });
   it('does not swallow an addressed answer or merge two user turns', async () => {
@@ -447,6 +534,32 @@ describe('continuous teammate process', () => {
     expect(result.filter(item => item.type === 'work_group')).toHaveLength(2);
   });
 });
+
+// Unit parity for the reported empty completed group process. Both sides use
+// their production readers/grouping with the same input; do not define separate
+// expected group behavior. The late thinking case was absent from group coverage.
+it.each(['answer-only', 'thinking-before-answer', 'thinking-after-answer', 'stage-note'] as const)(
+  'matches private-chat completed process contents for %s', async scenario => {
+    const ref = { groupId: 'group', executionId: 'execution', sessionId: 'lane', clientId: 'source' };
+    const source: BotGroupProcessMessage = { clientId: 'source', role: 'user', content: 'Request' };
+    const final: BotGroupProcessMessage = { clientId: 'final', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } };
+    const thought: BotGroupProcessMessage = { clientId: 'thought', role: 'thinking', content: 'Thinking' };
+    const note: BotGroupProcessMessage = { clientId: 'note', role: 'assistant', content: 'Checking', agentMeta: { assistantPhase: 'commentary' } };
+    const rows = scenario === 'answer-only' ? [source, final]
+      : scenario === 'thinking-after-answer' ? [source, final, thought]
+      : [source, scenario === 'stage-note' ? note : thought, final];
+    const privateItems = botProcessItems(groupWorkRuns(rows.map(row => message(row.clientId, row.role as ChatMessage['role'], row.content as string, {
+      turnCompleted: row.agentMeta?.turnCompleted === true,
+      assistantPhase: row.agentMeta?.assistantPhase as ChatMessage['assistantPhase'],
+    })), false), false);
+    const privateProcessKeys = privateItems.flatMap(item => item.type === 'work_group' ? allKeys(item.children).map(key => key.replace(/^msg-/, '')) : []);
+    const groupRows = rows.map(row => ({ ...row, agentMeta: { ...row.agentMeta, botPrivateReply: true, botGroupLane: true } }));
+    const groupMessages = await readBotGroupProcessMessages(ref, async () => groupRows, () => false);
+    const groupProcessKeys = projectBotGroupProcess(groupMessages, false).segments.flatMap(segment =>
+      segment.kind === 'work' ? segment.items.map(item => item.key) : [segment.item.key]);
+    expect(groupProcessKeys).toEqual(privateProcessKeys);
+  },
+);
 
 describe('companion closing reply and read position', () => {
   // #8629 + codex P2: 主进程 `canonicalReplyVisibility` 把「未封口、但有后续工具之前」

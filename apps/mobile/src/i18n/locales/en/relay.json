@@ -51,7 +51,7 @@
     "signedOut": "Sign in to {{appName}} first, then join this relay.",
     "signIn": "Sign In",
     "invalidLink": "This share link isn’t valid or has expired. Create a new one on your computer.",
-    "cancelled": "Joining was canceled. To join this relay, create a new share link on your computer.",
+    "cancelled": "Joining was cancelled. To join this relay, create a new share link on your computer.",
     "accountRequesting": "Asking “{{device}}” to let this phone in…",
     "accountWaiting": "Joining, waiting for “{{device}}”…",
     "openOnComputer": "This relay was shared by another account. Open this link on your computer to join. Once your computer joins, this phone sees it under Relay in Settings and can join with one tap."

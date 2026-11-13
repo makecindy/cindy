@@ -55,7 +55,7 @@ import {
   parseOrcaPersistedMessage,
   type OrcaCollabCard,
 } from '@/session/orcaCollab';
-import { isMobileImPlatform, type MobileImPlatform } from '@/session/messageSourceLabels';
+import { isMobileImPlatform, orcaAutoBridgeBatchCount, type MobileImPlatform } from '@/session/messageSourceLabels';
 import {
   parseMobilePersistedSessionReferenceMetadata,
   type MobilePersistedSessionReferenceMetadata,
@@ -275,7 +275,7 @@ const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
 export function normalizeRemoteMessages(
   messages: readonly RemoteMessage[],
-  options: { preserveSourceOrder?: boolean; sessionSource?: string | null; pendingQuestionIds?: ReadonlySet<string> } = {},
+  options: { preserveSourceOrder?: boolean; sessionSource?: string | null; includeInteractionTools?: boolean; pendingQuestionIds?: ReadonlySet<string> } = {},
 ): NormalizedRemoteMessage[] {
   // History views already place live tails after their persisted prefix. A live
   // row's provisional timestamp must not undo that order during normalization.
@@ -341,7 +341,10 @@ export function normalizeRemoteMessages(
       const agentTaskStatus = normalizeAgentTaskTerminalStatus(
         message.agentMeta?.agentTaskStatus,
       );
-      if (tool.toolName === 'AskUserQuestion' || tool.toolName === 'ExitPlanMode') continue;
+      // Private chat has dedicated interaction rows; process-only views need
+      // the read-only call/result too, or an entire work segment disappears.
+      const interactionTool = tool.toolName === 'AskUserQuestion' || tool.toolName === 'ExitPlanMode';
+      if (interactionTool && !options.includeInteractionTools) continue;
       // Lead 派活(create_worker / send_to_worker)→ 渲染成 dispatch 卡片(kind:'system' 使其成为
       // 独立卡片而非折叠进 tool_group),其余 tool 照常走下面的 tool 渲染。
       const dispatchCard = buildOrcaDispatchCard(tool.toolName, tool.input);
@@ -366,7 +369,7 @@ export function normalizeRemoteMessages(
         kind: 'tool',
         role: message.role,
         label: tool.toolName || 'tool_use',
-        body: tool.summary,
+        body: interactionTool ? contentToPreview(tool.input) : tool.summary,
         secondaryBody,
         media: extractToolResultMedia(secondaryBody ?? ''),
         files: extractPayloadToolResultFiles(secondaryBody ?? ''),
@@ -526,6 +529,7 @@ export function normalizeRemoteMessages(
       const reportCard = parseOrcaPersistedMessage(
         message.content,
         orcaOrigin?.kind === 'orca' ? readString(orcaOrigin.senderLabel) ?? undefined : undefined,
+        orcaAutoBridgeBatchCount(orcaOrigin),
       );
       if (reportCard) {
         result.push({
@@ -540,7 +544,7 @@ export function normalizeRemoteMessages(
           orcaCard: reportCard,
           align: 'agent',
           createdAt: message.createdAt,
-          ...readSessionOrigin(message),
+          ...(orcaAutoBridgeBatchCount(orcaOrigin) ? {} : readSessionOrigin(message)),
         });
         continue;
       }

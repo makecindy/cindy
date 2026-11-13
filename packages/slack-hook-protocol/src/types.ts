@@ -921,17 +921,43 @@ export interface ProviderBindRevokePayload {
 
 export const PROVIDER_BIND_SELECT_TIMEOUT_MS = 10_000;
 
+/** Display-only working computer metadata; never grants binding/task authority. */
+export interface ProviderWorkingDevice { name: string | null; isCurrent: boolean }
+
 /** Select this confirmed binding as the working device; requires the select_device action. */
 export type ProviderBindSelectPayload = ProviderBindRevokePayload;
 /** Acknowledges only the requested selection; does not change any device’s binding state. */
-export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload { ok: boolean }
+export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload {
+  ok: boolean;
+  /** Also sent unsolicited to already-bound computers after a selection changes. */
+  workingDevice?: ProviderWorkingDevice;
+}
 
 /**
  * Shared payload for provider.bind.update and provider.bind.state. update is an
  * event/reply; state is an authoritative point-in-time snapshot for one scope.
  * All nullable fields are explicit so an old value cannot survive a snapshot.
  */
+export interface FeishuBotAppInfo {
+  appId: string;
+  brand: 'feishu' | 'lark';
+  appType: 'self_built' | 'store';
+  botName: string | null;
+  organization: string | null;
+  /** Feishu company display name for this application's tenant; omitted by older peers. */
+  tenantName?: string | null;
+}
+
+export interface FeishuApplicationState {
+  app: FeishuBotAppInfo;
+  bindings: ProviderBindStatusPayload[];
+}
+
 export interface ProviderBindStatusPayload {
+  /** Optional Feishu display state; absent on older servers and unconfirmed attempts. */
+  workingDevice?: ProviderWorkingDevice;
+  appInfo?: FeishuBotAppInfo;
+  applications?: FeishuApplicationState[];
   provider: HookProvider;
   /** Request id being answered, or null for an unsolicited state push. */
   replyTo: string | null;
@@ -958,6 +984,12 @@ export interface ProviderBindStatusPayload {
   /** Optional safe recovery/provider URL interpreted by the host application. */
   remediationUrl: string | null;
   actions: ProviderBindAction[];
+  /** Store-app multi-account snapshot, only after feishu-store-multi-bind-v1 negotiation. */
+  bindings?: ProviderBindStatusPayload[];
+  /** The exact additive attempt completed by this confirmation. */
+  completedAttemptId?: string;
+  /** Installation tenant, used to distinguish store accounts; not a global person identifier. */
+  tenantKey?: string | null;
 }
 
 export type ProviderBindUpdatePayload = ProviderBindStatusPayload;
@@ -1389,6 +1421,8 @@ export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
 
 /** Both peers must advertise this before using provider.bind.* frames. */
 export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
+/** Additive Feishu identities for store apps only; both peers must advertise it. */
+export const HOOK_FEATURE_FEISHU_STORE_MULTI_BIND = 'feishu-store-multi-bind-v1';
 
 /** Both peers must advertise this before using provider.prefs.* frames. */
 export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';
@@ -2114,3 +2148,6 @@ export type HookMessage =
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };
+
+/** Multiple independently enabled Feishu apps on one connection; each app keeps its own identities. */
+export const HOOK_FEATURE_FEISHU_MULTI_APP = 'feishu-multi-app-v1';

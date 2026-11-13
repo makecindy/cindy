@@ -34,7 +34,11 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 import {
-  PROVIDER_GROUP_MAX_LIMIT,
+  CONCURRENCY_LIMIT_OPTIONS,
+  CONCURRENCY_LIMIT_UNLIMITED,
+  concurrencyLimitFromOption,
+  concurrencyLimitOptionValue,
+  concurrencyLimitPatch,
   PROVIDER_GROUP_MAX_WEIGHT,
   PROVIDER_GROUP_STRATEGIES,
   providerGroupDeviceCount,
@@ -66,8 +70,9 @@ export { memberStatusText };
 const SELECTABLE_STRATEGIES = PROVIDER_GROUP_STRATEGIES.filter((value) => value !== 'usage');
 const selectableStrategy = (strategy: ProviderGroupStrategy): ProviderGroupStrategy =>
   strategy === 'usage' ? 'least' : strategy;
-const LIMIT_OPTIONS = Array.from({ length: PROVIDER_GROUP_MAX_LIMIT }, (_, i) => String(i + 1));
 const WEIGHT_OPTIONS = ['1', '2', '3', '5', '10', '20', '50', String(PROVIDER_GROUP_MAX_WEIGHT)];
+const MEMBER_MORE_BUTTON =
+  'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 
 export function ProviderGroupSection({ providerId, providerName, deviceId, deviceName, initialConfig, remoteProvider, fastPolicySupported, onConfigChange }: {
   providerId: string;
@@ -492,11 +497,16 @@ function MemberRow({
           <div className="flex shrink-0 items-center gap-1.5">
             <Select
               label={t('providerGroup.member.limitAria', { name: label })}
-              value={String(member.limit)}
-              options={LIMIT_OPTIONS.map((value) => ({ value, label: t('providerGroup.member.limitOption', { count: Number(value) }) }))}
-              onValueChange={(value) => onChange({ limit: Number(value) })}
+              value={concurrencyLimitOptionValue(member)}
+              options={CONCURRENCY_LIMIT_OPTIONS.map((value) => ({
+                value,
+                label: value === CONCURRENCY_LIMIT_UNLIMITED
+                  ? t('providerGroup.member.limitUnlimited')
+                  : t('providerGroup.member.limitOption', { count: Number(value) }),
+              }))}
+              onValueChange={(value) => onChange(concurrencyLimitPatch(concurrencyLimitFromOption(value)))}
               disabled={disabled}
-              className="w-[104px]"
+              width="xs"
             />
             {strategy === 'weight' && (
               <Select
@@ -505,8 +515,8 @@ function MemberRow({
                 options={WEIGHT_OPTIONS.map((value) => ({ value, label: t('providerGroup.member.weightOption', { weight: value }) }))}
                 onValueChange={(value) => onChange({ weight: Number(value) })}
                 disabled={disabled}
-                /* 权重最大 100，各语言的「权重 100」都比「上限 16」长：按内容定宽，避免 trigger 自己截断。 */
-                className="w-[120px]"
+                /* 窄档 120px 按最长的「权重 100」定（各语言都比「上限 16」长），避免 trigger 自己截断。 */
+                width="xs"
               />
             )}
             <Switch
@@ -517,8 +527,18 @@ function MemberRow({
                 : 'providerGroup.member.assignAria', { name: label })}
               onCheckedChange={(on) => onChange({ paused: !on })}
             />
+            {/* 保留行尾按钮以对齐各行；aria-disabled 让不可移出的电脑仍能通过悬停和键盘聚焦查看原因。 */}
             {member.kind === 'local' ? (
-              <span aria-hidden="true" className="h-8 w-8 shrink-0" />
+              <Tip text={t('providerGroup.member.removeLocalBlocked')}>
+                <button
+                  type="button"
+                  aria-disabled="true"
+                  aria-label={t('providerGroup.member.moreAria', { name: label })}
+                  className={cn(MEMBER_MORE_BUTTON, 'cursor-default opacity-40')}
+                >
+                  <MoreHorizontal size={18} />
+                </button>
+              </Tip>
             ) : (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -526,7 +546,7 @@ function MemberRow({
                     <button
                       type="button"
                       aria-label={t('providerGroup.member.moreAria', { name: label })}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      className={cn(MEMBER_MORE_BUTTON, 'transition-colors hover:bg-[var(--surface-hover)]')}
                     >
                       <MoreHorizontal size={18} />
                     </button>

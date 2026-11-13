@@ -135,6 +135,7 @@ function SkipRow({
   gutterWidth: number;
   truncatedLabel: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       className="flex min-h-[20px] select-none text-[var(--diff-line-num)]"
@@ -143,7 +144,7 @@ function SkipRow({
       <span className="shrink-0 px-2 text-right" style={{ minWidth: `${gutterWidth + 3}ch` }} />
       <span className="shrink-0 w-4 text-center">⋯</span>
       <span className="flex-1 whitespace-pre pr-3 italic">
-        {row.truncated ? truncatedLabel : `${row.count} 行未变`}
+        {row.truncated ? truncatedLabel : t('chat.lightbox.diffUnchangedLines', { count: row.count })}
       </span>
     </div>
   );

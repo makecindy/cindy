@@ -5,6 +5,7 @@ import { teammateRoutineReviewIntent } from '../../shared/botAutonomy.js';
 import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
   PI_CACHE_RECOVERY_EXPECTATION,
+  MODEL_REQUEST_CONTROL,
   CodexResumePreparationBlockedError,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
@@ -43,6 +44,8 @@ import {
   type HandoffWireMessage,
 } from './agentHandoff.js';
 import type { MessageSourceDevice, MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
+import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
+import { appendRuntimePluginContext, runtimePluginInputText } from './runtimePlugins.js';
 import {
   buildClientEnvironmentNote,
   shouldPrependMobileClientPromptNote,
@@ -50,7 +53,8 @@ import {
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
-import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.desktop.js';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import type { SupportedLocale } from '../../shared/locale.js';
 import {
   buildUiLanguageErrorNote,
   turnClassicalStyleFromSendOpts,
@@ -69,7 +73,7 @@ import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
-import { mcpAppModelContext } from '../mcp-apps/runtime.js';
+import type { McpAppModelContext } from '../mcp-apps/host.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -135,6 +139,7 @@ type IpcUserMessage =
 
 
 type MakerSendOptions = {
+  readonly [MODEL_REQUEST_CONTROL]?: import('@cindy/maker-core').ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('@cindy/maker-core').SendOptions[typeof PI_CACHE_RECOVERY_EXPECTATION];
   /** Main-only live card guard, never serialized to queue history or provider options. */
   readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
@@ -270,6 +275,17 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  /** Read launcher preferences at dispatch time, not at module initialization. */
+  /** Null when the launcher has no interface-language preference. */
+  getResolvedMainLocale(): SupportedLocale | null;
+  getMainClassicalStyle(): ClassicalReplyStyleId;
+  /** Use the launcher's existing App registry; never create a parallel registry. */
+  readMcpAppModelContext(sessionId: string): Promise<McpAppModelContext>;
+  prepareRuntimePrompt?(sessionId: string): Promise<void> | undefined;
+  composeRuntimeContext?(sessionId: string, readText: () => string, signal?: AbortSignal): Promise<string> | undefined;
+  prepareRuntimeTurn?(sessionId: string, message: unknown, signal?: AbortSignal): Promise<{
+    options?: Partial<SessionSendOptions>; failure?: DesktopMakerSendResult;
+  }> | undefined;
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
   /** 资源漂移回收必须走 Maker 的 runtime-refresh 原因(直接 Session.close 会被
@@ -383,6 +399,10 @@ export interface MakerSendTransactionDeps {
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
   assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
+  /** Launcher-owned durable startup fence. A failed write must prevent provider
+   * startup so an uncertain turn cannot be replayed after a Host restart.
+   * Desktop omits this port and retains its existing event-driven lifecycle. */
+  beforeProviderStart?: (sessionId: string, sendOpts: unknown) => Promise<void>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
   ackInterruptedTurnDispatched?: (sessionId: string, endedAt: number) => void | Promise<void>;
   previewUserPrompt?(
@@ -1070,9 +1090,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
       if (deps.prepareExternalInput) await deps.prepareExternalInput(sessionId);
       const dispatchProductTurn = deps.prepareProductTurn?.(sessionId);
-      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
+      const requestedSendOpts = { ...((sendOpts ?? {}) as MakerSendOptions) };
       if (!requestedSendOpts.signal?.aborted) {
         await deps.restoreArchivedSessionForSend?.(sessionId);
+      }
+      const runtimePreparation = deps.prepareRuntimeTurn?.(sessionId,
+        requestedSendOpts[AUTO_REVIEW_SOURCE_CONTENT] ?? requestedSendOpts[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message,
+        requestedSendOpts.signal);
+      if (runtimePreparation) {
+        const runtime = await runtimePreparation;
+        if (runtime.failure && !requestedSendOpts.signal?.aborted) return runtime.failure;
+        Object.assign(requestedSendOpts, runtime.options);
       }
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
@@ -1090,6 +1118,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(clientId ? { clientId } : {}),
         } : undefined,
       );
+      try {
+        const promptPreparation = deps.prepareRuntimePrompt?.(sessionId);
+        if (promptPreparation) await promptPreparation;
+      } catch (error) {
+        if (!(error instanceof RuntimePluginControlError) || requestedSendOpts.signal?.aborted) throw error;
+        return toCompatibleMakerSendResult(createHostSendFailure(error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
+          'The selected system prompt provider is unavailable.'));
+      }
       // 发送前的准备期间就被停止(如供应商组正在等原电脑恢复)：不再打开会话、不再派发，与 Session 在派发前
       // 收到取消是同一个结果，由调用方按「派发前取消」收尾。
       if (requestedSendOpts.signal?.aborted) {
@@ -1286,7 +1322,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
       }
       let outgoingMessage = message;
-      let outgoingSendOpts = sendOpts;
+      let outgoingSendOpts: unknown = requestedSendOpts;
       let cleanupAfterAcceptance: (() => void) | undefined;
       let cleanupBeforeAcceptance: (() => void | Promise<void>) | undefined;
       let cleanupLocalMaterialization: (() => void | Promise<void>) | undefined;
@@ -1507,9 +1543,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         allowsEnvironmentNotes
           ? buildCindyMakeTaskNote()
           : null;
-      const uiLanguageNote = allowsEnvironmentNotes
-        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()), {
-            classicalStyle: turnClassicalStyleFromSendOpts(so, getMainClassicalStyle()),
+      const uiLanguage = allowsEnvironmentNotes
+        ? turnUiLanguageFromSendOpts(so, deps.getResolvedMainLocale()) : null;
+      const uiLanguageNote = allowsEnvironmentNotes && uiLanguage
+        ? buildUiLanguageErrorNote(uiLanguage, {
+            classicalStyle: turnClassicalStyleFromSendOpts(so, deps.getMainClassicalStyle()),
           })
         : null;
       // 这三段是"环境说明":同一原生上下文里内容没变就不重复发(wireNoteMemory)。交接首条
@@ -1554,10 +1592,29 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, inputHandoffOwnerNote);
       }
       const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? await mcpAppModelContext(sessionId)
+        ? await deps.readMcpAppModelContext(sessionId)
         : undefined;
       if (appContext?.text) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, appContext.text);
+      }
+      if (allowsEnvironmentNotes) {
+        try {
+          const pending = deps.composeRuntimeContext?.(sessionId,
+            () => runtimePluginInputText(so[AUTO_REVIEW_SOURCE_CONTENT] ?? so[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message), so.signal);
+          const context = pending ? await pending : undefined;
+          if (context) outgoing = appendRuntimePluginContext(outgoing as HandoffWireMessage, context);
+        } catch (error) {
+          await cleanupRejectedMaterialization();
+          if (so.signal?.aborted) {
+            return toCompatibleMakerSendResult(toDesktopSessionDispatchOutcome(
+              { accepted: false, reason: 'cancelled-before-dispatch' },
+              { source: 'maker-ipc', context: `SEND/${sessionId}/runtime-context` },
+            ));
+          }
+          if (!(error instanceof RuntimePluginControlError)) throw error;
+          const code = error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED';
+          return toCompatibleMakerSendResult(createHostSendFailure(code, 'The selected runtime plugin stopped this reply.'));
+        }
       }
       const assertAppCurrent = so[MCP_APP_MESSAGE_GUARD] || appContext?.text
         ? async () => {
@@ -1758,15 +1815,25 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // another Cindy row. Keep later manual Retry attached to the active entry.
         const transcriptUserClientId = persistUserMessage?.clientId
           ?? (so[PI_CACHE_RECOVERY_EXPECTATION] ? so.retryUserClientId : undefined);
+        const beforeProviderStart = deps.beforeProviderStart
+          ? async () => {
+              so.signal?.throwIfAborted();
+              await assertAppCurrent?.();
+              await deps.beforeProviderStart!(sessionId, finalFenceSendOpts);
+              so.signal?.throwIfAborted();
+              // The launcher's durable write can yield while an App is revoked.
+              await assertAppCurrent?.();
+            }
+          : assertAppCurrent;
         // Other-task mail is the only non-scheduler turn whose reply IM relays (channelTurnSignal).
         const sendResult = await withChannelTurnSource(sess.id, channelTurnSourceFor(
           persistUserMessage?.origin,
           persistUserMessage?.botTaskCoordination !== undefined,
         ), () => sess.send(outgoing as never, {
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
+          ...(beforeProviderStart ? { beforeProviderStart } : {}),
           ...(assertAppCurrent
             ? {
-                beforeProviderStart: assertAppCurrent,
                 resolveAutoReviewUserIntent: async () => {
                   const intent = resolveScheduledIntent
                     ? await resolveScheduledIntent()
@@ -1810,6 +1877,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           signal: so.signal,
           [ASYNC_QUESTION_ANSWER]: so[ASYNC_QUESTION_ANSWER],
           [PI_CACHE_RECOVERY_EXPECTATION]: so[PI_CACHE_RECOVERY_EXPECTATION],
+          ...(so[MODEL_REQUEST_CONTROL] ? { [MODEL_REQUEST_CONTROL]: so[MODEL_REQUEST_CONTROL] } : {}),
           ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
