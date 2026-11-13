@@ -1027,7 +1027,7 @@ import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { buildOrcaQueueDispatchNote } from './orcaQueueNote.js';
 import { createOrcaWorkerReportQueue, type OrcaWorkerReportQueue } from './orcaWorkerReportQueue.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
-import { assertTaskActionCurrent, runTaskActionRequest, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, runTaskActionRequest, runTaskActionRewindBoundary, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
   getOrcaWorkerDiagnosticStatusReadOnly,
@@ -4913,7 +4913,9 @@ export async function withSessionInputStoppedForRewind<T>(
     if (coordinator.hasActiveTurnForRewind(sessionId)) {
       // Pause /goal before abort so the terminal event cannot auto-resume it.
       await goalStopObserver?.(sessionId);
-      coordinator.stop(sessionId, { keepQueue: true, pauseQueue: true });
+      const stopping = runTaskActionRewindBoundary(sessionId, undefined, 'stop', () =>
+        coordinator.stop(sessionId, { keepQueue: true, pauseQueue: true }));
+      if (stopping instanceof Promise) await stopping;
     } else {
       coordinator.pausePendingQueueForRewind(sessionId);
     }
@@ -5037,7 +5039,7 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
   return request;
 }
 
-export function getTaskActionInputState(sessionId: string) {
+export function getTaskActionInputState(sessionId: string, forSelfRewind = false) {
   const input = getSessionInputProvenance(sessionId);
   const session = getMakerIfReady()?.getSession(sessionId);
   return {
@@ -5051,6 +5053,12 @@ export function getTaskActionInputState(sessionId: string) {
     orcaSenderSessionId: input.input?.orcaSenderSessionId,
     boundary: `${session?.instanceId ?? ''}:${agentInputCoordinatorHolder?.getGeneration(sessionId) ?? -1}`,
     clearBoundaryMs: agentInputCoordinatorHolder?.getClearBoundaryMs(sessionId) ?? null,
+    ...(forSelfRewind && agentInputCoordinatorHolder ? { rewind: {
+      generation: agentInputCoordinatorHolder.getGeneration(sessionId),
+      signal: agentInputCoordinatorHolder.getInputAbortSignal(sessionId),
+      locked: rewindInputSessions.has(sessionId),
+      idle: !input.executing,
+    } } : {}),
   };
 }
 
