@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, findNodeHandle, Modal, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
@@ -12,7 +13,7 @@ type Confirmation = Parameters<typeof showConfirm>[0];
 export function useSharedTaskConfirmation() {
   const [request, setRequest] = useState<Confirmation | null>(null);
   const resolver = useRef<((accepted: boolean) => void) | null>(null);
-  const cancelButton = useRef<View>(null);
+  const cancelButton = useRef<ViewInstance>(null);
   const styles = useThemedStyles(makeStyles);
   useEffect(() => () => { resolver.current?.(false); resolver.current = null; }, []);
   const settle = useCallback((accepted: boolean) => {

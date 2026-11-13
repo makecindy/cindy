@@ -24,6 +24,14 @@ function actionId(resource: Awaited<ReturnType<ReturnType<typeof fixture>['get']
   return (resource.blocks!.find(block => block.id === id)!.data as { actionId: string }).actionId;
 }
 describe('opaque teammate settings actions', () => {
+  // 2026-11-10 owner: a V2 teammate has the same capabilities in every session, so the phone
+  // shows no capability references for it (third-round review #1).
+  it('shows no capability references for a V2 teammate', async () => {
+    const f = fixture();
+    expect((await f.get()).blocks?.some(block => block.id === 'connections')).toBe(true);
+    Object.assign(f.settings, { projectMode: true });
+    expect((await f.get()).blocks?.some(block => block.id === 'connections')).toBe(false);
+  });
   it('detects display-only edits without treating arriving chat messages as a settings conflict', async () => {
     const f = fixture(); const original = await f.get();
     f.source.activityAt++; f.source.updatedAt++;
@@ -119,7 +127,7 @@ describe('opaque teammate settings actions', () => {
     const paused = await f.get();
     expect(paused.blocks!.some(block => block.id === 'restart')).toBe(false);
     const resume = paused.actions!.find(action => action.id === actionId(paused, 'resume'))!;
-    expect(resume.confirmation?.title).toMatchObject({ fallback: 'Resume Teammate' });
+    expect(resume.confirmation?.title).toMatchObject({ fallback: "Resume Buddy" });
     expect(resume.confirmation?.body).not.toEqual(restart.confirmation?.body);
     expect(resume.confirmation?.body).toMatchObject({ translations: { 'zh-CN': expect.stringContaining('恢复后伙伴重新接收消息') } });
     for (const locale of ['zh-CN', 'zh-TW', 'ja', 'ko']) expect((resume.confirmation?.body as { translations: Record<string, string> }).translations[locale]).toBeTruthy();
@@ -187,23 +195,18 @@ it('rejects invalid, duplicate and oversized model chains without modifying the 
 });
 
 
-it('saves and clears a task model without changing the primary model', async () => {
+// 2026-11-09: the teammate task model setting is retired. The models form no longer lists it; an
+// older controller's task fields are ignored, and on their own they are refused as no change.
+it('ignores an older controller\'s retired task model fields', async () => {
   const f = fixture();
   const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
   let resource = await f.get();
-  expect((resource.blocks?.find(block => block.id === 'models')?.data as any).values.taskFollowsPrimary).toBe(true);
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false, taskModel: JSON.stringify([route]) }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: route } }, 3);
-  resource = await f.get();
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: true }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: null } }, 4);
-});
-
-it('rejects task model submissions that discard the harness identity', async () => {
-  const f = fixture(); const resource = await f.get();
-  await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false,
-    taskModel: JSON.stringify([{ model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }]) }))).rejects.toThrow();
+  expect(Object.keys((resource.blocks?.find(block => block.id === 'models')?.data as { values: object }).values)).toEqual(['followsDefault', 'modelChain']);
+  await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false, taskModel: JSON.stringify([route]) }))).rejects.toThrow();
   expect(f.deps.update).not.toHaveBeenCalled();
+  resource = await f.get();
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: true, taskFollowsPrimary: true, taskModel: JSON.stringify([route]) }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { modelChainOverride: null, modelOverride: null }, acceptSavedModelSelectionVersion: 3 }, 3);
 });
 
 it('keeps pending profile fields read-only while models remain available, including after welcome failure', async () => {

@@ -4,9 +4,13 @@ export default {
   name: 'teammate-feishu',
   entry: './teammate-feishu-fixture.tsx',
   viewport: { width: 720, height: 900 },
-  real: 'BotChannelsPage add-platform dialog, shared Input, Button, SegmentedControl, Collapse and five-locale translations',
-  notCovered: 'Live Feishu/Lark login, application provisioning, external browser navigation, credential persistence and connection handshake; host writes are forbidden',
+  real: 'BotChannelsPage add/edit dialogs and group controls, shared Input, Button, SegmentedControl, Collapse and localized text',
+  notCovered: 'Live platform login, credential persistence and connection handshake; real host writes are forbidden, group-edit saves and queries use in-memory fixture state',
   cases: {
+    'imessage-edit': { about: 'Populated iMessage editor keeps its password write-only', data: { imessage: true } },
+    'imessage-narrow': { about: 'iMessage editor remains usable at 320px', data: { imessage: true }, viewport: { width: 320, height: 700 } },
+    'imessage-group-add': { about: 'The first group appears immediately after a simulated settings save', data: { imessage: true, groupEdit: 'add' } },
+    'imessage-group-replace': { about: 'Editing chat GUIDs removes old group controls and shows new ones', data: { imessage: true, groupEdit: 'replace' } },
     default: { about: 'Feishu creation prompt and link share one row', data: {} },
     'feishu-onboarding': { about: 'Feishu creation prompt and link share one row', data: {} },
     'feishu-lark': { about: 'Lark updates the link, description and submit label', data: { lark: true } },
@@ -14,6 +18,23 @@ export default {
     'feishu-narrow': { about: '320px viewport wraps guidance and keeps the form scrollable', data: { expanded: true }, viewport: { width: 320, height: 700 } },
   },
   async check(page, ui) {
+    if (ui.data.imessage) {
+      if (ui.data.groupEdit === 'replace') await page.getByText('Old group', { exact: true }).waitFor();
+      await page.getByRole('button', { name: await ui.t('bots.channels.edit.button'), exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      assert.equal(await dialog.getByLabel(await ui.t('bots.channels.add.imessage.passwordLabel'), { exact: true }).inputValue(), '');
+      assert.equal(await dialog.getByRole('button', { name: await ui.t('bots.channels.edit.save'), exact: true }).isEnabled(), true);
+      await ui.capture('imessage-edit');
+      if (ui.data.groupEdit) {
+        await dialog.getByLabel(await ui.t('bots.channels.add.imessage.chatGuidsLabel'), { exact: true }).fill('any;-;owner@example.test, any;+;new-group');
+        await dialog.getByRole('button', { name: await ui.t('bots.channels.edit.save'), exact: true }).click();
+        await page.getByText('New group', { exact: true }).waitFor();
+        assert.equal(await page.getByText('Old group', { exact: true }).count(), 0);
+        assert.equal(await page.getByRole('radio', { name: await ui.t('bots.channels.groups.mode.always'), exact: true }).isVisible(), true);
+        await ui.capture('groups-refreshed');
+      }
+      return;
+    }
     await page.getByRole('button', { name: await ui.t('bots.channels.add.button'), exact: true }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByRole('radio', { name: await ui.t('bots.channels.platform.feishu'), exact: true }).click();

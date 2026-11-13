@@ -53,6 +53,7 @@ import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting'
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { filePreviewFailureText } from '@/session/filePreviewFailure';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import type { FileBrowserReadFileResult, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
@@ -589,7 +590,7 @@ function RemoteFilePreviewContent() {
       if (run.cancelled) return;
       await sharing.shareAsync(localUri, { mimeType: mime });
     } catch (err) {
-      if (!run.cancelled) showNotice(formatRemoteError(err));
+      if (!run.cancelled) showNotice(filePreviewFailureText(err));
     } finally {
       if (exportRunRef.current === run) {
         exportRunRef.current = null;
@@ -1566,11 +1567,13 @@ function ImagePreviewPage({
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
     let cancelled = false;
+    let completed = false;
     setFailure(null);
-    void exportToUrl(item.relPath, item.mtimeMs, { stream: false })
+    void exportToUrl(item.relPath, item.mtimeMs, { stream: false, isCancelled: () => cancelled })
       .then((url) => retainRemoteFilePreview(url, shareMimeForFileName(item.name), item.name))
       .then((source) => {
         if (cancelled) { source.release(); return; }
+        completed = true;
         releaseSourceRef.current?.();
         releaseSourceRef.current = source.release;
         setFullUrl(source.uri);
@@ -1578,10 +1581,13 @@ function ImagePreviewPage({
       .catch((err) => {
         if (cancelled) return;
         requestedRef.current = false; // 允许「重试」按钮/重进再次发起
-        setFailure(formatRemoteError(err));
+        setFailure(filePreviewFailureText(err));
       });
     return () => {
       cancelled = true;
+      // A pending request cancelled by paging or a transport refresh must be
+      // eligible to restart; otherwise the thumbnail remains forever.
+      if (!completed) requestedRef.current = false;
     };
   }, [active, attempt, exportToUrl, item.mtimeMs, item.name, item.relPath, workdir,
   ]);

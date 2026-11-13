@@ -1,0 +1,6 @@
+RESULT every 1 lead 5000 noticed true up 8000000 down 1: finished true at 1.49s path 1 recovery [Some(462)] attacker 8400/9834285 migrations Some(1) failures Some(0)
+RESULT every 1 lead 5000 noticed true up 0 down 8000000: finished true at 4.98s path 1 recovery [Some(148734)] attacker 8570/144531 migrations Some(1) failures Some(1)
+RESULT every 1 lead 5000 noticed true up 4000000 down 4000000: finished true at 2.52s path 1 recovery [Some(218866)] attacker 9800/4303744 migrations Some(1) failures Some(0)
+RESULT every 1 lead 5000 noticed false up 8000000 down 1: finished true at 1.58s path 1 recovery [Some(462)] attacker 8400/9732061 migrations Some(1) failures Some(0)
+RESULT every 1 lead 5000 noticed false up 0 down 8000000: finished true at 5.98s path 1 recovery [Some(1148520)] attacker 11370/144531 migrations Some(1) failures Some(1)
+RESULT every 1 lead 5000 noticed false up 4000000 down 4000000: finished true at 2.44s path 1 recovery [Some(246751)] attacker 8473/4485455 migrations Some(1) failures Some(0)

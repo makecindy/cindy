@@ -2,10 +2,10 @@ import { expect, it } from 'vitest';
 import { REMOTE_INVOKE_ALLOWLIST, PUSH_FORWARD_ALLOWLIST } from '@cindy/device-link';
 import type { BotDelegationListResult } from '../../../shared/botDelegation';
 import { projectRemoteBotDelegations } from '../remoteBotDelegations';
-it('exports task controls while keeping profile mutations local', () => {
+// Older controllers still read old task cards and offer a stop chip (answered UNSUPPORTED_CAPABILITY).
+it('keeps the old task-card channels for older controllers while keeping profile mutations local', () => {
   for (const channel of ['maker:bot-delegations:list', 'maker:bot-delegation:cancel', 'maker:bot-direct-message-thread:get']) expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
   expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:bots:update')).toBe(false);
-  // The owner's 补一句 trace is offered for local tasks only; the renderer sends the note itself.
   expect(REMOTE_INVOKE_ALLOWLIST.has('maker:bot-delegation:note-trace')).toBe(false);
   expect(PUSH_FORWARD_ALLOWLIST.has('maker:bot-delegation:changed')).toBe(true);
   expect(PUSH_FORWARD_ALLOWLIST.has('maker:bot-direct-message:changed')).toBe(true);

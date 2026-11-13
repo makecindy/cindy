@@ -127,7 +127,7 @@ vi.mock('../../maker-host/codex-local-sessions.js', () => ({
 vi.mock('../../maker-orchestration/claudeTranscriptAnchors.js', () => ({
   defaultClaudeConfigDirCandidates: () => [path.join(tmpRoot, 'claude-home')],
 }));
-vi.mock('../../imageCacheStore.js', () => ({
+vi.mock('../../imageCacheStore.desktop.js', () => ({
   getCacheRoot: () => path.join(tmpRoot, 'cc-agent', 'images'),
   getSessionDir: (sessionId: string) => path.join(tmpRoot, 'cc-agent', 'images', sessionId),
   removeSession: async (sessionId: string) => {

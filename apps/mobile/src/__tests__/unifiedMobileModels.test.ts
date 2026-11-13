@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { UnifiedModelEntry } from '@cindy/model-providers';
+import type { ProviderView } from '@cindy/model-providers/registry';
 import { addModelFavorite, matchesEntry, mobileUnifiedEntries, resolveMobileModelConfig, sameConfiguration } from '@/session/unifiedMobileModels';
 const cap = (agent: 'codex'|'claude-code') => ({agent,wireModelId:agent === 'codex' ? 'codex/model' : 'model',efforts:['low','medium','high'],defaultEffort:'medium',supportsFastMode:true,contextWindow:200000,defaultEffortSource:"catalog",contextWindowVerified:true});
 const entry = {providerId:'account-a',modelId:'model',displayName:'Model',candidates:['codex','claude-code'],recommended:'codex',nativeAgent:'codex',capabilities:{codex:cap('codex'),'claude-code':cap('claude-code')}} as unknown as UnifiedModelEntry;
@@ -43,6 +44,27 @@ it('deduplicates identical favorites but keeps distinct configurations and accou
 });
 it('an explicitly empty catalog never revives capability models', () => {
   expect(mobileUnifiedEntries([],['codex'],{},false)).toEqual([]);
+});
+
+// #9501 / review 4514451094, unit: the phone's controlled-host picker must show
+// the source budget. Existing picker tests mock entries, missing this projection.
+// Minimal input: a 200K model overridden to 1M, an old-host row, and no remote grants.
+it('uses source budgets in host picker capabilities without filtering or changing catalog defaults', () => {
+  const provider: ProviderView = {
+    id: 'host-account', name: 'Host account', source: 'builtin', connected: true,
+    auth: { method: 'oauth' }, agents: ['codex'], remoteModelIds: [],
+    routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+    models: { codex: [
+      { id: 'overridden', name: 'Overridden', efforts: ['medium'], defaultEffort: 'medium',
+        contextWindow: 200_000, contextWindowOverride: 1_000_000 },
+      { id: 'legacy', name: 'Legacy', efforts: ['medium'], defaultEffort: 'medium', contextWindow: 272_000 },
+    ] },
+  };
+  const entries = mobileUnifiedEntries([provider], ['codex'], undefined, false);
+  expect(entries).toHaveLength(2);
+  expect(entries.find(row => row.modelId === 'overridden')?.capabilities.codex?.contextWindow).toBe(1_000_000);
+  expect(entries.find(row => row.modelId === 'legacy')?.capabilities.codex?.contextWindow).toBe(272_000);
+  expect(provider.models.codex?.[0].contextWindow).toBe(200_000);
 });
 
 it('restores Ultrafast only while the selected account advertises that tier', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BotCollaborationMeta } from '../botCollaboration';
-import { buildBotGroupTaskCard, parseBotGroupTaskCardView, readBotGroupTaskCard, type BotGroupTaskCardLabels } from '../botGroupTask';
+import { botGroupLiveTaskReplyLine, botGroupLiveTaskStateOfPhase, buildBotGroupLiveTaskCard, buildBotGroupTaskCard, parseBotGroupTaskCardView, readBotGroupLiveTaskCard, readBotGroupTaskCard, type BotGroupTaskCardLabels } from '../botGroupTask';
 
 const meta: BotCollaborationMeta = {
   v: 1, role: 'delegation-request', delegationId: 'task-1', fromBotId: 'bot-a', fromBotName: 'LiZi',
@@ -56,5 +56,37 @@ describe('group task card (bot-group-chat.md §10)', () => {
   it('rejects a view whose task anchor is not a delegation request', () => {
     expect(parseBotGroupTaskCardView({ meta: { ...meta, role: 'interjection' }, state: 'completed', title: 't' })).toBeNull();
     expect(parseBotGroupTaskCardView(null)).toBeNull();
+  });
+});
+
+// 2026-11-11 acceptance: a task that ended its turn asking the owner to confirm showed 「已完成」.
+describe('live group task card (revision 2)', () => {
+  it.each([['running', 'running'], ['needs-interaction', 'waiting'], ['completed', 'idle'], ['error', 'failed'], ['idle', undefined]] as const)(
+    'shows a task whose phase is %s as %s, never as done', (phase, state) => {
+      expect(botGroupLiveTaskStateOfPhase(phase)).toBe(state);
+    });
+
+  // 2026-11-11 owner decision: the card says where the task stopped after its state. The line is
+  // optional data in revision 2, so cards posted before it and clients that ignore it still read.
+  it('carries where the task stopped after the state, and reads cards without it', () => {
+    const labels = { task: 'Task', untitled: 'Untitled task', states: { running: 'In progress', waiting: 'Waiting for a reply', idle: 'Idle', failed: 'Failed' } };
+    const view = { taskId: 'task-1', deviceId: null, title: 'Fix login', state: 'idle' as const, requesterName: 'Ann', botName: 'Cindy',
+      prUrl: 'https://github.com/makecindy/cindy/pull/42' };
+    const card = buildBotGroupLiveTaskCard({ ...view, summary: 'Preflight failed: lint' }, labels);
+    expect(card).toMatchObject({ schemaRevision: 2, fallback: '[Task] Fix login · Idle · Preflight failed: lint · https://github.com/makecindy/cindy/pull/42' });
+    expect(readBotGroupLiveTaskCard(card)?.summary).toBe('Preflight failed: lint');
+    const { summary: _none, ...earlier } = card.data;
+    expect(readBotGroupLiveTaskCard({ ...card, data: earlier })).toEqual(view);
+    expect(readBotGroupLiveTaskCard({ ...card, data: { ...earlier, summary: 7 } })).toBeNull();
+  });
+
+  it.each([
+    ['## Preflight **failed**\n\nmore', 'Preflight failed'],
+    ['\n\n- [x] Shipped `fix-login` in [#42](https://github.com/makecindy/cindy/pull/42)', 'Shipped fix-login in #42'],
+    ['> Should I approve Pi 1.5.2?', 'Should I approve Pi 1.5.2?'],
+    ['   \n', ''],
+    ['x'.repeat(200), `${'x'.repeat(79)}…`],
+  ])('takes the first line of a reply as plain text, clipped (%j)', (reply, line) => {
+    expect(botGroupLiveTaskReplyLine(reply)).toBe(line);
   });
 });

@@ -29,6 +29,9 @@
  *   - process.on('uncaughtException')   —— main 进程未捕获异常
  *   - app.on('render-process-gone')     —— renderer 崩 (main 还活)
  *
+ * Windows 关机 / 重启 / 注销 (BrowserWindow 'session-end') 不进这条链, 只记退出原因,
+ * 见 installQuitHandler 的 Layer 6。
+ *
  * unhandledRejection 只记日志、不退出 —— 悬空 Promise 不必然致命, 让上游决定。
  * 真硬崩 (segfault / kill -9) JS 层无能为力, 这里覆盖不到; 子进程靠 stdin EOF 自死。
  */
@@ -46,7 +49,12 @@ import {
   isBrokenStdioError,
   isTransientNetworkError,
 } from './logger';
-import { noteQuitDisposersCompleted, noteShutdownBegin } from './startup-diagnostics';
+import {
+  noteExpectedExit,
+  noteQuitDisposersCompleted,
+  noteShutdownBegin,
+  WINDOWS_SESSION_END_REASON,
+} from './startup-diagnostics';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
 import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
@@ -710,6 +718,21 @@ export function installQuitHandler(timeoutMs = 2000): void {
       log.error(desc);
     }
   });
+
+  // ── Layer 6: Windows 结束会话 (关机 / 重启 / 注销) —— 只记退出原因 ──────────
+  // 关机不经 before-quit: Electron 收到 WM_ENDSESSION 后给每个窗口发一次 'session-end',
+  // 处理函数一返回就 TerminateCurrentProcessImmediately(0), 'exit' 钩子也不会跑。此前没人
+  // 监听, run marker 停在 running, 下次启动误报「上次意外退出」(issue #9600)。
+  // 这里只同步把原因写进标记 (先写标记再写日志); 不起 disposer chain —— 进程随即被终止,
+  // 链跑不完。markShutdownBegin 保留首个 reason, 多窗口重复触发无害。
+  if (process.platform === 'win32') {
+    const onSessionEnd = (event: Electron.WindowSessionEndEvent) => {
+      noteExpectedExit(WINDOWS_SESSION_END_REASON);
+      log.info(`session-end received reasons=${event.reasons.join(',')}`);
+    };
+    for (const win of BrowserWindow.getAllWindows()) win.on('session-end', onSessionEnd);
+    app.on('browser-window-created', (_event, win) => win.on('session-end', onSessionEnd));
+  }
 
   // 真硬崩 (segfault / kill -9) JS 层无能为力 —— 子进程靠 stdin EOF 检测父进程
   // 死亡然后自死 (Codex Rust app-server 的 lines.next_line() 收 None 退出循环)。

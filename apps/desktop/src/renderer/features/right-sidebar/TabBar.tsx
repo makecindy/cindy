@@ -152,7 +152,6 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   subagents: Bot,
   'side-chat': MessagesSquare,
   'background-tasks': ListTodo,
-  routines: ListTodo,
   'resource-usage': Activity,
   'cindy-make': Wrench,
   'plugin-view': Puzzle,
@@ -170,7 +169,6 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   subagents: 'rightSidebar.tabs.kinds.subagents',
   'side-chat': 'chat.sideChat.title',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
-  routines: 'routines.title',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
   'cindy-make': 'settings.cindyMake.title',
   'plugin-view': 'rightSidebar.tabs.kinds.pluginView',
@@ -529,7 +527,7 @@ export function TabStrip({
                   addButtonClassName,
                   dropdownOpen
                     ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
-                    : 'text-[var(--titlebar-icon)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                    : 'text-[hsl(var(--titlebar-icon))] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
                 )}
               >
                 <Plus size={13} />

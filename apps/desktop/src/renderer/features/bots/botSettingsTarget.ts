@@ -1,7 +1,6 @@
 import { createContext, useContext } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
 import type { BotLifecycleActionRequest, BotLifecycleActionResult } from '../../../shared/botLifecycle';
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
@@ -15,13 +14,12 @@ export type BotCapabilityEntry = {
   description?: string;
   available: boolean;
   personal?: boolean;
+  cindyOfficial?: boolean;
   /** Kept from the companion's setup but not present on this computer. */
   missing?: boolean;
 };
 
 type Bots = NonNullable<Window['electronAPI']['localDb']>['bots'];
-// The nightly review is read on this computer only (BotNightlyLearning); a target never carries it.
-export type BotRoutinesApi = Omit<Window['electronAPI']['routines'], 'nightlyLearning'>;
 type VoiceApi = Window['electronAPI']['voiceConversation'];
 type ImConnectionApi = Window['electronAPI']['botImConnection'];
 type WechatApi = Window['electronAPI']['wechatBot'];
@@ -41,6 +39,8 @@ export interface BotSettingsTarget {
   online: boolean;
   /** Pages whose host operations exist; the local target supports all of them. */
   pages: ReadonlySet<string>;
+  /** Optional on older hosts. Reads and retries execute on the buddy's computer. */
+  projectRepository?: (botId: string, retry: boolean) => Promise<import('../../../shared/botProjectMode').BotProjectRepositoryStatus>;
   profile: {
     update(botId: string, patch: BotProfileUpdatePatch): Promise<BotProfile>;
     /** Gallery / uploaded image bytes; omitted bytes open the native chooser (local only). */
@@ -81,18 +81,6 @@ export interface BotSettingsTarget {
     refreshCatalog?(): Promise<void>;
     /** Sample playback uses this window's speakers and its own voice service; absent for another computer. */
     previewApi?: VoiceApi;
-  };
-  /** Routines of the teammate's computer (`onChanged` fires when they change there). */
-  routines: BotRoutinesApi;
-  /** Host accepts a persistent independent model selection for each routine. */
-  routineModels?: boolean;
-  /** Host keeps a routine's session mode (persistent lane or a fresh lane per trigger). */
-  routineSessionModes?: boolean;
-  routineDelivery?: boolean;
-  autonomy: {
-    useSettings(): BotAutonomySettingsView | null;
-    setSchedulerBotId(botId: string | null): Promise<void>;
-    reset(): Promise<void>;
   };
 }
 

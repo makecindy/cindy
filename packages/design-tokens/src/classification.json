@@ -1,12 +1,12 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 576,
+  "snapshotCount": 584,
   "categories": {
-    "literal": 283,
-    "alias": 246,
+    "literal": 291,
+    "alias": 247,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 41
+    "runtime-derived-or-protected": 40
   },
   "entries": [
     {
@@ -1748,10 +1748,14 @@
     },
     {
       "id": "chat-input-placeholder-subtle",
-      "category": "runtime-derived-or-protected",
-      "destination": "register-only",
-      "lightKind": "color-mix",
-      "darkKind": "color-mix",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "chat-input-placeholder",
+        "dark": "chat-input-placeholder"
+      },
       "modeledAsSemantic": false
     },
     {
@@ -2721,8 +2725,8 @@
       "lightKind": "alias",
       "darkKind": "alias",
       "aliasOf": {
-        "light": "text-tertiary",
-        "dark": "text-tertiary"
+        "light": "text-placeholder",
+        "dark": "text-placeholder"
       },
       "modeledAsSemantic": false
     },
@@ -5690,6 +5694,70 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plugin-identity-official-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plugin-identity-official-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plugin-identity-community-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plugin-identity-community-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plugin-identity-team-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plugin-identity-team-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plugin-identity-custom-text",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "plugin-identity-custom-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     }
   ]

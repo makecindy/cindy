@@ -60,6 +60,18 @@ pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟
   `ui-mock/claude/.claude.json` 的 `mcpServers`，不读取真实 Claude Code 用户配置。
   可写入虚拟 HTTP/SSE 地址，再通过设置添加对应的 Cindy MCP，验证选择与持久化。
   该文件只用于设置页验收，真实 Agent 的连接装配仍按实际运行环境解析。
+- 伙伴资料恢复：在隔离沙箱的 `ui-mock/companion-profile.json` 写入合成 JSON
+  `{"soul":"…"}`，重启后从伙伴列表打开「资料恢复验收」。12001 个非空白字符
+  展示资料校验失败，点击重试仍保留错误和云端记录；点击「修改资料并重试」，在真实表单里
+  缩短到 12000 字符以内并保存，经真实 runtime、备份和本机资料写入入口恢复。
+  此场景替换该合成伙伴的 Chat Server 传输，并预置合成主任务，不访问账号或服务器、不运行模型；
+  资料校验、原文备份、资料写入、历史导入和恢复状态使用真实入口，更正同步回合成文件。
+  删除该合成文件并重启即退出场景；再次验收时重写合成输入并重启。
+  输入另加 `"failHistoryOnce":true` 可让恢复时第一次历史读取临时断开：保存更正失败后关闭表单，
+  从原恢复入口重试应沿用已保存的更正并成功，不需要再次输入，原文仍只备份一次。
+  输入另加 `"currentHome":true` 可预置未降级的本机伙伴，打开更正表单后可将沙箱内该伙伴的
+  `SOUL.md` 临时设为只读，验证真实文件写入失败时表单保留草稿；解除只读后直接保存应成功。
+  只对该合成文件施加故障，验收后恢复文件属性并关闭沙箱。
 
 ## Mobile 模拟器
 
@@ -74,11 +86,19 @@ pnpm mobile:sim:whoami -- --mock --json
   环境，加 `--takeover` 重启；`whoami` 不带相同的 `--mock` 会判定环境不一致。
 - App 里是一台在线的模拟电脑和一台离线电脑，任务、消息、插件演示、文件浏览都由
   `apps/mobile/src/debug/visualMock.ts` 在内存里提供，写操作只在本次进程内生效，重启即还原。
+- 模拟电脑支持协同：任务或新建任务的「+」面板 →「协同模式」可以直接打开开启协同的表单，角色清单
+  （含添加、长按移除）读写的是模拟电脑上的那一份，只在本次进程内生效。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。
+- 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
+  mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
+- 反馈确认：`cindy://sessions/visual-issue-confirm?deviceId=cindy-visual-mock-mac`，合成反馈草稿、署名与环境，覆盖预览、编辑和展开详情；不提交。Desktop 对应 `pnpm ui:check --page issue-confirm --case all --theme all`，两端均加载实际组件。
 - 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。
+
+- 群内执行：`cindy://companions/groups/execution-qa?deviceId=cindy-visual-mock-mac`；后缀 `-work`／`-talk` 查看长分工与讨论队列，`-member`／`-legacy` 查看普通成员与旧宿主的默认停止。仅合成内存回执，不访问真实权限或模型。
+- 窄屏正文：`cindy://group-execution-preview?width=320&groupId=execution-qa`（`width` 可选 `393`）。复用真实群聊页，把正文容器限宽；设备窗口、系统安全区和原生导航栏仍取当前模拟器，不将它当作另一机型的整屏验收。
 
 ## 可复用的展示项目：Orbit Garden
 

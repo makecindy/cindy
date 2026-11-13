@@ -11,6 +11,8 @@ vi.mock('@/platform/gestureHandler', () => {
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
+// Card previews are covered separately; file-chip layout does not use Expo's native viewer.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('expo-modules-core', () => ({
   requireOptionalNativeModule: () => null,
@@ -173,3 +175,6 @@ describe('file chip names keep their width when the chip is content-sized (#5875
 });
 
 vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// Native blur rendering is outside the attachment layout contract.
+vi.mock('expo-blur', () => ({ BlurView: () => null }));

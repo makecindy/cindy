@@ -30,10 +30,13 @@ export interface OverrideSettingsFile<T> {
   resetAtomic(): Promise<T>;
   /**
    * 文件被进程外修改(用户/agent 手改配置)时失效缓存,下次 read 现读。
-   * mtime 守卫:文件没变时零开销(一次 stat),不重读不重复打 loaded 日志。
+   * 文件身份守卫(dev/ino/size/mtime):文件没变时零开销(一次 stat),不重读不重复打 loaded 日志。
+   * 同一 mtime 刻度内的原子替换(rename 换 inode)或改长度也会失效缓存。
    * 支持"直接改文件即生效"语义的 store 在读取入口调用;不调用 = 原缓存语义。
    */
   invalidateIfChanged(): void;
+  /** 文件存在但读不了(只有 preserveUnreadableFile 的 store 会区分)；此时 read() 返回的是默认值。 */
+  isUnreadable(): boolean;
 }
 
 interface CachedState<T> extends OverrideSettingsState<T> {
@@ -72,16 +75,19 @@ export function createOverrideSettingsFile<T>(options: {
 }): OverrideSettingsFile<T> {
   let cached: CachedState<T> | null = null;
   let cachedResolvedPath: string | null = null;
-  /** 缓存装载时文件的 mtimeMs;null = 装载时文件不存在(默认态)。 */
-  let cachedFileMtimeMs: number | null = null;
+  /** 缓存装载时文件的身份;null = 装载时文件不存在(默认态)。 */
+  let cachedFileIdentity: string | null = null;
 
   const defaults = (): T =>
     clone(typeof options.defaults === 'function' ? (options.defaults as () => T)() : options.defaults);
 
-  /** 当前文件 mtimeMs;文件不存在/不可 stat 时 null(与"无文件"同态)。 */
-  function statFileMtimeMs(): number | null {
+  /**
+   * 当前文件身份;文件不存在/不可 stat 时 null(与"无文件"同态)。只比 mtime 不够:
+   * 文件系统的 mtime 有刻度(Linux 常见 4ms),刻度内的替换或改写 mtime 不变。
+   */
+  function statFileIdentity(): string | null {
     try {
-      return fs.statSync(options.filePath()).mtimeMs;
+      return fileIdentity(fs.statSync(options.filePath(), { bigint: true }));
     } catch {
       return null;
     }
@@ -95,8 +101,8 @@ export function createOverrideSettingsFile<T>(options: {
     let readStatus: CachedState<T>['readStatus'] = 'missing';
     try {
       if (fs.existsSync(file)) {
-        const stat = fs.statSync(file);
-        if (options.maxBytes !== undefined && stat.size > options.maxBytes) {
+        const stat = fs.statSync(file, { bigint: true });
+        if (options.maxBytes !== undefined && Number(stat.size) > options.maxBytes) {
           throw new Error(`file exceeds ${options.maxBytes} byte limit`);
         }
         const text = fs.readFileSync(file, 'utf-8');
@@ -105,7 +111,7 @@ export function createOverrideSettingsFile<T>(options: {
           throw new Error('settings file root must be an object');
         }
         const overrides = isLoggableObject(parsed) ? parsed : {};
-        cachedFileMtimeMs = stat.mtimeMs;
+        cachedFileIdentity = fileIdentity(stat);
         cached = {
           value: options.normalize({ ...defaults(), ...overrides }),
           isCustomized: Object.keys(overrides).length > 0,
@@ -142,9 +148,9 @@ export function createOverrideSettingsFile<T>(options: {
       }
     }
 
-    // 保留坏文件时记住它的 mtime，避免每次读取重复解析/刷日志；用户修复后
-    // invalidateIfChanged 会看到 mtime 变化并自动重试。
-    cachedFileMtimeMs = readStatus === 'unreadable' ? statFileMtimeMs() : null;
+    // 保留坏文件时记住它的身份，避免每次读取重复解析/刷日志；用户修复后
+    // invalidateIfChanged 会看到文件变化并自动重试。
+    cachedFileIdentity = readStatus === 'unreadable' ? statFileIdentity() : null;
     cached = {
       value: defaults(),
       isCustomized: false,
@@ -159,9 +165,9 @@ export function createOverrideSettingsFile<T>(options: {
   function invalidateIfChanged(): void {
     invalidateIfPathChanged();
     if (!cached) return;
-    if (statFileMtimeMs() !== cachedFileMtimeMs) {
+    if (statFileIdentity() !== cachedFileIdentity) {
       cached = null;
-      cachedFileMtimeMs = null;
+      cachedFileIdentity = null;
     }
   }
 
@@ -261,7 +267,7 @@ export function createOverrideSettingsFile<T>(options: {
     fs.mkdirSync(pathDirname(file), { recursive: true });
     fs.writeFileSync(tmp, serialized, 'utf-8');
     fs.renameSync(tmp, file);
-    cachedFileMtimeMs = statFileMtimeMs();
+    cachedFileIdentity = statFileIdentity();
     const next = options.normalize({ ...defaults(), ...overrides });
     cached = {
       value: next,
@@ -287,7 +293,7 @@ export function createOverrideSettingsFile<T>(options: {
       });
       throw err;
     }
-    cachedFileMtimeMs = null;
+    cachedFileIdentity = null;
     cached = {
       value: defaults(),
       isCustomized: false,
@@ -331,11 +337,15 @@ export function createOverrideSettingsFile<T>(options: {
     reset,
     resetAtomic,
     invalidateIfChanged,
+    isUnreadable: () => {
+      readState();
+      return cached?.readStatus === 'unreadable';
+    },
   };
 
   function invalidate(): void {
     cached = null;
-    cachedFileMtimeMs = null;
+    cachedFileIdentity = null;
     cachedResolvedPath = null;
   }
 
@@ -343,7 +353,7 @@ export function createOverrideSettingsFile<T>(options: {
     const currentPath = options.filePath();
     if (cachedResolvedPath === null || cachedResolvedPath === currentPath) return;
     cached = null;
-    cachedFileMtimeMs = null;
+    cachedFileIdentity = null;
     cachedResolvedPath = currentPath;
   }
 
@@ -440,6 +450,12 @@ export function portableOverrideSettings<T>(
       }
     },
   };
+}
+
+function fileIdentity(stat: fs.BigIntStats): string {
+  // Windows file IDs are 64-bit; number-valued Stats can round distinct IDs to
+  // one value, so keep the bigint form.
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
 }
 
 function pathDirname(filePath: string): string {

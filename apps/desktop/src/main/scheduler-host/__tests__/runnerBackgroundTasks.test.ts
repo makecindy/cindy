@@ -60,7 +60,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -197,6 +197,7 @@ function createRunnerHarness(session: Session, overrides: Partial<ConstructorPar
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,

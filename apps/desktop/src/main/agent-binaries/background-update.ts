@@ -1,7 +1,7 @@
 import { app } from 'electron';
 import { isCindyPersonalRuntime } from '../cindy-make/versionRuntimeIdentity.js';
 import { getCachedManifest, onManifestFetched, type Manifest } from '../manifestService.js';
-import { prefetch } from './index.js';
+import { getReadyBinaryPath, prepare, prefetch } from './index.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('agent-binaries/background-update');
@@ -41,7 +41,11 @@ async function run(signal: AbortSignal): Promise<void> {
       pending = undefined;
       for (const kind of ['claude-code', 'codex', 'pi'] as const) {
         if (signal.aborted) break;
-        await prefetch(kind, { manifest, signal });
+        if (kind !== 'pi' && !getReadyBinaryPath(kind)) {
+          await prepare(kind, { signal, broadcastProgress: false, broadcastFailure: false });
+        } else {
+          await prefetch(kind, { manifest, signal });
+        }
       }
     }
   } catch {

@@ -3,12 +3,25 @@ export default {
   name: 'teammate-process', entry: './process-fixture.tsx', viewport: { width: 720, height: 850 },
   stubs: {
     'src/renderer/components/chat/GhostToolCard': 'export const GhostToolCard = () => null; export const MailCardEditor = () => null; export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle";',
+    // Only replace fixture media transport; the actual image/video/audio cards render.
+    'src/renderer/hooks/useRemoteMediaUrl': { partial: "export const useRemoteMediaUrl = (url) => url.includes('://fixture/') ? (url.startsWith('xdt-image:') ? \"data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22160%22 height=%22240%22%3E%3Crect width=%22160%22 height=%22240%22 fill=%22%23888%22/%3E%3C/svg%3E\" : url.startsWith('xdt-video:') ? \"data:video/webm;base64,GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAJnEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHWTbuMU6uEElTDZ1OsggEjTbuMU6uEHFO7a1OsggJR7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsCrXsYMPQkBNgIxMYXZmNjIuMy4xMDBXQYxMYXZmNjIuMy4xMDBEiYhAaQAAAAAAABZUrmvIrgEAAAAAAAA/14EBc8WI5u85iR3IihWcgQAitZyDdW5kiIEAhoVWX1ZQOIOBASPjg4QCYloA4JCwgaC6gVqagQJVsIRVuYEBElTDZ/tzc59jwIBnyJlFo4dFTkNPREVSRIeMTGF2ZjYyLjMuMTAwc3PWY8CLY8WI5u85iR3IihVnyKFFo4dFTkNPREVSRIeUTGF2YzYyLjExLjEwMCBsaWJ2cHhnyKFFo4hEVVJBVElPTkSHkzAwOjAwOjAwLjIwMDAwMDAwMAAfQ7Z1QKjngQCju4EAAIBQBQCdASqgAFoAAEcIhYWIhYSIAgIABigSbvz16MvEc9ejLxHPXoy8Rz16MvEc9ejLxGUA/mgAo5iBACgAEQIABRCsABgAGFgv9AAIgIEAAACjmIEAUAARAgAFEKwAGAAYWC/0AAiAgQAAAKOYgQB4ABECAAUQrAAYABhYL/QACICBAAAAo5iBAKAAEQIABRCsABgAGFgv9AAIgIEAAAAcU7trkbuPs4EAt4r3gQHxggGj8IED\" : \"data:audio/wav;base64,UklGRnQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==\") : url;" },
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth = () => ({ dataOwnerId: "fixture", isAuthenticated: false });' },
   },
   real: 'MessageStream, ThreadPanel with compact styles, BotSessionTaskResultCard, teammate grouping, WorkGroupBlock, GeneratedFilesCard and SheetPreview, Markdown, theme and i18n',
   notCovered: 'Full CCAgentSessionView, login, host execution, document opening, native mobile layout and transport',
   cases: { default: { about: 'Live private turn with stage notes and initial thinking', data: { done: false } }, finished: { about: 'Completed private turn with final answer outside', data: { done: true } }, retry: { about: 'Two failed attempts followed by a running read: current action stays visible', data: { done: false, retry: true } },
+    'reply-columns': { about: 'Generated media, plan, running task and MCP App share the companion reply column', data: { columns: true } },
+    'reply-columns-narrow': { about: 'All four top-level card kinds fit a narrow reply column', data: { columns: true }, viewport: { width: 320, height: 850 } },
+    'reply-columns-task': { about: 'Ordinary tasks keep their original unindented card column', data: { columns: true, ordinary: true } },
+    'unread-turn': { about: 'NEW precedes the portrait and completed process instead of splitting the answer', data: { unread: true, done: true } },
+    'unread-live': { about: 'NEW stays above the process as commentary folds on completion', data: { unread: true } },
+    'model-switch': { about: 'The existing switch notice stays visible between collapsed process records', data: { done: true, switched: true } },
+    disclosure: { about: 'Frame-by-frame disclosure stability in a long companion conversation', data: { done: true, disclosure: true } },
+    'disclosure-live': { about: 'Inspection survives completion, late updates and explicit follow', data: { disclosure: true } },
+    'disclosure-reduced': { about: 'Reduced motion preserves the same reading position', data: { done: true, disclosure: true, reduced: true } },
+    'live-refresh': { about: 'Loading work details does not add a row while the teammate is working', data: { refresh: true } },
+    'history-refresh': { about: 'History detail loading uses the existing heading; failures can still be retried', data: { refresh: true, done: true } },
     'artifacts-wide': { about: 'Avatar, long reply, Excel preview and related file align in the production stream' },
     'artifacts-narrow': { about: 'A narrow companion column preserves card sizing', viewport: { width: 320, height: 850 } },
     'artifacts-thread': { about: 'The production topic panel and compact styles retain reply/artifact alignment', viewport: { width: 640, height: 950 } },
@@ -18,6 +31,218 @@ export default {
     'artifacts-missing': { about: 'Missing files leave no empty avatar row' },
   },
   async check(page, ui) {
+    if (ui.data.columns) {
+      const reply = page.locator('[data-message-client-id="columns-answer"]');
+      await reply.scrollIntoViewIfNeeded();
+      await page.getByText('Saved fixture result.', { exact: true }).waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('img[data-gallery-src]')]
+        .filter(img => img.alt.startsWith('tool-image-')).every(img => img.complete && img.naturalWidth > 0 && getComputedStyle(img).display !== 'none'));
+      const layout = await page.evaluate(() => {
+        const reply = document.querySelector('[data-message-client-id="columns-answer"]');
+        const bubble = reply.querySelector('[data-bot-reply-bubble]') ?? reply;
+        const media = [...document.querySelectorAll('img[data-gallery-src], [data-chat-video-preview], audio')]
+          .map(node => node.tagName === 'AUDIO' ? node.parentElement : node)
+          .filter(node => node.getBoundingClientRect().width > 0);
+        const cards = [...media,
+          document.querySelector('[data-inline-plan-card]'),
+          document.querySelector('[data-message-client-id="columns-agent"] > div'),
+          document.querySelector('dialog[role="region"]'),
+        ];
+        return { replyX: bubble.getBoundingClientRect().x, viewport: innerWidth,
+          cards: cards.map(node => node ? { x: node.getBoundingClientRect().x, right: node.getBoundingClientRect().right } : null) };
+      });
+      assert.equal(layout.cards.length, 8, 'Two images, video, music, sound, plan, running task and App are present');
+      for (const card of layout.cards) {
+        assert.ok(card, 'Each production card renders');
+        assert.ok(Math.abs(card.x - layout.replyX) <= 0.5, `Card shares the reply column: ${JSON.stringify(layout)}`);
+        assert.ok(card.right <= layout.viewport + 0.5, 'Card fits the column');
+      }
+      await ui.capture('reply-and-cards');
+      await page.locator('[data-inline-plan-card]').scrollIntoViewIfNeeded();
+      const toggle = page.locator('[data-inline-plan-card] button[aria-expanded]').first();
+      await toggle.click();
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+      await toggle.click();
+      await ui.capture('plan-and-media');
+      await page.getByTestId('columns-select').click();
+      const boxes = page.getByRole('checkbox');
+      await boxes.first().waitFor();
+      const xs = await boxes.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
+      assert.ok(xs.length >= 3 && Math.max(...xs) - Math.min(...xs) <= 0.5, 'Media and message selection boxes share one gutter');
+      await page.getByTestId('columns-exit-select').click();
+      return;
+    }
+    if (ui.data.unread) {
+      const separator = page.getByRole('separator', { name: await ui.t('bots.chat.newMessagesBoundary'), exact: true });
+      await separator.waitFor();
+      const assertBoundary = async () => {
+        assert.equal(await separator.count(), 1);
+        const beforePortrait = await separator.evaluate(node => {
+          const portrait = document.querySelector('[data-testid="fixture-partner-avatar"]');
+          return !!portrait && !!(node.compareDocumentPosition(portrait) & Node.DOCUMENT_POSITION_FOLLOWING);
+        });
+        assert.ok(beforePortrait, 'NEW is before the shared portrait and process');
+      };
+      await assertBoundary();
+      if (!ui.data.done) {
+        await page.getByTestId('fixture-finish').click();
+        await page.getByText('任务与 PR 的进展已整理。', { exact: false }).waitFor();
+        await assertBoundary();
+      }
+      const heading = page.locator('[data-teammate-process] > button').first();
+      await heading.click();
+      await assertBoundary();
+      await heading.click();
+      await assertBoundary();
+      await ui.capture('new-before-process');
+      return;
+    }
+    if (ui.data.switched) {
+      const notice = page.getByRole('separator');
+      await notice.waitFor();
+      assert.match(await notice.innerText(), /quota-test.*gpt-6\.1-sol/s);
+      const headings = page.locator('[data-teammate-process] > button');
+      assert.equal(await headings.count(), 2);
+      for (const heading of await headings.all()) assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+      assert.equal(await notice.locator('xpath=ancestor::*[@data-teammate-process]').count(), 0);
+      await ui.capture('visible-switch');
+      await headings.first().click();
+      assert.equal(await notice.isVisible(), true);
+      await headings.first().click();
+      assert.equal(await notice.isVisible(), true);
+      return;
+    }
+    if (ui.data.disclosure) {
+      // Browser integration: a long history plus an expanded tail reproduces
+      // scroll-range clamping. Sample animation frames; endpoint screenshots
+      // alone missed the one-frame jumps in the user's recording.
+      if (!ui.data.reduced) await page.emulateMedia({ reducedMotion: 'no-preference' });
+      const heading = page.locator('[data-teammate-process] > button').last();
+      const scroll = page.locator('[data-scroll-container]');
+      await heading.waitFor();
+      // Start with an expanded process at the actual scroll boundary, as in the recording.
+      if (await heading.getAttribute('aria-expanded') === 'false') await heading.click();
+      await page.evaluate(() => new Promise(resolve => {
+        const start = performance.now();
+        const tick = () => performance.now() - start > 400 ? resolve() : requestAnimationFrame(tick);
+        requestAnimationFrame(tick);
+      }));
+      await scroll.evaluate(root => { root.scrollTop = root.scrollHeight; });
+      await page.waitForFunction(() => { const root = document.querySelector('[data-scroll-container]'); return Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1; });
+      const sampleToggle = async (target, label, rapid = false, keyboard = false) => {
+        await target.evaluate((button, rapid) => {
+          window.disclosureFrames = new Promise(resolve => button.addEventListener('click', () => {
+            const root = button.closest('[data-scroll-container]');
+            const frames = [];
+            const start = performance.now();
+            const record = () => frames.push({ ms: Math.round(performance.now() - start), y: button.getBoundingClientRect().y, top: root.scrollTop, height: root.scrollHeight });
+            record();
+            let reversed = false;
+            const tick = () => {
+              record();
+              if (rapid && !reversed && performance.now() - start >= 80) { reversed = true; button.click(); }
+              if (performance.now() - start < 650) requestAnimationFrame(tick);
+              else resolve(frames);
+            };
+            requestAnimationFrame(tick);
+          }, { once: true }));
+        }, rapid);
+        if (keyboard) { await target.focus(); await target.press('Enter'); }
+        else await target.click();
+        const samples = await page.evaluate(() => window.disclosureFrames);
+        const positions = samples.map(frame => frame.y);
+        const displacement = Math.max(...positions) - Math.min(...positions);
+        console.log(`DISCLOSURE_GEOMETRY ${label} ${JSON.stringify({ frames: samples.length, displacement })}`);
+        assert.ok(displacement <= 1, `${label}: clicked header moved: ${JSON.stringify(samples)}`);
+      };
+      for (let cycle = 0; cycle < 4; cycle++) {
+        await sampleToggle(heading, `toggle-${cycle}`, false, cycle >= 2);
+      }
+      const nested = page.locator('[data-teammate-segment] > button').first();
+      await sampleToggle(nested, 'tool-expand');
+      await sampleToggle(nested, 'tool-collapse');
+      await sampleToggle(heading, 'rapid-reversal', true);
+      await ui.capture('expanded-after-reversal');
+      const beforeUpdate = (await heading.boundingBox()).y;
+      await page.getByTestId('fixture-finish').click();
+      assert.equal(await heading.getAttribute('aria-expanded'), 'true', 'Completion preserves inspected work');
+      await page.getByTestId('fixture-update').click();
+      await page.getByText('补充记录 1。', { exact: false }).waitFor();
+      assert.ok(Math.abs((await heading.boundingBox()).y - beforeUpdate) <= 1, 'A late answer does not pull inspected work to the bottom');
+      await sampleToggle(heading, 'final-collapse');
+      await ui.capture('collapsed-in-place');
+      const floor = await scroll.evaluate(root => parseFloat(root.firstElementChild.style.minHeight));
+      await scroll.hover({ position: { x: 30, y: 100 } });
+      await page.mouse.wheel(0, -400);
+      await page.waitForFunction(previous => parseFloat(document.querySelector('[data-scroll-container]').firstElementChild.style.minHeight) < previous - 100, floor);
+      await page.mouse.wheel(0, 10000);
+      await page.waitForFunction(() => { const root = document.querySelector('[data-scroll-container]'); return Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1; });
+      await page.mouse.wheel(0, 120);
+      await page.waitForFunction(() => document.querySelector('[data-scroll-container]').firstElementChild.style.minHeight === '');
+      await sampleToggle(heading, 'reopen-after-scroll');
+      await sampleToggle(heading, 'recollapse-before-send');
+      await page.getByTestId('fixture-send').click();
+      await page.waitForFunction(() => {
+        const root = document.querySelector('[data-scroll-container]');
+        return root.firstElementChild.style.minHeight === '' && Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1;
+      });
+      if (!ui.data.done) {
+        assert.equal(await page.getByText(await ui.t('chat.newMessageIndicator.label', { count: 0 }), { exact: true }).count(), 0, 'The departing unread indicator keeps its last count instead of flashing zero');
+      }
+      await ui.capture('follow-restored');
+      // #9249 r4501358984: End at the reserved tail has no native movement to
+      // restore following. Use real heading focus/keys and subsequent DOM growth.
+      for (const key of ['End', 'Control+End']) {
+        if (await heading.getAttribute('aria-expanded') === 'false') await sampleToggle(heading, `${key}-expand`);
+        await scroll.evaluate(root => { root.scrollTop = root.scrollHeight; });
+        await page.waitForFunction(() => {
+          const root = document.querySelector('[data-scroll-container]');
+          return Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1;
+        });
+        await sampleToggle(heading, `${key}-collapse-at-tail`);
+        assert.ok(await scroll.evaluate(root => !!root.firstElementChild.style.minHeight), 'Collapse reserves the old tail');
+        assert.ok(await scroll.evaluate(root => Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1), 'End starts at a tail with no remaining native scroll distance');
+        await heading.focus();
+        await heading.press(key);
+        await page.waitForFunction(() => document.querySelector('[data-scroll-container]').firstElementChild.style.minHeight === '');
+        await scroll.evaluate(root => {
+          const answer = root.querySelector('[data-message-client-id="final_answer"]');
+          answer.style.minHeight = `${answer.getBoundingClientRect().height + root.clientHeight * 2}px`;
+        });
+        await page.waitForFunction(() => {
+          const root = document.querySelector('[data-scroll-container]');
+          return Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1;
+        });
+        await ui.capture(`${key.replace('+', '-')}-restores-process-follow`);
+        await scroll.evaluate(root => { root.querySelector('[data-message-client-id="final_answer"]').style.minHeight = ''; });
+      }
+      return;
+    }
+    // Browser integration: the existing static stream cases never changed deferred.loading.
+    // A single visible note plus a detail refresh previously added a spinner row and shifted content.
+    if (ui.data.refresh) {
+      const journal = page.locator('[data-teammate-process]');
+      const heading = journal.locator(':scope > button');
+      if (await heading.getAttribute('aria-expanded') === 'false') await heading.click();
+      await journal.getByText('正在核对任务进展。').waitFor();
+      await page.evaluate(() => document.getAnimations().filter(a => a.effect?.getComputedTiming().iterations !== Infinity).forEach(a => a.finish()));
+      const height = (await journal.boundingBox()).height;
+      for (let cycle = 0; cycle < 3; cycle++) {
+        await page.getByTestId('refresh-start').click();
+        await ui.capture(`refresh-${cycle}`);
+        assert.equal((await journal.boundingBox()).height, height, 'Background loading must not change the process height');
+        assert.equal(await heading.locator('.animate-spinner').count(), 1, 'Existing heading carries the loading state');
+        assert.equal(await journal.getByText(await ui.t('chat.teammateProcess.thinking'), { exact: true }).count(), 0, 'No redundant thinking row after prose');
+        await page.getByTestId('refresh-end').click();
+        assert.equal((await journal.boundingBox()).height, height);
+        assert.equal(await heading.locator('.animate-spinner').count(), ui.data.done ? 0 : 1);
+      }
+      await page.getByTestId('refresh-fail').click();
+      await journal.getByRole('button', { name: await ui.t('chat.errorBanner.retry'), exact: true }).click();
+      assert.equal(await heading.locator('.animate-spinner').count(), 1, 'Retry still starts a detail load');
+      assert.equal((await journal.boundingBox()).height, height);
+      return;
+    }
     // Layout regression tier: the full MessageStream must align confirmed
     // deliverables with its reply. Card-only jsdom tests cannot measure columns.
     // Minimal failure: one assistant avatar followed by a generated file.
@@ -104,8 +329,8 @@ export default {
     const journal = page.locator('[data-teammate-process]');
     await journal.waitFor();
     assert.equal(await journal.count(), 1, 'One disclosure owns all intermediate notes');
-    // Visible UI regression: process and reply each own a portrait; expansion
-    // must not repeat it in tool details. Hidden spacers failed this check.
+    // #8864 regression: process -> reply must retain a single visible portrait
+    // throughout completion and expansion, rather than splitting the turn visually.
     const processPortrait = journal.locator('xpath=../..').getByTestId('fixture-partner-avatar');
     assert.equal(await processPortrait.count(), 1);
     assert.equal(await processPortrait.isVisible(), true, 'The process portrait is visible');
@@ -150,7 +375,7 @@ export default {
       assert.equal(await heading.getAttribute('aria-expanded'), 'true', 'Keep inspected work open on completion');
     }
     await ui.capture('records');
-    assert.equal(await page.getByTestId('fixture-partner-avatar').count(), 2, 'Expanded process and final reply each have one portrait');
+    assert.equal(await page.getByTestId('fixture-partner-avatar').count(), 1, 'Process and final reply share one portrait');
     assert.equal(await processPortrait.isVisible(), true);
     await heading.click();
     assert.equal(await heading.getAttribute('aria-expanded'), 'false');

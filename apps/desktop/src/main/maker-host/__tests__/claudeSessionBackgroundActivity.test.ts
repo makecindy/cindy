@@ -11,11 +11,15 @@ import {
   clearClaudeSessionBackgroundActivity,
   createClaudeSessionActivityResponseObserver,
   getClaudeSessionBackgroundActivity,
+  hasWorkingBackgroundCommand,
   listActiveClaudeBackgroundActivitySessions,
+  listClaudeBackgroundCommandWorkSessions,
+  noteClaudeSessionBackgroundCommandWork,
   noteClaudeSessionTurnState,
   recordClaudeApiActivity,
   resetClaudeBackgroundActivityForTests,
   setClaudeBackgroundActivityBroadcaster,
+  setClaudeBackgroundCommandWorkBroadcaster,
 } from '../claude-session-background-activity.js';
 
 vi.mock('../../logger.js', () => ({
@@ -145,6 +149,78 @@ describe('claude-session-background-activity', () => {
     expect(listActiveClaudeBackgroundActivitySessions()).toEqual([]);
   });
 
+  // 「后台命令仍在工作」:回合收尾时测试、构建这类命令没跑完,任务列表要显示运行中而不是已结束
+  // (与 Codex / Pi 命令没跑完回合就不结束一致)。长驻服务不算;只影响展示。
+  describe('后台命令仍在工作', () => {
+    const COMMAND_WORK_END_GRACE_MS = 5_000;
+    let workBroadcasts: Array<{ sessionId: string; active: boolean }>;
+
+    beforeEach(() => {
+      workBroadcasts = [];
+      setClaudeBackgroundCommandWorkBroadcaster((p) => workBroadcasts.push(p));
+    });
+
+    it('只把会自己结束的后台命令算作工作,长驻服务与其他任务类型不算', () => {
+      expect(
+        hasWorkingBackgroundCommand([
+          { taskType: 'local_bash', backgroundCommandKind: 'service' },
+          { taskType: 'local_agent' },
+        ]),
+      ).toBe(false);
+      expect(hasWorkingBackgroundCommand([{ taskType: 'local_bash', backgroundCommandKind: 'work' }])).toBe(true);
+      // 种类未知(没见过启动它的命令)按工作算。
+      expect(hasWorkingBackgroundCommand([{ taskType: 'local_bash' }])).toBe(true);
+    });
+
+    it('回合在跑时不点亮;回合结束而命令仍在工作才点亮,新回合开始即让位', () => {
+      const sid = 'w1';
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionBackgroundCommandWork(sid, true);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([]);
+
+      noteClaudeSessionTurnState(sid, false);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([sid]);
+      expect(workBroadcasts).toEqual([{ sessionId: sid, active: true }]);
+
+      noteClaudeSessionTurnState(sid, true);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([]);
+      expect(workBroadcasts.at(-1)).toEqual({ sessionId: sid, active: false });
+    });
+
+    it('命令结束后保持到自动续跑的那一轮接上,中间不闪成已结束', () => {
+      const sid = 'w2';
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionBackgroundCommandWork(sid, true);
+      noteClaudeSessionTurnState(sid, false);
+
+      noteClaudeSessionBackgroundCommandWork(sid, false); // 命令跑完,CLI 即将自动开新一轮
+      vi.advanceTimersByTime(COMMAND_WORK_END_GRACE_MS - 1);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([sid]);
+
+      noteClaudeSessionTurnState(sid, true); // 续跑那一轮开始:运行态接管
+      expect(workBroadcasts).toEqual([
+        { sessionId: sid, active: true },
+        { sessionId: sid, active: false },
+      ]);
+    });
+
+    it('续跑没来时到点熄灭;关闭任务进程立即熄灭', () => {
+      const sid = 'w3';
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionBackgroundCommandWork(sid, true);
+      noteClaudeSessionTurnState(sid, false);
+      noteClaudeSessionBackgroundCommandWork(sid, false);
+      vi.advanceTimersByTime(COMMAND_WORK_END_GRACE_MS);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([]);
+
+      noteClaudeSessionBackgroundCommandWork(sid, true);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([sid]);
+      clearClaudeSessionBackgroundActivity(sid);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([]);
+      expect(workBroadcasts.at(-1)).toEqual({ sessionId: sid, active: false });
+    });
+  });
+
   it('响应观察器:带会话标头才建 sink,onData 节流刷新活动', () => {
     const sid = 's6';
     runTurn(sid, 'sdk-6');
@@ -169,6 +245,38 @@ describe('claude-session-background-activity', () => {
       vi.advanceTimersByTime(10_000);
       sink?.onData?.(Buffer.from('data: {}\n'));
     }
+    expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+  });
+
+  // #8671: /context 卡片(getContextUsage,默认 detail:'full')让 CLI 对每类输入各发
+  // 一笔 count_tokens 计量请求 —— 不生成 token、也不是后台子 agent 的采样流量。
+  // 观察器与请求侧路由 transform(anthropic-compat-proxy-host)共用同一判据:这类
+  // 探测不得点亮「后台子任务运行中」;真实 /v1/messages 采样仍照常点亮。URL 带
+  // ?beta=true 是 SDK 实际发出的形态(providerUpstreamErrorObserver.test 已录),
+  // 判据必须剥 query 后按后缀匹配。
+  it('count_tokens 用量探测不点亮横幅;真实采样仍点亮', () => {
+    const sid = 's7';
+    runTurn(sid, 'sdk-7');
+    const observer = createClaudeSessionActivityResponseObserver(() => sid);
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/v1/messages/count_tokens?beta=true',
+      upstreamBase: 'https://up',
+      status: 200,
+      responseHeaders: {},
+      requestBody: Buffer.alloc(0),
+      requestHeaders: { 'x-claude-code-session-id': 'sdk-7' },
+    };
+    vi.advanceTimersByTime(TURN_END_GRACE_MS + 100);
+    expect(observer(ctx)).toBeNull();
+    // 探测后立刻核查:若被误记为活动,此刻(宽限外的首笔)就会点亮。
+    expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    expect(broadcasts).not.toContainEqual({ sessionId: sid, active: true });
+
+    // 对照:同一时刻的真实采样请求照常建 sink 并点亮。
+    const sink = observer({ ...ctx, url: '/v1/messages' });
+    expect(sink).not.toBeNull();
     expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
   });
 });

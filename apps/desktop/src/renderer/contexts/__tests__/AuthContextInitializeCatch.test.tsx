@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
+import { openFirstRunGuide, parkFirstRunGuide, getFirstRunGuideState } from '@/features/first-run-guide/firstRunGuideStore';
 
 import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
-import type { DesktopLoginActionResult } from '@/lib/authService';
+import type { AuthState, DesktopLoginActionResult } from '@/lib/authService';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -16,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   service: {
     initialize: vi.fn<() => Promise<unknown>>(),
-    onAuthStateChange: vi.fn(() => () => {}),
+    onAuthStateChange: vi.fn<(listener: (state: AuthState) => void) => () => void>(() => () => {}),
     dispose: vi.fn(),
     getLoginState: vi.fn<() => Promise<DesktopLoginActionResult>>(),
     dispatchLoginAction: vi.fn<() => Promise<DesktopLoginActionResult>>(),
@@ -75,6 +76,7 @@ const onUnhandled = (reason: unknown) => {
 
 beforeEach(() => {
   mocks.service.initialize.mockReset();
+  mocks.service.onAuthStateChange.mockImplementation(() => () => {});
   mocks.logError.mockClear();
   mocks.unhandled.length = 0;
   process.on('unhandledRejection', onUnhandled);
@@ -87,6 +89,63 @@ afterEach(() => {
   process.off('unhandledRejection', onUnhandled);
   cleanup();
   vi.clearAllMocks();
+});
+
+describe('initial auth decision', () => {
+  const signedOut: AuthState = {
+    user: null, mode: 'signed-out', dataOwnerId: null, ownerGeneration: 1,
+    ownerBoundaryPending: false, canEnterApp: false, isAuthenticated: false,
+    isCanary: false, deviceId: 'device', hasAccountDeletionReceipt: false,
+    accountDeletionRestored: false, credentialStoreUnavailable: false,
+  };
+  // unit：真实 Provider；旧 finally 把 boundary pending 判成完成，已有 reject 用例覆盖不到。
+  it.each(['cloud', 'local', 'signed-out'] as const)('waits for stable %s after a pending initialize response', async (mode) => {
+    let push!: (state: AuthState) => void;
+    mocks.service.onAuthStateChange.mockImplementation((listener) => {
+      push = listener;
+      return () => {};
+    });
+    mocks.service.initialize.mockResolvedValue({ ...signedOut, ownerBoundaryPending: true });
+    const hook = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await act(async () => {});
+    expect(hook.result.current.isInitializing).toBe(true);
+    expect(hook.result.current.ownerBoundaryPending).toBe(true);
+    const stable = { ...signedOut, mode, ownerGeneration: 2,
+      dataOwnerId: mode === 'signed-out' ? null : 'owner', canEnterApp: mode !== 'signed-out' };
+    act(() => push(stable));
+    expect(hook.result.current.isInitializing).toBe(false);
+    expect(hook.result.current.ownerBoundaryPending).toBe(false);
+    // 运行期边界继续安全等待，但不重播首次初始化。
+    act(() => push({ ...signedOut, ownerGeneration: 2, ownerBoundaryPending: true }));
+    expect(hook.result.current.ownerBoundaryPending).toBe(true);
+    expect(hook.result.current.isInitializing).toBe(false);
+  });
+
+  it.each(['resolve', 'reject'] as const)('does not finish a newer pending push when old initialize %ss', async (completion) => {
+    let push!: (state: AuthState) => void;
+    let resolve!: (state: AuthState) => void;
+    let reject!: (error: Error) => void;
+    mocks.service.onAuthStateChange.mockImplementation((listener) => {
+      push = listener;
+      return () => {};
+    });
+    mocks.service.initialize.mockReturnValue(new Promise<AuthState>((done, fail) => {
+      resolve = done;
+      reject = fail;
+    }));
+    const hook = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    act(() => push({ ...signedOut, ownerBoundaryPending: true }));
+    await act(async () => {
+      if (completion === 'resolve') resolve(signedOut);
+      else reject(new Error('old initialization failed'));
+    });
+    expect(hook.result.current.isInitializing).toBe(true);
+    expect(hook.result.current.ownerBoundaryPending).toBe(true);
+    act(() => push({ ...signedOut, ownerGeneration: 2 }));
+    expect(hook.result.current.isInitializing).toBe(false);
+    hook.unmount();
+    expect(mocks.service.dispose).not.toHaveBeenCalled();
+  });
 });
 
 describe('login recovery ignores abandoned IPC results', () => {
@@ -113,7 +172,14 @@ describe('login recovery ignores abandoned IPC results', () => {
     }));
     expect(catalog.result.current.providers.providers).toHaveLength(1);
     expect(catalog.result.current.capabilities.capabilities?.availableModels[0].id).toBe('member-a');
+    // PR #9997: a parked guide must not survive the real AuthProvider logout boundary.
+    // Existing tests only covered model snapshots, not the guide's module-local state.
+    act(() => {
+      openFirstRunGuide({ manual: true, migration: true, legacyMigrated: true });
+      parkFirstRunGuide();
+    });
     await act(async () => { await auth.result.current.logout(); });
+    expect(getFirstRunGuideState()).toMatchObject({ open: false, parked: false });
     expect(mocks.service.logout).toHaveBeenCalledOnce();
     expect(catalog.result.current.providers.providers).toEqual([]);
     expect(catalog.result.current.capabilities.capabilities).toBeNull();

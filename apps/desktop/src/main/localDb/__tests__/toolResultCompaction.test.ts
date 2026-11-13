@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   drainPersistQueue: vi.fn(async (): Promise<void> => undefined),
 }));
 
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
 }));
 

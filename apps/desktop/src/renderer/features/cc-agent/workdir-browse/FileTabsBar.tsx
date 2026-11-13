@@ -603,7 +603,7 @@ export function FileTabsBar({
                   'fixed z-[9999] min-w-[176px] rounded-xl p-0.5 overflow-hidden',
                   'bg-[var(--cmd-palette-bg)]',
                   'border border-[var(--cmd-palette-border)]',
-                  'shadow-[var(--shadow-menu)]',
+                  'shadow-[shadow:var(--shadow-menu)]',
                 )}
                 style={{ left: m.pos.x, top: m.pos.y }}
               >
@@ -688,7 +688,7 @@ export function FileTabsBar({
                   'flex h-7 items-center gap-1.5 px-3 rounded-md',
                   'bg-[var(--chat-input-chip-bg)] text-foreground font-medium',
                   'border border-[var(--cmd-palette-border)]',
-                  'shadow-[var(--shadow-menu)]',
+                  'shadow-[shadow:var(--shadow-menu)]',
                   'text-12 opacity-90',
                 )}
                 style={{ left: dragGhost.x + 12, top: dragGhost.y + 12 }}

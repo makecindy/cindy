@@ -15,13 +15,13 @@ import type {
   SwipeableMethods,
   SwipeableProps,
 } from 'react-native-gesture-handler/ReanimatedSwipeable';
-import type { SwipeableProps as ClassicSwipeableProps } from 'react-native-gesture-handler/Swipeable';
+import type { SwipeableProps as ClassicSwipeableProps } from './ClassicSwipeable';
 
 type GestureHandlerModule = typeof import('react-native-gesture-handler');
 type ReanimatedSwipeableModule =
   typeof import('react-native-gesture-handler/ReanimatedSwipeable');
 type ClassicSwipeableModule =
-  typeof import('react-native-gesture-handler/Swipeable');
+  typeof import('./ClassicSwipeable');
 
 const isStoreClient =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -54,7 +54,7 @@ function loadClassicSwipeable(): ClassicSwipeableModule | null {
   if (isStoreClient) return null;
   if (classicSwipeableModule === undefined) {
     classicSwipeableModule = require(
-      'react-native-gesture-handler/Swipeable',
+      './ClassicSwipeable',
     ) as ClassicSwipeableModule;
   }
   return classicSwipeableModule;
@@ -97,7 +97,7 @@ const NoopReanimatedSwipeable = forwardRef<SwipeableMethods, SwipeableProps>(
   ({ children, containerStyle, testID }, ref) => {
     useImperativeHandle(ref, () => noopSwipeableMethods, []);
     return (
-      <View style={containerStyle} testID={testID}>
+      <View style={containerStyle as ViewProps["style"]} testID={testID}>
         {children}
       </View>
     );
@@ -116,7 +116,7 @@ const NoopClassicSwipeable = forwardRef<ClassicSwipeableMethods, ClassicSwipeabl
   ({ children, containerStyle, testID }, ref) => {
     useImperativeHandle(ref, () => noopSwipeableMethods, []);
     return (
-      <View style={containerStyle} testID={testID}>
+      <View style={containerStyle as ViewProps["style"]} testID={testID}>
         {children}
       </View>
     );

@@ -112,6 +112,7 @@ function makeHarness(opts?: {
   peerResetReadRetry?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerResetReadRetry'];
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
+  transportAllowed?: () => boolean;
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -134,6 +135,7 @@ function makeHarness(opts?: {
     peerResetReadRetry: opts?.peerResetReadRetry,
     invokeMetrics: opts?.invokeMetrics,
     frameAuth: opts?.frameAuth,
+    transportAllowed: opts?.transportAllowed,
     timing: {
       reconnectBaseMs: 5,
       reconnectMaxMs: 40,
@@ -147,6 +149,43 @@ function makeHarness(opts?: {
 }
 
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('host transport policy', () => {
+  // Regression: settings can change before an asynchronous relay restart closes
+  // the old socket. Exercise the real send and inbound paths during that gap.
+  it('blocks an already open socket immediately, including late inbound frames', async () => {
+    let allowed = true;
+    const h = makeHarness({ transportAllowed: () => allowed, timing: { pingIntervalMs: 60_000 } });
+    const received = vi.fn();
+    h.client.onFrame(received);
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'peer-a', payload: { channel: 'unit', payload: 1 } });
+      expect(received).toHaveBeenCalled();
+      received.mockClear();
+      const sent = h.current().sent.length;
+      allowed = false;
+      const request = h.client.invoke('peer-a', { channel: 'sessions:list', args: [] });
+      await expect(request).rejects.toMatchObject({ code: 'CHANNEL_NOT_ALLOWED' });
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'peer-a', payload: { channel: 'unit', payload: 2 } });
+      await tick();
+      expect(h.current().sent).toHaveLength(sent);
+      expect(received).not.toHaveBeenCalled();
+    } finally { h.client.stop(); }
+  });
+
+  it('closes a socket whose upgrade completes after the host disables its transport', async () => {
+    let allowed = true;
+    const h = makeHarness({ transportAllowed: () => allowed });
+    try {
+      h.client.start(); await tick();
+      allowed = false;
+      expect(() => h.current().emit('open')).not.toThrow();
+      expect(h.current().closed?.code).toBe(1000);
+      expect(h.current().sent).toHaveLength(0);
+    } finally { h.client.stop(); }
+  });
+});
 
 describe('outbound invoke admission', () => {
   // Unit, PR #9153: resource actions share one channel. Valid parsed actionId
@@ -3941,7 +3980,7 @@ describe('DeviceLinkClient', () => {
   });
 
   // PR #6569: plugin data sync remains independent from the control link (unit wire fixture).
-  it.each(['device-link:voice:dictionary:snapshot', PLUGIN_SYNC_CHANNEL])('显式 close 后 %s push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async (channel) => {
+  it.each(['device-link:voice:dictionary:snapshot', PLUGIN_SYNC_CHANNEL, 'device-link:remote-control-consent'])('显式 close 后 %s push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async (channel) => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
     await tick();
@@ -6310,6 +6349,36 @@ describe('DeviceLinkClient', () => {
     expect(ws.terminated).toBe(false);
     expect(h.client.getStatus()).toBe('online');
     h.client.stop();
+  });
+
+  // 远程连接拓扑页展示到 relay 的往返:只有真实 pong 才出样本,重复 pong 不重复采样,断线归零。
+  it('心跳往返只在真实 pong 后出样本,重复 pong 不出第二个,断线清零', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 3 } });
+      const internals = h.client as unknown as { monotonicNow(): number };
+      const realNow = internals.monotonicNow.bind(h.client);
+      let offset = 0;
+      internals.monotonicNow = () => realNow() + offset;
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      expect(h.client.getRelayRttMs()).toBeNull();
+      await vi.advanceTimersByTimeAsync(8);
+      expect(ws.sent.some((e) => e.kind === 'ping')).toBe(true);
+      offset = 37;
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      expect(h.client.getRelayRttMs()).toBe(37);
+      offset = 90;
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      expect(h.client.getRelayRttMs()).toBe(37);
+      ws.emit('close', 1006, 'network lost');
+      expect(h.client.getRelayRttMs()).toBeNull();
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('非 pong 的有效入站流量也能阻止心跳误判共享连接', async () => {
@@ -11671,6 +11740,53 @@ describe('automatic LAN connection through platform bridges', () => {
 });
 
 describe('直连优先、中继兜底(Device Link direct path)', () => {
+  // 远程连接拓扑页读的快照:建链后出现(relay、未测往返、已就绪、还没有业务收发),发出业务消息后有「多久前发出」,
+  // ACK 只给往返、不算收到,对端的业务消息才算收到;挂上直连后路径变直连,关链后消失。
+  it('链路快照反映路径、就绪、往返与业务收发,关链后消失', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });
+    const internals = h.client as unknown as { monotonicNow(): number };
+    const realNow = internals.monotonicNow.bind(h.client);
+    let offset = 0;
+    internals.monotonicNow = () => realNow() + offset;
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      expect(h.client.getPeerLinkSnapshots()).toEqual([]);
+      const opening = establishInboundReliableLink(h, 'peer-stream');
+      await vi.advanceTimersByTimeAsync(0); await opening;
+      expect(h.client.getPeerLinkSnapshots()).toEqual([
+        { deviceId: 'dev-b', path: 'relay', rttMs: null, open: true, sentAgoMs: null, receivedAgoMs: null },
+      ]);
+      h.client.sendInvokeResult('dev-b', 'r1', { ok: true, result: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      const ws = h.current();
+      const meta = parseTransportPayload(ws.sent.find((env) => env.kind === 'invoke-result')!.payload)!.meta;
+      ws.push({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: meta.streamId, ackSeq: meta.seq } },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      offset += 40;
+      const acked = h.client.getPeerLinkSnapshots()[0];
+      expect(acked.rttMs).not.toBeNull();
+      expect(acked.rttMs).toBeGreaterThanOrEqual(0);
+      expect(acked.sentAgoMs).toBeGreaterThanOrEqual(40);
+      expect(acked.receivedAgoMs).toBeNull();
+      encodeReliableFrames({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: { channel: 'maker:event', payload: { n: 1 } },
+      }, 'peer-stream', 1).forEach((frame) => ws.push(frame));
+      await vi.advanceTimersByTimeAsync(0);
+      offset += 25;
+      const received = h.client.getPeerLinkSnapshots()[0];
+      expect(received.receivedAgoMs).toBeGreaterThanOrEqual(25);
+      expect(received.receivedAgoMs).toBeLessThan(received.sentAgoMs!);
+      h.client.attachDirectPath('dev-b', { send() {}, close() {} });
+      expect(h.client.getPeerLinkSnapshots()[0]).toMatchObject({ deviceId: 'dev-b', path: 'direct', open: true });
+      h.client.closeLink('dev-b', 'user');
+      expect(h.client.getPeerLinkSnapshots()).toEqual([]);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('replays a partially written large head while an older relay tail is still in flight', async () => {
     vi.useFakeTimers();
     const info = vi.fn();
@@ -11692,19 +11808,29 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
         send() { if (++writes > TRANSPORT_RETRY_PASS_BUDGET) throw new Error('direct write interrupted'); },
         close() {},
       });
-      await vi.advanceTimersByTimeAsync(61_000);
+      // Attaching moves both relay messages onto the direct path at once; stay before their
+      // next size-paced relay retry so only the fallback replay is counted.
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(writes).toBe(TRANSPORT_RETRY_PASS_BUDGET + 1);
       expect(h.client.getPeerPath('dev-b')).toBe('relay');
       const rows = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
         .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)));
+      // A row may be split into `transport.head` when it is too large for one upload line.
+      const headOf = (row: Record<string, any>): any[] => row.transport?.head ?? row['transport.head'] ?? [];
+      // Attaching moves the unacknowledged relay head onto the direct path, so the attach row
+      // is the only place that still shows which relay prefix had held the cumulative ACK.
+      const movedRow = rows.find(row => row.stage === 'send' && row.outcome === 'moved-to-direct');
+      expect(movedRow).toMatchObject({ moved: 2 });
+      expect(headOf(movedRow!)).toEqual([
+        expect.objectContaining({ seq: 1, bytes: expect.any(Number), path: 'relay', sent: true }),
+        expect.objectContaining({ seq: 2, bytes: expect.any(Number), path: 'relay', sent: true }),
+      ]);
+      // The detach row is recorded before the direct frames are reset, so it reports the
+      // interrupted direct write instead.
       const pathRows = rows.filter(row => row.stage === 'path');
-      const snapshot = Object.assign({}, ...pathRows.map(row => row.transport ?? {}));
-      // Capture before detach clears the path: later fallback logs cannot show
-      // which unacknowledged prefix was still on the relay.
-      const heads = snapshot.head ?? pathRows.find(row => row['transport.head'])?.['transport.head'];
-      expect(heads).toEqual(expect.arrayContaining([expect.objectContaining({ seq: expect.any(Number),
-        bytes: expect.any(Number), path: 'relay', sent: true })]));
       expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
+      expect(headOf(pathRows[0])).toEqual(expect.arrayContaining([expect.objectContaining({
+        path: 'direct', sent: true, attempts: expect.any(Number) })]));
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
       // Reuse the original sequence and every fragment; the receiver can assemble and deduplicate it.
@@ -11899,6 +12025,61 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       for (const result of sockets.mock.results) expect(result.value.closed).toBeNull();
     } finally {
       for (const client of [host, a, b]) client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  // 2026-11-04: under steady remote-agent traffic a healthy LAN path was dropped for
+  // ack-timeout 8–10s after every attach (34 times an hour). An older frame was still
+  // waiting on the slow relay, so the cumulative ACK could not reach the direct frames.
+  // More lost requests than one retry pass may send: the moved frames go out in batches.
+  it.each([1, TRANSPORT_RETRY_PASS_BUDGET + 2])('keeps a new direct path when older relay frames hold back the ACK (lost=%i)', async (lost) => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const timing = { transportRetryIntervalMs: 1_000, requestTimeoutMs: 30_000 };
+    const host = makeRelayClient(relay, 'desktop', timing);
+    const a = makeRelayClient(relay, 'viewer-a', timing);
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executed: string[] = [];
+    host.onFrame((env) => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      executed.push(env.id!);
+      host.sendInvokeResult(env.src!, env.id!, { ok: true, result: `done-${executed.length}` });
+    });
+    const pathChanges: DeviceLinkPeerPathChanged[] = [];
+    a.onPeerPathChanged(change => pathChanges.push(change));
+    try {
+      host.start(); a.start();
+      await pump();
+      const opening = a.openLink('desktop', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      // The relay loses these requests; their size-paced relay retry is due long after the direct deadline.
+      const results: unknown[] = [];
+      for (let index = 0; index < lost; index++) {
+        relay.dropNext((sender, env) => sender === 'viewer-a' && env.kind === 'invoke');
+        void a.invoke('desktop', { channel: 'local-db:sessions:get', args: ['x'.repeat(64 * 1024)] })
+          .then(value => { results[index] = value; });
+      }
+      await pump();
+      expect(executed).toHaveLength(0);
+
+      const direct = connectDirect({ id: 'viewer-a', client: a }, { id: 'desktop', client: host });
+      void a.invoke('desktop', { channel: 'local-db:sessions:get', args: ['after-attach'] })
+        .then(value => { results[lost] = value; });
+      await pump();
+      // Past the direct ACK deadline and the retry pass that would judge it.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await pump();
+
+      expect(results).toEqual(Array.from({ length: lost + 1 }, (_, index) => ({ ok: true, result: `done-${index + 1}` })));
+      expect(executed).toHaveLength(lost + 1);
+      expect(pathChanges.filter(change => change.path === 'relay')).toEqual([]);
+      expect(a.getPeerPath('desktop')).toBe('direct');
+      expect(direct.isOpen()).toBe(true);
+      expect(reliableKinds(direct.frames.toRight, 'invoke')).toBe(lost + 1);
+    } finally {
+      host.stop(); a.stop();
       vi.useRealTimers();
     }
   });

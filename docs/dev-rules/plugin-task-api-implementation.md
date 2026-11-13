@@ -128,6 +128,7 @@ Host 每次调用都重新读取本插件的模型设置，复用创建任务的
 `localDb/sessionOpening.openSession` 是普通新建任务的公共入口：模型准入、目录准备、Session 行构造与提交。
 普通新建任务 UI、`send_to_session` 新建、伙伴普通任务、插件普通任务和工作区创建均使用该入口。
 伙伴通过提交回调把 Session 与原有委派回执保存在同一个事务中；伙伴信号、卡片、超时及完成回报留在伙伴层。
+（2026-11-08 起 V2 不再适用：V1 委派已移除，伙伴用普通 `send_to_session` 开任务，宿主只另记「由这位伙伴开的」，见 [伙伴运行时](../product-rules/cindy-bots-runtime.md) §6.1。）
 插件继续使用自己的持久操作回执。公共入口不认识伙伴／插件身份，不创建回叫任务。
 `sessionExecutionSelection` 复用普通模型能力及供应商校验；显式目录选项沿用 `appDefaultModelControl`。
 已有任务改模复用 `sessionControlService`，不另造运行时或供应商选择器。
@@ -267,9 +268,9 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 
 ## 与伙伴的共用和隔离
 
-`sessionExecutionOwnership.ts` 提供执行身份比较、锁内二次核对、按归属撤回排队输入。伙伴委派与插件任务均使用这套函数。
+`sessionExecutionOwnership.ts` 提供执行身份比较、锁内二次核对、按归属撤回排队输入。插件任务使用这套函数（V1 伙伴委派曾共用，2026-11-08 已移除）。
 
-插件继续复用现有普通 Session 创建、输入协调器、停止服务及产品终态边界。没有创建假伙伴，没有另建模型执行器。伙伴的身份、父子委派规则及专有配置仍由伙伴服务管理。
+插件继续复用现有普通 Session 创建、输入协调器、停止服务及产品终态边界。没有创建假伙伴，没有另建模型执行器。伙伴的身份及专有配置仍由伙伴服务管理。
 
 ## 当前限制与后续工作
 
@@ -353,6 +354,7 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
   项目使用 Cindy 已有目录分组（id 为目录路径），普通任务和伙伴使用其 ID。最近活动只排序，插件自行展示和选择。
 - `resolve({target:{kind,id}})` 返回最新目标元数据，供插件校验保存的固定目标；无写入、弹窗或隐式选中。
   `send` 同样重新校验目标，不要求先 list/resolve，也不接受任意不可用路径或目标；失效返回 TARGET_UNAVAILABLE，不降级改投。
+- `resolve({session:sessionId})` 与 `target` 二选一，返回相同 `{kind,id,label,detail}`。普通任务沿用候选筛选并返回 task；伙伴只接受唯一、未归档的 canonical 注册，返回 bot 与伙伴 ID。其他伙伴会话、冲突或不可用目标返回 TARGET_UNAVAILABLE；不使用兼容镜像，不回退到其他会话，查询继续复核账号与批准。
 - `send({target,requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})` 在指定项目中新建普通任务，或向指定普通任务/伙伴投递。
   新任务经现有 `PluginTaskService.create` 登记归属后使用 `createPluginTaskSession`，沿用插件模型选择、受限动手权限及卸载撤销流程，可传统一模型目录的 route，以及当前授权范围内的 permissionMode。
   存量任务和伙伴保留其模型、权限、目录，不接受 route 或 permissionMode；伙伴通过唯一 canonical 注册解析，不使用兼容镜像或伪造伙伴身份。

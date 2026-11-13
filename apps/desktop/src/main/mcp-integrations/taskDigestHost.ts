@@ -9,8 +9,6 @@ import type { InvokeResultPayload } from '@cindy/device-link';
 import type { HistoryDevice, TaskDigestRoute } from '@cindy/mcps';
 import type { AgentKind } from '@cindy/model-providers';
 
-import { deriveFollowUpUsage, suggestFollowUpRoute } from '../bot-autonomy/followUpRoute.js';
-import { parseActiveSessionList } from '../bot-autonomy/phase.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { botProfileVersions, botSessionLinks, sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -18,10 +16,11 @@ import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settin
 import { resolveConfiguredContextWindow } from '../maker-host/model-context-settings.js';
 import { lookupVerifiedContextWindow } from '../maker-ipc/contextOverflowRollover.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
-import { readWatchedSession } from '../maker-ipc/botWorkbenchAutonomyBridge.js';
-import { lastExchange, readSessionLastExchange } from '../maker-ipc/botWorkbenchTranscripts.js';
+import { lastExchange, readSessionLastExchange } from '../maker-ipc/sessionLastExchange.js';
 import type { BotHarness } from '../../shared/botModelChain.js';
+import { deriveFollowUpUsage, suggestFollowUpRoute } from './followUpRoute.js';
 import { readChatHistoryMessages } from './remoteChatHistory.js';
+import { parseActiveSessionList } from './taskPhase.js';
 import {
   formatPrStatuses,
   historyContentText,
@@ -154,18 +153,11 @@ async function readRemoteMessageItems(invoke: Invoke, deviceId: string, sessionI
   };
 }
 
-/** 工作台跨电脑读取用:那台电脑上一件任务最近的用户 / 助手文字(时间正序)。 */
-export function createRemoteWorkbenchMessageReader(invoke: Invoke) {
-  return async (deviceId: string, sessionId: string) => {
-    const result = await readRemoteMessageItems(invoke, deviceId, sessionId, 60);
-    return result.ok ? result : { ok: false as const, errorCode: result.errorCode, message: result.message };
-  };
-}
-
 export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDigestDeps {
   return {
     now: () => Date.now(),
-    watched: readWatchedSession,
+    // The V1 follow-up watch is gone: the digest derives the phase from live activity.
+    watched: () => null,
     local: {
       readSession: async (sessionId) => {
         const [row] = await getDbClient()

@@ -387,6 +387,8 @@ const rendererConfig = {
     include: ['@tiptap/react', 'highlight.js'],
   },
   server: {
+    // Keep optional settings modules on demand. Warming the entire settings tree
+    // at startup can exhaust the Forge/Vite heap on Windows (#9504).
     watch: {
       // 被 exclude 的内部包以 node_modules 软链路径进模块图,默认 `**/node_modules/**`
       // 忽略规则会让 watcher 对它们的源码变更全盲(变更后引用新导出的组件热更、被引用包

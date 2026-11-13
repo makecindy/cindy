@@ -18,6 +18,7 @@ import { retroDesktopViewport } from "../FoldDesktopSkin";
 import { RemoteDesktopControls } from "../RemoteDesktopControls";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
+import { resolveMobileInvokeTimeoutMs } from "@/device-link/invokeTimeouts";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { darkColors, lightColors } from "@/theme/tokens";
 
@@ -73,7 +74,8 @@ vi.mock("../useAutoUnlockSettings", () => ({
       biometricVerification: true,
       available: true,
       busy: fixture.securityBusy,
-      notice: null,
+      notice: fixture.securityNotice,
+      clearNotice: fixture.clearSecurityNotice,
       onAutoUnlock: vi.fn(),
       onBiometricVerification: vi.fn(),
       maybeUnlock: fixture.maybeUnlock,
@@ -127,6 +129,8 @@ const fixture = vi.hoisted(() => ({
   safe: { top: 59, bottom: 34, left: 0, right: 0 },
   securityAutoUnlock: false,
   securityBusy: false,
+  securityNotice: null as string | null,
+  clearSecurityNotice: vi.fn(),
   themeMode: "light",
   lockOnExit: false,
   lockPreferenceFromStorage: false,
@@ -216,6 +220,7 @@ vi.mock("react-native", async () => {
       },
     },
     Dimensions: {
+      addEventListener: () => ({ remove() {} }),
       get: (kind: string) =>
         kind === "screen"
           ? (fixture.displaySize ?? fixture.size)
@@ -262,9 +267,13 @@ vi.mock("expo-router", () => ({
   }),
 }));
 vi.mock("@/utils/backGuard", () => ({ goBackGuarded: vi.fn() }));
-vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => fixture.safe,
-}));
+vi.mock("react-native-safe-area-context", async () => {
+  const { createContext } = await import("react");
+  return {
+    SafeAreaInsetsContext: createContext(fixture.safe),
+    useSafeAreaInsets: () => fixture.safe,
+  };
+});
 vi.mock("react-i18next", () => {
   const t = (key: string) => key;
   return { useTranslation: () => ({ t }) };
@@ -328,6 +337,7 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
     ),
 }));
 vi.mock("lucide-react-native", () => ({
+  CircleAlert: () => null,
   Smartphone: () => null,
   Tablet: () => null,
   ArrowBigUp: () => null,
@@ -511,6 +521,8 @@ beforeEach(async () => {
   fixture.liveScreen = undefined;
   fixture.securityAutoUnlock = false;
   fixture.securityBusy = false;
+  fixture.securityNotice = null;
+  fixture.clearSecurityNotice.mockReset();
   fixture.maybeUnlock.mockReset().mockResolvedValue(undefined);
   fixture.themeMode = "light";
   fixture.lockOnExit = false;
@@ -1241,6 +1253,215 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
   });
+  // #6538, unit: mount the real screen and its heartbeat. The existing success
+  // case did not cover a lost presentation reply, pending retries or old leases.
+  const browserPresentation = async (
+    type: string,
+    values: Record<string, unknown> = {},
+  ) => {
+    await act(async () =>
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type, epoch: "lease", ...values }),
+        },
+      }),
+    );
+  };
+  const viewOnlyPip = async (platform: "ios" | "android") => {
+    fixture.canControl = false;
+    fixture.hostPlatform = "linux";
+    fixture.platform = platform;
+    if (platform === "ios") {
+      await retainedViewer();
+      return nativePresentation;
+    }
+    await connect();
+    await browserPresentation("pipCapability", { supported: true });
+    act(() => button("operations").click());
+    await act(async () => button("smallWindow").click());
+    await browserPresentation("presentation", { active: true });
+    return browserPresentation;
+  };
+  it.each([
+    { platform: "ios" as const, code: "INVOKE_TIMEOUT" },
+    { platform: "android" as const, code: "DESKTOP_INPUT_BUSY" },
+  ])(
+    "keeps view-only video and retries fullscreen on the heartbeat: $platform/$code",
+    async ({ platform, code }) => {
+      const present = await viewOnlyPip(platform);
+      const original = fixture.invoke.getMockImplementation()!;
+      let attempts = 0;
+      fixture.invoke.mockImplementation((...args) => {
+        const req = args[2][0];
+        if (req.op === "presentation" && !req.enabled && ++attempts === 1)
+          return Promise.reject(Object.assign(new Error(code), { code }));
+        return original(...args);
+      });
+      const messages = sent().length;
+      await present("presentation", { active: false });
+      expect(attempts).toBe(1);
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+      expect(sent().slice(messages).some((m) => m.type === "stop")).toBe(false);
+      expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(attempts).toBe(2);
+      expect(
+        requests().filter((r) => r.op === "presentation" && !r.enabled),
+      ).toEqual([
+        { op: "presentation", lease: "lease", enabled: false },
+        { op: "presentation", lease: "lease", enabled: false },
+      ]);
+      await act(async () => vi.advanceTimersByTimeAsync(6000));
+      expect(attempts).toBe(2);
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    },
+  );
+  it.each([
+    { code: "INVOKE_TIMEOUT", outcome: "grant" },
+    { code: "DESKTOP_INPUT_BUSY", outcome: "timeout" },
+  ])(
+    "requires fresh PiP authorization after a settled view-only restore: $code/$outcome",
+    async ({ code, outcome }) => {
+      const present = await viewOnlyPip("ios");
+      const original = fixture.invoke.getMockImplementation()!;
+      let finish!: () => void;
+      fixture.invoke.mockImplementation((...args) => {
+        const req = args[2][0];
+        if (req.op === "presentation") {
+          if (!req.enabled) return Promise.reject(new Error(code));
+          return new Promise((resolve) => { finish = () => resolve({}); });
+        }
+        return original(...args);
+      });
+      await present("presentation", { active: false });
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+      const heartbeats = requests().filter((r) => r.op === "heartbeat").length;
+      await act(async () => {
+        AppState.currentState = "inactive";
+        fixture.appState!("inactive");
+        AppState.currentState = "background";
+        fixture.appState!("background");
+      });
+      await present("presentation", { active: true });
+      // No clock advance: enter again before the original heartbeat can retry.
+      expect(requests().filter((r) => r.op === "heartbeat")).toHaveLength(heartbeats);
+      expect(requests().filter((r) => r.op === "presentation" && r.enabled)).toEqual([
+        { op: "presentation", lease: "lease", enabled: true },
+        { op: "presentation", lease: "lease", enabled: true },
+      ]);
+      expect(sent().filter((m) => m.type === "pipPolicy").at(-1)).toMatchObject({
+        preparing: true, authorized: false,
+      });
+      if (outcome === "grant") await act(async () => finish());
+      await act(async () => vi.advanceTimersByTimeAsync(4100));
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(
+        outcome === "grant" ? 0 : 1,
+      );
+      if (outcome === "timeout") await act(async () => finish());
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+    },
+  );
+  it("keeps one view-only restore in flight across duplicate PiP events and heartbeats", async () => {
+    const present = await viewOnlyPip("ios");
+    const original = fixture.invoke.getMockImplementation()!;
+    let reject!: (cause: Error) => void;
+    let attempts = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "presentation" && !req.enabled && ++attempts === 1)
+        return new Promise((_resolve, fail) => { reject = fail; });
+      return original(...args);
+    });
+    await present("presentation", { active: false });
+    await present("presentation", { active: false });
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(attempts).toBe(1);
+    await act(async () => reject(new Error("INVOKE_TIMEOUT")));
+    expect(attempts).toBe(1); // No recursive retry from catch/finally.
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(attempts).toBe(2);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+  });
+  it.each(["DESKTOP_LEASE_EXPIRED", "DESKTOP_STOPPED"])(
+    "still stops a view-only lease on definitive fullscreen rejection: %s",
+    async (code) => {
+      const present = await viewOnlyPip("ios");
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "presentation" && !args[2][0].enabled
+          ? Promise.reject(new Error(code))
+          : original(...args),
+      );
+      await present("presentation", { active: false });
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+      expect(sent()).toContainEqual(
+        expect.objectContaining({ type: "stop", epoch: "lease" }),
+      );
+    },
+  );
+  it.each(["success", "failure"])(
+    "ignores an old view-only restore %s while a new lease is restoring",
+    async (outcome) => {
+      await viewOnlyPip("android");
+      const original = fixture.invoke.getMockImplementation()!;
+      let finishOld!: () => void;
+      let rejectNew!: (cause: Error) => void;
+      let newAttempts = 0;
+      let newPipAuthorized = false;
+      fixture.invoke.mockImplementation((...args) => {
+        const req = args[2][0];
+        if (req.op === "start")
+          return Promise.resolve(original(...args)).then((result) => ({
+            ...result, lease: "lease-2",
+          }));
+        if (req.op === "presentation" && req.lease === "lease-2" && req.enabled)
+          newPipAuthorized = true;
+        if (req.op === "presentation" && !req.enabled) {
+          if (req.lease === "lease")
+            return new Promise((resolve, reject) => {
+              finishOld = () => outcome === "success"
+                ? resolve({}) : reject(new Error("DESKTOP_STOPPED"));
+            });
+          if (newPipAuthorized && ++newAttempts === 1)
+            return new Promise((_resolve, reject) => { rejectNew = reject; });
+        }
+        return original(...args);
+      });
+      await browserPresentation("presentation", { active: false });
+      fixture.status = "offline";
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      fixture.status = "online";
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      await browserPresentation("framePresented", { epoch: "lease-2" });
+      await browserPresentation("pipCapability", { supported: true, epoch: "lease-2" });
+      // The saved option is already enabled. Turn it off, then on to enter
+      // browser PiP again; the first disable is not a fullscreen restoration.
+      if (!button("smallWindow")) act(() => button("operations").click());
+      await act(async () => button("smallWindow").click());
+      await act(async () => button("smallWindow").click());
+      expect(requests()).toContainEqual({
+        op: "presentation", lease: "lease-2", enabled: true,
+      });
+      await browserPresentation("presentation", { active: true, epoch: "lease-2" });
+      await browserPresentation("presentation", { active: false, epoch: "lease-2" });
+      expect(newAttempts).toBe(1);
+      const stops = requests().filter((r) => r.op === "stop").length;
+      await act(async () => finishOld());
+      await browserPresentation("presentation", { active: false, epoch: "lease-2" });
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(newAttempts).toBe(1); // Old finally must not unlock the new request.
+      await act(async () => rejectNew(new Error("INVOKE_TIMEOUT")));
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(newAttempts).toBe(2); // Old ACK must not consume the new intent.
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+    },
+  );
   it("does not select view-only or label the viewer as view-only during actual PiP", async () => {
     await retainedViewer();
     expect(host.textContent).not.toContain("remoteDesktop.viewOnly");
@@ -1610,8 +1831,12 @@ describe("remote desktop controls", () => {
       await nativePresentation("presentation", { active: true });
       expect(grants()).toBe(before);
       expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
-      if (outcome === "timeout")
+      if (outcome === "timeout") {
         await act(async () => vi.advanceTimersByTimeAsync(4100));
+        // A previous PiP grant cannot cancel this new entry's deadline while
+        // its foreground restoration is still pending.
+        expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+      }
       await act(async () => finish({ controlling: true }));
       expect(grants()).toBe(before + (outcome === "grant" ? 1 : 0));
       await act(async () => vi.advanceTimersByTimeAsync(4100));
@@ -3492,6 +3717,50 @@ describe("remote desktop controls", () => {
     act(() => button("operations").click());
     expect(host.textContent).not.toContain("remoteDesktop.pipUnavailable");
   });
+  // 回归：自动解锁失败原先只藏在安全页；主画面应给出非模态错误，安全页打开时不重复。
+  // 生产入口 RemoteDesktopScreen；最小输入 security.notice；unit，真实组件渲染。
+  it("surfaces automatic unlock failure on the remote picture without a modal", async () => {
+    await connect();
+    fixture.securityNotice = "remoteDesktop.credentialUnlockUnavailable";
+    act(() => root.render(<RemoteDesktopScreen />));
+    const notice = host.querySelector(
+      '[data-testid="remoteDesktop.autoUnlockNotice"]',
+    );
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain(
+      "remoteDesktop.credentialUnlockUnavailable",
+    );
+    // 自动解锁失败是异步出现的告警，读屏也必须能播报，不能只有视觉提示。
+    expect(
+      fixture.views["remoteDesktop.autoUnlockNotice"]?.accessibilityRole,
+    ).toBe("alert");
+    expect(fixture.alert).not.toHaveBeenCalled();
+    fixture.clearSecurityNotice.mockImplementation(() => {
+      fixture.securityNotice = null;
+    });
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="remoteDesktop.dismissUnlockNotice"]',
+        )!
+        .click(),
+    );
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlockNotice"]'),
+    ).toBeNull();
+    fixture.securityNotice = "remoteDesktop.credentialUnlockUnavailable";
+    act(() => root.render(<RemoteDesktopScreen />));
+    act(() => button("operations").click());
+    act(() => button("security").click());
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlockNotice"]'),
+    ).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.panelScroll"]')
+        ?.textContent,
+    ).toContain("remoteDesktop.credentialUnlockUnavailable");
+  });
   it("does not reuse Mac eligibility when the route changes to another host", async () => {
     await connect();
     expect(fixture.getHost()).toBe("darwin");
@@ -3793,6 +4062,28 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
     expect(host.textContent).toContain("remoteDesktop.backgroundDisconnected");
   });
+  // Unit regression: a missing heartbeat reply must not block renewal beyond the
+  // host's 12s lease. Existing cases rejected immediately; here the mock waits
+  // for the timeout the real mobile transport resolves for this request.
+  it("renews before the host lease expires when a heartbeat reply is missing", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    let heartbeats = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      if (args[2][0].op === "heartbeat" && ++heartbeats === 1) {
+        return new Promise((_, reject) => setTimeout(
+          () => reject({ code: "INVOKE_TIMEOUT" }),
+          resolveMobileInvokeTimeoutMs(args[1], args[2]) ?? 30_000,
+        ));
+      }
+      return original(...args);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(11_000));
+    expect(heartbeats).toBeGreaterThanOrEqual(2);
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+  });
+
   it("keeps the host idle clock alive during a transient protected reconnect", async () => {
     fixture.idleSupported = true;
     await connect();
@@ -7080,6 +7371,7 @@ describe("live screen controls", () => {
   const open = async (
     page = <RemoteDesktopScreen />,
     buttons = screen.buttons,
+    firstFrame = true,
   ) => {
     act(() => root.unmount());
     fixture.liveScreen = `${screen.plugin}|${screen.id}`;
@@ -7096,7 +7388,10 @@ describe("live screen controls", () => {
     });
     root = createRoot(host);
     act(() => root.render(page));
-    await connect();
+    if (firstFrame) await connect();
+    else await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
     await act(async () => {});
   };
   const control = (testID: string) =>
@@ -7115,6 +7410,20 @@ describe("live screen controls", () => {
         .click(),
     );
   };
+
+  // Regression: a plugin screen without a first frame had no visible Back.
+  // Existing live-screen tests only exercised controls after opening (unit tier).
+  it("keeps an exit and identifies the device screen until its first frame", async () => {
+    await open(undefined, undefined, false);
+    expect(control("remoteDesktop.backPosition")).not.toBeNull();
+    expect(host.textContent).toContain("remoteDesktop.liveScreenConnecting");
+    act(() =>
+      fixture.message!({
+        nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' },
+      }),
+    );
+    expect(control("remoteDesktop.backPosition")).toBeNull();
+  });
 
   it("tells a reloaded viewer again that fingers touch the device", async () => {
     await open();

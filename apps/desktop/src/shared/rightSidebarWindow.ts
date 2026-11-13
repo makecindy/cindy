@@ -41,12 +41,15 @@ export interface RsbWindowContext {
 
 /** main → 子窗口的命令推送(如主窗终端快捷键转发 / detached RSB 内定位文件)。 */
 export type RsbWindowCommand =
-  | { type: 'open-routines-tab'; sessionId: string; botId: string }
+  /** Global named pages have no task identity; activate them in the sidebar host. */
+  | { type: 'open-plugin-view'; instanceId: string; resourceViewId: string; resourceInput?: Record<string, unknown> }
   /** 打开 / 聚焦插件任务页(taskView):instanceId 是已装插件实例的存储键。 */
   | {
       type: 'open-plugin-task';
       sessionId: string;
       instanceId: string;
+      resourceViewId?: string;
+      resourceInput?: Record<string, unknown>;
       /** Main 从路由请求写入的来源；缺省为被动，仅用于保留选中与焦点语义。 */
       userInitiated?: boolean;
     }

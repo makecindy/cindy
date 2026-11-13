@@ -26,6 +26,8 @@ export interface ExtraDirsButtonProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   panel: ReactNode;
+  /** 传给 MorphPopover 的内容高度上限。新建任务页用它挡住 logo 和 worktree chips。 */
+  maxContentHeight?: number;
   disabled?: boolean;
   dense?: boolean;
   visualVariant?: 'default' | 'create-agent';
@@ -41,6 +43,8 @@ export function ExtraDirsButton({
   open,
   onOpenChange,
   panel,
+  // 默认聊天沿用建议面板原来的 400px 上限；新建任务页可传更小值。
+  maxContentHeight = 400,
   disabled,
   dense = false,
   visualVariant = 'default',
@@ -54,6 +58,7 @@ export function ExtraDirsButton({
       open={open}
       onOpenChange={onOpenChange}
       panelWidth={480}
+      maxContentHeight={maxContentHeight}
       panelClassName="p-0"
       panelAriaLabel={t('extraDirs.menuAria')}
       wrapperClassName="shrink-0"
@@ -72,13 +77,11 @@ export function ExtraDirsButton({
             data-composer-suggestion-trigger
             className={cn(
               'flex h-[30px] shrink-0 items-center rounded-full border border-transparent',
-              'bg-transparent text-[var(--composer-pill-icon,#3C3F43)]',
-              'transition-colors dark:text-[var(--composer-pill-icon,#D9D9D9)]',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)]',
-              'dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+              'bg-transparent text-[var(--composer-pill-icon)] transition-colors',
+              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
               'disabled:cursor-not-allowed disabled:opacity-50',
               open &&
-                'border-[var(--border-default)] bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
+                'border-[var(--border-default)] bg-[var(--composer-pill-bg)]',
               count > 0 && hasReferenceDirs
                 ? 'min-w-max justify-center gap-1 px-2.5'
                 : 'w-[30px] justify-center p-0',

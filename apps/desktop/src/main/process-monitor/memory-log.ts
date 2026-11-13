@@ -31,8 +31,15 @@ const MB = 1024 * 1024;
 
 const toMb = (bytes: number): number => Math.round(bytes / MB);
 
+/** 进程表之外的计数类诊断(如存活的 MCP 会话数);只允许整数,保持本行可上报。 */
+export type MemoryLogCounters = Readonly<Record<string, number>>;
+
 /** 把一次采样格式化成一行日志正文。 */
-export function formatMemorySample(main: MainMemoryUsage, metrics: readonly MemoryLogMetric[]): string {
+export function formatMemorySample(
+  main: MainMemoryUsage,
+  metrics: readonly MemoryLogMetric[],
+  counters: MemoryLogCounters = {},
+): string {
   const byType = new Map<string, number[]>();
   let totalKb = 0;
   for (const m of metrics) {
@@ -48,13 +55,16 @@ export function formatMemorySample(main: MainMemoryUsage, metrics: readonly Memo
   return (
     `sample main{rss=${toMb(main.rss)} heapUsed=${toMb(main.heapUsed)} heapTotal=${toMb(main.heapTotal)} ` +
     `external=${toMb(main.external)} arrayBuffers=${toMb(main.arrayBuffers)}} ` +
-    `processes=${metrics.length} total=${Math.round(totalKb / 1024)} ${groups} (MB)`
+    `processes=${metrics.length} total=${Math.round(totalKb / 1024)} ` +
+    Object.entries(counters).map(([key, value]) => `${key}=${Math.round(value)} `).join('') +
+    `${groups} (MB)`
   );
 }
 
 export interface MemoryLogDeps {
   getMetrics(): readonly MemoryLogMetric[];
   memoryUsage(): MainMemoryUsage;
+  counters?(): MemoryLogCounters;
   log: { info(message: string): void; warn(message: string, meta?: Record<string, unknown>): void };
   intervalMs: number;
 }
@@ -63,7 +73,7 @@ export interface MemoryLogDeps {
 export function startMemoryLog(deps: MemoryLogDeps): () => void {
   const timer = setInterval(() => {
     try {
-      deps.log.info(formatMemorySample(deps.memoryUsage(), deps.getMetrics()));
+      deps.log.info(formatMemorySample(deps.memoryUsage(), deps.getMetrics(), deps.counters?.()));
     } catch (err) {
       deps.log.warn('memory sample failed', { error: err instanceof Error ? err.message : String(err) });
     }

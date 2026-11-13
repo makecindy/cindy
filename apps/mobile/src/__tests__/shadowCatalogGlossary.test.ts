@@ -19,9 +19,11 @@ import { FULL_ACCESS_CONFIRMATION_COPY } from "@/session/fullAccessConfirmationC
 import {
   ELLIPSIS_LOCALES,
   HALFWIDTH_PUNCT_LOCALES,
+  auditEnglishCopy,
   findCaseMismatch,
   findHalfWidthPunct,
   hasAsciiEllipsis,
+  makeEnglishCopyExemptChecker,
   makeExemptChecker,
   occursIn,
   normalizeForPunctuation,
@@ -49,8 +51,32 @@ const glossary = JSON.parse(
   locales: string[];
   sourceLocale: string;
   punctuationExempt?: string[];
+  englishCopyExempt?: Record<string, string[]>;
   terms: GlossaryTerm[];
 };
+
+/**
+ * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时这些手写 catalog 的既有问题,指纹为
+ * `key\trule\t命中次数\t文案摘要`(与根门禁 baseline 同口径,见 auditEnglishCopy)。
+ * 只减不增:修好一条就删一条,新增违规直接失败。
+ */
+const KNOWN_ENGLISH_COPY_ISSUES: readonly string[] = [
+  "mobile/authErrorMessages:CAPTCHA_INVALID\ten-please\tplease×1\t2239888f2752",
+  "mobile/authErrorMessages:CAPTCHA_REQUIRED\ten-please\tplease×1\te13f3f7e2c9d",
+  "mobile/authErrorMessages:CAPTCHA_UNAVAILABLE\ten-please\tplease×1\t4001474bda5c",
+  "mobile/authErrorMessages:INVALID_AUTH_CODE\ten-please\tplease×1\t07176ea9e991",
+  "mobile/authErrorMessages:INVALID_BIND_TICKET\ten-please\tplease×1\t096990e5a167",
+  "mobile/authErrorMessages:INVALID_LOGIN_TICKET\ten-please\tplease×1\tafefe4a80055",
+  "mobile/authErrorMessages:INVALID_PARAMS\ten-please\tplease×1\t933aea06f050",
+  "mobile/authErrorMessages:RATE_LIMITED\ten-please\tplease×1\td1de3635fd27",
+  "mobile/authErrorMessages:REQUEST_TIMEOUT\ten-please\tplease×1\t0cd6b7ea0693",
+  "mobile/authErrorMessages:STATE_MISMATCH\ten-please\tplease×1\t0912b0fa87d3",
+  "mobile/loginMessages:errorFallback\ten-please\tplease×1\t451642148e0a",
+  "mobile/loginMessages:invalidEmail\ten-please\tplease×1\tb00f7e3ae5e8",
+  "mobile/loginMessages:invalidPhone\ten-please\tplease×1\td5d64643417d",
+  "mobile/loginMessages:orgDetected\ten-straight-quote\t\"×2\t41e7b1ffaa6b",
+  "mobile/loginMessages:ssoOrgDetected\ten-straight-quote\t\"×2\t8ada013c7603",
+];
 
 /**
  * 把影子 catalog 摊平成 (source, locale, key, value)。
@@ -241,5 +267,18 @@ describe("影子 catalog 术语一致性", () => {
       violations,
       `影子 catalog 标点不规范:\n${violations.join("\n")}`,
     ).toEqual([]);
+  });
+
+  it("英文写法符合 DESIGN.md §11.1 / §11.2", () => {
+    // 根门禁只读 locale JSON,登录页等手写 catalog 的英文写法规则由这里把关,豁免与根门禁同源。
+    const { added, stale } = auditEnglishCopy(
+      entries.filter((e) => e.locale === glossary.sourceLocale),
+      {
+        isExempt: makeEnglishCopyExemptChecker(glossary.englishCopyExempt),
+        known: KNOWN_ENGLISH_COPY_ISSUES,
+      },
+    );
+    expect(added, `影子 catalog 英文写法违规:\n${added.join("\n")}`).toEqual([]);
+    expect(stale, "已修好的英文写法存量请从清单删除").toEqual([]);
   });
 });

@@ -14,6 +14,7 @@
  * 渠道失败提示, 不静默换模型。
  */
 
+import { imText } from './imText';
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
@@ -53,7 +54,7 @@ export function captureChannelAccount(): () => void {
   const owner = getCurrentDbClientSnapshot();
   return () => {
     if (!owner || getCurrentDbClientSnapshot() !== owner) {
-      throw new Error('账号已变化，请重新新建任务');
+      throw new Error(imText('imBot.text.shared.session.accountChanged'));
     }
   };
 }

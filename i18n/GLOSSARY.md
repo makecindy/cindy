@@ -31,6 +31,7 @@
 | **Author** | 作者 | 作者 | 作成者 | 작성자 | auteur | Autor | Autor | Autor | Autor | 作者 | 作者 | zh-CN: 提交者（仅当英文含 Author）；zh-CN: 提出者（仅当英文含 Author）；zh-TW: 提交者（仅当英文含 Author）；zh-TW: 提出者（仅当英文含 Author） |
 | **Automation** | 自动化 | 自動化 | 自動化 | 자동화 | automatisation | Automatización | Automatisierung | Automatização | Automação | 自運 | 自运 | ja: オートメーション；ko: 오토메이션 |
 | **Balance** | 余额 | 餘額 | 残高 | 잔액 | solde | Saldo | Guthaben | Saldo | Saldo | 餘資 | 余资 | zh-CN: 额度（仅当英文含 Balance）；zh-TW: 額度（仅当英文含 Balance） |
+| **Discover Buddies** | 发现伙伴 | 發現夥伴 | 仲間を探す | 동반자 찾기 | Découvrir des amis | Descubrir amigos | Freunde entdecken | Descobrir amigos | Descobrir amigos | 訪同伴 | 访同伴 | — |
 | **Chat** | 对话 | 對話 | チャット | 채팅 | conversation | Conversación | `Chat`（保留英文） | Conversa | Conversa | 言談 | 言谈 | zh-CN: 聊天；zh-TW: 聊天；zh-Hant-x-lzh: 聊天；zh-Hans-x-lzh: 聊天 |
 | **Collaboration** | 协同 | 協同 | 協同 | 협업 | collaboration | Colaboración | Zusammenarbeit | Colaboração | Colaboração | 協同 | 协同 | zh-CN: 协作（仅当英文含 Collaboration）；zh-TW: 協作（仅当英文含 Collaboration） |
 | **Collapse** | 收起 | 收起 | 折りたたむ | 접기 | Réduire | Contraer | Einklappen | Recolher | Recolher | 收 | 收 | zh-CN: 折叠（仅当英文含 Collapse）；zh-TW: 折疊（仅当英文含 Collapse） |
@@ -52,6 +53,7 @@
 | **SkillHub** | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | ja: スキルハブ；ko: 스킬 허브 |
 | **Subagent** | `Subagent`（保留英文） | `Subagent`（保留英文） | サブエージェント | 하위 에이전트 | sous-Agent | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | zh-CN: 代理（仅当英文含 Subagent）；zh-TW: 代理（仅当英文含 Subagent）；zh-Hant-x-lzh: 代理（仅当英文含 Subagent）；zh-Hans-x-lzh: 代理（仅当英文含 Subagent） |
 | **Task** | 任务 | 任務 | タスク | 작업 | tâche | Tarea | Aufgabe | Tarefa | Tarefa | 差事 | 差事 | — |
+| **Buddy** | 伙伴 | 夥伴 | 仲間 | 동반자 | Ami | Amigo | Freund | Amigo | Amigo | 同伴 | 同伴 | — |
 | **Thread** | 任务 | 任務 | スレッド | 스레드 | fil | Hilo | `Thread`（保留英文） | Tópico | Tópico | 話題 | 话题 | zh-CN: 线程；zh-TW: 執行緒 |
 | **Turn** | 轮 | 輪 | ターン | 턴 | tour | Turno | Runde | Turno | Turno | 輪 | 轮 | — |
 | **Usage** | 用量 | 用量 | 使用量 | 사용량 | consommation | Uso | Nutzung | Utilização | Uso | 耗用 | 耗用 | zh-CN: 使用情况；zh-CN: 使用表现；zh-TW: 使用情況；zh-TW: 使用表現；ja: 使用状況；ja: 利用状況；ko: 사용 현황 |
@@ -65,6 +67,11 @@
 
 | 英文 | 语言 | 译法 | 什么场合 |
 | --- | --- | --- | --- |
+| **Active** | fr | actif | 默认 |
+| Active | fr | Actif | 标题或状态标签使用大写首字母。 |
+| Active | fr | active | 阴性名词使用 active / actives，阳性复数 actifs 已包含标准词干。 |
+| **Active** | de | Aktiv | 默认 |
+| Active | de | aktiv | 句中形容词使用小写，并按性、数、格变为 aktive / aktiven 等。 |
 | **Active** | zh-CN | 活跃 | 默认 |
 | Active | zh-CN | 生效中 | 计费语境（"no active subscription"→没有生效中的订阅），指订阅状态而非活跃度 |
 | **Active** | zh-TW | 活躍 | 默认 |
@@ -227,6 +234,18 @@
 | Task | pt-PT | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Task** | pt-BR | Tarefa | 默认 |
 | Task | pt-BR | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Buddy** | fr | Ami | 默认 |
+| Buddy | fr | ami | 句中使用小写首字母。 |
+| Buddy | fr | amis | 按语法使用复数形式。 |
+| **Buddy** | es | Amigo | 默认 |
+| Buddy | es | amigo | 句中使用小写首字母。 |
+| Buddy | es | amigos | 按语法使用复数形式。 |
+| **Buddy** | pt-PT | Amigo | 默认 |
+| Buddy | pt-PT | amigo | 句中使用小写首字母。 |
+| Buddy | pt-PT | amigos | 按语法使用复数形式。 |
+| **Buddy** | pt-BR | Amigo | 默认 |
+| Buddy | pt-BR | amigo | 句中使用小写首字母。 |
+| Buddy | pt-BR | amigos | 按语法使用复数形式。 |
 | **Thread** | zh-CN | 任务 | 默认 |
 | Thread | zh-CN | thread | 指 Codex 的 thread 这一外部系统概念时（导入历史、thread 上下文），保留英文 |
 | Thread | zh-CN | 评论 | 指 GitHub PR 的 review thread 时，用「review 评论」 |
@@ -276,6 +295,7 @@
 - **Automation** — scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。
   - 豁免范围：`desktop:settings.contacts.import.permissionDenied`、`desktop:settings.contacts.ipcError.PERMISSION_DENIED`
 - **Balance** — 账户余额用「余额」。原先被并入「额度」（可用额度 / 额度更新于 / 剩余额度），与 Credits、Quota 混同。Balance 是「账上还剩多少」，Credits 是「可购买消耗的计数单位」，Quota 是「周期内上限」——三者是不同层面的量，中文必须分开。
+- **Discover Buddies** — 预制伙伴目录与邀请入口；使用 Buddy 对应的本地化产品术语。
 - **Chat** — Chat 专指任务内人与 AI 交流的过程与内容（对话区 / 对话正文 / 对话记录 / 继续对话），中文「对话」。指那个可打开可删除的条目时用 Session（中文「任务」）——此前 Chat 与 Session 混用同一个中文词的问题已随 2026-07-31 的改名解决：英文侧指容器的 Chat 已改为 Session。「聊天」一律禁用。ja / ko 保留各自既有译法。
 - **Collaboration** — Orca 多 Agent 功能名，中文用「协同」（现状 21:2）。可见 bug：设置导航项写「协作」，点进去页面标题写「协同」。条件禁用：settings.contacts 里的「协作经历」是 collaboration history，属另一个语义，英文源不含独立 Collaboration 一词时不判违规。
   - 豁免范围：`desktop:settings.contacts.`
@@ -303,6 +323,7 @@
 - **SkillHub** — 产品名，五语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。
 - **Subagent** — Agent 的派生概念，中文跟随 Agent 保留英文原词，不译「子代理」。「代理」在此条下按 whenEn=Subagent 登记：同一个中文词在 Agent / Subagent / Proxy 三处各有来源，只有按英文源区分，自动替换才知道该换成哪个词。ja / ko 沿用既有音译。
 - **Task** — 指 Agent 正在执行的一件活，与 Session（也叫「任务」）同名。**同一句里同时出现两者时必须消解歧义**：task 一侧优先动词化（"当前任务正在运行" / "执行完成"），确需名词时用「执行」或「作业」——"当前任务正在执行任务" 这类写法一律不可接受。不同句、语境清晰时沿用「任务」（现状 104 处）。定时任务（Schedule）与后台作业各有限定词，不歧义。判定规则见 docs/product-rules/task-and-conversation-naming.md §3。
+- **Buddy** — Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。
 - **Thread** — 按语境分四类：①指产品内那个条目 → 跟随 session 叫「任务」（2026-07-31 随 session 改名一并更新）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 "persistent work thread" → 改写为「持续推进的工作」。「线程」一律禁用。
 - **Turn** — 一次提问到一次回答结束。**内部概念，不作为界面术语**：面向用户一律说「消息」，只在确实要强调一次完整往返时说「一轮」（如「上一轮」）。不要引入「轮次」作为界面用词。
 - **Usage** — 中文用「用量」（现状 37:6 压倒性）。「使用情况」「使用表现」是同义漂移，禁用。注意 usage 在英文里也有「用法」义（如 CLI usage），那属于另一个概念，不在本条约束范围。豁免遥测说明两处:那里的 usage 指「启动与留存情况」这类使用行为,不是计费口径的用量指标。硬套成「用量」会写出「启动与留存用量」这种不通的话——zh-CN 用的是「留存情况」+「使用环境」,ja/ko 的「継続利用状況」「지속 사용 현황」同理。
@@ -325,6 +346,14 @@
 ### Additional fees
 
 任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。
+
+### Agent-Net
+
+端到端加密的 V2 设备链路名称；各语言保留品牌拼写。拓扑只在已协商的实际连接上标注。
+
+### Agent network
+
+agent-net 的产品名：所有用 Cindy 登录的 App 和硬件组成的互联网络。代码与文档里的 agent-net 是工程名，不出现在 UI 文案。
 
 ### Agent Notch
 
@@ -360,11 +389,7 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 ### At a glance
 
-伙伴聊天头部网格按钮打开的浮层：电脑、待办、输出内容三块（docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
-
-### Discover Teammates
-
-预制伙伴目录与邀请入口，仅 Desktop。入口菜单项与弹窗标题同用 bots.market.heading，不再另设英文品牌名 Bot Market；英文句中小写 teammates（Discover teammates 作动作时），作功能名保持 Discover Teammates。
+伙伴聊天头部网格按钮打开的浮层：电脑、近期任务、输出内容三块（2026-11-08 起待办块随伙伴 V2 移除；docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
 
 ### reply (the bot's public post on X)
 
@@ -442,6 +467,18 @@ Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一
 
 本机应用临时连接的端点定位文本，不是授权令牌；连接仍需目标 Cindy 原生确认。
 
+### Latency
+
+远程连接拓扑与浮层里的往返时间（ms）。
+
+### Direct
+
+远程连接拓扑里两台设备之间的数据路径不经中转。只用于路径，不用于「电脑直连」（remote-desktop-direct）那种连接方式名。
+
+### Via relay
+
+远程连接拓扑里两台设备之间的数据经中转服务转发。与「中转服务」（self-hosted-relay-service）是同一个「中转」。
+
 ### Content Update
 
 指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。
@@ -473,6 +510,10 @@ device-link 里「可以选择在哪台机器上运行」这一维度，两端�
 ### Device Code
 
 OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
+
+### Device Link
+
+兼容设备所用的旧版链路名称；与 Agent-Net 的协议标识并列，直连或经中转另行展示。
 
 ### Device Simulator
 
@@ -510,9 +551,17 @@ Irreversible group termination, distinct from archive, leave and personal list r
 
 官方飞书 / Lark 机器人关联时的一次性短码：网页授权不可用的用户把它私聊发给机器人完成关联，只在关联进行中出现，过期作废，不是密钥。与供应商分享的「配对码」(Pairing Code)、本机应用的「连接码」(Connection code) 是不同概念；ko 取「연동 코드」以免与「연결 코드」(Connection code) 撞名。
 
+### Organization app
+
+飞书应用类型标识，供组织切换提示识别新旧机器人；不同于 Cindy 个人/组织身份。用户确认不展示 App ID。
+
+### Store app
+
+飞书应用类型标识，供组织切换提示识别新旧机器人；不同于 Cindy 个人/组织身份。用户确认不展示 App ID。
+
 ### Follow Up on All Sessions
 
-伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。
 
 ### MR
 
@@ -525,6 +574,10 @@ GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 G
 ### Group chat
 
 伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
+
+### Group Cindy
+
+每个服务器群自带的那位 Cindy 成员（docs/product-rules/bot-group-chat.md 第 9 节，2026-11-12）：谁 @ 它就在谁自己的电脑上替他做事，不属于任何人，也不是个人伙伴。名字各语言都叫 Cindy，群管理开关与说明里用这个称呼；不叫「群助手」「群伙伴」「默认伙伴」。先登记为 proposed，等 UI 走查后再定。
 
 ### Main Chat
 
@@ -658,6 +711,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。
 
+### Model Group
+
+用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一条条「路线」（几个来源加一种选法，可选推理强度，英文 Route；2026-11-11 原「模式」并入路线）；这个词只在模型组语境下这样用，不约束网络路由等其它语境。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。
+
 ### Model ID
 
 用户确认并公开提交 Issue 时展示本轮在 Cindy 中冻结的模型标识。五语暂统一保留技术名称 Model ID，避免与可翻译的模型显示名混淆。
@@ -674,13 +731,17 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 当前登录账号向公开市场发布插件、查看发布情况与发布记录的页面，个人和组织成员均可使用；区别于本机已安装插件和旧企业我的发布。
 
+### New connection view
+
+「远程连接」页里切换到拓扑形态的开关名；按设备保存、默认关。
+
 ### New project location
 
 存储设置名称（#8259）：在任务里「新建项目…」时项目文件夹的上级目录。未设置时按已登记项目最常见的父目录推荐，否则为 ~/Projects。与「对话工作区」（不绑项目任务的工作目录分配位置）是两个设置。
 
 ### Nightly learning
 
-伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
 
 ### Not signed in
 
@@ -733,6 +794,10 @@ WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Micros
 ### Publish anonymously
 
 个人插件的公开署名开关，默认开启，原作者可随时修改；不改变固定账号归属，关闭后展示提审时保存的昵称。
+
+### Community
+
+插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。
 
 ### Main view
 
@@ -872,11 +937,11 @@ Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改�
 
 ### Routine
 
-伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。
+伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。2026-11-08 起伙伴 V2 的定时工作改为项目里的普通自动化，例行任务的管理界面已下线；条目保留以核对存量文案与 V1 运行任务的历史显示，新文案用「自动化」。
 
 ### Trigger
 
-例行任务的时间或事件触发条件。
+例行任务的时间或事件触发条件（例行任务 2026-11-08 起随伙伴 V2 下线，见 Routine 条目）。
 
 ### Run records
 
@@ -932,21 +997,17 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 
 任务列表的 Finder 式颜色标签；仅标识任务，不改变运行状态。用户已确认显示为重叠色球，整合现有任务菜单，当前不增加筛选入口。
 
-### Teammate
-
-Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。
-
 ### Core skill
 
-伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。
+伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」；2026-11-08 起 V2 伙伴的主人对话不再挂载它）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。
 
 ### System skills
 
-伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。
 
 ### Todo
 
-伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。V2 把未完成事项写进伙伴项目的 CARRYOVER.md；旧消息里的 Todo 引用照常渲染。
 
 ### Terms of Service
 

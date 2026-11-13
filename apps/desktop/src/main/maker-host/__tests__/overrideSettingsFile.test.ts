@@ -198,7 +198,7 @@ describe('createOverrideSettingsFile', () => {
       fs.writeFileSync(file, JSON.stringify({ enabled: false }), 'utf-8');
       store.readState();
       expect(statSync).toHaveBeenCalledTimes(1);
-      expect(statSync).toHaveBeenCalledWith(file);
+      expect(statSync).toHaveBeenCalledWith(file, { bigint: true });
     } finally {
       statSync.mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });

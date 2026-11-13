@@ -48,6 +48,12 @@ describe('Bot profile deletion transaction', () => {
         bot_id TEXT NOT NULL REFERENCES bot_profiles(id) ON DELETE CASCADE,
         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE
       );
+      CREATE TABLE mcp_app_view_states (
+        message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+        state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
+      );
       CREATE TABLE messages (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -255,6 +261,32 @@ describe('Bot profile deletion transaction', () => {
     ]);
     expect(snapshot().bot_direct_message_threads).toEqual(before.bot_direct_message_threads);
     expect(snapshot().bot_direct_messages).toEqual(before.bot_direct_messages);
+  });
+
+  // Tier: behavior. Deleting a teammate left the tasks in its project (automation runs, tasks it opened
+  // there) in the task list under a project that no longer exists (2026-11-10).
+  it.each([true, false])('applies the keep-or-delete choice to the teammate project tasks (keep=%s)', async (keepTaskHistory) => {
+    sqlite.exec(`INSERT INTO sessions VALUES ('project-run', 'scheduler', 'active', 1), ('project-gone', 'desktop', 'deleted', 1)`);
+    // DB behavior: profile deletion must remove drafts only for tasks it deletes,
+    // including hidden group lanes even when ordinary history is kept.
+    sqlite.exec("ALTER TABLE bot_session_links ADD COLUMN role TEXT; UPDATE bot_session_links SET role='group' WHERE session_id='route'");
+    for (const sessionId of ['canonical', 'route', 'project-run', 'ordinary']) {
+      sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?)').run('card-' + sessionId, sessionId, '{}');
+      sqlite.prepare('INSERT INTO mcp_app_view_states VALUES (?, ?, ?, ?, NULL, ?, ?)')
+        .run('card-' + sessionId, sessionId, 'fixture', 'revision', '{"draft":"saved"}', 17);
+    }
+    await commitBotProfileDeletion({
+      botId: 'bot-1', sessionIds: ['canonical', 'route'], keepTaskHistory, projectSessionIds: ['project-run', 'project-gone', 'canonical'],
+    });
+    expect(sqlite.prepare('SELECT session_id FROM mcp_app_view_states ORDER BY session_id').pluck().all())
+      .toEqual(keepTaskHistory ? ['canonical', 'ordinary', 'project-run'] : ['ordinary']);
+    const status = keepTaskHistory ? 'archived' : 'deleted';
+    expect(sqlite.prepare("SELECT id, source, status FROM sessions WHERE id IN ('project-run', 'project-gone', 'ordinary') ORDER BY id").all())
+      .toEqual([
+        { id: 'ordinary', source: 'desktop', status: 'active' },
+        { id: 'project-gone', source: 'desktop', status: 'deleted' },
+        { id: 'project-run', source: 'scheduler', status },
+      ]);
   });
 
   it('deletes a Profile that has no task yet', async () => {

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { areAllTaskPrsMerged, prStatusKey } from '@/lib/prStatus';
 import type { SessionPrRef, PrStatusResult } from '@/lib/gitContext.types';
+import { enableGhostCardTaskAutoArchive, setGhostCardTaskAutoArchiveArmed, getGhostCardTaskAutoArchiveState, cancelGhostCardTaskAutoArchive } from '../ghostCardTaskArchive';
 import { fillGhostCardPrStatus, fillGhostCardTaskAutoArchiveHint, readPrStatusSlotKey } from '../ghostCardPrStatus';
 
 // Unit: the PR card's check strip was a snapshot from the agent's last pr_card call and could
@@ -90,23 +91,43 @@ describe('fillGhostCardPrStatus', () => {
     expect(el.style.display).toBe('inline-flex');
   });
 
-  // Rule (2026-11-06): while auto-archive is pending the card says so next to the revealed button and
-  // offers a host-owned cancel; once it is no longer pending the hint goes away.
-  it('shows the pending auto-archive hint with a cancel next to the revealed archive button', () => {
+  // Unit regression (2026-11-08): cancellation previously erased all feedback. Exercise the
+  // real state + DOM entry with one eligible card; retain the cancelled result across refreshes,
+  // then clear it when eligibility ends (the previous test only asserted removal).
+  it('distinguishes pending, cancelled and inactive archive states across card refreshes', () => {
     document.body.innerHTML = '<div><button data-ghost-task-archive="Octo/Repo#9" data-ghost-task-archive-auto style="display:none"></button></div>';
     fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t, true);
-    const onCancel = vi.fn();
-    const labels = { pending: 'Archives when you leave', cancel: 'Keep this time' };
-    fillGhostCardTaskAutoArchiveHint(document, true, labels, onCancel);
-    fillGhostCardTaskAutoArchiveHint(document, true, labels, onCancel);
-    const hint = document.querySelectorAll('[data-x-auto-archive-hint]');
-    expect(hint).toHaveLength(1);
-    expect(hint[0].nextElementSibling?.hasAttribute('data-ghost-task-archive')).toBe(true);
-    expect(hint[0].textContent).toBe('Archives when you leave · Keep this time');
-    hint[0].querySelector('button')!.click();
-    expect(onCancel).toHaveBeenCalledTimes(1);
-    fillGhostCardTaskAutoArchiveHint(document, false, labels, onCancel);
-    expect(document.querySelector('[data-x-auto-archive-hint]')).toBeNull();
+    const id = 'archive-hint-regression';
+    const disable = enableGhostCardTaskAutoArchive(id);
+    setGhostCardTaskAutoArchiveArmed(id, 'card', true);
+    const onCancel = vi.fn(() => cancelGhostCardTaskAutoArchive(id));
+    const labels = { pending: 'Archives when you leave', cancel: 'Cancel', cancelled: 'Will not auto-archive this time' };
+    const render = () => fillGhostCardTaskAutoArchiveHint(document, getGhostCardTaskAutoArchiveState(id), labels, onCancel);
+    try {
+      render();
+      render();
+      const hints = document.querySelectorAll('[data-x-auto-archive-hint]');
+      expect(hints).toHaveLength(1);
+      expect(hints[0].nextElementSibling?.getAttribute('aria-label')).toBe('taskArchiveNow');
+      expect(hints[0].textContent).toBe('Archives when you leaveCancel');
+      hints[0].querySelector('button')!.click();
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      render();
+      render();
+      const cancelled = document.querySelector('[data-x-auto-archive-hint]')!;
+      expect(cancelled.textContent).toBe(labels.cancelled);
+      expect(cancelled.querySelector('button')).toBeNull();
+      expect(document.querySelector<HTMLElement>('[data-ghost-task-archive]')!.style.display).toBe('inline-flex');
+      setGhostCardTaskAutoArchiveArmed(id, 'card', false);
+      render();
+      expect(document.querySelector('[data-x-auto-archive-hint]')).toBeNull();
+      setGhostCardTaskAutoArchiveArmed(id, 'card', true);
+      render();
+      expect(document.querySelector('[data-x-auto-archive-hint] button')?.textContent).toBe('Cancel');
+    } finally {
+      setGhostCardTaskAutoArchiveArmed(id, 'card', false);
+      disable();
+    }
   });
 
   it('puts the plugin snapshot back when the live status later disappears', () => {

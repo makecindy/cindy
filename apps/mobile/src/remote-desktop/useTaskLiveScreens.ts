@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  LIVE_SCREEN_ID,
-  LIVE_SCREEN_PLATFORMS,
-  LIVE_SCREEN_PLUGIN_ID,
   REMOTE_DESKTOP_CHANNEL,
+  taskLiveScreens,
   type RemoteDesktopCapabilities,
   type RemoteLiveScreen,
 } from "@cindy/device-link";
@@ -11,29 +9,7 @@ import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 
 const REFRESH_MS = 15_000;
 
-/** Running screens the computer's plugins have bound to this task; untrusted shapes are dropped. */
-export function taskLiveScreens(
-  value: unknown,
-  sessionId: string,
-): RemoteLiveScreen[] {
-  const list = (value as { screens?: unknown } | null)?.screens;
-  if (!Array.isArray(list)) return [];
-  return list.filter(
-    (item): item is RemoteLiveScreen =>
-      !!item &&
-      typeof item === "object" &&
-      typeof item.plugin === "string" &&
-      LIVE_SCREEN_PLUGIN_ID.test(item.plugin) &&
-      typeof item.id === "string" &&
-      LIVE_SCREEN_ID.test(item.id) &&
-      typeof item.name === "string" &&
-      typeof item.pluginName === "string" &&
-      LIVE_SCREEN_PLATFORMS.includes(item.platform) &&
-      item.state === "running" &&
-      Array.isArray(item.taskIds) &&
-      item.taskIds.includes(sessionId),
-  );
-}
+export { taskLiveScreens };
 
 /**
  * Plugin live screens (such as simulators) of this task on its computer, for

@@ -10,6 +10,8 @@ const runtime = vi.hoisted(() => ({
   listeners: new Map<string, (event: { value: number }) => void>(),
   removed: vi.fn(), stopped: vi.fn(), close: vi.fn(), reset: vi.fn(),
 }));
+// Keep the UI-to-JS bridge at the native boundary, like the other row fixtures.
+vi.mock('react-native-reanimated', () => ({ runOnJS: (fn: unknown) => fn }));
 vi.mock('react-native', async () => {
   const { createElement: el } = await import('react');
   const View = ({ children }: { children?: ReactNode }) => el('div', null, children);
@@ -21,7 +23,7 @@ vi.mock('react-native', async () => {
   const node = { interpolate: () => node };
   return {
     View, Pressable: ({ children, testID }: any) => el('button', { 'data-testid': testID }, children),
-    StyleSheet: { create: (value: unknown) => value }, useWindowDimensions: () => ({ width: 400 }),
+    StyleSheet: { create: (value: unknown) => value }, Dimensions: { get: () => ({ width: 400 }), addEventListener: () => ({ remove() {} }) },
     Animated: { Value, View, add: () => node, divide: () => node, multiply: () => node,
       subtract: () => node, timing: () => ({ start() {} }) },
   };
