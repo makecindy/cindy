@@ -382,8 +382,10 @@ export function MainLayout() {
       const nextCollapsed = hasInitialCollapsed
         ? opts.initialCollapsed === true
         : readCollapsedFor(sessionId);
-      // 标记只在真的落地到目标任务时消费（见下面的会话提交 effect）。这里再消费一次会
-      // 让同任务的普通重声明（如 subagentsAvailable 解析完）提前清掉用户手势。
+      // 来源必须和可见性在同一次更新里提交：LayoutRoot 的子级 layout effect 先跑，
+      // 等父级 effect 再改来源时它已经按上一个任务的来源动过窗口了。consume 只认落地
+      // 到目标任务，同任务的普通重声明（如 subagentsAvailable 解析完）不会吃掉手势。
+      setRightTabsUserToggle(userReveal.consume(sessionId));
       setRightTabsPassiveReveal(hasInitialCollapsed && nextCollapsed === false);
       setIsRightSidebarCollapsed(nextCollapsed);
       setRightTabsRestored(true);
@@ -1034,10 +1036,12 @@ export function MainLayout() {
       userReveal.cancel();
       return;
     }
+    // 这个 effect 只在落地任务真的变了时跑（同任务重声明不改值）。还等着别的任务说明
+    // 这次手势被顶掉了，作废掉，别留给以后。
+    const revealTarget = userReveal.target();
+    if (revealTarget && revealTarget !== rightSidebarSessionId) userReveal.cancel();
     if (!rsbWindow.loaded || rsbDetached) return;
-    // 跨任务用户开栏保留用户来源，其余切任务恢复都按导航处理；标记用完即清。
-    const reveal = userReveal.consume(rightSidebarSessionId);
-    setRightTabsUserToggle(reveal);
+    // 来源已经在 declare 里随可见性一起提交，这里只恢复该任务记住的开合。
     setIsRightSidebarCollapsed(readCollapsedFor(rightSidebarSessionId));
     setRightTabsRestored(true);
   }, [rightSidebarSessionId, rsbDetached, rsbWindow.loaded, userReveal]);
