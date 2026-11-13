@@ -201,6 +201,15 @@ function removeLinkedDatabaseFilesSync(dbPath: string): void {
 }
 
 export class MakerMemoryManager {
+  /** Discover a project-local store without opening SQLite or creating any files. */
+  getProjectMemoryDirectory(scopeKey: string): string | undefined {
+    this.ensureOwnerScope();
+    if (!path.isAbsolute(scopeKey)) return undefined;
+    const dir = this.deps.resolveStorageDir?.(scopeKey, this.resolvedBasePath!);
+    if (!dir) return undefined;
+    const relative = path.relative(scopeKey, dir);
+    return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? dir : undefined;
+  }
   private enabled: boolean;
   private readonly stores = new Map<string, PooledEntry>();
   private readonly logger: Logger;
@@ -647,6 +656,7 @@ export class MakerMemoryManager {
     const store = new MakerMemoryStore({
       storageDir,
       absWorkdir,
+      nativeFileEdits: this.getProjectMemoryDirectory(absWorkdir) !== undefined,
       db,
       logger: this.logger.child(`memory:${sanitized}`),
       ...(this.deps.config ? { config: this.deps.config } : {}),

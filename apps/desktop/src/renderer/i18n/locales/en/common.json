@@ -21451,8 +21451,8 @@
   "modelGroups": {
     "title": "Model groups",
     "description": "Combine sources you already have under Model providers into one choice. Pick it under Model groups in the model picker and Cindy decides which source to use.",
-    "routes": "Routes",
-    "routesDescription": "A route holds several sources. Each new task picks one by the route's rule.",
+    "routes": "Modes",
+    "routesDescription": "A mode holds several sources. Each new task picks one by the mode's rule.",
     "sourceCount_one": "{{count}} source",
     "sourceCount_other": "{{count}} sources",
     "strategy": {
@@ -21474,8 +21474,10 @@
       }
     },
     "picker": {
-      "empty": "No model groups yet. Combine a few sources into a route in Settings to pick it here.",
-      "manage": "Manage model groups"
+      "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
+      "manage": "Manage model groups",
+      "switched": "“{{name}}” switched this task to {{model}}",
+      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
@@ -21487,7 +21489,7 @@
       "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
       "standby": "Not picked this time",
       "standbyQuota": "{{left}}% of its quota is left and does not reset until {{reset}}, so it is kept for later",
-      "off": "Off in this route",
+      "off": "Off in this mode",
       "unavailable": "Not connected, or this model cannot be selected now",
       "limited": "Out of quota",
       "limitedUntil": "Out of quota until {{reset}}",
@@ -21501,10 +21503,10 @@
       "separator": "; "
     },
     "settings": {
-      "newRoute": "New route",
-      "newRouteName": "New route",
-      "routesEmpty": "No routes yet. Create one and add a few sources.",
-      "scopeNote": "Model groups apply to new tasks started on this computer. A source is chosen when the task starts and does not change during the task.",
+      "newRoute": "New mode",
+      "newRouteName": "New mode",
+      "routesEmpty": "No modes yet. Create one and add a few sources.",
+      "scopeNote": "Model groups apply to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
       "back": "Back to model groups",
       "name": "Name",
       "nameHint": "Shown in the model picker.",
@@ -21516,14 +21518,14 @@
       "sources": "Sources it can use",
       "sourcesHint": "Different models can sit together. The task shows which one was used.",
       "sourcesEmpty": "No sources yet. Add a connected model below.",
-      "sourcesFull": "A route can hold up to {{count}} sources.",
+      "sourcesFull": "A mode can hold up to {{count}} sources.",
       "addSource": "Add source",
       "chooseModel": "Choose a model",
       "notConnected": "Not connected",
       "moveUp": "Move up",
       "moveDown": "Move down",
-      "remove": "Remove from this route",
-      "useSource": "Let this route use {{name}}",
+      "remove": "Remove from this mode",
+      "useSource": "Let this mode use {{name}}",
       "try": {
         "title": "Try it",
         "hint": "See which source a new task would use right now. Nothing is sent and no quota is used.",
@@ -21531,11 +21533,11 @@
         "picked": "Use this",
         "standby": "Standby",
         "skipped": "Skipped",
-        "unavailable": "No source in this route can be used right now. A new task will use the model you had selected."
+        "unavailable": "No source in this mode can be used right now. A new task will use the model you had selected."
       },
-      "deleteRoute": "Delete this route",
+      "deleteRoute": "Delete this mode",
       "deleteRouteConfirmTitle": "Delete “{{name}}”?",
-      "deleteRouteConfirmDescription": "Time-of-day exceptions in other routes that switch to it are removed too. Tasks already started are not affected.",
+      "deleteRouteConfirmDescription": "Time-of-day exceptions in other modes that switch to it are removed too. Tasks already started are not affected.",
       "delete": "Delete",
       "cancel": "Cancel",
       "saveFailed": "Could not save. Try again.",
@@ -21556,17 +21558,17 @@
         "addHours": "Add",
         "sameHour": "Start and end cannot be the same time.",
         "full": "Up to {{count}} exceptions.",
-        "needOtherRoute": "Create another route to switch to it by time of day."
+        "needOtherRoute": "Create another mode to switch to it by time of day."
       }
     },
     "overview": {
       "mapTitle": "How new tasks pick a model",
-      "mapDescription": "Left to right: the route a new task takes and the source it lands on. Click a route to change it.",
+      "mapDescription": "Left to right: the mode a new task takes and the source it lands on. Click a mode to change it.",
       "columnSources": "Sources",
       "columnEmpty": "None yet",
-      "openRoute": "Open route “{{name}}”",
+      "openRoute": "Open mode “{{name}}”",
       "recentTitle": "Recent choices",
-      "recentEmpty": "No task has used a route yet.",
+      "recentEmpty": "No task has used a mode yet.",
       "keptOriginal": "Nothing in it was available, so the task kept the model you had chosen.",
       "keptOriginalShort": "Kept your model",
       "latest": "The path the latest task took"
