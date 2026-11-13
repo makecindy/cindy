@@ -46,6 +46,10 @@ describe('teammate learning receipt ownership', () => {
       ]);
       publish.mockClear();
       tracker.observe('s', 'i:2', publish);
+      // Pi compaction writes an internal digest during an otherwise read-only turn.
+      // It is hidden by the memory settings, so it must not create a curated-save receipt.
+      await writeFile(path.join(dir, 'digest_compaction.md'),
+        '---\ntitle: Compaction\ndescription: Internal summary\ntype: digest\n---\nInternal only');
       tracker.seal('s', 'i:2', 'next');
       await read.mock.results[1].value;
       expect(publish).not.toHaveBeenCalled();

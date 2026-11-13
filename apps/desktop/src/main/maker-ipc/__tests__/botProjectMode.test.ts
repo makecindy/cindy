@@ -111,6 +111,31 @@ describe('ensureBotProjectAutomations', () => {
     await expect(fs.stat(database.path)).rejects.toThrow();
   });
 
+  // PR #10294: actual chatServer group dispatches retain the hidden prefix even for
+  // host-attested owner text; attachments serialize it as {text,images,files}. Exercise the
+  // production-generated hook process, not a copy of its predicate (unit, synthetic SQLite).
+  it.each([
+    ['human group text', '[UI_ACTION_TRIGGER]group request', { autoReviewUserText: 'Please review this' }, 0],
+    ['human JSON string', JSON.stringify('[UI_ACTION_TRIGGER]group request'), { autoReviewUserText: 'Please review this' }, 0],
+    ['human group attachments', JSON.stringify({ text: '[UI_ACTION_TRIGGER]group request', images: [], files: [{ path: 'sample.txt' }] }), { autoReviewUserText: 'Please review this' }, 0],
+    ['autonomous attachments', JSON.stringify({ text: '[UI_ACTION_TRIGGER]peer update', images: [], files: [{ path: 'sample.txt' }] }), { autoReviewUserText: '' }, 2],
+    ['autonomous attachments without origin', JSON.stringify({ text: '[UI_ACTION_TRIGGER]peer update', images: [], files: [{ path: 'sample.txt' }] }), null, 2],
+  ] as const)('counts activity correctly for %s', async (_label, content, meta, expectedExit) => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const config = loader.upsertSchedule.mock.calls[0]![1];
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      INSERT INTO bot_session_links VALUES ('bot-1','group');`);
+    const firedAt = Date.now();
+    db.prepare('INSERT INTO messages VALUES (?, ?, NULL, ?, ?, ?)')
+      .run('group', 'user', firedAt - 1, meta === null ? null : JSON.stringify(meta), content);
+    db.close();
+    const result = await executePreRunHook({ ...config.preRunHook!, cwd: workingDir,
+      stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt } });
+    expect(result.exitCode).toBe(expectedExit);
+  });
+
   it('upgrades the supplied review while retaining choices, custom checks and removal', async () => {
     const old = { id: BOT_PROJECT_MEMORY_REVIEW_ID, cronExpr: '0 4 * * *', model: 'chosen',
       prompt: "Look back at Old Name's conversations from the last day (teammate id bot-1) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly." };

@@ -5,6 +5,7 @@ import matter from 'gray-matter';
 import { parseFilename } from '@cindy/maker-core';
 import type { BotLearningReceipt } from '@cindy/maker-shared/bot-learning';
 import { readTeammateMemories, teammateProjectMemoryDir } from './botProjectMemory.js';
+import { BOT_MEMORY_TYPES } from '../../shared/botMemory.js';
 
 /** Host-only feedback: one async baseline at hydration, one scan per tool-using turn's seal.
  * Native files stay the source of truth; no polling, model context or application write tool. */
@@ -21,12 +22,14 @@ export async function createProjectMemoryReceipts(workspace: string) {
     const records = await readTeammateMemories([directory]);
     const result = new Map<string, { hash: string; title: string }>();
     for (const record of records) {
-      if (!parseFilename(record.filename)) continue;
+      const parsed = parseFilename(record.filename);
+      // Match the settings page: Pi's automatic compaction digests are not curated saves.
+      if (!parsed || !BOT_MEMORY_TYPES.some(type => type === parsed.type)) continue;
       try {
         const { data } = matter(record.content);
         if (typeof data.title !== 'string' || !data.title.trim()
           || typeof data.description !== 'string' || !data.description.trim()
-          || data.type !== parseFilename(record.filename)?.type) continue;
+          || data.type !== parsed.type) continue;
         result.set(record.filename, {
           hash: createHash('sha256').update(record.content).digest('hex'), title: data.title,
         });

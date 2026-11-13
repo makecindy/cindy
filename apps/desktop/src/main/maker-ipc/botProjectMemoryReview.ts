@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 
 export const MEMORY_REVIEW_HOOK_COMMAND = 'xdt-node "../.memory-review-check-v1.cjs"';
@@ -22,23 +23,36 @@ if (event.event !== 'schedule-pre-run' || !Number.isFinite(event.firedAt)) {
 }
 const db = new DatabaseSync(source.databasePath, { readOnly: true });
 try {
-  // Session/history links include the teammate's chat and IM lanes. Automated user-role
-  // messages must not make the nightly review keep waking itself or other idle teammates.
-  const activity = db.prepare(
-    "SELECT 1 FROM bot_session_links l JOIN messages m ON m.session_id = l.session_id " +
+  function messageText(content) {
+    try {
+      const parsed = JSON.parse(content);
+      return typeof parsed === 'string' ? parsed
+        : typeof parsed?.text === 'string' ? parsed.text : '';
+    } catch { return content; }
+  }
+  function humanInput(row) {
+    let meta;
+    try { meta = JSON.parse(row.agent_meta || '{}'); } catch { return false; }
+    if (meta?.sourcePlugin) return false;
+    const origin = meta?.origin;
+    // Host-attested owner group messages retain the hidden dispatch prefix. Count the
+    // actual owner text before rejecting synthetic envelopes (including attachments).
+    if (typeof meta?.autoReviewUserText === 'string' && meta.autoReviewUserText.trim()) return true;
+    if (origin?.groupThread || origin?.groupRequest) return true;
+    if (messageText(row.content).startsWith(source.syntheticPrefix)) return false;
+    return !origin?.kind || (origin.kind === 'scheduler'
+      && typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith('hook:'));
+  }
+  // Stream only this teammate's recent user rows; stop at the first human input.
+  const rows = db.prepare(
+    "SELECT m.content, m.agent_meta FROM bot_session_links l JOIN messages m ON m.session_id = l.session_id " +
     "WHERE l.bot_id = ? AND m.role = 'user' AND m.rewind_at IS NULL " +
-    "AND m.created_at > ? AND m.created_at <= ? " +
-    "AND substr(m.content, 1, ?) <> ? AND substr(m.content, 1, ?) <> ? " +
-    "AND (m.agent_meta IS NULL OR (json_valid(m.agent_meta) AND " +
-    "json_extract(m.agent_meta, '$.sourcePlugin') IS NULL AND (" +
-    "json_extract(m.agent_meta, '$.origin.kind') IS NULL OR " +
-    "json_extract(m.agent_meta, '$.origin.groupThread') IS NOT NULL OR " +
-    "json_extract(m.agent_meta, '$.origin.groupRequest') IS NOT NULL OR " +
-    "(json_extract(m.agent_meta, '$.origin.kind') = 'scheduler' AND " +
-    "json_extract(m.agent_meta, '$.origin.scheduleId') LIKE 'hook:%')))) LIMIT 1"
-  ).get(source.botId, event.firedAt - 24 * 60 * 60 * 1000, event.firedAt,
-    source.syntheticPrefix.length, source.syntheticPrefix,
-    source.syntheticPrefix.length + 1, '"' + source.syntheticPrefix);
+    "AND m.created_at > ? AND m.created_at <= ?"
+  ).iterate(source.botId, event.firedAt - 24 * 60 * 60 * 1000, event.firedAt);
+  let activity = false;
+  for (const row of rows) {
+    if (humanInput(row)) { activity = true; break; }
+  }
   if (!activity) {
     console.log('No human messages in the last day; memory and skills review skipped.');
     process.exitCode = 2;
@@ -59,7 +73,11 @@ try {
     const old = await fs.readFile(file, 'utf8');
     // On another computer the supplied script needs that computer's database location. Only
     // refresh our untouched script; never replace a check the owner has edited.
-    if (old !== source && old.startsWith('const source = {') && old.slice(old.indexOf('\n') + 1) === check) {
+    const oldCheck = old.slice(old.indexOf('\n') + 1);
+    // Exact previous bundled body from 788b938c; owner-edited checks stay untouched.
+    const previousBundled = createHash('sha256').update(oldCheck).digest('hex')
+      === '32dd10c0fb4c51e5fde92f0e57b80d6a4391c35d7fc134f847ac6496c76ef47c';
+    if (old !== source && old.startsWith('const source = {') && (oldCheck === check || previousBundled)) {
       const temp = `${file}.${process.pid}.tmp`;
       await fs.writeFile(temp, source, { flag: 'wx' });
       await fs.rename(temp, file);
