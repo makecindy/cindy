@@ -146,13 +146,16 @@ describe('ensureBotProjectAutomations', () => {
 
   // User correction 2026-11-13: the bundled minimum is 20, not a single human input.
   // Unit, real generated hook + SQLite: installed cdb14543 allows 19; upgrade must skip
-  // 19 and admit 20 without changing a customized schedule or replacing owner-edited scripts.
-  it('upgrades the installed one-message check while preserving schedule choices and script edits', async () => {
+  // 19 and admit 20 without changing customized schedules/scripts. Windows checkout uses
+  // CRLF: exercise both stored byte formats so the fingerprint cannot misclassify a stock script.
+  it.each(['\n', '\r\n'])('upgrades the installed one-message check with %j line endings while preserving choices and edits', async (lineEnding) => {
+    loader.loadProjectSchedules.mockResolvedValueOnce(null);
     await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
     const supplied = { ...loader.upsertSchedule.mock.calls[0]![1], cronExpr: '0 5 * * *',
       model: 'chosen-model', prompt: 'Owner-maintained review instructions' };
     const checkFile = path.join(root, '.memory-review-check-v1.cjs');
-    const old = await fs.readFile(new URL('./fixtures/memory-review-cdb14543.cjs.txt', import.meta.url), 'utf8');
+    const old = (await fs.readFile(new URL('./fixtures/memory-review-cdb14543.cjs.txt', import.meta.url), 'utf8'))
+      .replace(/\r?\n/g, lineEnding);
     await fs.writeFile(checkFile, `const source = ${JSON.stringify({ databasePath: database.path,
       botId: 'bot-1', syntheticPrefix: '[UI_ACTION_TRIGGER]' })};\n${old.slice(old.indexOf('\n') + 1)}`);
     const db = new DatabaseSync(database.path);

@@ -80,7 +80,8 @@ process.stdout.write('', () => process.exit(process.exitCode || 0));
     const old = await fs.readFile(file, 'utf8');
     // On another computer the supplied script needs that computer's database location. Only
     // refresh our untouched script; never replace a check the owner has edited.
-    const oldCheck = old.slice(old.indexOf('\n') + 1);
+    // Git/editor line-ending conversion does not make a bundled check owner-customized.
+    const oldCheck = old.slice(old.indexOf('\n') + 1).replace(/\r\n/g, '\n');
     // Exact prior bundled bodies; owner-edited checks stay untouched.
     const previousBundled = createHash('sha256').update(oldCheck).digest('hex')
       === '32dd10c0fb4c51e5fde92f0e57b80d6a4391c35d7fc134f847ac6496c76ef47c'
