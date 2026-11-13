@@ -15,8 +15,10 @@ import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
 } from '../maker-host/rehydrateCloseSuppression.js';
+import { redactEventForRenderer } from '../maker-ipc/rendererEventRedaction.js';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
+const rendererRedactionSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'rendererEventRedaction.ts'), 'utf8').replace(/\r\n?/g, '\n');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const registerSource = source;
 const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
@@ -92,14 +94,10 @@ describe('maker:event hot path ordering', () => {
   it.each([undefined, null, { text: 'Restart Cindy before using Pi again.', isFinal: true }])(
     'strips Host recovery metadata from the boundary copy with data %j',
     (data) => {
-      // Execute the actual boundary function without booting Desktop/register side effects.
-      const start = source.indexOf('function redactEventForRenderer');
-      const code = source.slice(start, source.indexOf('\nfunction ', start + 1));
-      const js = transpileModule(code, {
-        compilerOptions: { target: ScriptTarget.ES2022 },
-      }).outputText;
-      const redact = new Function(`${js}; return redactEventForRenderer;`)() as
-        (event: AgentEvent) => AgentEvent;
+      // Execute the actual boundary function (rendererEventRedaction.ts, the one register.ts
+      // imports) without booting Desktop/register side effects.
+      expect(source).toContain("import { redactEventForRenderer } from './rendererEventRedaction.js';");
+      const redact = redactEventForRenderer;
       const original: AgentEvent = {
         type: 'text', source: 'pi', data, runtimeRecovery: true,
         sessionInstanceId: 'runtime', sessionTurnGeneration: 7,
@@ -114,9 +112,8 @@ describe('maker:event hot path ordering', () => {
   );
 
   it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
-    const redactor = source.slice(
-      source.indexOf('function redactEventForRenderer'),
-      source.indexOf('\nfunction ', source.indexOf('function redactEventForRenderer') + 1),
+    const redactor = rendererRedactionSource.slice(
+      rendererRedactionSource.indexOf('export function redactEventForRenderer'),
     );
     expect(redactor).toContain('delete rendererEvent.sessionTurnGeneration;');
     expect(redactor).toContain('delete rendererEvent.sessionInstanceId;');
