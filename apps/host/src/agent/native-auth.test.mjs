@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createCodexLocalCliAuth, createClaudeGatewayAuth } from './runtime.mjs';
+import { createCodexLocalCliAuth, createClaudeGatewayAuth } from './runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { bindNativeProviderAuth, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
@@ -77,4 +77,32 @@ test('explicit Claude subscription never receives the Cindy gateway key', async 
   assert.deepEqual(await auth.getAuthEnv({ credentialMode: 'oauth-bearer' }), {});
   assert.equal((await auth.getAuthEnv({ providerId: 'xd' })).ANTHROPIC_API_KEY, 'fixture-gateway');
   assert.equal((await createClaudeGatewayAuth(null).getState({ providerId: 'xd' })).authenticated, false);
+});
+
+/*
+ * 测试价值（放行表第 24 行，24a）
+ * - 可观察结果：经回环代理时 Host 的 Claude 认证与桌面 Claude 适配器（auth-adapters.ts
+ *   getState/getAuthEnv）同样分支：网关来源带网关 key；显式的非网关来源只带占位凭据（Host 用
+ *   代理运行时的密钥），不再直连供应商、不带供应商的 key；代理没就绪时报 proxy_not_ready；
+ *   Claude 订阅不经代理、不拿任何 Cindy 凭据。
+ * - 最小失败输入：自定义来源仍给 ANTHROPIC_BASE_URL 与供应商 key；代理未就绪仍授权。
+ * - tier：unit。
+ */
+test('through the loopback proxy, Claude carries the gateway key or only the proxy runtime secret', async () => {
+  let ready = false;
+  const proxy = { isReady: () => ready, inboundSecret: () => 'runtime-secret-fixture' };
+  const auth = createClaudeGatewayAuth({ credential: 'fixture-gateway' }, async () => {
+    throw new Error('the proxy routes explicit sources; the adapter must not resolve them');
+  }, undefined, proxy);
+  assert.deepEqual(await auth.getAuthEnv({ credentialMode: 'provider-oauth', providerId: 'cprov-fixture' }),
+    { ANTHROPIC_API_KEY: 'runtime-secret-fixture' });
+  assert.deepEqual(await auth.getState({ credentialMode: 'provider-oauth', providerId: 'cprov-fixture' }),
+    { authenticated: false, errorReason: 'proxy_not_ready' });
+  ready = true;
+  assert.equal((await auth.getState({ credentialMode: 'provider-oauth', providerId: 'cprov-fixture' })).authenticated, true);
+  assert.deepEqual(await auth.getAuthEnv({ credentialMode: 'gateway-key' }), { ANTHROPIC_API_KEY: 'fixture-gateway' });
+  assert.deepEqual(await auth.getAuthEnv({}), { ANTHROPIC_API_KEY: 'fixture-gateway' });
+  assert.deepEqual(await auth.getAuthEnv({ providerId: 'anthropic', credentialMode: 'oauth-bearer' }), {});
+  const noKey = createClaudeGatewayAuth(null, undefined, undefined, proxy);
+  assert.deepEqual(await noKey.getState({ credentialMode: 'gateway-key' }), { authenticated: false, errorReason: 'no_key' });
 });

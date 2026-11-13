@@ -11,7 +11,6 @@ import { customProviderHeaderStorageKey, customProviderSecretStorageKey, provide
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.js';
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
-import { buildPiNativeProvidersFromConfigs } from '../../../desktop/src/main/maker-host/pi-native-catalog.js';
 import { createProviderService } from '../../../desktop/src/main/maker-host/provider-service.js';
 import { hasCustomProviderCredential } from '../../../desktop/src/main/maker-host/provider-connection-state.js';
 import { withoutProviderHeaderCredentials } from '../../../desktop/src/main/maker-host/provider-public-view.js';
@@ -30,6 +29,30 @@ import { isNativeProviderAuthBound } from '../../../desktop/src/main/maker-host/
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
 import type { ProviderSecretStore } from '../../../desktop/src/main/secrets/providerSecretStore.js';
 import { createCodexAccountAuth } from '../../../desktop/src/main/maker-host/codex-account-auth.js';
+
+/**
+ * The profile's Codex account service (createCodexAccountAuth), with the provider config's
+ * scope: its owner, its check and whether it is closed. Also used by the parity tests, so they
+ * run the Host's own login and logout.
+ */
+export function createHostCodexAccounts(
+  options: { profileDir: string; getCodexBinary?(): string | null; publish?(channel: string, payload: unknown): void },
+  scope: { owner: string; check(): void; closed(): boolean },
+) {
+  return createCodexAccountAuth({
+    getUserDataDir: () => { scope.check(); return options.profileDir; },
+    getCodexBinary: () => { scope.check(); return options.getCodexBinary?.() ?? null; },
+    isProvider: id => { scope.check(); return id === 'openai' || getActiveCatalog().providers.some(provider =>
+      provider.id === id && provider.source === 'user' && provider.auth.native === 'codex'); },
+    accountHome: id => { scope.check(); return id === 'openai' ? path.join(options.profileDir, 'codex-home') : undefined; },
+    broadcastCodexAccountAuthReady: providerId => {
+      if (!scope.closed() && activeOwnerScopeKey() === scope.owner && !isAppSessionBoundaryPending()) options.publish?.('usage:codex-account-auth-ready', { providerId });
+    },
+    broadcastCodexAccountAuthStarted: providerId => {
+      scope.check(); options.publish?.('usage:codex-account-auth-started', { providerId });
+    },
+  });
+}
 
 /** Owner-bound configuration and the existing encrypted header migration. */
 export function createHostProviderConfig(options: { profileDir: string; ownerId: string; openExternal(url: string): Promise<void>;
@@ -73,19 +96,7 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     resolveOutboundProxy: resolveHostOutboundProxy,
     readStatus: readClaudeCliLoginStatusBySpawn,
   });
-  const codexAccounts = createCodexAccountAuth({
-    getUserDataDir: () => { check(); return options.profileDir; },
-    getCodexBinary: () => { check(); return options.getCodexBinary?.() ?? null; },
-    isProvider: id => { check(); return id === 'openai' || getActiveCatalog().providers.some(provider =>
-      provider.id === id && provider.source === 'user' && provider.auth.native === 'codex'); },
-    accountHome: id => { check(); return id === 'openai' ? path.join(options.profileDir, 'codex-home') : undefined; },
-    broadcastCodexAccountAuthReady: providerId => {
-      if (!closed && activeOwnerScopeKey() === owner && !isAppSessionBoundaryPending()) options.publish?.('usage:codex-account-auth-ready', { providerId });
-    },
-    broadcastCodexAccountAuthStarted: providerId => {
-      check(); options.publish?.('usage:codex-account-auth-started', { providerId });
-    },
-  });
+  const codexAccounts = createHostCodexAccounts(options, { owner, check, closed: () => closed });
   const headers = createCustomProviderHeaderService({
     getCurrentDbClientUserId: () => { check(); return owner; },
     listCustomProviders: async () => { check(); const rows = await listCustomProviders(); check(); return rows; },
@@ -172,12 +183,6 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
       });
       const views = await service.listProviders({ allowSideEffects: false }); check();
       return views.map(withoutProviderHeaderCredentials);
-    },
-    async piNativeProviders() {
-      const configs = await list();
-      // Protocol, endpoint, header isolation and model limits use the exact same
-      // projection as Desktop. Unknown capacities are never replaced with guesses.
-      return buildPiNativeProvidersFromConfigs(configs, readKey);
     },
   };
   setCustomProviderKeyReader(readKey);

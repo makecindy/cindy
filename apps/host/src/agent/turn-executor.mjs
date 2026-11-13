@@ -12,12 +12,17 @@ import { createWireNoteMemory } from '../../../desktop/src/main/maker-ipc/wireNo
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
 import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send-preflight.ts';
+import { createHostLearnInvocationCapture } from './learn-capture.ts';
 import { createHostEventPersistence } from './event-persistence.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
-import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
+import { setSessionProvider, clearSessionProvider, getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { setSessionEffort } from '../../../desktop/src/main/maker-host/session-effort-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
+import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
+import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -28,6 +33,16 @@ const errorText = error => error instanceof Error ? error.message : String(error
  * dispatch ownership belong to AgentInputCoordinator, never to this adapter.
  * A terminal is handed back only after all visible reply rows have settled.
  */
+/**
+ * Publishes an agent event to the Host's clients (the event stream and the device link read the
+ * hub). As on the desktop (sessionEventPreparation.ts broadcastEvent), what leaves is the
+ * renderer-boundary projection of the event; persistence and bookkeeping keep the original.
+ */
+export function publishAgentEvent(hub, sessionId, event, fields) {
+  const clientEvent = redactEventForRenderer(event);
+  hub.publish({ ...clientEvent, sessionId, event: clientEvent, ...fields });
+}
+
 export function createTurnExecutor(deps) {
   const turns = new Map();
 
@@ -85,8 +100,19 @@ export function createTurnExecutor(deps) {
     return turn.settlement;
   }
 
+  // Desktop's exact-instance binding (sessionBindingLifecycle.ts): when the bound
+  // instance closes, the snapshot state is released, then the unfinished turn
+  // change record; a replaced instance only drops its record, and a late close of
+  // an instance that is no longer bound changes nothing.
+  function releaseBinding(sessionId) {
+    if (!bindings.has(sessionId)) return;
+    deps.getGitSnapshot?.()?.onSessionClosed(sessionId);
+    clearPendingTurnChangeSets(sessionId);
+  }
+
   function listen(sessionId, session) {
     if (bindings.get(sessionId)?.session === session) return;
+    if (bindings.has(sessionId)) clearPendingTurnChangeSets(sessionId);
     bindings.get(sessionId)?.unsubscribe();
     const history = historyFor(sessionId);
     history.noteSessionAgentKind(sessionId, dbKind(session.agentKind ?? turns.get(sessionId)?.dbKind));
@@ -101,8 +127,27 @@ export function createTurnExecutor(deps) {
           && event.sessionTurnGeneration !== turn.generation) return;
       }
       if (event.type === 'compact_boundary') wireNotes.reset(sessionId);
+      // Desktop records Codex's native turn diff from the event stream (register.ts)
+      // and closes the turn change record at the turn's end (sessionEventPreparation.ts).
+      noteTurnDiffEvent(sessionId, event, session.remoteHostId !== null);
+      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
+        const rawTurn = event.data?.raw;
+        // Desktop settles a silent-stop done once its guard declines to resume
+        // (settleSilentStopDone); the Host has no auto-resume, so it settles now.
+        if (event.data?.silentStop === true) void finalizeTurnChangeSet(sessionId, null, 'complete');
+        else void finalizeTurnChangeSet(sessionId, typeof rawTurn?.id === 'string' ? rawTurn.id : null,
+          rawTurn && rawTurn.status !== 'completed' ? 'partial' : 'complete');
+      }
+      if (isTerminalTurnErrorEvent(event)) void finalizeTurnChangeSet(sessionId, null, 'partial');
       const stream = history.event(session, event);
-      deps.hub.publish({ ...event, sessionId, event, ...stream, inputClientId: turn.clientId });
+      // As the desktop (sessionEventDelivery.ts): a turn that ended on a rejected Cindy AI Key
+      // reports the current key, which resynchronizes the credentials.
+      if (isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event)) {
+        deps.reportAgentCindyGatewayKeyRejected?.();
+      }
+      publishAgentEvent(deps.hub, sessionId, event, { ...stream, inputClientId: turn.clientId });
+      // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
+      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) void deps.getGitSnapshot?.()?.onTurnEnd(sessionId);
       if ((event.type === 'done' || isTerminalTurnErrorEvent(event))
         && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)) {
         turn.terminalMeta = { sessionTurnGeneration: event.sessionTurnGeneration,
@@ -113,7 +158,10 @@ export function createTurnExecutor(deps) {
         void finish(sessionId, turn, error, event);
       }
     });
-    bindings.set(sessionId, { session, unsubscribe });
+    const unsubscribeStatus = session.onStatusChange?.(status => {
+      if (status === 'closed' && bindings.get(sessionId)?.session === session) releaseBinding(sessionId);
+    });
+    bindings.set(sessionId, { session, unsubscribe: () => { unsubscribe(); unsubscribeStatus?.(); } });
   }
 
   async function readExecutionSession(id) {
@@ -142,6 +190,8 @@ export function createTurnExecutor(deps) {
     const maker = deps.getMaker();
     const session = maker.getSession(id);
     deps.interactions?.detach(id);
+    // The bound instance closes here; release it before the binding goes away.
+    releaseBinding(id);
     bindings.get(id)?.unsubscribe();
     bindings.delete(id);
     wireNotes.reset(id);
@@ -227,6 +277,8 @@ export function createTurnExecutor(deps) {
     // Runtime creation updates an existing task; it does not create another row.
     broadcastSessionCreated: id => deps.hub.publish({ type: 'session_changed', sessionId: id }),
     prepareSendUserMessage: deps.prepareUserMessage ?? prepareHostUserMessage,
+    // The trusted /learn Skill of a persisted user turn, as on the desktop (learn-capture.ts).
+    captureCindyLearnInvocation: deps.captureCindyLearnInvocation ?? createHostLearnInvocationCapture({ getMaker: deps.getMaker }),
     createDbMessage: async (id, message, options) => {
       const history = historyFor(id);
       await history.drain();
@@ -291,6 +343,10 @@ export function createTurnExecutor(deps) {
         }
       }) : undefined,
     readTaskSource: async id => (await readExecutionSession(id)).source ?? null,
+    // Desktop register.ts: a direct (non-queued) user turn takes the Git baseline
+    // before dispatch and drops it when the turn is not dispatched.
+    beforeDispatchDirectUserTurn: (id, signal) => deps.getGitSnapshot?.()?.onTurnStart(id, signal),
+    onUndispatchedDirectUserTurn: id => deps.getGitSnapshot?.()?.onTurnAbort(id),
     readHostDeviceIdentity: deps.readHostDeviceIdentity,
     planRepeatableWireNotes: (id, notes, options) => wireNotes.plan(id, notes, options),
     log,
@@ -489,12 +545,15 @@ export function createTurnExecutor(deps) {
       const history = histories.get(id);
       await history?.drain();
       if (history?.hasFailedWrites()) throw new Error(turn?.persistenceError || 'Reply persistence is incomplete');
+      releaseBinding(id);
       bindings.get(id)?.unsubscribe();
       bindings.delete(id);
       history?.clearSessionPersistState(id);
       histories.delete(id);
       wireNotes.reset(id);
       clearSessionProvider(id);
+      // The desktop session runtime cleanup clears the effort axis with the provider.
+      setSessionEffort(id, null);
       await deps.getMaker()?.closeSession?.(id);
       turns.delete(id);
     },

@@ -10,10 +10,13 @@ import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-i
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
+import { beginTurnChangeSetAtDispatch } from '../../../desktop/src/main/turn-change-set/dispatchBoundary.ts';
+import { clearPendingTurnChangeSets } from '../../../desktop/src/main/turn-change-set/store.ts';
 
 const attachmentLog = createLogger('host-attachments');
 
-function storedSessionOptions(stored) {
+/** Create options for every start from a stored task row (send, restore, resume). */
+export function storedSessionOptions(stored) {
   return { agentKind: makerKind(stored.agentKind), model: stored.model || '',
     workingDir: stored.workingDir || '', effort: stored.effort || undefined,
     permissionMode: stored.permissionMode || undefined, providerId: stored.providerId ?? undefined,
@@ -215,6 +218,18 @@ export function createInputQueue(deps) {
       onUserMessagePersisted: (id, item) => { void attachmentOwnership.settleDurable(id, item.clientId); },
       onUserMessagePersistenceFailed: (id, item, options) => {
         afterSnapshot(id, () => attachmentOwnership.markPersistenceFailed(id, item.clientId, options));
+      },
+      // Desktop register.ts (AgentInputCoordinator hooks): after the user row is durable
+      // and before vendor dispatch, open the turn change record, then the Git baseline.
+      beforeDispatchUserTurn: async (id, item, signal) => {
+        const live = deps.getMaker()?.getSession(id);
+        if (live) await beginTurnChangeSetAtDispatch(live, item.clientId);
+        await deps.getGitSnapshot?.()?.onTurnStart(id, signal);
+      },
+      // A durable turn that never reached the vendor: drop the record, then the baseline.
+      onUndispatchedUserTurn: (id) => {
+        clearPendingTurnChangeSets(id);
+        deps.getGitSnapshot?.()?.onTurnAbort(id);
       },
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
@@ -444,6 +459,8 @@ export function createInputQueue(deps) {
       // This endpoint clears pending inputs, not persisted history. Only the
       // history service may advance the durable conversation clear boundary.
       clearSession: id => stop(id, { keepQueue: false }),
+      /** The running turn's accepted input, as the desktop's Auto-review context reads it. */
+      acceptedInputProvenance: id => coordinator.getAcceptedInputProvenance(id),
       async disposeSession(id) {
         stateFor(id).closed = true;
         await stop(id);
