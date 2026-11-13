@@ -1185,6 +1185,11 @@ export function translatePiEvent(
       const finalTokens = ctx.turnMainOutput + ctx.unreportedEstimatedOutput;
       ctx.tokenSpeed.stop(finalTokens);
       stopPiGenerationHeartbeat(ctx);
+      const calibratedElapsedMs = ctx.tokenSpeed.snapshot()?.elapsedMs;
+      const usageDurationMs =
+        typeof calibratedElapsedMs === 'number' && Number.isFinite(calibratedElapsedMs) && calibratedElapsedMs > 0
+          ? Math.round(calibratedElapsedMs)
+          : ctx.generationDurationMs;
       const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
       const pendingAssistantError = hostAbortRequested ? null : ctx.pendingAssistantError;
       // Classify the final assistant message at settlement, after native retries
@@ -1194,11 +1199,11 @@ export function translatePiEvent(
         && ctx.finalAssistantStopReason === 'length';
       const usage = {
         ...piTurnUsageOf(ctx),
-        // durationMs is deliberately generation-only. If Pi does not report a
-        // per-assistant generation duration, omit it instead of charging tool
-        // execution / user waits to TPS.
-        ...(ctx.generationTimingReliable && ctx.generationDurationMs > 0
-          ? { durationMs: ctx.generationDurationMs }
+        // durationMs is deliberately generation-only. Prefer the calibrated meter's
+        // first-byte generation clock so unmeasured TTFT waits are excluded when
+        // generation timing is reliable.
+        ...(ctx.generationTimingReliable && usageDurationMs > 0
+          ? { durationMs: usageDurationMs }
           : {}),
         ...(ctx.turnWallClockStartedAt > 0
           ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }

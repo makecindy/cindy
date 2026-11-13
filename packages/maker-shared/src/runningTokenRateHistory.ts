@@ -207,8 +207,10 @@ export function recordTokenSpeed(
   const { speed } = input;
   const startedAt = input.startedAt ?? history.startedAt;
   // A new turn restarts the host clock; keep earlier points and continue the axis after them.
+  // Within the same turn, provisional wait credit can be trimmed down once a real speed settles.
+  const sameTurn = startedAt !== null && history.startedAt === startedAt;
   const reset = history.startedAt !== startedAt || history.speedOffsetMs === undefined ||
-    speed.elapsedMs < (history.speedElapsedMs ?? 0);
+    (!sameTurn && speed.elapsedMs < (history.speedElapsedMs ?? 0));
   const offset = reset ? (history.samples.at(-1)?.durationMs ?? 0) : (history.speedOffsetMs ?? 0);
   const next: RateHistory = {
     ...history,

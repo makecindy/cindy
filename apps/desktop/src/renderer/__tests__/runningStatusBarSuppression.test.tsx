@@ -250,3 +250,35 @@ it.each([
   expect(screen.getByText(statusKey)).toBeTruthy();
   expect(container.querySelector('.status-bar-shimmer') !== null).toBe(shimmers);
 });
+
+it('shows streamed token count while tokenSpeed is warming up with rate 0', () => {
+  const { container, rerender } = render(
+    <RunningStatusBar
+      visible
+      status="Generating..."
+      startedAt={1}
+      tokenUsage={0}
+      outputTokens={0}
+      generationDurationMs={0}
+      generationReliable
+      tokenSpeed={{ rate: 0, average: 60, tokens: 120, elapsedMs: 2_000, streaming: true }}
+    />,
+  );
+  const trigger = () => container.querySelector('[data-running-status-meta] button');
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenCount');
+  expect(trigger()?.textContent).not.toContain('chat.runningStatus.tokenRate');
+
+  rerender(
+    <RunningStatusBar
+      visible
+      status="Generating..."
+      startedAt={1}
+      tokenUsage={0}
+      outputTokens={0}
+      generationDurationMs={0}
+      generationReliable
+      tokenSpeed={{ rate: 85, average: 70, tokens: 210, elapsedMs: 3_000, streaming: true, peak: 85 }}
+    />,
+  );
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');
+});

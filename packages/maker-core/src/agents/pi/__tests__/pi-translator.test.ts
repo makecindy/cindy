@@ -2941,6 +2941,60 @@ describe('pi translator live token speed', () => {
       vi.useRealTimers();
     }
   });
+
+  it('publishes live thinking rate within 2.5s, resets stale rate on new request, and excludes TTFT from done.usage.durationMs', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) =>
+        send({ type: 'message_update', assistantMessageEvent }, at);
+
+      send({ type: 'agent_start' }, 1_000);
+      // 5s TTFT wait before first byte arrives.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 1_000 } }, 1_000);
+      update({ type: 'thinking_start', contentIndex: 0 }, 6_000);
+      for (let t = 6_250; t <= 8_500; t += 250) {
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'a '.repeat(25) }, t);
+      }
+      // Verbatim thinking should already produce a live reading well before 10s.
+      const thinkingSnap = ctx.tokenSpeed.snapshot(8_500);
+      expect(thinkingSnap?.streaming).toBe(true);
+      expect(thinkingSnap?.rate).toBeGreaterThan(80);
+
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'toolUse', timestamp: 1_000,
+        usage: { input: 10, output: 250, reasoning: 250 },
+      } }, 8_500);
+
+      // Next request after >500ms pause must not leak the previous request's rate while warming up.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 15_000 } }, 15_000);
+      update({ type: 'text_start', contentIndex: 0 }, 15_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'hello world' }, 15_100);
+      expect(ctx.tokenSpeed.snapshot(15_100)?.rate).toBe(0);
+
+      update({ type: 'text_delta', contentIndex: 0, delta: 'foo bar' }, 16_000);
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'hello world foo bar' }], stopReason: 'stop',
+        timestamp: 15_000, usage: { input: 10, output: 100 },
+      } }, 16_000);
+      send({ type: 'agent_settled' }, 16_000);
+
+      const done = events.find((e) => e.type === 'done')!;
+      const usage = (done.data as { usage: Record<string, unknown> }).usage;
+      // Excludes the 5s TTFT wait and 6.5s tool gap; matches the calibrated clock.
+      const calibratedMs = Math.round(ctx.tokenSpeed.snapshot(16_000)!.elapsedMs);
+      expect(usage.durationMs).toBe(calibratedMs);
+      expect(usage.durationMs).toBeLessThan(5_000);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 it.each(['none', 'thinking', 'tool'])('reports a route receipt and blocks recovery after %s output', (kind) => {
