@@ -125,6 +125,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
     const { t } = useTranslation();
     const [moreMenuOpen, setMoreMenuOpen] = useState(false);
     const moreMenuHiddenCloseRef = useRef(false);
+    const moreMenuPointerFocusRef = useRef<HTMLElement | null>(null);
     const handleMoreMenuOpenChange = useCallback(
       (open: boolean) => {
         if (open) moreMenuHiddenCloseRef.current = false;
@@ -343,6 +344,15 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
               <button
                 type="button"
                 aria-label={t('rightSidebar.browser.moreTools')}
+                onPointerDown={(event) => {
+                  if (event.button === 0 && !event.ctrlKey && !moreMenuOpen) {
+                    const focused = document.activeElement;
+                    moreMenuPointerFocusRef.current = focused instanceof HTMLElement ? focused : null;
+                  }
+                }}
+                onKeyDown={() => {
+                  moreMenuPointerFocusRef.current = null;
+                }}
                 className={cn(
                   'flex size-6 shrink-0 items-center justify-center rounded-md transition-colors',
                   'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
@@ -357,11 +367,21 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
           <DropdownMenuContent
             align="end"
             className="min-w-[9rem]"
+            onInteractOutside={() => {
+              moreMenuPointerFocusRef.current = null;
+            }}
             onCloseAutoFocus={(event) => {
-              // Presence can finish closing after a rapid return to this task.
-              // Remember the hidden close until the next intentional opening;
-              // ordinary dismissal still restores the visible trigger focus.
-              if (!visible || moreMenuHiddenCloseRef.current) event.preventDefault();
+              const previousFocus = moreMenuPointerFocusRef.current;
+              moreMenuPointerFocusRef.current = null;
+              // Hidden hosts must never reclaim focus after their exit animation.
+              if (!visible || moreMenuHiddenCloseRef.current) {
+                event.preventDefault();
+              } else if (previousFocus?.isConnected) {
+                // Pointer tools return to the page (including its webview), while
+                // keyboard-opened menus retain Radix's normal trigger focus.
+                event.preventDefault();
+                previousFocus.focus({ preventScroll: true });
+              }
             }}
           >
             <DropdownMenuItem
@@ -425,6 +445,9 @@ function ChromeIconButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
+      // Prevent the mouse's default focus transfer before the click action;
+      // blurring afterwards would already have lost the page's selection/IME.
+      onMouseDown={(event) => event.preventDefault()}
       aria-label={accessibleLabel}
       aria-hidden={disabled ? true : undefined}
       aria-busy={spinning || undefined}
@@ -466,6 +489,7 @@ function ChromeIconButton({
         <span
           role="button"
           aria-disabled="true"
+          onMouseDown={(event) => event.preventDefault()}
           aria-label={accessibleLabel}
           tabIndex={0}
           className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
