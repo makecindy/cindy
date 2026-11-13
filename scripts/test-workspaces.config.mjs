@@ -185,6 +185,7 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/motionDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.
+  'src/main/__tests__/providerImportWiring.test.ts',
   'src/main/__tests__/analyticsConsentMigrationGuards.test.ts',
   'src/main/__tests__/authAccountDeletionLifecycle.test.ts',
   'src/main/__tests__/authLegacyTokenMirror.test.ts',

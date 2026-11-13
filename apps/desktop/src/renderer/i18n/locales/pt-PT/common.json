@@ -6804,7 +6804,7 @@
         "sectionTitle": "Rede experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Mostra a topologia das ligações e a atividade recente. A ligação é cifrada quando ambos os dispositivos ativam o Agent-Net e foram emparelhados através do Agent-Net. Os outros dispositivos usam a ligação habitual. Aplica-se apenas a este computador."
+          "hint": "Funcionalidade experimental. A utilização não é recomendada de momento. Mostra a topologia das ligações e a atividade recente. A ligação é cifrada quando ambos os dispositivos ativam o Agent-Net e foram emparelhados através do Agent-Net. Os outros dispositivos usam a ligação habitual. Aplica-se apenas a este computador."
         },
         "empty": "Ainda não há outros dispositivos. Inicie sessão com a mesma conta noutro computador ou telemóvel e ele aparecerá aqui.",
         "stats": {
@@ -7070,7 +7070,11 @@
         "remoteSessionEnded": "O dispositivo remoto terminou esta sessão"
       },
       "control": "Controlo",
-      "standbyHint": "Outra instância do Cindy neste computador está a utilizar a ligação remota. Feche-a para que esta instância assuma o controlo automaticamente."
+      "standbyHint": "Outra instância do Cindy neste computador está a utilizar a ligação remota. Feche-a para que esta instância assuma o controlo automaticamente.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -7973,6 +7977,7 @@
         "install": "Instalar",
         "details": "Detalhes",
         "detailsAria": "Ver detalhes de {{name}}",
+        "loadingDetails": "A carregar detalhes…",
         "update": "Atualizar a partir do mercado",
         "updateTo": "Atualizar para v{{version}}",
         "installed": "Instalado",
@@ -8288,6 +8293,29 @@
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são devolvidos e os dados confidenciais são introduzidos por si.",
         "hostTools_scheduler": "Gestão de automatizações",
         "hostTools_schedulerDetail": "Após a aprovação, o plugin pode criar, consultar, editar, pausar, retomar, eliminar e executar tarefas automáticas e consultar o histórico. As tarefas agendadas executadas pelo Agent usam as permissões predefinidas da tarefa, incluindo Acesso total. As operações de alto risco do sistema anfitrião exigem confirmação em cada utilização.",
+        "hostTools_terminal": "Terminal e comandos",
+        "codeDetailFiles": "A página do plugin mantém-se isolada. A Cindy executa as operações de ficheiros autorizadas nos diretórios que selecionares.",
+        "hostTools_discovery": "Ver capacidades do anfitrião",
+        "hostTools_discoveryDetail": "Consultar os serviços do computador executor e os grupos declarados e aprovados deste plugin. Não permite instalar, desativar nem revogar outros plugins.",
+        "hostTools_browser": "Controlo do navegador",
+        "hostTools_browserDetail": "Ler e operar páginas no navegador selecionado na Cindy. Mudar para O meu navegador, enviar ficheiros e outras ações sensíveis mantêm as confirmações da Cindy.",
+        "hostTools_computer": "Controlo do computador",
+        "hostTools_computerDetail": "Ver janelas e usar teclado e rato pelas ferramentas da Cindy. Continuam a aplicar-se as permissões do sistema, a proteção de entradas sensíveis e as regras de risco.",
+        "hostTools_ssh": "Ligações SSH",
+        "hostTools_sshDetail": "Executar comandos e gerir as tuas ligações SSH configuradas. As credenciais ficam na Cindy. As ações que exigem confirmação são confirmadas de cada vez.",
+        "hostTools_docs": "Ler e criar documentos",
+        "hostTools_docsDetail": "Usar as ferramentas de documentos da Cindy no diretório privado deste plugin. Criar e converter documentos exige confirmação na Cindy.",
+        "codeDetailHostServices": "As páginas do plugin continuam isoladas. As ferramentas autorizadas operam navegadores, computadores, ligações ou documentos conforme cada permissão.",
+        "hostTools_storage": "Armazenamento e partilha entre plugins",
+        "hostTools_storageDetail": "Usar o armazenamento, a Library e os conteúdos multimédia autorizados deste plugin. A Cindy confirma a origem, o plugin destinatário e a cópia em cada partilha. Não permite ler o armazenamento de outros plugins.",
+        "codeDetailStorage": "As operações limitam-se aos dados deste plugin. Confirmas cada partilha com outro plugin.",
+        "storageShareTitle": "Entregar uma cópia a outro plugin",
+        "storageShareMessage": "Copiar «{{file}}» ({{size}}) do plugin «{{name}}» para «{{target}}». O destinatário recebe uma cópia independente; as alterações da origem não são sincronizadas. Conteúdos já lidos ou guardados não podem ser recuperados.",
+        "hostTools_files": "Ficheiros em diretórios autorizados",
+        "hostTools_filesDetail": "Ler, escrever, listar e eliminar ficheiros e observar alterações nos diretórios que selecionares explicitamente. Seleções anteriores não dão acesso. Desativar o plugin termina o acesso.",
+        "filesPickMessage": "O plugin «{{name}}» poderá ler, escrever, listar e eliminar ficheiros no diretório escolhido e observar alterações. Seleciona um diretório ao qual permites o acesso.",
+        "codeDetailTerminal": "As páginas do plugin são executadas numa sandbox isolada. Os comandos autorizados são executados com as tuas permissões e podem aceder a ficheiros locais, aplicações e redes.",
+        "hostTools_terminalDetail": "Iniciar comandos e terminais interativos com as tuas permissões neste computador, ler a saída, enviar entradas e parar os processos deste plugin. Os comandos podem aceder aos teus ficheiros e aplicações. Iniciar, escrever e fazer outras alterações exige confirmação na Cindy de cada vez.",
         "hostToolsRequest": "Rever permissão de {{group}}",
         "hostToolCallTitle": "Permitir operação do plugin",
         "hostToolCallMessage": "O plugin «{{name}}» pretende chamar {{server}} / {{tool}}. Esta autorização aplica-se apenas aos parâmetros abaixo.",
@@ -8354,8 +8382,8 @@
         "badgeDetail": "Quando tem novidades, pode mostrar um ponto verde na entrada Plugins da navegação esquerda e no seu próprio cartão, com um resumo de uma linha. Abrir o painel remove o ponto. O ponto não emite som, não vibra, nunca chega ao centro de notificações do sistema e é uma permissão distinta das dicas do sistema.",
         "confirm": "Pode pedir a sua confirmação numa caixa de diálogo",
         "confirmDetail": "Antes de agir, pode abrir uma caixa de diálogo com o aspeto da Cindy para lhe fazer uma pergunta. A pergunta é do plugin, e a caixa de diálogo identifica-o pelo nome. Só o utilizador pode confirmar ou cancelar; o plugin não pode. Só pode haver uma caixa de diálogo de cada vez, e os pedidos demasiado frequentes são bloqueados.",
-        "fsWrite": "Pode escrever ficheiros (criar / modificar)",
-        "fsWriteDetail": "A sua própria pasta de dados privados permite sempre escrita. A escrita no diretório de trabalho da sessão atual segue o modo de permissões da sessão (os modos de aprovação automática escrevem diretamente; os modos por ação pedem-lhe autorização primeiro). Qualquer outra pasta exige sempre a sua confirmação. Os ficheiros são sempre escritos pelo anfitrião — o próprio plugin nunca toca no seu sistema de ficheiros.",
+        "fsWrite": "Pode gerir os seus ficheiros privados",
+        "fsWriteDetail": "Pode ler, escrever, listar e eliminar os seus dados privados. Durante uma chamada ativa do Agent também pode ler, listar e vigiar o diretório de trabalho da tarefa. A escrita e a eliminação seguem as permissões da tarefa; autorizar uma escrita não autoriza a eliminação. A vigilância termina com a chamada. O anfitrião executa todas as operações.",
         "deviceSync": "Sincronizar dados do plugin entre os seus computadores",
         "deviceSyncDetail": "Troca dados deste plugin com o mesmo plugin nos seus outros computadores online com sessão iniciada na mesma conta Cindy. As transferências são encriptadas. O plugin controla a união e a eliminação de dados; não são partilhadas credenciais nem dados de outros plugins.",
         "libraryPersist": "Pode usar uma biblioteca persistente (ficheiros grandes e bases de dados)",
@@ -11454,6 +11482,7 @@
         "memberLimit": "Uma conversa de grupo precisa de 2–6 amigos",
         "memberUnavailable": "Um destes amigos está indisponível. Escolha outro e tente novamente.",
         "mentionUnavailable": "Um membro mencionado já não está disponível. Escolha quem mencionar antes de enviar novamente.",
+        "mentionAmbiguous": "Há mais de um membro chamado “{{name}}”. Escolha quem pretende na lista de @.",
         "notFound": "Esta conversa de grupo já não existe",
         "hostNotReady": "Cindy ainda está a preparar-se. Tente novamente dentro de momentos.",
         "planOpen": "Está em curso uma divisão do trabalho. Conclua-a ou pare-a antes de iniciar outra.",
@@ -18096,6 +18125,7 @@
       "descriptionSaveDir": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se permitir, este plugin poderá guardar nele ficheiros transferidos (os ficheiros existentes nunca são substituídos).",
       "descriptionRevealPath": "O caminho só é devolvido ao Agent atual depois de dar permissão e passará a constar do registo da conversa; os dispositivos emparelhados poderão sincronizar esse registo. Isto não concede a nenhum plugin acesso ao ficheiro.",
       "descriptionFsWrite": "Este plugin solicita gravar os ficheiros abaixo no diretório de trabalho da sessão atual. Se permitir, as gravações posteriores no mesmo diretório nesta sessão não voltarão a pedir autorização.",
+      "descriptionFsDelete": "Este plugin solicita eliminar os ficheiros ou pastas abaixo do diretório de trabalho da tarefa atual. O conteúdo das pastas também será eliminado. Esta autorização aplica-se apenas a esta eliminação.",
       "descriptionWorkspace": "Esta pasta está fora do diretório de trabalho desta sessão. Se permitir, o Cindy cria uma sessão vazia para ela na barra lateral (uma sessão existente será reutilizada), sem ler quaisquer ficheiros no seu interior.",
       "descriptionForgeSource": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se permitir, o Forge irá empacotar ou criar a estrutura base do plugin nesse local (grava um artefacto .cindy ou ficheiros de estrutura base).",
       "descriptionForgeScaffold": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se permitir, o Forge irá criar aí os ficheiros de código-fonte do plugin.",
@@ -19141,6 +19171,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "Modo de permissões",
       "noAvailableModels": "Nenhum modelo {{agent}} disponível. Verifique a ligação ao fornecedor e as credenciais nas Definições.",
+      "savedModelUnavailable": "O modelo guardado ou a sua origem não está disponível.",
+      "reselectModel": "Escolher um modelo",
       "effortLabel": "Esforço de raciocínio",
       "initialTaskLabel": "Tarefa inicial",
       "initialTaskPlaceholder": "Escreva a primeira coisa a entregar-lhe ou deixe em branco para o Lead distribuir o trabalho",
@@ -21627,8 +21659,8 @@
   "modelGroups": {
     "title": "Grupos de modelos",
     "description": "Combine várias fontes que já tem em Fornecedores numa única opção. Escolha-a em «Grupos de modelos» no seletor de modelos e a Cindy decide que fonte usar.",
-    "routes": "Rotas",
-    "routesDescription": "Uma rota contém várias fontes. Cada nova tarefa escolhe uma segundo a regra da rota.",
+    "routes": "Modos",
+    "routesDescription": "Um modo contém várias fontes. Cada nova tarefa escolhe uma segundo a regra do modo.",
     "sourceCount_one": "{{count}} fonte",
     "sourceCount_many": "{{count}} fontes",
     "sourceCount_other": "{{count}} fontes",
@@ -21651,8 +21683,10 @@
       }
     },
     "picker": {
-      "empty": "Ainda não há grupos de modelos. Combine várias fontes numa rota nas Definições para a escolher aqui.",
-      "manage": "Gerir grupos de modelos"
+      "empty": "Ainda não há grupos de modelos. Combine várias fontes num modo nas Definições para o escolher aqui.",
+      "manage": "Gerir grupos de modelos",
+      "switched": "«{{name}}» mudou esta tarefa para {{model}}",
+      "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado."
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da quota, reposta a {{reset}}, por isso vai primeiro",
@@ -21664,7 +21698,7 @@
       "soonestUntil": "Todas as fontes esgotaram a quota; esta recupera primeiro ({{reset}})",
       "standby": "Desta vez não é a vez dela",
       "standbyQuota": "Restam {{left}}% da quota, reposta só a {{reset}}, por isso fica guardada",
-      "off": "Desativada nesta rota",
+      "off": "Desativada neste modo",
       "unavailable": "Sem ligação, ou este modelo não pode ser escolhido agora",
       "limited": "Quota esgotada",
       "limitedUntil": "Quota esgotada até {{reset}}",
@@ -21678,10 +21712,10 @@
       "separator": "; "
     },
     "settings": {
-      "newRoute": "Nova rota",
-      "newRouteName": "Nova rota",
-      "routesEmpty": "Ainda não há rotas. Crie uma e adicione várias fontes.",
-      "scopeNote": "Os grupos de modelos aplicam-se às novas tarefas iniciadas neste computador. A fonte é escolhida no início e não muda durante a tarefa.",
+      "newRoute": "Novo modo",
+      "newRouteName": "Novo modo",
+      "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",
+      "scopeNote": "Os grupos de modelos aplicam-se às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher um numa tarefa em curso troca uma vez, de imediato; depois não troca sozinha.",
       "back": "Voltar aos grupos de modelos",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
@@ -21693,14 +21727,14 @@
       "sources": "Fontes que pode usar",
       "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
       "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo ligado.",
-      "sourcesFull": "Uma rota aceita até {{count}} fontes.",
+      "sourcesFull": "Um modo aceita até {{count}} fontes.",
       "addSource": "Adicionar fonte",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem ligação",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",
-      "remove": "Remover desta rota",
-      "useSource": "Permitir que esta rota use {{name}}",
+      "remove": "Remover deste modo",
+      "useSource": "Permitir que este modo use {{name}}",
       "try": {
         "title": "Experimentar",
         "hint": "Veja que fonte uma nova tarefa usaria agora. Nada é enviado e não se gasta quota.",
@@ -21708,11 +21742,11 @@
         "picked": "Usar esta",
         "standby": "De reserva",
         "skipped": "Ignorada",
-        "unavailable": "Nenhuma fonte desta rota pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
+        "unavailable": "Nenhuma fonte deste modo pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
       },
-      "deleteRoute": "Eliminar esta rota",
+      "deleteRoute": "Eliminar este modo",
       "deleteRouteConfirmTitle": "Eliminar «{{name}}»?",
-      "deleteRouteConfirmDescription": "As exceções por horário de outras rotas que mudam para ela também são eliminadas. As tarefas já iniciadas não são afetadas.",
+      "deleteRouteConfirmDescription": "As exceções por horário de outros modos que mudam para ele também são eliminadas. As tarefas já iniciadas não são afetadas.",
       "delete": "Eliminar",
       "cancel": "Cancelar",
       "saveFailed": "Não foi possível guardar. Tente novamente.",
@@ -21733,17 +21767,17 @@
         "addHours": "Adicionar",
         "sameHour": "O início e o fim não podem ser a mesma hora.",
         "full": "Até {{count}} exceções.",
-        "needOtherRoute": "Crie outra rota para poder mudar para ela por horário."
+        "needOtherRoute": "Crie outro modo para poder mudar para ele por horário."
       }
     },
     "overview": {
       "mapTitle": "Como as novas tarefas escolhem um modelo",
-      "mapDescription": "Da esquerda para a direita: a rota que segue e a fonte onde termina. Clique numa rota para a alterar.",
+      "mapDescription": "Da esquerda para a direita: o modo que segue e a fonte onde termina. Clique num modo para o alterar.",
       "columnSources": "Fontes",
       "columnEmpty": "Ainda nenhum",
-      "openRoute": "Abrir a rota «{{name}}»",
+      "openRoute": "Abrir o modo «{{name}}»",
       "recentTitle": "Escolhas recentes",
-      "recentEmpty": "Ainda nenhuma tarefa usou uma rota.",
+      "recentEmpty": "Ainda nenhuma tarefa usou um modo.",
       "keptOriginal": "Não havia nenhum modelo disponível, por isso a tarefa manteve o modelo que tinha escolhido.",
       "keptOriginalShort": "O seu modelo foi mantido",
       "latest": "O caminho que a última tarefa seguiu"
