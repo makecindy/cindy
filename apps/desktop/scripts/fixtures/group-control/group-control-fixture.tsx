@@ -8,10 +8,12 @@ import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness
 import type { BotGroupSummary } from '../../../src/shared/botGroupChat';
 import { BotGroupSidebarRow } from '../../../src/renderer/features/bots/BotGroupSidebarRow';
 import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupChatView';
+import { BotGroupComposer } from '../../../src/renderer/features/bots/BotGroupComposer';
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { BOT_GROUP_SETTINGS_PARAM } from '../../../src/renderer/features/bots/botGroupPresentation';
 import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupStore';
 import { ControlledBanner } from '../../../src/renderer/features/remote-device/ControlledBanner';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { applyRemoteSessionActivity } from '../../../src/renderer/features/device-link/remoteSessionActivityStore';
 
 // The fixture's custom origin lacks secure-context randomUUID. Only correlation
@@ -48,6 +50,7 @@ interface GroupData {
   /** A server group with teammates' bubbles: quote, reactions, thread entry and a task card. */
   bubbles?: boolean;
   wrappedReactions?: boolean;
+  replyComposer?: boolean;
   /** A single-speaker server group: nobody was named, so everyone answers in turn (bot-group-chat.md §4.0/§7.0). */
   arrangement?: Queue;
   /** A preserved work plan whose ordinary messages must stay quiet. */
@@ -60,6 +63,8 @@ interface GroupData {
   threadUnread?: boolean;
   /** The Thread panel answers reads and keeps the reader's follow switch. */
   threadPanel?: boolean;
+  threadWork?: boolean;
+  threadWorkTall?: boolean;
   /** A server group that reports who has read a message: own messages with one or two checks and the read list. */
   readReceipts?: boolean;
   /** Many one-paragraph messages of growing length, to catch a last line that is just full. */
@@ -382,6 +387,22 @@ void mountPage({
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
     let group = { ...groupFrom(data), ...(data.planRead ? { serverBacked: true, historyRevision: 'fixture-live', organizerBotId: 'b' } : {}) };
+    if (data.threadWork) {
+      group.round = { status: 'running', canContinue: false, speakers: [
+        { botId: 'a', executionId: 'thread-a', sourceMessageId: 'reply-a', threadRootId: 'a1', timelineAt: T0 + 3.5 * MINUTE, sessionId: null, activity: 'reply', executionStatus: 'needs_input' },
+        { botId: 'b', executionId: 'thread-b', sourceMessageId: 'reply-b', threadRootId: 'q4', sessionId: null, activity: 'reply', executionStatus: 'queued' },
+      ] };
+    }
+    if (data.threadWork) {
+      Object.assign(group, { canStopAll: data.canStop !== false });
+      Object.assign(group.round, { othersActive: true, canStop: data.canStop });
+    }
+    if (data.threadWorkTall) {
+      group.round.speakers.push(...Array.from({ length: 18 }, (_, index) => ({
+        botId: 'a', executionId: `long-thread-${index}`, sourceMessageId: `long-source-${index}`,
+        threadRootId: 'a1', sessionId: null, activity: 'reply', executionStatus: 'needs_input',
+      })));
+    }
     let planReadHeld = false;
     const planReads: Array<() => void> = [];
     if (data.planRead) {
@@ -419,6 +440,15 @@ void mountPage({
       return { ok: true, root: receipts ? { ...root, readByOthers: true } : root, replies: marked, hasMore: false, following };
     };
     return {
+      voiceInput: {
+        getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), fastActivationEnabled: false }, history: [] }),
+        onDataChanged: subscription('voiceDataChanged'),
+        onEvent: subscription('voiceEvent'),
+        onGlobalShortcutTrigger: subscription('voiceShortcut'),
+        setGlobalShortcut: async () => ({ ok: true }),
+        prewarm: async () => ({ ok: true }),
+        start: forbid('voiceInput.start'),
+      },
       agentIsland: { onSessionActivity: subscription('sessionActivity') },
       // The missing-card scenario follows the real history/interaction hydration path.
       localDb: {
@@ -448,7 +478,10 @@ void mountPage({
             resolve({ ok: true, messageId: id });
           }, { once: true });
         }) : forbid('maker.sendBotGroupMessage'),
-        stopBotGroupRound: forbid('maker.stopBotGroupRound'),
+        stopBotGroupRound: data.threadWork ? async (_groupId: string, scope?: string) => {
+          document.body.dataset.fixtureStopScope = scope ?? 'mine';
+          return { ok: true };
+        } : forbid('maker.stopBotGroupRound'),
         chatServer: {
           reactors: async () => ({ ok: true, reactors: [{ actorId: 'me', isSelf: true, name: 'You', formerMember: false }] }),
           readers: async (input: { messageId: string }) => {
@@ -513,9 +546,12 @@ void mountPage({
       <>
         <AppFrame sidebar={sidebar}>
           <div className="min-h-0 flex-1" data-ui-page-subject>
-            <Routes>
+            {data.replyComposer ? <div className="flex h-full flex-col justify-end">
+              <BotGroupComposer groupId="fixture-group" draftKey="fixture-reply" mode="thread"
+                members={[]} running={false} sendReply={forbid('sendReply')} />
+            </div> : <Routes>
               <Route path="/bots/groups/:groupId" element={<BotGroupChatView />} />
-            </Routes>
+            </Routes>}
           </div>
         </AppFrame>
         <ControlledBanner />

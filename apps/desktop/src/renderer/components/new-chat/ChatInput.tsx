@@ -2244,9 +2244,12 @@ export function ChatInput({
     (activeProviderId ?? null) === (runtimeEffective ? runtimeEffective.providerId ?? null : initialProviderId ?? null) &&
     (!activeProviderId || activeProviderId === 'openai');
   const enforceConnectedSourceGate = (!sessionId || !catalogDeviceId) && !preserveSshCodexRoute;
-  const remoteModelListBlocked =
+  // 新任务选了模型组或「让插件选」：这次用哪个模型、在哪台运行由发送时的选路决定，草稿底层模型的来源
+  // 只在选路沿用它时才用得上(由发送回调在选路后检查)。输入框不按底层模型先挡下发送(model-groups.md §5)。
+  const sendRoutesOwnModel = !sessionId && (!!modelGroups?.active || !!pluginModels?.active);
+  const remoteModelListBlocked = !sendRoutesOwnModel && (
     (!!catalogDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
-    (!!sshCodexHostId && sshCodexProviders.status !== 'ready');
+    (!!sshCodexHostId && sshCodexProviders.status !== 'ready'));
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
   // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
@@ -2266,6 +2269,7 @@ export function ChatInput({
   const noConnectedSource =
     enforceConnectedSourceGate &&
     !!currentModelAgentKind &&
+    !sendRoutesOwnModel &&
     !providersLoading &&
     !remoteModelListBlocked &&
     // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
@@ -6028,7 +6032,7 @@ export function ChatInput({
         // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
         if (
           enforceConnectedSourceGate && !canAttemptBaselineRecovery &&
-          currentModelAgentKind &&
+          currentModelAgentKind && !sendRoutesOwnModel &&
           // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
           // 与模型列表一致交给 capabilities + 被控端发送链路做兼容回退。
           !(deviceLinkDeviceId && remoteProviders.unsupported)
@@ -6575,6 +6579,7 @@ export function ChatInput({
       providers,
       remoteProviders.unsupported,
       remoteModelListBlocked,
+      sendRoutesOwnModel,
       remoteModelListStatus,
       sshCodexHostId,
       sshCodexProviders.status,

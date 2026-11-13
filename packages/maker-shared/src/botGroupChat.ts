@@ -530,6 +530,9 @@ export type BotGroupSpeakerActivity = 'reply' | 'planning' | 'step';
 
 export interface BotGroupSpeaker {
   botId: string;
+  sourceMessageId?: string;
+  /** null is the main timeline; absent with a source ID means ownership is unresolved. */
+  threadRootId?: string | null;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
   /** Stable history position (e.g. server enqueue time), independent of elapsed work. */

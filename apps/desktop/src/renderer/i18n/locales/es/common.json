@@ -6503,7 +6503,7 @@
         "hook": "Bots de mensajería de Cindy"
       },
       "hook": {
-        "description": "Conecta Slack, Telegram, Feishu / Lark y otros canales al mismo Cindy. Los mensajes se envían a este dispositivo y comparten su lista de proyectos y su ejecutor de sesiones; cada proveedor conserva su propia cuenta y preferencias.",
+        "description": "Conecta Slack, Telegram, Feishu / Lark y otros canales al mismo Cindy. Los mensajes se envían a este dispositivo y comparten su lista de proyectos y su ejecutor de sesiones; el modelo y los permisos de cada proyecto se comparten entre todos los canales, y cada canal conserva su propia vinculación de cuenta.",
         "slackDescription": "Vincula espacios de trabajo de Slack y asigna tareas a Cindy desde Slack.",
         "slackDisabledHint": "Activa el interruptor para iniciar la autorización de Slack; una vez vinculado, podrás enviar tareas desde Slack.",
         "slackBoundHint": "Vinculación completa. Al desactivar el interruptor se desvincula este dispositivo; al volver a activarlo tendrás que autorizar de nuevo.",
@@ -6522,33 +6522,21 @@
           "error": "La conexión falló"
         },
         "form": {
-          "workspacesCardTitle": "Asignaciones de directorios de trabajo",
-          "workspacesCardDescription": "Alias → ruta absoluta local; la lista de directorios se comparte entre canales, mientras que las preferencias de ejecución son específicas de cada canal.",
-          "workspacesBoundCount_one": "{{count}} directorio de trabajo local vinculado",
-          "workspacesBoundCount_other": "{{count}} directorios de trabajo locales vinculados",
+          "workspacesCardTitle": "Proyectos y modelos",
+          "workspacesCardDescription": "Compartido por todos los bots oficiales. Los proyectos vienen de la barra lateral: créalos, renómbralos o quítalos allí. Los cambios hechos con /model en un chat también aparecen aquí.",
+          "workspacesBoundCount_one": "{{count}} proyecto",
+          "workspacesBoundCount_other": "{{count}} proyectos",
           "aliasPlaceholder": "Alias, p. ej., my-server",
-          "addWorkspace": "Agregar directorio de trabajo",
-          "removeWorkspace": "Eliminar este directorio de trabajo",
-          "changeDir": "Haz clic para cambiar de directorio (se conservan el alias y las preferencias)",
+          "addProject": "Agregar proyecto",
           "defaultWorkspaceChip": "Predeterminado: {{name}}",
-          "defaultWorkspaceAria": "Elige el directorio de trabajo predeterminado para las tareas enviadas",
-          "defaultWorkspaceRadioAria": "Establecer «{{name}}» como directorio de trabajo predeterminado",
-          "defaultWorkspaceRowHint": "El directorio seleccionado es el directorio de trabajo predeterminado: cualquier conversación por mensaje directo, grupo o tema de Telegram que no haya elegido su propio proyecto ejecuta sus tareas allí (las conversaciones que eligieron uno con /workspace conservan el suyo). Presta atención al modo de permisos en la fila del directorio seleccionado: si está en Acceso completo, una @mention desde cualquier grupo se ejecuta con acceso completo dentro de ese repositorio.",
-          "legacyDefaultsTitle": "Los valores predeterminados antiguos de «nueva conversación» siguen vigentes",
-          "legacyDefaultsDescription": "Este dispositivo guardó valores predeterminados antiguos del bot oficial que aún se usan como alternativa para los directorios sin configuración propia (Telegram oficial y X comparten una copia). Estos valores ahora se configuran por directorio. Restaurar los valores predeterminados borra todo lo siguiente:",
-          "legacyDefaultsRow": {
-            "agentKind": "Agent predeterminado: {{current}} → {{fallback}}",
-            "permissionMode": "Modo de permisos: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "modelo {{current}} → {{fallback}}",
-            "effort": "intensidad de razonamiento {{current}} → {{fallback}}",
-            "source": "fuente del modelo {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "usa la configuración global",
-          "workspacesBoundCount_many": "{{count}} directorios de trabajo locales vinculados"
+          "defaultWorkspaceAria": "Elige el proyecto predeterminado para las tareas enviadas",
+          "defaultWorkspaceRadioAria": "Establecer «{{name}}» como proyecto predeterminado",
+          "defaultWorkspaceRowHint": "El proyecto seleccionado es el predeterminado: las conversaciones de Telegram, Feishu / Lark y X que no han elegido proyecto ejecutan sus tareas allí.",
+          "defaultProjectTag": "Predeterminado",
+          "defaultProjectFullAccessWarning": "El proyecto predeterminado «{{name}}» tiene Acceso completo: una @mention desde cualquier grupo se ejecuta con acceso completo dentro de él.",
+          "sharedSettingsPointer": "Los proyectos, modelos y permisos se comparten entre todos los bots oficiales.",
+          "sharedSettingsPointerAction": "Abrir ajustes",
+          "workspacesBoundCount_many": "{{count}} proyectos"
         },
         "binding": {
           "copyLink": "Copiar enlace",
@@ -6566,7 +6554,8 @@
         "toast": {
           "saveFailed": "No se pudo guardar",
           "toggleFailed": "No se pudo cambiar el estado",
-          "actionFailed": "Operación fallida"
+          "actionFailed": "Operación fallida",
+          "addProjectFailed": "No se pudo agregar el proyecto"
         },
         "loginRequired": "Primero inicia sesión en tu cuenta de {{appName}}; la conexión se reanuda automáticamente después de iniciar sesión.",
         "standbyHint": "Otra instancia de Cindy en esta computadora está usando la conexión con Slack. Ciérrala y vuelve a activar este interruptor para tomar el control.",
@@ -6700,7 +6689,7 @@
             "usageBody": "Publica en X mencionando a @askmycindy y la tarea se enviará a este dispositivo para ejecutarse aquí; el resultado llegará como respuesta.",
             "riskLabel": "Las respuestas son públicas",
             "riskPublicBody": "Las respuestas son públicas y cualquier persona puede verlas. Usa esta función para preguntas y problemas públicos, no para asuntos privados que puedan comprometer tu privacidad.",
-            "riskWorkdirBody": "Cada tarea de X se ejecuta en el directorio de trabajo predeterminado definido en la configuración de conexión de X. El Agent puede leer y escribir archivos allí, y su conclusión se publica abiertamente; si ese directorio apunta a un repositorio privado, el contenido de los archivos también podría hacerse público.",
+            "riskWorkdirBody": "Cada tarea de X se ejecuta en el proyecto predeterminado definido en la configuración de conexión de X. El Agent puede leer y escribir archivos allí, y su conclusión se publica abiertamente; si ese proyecto apunta a un repositorio privado, el contenido de los archivos también podría hacerse público.",
             "withdrawLabel": "Cómo retirar una respuesta",
             "withdrawBody": "Quien hizo la pregunta puede eliminar la respuesta respondiéndole “@askmycindy /delete”. Incluye @askmycindy en el texto de la respuesta. Solo se elimina la respuesta pública; el registro local de la tarea se conserva.",
             "ackTitle": "X está vinculado: cómo funciona y qué debes tener en cuenta",
@@ -6780,8 +6769,8 @@
           "botFallback": "Bot de Cindy",
           "bridgeTitle": "Bots de Feishu / Lark",
           "bridgeDescription": "Los bots solo pasan tus mensajes de Feishu / Lark a Cindy. Los mensajes de cada cuenta vinculada van a su computadora de trabajo, y las sesiones se mantienen separadas por bot y por cuenta.",
-          "settingsTitle": "Directorios de trabajo y modelos",
-          "settingsDescription": "Pertenecen a tu cuenta de Cindy en esta computadora, no a un bot ni a una cuenta de Feishu / Lark: todos los bots de Feishu / Lark usan los mismos. La lista de directorios también se comparte con otros canales.",
+          "settingsTitle": "Proyectos y modelos",
+          "settingsDescription": "Pertenecen a tu cuenta de Cindy en esta computadora, no a un bot ni a una cuenta de Feishu / Lark: todos los bots de Feishu / Lark usan los mismos. Los proyectos son los proyectos locales de la barra lateral y también se comparten con otros canales.",
           "workingDeviceLabel": "Computadora de trabajo: {{name}}",
           "workingDeviceThisComputer": "Esta computadora",
           "workingDeviceUnknown": "Computadora de trabajo aún sin sincronizar",
@@ -6995,9 +6984,10 @@
         "offlineLocal": "{{provider}} está sin conexión. Los cambios se guardan en esta computadora y se sincronizan con la tarjeta de modelo de la conversación cuando vuelva a conectarse.",
         "requireBinding": "Primero completa la vinculación de la cuenta de {{provider}}.",
         "serverUnsupported": "El servidor es demasiado antiguo o no responde; no se pueden cargar las preferencias.",
+        "loadFailed": "No se pudo cargar la configuración de proyectos.",
         "retry": "Reintentar",
         "toast": {
-          "saveFailed": "No se pudieron guardar las preferencias de directorio"
+          "saveFailed": "No se pudo guardar la configuración del proyecto"
         },
         "teamChipAria": "Elige a qué espacio de trabajo de Slack pertenecen estas preferencias"
       }
@@ -12664,7 +12654,7 @@
         "expiredCardNotice": "Esta tarjeta ha caducado",
         "slash": {
           "new": "🌱 Empezamos de cero: borré la conversación anterior. ¡Cuéntame!",
-          "help": "🤖 Esto es lo que puedo hacer:\n\n/new         Empezar de cero (borra el contexto de la conversación actual)\n/model       Cambiar de modelo\n/permission  Ajustar el modo de permiso (auto / bypass / ask, etc.)\n/ctr         Controlar en remoto un espacio de trabajo del escritorio (vuelve a enviarlo durante el control para cambiar de sesión)\n/exctr       Terminar el control remoto y volver a nuestros mensajes directos de Discord\n/help        Ver lo que puedo hacer\n\n¿Hay algo en marcha que quieras detener? Envía `!stop`: detendré la ejecución actual al instante y descartaré también los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nPor lo demás, escríbeme sin más. Te escucho.",
+          "help": "🤖 Esto es lo que puedo hacer:\n\n/new         Empezar de cero (borra el contexto de la conversación actual)\n/model       Cambiar de modelo\n/permission  Ajustar el modo de permiso (auto / bypass / ask, etc.)\n/ctr         Controlar en remoto un proyecto del escritorio (vuelve a enviarlo durante el control para cambiar de sesión)\n/exctr       Terminar el control remoto y volver a nuestros mensajes directos de Discord\n/help        Ver lo que puedo hacer\n\n¿Hay algo en marcha que quieras detener? Envía `!stop`: detendré la ejecución actual al instante y descartaré también los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nPor lo demás, escríbeme sin más. Te escucho.",
           "unknownCommand": "No reconozco el comando `{{cmd}}` 🤔\nComandos que entiendo: /new, /model, /permission, /ctr, /exctr, /help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` no está disponible en los canales de servidor: expondría en público las sesiones / proyectos privados de tu escritorio. Si quieres usarlo, envíamelo por mensaje directo.",
           "detachedBySlash": "🚪 Control remoto terminado: volvemos a nuestros mensajes directos de Discord. Cuando quieras controlar el escritorio otra vez, envía /ctr.",
@@ -12744,15 +12734,15 @@
             "fullAccessCancelled": "Cancelado: se mantienen los permisos actuales"
           },
           "control": {
-            "title": "🎮 Elige un espacio de trabajo",
-            "emptyBody": "_Todavía no hay espacios de trabajo que controlar. Abre o crea una sesión en el escritorio y vuelve._",
-            "hint": "Elige un espacio de trabajo para continuar; 🚪 Salir cancela.",
+            "title": "🎮 Elige un proyecto",
+            "emptyBody": "_Todavía no hay proyectos que controlar. Abre o crea una sesión en el escritorio y vuelve._",
+            "hint": "Elige un proyecto para continuar; 🚪 Salir cancela.",
             "attachedSwitchHint": "🎮 Controlando ahora: **{{sessionTitle}}**\nElige otra sesión para cambiar a ella; 🚪 Salir lo deja todo como está.",
             "btnExit": "🚪 Salir",
             "resolvedExit": "🚪 Listo, salí. Cuando quieras volver a controlar en remoto, envía /ctr.",
             "sessionPickerTitle": "🎮 Sesiones de {{displayName}}",
-            "sessionPickerHint": "Elige una sesión para continuar · ➕ Nueva crea otra · ↩️ Atrás cambia de espacio de trabajo · 🚪 Salir cancela",
-            "sessionPickerEmptyBody": "_Aún no hay sesiones activas en el espacio de trabajo **{{displayName}}**. ¿Por qué no creas una con ➕ Nueva?_",
+            "sessionPickerHint": "Elige una sesión para continuar · ➕ Nueva crea otra · ↩️ Atrás cambia de proyecto · 🚪 Salir cancela",
+            "sessionPickerEmptyBody": "_Aún no hay sesiones activas en el proyecto **{{displayName}}**. ¿Por qué no creas una con ➕ Nueva?_",
             "btnNew": "➕ Nueva",
             "btnBack": "↩️ Atrás",
             "resolvedSessionPick": "🎯 Ya estás dentro: **{{sessionTitle}}** ({{workspaceName}})\nTus mensajes irán directamente a esta sesión. Para salir, envía `/exctr` cuando quieras.",
@@ -12867,7 +12857,7 @@
         "slash": {
           "start": "👋 ¡Hola! Soy tu asistente personal de Cindy.\n\nEn un chat privado, solo tienes que enviarme un mensaje. En los grupos solo respondo si me mencionas con @ o respondes a uno de mis mensajes. Envía /help para ver todos los comandos.",
           "new": "🌱 Nueva sesión creada: ya aparece en tu lista de sesiones. ¡Empecemos desde cero!",
-          "help": "🤖 Esto es lo que puedo hacer por ti:\n\n/new         Crear una nueva sesión (las anteriores se conservan; en grupos, se crea para el tema actual del grupo)\n/project     Trabajar en una carpeta de proyecto (se ejecuta aquí en el bot, sin tomar el control del escritorio)\n/session     Ver las sesiones recientes del escritorio; toca una para tomar el control y seguir\n/model       Sacar a otro modelo al campo\n/permission  Cambiar el modo de permiso (auto / bypass / ask, etc.)\n/settings    Ver el proyecto, el Agent, el modelo, la intensidad de razonamiento y los permisos actuales\n/ctr         Tomar el control remoto de un espacio de trabajo del escritorio (vuelve a enviarlo durante el control para cambiar de sesión)\n/exctr       Dejar el control y volver a la conversación de Telegram\n/help        Ver lo que sé hacer\n\n¿Hay algo en marcha que quieras detener? Envía /stop (o `!stop`): detendré de inmediato la ejecución actual y también retiraré los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nEn un chat privado, solo tienes que enviarme un mensaje. En los grupos solo respondo si me mencionas con @ o respondes a uno de mis mensajes, y recuerdo los mensajes recientes del grupo como contexto.",
+          "help": "🤖 Esto es lo que puedo hacer por ti:\n\n/new         Crear una nueva sesión (las anteriores se conservan; en grupos, se crea para el tema actual del grupo)\n/project     Trabajar en una carpeta de proyecto (se ejecuta aquí en el bot, sin tomar el control del escritorio)\n/session     Ver las sesiones recientes del escritorio; toca una para tomar el control y seguir\n/model       Sacar a otro modelo al campo\n/permission  Cambiar el modo de permiso (auto / bypass / ask, etc.)\n/settings    Ver el proyecto, el Agent, el modelo, la intensidad de razonamiento y los permisos actuales\n/ctr         Tomar el control remoto de un proyecto del escritorio (vuelve a enviarlo durante el control para cambiar de sesión)\n/exctr       Dejar el control y volver a la conversación de Telegram\n/help        Ver lo que sé hacer\n\n¿Hay algo en marcha que quieras detener? Envía /stop (o `!stop`): detendré de inmediato la ejecución actual y también retiraré los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nEn un chat privado, solo tienes que enviarme un mensaje. En los grupos solo respondo si me mencionas con @ o respondes a uno de mis mensajes, y recuerdo los mensajes recientes del grupo como contexto.",
           "unknownCommand": "No reconozco el comando `{{cmd}}` 🤔\nComandos que entiendo: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Configuración actual\n\nProyecto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nIntensidad de razonamiento: {{effort}}\nPermisos: {{permission}}\n\nPara cambiarla, envía /project, /model o /permission.",
           "settingsCompanion": "⚙️ Configuración actual (compañero)\n\nProyecto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nIntensidad de razonamiento: {{effort}}\nPermisos: {{permission}}\n\nEl modelo, los permisos y el directorio de trabajo siguen la configuración del compañero. Cámbialos en la configuración del compañero en Cindy.",
@@ -12970,15 +12960,15 @@
             "dialogueName": "Conversación (carpeta gestionada)"
           },
           "control": {
-            "title": "🎮 Elige un espacio de trabajo",
-            "emptyBody": "_Todavía no hay espacios de trabajo que controlar. Abre o crea una sesión en el escritorio y vuelve._",
-            "hint": "Toca un espacio de trabajo para seguir; toca 🚪 Salir para cancelar",
+            "title": "🎮 Elige un proyecto",
+            "emptyBody": "_Todavía no hay proyectos que controlar. Abre o crea una sesión en el escritorio y vuelve._",
+            "hint": "Toca un proyecto para seguir; toca 🚪 Salir para cancelar",
             "attachedSwitchHint": "🎮 Controlando ahora: **{{title}}**\nElige otra sesión para cambiar directamente; toca 🚪 Salir para dejarlo como está",
             "btnExit": "🚪 Salir",
             "resolvedExit": "🚪 Me voy. La próxima vez que quieras control remoto, envía /ctr",
             "sessionPickerTitle": "🎮 Sesiones en {{name}}",
-            "sessionPickerHint": "Elige una sesión para continuar · ➕ Nueva para una sesión nueva · ↩️ Atrás para cambiar de espacio de trabajo · 🚪 Salir para cancelar",
-            "sessionPickerEmptyBody": "_El espacio de trabajo **{{name}}** aún no tiene sesiones activas. ¿Por qué no tocas ➕ Nueva para abrir una?_",
+            "sessionPickerHint": "Elige una sesión para continuar · ➕ Nueva para una sesión nueva · ↩️ Atrás para cambiar de proyecto · 🚪 Salir para cancelar",
+            "sessionPickerEmptyBody": "_El proyecto **{{name}}** aún no tiene sesiones activas. ¿Por qué no tocas ➕ Nueva para abrir una?_",
             "btnNew": "➕ Nueva",
             "btnBack": "↩️ Atrás",
             "resolvedSessionPick": "🎯 Ya estás dentro: **{{title}}** ({{workspace}})\nTus mensajes irán directo a esta sesión; para salir, envía `/exctr` cuando quieras",
@@ -12987,7 +12977,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ Esa sesión sigue en marcha: abajo tienes una tarjeta nueva, vuelve a elegir",
             "recentSessions": {
               "title": "🕑 Sesiones recientes",
-              "hint": "Toca una para tomar el control y seguir (ordenadas por fecha entre espacios de trabajo) · Para elegir por espacio de trabajo, usa /ctr · 🚪 Salir para cancelar",
+              "hint": "Toca una para tomar el control y seguir (ordenadas por fecha entre proyectos) · Para elegir por proyecto, usa /ctr · 🚪 Salir para cancelar",
               "emptyBody": "_Todavía no hay sesiones activas en el escritorio. Inicia una allí y vuelve._"
             },
             "sessionBusyPrompts": {
@@ -13145,18 +13135,18 @@
           "permissionTimeout": "Se agotó el tiempo de espera de la autorización. Se denegó la solicitud de permiso."
         },
         "run": {
-          "routeReselectHint": ". Vuelve a elegir un modelo para el directorio de trabajo de este canal en Configuración → Bots de mensajería.",
+          "routeReselectHint": ". Vuelve a elegir un modelo para el proyecto de este canal en Configuración → Bots de mensajería.",
           "awaitingPermission": "Esperando autorización · necesita tu confirmación",
           "awaitingAnswer": "Esperando respuesta · necesita que elijas",
           "awaitingPlan": "Esperando revisión · necesita que confirmes el plan",
           "awaitingFallback": "Esperando tu confirmación",
           "cancelledBeforeRun": "El usuario detuvo la tarea, así que este mensaje no se ejecutó.",
-          "liveSessionDirUnmapped": "Esta tarea se está ejecutando en un directorio que ya no está en las asignaciones de directorios de trabajo, así que este mensaje no se ejecutó. Añade ese directorio en Configuración → Conexión remota → Asignaciones de directorios de trabajo, o cierra esta tarea en la app de escritorio y vuelve a enviarlo.",
+          "liveSessionDirUnmapped": "Esta tarea se está ejecutando en un directorio que ya no pertenece a ningún proyecto, así que este mensaje no se ejecutó. Añade ese directorio como proyecto en la barra lateral, o cierra esta tarea en la app de escritorio y vuelve a enviarlo.",
           "interactionExpired": "La tarea terminó, así que esta interacción ya no es válida.",
           "telegramOfficialBot": "bot oficial de Telegram"
         },
         "dispatch": {
-          "dirUnmapped": "El directorio de esta tarea ya no está en las asignaciones de directorios de trabajo, así que este mensaje no se ejecutó. Añade su directorio en Configuración → Conexión remota → Asignaciones de directorios de trabajo y vuelve a enviarlo."
+          "dirUnmapped": "El directorio de esta tarea ya no pertenece a ningún proyecto, así que este mensaje no se ejecutó. Añade su directorio como proyecto en la barra lateral y vuelve a enviarlo."
         }
       },
       "wecom": {
@@ -13242,9 +13232,9 @@
             "fullAccessCancelled": "Cancelado. Se mantienen los permisos actuales"
           },
           "control": {
-            "title": "🎮 Elige un espacio de trabajo",
-            "emptyBody": "_Todavía no hay espacios de trabajo que controlar. Primero crea una tarea en Cindy Desktop._",
-            "hint": "Elige un espacio de trabajo para continuar o sal.",
+            "title": "🎮 Elige un proyecto",
+            "emptyBody": "_Todavía no hay proyectos que controlar. Primero crea una tarea en Cindy Desktop._",
+            "hint": "Elige un proyecto para continuar o sal.",
             "attachedSwitchHint": "Controlando ahora: **{{sessionTitle}}**",
             "btnExit": "🚪 Salir",
             "resolvedExit": "🚪 Saliste del control remoto",
@@ -13306,7 +13296,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 Empezamos de cero: he borrado la conversación anterior. ¡Cuéntame!",
-          "help": "🤖 Esto es lo que puedo hacer:\n\n/new         Empezar de cero (borra el contexto de la conversación actual)\n/model       Cambiar de modelo\n/permission  Ajustar el modo de permiso (auto / bypass / ask, etc.)\n/ctr         Controlar a distancia un espacio de trabajo de la app de escritorio (envíalo de nuevo durante el control para cambiar de sesión)\n/exctr       Terminar el control remoto y volver a nuestro chat privado\n/help        Ver lo que puedo hacer\n\n¿Hay algo en marcha que quieras detener? Envía `!stop`: detendré la ejecución actual al instante y descartaré los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nPor lo demás, escríbeme sin más; te escucho~",
+          "help": "🤖 Esto es lo que puedo hacer:\n\n/new         Empezar de cero (borra el contexto de la conversación actual)\n/project     Trabajar en una carpeta de proyecto (se ejecuta aquí en el bot, sin tomar el control del escritorio)\n/model       Cambiar de modelo\n/permission  Ajustar el modo de permiso (auto / bypass / ask, etc.)\n/ctr         Controlar a distancia un proyecto de la app de escritorio (envíalo de nuevo durante el control para cambiar de sesión)\n/exctr       Terminar el control remoto y volver a nuestro chat privado\n/help        Ver lo que puedo hacer\n\n¿Hay algo en marcha que quieras detener? Envía `!stop`: detendré la ejecución actual al instante y descartaré los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nPor lo demás, escríbeme sin más; te escucho~",
           "unknownCommand": "No reconozco el comando `{{cmd}}` 🤔\nComandos que entiendo: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Control remoto terminado: volvemos a nuestro chat privado. Cuando quieras controlar de nuevo la app de escritorio, envía /ctr",
           "detachedByRevoke": "⚠️ Recuperaste el control desde la app de escritorio. Los próximos mensajes vuelven a nuestro chat privado.",
@@ -13404,15 +13394,28 @@
             "resolved": "✅ Cambiado a “Revisión automática”: vuelve al grupo y sigue escribiendo~",
             "failed": "❌ No se pudo cambiar: {{reason}}. Puedes enviar /permission auto para cambiarlo a mano"
           },
+          "project": {
+            "title": "📂 Cambiar de carpeta de proyecto",
+            "hint": "**Actual**: {{name}}\nElige un proyecto y los siguientes mensajes trabajarán en esa carpeta (el contexto empieza de nuevo; se conservan los ajustes de modelo y permisos)",
+            "emptyBody": "_Todavía no hay espacios de trabajo de proyecto activos en el escritorio. Abre primero un proyecto en el escritorio y vuelve._",
+            "btnDialogue": "💬 Volver a la conversación",
+            "btnCancel": "🚪 Mejor no",
+            "resolvedPick": "📂 Cambiado a **{{name}}**: el nuevo contexto está listo, envía una instrucción para empezar. Para volver a la conversación normal, envía /project y elige “Volver a la conversación”",
+            "resolvedDialogue": "💬 De vuelta en la carpeta de conversación; el contexto empieza de nuevo.",
+            "resolvedCancel": "🚪 Sin cambios, todo sigue igual",
+            "switchFailed": "❌ No se pudo cambiar: {{reason}} (puede que la carpeta se haya movido o eliminado)",
+            "attachedUnsupported": "🎮 Estás controlando una sesión del escritorio con /ctr: mientras dure el control, los mensajes van directo a esa sesión, así que no necesitas /project. Para cambiar de proyecto, sal primero del control con `/exctr`",
+            "dialogueName": "Conversación (carpeta gestionada)"
+          },
           "control": {
-            "title": "🎮 Elige un espacio de trabajo",
-            "emptyBody": "_Todavía no hay espacios de trabajo que controlar~ Abre o crea una sesión en la app de escritorio y vuelve_",
-            "hint": "Toca un espacio de trabajo para continuar; toca 🚪 Salir para cancelar",
+            "title": "🎮 Elige un proyecto",
+            "emptyBody": "_Todavía no hay proyectos que controlar~ Abre o crea una sesión en la app de escritorio y vuelve_",
+            "hint": "Toca un proyecto para continuar; toca 🚪 Salir para cancelar",
             "attachedSwitchHint": "🎮 Controlando ahora: **{{title}}**\nElige otra sesión para cambiar directamente; toca 🚪 Salir para dejarlo como está",
             "btnExit": "🚪 Salir",
             "resolvedExit": "🚪 Listo, salgo. La próxima vez que quieras control remoto, envía /ctr",
             "sessionPickerTitle": "🎮 Sesiones en {{workspace}}",
-            "sessionPickerHint": "Elige una sesión para continuar · ➕ Nueva para empezar otra · ↩️ Atrás para cambiar de espacio de trabajo · 🚪 Salir para cancelar",
+            "sessionPickerHint": "Elige una sesión para continuar · ➕ Nueva para empezar otra · ↩️ Atrás para cambiar de proyecto · 🚪 Salir para cancelar",
             "sessionPickerEmptyBody": "_Todavía no hay sesiones activas en **{{workspace}}**~ ¿Por qué no tocas ➕ Nueva para abrir una?_",
             "btnNew": "➕ Nueva",
             "btnBack": "↩️ Atrás",
@@ -13457,7 +13460,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 Empezamos de cero: borré la conversación anterior. ¡Cuéntame!",
-          "help": "🤖 Esto es lo que puedo hacer:\n\n/new         Empezar de cero (borra el contexto de la conversación actual)\n/model       Cambiar de modelo\n/permission  Ajustar el modo de permiso (auto / bypass / ask, etc.)\n/ctr         Tomar el control remoto de un espacio de trabajo de la app de escritorio (envíalo de nuevo durante el control para cambiar de sesión)\n/exctr       Terminar el control remoto y volver a nuestra conversación privada de WeChat\n/help        Ver lo que sé hacer\n\n¿Hay algo en marcha que quieras detener? Envía `!stop`: detengo la ejecución actual al instante y retiro los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nPor lo demás, escríbeme sin más. Te escucho~",
+          "help": "🤖 Esto es lo que puedo hacer:\n\n/new         Empezar de cero (borra el contexto de la conversación actual)\n/model       Cambiar de modelo\n/permission  Ajustar el modo de permiso (auto / bypass / ask, etc.)\n/ctr         Tomar el control remoto de un proyecto de la app de escritorio (envíalo de nuevo durante el control para cambiar de sesión)\n/exctr       Terminar el control remoto y volver a nuestra conversación privada de WeChat\n/help        Ver lo que sé hacer\n\n¿Hay algo en marcha que quieras detener? Envía `!stop`: detengo la ejecución actual al instante y retiro los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nPor lo demás, escríbeme sin más. Te escucho~",
           "unknownCommand": "No reconozco el comando `{{cmd}}` 🤔\nComandos que entiendo: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Control remoto finalizado: volvemos a nuestra conversación privada de WeChat. La próxima vez que quieras controlar la app de escritorio a distancia, envía /ctr",
           "detachedByRevoke": "⚠️ Recuperaste el control desde la app de escritorio. Los siguientes mensajes vuelven a nuestra conversación privada de WeChat.",
@@ -13541,14 +13544,14 @@
             "fullAccessCancelled": "Cancelado. Se mantienen los permisos actuales"
           },
           "control": {
-            "title": "🎮 Elige un espacio de trabajo",
-            "emptyBody": "_Todavía no hay espacios de trabajo que puedas controlar~ Abre o crea una sesión en la app de escritorio y vuelve_",
-            "hint": "Toca un espacio de trabajo para seguir; toca 🚪 Salir para cancelar",
+            "title": "🎮 Elige un proyecto",
+            "emptyBody": "_Todavía no hay proyectos que puedas controlar~ Abre o crea una sesión en la app de escritorio y vuelve_",
+            "hint": "Toca un proyecto para seguir; toca 🚪 Salir para cancelar",
             "attachedSwitchHint": "🎮 Controlando ahora: **{{sessionTitle}}**\nElige otra sesión para cambiar; toca 🚪 Salir para dejarlo como está",
             "btnExit": "🚪 Salir",
             "resolvedExit": "🚪 Listo, salí. Cuando quieras volver a controlarlo a distancia, envía /ctr",
             "sessionPickerTitle": "🎮 Sesiones de {{displayName}}",
-            "sessionPickerHint": "Elige una sesión para continuar · ➕ Nueva para empezar otra · ↩️ Atrás para cambiar de espacio de trabajo · 🚪 Salir para cancelar",
+            "sessionPickerHint": "Elige una sesión para continuar · ➕ Nueva para empezar otra · ↩️ Atrás para cambiar de proyecto · 🚪 Salir para cancelar",
             "sessionPickerEmptyBody": "_Aún no hay sesiones activas en **{{displayName}}**~ ¿Por qué no tocas ➕ Nueva para crear una?_",
             "btnNew": "➕ Nueva",
             "btnBack": "↩️ Atrás",

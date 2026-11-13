@@ -40,6 +40,7 @@ import {
   MAX_PLAN_LEN,
 } from './interactionCardModel';
 import type { ControlProject, ControlSession, RecentControlSession } from './controlProjects';
+import { projectToken } from './projectToken';
 
 /** IM 卡片文本截断(实现见 interactionCardModel.truncateBlock)。 */
 const truncate = truncateBlock;
@@ -604,10 +605,11 @@ export function createCardBuilders(
             id: 'project:pick',
             label: truncate(p.displayName, 30),
             type: 'default' as const,
+            // 只带不透明标记, 不带本机路径(见 projectToken.ts); 回调时按当前项目清单找回目录。
             payload: {
-              requestId: `project-pick:${p.workingDir}`,
+              requestId: `project-pick:${projectToken(p.workingDir)}`,
               botAppId,
-              workingDir: p.workingDir,
+              projectToken: projectToken(p.workingDir),
               displayName: p.displayName,
             },
           })),

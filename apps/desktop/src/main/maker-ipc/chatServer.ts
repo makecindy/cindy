@@ -1941,14 +1941,25 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Keep execution identity across computers and concurrent threads. Only the executing
     // computer resolves a lane; authenticated peers retrieve it through the group resource.
     const speakers: BotGroupSpeaker[] = [];
+    const sourceMessages = new Map<string, Message | undefined>([...s.messages, ...page].map(message => [message.id, message]));
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
+      if (!e.plan_id && !summaryOnly && !sourceMessages.has(e.source_message_id)) {
+        const source = await (history()?.message<Message>(roomId, e.source_message_id) ?? readMessage(roomId, e.source_message_id)).catch(error => {
+          if (error instanceof ChatResponseError && [403, 404, 410].includes(error.status)) return undefined;
+          throw error;
+        });
+        sourceMessages.set(e.source_message_id, source);
+      }
+      const source = e.plan_id ? undefined : sourceMessages.get(e.source_message_id);
       const run = running.get(e.id);
       // Enqueue time anchors history across computers and queue transitions; only the
       // local start is an elapsed-work clock.
       const timelineAt = e.created_at ? Date.parse(e.created_at) : NaN;
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
-        executionId: e.id, ...(Number.isFinite(timelineAt) ? { timelineAt } : {}),
+        executionId: e.id, sourceMessageId: e.source_message_id,
+        ...(e.plan_id || source ? { threadRootId: e.plan_id ? null : source!.threadRootId ?? null } : {}),
+        ...(Number.isFinite(timelineAt) ? { timelineAt } : {}),
         ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
         activity: e.plan_id ? 'step' : 'reply' };
