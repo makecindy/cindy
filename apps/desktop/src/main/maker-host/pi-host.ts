@@ -136,7 +136,7 @@ export function resolvePiBinaryPath(): string | null {
 }
 
 // The desktop's ports for the Pi native providers shared with the Node Host (piNativeProvidersCore.ts).
-export const { buildXaiPiNativeProvider, resolvePiNativeProviders } = createPiNativeProviderResolver({
+const piNativeProviderResolver = createPiNativeProviderResolver({
   getClaudeEndpoint: () => getClaudeEndpoint(),
   isAnthropicCompatProxyHandleReady: () => isAnthropicCompatProxyHandleReady(),
   resolvePiBinaryPath: () => resolvePiBinaryPath(),
@@ -148,6 +148,18 @@ export const { buildXaiPiNativeProvider, resolvePiNativeProviders } = createPiNa
   ensureManagedOllamaReadyForSession: (input) => ensureManagedOllamaReadyForSession(input),
   getUserDataDir: () => app.getPath('userData'),
 });
+
+export async function buildXaiPiNativeProvider(
+  ...args: Parameters<typeof piNativeProviderResolver.buildXaiPiNativeProvider>
+): ReturnType<typeof piNativeProviderResolver.buildXaiPiNativeProvider> {
+  return piNativeProviderResolver.buildXaiPiNativeProvider(...args);
+}
+
+export async function resolvePiNativeProviders(
+  ...args: Parameters<typeof piNativeProviderResolver.resolvePiNativeProviders>
+): ReturnType<typeof piNativeProviderResolver.resolvePiNativeProviders> {
+  return piNativeProviderResolver.resolvePiNativeProviders(...args);
+}
 
 // ── AuthAdapter(XD 网关 key)─────────────────────────────────────────────────
 
