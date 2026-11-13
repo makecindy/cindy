@@ -21,6 +21,7 @@ import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../
 import { bearerKeyFromHeaders } from '../../../desktop/src/main/model-access/gatewayKeyRejectionCore.js';
 import { captureCodexLocalAuthPolicy } from '../../../desktop/src/main/maker-host/provider-route.js';
 import { registerCodexTextOnlyPolicy } from '../../../desktop/src/main/maker-host/codex-text-only-policy.js';
+import { withParentReasoningEffort } from '../../../desktop/src/main/maker-host/codex-smart-subagent-routing.js';
 import { createAnthropicResponsesBridgeHost } from '../../../desktop/src/main/maker-host/anthropicResponsesBridgeHostCore.js';
 import { createPiSubscriptionWebSocket } from '../../../desktop/src/main/maker-host/piSubscriptionWebSocketCore.js';
 import { chatgptAccountIdFromTokens } from '../../../desktop/src/main/maker-host/codexCredentialRead.js';
@@ -210,8 +211,35 @@ export function createHostCodexRuntime(options: {
     isCodexAccountProvider: id => id !== 'openai' && options.config.codexAccounts.isCodexAccountProvider(id),
     isolateCodexAccountSessions: true,
     registerCodexTextOnlyPolicy,
-    registerCodexSystemPromptForThread: ({ sessionId, threadId, text, subagentRoute, smartSubagentRoutes }) => {
-      check(); proxy.registerComposed(sessionId, threadId, text, { subagentRoute, smartSubagentRoutes });
+    // As the desktop (maker-host/index.ts): the smart subagent routes of this thread carry the
+    // parent task's current reasoning effort.
+    registerCodexSystemPromptForThread: ({
+      sessionId,
+      threadId,
+      text,
+      subagentRoute,
+      smartSubagentRoutes,
+      reasoningEffort,
+    }) => {
+      check();
+      proxy.registerComposed(sessionId, threadId, text, {
+          ...(subagentRoute ? { subagentRoute } : {}),
+          // 共享的 app-server 目录不带档位。只给这条线程的智能路由盖上父任务当前档位，
+          // 避免恢复后子代理掉回目录默认 low。优先用登记时带上的活档位：冷恢复
+          // 这一刻 session store 还没从数据库 hydrate。
+          // 空字符串是「不用推理」的显式哨兵，不能再去 store 里找一个默认档。
+          // 字段缺席是「这一轮没有已选档位」（agent 不把目录默认 high 登记过来），
+          // 同样不盖章：store 在任务从没存过档位时也会被填成目录默认，读它
+          // 会把子代理自己选的 low 盖掉。
+          ...(smartSubagentRoutes
+            ? {
+                smartSubagentRoutes: withParentReasoningEffort(
+                  smartSubagentRoutes,
+                  reasoningEffort !== undefined ? reasoningEffort : null,
+                ),
+              }
+            : {}),
+        });
     },
     getCodexSubagentIdentity: ({ childThreadId }) => proxy.getObservedCodexSubagentIdentity(childThreadId),
     armCodexHttpRecovery: proxy.armCodexHttpRecovery,
