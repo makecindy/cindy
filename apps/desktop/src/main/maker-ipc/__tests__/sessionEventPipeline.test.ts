@@ -1714,16 +1714,19 @@ describe('production Session event pipeline', () => {
     },
   );
 
-  it.each([null, 'ssh-host'])(
-    'only records local Codex account snapshots (remote=%s)',
-    async (remoteHostId) => {
+  it.each([
+    [null, null], ['ssh-host', null], [null, 'remote-computer'], [null, 'share:example'],
+  ])(
+    'only records local Codex account snapshots (ssh=%s, device=%s)',
+    async (remoteHostId, agentDeviceId) => {
       const h = harness();
       Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      Object.defineProperty(h.session, 'agentDeviceId', { value: agentDeviceId });
       h.emit(event('account_usage', { remaining: 42 }));
       expect(effects.fn('recordCodexAccountUsageSnapshot')).toHaveBeenCalledTimes(
-        remoteHostId ? 0 : 1,
+        remoteHostId || agentDeviceId ? 0 : 1,
       );
-      if (!remoteHostId) ordered('broadcast', 'recordCodexAccountUsageSnapshot');
+      if (!remoteHostId && !agentDeviceId) ordered('broadcast', 'recordCodexAccountUsageSnapshot');
       await h.dispose();
     },
   );
@@ -2411,6 +2414,15 @@ describe('usage through the production event pipeline', () => {
       );
       expect(effects.fn('recordTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
       expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
+      if (source === 'codex') {
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          turnUsageDetails: expect.objectContaining({
+            providerId: subscription ? 'openai' : 'xd',
+            billingSource: subscription ? 'subscription' : 'cindy-ai',
+          }),
+        }));
+        expect(effects.fn('triggerClaudeAccountUsageRefresh')).toHaveBeenCalledTimes(subscription ? 0 : 1);
+      }
       ordered('broadcast', 'recordSessionTurnTokens');
       await h.dispose();
     },
@@ -2539,6 +2551,73 @@ describe('usage through the production event pipeline', () => {
             turnUsageDetails: expect.objectContaining({ turnDurationMs: 100 }),
           }),
         );
+      await h.dispose();
+    },
+  );
+
+  // Unit regression: SSH-only coverage above did not check billing identity or
+  // device-link runs. A remote OpenAI done with local env-key must retain tokens
+  // without inventing gateway spend, subscription value, or local quota traffic.
+  it.each(([
+    ['agentDeviceId', 'remote-computer', 'openai', 'test-model'],
+    ['agentDeviceId', 'share:example', 'xd', 'codex/test-model'],
+    ['agentDeviceId', 'remote-computer', 'custom-api', 'test-model'],
+    ['agentDeviceId', 'remote-computer', 'xai', 'xai/grok-4.6'],
+    ['remoteHostId', 'ssh-host', 'openai', 'test-model'],
+  ] as const).flatMap(row => ['env-key', 'oauth-bearer'].map(auth => [...row, auth] as const)))(
+    'keeps remote Codex billing unknown (%s, %s, %s, %s, local %s)',
+    async (location, remoteId, providerId, model, auth) => {
+      const h = harness();
+      pricing(false);
+      Object.defineProperty(h.session, location, { value: remoteId });
+      effects.fn('getSessionProvider').mockReturnValue(providerId);
+      effects.fn('getCodexProxyAuthInjection').mockReturnValue(auth);
+      effects.fn('readClaudeApiKey').mockReturnValue('test-key');
+      // A same-named local subscription is not evidence about the remote route.
+      effects.fn('getActiveCatalog').mockReturnValue({ providers: [
+        { id: providerId, auth: { method: 'oauth' }, access: { kind: 'subscription' } },
+      ] });
+      h.deps.readSessionModelForUsage.mockResolvedValue(model);
+      h.emit(event('done', { usage: usage('codex') }, {
+        turnOrigin: { kind: 'scheduler', scheduleId: 'test-schedule', scheduleName: 'Test', runId: 'test-run' },
+      }));
+      await microtasks();
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        model, money: undefined, inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10,
+      }));
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+        clientId: 'assistant-row',
+        turnUsageDetails: expect.objectContaining({ providerId, billingSource: 'unknown', totalTokens: 130 }),
+      }));
+      for (const name of ['recordTurnSpend', 'recordSessionTurnSpend', 'recordSchedulerTurnCost',
+        'getCodexProxyAuthInjection', 'readClaudeApiKey', 'getGatewayModelPricingForModel',
+        'getReferenceModelPricing', 'triggerClaudeAccountUsageRefresh',
+        'triggerClaudeSubscriptionUsageRefresh', 'triggerXaiSubscriptionUsageRefresh']) {
+        expect(effects.fn(name), name).not.toHaveBeenCalled();
+      }
+      await h.dispose();
+    },
+  );
+
+  it.each(['agentDeviceId', 'remoteHostId'] as const)(
+    'retains remote Codex tokens without local quota fallback when model lookup rejects (%s)', async location => {
+      const h = harness();
+      pricing(false);
+      Object.defineProperty(h.session, location, { value: 'remote-computer' });
+      effects.fn('readClaudeApiKey').mockReturnValue('test-key');
+      h.deps.readSessionModelForUsage.mockRejectedValue(new Error('model unavailable'));
+      h.emit(event('done', { usage: usage('codex') }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        model: 'unknown', money: undefined, inputTokensDelta: 100, outputTokensDelta: 20,
+      }));
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+        turnUsageDetails: expect.objectContaining({ providerId: 'xd', billingSource: 'unknown', totalTokens: 130 }),
+      }));
+      expect(effects.fn('triggerClaudeAccountUsageRefresh')).not.toHaveBeenCalled();
+      expect(effects.fn('readClaudeApiKey')).not.toHaveBeenCalled();
+      expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
       await h.dispose();
     },
   );
