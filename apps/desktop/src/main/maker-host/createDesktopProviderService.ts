@@ -94,6 +94,8 @@ import { createProviderService, type ProviderService } from './provider-service.
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
+import { restoreProviderModelSources } from './provider-model-fetch.js';
+import { PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS } from './provider-model-auto-refresh.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
 import { migrateLocalConnectProvider } from '../../shared/localConnectHarness.js';
 import {
@@ -102,6 +104,8 @@ import {
   setOAuthTokenReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
+  getProviderRouteCredentialRevision,
+  isProviderRouteMutationInProgress,
   type ProviderOAuthTokenReadOptions,
 } from './provider-route.js';
 import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provider-diagnostics.js';
@@ -139,7 +143,7 @@ import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { organizationProviderLogoKind } from '../organizationProviderLogo.js';
 import { getAuthState } from '../authManager.js';
 import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
-import { getActiveAppSession, activeOwnerScopeKey } from '../appSessionState.js';
+import { getActiveAppSession, activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
@@ -637,6 +641,48 @@ export async function refreshDiscoveredCodexModels(
 // older DB read must never publish after a newer one or a persisted capability can disappear from
 // the in-memory routing catalog until the next full app restart.
 let customProviderCatalogRefreshGeneration = 0;
+
+let sourceRestore: {
+  owner: string;
+  promise: Promise<void> | null;
+  retries: Map<string, { revision: number; after: number }>;
+} | null = null;
+
+/** Background model-list hints restore only the supplier metadata hidden on restart. */
+export function refreshCustomProviderModelSources(): Promise<void> {
+  const owner = activeOwnerScopeKey();
+  if (isAppSessionBoundaryPending()) return Promise.resolve();
+  if (sourceRestore?.owner !== owner) sourceRestore = { owner, promise: null, retries: new Map() };
+  const state = sourceRestore;
+  if (state.promise) return state.promise;
+  const scopeIsCurrent = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
+  const promise = (async () => {
+    const revisions = new Map(getActiveCatalog().providers.map(provider =>
+      [provider.id, getProviderRouteCredentialRevision(provider.id)]));
+    const configs = await listCustomProvidersWithSecureHeaders();
+    if (!scopeIsCurrent()) return;
+    const access = readModelDisableOverrides();
+    const updates = await Promise.all(configs.map(async config => {
+      const revision = revisions.get(config.id);
+      if (revision === undefined || isProviderDisabled(access, config.id)) return false;
+      const retry = state.retries.get(config.id);
+      if (retry?.revision === revision && Date.now() < retry.after) return false;
+      const isCurrent = () => scopeIsCurrent() && !isProviderRouteMutationInProgress(config.id)
+        && getProviderRouteCredentialRevision(config.id) === revision;
+      const restored = await restoreProviderModelSources(config,
+        agent => readCustomProviderKey(config.id, agent), isCurrent);
+      if (!isCurrent()) return false;
+      // A partial recovery can still leave another runtime's directory unavailable.
+      state.retries.set(config.id, { revision, after: Date.now() + PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS });
+      return restored ? updateCustomProviderIfUnchanged(config.id, config, restored) : false;
+    }));
+    if (updates.some(Boolean) && scopeIsCurrent()) await refreshCustomProvidersIntoCatalog(scopeIsCurrent);
+  })().finally(() => {
+    if (state.promise === promise) state.promise = null;
+  });
+  state.promise = promise;
+  return promise;
+}
 
 export async function refreshCustomProvidersIntoCatalog(
   shouldApply: () => boolean = () => true,

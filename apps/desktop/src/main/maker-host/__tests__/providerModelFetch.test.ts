@@ -5,13 +5,92 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
+import { buildUserProvider, modelSupplierLabel, type CustomProviderConfig } from '@cindy/model-providers';
+import { acceptsModelSourceSnapshot, modelSourceRequestSignature, projectCurrentModelSources } from '../model-source-snapshots.js';
 
 import {
   buildModelsFetchRequest,
   fetchProviderModels,
+  restoreProviderModelSources,
   type ProviderModelsFetchSpec,
 } from '../provider-model-fetch.js';
+
+// Unit regression: the real discovery/projector path must restore a supplier after
+// restart. Existing fetch tests never passed an expired persisted receipt through it.
+describe('persisted Magpie source recovery', () => {
+  function saved(): CustomProviderConfig {
+    return { id: 'gateway', name: 'Gateway', auth: { method: 'apiKey' }, runtimes: {
+      pi: { baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat', models: [{
+        id: 'supplier/model', name: 'My model name', contextWindow: 12345, opaqueModelId: true,
+        discoveredSource: { kind: 'magpie', providerId: 'old', snapshotId: 'previous-boot:receipt' },
+      }] },
+    } };
+  }
+  const reply = () => fakeResponse(200, JSON.stringify({ data: [
+    { id: 'supplier/model', display_name: 'Model', owned_by: 'supplier', magpie_label: 'Model · Supplier' },
+    { id: 'supplier/another-model', owned_by: 'supplier', magpie_label: 'Another · Supplier' },
+  ] }));
+  const visible = (config: CustomProviderConfig) => projectCurrentModelSources(buildUserProvider(config)).models.pi!;
+
+  it('restores supplier display using the current saved connection without changing model choices or overrides', async () => {
+    const before = saved();
+    expect(visible(before)[0].discoveredSource).toBeUndefined();
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://gateway.example/v1/models');
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer saved-key');
+      expect(init?.redirect).toBe('error');
+      return reply();
+    });
+    const after = await restoreProviderModelSources(before, () => 'saved-key', () => true, fetcher);
+    expect(after).not.toBeNull();
+    expect(after!.runtimes.pi!.models).toHaveLength(1);
+    expect(after!.runtimes.pi!.models[0]).toMatchObject({ id: 'supplier/model', name: 'My model name', contextWindow: 12345 });
+    expect(modelSupplierLabel(visible(after!)[0].discoveredSource)).toBe('Supplier');
+    expect(await restoreProviderModelSources(after!, () => 'saved-key', () => true, fetcher)).toBeNull();
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each(['failure', 'owner-changed'] as const)('keeps expired labels hidden after %s', async mode => {
+    let current = true;
+    const before = saved();
+    const result = await restoreProviderModelSources(before, () => 'saved-key', () => current, async () => {
+      if (mode === 'failure') return fakeResponse(503, '{}');
+      current = false;
+      return reply();
+    });
+    expect(result).toBeNull();
+    expect(visible(before)[0].discoveredSource).toBeUndefined();
+  });
+
+  // Unit regression for #10156: a successful first page followed by an outage
+  // is not an authoritative withdrawal. Keep old receipts retryable until complete.
+  it('preserves old sources after a partial directory read and restores them on retry', async () => {
+    const before = saved();
+    before.runtimes.pi!.models.push({ ...before.runtimes.pi!.models[0], id: 'supplier/later' });
+    let complete = false;
+    const fetcher: typeof fetch = async url => {
+      if (!String(url).includes('cursor=')) return fakeResponse(200, JSON.stringify({
+        data: [{ id: 'supplier/model', owned_by: 'supplier', magpie_label: 'Model · Supplier' }],
+        next_cursor: 'page2',
+      }));
+      return complete ? fakeResponse(200, JSON.stringify({ data: [
+        { id: 'supplier/later', owned_by: 'supplier', magpie_label: 'Later · Supplier' },
+      ] })) : fakeResponse(503, '{}');
+    };
+    expect(await restoreProviderModelSources(before, () => 'saved-key', () => true, fetcher)).toBeNull();
+    expect(before.runtimes.pi!.models.every(model => model.discoveredSource?.snapshotId === 'previous-boot:receipt')).toBe(true);
+    complete = true;
+    const after = await restoreProviderModelSources(before, () => 'saved-key', () => true, fetcher);
+    expect(visible(after!).map(model => modelSupplierLabel(model.discoveredSource))).toEqual(['supplier', 'supplier']);
+  });
+
+  it('removes stale supplier labels when the current directory withdraws them', async () => {
+    const after = await restoreProviderModelSources(saved(), () => 'saved-key', () => true,
+      async () => fakeResponse(200, '{"data":[{"id":"supplier/model"}]}'));
+    expect(after!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+    expect(after!.runtimes.pi!.models[0].name).toBe('My model name');
+  });
+});
 
 function spec(over: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchSpec {
   return {

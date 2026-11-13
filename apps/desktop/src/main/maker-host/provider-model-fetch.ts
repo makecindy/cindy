@@ -1,4 +1,4 @@
-import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
+import { isCurrentModelSource, issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
@@ -21,6 +21,7 @@ import {
   type AgentKind,
   type ProviderWireProtocol,
   type Provider,
+  type CustomProviderConfig,
 } from '@cindy/model-providers';
 
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
@@ -74,6 +75,8 @@ async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: ty
 export interface ProviderModelsFetchSpec {
   /** Add-flow callers distinguish an empty directory from an invalid response. */
   allowEmpty?: boolean;
+  /** Recovery must not treat missing rows in a partial catalog as withdrawal. */
+  requireComplete?: boolean;
   agent: AgentKind;
   /** 上游 wire protocol；用于区分 Codex 原生 OpenAI 与 Anthropic Messages 桥。 */
   wireProtocol?: ProviderWireProtocol;
@@ -108,6 +111,50 @@ export interface ProviderModelsFetchResult {
   status?: number;
   /** 上游原始信息摘要（详情展开用，UI 主文案走 i18n）。 */
   detail?: string;
+}
+
+/** Revalidate display provenance after restart, keeping membership and user overrides intact. */
+export async function restoreProviderModelSources(
+  config: CustomProviderConfig,
+  readKey: (agent: AgentKind) => string | null,
+  isCurrent: () => boolean,
+  fetchImpl: typeof fetch = outboundFetch,
+): Promise<CustomProviderConfig | null> {
+  if (config.auth?.method === 'oauth' || !isCurrent()) return null;
+  const runtimes = { ...config.runtimes };
+  let changed = false;
+  await Promise.all((Object.keys(runtimes) as AgentKind[]).map(async agent => {
+    const runtime = runtimes[agent];
+    if (!runtime || !runtime.models.some(model => model.discoveredSource && !isCurrentModelSource(model.discoveredSource))) return;
+    try {
+      const apiKey = readKey(agent);
+      if (!isCurrent() || (config.auth?.method !== 'none' && !apiKey && !Object.keys(runtime.headers ?? {}).length)) return;
+      const result = await fetchProviderModels({
+        agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl,
+        wireProtocol: runtime.wireProtocol, authMethod: config.auth?.method ?? 'apiKey',
+        apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true,
+      }, (url, init) => {
+        if (!isCurrent()) throw new Error('Model source discovery context changed');
+        return fetchImpl(url, init);
+      });
+      if (!result.ok || !result.models || !isCurrent()) return;
+      const discovered = new Map(result.models.map(model => [model.id, model]));
+      runtimes[agent] = { ...runtime, models: runtime.models.map(model => {
+        const saved = { ...model };
+        delete saved.discoveredSource;
+        delete saved.discoverySnapshotId;
+        const fresh = discovered.get(model.id);
+        return { ...saved,
+          ...(fresh?.discoveredSource ? { discoveredSource: fresh.discoveredSource } : {}),
+          ...(fresh?.discoverySnapshotId ? { discoverySnapshotId: fresh.discoverySnapshotId } : {}),
+        };
+      }) };
+      changed = true;
+    } catch {
+      // Keep persisted data; the catalog continues withholding unverified labels.
+    }
+  }));
+  return changed && isCurrent() ? { ...config, runtimes } : null;
 }
 
 /** Refresh a saved OAuth connection using only Main's route and credential snapshot. */
@@ -368,7 +415,7 @@ export async function fetchProviderModels(
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
-  });
+  }, spec.requireComplete);
   // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),
   // without treating an error envelope as an empty catalog or an account grant.

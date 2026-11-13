@@ -34,6 +34,54 @@ function deferred(): {
 }
 
 describe('provider model auto-refresh coordinator', () => {
+  it('restores custom supplier labels on scoped startup and list hints', async () => {
+    const recovery = deferred();
+    const refreshCustomModelSources = vi.fn(() => recovery.promise);
+    const refreshProvider = vi.fn(async () => undefined);
+    const log = { debug: vi.fn(), warn: vi.fn() };
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true)],
+      refreshProvider, refreshCustomModelSources, now: () => 1_000, log,
+    });
+    const started = coordinator.requestAutoRefresh('startup', ['xd', 'openai', 'xai']);
+    await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledWith('openai'));
+    expect(refreshCustomModelSources).toHaveBeenCalledOnce();
+    recovery.reject(new Error('offline'));
+    await started;
+    expect(log.warn).toHaveBeenCalledWith('custom provider source refresh failed', { trigger: 'startup' });
+    await coordinator.requestAutoRefresh('foreground', ['openai']);
+    expect(refreshCustomModelSources).toHaveBeenCalledOnce();
+
+    refreshCustomModelSources.mockResolvedValue(undefined);
+    const customOnly = createProviderModelRefreshCoordinator({
+      listProviders: async () => [], refreshProvider, refreshCustomModelSources,
+      now: () => 1_000, log,
+    });
+    await customOnly.requestAutoRefresh('model-selector-open');
+    expect(refreshCustomModelSources).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit regression for #10156: a pending display-only recovery must not
+  // hold the production startup readiness promise, including list failures.
+  it.each([false, true])('finishes startup while supplier recovery is pending (list fails: %s)', async fails => {
+    const recovery = deferred();
+    const refreshCustomModelSources = vi.fn(() => recovery.promise);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => { if (fails) throw new Error('offline'); return [view('openai', true)]; },
+      refreshProvider: async () => undefined, refreshCustomModelSources,
+      now: () => 1_000, log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    let ready = false;
+    const started = coordinator.requestAutoRefresh('startup', ['openai']).then(() => { ready = true; });
+    try {
+      await vi.waitFor(() => expect(ready).toBe(true), { timeout: 100 });
+      expect(refreshCustomModelSources).toHaveBeenCalledOnce();
+    } finally {
+      recovery.resolve();
+      await started;
+    }
+  });
+
   it('refreshes the public image catalog before manual OpenAI discovery', async () => {
     const catalog = deferred();
     const refreshProvider = vi.fn(async () => undefined);
