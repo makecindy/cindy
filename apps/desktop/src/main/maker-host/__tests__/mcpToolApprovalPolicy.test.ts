@@ -15,10 +15,19 @@ describe('desktop Claude read-only allowlist', () => {
     for (const toolName of ['status', 'list_tools']) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName })).toBe('auto-approve');
     for (const toolName of ['call_tool', undefined]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName, toolParams: { name: 'send_message', args: { text: 'external' } } })).toBe('prompt-each-time');
   });
+  // Unit: profile changes remain risk actions even when they are the only runtime field.
+  it.each(['acceptEdits', 'auto', 'bypassPermissions'])('reviews explicit permission profile %s', permission_mode => {
+    const args = { session_id: 'target', expected_generation: 0, permission_mode };
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'set_session_runtime', toolParams: args })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name: 'set_session_runtime', args } })).toBe('prompt-each-time');
+  });
+
   // PR #9145: removing redundant Host consent must not let trusted MCP servers
   // bypass the task's normal review. Public policy entry, unit tier; both dispatch routes.
   it.each([
     ['cindy_scheduler', 'schedule_delete'],
+    ['cindy_helper', 'delete_session'],
+    ['cindy_helper', 'rewind_session'],
   ])('routes %s %s through ordinary per-call approval', (serverName, name) => {
     for (const toolParams of [{ id: 'automation' }, { id: 'automation', device: 'local' }]) {
       expect(getDesktopMcpToolApprovalPolicy({ serverName, toolName: name, toolParams })).toBe('prompt-each-time');

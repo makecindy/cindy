@@ -1578,6 +1578,10 @@ function contextRebuild(db: Database.Database, args: unknown): void {
           nullableString(replacement.providerId), nullableString(replacement.effort),
           fastModeToStorage(replacement.fastMode), sessionId, expectedClearedAt,
           expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
+      : payload.expectedSdkSessionId !== undefined
+        ? db.prepare(
+            'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
+          ).run(updatedAt, sessionId, expectedClearedAt, expectString(payload.expectedSdkSessionId, 'expectedSdkSessionId'), 'deleted')
       : db.prepare(
           'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
         ).run(updatedAt, sessionId, expectedClearedAt);
