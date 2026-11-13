@@ -29,6 +29,10 @@ import { resolveVisionBackendRoute, setCustomProviderKeyReader, setVisionGateway
 import { setPreserveUnreadableSettingsFilesByDefault } from '../../maker-host/override-settings-file.js';
 import { createMakerLogger } from '../../maker-host/logger-adapter.js';
 
+// Local fixture vision backends and real settings files, for both sides.
+// An explicit bound instead of the 5 s / 10 s defaults, wide enough for the loaded full desktop pool.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 type HostVisionBridge = {
   hook: (msg: unknown, ctx: { model: string; sessionId?: string }) => Promise<{ applied: boolean; message: { content: Array<{ type: string; text?: string }> } }>;
   settings: { readVisionBridgeSettings(): unknown };

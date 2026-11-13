@@ -5,16 +5,20 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
 const hostDir = path.dirname(srcDir);
 
-test('main.ts strips inherited Anthropic env before any other module loads', () => {
+test('main.ts strips inherited Anthropic env before any other module loads', { timeout: TEST_TIMEOUT_MS }, () => {
   const firstImport = fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8')
     .split('\n').find(line => line.startsWith('import '));
   assert.equal(firstImport, "import './boot-env.js';");
 });
 
-test('the boot step removes the same keys as Desktop and keeps the import source directory', () => {
+test('the boot step removes the same keys as Desktop and keeps the import source directory', { timeout: TEST_TIMEOUT_MS }, () => {
   const probe = `
     const { localImportClaudeConfigDirectory } = await import('../desktop/src/main/provider-import/local/sourceEnvironment.js');
     await import('./src/boot-env.ts');

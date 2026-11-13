@@ -26,6 +26,10 @@ import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/
 import { readClaudeSessionRoute } from '../../../desktop/src/main/maker-host/claude-session-route-registry.ts';
 import { authenticatePiProxySession } from '../../../desktop/src/main/maker-host/pi-proxy-session-auth.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const GATEWAY_KEY = 'fake-gateway-key';
 const CLASSIFIER_PREFIX = 'You are a security monitor for autonomous AI coding agents.';
 
@@ -87,7 +91,7 @@ function upgradeStatus(endpoint, headers = []) {
   });
 }
 
-test('the Host loopback proxy listens on 127.0.0.1 and admits only the credentials Cindy gave its agents', async t => {
+test('the Host loopback proxy listens on 127.0.0.1 and admits only the credentials Cindy gave its agents', { timeout: TEST_TIMEOUT_MS }, async t => {
   const env = await fixture(t, 'claude-proxy-gate');
   const runtime = await env.start();
   assert.equal(runtime.isReady(), true);
@@ -123,7 +127,7 @@ test('the Host loopback proxy listens on 127.0.0.1 and admits only the credentia
   assert.equal(env.upgrades(), 0);
 });
 
-test('the public provider placeholder is not an inbound credential on the Host', async t => {
+test('the public provider placeholder is not an inbound credential on the Host', { timeout: TEST_TIMEOUT_MS }, async t => {
   const env = await fixture(t, 'claude-proxy-placeholder');
   const runtime = await env.start();
   const res = await post(runtime, { 'x-api-key': CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY });
@@ -131,7 +135,7 @@ test('the public provider placeholder is not an inbound credential on the Host',
   assert.equal(env.requests.length, 0);
 });
 
-test('without a Codex runtime, subscription routes are refused locally and never reach the gateway', async t => {
+test('without a Codex runtime, subscription routes are refused locally and never reach the gateway', { timeout: TEST_TIMEOUT_MS }, async t => {
   const env = await fixture(t, 'claude-proxy-subscription');
   const runtime = await env.start();
   const claude = await post(runtime, { 'x-api-key': GATEWAY_KEY }, { model: 'chatgpt/gpt-5.4', max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] });
@@ -146,7 +150,7 @@ test('without a Codex runtime, subscription routes are refused locally and never
   assert.equal(env.requests.length, 0);
 });
 
-test('with the subscription bridge, the proxy hands ChatGPT routes to it and never to the gateway', async t => {
+test('with the subscription bridge, the proxy hands ChatGPT routes to it and never to the gateway', { timeout: TEST_TIMEOUT_MS }, async t => {
   const env = await fixture(t, 'claude-proxy-bridge');
   const calls = [];
   const answer = (res, lane) => {
@@ -184,7 +188,7 @@ test('with the subscription bridge, the proxy hands ChatGPT routes to it and nev
   assert.deepEqual(calls, ['claude', 'pi']);
 });
 
-test('closing the runtime forgets the route records and Pi tokens of its tasks; the next runtime has a new secret', async t => {
+test('closing the runtime forgets the route records and Pi tokens of its tasks; the next runtime has a new secret', { timeout: TEST_TIMEOUT_MS }, async t => {
   const env = await fixture(t, 'claude-proxy-close');
   const first = await env.start();
   env.tasks.set('sdk-1', 'task-1');
@@ -203,7 +207,7 @@ test('closing the runtime forgets the route records and Pi tokens of its tasks; 
   assert.equal((await post(second, { 'x-api-key': oldSecret })).status, 401);
 });
 
-test('an Auto classifier request that fails reaches the agent as the error it is', async t => {
+test('an Auto classifier request that fails reaches the agent as the error it is', { timeout: TEST_TIMEOUT_MS }, async t => {
   const env = await fixture(t, 'claude-proxy-classifier');
   const runtime = await env.start();
   env.tasks.set('sdk-auto', 'task-auto');
@@ -215,7 +219,7 @@ test('an Auto classifier request that fails reaches the agent as the error it is
   assert.equal(env.requests.length, 1);
 });
 
-test('a non-Claude model loses the Anthropic-only field its upstream rejects; a Claude model keeps it', async t => {
+test('a non-Claude model loses the Anthropic-only field its upstream rejects; a Claude model keeps it', { timeout: TEST_TIMEOUT_MS }, async t => {
   const env = await fixture(t, 'claude-proxy-strip');
   const runtime = await env.start();
   const body = model => ({ model, max_tokens: 8, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hi' }] });

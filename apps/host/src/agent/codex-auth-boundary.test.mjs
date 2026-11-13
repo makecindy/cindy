@@ -19,6 +19,10 @@ import { createCodexLocalCliAuth } from './runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 function recorder({ retireFails = false } = {}) {
   const steps = [];
   const boundary = createCodexAuthBoundary({
@@ -33,21 +37,21 @@ function recorder({ retireFails = false } = {}) {
   return { steps, boundary };
 }
 
-test('logout follows the desktop onLogoutSuccess step for step', async () => {
+test('logout follows the desktop onLogoutSuccess step for step', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { steps, boundary } = recorder();
   await boundary.afterLogout();
   // desktop: forceDisposeLocalHostForAuthChange → clearCodexProxyAuthInjection → broadcastCodexRuntimeRoute → invalidatePiEnvironment
   assert.deepEqual(steps, ['retire local hosts: Codex auth logout', 'clear proxy auth injection', 'publish runtime route', 'invalidate Pi environment']);
 });
 
-test('a successful login follows the desktop onLoginSuccess step for step', async () => {
+test('a successful login follows the desktop onLoginSuccess step for step', { timeout: TEST_TIMEOUT_MS }, async () => {
   const { steps, boundary } = recorder();
   await boundary.afterLogin();
   // desktop: clearChatgptBridgeCredentialCache → forceDisposeLocalHostForAuthChange → broadcastCodexRuntimeRoute → invalidatePiEnvironment
   assert.deepEqual(steps, ['clear bridge credential cache', 'retire local hosts: Codex auth login', 'publish runtime route', 'invalidate Pi environment']);
 });
 
-test('an invalidation follows the desktop onInvalidatedBroadcast, and still announces when retirement fails', async () => {
+test('an invalidation follows the desktop onInvalidatedBroadcast, and still announces when retirement fails', { timeout: TEST_TIMEOUT_MS }, async () => {
   const payload = { agentKind: 'codex', authenticated: false, errorReason: 'token_revoked', credentialScope: 'instance-isolated' };
   const ok = recorder();
   await ok.boundary.afterInvalidation('token_revoked', 'instance-isolated');
@@ -60,7 +64,7 @@ test('an invalidation follows the desktop onInvalidatedBroadcast, and still anno
     'warn: Codex invalidation catalog cleanup failed', [MAKER_PUSH.AUTH_STATE_CHANGED, payload], 'invalidate Pi environment']);
 });
 
-test('the Host Codex adapter runs the hooks after its own login and logout, and not across an owner change', async t => {
+test('the Host Codex adapter runs the hooks after its own login and logout, and not across an owner change', { timeout: TEST_TIMEOUT_MS }, async t => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-auth-boundary-'));
   t.after(() => { configureHostOwner({ userDataDir: profile, ownerId: null }); fs.rmSync(profile, { recursive: true, force: true }); });
   configureHostOwner({ userDataDir: profile, ownerId: 'boundary-owner-a' });
@@ -95,7 +99,7 @@ test('the Host Codex adapter runs the hooks after its own login and logout, and 
 // As the desktop's logout (runLogout, disconnectCodexOAuth): a login started before the logout and
 // finishing during it does not bind; a login started during it waits for it; and an invalidation
 // that rewrote the marker in between is overruled by the logout's last commit.
-test('the Host Codex logout wins over a login and an invalidation running alongside it', async t => {
+test('the Host Codex logout wins over a login and an invalidation running alongside it', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { createHostCodexAccounts } = await import('./provider-config.ts');
   const { invalidateHostCodexLogin, readHostCodexInvalidation } = await import('./codex-invalidation.ts');
   const { readInvalidatedSystemCodexAuthMarker } = await import('../../../desktop/src/main/maker-host/codex-auth-invalidation.ts');

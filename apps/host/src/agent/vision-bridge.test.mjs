@@ -16,6 +16,10 @@ import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 function fixtureHarnessRoot(profile) {
   const root = path.join(profile, 'harnesses');
   const dir = path.join(root, 'ripgrep-bin', `${process.platform}-${process.arch}`);
@@ -32,7 +36,7 @@ const providerConfig = {
   codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
 };
 
-test('the Host graph hands the vision bridge to Maker and Pi and owns the controller until it closes', async t => {
+test('the Host graph hands the vision bridge to Maker and Pi and owns the controller until it closes', { timeout: TEST_TIMEOUT_MS }, async t => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-vision-graph-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'vision-graph-owner' });
@@ -50,7 +54,7 @@ test('the Host graph hands the vision bridge to Maker and Pi and owns the contro
   assert.equal(getVisionBridgeController(), null);
 });
 
-test('the Host teardown closes the vision bridge after Maker shuts down', () => {
+test('the Host teardown closes the vision bridge after Maker shuts down', { timeout: TEST_TIMEOUT_MS }, () => {
   const main = fs.readFileSync(new URL('../main.ts', import.meta.url), 'utf8');
   const shutdown = main.indexOf('?.shutdown?.());');
   const close = main.indexOf('agentGraph?.visionBridge.close()');

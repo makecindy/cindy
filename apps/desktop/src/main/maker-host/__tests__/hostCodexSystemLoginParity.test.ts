@@ -26,6 +26,10 @@ import {
   isNativeProviderAuthSharedSystemCredential,
 } from '../nativeProviderAuthBinding.js';
 
+// Fake HOMEs, links and file identity checks on real temporary files, for both sides.
+// An explicit bound instead of the 5 s / 10 s defaults, wide enough for the loaded full desktop pool.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 const h = vi.hoisted(() => ({ userDataDir: '', dataOwnerId: null as string | null, generation: 1 }));
 
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));

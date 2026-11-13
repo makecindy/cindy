@@ -36,6 +36,10 @@ import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { PluginMarketLedger } from '../../../desktop/src/main/plugin-market/ledger.ts';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const require = createRequire(new URL('../../../desktop/package.json', import.meta.url));
 const JSZip = require('jszip');
 const SYSTEM_SKILLS = fileURLToPath(new URL('../../../desktop/resources/system-skills', import.meta.url));
@@ -122,7 +126,7 @@ function previousIdentity({ profile, owner, manager }, user = null) {
 
 const byCommand = skills => Object.fromEntries(skills.map(skill => [skill.claudeCommandName, skill.cindyOfficial]));
 
-test('the Host plugin runtime lists the published built-in Skills and approved plugin Skills, marking official ones like the desktop', async t => {
+test('the Host plugin runtime lists the published built-in Skills and approved plugin Skills, marking official ones like the desktop', { timeout: TEST_TIMEOUT_MS }, async t => {
   const fixture = await profileFor(t, 'cloud', 'plugin-skills-published');
   const published = await prepareBuiltInSkills({ bundledRoot: SYSTEM_SKILLS, userDataDir: fixture.profile,
     appDataDir: path.join(fixture.profile, 'app-data'), homeDir: path.join(fixture.profile, 'home'),
@@ -141,7 +145,7 @@ test('the Host plugin runtime lists the published built-in Skills and approved p
   assert.equal(Object.keys(listed).length, published.descriptors.length + 4);
 });
 
-test('a profile the desktop never published lists no built-in Skill and does not fail', async t => {
+test('a profile the desktop never published lists no built-in Skill and does not fail', { timeout: TEST_TIMEOUT_MS }, async t => {
   const fixture = await profileFor(t, 'cloud', 'plugin-skills-unpublished');
   const parts = await installAll(fixture.manager, fixture.profile, fixture.owner, { thirdParty: PLUGINS.thirdParty });
   const runtime = await hostRuntime(t, fixture);
@@ -149,7 +153,7 @@ test('a profile the desktop never published lists no built-in Skill and does not
   assert.deepEqual(listed, { [`cindy-plugin-${parts.thirdParty}:demo`]: false });
 });
 
-test('with account services available, plugin identity reads are the same as before the lookup change', async t => {
+test('with account services available, plugin identity reads are the same as before the lookup change', { timeout: TEST_TIMEOUT_MS }, async t => {
   const fixture = await profileFor(t, 'cloud', 'plugin-identity-cloud');
   assert.equal(getAppCapabilities().canUseCindyAccountServices, true);
   const parts = await installAll(fixture.manager, fixture.profile, fixture.owner);
@@ -169,7 +173,7 @@ test('with account services available, plugin identity reads are the same as bef
   assert.deepEqual(broker, { thirdParty: false, marketOfficial: false, accountOfficial: false, organization: true });
 });
 
-test('with account services unavailable, a plugin that needs an account is left out of the Skill list; its identity facts read as on the desktop', async t => {
+test('with account services unavailable, a plugin that needs an account is left out of the Skill list; its identity facts read as on the desktop', { timeout: TEST_TIMEOUT_MS }, async t => {
   const fixture = await profileFor(t, 'local', 'plugin-identity-local');
   assert.equal(getAppCapabilities().canUseCindyAccountServices, false);
   const parts = await installAll(fixture.manager, fixture.profile, fixture.owner,

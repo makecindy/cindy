@@ -40,6 +40,10 @@ import { getModelAccessCredentialsStore } from '../../model-access/credentialsSt
 import { ownerScopedUserDataPath } from '../../appSessionState.js';
 import { setXdGatewayModels } from '../active-catalog.js';
 
+// Real temporary profiles and settings files, for both sides.
+// An explicit bound instead of the 5 s / 10 s defaults, wide enough for the loaded full desktop pool.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 const fakeMaker = { listAvailableAgents: () => [] } as unknown as Maker;
 const getMaker = () => fakeMaker;
 

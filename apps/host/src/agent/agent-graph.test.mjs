@@ -22,6 +22,10 @@ import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 // CI installs no agent binaries; the Pi config resolves ripgrep when the agent is built.
 function fixtureHarnessRoot(profile) {
   const root = path.join(profile, 'harnesses');
@@ -31,7 +35,7 @@ function fixtureHarnessRoot(profile) {
   return root;
 }
 
-test('the PiAgent the Host assembles gets the MCP bridge under the key it reads, with the session context intact', async t => {
+test('the PiAgent the Host assembles gets the MCP bridge under the key it reads, with the session context intact', { timeout: TEST_TIMEOUT_MS }, async t => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   // A new temporary profile and owner; no real CLI or account is read.
@@ -76,7 +80,7 @@ test('the PiAgent the Host assembles gets the MCP bridge under the key it reads,
  * - 最小失败输入：任一引擎缺这些依赖（旧装配）。
  * - tier：unit（只构造实例，不起子进程、不调模型）。
  */
-test('every engine the Host assembles resolves per-model context the way the desktop does', async t => {
+test('every engine the Host assembles resolves per-model context the way the desktop does', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { getActiveCatalog } = await import('../../../desktop/src/main/maker-host/active-catalog.ts');
   const { filterLegacyGptContextProfiles } = await import('../../../desktop/src/main/maker-host/legacy-context-profiles.ts');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
@@ -170,7 +174,7 @@ test('every engine the Host assembles resolves per-model context the way the des
  * - 最小失败输入：任一引擎缺这个依赖。
  * - tier：unit（只构造实例，偏好写进临时 profile）。
  */
-test('every engine the Host assembles skips the Skills the user disabled and gets the plugin roster and managed Skills', async t => {
+test('every engine the Host assembles skips the Skills the user disabled and gets the plugin roster and managed Skills', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { setCindySkillEnabled } = await import('../../../desktop/src/main/skillhub/activationPreferences.ts');
   const { configureAppDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
@@ -221,7 +225,7 @@ test('every engine the Host assembles skips the Skills the user disabled and get
  * - tier：unit（只构造实例并读配置，不起子进程、不调模型）。系统提示按桌面的拼接方式从
  *   源文件独立拼出，不经被测代码。
  */
-test('every engine the Host assembles gets the desktop runtime config: product prompt, answer delivery, flags and live memory settings', async t => {
+test('every engine the Host assembles gets the desktop runtime config: product prompt, answer delivery, flags and live memory settings', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } = await import('@cindy/maker-shared/rich-answer-guide');
   const { DEFAULT_MODEL_COMPACTION_PCT } = await import('../../../desktop/src/shared/modelContextLimit.ts');
   const { writeMemorySetting, readMemorySettings } = await import('../../../desktop/src/main/maker-host/memory-settings-store.ts');
@@ -306,7 +310,7 @@ test('every engine the Host assembles gets the desktop runtime config: product p
  * - 最小失败输入：harnessRoot 下没有 ripgrep-bin。
  * - tier：unit。
  */
-test('without the bundled ripgrep the Host fails the way the desktop does', async t => {
+test('without the bundled ripgrep the Host fails the way the desktop does', { timeout: TEST_TIMEOUT_MS }, async t => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'agent-graph-no-ripgrep' });
@@ -334,7 +338,7 @@ test('without the bundled ripgrep the Host fails the way the desktop does', asyn
  * - 最小失败输入：仍把网关地址交给引擎；Pi 不登记 token（经代理的请求全部 401）。
  * - tier：unit（只构造实例）。
  */
-test('with the loopback proxy, Claude and Pi use its endpoint and Pi registers its session tokens', async t => {
+test('with the loopback proxy, Claude and Pi use its endpoint and Pi registers its session tokens', { timeout: TEST_TIMEOUT_MS }, async t => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-proxy-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'agent-graph-proxy' });

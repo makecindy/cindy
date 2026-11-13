@@ -30,6 +30,10 @@ import { createWorktreeRuntimeLeases } from '../../../desktop/src/main/worktree/
 import { createPrecreatedCancellation } from '../../../desktop/src/main/worktree/precreatedCancellationCore.ts';
 import { physicalWorktreeKey } from '../../../desktop/src/main/worktree/resourceLock.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const agentDir = path.dirname(fileURLToPath(import.meta.url));
 const hostDir = path.dirname(path.dirname(agentDir));
 const desktopMain = path.join(hostDir, '..', 'desktop', 'src', 'main');
@@ -118,7 +122,7 @@ function startHost(t, f) {
   };
 }
 
-test('a lease the Host process holds is protected in the desktop view, and the Host close releases it', async t => {
+test('a lease the Host process holds is protected in the desktop view, and the Host close releases it', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = fixture(t);
   const host = startHost(t, f);
   await host.ready;
@@ -139,7 +143,7 @@ test('a lease the Host process holds is protected in the desktop view, and the H
   assert.deepEqual([...await f.desktop.readWorktreeRuntimePaths()], []);
 });
 
-test('a lease left by a Host that is gone stays protective through the heartbeat grace, then counts as abandoned', async t => {
+test('a lease left by a Host that is gone stays protective through the heartbeat grace, then counts as abandoned', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = fixture(t);
   const host = startHost(t, f);
   await host.ready;
@@ -159,7 +163,7 @@ test('a lease left by a Host that is gone stays protective through the heartbeat
   assert.deepEqual(leaseFiles(f.leaseDir), [name]);
 });
 
-test('after a Host restart one lease file remains when it closed; a crashed one stays beside the new one until its grace passes', async t => {
+test('after a Host restart one lease file remains when it closed; a crashed one stays beside the new one until its grace passes', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = fixture(t);
   const physical = await physicalWorktreeKey(f.worktree);
   const first = startHost(t, f);
@@ -190,7 +194,7 @@ function fixtureHarnessRoot(profile) {
   return root;
 }
 
-test('the Maker the Host assembles releases the lease on a dead start failure, a successful cleanup and close', async t => {
+test('the Maker the Host assembles releases the lease on a dead start failure, a successful cleanup and close', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = fixture(t);
   configureHostOwner({ userDataDir: f.profile, ownerId: 'lease-graph' });
   configureAppDataDir(f.appData);
@@ -247,7 +251,7 @@ function startOptionsFor(t, f, ownerId) {
   return createHostStartOptions({ modelContext, fastPolicies: null, logger: { warn() {} } });
 }
 
-test('a creation cancelled by another local instance is caught after the lease is taken, and the failed start releases it', async t => {
+test('a creation cancelled by another local instance is caught after the lease is taken, and the failed start releases it', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = fixture(t);
   const start = startOptionsFor(t, f, 'lease-cancel');
   // The desktop window seals the cancellation in the shared profile.
@@ -261,7 +265,7 @@ test('a creation cancelled by another local instance is caught after the lease i
   assert.deepEqual(leaseFiles(f.leaseDir), []);
 });
 
-test('no lease is taken outside a managed worktree or for a remote task', async t => {
+test('no lease is taken outside a managed worktree or for a remote task', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = fixture(t);
   const start = startOptionsFor(t, f, 'lease-none');
   await start.prepareStartOptions('plain-task', { agentKind: 'claude-code', providerId: 'fixture-provider', model: 'fixture-model', workingDir: f.plain });
@@ -269,7 +273,7 @@ test('no lease is taken outside a managed worktree or for a remote task', async 
   assert.deepEqual(leaseFiles(f.leaseDir), []);
 });
 
-test('the Host lease steps are the desktop start-hook lines, before the shared Skill links', () => {
+test('the Host lease steps are the desktop start-hook lines, before the shared Skill links', { timeout: TEST_TIMEOUT_MS }, () => {
   const host = fs.readFileSync(path.join(agentDir, 'start-options.ts'), 'utf8');
   const desktop = fs.readFileSync(path.join(desktopMain, 'maker-host', 'index.ts'), 'utf8');
   const block = (source, from) => {

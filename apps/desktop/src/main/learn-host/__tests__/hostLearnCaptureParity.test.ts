@@ -30,6 +30,10 @@ import { isCindySkillEnabled, setCindySkillEnabled } from '../../skillhub/activa
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import { app } from 'electron';
 
+// Real temporary workspaces and capture files, for both sides.
+// An explicit bound instead of the 5 s / 10 s defaults, wide enough for the loaded full desktop pool.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 type Session = { id: string; instanceId: string; agentKind: AgentKind; workDir: string; remoteHostId: string | null; getStatus?(): 'active' | 'closed' };
 type Capture = (session: Session, persisted: unknown, dispatched: string) => Promise<unknown>;
 

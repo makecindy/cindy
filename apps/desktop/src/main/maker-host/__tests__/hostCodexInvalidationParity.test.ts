@@ -25,6 +25,10 @@ import { readInvalidatedSystemCodexAuthMarker } from '../codex-auth-invalidation
 import { currentCodexCredentialGeneration } from '../codexCredentialRead.js';
 import { bindNativeProviderAuth, isNativeProviderAuthBound, isNativeProviderAuthRevoked } from '../nativeProviderAuthBinding.js';
 
+// Real temporary profiles, auth files and markers, for both sides.
+// An explicit bound instead of the 5 s / 10 s defaults, wide enough for the loaded full desktop pool.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 const h = vi.hoisted(() => ({ userDataDir: '', dataOwnerId: null as string | null }));
 
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));

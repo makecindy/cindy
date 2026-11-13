@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import JSZip from 'jszip';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghostProductionCallbacksFixture.js';
 import { loadGhostFirstPartyFactsLoader, type GhostFirstPartyFactsLoad } from '../../cindy-brain/ghostFirstPartyFacts.js';
@@ -45,6 +45,10 @@ import type { User } from '../../../shared/authUser.js';
 import { GhostManager } from '../../cindy-brain/GhostManager.js';
 import { runGhostSnapshotWorkerRequest } from '../../cindy-brain/ghostSnapshotWorkerProcess.js';
 import { dataOwnerStorageKey } from '../../dataOwnerPath.js';
+
+// The cases carry PARITY_TIMEOUT_MS below; the cleanup hook removes real temporary
+// directories and gets an explicit bound too.
+vi.setConfig({ hookTimeout: 60_000 });
 
 type Desktop = {
   loadGhostFirstPartyFactsForGhost(id: string, purpose: 'runtime'): GhostFirstPartyFactsLoad;

@@ -35,6 +35,10 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 import { __testing, readAuxiliaryModelSettings } from '../auxiliary-model-settings-store.js';
 import { getEffectiveAuxiliaryModelChain } from '../resolveAuxiliaryModelChain.js';
 
+// Real temporary profiles and settings files, for both sides.
+// An explicit bound instead of the 5 s / 10 s defaults, wide enough for the loaded full desktop pool.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 type HostChain = {
   settings: { readAuxiliaryModelSettings(): unknown; __testing: { flushLegacyMigration(): Promise<void> } };
   chain: { getEffectiveAuxiliaryModelChain(): unknown };

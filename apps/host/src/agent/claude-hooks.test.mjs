@@ -19,6 +19,10 @@ import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 function fixtureHarnessRoot(profile) {
   const root = path.join(profile, 'harnesses');
   const dir = path.join(root, 'ripgrep-bin', `${process.platform}-${process.arch}`);
@@ -39,7 +43,7 @@ const providerConfig = {
 const shape = table => Object.fromEntries(Object.entries(table).map(([event, matchers]) =>
   [event, matchers.map(matcher => [matcher.matcher ?? null, matcher.hooks.length])]));
 
-test('the Claude agent the Host assembles gets the desktop hooks: read-image, Bash gate, desktop-input guard', async t => {
+test('the Claude agent the Host assembles gets the desktop hooks: read-image, Bash gate, desktop-input guard', { timeout: TEST_TIMEOUT_MS }, async t => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-claude-hooks-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'claude-hooks-owner' });
@@ -133,7 +137,7 @@ function call(source, start) {
   return source.slice(at, end).replace(/\/\/[^\n]*/g, '').replace(/\s+/g, '').replace(/,([)\]}])/g, '$1');
 }
 
-test('the Host hooks are the desktop composition, line for line', () => {
+test('the Host hooks are the desktop composition, line for line', { timeout: TEST_TIMEOUT_MS }, () => {
   const desktop = fs.readFileSync(new URL('../../../desktop/src/main/maker-host/index.ts', import.meta.url), 'utf8');
   const host = fs.readFileSync(new URL('./runtime.ts', import.meta.url), 'utf8');
   // The only differences: the logger instance and getPluginRegistry(), which is createPluginRegistry().

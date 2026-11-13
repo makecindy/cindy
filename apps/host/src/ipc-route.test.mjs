@@ -39,6 +39,10 @@ import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/c
 import { sessions } from '../../desktop/src/main/localDb/schema.ts';
 import { listSideChats } from '../../desktop/src/main/maker-orchestration/side-chat-list.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const TOKEN = 'ipc-test-token';
 const CHANNEL = 'maker:side-chat:list:v1';
 const ENTRY = findHostIpcEntry(CHANNEL);
@@ -67,7 +71,7 @@ async function serve(t, deps) {
 const pinned = (extra = {}) => ({ authorization: `Bearer ${TOKEN}`, 'x-cindy-host-instance': 'host-a',
   'x-cindy-ipc-contract': hostIpcFingerprint(ENTRY), ...extra });
 
-test('admission runs in order and the handler only runs for an admitted call', async t => {
+test('admission runs in order and the handler only runs for an admitted call', { timeout: TEST_TIMEOUT_MS }, async t => {
   let calls = 0;
   let owner = OWNER;
   const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => owner, unsupported: OTHERS,
@@ -112,7 +116,7 @@ test('admission runs in order and the handler only runs for an admitted call', a
     { error: 'owner_runtime_unavailable' });
 });
 
-test('a read that straddles an account switch is dropped, and typed errors keep their code', async t => {
+test('a read that straddles an account switch is dropped, and typed errors keep their code', { timeout: TEST_TIMEOUT_MS }, async t => {
   let owner = OWNER;
   const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => owner, unsupported: OTHERS,
     bindings: { [CHANNEL]: async ([id]) => {
@@ -132,7 +136,7 @@ test('a read that straddles an account switch is dropped, and typed errors keep 
   assert.deepEqual((await call('untyped')).body, { ok: false, error: { code: 'INTERNAL', message: 'Host handler failed' } });
 });
 
-test('manifest needs the bearer and the pin, lists bound entries, and an old Host answers 404', async t => {
+test('manifest needs the bearer and the pin, lists bound entries, and an old Host answers 404', { timeout: TEST_TIMEOUT_MS }, async t => {
   const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => OWNER, unsupported: OTHERS,
     bindings: { [CHANNEL]: () => [] } });
   const request = await serve(t, { ipcRoute: route });
@@ -149,7 +153,7 @@ test('manifest needs the bearer and the pin, lists bound entries, and an old Hos
     { error: 'not_found' });
 });
 
-test('every registered entry is bound or explicitly unsupported; unsupported answers instead of empty success', async t => {
+test('every registered entry is bound or explicitly unsupported; unsupported answers instead of empty success', { timeout: TEST_TIMEOUT_MS }, async t => {
   assert.throws(() => createHostIpcRoute({ instanceId: 'h', readOwnerStamp: () => OWNER, bindings: {} }), /bound or declared unsupported/);
   assert.throws(() => createHostIpcRoute({ instanceId: 'h', readOwnerStamp: () => OWNER, unsupported: OTHERS,
     bindings: { [CHANNEL]: () => [], 'maker:nope': () => [] } }), /not a registered entry/);
@@ -161,7 +165,7 @@ test('every registered entry is bound or explicitly unsupported; unsupported ans
   assert.deepEqual([response.status, response.body.error.code], [501, 'channel_unsupported']);
 });
 
-test('the auth state a proxy stamps from equals the app-session stamp the route compares', t => {
+test('the auth state a proxy stamps from equals the app-session stamp the route compares', { timeout: TEST_TIMEOUT_MS }, t => {
   // Production order: configureHostOwner commits the app session, then main.ts
   // publishes runtime.owner and projects auth from the session generation.
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-ipc-'));
@@ -174,7 +178,7 @@ test('the auth state a proxy stamps from equals the app-session stamp the route 
   assert.deepEqual({ dataOwnerId: auth.dataOwnerId, ownerGeneration: auth.ownerGeneration }, getActiveDataOwnerPushStamp());
 });
 
-test('side-chat binding returns the contract shape from a real database, unchanged by JSON', async t => {
+test('side-chat binding returns the contract shape from a real database, unchanged by JSON', { timeout: TEST_TIMEOUT_MS }, async t => {
   const sqlite = new Database(':memory:');
   t.after(() => sqlite.close());
   sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))
@@ -193,7 +197,7 @@ test('side-chat binding returns the contract shape from a real database, unchang
   assert.ok(HOST_IPC_ENTRIES.includes(ENTRY));
 });
 
-test('a result outside the contract is still returned, but logged as result_mismatch naming the field only', async t => {
+test('a result outside the contract is still returned, but logged as result_mismatch naming the field only', { timeout: TEST_TIMEOUT_MS }, async t => {
   const events = [];
   const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => OWNER, unsupported: OTHERS,
     log: event => events.push(event), bindings: { [CHANNEL]: () => [{ id: 'child', title: 'private title' }] } });
@@ -204,7 +208,7 @@ test('a result outside the contract is still returned, but logged as result_mism
     detail: 'result[0].title is not part of the contract' }]);
 });
 
-test('Host bindings mirror the registry families, and the production table binds every entry once', () => {
+test('Host bindings mirror the registry families, and the production table binds every entry once', { timeout: TEST_TIMEOUT_MS }, () => {
   const families = createHostIpcFamilyBindings({ getLiveSession: () => undefined });
   assert.deepEqual(Object.keys(families), Object.keys(HOST_IPC_FAMILIES));
   for (const [family, bindings] of Object.entries(families)) {
@@ -219,7 +223,7 @@ test('Host bindings mirror the registry families, and the production table binds
 // Type half: the ResultFields tables in ipc-bindings/ stop type checking when the
 // types a handler returns change. This half keeps those tables equal to the
 // registry, so a maker-core field change cannot reach a window as result_mismatch only.
-test('every object in a registered result has a shape table equal to the registry schema', () => {
+test('every object in a registered result has a shape table equal to the registry schema', { timeout: TEST_TIMEOUT_MS }, () => {
   const objectTables = (schema, at, out = {}) => {
     if (schema.type === 'array') return objectTables(schema.items, `${at}[]`, out);
     if (schema.type !== 'object') return out;
@@ -235,7 +239,7 @@ test('every object in a registered result has a shape table equal to the registr
   }
 });
 
-test('desktop proxy and Host route agree over real HTTP with the production bindings', async t => {
+test('desktop proxy and Host route agree over real HTTP with the production bindings', { timeout: TEST_TIMEOUT_MS }, async t => {
   const sqlite = new Database(':memory:');
   t.after(() => sqlite.close());
   sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))

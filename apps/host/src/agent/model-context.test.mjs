@@ -22,11 +22,15 @@ import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-ca
 import { filterLegacyGptContextProfiles } from '../../../desktop/src/main/maker-host/legacy-context-profiles.ts';
 import { commitVolatileAppSession } from '../../../desktop/src/main/appSessionState.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const context = () => createHostModelContext({
   readGatewayKey: () => null, hasCodexOAuthLogin: () => false, codexAccountState: () => ({ authenticated: false }),
 });
 
-test('the Host catalog follows the desktop account filter: Cindy AI only with a Cindy account', t => {
+test('the Host catalog follows the desktop account filter: Cindy AI only with a Cindy account', { timeout: TEST_TIMEOUT_MS }, t => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-model-context-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   assert.ok(filterLegacyGptContextProfiles(getActiveCatalog()).providers.some(provider => provider.id === 'xd'),

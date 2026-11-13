@@ -13,7 +13,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { HOST_TEST_SYSTEM_CODEX_AUTH_ENV, resolveHostSystemCodexAuthPath } from './codex-system-login.ts';
 
-test('only an installed Host reconciles with the system Codex login', () => {
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
+test('only an installed Host reconciles with the system Codex login', { timeout: TEST_TIMEOUT_MS }, () => {
   const fake = path.join(os.tmpdir(), 'isolated-home', '.codex', 'auth.json');
   // Installed: the desktop's packaged path; a test override is ignored.
   assert.equal(resolveHostSystemCodexAuthPath({ packaged: true }, {}), path.join(os.homedir(), '.codex', 'auth.json'));
@@ -63,7 +67,7 @@ function sharedProfile(t, ownerId) {
 
 // Release table row 26: the desktop clears "recovery required" after an account request (2e);
 // before that the Host keeps the mark. The renewed login must still be usable for tasks.
-test('after a system re-login the recovered login is usable on the Host, only marked', async t => {
+test('after a system re-login the recovered login is usable on the Host, only marked', { timeout: TEST_TIMEOUT_MS }, async t => {
   const p = sharedProfile(t, 'recovery-owner');
   await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: p.systemAuth, reason: 'token_revoked', hostBound: true,
     credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(path.join(p.codexHome, 'auth.json'))) });
@@ -80,7 +84,7 @@ test('after a system re-login the recovered login is usable on the Host, only ma
   assert.equal(createHostCodexCredentials(p.profileDir, p.accounts).readAccessToken('openai'), 'system-token-2');
 });
 
-test('a successful Cindy login reconciles before its auth boundary; a failed one does not', async t => {
+test('a successful Cindy login reconciles before its auth boundary; a failed one does not', { timeout: TEST_TIMEOUT_MS }, async t => {
   for (const ok of [true, false]) {
     const p = sharedProfile(t, `login-owner-${ok}`);
     const calls = [];
@@ -94,7 +98,7 @@ test('a successful Cindy login reconciles before its auth boundary; a failed one
   }
 });
 
-test('the subscription bridge reconciles before it reads the native token', async () => {
+test('the subscription bridge reconciles before it reads the native token', { timeout: TEST_TIMEOUT_MS }, async () => {
   const calls = [];
   const read = createBridgeTokenReader({ check: () => calls.push('check'), systemLogin: { reconcile: async () => { calls.push('reconcile'); } },
     readAccessToken: id => { calls.push(`read:${id ?? 'openai'}`); return 'token'; } });

@@ -28,6 +28,10 @@ import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.ts';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../../../desktop/src/main/mcp-integrations/codexBuiltinToolPolicy.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 function setup(t, ownerId, ensureProviderCatalog, refreshModels) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
@@ -48,7 +52,7 @@ function setup(t, ownerId, ensureProviderCatalog, refreshModels) {
   return { start, modelContext, policies, warnings };
 }
 
-test('a Codex start freezes its provider, gets the Fast policy and a price-tier reader', async t => {
+test('a Codex start freezes its provider, gets the Fast policy and a price-tier reader', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { start, policies } = setup(t, 'start-options-codex');
   const opts = { agentKind: 'codex', providerId: 'openai', model: 'fixture-model', fastMode: true };
   await start.prepareStartOptions('codex-task', opts);
@@ -70,7 +74,7 @@ test('a Codex start freezes its provider, gets the Fast policy and a price-tier 
   assert.equal(opts.resolveUsagePriceVariant({ threadId: 'thread-1', inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 }), undefined);
 });
 
-test('a Pi start follows the session Fast axis for its price tier and restores the remembered thinking switch', async t => {
+test('a Pi start follows the session Fast axis for its price tier and restores the remembered thinking switch', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { start } = setup(t, 'start-options-pi');
   setThinkingEnabledInMemory('pi', 'fixture-provider', 'fixture-model', false);
   const opts = { agentKind: 'pi', providerId: 'fixture-provider', model: 'fixture-model', fastMode: true };
@@ -87,7 +91,7 @@ test('a Pi start follows the session Fast axis for its price tier and restores t
   assert.equal(explicit.thinkingEnabled, true);
 });
 
-test('the saved task budget is settled against the catalog with the Host route resolver', async t => {
+test('the saved task budget is settled against the catalog with the Host route resolver', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { start, modelContext } = setup(t, 'start-options-budget');
   const catalog = getActiveCatalog();
   const route = catalog.providers.flatMap(provider => (provider.models['claude-code'] ?? [])
@@ -108,7 +112,7 @@ test('the saved task budget is settled against the catalog with the Host route r
   assert.equal(Object.hasOwn(plain, 'contextWindowBudget'), false);
 });
 
-test('a start after the account changed is refused with the desktop marker', async t => {
+test('a start after the account changed is refused with the desktop marker', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { start } = setup(t, 'start-options-owner-a');
   configureHostOwner({ userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-b-')), ownerId: 'start-options-owner-b' });
   await assert.rejects(
@@ -118,7 +122,7 @@ test('a start after the account changed is refused with the desktop marker', asy
   assert.equal(getSessionProvider('stale-task'), null);
 });
 
-test('a start waits for the account provider catalog before it freezes the provider', async t => {
+test('a start waits for the account provider catalog before it freezes the provider', { timeout: TEST_TIMEOUT_MS }, async t => {
   const order = [];
   const { start } = setup(t, 'start-options-catalog', async () => { order.push('catalog'); });
   const opts = { agentKind: 'codex', providerId: 'openai', model: 'fixture-model' };
@@ -127,7 +131,7 @@ test('a start waits for the account provider catalog before it freezes the provi
   assert.deepEqual(order, ['catalog', 'openai']);
 });
 
-test('a start whose catalog refresh fails, or whose owner changes during it, is refused with the desktop marker', async t => {
+test('a start whose catalog refresh fails, or whose owner changes during it, is refused with the desktop marker', { timeout: TEST_TIMEOUT_MS }, async t => {
   const failing = setup(t, 'start-options-catalog-fail', async () => { throw new Error('PROVIDER_OWNER_CHANGED'); });
   await assert.rejects(failing.start.prepareStartOptions('fail-task', { agentKind: 'codex', providerId: 'openai', model: 'm' }),
     error => error.code === 'ACCOUNT_PROVIDER_NOT_READY');
@@ -141,7 +145,7 @@ test('a start whose catalog refresh fails, or whose owner changes during it, is 
   assert.equal(getSessionProvider('switch-task'), null);
 });
 
-test('a start refreshes the model lists after the catalog wait and passes the disabled plugins', async t => {
+test('a start refreshes the model lists after the catalog wait and passes the disabled plugins', { timeout: TEST_TIMEOUT_MS }, async t => {
   const order = [];
   const { start } = setup(t, 'start-options-plugins', async () => { order.push('catalog'); }, () => { order.push('models'); });
   const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-work-'));
@@ -158,7 +162,7 @@ test('a start refreshes the model lists after the catalog wait and passes the di
  * 一个运行中开过快速模式的任务被恢复时，创建参数取自任务行（input-queue.mjs storedSessionOptions，
  * 发送、恢复、续接三条路径共用）。若这条映射丢了 fastMode，Pi 的价格档会被改回 standard。
  */
-test('a task restored with Fast saved on its row starts on the priority price tier', async t => {
+test('a task restored with Fast saved on its row starts on the priority price tier', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { start } = setup(t, 'start-options-restore-fast');
   const opts = storedSessionOptions({ agentKind: 'pi', model: 'fixture-model', providerId: 'fixture-provider', fastMode: true });
   assert.equal(opts.fastMode, true);

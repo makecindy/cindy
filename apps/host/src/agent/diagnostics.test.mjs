@@ -27,6 +27,10 @@ import { listCodexProcessPids, resolveAgentProcessRegistration } from '../../../
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../../../desktop/src/main/logger.ts';
 import { reapCodexToolTreesSync } from '../../../desktop/src/main/codex-tool-tree-reaper.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const agentDir = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.dirname(agentDir);
 const desktopMain = path.join(srcDir, '..', '..', 'desktop', 'src', 'main');
@@ -67,7 +71,7 @@ function buildGraph(t, ownerId) {
   });
 }
 
-test('the three engines the Host assembles register their processes as the desktop does, and Claude gets the desktop cc-debug files', t => {
+test('the three engines the Host assembles register their processes as the desktop does, and Claude gets the desktop cc-debug files', { timeout: TEST_TIMEOUT_MS }, t => {
   const graph = buildGraph(t, 'diagnostics-registration');
   // PIDs no process holds here: only the in-memory registry is touched.
   const claude = graph.agent.deps.registerLocalAgentProcess({ pid: 999_991, kind: 'claude', role: 'task-host', sessionId: 'claude-task' });
@@ -143,7 +147,7 @@ function startFake(t, recorded, script, name) {
   return { pid: child.pid, facts, ready };
 }
 
-test('Host exit reaps only the tool trees below the Host\'s own registered app-servers', { skip: process.platform === 'win32' }, async t => {
+test('Host exit reaps only the tool trees below the Host\'s own registered app-servers', { skip: process.platform === 'win32', timeout: TEST_TIMEOUT_MS }, async t => {
   const graph = buildGraph(t, 'diagnostics-reaper');
   // Every process this test starts, by the PID recorded when it started; nothing else is stopped.
   const recorded = new Set();
@@ -175,7 +179,7 @@ test('Host exit reaps only the tool trees below the Host\'s own registered app-s
   }
 });
 
-test('main.ts reaps on the Host exit only, before the Maker shutdown, and turns the cc-debug tailer on as the desktop does', () => {
+test('main.ts reaps on the Host exit only, before the Maker shutdown, and turns the cc-debug tailer on as the desktop does', { timeout: TEST_TIMEOUT_MS }, () => {
   const main = fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8');
   const bootstrap = fs.readFileSync(path.join(desktopMain, 'bootstrap-electron.ts'), 'utf8');
   const sources = [];

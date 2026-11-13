@@ -19,6 +19,10 @@ import { createHostGitSnapshot } from './git-snapshot.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { listShadowSavepoints } from '../../../desktop/src/main/git-snapshot/gitSnapshotService.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8',
   env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
     GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } }).trim();
@@ -44,7 +48,7 @@ function setup(t, ownerId) {
   return { repo, snapshot };
 }
 
-test('a Host turn keeps the desktop savepoint chain in the task repository without a model call', async t => {
+test('a Host turn keeps the desktop savepoint chain in the task repository without a model call', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { repo, snapshot } = setup(t, 'snapshot-owner');
   const head = git(repo, 'rev-parse', 'HEAD');
 
@@ -64,7 +68,7 @@ test('a Host turn keeps the desktop savepoint chain in the task repository witho
   assert.equal(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8'), 'two\n');
 });
 
-test('a Host turn that is not dispatched leaves no after-edit savepoint', async t => {
+test('a Host turn that is not dispatched leaves no after-edit savepoint', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { repo, snapshot } = setup(t, 'snapshot-owner-abort');
   await snapshot.onTurnStart('task-2');
   snapshot.onTurnAbort('task-2');

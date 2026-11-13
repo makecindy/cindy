@@ -19,7 +19,11 @@ import test from 'node:test';
 import { setCindySkillEnabled } from '../../../desktop/src/main/skillhub/activationPreferences.ts';
 import { learnFixture as fixture, learnDescriptor, inside } from './learn-fixture.mjs';
 
-test('Claude and Pi get the published built-in learn; Codex waits for the Skill projection', async t => {
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
+test('Claude and Pi get the published built-in learn; Codex waits for the Skill projection', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = await fixture(t);
   const descriptor = learnDescriptor(f);
   assert.ok(descriptor, 'the bundled learn Skill was published into the fixture');
@@ -58,7 +62,7 @@ test('Claude and Pi get the published built-in learn; Codex waits for the Skill 
   assert.equal(await expect('claude-other', 'claude-code', 'please learn how we deploy'), null);
 });
 
-test('no snapshot when the turn, the session or the Skill does not qualify', async t => {
+test('no snapshot when the turn, the session or the Skill does not qualify', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = await fixture(t);
   const descriptor = learnDescriptor(f);
   const qualified = '/cindy:learn how we deploy';
@@ -88,7 +92,7 @@ test('no snapshot when the turn, the session or the Skill does not qualify', asy
   assert.ok(await f.capture(f.session('enabled-again', 'claude-code'), qualified, qualified));
 });
 
-test('no snapshot when the desktop never published the built-in Skills', async t => {
+test('no snapshot when the desktop never published the built-in Skills', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = await fixture(t, { publish: false });
   assert.equal(learnDescriptor(f), undefined);
   for (const kind of ['claude-code', 'pi', 'codex']) {

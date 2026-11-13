@@ -24,6 +24,10 @@ import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { beginAppSessionBoundary } from '../../../desktop/src/main/appSessionState.ts';
 import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
 
+// node:test has no default timeout. These tests start subprocesses or use real temporary
+// files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
+const TEST_TIMEOUT_MS = 120_000;
+
 const require = createRequire(new URL('../../../desktop/package.json', import.meta.url));
 const JSZip = require('jszip');
 
@@ -68,7 +72,7 @@ async function installSkillPlugin(t, ownerId) {
   return { manager, catalog, ghost: result.ghost, stateRoot };
 }
 
-test('approved plugin Skills are listed from their snapshot; a tampered snapshot is not, and the approval record is untouched', async t => {
+test('approved plugin Skills are listed from their snapshot; a tampered snapshot is not, and the approval record is untouched', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { manager, catalog, ghost } = await installSkillPlugin(t, 'managed-skills-owner');
   const part = installedGhostStoragePart(ghost);
   const listed = await catalog.listCindyManagedSkills();
@@ -94,7 +98,7 @@ test('approved plugin Skills are listed from their snapshot; a tampered snapshot
   }
 });
 
-test('listing managed Skills during an owner switch fails like the desktop instead of returning nothing', async t => {
+test('listing managed Skills during an owner switch fails like the desktop instead of returning nothing', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { catalog } = await installSkillPlugin(t, 'managed-skills-switch');
   t.after(beginAppSessionBoundary());
   await assert.rejects(catalog.listCindyManagedSkills(), { message: 'Skill owner is changing' });
