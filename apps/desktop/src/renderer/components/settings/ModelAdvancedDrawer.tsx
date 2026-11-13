@@ -361,8 +361,9 @@ export function ModelAdvancedDrawer({
         ? thinking.defaultEffort
         : null;
     const persisted = await thinking.setTiers(tiers, keptDefault);
-    if (!persisted) {
-      const reason = thinking.errorReason;
+    if (!persisted.ok) {
+      // 失败原因取本次返回值，不是 state：state 在失败回调里仍是渲染时的旧快照。
+      const reason = persisted.reason;
       toast.error(
         reason
           ? t('settings.providers.models.advanced.thinkingOverride.saveFailedWithReason', { reason })

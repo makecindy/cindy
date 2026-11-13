@@ -116,7 +116,7 @@ describe('model catalog thinking override hook', () => {
 
     // 第一笔写入保持在途；等 React 冲出乐观渲染后，模拟用户再勾一档（抽屉按当前 state
     // 计算 keptDefault）。第二笔立即落盘。
-    let second: Promise<boolean> | undefined;
+    let second: Promise<{ ok: boolean }> | undefined;
     await act(async () => {
       void hook.result.current.setTiers(['low', 'high'], 'low');
     });
