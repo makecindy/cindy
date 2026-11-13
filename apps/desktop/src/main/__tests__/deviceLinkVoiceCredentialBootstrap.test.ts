@@ -28,6 +28,7 @@ import {
   sharedTaskGuestPeer,
   sharedTaskHostPeer,
   sharedTaskTopics,
+  shortDeviceRef,
   type Envelope,
   type InvokePayload,
   type InvokeResultPayload,
@@ -205,7 +206,8 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
     scheduleLinkAcceptRetry: () => { throw new Error('Unexpected failed link accept'); },
     onOrdinaryPeerLinkAccepted: undefined,
     setOrdinaryPeerLinkAcceptedListener: (listener: (peer: string) => void) => { context.onOrdinaryPeerLinkAccepted = listener; },
-    log: diagnostic, shortId: (peer: string) => peer.slice(0, 8),
+    // Extracted production callbacks retain their real diagnostic dependency.
+    log: diagnostic, shortId: shortDeviceRef, shortDeviceRef,
   });
   const accept = inboundDispatch.runInContext(context) as
     (client: DeviceLinkClient, src: string, requestId: string, payload: LinkOpenPayload) => void;
@@ -266,7 +268,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // presence(wasAvailable=undefined)同样必须触发重放,接续 DEVICE_OFFLINE
     // 结束的恢复轮次(#1520 review P1)。
     expect(deviceLinkHost).toContain('if (available && wasAvailable !== true)');
-    expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
+    expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${shortDeviceRef(snap.deviceId)}`, snap.deviceId);');
     expect(deviceLinkHost).toContain('createSubscriptionReplayScheduler({');
     // Preserve unknown after reconnect; only explicit unavailability stops retries.
     expect(deviceLinkHost).toContain(
@@ -302,6 +304,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       client: { onPeerStreamAccepted: (callback: typeof callbacks[number]) => callbacks.push(callback) },
       isProviderSharePeer,
       parseSharedTaskPeer,
+      shortDeviceRef,
       replayActiveSubscriptions,
       sharedHostStreams,
       sharedHostSourceEpoch: 1,
