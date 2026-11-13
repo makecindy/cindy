@@ -68,9 +68,14 @@ export function createScheduledSessionBootstrap(
       // after the original process is proven stopped and admission really changes the source.
       if (!(error instanceof AgentStartupStoppedError) || !prepareFreshAccount) throw error;
       assertCurrent();
-      if (!await prepareFreshAccount(prepared, assertCurrent)) throw error;
+      if (!await prepareFreshAccount(prepared, assertCurrent)) throw error.cause;
       assertCurrent();
-      result = await bootstrapSession(prepared, assertCurrent);
+      try {
+        result = await bootstrapSession(prepared, assertCurrent);
+      } catch (retryError) {
+        // The exit receipt is internal to this retry; callers retain Maker's original error type.
+        throw retryError instanceof AgentStartupStoppedError ? retryError.cause : retryError;
+      }
     }
     const { session } = result;
     // Keep the caller's routing metadata aligned with the group-selected member.

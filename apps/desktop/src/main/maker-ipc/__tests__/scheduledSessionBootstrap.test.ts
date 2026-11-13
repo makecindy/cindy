@@ -105,18 +105,19 @@ describe('createScheduledSessionBootstrap', () => {
   // never exercised account preparation. A per-fire task has no durable row yet;
   // it must use the admitted source, while the saved schedule remains unchanged.
   // Retry is safe only once the failed runtime is proven stopped.
-  it.each(['known-failure', 'learned-at-startup', 'healthy', 'cleanup-pending', 'unclassified'] as const)(
+  it.each(['known-failure', 'learned-at-startup', 'healthy', 'cleanup-pending', 'unclassified', 'no-alternative', 'retry-exhausted'] as const)(
     'starts a fresh scheduled task using account admission (%s)', async mode => {
       const saved = { ...createOpts() as Record<string, unknown>, providerId: 'openai-old' };
       const options = { ...saved };
+      const cause = Object.assign(new Error('limit'), { code: 'usage_limit' });
       const failure = mode === 'cleanup-pending'
         ? new AgentStartupCleanupPendingError('cleanup pending', { cause: new Error('limit'), whenStopped: Promise.resolve() })
-        : mode === 'unclassified' ? new Error('unknown startup state') : new AgentStartupStoppedError(new Error('limit'));
+        : mode === 'unclassified' ? new Error('unknown startup state') : new AgentStartupStoppedError(cause);
       let learned = mode === 'known-failure';
       const startedSources: unknown[] = [];
       const prepare = vi.fn(async (opts: Parameters<Starter>[0], assertCurrent: () => void) => {
         assertCurrent();
-        if (!learned || opts.providerId === 'openai') return false;
+        if (!learned || opts.providerId === 'openai' || mode === 'no-alternative') return false;
         opts.providerId = 'openai';
         return true;
       });
@@ -126,7 +127,7 @@ describe('createScheduledSessionBootstrap', () => {
         startSession: async (opts: Parameters<Starter>[0]) => {
           startedSources.push(opts.providerId);
           expect(opts).not.toHaveProperty('preserveStartupStoppedError');
-          if (mode !== 'healthy' && opts.providerId === 'openai-old') {
+          if (mode !== 'healthy' && (opts.providerId === 'openai-old' || mode === 'retry-exhausted')) {
             learned = true;
             throw failure;
           }
@@ -142,7 +143,11 @@ describe('createScheduledSessionBootstrap', () => {
       } as never, logger: { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return this; } } as never });
       const starter = vi.fn<Starter>(async opts => ({ session: await maker.createSession(opts) }));
       const bootstrap = createScheduledSessionBootstrap(starter, prepare);
-      if (mode === 'cleanup-pending' || mode === 'unclassified') {
+      if (mode === 'no-alternative' || mode === 'retry-exhausted') {
+        await expect(bootstrap(options as never)).rejects.toBe(cause);
+        expect(startedSources).toEqual(mode === 'no-alternative' ? ['openai-old'] : ['openai-old', 'openai']);
+        expect(prepare).toHaveBeenCalledTimes(2);
+      } else if (mode === 'cleanup-pending' || mode === 'unclassified') {
         await expect(bootstrap(options as never)).rejects.toBe(failure);
         expect(startedSources).toEqual(['openai-old']);
         expect(prepare).toHaveBeenCalledOnce();
