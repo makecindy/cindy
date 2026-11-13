@@ -50,7 +50,7 @@ function captureScope() {
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
   const selection = agentNetSelectionKey();
   return {
-    key: JSON.stringify([providerShareOwnerKey(), endpoint]),
+    key: JSON.stringify([key, endpoint]),
     isCurrent: () => getAuthState().isAuthenticated && !isAppSessionBoundaryPending()
       && activeOwnerScopeKey() === key && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint && agentNetSelectionKey() === selection,
   };
@@ -235,7 +235,10 @@ export async function revokeProviderShareDelegation(input: {
 
 /** M verifies that the server accepted O's delegation before trusting a cross-account guest. */
 const delegationChecks = createProviderShareDelegationChecks({
-  captureScope,
+  // Only the delegation budget survives an owner generation change. Ordinary
+  // sharing and private invitations keep their existing scope dependency.
+  captureScope: () => ({ ...captureScope(),
+    key: JSON.stringify([providerShareOwnerKey(), getClientEndpoint('deviceLinkApiBaseUrl')]) }),
   scopeChanged: () => new ProviderShareScopeChangedError(),
   async request(input, scope, timeoutMs, signal) {
     const privateCheck = await checkAgentNetProviderExecutor(input, signal); if (privateCheck) return privateCheck;

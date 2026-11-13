@@ -118,8 +118,11 @@ O 的未完成回执按账号、任务、执行电脑和授权代次记录下次
 逐项等待；服务端写请求仍遵守 429。M 的到期与每次执行的实时权限检查保持原样。
 临时分配未确认到达 M 时，撤权清理逐个通知该任务已知的旧代次，全部确认后才退役对应账本，
 不能只撤销临时代次再抹掉 M 可能仍持有的旧许可记录。
+快照读取从不完整转为完整也发布一次状态变化；未完成的旧版权限补记保留成功刷新回调，成功后
+不再读取／写入补记状态。这些通知不重新触发权限事实未变的授权修复。
 实现与合成回归见 `providerShareDelegationChecks.ts`／同名测试、`providerShareHost.ts`／
-`providerShareRuntime.test.ts`、`remote-agent/host/service.ts`／`fastPolicyRuntime.test.ts`。
+`providerShareRuntime.test.ts`／`providerShareManagement.test.ts`、
+`remote-agent/host/service.ts`／`fastPolicyRuntime.test.ts`。
 
 - 启用成员模型用量比例限制时，新任务继续走 O 中转，由上游既有机制逐请求核对实时用量；
   离线直连许可不具备该能力。O 上修改此策略会退役该成员已有直连许可，仍保留原 M 的历史位置，

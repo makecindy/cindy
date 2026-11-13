@@ -399,6 +399,30 @@ describe('delegated executor access', () => {
 });
 
 describe('provider share host snapshot', () => {
+  // Unit / real snapshot publication: access-default migration waits for all
+  // authorities, even if the recovered service contributes an empty list.
+  it('publishes completion of an unchanged partial snapshot without restarting permission repair', async () => {
+    state.owned = [share([member('m1')])];
+    state.ownedIncomplete = true;
+    const published: Array<readonly ProviderShareOwned[] | null> = [];
+    const access = vi.fn();
+    const refreshed = vi.fn();
+    const stop = onProviderShareHostChanged(() => published.push(getProviderShareHostCompleteSnapshot()));
+    const stopAccess = onProviderShareHostChanged(access, { accessOnly: true });
+    const stopRefresh = onProviderShareHostChanged(refreshed, { refreshed: true });
+    try {
+      startProviderShareHost(events());
+      await refreshProviderShareHost('partial');
+      expect(published).toEqual([null]);
+      state.ownedIncomplete = false;
+      await refreshProviderShareHost('complete');
+      expect(published).toEqual([null, state.owned]);
+      await refreshProviderShareHost('identical-complete');
+      expect(published).toHaveLength(2);
+      expect(access).toHaveBeenCalledTimes(1);
+      expect(refreshed).toHaveBeenCalledTimes(3);
+    } finally { stop(); stopAccess(); stopRefresh(); }
+  });
   // Unit / real snapshot publication. Polling identical snapshots used to start
   // authorization repair and reshare fanout; prior tests only checked admission.
   it('publishes real changes once and separates permission facts from request/display refreshes', async () => {
