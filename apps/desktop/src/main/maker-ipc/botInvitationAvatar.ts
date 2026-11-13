@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { nativeImage } from 'electron';
 import { callCindyMedia } from '../cindy-media/invocationService.js';
-import { resolveSafe, writeBlob } from '../cindy-media/blobStore.js';
+import { resolveSafe, writeBlob } from '../cindy-media/blobStore.desktop.js';
 import { recordBlob, type LedgerDb } from '../cindy-media/ledger.js';
 
 /** Consume Core's executable catalog, without embedding a plugin or a model id. */

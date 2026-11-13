@@ -2218,6 +2218,26 @@ it('main provider form contains Tab and blocks dismissal only during the actual 
 describe('new-connection identification', () => {
   afterEach(() => { cleanup(); vi.useRealTimers(); });
   const preset = { id: 'deepseek', name: 'DeepSeek', runtimes: { pi: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' as const, models: [] } } };
+  it('lets a new connection with an image model opt into the Images API before saving', async () => {
+    render(<ProviderConnectionDialog onDetected={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} draft={{
+      preset, agent: 'pi', apiKey: 'fake-key', keys: { pi: 'fake-key' },
+      config: { id: 'image-relay', name: 'Image relay', runtimes: { pi: {
+        baseUrl: 'https://images.example.test/v1',
+        models: [{ id: 'private-image', name: 'Private image', mode: 'image_generation' }],
+      } } },
+    }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.advanced.label' }));
+    const images = screen.getByLabelText('settings.providers.custom.fields.openaiImages');
+    expect((images as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(images);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.saveProvider' }));
+    await waitFor(() => expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce());
+    const saved = customProviderMocks.createCustomProvider.mock.calls[0]?.[0] as CustomProviderConfig;
+    expect(saved.runtimes.pi?.imageApi).toBe('openai-images');
+    expect(buildUserProvider(saved).imageModels).toEqual([
+      expect.objectContaining({ id: 'private-image', sourceAgent: 'pi' }),
+    ]);
+  });
   async function openIdentification(available: ProviderPreset = preset, url = 'https://api.deepseek.com', apiKey = 'fake-key', selectModels = true) {
     vi.useFakeTimers();
     const fetchProviderModels = vi.fn(async () => ({ ok: true, models: [{ id: 'private-model', name: 'Model' }] }));
@@ -2839,6 +2859,28 @@ function renderExpandedConnection(...args: Parameters<typeof render>) {
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.manualAdd' }));
   return result;
 }
+
+it.each([
+  ['minimaxVideos', 'minimax-videos'], ['openaiVideos', 'openai-videos'],
+] as const)('保存 %s 视频接口时保留模型，且与原 xAI 选项互斥', async (label, videoApi) => {
+  const initial: CustomProviderConfig = { id: 'video-connection', name: 'Video connection', auth: { method: 'none' },
+    runtimes: { pi: { baseUrl: 'http://127.0.0.1:1234/v1', wireProtocol: 'openai-chat', videoApi: 'xai-videos',
+      models: [{ id: 'MiniMax-H3', name: 'MiniMax-H3', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } }] } },
+  };
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  await waitForInitialDialogFocus();
+  const xai = screen.getByRole('checkbox', { name: 'settings.providers.custom.fields.xaiVideos' }) as HTMLInputElement;
+  expect(xai.checked).toBe(true);
+  const chosen = screen.getByRole('checkbox', { name: `settings.providers.custom.fields.${label}` }) as HTMLInputElement;
+  fireEvent.click(chosen);
+  expect(chosen.checked).toBe(true);
+  expect(xai.checked).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  const saved = customProviderMocks.updateCustomProvider.mock.calls[0][0] as CustomProviderConfig;
+  expect(saved.runtimes.pi?.videoApi).toBe(videoApi);
+  expect(saved.runtimes.pi?.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'MiniMax-H3', mode: 'video_generation' })]));
+});
 
 // Standard: connection fields remain usable while optional editors start closed.
 it('starts manual models and advanced fields closed without hiding model discovery', async () => {

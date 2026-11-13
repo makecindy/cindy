@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 
-import type { PrStatusResult } from '@/lib/gitContext.types';
+import { areAllTaskPrsMerged, prStatusKey } from '@/lib/prStatus';
+import type { SessionPrRef, PrStatusResult } from '@/lib/gitContext.types';
+import { enableGhostCardTaskAutoArchive, setGhostCardTaskAutoArchiveArmed, getGhostCardTaskAutoArchiveState, cancelGhostCardTaskAutoArchive } from '../ghostCardTaskArchive';
 import { fillGhostCardPrStatus, fillGhostCardTaskAutoArchiveHint, readPrStatusSlotKey } from '../ghostCardPrStatus';
 
 // Unit: the PR card's check strip was a snapshot from the agent's last pr_card call and could
@@ -60,40 +62,72 @@ describe('fillGhostCardPrStatus', () => {
     expect(el.style.display).toBe('none');
   });
 
-  // Rule (2026-11-06): the archive-task button shows once the PR ended. The host's own status wins
-  // over the plugin snapshot; auto-archive is offered only for a PR the host itself saw merged.
-  it('reveals the archive-task button for an ended PR and reports auto-archive only for a live merge', () => {
+  // Regression: one merged card must not offer to archive a task with another unfinished PR.
+  // Unit: the second PR need not have a mounted card; missing/failed status is not completion.
+  it('requires every task PR to be confirmed merged before revealing archive', () => {
     document.body.innerHTML = '<button data-ghost-task-archive="Octo/Repo#9" data-ghost-task-archive-state="merged" data-ghost-task-archive-auto style="display:none"></button>';
     const el = document.querySelector('button')!;
-    expect(readPrStatusSlotKey(document.body.innerHTML)).toBe('octo/repo#9');
-    expect(fillGhostCardPrStatus(document, () => undefined, t)).toBe(false);
-    expect(el.style.display).toBe('inline-flex');
-    expect(fillGhostCardPrStatus(document, () => status(), t)).toBe(false);
+    const refs = [9, 10].map(prNumber => ({ owner: 'octo', repo: 'repo', prNumber }) as SessionPrRef);
+    const merged = status({ status: 'merged' });
+    const statuses = new Map([[prStatusKey(refs[0]), merged]]);
+    const render = (error = false) => fillGhostCardPrStatus(document, () => merged, t, areAllTaskPrsMerged(refs, statuses, error));
+    expect(render()).toBe(false);
     expect(el.style.display).toBe('none');
-    expect(fillGhostCardPrStatus(document, () => status({ status: 'closed' }), t)).toBe(false);
+    for (const other of [status(), status({ status: 'closed' }), { ok: false } as PrStatusResult]) {
+      statuses.set(prStatusKey(refs[1]), other);
+      expect(render()).toBe(false);
+      expect(el.style.display).toBe('none');
+    }
+    statuses.set(prStatusKey(refs[1]), status({ prNumber: 10, status: 'merged' }));
+    expect(render()).toBe(true);
     expect(el.style.display).toBe('inline-flex');
-    expect(fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t)).toBe(true);
+    expect(render(true)).toBe(false);
+    expect(el.style.display).toBe('none');
+    expect(areAllTaskPrsMerged([], statuses, false)).toBe(false);
+    expect(fillGhostCardPrStatus(document, () => undefined, t, true)).toBe(false);
+    expect(el.style.display).toBe('none');
     el.removeAttribute('data-ghost-task-archive-auto');
-    expect(fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t)).toBe(false);
+    expect(render()).toBe(false);
+    expect(el.style.display).toBe('inline-flex');
   });
 
-  // Rule (2026-11-06): while auto-archive is pending the card says so next to the revealed button and
-  // offers a host-owned cancel; once it is no longer pending the hint goes away.
-  it('shows the pending auto-archive hint with a cancel next to the revealed archive button', () => {
+  // Unit regression (2026-11-08): cancellation previously erased all feedback. Exercise the
+  // real state + DOM entry with one eligible card; retain the cancelled result across refreshes,
+  // then clear it when eligibility ends (the previous test only asserted removal).
+  it('distinguishes pending, cancelled and inactive archive states across card refreshes', () => {
     document.body.innerHTML = '<div><button data-ghost-task-archive="Octo/Repo#9" data-ghost-task-archive-auto style="display:none"></button></div>';
-    fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t);
-    const onCancel = vi.fn();
-    const labels = { pending: 'Archives when you leave', cancel: 'Keep this time' };
-    fillGhostCardTaskAutoArchiveHint(document, true, labels, onCancel);
-    fillGhostCardTaskAutoArchiveHint(document, true, labels, onCancel);
-    const hint = document.querySelectorAll('[data-x-auto-archive-hint]');
-    expect(hint).toHaveLength(1);
-    expect(hint[0].nextElementSibling?.hasAttribute('data-ghost-task-archive')).toBe(true);
-    expect(hint[0].textContent).toBe('Archives when you leave · Keep this time');
-    hint[0].querySelector('button')!.click();
-    expect(onCancel).toHaveBeenCalledTimes(1);
-    fillGhostCardTaskAutoArchiveHint(document, false, labels, onCancel);
-    expect(document.querySelector('[data-x-auto-archive-hint]')).toBeNull();
+    fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t, true);
+    const id = 'archive-hint-regression';
+    const disable = enableGhostCardTaskAutoArchive(id);
+    setGhostCardTaskAutoArchiveArmed(id, 'card', true);
+    const onCancel = vi.fn(() => cancelGhostCardTaskAutoArchive(id));
+    const labels = { pending: 'Archives when you leave', cancel: 'Cancel', cancelled: 'Will not auto-archive this time' };
+    const render = () => fillGhostCardTaskAutoArchiveHint(document, getGhostCardTaskAutoArchiveState(id), labels, onCancel);
+    try {
+      render();
+      render();
+      const hints = document.querySelectorAll('[data-x-auto-archive-hint]');
+      expect(hints).toHaveLength(1);
+      expect(hints[0].nextElementSibling?.getAttribute('aria-label')).toBe('taskArchiveNow');
+      expect(hints[0].textContent).toBe('Archives when you leaveCancel');
+      hints[0].querySelector('button')!.click();
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      render();
+      render();
+      const cancelled = document.querySelector('[data-x-auto-archive-hint]')!;
+      expect(cancelled.textContent).toBe(labels.cancelled);
+      expect(cancelled.querySelector('button')).toBeNull();
+      expect(document.querySelector<HTMLElement>('[data-ghost-task-archive]')!.style.display).toBe('inline-flex');
+      setGhostCardTaskAutoArchiveArmed(id, 'card', false);
+      render();
+      expect(document.querySelector('[data-x-auto-archive-hint]')).toBeNull();
+      setGhostCardTaskAutoArchiveArmed(id, 'card', true);
+      render();
+      expect(document.querySelector('[data-x-auto-archive-hint] button')?.textContent).toBe('Cancel');
+    } finally {
+      setGhostCardTaskAutoArchiveArmed(id, 'card', false);
+      disable();
+    }
   });
 
   it('puts the plugin snapshot back when the live status later disappears', () => {

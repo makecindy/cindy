@@ -26,6 +26,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
 import { setBroadcastTapListener } from '../device-link/broadcast-tap.js';
 const attemptJournal = vi.hoisted(() => ({ read: vi.fn<() => Promise<Array<{ id: string; anchor?: string }> | null>>() }));
+const readBoundClaudeConfigDirMock = vi.hoisted(() => vi.fn<(_sdkSessionId: string) => string | undefined>());
+vi.mock('../subscription-accounts/store.js', () => ({
+  readBoundClaudeConfigDir: readBoundClaudeConfigDirMock,
+}));
 vi.mock('../git-snapshot/snapshotAttemptStore', () => ({ SnapshotAttemptStore: class { read = attemptJournal.read; } }));
 
 // ── mock(在被测模块 import 前 hoist) ─────────────────────────────────────
@@ -38,6 +42,10 @@ vi.mock('../device-link/index.js', () => ({
 
 const previewRewindFilesMock = vi.fn();
 const commitRewindFilesMock = vi.fn();
+const syncBackgroundCommandWorkMock = vi.fn();
+vi.mock('../maker-host/claude-background-command-work-sync.js', () => ({
+  syncBackgroundCommandWork: syncBackgroundCommandWorkMock,
+}));
 const isTurnRunningMock = vi.fn(() => false);
 const recomputePrRefsForSessionMock = vi.fn();
 const executeCodexFileRewindPlanWithThreadRollbackMock = vi.fn();
@@ -145,7 +153,7 @@ vi.mock('../git-snapshot/gitSnapshotService', () => ({
 vi.mock('../worktree/gitExec', () => ({ gitExec: gitExecMock }));
 
 const setLastAssistantTranscriptUuidMock = vi.fn();
-vi.mock('../messagePersistBroadcaster.js', () => ({
+vi.mock('../messagePersistBroadcaster.desktop.js', () => ({
   setLastAssistantTranscriptUuid: setLastAssistantTranscriptUuidMock,
 }));
 
@@ -192,6 +200,7 @@ const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const tempDirs: string[] = [];
 
 beforeEach(() => {
+  readBoundClaudeConfigDirMock.mockReset();
   attemptJournal.read.mockReset().mockResolvedValue([]);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
@@ -259,6 +268,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  if (vi.isMockFunction(os.homedir)) vi.mocked(os.homedir).mockRestore();
+  vi.unstubAllEnvs();
   setBroadcastTapListener(null);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
@@ -376,6 +387,12 @@ describe('commitRewindAtMessage', () => {
       'sdk-msg-uuid-target',       // userUuid
       'sdk-msg-uuid-prior-asst',   // priorAssistantUuid
     );
+    // 提交关闭旧 Query、后台命令随之终止,任务表被不带事件地清空:提交之后必须刷新
+    // 「后台命令仍在工作」,否则任务列表会一直显示已不存在的命令在跑,直到下次发送。
+    expect(syncBackgroundCommandWorkMock).toHaveBeenCalledExactlyOnceWith(fakeSession);
+    expect(syncBackgroundCommandWorkMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      commitRewindFilesMock.mock.invocationCallOrder[0]!,
+    );
 
     // 段 2: 事务已封装为具名 tx — messages.rewind_at + sessions reset 在 worker 侧执行。
     const txCall = txCalls.find((c) => c.name === 'rewind.commit');
@@ -477,7 +494,8 @@ describe('commitRewindAtMessage', () => {
     });
   });
 
-  it('uses JSONL parent chain instead of stale target transcriptParentUuid', async () => {
+  // Standard regression: a secondary account's real transcript must also beat stale DB ancestry.
+  it.each([false, true])('uses JSONL parent chain instead of stale target transcriptParentUuid (secondary=%s)', async (secondary) => {
     await writeClaudeJsonl('sdk-uuid-old', '/repo', [
       {
         type: 'assistant',
@@ -500,6 +518,15 @@ describe('commitRewindAtMessage', () => {
         message: { content: 'next' },
       },
     ]);
+    if (secondary) {
+      const configDir = process.env.CLAUDE_CONFIG_DIR!;
+      readBoundClaudeConfigDirMock.mockImplementation((id) => id === 'sdk-uuid-old' ? configDir : undefined);
+      const emptyHome = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rewind-empty-home-'));
+      tempDirs.push(emptyHome);
+      vi.spyOn(os, 'homedir').mockReturnValue(emptyHome);
+      vi.stubEnv('CLAUDE_CONFIG_DIR', undefined);
+      vi.stubEnv('XDT_USER_DATA_DIR', undefined);
+    }
     selectQueue.push([
       makeUserMessageRow({
         agentMeta: JSON.stringify({

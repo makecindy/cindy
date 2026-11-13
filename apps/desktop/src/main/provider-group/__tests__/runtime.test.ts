@@ -11,7 +11,7 @@ import { PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS, providerGroupMemberUsageState } f
 import { createGroupContinuityExecutor } from '../continuityExecutor.js';
 import type { GroupContinuityGrant } from '../../../shared/providerGroupContinuity.js';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../service.js';
-import type { ProviderGroupBinding } from '../bindings.js';
+import type { ProviderGroupBinding } from '../bindings.desktop.js';
 
 let owner = 'owner-a';
 const io = vi.hoisted(() => ({
@@ -26,13 +26,28 @@ const io = vi.hoisted(() => ({
   self: vi.fn(() => 'self'),
   closeEpoch: vi.fn(() => 0),
   offlineDirect: vi.fn(() => false),
+  localAccountPush: undefined as (() => void) | undefined,
+  accountPush: undefined as ((deviceId: string, channel: string) => void) | undefined,
 }));
 
+// Keep the real account runtime; capture only its event subscription so both
+// local and remote invalidation exercise the production directory/cache owner.
+vi.mock('../../subscription-accounts/runtime.js', async importOriginal => ({
+  ...await importOriginal<Record<string, unknown>>(),
+  onSubscriptionAccountsChanged: (listener: () => void) => { io.localAccountPush = listener; return () => {}; },
+}));
+// The account runtime now statically imports route admission. These directory/cache tests never
+// dispatch accounts; keep that permission leaf fail-closed without loading share/fast-policy assembly.
+vi.mock('../../subscription-accounts/legacyAccountAccess.js', () => ({
+  legacyCodexAccountCanRun: () => false,
+  openAiRouteAllowsModel: () => false,
+  setLegacyCodexAccountPaused: vi.fn(),
+}));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => owner, isAppSessionBoundaryPending: () => false }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: io.shares,
   captureProviderShareGroupRecovery: () => async () => undefined }));
 vi.mock('../../device-link/ipc.js', () => ({ handleListDevices: io.devices, defaultDeps: vi.fn() }));
-vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: io.invoke, getDeviceLinkStatus: io.status,
+vi.mock('../../device-link/index.js', () => ({ onRemotePushChannel: (listener: (deviceId: string, channel: string) => void) => { io.accountPush = listener; return () => {}; }, remoteBackgroundInvoke: io.invoke, getDeviceLinkStatus: io.status,
   getSelfDeviceId: io.self, getRemoteLinkCloseEpoch: io.closeEpoch, hasOfflineDirectPath: io.offlineDirect }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://device-link.invalid' }));
 vi.mock('../../device-link/controllerPlatform.js', () => ({ isMobilePlatform: () => false }));
@@ -42,7 +57,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: io.catalog,
   readDeviceProviderCatalog: io.catalogState }));
-vi.mock('../bindings.js', () => ({ listProviderGroupBindings: () => ({}) }));
+vi.mock('../bindings.desktop.js', () => ({ listProviderGroupBindings: () => ({}) }));
 vi.mock('../store.js', () => ({ readProviderGroup: io.group }));
 vi.mock('../coolingStore.js', () => ({ readProviderGroupCooling: () => ({}), writeProviderGroupCooling: vi.fn() }));
 // Heavy leaves used only by service's failover/auto-resume paths, which these runtime
@@ -667,6 +682,102 @@ describe('provider group runtime quota account selection', () => {
     return { read, config, localId };
   }
 
+  // #9833, unit: run the owner runtime → directory → router with a remote
+  // account-pool reply. Legacy aggregate quota cannot prove model availability.
+  it.each(['healthy', 'exhausted', 'old-peer', 'wrong-model', 'owner-change'] as const)(
+    'recovers remote model cooling only from a current matching pool reply (%s)', async (reply) => {
+      const h = harness('anthropic');
+      const model = 'claude-sonnet-5-5';
+      h.config.members = h.config.members.slice(1);
+      io.group.mockReturnValue(h.config);
+      io.catalog.mockResolvedValue([{ id: 'anthropic', connected: true, agents: ['claude-code'],
+        auth: { method: 'oauth', native: 'claude' },
+        models: { 'claude-code': [{ id: model, name: model, efforts: [], defaultEffort: null }] },
+        routing: { 'claude-code': {} },
+      } as unknown as ProviderView]);
+      let preSend!: () => void;
+      io.invoke.mockImplementation(async (_device, channel, args, options) => {
+        expect(channel).toBe('maker:subscription-pool:quota');
+        if (args.length === 1 || reply === 'old-peer')
+          return { ok: true, result: { providerId: 'anthropic', pooled: true, usage: { claudeUsage: usage() } } };
+        preSend = options.preSend;
+        preSend();
+        if (reply === 'owner-change') owner = 'changed-during-model-read';
+        return { ok: true, result: { providerId: 'anthropic', model: reply === 'wrong-model' ? 'opus' : model,
+          available: reply !== 'exhausted' } };
+      });
+      const router = getProviderGroupOwnerScope().router;
+      const member = h.config.members[0];
+      const until = Date.now() + 1_800_000;
+      router.markCooling(h.localId, member.key, until, model);
+      const pick = await router.pick({ providerId: h.localId, model, agentKind: 'claude-code' });
+      expect(pick.kind).toBe(reply === 'healthy' ? 'member' : 'unavailable');
+      expect(router.coolingUntil(h.localId, member.key, model)).toBe(reply === 'healthy' ? null : until);
+      expect(io.invoke.mock.calls.filter(([, , args]) => args.length === 2)).toHaveLength(1);
+      if (reply === 'owner-change') expect(() => preSend()).toThrow('provider group account changed');
+      if (reply === 'healthy') {
+        expect((await router.pick({ providerId: h.localId, model, agentKind: 'claude-code' })).kind).toBe('member');
+        expect(io.invoke.mock.calls.filter(([, , args]) => args.length === 2)).toHaveLength(1);
+      }
+    },
+  );
+
+  // Unit: a new controller must keep the existing provider usable when an old
+  // host explicitly rejects the new pool channel; named-account echo tests do
+  // not cover that capability failure and fallback across both quota sources.
+  it.each(['claude', 'codex'])('uses legacy %s quota when an old host rejects pool queries', async (native) => {
+    const providerId = native === 'claude' ? 'anthropic' : 'openai';
+    const h = harness(providerId, native);
+    const bucket = { updatedAt: Date.now(), primary: { usedPercent: 12, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 } };
+    io.invoke.mockImplementation(async (_device, channel) => {
+      if (channel === 'maker:subscription-pool:quota')
+        return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'old host' } };
+      return { ok: true, result: channel === 'maker:usage:claude-subscription'
+        ? usage() : channel === 'maker:usage:codex-rate-limits' ? { rateLimits: bucket } : bucket };
+    });
+    const member = (await h.read())[1];
+    expect(member.state).toBe('ok');
+    if (native === 'claude') expect(member.claudeUsage?.fiveHour?.utilization).toBe(25);
+    else expect(member.codexUsage?.appServerBuckets?.__default__?.primary?.usedPercent).toBe(12);
+    await h.read();
+    expect(io.invoke.mock.calls.filter(([, channel]) => channel === 'maker:subscription-pool:quota')).toHaveLength(1);
+  });
+
+  // Unit, pause report: invalidating the visible directory used to leave the
+  // separate 30-second pool cache alive. The real change event must change quota.
+  it.each(['local', 'remote'])('drops pool quota caches on %s account changes', async source => {
+    const h = harness('anthropic', 'claude');
+    let percent = 100;
+    io.invoke.mockImplementation(async () => ({ ok: true, result: { providerId: 'anthropic', pooled: true,
+      usage: { claudeUsage: { ...usage(), fiveHour: { utilization: percent, resetsAt: Date.now() / 1000 + 3600 } } } } }));
+    expect((await h.read())[1].claudeUsage?.fiveHour?.utilization).toBe(100);
+    percent = 10;
+    if (source === 'local') io.localAccountPush!();
+    else io.accountPush!('mini', 'subscription-accounts:changed');
+    expect((await h.read())[1].claudeUsage?.fiveHour?.utilization).toBe(10);
+  });
+
+  // PR review: pooled native quota must survive both remote parsing and source merging for bridge engines.
+  it('uses remote pool buckets for Pi and Claude Code while retaining model-specific capacity', async () => {
+    const h = harness('openai', 'codex');
+    const bucket = (limitName: string, usedPercent: number) => ({ limitName, updatedAt: Date.now(),
+      primary: { usedPercent, windowMinutes: 300, resetsAt: Date.now() / 1000 + 7200 } });
+    io.invoke.mockImplementation(async (_device, channel) => {
+      if (channel !== 'maker:subscription-pool:quota') throw new Error('Unexpected legacy quota fallback');
+      return { ok: true, result: { providerId: 'openai', pooled: true, usage: { codexUsage: {
+        nativeAccountPool: true, webSnapshot: null,
+        appServerBuckets: { codex: bucket('Codex', 100), special: bucket('special-model', 20) },
+      } } } };
+    });
+    const resolved = await h.read();
+    expect(resolved[1].codexUsage?.nativeAccountPool).toBe(true);
+    for (const kind of ['pi', 'claude-code']) {
+      expect(providerGroupMemberUsageState(resolved[1], 'chatgpt/gpt-6', Date.now(), kind).limited).toBe(true);
+      expect(providerGroupMemberUsageState(resolved[1], 'chatgpt/special-model', Date.now(), kind).limited).toBe(false);
+    }
+    expect(io.invoke).toHaveBeenCalledTimes(1);
+  });
+
   it('uses each member’s provider ID through the injected reader and existing same-account channel', async () => {
     const h = harness();
     const local = vi.fn(async () => usage());
@@ -727,7 +838,8 @@ describe('provider group runtime quota account selection', () => {
     expect(resolved[0].codexUsage?.appServerBuckets?.__default__?.primary?.usedPercent).toBe(30);
     expect(resolved[1].codexUsage !== null).toBe(accepted);
     await h.read();
-    expect(io.invoke).toHaveBeenCalledTimes(2);
+    // Built-in OpenAI probes account-pool support once, shared by its two quota sources.
+    expect(io.invoke).toHaveBeenCalledTimes(id === 'openai' ? 3 : 2);
     expect(local).toHaveBeenCalledTimes(1);
     expect(localLimits).toHaveBeenCalledTimes(1);
   });

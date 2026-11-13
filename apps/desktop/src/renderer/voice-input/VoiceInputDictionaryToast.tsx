@@ -44,7 +44,7 @@ export function VoiceInputDictionaryToast() {
   const terms = entries.map((entry) => entry.term);
   const termText = useMemo(() => {
     if (terms.length === 0) return t('settings.voiceInput.refinement.dictionary.label');
-    const visibleTerms = terms.slice(0, 3).join('、');
+    const visibleTerms = terms.slice(0, 3).join(t('commonUi.listSeparator'));
     if (terms.length <= 3) return visibleTerms;
     return t('settings.voiceInput.refinement.dictionary.toast.termsSummary', {
       terms: visibleTerms,
@@ -67,7 +67,7 @@ export function VoiceInputDictionaryToast() {
       <div
         className={cn(
           'flex h-11 w-max max-w-full shrink-0 items-center gap-2 rounded-xl border px-2.5',
-          'border-[var(--cmd-palette-border)] shadow-[var(--shadow-menu)] backdrop-blur-xl',
+          'border-[var(--cmd-palette-border)] shadow-[shadow:var(--shadow-menu)] backdrop-blur-xl',
         )}
         style={{ backgroundColor: 'color-mix(in srgb, var(--cmd-palette-bg) 95%, transparent)' }}
       >

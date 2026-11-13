@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import {
   Mail,
   CalendarDays,
@@ -256,6 +257,7 @@ function RichAnswerDocument({
         const vector = richVector(node, palette);
         return (
           <svg
+            data-chat-rich-svg
             role="img"
             aria-label={label || richString(node, 'alt')}
             viewBox={vector.viewBox}
@@ -486,7 +488,7 @@ function RichAnswerDocument({
                       <dd>{item.value}</dd>
                     </div>
                     {richString(node, 'variant') !== 'line' && (
-                      <div className="rich-answer-track">
+                      <div className="rich-answer-track" data-chat-rich-bar>
                         <div
                           style={{
                             backgroundColor:
@@ -546,6 +548,7 @@ function AnswerLineChart({
   return (
     <div ref={ref}>
       <svg
+        data-chat-rich-svg="chart"
         role="img"
         aria-label={`${label}. ${data.map((item) => `${item.label}: ${item.value}`).join(', ')}`}
         viewBox={`0 0 ${plot.width} ${plot.height}`}

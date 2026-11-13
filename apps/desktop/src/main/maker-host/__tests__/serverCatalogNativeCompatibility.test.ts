@@ -136,7 +136,7 @@ describe('Server catalog updates with independent Cindy native protocols', () =>
     };
     expect(models.pi).toMatchObject({
       nativeApi: 'google-generative-ai',
-      piApi: 'google-generative-ai',
+      piApi: 'openai-responses',
       contextWindow: 1234567,
     });
     // Cindy AI serves Responses and Messages for Gemini: those engines start enabled.

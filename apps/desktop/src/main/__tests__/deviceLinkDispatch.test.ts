@@ -1,3 +1,6 @@
+// Media IO is a platform port; authorization tests use the real dispatcher and projections.
+vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMedia: vi.fn(async value => value) }));
+vi.mock('../device-link/providerShareAvailability.js', () => ({ prepareShareAvailability: vi.fn() }));
 /**
  * device-link 被控端 dispatch 单测:runInvoke 的双层校验(被控开关 + allowlist)
  * 与 invoke-registry 的 dispatchLocalInvoke。
@@ -6,8 +9,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let remoteControlEnabled = true;
 let revokedControllers: string[] = [];
-vi.mock('../device-link/settings-store', () => ({
-  readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers }),
+let modelUseRevokedControllers: string[] = [];
+vi.mock('../device-link/settings-store.desktop', () => ({
+  readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers, modelUseRevokedControllers }),
 }));
 const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => diagnosticLog }));
@@ -19,6 +23,7 @@ vi.mock('electron', () => ({
 // boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
 vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
   delegatedProviderShareGuestAccess: () => null,
+  delegatedProviderShareLeases: () => [], invalidateProviderShareDelegation: vi.fn(),
 }));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
 vi.mock('../task-migration/service', () => ({ requestTaskMigration: vi.fn() }));
@@ -44,7 +49,7 @@ import {
   handleControllerOffline,
   __testing as dispatchTesting,
   type ActiveController,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import { __testing as registry, dispatchLocalInvoke } from '../device-link/invoke-registry';
 import {
   deviceLinkInvokeControllerSupports,
@@ -62,6 +67,7 @@ import { authenticateOauthController } from '../plugin-oauth/authentication';
 beforeEach(() => {
   remoteControlEnabled = true;
   revokedControllers = [];
+  modelUseRevokedControllers = [];
   registry.reset();
   dispatchTesting.reset(); // 清订阅 registry / tap / onControllersChanged / activeClient
   setRemoteWorkingDirGuard(null); // 默认不注入,行为同生产未就绪态(放行)
@@ -513,7 +519,7 @@ import {
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
   pushSessionActivityToController,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import {
   applyControllerDisplayNameDirectorySnapshot,
   applyControllerDisplayNamePresence,
@@ -895,6 +901,102 @@ describe('被控端控制链路生命周期', () => {
 
     expect(dispatchTesting.queuedPushesFor('ctrl-drop-queue')).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
+  });
+
+  it('a computer whose "use models here" is off still reads the catalog but sees nothing it can borrow', async () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [{ id: 'openai', name: 'OpenAI', remoteInvocationEnabled: true }],
+    }));
+    for (const src of ['ctrl-borrow', 'ctrl-no-models']) {
+      feed({ v: 1, kind: 'link-open', id: `open-${src}`, src, payload: { controllerName: src, protocolVersion: 1, appVersion: '2.0.0' } });
+    }
+    modelUseRevokedControllers = ['ctrl-no-models'];
+
+    const allowed = await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] });
+    const denied = await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] });
+    expect(allowed).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: true }] } });
+    expect(denied).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: false }] } });
+  });
+
+  // 2026-11-12：「让我的其他电脑用本机模型」默认关闭；只有用户在「远程连接」里打开后，自己的电脑才看到
+  // 没单独打开的供应商，「用本机模型」被关掉的那台仍看不到。
+  it('own computers see providers not opened one by one only after the 远程连接 switch is on', async () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: false }],
+    }));
+    for (const src of ['ctrl-borrow', 'ctrl-no-models']) {
+      feed({ v: 1, kind: 'link-open', id: `open-${src}`, src, payload: { controllerName: src, protocolVersion: 1, appVersion: '2.0.0' } });
+    }
+    modelUseRevokedControllers = ['ctrl-no-models'];
+    let ownComputers = false;
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), ownComputerModelUseEnabled: () => ownComputers });
+    try {
+      expect(await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+      ownComputers = true;
+      expect(await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: true }] } });
+      expect(await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+      // PR #10150 review: a provider with a group keeps its own switch, so group member selection is not bypassed;
+      // a provider opened by the switch still reports its running count, which other groups use as its load.
+      registry.register('maker:provider:list', () => ({
+        providers: [
+          { id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: false },
+          { id: 'openai', name: 'OpenAI', remoteInvocationEnabled: false },
+        ],
+      }));
+      setProviderGroupRemoteHandler({
+        handle: vi.fn(),
+        decorateProviderList: (result) => ({ ...(result as object), providers: (result as { providers: Record<string, unknown>[] }).providers
+          .map((provider) => ({
+            ...provider,
+            ...(provider.id === 'anthropic' ? { group: { strategy: 'least', members: [] } } : {}),
+            ...(provider.remoteInvocationEnabled === true ? { runningTurns: 2 } : {}),
+          })) }),
+        sharedGroupSize: () => null,
+      });
+      const listed = await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }) as { result: { providers: Record<string, unknown>[] } };
+      expect(listed.result.providers).toEqual([
+        expect.not.objectContaining({ runningTurns: expect.anything() }),
+        expect.objectContaining({ id: 'openai', remoteInvocationEnabled: true, runningTurns: 2 }),
+      ]);
+      expect(listed.result.providers[0]).toMatchObject({ id: 'anthropic', remoteInvocationEnabled: false });
+      // PR #10150 review: a computer whose 「用本机模型」 is off stays refused for a grouped provider opened one by one.
+      registry.register('maker:provider:list', () => ({
+        providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true }],
+      }));
+      ownComputers = false;
+      expect(await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+    } finally { setRemoteAgentHandler(null); setProviderGroupRemoteHandler(null); }
+  });
+
+  // PR #10150 review: the pool alias was folded against the pool's original (closed) mark, so with the
+  // switch on a same-account computer saw the open pool and the folded old connection as two entries.
+  it('folds the old Codex connection into the pool after the own-computer switch opens it', async () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [
+        { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: false },
+        { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: false, subscriptionPoolAlias: true },
+      ],
+    }));
+    feed({ v: 1, kind: 'link-open', id: 'open-ctrl-alias', src: 'ctrl-alias', payload: { controllerName: 'ctrl-alias', protocolVersion: 1, appVersion: '2.0.0' } });
+    let ownComputers = false;
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), ownComputerModelUseEnabled: () => ownComputers });
+    const alias = async () => ((await runInvoke('ctrl-alias', { channel: 'maker:provider:list', args: [] })) as {
+      result: { providers: Record<string, unknown>[] } }).result.providers.find((provider) => provider.id === 'old-openai')?.subscriptionPoolAlias;
+    try {
+      expect(await alias()).toBeUndefined();
+      ownComputers = true;
+      expect(await alias()).toBe(true);
+    } finally { setRemoteAgentHandler(null); }
   });
 
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {

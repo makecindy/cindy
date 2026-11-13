@@ -41,6 +41,10 @@ function mapWireTheme(theme: LocalThemeWire): Theme {
     // 加载期兼容归一化:把 text-placeholder slot 引入前创建的旧本地主题统一收口
     // 到新 slot(详见 local-themes-normalize.ts / docs/design-rules/cindy-design-system.md §13 G3)。
     colors: normalizeLocalThemeColors(theme.colors, theme.type),
+    ...(theme.packageSha256 ? {
+      packageSha256: theme.packageSha256,
+      ...(theme.appearance ? { appearance: theme.appearance } : {}),
+    } : {}),
     ...(icon || logo
       ? { brand: { ...(icon ? { icon } : {}), ...(logo ? { logo } : {}) } }
       : {}),
@@ -49,7 +53,8 @@ function mapWireTheme(theme: LocalThemeWire): Theme {
 
 function signatureOf(themes: Theme[]): string {
   return JSON.stringify(
-    themes.map((t) => [t.id, t.type, t.name, t.family, t.colors, t.brand]),
+    themes.map((t) => [t.id, t.type, t.name, t.family, t.colors, t.brand,
+      ...(t.packageSha256 ? [t.packageSha256, t.appearance] : [])]),
   );
 }
 
@@ -70,6 +75,9 @@ export function bootstrapLocalThemesSync(): void {
   } catch (error) {
     log.warn('Failed to bootstrap local themes:', error);
   }
+  window.electronAPI.localThemes.onChanged((payload) => {
+    if (updateCachedThemes(payload)) didChange.fire(undefined);
+  });
 }
 
 export async function refreshLocalThemes(): Promise<LocalThemesResult> {

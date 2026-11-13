@@ -1,6 +1,6 @@
 /**
  * xdt-helper/list_available_models.ts —— 列出每个 agent 当前 host 支持的 model。
- * 用于 create_worker 前确认 model 名拼写, Codex 和 Claude Code 模型不可跨用。
+ * 用于 send_to_session 新建普通任务或 create_worker 前确认 model 名拼写, Codex 和 Claude Code 模型不可跨用。
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -94,20 +94,21 @@ function toToolAgentDeviceId(value: string | null): string {
 }
 
 const DESCRIPTION = [
-  '列出每个 agent 当前 host 支持的 model id 清单, 用于 create_worker 前确认 model 名拼写。',
+  '列出每个 agent 当前 host 支持的 model id 清单, 用于 send_to_session 新建普通任务或 create_worker 前确认 model 名拼写。',
   'Codex 和 Claude Code 支持的 model 完全不同, 不可跨用。',
   '',
+  '普通任务使用 device 选择任务电脑、provider_device_id 选择供应商位置；execution_device_id / agent_device_id 是兼容旧名。位置参数同时给新旧名时必须一致。',
   '参数:',
   '- agent: 可选, codex / claude-code / pi; 不传返三者',
-  '- execution_device_id: 可选, 查询该 Worker 工作电脑可用的模型与来源，取 execution_devices 的 device_id。',
-  '- agent_device_id: 可选, 模型所在位置: locations[].agent_device_id 或 "local"。指定 execution_device_id 时相对工作电脑，否则不传跟 Lead。',
+  '- device: 可选，任务和文件所在电脑，取 list_machines 的 machines.computers[].deviceId；local 为本机。旧名 execution_device_id 继续支持。',
+  '- provider_device_id: 可选，模型供应商位置，取 locations[].provider_device_id；local 相对 device 指定的任务电脑。不传 device 时保留当前任务的模型位置。旧名 agent_device_id 继续支持。',
   '',
   '返回值:',
-  '- agent_device_id: 本次列出的位置; locations: 其他可选位置 [{agent_device_id, name}]。create_worker 传同一个 agent_device_id 并用这里列出的 model / provider_id',
+  '- device: 显式查询的任务电脑；provider_device_id: 实际模型位置；locations: 其他可选供应商位置。agent_device_id 保留为旧名。send_to_session 使用同一 device、provider_device_id 和 model；Worker 仍用 execution_device_id、agent_device_id。',
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
-  '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。创建 Worker 时把选定的 provider_id 原样传给 create_worker/create_workers。',
+  '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。普通任务按精确 model 使用宿主默认来源，不传 provider_id；显式创建 Worker 时可把选定的 provider_id 传给 create_worker/create_workers。',
   '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',
@@ -128,6 +129,8 @@ export function registerListAvailableModelsTool(
     category: 'control',
     description: DESCRIPTION,
     inputShape: {
+      device: z.string().trim().min(1).max(128).optional().describe('任务所在电脑，取 list_machines 的 machines.computers[].deviceId；查询在这台电脑创建任务可用的模型。省略保持当前任务的位置。'),
+      provider_device_id: z.string().trim().min(1).max(128).optional().describe('模型供应商所在电脑；local 相对 device 指定的任务电脑。agent_device_id 为兼容旧名。'),
       agent: z
         .enum(['codex', 'claude-code', 'pi'])
         .optional()
@@ -140,9 +143,14 @@ export function registerListAvailableModelsTool(
         .optional()
         .describe('可选, 模型位置: locations[].agent_device_id 或 "local"；指定工作电脑时相对它，否则不传跟 Lead'),
       execution_device_id: z.string().trim().min(1).max(128).optional()
-        .describe('可选，Worker 的工作电脑；查询它可用的模型与远程供应商'),
+        .describe('兼容旧名；优先用 device 指定任务电脑，查询它可用的模型与远程供应商'),
     },
-    handler: async ({ agent, agent_device_id, execution_device_id }) => {
+    handler: async ({ agent, agent_device_id, execution_device_id, device, provider_device_id }) => {
+      if ((device !== undefined && execution_device_id !== undefined && device !== execution_device_id)
+        || (provider_device_id !== undefined && agent_device_id !== undefined && provider_device_id !== agent_device_id))
+        return errorPayload('INVALID_ARGS', '设备参数与兼容旧名不一致，请只指定一个任务位置和一个供应商位置。');
+      execution_device_id = device ?? execution_device_id;
+      agent_device_id = provider_device_id ?? agent_device_id;
       const callerSessionId = deps.getSessionContext?.().sessionId;
       const result = await deps.listAvailableModels({
         agent,
@@ -161,12 +169,14 @@ export function registerListAvailableModelsTool(
         );
       }
       return okPayload({
+        ...(execution_device_id !== undefined ? { device: execution_device_id } : {}),
         ...(result.agentDeviceId !== undefined
-          ? { agent_device_id: toToolAgentDeviceId(result.agentDeviceId) }
+          ? { provider_device_id: toToolAgentDeviceId(result.agentDeviceId), agent_device_id: toToolAgentDeviceId(result.agentDeviceId) }
           : {}),
         ...(result.locations
           ? {
               locations: result.locations.map((location) => ({
+                provider_device_id: location.agentDeviceId,
                 agent_device_id: location.agentDeviceId,
                 name: location.name,
               })),

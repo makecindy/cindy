@@ -587,3 +587,25 @@ describe('sanitizeGhostCardHtml · 卡内外链声明(v3,data-ghost-link)', () =
     expect(out).toBe('<a data-ghost-link="https://a.com/">x</a>');
   });
 });
+
+
+it('preserves only navigation-only Cindy task links, never commands or ambiguous targets', () => {
+  expect(ok('<a href="cindy://session/task-42">打开原任务</a>')).toBe('<a data-ghost-link="cindy://session/task-42">打开原任务</a>');
+  for (const url of ['cindy://settings', 'cindy://session/task?command=run', 'cindy://session/../settings', 'cindy://session/%2e%2e', 'cindy://session/task#x', 'cindy://session/task/other']) {
+    expect(ok(`<a href="${url}">open</a>`)).toBe('<a>open</a>');
+  }
+});
+
+// Unit: older clients need the ordinary action; only safe, input-free buttons
+// may opt into native navigation. Existing href tests do not cover this fallback.
+it('retains the legacy action and validates the optional native task entry', () => {
+  expect(ok('<button data-ghost-action="open" data-ghost-session-link="cindy://session/task">Open</button>'))
+    .toBe('<button data-ghost-action="open" data-ghost-session-link="cindy://session/task" type="button">Open</button>');
+  for (const attrs of ['data-ghost-action="open" data-ghost-prompt=""', 'data-ghost-action="open" data-ghost-submit="true"', '', 'data-ghost-action="!bad"']) {
+    expect(ok(`<button ${attrs} data-ghost-session-link="cindy://session/task">Open</button>`)).not.toContain('data-ghost-session-link');
+  }
+  for (const url of ['cindy://settings', 'cindy://session/task?run=1', 'https://example.test']) {
+    expect(ok(`<button data-ghost-action="open" data-ghost-session-link="${url}">Open</button>`))
+      .toBe('<button data-ghost-action="open" type="button">Open</button>');
+  }
+});

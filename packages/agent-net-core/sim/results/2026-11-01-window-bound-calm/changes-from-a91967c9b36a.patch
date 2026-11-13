@@ -1,0 +1,92 @@
+--- a/src/congestion.rs
++++ b/src/congestion.rs
+@@ -84,6 +84,8 @@
+ const CALM_SAMPLE_FLOOR: u32 = 64;
+ /// 看最近这么多轮的平均送达速率。要盖过排空阶段：排空时发得慢，送达速率本来就低。
+ const DELIVERY_ROUNDS: usize = 4;
++/// 最近几轮平均送达速率至少是窗口能送速率的这么多百分比，才算真的被窗口限住。
++const WINDOW_DELIVERY_PERCENT: u64 = 85;
+ 
+ #[derive(Clone, Copy, PartialEq)]
+ enum Mode {
+@@ -121,6 +123,8 @@
+     round_started_at: u64,
+     /// 最近几轮各自的平均送达速率。
+     round_rates: [u64; DELIVERY_ROUNDS],
++    /// 进入巡航以后过了几轮。
++    probe_bw_rounds: u32,
+     round_lost: u64,
+     btl_bw: u64,
+     min_rtt_us: u64,
+@@ -189,6 +193,7 @@
+             round_start_delivered: 0,
+             round_started_at: 0,
+             round_rates: [0; DELIVERY_ROUNDS],
++            probe_bw_rounds: 0,
+             round_lost: 0,
+             btl_bw: 0,
+             min_rtt_us: 0,
+@@ -413,6 +418,26 @@
+     /// 被窗口限住不算：窗口对应的速率完全可能高过限速。
+     pub(crate) fn is_below_capacity(&self) -> bool {
+         self.mode == Mode::ProbeBw && PROBE_CYCLE[self.cycle_index] < 1000
++    }
++
++    /// 速度卡在窗口上、路径还有余量，并且最近真的按接近窗口的速率送到了：这时不管处在哪个阶段，
++    /// 发出去的包都低于路径容量，丢了只能是随机丢包，用不着专门降速去测。
++    /// 送达速率明显低于窗口能送的速率时不算：那说明路径上另有更低的上限（比如令牌桶），带宽估计是被突发抬高的。
++    /// 只看进入巡航以后的轮次：启动时令牌桶放行的突发能让送达速率短时间远超上限。
++    fn window_bound_with_room(&self) -> bool {
++        let recent = self.round_rates.iter().sum::<u64>() / DELIVERY_ROUNDS as u64;
++        let window_rate = self.max_cwnd.saturating_mul(1_000_000) / self.min_rtt_us.max(1);
++        self.mode == Mode::ProbeBw
++            && self.window_limited
++            && self.rate_cap == 0
++            && self.window_has_room()
++            && self.probe_bw_rounds as usize > DELIVERY_ROUNDS
++            && recent.saturating_mul(100) >= window_rate.saturating_mul(WINDOW_DELIVERY_PERCENT)
++    }
++
++    /// 这时发的包可以当低速样本，用来估计随机丢包率。
++    pub(crate) fn sends_below_capacity(&self) -> bool {
++        self.is_below_capacity() || self.window_bound_with_room()
+     }
+ 
+     /// 被窗口限住、随机丢包率的样本已经攒够、也没有撞上过容量的降速阶段。
+@@ -501,6 +526,8 @@
+             Mode::ProbeBw if PROBE_CYCLE[self.cycle_index] == 1000 && self.queue_is_building() => QUEUE_DRAIN_GAIN,
+             // 被窗口限住时瓶颈没有队列，这一轮只是要测随机丢包率，低于送达速率就够了，不用多降。
+             // 窗口对应的速率可能高过限速，所以要等样本攒够、确认过没有撞上容量。
++            // 窗口限住、路径有余量时任何阶段都低于容量，降速阶段照常按窗口发，不用白白慢下来。
++            Mode::ProbeBw if self.is_below_capacity() && self.window_bound_with_room() => 1000,
+             Mode::ProbeBw if self.settled_window_limited() => {
+                 WINDOW_LIMITED_CALM_GAIN
+             }
+@@ -509,7 +536,7 @@
+         };
+         // 降速阶段不能被抬上去：这段时间的丢包要用来判断是不是随机丢包。
+         // 排空阶段也不能：抬上去在途量就降不到一个 BDP，连接一直出不了排空，随机丢包率永远测不到。
+-        let boost = self.window_limited && self.mode != Mode::Drain && !self.is_below_capacity();
++        let boost = self.window_limited && self.mode != Mode::Drain && (!self.is_below_capacity() || self.window_bound_with_room());
+         let gain = if boost { gain.max(WINDOW_LIMITED_GAIN) } else { gain };
+         let rate = (self.path_rate().saturating_mul(gain) / 1000).max(1);
+         // 已经确认限速时，任何增益都不能把节奏抬过上限：多出来的包只会被限速器丢掉。
+@@ -621,6 +648,7 @@
+             self.clean_rounds = if outage { 0 } else { self.clean_rounds.saturating_add(1) };
+             let round_elapsed = now_us.saturating_sub(self.round_started_at);
+             if self.round_started_at > 0 && round_elapsed > 0 {
++                self.probe_bw_rounds = if self.mode == Mode::ProbeBw { self.probe_bw_rounds.saturating_add(1) } else { 0 };
+                 self.round_rates.rotate_right(1);
+                 self.round_rates[0] = round_delivered.saturating_mul(1_000_000) / round_elapsed;
+             }
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -1569,7 +1569,7 @@
+             // 对端窗口卡住时测到的速率同样不代表路径能力，要和“应用没东西发”一样对待。
+             let app_limited = !self.has_data_to_send();
+             let app_idle = self.retransmit.is_empty() && self.snd_sent >= self.snd_end;
+-            let below_capacity = app_idle || self.congestion.is_below_capacity();
++            let below_capacity = app_idle || self.congestion.sends_below_capacity();
+             self.sent.push_back(SentPacket {
+                 number,
+                 sent_at: now_us,

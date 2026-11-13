@@ -4,6 +4,7 @@ describe('generated effort inputs initialize without DOM or circular imports', (
   it.each(['effort-first', 'registry-first'])(
     '%s preserves registration order, caching and interpolation',
     async (order) => {
+      // reset-modules: each case verifies a fresh process import order and singleton registry.
       vi.resetModules();
       expect(typeof document).toBe('undefined');
       if (order === 'registry-first') await import('../colors');
@@ -13,7 +14,8 @@ describe('generated effort inputs initialize without DOM or circular imports', (
       await import('../colors');
       await import('../effortTierColors');
       expect(colorRegistry.getColors()).toEqual(first);
-      expect(first.length).toBe(576);
+      // Governance §4: keep the legacy shadow-chip-raised ID in both import orders.
+      expect(first.length).toBe(584);
       expect(first[0].id).toBe('surface');
       expect(effort.effortTierColor('high')).toBe('#3B82F6');
       expect(effort.effortTierColor('unknown')).toBe('#14B8A6');

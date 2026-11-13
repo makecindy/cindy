@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Appearance, StyleSheet, useColorScheme } from 'react-native';
+import { Appearance, StyleSheet, useColorScheme, type ViewStyle, type TextStyle, type ImageStyle } from 'react-native';
 import { palettes, type ThemeColors, type ThemeMode } from './tokens';
 import {
   readThemePreference,
@@ -125,7 +125,7 @@ const sheetCache = new WeakMap<StyleFactory<unknown>, Partial<Record<ThemeMode, 
  *   ⚠️ **必须是模块级常量**(身份稳定),不要在组件体内内联定义——否则 WeakMap 缓存每次都 miss,
  *   退化成每帧新建 sheet,拖垮热路径。
  */
-export function useThemedStyles<T extends StyleSheet.NamedStyles<T>>(make: StyleFactory<T>): T {
+export function useThemedStyles<T extends { [K in keyof T]: ViewStyle | TextStyle | ImageStyle }>(make: StyleFactory<T>): T {
   const { mode, colors } = useTheme();
   return useMemo(() => {
     const factory = make as StyleFactory<unknown>;

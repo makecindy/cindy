@@ -215,6 +215,16 @@
    "glob": "docs/design-rules/design-inventory.md",
    "reason": "台账 GENERATED 区块自述计数口径(`hsl(var(--token)`),同 DESIGN.md 文档示例先例",
    "owner": "design-system"
+  },
+  {
+   "glob": "apps/desktop/src/renderer/components/ui/toast/Toast.tsx",
+   "reason": "Toast 四色 hardcode(E5D 定稿 2026-07-17);2026-11-11 维护者裁决 A-15 改走 --focus-ring / --card-status-done / --warning-fg / --card-status-error,豁免撤销",
+   "owner": "E5D"
+  },
+  {
+   "glob": "apps/desktop/src/renderer/components/new-chat/*.tsx",
+   "reason": "composer-pill fallback var(--composer-pill-*,hex);豁免 2026-09-17 过期未续期,2026-11-11 维护者裁决 A-07 删除兜底色(token 早已注册)",
+   "owner": "E3-fix"
   }
  ]
 }

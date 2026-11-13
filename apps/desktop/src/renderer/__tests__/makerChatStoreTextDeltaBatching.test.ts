@@ -119,6 +119,10 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../shared/interruptedTurn';
 import { piReplyText, piReplyThinking } from '../../test/fixtures/piSuccessfulReply';
+import { createPiTranslateContext, disposePiTranslateContext, translatePiEvent } from '../../../../../packages/maker-core/src/agents/pi/translator';
+import { createAsyncQueue } from '../../../../../packages/maker-core/src/agents/shared/async-queue';
+import type { AgentEvent } from '../../../../../packages/maker-core/src/types/events';
+import type { Logger } from '../../../../../packages/maker-core/src/interfaces/logger';
 
 const SESSION_ID = 'text-delta-batching';
 const MODEL = 'gpt-5';
@@ -526,6 +530,48 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  // #9498 review: old Hosts send raw text after the event has localized it or
+  // appended an HTTP status. These paired terminal inputs still own one row (unit).
+  it.each([
+    { reason: undefined, errorStatus: 503 },
+    { reason: 'turn-failed', errorStatus: undefined },
+    { reason: 'empty-response', errorStatus: undefined },
+  ])('retains the legacy Host error identity after presentation formatting ($reason, $errorStatus)', ({ reason, errorStatus }) => {
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, vi.fn());
+    try {
+      onEvent?.({ sessionId: SESSION_ID, persistId: 'legacy-error-row', event: {
+        type: 'error', source: 'claude-code',
+        data: { isTerminal: true, message: 'failed', reason, errorStatus },
+      } });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID)).toMatchObject({
+        error: reason === 'turn-failed' ? i18n.t('logic.errors.turnFailed')
+          : reason === 'empty-response' ? i18n.t('logic.errors.emptyResponse') : 'failed (HTTP 503)',
+        errorPersistId: 'legacy-error-row',
+      });
+      onEvent?.({ sessionId: SESSION_ID, event: { type: 'done', source: 'claude-code', data: {} } });
+      onInputProjection?.(projection(SESSION_ID, { error: 'failed', errorReason: reason }));
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('legacy-error-row');
+    } finally { unsubscribe(); }
+  });
+
+  // #8147 follow-up: a recreated renderer gets history + projection, not the old
+  // terminal event. The exact row ID must reach light subscribers (unit).
+  it('restores the active error row ID from a snapshot without replaying its terminal event', () => {
+    const notify = vi.fn();
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, notify);
+    onInputProjection?.({ ...projection(SESSION_ID, { error: 'failed' }), errorPersistId: 'error-current' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-current');
+    onInputProjection?.(projection(SESSION_ID, { error: 'failed' }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-current');
+    onInputProjection?.(projection(SESSION_ID, { error: 'replacement failure' }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    onInputProjection?.({ ...projection(SESSION_ID, { error: 'failed' }), errorPersistId: 'error-next' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBe('error-next');
+    onInputProjection?.({ ...projection(SESSION_ID), errorPersistId: 'error-next' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    unsubscribe();
+  });
+
   // #7119: UI eligibility must survive the actual projection -> light subscriber
   // path and disappear when an older host omits the optional field (unit).
   it('projects host continuation eligibility to light subscribers and revokes missing eligibility', () => {
@@ -670,6 +716,78 @@ describe('makerChatStore text delta batching', () => {
     await flushPromises();
     expect(sessionService.update).toHaveBeenCalledTimes(sidebar ? 0 : 1);
     if (!sidebar) expect(sessionService.update).toHaveBeenCalledWith(SESSION_ID, { sdkSessionId: 'sdk-live-1' });
+  });
+
+  // #10198: the real Pi translation + maker subscription must lower the live
+  // ring before completion, without stopping the next tool (standard tier).
+  it.each([46703, 0])('applies a running Pi compaction snapshot (%s) through the event subscription', async (postTokens) => {
+    const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn() } as unknown as Logger;
+    const ctx = createPiTranslateContext(logger);
+    ctx.contextTokens = 579216;
+    ctx.contextWindow = 1_000_000;
+    ctx.workingContextWindow = 272000;
+    const queue = createAsyncQueue<AgentEvent>();
+    const deliver = async () => {
+      const iterator = queue[Symbol.asyncIterator]();
+      while (queue.pending) {
+        const { value } = await iterator.next();
+        onEvent?.({ sessionId: SESSION_ID, event: value });
+      }
+      await iterator.return?.();
+    };
+    try {
+      translatePiEvent({ type: 'agent_start' }, queue, ctx);
+      await deliver();
+      expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.contextTokens).toBe(579216);
+      translatePiEvent({ type: 'compaction_start', reason: 'threshold' }, queue, ctx);
+      translatePiEvent({ type: 'compaction_end', reason: 'threshold', result: {
+        tokensBefore: 579216, estimatedTokensAfter: postTokens,
+      } }, queue, ctx);
+      await deliver();
+      expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus).toMatchObject({
+        contextTokens: postTokens, contextWindow: 272000, isRunning: true,
+      });
+      translatePiEvent({ type: 'tool_execution_start', toolCallId: 'after-compact', toolName: 'read', args: { path: 'README.md' } }, queue, ctx);
+      await deliver();
+      expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(true);
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toContainEqual(expect.objectContaining({ role: 'tool_use', toolUseId: 'after-compact' }));
+    } finally {
+      queue.end();
+      disposePiTranslateContext(ctx);
+    }
+  });
+
+  // #10198 review: restored Pi runtimes know the window before the first
+  // request's usage. Consecutive unknown zeros must not erase persisted usage
+  // (standard tier; covers both idle and optimistically running consumers).
+  it.each([false, true])('preserves restored usage through Pi startup statuses (already running=%s)', async (isRunning) => {
+    onEvent?.({ sessionId: SESSION_ID, event: { type: 'status', source: 'pi', data: {
+      status: 'Done', isRunning: false, tokenUsage: 0, contextTokens: 579216, contextWindow: 272000,
+    } } });
+    if (isRunning) onEvent?.({ sessionId: SESSION_ID, event: { type: 'status', source: 'pi', data: {
+      status: 'Working…', isRunning: true, tokenUsage: 0, contextTokens: 579216, contextWindow: 272000,
+    } } });
+    const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn() } as unknown as Logger;
+    const ctx = createPiTranslateContext(logger);
+    ctx.contextWindow = 272000;
+    const queue = createAsyncQueue<AgentEvent>();
+    try {
+      for (const event of [{ type: 'agent_start' }, { type: 'message_start', message: { role: 'assistant' } }]) {
+        translatePiEvent(event, queue, ctx);
+        const iterator = queue[Symbol.asyncIterator]();
+        while (queue.pending) {
+          const { value } = await iterator.next();
+          onEvent?.({ sessionId: SESSION_ID, event: value });
+        }
+        await iterator.return?.();
+        expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus).toMatchObject({
+          contextTokens: 579216, contextWindow: 272000, isRunning: true,
+        });
+      }
+    } finally {
+      queue.end();
+      disposePiTranslateContext(ctx);
+    }
   });
 
   it.each([true, false])('keeps the Pi reply through early persistence and history reload (DB first=%s)', async (dbFirst) => {

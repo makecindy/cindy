@@ -13,6 +13,11 @@ import JSZip from 'jszip';
 // A fixed root lets concurrent `pnpm test:unit` runs delete each other's
 // junctions and rename targets, producing ENOENT/EPERM/ENOTEMPTY on Windows.
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-install-service-test-'));
+async function configureTestPaths(): Promise<void> {
+  const { configureAppDataDir, configureUserDataDir } = await import('../../userDataPath');
+  configureAppDataDir(path.join(TEST_ROOT, 'userData'));
+  configureUserDataDir(path.join(TEST_ROOT, 'userData'));
+}
 
 function removeTestRoot(): void {
   fs.rmSync(TEST_ROOT, {
@@ -69,7 +74,7 @@ vi.mock('../../clientEndpointsService', () => ({
   getClientEndpoint: vi.fn(() => 'https://skillhub.test.invalid'),
 }));
 
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
 }));
 
@@ -91,6 +96,7 @@ vi.mock('../../maker-host/shared-global-skills.js', () => ({
   prepareSharedGlobalSkillLinks: vi.fn(async () => ({ warnings: [] })),
   prepareSharedProjectSkillLinks: vi.fn(async () => ({ warnings: [] })),
   projectWorkingDirFromSkillPath: vi.fn(() => null),
+  shouldProjectToClaudeSkills: vi.fn(async () => true),
 }));
 
 async function makeZip(files: Record<string, string>): Promise<Uint8Array> {
@@ -121,7 +127,7 @@ function makeDirectoryLink(linkPath: string, targetPath: string) {
 async function setupInstallDownload(skillName: string, zipBuf: Uint8Array) {
   const { net } = await import('electron');
   const { getCurrentUserId } = await import('../../authManager');
-  const { serverApiFetch } = await import('../../serverApiClient');
+  const { serverApiFetch } = await import('../../serverApiClient.desktop');
 
   vi.mocked(getCurrentUserId).mockReturnValue('user-1');
   vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string) => {
@@ -147,6 +153,7 @@ describe('skillhub/installService', () => {
     // Keep the module graph warm: each case owns TEST_ROOT and resets every mock below.
     // The restart-specific cases call resetModules() at the exact boundary they exercise.
     vi.resetAllMocks();
+    await configureTestPaths();
     removeTestRoot();
     fs.mkdirSync(TEST_ROOT, { recursive: true });
     const { projectWorkingDirFromSkillPath } =
@@ -446,6 +453,7 @@ describe('skillhub/installService', () => {
     const result = await uninstall(source, target);
     if (!result.success || !result.cleanupToken) throw new Error('expected receipt');
     vi.resetModules();
+    await configureTestPaths();
     const { retryUninstallCleanup, listPendingUninstallCleanups } =
       await import('../installService');
     const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
@@ -493,6 +501,7 @@ describe('skillhub/installService', () => {
       // Simulate an app restart: the pending lease/journal modules own process state that
       // clearAllMocks() cannot reset, so re-importing is part of this recovery contract.
       vi.resetModules();
+      await configureTestPaths();
       const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
       for (const name of ['old-source', 'reinstalled-alias', 'different-alias']) {
         expect(await acquireSharedSkillMutationLease([name])).toBeNull();
@@ -594,6 +603,7 @@ describe('skillhub/installService', () => {
       // Simulate an app restart so the durable cleanup receipt is reconstructed by the
       // module-level journal/lease state; mock reset alone cannot exercise that boundary.
       vi.resetModules();
+      await configureTestPaths();
       const { retryUninstallCleanup } = await import('../installService');
       const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
       expect(await acquireSharedSkillMutationLease(['persistence-failure'])).toBeNull();
@@ -707,7 +717,7 @@ describe('skillhub/installService', () => {
       const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
       await setupInstallDownload(name, zipBuf);
       const { registryService } = await import('../registry');
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const fetch = vi.mocked(serverApiFetch).getMockImplementation()!;
       vi.mocked(serverApiFetch).mockImplementation(async (url, options) =>
         url.includes('/batch-detail')
@@ -761,7 +771,7 @@ describe('skillhub/installService', () => {
     });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { install } = await import('../installService');
 
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
@@ -899,7 +909,7 @@ describe('skillhub/installService', () => {
     const zipBuf = new Uint8Array([1, 2, 3]);
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { install } = await import('../installService');
 
     try {
@@ -989,7 +999,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1036,7 +1046,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1086,7 +1096,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1137,7 +1147,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1198,7 +1208,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'project content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const sharedSkills = await import('../../maker-host/shared-global-skills.js');
     const { install } = await import('../installService');
@@ -1239,6 +1249,35 @@ describe('skillhub/installService', () => {
     expect(sharedSkills.prepareSharedProjectSkillLinks).toHaveBeenCalledWith({
       workingDir: projectRoot,
     });
+  });
+
+  it('creates the Claude discovery link for a global install only when projection is allowed (#9282)', async () => {
+    const fakeHome = path.join(TEST_ROOT, 'claude-gate-home');
+    const sharedSkills = await import('../../maker-host/shared-global-skills.js');
+    const { install } = await import('../installService');
+    const home = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+    try {
+      const { registryService } = await import('../registry');
+      vi.mocked(registryService.addInstall).mockResolvedValue(undefined);
+      const zipBuf = await makeZip({ 'SKILL.md': 'global content' });
+      await setupInstallDownload('claude-gate-on', zipBuf);
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(true);
+      const on = await install({ name: 'claude-gate-on', version: '1.0.0' }, () => {});
+      expect(on).toMatchObject({ success: true });
+      expect(fs.existsSync(path.join(fakeHome, '.claude', 'skills', 'claude-gate-on'))).toBe(true);
+
+      const zipBuf2 = await makeZip({ 'SKILL.md': 'global content' });
+      await setupInstallDownload('claude-gate-off', zipBuf2);
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(false);
+      const off = await install({ name: 'claude-gate-off', version: '1.0.0' }, () => {});
+      expect(off).toMatchObject({ success: true });
+      // 门关：安装成功但不主动创建 ~/.claude（目录与链接都不建）。
+      expect(fs.existsSync(path.join(fakeHome, '.claude', 'skills', 'claude-gate-off'))).toBe(false);
+      expect(fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'claude-gate-off'))).toBe(true);
+    } finally {
+      home.mockRestore();
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(true);
+    }
   });
 
   it('force-updates the physical skill while preserving a project compatibility link', async () => {
@@ -1823,7 +1862,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1876,7 +1915,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1922,7 +1961,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1981,7 +2020,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -2033,7 +2072,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -2106,6 +2145,7 @@ describe('skillhub/installService', () => {
       // Auto-sync preferences are module-scoped and this case verifies their cross-restart
       // persistence; only resetModules() gives the next import a fresh in-memory store.
       vi.resetModules();
+      await configureTestPaths();
       const { listIgnoredAutoSyncSkills, clearIgnoredAutoSyncSkill } =
         await import('../autoSyncPreferences');
       expect(await listIgnoredAutoSyncSkills('original-user')).toContain('offline-auto');
@@ -2358,7 +2398,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -2439,7 +2479,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -2542,7 +2582,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -2657,7 +2697,7 @@ describe('skillhub/installService', () => {
   it('rejects install while a learn apply holds the shared lock; other names unaffected', async () => {
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { tryAcquireSkillInstallLock } = await import('../installLock');
     const { install } = await import('../installService');
 
@@ -2721,7 +2761,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { getSkillInstallLockOwner, tryAcquireSkillInstallLock } = await import('../installLock');
     const { install } = await import('../installService');
 
@@ -2778,7 +2818,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'content' });
     const { net } = await import('electron');
     const { getCurrentDataOwnerId, getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 

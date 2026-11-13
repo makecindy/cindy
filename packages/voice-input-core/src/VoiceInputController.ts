@@ -32,6 +32,7 @@ type PendingRefinement = {
   startedAt: number;
   latestPreview?: string;
   onPreview?: (text: string) => void;
+  onProgress?: () => void;
   promise: Promise<{ result?: RefinementResult; error?: unknown }>;
   settled?: boolean;
   result?: RefinementResult;
@@ -93,6 +94,9 @@ const ASR_NETWORK_RECOVERY_MAX_ATTEMPTS = 3;
 // next refinement if false positives ever bite.
 const ASR_VOICED_RMS_THRESHOLD = 300;
 const EMPTY_TRANSCRIPT_ERROR = 'Voice input detected speech but returned no transcript. Please try again.';
+// Refinement is optional. A transport or fallback chain may stay alive without
+// producing words; stop must still release the user's already-submitted text.
+const REFINEMENT_IDLE_TIMEOUT_MS = 8_000;
 
 /**
  * VoiceInputController owns click-to-dictate state.
@@ -174,6 +178,7 @@ export class VoiceInputController {
   // an injected history recorder that can throw), so retrying it through salvage
   // would run those effects a second time. One attempt per run is the contract.
   private submitCallbackThrew = false;
+  private cancelRefinementWait?: () => void;
 
   constructor(options: VoiceInputControllerOptions) {
     this.asr = options.asr;
@@ -715,6 +720,7 @@ export class VoiceInputController {
       runId,
       segmentIds,
       onPartial: (partial) => {
+        if (partial.trim() && partial !== request.latestPreview) request.onProgress?.();
         request.latestPreview = partial;
         request.onPreview?.(partial);
       },
@@ -733,8 +739,9 @@ export class VoiceInputController {
   ): Promise<void> {
     // A completed result may already have been submitted atomically. Replaying
     // its earlier streaming preview would briefly replace it with older text.
+    const pending = request.settled ? request.promise : this.waitForRefinement(request);
     if (!request.settled) this.attachRefinementPreview(runId, segment, range, request);
-    const { result, error } = await request.promise;
+    const { result, error } = await pending;
     if (runId !== this.runId) {
       this.discardRefinement(runId, request, 'stale_run');
       return;
@@ -807,6 +814,28 @@ export class VoiceInputController {
     this.setState('done');
   }
 
+  private async waitForRefinement(request: PendingRefinement): Promise<{ result?: RefinementResult; error?: unknown }> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let cancel!: () => void;
+    const interrupted = new Promise<{ error?: unknown }>((resolve) => {
+      cancel = () => resolve({});
+      request.onProgress = () => {
+        if (timeout !== undefined) clearTimeout(timeout);
+        timeout = setTimeout(() => resolve({ error: new Error('Refinement stopped producing text') }), REFINEMENT_IDLE_TIMEOUT_MS);
+      };
+      request.onProgress();
+    });
+    this.cancelRefinementWait = cancel;
+    try {
+      return await Promise.race([request.promise, interrupted]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+      request.onProgress = undefined;
+      request.onPreview = undefined;
+      if (this.cancelRefinementWait === cancel) this.cancelRefinementWait = undefined;
+    }
+  }
+
   private attachRefinementPreview(
     runId: string,
     segment: SpeechSegment,
@@ -850,6 +879,7 @@ export class VoiceInputController {
 
   private setState(state: VoiceInputState, outcome?: VoiceInputTerminalOutcome): void {
     this.state = state;
+    if (state === 'done' || state === 'error') this.cancelRefinementWait?.();
     const terminalOutcome = outcome
       ?? (state === 'error' ? 'failed' : state === 'done' ? 'success' : undefined);
     this.callbacks.onStateChanged?.(state, terminalOutcome);

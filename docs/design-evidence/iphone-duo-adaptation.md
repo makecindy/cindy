@@ -307,9 +307,11 @@ Metro 会静态解析所有 region 分支，即使运行 Global，也需要本�
 
 - 问题：iPhone 横屏等宽而不高的窗口（宽 ≥ 600、未达常驻条件）使用临时任务侧栏，它在页面树内靠 zIndex 覆盖；聊天页 iOS 系统栏位于 RN 内容之上，返回、标题和右侧操作叠在侧栏顶部并遮挡其按钮，也不随遮罩变暗。iPad 窄窗口（mini 竖屏、分屏、台前调度）同属此路径。
 - 曾试过把侧栏放进 `FullWindowOverlay`：该层总被提到窗口最前，侧栏自身弹出的选项面板、改名弹窗和下拉菜单会被挡在其后，已放弃。
-- 现行做法：临时侧栏存续期间收起聊天页系统栏，关闭完成后恢复。`Stack.Toolbar` 左右栏会强制 `headerShown: true`，收起期间整组不渲染。正文沿用打开前的顶栏高度，收起期间的高度不写入几何缓存。
+- 当时做法（2026-11-07 已替换，见下文）：临时侧栏存续期间收起聊天页系统栏，关闭完成后恢复。`Stack.Toolbar` 左右栏会强制 `headerShown: true`，收起期间整组不渲染。正文沿用打开前的顶栏高度，收起期间的高度不写入几何缓存。
 - 按用户决定：临时侧栏左上角与常驻侧栏、首页一致为系统菜单（替代 2026-09-20「左上角提供关闭操作」）；关闭走遮罩、左滑和选择任务。新建任务从底部浮动按钮移到侧栏顶栏，不再遮挡短列表；常驻侧栏与首页的新建入口不变。选中行高亮保持在安全区内侧，不铺到屏幕边缘。
 - 目检：Global iPhone Air iOS 27.0 横屏，侧栏顶部控件完整可见、遮罩下正文位置不变，关闭后系统栏完整恢复（辅助功能触发关闭）。新建按钮新位置、侧栏内菜单入口及其弹层本轮未由 AI 实点验证（Device Hub 不接收合成点击）；iOS 27.1 竖向系统栏（`barEdge`）未处理也未验证。
+- 2026-11-07 按用户要求改为系统栏不收起：开合抽屉时系统栏的标题和按钮跟着收起放回，用户要求留在原地。iOS 上临时侧栏改放进透明 RN `Modal`（独立呈现层，`animationType="none"`），盖在系统栏之上；系统栏留在遮罩下原地变暗，侧栏盖住其左半边，头部仍与系统栏同一行。不用 `FullWindowOverlay`：它只是挂在窗口上的视图，没有可用来 present 的控制器，侧栏里的 Modal 弹层无法盖在它上面；放进 `Modal` 后，侧栏内弹层由侧栏自己的控制器 present，叠在侧栏之上。收起系统栏、顶栏高度暂留（`hold`）的逻辑随之删除。Android 不变。
+- 目检（2026-11-07，Global iPad mini (A17 Pro) iOS 27.0 竖屏，`--mock`）：开合抽屉时系统栏不动、遮罩下变暗；长按任务的选项面板、改名弹窗与键盘、范围下拉、⋯ 菜单、左上角系统菜单及其「切换账号」都显示在侧栏之上；抽屉内切换任务、进入设置、拖灰色区域回首页、任务页右滑拉出、左滑和点遮罩关闭、旋转横屏切到常驻侧栏后均可继续操作；浅色与深色都已看过。打开抽屉到首帧约 0.5 秒，与改前树内抽屉相同（开发版 MobileHome 首次挂载耗时），非本次引入。iPhone 横屏与 Duo 本轮未复验。
 
 ## 半折叠 MacBook 皮肤与多指键盘（2026-10-26）
 
@@ -331,3 +333,133 @@ Metro 会静态解析所有 region 分支，即使运行 Global，也需要本�
 - 复古与 MacBook 皮肤沿用主干统一的 `RemoteKeySurface` / `RemoteKeyInput`，不恢复旧的逐键组件与独立输入状态；音效在统一 surface 的有效首次按键入口触发，同键第二指不重复触发。
 - 保留主干默认「键盘」皮肤和 Android 折叠支持；未保存偏好时跟随这个默认值，已有用户选择仍按本机存储恢复。上述初版默认 Macintosh II 与逐键实现描述仅记录当时版本。
 - 保留主干复古机壳切片绘制与按键比例，MacBook 使用银色机身和独立触控板布局；现代模式留白乱序修复保持不变。
+
+### 旋转时统一几何快照与缩小导航更新范围（2026-11-07）
+
+- `AdaptiveWindowProvider` 在 iOS 收到完整原生快照后，以该快照统一提供尺寸、安全区、size class、系统栏边缘和保留区域，不再在 Dimensions 与原生事件不同步时回退成无折叠区域的普通宽屏布局。Android 的桥只报告折叠区域，继续保留尺寸匹配和系统安全区的既有逻辑；旧包未提供完整快照时保留响应式 fallback。
+- `SessionListDrawer` 在常驻栏收起的当次 render 直接移除内容，不先把 Home 排成 1pt 再在 layout effect 卸载；原有关闭收尾、手势取消和无障碍隔离继续生效。
+- 根导航的几何订阅移到 `AdaptiveNavigationStack`；Stack 元素只随实际导航外观输入更新，旋转不再连带重新创建外层账号、历史消息与远控容器的 children。未改变路由身份、账号代次 key 或返回行为。
+- iPhone Duo / iOS 27.1 / Global / mock，同一开发原生包、同一任务末尾和浅色，预热后前后各两轮；每轮 35 秒、6 次旋转，采样时不运行构建或测试。基线为 `def7409eb6` 的产品源码，测试文件不影响运行 bundle。
+
+| 每轮指标（两轮均值） | 优化前 | 优化后 |
+| --- | ---: | ---: |
+| React 追踪区间并集时长 | 8195.5 ms | 5923.6 ms |
+| 原生 layout 标记数 | 494.5 | 430 |
+| 原生 layout 累计耗时 | 677.4 ms | 488.3 ms |
+| NativeStackView 渲染次数 | 36 | 18 |
+| NativeStackView 子树累计渲染耗时 | 2164.5 ms | 299.3 ms |
+
+- 三次转宽屏均由 `0→320→455.5pt` 改为 `0→455.5pt`；转窄屏不再记录 Home 的 `455.5→1pt` 中间布局。React 区间并集按 b/e 配对后合并重叠区间，避免父子累加；它不是 CPU 自耗时、帧率或端到端旋转延迟。导航子树耗时包含子组件，不能再与其他行相加。
+- 模拟器检查覆盖浅色两种纵向方向与宽屏、深色纵向与宽屏、键盘显示时旋转、合拢外屏再展开；测试草稿保留、输入框位于键盘上方。尚未验收真机 Release、Android 实机、远程桌面旋转及任意长度真实消息历史。
+- 回归先红后绿：`AdaptiveWindow.test.tsx` 补 iOS 两种事件顺序，`sessionListDrawerUpdates.test.tsx` 在既有收栏用例补零宽度输入，旧实现共 3 项失败；相关 6 文件 80 项通过，Mobile typecheck、scope、smoke（2 项）通过。两份回归文件合跑 1.71 秒（失败基线）/2.08 秒（含其他 4 文件），无真实计时等待。运行日志检查通过，保留已知 require-cycle 与无监听器 onAnimatedValueUpdate 警告，不把它们说成零警告。
+- 本次只修改 JS/TS 与文档，没有新增原生指纹输入。原始 trace、截图、设备身份及个人本地路径保留在任务产物中，不入公开仓库。
+
+### 日常交互重复菜单更新（2026-11-07）
+
+- 检查侧栏开合、列表滑动、任务切换、输入、菜单及详情弹层。侧栏本地菜单每次父界面更新都会重建全部 SwiftUI 选项，即使内容没有变化；改为复用 Home 已有的稳定选项模型与最新回调，并按选项、回调、提醒图片记忆菜单元素。按钮与 Host 主题继续正常更新，没有改变动画、预加载范围、历史保留或草稿行为。
+- 基线包含上一节旋转优化；同一 Duo 开发包、Global mock、浅色 669×951，连续三次侧栏开合，各采样 40 秒。HomeDisplayMenu 渲染均为 21 次，Menu（含子菜单）273→57 次，Toggle 819→117 次，LabelView 1092→156 次；选项重复渲染减少 85.7%。独立重复操作仍得到相同菜单计数。
+- React 区间并集 4442.0→4044.8ms，原生 layout 累计 288.1→292.6ms；消息区显示状态有差异，且开发追踪存在扰动，整体耗时不作为本轮收益结论，不声称交互延迟或帧率提高同样比例。重复轮仅复核计数，期间有测试进程，不比较耗时。
+- 真实触摸验证分组勾选关闭/恢复、浅深主题、列表滚动、软键盘输入/删除、详情弹层；草稿保留。输入区域已有局部状态隔离、列表已有行级复用，本轮没有为它们扩大缓存或改变调度。
+- 在既有 nativeGlassControls 测试中补性能回归，旧实现按钮变化会重复渲染 Toggle（先红）；新实现保持选项静止，同时单独改变回调、改变选项仍立即生效。87 项定向测试、2 项 smoke、Mobile typecheck、scope、test-hygiene 通过。
+- 排除：输入采样中模拟器输入法打断；滚动探索曾触发上下文菜单；首次切换任务的所谓 after 仍连接旧 bundle。以上均不用于量化收益。冷启首次打开中文 mock 会话曾出现空白消息区，原始源码诊断又遇到开发 bundle 重载，未完成同条件归因；最终切换任务可正常显示附件消息，但不能声称已修复。真机 Release、Android 实机、长历史及远程桌面交互未验收。
+
+### 聊天页旋转的尺寸订阅（2026-11-07）
+
+- 以系统栏保持原位的临时侧栏版本（`15cb61c599`）加上述优化为基线。聊天页仍混用原生几何、`Dimensions` 和 safe-area 广播；`useAdaptiveWindow` 在已有 provider 时仍订阅备用来源，`usePaneViewport` 在已有 pane 时也会因整屏宽高变化重复更新。
+- 原生几何消费者只订阅实际几何；没有 provider 的独立页面保留窗口和安全区回退。pane 消费者用有效宽高筛选 Dimensions 快照，继续响应系统字体及显示缩放。聊天页、输入框和顶部栏使用同一份几何，顶栏高度缓存键仍包含实时字号。没有修改消息内容、文本测量、列表锚点、动画时长、预加载或历史保留策略。
+- Global mock / iPhone Duo / iOS 27.1 / 同一开发原生包 / 浅色，打开 Orbit Garden 的图表消息，键盘收起；每轮 85 秒、6 次旋转（669×951 与 951×669 往返），采样时不运行本任务的测试或构建。1 轮基线、2 轮优化后；早期 40 秒试采未完整覆盖六次操作，排除。
+
+| 每轮指标 | 基线 | 优化后两轮 |
+| --- | ---: | ---: |
+| 原生 layout 标记数 | 446 | 387 / 392 |
+| 原生 layout 累计耗时 | 565.3 ms | 504.9 / 467.7 ms |
+| React 追踪区间并集时长 | 6673.5 ms | 6501.6 / 6047.2 ms |
+| SessionListDrawer 渲染次数 | 9 | 6 / 6 |
+| SessionHeaderNativeBlur 渲染次数 | 18 | 6 / 6 |
+| MessageRenderer 渲染次数 | 18 | 19 / 18 |
+
+- 布局次数减少约 12–13%，布局累计耗时减少约 11–17%；整体消息组件渲染次数没有稳定减少，不宣称所有渲染都更快。上述数据不是 Release 帧率、CPU 自耗时或端到端旋转延迟。基线只有一轮，耗时受开发追踪与主机负载影响，结论限于这条含图表消息的受控场景。
+- 回归先红后绿：原生几何消费者面对迟到 Dimensions 与安全区事件，渲染 3→1；pane 消费者面对独立窗口宽高事件 2→1。新增 6 项行为回归同时覆盖 fallback、provider 动态挂接/移除、两种通知顺序、pane 坐标与字体/显示缩放。现有测试补齐原生 Dimensions/context 替身，未删除断言。49 个窗口消费者相关测试文件共 946 项通过（修正两份替身后定向重跑）；另覆盖侧栏、顶栏高度、键盘、预览及导航回归，Mobile 类型检查通过。
+- 模拟器实点检查：重复横竖屏、键盘展开时旋转并继续软键盘输入、回到竖屏保留草稿、临时侧栏打开后旋转为常驻侧栏再转回。图表、输入框与顶部栏正常，运行日志检查通过（仍有已知 require-cycle 警告）。没有以本次实测代替 Android 实机、真机 Release 帧时间和任意长历史的验收。
+- 修改限 JS/TS、测试与文档，不新增原生指纹输入。测试用签名包、设备标识及原始采样保留在本地任务产物中。
+- 全仓 test-hygiene 仍被基线既有的 `pi-extra-dirs-prompt.test.ts` sourceReads 上调拦住；本次未改检查脚本、基线文件或该测试，不将定向回归通过等同于全仓门禁通过。文档契约 10 项通过。
+
+### 内屏竖屏从聊天页拉出任务列表（2026-11-07）
+
+- 用户反馈快速拉出时响应慢、面板会跳一下。打开事件原先先提交空抽屉，再由 passive effect 挂载 Home；现在在打开的同一次提交内挂载，不增加关闭后的列表常驻、后台订阅或预加载。
+- 原先只用 `tracking` 判断手指是否正在拖动：快速松手后该值已变 false，UI 线程已经向终点收尾，迟到的 React 打开 effect 又读写 progress 并启动一次入场。新增独立的 settling 状态保留该次动画的所有权，迟到提交不重播；动画已到终点时也不再排一次入场。关闭仍依赖原有 JS 收尾和卸载后导航，避免失去完成回调导致透明浮层残留。
+- 激活时直接使用已有手势位移；松手判定使用 release 事件里的最终位移，避免最后一段移动还未送达 onUpdate 时判断错误。收尾时长按剩余距离乘现有 enter token：拉至 80% 后剩余约 50ms，原先固定 250ms。阈值、速度判定、曲线和点击打开的时长保留，减弱动态效果为 true/未知时不播放收尾动画。
+- 行为回归先红后绿：首次打开的父 layout effect 原先观察不到面板；延迟 React 提交原先启动两次动画；激活时原先丢失已发生位移。补齐动画运行中/已结束、独立 Modal/普通容器、release 最终位移、三态减弱动态效果覆盖。侧栏、Home 驻留与顶栏相关 4 文件 57 项通过；Mobile 类型检查、运行日志检查通过。
+- Duo / iOS 27.1 / Global mock / 同一开发包，内屏竖屏 669×951，实际触摸覆盖完整拉出、短拉取消、再次打开、菜单覆盖层和左滑关闭。前后各一次相同长距离手势的 20 秒开发追踪：layout 标记 68→54，累计 layout 133.1→105.7ms，React 区间并集 1268.1→1074.8ms；只作辅助观察，不从单轮结果推导真机加速比例。组件包含子树的耗时随挂载提交归属变化，不比较它们的排名作为收益。
+- 模拟器手势注入及抓帧有明显工具调度开销，不能把指定的 0.15 秒或工具 inputMs 当作实际手指速度/首帧时间；快速松手与迟到提交的竞争由行为测试确定性覆盖，真机甩动手感仍需设备验收。原始 trace 和截图留在本地任务产物。
+- 延续上一节的全仓 test-hygiene 既有基线问题；本轮没有修改该门禁或无关测试债务。保留系统栏原位、独立浮层及内部菜单呈现行为。
+
+
+### 2026-11-07 — 浮动任务栏首次显示延迟试验
+
+在 #9234 组合测试线继续排查 Beta20：浮层每次滑出都从头挂载完整 Home。两次同场景开发模拟器样本，手势激活→Modal onShow 为 460/462 ms，Home React 挂载为 160.2/145.9 ms。现有手势动画修复不消除这段创建成本。
+
+试验复用已有原生 Host/Slot，在当前任务的 Duo 内屏竖屏中空闲准备一份 Home，Modal 内仅放原生停靠槽。收起后以稳定的局部导航焦点边界暂停 Home 已有的订阅、同步和循环动画，不拆原生视图；失焦/折叠/切换常驻侧栏后释放。普通手机与缺少原生能力的旧包保持按需挂载。原生菜单与 Modal 控制器保留，不改变 runtime fingerprint。隐藏整树的 Activity 方案因恢复时重新物化原生视图而更慢，已撤掉。
+
+相同开发场景两次试验为 178/177 ms，Home update 为 16.8/16.7 ms；仅为开发环境 callback 区间，不是手机 Release 首帧或 FPS。空闲准备完成前立即滑出仍走按需创建。重新启动模拟器进程后的 footprint 样本显示，首次竖屏约多占 50 MB；相同展开/收起/旋转顺序的进程峰值约高 64 MB（约 5%），含 GC 与原生缓存波动，不能承诺“内存与横屏完全一样”。当前横竖屏仍释放/重新挂载各自 Home，不声称跨方向共享一个 React 实例。安装此取舍方案前向用户说明实测结果。
+
+证据：`outputs/drawer-firstpaint-20261107/README.md`（本机工作区根目录）；记录了原始日志、放弃方案和完整测量限制。用户在获知内存取舍后选择“装 Beta 试手感”。Beta2026110721 已通过签名与目标设备授权检查，经 Xcode 安装到 Dash iPhone Duo，并从设备读回确认版本。6 个相关测试文件共 102 项、Mobile TypeScript、开发文档检查及 Metro logcheck 通过。
+
+### 2026-11-07 — 横屏与浮层共用一个任务列表
+
+用户明确要求横竖屏共用同一份实例。`SessionTaskDrawerProvider` 把唯一任务栏放在任务 key 之外，保留任务页原有手势、关闭完成与导航交接；竖屏只提供浮层停靠槽，横屏只提供侧栏停靠槽。`LocalHomeList` 阻止列表在横屏时另行迁移到旧的根层 host，滚动原生节点、筛选与展开状态随同一个 Home 保留。后台焦点暂停策略继续沿用 Beta21。旧原生包缺少 `sharedTaskDrawerAvailable` 时继续分开呈现。
+
+仅移动 UIView 会让内嵌 SwiftUI 控件仍隶属旧 Modal，实测触发 `UIViewControllerHierarchyInconsistency`。新增 `TaskDrawerHost` 使用稳定的内容控制器，切换时成对迁移 UIKit containment 与 appearance；主队列合并迁移避免在 UIKit 枚举子控制器时修改。停靠槽按最近激活顺序选取，避免退场旧窗口尚存时任意抢回列表。原有消息历史 host 仍使用原路径。此改动改变 iOS runtime fingerprint，须随原生包交付，正式合并需按冷更门审核。未修改或合并 #9234。
+
+独立 Duo 模拟器（iOS 27.1、669×951 / 951×669、mock、开发包）验证：相同 React 实例与原生滚动节点在旋转间保持；旧 Beta21 一次竖转横出现两个替换实例，新版没有重新挂载。横屏滚动后竖屏浮层保留位置；菜单、子菜单、打开菜单后旋转、连续展开、切换任务的列表选中态均可工作。原生修复后的测试窗口未再出现 hierarchy / detached-controller / unbalanced-appearance 日志。
+
+macOS footprint 一次冷启动对照（不是手机 Release 内存或 FPS）：竖屏进入任务后的样本为 939.4 → 935.3 MiB；打开抽屉后旋转横屏为 1217.1 → 1078.9 MiB，该时刻进程历史峰值 1277.9 → 1084.8 MiB。包括 JS、原生缓存与 GC 波动，不作为精确节省承诺。没有重新测量手势首帧，不能把 Beta21 对 Beta20 的 61.5% callback 缩短误写成本次提升。
+
+验证：9 文件 143 项相关测试、类型检查、scope 与两个导航冒烟测试通过。模拟数据从 Orbit Garden 切到“下一轮试玩”后聊天内容空白，在恢复完整 Beta21 JS 的独立冷启动中同样复现，不能记为本次成功的消息切换验收；本次没有扩大修改消息缓存逻辑。原始日志、基线快照和内存原始 JSON 见工作区 `outputs/unified-sidebar-20261107/`。
+
+### 2026-11-07 — 浮层打开时连续接入横屏侧栏
+
+Beta22 已共用列表，但 provider 仍等待约 150ms 的浮层退场再交给侧栏。取消退场后，逐帧试验仍出现两帧列表空白：React 先撤去 Modal，原生主队列稍后才能安全迁移内容控制器。最终改为保留原 Modal 与原停靠槽的透明外壳，先创建侧栏停靠槽；原生确认同一内容控制器已进入具有有效尺寸的新槽后，通过 `onDock` 通知 JS 撤掉旧窗口。没有额外 Home 实例或列表快照，也不靠定时器猜测接入完成。
+
+交接同时收尾拖动、弹性拉伸和待处理导航；旧回调不能完成新一轮旋转。旧原生包没有 `taskDrawerHandoffAvailable` 时不等待新事件。短暂重叠期间横屏侧栏不再绑定浮层的 Pan，避免一份手势被两个容器附着、触发 handlerTag worklet 警告。新能力改变原生指纹：开发 iOS 从 `7e890ef4f6f909e11c959193699a446d52be25c5` 到 `1ca552db88dee324399e42963f333aad53b52c39`，个人 Beta 需新原生包，正式合并仍需冷更审核。
+
+独立 Duo 模拟器、iOS 27.1、Global mock 开发包：浅/深色录屏的交接区间逐帧抽查中列表持续可见，转屏后菜单及子菜单可打开；转回竖屏后可再次滑出。回归覆盖等待真实接入、关闭中旋转、重复及迟到回调、列表身份保留、旧包降级与手势单容器约束，共 6 文件 107 项通过；另有 2 项导航冒烟、scope、类型检查。原始录屏与采样见本地 `outputs/drawer-rotation-handoff-20261107/`。录屏证明所测场景的列表连续性，不是手机 Release FPS 或所有聊天内容布局均零跳动的保证；消息附件在横屏布局过程中仍能看到重新排版。
+
+### 2026-11-07 — 横竖屏宽度一致与浮层边缘拖动
+
+#9151 的共享偏好仍在 #9234 基线中；此前浮层默认 400 / 最小 300 / 最大随窗口变化，侧栏默认按窗口比例 / 最小 240 / 最大 420，因此共享偏好不等于共享实际宽度。现在两者共用默认 400pt、300–420pt 范围；狭小窗口与真实铰链仍服从可用几何，常驻列保留至少 400pt 聊天区域。旧偏好不删除，超范围时两种呈现一致裁剪。
+
+Beta23 浮层边缘实际触摸只触发 JS touch start，没有后续 PanResponder move/grant。独立 Modal 里的边缘现在使用原生 Gesture Handler Pan，先于浮层的 16pt 横滑手势在专用 44pt 边缘激活；纵向触摸失败退出。保留弹性越界、取消回滚与读屏调整；非 Modal 与 Expo Go 路径继续使用原 PanResponder。没有新增 Home 或原生模块变动。
+
+同一独立 Duo / iOS 27.1 / mock 开发包真实触摸：修复前 400pt 边缘拖动不改变宽度；修复后竖屏拖至 346pt，转横屏读回 346pt；横屏改至 386pt，回竖屏读回 386pt；超上限回弹至 420pt，转横屏保持 420pt；横屏超下限至 300pt，回竖屏保持 300pt。浅/深色画面复核，列表纵向滚动与遮罩关闭可用。此处数值是无障碍宽度读回和屏幕边缘位置，不是 Release 帧率或延迟数据。
+
+新增宽度一致回归先红后绿；宽度、手势取消、窗口几何、列表驻留与交接 6 文件 103 项，相关边界 5 文件 47 项，2 项导航冒烟、scope、Mobile 类型检查及 Metro logcheck 通过。日志仍有 2 条已知警告。原始读回、修复前源文件与测试日志见工作区 `outputs/sidebar-width-20261107/`；个人测试包为 Beta2026110724。
+
+### 2026-11-07 - Shared conversation drawer lifecycle (Beta25)
+
+Task and group routes now share useConversationTaskDrawer for opening, cancellation, exit fencing, first-intent navigation and docking cleanup. Hidden Home visibility no longer rejects a queued navigation: NavigationActionContext preserves the actual route focus gate without removing duplicate-navigation protection. Group portrait uses the existing drawer top rule; landscape keeps the title inside the conversation pane instead of overriding the native rail title.
+
+Duo/iOS27.1/Global mock: task drawer -> Cindy; group mask-qa -> swipe drawer -> rotate -> portrait -> swipe -> Cindy passed with real input in light/dark appearance. One initial gesture tool returned INPUT_FAILED/unknown; observed partial movement, released input and closed the drawer, then verified a fresh gesture. No release-frame-rate claim. Controller/dispatch tests: 7; group chat:194; drawer:35; teammate entry:42; header:8; typecheck, scope and 2 smoke tests pass. Evidence: workspace outputs/sidebar-width-20261107/group-*.log. No new native fingerprint inputs.
+
+### 2026-11-07 - Companion outer-display navigation (Beta26)
+
+ChatIdentityHeader now resolves the system-rail mode before its native horizontal-header mode. Back and settings use actual toolbar buttons; identity and activity stay inside the conversation. The session route no longer hides native navigation while a rail is present. Shared handling covers companion chats and companion topics; group pages that already own rail controls opt out via showBack=false. No native source changes.
+
+Duo iOS27.1 mock UI checks: closed outer display 466x678, Dash identity, right-rail Back/Settings, opening settings, unfolding to 669x951 and restoring horizontal controls. Dark outer and light inner appearances checked. Simulator saving mode limits this evidence to UI/navigation, not full platform acceptance. Header transition regression and existing group/header tests pass (214 total across three files), plus TypeScript. Logs and build receipts remain in the local task outputs.
+
+### 2026-11-07 - Companion performance parity audit
+
+Companion single chats already use the normal task message route, so earlier geometry, retained-drawer and gesture-settlement optimizations apply. Two independent consumers remained: NativeChatHeader read both Dimensions and SafeAreaInsets, and BotGroupChatContent read safe area separately from adaptive native geometry. Both now use one adaptive geometry snapshot; independent surfaces still retain the existing fallback. No native or network behavior changes.
+
+A test rendering the actual shared ChatIdentityHeader recorded 3 header renders before and 1 after for the same provided geometry plus independent Dimensions/safe-area broadcasts. A changed native snapshot still renders; standalone fallback still responds to both inputs. This is a controlled render count, not a device FPS or gesture-latency measurement. Five relevant files / 217 tests and Mobile TypeScript pass. Logs: workspace outputs/companion-performance-20261107/.
+
+Follow-up profiling candidates, not fixes or proven frame bottlenecks: useCloudCompanionHome subscribes to the global remote-resource-cache revision, and cache normalization recreates cloud-home snapshots for unrelated updates; BotGroupTimeline reconstructs message/plan/member indices and time groups on renders unrelated to history changes; companion todo subscriptions stay active for mounted background chats. Any follow-up must preserve account fencing, focused refresh, message anchors and pending/outbox identity. CompanionPresenceRing already uses native-driver opacity and the shared looping visibility gate; no reason to replace it merely because it uses Animated.
+### 2026-11-07 - Companion performance follow-up (Beta27)
+
+Companion headers select the current account/realm cloud-home snapshot instead of the global cache revision. Cache normalization retains unchanged cloud-home references, including unrelated task/roster writes. Group timelines reuse message, pending, plan, member and time-group projections; the cloud outbox selector also retains its pending array between actual ledger changes. Remote group projections replace arrays, so plan transition fixtures now mirror that immutable producer contract while retaining all existing assertions. Pending-to-confirmed row identity remains independent of memoization.
+
+Companion glance reads have separate availability and route-activity inputs. Blur removes change/foreground subscriptions and deferral timers without clearing content; focus refreshes immediately. Generation checks reject late full/daily-check responses and stop subsequent pagination after leaving. Changing companion/device or losing capability still clears the old view.
+
+Actual production-hook/component regression counts: ten unrelated roster writes caused ten extra companion renders before, zero after; ten unchanged group UI renders regrouped history ten times before, zero after; ten resource notifications on a blurred companion caused twenty resource reads before, zero after. Focus resumes with two first-page reads. The earlier native geometry regression remains three header renders versus one for redundant size/safe-area broadcasts. These are deterministic work counts, not device FPS or end-to-end latency.
+
+Validation: 10 targeted files / 264 tests passed; Mobile typecheck and diff whitespace check passed. Duo iOS 27.1 Global mock UI: light inner companion, dark outer companion with native Back/Settings rail, dark group portrait swipe drawer and landscape dock at the same 400pt width verified. Simulator used saving mode; this is UI evidence, not full platform acceptance or Release frame timing. Global test-hygiene check remains blocked by the pre-existing `pi-extra-dirs-prompt.test.ts` sourceReads baseline increase; that file is unchanged in this worktree. Raw test and simulator logs are retained in the local companion-performance evidence output.

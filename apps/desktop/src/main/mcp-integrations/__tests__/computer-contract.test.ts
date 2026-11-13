@@ -10,6 +10,27 @@ const schemas = new Map(
   fixture.tools.map((tool) => [tool.name, tool.inputSchema as ComputerDriverToolSchema]),
 );
 describe('installed Computer Use contract', () => {
+  // #9887 unit regression: desktop click credentials and target must survive
+  // adaptation; older window-only drivers cannot accept this input safely.
+  it('preserves explicit capture-bound desktop input and rejects incompatible drivers', () => {
+    const args = { target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'capture-1', x: 10, y: 20, delivery_mode: 'foreground' };
+    const modern = new Map<string, ComputerDriverToolSchema>([['click', {
+      properties: { target: {}, capture_id: {}, x: {}, y: {}, delivery_mode: {} }, additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('click', args, modern)).toEqual(args);
+    expect(() => adaptComputerDriverArgs('click', args, schemas)).toThrow('capture-bound desktop input');
+    expect(() => adaptComputerDriverArgs('get_desktop_state', {}, schemas)).toThrow('does not advertise');
+  });
+  it('adapts 0.47 desktop drag only after host capture validation', () => {
+    const driver = new Map<string, ComputerDriverToolSchema>([
+      ['get_desktop_state', {}],
+      ['drag', { properties: { target: {}, session: {}, from_x: {}, from_y: {}, to_x: {}, to_y: {} }, additionalProperties: false }],
+    ]);
+    const args = { target: { kind: 'desktop', display_id: 'primary' }, session: 'same-session', capture_id: 'observed', from_x: 1, from_y: 2, to_x: 3, to_y: 4 };
+    expect(() => adaptComputerDriverArgs('drag', args, driver)).toThrow('capture-bound');
+    const { capture_id: _captureId, ...expected } = args;
+    expect(adaptComputerDriverArgs('drag', args, driver, { desktopCaptureValidated: true })).toEqual(expected);
+  });
   // Production argument adapter, unit tier: new incremental evidence requests
   // must still dispatch with the existing old-driver fixture (previously untested).
   it('preserves Markdown evidence diffs only for drivers advertising since', () => {
@@ -88,6 +109,23 @@ describe('installed Computer Use contract', () => {
     expect(adaptComputerDriverArgs('get_window_state', { pid: 1, window_id: 2, tree_format: 'markdown' }, schemas))
       .not.toHaveProperty('tree_format');
   });
+  // #9695 tool repair: preserve the screenshot point on capable drivers, and
+  // fail before input on older closed contracts rather than silently scrolling
+  // their window center. Existing coverage only exercised click arguments; unit.
+  it('preserves scroll coordinates or rejects an older driver without them', () => {
+    const point = { pid: 1, window_id: 2, x: 1055.5, y: 609, direction: 'down', delivery_mode: 'foreground' };
+    const current = new Map<string, ComputerDriverToolSchema>([['scroll', {
+      properties: { pid: {}, window_id: {}, x: {}, y: {}, direction: {}, delivery_mode: {} },
+      additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('scroll', point, current)).toEqual(point);
+    const older = new Map<string, ComputerDriverToolSchema>([['scroll', {
+      properties: { pid: {}, window_id: {}, direction: {}, delivery_mode: {} },
+      additionalProperties: false,
+    }]]);
+    expect(() => adaptComputerDriverArgs('scroll', point, older)).toThrow('does not accept x');
+  });
+
   it('rejects unavailable tools and incompatible arguments before dispatch', () => {
     expect(() => adaptComputerDriverArgs('missing', {}, schemas)).toThrow('does not advertise');
     const olderClick = new Map([['click', {
