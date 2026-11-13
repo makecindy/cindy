@@ -173,6 +173,12 @@ describe('planProjectWorkspaces', () => {
     ]);
     expect(reordered.changed).toBe(true);
     expect(reordered.mappingChanged).toBe(false);
+
+    // 排到最前、服务端选择卡会列出来的那一批换了成员: 要告诉服务端, 否则卡上一直是旧的那批。
+    const many = Array.from({ length: 30 }, (_, index) => ({ path: `/p/${index}`, name: `p${index}` }));
+    const before = plan({}, many).workspaces;
+    const promoted = plan(before, [many[29]!, ...many.slice(0, 29)]);
+    expect(promoted.mappingChanged).toBe(true);
   });
 });
 

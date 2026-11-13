@@ -45,11 +45,16 @@ export interface ProjectWorkspacePlan {
   renames: ProjectWorkspaceRename[];
   /** 清单或 retired 与输入不同(含顺序)。 */
   changed: boolean;
-  /** 名称与目录的对应关系变了(不看顺序) —— 需要让服务端知道。 */
+  /**
+   * 需要让服务端知道: 名称与目录的对应关系变了, 或排在最前、服务端选择卡会列出来的那一批
+   * 项目换了成员。只是这一批内部换了先后不算 —— 每次用另一个项目都重发握手没有必要。
+   */
   mappingChanged: boolean;
 }
 
 const MAX_NAME_CODE_POINTS = 32;
+/** 各服务端的项目选择卡只列清单最前面的若干个(目前最多 24 个)。 */
+const SERVER_PICKER_WINDOW = 24;
 const RESERVED_NAMES = new Set([
   HOOK_CHAT_WORKSPACE_ALIAS,
   '__proto__',
@@ -227,7 +232,10 @@ export function planProjectWorkspaces(input: {
   const retired: Record<string, string> = {};
   for (const [alias, directory] of retiredEntries) retired[alias] = directory;
 
-  const mappingChanged = !sameRecord(workspaces, input.current, false);
+  const shown = (record: Readonly<Record<string, string>>): string =>
+    Object.keys(record).slice(0, SERVER_PICKER_WINDOW).sort().join('\n');
+  const mappingChanged =
+    !sameRecord(workspaces, input.current, false) || shown(workspaces) !== shown(input.current);
   return {
     workspaces,
     retired,
