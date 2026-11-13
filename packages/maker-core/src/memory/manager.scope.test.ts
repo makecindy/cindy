@@ -112,7 +112,7 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     try {
       const context = await loadMemoryContext({ manager, scopeKey: workdir, snapshot: 'PRIVATE_INDEX_CANARY' });
       expect(context.index).toBe('');
-      expect(context.rules).toContain(directory);
+      expect(context.rules).toContain(JSON.stringify(directory));
       expect(context.rules).not.toContain('cindy_memory');
       expect(factory).not.toHaveBeenCalled();
       expect(existsSync(workdir)).toBe(false);
