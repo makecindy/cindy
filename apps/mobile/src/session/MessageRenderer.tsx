@@ -6432,7 +6432,7 @@ function MarkdownBodyBase({
           style={headingStyle}
           testID="message.markdownHeading"
         >
-          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable))}
+          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable), headingStyle)}
         </MarkdownSelectableText>
       );
     }
@@ -6505,7 +6505,7 @@ function MarkdownBodyBase({
                       styles.markdownTableHeaderCell,
                     ]}
                   >
-                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), [styles.markdownTableCell, styles.markdownTableHeaderCell])}
                   </MarkdownSelectableText>
                 );
               })}
@@ -6522,7 +6522,7 @@ function MarkdownBodyBase({
                       selectable={inlinesSelectable(cell)}
                       style={[styles.markdownTableCell, { width: columnWidth }]}
                     >
-                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), styles.markdownTableCell)}
                     </MarkdownSelectableText>
                   );
                 })}
@@ -6859,7 +6859,12 @@ function renderInline(
     case 'math': {
       const mathSegments = tokenizeInlineMath(inline.text);
       const baseFontSize = StyleSheet.flatten(ctx.baseStyle)?.fontSize ?? typeScale.bodyLarge;
-      const subFontSize = Math.max(9, Math.round(baseFontSize * 0.72));
+      const subFontSize =
+        baseFontSize <= typeScale.bodySmall
+          ? typeScale.micro
+          : baseFontSize <= typeScale.subtitle
+            ? typeScale.caption
+            : typeScale.footnote;
       return (
         <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`math:${index}`)} style={ctx.baseStyle}>
           {mathSegments.map((segment, segIndex) => (

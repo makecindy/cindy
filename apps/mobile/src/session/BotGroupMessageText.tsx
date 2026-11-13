@@ -81,7 +81,13 @@ function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label
   });
 }
 
-function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext): ReactNode[] {
+function inlineMathSubFontSize(baseFontSize: number): number {
+  if (baseFontSize <= typeScale.bodySmall) return typeScale.micro;
+  if (baseFontSize <= typeScale.subtitle) return typeScale.caption;
+  return typeScale.footnote;
+}
+
+function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext, baseFontSize: number = typeScale.bodyLarge): ReactNode[] {
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
   let offset = 0;
@@ -110,7 +116,7 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
       inline.type === 'strong' ? styles.strong : inline.type === 'emphasis' ? styles.emphasis
         : inline.type === 'strikethrough' ? styles.strike : inline.type === 'code' ? styles.inlineCode : undefined];
     if (mathSegments) {
-      const subFontSize = Math.max(9, Math.round(typeScale.bodyLarge * 0.72));
+      const subFontSize = inlineMathSubFontSize(baseFontSize);
       return (
         <Span key={index} style={textStyle}>
           {mathSegments.map((segment, segIndex) => (
@@ -177,7 +183,7 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
       {widths.map((width, index) => (
         <View key={index} style={[styles.tableCell, { width }]}>
           <MarkdownSelectableText selectable style={[styles.tableText, header && styles.tableHeaderText]}>
-            {renderInlines(cells[index] ?? [], styles, options, context)}
+            {renderInlines(cells[index] ?? [], styles, options, context, typeScale.bodySmall)}
           </MarkdownSelectableText>
         </View>
       ))}

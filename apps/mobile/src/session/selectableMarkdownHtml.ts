@@ -126,6 +126,16 @@ function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
  */
 function buildMathRuntimeScript(): string {
   const renderAllJs = [
+    'function syncInlineMathOverflow() {',
+    '  document.querySelectorAll(".xdt-math-inline").forEach(function (el) {',
+    '    el.classList.remove("xdt-math-inline-fit");',
+    '    var parent = el.parentElement;',
+    '    var limit = el.clientWidth > 0 ? el.clientWidth : (parent && parent.clientWidth > 0 ? parent.clientWidth : 0);',
+    '    if (limit <= 0 || el.scrollWidth <= limit + 1) {',
+    '      el.classList.add("xdt-math-inline-fit");',
+    '    }',
+    '  });',
+    '}',
     'document.querySelectorAll("[data-latex]").forEach(function (el) {',
     '  try {',
     '    window.katex.render(el.getAttribute("data-latex"), el, {',
@@ -135,6 +145,11 @@ function buildMathRuntimeScript(): string {
     '    });',
     '  } catch (error) { /* 保留占位源码 */ }',
     '});',
+    'syncInlineMathOverflow();',
+    'if (document.fonts && document.fonts.ready) {',
+    '  document.fonts.ready.then(syncInlineMathOverflow);',
+    '}',
+    'window.addEventListener("resize", syncInlineMathOverflow);',
   ].join('');
   return `<script>${buildKatexLoaderJs(renderAllJs)}</script>`;
 }
@@ -419,6 +434,10 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       display: inline-block;
       max-width: 100%;
       overflow-x: auto;
+      vertical-align: middle;
+    }
+    .xdt-math-inline.xdt-math-inline-fit {
+      overflow-x: visible;
       vertical-align: baseline;
     }
     .xdt-math-block {

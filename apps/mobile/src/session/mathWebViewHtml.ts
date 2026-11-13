@@ -157,6 +157,19 @@ export function buildMathWebViewHtml(
     var BASE_KATEX_EM = 1.08;
     var MIN_FIT_SCALE = 0.76;
 
+    function measureFormulaWidth(displayEl, katexEl) {
+      var htmlEl = katexEl.querySelector ? katexEl.querySelector('.katex-html') : null;
+      var hadOverflow = displayEl ? displayEl.classList.contains('katex-overflow') : false;
+      if (displayEl && !hadOverflow) displayEl.classList.add('katex-overflow');
+      var w = katexEl.scrollWidth || 0;
+      if (htmlEl) {
+        var rectW = htmlEl.getBoundingClientRect ? Math.ceil(htmlEl.getBoundingClientRect().width) : 0;
+        w = Math.max(w, htmlEl.scrollWidth || 0, rectW);
+      }
+      if (displayEl && !hadOverflow) displayEl.classList.remove('katex-overflow');
+      return w;
+    }
+
     function fitFormula() {
       var displayEl = root.querySelector('.katex-display');
       var katexEl = displayEl ? displayEl.querySelector('.katex') : root.querySelector('.katex');
@@ -166,16 +179,12 @@ export function buildMathWebViewHtml(
       var cs = window.getComputedStyle ? window.getComputedStyle(root) : null;
       var padX = cs ? (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) : 16;
       var available = root.clientWidth - padX;
-      var natural = katexEl.scrollWidth;
+      var natural = measureFormulaWidth(displayEl, katexEl);
       if (available > 0 && natural > available) {
-        var ratio = available / natural;
-        if (ratio >= MIN_FIT_SCALE) {
-          katexEl.style.fontSize = (BASE_KATEX_EM * ratio).toFixed(4) + 'em';
-        } else {
-          katexEl.style.fontSize = (BASE_KATEX_EM * MIN_FIT_SCALE).toFixed(4) + 'em';
-          if (displayEl && katexEl.scrollWidth > available) {
-            displayEl.classList.add('katex-overflow');
-          }
+        var ratio = Math.max(MIN_FIT_SCALE, available / natural);
+        katexEl.style.fontSize = (BASE_KATEX_EM * ratio).toFixed(4) + 'em';
+        if (displayEl && measureFormulaWidth(displayEl, katexEl) > available + 1) {
+          displayEl.classList.add('katex-overflow');
         }
       }
     }

@@ -346,4 +346,27 @@ describe('tokenizeInlineMath', () => {
     ]);
     expect(() => tokenizeInlineMath('\\sqrt{'.repeat(2000) + 'x')).not.toThrow();
   });
+
+  it('ignores Object.prototype keys like \\toString and \\constructor instead of throwing', () => {
+    expect(tokenizeInlineMath('\\toString + \\constructor + \\valueOf')).toEqual([
+      { kind: 'text', text: 'toString + constructor + valueOf' },
+    ]);
+    expect(latexToUnicodeApproximation('\\toString + \\constructor')).toBe('toString + constructor');
+  });
+
+  it('keeps outer parentheses unless a single delimiter pair wraps the whole operand', () => {
+    const plain = (latex: string) => tokenizeInlineMath(latex).map((s) => s.text).join('');
+    expect(plain('\\frac{(a)+(b)}{c}')).toBe('((a)+(b))/c');
+    expect(plain('\\frac{a}{(b)+(c)}')).toBe('a/((b)+(c))');
+    expect(plain('\\sqrt{(a)+(b)}')).toBe('√((a)+(b))');
+    expect(plain('\\sqrt{|x|+|y|}')).toBe('√(|x|+|y|)');
+    expect(plain('\\sqrt{(a+b)}')).toBe('√(a+b)');
+    expect(plain('\\sqrt{|x|}')).toBe('√|x|');
+  });
+
+  it('preserves nested subscript boundaries inside superscripts', () => {
+    const plain = (latex: string) => tokenizeInlineMath(latex).map((s) => s.text).join('');
+    expect(plain('x^{a_b}')).toBe('x^(a_b)');
+    expect(plain('2^{n_1+n_2}')).toBe('2^(n₁+n₂)');
+  });
 });

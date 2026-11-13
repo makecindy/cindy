@@ -7,6 +7,7 @@
  * KaTeX 资源只允许由内联 loader 动态注入(固定本地资源 + 超时)。
  */
 
+import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import {
   MOBILE_KATEX_VERSION,
@@ -14,6 +15,131 @@ import {
   buildMathWebViewHtml,
 } from '@/session/mathWebViewHtml';
 import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
+
+function extractLastInlineScript(html: string): string {
+  const matches = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  const last = matches[matches.length - 1]?.[1];
+  if (!last) throw new Error('missing inline <script>');
+  return last;
+}
+
+function runMathWebViewScript(options: {
+  latex?: string;
+  captureMarkup?: boolean;
+  rootWidth: number;
+  centeredScrollWidth: number;
+  intrinsicWidth: number;
+  scaledWidth?: (ratio: number) => number;
+}) {
+  const html = buildMathWebViewHtml(options.latex ?? 'E = mc^2', {}, undefined, options.captureMarkup ?? false);
+  const scriptSource = extractLastInlineScript(html);
+
+  const classes = new Set<string>();
+  const messages: Array<Record<string, unknown>> = [];
+  const listeners = new Map<string, Array<() => void>>();
+
+  const katexStyle: { fontSize: string } = { fontSize: '' };
+  const parseRatio = () => {
+    if (!katexStyle.fontSize) return 1;
+    const em = parseFloat(katexStyle.fontSize);
+    return Number.isFinite(em) ? em / 1.08 : 1;
+  };
+  const currentWidth = () => {
+    const ratio = parseRatio();
+    if (options.scaledWidth) return options.scaledWidth(ratio);
+    return Math.round(options.intrinsicWidth * ratio);
+  };
+
+  const katexHtmlEl = {
+    get scrollWidth() {
+      return currentWidth();
+    },
+    getBoundingClientRect: () => ({ width: currentWidth() }),
+  };
+
+  const katexEl = {
+    style: katexStyle,
+    get scrollWidth() {
+      return classes.has('katex-overflow') ? currentWidth() : Math.round(options.centeredScrollWidth * parseRatio());
+    },
+    querySelector: (sel: string) => (sel === '.katex-html' ? katexHtmlEl : null),
+  };
+
+  const displayEl = {
+    classList: {
+      add: (c: string) => classes.add(c),
+      remove: (c: string) => classes.delete(c),
+      contains: (c: string) => classes.has(c),
+    },
+    querySelector: (sel: string) => (sel === '.katex' ? katexEl : null),
+  };
+
+  let rendered = false;
+  let rootWidth = options.rootWidth;
+  const rootEl = {
+    innerHTML: '<pre>source</pre>',
+    get clientWidth() {
+      return rootWidth;
+    },
+    get scrollHeight() {
+      return rendered ? 44 : 22;
+    },
+    getBoundingClientRect: () => ({ height: rendered ? 44 : 22 }),
+    querySelector: (sel: string) => {
+      if (!rendered) return null;
+      if (sel === '.katex-display') return displayEl;
+      if (sel === '.katex') return katexEl;
+      return null;
+    },
+  };
+
+  const windowObj: Record<string, unknown> = {
+    getComputedStyle: () => ({ paddingLeft: '8px', paddingRight: '8px' }),
+    ReactNativeWebView: {
+      postMessage: (raw: string) => messages.push(JSON.parse(raw)),
+    },
+    addEventListener: (event: string, fn: () => void) => {
+      const list = listeners.get(event) ?? [];
+      list.push(fn);
+      listeners.set(event, list);
+    },
+  };
+
+  const documentObj = {
+    head: {
+      appendChild: (node: { textContent?: string }) => {
+        if (node.textContent && node.textContent.includes('katex')) {
+          windowObj.katex = {
+            render: () => {
+              rendered = true;
+              rootEl.innerHTML = '<span class="katex-display"><span class="katex"><span class="katex-html">x</span></span></span>';
+            },
+          };
+        }
+      },
+    },
+    createElement: () => ({ textContent: '' }),
+    getElementById: (id: string) => (id === 'root' ? rootEl : null),
+    fonts: { ready: { then: () => undefined } },
+  };
+
+  vm.runInNewContext(scriptSource, {
+    window: windowObj,
+    document: documentObj,
+    setTimeout: () => 1,
+    clearTimeout: () => undefined,
+  });
+
+  return {
+    katexStyle,
+    classes,
+    messages,
+    resize: (nextWidth: number) => {
+      rootWidth = nextWidth;
+      for (const fn of listeners.get('resize') ?? []) fn();
+    },
+  };
+}
 
 describe('buildMathWebViewHtml — 零阻塞外链约束', () => {
   const html = buildMathWebViewHtml('E = mc^2');
@@ -51,21 +177,83 @@ describe('buildMathWebViewHtml — 零阻塞外链约束', () => {
     expect(html).toContain("reportHeight('katex')");
   });
 
-  it('aligns base font size and fits/scrolls overflowing display formulas without clipping', () => {
-    expect(html).toContain('font-size: 15px;');
-    expect(html).toContain('font-size: 1.08em;');
-    expect(html).toContain('function fitFormula()');
-    expect(html).toContain('katex-overflow');
-    expect(html).toContain('Math.max(root.getBoundingClientRect().height, root.scrollHeight)');
-    expect(html).toContain("addEventListener('resize', syncLayoutAndReport)");
+  it('scales moderately overflowing centered formulas using intrinsic width and activates katex-overflow only when still wider than viewport', () => {
+    // 1.5x intrinsic width (180px in 120px available) even when centered scrollWidth underreports at 150px:
+    // ratio = 120 / 180 = 0.6667 < 0.76 -> clamped to 0.76 * 1.08 = 0.8208em, scaled width 137 > 120 -> katex-overflow enabled
+    const clippedCenter = runMathWebViewScript({
+      rootWidth: 136, // available = 136 - 16 = 120
+      centeredScrollWidth: 150,
+      intrinsicWidth: 180,
+    });
+    expect(clippedCenter.katexStyle.fontSize).toBe('0.8208em');
+    expect(clippedCenter.classes.has('katex-overflow')).toBe(true);
+    expect(clippedCenter.messages.some((m) => m.kind === 'math-height' && m.stage === 'katex')).toBe(true);
+
+    // 1.25x intrinsic width (150px in 120px available): ratio = 0.8 >= 0.76 -> scaled to 0.8640em, fits cleanly without katex-overflow
+    const fitted = runMathWebViewScript({
+      rootWidth: 136,
+      centeredScrollWidth: 135,
+      intrinsicWidth: 150,
+    });
+    expect(fitted.katexStyle.fontSize).toBe('0.8640em');
+    expect(fitted.classes.has('katex-overflow')).toBe(false);
+
+    // Resizing narrower to 100px (available = 84px) re-fits and activates katex-overflow
+    fitted.resize(100);
+    expect(fitted.katexStyle.fontSize).toBe('0.8208em');
+    expect(fitted.classes.has('katex-overflow')).toBe(true);
   });
 
   it('captures unscaled KaTeX markup before fitFormula mutates viewport font-size', () => {
-    const captureHtml = buildMathWebViewHtml('E = mc^2', {}, undefined, true);
-    const renderPos = captureHtml.indexOf("kind: 'math-rendered'");
-    const fitPos = captureHtml.indexOf('syncLayoutAndReport();', renderPos);
-    expect(renderPos).toBeGreaterThan(-1);
-    expect(fitPos).toBeGreaterThan(renderPos);
+    let capturedBeforeScale = '';
+    const html = buildMathWebViewHtml('E = mc^2', {}, undefined, true);
+    const scriptSource = extractLastInlineScript(html);
+    const katexStyle = { fontSize: '' };
+    const katexEl = {
+      style: katexStyle,
+      scrollWidth: 300,
+      querySelector: () => ({ scrollWidth: 300, getBoundingClientRect: () => ({ width: 300 }) }),
+    };
+    const rootEl = {
+      innerHTML: '<pre>E = mc^2</pre>',
+      clientWidth: 136,
+      scrollHeight: 40,
+      getBoundingClientRect: () => ({ height: 40 }),
+      querySelector: () => ({
+        classList: { add: () => undefined, remove: () => undefined, contains: () => false },
+        querySelector: () => katexEl,
+      }),
+    };
+    const windowObj: Record<string, unknown> = {
+      getComputedStyle: () => ({ paddingLeft: '8px', paddingRight: '8px' }),
+      addEventListener: () => undefined,
+      ReactNativeWebView: {
+        postMessage: (raw: string) => {
+          const msg = JSON.parse(raw) as { kind: string };
+          if (msg.kind === 'math-rendered') capturedBeforeScale = katexStyle.fontSize;
+        },
+      },
+    };
+    const documentObj = {
+      head: {
+        appendChild: (node: { textContent?: string }) => {
+          if (node.textContent && node.textContent.includes('katex')) {
+            windowObj.katex = { render: () => { rootEl.innerHTML = '<span class="katex">x</span>'; } };
+          }
+        },
+      },
+      createElement: () => ({ textContent: '' }),
+      getElementById: () => rootEl,
+      fonts: { ready: { then: () => undefined } },
+    };
+    vm.runInNewContext(scriptSource, {
+      window: windowObj,
+      document: documentObj,
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
+    expect(capturedBeforeScale).toBe('');
+    expect(katexStyle.fontSize).toBe('0.8208em');
   });
 });
 
@@ -125,11 +313,54 @@ describe('buildSelectableMarkdownHtml — math 文档同守零阻塞约束', () 
     expect(html).not.toContain('katex');
   });
 
-  it('keeps inline math on baseline without vertical-align middle shifts', () => {
-    const html = buildSelectableMarkdownHtml('行内 $x^2$ 公式');
-    const rule = html.match(/\.xdt-math-inline\s*\{[^}]*\}/)?.[0] ?? '';
-    expect(rule).toContain('display: inline-block;');
-    expect(rule).toContain('vertical-align: baseline;');
-    expect(rule).not.toContain('vertical-align: middle;');
+  it('enables true baseline alignment for fitting inline math while keeping overflow scrolling for wide inline math', () => {
+    const html = buildSelectableMarkdownHtml('行内 $g_y$ 和 $a+b+c+d$ 公式');
+    const ruleFit = html.match(/\.xdt-math-inline\.xdt-math-inline-fit\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(ruleFit).toContain('overflow-x: visible;');
+    expect(ruleFit).toContain('vertical-align: baseline;');
+
+    const scriptSource = extractLastInlineScript(html);
+    const makeInlineNode = (scrollWidth: number, clientWidth: number, latex: string) => {
+      const classes = new Set<string>(['xdt-math-inline']);
+      return {
+        classes,
+        scrollWidth,
+        clientWidth,
+        parentElement: { clientWidth },
+        getAttribute: (name: string) => (name === 'data-latex' ? latex : null),
+        hasAttribute: () => false,
+        classList: {
+          add: (c: string) => classes.add(c),
+          remove: (c: string) => classes.delete(c),
+          contains: (c: string) => classes.has(c),
+        },
+      };
+    };
+    const fitNode = makeInlineNode(24, 24, 'g_y');
+    const wideNode = makeInlineNode(420, 280, 'a+b+c+d');
+    const windowObj: Record<string, unknown> = { addEventListener: () => undefined };
+    const documentObj = {
+      head: {
+        appendChild: (node: { textContent?: string }) => {
+          if (node.textContent && node.textContent.includes('katex')) {
+            windowObj.katex = { render: () => undefined };
+          }
+        },
+      },
+      createElement: () => ({ textContent: '' }),
+      querySelectorAll: (sel: string) => {
+        if (sel === '[data-latex]' || sel === '.xdt-math-inline') return [fitNode, wideNode];
+        return [];
+      },
+      fonts: { ready: { then: () => undefined } },
+    };
+    vm.runInNewContext(scriptSource, {
+      window: windowObj,
+      document: documentObj,
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
+    expect(fitNode.classes.has('xdt-math-inline-fit')).toBe(true);
+    expect(wideNode.classes.has('xdt-math-inline-fit')).toBe(false);
   });
 });
