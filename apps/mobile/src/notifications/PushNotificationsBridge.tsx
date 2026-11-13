@@ -1,3 +1,4 @@
+import { NotificationReconciliationBridge } from './NotificationReconciliationBridge';
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
@@ -178,5 +179,5 @@ export function PushNotificationsBridge() {
     flushPendingDeepLink();
   }, [auth.initialized, auth.isAuthenticated, flushPendingDeepLink]);
 
-  return <ChatBackgroundBridge />;
+  return <><ChatBackgroundBridge /><NotificationReconciliationBridge /></>;
 }

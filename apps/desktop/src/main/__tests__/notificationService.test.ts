@@ -944,22 +944,38 @@ describe('notificationService — channels 分发', () => {
       kind: 'needs-reply', permission, eventId: 'permission:req-1',
     }));
 
+    // Execution and mirrored alerts must share the same identity, independently
+    // of action buttons. A request-specific fallback is only for legacy callers.
+    await invokeHandler({ ...event, alertEventId: 'turn:1:permission:req-1' });
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
+      permission, eventId: 'turn:1:permission:req-1',
+    }));
+    pendingPermissionAlert.mockClear();
+    await invokeHandler({ ...event, alertEventId: 'turn:1:permission:req-1', remoteDeviceId: 'other-mac', markAttention: false });
+    await flushAsync();
+    expect(pendingPermissionAlert).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:1:permission:req-1' }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
+
     // 等回答的是一道提问:同样绑定到那一条请求。
     pendingPermissionAlert.mockReturnValueOnce({ question });
     await invokeHandler({ ...event, alertEventId: 'turn:1:ask:q-1' });
     await flushAsync();
     expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
-      kind: 'needs-reply', question, eventId: 'question:q-1',
+      kind: 'needs-reply', question, eventId: 'turn:1:ask:q-1',
     }));
     expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
 
     sendMobileSessionNotify.mockClear();
     pendingPermissionAlert.mockClear();
-    await invokeHandler({ ...event, remoteDeviceId: 'other-mac', markAttention: false });
+    await invokeHandler({ ...event, alertEventId: 'turn:1:ask:q-1', remoteDeviceId: 'other-mac', markAttention: false });
     await flushAsync();
     expect(pendingPermissionAlert).not.toHaveBeenCalled();
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:1:ask:q-1' }));
     expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ question: expect.anything() }));
   });
 
   it('链路代次在 await 之前捕获:等待队列期间换号,透传的仍是发起时的代次', async () => {

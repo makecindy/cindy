@@ -15,7 +15,11 @@ import {
 } from '@cindy/device-link';
 import { createHash } from 'node:crypto';
 import { desktopDiagnosticCode } from '../../shared/remoteDesktopDiagnostics';
-import { REMOTE_VIEWER, type RemoteViewerTarget } from '../../shared/remoteDesktopViewer.js';
+import {
+  LIVE_SCREEN_EMBED,
+  REMOTE_VIEWER,
+  type RemoteViewerTarget,
+} from '../../shared/remoteDesktopViewer.js';
 import {
   activeOwnerScopeKey,
   getPersistedAppSessionMode,
@@ -43,6 +47,9 @@ import { t } from '../i18n.desktop.js';
 import { markRemoteDesktopViewer } from './registry.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { RemoteViewerConnection } from './connection.js';
+import { EmbeddedLiveScreens } from './embedded.js';
+import type { PluginLiveScreenViews } from './pluginViews.js';
+import { LIVE_SCREEN_RELAY } from '../../shared/liveScreenView.js';
 import { ViewerCredentials } from './credentials.js';
 import { readViewerPreferences, writeViewerPreferences } from './preferences.js';
 import { readViewerResolution, writeViewerResolution } from './resolutionMemory.js';
@@ -117,8 +124,20 @@ type Entry = {
  */
 export class RemoteDesktopViewerWindows {
   private entries = new Set<Entry>();
+  private pluginViews: PluginLiveScreenViews | null = null;
+  /** Device screens shown inside app windows; same authority, no window of their own. */
+  private embedded = new EmbeddedLiveScreens({
+    owner: activeOwnerScopeKey,
+    available: () => getAppCapabilities().canUseDeviceLink && !isAppSessionBoundaryPending(),
+    selfDeviceId: getSelfDeviceId,
+    request: requestRemote,
+    ice: loadDesktopIceServers,
+  });
   private locale: SupportedLocale | null = null;
-  constructor(private readonly isOpenSender: (sender: WebContents) => boolean) {}
+  constructor(
+    private readonly isOpenSender: (sender: WebContents) => boolean,
+    private readonly isRelayHost: (sender: WebContents) => boolean = isOpenSender,
+  ) {}
   prewarm(): void {
     // Remote desktop needs a Cindy account, so local and signed-out profiles
     // never keep a spare shell. A persisted cloud intent still prewarms while
@@ -168,6 +187,8 @@ export class RemoteDesktopViewerWindows {
     for (const e of this.entries) e.controller.setLocale(locale);
   }
   reset(): void {
+    this.pluginViews?.endAll();
+    this.embedded.endAll();
     for (const e of this.entries) {
       e.connection.deactivate();
       e.controller.dispose();
@@ -322,6 +343,8 @@ export class RemoteDesktopViewerWindows {
     return entry;
   }
   private readonly endForLocalLock = () => {
+    this.pluginViews?.endAll();
+    this.embedded.endAll();
     for (const entry of this.entries) {
       if (!entry.connection.active) continue;
       try {
@@ -335,12 +358,55 @@ export class RemoteDesktopViewerWindows {
       if (win && !win.isDestroyed()) entry.controller.close(win.webContents);
     }
   };
-  register(): void {
+  /**
+   * `pluginViews` serves plugins that draw their own device screens: the app
+   * window that registers here holds those connections and relays the picture.
+   */
+  register(pluginViews?: PluginLiveScreenViews): void {
+    this.pluginViews = pluginViews ?? null;
+    if (pluginViews) {
+      pluginViews.connect({
+        selfDeviceId: getSelfDeviceId,
+        invoke: (deviceId, request) => requestRemote(deviceId, request, () => {}),
+      });
+      ipcMain.handle(LIVE_SCREEN_RELAY.HOST, (event) => {
+        assertTrustedAppRendererEvent(event);
+        // Secondary task windows mount the same relay bridge. Only the
+        // designated main window may own it, including after a reload.
+        if (this.isRelayHost(event.sender)) pluginViews.setHost(event.sender);
+      });
+      ipcMain.on(LIVE_SCREEN_RELAY.STATE, (event, relayId, state) =>
+        pluginViews.state(event.sender, relayId, state),
+      );
+      ipcMain.on(LIVE_SCREEN_RELAY.FRAME, (event, relayId, kind, bytes) =>
+        pluginViews.frame(event.sender, relayId, kind, bytes),
+      );
+    }
     powerMonitor.on('lock-screen', this.endForLocalLock);
     powerMonitor.on('suspend', this.endForLocalLock);
     ipcMain.handle(REMOTE_VIEWER.OPEN, (event, target) => {
       assertTrustedAppRendererEvent(event);
       this.open(event.sender, target);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.OPEN, (event, embedId, target) => {
+      assertTrustedAppRendererEvent(event);
+      return this.embedded.open(event.sender, embedId, target);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.CLOSE, (event, embedId) => {
+      assertTrustedAppRendererEvent(event);
+      this.embedded.close(event.sender, embedId);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.REQUEST, (event, embedId, generation, request, attempt) => {
+      assertTrustedAppRendererEvent(event);
+      return this.embedded.request(event.sender, embedId, generation, request, attempt);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.ICE, (event, embedId, generation, attempt) => {
+      assertTrustedAppRendererEvent(event);
+      return this.embedded.ice(event.sender, embedId, generation, attempt);
+    });
+    ipcMain.handle(LIVE_SCREEN_EMBED.CHANNEL_REPLY, (event, embedId, generation, id, outcome) => {
+      assertTrustedAppRendererEvent(event);
+      this.embedded.channelReply(event.sender, embedId, generation, id, outcome);
     });
     ipcMain.handle(REMOTE_VIEWER.STATE, (event) => this.entry(event).connection.snapshot());
     ipcMain.handle(REMOTE_VIEWER.READY, (event) => {

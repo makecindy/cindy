@@ -1309,7 +1309,24 @@
     "credentialRequired": "请完成 Mac 密码验证。若不能验证，请更新两机之 Cindy。",
     "handoffEnded": "此番代书已毕，无可显之窗口。",
     "handoffUnavailable": "此机暂不能仅显此窗口。请于彼机更新 Cindy，或启远程桌面。",
-    "handoffWindow": "代书 · {{app}}"
+    "handoffWindow": "代书 · {{app}}",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "须装「{{plugin}}」法器",
+        "body": "此务于他机开 {{device}}。于本机装「{{plugin}}」法器，即可于右栏观之、操之。",
+        "action": "往装"
+      },
+      "enable": {
+        "title": "须启「{{plugin}}」法器",
+        "body": "此务于他机开 {{device}}。于本机启「{{plugin}}」法器，即可于右栏观之、操之。",
+        "action": "往启"
+      },
+      "update": {
+        "title": "须更「{{plugin}}」法器",
+        "body": "此务于他机开 {{device}}。更本机「{{plugin}}」法器至新版，即可于右栏观之、操之。",
+        "action": "往更"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -4257,6 +4274,7 @@
           "ariaLabel": "许君之他机与君所分享之人调用此供方",
           "writeFailed": "远程调用之设未能存，请再试"
         },
+        "ownComputersCanUse": "吾之他机可用",
         "moreActionsAria": "余者",
         "runLocation": {
           "label": "运于何机",
@@ -6879,6 +6897,11 @@
       "description": "以同一飞书名籍登录之设备可互相发现；开「许控此机」后，君之他设备可远程连接此机之 {{appName}}。",
       "allowControl": "许同名籍设备控此机",
       "allowControlHint": "打开之后，以同一名籍登录之他设备无须逐次确认即可控此机；此机将显远程操控之示，可随时断开。慎之。",
+      "ownModelAccess": {
+        "title": "许吾他机用此机之模",
+        "hint": "开之，吾之他机可用此机之供方；Agent 运于此机，用此机之登录与配额。不与他人共之。",
+        "writeFailed": "设未能存，请再试"
+      },
       "keepAwake": "令机常醒",
       "keepAwakeHint": "打开后此机不入休眠，后台之 Agent 与定时差事可持续运行(仍可关显示器 / 锁屏)。",
       "linkStatus": {
@@ -8218,8 +8241,8 @@
         "workspaceDetail": "其发请求时，或由君亲择卷匣，或于确认卡上观完整路径后再决；其处置君所发之调用时，当前差事工作目录内之子卷匣可径用，不另确认。卷匣已有差事者径复用之，不重立。所立仅为空差事，不自行运行。",
         "sessionContext": "可知当前差事所用之案卷匣位置",
         "sessionContextDetail": "仅于其为当前差事效力时告以位置(差事编号与案卷匣路径)，不含文件内容，亦不因此得文件访问之权。",
-        "liveScreen": "于手机观并操器物之画面",
-        "liveScreenDetail": "借远端桌面，手机可观其所供器物之画面(如模拟器)，并触之、按之、书文字于其上。唯自手机开启时方连，不示此电脑他物。",
+        "liveScreen": "于手机或他电脑观并操器物之画面",
+        "liveScreenDetail": "借远端桌面，手机或他电脑可观其所供器物之画面(如模拟器)，并触之、按之、书文字于其上。唯自手机或他电脑开启时方连，不示此电脑他物。",
         "preview": "可于右侧栏浏览器中启下列网站之预览页",
         "previewDetail": "仅能启下方所列网站；每启一页，皆示为何法器所启。",
         "browserExtension": "可令其自带之浏览器扩充功能连 Cindy",
@@ -12044,6 +12067,15 @@
     },
     "starterOptions": "起手之选",
     "channels": {
+      "edit": {
+        "button": "编辑",
+        "title": "编辑 iMessage 连线",
+        "description": "存之则重连，模型从同伴之设定。",
+        "keepPassword": "留空则仍用原密钥",
+        "save": "储存并重连",
+        "loadFailed": "连线设定未能读取，请重试。",
+        "failed": "连线未能储存，请核其设定而重试。"
+      },
       "title": "传讯之所",
       "platform": {
         "telegram": "Telegram",
@@ -15434,7 +15466,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "此 Agent 于彼机不可用。请于彼机安装或登门后再试，或易一 Agent。",
       "REMOTE_AGENT_INVALID": "与行 Agent 之机通信有谬。请再试；若屡现，请将两机之 Cindy 皆更新至最新版。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达分享者所设之模型占比上限。请择他可用之模型续之。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼机未向君开放此供方或所择模型。请令机主于「远程与分享」中调其开放之范围，或易一模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼机未向君开放此供方或所择模型。若为君之他机，于彼机「远程连接」中开「许吾他机用此机之模」；若为他人所分享，请令机主于「远程与分享」中调其开放之范围。亦可易一模型。",
       "REMOTE_AGENT_FORK_FAILED": "行 Agent 之机未能自此开新差事。请再试，或易一讯再试。",
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对君之分享，未复之前不可用此诸模型。可易他模型续之。",
       "REMOTE_AGENT_SHARE_REMOVED": "此分享已不可用（对方已删分享，或君已退出）。可易他模型续之。",

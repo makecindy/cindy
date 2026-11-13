@@ -1322,7 +1322,24 @@
     "credentialRequired": "Complete Mac password verification. If unavailable, update Cindy on both computers.",
     "handoffEnded": "This input handoff has already finished, so there is no window to show.",
     "handoffUnavailable": "This computer can't show just this window. Update Cindy on it, or turn on remote desktop there.",
-    "handoffWindow": "Input handoff · {{app}}"
+    "handoffWindow": "Input handoff · {{app}}",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Install the “{{plugin}}” plugin",
+        "body": "This task has {{device}} open on another computer. Install the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
+        "action": "Install"
+      },
+      "enable": {
+        "title": "Enable the “{{plugin}}” plugin",
+        "body": "This task has {{device}} open on another computer. Enable the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
+        "action": "Turn on"
+      },
+      "update": {
+        "title": "Update the “{{plugin}}” plugin",
+        "body": "This task has {{device}} open on another computer. Update the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
+        "action": "Update"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -4300,6 +4317,7 @@
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn’t save the remote access setting. Try again."
         },
+        "ownComputersCanUse": "Available to my other computers",
         "moreActionsAria": "More Actions",
         "runLocation": {
           "label": "Run on",
@@ -6922,6 +6940,11 @@
       "description": "Devices signed in with the same Feishu account can discover each other. Once \"Allow control\" is on, your other devices can remotely control {{appName}} on this machine.",
       "allowControl": "Allow same-account devices to control this machine",
       "allowControlHint": "When enabled, other devices signed in with the same account can control this machine without per-connection approval. A visible indicator is shown while being controlled, and you can disconnect at any time.",
+      "ownModelAccess": {
+        "title": "Let my other computers use this computer’s models",
+        "hint": "When on, your other computers can use the providers on this computer. The Agent runs here, using this computer’s sign-in and quota. Nothing is shared with other people.",
+        "writeFailed": "Couldn't save this setting. Try again."
+      },
       "keepAwake": "Keep computer awake",
       "keepAwakeHint": "When enabled, this machine won't go to sleep, so background agents and scheduled tasks keep running (you can still turn off the display or lock the screen).",
       "linkStatus": {
@@ -8291,8 +8314,8 @@
         "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
         "sessionContext": "Can learn which project folder the current session is working in",
         "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
-        "liveScreen": "View and control device screens on your phone",
-        "liveScreenDetail": "Through remote desktop, your phone can show the device screens it provides (such as simulators) and send touches, buttons and text to them. It connects only when you open it from your phone and shows nothing else on this computer.",
+        "liveScreen": "View and control device screens on your phone or other computers",
+        "liveScreenDetail": "Through remote desktop, your phone or other computers can show the device screens it provides (such as simulators) and send touches, buttons and text to them. It connects only when you open it from one of those devices and shows nothing else on this computer.",
         "preview": "Can open preview pages from the sites below in the sidebar browser",
         "previewDetail": "Only the sites listed below can be opened; every page it opens is attributed to this plugin.",
         "browserExtension": "Lets its bundled browser extension connect to Cindy",
@@ -12267,6 +12290,15 @@
         "unbound": "Let {{name}} handle your questions to the official @askmycindy bot.",
         "managed": "A buddy handles X questions. Change the assignment in that buddy’s message platform settings.",
         "riskBody": "X questions use the buddy’s shared memory, tools and workspace, and replies are public. Do not use X for private information. The X thread does not directly use your private chat history."
+      },
+      "edit": {
+        "button": "Edit",
+        "title": "Edit iMessage connection",
+        "description": "Save to reconnect. The model follows your buddy’s settings.",
+        "keepPassword": "Leave blank to keep the saved password",
+        "save": "Save and reconnect",
+        "loadFailed": "Couldn’t load the connection settings. Try again.",
+        "failed": "Couldn’t save the connection. Check the settings and try again."
       }
     },
     "voiceMode": {
@@ -15508,7 +15540,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t granted you remote access to this provider or the selected model. Ask its owner to adjust access in Remote & Sharing, or pick another model.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Let my other computers use this computer’s models” in its Remote Connection settings; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
       "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
