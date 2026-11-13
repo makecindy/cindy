@@ -7863,6 +7863,7 @@
         "install": "설치",
         "details": "상세",
         "detailsAria": "{{name}} 상세 보기",
+        "loadingDetails": "상세 정보 불러오는 중…",
         "update": "마켓에서 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",

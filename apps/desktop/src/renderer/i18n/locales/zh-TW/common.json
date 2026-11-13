@@ -7863,6 +7863,7 @@
         "install": "安裝",
         "details": "詳情",
         "detailsAria": "檢視 {{name}} 的詳情",
+        "loadingDetails": "正在載入詳情…",
         "update": "從市場更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
