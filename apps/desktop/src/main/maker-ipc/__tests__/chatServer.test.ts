@@ -202,7 +202,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.upload.mockReset().mockResolvedValue([]);
     replyImages.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
     replyFiles.prepare.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
-    deps = { validateProjectDir: async dir => ({ ok: true as const, dir }), ensureLane: vi.fn(async () => ({ ok: true, sessionId: 'lane' })), abortLane: vi.fn(async () => {}),
+    deps = { validateProjectDir: async (dir: string) => ({ ok: true as const, dir }), ensureLane: vi.fn(async () => ({ ok: true, sessionId: 'lane' })), abortLane: vi.fn(async () => {}),
       dispatch: vi.fn(async (input: Parameters<BotGroupChatServiceDeps['dispatch']>[0]) => { await input.onAccepted?.(); return { ok: true }; }),
       onChanged: vi.fn(),
     } as unknown as BotGroupChatServiceDeps;
@@ -2002,7 +2002,7 @@ describe('Chat Server result delivery and refresh', () => {
       await ask(5, '@Cindy please fix it');
       expect(fixture.requests.some(r => r.url.endsWith('/v1/executions/claim') && r.actor === cindyId)).toBe(true);
       expect(fixture.urls.some(url => url.includes('/mask/'))).toBe(false);
-      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Room', projectDir: null });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Room', projectDir: expect.any(String) });
       const [input] = dispatched();
       expect(input).toMatchObject({ targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
         message: `@Cindy please fix it\n\n${t('bots.groupChat.assistant.groupRecent')}\nAnn：The build is red again`,
@@ -2055,7 +2055,9 @@ describe('Chat Server result delivery and refresh', () => {
       const rootB = message(2, peerId, 'Topic B');
       history.push(rootA, rootB, message(3, peerId, 'A background', { threadRootId: rootA.id }),
         message(4, peerId, 'B background', { threadRootId: rootB.id }));
-      assistantStore.value[roomId] = { sessionId: 'legacy-main', projectDir: null, deliveredSeq: { main: '2', [rootA.id]: '99' } };
+      const shown = await service.getGroup(roomId);
+      if (!shown.ok) throw new Error(shown.errorCode);
+      assistantStore.value[roomId] = { sessionId: 'legacy-main', projectDir: shown.group.projectDir, deliveredSeq: { main: '2', [rootA.id]: '99' } };
       const send = async (n: number, text: string, threadRootId: string | null) => {
         history.push(message(n, selfId, text, { threadRootId }));
         queue.push(request(n));

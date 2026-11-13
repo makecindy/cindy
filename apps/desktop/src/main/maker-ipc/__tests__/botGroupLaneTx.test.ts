@@ -131,8 +131,8 @@ describe('Bot group lane transactions', () => {
 
   // bot-group-chat.md §7.5: a V2 teammate's group lane follows the group's project folder on this
   // computer. Moving archives the old lane; a restart keeps the folder and fails if it is gone.
-  it('moves a group lane into the project folder and restarts it there', async () => {
-    const routeKey = chatGroupLaneRouteKey('g1', { mode: 'owner', revision: 1 });
+  it.each(['owner', 'tools', 'chat'] as const)('moves a %s group lane into the shared project and restarts it there', async mode => {
+    const routeKey = chatGroupLaneRouteKey('g1', { mode, revision: 1 });
     tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session: laneSession('lane-1') } });
     const projectDir = path.join(ownerRoot, 'cindy');
     await mkdir(projectDir);
@@ -147,6 +147,7 @@ describe('Bot group lane transactions', () => {
     const opts: MakerSessionCreateOpts = { id: 'lane-2', agentKind: 'claude-code', model: 'model-a', workingDir: '/stale', workspaceKind: 'dialogue' };
     await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
     expect(opts).toMatchObject({ workingDir: projectDir, workspaceKind: 'project', projectDir, remoteHostId: undefined });
+    expect(ensureWorkspaceDir).not.toHaveBeenCalled();
     await rm(projectDir, { recursive: true });
     await expect(prepareBotWorkspaceRuntime({ ...opts, workingDir: '/stale' }, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir }))
       .rejects.toBeInstanceOf(BotPlanWorkDirUnavailableError);

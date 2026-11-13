@@ -4,7 +4,7 @@ vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-to
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({
-  read: (room: string) => structuredClone(fixture.workspaces.get(room) ?? null),
+  read: (room: string) => structuredClone(fixture.workspaces.get(room) ?? { projectDir: '/group/project', plans: {} }),
   save: (room: string, value: unknown) => fixture.workspaces.set(room, structuredClone(value)),
 }) }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
@@ -163,7 +163,7 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     fixture.profiles = bots.map(bot => ({ id: bot.local, displayName: bot.name, avatar: null, status: 'active' }));
     fixture.handle.mockImplementation(handle);
     fixture.download.mockImplementation(async (_room: string, mediaId: string) => ({ id: mediaId, name: mediaId, category: 'image', path: '/test/image', url: null }));
-    deps = { ensureLane: vi.fn(async ({ botId }: { botId: string }) => ({ ok: true, sessionId: `lane-${botId}` })), abortLane: vi.fn(async () => {}),
+    deps = { validateProjectDir: async (dir: string) => ({ ok: true as const, dir }), ensureLane: vi.fn(async ({ botId }: { botId: string }) => ({ ok: true, sessionId: `lane-${botId}` })), abortLane: vi.fn(async () => {}),
       dispatch: vi.fn(async (input: Parameters<BotGroupChatServiceDeps['dispatch']>[0]) => { await input.onAccepted?.(); return { ok: true }; }),
       onChanged: vi.fn(),
     } as unknown as BotGroupChatServiceDeps;

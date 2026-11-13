@@ -2881,8 +2881,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // answered as a group and never subscribed: nothing may run without a visible group entry to watch or stop it.
       if (!ownDirectRoom && !isGroupRoom(s.room)) throw new Error('INVALID_EXECUTION_TRIGGER');
       subscribe(execution.conversation_id, s.cursor);
-      // All group contexts share the folder. Other members cannot use this owner's tools or logins.
-      if (!ownDirectRoom && execution.access_mode !== 'owner') toolsOff = true;
+      // Regular group requests from other members only chat. AI reply mode
+      // retains its separate explicit per-member grant and authority checks.
+      if (!ownDirectRoom && !execution.mask_owner_id && execution.access_mode !== 'owner') toolsOff = true;
       // Claim metadata and the persisted source must agree before creating a lane.
       // Reading this exact ID also covers sources outside the bounded history page.
       let eventSource: Message | undefined;

@@ -1,4 +1,3 @@
-import { groupSessions } from '../features/cc-agent/lib/projectGrouping';
 import { describe, expect, it } from 'vitest';
 
 import {

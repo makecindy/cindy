@@ -5,12 +5,12 @@ import { app } from 'electron';
 import { and, eq } from 'drizzle-orm';
 
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
-import { ensureBotWorkspaceDir } from './botProfileFolder.js';
+import { ensureBotChatOnlyWorkspaceDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { botGroupPlans, botProfileVersions, botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { botGroupPlanRouteKey, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
+import { botGroupPlanRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
 
 export interface BotWorkspaceRuntimeDeps {
   ensureWorkspaceDir?: typeof ensureBotWorkspaceDir;
@@ -69,6 +69,19 @@ export async function prepareBotWorkspaceRuntime(
 
   const ownerUserDataPath = deps.ownerUserDataPath ?? ownerScopedUserDataPath;
   const groupRouteKey = link[0]?.role === 'group' ? link[0].routeKey : null;
+  // Old chat-only lanes had no explicit project. Preserve their isolated
+  // workspace on recovery; new group lanes always carry the shared projectDir.
+  if (isChatOnlyGroupLane(groupRouteKey)) {
+    const [lane] = await db.select({ projectDir: sessions.projectDir })
+      .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!lane?.projectDir) {
+      opts.workingDir = await ensureBotChatOnlyWorkspaceDir(ownerUserDataPath(), botId, groupLaneOfRouteKey(groupRouteKey!));
+      opts.workspaceKind = 'dialogue';
+      opts.remoteHostId = undefined;
+      return;
+    }
+  }
+
   const planRoute = parseBotGroupPlanRouteKey(groupRouteKey);
   if (planRoute) {
     let workDir: string | null | undefined;
