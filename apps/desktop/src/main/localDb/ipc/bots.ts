@@ -2317,6 +2317,18 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       });
     });
     owner.assertCurrent();
+    if (patch.displayName !== undefined && patch.displayName !== current.displayName) {
+      // Read after commit: a newer rename or canonical replacement may have won
+      // while this save was waiting. Never push the earlier request's stale name.
+      const canonicalTasks = await db.select({ sessionId: sessions.id, title: sessions.title })
+        .from(botSessionLinks).innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+        .where(and(eq(botSessionLinks.botId, id), eq(botSessionLinks.role, 'canonical'),
+          isNull(botSessionLinks.archivedAt), ne(sessions.status, 'deleted')));
+      owner.assertCurrent();
+      for (const canonical of canonicalTasks) {
+        broadcastSessionPatched(canonical.sessionId, { title: canonical.title });
+      }
+    }
     if (changesPermissions) {
       // Read the committed canonical row: profile and chat permissions change together,
       // and a concurrent newer settings save must not be rolled back by this continuation.
