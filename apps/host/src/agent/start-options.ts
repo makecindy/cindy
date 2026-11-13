@@ -6,8 +6,8 @@
  * Deliberately absent here, with where they land:
  * - remote-device lookup, Orca and teammate preparation: Host rejects those tasks
  *   before start (send-preflight.ts); they arrive with M3;
- * - worktree runtime lease: a later M1 step; the teammate parts of the shared
- *   Skill links and disabled plugin ids (bot toolsets) arrive with M3;
+ * - the teammate parts of the shared Skill links and disabled plugin ids (bot
+ *   toolsets) and the bot workspace runtime arrive with M3;
  * - account-model discovery barrier: the desktop waits for its account provider
  *   discovery (ensureCurrentAccountProviderReadiness). The Host's equivalent is its
  *   provider catalog refresh, which applies the account's gateway models to the
@@ -28,6 +28,9 @@ import { clearUsagePricing, registerUsagePricing } from '../../../desktop/src/ma
 import { getSessionFastMode, setSessionEffort, setSessionFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.js';
 import { resolveCompatibleSessionRuntimeEffort } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.js';
 import type { createSubscriptionFastPolicies } from '../../../desktop/src/main/maker-host/subscriptionFastPolicyCore.js';
+import type { SessionStartFailureContext } from '@cindy/maker-core';
+import type { WorktreeRuntimeLease } from '../../../desktop/src/main/worktree/runtimeLeasesCore.js';
+import { hostPrecreatedCancellation, hostWorktreeRuntimeLeases } from './worktree-leases.js';
 import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../../desktop/src/shared/accountProviderReadiness.js';
 import { prepareSharedProjectSkillLinks } from '../../../desktop/src/main/maker-host/shared-global-skills.js';
@@ -62,6 +65,18 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
   const owner = activeOwnerScopeKey();
   // Same root as the desktop (index.ts configureSessionModelInterfaceStorage).
   configureSessionModelInterfaceStorage(() => ownerScopedPath('model-interface-snapshots'));
+  // The desktop's worktree runtime leases (maker-host/index.ts worktreeRuntimeLeases): one per
+  // start, released when the start fails without a live runtime, when its cleanup succeeds and
+  // on close; a window recycling worktrees in the same profile treats a held one as in use.
+  const worktreeRuntimeLeases = new WeakMap<object, WorktreeRuntimeLease>();
+  const releaseLease = async (sessionId: string, options: CreateSessionOptions) => {
+    const lease = worktreeRuntimeLeases.get(options);
+    if (lease) {
+      await hostWorktreeRuntimeLeases.releaseWorktreeRuntimeLease(lease).catch((error) => {
+        ports.logger.warn('worktree runtime lease release postponed', { sessionId, code: (error as NodeJS.ErrnoException).code });
+      });
+    }
+  };
   const budget = createSessionContextBudget({
     resolveContextProviderId: ports.modelContext.resolveContextProviderId,
     readSessionContextWindowBudget,
@@ -114,6 +129,16 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     if (opts.agentKind === 'pi') {
       opts.getPriceVariant = () => (getSessionFastMode(sessionId) ? 'priority' : 'standard');
     }
+    // As the desktop, before the shared Skill links. The desktop first fills createOpts.id and
+    // prepares the bot workspace runtime, which reads that id; both arrive with M3.
+    const createOpts = opts;
+    if (!createOpts.remoteHostId && createOpts.workingDir) {
+      const lease = await hostWorktreeRuntimeLeases.acquireWorktreeRuntimeLease(sessionId, createOpts.workingDir);
+      if (lease) worktreeRuntimeLeases.set(opts, lease);
+      // Recheck after acquiring the directory lease: cancellation may have
+      // arrived during preparation or through another local instance.
+      hostPrecreatedCancellation.assertPrecreatedSessionNotCancelled(sessionId);
+    }
     if (!opts.remoteHostId && opts.workingDir) {
       const result = await prepareSharedProjectSkillLinks({ workingDir: opts.workingDir });
       for (const warning of result.warnings) {
@@ -141,8 +166,15 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
   return {
     prepareStartOptions,
     onBeforeStart,
-    onClose(sessionId: string): void {
+    async onStartFailed({ sessionId, options, runtimeMayBeAlive }: SessionStartFailureContext): Promise<void> {
+      if (!runtimeMayBeAlive) await releaseLease(sessionId, options);
+    },
+    async onStartCleanupSucceeded(sessionId: string, options: CreateSessionOptions): Promise<void> {
+      await releaseLease(sessionId, options);
+    },
+    async onClose(sessionId: string, options?: CreateSessionOptions): Promise<void> {
       clearUsagePricing(sessionId);
+      if (options) await releaseLease(sessionId, options);
     },
   };
 }

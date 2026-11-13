@@ -639,13 +639,15 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     lifecycleHooks: {
       prepareStartOptions: startOptions.prepareStartOptions,
       onBeforeStart: startOptions.onBeforeStart,
+      onStartFailed: startOptions.onStartFailed,
+      onStartCleanupSucceeded: startOptions.onStartCleanupSucceeded,
       // Codex product prompt delivery, persisted on the task row as on the desktop.
       getCodexHistoryHasProductPrompt: sessionId => readCodexHistoryHasProductPrompt(sessionId),
       onCodexProductPromptDelivery: async ({ sessionId, historyHasProductPrompt }) => {
         await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
       },
-      onClose: async id => {
-      startOptions.onClose(id);
+      onClose: async (id, closeOptions) => {
+      await startOptions.onClose(id, closeOptions);
       options.claudeProxy?.closeSession(id);
       try { await options.codexRuntime?.closeSession(id); }
       finally { await options.onSessionClose?.(id); }
