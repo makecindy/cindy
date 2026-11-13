@@ -43,6 +43,7 @@ import {
   resolveProviderMediaModel,
   resolveProviderVideoConnection,
   resolveProviderHttpConnection,
+  isMediaUrlWithinBase,
   type ProviderMediaRuntimeModel,
   type ProviderVideoConnection,
 } from './providerMediaRuntime.js';
@@ -434,12 +435,15 @@ async function dispatchRequest(input: {
   recordBilling?(response: Response): Promise<void>;
   authRetried?: boolean;
 }): Promise<unknown> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
-  timeout.unref?.();
   const wirePath = input.path.replaceAll('{model}', encodeURIComponent(input.connection.requestModelId ?? input.modelId));
   const prefix = input.connection.pathPrefix ?? '';
   const url = requestUrl(input.connection.baseUrl, `${prefix}${wirePath}`);
+  if (prefix && !isMediaUrlWithinBase(url, input.connection.baseUrl)) {
+    throw new MediaInvocationError('GUIDE_INVALID', '调用说明的请求路径越出当前连接范围');
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  timeout.unref?.();
   const startedAt = Date.now();
   const requestLog = {
     invocationId: input.invocationId,

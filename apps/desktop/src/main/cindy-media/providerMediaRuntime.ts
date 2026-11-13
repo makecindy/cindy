@@ -64,6 +64,20 @@ export function providerMediaGuideProtocol(target: { providerId: string; agent: 
   return runtime?.guideProtocol?.(target);
 }
 
+/** Compare normalized URLs before attaching a connection's managed credentials. */
+export function isMediaUrlWithinBase(url: string, baseUrl: string): boolean {
+  try {
+    const base = new URL(baseUrl);
+    const resolved = new URL(url);
+    const prefix = base.pathname.replace(/\/+$/, '');
+    return resolved.origin === base.origin &&
+      (resolved.pathname === prefix || resolved.pathname.startsWith(`${prefix}/`)) &&
+      (!prefix || !decodeURIComponent(resolved.pathname).split(/[\\/]/).some(segment => segment === '.' || segment === '..'));
+  } catch {
+    return false;
+  }
+}
+
 export function resolveProviderHttpConnection(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind) {
   return runtime?.resolveHttpConnection?.(providerId, modelId, capability, agent) ?? null;
 }

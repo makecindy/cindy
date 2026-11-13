@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { MediaDownloadError } from './mediaDownload.js';
-import type { ProviderVideoConnection } from './providerMediaRuntime.js';
+import { isMediaUrlWithinBase, type ProviderVideoConnection } from './providerMediaRuntime.js';
 
 const DISK_RESERVE_BYTES = 256n * 1024n * 1024n;
 
@@ -25,7 +25,9 @@ function taskContentPath(taskId: string, template = '/videos/{taskId}/content'):
 }
 
 export function videoTaskContentUrl(taskId: string, baseUrl: string, contentPath?: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}${taskContentPath(taskId, contentPath)}`;
+  const url = `${baseUrl.replace(/\/+$/, '')}${taskContentPath(taskId, contentPath)}`;
+  if (!isMediaUrlWithinBase(url, baseUrl)) throw new MediaDownloadError('MEDIA_RESULT_INVALID', '视频任务内容路径越出当前连接范围');
+  return url;
 }
 
 /** A private task resource, never an arbitrary URL authorized to receive an API key. */

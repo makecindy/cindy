@@ -127,7 +127,8 @@ vi.mock('../../model-access/mediaModels.js', () => ({
     }
   },
 }));
-vi.mock('../providerMediaRuntime.js', () => ({
+vi.mock('../providerMediaRuntime.js', async (importOriginal) => ({
+  isMediaUrlWithinBase: (await importOriginal<typeof import('../providerMediaRuntime.js')>()).isMediaUrlWithinBase,
   resolveProviderMediaModel: mocks.providerModel,
   invokeProviderMedia: mocks.providerInvoke,
   resolveProviderVideoConnection: mocks.videoConnection,
@@ -438,6 +439,68 @@ describe('Cindy Core media invocation state and security boundary', () => {
       timeoutMs: 1000, maxResponseBytes: 1048576, media: [{ path: mediaPath, encoding: 'base64', kind: 'video' }] } };
     return { ...operation(response), response, capability: 'video.generate' };
   }
+
+  // Real prepare/request boundary: URL normalization must not send the selected
+  // runtime's managed credentials outside its configured API path (unit).
+  it.each(['/../../admin', '/%2e%2e/%2E%2E/admin', '/.%2e/%2e./admin', '/../v20/admin', '/render/../../../admin',
+    '/%2e%2e%2f%2e%2e%2fadmin', '/%2e%2e%5c%2e%2e%5cadmin'])(
+    'rejects a Guide submission escaping the connection prefix: %s', async path => {
+      const op = operation({ mode: 'sync', media: [{ path: ['image'], encoding: 'base64', kind: 'image' }] }, path);
+      const { model } = setupGuideDriven(op);
+      const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+      expect(prepared.ok).toBe(true);
+      mocks.outboundFetch.mockResolvedValueOnce(Response.json({ image: PNG.toString('base64') }));
+      expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } }))
+        .toMatchObject({ ok: false, errorCode: 'GUIDE_INVALID' });
+      expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('checks the final submission URL after substituting the model ID', async () => {
+    const { model } = setupGuideDriven(operation({ mode: 'sync', media: [{ path: ['image'], encoding: 'base64', kind: 'image' }] }, '/{model}/{model}/admin'));
+    model.id = '..';
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    expect(prepared.ok).toBe(true);
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ image: PNG.toString('base64') }));
+    expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } }))
+      .toMatchObject({ ok: false, errorCode: 'GUIDE_INVALID' });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { path: '/../../jobs/{taskId}', taskId: 'paid-task' },
+    { path: '/%2e%2e/%2E%2E/jobs/{taskId}', taskId: 'paid-task' },
+    { path: '/../v20/jobs/{taskId}', taskId: 'paid-task' },
+    { path: '/%2e%2e%2f%2e%2e%2fjobs/{taskId}', taskId: 'paid-task' },
+    { path: '/{taskId}/{taskId}/admin', taskId: '..' },
+  ])('blocks an escaping poll URL after task substitution: $path', async ({ path, taskId }) => {
+    const video = recoveryVideoOperation();
+    const { model } = setupGuideDriven({ ...video, response: { ...video.response, poll: { ...video.response.poll, path } } });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    expect(prepared.ok).toBe(true);
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: taskId }))
+      .mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
+    expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } }))
+      .toMatchObject({ ok: true });
+    expect(await callCindyMedia({ action: 'poll', invocationId: String(prepared.invocation_id) }))
+      .toMatchObject({ ok: false, errorCode: 'GUIDE_INVALID' });
+    expect(mocks.outboundFetch.mock.calls.map(call => call[0])).toEqual(['https://relay.example/proxy/v2/images/generations']);
+    expect(mocks.rows.get(String(prepared.invocation_id))?.state).toBe('pending');
+  });
+
+  it.each(['https://relay.example/proxy/v2', 'https://relay.example/proxy/v2/', 'https://relay.example'])(
+    'retains a valid Guide path and query for %s', async baseUrl => {
+      const op = operation({ mode: 'sync', media: [{ path: ['image'], encoding: 'base64', kind: 'image' }] }, '/images.v2/generations?next=../preview');
+      const { model, connection } = setupGuideDriven(op);
+      connection.baseUrl = baseUrl;
+      const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+      mocks.outboundFetch.mockResolvedValueOnce(Response.json({ image: PNG.toString('base64') }));
+      expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } }))
+        .toMatchObject({ ok: true });
+      expect(mocks.outboundFetch).toHaveBeenCalledExactlyOnceWith(`${baseUrl.replace(/\/+$/, '')}${op.request.path}`,
+        expect.objectContaining({ headers: expect.objectContaining(connection.headers) }));
+    },
+  );
 
   // #10137: an empty media catalog must lead to connection/declaration repair,
   // rather than asking the user to enable Cindy AI or abandon their own model.
