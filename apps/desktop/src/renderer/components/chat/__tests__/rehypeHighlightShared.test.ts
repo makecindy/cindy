@@ -9,8 +9,8 @@ const calls = vi.hoisted(() => ({ highlighted: 0 }));
 vi.mock('rehype-highlight', async (importOriginal) => {
   const original = await importOriginal<typeof import('rehype-highlight')>();
   return {
-    default: () => {
-      const transform = original.default();
+    default: (...options: Parameters<typeof original.default>) => {
+      const transform = original.default(...options);
       return (...args: Parameters<typeof transform>) => {
         const visit = (node: Root | Element) => {
           if (
@@ -46,6 +46,16 @@ describe('rehypeHighlightShared', () => {
     expect(render('```unknown-lang\nx\n```')).toContain(
       '<pre><code class="hljs language-unknown-lang">x',
     );
+  });
+
+  // #10143: mapped non-common languages must also highlight fenced previews.
+  it.each([
+    ['protobuf', 'syntax = "proto3"; message Item { string name = 1; }'],
+    ['powershell', 'function Get-Item { return $true }'],
+    ['fsharp', 'let answer = 42'],
+    ['http', 'GET /items HTTP/1.1'],
+  ])('highlights %s outside the editor', (lang, code) => {
+    expect(render(`\`\`\`${lang}\n${code}\n\`\`\``)).toContain('<span class="hljs-');
   });
 
   // Unit: full-document streaming reparses stable code; the upstream highlighter

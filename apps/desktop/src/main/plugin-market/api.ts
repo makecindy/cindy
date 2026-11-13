@@ -85,6 +85,11 @@ type Fetcher = <T>(
   options: Omit<ApiFetchOptions, 'baseUrl'>,
 ) => Promise<T>;
 
+type PluginCatalogRead = PluginCatalogPage & {
+  /** Main-only, request-scoped query results for legacy installed-count deduction. */
+  legacyQueryPlugins?: VisiblePluginSummary[];
+};
+
 const defaultFetcher: Fetcher = (apiPath, options) =>
   serverApiFetch(apiPath, {
     ...options,
@@ -169,7 +174,7 @@ export class PluginMarketApi {
   }
 
   async catalog(options: { scope?: PluginScope | 'all'; query?: string; limit?: number;
-    cursor?: string | null; counts?: boolean } = {}): Promise<PluginCatalogPage> {
+    cursor?: string | null; counts?: boolean } = {}): Promise<PluginCatalogRead> {
     if (options.cursor?.startsWith(LEGACY_CURSOR_PREFIX) || this.isKnownLegacyServer()) return this.legacyCatalog(options);
     try {
       return await this.readCatalogPage(options);
@@ -190,7 +195,7 @@ export class PluginMarketApi {
 
   /** 旧服务端：读整份目录后在本地分页，游标是本地偏移量。 */
   private async legacyCatalog(options: { scope?: PluginScope | 'all'; query?: string; limit?: number;
-    cursor?: string | null; counts?: boolean }): Promise<PluginCatalogPage> {
+    cursor?: string | null; counts?: boolean }): Promise<PluginCatalogRead> {
     const scope = options.scope ?? 'all';
     const limit = options.limit ?? 12;
     let offset = 0;
@@ -216,6 +221,7 @@ export class PluginMarketApi {
       currentOrganization: catalog.currentOrganization,
       ...(catalog.organizationAccessError ? { organizationAccessError: catalog.organizationAccessError } : {}),
       counts,
+      ...(counts ? { legacyQueryPlugins: catalog.plugins } : {}),
     };
   }
 

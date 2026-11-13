@@ -564,6 +564,12 @@ export interface GhostTaskViewDecl {
   title?: string;
   /** 任务页入口（安装目录内安全相对路径）。 */
   html: string;
+  /**
+   * 任务在本账号的另一台电脑上时也显示这个任务页（只接受字面量 true，且需同时声明
+   * `liveScreen`）。页面此时多一个查询参数 `device`（那台电脑的设备 ID），逻辑页经
+   * `cindy.liveScreenView()` 查看并操作那台电脑上同一插件的设备画面。
+   */
+  remote?: true;
 }
 
 /**
@@ -2259,6 +2265,7 @@ export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | und
     contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
     commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
     capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
+    ...(host.settings ? { settings: host.settings.filter(field => has('setting', field.id)) } : {}),
     ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
       fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
       resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
@@ -4766,10 +4773,14 @@ function validateGhostManifestInput(
     if (!isPortableGhostRelativePath(raw.taskView.html)) {
       return { ok: false, reason: 'taskView.html 必填，且必须是安装目录内的安全相对路径' };
     }
+    if (raw.taskView.remote !== undefined && raw.taskView.remote !== true) {
+      return { ok: false, reason: 'taskView.remote 只接受 true' };
+    }
     taskView = {
-      ...unknownDeclarationFields(raw.taskView, ['html', 'title']),
+      ...unknownDeclarationFields(raw.taskView, ['html', 'title', 'remote']),
       ...(raw.taskView.title !== undefined ? { title: raw.taskView.title } : {}),
       html: raw.taskView.html,
+      ...(raw.taskView.remote === true ? { remote: true as const } : {}),
     };
   }
 
@@ -4843,6 +4854,9 @@ function validateGhostManifestInput(
   }
   if (slots.includes('task-view') && taskView === undefined) {
     return { ok: false, reason: 'slots 声明了 "task-view" 但缺少 taskView(html 必填)' };
+  }
+  if (taskView?.remote === true && !slots.includes('live-screen')) {
+    return { ok: false, reason: 'taskView.remote 需要同时声明 liveScreen: true' };
   }
 
   // card 槽详单:有详单必有槽;有槽无详单 = 纯渲染卡片(默认行为,向后兼容)。

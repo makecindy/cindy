@@ -67,6 +67,11 @@
 
 | 英文 | 语言 | 译法 | 什么场合 |
 | --- | --- | --- | --- |
+| **Active** | fr | actif | 默认 |
+| Active | fr | Actif | 标题或状态标签使用大写首字母。 |
+| Active | fr | active | 阴性名词使用 active / actives，阳性复数 actifs 已包含标准词干。 |
+| **Active** | de | Aktiv | 默认 |
+| Active | de | aktiv | 句中形容词使用小写，并按性、数、格变为 aktive / aktiven 等。 |
 | **Active** | zh-CN | 活跃 | 默认 |
 | Active | zh-CN | 生效中 | 计费语境（"no active subscription"→没有生效中的订阅），指订阅状态而非活跃度 |
 | **Active** | zh-TW | 活躍 | 默认 |
@@ -569,6 +574,10 @@ GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 G
 ### Group chat
 
 伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
+
+### Group Cindy
+
+每个服务器群自带的那位 Cindy 成员（docs/product-rules/bot-group-chat.md 第 9 节，2026-11-12）：谁 @ 它就在谁自己的电脑上替他做事，不属于任何人，也不是个人伙伴。名字各语言都叫 Cindy，群管理开关与说明里用这个称呼；不叫「群助手」「群伙伴」「默认伙伴」。先登记为 proposed，等 UI 走查后再定。
 
 ### Main Chat
 

@@ -9,7 +9,8 @@
  *  - 发送前伙伴守卫拒绝 → 回一句提示, 不发送;
  *  - 停止 / `/new` 走同一解析, 停止不建行。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 import type { AgentEvent, MakerEvent, Session, SessionSendResult, TurnPermissionPolicy } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
@@ -302,6 +303,11 @@ async function runTurn(userId: string, text = 'hello'): Promise<void> {
     ...(userId === OWNER ? { requesterIsOwner: true } : {}),
   });
 }
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('turnRunner: connection handed to a companion bot', () => {
   // Durable transports settle receipts only from dispatch outcomes. Preparation
