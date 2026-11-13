@@ -295,7 +295,7 @@ export function buildConversationShareSvgLayout({
         innerY += height + 5;
         continue;
       }
-      const lines = wrapSvgText(block.text, textWidth, block.fontSize);
+      const lines = wrapSvgText(block.text, textWidth, block.fontSize, true);
       textBlocks.push({
         color: block.color,
         fontSize: block.fontSize,
@@ -491,6 +491,7 @@ export function wrapSvgText(
   text: string,
   maxWidth: number,
   fontSize: number,
+  preserveListIndent = false,
 ): string[] {
   const maxUnits = Math.max(1, maxWidth / fontSize);
   const lines: string[] = [];
@@ -501,12 +502,16 @@ export function wrapSvgText(
     }
     let line = "";
     let units = 0;
+    // Only sanitized body fallback opts in; metadata keeps its existing layout.
+    const indent = preserveListIndent ? (paragraph.match(/^\u2003+/u)?.[0] ?? "") : "";
     for (const character of Array.from(paragraph)) {
       const characterUnits = conservativeArialGlyphWidthEm(character);
       if (line && units + characterUnits > maxUnits) {
         lines.push(line.trimEnd());
-        line = "";
-        units = 0;
+        // U+2003 is one em in the shared conservative font metrics. Reserve
+        // room for the next glyph even when the source nesting is very deep.
+        line = indent.slice(0, Math.max(0, Math.floor(maxUnits - characterUnits)));
+        units = line.length;
       }
       line += character;
       units += characterUnits;
