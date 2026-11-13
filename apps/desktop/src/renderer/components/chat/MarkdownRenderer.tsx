@@ -66,6 +66,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
 import {
+  isFileUrlHostHref,
   looksLikeFilePath,
   MODEL_EXT_RE,
   normalizeMarkdownImageSrc,
@@ -878,6 +879,17 @@ function InlineXdtAudioPlayer({ src }: { src: string }) {
 }
 
 /**
+ * 远程会话里嵌入媒体的取件来源。file://host 指向另一台机器的共享:改写成远程媒体会在渲染时把
+ * 该路径交给被控端取件,因此不改写,留在本机 xdt-file / xdt-audio 协议(不接受这类路径,不触盘)。
+ */
+function markdownMediaOrigin(
+  src: string | undefined,
+  origin: RemoteMediaOrigin | undefined,
+): RemoteMediaOrigin | undefined {
+  return src && isFileUrlHostHref(src) ? undefined : origin;
+}
+
+/**
  * LightboxImage — module-level component for react-markdown img renderer.
  * Tracks per-image load errors; broken images get no zoom-in cursor or click.
  */
@@ -1331,6 +1343,8 @@ function useResolvedMarkdownTarget(
   // 任何一条边都只有 resolveFromCache 一个地方需要改对(PR #1144 第 10 轮止损重构)。
   const remoteAbsPath = useMemo(() => {
     if (isStreaming || target.kind !== 'local-candidate' || !remoteOrigin) return '';
+    // file://host 指向另一台机器的共享:与本机渲染期解析一样不预检、不点亮,只在点击时 stat。
+    if (isFileUrlHostHref(target.href)) return '';
     return resolveLocalPath(target.href, workingDir) || '';
   }, [isStreaming, target, workingDir, remoteOrigin]);
 
@@ -1908,12 +1922,13 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           >
             {(localSrc) => {
               const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks);
+              const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin);
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
                 return (
                   <ChatVideoView
-                    src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
+                    src={rewriteToRemoteMediaOrigin(normalized, mediaOrigin)}
                     filename={markdownMediaFilename(normalized, alt)}
                     variant="tool-output"
                     sessionId={currentSessionId}
@@ -1923,7 +1938,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
               return (
                 <LightboxImage
                   streaming={isStreaming}
-                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
+                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : normalized}
                   alt={alt}
                   onZoom={setLightboxSrc}
                   {...imageProps}
@@ -2151,7 +2166,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
           // images/documents/video and rejects MP3. Preserve the encoded path and
           // select the handler before wrapping the URL for a remote source device.
           const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
-          const src = rewriteToRemoteMediaOrigin(playable, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
+          const src = rewriteToRemoteMediaOrigin(playable, markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined));
           return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
         }}
       </WorkspaceMediaSrc>

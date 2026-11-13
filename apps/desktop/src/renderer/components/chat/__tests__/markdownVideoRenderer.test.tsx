@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -422,6 +422,42 @@ describe('MarkdownRenderer workspace-relative media in local sessions', () => {
     const src = mediaSrc(view.container) ?? '';
     expect(parseRemoteMediaUrl(src)?.origUrl ?? src).toBe(toLocalFileUrl(`/task/${href}`));
     expect(resolvePathBatch).not.toHaveBeenCalled();
+  });
+});
+
+// PR #9780: file://host/share/x names a share on another computer. In a device session the
+// render-time pre-check (chat-file:stat) and media loads must not hand that path to the
+// controlled computer; an explicit click still asks.
+// Minimal inputs: a file://nas link / inline path / image / cindy-ui video and audio.
+describe('MarkdownRenderer file://host targets in device sessions', () => {
+  const share = '\\\\nas\\share\\';
+  const richNode = (kind: 'video' | 'audio', src: string) => '```cindy-ui\n' + JSON.stringify({
+    version: 1, seq: 1, op: 'create', id: 'm', kind, props: { src, alt: 'clip' },
+  }) + '\n```';
+  const renderInDevice = (content: string) => {
+    sessionFile.current = { ...REMOTE_SESSION_FILE, workingDir: 'C:\\proj' };
+    return render(<MarkdownRenderer workingDir="C:\proj" currentSessionId="s1" renderRichAnswers content={content} />);
+  };
+
+  it('does not pre-check a file://host link or inline path, and stats the link on click', async () => {
+    const chatStat = vi.fn(async () => ({ verdict: 'unknown' }));
+    (window as unknown as { electronAPI: unknown }).electronAPI = { fileBrowser: { chatStat } };
+    renderInDevice('[report](file://nas/share/report.pdf) `file://nas/share/a.png`');
+    await act(async () => {});
+    expect(chatStat).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: 'report' }));
+    await waitFor(() => expect(chatStat).toHaveBeenCalledWith(expect.objectContaining({ absPath: `${share}report.pdf` })));
+  });
+
+  it.each([
+    ['Markdown image', '![a](file://nas/share/a.png)', 'img', toLocalFileUrl(`${share}a.png`)],
+    ['cindy-ui video', richNode('video', 'file://nas/share/clip.mp4'), '[data-testid="markdown-video"]', toLocalFileUrl(`${share}clip.mp4`)],
+    ['cindy-ui audio', richNode('audio', 'file://nas/share/a.mp3'), 'audio',
+      toLocalFileUrl(`${share}a.mp3`).replace(/^xdt-file:/, 'xdt-audio:')],
+  ])('does not route a file://host %s through the remote media fetch', (_label, content, selector, expected) => {
+    const element = renderInDevice(content).container.querySelector(selector);
+    expect(element?.getAttribute('data-src') ?? element?.getAttribute('src')).toBe(expected);
   });
 });
 

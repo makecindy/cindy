@@ -533,11 +533,11 @@ function settleSmartResult(
 /**
  * `file://nas/share/x` names a share on another machine. Rendering must not
  * contact a host named in message content (on Windows a stat opens an SMB
- * connection and offers NTLM credentials), so render-time lookups skip it and
- * only an explicit open (`resolveLocalPathSmart`) asks main.
+ * connection and offers NTLM credentials), so render-time lookups, remote
+ * pre-checks and media loads skip it; only an explicit open asks for it.
  */
-function namesFileUrlHost(href: string, workingDir: string): boolean {
-  return /^file:\/\/[^\\/]/.test(href) && /^[\\/]{2}/.test(resolveLocalPath(href, workingDir));
+export function isFileUrlHostHref(href: string): boolean {
+  return /^file:\/\/[^\\/]/.test(href) && /^[\\/]{2}/.test(fileUrlToPath(href));
 }
 
 async function runBatchForDir(
@@ -547,7 +547,7 @@ async function runBatchForDir(
 ): Promise<void> {
   const hrefs: string[] = [];
   for (const href of hrefMap.keys()) {
-    if (!namesFileUrlHost(href, workingDir)) {
+    if (!isFileUrlHostHref(href)) {
       hrefs.push(href);
       continue;
     }
