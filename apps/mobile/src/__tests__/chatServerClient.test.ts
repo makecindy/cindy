@@ -1209,3 +1209,20 @@ it('keeps main and two topics isolated including waiting work and unknown source
   expect(chatGroupView({ ...page, threadRootId: id(20) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(121)]);
   expect(chatGroupView({ ...page, threadRootId: id(19) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(122)]);
 });
+
+// Unit: two active executions from a removed message used to repeat the same failed GET.
+it('reads a missing source once per load and retries it on a later refresh', async () => {
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.includes('/messages?') || path.includes('/execution-failures?') || path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) return [30, 31].map(n => ({ id: id(n), bot_id: id(12), status: 'running', epoch: 1, source_message_id: id(20) }));
+    if (path.endsWith(`/messages/${id(20)}`)) throw { status: 404, code: 'MESSAGE_NOT_FOUND' };
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  for (let count = 1; count <= 2; count++) {
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).round.speakers).toEqual([]);
+    expect(request.mock.calls.filter(([path]) => path.endsWith(`/messages/${id(20)}`))).toHaveLength(count);
+  }
+});

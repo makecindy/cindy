@@ -2667,6 +2667,20 @@ describe('Chat Server result delivery and refresh', () => {
     expect(result.ok && result.group.round.speakers).toHaveLength(2);
   });
 
+  // Unit: missing source messages must be read once per detail, even with concurrent executions.
+  it('deduplicates missing execution sources without hiding their execution identities', async () => {
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { status: 404, body: { error: { code: 'MESSAGE_NOT_FOUND' } } };
+      if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'running' },
+        { ...execution, id: '50000000-0000-4000-8000-000000000099', status: 'needs_input' }] };
+      return response(route);
+    });
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.round.speakers).toHaveLength(2);
+    expect(result.ok && result.group.round.speakers.every(speaker => speaker.threadRootId === undefined)).toBe(true);
+    expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith(`/messages/${execution.source_message_id}`))).toHaveLength(1);
+  });
+
   it.each(['IMAGE_INPUT_UNSUPPORTED', 'RUNTIME_TIMEOUT', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
     const source = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [{ type: 'text', text: 'Question' }], origin: 'user', deleted: false, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };

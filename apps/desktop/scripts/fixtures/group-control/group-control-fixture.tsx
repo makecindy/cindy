@@ -60,6 +60,7 @@ interface GroupData {
   /** The Thread panel answers reads and keeps the reader's follow switch. */
   threadPanel?: boolean;
   threadWork?: boolean;
+  threadWorkTall?: boolean;
   /** A server group that reports who has read a message: own messages with one or two checks and the read list. */
   readReceipts?: boolean;
   /** Many one-paragraph messages of growing length, to catch a last line that is just full. */
@@ -387,6 +388,12 @@ void mountPage({
         { botId: 'a', executionId: 'thread-a', sourceMessageId: 'reply-a', threadRootId: 'a1', sessionId: null, activity: 'reply', executionStatus: 'needs_input' },
         { botId: 'b', executionId: 'thread-b', sourceMessageId: 'reply-b', threadRootId: 'q4', sessionId: null, activity: 'reply', executionStatus: 'queued' },
       ] };
+    }
+    if (data.threadWorkTall) {
+      group.round.speakers.push(...Array.from({ length: 18 }, (_, index) => ({
+        botId: 'a', executionId: `long-thread-${index}`, sourceMessageId: `long-source-${index}`,
+        threadRootId: 'a1', sessionId: null, activity: 'reply', executionStatus: 'needs_input',
+      })));
     }
     let planReadHeld = false;
     const planReads: Array<() => void> = [];

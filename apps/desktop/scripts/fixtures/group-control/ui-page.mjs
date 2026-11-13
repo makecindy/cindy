@@ -136,6 +136,7 @@ export default {
       data: { ...base, bubbles: true, threadUnread: true },
     },
     'thread-work': { about: 'Concurrent topic work stays in its own thread', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true } },
+    'thread-work-overflow': { about: 'Long topic work scrolls while reply composer stays visible', viewport: { width: 1280, height: 600 }, data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, threadWorkTall: true } },
     'thread-follow': {
       about: 'The Thread panel\'s 关注 switch, off by default; switched on it reads 已关注',
       data: { ...base, bubbles: true, threadUnread: true, threadPanel: true },
@@ -644,11 +645,29 @@ export default {
       assert.ok(ui.case === 'arrangement' ? placeholder.includes('正在说') : !placeholder.includes('改改'), placeholder);
       return;
     }
-    if (ui.case === 'thread-work') {
+    if (ui.case === 'thread-work' || ui.case === 'thread-work-overflow') {
       assert.equal(await page.getByTestId('bot-group-work').count(), 0, 'topic work must not appear in main');
       await page.locator('[data-thread-preview="a1"]').first().click();
-      await page.getByTestId('bot-group-work').waitFor();
-      assert.equal(await page.getByTestId('bot-group-work').count(), 1, 'only the selected topic work');
+      await page.getByTestId('bot-group-work').first().waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), ui.case === 'thread-work-overflow' ? 19 : 1, 'only the selected topic work');
+      if (ui.case === 'thread-work-overflow') {
+        const panel = page.locator('aside.thread-panel');
+        const composer = panel.locator('textarea');
+        const geometry = await composer.evaluate(element => {
+          const panel = element.closest('aside');
+          const work = panel.querySelector('[data-testid="bot-group-work"]');
+          let scroller = work.parentElement;
+          while (scroller && getComputedStyle(scroller).overflowY !== 'auto') scroller = scroller.parentElement;
+          const bounds = panel.getBoundingClientRect(), input = element.getBoundingClientRect();
+          return { visible: input.top >= bounds.top && input.bottom <= bounds.bottom,
+            scrollable: !!scroller && scroller.scrollHeight > scroller.clientHeight };
+        });
+        assert.ok(geometry.visible, 'reply composer stays inside the fixed panel');
+        assert.ok(geometry.scrollable, 'long work has a reachable scroll range');
+        await panel.getByTestId('bot-group-work').last().scrollIntoViewIfNeeded();
+        await composer.fill('回复仍可输入');
+        assert.equal(await composer.inputValue(), '回复仍可输入');
+      }
       await ui.capture('topic-work');
       return;
     }

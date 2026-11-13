@@ -837,14 +837,14 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }
       // Use the same execution snapshot for running status and stop controls.
       const executions = await request<ChatExecution[]>(`/conversations/${room}/executions`);
-      const sourceMessages = new Map([...snapshot.messages, ...messages].map(message => [message.id, message]));
+      const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
       for (const execution of Array.isArray(executions) ? executions : []) {
         if (execution.plan_id || !['queued', 'running', 'needs_input', 'stopping'].includes(execution.status)) continue;
         let source = sourceMessages.get(execution.source_message_id);
-        if (!source) {
+        if (!sourceMessages.has(execution.source_message_id)) {
           try { source = await this.message(room, execution.source_message_id); }
           catch (error) { if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error; }
-          if (source) sourceMessages.set(source.id, source);
+          sourceMessages.set(execution.source_message_id, source);
         }
         if (source) execution.threadRootId = source.threadRootId ?? null;
       }

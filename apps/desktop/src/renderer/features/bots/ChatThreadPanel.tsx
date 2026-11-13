@@ -713,6 +713,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], quoteSources = g
                 {renderRow(message, firstNewId === message.id ? false : layout.get(message.id)?.continued ?? false)}
               </Fragment>
             ))}
+            {!sharing && <>
+              {speakers.length > 0 && <BotGroupProgressStrip step={null} speakers={speakers} stopping={false} />}
+              {speakers.map(speaker => <BotGroupSpeakerInteraction key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />)}
+            </>}
           </div>
         </div>
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
@@ -724,8 +728,6 @@ export function ChatThreadPanel({ group, rootId, speakers = [], quoteSources = g
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-            {speakers.length > 0 && <BotGroupProgressStrip step={null} speakers={speakers} stopping={false} />}
-            {speakers.map(speaker => <BotGroupSpeakerInteraction key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />)}
             <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
