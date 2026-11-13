@@ -54,6 +54,18 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { isClassicalLocale, modernLocaleOf } from '../../../shared/locale';
 import { providersSettings } from './ProvidersSection.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
+import { codexResetScope } from '../../../shared/subscriptionAccounts';
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
+import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
+import { CodexResetCredits } from '../status/CodexResetCredits';
+
+function AccountResetCredits({ scope }: { scope: string }) {
+  const { snapshot, refresh } = useCodexRateLimits(true, scope);
+  const reset = useCodexRateLimitReset(snapshot, refresh, scope);
+  return <CodexResetCredits variant="embedded" providerId={scope} snapshot={snapshot}
+    onChanged={refresh} busy={reset.busy} canReset={reset.canReset} canRetry={reset.canRetry}
+    onReset={credit => void reset.reset(credit)} />;
+}
 
 const strategies: ProviderGroupStrategy[] = ['least', 'round', 'order', 'weight'];
 const statusDot: Record<SubscriptionAccountView['status'], string> = {
@@ -325,7 +337,9 @@ export function SubscriptionAccountsSection({
                   account.id === 'default' && defaultUsage ? (
                     defaultUsage
                   ) : usage ? (
-                    <QuotaHoverCard variant="embedded" hideIdentity account={usage} />
+                    <QuotaHoverCard variant="embedded" hideIdentity account={usage}>
+                      {providerId === 'openai' && connected && <AccountResetCredits scope={account.codexResetProviderId ?? codexResetScope(account.id)} />}
+                    </QuotaHoverCard>
                   ) : null;
                 return (
                   <div

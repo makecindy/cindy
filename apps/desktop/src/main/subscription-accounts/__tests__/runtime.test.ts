@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   pools: {} as Partial<Record<SubscriptionProvider, SubscriptionPoolConfig>>,
   bindings: new Map<string, { providerId: SubscriptionProvider; accountId: string }>(),
   read: vi.fn(),
+  rpc: vi.fn(),
+  tokens: vi.fn(),
   usage: vi.fn(),
   login: vi.fn(),
   bound: true,
@@ -52,6 +54,8 @@ vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
 }));
 vi.mock('../nativeCli.js', () => ({
   readNativeAccount: h.read,
+  codexAccountRpc: h.rpc,
+  readNativeCodexTokens: h.tokens,
   readNativeAccountUsage: h.usage,
   loginNativeAccount: h.login,
   readLegacyCodexAccount: h.legacyRead,
@@ -110,7 +114,11 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   observeSubscriptionAccountUsage,
+  pooledCodexResetTarget,
+  hasRestoredPooledCodexQuota,
 } from '../runtime.js';
+import { createCodexRateLimitResetService } from '../../usage/codexRateLimitReset.js';
+import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/codexResetAutoUse.js';
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
@@ -135,6 +143,10 @@ beforeEach(() => {
   h.pools = { anthropic: { strategy: 'least', accounts: [account('default'), account('second')] } };
   h.bindings.clear();
   h.read.mockReset().mockResolvedValue({ authenticated: true, identity: 'account' });
+  h.rpc.mockReset();
+  h.tokens.mockReset().mockImplementation(async (directory: string) => ({
+    chatgptAccountId: directory, canDispatch: () => true,
+  }));
   h.usage.mockReset().mockResolvedValue({});
   h.login.mockReset().mockResolvedValue(undefined);
   h.legacyRead.mockReset().mockResolvedValue({
@@ -151,6 +163,94 @@ beforeEach(() => {
   h.cooling = {};
   h.writeCooling.mockReset().mockResolvedValue(undefined);
   h.clearCooling.mockReset().mockResolvedValue(undefined);
+});
+
+// Regression: added OpenAI accounts had neither reset RPC routing nor an automatic
+// redemption path. Unit/in-process integration through the real service and engine;
+// the native CLI transport is the only replacement, so no real credit is consumed.
+describe('pooled Codex resets', () => {
+  it('reads, automatically redeems and refreshes only the selected account', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second'), account('third')] };
+    const redeemed = new Set<string>();
+    const now = Date.now();
+    const response = (directory: string) => ({
+      rateLimits: { secondary: { usedPercent: redeemed.has(directory) ? 0 : 100,
+        windowDurationMins: 10080, resetsAt: now / 1000 + 4 * 86400 } },
+      rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: redeemed.has(directory) ? 0 : 1, credits: redeemed.has(directory) ? [] : [{
+        id: directory + '-credit', status: 'available', resetType: 'codexRateLimits',
+        grantedAt: 1, expiresAt: now / 1000 + 86400, title: null, description: null,
+      }] },
+    });
+    h.rpc.mockImplementation(async (directory: string, method: string) => {
+      if (method === 'account/rateLimits/read') return response(directory);
+      redeemed.add(directory);
+      return { outcome: 'reset' };
+    });
+    const second = pooledCodexResetTarget('openai-account:second')!;
+    const third = pooledCodexResetTarget('openai-account:third')!;
+    const services = new Map([
+      ['openai-account:second', createCodexRateLimitResetService(second)],
+      ['openai-account:third', createCodexRateLimitResetService(third)],
+    ]);
+    const record = vi.fn();
+    const engine = new CodexResetAutoUse({
+      scope: () => h.owner, now: () => now,
+      read: async scope => ({ ...await services.get(scope)!.read(), autoUse: {
+        accountKey: scope, settings: { ...DEFAULT_CODEX_RESET_AUTO_USE, enabled: scope.endsWith(':second') },
+        customized: true, lastUsedAt: null,
+      } }),
+      authorized: (_scope, value) => value.autoUse!.settings.enabled,
+      consume: (scope, key, authorized) => services.get(scope)!.consume(key, authorized),
+      record, refreshWeb: () => second.refresh(), restored: async () => {}, warn: vi.fn(),
+    });
+    await Promise.all([engine.check('openai-account:second'), engine.check('openai-account:third')]);
+    expect([...redeemed]).toEqual(['openai/second']);
+    expect(record).toHaveBeenCalledOnce();
+    expect(h.usage).toHaveBeenCalledWith('openai', 'openai/second');
+    const thirdOffer = (await services.get('openai-account:third')!.read()).resetOffer!;
+    await services.get('openai-account:third')!.consume(thirdOffer.idempotencyKey);
+    expect([...redeemed]).toEqual(['openai/second', 'openai/third']);
+    expect(h.rpc.mock.calls.filter(([, method]) => method === 'account/rateLimitResetCredit/consume')
+      .map(([directory, , params]) => [directory, params.creditId])).toEqual([
+        ['openai/second', 'openai/second-credit'], ['openai/third', 'openai/third-credit'],
+      ]);
+    expect(h.rpc.mock.calls.some(([directory]) => directory === 'openai/default')).toBe(false);
+  });
+
+  it.each(['removed', 'disconnected', 'owner', 'login'] as const)('rejects a retained reset target after %s', async reason => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    const target = pooledCodexResetTarget('openai-account:second')!;
+    if (reason === 'removed') h.pools.openai.accounts.pop();
+    if (reason === 'disconnected') h.pools.openai.disconnected = true;
+    if (reason === 'owner') h.owner += '-changed';
+    if (reason === 'login') {
+      h.login.mockImplementation(() => new Promise(() => {}));
+      void runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'second', loginKey: 'reset-test' }).catch(() => {});
+      await Promise.resolve();
+    }
+    await expect(target.consumeResetCredit({ creditId: 'credit', idempotencyKey: 'key' })).rejects.toThrow();
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
+
+  it('keeps imported connections on their original reset lock and preference key', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')], legacyCodexAccounts: { 'openai-old': 'second' } };
+    const view = await readSubscriptionPool('openai');
+    expect(view.accounts[1].codexResetProviderId).toBe('openai-old');
+    expect(() => pooledCodexResetTarget('openai-account:second')).toThrow('original account connection');
+  });
+
+  it('wakes only a task bound to the restored account and requires known quota', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.bindings.set('task:mine', { providerId: 'openai', accountId: 'second' });
+    expect(await hasRestoredPooledCodexQuota('openai-account:second', 'other', null)).toBe(false);
+    expect(await hasRestoredPooledCodexQuota('openai-account:second', 'mine', null)).toBe(false);
+    h.usage.mockResolvedValue({ codexUsage: { appServerBuckets: { codex: { limitId: 'codex',
+      updatedAt: Date.now(), primary: null, secondary: { usedPercent: 5, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 86400 },
+    } } } });
+    await pooledCodexResetTarget('openai-account:second')!.refresh();
+    expect(await hasRestoredPooledCodexQuota('openai-account:second', 'mine', null)).toBe(true);
+  });
 });
 
 // Standard: explicit Claude re-login used to be a no-op for connected accounts.

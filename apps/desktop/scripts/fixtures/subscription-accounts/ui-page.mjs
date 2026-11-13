@@ -57,7 +57,16 @@ export default {
       assert.equal(await page.getByRole('switch').count(), 0);
       return;
     }
-    assert.equal(await page.getByRole('switch').count(), 3);
+    const codex = ui.case === 'codex' || ui.case === 'narrow-weight';
+    if (codex) {
+      const rows = page.getByTestId('subscription-account');
+      for (let index = 0; index < 3; index++) {
+        await rows.nth(index).getByRole('switch', { name: await ui.t('codexResets.autoUse.label'), exact: true }).waitFor();
+        assert.equal(await rows.nth(index).getByRole('switch', { name: await ui.t('codexResets.autoUse.label'), exact: true }).getAttribute('aria-checked'), String(index === 0));
+      }
+      await ui.capture('account-resets');
+    }
+    assert.equal(await page.getByRole('switch').count(), codex ? 6 : 3);
     assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll(elements =>

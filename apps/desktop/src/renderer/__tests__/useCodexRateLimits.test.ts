@@ -25,6 +25,31 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Unit regression: the pool broadcasts after recording a reset read. Its own
+// echo must not spawn another CLI read; a later account change must refresh.
+it('refreshes pooled reset settings on account changes without rereading its own echo', async () => {
+  const scope = 'openai-account:second';
+  let changed!: (event: { providerId: string }) => void;
+  const reader = vi.fn(async () => {
+    changed({ providerId: 'openai' });
+    return { ...result, providerId: scope };
+  });
+  vi.stubGlobal('electronAPI', {
+    maker: { usage: { getCodexRateLimits: reader } },
+    subscriptionAccounts: { onChanged: (listener: typeof changed) => { changed = listener; return () => {}; } },
+  });
+  const hook = renderHook(() => useCodexRateLimits(true, scope));
+  await waitFor(() => expect(hook.result.current.snapshot?.providerId).toBe(scope));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'anthropic' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai' }));
+  expect(reader).toHaveBeenCalledTimes(2);
+  hook.unmount();
+  await act(async () => changed({ providerId: 'openai' }));
+  expect(reader).toHaveBeenCalledTimes(2);
+});
+
 describe('useCodexRateLimits', () => {
   // PR #9916: a read with no reply must release the Retry button and discard
   // any late reply. Fake time keeps this unit regression network-free.

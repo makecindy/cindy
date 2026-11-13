@@ -44,7 +44,10 @@ import {
   MAX_SUBSCRIPTION_ACCOUNTS,
   parseSubscriptionSessionAccountView,
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
+  CODEX_POOL_RESET_PREFIX,
+  codexResetScope,
 } from '../../shared/subscriptionAccounts.js';
+import type { CodexRateLimitResetServiceDeps } from '../usage/codexRateLimitReset.js';
 import {
   accountDirectory,
   accountOwnerPrefix,
@@ -64,6 +67,7 @@ import {
   loginLegacyCodexAccount,
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
+  codexAccountRpc,
 } from './nativeCli.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 
@@ -199,6 +203,88 @@ function directoryFor(provider: SubscriptionProvider, id: string): string {
   return id === 'default' && legacyCodexDefault(provider)
     ? getCodexHome()
     : accountDirectory(provider, id);
+}
+
+/** Resolve only a saved account of this owner. Default/legacy connections retain their adapters. */
+export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServiceDeps & { refresh(): Promise<void> }) | null {
+  if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return null;
+  const id = scope.slice(CODEX_POOL_RESET_PREFIX.length);
+  // The old target must remain the sole lock/settings owner of an imported connection.
+  if (readLegacyCodexProviderId(id)) throw new Error('PRECONDITION_FAILED: Use the original account connection');
+  const state = currentRuntime();
+  const directory = directoryFor('openai', id);
+  const assertCurrent = () => {
+    assertOwner(state);
+    const pool = readPool('openai');
+    if (!pool || pool.disconnected || id === 'default' || !pool.accounts.some(a => a.id === id)
+      || directoryFor('openai', id) !== directory
+      || state.invalidated.has(keyOf('openai', id))
+      || [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id))
+      throw new Error('PRECONDITION_FAILED: Subscription account unavailable');
+  };
+  assertCurrent();
+  let credentialCurrent = () => false;
+  const readAccountIdentity = async () => {
+    assertCurrent();
+    const auth = await readNativeAccount('openai', directory);
+    const tokens = await readNativeCodexTokens(directory);
+    assertCurrent();
+    if (!auth.authenticated || !auth.identity || !tokens.canDispatch())
+      throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+    credentialCurrent = tokens.canDispatch;
+    return { email: auth.identity, accountId: tokens.chatgptAccountId };
+  };
+  return {
+    readAccountIdentity,
+    readRateLimits: async () => {
+      assertCurrent();
+      const result = await codexAccountRpc(directory, 'account/rateLimits/read', {});
+      assertCurrent();
+      return result as Awaited<ReturnType<CodexRateLimitResetServiceDeps['readRateLimits']>>;
+    },
+    consumeResetCredit: async params => {
+      // Re-check membership after the reset service has revalidated its account-bound offer.
+      assertCurrent();
+      const credential = credentialCurrent;
+      const canDispatch = () => {
+        try { assertCurrent(); return credential(); } catch { return false; }
+      };
+      if (!canDispatch()) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+      const result = await codexAccountRpc(directory, 'account/rateLimitResetCredit/consume', params, canDispatch);
+      assertCurrent();
+      return result as Awaited<ReturnType<CodexRateLimitResetServiceDeps['consumeResetCredit']>>;
+    },
+    recordRateLimitSnapshot: async () => {
+      assertCurrent();
+      // The reset service projects only the default bucket. The pool retains its
+      // full model table, refreshed once after redemption rather than on every read.
+    },
+    refresh: async () => {
+      assertCurrent();
+      await snapshot(state, 'openai', id, true, true);
+      assertCurrent();
+      changed('openai');
+    },
+  };
+}
+
+/** Exact task affinity and known fresh quota are both required to wake an existing wait. */
+export async function hasRestoredPooledCodexQuota(scope: string, taskId: string, nativeId: string | null | undefined, model?: string | null): Promise<boolean | null> {
+  if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return null;
+  const id = scope.slice(CODEX_POOL_RESET_PREFIX.length);
+  const bound = () => (readAccountBinding(`task:${taskId}`, 'openai')
+    ?? (nativeId ? readAccountBinding(`native:${nativeId}`, 'openai') : undefined))?.accountId === id;
+  if (!bound()) return false;
+  const target = pooledCodexResetTarget(scope);
+  if (!target) return false;
+  const state = currentRuntime();
+  const info = await snapshot(state, 'openai', id);
+  assertOwner(state);
+  const pool = readPool('openai');
+  if (!bound() || !pool || pool.disconnected || !pool.accounts.some(a => a.id === id && !a.paused)
+    || !info.auth.authenticated || info.unavailable) return false;
+  const usage = providerGroupMemberUsageState(info.usage ?? {}, model?.replace(/^chatgpt\//, ''), Date.now(), 'codex');
+  return usage.quota !== null && !usage.limited;
 }
 /** Recover affinity from host-owned history metadata, never from pool order or quota.
  * Retain removed aliases so an old task fails closed instead of switching accounts.
@@ -860,6 +946,7 @@ async function readSubscriptionPoolView(
       return {
         ...visibleAccount,
         directory: directoryFor(provider, account.id),
+        ...(provider === 'openai' ? { codexResetProviderId: readLegacyCodexProviderId(account.id) ?? codexResetScope(account.id) } : {}),
         ...(account.id === 'default' && legacyCodexDefault(provider) ? { legacy: true } : {}),
         identity: info.auth.identity,
         plan: info.auth.plan,

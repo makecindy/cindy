@@ -6,6 +6,7 @@ import { ToastContainer } from '../../../src/renderer/components/ui/toast';
 import { QuotaHoverCard } from '../../../src/renderer/components/status/QuotaHoverCard';
 import { buildClaudeUsageCard } from '../../../src/renderer/components/status/usageCardModel';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../src/shared/claudeSubscriptionUsage';
+import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type {
   SubscriptionAccountCommand,
   SubscriptionAccountUsage,
@@ -154,6 +155,16 @@ void mountPage({
       };
     return {
       openPath: async () => ({ success: true }),
+      maker: { usage: {
+        getCodexRateLimits: async (providerId = 'openai'): Promise<MobileCodexRateLimitsResult> => ({
+          providerId, account: { email: 'ac***@example.com', accountId: '…account', planType: 'pro' },
+          rateLimits: {}, rateLimitsByLimitId: null, resetOffer: null,
+          rateLimitResetCredits: { availableCount: 1, credits: [{ status: 'available', resetType: 'codexRateLimits',
+            grantedAt: 1, expiresAt: hours(24 * 30), title: null, description: null }] },
+          autoUse: { accountKey: providerId, settings: { enabled: providerId === 'openai',
+            lowQuota: true, minimumDays: 3, expiring: true, expiryMinutes: 60 }, customized: false, lastUsedAt: null },
+        }),
+      } },
       subscriptionAccounts: {
         onChanged: subscription('subscriptionAccounts'),
         command: async (command: SubscriptionAccountCommand) => {
