@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -88,6 +89,9 @@ const ACCOUNT_SNAPSHOT_TTL_MS = 30_000;
  * 缩短失败窗口不会反复 spawn CLI。
  */
 const ACCOUNT_SNAPSHOT_FAILURE_TTL_MS = 3_000;
+// A broken CLI must not keep a provider read spawning fresh RPC processes.
+const CODEX_MODEL_MAX_PAGES = 10;
+const CODEX_MODEL_MAX_ITEMS = 1_000;
 
 type Usage = {
   claudeUsage?: ReturnType<typeof parseClaudeSdkRateLimitInfo>;
@@ -117,10 +121,26 @@ interface OwnerRuntime {
   codexModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number }>;
   codexModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
   codexCatalog?: readonly CatalogModel[];
+  publishedCodexCatalog?: readonly CatalogModel[] | null;
   defaultCodexAuthEpoch: number;
 }
 let runtime: OwnerRuntime | undefined;
 const listeners = new Set<(providerId: SubscriptionProvider, resetAccountId?: string) => void>();
+const codexModelListeners = new Set<() => void>();
+/** Synchronous capability invalidation; listeners read the newly committed union. */
+export function onSubscriptionPoolCodexModelsChanged(listener: () => void): () => void {
+  codexModelListeners.add(listener);
+  return () => { codexModelListeners.delete(listener); };
+}
+function publishCodexCatalogChange(state: OwnerRuntime): void {
+  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+  const models = readSubscriptionPoolCodexModels();
+  if (isDeepStrictEqual(state.publishedCodexCatalog ?? null, models)) return;
+  state.publishedCodexCatalog = models;
+  for (const listener of codexModelListeners) {
+    try { listener(); } catch { /* A view cannot invalidate a completed model read. */ }
+  }
+}
 export function onSubscriptionAccountsChanged(
   listener: (providerId: SubscriptionProvider, resetAccountId?: string) => void,
 ) {
@@ -130,6 +150,7 @@ export function onSubscriptionAccountsChanged(
   };
 }
 function changed(provider: SubscriptionProvider, resetAccountId?: string) {
+  if (provider === 'openai') publishCodexCatalogChange(currentRuntime());
   for (const listener of listeners) {
     try {
       listener(provider, resetAccountId);
@@ -557,6 +578,7 @@ async function snapshot(
     if (provider === 'openai' && id === 'default' && state.defaultCodexAuthEpoch !== defaultCodexAuthEpoch)
       return state.cache.get(key) ?? { auth: { authenticated: false }, at: 0 };
     state.cache.set(key, result);
+    if (provider === 'openai') publishCodexCatalogChange(state);
     return result;
   })();
   state.flights.set(key, { promise: flight, forceUsage });
@@ -584,6 +606,7 @@ export function resetDefaultSubscriptionCodexDiscovery(authenticated: boolean): 
   state.codexModels.delete('default');
   if (authenticated) state.cache.delete(keyOf('openai', 'default'));
   else state.cache.set(keyOf('openai', 'default'), { auth: { authenticated: false }, at: Date.now() });
+  publishCodexCatalogChange(state);
 }
 
 /** Owner-local model/list discovery; shares the account snapshot lifetime and in-flight work.
@@ -592,7 +615,7 @@ export function resetDefaultSubscriptionCodexDiscovery(authenticated: boolean): 
 export async function refreshSubscriptionPoolCodexModels(force = false): Promise<void> {
   const state = currentRuntime();
   const pool = readPool('openai');
-  if (!pool || pool.disconnected) return;
+  if (!pool || pool.disconnected) { publishCodexCatalogChange(state); return; }
   const refreshAccount = async (id: string): Promise<void> => {
     const loggingIn = () => [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id);
     const auth = state.cache.get(keyOf('openai', id))?.auth;
@@ -618,13 +641,17 @@ export async function refreshSubscriptionPoolCodexModels(force = false): Promise
       try {
         const models: CodexModelListItem[] = [];
         const cursors = new Set<string>();
+        let pages = 0;
         let cursor: string | null = null;
         do {
           if (!isCurrent()) return;
+          if (pages >= CODEX_MODEL_MAX_PAGES) throw new Error('Codex model page budget exceeded');
           const page = await codexAccountRpc(directory, 'model/list', { cursor, limit: 100, includeHidden: false }, isCurrent) as {
             data: CodexModelListItem[]; nextCursor?: string | null;
           };
           if (!Array.isArray(page?.data)) throw new Error('Invalid Codex model list');
+          pages += 1;
+          if (models.length + page.data.length > CODEX_MODEL_MAX_ITEMS) throw new Error('Codex model item budget exceeded');
           models.push(...page.data);
           const next: string | null = typeof page.nextCursor === 'string' && page.nextCursor ? page.nextCursor : null;
           if (next && cursors.has(next)) throw new Error('Repeated Codex model cursor');
@@ -668,6 +695,7 @@ export async function refreshSubscriptionPoolCodexModels(force = false): Promise
   };
   await Promise.all(pool.accounts.filter(account => !account.paused && !readLegacyCodexProviderId(account.id))
     .map(account => refreshAccount(account.id)));
+  publishCodexCatalogChange(state);
 }
 
 /** null preserves pre-pool discovery; [] is authoritative empty membership.
@@ -1680,6 +1708,7 @@ export async function runSubscriptionAccountCommand(
     const abort = new AbortController();
     const key = `${provider}:${command.loginKey}`;
     state.logins.set(key, { abort, accountId });
+    if (provider === 'openai') publishCodexCatalogChange(state);
     try {
       if (
         command.action === 'add' &&

@@ -112,6 +112,7 @@ import {
   readSubscriptionPool,
   refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels,
+  onSubscriptionPoolCodexModelsChanged,
   readSubscriptionPoolCodexModels,
   resetDefaultSubscriptionCodexDiscovery,
   readSubscriptionAccountBlocked,
@@ -124,7 +125,6 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   observeSubscriptionAccountUsage,
-  readSubscriptionAccountBlocked,
   pooledCodexResetTarget,
   hasRestoredPooledCodexQuota,
 } from '../runtime.js';
@@ -135,6 +135,8 @@ import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
 import { getSessionSubscriptionAccount } from '../session.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
+import { getActiveCatalogWithCodexModels } from '../../maker-host/active-catalog.js';
+import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
 import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
 import { UsageLimitAutoResume, USAGE_LIMIT_RESUME_BUFFER_MS } from '../../maker-ipc/usageLimitAutoResume.js';
@@ -187,6 +189,72 @@ beforeEach(() => {
 // independent model discovery. Existing dispatch tests never read the supplier
 // catalog after default logout. Minimal input: default revoked, second healthy.
 describe('pooled Codex model discovery', () => {
+  // Unit / PR #10327: cold-start agents already exist before discovery. Previous
+  // catalog tests only read the union, missing the capability invalidation path.
+  it('publishes effective changes to existing agent capabilities and ignores unchanged or stale reads', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const byAgent = new Map<string, { availableModels: import('@cindy/maker-core').ModelDescriptor[] }>();
+    const target = { getCapabilities(kind: string) {
+      if (!byAgent.has(kind)) byAgent.set(kind, { availableModels: [] });
+      return byAgent.get(kind)!;
+    } };
+    const capabilities = target.getCapabilities('codex');
+    const push = vi.fn(() => refreshCatalogDerivedModels(target,
+      getActiveCatalogWithCodexModels(readSubscriptionPoolCodexModels() ?? [])));
+    const stop = onSubscriptionPoolCodexModelsChanged(push);
+    try {
+      h.rpc.mockImplementation(async (directory: string) => ({ data: [{ id: directory.endsWith('default')
+        ? 'gpt-default-only' : 'gpt-second-only' }], nextCursor: null }));
+      await refreshSubscriptionPool('openai');
+      await refreshSubscriptionPoolCodexModels();
+      expect(capabilities.availableModels.map(m => m.id)).toContain('gpt-second-only');
+      const broadcasts = push.mock.calls.length;
+      await refreshSubscriptionPoolCodexModels(true);
+      expect(push).toHaveBeenCalledTimes(broadcasts);
+      resetDefaultSubscriptionCodexDiscovery(false);
+      expect(capabilities.availableModels.map(m => m.id)).not.toContain('gpt-default-only');
+      expect(capabilities.availableModels.map(m => m.id)).toContain('gpt-second-only');
+      await runSubscriptionAccountCommand({ providerId: 'openai', action: 'configure', accountId: 'second', paused: true });
+      expect(capabilities.availableModels.map(m => m.id)).not.toContain('gpt-second-only');
+      await runSubscriptionAccountCommand({ providerId: 'openai', action: 'configure', accountId: 'second', paused: false });
+      expect(capabilities.availableModels.map(m => m.id)).toContain('gpt-second-only');
+      let complete!: (value: unknown) => void;
+      h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+      const pending = refreshSubscriptionPoolCodexModels(true);
+      h.owner = 'next-owner';
+      const beforeLate = push.mock.calls.length;
+      complete({ data: [{ id: 'stale-model' }], nextCursor: null });
+      await pending;
+      expect(push).toHaveBeenCalledTimes(beforeLate);
+    } finally { stop(); }
+  });
+
+  // Unit / PR #10327: unique endless cursors and an oversized page bypassed
+  // repeat-token detection. Overflow must stop, retain LKG and remain retryable.
+  it.each(['pages', 'items'] as const)('bounds discovery by %s without publishing a partial list', async budget => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    await refreshSubscriptionPool('openai');
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-complete' }], nextCursor: null });
+    await refreshSubscriptionPoolCodexModels();
+    let calls = 0;
+    h.rpc.mockImplementation(async () => {
+      if (calls >= 10) throw new Error('fixture ends after the expected page budget');
+      return {
+        data: Array.from({ length: budget === 'items' ? 1001 : 1 }, (_, i) => ({ id: `partial-${i}` })),
+        nextCursor: budget === 'pages' ? `unique-${++calls}` : null,
+      };
+    });
+    const before = h.rpc.mock.calls.length;
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(h.rpc.mock.calls.length - before).toBe(budget === 'pages' ? 10 : 1);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-complete']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+    h.rpc.mockResolvedValue({ data: [{ id: 'gpt-recovered' }], nextCursor: null });
+    await refreshSubscriptionPoolCodexModels(true);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-recovered']);
+    expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+  });
+
   // PR #10327 review: aggregation alone allowed a new task or failover to pick
   // a healthy account that never reported its model. The real admission path
   // must use exact per-account membership (including the ChatGPT bridge alias).
@@ -197,6 +265,9 @@ describe('pooled Codex model discovery', () => {
     }));
     await refreshSubscriptionPool('openai');
     await refreshSubscriptionPoolCodexModels();
+    // Rebase with the credits fix: ignoring plan-window exhaustion must not
+    // make a complete per-account model mismatch admissible before sending.
+    expect(readSubscriptionAccountBlocked('openai', 'default', 'gpt-second-only')).toBe(true);
     for (const model of ['gpt-second-only', 'chatgpt/gpt-second-only']) {
       const lease = await acquireSubscriptionAccount('openai', model, []);
       expect(lease?.accountId).toBe('second');
