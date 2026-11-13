@@ -18,6 +18,10 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../model-route-guard-live.js', () => ({ isAgentOneShotRouteDisabled: async () => true }));
 
+// Real git subprocesses for both savepoint rounds: about 2.7 s alone, and over the 5 s default
+// when the full desktop pool loads the machine. An explicit bound, wide enough for that load.
+const CHAIN_TIMEOUT_MS = 60_000;
+
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, {
   cwd,
   encoding: 'utf8',
@@ -91,5 +95,5 @@ describe('a savepoint chain the desktop started, continued by the Host', () => {
       .map((file) => JSON.parse(fs.readFileSync(path.join(attemptsRoot, dirs[0]!, file), 'utf8')).anchor)
       .sort();
     expect(anchors).toEqual(['u-desktop', 'u-host']);
-  });
+  }, CHAIN_TIMEOUT_MS);
 });
