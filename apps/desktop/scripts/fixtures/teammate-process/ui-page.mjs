@@ -9,6 +9,7 @@ export default {
   real: 'MessageStream, ThreadPanel with compact styles, BotSessionTaskResultCard, teammate grouping, WorkGroupBlock, GeneratedFilesCard and SheetPreview, Markdown, theme and i18n',
   notCovered: 'Full CCAgentSessionView, login, host execution, document opening, native mobile layout and transport',
   cases: { default: { about: 'Live private turn with stage notes and initial thinking', data: { done: false } }, finished: { about: 'Completed private turn with final answer outside', data: { done: true } }, retry: { about: 'Two failed attempts followed by a running read: current action stays visible', data: { done: false, retry: true } },
+    'model-switch': { about: 'The existing switch notice stays visible between collapsed process records', data: { done: true, switched: true } },
     disclosure: { about: 'Frame-by-frame disclosure stability in a long companion conversation', data: { done: true, disclosure: true } },
     'disclosure-live': { about: 'Inspection survives completion, late updates and explicit follow', data: { disclosure: true } },
     'disclosure-reduced': { about: 'Reduced motion preserves the same reading position', data: { done: true, disclosure: true, reduced: true } },
@@ -23,6 +24,21 @@ export default {
     'artifacts-missing': { about: 'Missing files leave no empty avatar row' },
   },
   async check(page, ui) {
+    if (ui.data.switched) {
+      const notice = page.getByRole('separator');
+      await notice.waitFor();
+      assert.match(await notice.innerText(), /quota-test.*gpt-6\.1-sol/s);
+      const headings = page.locator('[data-teammate-process] > button');
+      assert.equal(await headings.count(), 2);
+      for (const heading of await headings.all()) assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+      assert.equal(await notice.locator('xpath=ancestor::*[@data-teammate-process]').count(), 0);
+      await ui.capture('visible-switch');
+      await headings.first().click();
+      assert.equal(await notice.isVisible(), true);
+      await headings.first().click();
+      assert.equal(await notice.isVisible(), true);
+      return;
+    }
     if (ui.data.disclosure) {
       // Browser integration: a long history plus an expanded tail reproduces
       // scroll-range clamping. Sample animation frames; endpoint screenshots
@@ -240,8 +256,8 @@ export default {
     const journal = page.locator('[data-teammate-process]');
     await journal.waitFor();
     assert.equal(await journal.count(), 1, 'One disclosure owns all intermediate notes');
-    // Visible UI regression: process and reply each own a portrait; expansion
-    // must not repeat it in tool details. Hidden spacers failed this check.
+    // #8864 regression: process -> reply must retain a single visible portrait
+    // throughout completion and expansion, rather than splitting the turn visually.
     const processPortrait = journal.locator('xpath=../..').getByTestId('fixture-partner-avatar');
     assert.equal(await processPortrait.count(), 1);
     assert.equal(await processPortrait.isVisible(), true, 'The process portrait is visible');
@@ -286,7 +302,7 @@ export default {
       assert.equal(await heading.getAttribute('aria-expanded'), 'true', 'Keep inspected work open on completion');
     }
     await ui.capture('records');
-    assert.equal(await page.getByTestId('fixture-partner-avatar').count(), 2, 'Expanded process and final reply each have one portrait');
+    assert.equal(await page.getByTestId('fixture-partner-avatar').count(), 1, 'Process and final reply share one portrait');
     assert.equal(await processPortrait.isVisible(), true);
     await heading.click();
     assert.equal(await heading.getAttribute('aria-expanded'), 'false');

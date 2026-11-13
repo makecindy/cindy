@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwipeableProjectHeader } from "@/session/SwipeableProjectHeader";
 import { createSwipeRowRegistry } from "@/session/swipeRowRegistry";
+import { PaneEdgeInsetProvider } from "@/session/SessionPaneDivider";
 
 const native = vi.hoisted(() => ({
   width: 400,
@@ -88,10 +89,10 @@ let root: Root;
 let host: HTMLDivElement;
 let registry: ReturnType<typeof createSwipeRowRegistry>;
 let destination: string;
-function render(projectKey = "project-a") {
+function render(projectKey = "project-a", edgeInset = 0) {
   act(() =>
     root.render(
-      createElement(SwipeableProjectHeader, {
+      createElement(PaneEdgeInsetProvider, { value: edgeInset }, createElement(SwipeableProjectHeader, {
         projectKey,
         registry,
         onNewTask: () => {
@@ -104,7 +105,7 @@ function render(projectKey = "project-a") {
           destination = "search";
         },
         children: "Project",
-      }),
+      })),
     ),
   );
 }
@@ -136,6 +137,10 @@ describe("project header navigation and swipe lifecycle", () => {
     for (const key of ["onSwipeableOpenStartDrag", "onSwipeableClose", "onSwipeableWillOpen", "hitSlop"]) {
       expect(native.props[key]).toBe(initial[key]);
     }
+    // User decision 2026-11-12: beside a resizable pane edge the row leaves the
+    // edge's 24pt drag band to resizing; a coarse drag there opened row actions.
+    render("project-b", 24);
+    expect(native.props.hitSlop).toEqual({ left: -24, right: -24 });
     native.offset.value = -260;
     act(() => native.props.onSwipeableWillOpen("left"));
     expect(destination).toBe("home");

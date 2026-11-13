@@ -9,7 +9,6 @@ import {
   CircleAlert,
   CircleCheck,
   GitPullRequest,
-  Square,
   ChevronRight,
   Layers,
   Megaphone,
@@ -24,11 +23,7 @@ import {
   type PrStatusResult,
 } from '@cindy/maker-shared';
 import { useTranslation } from 'react-i18next';
-import {
-  BOT_DELEGATION_STATUSES,
-  type BotDelegationListResult,
-  type BotDelegationCancelResult,
-} from '@cindy/maker-shared/botDelegation';
+import type { BotDelegationListResult, BotDelegationStatus } from '@cindy/maker-shared/botDelegation';
 import type { BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import type { BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
 import { resolveRemoteText } from '@cindy/device-link';
@@ -172,7 +167,13 @@ function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: Bot
   );
 }
 
-/** Also the live card of a task a teammate started from a group (BotGroupTaskCard). */
+/** Stored rows that ended; an unfinished stored row is never shown as live (nothing updates it now). */
+const TERMINAL_STATUSES: ReadonlySet<BotDelegationStatus> = new Set(['completed', 'failed', 'cancelled', 'timed-out']);
+
+/**
+ * Read-only card of a V1 background task a teammate started (also from a group, BotGroupTaskCard).
+ * Live state comes from the original task; the stored row only supplies its ended status and facts.
+ */
 export function CompanionTaskCard({
   deviceId,
   parentSessionId,
@@ -184,7 +185,6 @@ export function CompanionTaskCard({
 }) {
   const { t } = useTranslation();
   const push = useGuardedPush();
-  const { invoke } = useDeviceLink();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { value, online, error, refresh } = useRemoteCompanionQuery<BotDelegationListResult>(
@@ -198,32 +198,29 @@ export function CompanionTaskCard({
       : null;
   const childSessionId = row?.childSessionId || meta.childSessionId;
   const task = useCompanionTaskSession(deviceId, childSessionId);
-  // Like Desktop, the original task can still be running after the delegation settled.
-  // Without either live evidence or a delegation snapshot, keep the unknown/loading state.
-  const resolved = value !== null || error || !online;
+  // Like Desktop, the original task can still be running after the stored task ended.
+  const rowEnded = Boolean(row && TERMINAL_STATUSES.has(row.status));
   const status =
     task.activity?.phase === 'error' ? 'failed'
-    : task.waiting || task.activity?.phase === 'needs-interaction' || row?.status === 'waiting' ? 'waiting'
-    : task.running || row?.status === 'running' ? 'running'
+    : task.waiting || task.activity?.phase === 'needs-interaction' ? 'waiting'
+    : task.running ? 'running'
     : task.activity?.phase === 'completed' ? 'completed'
-    : row && (BOT_DELEGATION_STATUSES as readonly string[]).includes(row.status)
-      ? row.status
-      : resolved ? 'unknown' : 'queued';
+    : row && rowEnded ? row.status
+    : 'unknown';
   const title = task.session?.title || row?.title || meta.objective.trim().split('\n')[0] || t('devices.companions.backgroundTask');
-  const [pending, setPending] = useState(false);
   const [actionFailed, setActionFailed] = useState(false);
   const [showPrs, setShowPrs] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const active = Boolean(row && ['queued', 'running', 'waiting'].includes(row.status));
+  const ticking = Boolean(row) && !rowEnded && status === 'running';
   useEffect(() => {
-    if (!active) return;
+    if (!ticking) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [active]);
-  const seconds = row
+  }, [ticking]);
+  const seconds = row && (ticking || rowEnded)
     ? Math.max(
         0,
-        Math.floor(((active ? now : (row.completedAt ?? row.updatedAt)) - row.createdAt) / 1000),
+        Math.floor(((ticking ? now : (row.completedAt ?? row.updatedAt)) - row.createdAt) / 1000),
       )
     : null;
   const duration =
@@ -282,24 +279,6 @@ export function CompanionTaskCard({
     setActionFailed(false);
     void Linking.openURL(url).catch(() => setActionFailed(true));
   };
-  const stop = async () => {
-    if (!online || pending) return;
-    setPending(true);
-    setActionFailed(false);
-    try {
-      const result = await invoke<BotDelegationCancelResult>(
-        deviceId,
-        'maker:bot-delegation:cancel',
-        [parentSessionId, meta.delegationId],
-      );
-      setActionFailed(!result.ok);
-      refresh();
-    } catch {
-      setActionFailed(true);
-    } finally {
-      setPending(false);
-    }
-  };
   const openTask = childSessionId && deviceId && !task.originConflict ? () => push({
     pathname: '/sessions/[sessionId]',
     params: { deviceId, sessionId: childSessionId },
@@ -351,17 +330,12 @@ export function CompanionTaskCard({
       ) : !online ? (
         <Text style={styles.note}>{t('devices.resources.hostOffline')}</Text>
       ) : null}
-      {row?.status === 'waiting' ? (
-        <Text numberOfLines={2} style={styles.note}>
-          {row.pendingInteraction?.summary || t('devices.companions.retrying')}
-        </Text>
-      ) : null}
       {row?.lastError && (row.status === 'failed' || row.status === 'timed-out') ? (
         <Text numberOfLines={2} style={styles.error}>
           {row.lastError.replace(/^[A-Z_]+:\s*/, '')}
         </Text>
       ) : null}
-      {prs.length > 0 || active || error ? (
+      {prs.length > 0 || error ? (
         <View style={styles.actions}>
           {prs.length > 0 ? (
             <Pressable
@@ -387,22 +361,6 @@ export function CompanionTaskCard({
                     : 'devices.companions.viewPr',
                 )}
               </Text>
-            </Pressable>
-          ) : null}
-          {active ? (
-            <Pressable
-              accessibilityRole="button"
-              disabled={!online || pending}
-              hitSlop={AUX_HIT_SLOP}
-              style={({ pressed }) => [
-                styles.action,
-                (!online || pending) && styles.disabled,
-                pressed && mobileInteractionStyles.pressed,
-              ]}
-              onPress={() => void stop()}
-            >
-              <Square size={iconSize.sm} color={colors.textPrimary} />
-              <Text style={styles.actionLabel}>{t('devices.companions.stopTask')}</Text>
             </Pressable>
           ) : null}
           {error ? (
@@ -512,5 +470,4 @@ const makeStyles = (colors: ThemeColors) =>
       backgroundColor: colors.surfaceChip,
     },
     prOption: { minHeight: 44, justifyContent: 'center' },
-    disabled: { opacity: 0.5 },
   });

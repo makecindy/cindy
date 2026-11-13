@@ -12,7 +12,7 @@ selection (one of):
   --page <name>            registered page (pnpm ui:check --list)
   --entry <file.tsx>       ad-hoc entry calling mountPage(); generic checks + screenshots
   --changed[=<ref>]        pages that load files changed since the upstream merge-base
-matrix (comma lists; every combination runs in one browser):
+matrix (comma lists; every combination gets an isolated browser context):
   --case <name,…|all>      default: default
   --theme light,dark|all   default: light
   --locale <list>|all      ${LOCALES.join(', ')} (default: zh-CN)
@@ -23,7 +23,8 @@ runtime:
   --focus <css selector>   2x crop + measured box/padding/font of one element at every capture
   --engine chromium|electron  --browser <path>  --timeout <ms per variant>  --output <dir>
   --json                   print summary.json instead of the text report
-pnpm ui:preview <page and single variant>   keep one window open; rebuilds on source edits`;
+pnpm ui:preview <page and single variant>   keep one window open; rebuilds on source edits
+  --motion                 preview only: play the page's real motion instead of reduced motion`;
 
 function report(summary) {
   const after = summary.variants.filter((variant) => variant.role === 'after');

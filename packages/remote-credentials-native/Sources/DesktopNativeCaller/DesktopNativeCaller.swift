@@ -79,8 +79,14 @@ public struct DesktopInputCaller {
     var appURL = ownExecutable.resolvingSymlinksInPath()
     for _ in 0..<5 { appURL.deleteLastPathComponent() }
     guard let bundle = Bundle(url: appURL), let identifier = bundle.bundleIdentifier,
-      ["com.xd.cindy", "com.xd.cindycn"].contains(identifier),
       let mainExecutable = bundle.executableURL else { return nil }
+#if DESKTOP_INPUT_PERSONAL
+    // Source personal builds have an inspector and writable JS. Keep their
+    // signed enclosing-app boundary separate from hardened official builds.
+    guard identifier.range(of: "^app\\.cindy\\.personal\\.[a-f0-9]{16}$", options: .regularExpression) != nil else { return nil }
+#else
+    guard ["com.xd.cindy", "com.xd.cindycn"].contains(identifier) else { return nil }
+#endif
     executable = mainExecutable.resolvingSymlinksInPath()
     let rule = "anchor apple generic and identifier \"\(identifier)\" and certificate leaf[subject.OU] = \"\(team)\""
     guard SecRequirementCreateWithString(rule as CFString, [], &requirement) == errSecSuccess else { return nil }
@@ -92,9 +98,11 @@ public struct DesktopInputCaller {
       actual.resolvingSymlinksInPath() == executable else { return nil }
 #if !DESKTOP_INPUT_DEVELOPMENT
     guard let flags = info[kSecCodeInfoFlags as String] as? UInt32,
-      flags & 0x10000 /* kSecCodeSignatureRuntime */ != 0,
       flags & 0x0002 /* kSecCodeSignatureAdhoc */ == 0,
       hasSealedHelper(code, executable: ownExecutable, resourceName: resourceName) else { return nil }
+#if !DESKTOP_INPUT_PERSONAL
+    guard flags & 0x10000 /* kSecCodeSignatureRuntime */ != 0 else { return nil }
+#endif
 #endif
     return caller
   }

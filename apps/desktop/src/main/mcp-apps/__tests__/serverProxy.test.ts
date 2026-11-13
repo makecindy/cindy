@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getLiziMcpSessionContext } from '@cindy/mcps';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { startCodexHttpBridge, withMcpRouteIdentity } from '../../mcp-integrations/codexHttpBridge.js';
+import { startCodexHttpBridge, withMcpRouteIdentity } from '../../mcp-integrations/codexHttpBridge.desktop.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -44,7 +44,7 @@ import { startMockAppServer } from '../../../../scripts/mcp-apps-mock.mjs';
 import { McpAppsHost } from '../host.js';
 import { AppToolCancellation } from '../toolCancellation.js';
 import { AppConnection } from '../connection.js';
-import { createAppServerProxy } from '../serverProxy.js';
+import { createAppServerProxy } from '../serverProxy.desktop.js';
 import { setMcpAppsHost, registerAppServer, clearAppServerConfigs } from '../runtime.js';
 
 const capabilities: ServerCapabilities = {

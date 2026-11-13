@@ -184,6 +184,19 @@ describe('normalizeRemoteMessages with orca collaboration', () => {
     expect(report?.orcaCard).toEqual({ variant: 'report', title: '来自 Worker「api」的消息', body: '接口完成' });
   });
 
+  // 回归：合批仍带首个 Worker 身份，历史归一化必须用总数覆盖卡头且不跳转它（unit）。
+  it('renders a system batch with its total and every original Worker report', () => {
+    const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
+    const [item] = normalizeRemoteMessages([message({ id: 'batch', role: 'user',
+      content: JSON.stringify({ orcaSource: 'worker', content: body }),
+      agentMeta: { origin: { kind: 'orca', senderLabel: 'A', senderSessionId: 'worker-1', autoBridge: true, autoBridgeBatchCount: 2 } },
+    })]);
+    expect(item).toMatchObject({ kind: 'user', body, orcaCard: {
+      variant: 'report', title: '系统回传的 2 条 Worker 结果', body,
+    } });
+    expect(item.sessionOrigin).toBeUndefined();
+  });
+
   it('renders a persisted Lead → Worker message in the worker session as a lead card', () => {
     const [item] = normalizeRemoteMessages([
       message({
@@ -319,7 +332,7 @@ describe('selectVisibleDeviceSessions', () => {
       if (!ts.isVariableStatement(statement)) continue;
       for (const node of statement.declarationList.declarations) {
         if (ts.isIdentifier(node.name) && names.has(node.name.text) && node.initializer) {
-          declarations.push('const ' + node.getText(detail) + ';');
+          declarations.push(`const ${node.getText(detail)};`);
         }
       }
     }

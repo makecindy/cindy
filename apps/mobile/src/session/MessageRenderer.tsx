@@ -19,6 +19,7 @@ import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
 import { RichContentRuntime } from './richContentRuntime';
 import { MessageListItemViewableContext, MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
+import { LegendListRowContext, useRowStateHook } from './listRowState';
 import { MessageContentLongPressContext } from './messageContentLongPress';
 import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
@@ -28,6 +29,7 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionThreadSummary, type CompanionThreads } from './CompanionThreads';
+import { companionTurnContinuations } from './companionConversationPresentation';
 import { CompanionMessageActions } from './CompanionMessageActions';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
@@ -161,6 +163,7 @@ import {
 } from '@/session/sentMessageAtoms';
 import { SelectionQuoteContext } from '@/session/selectionQuote';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
+import { MarkdownListParagraph } from './MarkdownListParagraph';
 // Passive formatting inside a selectable iOS block stays a raw UITextView child without the share-row gesture context.
 import { UITextView } from 'react-native-uitextview';
 import {
@@ -241,6 +244,7 @@ import {
 } from '@/session/filePreview';
 import {
   groupMobileMarkdownSelectableBlocks,
+  mobileMarkdownListMarkerText,
   mobileMarkdownManagedImagePreviewUrl,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageAltChipText,
@@ -278,7 +282,7 @@ import {
   useRemoteSessionMessages,
 } from '@/session/remoteSessionStore';
 import {
-  isCrossDeviceSourceSessionId,
+  parseSourceSessionTarget,
   shouldShowSourceDevice,
   type MessageSourceDevice,
   type MessageSourcePlugin,
@@ -598,6 +602,8 @@ interface MessageActions {
   companionAttentionLabel?: string;
   /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
   companionAvatar?: ReactNode;
+  /** Top-level rows continuing the same teammate turn retain only the avatar inset. */
+  companionTurnContinuation?: boolean;
   /** First visible message of each five-minute teammate time group → its timestamp. */
   companionTimeGroups?: ReadonlyMap<string, number>;
   companionPluginWork?: ReturnType<typeof companionPluginWorkEntries>;
@@ -1612,6 +1618,10 @@ export function MessageRenderer({
   // LegendList 虚拟化/回收。不能用业务尾窗代替完整数据，否则短尾窗未撑满首屏时
   // Android 无法产生有效滚动，运行中任务会重现“上半屏空白且历史不可拖动”。
   const listData = items;
+  const companionContinuationKeys = useStableValue(
+    useMemo(() => companion ? companionTurnContinuations(items) : new Set<string>(), [companion, items]),
+    (previous, next) => previous.size === next.size && [...previous].every(key => next.has(key)),
+  );
   const listDataRef = useRef(listData);
   listDataRef.current = listData;
   const prevListLengthRef = useRef(listData.length);
@@ -2857,11 +2867,12 @@ export function MessageRenderer({
     return (
       <RenderListItemView
         actions={actions}
+        companionTurnContinuation={companionContinuationKeys.has(item.key)}
         focused={item.key === focusedItemKey}
         item={item}
       />
     );
-  }, [actions, focusedItemKey]);
+  }, [actions, focusedItemKey, companionContinuationKeys]);
   // pending_send 的展开态不改变 listData；LegendList 会复用现有行，单靠 renderItem
   // 闭包更新不足以保证可见行重绘。把选中项显式纳入 extraData，确保轻点气泡后
   // 「取消 / 编辑 / 插话」操作行立即出现，不依赖滚动触发回收重渲染。
@@ -2882,9 +2893,10 @@ export function MessageRenderer({
       // and the five-minute stamps. Both keep their identity until they really change.
       lastCompanionReplyKey,
       companionTimeGroups,
+      companionContinuationKeys,
     }),
     [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, companionPluginWork, companionThreads,
-      lastCompanionReplyKey, companionTimeGroups],
+      lastCompanionReplyKey, companionTimeGroups, companionContinuationKeys],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
   // recycling an Android container across heterogeneous message trees can race
@@ -3230,15 +3242,17 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Each outer process group owns a portrait, just like the final reply.
-  // Nested details clear companionAvatar, so expanding them cannot repeat it.
-  const processAvatar = actions.companion && item.type === 'work_group' ? actions.companionAvatar : undefined;
+  // Only the first top-level row owns the turn's portrait. Nested details clear
+  // companionAvatar, so expanding them cannot repeat it.
+  const processAvatar = actions.companion && item.type === 'work_group' && !actions.companionTurnContinuation
+    ? actions.companionAvatar : undefined;
   // Cards still share the reply text column without repeating the portrait.
   const alignWithReplies = !!actions.companionAvatar && actions.companion
-    && item.type === 'message' && !!item.message.companion;
+    && ((item.type === 'message' && !!item.message.companion)
+      || (item.type === 'work_group' && actions.companionTurnContinuation));
   const aligned = processAvatar ? (
     <View style={styles.companionAvatarRow} testID="companion.processRow">
-      <View style={styles.companionAvatarSlot}>{processAvatar}</View>
+      <View style={styles.companionProcessAvatarSlot}>{processAvatar}</View>
       <View style={styles.companionAvatarContent}>{node}</View>
     </View>
   ) : alignWithReplies ? (
@@ -3275,26 +3289,31 @@ const RenderListItemView = memo(function RenderListItemView({
   item,
   actions,
   focused,
+  companionTurnContinuation,
 }: {
   item: MobileMessageRenderItem;
   actions: MessageActions & { firstUserMessageClientId?: string };
   focused: boolean;
+  companionTurnContinuation: boolean;
 }) {
   const isViewable = useMessageListItemVisible(item.key);
   const heavyContentVisible = focused || isViewable;
   // 本项(含 work_group / subagent 内层)点开的 payload 都带上顶层 key 作来源:
   // 看图器按它取「同一条消息」的图集,不靠 url 反查(同一 url 会再出现在后面的消息里)。
   const openPayloadFromItem = actions.onOpenPayloadFromItem;
-  const itemActions = useMemo(() =>
-      openPayloadFromItem
-    ? { ...actions, onOpenPayload: (next: MessagePayload) => openPayloadFromItem(next, item.key) }
-    : actions, [actions, item.key, openPayloadFromItem]);
+  const itemActions = useMemo(() => ({
+    ...actions,
+    companionTurnContinuation,
+    ...(openPayloadFromItem ? { onOpenPayload: (next: MessagePayload) => openPayloadFromItem(next, item.key) } : {}),
+  }), [actions, companionTurnContinuation, item.key, openPayloadFromItem]);
   return (
+    <LegendListRowContext.Provider value>
     <MessageListItemViewableContext.Provider value={isViewable}>
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
       <RenderItemView actions={itemActions} focused={focused} item={item} />
     </MessageHeavyContentVisibilityContext.Provider>
     </MessageListItemViewableContext.Provider>
+    </LegendListRowContext.Provider>
   );
 });
 
@@ -3372,7 +3391,7 @@ function SessionOriginLabel({
       idText={sourceIdText(sourceMeta)
         ?? (senderSessionId ? t('message.renderer.sourceSessionId', { id: senderSessionId }) : undefined)}
       label={sessionOriginLabel(origin)}
-      onPress={onOpen && senderSessionId && !isCrossDeviceSourceSessionId(senderSessionId)
+      onPress={onOpen && senderSessionId && parseSourceSessionTarget(senderSessionId)
         ? () => onOpen(senderSessionId)
         : undefined}
       openHint={t('message.renderer.openSessionOrigin')}
@@ -3929,7 +3948,7 @@ function MessageBubble({
     />
   ) : null;
   const hasBubbleContent = !!(
-    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
+    hookSource || item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
     // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
     (companionQuote && (replyQuote || replyTarget))
   );
@@ -4324,7 +4343,9 @@ function MessageBubble({
     && !item.message.systemCardType ? actions.companionAvatar : undefined;
   const rowNode = companionAvatar ? (
     <View style={styles.companionAvatarRow} testID="companion.replyRow">
-      <View style={styles.companionAvatarSlot}>{companionAvatar}</View>
+      <View style={styles.companionAvatarSlot}>
+        {actions.companionTurnContinuation ? <View style={styles.companionAvatarPlaceholder} /> : companionAvatar}
+      </View>
       <View style={styles.companionAvatarContent}>{messageNode}</View>
     </View>
   ) : (
@@ -4532,12 +4553,14 @@ type ToolDetailActions = Pick<MessageActions,
 function ToolActionRow({
   actions,
   contentLayout,
+  onOpenInput,
   row,
   rowKey,
   tool,
 }: {
   actions: ToolDetailActions;
   contentLayout: MessageContentLayout;
+  onOpenInput?: () => void;
   row: ToolRowPresentation;
   rowKey?: string;
   tool: NormalizedRemoteMessage;
@@ -4546,7 +4569,7 @@ function ToolActionRow({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   // 明确交付媒体仍由 ToolMediaBlock 承载；原生过程媒体留在所属工具步骤内。
-  const hasDetails = !!(row.detail || tool.body || tool.diff || tool.secondaryBody);
+  const hasDetails = !!(row.detail || tool.body || tool.diff || tool.secondaryBody || onOpenInput);
   const [expanded, toggleExpanded] = useFoldableExpandedState(`toolrow-${rowKey ?? tool.key}`, false);
   const showDetails = expanded && hasDetails;
   const chevronNode = hasDetails
@@ -4597,6 +4620,17 @@ function ToolActionRow({
               actions={actions}
               projection={tool.toolInputProjection}
             />
+          ) : onOpenInput ? (
+            <MessageContentOpenButton
+              accessibilityLabel={t('message.renderer.viewToolInput')}
+              onPress={onOpenInput}
+              style={styles.toolInputPreview}
+              testID="message.toolInputPayloadButton"
+            >
+              <View style={styles.toolInputActionRow}>
+                <Text style={styles.toolInputActionText}>{t('message.renderer.viewToolInput')}</Text>
+              </View>
+            </MessageContentOpenButton>
           ) : null}
           {tool.diff ? (
             <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} />
@@ -5297,14 +5331,16 @@ function WorkGroupElapsed({ sinceIso }: { sinceIso: string | undefined }) {
   );
 }
 
-const WorkToolActivityRow = memo(function WorkToolActivityRow({
+export const WorkToolActivityRow = memo(function WorkToolActivityRow({
   actions,
   activity,
   contentLayout,
+  onOpenInput,
 }: {
   actions: ToolDetailActions & Pick<MessageActions, 'isSessionStreaming'>;
   activity: MobileProjectedToolActivity;
   contentLayout: MessageContentLayout;
+  onOpenInput?: () => void;
 }) {
   const { i18n } = useTranslation();
   const tool = activity.message.normalized;
@@ -5318,6 +5354,7 @@ const WorkToolActivityRow = memo(function WorkToolActivityRow({
     <ToolActionRow
       actions={actions}
       contentLayout={contentLayout}
+      onOpenInput={onOpenInput}
       row={row}
       rowKey={activity.key}
       tool={tool}
@@ -5326,6 +5363,7 @@ const WorkToolActivityRow = memo(function WorkToolActivityRow({
 }, (previous, next) =>
     previous.actions === next.actions
   && previous.contentLayout === next.contentLayout
+  && previous.onOpenInput === next.onOpenInput
   && sameMobileWorkToolActivity(previous.activity, next.activity));
 
 const ExpandedWorkThinkingRow = memo(function ExpandedWorkThinkingRow({
@@ -6114,7 +6152,10 @@ function MarkdownBodyBase({
   // Android RN Text 在 stretch 宽度下测高正确;钉宽靠换 key 重挂文本,会让每条
   // agent 回复挂载两遍,所以只在 iOS 测宽。外层 stretch 两端保留,版面宽度一致。
   const measuresSettledWidth = pinContentWidth && Platform.OS === 'ios';
-  const [contentWidth, setContentWidth] = useRecyclingState(0);
+  // Group chats, threads and cloud companions render this body in a plain ScrollView;
+  // LegendList row state throws there, so only list rows use the recycling hook.
+  const useRowState = useRowStateHook();
+  const [contentWidth, setContentWidth] = useRowState(0);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
     if (!measuresSettledWidth) return;
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -6147,6 +6188,10 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
+  const hasNestedLists = blocks.some(block => block.type === 'list_item' && (block.depth ?? 0) > 0);
+  // Paragraph layout needs UIKit on iOS. Expanded nested replies use bounded
+  // native runs instead of reintroducing the giant UITextView that blanked.
+  const paragraphUsesIosTextView = allowIosUITextView || hasNestedLists;
   const managedImagePreviewUrl = useCallback((url: string) => !publicMediaOnly && resolveMarkdownMedia
     ? mobileMarkdownManagedImagePreviewUrl(
       url, chatFilePathContext?.workdir, markdownImageCacheKey,
@@ -6205,10 +6250,11 @@ function MarkdownBodyBase({
           label={label}
           onOpen={onOpenPayload ? () => openMarkdownImage(inline.url, inline.alt) : undefined}
           onResolveRemoteMedia={resolveMarkdownMedia}
+          usePreviewState={useRowState}
         />
       </View>
     );
-  }, [layout, managedImagePreviewUrl, onOpenPayload, openMarkdownImage, resolveMarkdownMedia]);
+  }, [layout, managedImagePreviewUrl, onOpenPayload, openMarkdownImage, resolveMarkdownMedia, useRowState]);
   // Preserve the inline renderer while streaming or unrelated task metadata
   // changes; referenced task title changes still refresh every affected chip.
   const sessionLinkTitles = useMarkdownSessionLinkTitles(text);
@@ -6237,9 +6283,9 @@ function MarkdownBodyBase({
   );
   const textRunGroupingOptions = useMemo(() => ({
     ...(Platform.OS === 'android' ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
-    ...(boundTextRuns ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
+    ...(boundTextRuns || hasNestedLists && !allowIosUITextView ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
     imageRendersPreview,
-  }), [boundTextRuns, imageRendersPreview]);
+  }), [allowIosUITextView, boundTextRuns, hasNestedLists, imageRendersPreview]);
   // 连续纯文本块合并为 text_run，图片预览保持独立。
   // Android selectable Text 在超长原生文本视图里会偶发高度/滚动协商异常,长 run 分块
   // 后仍保留块内跨段选择。伙伴的 iOS 长消息展开也复用同一分块，避免巨型 UITextView。
@@ -6247,21 +6293,20 @@ function MarkdownBodyBase({
     () => groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions),
     [blocks, textRunGroupingOptions],
   );
-  // 块可选中且 iOS → 嵌套 span 必须是 UITextView 家族;其余场景缺省 RN Text。
-  const spanFor = useCallback((blockSelectable: boolean) =>
-      blockSelectable && allowIosUITextView && Platform.OS === 'ios'
+  // iOS 的可选或段落排版根使用 UITextView 家族，其余场景保持 RN Text。
+  const spanFor = useCallback((blockSelectable: boolean, paragraphLayout = false) =>
+      (blockSelectable || paragraphLayout) && (allowIosUITextView || paragraphLayout) && Platform.OS === 'ios'
       ? MarkdownSelectableSpan
       : undefined, [allowIosUITextView]);
   // 文本运行组:连续纯文本块(段落/标题/列表项)合进同一个原生文本视图,
   // 原生选择手柄即可横跨段落(单个 text view 是 iOS/Android 原生选择的天然边界)。
   // 段间距用「lineHeight = markdownBodyGap 的空行 span」还原:原生文本树内没有块级 gap 可用,
   // 一个高度恰为 gap 的空行在视觉上与原块间距一致。由单块切出的 continuation 不插间距。
-  // 列表项在树内表达为「marker 前缀 span + 正文」
-  // (无悬挂缩进;任务项以 ☑/☐ 字符替代原边框小方块)。
+  // 列表项保留同一原生文本树，通过段落缩进让自动换行仍留在当前层级。
   const renderTextRunBlock = useCallback((block: MobileMarkdownBlock, leadingGap: boolean): ReactNode => {
     if (block.type !== 'paragraph' && block.type !== 'heading' && block.type !== 'list_item') return null;
     const runSelectable = selectable === true;
-    const RunSpan = spanFor(runSelectable) ?? Text;
+    const RunSpan = spanFor(runSelectable, hasNestedLists) ?? Text;
     const spans: ReactNode[] = [];
     if (leadingGap) {
       spans.push(
@@ -6273,23 +6318,30 @@ function MarkdownBodyBase({
     const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
       ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
       : styles.messageText;
+    const content: ReactNode[] = [];
     if (block.type === 'list_item' && !('textRunContinuation' in block && block.textRunContinuation)) {
-      const task = typeof block.checked === 'boolean';
-      spans.push(
+      content.push(
         <RunSpan key={`${block.key}:marker`} style={[styles.messageText, styles.markdownListMarkerInline]}>
-          {task ? block.checked ? '☑ ' : '☐ '
-              : block.ordered ? `${block.marker} ` : '• '}
+          {mobileMarkdownListMarkerText(block)}
         </RunSpan>,
       );
     }
-    spans.push(...renderInlines(block.inlines, spanFor(runSelectable), baseStyle, block.key));
+    content.push(...renderInlines(block.inlines, spanFor(runSelectable, hasNestedLists), baseStyle, block.key));
+    if (block.type === 'list_item' && (block.depth ?? 0) > 0) {
+      spans.push(<MarkdownListParagraph key={`${block.key}:paragraph`}
+        indent={(block.depth ?? 0) * typeScale.bodyLarge}
+        continuation={'textRunContinuation' in block && block.textRunContinuation === true}>
+        {content}
+      </MarkdownListParagraph>);
+    } else spans.push(...content);
     return spans;
-  }, [layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
+  }, [hasNestedLists, layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
   const renderTextRun = (group: Extract<MobileMarkdownBlockGroup, { type: 'text_run' }>): ReactNode => {
     const runSelectable = selectable === true;
     return (
       <MarkdownSelectableText
-        allowIosUITextView={allowIosUITextView}
+        allowIosUITextView={paragraphUsesIosTextView}
+        paragraphLayout={hasNestedLists}
         alignmentTextStyles={group.blocks.map((block) => block.type === 'heading'
           ? headingSizeStyle(styles, block.level)
           : styles.messageText)}
@@ -6313,7 +6365,7 @@ function MarkdownBodyBase({
     // Only text_run groups are bounded. Code, quotes and table cells retain
     // the stable RN Text fallback in expanded long companion messages.
     const singleBlockAllowsIosUITextView = allowIosUITextView && !boundTextRuns;
-    const singleBlockSpanFor = (blockSelectable: boolean) => singleBlockAllowsIosUITextView
+    const singleBlockSpanFor = (blockSelectable: boolean) => blockSelectable && singleBlockAllowsIosUITextView
       ? spanFor(blockSelectable)
       : undefined;
     if (block.type === 'mermaid') {
@@ -6414,7 +6466,7 @@ function MarkdownBodyBase({
       return (
         <View
           key={block.key}
-          style={[styles.markdownListRow, { gap: layout.markdownListGap }]}
+          style={[styles.markdownListRow, { gap: layout.markdownListGap, paddingLeft: (block.depth ?? 0) * typeScale.bodyLarge }]}
           testID={task ? 'message.markdownTaskItem' : undefined}
         >
           <Text style={[
@@ -6423,7 +6475,7 @@ function MarkdownBodyBase({
             task && styles.markdownTaskMarker,
           ]}>
             {task ? block.checked ? '✓' : ''
-                : block.ordered ? block.marker : '•'}
+                : mobileMarkdownListMarkerText(block).trim()}
           </Text>
           <MarkdownSelectableText
             allowIosUITextView={singleBlockAllowsIosUITextView}
@@ -9128,6 +9180,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // Desktop BotAvatar sm (28) + gap-2.5; the task card reuses the same inset.
   companionAvatarRow: { flexDirection: 'row', alignItems: 'flex-start', gap: COMPANION_AVATAR_GAP },
   companionAvatarSlot: { flexShrink: 0, marginTop: 2 },
+  // Center on TeammateProcess's 44pt header, not its expanded body.
+  companionProcessAvatarSlot: { flexShrink: 0, minHeight: 44, justifyContent: 'center' },
+  companionAvatarPlaceholder: { width: COMPANION_AVATAR_SIZE },
   companionAvatarContent: { flex: 1, minWidth: 0 },
   companionAvatarInset: { paddingLeft: COMPANION_AVATAR_SIZE + COMPANION_AVATAR_GAP },
   companionTimeGroup: {

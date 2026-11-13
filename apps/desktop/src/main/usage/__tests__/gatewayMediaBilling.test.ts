@@ -37,7 +37,7 @@ vi.mock('../mediaTurnCost.js', () => ({
   captureMediaUserTurn: mocks.captureTurn,
   refreshMediaUserTurnCost: mocks.refreshTurn,
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: (_label: string, fn: () => unknown) => Promise.resolve(fn()),
 }));
 vi.mock('../../turnCostBroadcaster.js', () => ({ broadcastTurnCostPayload: mocks.turnPush }));

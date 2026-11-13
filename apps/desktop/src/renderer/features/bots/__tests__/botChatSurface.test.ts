@@ -58,9 +58,9 @@ describe('消息流的头像挂载', () => {
     // Assistant text and work folds show avatars; task and teammate-message
     // cards and generated artifacts reserve the same space invisibly.
     // User messages bypass it; fixture geometry covers pending/empty artifacts.
-    // Assistant text, work folds and plugin result cards each reserve the same
-    // reply column in companion conversations.
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(6);
+    // Assistant text, work folds, plugin result cards and the started-task chips each
+    // reserve the same reply column in companion conversations.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(7);
     expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\s*\|\|\s*message\.systemCardType === 'bot-session-task-message'\s*\|\|\s*message\.systemCardType === 'bot-direct-message'\)\s*\? withAssistantAvatar\(/);
     expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
     expect(messageStream).toContain('{companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}');
@@ -121,7 +121,8 @@ describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
     expect(messageStream).toContain("from '@/features/bots/botConversationPresentation'");
     expect(messageStream).toContain('compact={false}');
     expect(messageStream).not.toContain('compact={simplifiedBotConversation}');
-    expect(messageStream).toContain('companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}');
+    // Wiring guard only; the real teammate-process fixture verifies visible portraits.
+    expect(messageStream).toMatch(/companionAvatar=\{simplifiedBotConversation\s*\? botContinuationKeys\.has\(item\.key\) \? botReplyColumnSpacer : assistantAvatar\s*: undefined\}/);
     expect(messageStream).not.toContain('data-testid="bot-thinking-indicator"');
     expect(sessionView).not.toContain('<BotWorkingStatus');
     expect(sessionView).toContain('<RunningStatusBar');

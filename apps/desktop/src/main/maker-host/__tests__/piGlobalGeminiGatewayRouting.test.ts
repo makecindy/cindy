@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 // Separate environment: mutable build-region mock checks Global/CN/dev without reloading modules.
-describe('Global Gemini Gateway execution protocol (#9288)', () => {
+describe('Gemini Gateway execution protocol (#9288)', () => {
   it.each(['google/gemini-4-argon', 'google/gemini-3.7-flash', 'gemini-3.8-flash'])(
     'uses the declared Responses route for %s without changing native model identity',
     (id) => {
@@ -52,11 +52,18 @@ describe('Global Gemini Gateway execution protocol (#9288)', () => {
     },
   );
 
-  it.each(['cn', 'dev'] as const)('preserves the %s Gateway execution policy', (region) => {
+  // Unit regression: the public catalog resolvers must honor the advertised Responses route.
+  // The previous CN/dev expectations preserved the /v1beta 404 bug; the smallest failing input
+  // is a CN/dev Gemini Gateway member with perAgent.pi.wireProtocol = openai-responses.
+  it.each(['cn', 'dev'] as const)('uses the declared Responses route on %s', (region) => {
     build.region = region;
+    const id = 'google/gemini-3.8-flash';
     setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([gatewayModel('openai-responses')]);
-    expect(resolveXdPiGatewayApi(modelId)).toBe('google-generative-ai');
+    setXdGatewayModels([{ ...gatewayModel('openai-responses'), id }]);
+    expect(resolveXdPiGatewayApi(id)).toBe('openai-responses');
+    expect(resolveXdPiGatewayServerApi(id)).toBe('openai-responses');
+    expect(getActiveCatalog().providers.find((p) => p.id === 'xd')?.models.pi?.[0])
+      .toMatchObject({ id, piApi: 'openai-responses', nativeApi: 'google-generative-ai' });
   });
 
   it.each([undefined, 'google-generative-ai'] as const)(

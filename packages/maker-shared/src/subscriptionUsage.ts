@@ -12,6 +12,8 @@
 /** 单个用量窗口(5h / 周 / 分模型周)。utilization 一律 0-100 已用百分比。 */
 export interface ClaudeUsageWindow {
   utilization: number;
+  /** Percentage authority after merging partial updates; absent on older hosts. */
+  utilizationSource?: 'oauth-endpoint' | 'unified-headers';
   /** Unix epoch 秒;缺失 = 未知。 */
   resetsAt?: number | null;
   /** 服务端判定的告警级别(端点 limits[].severity,如 'normal';headers 源无此字段)。 */

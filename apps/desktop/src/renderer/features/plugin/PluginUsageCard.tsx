@@ -51,7 +51,8 @@ export function PluginUsageCard({
       if (document.visibilityState === 'visible' && !clearingRef.current) void read();
     };
     void read();
-    const timer = window.setInterval(readWhenVisible, 5_000);
+    // 保守优化：只调整轮询频率，不改读取、可见性和在途去重语义。
+    const timer = window.setInterval(readWhenVisible, 15_000);
     document.addEventListener('visibilitychange', readWhenVisible);
     return () => {
       live = false;

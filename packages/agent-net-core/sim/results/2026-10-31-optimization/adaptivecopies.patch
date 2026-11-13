@@ -1,0 +1,44 @@
+--- before/src/connection.rs
++++ after/src/connection.rs
+@@ -1365,6 +1365,7 @@
+ 
+         while !parity_sent && bundled_count < MAX_BUNDLED_SEGMENTS && self.may_send(now_us) {
+             let Some(sn) = self.next_duplicate() else { break };
++            if bundled[..bundled_count].contains(&sn) { break; }
+             let Some(segment) = self.segment_mut(sn) else { break };
+             if used + wire::DATA_HEADER_LEN + segment.data.len() > out.len() {
+                 break;
+@@ -1378,6 +1379,7 @@
+ 
+         let mut segments = [0u64; MAX_SEGMENTS_PER_PACKET];
+         let mut count = 0usize;
++        let mut small_copied = false;
+         let mut protected_by = 0;
+         // 校验包到期但这个包放不下时先停一下：双向传输时每个包都带确认，继续发新数据的话校验包永远轮不到。
+         while !parity_sent && !self.parity_due(now_us) && count < MAX_SEGMENTS_PER_PACKET && self.may_send(now_us) {
+@@ -1410,6 +1412,16 @@
+                     None => {}
+                 }
+             }
++            if !retransmission && self.segments[(sn - self.snd_una) as usize].data.len() <= self.config.max_packet_size / 4
++                && (self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until) && !self.congestion.is_rate_limited()
++                && self.consecutive_timeouts == 0 && self.rtt.srtt_us() > 0 && now_us.saturating_sub(self.last_heard) < self.rtt.loss_delay_us()
++                && self.lost_run_ppm < PARITY_LOST_RUN_PPM {
++                let copies = BUNDLE_COPIES.iter().find(|&&(loss, _)| self.loss_ppm >= loss).map_or(1, |&(_, copies)| copies);
++                if self.duplicates.len() + copies <= MAX_DUPLICATES_QUEUED {
++                    for _ in 0..copies { self.duplicates.push_back(sn); }
++                    small_copied = true;
++                }
++            }
+             if retransmission {
+                 self.stats.retransmitted_segments += 1;
+                 if self.should_duplicate() {
+@@ -1420,7 +1432,7 @@
+             count += 1;
+         }
+         let bundling = self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until || self.loss_samples < BUNDLE_WARMUP_PACKETS;
+-        if count > 0 && bundling {
++        if count > 0 && bundling && !small_copied {
+             (used, bundled_count) = self.bundle_unacked(out, used, &segments[..count], &mut bundled, bundled_count);
+         }
+ 

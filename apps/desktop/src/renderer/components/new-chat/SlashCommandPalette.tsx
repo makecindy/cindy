@@ -53,6 +53,7 @@ interface SlashCommandPaletteProps {
   query: string;
   /** Merged list of available commands (desktop + agent-builtin + agent-skill). */
   commands: UnifiedCommand[];
+  additionalCommands?: UnifiedCommand[];
   /** Currently focused row index within the filtered list. */
   focusedIndex: number;
   onFocusedIndexChange: (i: number) => void;
@@ -90,6 +91,7 @@ function accessibleName(cmd: UnifiedCommand): string {
 export function SlashCommandPalette({
   query,
   commands,
+  additionalCommands,
   focusedIndex,
   onFocusedIndexChange,
   onSelect,
@@ -100,7 +102,10 @@ export function SlashCommandPalette({
   maxHeight = 400,
 }: SlashCommandPaletteProps) {
   const { t } = useTranslation();
-  const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
+  const filtered = useMemo(() => {
+    const original = filterSlashCommands(commands, query);
+    return additionalCommands?.length ? [...original, ...additionalCommands] : original;
+  }, [commands, query, additionalCommands]);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   // Glide highlight on the focused index; arrow keys are pressed in the editor.

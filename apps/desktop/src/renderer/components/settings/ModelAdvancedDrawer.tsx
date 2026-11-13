@@ -317,7 +317,7 @@ export function ModelAdvancedDrawer({
     ? imageModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate'
     : 'default';
   const videoAgents = canEditProtocol
-    ? provider.agents.filter(agent => provider.routing?.[agent]?.videoApi === 'xai-videos') : [];
+    ? provider.agents.filter(agent => provider.routing?.[agent]?.videoApi !== undefined) : [];
   const videoAgent = videoAgents.length === 1 ? videoAgents[0] : undefined;
   const videoModel = videoAgent ? row?.byAgent[videoAgent] : undefined;
   const videoCapability = videoModel?.userModelConfig?.mode === 'video_generation'

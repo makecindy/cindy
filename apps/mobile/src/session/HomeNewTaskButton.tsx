@@ -1,3 +1,5 @@
+import { useCallback } from 'react';
+import { playHaptic } from '@/platform/haptics';
 import { SquarePen } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { iconSize, iconStroke, useTheme } from '@/theme';
@@ -20,6 +22,11 @@ export function HomeNewTaskButton({ onPress, bottomInset, disabled = false, morp
   /** Only callers whose onPress hands the origin to the new-task route may morph. */
   morph?: boolean;
 }) {
+  const handlePress = useCallback((origin?: ComposerMorphOrigin) => {
+    if (disabled) return;
+    playHaptic('commit');
+    onPress(origin);
+  }, [disabled, onPress]);
   const { colors } = useTheme();
   const { t } = useTranslation();
   const paneLayout = useSessionPaneLayout();
@@ -30,12 +37,12 @@ export function HomeNewTaskButton({ onPress, bottomInset, disabled = false, morp
   // Without morph the native shield stays out of the way and the button presses normally.
   // The native morph guesses a full-window landing before the form mounts.
   // Split layouts use the normal push so it never stretches over the list.
-  return <ComposerMorphSource disabled={disabled || !morph || paneLayout.persistent} onAction={onPress} style={{
+  return <ComposerMorphSource disabled={disabled || !morph || paneLayout.persistent} onAction={handlePress} style={{
     position: 'absolute', right: composerGeometry.horizontalInset, bottom: bottomInset + composerGeometry.restingGap,
     width: HOME_NEW_TASK_SIZE, height: HOME_NEW_TASK_SIZE,
   }}>
     <HomeHeaderGlassButton accessibilityLabel={t('devices.list.a11y.newRemoteConversation')}
-      onPress={() => onPress()} disabled={disabled} prominent={!glass} size={HOME_NEW_TASK_SIZE} artworkSize={iconSize.xxl}
+      onPress={() => handlePress()} disabled={disabled} prominent={!glass} size={HOME_NEW_TASK_SIZE} artworkSize={iconSize.xxl}
       testID="home.newChatButton">
       <SquarePen color={glass ? colors.textPrimary : colors.ctaText} size={iconSize.xxl} strokeWidth={iconStroke.regular} />
     </HomeHeaderGlassButton>

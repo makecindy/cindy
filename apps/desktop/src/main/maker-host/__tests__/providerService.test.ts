@@ -1,16 +1,65 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField, remoteInvocationModels } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField, remoteInvocationModels, type ModelDisableOverrides } from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
 import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../shared/cindyAiPresentation.js';
+import { organizationProviderLogoKind } from '../../organizationProviderLogo.js';
 import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
 
 /** 注入内置 bundled 目录作为「当前生效目录」(桌面端真实注入的是 active-catalog 的 getActiveCatalog)。 */
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  // Unit, #10223: successful catalog transport does not mean every native read
+  // succeeded. Publish retry evidence only for disconnected rows, so healthy or
+  // intentionally disconnected providers do not produce background recovery.
+  it.each([
+    { connected: false, unavailable: true, expected: true },
+    { connected: false, unavailable: false, expected: undefined },
+    { connected: true, unavailable: true, expected: undefined },
+  ])('projects native read evidence (connected=$connected, unavailable=$unavailable)', async ({ connected, unavailable, expected }) => {
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => connected, xai: () => false },
+      subscriptionReadUnavailable: id => id === 'openai' && unavailable,
+    });
+    const providers = await svc.listProviders();
+    expect(providers.find(p => p.id === 'openai')?.subscriptionReadUnavailable).toBe(expected);
+    expect(providers.find(p => p.id === 'anthropic')).not.toHaveProperty('subscriptionReadUnavailable');
+  });
+
+  // Unit: the real list projection must brand only XD's exact enterprise provider,
+  // including mixed Auto/concrete model lists, and re-read membership after account changes.
+  it('projects enterprise branding from current membership without applying local display preferences', async () => {
+    let user: XdOrgIdentity | null = { membershipKind: 'org', orgSlug: 'xd', orgName: 'XD' };
+    const model = { id: 'byok-openai-codex/gpt-6.1-terra', name: 'Terra', contextWindow: 200000, efforts: [], defaultEffort: null };
+    const provider = { id: 'byok-test', name: 'Enterprise Codex', source: 'organization' as const,
+      auth: { method: 'none' as const }, agents: ['codex' as const, 'pi' as const], routing: {},
+      models: { codex: [{ ...model, id: 'auto/group' }], pi: [model] } };
+    const svc = createProviderService({
+      getCatalog: () => ({ version: 'test', providers: [provider,
+        { ...provider, id: 'byok-other', models: { codex: [{ ...model, id: 'byok-other/gpt' }] } },
+        { ...provider, id: 'user-test', source: 'user' as const },
+      ] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getOrganizationProviderLogoKind: p => organizationProviderLogoKind(p, user),
+      getProviderPresentation: () => ({ name: 'Stale local name', removed: true, logoKind: 'xd' }),
+    });
+    const read = () => svc.listProviders({ snapshotOnly: true });
+    const xd = await read();
+    expect(xd[0]).toMatchObject({ name: 'Enterprise Codex', logoKind: 'openai-spectrum' });
+    expect(xd[0].removed).not.toBe(true);
+    expect(xd.slice(1).map(p => p.logoKind)).toEqual([undefined, undefined]);
+    user = { membershipKind: 'org', orgSlug: 'other', orgName: 'XD' };
+    expect((await read())[0].logoKind).toBeUndefined();
+    user = null;
+    expect((await read())[0].logoKind).toBeUndefined();
+    user = { membershipKind: 'org', orgSlug: 'xd', orgName: 'Renamed' };
+    expect((await read())[0].logoKind).toBe('openai-spectrum');
+  });
+
   // #9501, unit: existing view tests never supply advanced-settings budgets.
   // One exact route with a 1M override must retain the 200k settings default,
   // expose 1M to Remote Agent selection, and follow defaults again after reset.
@@ -336,6 +385,30 @@ describe('createProviderService', () => {
     const provider = (await providersPromise).find(({ id }) => id === anthropic.id);
     expect(getFullCatalog).toHaveBeenCalledTimes(1);
     expect(provider?.models['claude-code']).toEqual([discoveredModel]);
+  });
+
+  // Unit regression: imported account members must pass through the same access
+  // overrides as raw members. Existing override tests had no catalog projection.
+  it('applies model disable overrides to projected account membership', async () => {
+    const openai = BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!;
+    const model = { id: 'pool-model', name: 'Pool model', contextWindow: 200_000,
+      efforts: [], defaultEffort: null };
+    const catalog = { ...BUNDLED_CATALOG, providers: [{ ...openai, models: { codex: [] } }] };
+    let disabled = true;
+    const svc = createProviderService({
+      getCatalog: () => catalog,
+      projectCatalog: source => ({ ...source, providers: source.providers.map(provider => ({
+        ...provider, models: { codex: [model] },
+      })) }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => true, xai: () => false },
+      getModelAccess: (): ModelDisableOverrides => ({ disabledModels: disabled ? { 'openai:pool-model': true } : {} }),
+    });
+    expect(checkModelRoute(await svc.listProviders({ catalog }), 'codex', model.id, 'openai'))
+      .toEqual({ kind: 'reject', reason: 'explicit-source-disabled' });
+    disabled = false;
+    expect(checkModelRoute(await svc.listProviders({ getCatalog: () => catalog }), 'codex', model.id, 'openai'))
+      .toEqual({ kind: 'pass' });
+    expect(catalog.providers[0].models.codex).toEqual([]);
   });
 
   it('supports async connection readers (codex oauth)', async () => {

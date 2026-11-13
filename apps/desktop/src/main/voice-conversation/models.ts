@@ -34,7 +34,9 @@ export type SpeechCatalogDeps = {
   visibilityOverride?(agent: AgentKind, providerId: string, modelId: string): boolean | undefined;
   gatewayConnection(): { baseUrl: string; apiKey: string };
   readKey(providerId: string, agent: AgentKind): string | null;
+  /** Status/snapshot only; never refresh while listing models or checking a live call. */
   readOAuthToken?(providerId: string, oauth: OAuthProviderDescriptor): string | null;
+  readOAuthTokenForRequest?(providerId: string, oauth: OAuthProviderDescriptor): Promise<string | null>;
 };
 type Binding = { model: VoiceConversationModel; connection: SpeechConnection | null };
 
@@ -286,4 +288,20 @@ export function resolveSpeechConnection(
   )
     throw new Error('invalid_speech_speed');
   return binding.connection;
+}
+
+/** Request-only binding: refresh the selected OAuth login before exposing its Bearer.
+ * Listing and synchronous live-call guards keep using the cache-only snapshot. */
+export async function resolveSpeechConnectionForRequest(
+  deps: SpeechCatalogDeps,
+  selection: SpeechModelSelection | VoiceConversationSelection,
+): Promise<SpeechConnection> {
+  const connection = resolveSpeechConnection(deps, selection);
+  const provider = deps.catalog.providers.find(p => p.id === selection.providerId);
+  if (provider?.auth.method !== 'oauth' || !provider.auth.oauth) return connection;
+  const token = (await deps.readOAuthTokenForRequest?.(provider.id, provider.auth.oauth))?.trim();
+  if (!token) throw new Error('model_unavailable');
+  return resolveSpeechConnection({ ...deps, readOAuthToken: (id, oauth) =>
+    id === provider.id ? token : deps.readOAuthToken?.(id, oauth) ?? null,
+  }, selection);
 }

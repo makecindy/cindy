@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { app } from 'electron';
-import { writeBlob } from '../../cindy-media/blobStore.js';
+import { writeBlob } from '../../cindy-media/blobStore.desktop.js';
 import { recordBlob, type LedgerDb } from '../../cindy-media/ledger.js';
 import { sniffImageMime } from '../../lightboxMediaActions.js';
 import { toSdrAvatarImage } from '../../hdrAvatarToSdr.js';
@@ -64,7 +64,7 @@ export async function readDefaultTeammatePortrait(index: number): Promise<{ buff
   const root = app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources');
   const image = sharp(path.join(root, 'teammate-portrait-gallery.png'));
   const { width, height } = await image.metadata();
-  if (!width || !height || width < 4 || height < 4) throw new Error('Invalid teammate portrait gallery');
+  if (!width || !height || width < 4 || height < 4) throw new Error('Invalid buddy portrait gallery');
   const cell = Math.abs(Math.trunc(index)) % 16;
   const column = cell % 4;
   const row = Math.floor(cell / 4);

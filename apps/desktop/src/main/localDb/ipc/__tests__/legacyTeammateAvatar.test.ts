@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as schema from '../../schema';
 import type { DbClient } from '../../client/DbClient';
 import { tx } from '../../worker/opHandlers/tx';
-import { resolveSafe } from '../../../cindy-media/blobStore';
+import { resolveSafe } from '../../../cindy-media/blobStore.desktop';
 import { migrateLegacyTeammateAvatar } from '../legacyTeammateAvatar';
 
 const state = vi.hoisted(() => ({ userData: '', appPath: '', packaged: false }));
