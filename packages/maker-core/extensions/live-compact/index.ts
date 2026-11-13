@@ -163,8 +163,11 @@
  *   - keptTokens 与实际切点对齐(上游 8ee6876b):长 read 刀可以落在普通保留轮右侧,按
  *     「保留区整段」计数会把切点左侧的轮也数进来,tailBeyondKept 变负、尾巴守卫失效;改为
  *     只数 rounds 里 start 在实际切点右边的轮,轮间杂项不计。
- *   - 长 read 刀翻车后的普通回退(上游 8ee6876b):配对/指针/卡片检验失败时,带
- *     disableLongRead 重试一次「不认长 read」的普通选点;标记只做递归保险,重试再翻车返回 null。
+ *   - 长 read 刀翻车后的重试(上游 8ee6876b):配对/指针/卡片检验失败时,带 disableLongRead
+ *     递归一次;重试再翻车返回 null。注意上游实现里标记只拦递归,longSpan 的计算与
+ *     roundHasLongRead 都不看它,重试会把同一个长刀原样再选再验一遍然后再次翻车,
+ *     普通选点不会被兜底执行(上游疑似缺陷,已报 Tranquillitatis-Lab/dsh-live-compact#54,
+ *     按忠实复刻口径原样移植;上游修复后跟进并翻转对应用例)。
  *   - 增长基线在被跳过的收尾上重置(上游 8ee6876b):官方压缩冷却/空闲窗口冷却/水位门三个
  *     跳过路径把 last=当前总量、max=0;收尾完成后同样清 max。此前 max 永不重置,一次尖峰之后
  *     projected 恒真,云端跟着连白切。
@@ -2825,8 +2828,9 @@ export function selectNewestChunk(
   };
   let usedLongCut = false;
   let picked: ReturnType<typeof selectCutIndexes> = null;
-  // 1.1.6(上游 8ee6876b): 长 read 刀在配对/指针/卡片检验上翻车时,重试一次「不认长 read」
-  // 的普通选点;标记只做递归保险,重试再翻车就返回 null。
+  // 1.1.6(上游 8ee6876b): 长 read 刀在配对/指针/卡片检验上翻车时,带 disableLongRead
+  // 递归一次;标记只拦二次递归(上游实现里 longSpan 计算不看它,重试撞同一堵墙,
+  // 见 Tranquillitatis-Lab/dsh-live-compact#54),重试再翻车就返回 null。
   const fallbackWithoutLongRead = () =>
     context.disableLongRead ? null : selectNewestChunk(entries, diag, { ...context, disableLongRead: true });
   if (longSpan) {

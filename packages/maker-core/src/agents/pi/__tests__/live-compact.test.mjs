@@ -1474,9 +1474,9 @@ describe('live compact 1.1.6: 切点对齐、本地屏障、决策收窄与快�
     sourceEntry: { id: `r-${id}` },
   });
   const small = (id) => [toolCall(id), toolResult(id, 'ok '.repeat(20))];
-  const round = (id, tag, n, name = 'shell') => [
+  const round = (id, tag, n, name = 'shell', failed = false) => [
     entry('assistant', `call ${id}`, { calls: [id], callMeta: new Map([[id, { name, command: '', filePath: '', jobId: '', hiddenArgs: false }]]) }),
-    entry('toolResult', `${tag} `.repeat(n), { results: [id] }),
+    entry('toolResult', `${tag} `.repeat(n), failed ? { results: [id], isError: true } : { results: [id] }),
   ];
   const settle = (root, sessionId, contextEntries, tokens = 200000) => {
     let handler = null;
@@ -1535,6 +1535,27 @@ describe('live compact 1.1.6: 切点对齐、本地屏障、决策收窄与快�
     expect(chunk.keptTokens).toBe(expected);
     // 旧行为会把保留区整段(含被切掉的 50000 est)都数进去,远大于这个值。
     expect(chunk.keptTokens).toBeLessThan(entries[5].est);
+  });
+
+  it('documents upstream 1.1.6 fallback shape: a failing long-read cut retries itself and yields nothing', () => {
+    // 上游 v1.1.6 的 disableLongRead 只拦递归:longSpan 的计算与 roundHasLongRead 都不看
+    // 这个标记。于是长刀翻车(这里用「指针段含失败结果」触发)后,重试会把同一个指针刀
+    // 原样再选再验一遍;失败判据全确定,第二次同样翻车、返回 null —— 普通选点不会被
+    // 兜底执行,整轮不切。我方按忠实复刻口径原样移植,缺陷已报上游待裁决;若上游改成
+    // 「重试跳过长 read、兜底切普通轮」,本用例应随之翻转(返回非 null,切掉 cOld)。
+    const mk = (failed) => [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('cOld', 'out', 800),
+      ...round('rL', 'x', 100000, 'read', failed),
+      // 保留窗垫底:重试若真能跳过长 read,普通选点才有 kept 区之外的段可切。
+      ...round('s1', 'ok', 20),
+      ...round('s2', 'ok', 20),
+      ...round('s3', 'ok', 20),
+    ];
+    expect(selectNewestChunk(mk(true), undefined, { engine: 'cloud', drain: true, totalTokens: 60000 })).toBeNull();
+    // 对照:同一批条目、长 read 结果没翻车时,指针刀照常成立 —— null 只能来自回退死路。
+    expect(selectNewestChunk(mk(false), undefined, { engine: 'cloud', drain: true, totalTokens: 60000 })).not.toBeNull();
   });
 
   it('refuses a duplicated tool-call id whose body changed', () => {
