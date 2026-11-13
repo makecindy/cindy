@@ -89,7 +89,7 @@ const INSPECTION_CACHE_MS = 1_000;
  * invalidates the cache, so the only stale window is an install made outside Cindy
  * (`pi install` in a terminal). Settings keeps the blocking one-second path.
  */
-const PALETTE_INSPECTION_REUSE_MS = 60_000;
+export const PALETTE_INSPECTION_REUSE_MS = 60_000;
 const SNAPSHOT_UNAVAILABLE_RETRY_MS = 6 * 60 * 60 * 1_000;
 const SNAPSHOT_COPY_CHUNK_BYTES = 256 * 1024;
 const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
@@ -518,6 +518,14 @@ export interface PiManagedPackageResources {
   packageRoots: string[];
   /** A package that can be read again later was skipped, so resources may be missing. */
   incomplete?: boolean;
+  /**
+   * When the inspection behind this palette-preview resolve was computed. A caller
+   * that caches the roster must not keep it past this inspection's own reuse
+   * window, or an install made outside Cindy stays hidden longer than the warm
+   * window promises. Only set for palette-preview reads; every other caller
+   * re-inspects before reuse, so their rosters need no cap.
+   */
+  inspectionComputedAt?: number;
 }
 
 export interface PiPackageSnapshotLimits {
@@ -639,7 +647,7 @@ class PiPackageInspectionLimitError extends Error {
 }
 
 let mutationTail: Promise<void> = Promise.resolve();
-let inspectionPromise: Promise<InspectedPackage[]> | undefined;
+let inspectionPromise: Promise<ServedInspection> | undefined;
 let inspectionCache: { computedAt: number; value: InspectedPackage[] } | undefined;
 let inspectionGeneration = 0;
 const snapshotUnavailablePackages = new Map<string, SnapshotUnavailablePackageProjection>();
@@ -2380,12 +2388,18 @@ function isTransientInspectionWarning(warning: PiPackageView['warning']): boolea
   return warning === 'inspection-failed' || warning === 'inspection-limit';
 }
 
-async function inspectAllPackages(
+/** What one inspection served: the packages, and when this data was computed. */
+interface ServedInspection {
+  inspected: InspectedPackage[];
+  computedAt: number;
+}
+
+async function inspectAllPackagesServed(
   startupTiming?: PiPackageStartupTiming,
   reuseMs = INSPECTION_CACHE_MS,
-): Promise<InspectedPackage[]> {
+): Promise<ServedInspection> {
   if (inspectionCache && Date.now() - inspectionCache.computedAt < reuseMs) {
-    return inspectionCache.value;
+    return { inspected: inspectionCache.value, computedAt: inspectionCache.computedAt };
   }
   if (inspectionPromise) {
     // Reusing in-flight work still blocks this startup. Attribute only its wait
@@ -2395,16 +2409,24 @@ async function inspectAllPackages(
   }
   const generation = inspectionGeneration;
   const pending = inspectAllPackagesUncached({ startupTiming }).then((value) => {
+    const computedAt = Date.now();
     const incomplete = value.some((pkg) => isTransientInspectionWarning(pkg.view.warning));
     if (generation === inspectionGeneration && !incomplete) {
-      inspectionCache = { computedAt: Date.now(), value };
+      inspectionCache = { computedAt, value };
     }
-    return value;
+    return { inspected: value, computedAt };
   }).finally(() => {
     if (inspectionPromise === pending) inspectionPromise = undefined;
   });
   inspectionPromise = pending;
   return pending;
+}
+
+async function inspectAllPackages(
+  startupTiming?: PiPackageStartupTiming,
+  reuseMs = INSPECTION_CACHE_MS,
+): Promise<InspectedPackage[]> {
+  return (await inspectAllPackagesServed(startupTiming, reuseMs)).inspected;
 }
 
 async function inspectAllPackagesFreshUnderMutationLock(
@@ -2642,19 +2664,20 @@ export async function resolveManagedPiPackageResources(
   }
   try {
     const resolveResources = async (forceFresh = false): Promise<PiManagedPackageResources> => {
-      const inspected = forceFresh
-        ? await inspectAllPackagesFreshUnderMutationLock({ startupTiming })
-        // The long window belongs to palette previews alone: they render an
-        // ephemeral catalog and nothing keeps their result. A snapshot copy
-        // verifies approved extensions against these fingerprints, and session
-        // startup freezes this list into the task's capability manifest, so both
-        // stay on the short window. The same goes for every other caller — a
-        // Bot hydration or capability catalog that kept a warm palette entry
-        // would persist a Skill as unavailable after `pi install`.
-        : await inspectAllPackages(
+      // The long window belongs to palette previews alone: they render an
+      // ephemeral catalog and nothing keeps their result. A snapshot copy
+      // verifies approved extensions against these fingerprints, and session
+      // startup freezes this list into the task's capability manifest, so both
+      // stay on the short window. The same goes for every other caller — a
+      // Bot hydration or capability catalog that kept a warm palette entry
+      // would persist a Skill as unavailable after `pi install`.
+      const served: ServedInspection = forceFresh
+        ? { inspected: await inspectAllPackagesFreshUnderMutationLock({ startupTiming }), computedAt: Date.now() }
+        : await inspectAllPackagesServed(
             startupTiming,
             options?.palettePreview ? PALETTE_INSPECTION_REUSE_MS : INSPECTION_CACHE_MS,
           );
+      const inspected = served.inspected;
       if (snapshotRoot) {
         const staleApprovals = inspected
           .filter((pkg) => pkg.staleApproval)
@@ -2669,6 +2692,9 @@ export async function resolveManagedPiPackageResources(
         skills: inspected.flatMap((pkg) => pkg.launch.skills),
         promptTemplates: [...new Set(inspected.flatMap((pkg) => pkg.launch.promptTemplates))],
         packageRoots: [...new Set(inspected.flatMap((pkg) => pkg.launch.packageRoots))],
+        // Only a palette preview serves the inspection under the long warm window,
+        // and its roster cap is the only consumer of the freshness stamp.
+        ...(options?.palettePreview ? { inspectionComputedAt: served.computedAt } : {}),
         // The inspection cache already refuses to retain a degraded read, but a caller
         // that caches the *roster* would keep these missing Skills past that retry.
         ...(inspected.some((pkg) => isTransientInspectionWarning(pkg.view.warning))

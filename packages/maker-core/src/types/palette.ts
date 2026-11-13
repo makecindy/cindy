@@ -121,6 +121,12 @@ export interface ListAgentSkillsResult {
    * a caller that caches rosters must rescan instead of storing this one.
    */
   incomplete?: boolean;
+  /**
+   * When the warm package inspection this roster merged was computed, if any.
+   * A caller that caches rosters must not keep this one past that inspection's
+   * own reuse window — it is the only bound on an install made outside Cindy.
+   */
+  managedInspectionComputedAt?: number;
 }
 
 export type AtResourceType = 'file' | 'dir' | 'agent';

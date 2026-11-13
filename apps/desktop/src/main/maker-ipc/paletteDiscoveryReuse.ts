@@ -16,7 +16,12 @@ export interface PaletteDiscoveryReuse<T> {
    * before the clear can no longer publish its pre-change result afterwards.
    */
   generation(): number;
-  write(key: string, value: T, generation: number): void;
+  /**
+   * `limits.ttlMs` sets this entry's own window; it never extends past the store
+   * default — a write whose data carries its own expiry (a warm cache it merged
+   * from) may only be kept shorter.
+   */
+  write(key: string, value: T, generation: number, limits?: { ttlMs?: number }): void;
   clear(): void;
 }
 
@@ -31,7 +36,7 @@ export function createPaletteDiscoveryReuse<T>(
 ): PaletteDiscoveryReuse<T> {
   const maxEntries = options.maxEntries ?? 16;
   const now = options.now ?? Date.now;
-  const entries = new Map<string, { at: number; value: T }>();
+  const entries = new Map<string, { at: number; value: T; ttlMs?: number }>();
   const scopedKey = (key: string) => (options.scope ? `${options.scope()}\u0000${key}` : key);
   let generation = 0;
   return {
@@ -39,7 +44,7 @@ export function createPaletteDiscoveryReuse<T>(
       const scoped = scopedKey(key);
       const entry = entries.get(scoped);
       if (!entry) return undefined;
-      if (now() - entry.at >= options.ttlMs) {
+      if (now() - entry.at >= (entry.ttlMs ?? options.ttlMs)) {
         entries.delete(scoped);
         return undefined;
       }
@@ -49,12 +54,16 @@ export function createPaletteDiscoveryReuse<T>(
       return entry.value;
     },
     generation: () => generation,
-    write(key, value, stamped) {
+    write(key, value, stamped, limits) {
       if (stamped !== generation) return;
       const scoped = scopedKey(key);
       // Re-insert so the eviction order follows the most recent use.
       entries.delete(scoped);
-      entries.set(scoped, { at: now(), value });
+      entries.set(scoped, {
+        at: now(),
+        value,
+        ttlMs: limits?.ttlMs === undefined ? undefined : Math.min(limits.ttlMs, options.ttlMs),
+      });
       while (entries.size > maxEntries) {
         const oldest = entries.keys().next();
         if (oldest.done) break;

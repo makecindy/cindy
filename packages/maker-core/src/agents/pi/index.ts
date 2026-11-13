@@ -9231,6 +9231,9 @@ export class PiAgent extends BaseAgent {
     };
     if (errors.length > 0) out.errors = errors;
     if (managedPackages === null || managedPackages?.incomplete) out.incomplete = true;
+    if (managedPackages?.inspectionComputedAt !== undefined) {
+      out.managedInspectionComputedAt = managedPackages.inspectionComputedAt;
+    }
     return out;
   }
 

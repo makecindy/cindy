@@ -42,8 +42,11 @@ export function paletteSkillListReuseKey(fields: {
   ]);
 }
 
+/** Reuse window for one `/` palette Skill roster. */
+export const PALETTE_SKILL_LIST_REUSE_MS = 30_000;
+
 export const paletteSkillListReuse = createPaletteDiscoveryReuse<PaletteSkillListing>({
-  ttlMs: 30_000,
+  ttlMs: PALETTE_SKILL_LIST_REUSE_MS,
   scope: activeOwnerScopeKey,
 });
 
@@ -101,4 +104,29 @@ export function shouldCachePaletteSkillListing(facts: PaletteSkillListCacheFacts
 export function isPalettePreviewRead(forceReload: unknown): boolean {
   // Any truthy force request asks for fresh data, not just the boolean `true`.
   return !forceReload;
+}
+
+/**
+ * Reuse window for one roster write, in ms.
+ *
+ * A roster whose package part was inspected fresh may keep its full window. One
+ * that merged a *warm* inspection may not outlive that inspection's own reuse
+ * window: that window is the only bound on an install made outside Cindy
+ * (`pi install` in a terminal), and a fresh 30-second roster on top would
+ * stretch the wait past it — a package installed just after the inspection was
+ * computed could stay hidden for ~90 s instead of the promised ~60 s.
+ *
+ * Returns `undefined` when there is no warm inspection to honor (keep the
+ * default window), and `0` when the inspection is already past its window
+ * (skip the write — the next open rescans anyway).
+ */
+export function paletteRosterReuseTtlMs(facts: {
+  inspectedAt?: number;
+  /** The reuse window the warm inspection was served under, in ms. */
+  inspectionReuseMs: number;
+  now?: number;
+}): number | undefined {
+  if (facts.inspectedAt === undefined) return undefined;
+  const remaining = facts.inspectedAt + facts.inspectionReuseMs - (facts.now ?? Date.now());
+  return Math.max(0, Math.min(PALETTE_SKILL_LIST_REUSE_MS, remaining));
 }

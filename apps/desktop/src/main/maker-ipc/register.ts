@@ -911,6 +911,7 @@ import {
   type PiPackageMutationRequest,
 } from '../../shared/piPackages.js';
 import {
+  PALETTE_INSPECTION_REUSE_MS,
   listManagedPiPromptCommands,
   listPiPackages,
   mutatePiPackage,
@@ -1497,7 +1498,7 @@ import {
   createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
-import { isPalettePreviewRead, paletteSkillListReuse, paletteSkillListReuseKey, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
+import { isPalettePreviewRead, paletteRosterReuseTtlMs, paletteSkillListReuse, paletteSkillListReuseKey, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -8559,7 +8560,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             readOnlyRemote,
           })
         ) {
-          paletteSkillListReuse.write(reuseKey, listing, scanGeneration);
+          // A roster merged from a warm package inspection must not outlive that
+          // inspection's window — it is the only bound on a `pi install` made
+          // outside Cindy (see paletteRosterReuseTtlMs).
+          const reuseTtlMs = paletteRosterReuseTtlMs({
+            inspectedAt: result.managedInspectionComputedAt,
+            inspectionReuseMs: PALETTE_INSPECTION_REUSE_MS,
+          });
+          if (reuseTtlMs !== 0) {
+            paletteSkillListReuse.write(
+              reuseKey,
+              listing,
+              scanGeneration,
+              reuseTtlMs !== undefined ? { ttlMs: reuseTtlMs } : undefined,
+            );
+          }
         }
         return listing;
       } catch (err) {

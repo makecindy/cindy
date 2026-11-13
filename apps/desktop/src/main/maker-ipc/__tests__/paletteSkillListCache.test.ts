@@ -7,6 +7,7 @@ vi.mock('../../appSessionState.js', () => ({
 import {
   type PaletteSkillListCacheFacts,
   isPalettePreviewRead,
+  paletteRosterReuseTtlMs,
   paletteSkillListReuseKey,
   shouldCachePaletteSkillListing,
 } from '../paletteSkillListCache.js';
@@ -65,5 +66,35 @@ describe('palette preview read', () => {
   it('keeps a forced reload off the warm package inspection', () => {
     expect(isPalettePreviewRead(true)).toBe(false);
     expect(isPalettePreviewRead('true')).toBe(false);
+  });
+});
+
+describe('palette roster reuse window', () => {
+  it('keeps the full window when no warm inspection was merged', () => {
+    expect(paletteRosterReuseTtlMs({ inspectionReuseMs: 60_000 })).toBeUndefined();
+  });
+
+  it('keeps the full window when the inspection was computed fresh', () => {
+    expect(paletteRosterReuseTtlMs({
+      inspectedAt: 60_000,
+      inspectionReuseMs: 60_000,
+      now: 60_001,
+    })).toBe(30_000);
+  });
+
+  it('caps the window at the warm inspection remaining lifetime', () => {
+    expect(paletteRosterReuseTtlMs({
+      inspectedAt: 0,
+      inspectionReuseMs: 60_000,
+      now: 45_000,
+    })).toBe(15_000);
+  });
+
+  it('reports zero once the warm inspection is past its window', () => {
+    expect(paletteRosterReuseTtlMs({
+      inspectedAt: 0,
+      inspectionReuseMs: 60_000,
+      now: 60_000,
+    })).toBe(0);
   });
 });

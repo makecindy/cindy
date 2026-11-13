@@ -48,4 +48,24 @@ describe('palette discovery reuse', () => {
     reuse.write('k', 'fresh-again', reuse.generation());
     expect(reuse.read('k')).toBe('fresh-again');
   });
+
+  it('honors a shorter per-entry window without touching the default', () => {
+    let now = 1_000;
+    const reuse = createPaletteDiscoveryReuse<string>({ ttlMs: 30_000, now: () => now });
+    reuse.write('capped', 'warm', reuse.generation(), { ttlMs: 10_000 });
+    reuse.write('full', 'fresh', reuse.generation());
+    now += 10_000;
+    // The warm entry expires with the cache it merged from; the fresh one keeps
+    // the store default.
+    expect(reuse.read('capped')).toBeUndefined();
+    expect(reuse.read('full')).toBe('fresh');
+  });
+
+  it('never lets a per-entry window extend past the store default', () => {
+    let now = 1_000;
+    const reuse = createPaletteDiscoveryReuse<string>({ ttlMs: 30_000, now: () => now });
+    reuse.write('k', 'v', reuse.generation(), { ttlMs: 60_000 });
+    now += 30_000;
+    expect(reuse.read('k')).toBeUndefined();
+  });
 });

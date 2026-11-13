@@ -772,6 +772,11 @@ export interface AgentDeps {
     packageRoots: string[];
     /** A package that can recover was skipped, so this list may be missing resources. */
     incomplete?: boolean;
+    /**
+     * When the inspection behind this resolve was computed; a caller that caches
+     * the roster must not keep it past this inspection's own reuse window.
+     */
+    inspectionComputedAt?: number;
   }>;
 
   /**
