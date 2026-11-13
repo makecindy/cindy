@@ -6615,6 +6615,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       surfaceId: string;
       bounds: RsbNativePopupBounds;
       visible: boolean;
+      /** One-shot restoration after the native view has been shown. */
+      focus?: boolean;
     }): Promise<{ ok: true }> => ipcRenderer.invoke(RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL, input),
     command: (input: { surfaceId: string } & RsbNativePopupCommand): Promise<{ ok: true }> =>
       ipcRenderer.invoke(RSB_NATIVE_POPUP_COMMAND_CHANNEL, input),
