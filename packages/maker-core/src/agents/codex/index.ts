@@ -11009,11 +11009,11 @@ assertRouteCurrent();
       // not. Use the shared signal extractor's boundaries, without limiting
       // contextual statuses to its auth/rate-limit subset.
       const contextualStatuses = Array.from(text.matchAll(/(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?)["']?\s*(?:[:=]\s*)?["']?(\d{3})["']?(?=$|[\s,;:}\]])/gi), match => Number(match[1]));
-      // The shared helper returns one routing signal. Recovery must consider
-      // every occurrence of its existing status fields and rejection phrase.
-      const sharedStatuses = [
-        ...Array.from(text.matchAll(/(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|429|529)["']?(?=$|[\s,;:}\]])/gi), match => Number(match[1])),
-        ...Array.from(text.matchAll(/\brequest\s+rejected\s*\(\s*(401|429|529)\s*\)/gi), match => Number(match[1])),
+      // Numeric code fields and rejection phrases can carry an upstream status.
+      // Collect every value for vetoes without adding new recovery formats.
+      const embeddedStatuses = [
+        ...Array.from(text.matchAll(/(?:^|[\s,{;])["']?code["']?\s*(?:[:=]\s*)?["']?(\d{3})["']?(?=$|[\s,;:}\]])/gi), match => Number(match[1])),
+        ...Array.from(text.matchAll(/\brequest\s+rejected\s*\(\s*(\d{3})\s*\)/gi), match => Number(match[1])),
       ];
       // LiteLLM can carry the rejection only in its provider code or JSON code
       // field. Keep explicit HTTP/auth/rate-limit statuses authoritative.
@@ -11031,7 +11031,7 @@ assertRouteCurrent();
       const rejectionStatuses = [400, 404, 405, 422, 500, 501, 502, 503];
       const rejectedRequest = rejectionStatuses.includes(httpStatus ?? 0);
       // An outer rejection cannot hide a later disallowed upstream status.
-      const responseStatuses = [...explicitStatuses, ...contextualStatuses, ...sharedStatuses, httpStatus]
+      const responseStatuses = [...explicitStatuses, ...contextualStatuses, ...embeddedStatuses, httpStatus]
         .filter((status): status is number => status !== undefined);
       const disallowedStatus = responseStatuses.some(status => !rejectionStatuses.includes(status)
         && !(status === 429 && compactRateLimit));
