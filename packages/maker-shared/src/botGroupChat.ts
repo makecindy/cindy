@@ -5,7 +5,7 @@ export * from './botGroupProcess.js';
  * Product rules: docs/product-rules/bot-group-chat.md.
  */
 import type { BotGroupQuoteInput, BotGroupQuoteView } from './botGroupQuote';
-import type { BotGroupTaskCardView } from './botGroupTask';
+import type { BotGroupLiveTaskView, BotGroupTaskCardView } from './botGroupTask';
 
 export * from './botGroupQuote';
 export * from './botGroupTask';
@@ -46,8 +46,13 @@ export type BotGroupNoticeCode =
   | 'workdir-unavailable';
 export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 'deleting' | 'missing';
 
-/** Non-terminal host notices: these never settle a turn or change execution status. */
-export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE'] as const;
+/**
+ * Non-terminal host notices: these never settle a turn or change execution status.
+ * `GROUP_ASSISTANT_UNAVAILABLE` is the server's notice that a request to the group's Cindy found no
+ * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
+ * Desktop projects it under this code with the requester's name, it is never posted from a client.
+ */
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE'] as const;
 export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
 export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
   return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
@@ -64,6 +69,23 @@ export function readBotGroupCapabilityNotice(message: {
 }
 export function buildBotGroupCapabilityNotice(code: BotGroupCapabilityNoticeCode, fallback: string) {
   return { type: 'card' as const, namespace: 'cindy.capability-notice', schemaRevision: 1, fallback, data: { code } };
+}
+
+/**
+ * The server's notice that a request to the group's Cindy found no online computer of its requester:
+ * a message by the group's Cindy carrying one `cindy.group-assistant` card of type
+ * `executor_unavailable`. Returns whom it is about, or null for anything else (including a look-alike
+ * card from a person).
+ */
+export function readBotGroupAssistantNotice(message: {
+  deleted?: unknown; author?: { kind?: unknown }; origin?: unknown;
+  content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown }[];
+}): { type: 'executor_unavailable'; requesterId: string | null } | null {
+  if (message.deleted === true || message.author?.kind !== 'bot' || (message.origin !== undefined && message.origin !== 'bot')) return null;
+  const card = message.content.find(block => block.type === 'card' && block.namespace === 'cindy.group-assistant' && block.schemaRevision === 1);
+  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; requesterId?: unknown } : null;
+  if (data?.type !== 'executor_unavailable') return null;
+  return { type: 'executor_unavailable', requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
 }
 
 /** Public failure categories only; never transport raw Agent errors into a group. */
@@ -169,6 +191,11 @@ export interface BotGroupMemberView {
   guestAccess?: 'none' | 'chat' | 'tools';
   accessRevision?: number;
   actorKind?: 'human' | 'bot' | 'integration';
+  /**
+   * The group's own Cindy (servers with `groupAssistant`): one per group, nobody's companion. It
+   * answers on the computer of whoever asks it (bot-group-chat.md「群里的 Cindy」).
+   */
+  assistant?: boolean;
   isSelf?: boolean;
   botId: string;
   name: string;
@@ -191,6 +218,12 @@ export interface BotGroupMessageView {
   quote?: BotGroupQuoteView;
   /** An independent task this teammate started from the group (bot-group-chat.md §10). */
   task?: BotGroupTaskCardView;
+  /**
+   * An ordinary task this teammate opened from the group, as its card last said (revision 2).
+   * `openable`: this account owns the teammate, so it may open the task itself; `here`: the task
+   * runs on this computer (otherwise it opens through the same-account remote path).
+   */
+  liveTask?: BotGroupLiveTaskView & { openable?: boolean; here?: boolean };
   reactions?: Array<{ emoji: string; count: number; me: boolean }>;
   id: string;
   sequence: number;
@@ -497,14 +530,24 @@ export type BotGroupSpeakerActivity = 'reply' | 'planning' | 'step';
 
 export interface BotGroupSpeaker {
   botId: string;
+  sourceMessageId?: string;
+  /** null is the main timeline; absent with a source ID means ownership is unresolved. */
+  threadRootId?: string | null;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
+  /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
+  timelineAt?: number;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
   /** Hidden group lane or 分工 Session of the speaking Bot, for pending permission/question UI. */
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
+  /**
+   * The group's Cindy, for the member who asked: which of their computers runs the turn, in which
+   * task (`sessionId`) and with which model. Absent until that computer has reported it.
+   */
+  executor?: { deviceId: string; sessionId?: string; model?: string; here?: boolean };
 }
 
 export interface BotGroupRoundView {
@@ -515,6 +558,8 @@ export interface BotGroupRoundView {
   canContinue: boolean;
   /** Server groups: someone else's request or teammate is also working, so stopping only yours leaves it running. */
   othersActive?: boolean;
+  /** This account has work it can stop with the default scope; canStopAll is separate. Absent on older hosts. */
+  canStop?: boolean;
 }
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
@@ -568,6 +613,18 @@ export interface BotGroupSummary {
   organizerBotId: string | null;
   /** 项目文件夹; null means the group's own folder. */
   projectDir: string | null;
+  /** `projectDir` was found from the group's repository, not chosen on this computer. */
+  projectDirAuto?: boolean;
+  /** The server keeps the group's shared project; absent on older servers/hosts. */
+  supportsGroupProject?: boolean;
+  /** The group's repository may be on GitLab, CNB or another git host, not only GitHub. */
+  supportsGroupProjectGit?: boolean;
+  /** The group's shared project (a GitHub repository); null when none is set. */
+  project?: GroupRepository | null;
+  /** The server gives each group its own Cindy (`groupAssistant`); absent on older servers/hosts. */
+  supportsGroupAssistant?: boolean;
+  /** The group's Cindy is on (group management 「群里的 Cindy」); only with `supportsGroupAssistant`. */
+  assistantEnabled?: boolean;
   /**
    * Server groups: 分工 you start here go on to the next step by themselves instead of waiting
    * for 继续 (§7.4). Kept on this computer like the project folder; absent where unsupported.
@@ -668,7 +725,14 @@ export interface BotGroupFailure {
 export type BotGroupListResult = { ok: true; groups: BotGroupSummary[] } | BotGroupFailure;
 export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | BotGroupFailure;
 export type BotGroupCreateResult = { ok: true; groupId: string } | BotGroupFailure;
-export type BotGroupMutationResult = { ok: true } | BotGroupFailure;
+export type BotGroupMutationResult = {
+  ok: true;
+  /**
+   * After choosing this computer's folder (bot-group-chat.md §7.5): the GitHub repository it is a
+   * checkout of. `filled`: the group had none and now uses it; otherwise the group's differs.
+   */
+  folderRepository?: { repo: string; filled: boolean };
+} | BotGroupFailure;
 export type BotGroupSendResult = { ok: true; messageId: string } | BotGroupFailure;
 
 export interface BotGroupCreateInput {
@@ -688,6 +752,11 @@ export interface BotGroupUpdateInput {
   organizerBotId?: string | null;
   /** Absolute existing local directory; null uses the group's own folder. */
   projectDir?: string | null;
+  /**
+   * Server groups: the shared repository as typed — `owner/name` (GitHub) or a link to a GitLab,
+   * CNB or other git repository (`parseGroupRepository`); null clears it.
+   */
+  repository?: string | null;
   /** Server groups: whether 分工 you start go on by themselves (kept on this computer). */
   autoContinue?: boolean;
 }
@@ -847,6 +916,24 @@ export const BOT_GROUP_CLIENT_ID = {
     `${BOT_GROUP_CLIENT_ID_PREFIX}${groupId}:plan:${planId}:${position}:${turnId}`,
 } as const;
 
+/** The group's own Cindy is called Cindy in every language, with Cindy's own artwork. */
+export const BOT_GROUP_ASSISTANT_NAME = 'Cindy';
+export const BOT_GROUP_ASSISTANT_AVATAR = 'cindy://avatar/preset/cindy';
+/**
+ * A request to the group's Cindy, delivered as an ordinary visible message into this computer's
+ * group task. Deliberately not a `bot-group:` ID: those mark hidden lane turns and private replies.
+ */
+export const botGroupAssistantClientId = (executionId: string, epoch: number) => `group-cindy:${executionId}:${epoch}`;
+/**
+ * The owner's words from a task card's Thread, delivered into the card's task (an ordinary visible
+ * task). Not a `bot-group:` ID either: the reply is the task's own and its end notifies as usual.
+ */
+export const botGroupCardTaskClientId = (executionId: string, epoch: number) => `group-task:${executionId}:${epoch}`;
+/** A group execution answered by a turn of an ordinary task (the group's Cindy task or a task card's task). */
+export function isBotGroupInTaskClientId(clientId: string | null | undefined): boolean {
+  return typeof clientId === 'string' && (clientId.startsWith('group-cindy:') || clientId.startsWith('group-task:'));
+}
+
 export function isBotGroupClientId(clientId: string | null | undefined): boolean {
   return typeof clientId === 'string' && clientId.startsWith(BOT_GROUP_CLIENT_ID_PREFIX);
 }
@@ -959,7 +1046,7 @@ export interface ChatInvitePreview {
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }
@@ -1015,4 +1102,84 @@ export interface ChatServerApi {
   revokeInvite(input: { groupId: string; link: string; clientId: string }): Promise<ChatServerResult<{ revoked: true }>>;
   previewInvite(input: { link: string }): Promise<ChatServerResult<ChatInvitePreview>>;
   acceptInvite(input: { link: string; clientId: string }): Promise<ChatServerResult<{ groupId: string }>>;
+}
+
+/**
+ * A group's shared repository (bot-group-chat.md §7.5): a GitHub repository (`owner/name`, cloned
+ * with Cindy's GitHub sign-in) or a repository on any other git host — GitLab, a company's own
+ * GitLab, CNB (cnb.cool) — kept as its host and path and cloned with this computer's own git access.
+ * The Chat Server stores the same shape (`room.project`, `groupProjectGit` for `git`).
+ */
+export type GroupRepository =
+  | { kind: 'github'; repo: string }
+  | { kind: 'git'; host: string; path: string };
+
+const GITHUB_REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+const SEGMENT = /^[A-Za-z0-9_.-]+$/;
+const HOST_LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?';
+const HOST = new RegExp(`^${HOST_LABEL}(?:\\.${HOST_LABEL})+$`);
+const GITHUB_HOST = /^(?:www\.)?github\.com$/i;
+
+function fromHostAndPath(host: string, port: string | undefined, rawPath: string): GroupRepository | null {
+  const hostname = host.toLowerCase();
+  if (!HOST.test(hostname) || (port !== undefined && !(/^[0-9]{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65535))) return null;
+  // A host the standard URL parser reads differently (`999.999.999.999`, `1.2.3`) never becomes a clone URL.
+  try { if (new URL(`https://${hostname}/`).hostname !== hostname) return null; } catch { return null; }
+  const path = rawPath.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+  const parts = path.split('/');
+  if (parts.length < 2 || parts.some(part => !SEGMENT.test(part) || part === '.' || part === '..')) return null;
+  if (GITHUB_HOST.test(hostname)) {
+    // A page of the repository (`/tree/main`, `/pull/1`) names the repository by its first two parts.
+    const repo = `${parts[0]}/${parts[1]}`;
+    return GITHUB_REPO.test(repo) ? { kind: 'github', repo } : null;
+  }
+  return { kind: 'git', host: port ? `${hostname}:${port}` : hostname, path };
+}
+
+/**
+ * What someone typed or a git remote points at: `owner/name` (GitHub), an HTTPS link
+ * (`https://gitlab.example.com/group/sub/name`), an SSH address (`git@cnb.cool:org/name.git`,
+ * `ssh://git@host:2222/group/name`) or `host/group/name`. Null for anything else. An SSH port is the
+ * SSH port, not the web one, so it is dropped; an HTTPS port is kept.
+ */
+export function parseGroupRepository(input: string): GroupRepository | null {
+  const text = input.trim().replace(/[?#].*$/, '');
+  if (!text || /\s/.test(text)) return null;
+  if (GITHUB_REPO.test(text)) return { kind: 'github', repo: text };
+  let match = /^https?:\/\/(?:[^@/]+@)?([^/:]+)(?::([0-9]+))?\/(.+)$/i.exec(text);
+  if (match) return fromHostAndPath(match[1]!, match[2], match[3]!.replace(/\/-\/.*$/, ''));
+  match = /^ssh:\/\/(?:[^@/]+@)?([^/:]+)(?::[0-9]+)?\/(.+)$/i.exec(text);
+  if (match) return fromHostAndPath(match[1]!, undefined, match[2]!);
+  match = /^[^@/\s]+@([^:/]+):(?!\/)(.+)$/.exec(text);
+  if (match) return fromHostAndPath(match[1]!, undefined, match[2]!);
+  match = /^([^/:]+\.[^/:]+)(?::([0-9]+))?\/(.+)$/.exec(text);
+  if (match) return fromHostAndPath(match[1]!, match[2], match[3]!);
+  return null;
+}
+
+/** How the repository is shown and named in messages: `owner/name`, or `host/group/name`. */
+export function groupRepositoryLabel(repository: GroupRepository): string {
+  return repository.kind === 'github' ? repository.repo : `${repository.host}/${repository.path}`;
+}
+
+/** Equal for the same repository however it was written (case, port, scheme). */
+export function groupRepositoryKey(repository: GroupRepository): string {
+  return (repository.kind === 'github' ? `github.com/${repository.repo}` : `${repository.host.replace(/:[0-9]+$/, '')}/${repository.path}`).toLowerCase();
+}
+
+/** The HTTPS address a background clone uses. */
+export function groupRepositoryCloneUrl(repository: GroupRepository): string {
+  return repository.kind === 'github' ? `https://github.com/${repository.repo}.git` : `https://${repository.host}/${repository.path}.git`;
+}
+
+/** A stored or received value that is a group repository, else null. */
+export function readGroupRepository(value: unknown): GroupRepository | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind === 'github' && typeof record.repo === 'string' && GITHUB_REPO.test(record.repo)) return { kind: 'github', repo: record.repo };
+  if (record.kind === 'git' && typeof record.host === 'string' && typeof record.path === 'string') {
+    const parsed = parseGroupRepository(`https://${record.host}/${record.path}`);
+    return parsed?.kind === 'git' ? parsed : null;
+  }
+  return null;
 }

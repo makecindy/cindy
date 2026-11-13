@@ -205,7 +205,15 @@ export async function liveScreenStream(
     canvas.width = canvas.height = 1;
   };
   const refresh = setInterval(() => {
-    if (painted && !stopped) track.requestFrame();
+    if (!painted || stopped) return;
+    // A canvas that has not been drawn on since its last capture gives no frame,
+    // whatever is requested: draw the picture onto itself so there is one to take.
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.globalCompositeOperation = 'copy';
+    context.drawImage(canvas, 0, 0);
+    context.restore();
+    track.requestFrame();
   }, REFRESH_MS);
   void (async () => {
     try {

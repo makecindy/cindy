@@ -61,6 +61,8 @@ export interface PluginManagementSnapshot {
   settingsPage?: true;
   uiCapabilityApproval?: true;
 }
+export interface PluginUiConsentItem { instanceKey: string; name: string; approvalToken: string; }
+export interface PluginUiConsentSnapshot { version: 1; uiCapabilityApproval?: true; item?: PluginUiConsentItem; }
 export interface PluginPermissionItem {
   key: string;
   kind: string;
@@ -163,6 +165,21 @@ export function parsePluginManagementSnapshot(value: unknown): PluginManagementS
   return { version: 1, ghosts: data.ghosts.map((g) => ({ ...g })), market: { ...data.market, items: data.market.items.map(safeMarketItem) },
     ...(data.uiCapabilityApproval ? { uiCapabilityApproval: true } : {}),
     ...(data.settingsPage ? { settingsPage: true } : {}) };
+}
+export function parsePluginUiConsent(value: unknown): PluginUiConsentSnapshot {
+  if (!isBoundedPluginResponse(value) || !record(value) || value.version !== 1
+    || (value.uiCapabilityApproval !== undefined && value.uiCapabilityApproval !== true)) return invalid();
+  if (value.item !== undefined) {
+    const item = value.item;
+    if (!record(item) || !str(item.instanceKey, 1024) || !str(item.name, 1024)
+      || !str(item.approvalToken, 256)
+      || !(item.approvalToken === 'legacy-unapproved' || item.approvalToken === 'invalid'
+        || /^approved:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(item.approvalToken))) return invalid();
+    // Additive wire fields must not turn a compact item into a full plugin locally.
+    return { ...value, item: { instanceKey: item.instanceKey, name: item.name,
+      approvalToken: item.approvalToken } } as unknown as PluginUiConsentSnapshot;
+  }
+  return value as unknown as PluginUiConsentSnapshot;
 }
 export function parsePluginManagementDetail(value: unknown): ManagedMarketDetail {
   if (!isBoundedPluginResponse(value) || !marketItem(value) || !manifest((value as ManagedMarketDetail).manifest)) return invalid();

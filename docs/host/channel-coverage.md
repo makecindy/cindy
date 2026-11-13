@@ -10,14 +10,14 @@
 
 ## 总口径
 
-**真正要 Host 做的 = A + C-后台 + C-两段式 = 912 + 32 + 41 = 985**；巡检实际调用到 **132** 个（709 次，其中 A 130）。
+**真正要 Host 做的 = A + C-后台 + C-两段式 = 910 + 32 + 41 = 983**；巡检实际调用到 **132** 个（709 次，其中 A 130）。
 同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。
 
 | 分类 | 含义 | 通道数 |
 |---|---|---:|
 | contract | 已在 Host 通道合同里，窗口做客户端时转发给 Host | 75（巡检调用 33） |
 | client | 客户端模式自己的通道（连接状态、重连） | 2（巡检调用 1） |
-| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 912（巡检调用 130） |
+| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 910（巡检调用 130） |
 | **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 353（巡检调用 71） |
 | **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 6（巡检调用 1） |
 | **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
@@ -29,7 +29,7 @@
 | 　C-两段式（窗口做界面动作，数据调 Host） | | 41（巡检调用 0） |
 | 　C-窗口本地 | | 11（巡检调用 2） |
 | 　C-专项设计（安全边界） | | 4（巡检调用 0） |
-| 合计 | | 1456 |
+| 合计 | | 1454 |
 
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
 已注册 **364**、未注册 **12**（今天被拒或无人监听，见下文）、快照无法判断 2。
@@ -398,7 +398,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | device-link | 0 | 49 | 0 | 0 | 0 | 0 | 3 | 52 |
 | cindy-brain | 5 | 48 | 2 | 0 | 6 | 0 | 5 | 66 |
 | skillhub | 0 | 40 | 0 | 0 | 0 | 0 | 2 | 42 |
-| hook-control | 0 | 29 | 0 | 0 | 0 | 0 | 0 | 29 |
+| hook-control | 0 | 27 | 0 | 0 | 0 | 0 | 0 | 27 |
 | remote-ssh | 0 | 28 | 0 | 0 | 0 | 0 | 1 | 29 |
 | git-review | 0 | 20 | 0 | 0 | 0 | 0 | 1 | 21 |
 | billing | 0 | 19 | 0 | 0 | 0 | 0 | 2 | 21 |
@@ -1035,19 +1035,16 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `maker:hook-control:add-binding` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
+| `maker:hook-control:add-project` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:bind-revoke` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:bind-start` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:cancel-pending-bind` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:prefs-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:prefs-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-bind-cancel` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-bind-revoke` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-bind-select` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-bind-start` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-open-action` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:provider-prefs-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:provider-prefs-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:rebind-team` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:revoke-team` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-enabled` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
@@ -1055,8 +1052,9 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:hook-control:set-provider-default-workspace` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-provider-enabled` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-slack-communications` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:set-workspaces` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-x-companion` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
+| `maker:hook-control:shared-prefs-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
+| `maker:hook-control:shared-prefs-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:telegram-behavior-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:telegram-behavior-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:telegram-group-activation-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |

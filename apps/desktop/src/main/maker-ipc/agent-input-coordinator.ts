@@ -765,6 +765,8 @@ type AgentInputSendFailure = Extract<
 interface SessionInputState {
   /** Runtime courtesy clock; never persisted or used for list ordering. */
   lastUserActionAt: number | null;
+  /** Last committed route while a crash snapshot may still be loading. */
+  queuedRoute: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'> | null;
   pendingQueue: AgentInputQueuedMessage[];
   pendingCompacts: PendingCompactRequest[];
   steeringQueueClientIds: string[];
@@ -925,6 +927,7 @@ function createInitialInputState(
 ): SessionInputState {
   return {
     lastUserActionAt: null,
+    queuedRoute: null,
     pendingQueue: [],
     pendingCompacts: [],
     steeringQueueClientIds: [],
@@ -1297,6 +1300,20 @@ function isHostGeneratedSteerItem(item: AgentInputQueuedMessage): boolean {
     || isSyntheticTriggerText((item.persistedContent ?? '').trimStart());
 }
 
+function rebaseQueuedItemRoute(
+  item: AgentInputQueuedMessage,
+  route: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'>,
+): void {
+  // A scheduled run can select its own route for this one execution.
+  if (item.origin?.kind === 'scheduler') return;
+  item.model = route.model;
+  item.createOpts.model = route.model;
+  item.createOpts.providerId = route.providerId;
+  item.createOpts.effort = route.effort;
+  item.createOpts.fastMode = route.fastMode;
+  if (route.effort) item.effort = route.effort;
+}
+
 export class AgentInputCoordinator {
   private readonly states = new Map<string, SessionInputState>();
   /** 账号限额等待计划的单调令牌（跨会话唯一，迟到的 host 定时器据此失效）。 */
@@ -1424,8 +1441,9 @@ export class AgentInputCoordinator {
 
   /**
    * Teammate principal only: an automatic resume/retry of the owner's own accepted input
-   * still speaks for that owner request. It is never fresh owner input for owner-only
-   * Host actions such as app update.
+   * still speaks for that owner request, and so does a host envelope (a companion group
+   * round) carrying the owner's words the host verified. Neither is fresh owner input for
+   * owner-only Host actions such as app update.
    */
   isActiveInputOwnerContinuation(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
@@ -1433,12 +1451,12 @@ export class AgentInputCoordinator {
     // still use isActiveInputOwnerAuthored), but task actions retain its scope.
     const relayed = !!item && !item.sourcePlugin && !item.sharedTaskAuthor
       && verifiedOwnerRequestText(item.autoReviewUserText) !== undefined;
-    return relayed || this.activeInputHasOwnerAuthor(sessionId, true);
+    return relayed || this.activeInputHasOwnerAuthor(sessionId, true, true);
   }
 
-  private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean): boolean {
+  private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean, allowHostEnvelope = false): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
-    return this.inputHasOwnerAuthor(item, allowContinuation);
+    return this.inputHasOwnerAuthor(item, allowContinuation, allowHostEnvelope);
   }
 
   /** Only the exact input held by this coordinator may use companion group recovery. */
@@ -1466,7 +1484,8 @@ export class AgentInputCoordinator {
     return this.inputHasOwnerAuthor(item, true);
   }
 
-  private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean): boolean {
+  private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean,
+    allowHostEnvelope = false): boolean {
     // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
     const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
     if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
@@ -1474,8 +1493,15 @@ export class AgentInputCoordinator {
     // A continuation keeps its source's author only when it names that source; the
     // host-generated "continue" text is never fresh owner input.
     const continuation = allowContinuation && !!item.retrySourceClientId;
+    // The host wrapped the input in a model-only envelope (`agentOmitsTriggerPrefix`, never
+    // accepted from renderer or device-link input) and kept beside it only the owner words it
+    // verified (a companion group round the owner started). The words below decide; an
+    // envelope without them, e.g. another member's message, has no owner author.
+    const hostEnvelope = allowHostEnvelope && item.agentOmitsTriggerPrefix === true
+      && item.originalSyntheticTrigger === 'generic';
     if (item.clientId.startsWith('plugin-task:')) return false;
-    if (item.originalSyntheticTrigger && !(continuation && item.originalSyntheticTrigger === 'continue')) return false;
+    if (item.originalSyntheticTrigger && !hostEnvelope
+      && !(continuation && item.originalSyntheticTrigger === 'continue')) return false;
     // Automatic continuations and zero-output retries are never fresh owner input.
     if (item.autoResume && !continuation) return false;
     const text = item.autoReviewUserText;
@@ -1751,6 +1777,11 @@ export class AgentInputCoordinator {
       item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && isUnrestorableMcpAppMessage(item));
     const restored = restorable.filter((item) =>
       item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && !isUnrestorableMcpAppMessage(item));
+    // set-model can finish while loadQueueSnapshot is still awaiting storage.
+    // Apply that committed route before publishing or persisting restored rows.
+    if (state.queuedRoute) {
+      for (const item of restored) rebaseQueuedItemRoute(item, state.queuedRoute);
+    }
     for (const item of staleAppItems) {
       this.deps.onDiscardedQueuedMessage?.(sessionId, item);
     }
@@ -5947,6 +5978,28 @@ export class AgentInputCoordinator {
       }
       this.scheduleDrain(sessionId, 'credential-switch-blocker-settled');
     }
+  }
+
+  /** Rebase unsent inputs after a committed user route selection, including the crash snapshot. */
+  refreshQueuedRoute(
+    sessionId: string,
+    route: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'>,
+  ): void {
+    const state = this.getState(sessionId);
+    state.queuedRoute = { ...route };
+    for (const item of state.pendingQueue) rebaseQueuedItemRoute(item, route);
+    // A head may already have left pendingQueue while pre-dispatch checks run.
+    const active = state.activeTurn;
+    // sendStarted may already be true while sendToAgent waits for the same
+    // session lock held by set-model; no vendor dispatch has happened yet.
+    if (active?.item && !active.persisted) rebaseQueuedItemRoute(active.item, route);
+    for (const compact of state.pendingCompacts) {
+      compact.createOpts.model = route.model;
+      compact.createOpts.providerId = route.providerId;
+      compact.createOpts.effort = route.effort;
+      compact.createOpts.fastMode = route.fastMode;
+    }
+    this.emit(sessionId);
   }
 
   /** host 侧异步边界(pending 凭证切换 apply 完成等)后恢复该会话的队列派发。 */

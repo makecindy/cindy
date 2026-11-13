@@ -33,6 +33,7 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
+import { onSubscriptionPoolCodexModelsChanged } from '../subscription-accounts/runtime.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -119,6 +120,7 @@ import {
   type BotProfileRuntimeSnapshot,
 } from '../maker-ipc/botProfileRuntime.js';
 import { collectBotOwnSkillMounts } from '../maker-ipc/botSkillService.js';
+import { collectGroupCollaborationSkillMount, isGroupCindyTask } from '../maker-ipc/groupCollaborationSkill.js';
 import { buildBotMcpCatalog } from './botMcpCatalog.js';
 import { createBotCapabilityService, type BotCapabilityServiceDeps, type BotCapabilityUpdate } from '../maker-ipc/botCapabilityService.js';
 import {
@@ -542,6 +544,13 @@ setActiveCatalogChangedListener((revision) => {
     });
     return;
   }
+});
+
+// Cold-start pool discovery completes after Maker construction. Keep the same
+// capability-before-broadcast ordering as the active catalog, including remote views.
+onSubscriptionPoolCodexModelsChanged(() => {
+  refreshSelectableModelsAndBroadcast({ providerId: 'openai' });
+  modelContextRuntimeRefreshListener?.();
 });
 
 /**
@@ -2797,6 +2806,15 @@ export function getMaker(): Maker {
           );
           if (botRuntimeSnapshot) {
             pendingBotRuntimeSnapshots.set(sessionId, botRuntimeSnapshot);
+          }
+          // A group's Cindy task starts with Cindy's 「群协作」 Skill, mounted for that task alone
+          // (bot-group-chat.md §9). A missing Skill never keeps the task from starting.
+          if (!createOpts.remoteHostId && !createOpts.botRuntimeProfile && isGroupCindyTask(sessionId)) {
+            const mount = await collectGroupCollaborationSkillMount(app.getPath('userData')).catch((error) => {
+              desktopMakerLogger.warn('Group collaboration Skill not mounted', { error: String(error) });
+              return null;
+            });
+            if (mount) createOpts.hostSkills = [mount];
           }
           if (botRuntimeSnapshot?.unavailableSkills.length) {
             desktopMakerLogger.warn('Bot configured Skills unavailable for runtime', {

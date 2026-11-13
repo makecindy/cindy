@@ -160,6 +160,11 @@ export interface ModelGroupResolveRequest {
   dryRun?: boolean;
   /** 第一条消息的情况；时间由主进程自己取，不信界面传来的。 */
   context?: { hasImages?: boolean };
+  /**
+   * 只在这个运行位置的来源里选(agentDeviceId null = 本机)：进行中的任务里选模式时用，任务换不了电脑。
+   * 省略 = 不限(新任务)。
+   */
+  location?: { agentDeviceId: string | null };
 }
 
 function text(value: unknown, max: number): string {

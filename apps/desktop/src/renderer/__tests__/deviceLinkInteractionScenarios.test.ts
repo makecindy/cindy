@@ -442,6 +442,24 @@ describe('device-link 远程交互往返 — plan_review', () => {
 });
 
 describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
+  // 测试价值：第21项删除确认必须进入真实 store，不能被旧 lane 白名单丢弃。
+  // 既有测试只覆盖远控只读投影；最小输入为本机挂起的 fs_delete，tier=unit。
+  it('本机删除确认从权威快照恢复，保留完整目标并经原确认入口作答', async () => {
+    const s = sid();
+    local.localGetPendingInteractions.mockResolvedValue([{ request: {
+      kind: 'ghost_grant_confirm', requestId: 'delete-confirm', ghostId: 'file-smoke', ghostName: 'File smoke',
+      lane: 'fs_delete', items: [{ name: 'reports', absPath: '/workspace/reports', size: 128, isDirectory: true }],
+    } }]);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingGhostGrantConfirm).toMatchObject({
+      requestId: 'delete-confirm', lane: 'fs_delete', items: [{ name: 'reports', isDirectory: true }],
+    });
+    makerChatStore.respondToGhostGrantConfirm(s, { confirmed: false });
+    await flush();
+    expect(local.localResolveInteraction).toHaveBeenCalledWith('delete-confirm', { confirmed: false });
+    expect(host.resolved).toHaveLength(0);
+  });
+
   it('只读提示展示期间保留 ChatInput，不把控制端锁死', () => {
     const src = readFileSync(
       resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
@@ -1508,8 +1526,11 @@ describe('远程交互接线不变式', () => {
     expect(pushStart).toBeGreaterThan(-1);
     const pushBody = src.slice(pushStart, pushEnd);
     expect(pushBody).toContain('target?: {');
+    // 没有显式目标时写穿的型号必须是**当前显示的那一个**(draftInitialModel):播种型号在
+    // 目标目录里路由不出去、被换成目录里的另一个型号时,写旧型号等于把新型号的改动写到
+    // 旧型号的远端草稿记忆上(Codex review #9369)。
     expect(pushBody).toContain(
-      'const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;',
+      'const model = target?.modelId ?? draftInitialModel ?? dlSel?.model ?? deviceLinkInitial?.model;',
     );
     expect(pushBody).toContain('agent: target?.agent ?? capabilityAgentKind');
     expect(pushBody).toMatch(/providerId: target\s*\r?\n?\s*\?\s*\(target\.providerId \?\? ''\)/);

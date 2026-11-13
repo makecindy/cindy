@@ -69,7 +69,6 @@ export function ProviderImportFileButton({ onImported }: { onImported: (id: stri
         {t('settings.providers.import.fromFile')}
       </Button>
       <ConfirmDialog
-        presentation="standard"
         open={open}
         onOpenChange={(next) => { if (!busyRef.current) setOpen(next); }}
         maxWidth={560}
@@ -318,7 +317,6 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
   return (
     <>
       <ConfirmDialog
-        presentation="standard"
         open={busyCount === null}
         maxWidth={600}
         onOpenChange={(open) => {
@@ -430,7 +428,6 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
         }
       />
       <ConfirmDialog
-        presentation="standard"
         open={busyCount !== null}
         zIndex={10002}
         onOpenChange={(open) => {
@@ -555,7 +552,6 @@ export function ProviderImportBatchDialog({ importIds, onClose, onDone }: {
   />;
 
   return <ConfirmDialog
-    presentation="standard"
     open
     maxWidth={600}
     title={t('settings.providers.import.batchTitle', { count: rows.length })}

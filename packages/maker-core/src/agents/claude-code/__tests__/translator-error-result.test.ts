@@ -50,6 +50,20 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator is_error result guard', () => {
+  // #9836: a provider access failure stays classified even when redaction removes the original phrase.
+  it('preserves provider 403 from an assistant error through result settlement', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: 'Authorization: Bearer secret-token, HTTP 403: Forbidden' }] },
+    }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true }, queue, ctx);
+    const errors = (await drain(queue)).filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].data).toMatchObject({ errorStatus: 403, isTerminal: true });
+    expect(JSON.stringify(errors)).not.toContain('secret-token');
+  });
+
   it.each(['toolu_child', null])('keeps query failure terminal after an API envelope from %s', async (parent) => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx(new UsageTracker());

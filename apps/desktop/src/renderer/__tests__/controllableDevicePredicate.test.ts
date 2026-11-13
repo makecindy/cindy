@@ -31,6 +31,15 @@ function dev(over: Partial<DeviceLinkDeviceView>): DeviceLinkDeviceView {
 }
 
 describe('isControllableDevice', () => {
+  // App routing, unit: project-target and new-task selectors previously repeated
+  // platform-only checks instead of the shared predicate. Offline Apps also stay out.
+  it.each([undefined, 'cindy', 'cindy-friend', 'other-app'])('routes app=%s consistently in online and offline target lists', app => {
+    const peer = dev({ app });
+    const cindy = app === undefined || app === 'cindy';
+    expect(isControllableDevice(peer)).toBe(cindy);
+    expect(toControllableDevices([peer])).toHaveLength(cindy ? 1 : 0);
+    expect(toSelectableDevices([{ ...peer, online: false }])).toHaveLength(cindy ? 1 : 0);
+  });
   it('在线 + 已开被控 + 非本机 → 可控', () => {
     expect(isControllableDevice(dev({}))).toBe(true);
     // busy(对方正忙)仍可作为项目目标。

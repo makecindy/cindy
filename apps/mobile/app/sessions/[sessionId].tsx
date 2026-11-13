@@ -25,6 +25,7 @@ import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionProcessItems } from '@/session/companionConversationPresentation';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
+import { SessionStackActions, SessionStackHeader } from '@/session/SessionStackHeader';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
 import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentMessageHistories';
 import { rememberRecentTask } from '@/session/recentTasks';
@@ -511,7 +512,7 @@ import { ComposerFrame, nativeComposerFrameAvailable } from '@/session/ComposerF
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
-import { useHandheldVoiceKey } from '@/handheld/handheldMode';
+import { useHandheldSessionControls, useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -2781,16 +2782,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const orcaModelSelectionUsesIntent = !!currentSession?.orcaRole && sessionAgentSwitchSupported;
   // 远程 Agent:模型列表在被控电脑自己的供应商之外,另列同账号其他电脑上开放了远程调用的供应商
   // (与桌面同一套,2026-10-07 产品裁决)。选另一台电脑的模型 = 把 Agent 挪过去,先二次确认;
-  // 同一台电脑内换模型直接切。共享任务访客与运行设备 Worker 不能换电脑，SSH 不支持切换;
+  // 同一台电脑内换模型直接切。共享任务访客不能换电脑，SSH 不支持切换;
   // 旧被控端不投影 agentDeviceId 字段、也不认换位置参数,这些情况维持原有调用与展示。
-  // Orca Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能换电脑(旧版会拒绝)。
+  // Orca Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能换电脑(旧版会拒绝)；
+  // 运行设备 Worker(Lead 在另一台电脑)要声明 supportsOrcaRemoteWorkerAgentRelocation(2026-11-12)。
   const orcaAgentLocationLocked = !!currentSession?.orcaRole
     && capabilities?.supportsOrcaAgentRelocation !== true;
+  const orcaRemoteWorkerLocationLocked = !!currentSession?.orcaRemoteLead
+    && capabilities?.supportsOrcaRemoteWorkerAgentRelocation !== true;
   const agentLocationMovable = sessionAgentSwitchSupported
     && !isSharedTaskPeer(deviceId)
     && !!currentSession
     && !orcaAgentLocationLocked
-    && !currentSession.orcaRemoteLead
+    && !orcaRemoteWorkerLocationLocked
     && Object.prototype.hasOwnProperty.call(currentSession, 'agentDeviceId');
   /** Agent 现在所在的电脑(null = 被控电脑)。 */
   const currentAgentDeviceId = sessionAgentRunsOnOtherComputer(currentSession)
@@ -7480,6 +7484,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sendLatestRef.current = send;
   });
 
+  const handheldSendTarget = useHandheldSessionControls(sessionId, () => {
+    if (!navigation.isFocused() || !canUseComposer || !composerSendTargetEnabledRef.current
+      || !draftRef.current.trim() || !composerDraftHydrated
+      || sendInFlightRef.current || messageEditSubmittingRef.current
+      || voiceRecordingActiveRef.current || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current || voiceState === 'listening' || voiceIsProcessing) return;
+    playHaptic('commit');
+    void sendLatestRef.current?.();
+  }, !(contextSheetOpen || modelSheetOpen || permissionSheetOpen || settingsOpen || sideChatsOpen
+    || searchOpen || extraDirBrowseOpen || sessionListDrawerOverlayMounted || shareSelectionActive));
+
   const applyProjectionIfCurrent = useCallback((projection: InputProjection, expectedEpoch: number) => {
     remoteSessionStore.setInputProjectionIfCurrent(sessionId, projection, expectedEpoch);
   }, [sessionId]);
@@ -7875,6 +7890,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ) : composerShowSendButton ? (
         <RouteActionButton
           ref={sendButtonRef}
+          nativeID={handheldSendTarget}
           accessibilityLabel={voiceIsListening ? t('session.screen.voiceStopAndSend') : t('session.screen.sendMessage')}
           accessibilityHint={composerLayout.send.disabledReason ?? composerLayout.guidanceText}
           disabled={composerSendDisabled}
@@ -8872,7 +8888,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return ids;
   }, [pendingUploads]);
   // 单张点按即同步入队，再关闭面板；不等待鉴权或上传才占用附件槽位。
-  const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset) => {
+  const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset, dismiss?: (afterClose: () => void) => void) => {
     if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || uploadingMediaAssetIds.has(asset.id)) return;
     if (attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
       setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
@@ -8903,8 +8919,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         };
       },
     }], { token: auth.getAccessToken() });
-    setContextSheetOpen(false);
-    requestAnimationFrame(() => composerInputRef.current?.focus());
+    const restoreEditing = () => {
+      // The sheet hides the keyboard while WebView can retain DOM focus.
+      // Release it after dismissal so focus() can open the keyboard again.
+      composerInputRef.current?.blur();
+      requestAnimationFrame(() => composerInputRef.current?.focus());
+    };
+    if (dismiss) dismiss(restoreEditing);
+    else {
+      setContextSheetOpen(false);
+      restoreEditing();
+    }
   }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, t]);
   // 勾选态按「映射的附件仍在列表里」现算,附件被单独移除 / 发送清空后角标自动消失。
   const selectedMediaAssetIds = useMemo(() => {
@@ -11917,42 +11942,14 @@ function SessionHeaderBar({
   // Let UINavigationBar align controls with the system status area, including Duo portrait.
   if (horizontalSystemHeader) {
     const files = overview?.actions.find((action) => action.id === 'files');
-    return (
-      <>
-      <Stack.Screen options={{ headerShown: true, headerTransparent: true,
-        headerShadowVisible: false, headerBackVisible: false, headerTitleAlign: 'center',
-        headerStyle: { backgroundColor: 'transparent' }, headerTintColor: colors.textPrimary,
-        // Route-owned options survive the title component's unmount during a pop transition.
-        headerTitle: () => (
-          <View style={{ width: nativeTitleMaxWidth, height: navigationChrome.target,
-            // Reserve the toolbar gaps in the width budget, outside the title.
-            minWidth: 0, flexShrink: 1, overflow: 'hidden', justifyContent: 'center' }}>
-            <SessionHeaderNativeTitle title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
-              tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
-              onTitleDoubleTap={titleDoubleTap}
-              syncing={syncing} syncingImmediately={syncingImmediately} notice={notice} />
-          </View>
-        ),
-      }} />
-      <Stack.Toolbar placement="left">
-        <Stack.Toolbar.View hidesSharedBackground>
-          <SessionHeaderNativeBack label={t('shared.back')} onPress={onBack} />
-        </Stack.Toolbar.View>
-        {sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}
-      </Stack.Toolbar>
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.View hidesSharedBackground>
-          <SessionHeaderNativeActions available={!!currentSession}
-            desktopLabel={t('remoteDesktop.title')}
-            filesLabel={t('session.presentation.overview.actions.files.a11y')}
-            moreLabel={t('session.menu.details')} files={files} detailsOnly={workerHeader}
-            onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
-            screen={liveScreen}
-            onAction={(id) => actionHandlers[id]()} />
-        </Stack.Toolbar.View>
-      </Stack.Toolbar>
-    </>
-    );
+    return <SessionStackHeader titleMaxWidth={nativeTitleMaxWidth}
+      title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
+      tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
+      onTitleDoubleTap={titleDoubleTap} syncing={syncing} syncingImmediately={syncingImmediately} notice={notice}
+      available={!!currentSession} detailsOnly={workerHeader}
+      filesDisabled={!files || files.disabled} filesDisabledReason={files?.disabledReason}
+      onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
+      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} />;
   }
 
   // 分享选择模式只保留全选；底部关闭按钮负责退出。
@@ -11976,24 +11973,9 @@ function SessionHeaderBar({
       <SystemNavigationBack label={t('shared.back')} onPress={onBack} />
       {sessionListButton}
       {systemBack ? (
-        <Stack.Toolbar placement="right">
-        {workerHeader ? null : (
-            <Stack.Toolbar.Button icon={require('../../assets/navigation/monitor.png')} iconRenderingMode="template"
-          accessibilityLabel={t('remoteDesktop.title')} disabled={!currentSession} onPress={onOpenRemoteDesktop} />
-          )}
-        {workerHeader ? null : liveScreen ? (
-            <Stack.Toolbar.Button icon="iphone" accessibilityLabel={liveScreen.label}
-              disabled={!currentSession} onPress={liveScreen.onPress} />
-          ) : (
-            <Stack.Toolbar.Button icon={require('../../assets/navigation/folder.png')} iconRenderingMode="template"
-          accessibilityLabel={t('session.presentation.overview.actions.files.a11y')}
-          disabled={!currentSession || !overview?.actions.some(
-                  (action) => action.id === 'files' && !action.disabled)}
-          onPress={onOpenFiles} />
-          )}
-        <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('session.menu.details')}
-          disabled={!currentSession} onPress={onOpenSettings} />
-      </Stack.Toolbar>
+        <SessionStackActions available={!!currentSession} detailsOnly={workerHeader}
+          filesDisabled={!overview?.actions.some((action) => action.id === 'files' && !action.disabled)}
+          onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop} screen={liveScreen} />
       ) : null}
       {systemBack ? null : nativeHeader ? (
         <SessionHeaderNativeBack label={t('shared.back')} onPress={onBack} />
@@ -13369,6 +13351,7 @@ interface RouteActionButtonProps {
   disabled?: boolean;
   disabledStyle?: StyleProp<ViewStyle>;
   hitSlop?: PressableProps['hitSlop'];
+  nativeID?: string;
   onLayout?: PressableProps['onLayout'];
   onLongPress?: () => void;
   onPress?: () => void;
@@ -13397,6 +13380,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
   disabled = false,
   disabledStyle,
   hitSlop,
+  nativeID,
   onLayout,
   onLongPress,
   onPress,
@@ -13448,6 +13432,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
       delayLongPress={delayLongPress}
       disabled={interactionDisabled}
       hitSlop={hitSlop}
+      nativeID={nativeID}
       onLayout={onLayout}
       onLongPress={interactionDisabled ? undefined : onLongPress}
       onPress={interactionDisabled ? undefined : handlePress}

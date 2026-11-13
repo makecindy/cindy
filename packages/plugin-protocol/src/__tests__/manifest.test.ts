@@ -2286,6 +2286,14 @@ it('keeps a liveScreen declaration as a granted capability only in v3', () => {
   // Without a node worker the declaration could never run: refuse it at install.
   const { node: _node, ...withoutNode } = base;
   expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
+  // A task page may also serve tasks on another computer, only for a live screen plugin.
+  const taskView = { html: 'task.html', remote: true };
+  const remote = validateGhostManifest({ ...base, liveScreen: true, taskView });
+  expect(remote.ok && remote.manifest.taskView).toEqual(taskView);
+  expect(validateGhostManifest({ ...base, taskView }).ok).toBe(false);
+  expect(
+    validateGhostManifest({ ...base, liveScreen: true, taskView: { ...taskView, remote: 1 } }).ok,
+  ).toBe(false);
 });
 
 describe('tool approval declaration', () => {
