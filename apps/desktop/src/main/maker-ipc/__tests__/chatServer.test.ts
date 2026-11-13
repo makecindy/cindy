@@ -1463,7 +1463,7 @@ describe('Chat Server result delivery and refresh', () => {
     deps.repositoriesOfFolder = vi.fn(async () => [{ kind: 'git' as const, host: 'gitlab.example.com', path: 'platform/cindy' }]);
     expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/gitlab' }))
       .toEqual({ ok: true, folderRepository: { repo: 'gitlab.example.com/platform/cindy', filled: true } });
-    for (const repository of ['not a repository', 'https://gitlab.example.com:65536/platform/cindy'])
+    for (const repository of ['not a repository', 'https://gitlab.example.com:65536/platform/cindy', 'https://999.999.999.999/org/repo'])
       expect((await service.updateGroup({ groupId: roomId, repository })).ok).toBe(false);
     capabilities = { groupProject: 1 };
     service.dispose?.();
