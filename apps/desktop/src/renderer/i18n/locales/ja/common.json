@@ -11140,6 +11140,8 @@
         "step": "ステップ {{step}}/{{total}}",
         "speaking": "{{name}} が返信中…",
         "elapsed": "経過 {{time}}",
+        "onDevice": "{{device}} で",
+        "onThisComputer": "このコンピュータで",
         "viewProcess": "経過を見る",
         "hideProcess": "経過を閉じる",
         "stop": "停止",

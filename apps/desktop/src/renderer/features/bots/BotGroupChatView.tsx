@@ -32,6 +32,7 @@ import { cn } from '@/lib/utils';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent } from 'react';
 import { ArrowLeft, CircleAlert, RefreshCcw, Settings2 } from 'lucide-react';
 import { useBotGroupWorkTargets } from './useBotGroupWorkTargets';
+import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
@@ -1234,13 +1235,19 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const openPlan = group ? openBotGroupPlan({ openPlan: group.openPlan, plans }) : null;
   const runningStep = runningBotGroupPlanStep(openPlan);
   const workTargets = useBotGroupWorkTargets(group);
+  const remoteDevices = useRemoteDevices();
   const speakers = useMemo<BotGroupLiveSpeaker[]>(() => (running && group
     ? group.round.speakers.flatMap((speaker) => {
         const member = memberById.get(speaker.botId);
-        const target = speaker.executionId ? workTargets.get(speaker.executionId) : undefined;
-        return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
+        const runsOn = speaker.executor;
+        const deviceName = runsOn && !runsOn.here ? remoteDevices.find(device => device.deviceId === runsOn.deviceId)?.deviceName ?? '' : '';
+        // The group's Cindy runs on another of the requester's computers: its task opens there.
+        const target = (speaker.executionId ? workTargets.get(speaker.executionId) : undefined)
+          ?? (runsOn && !runsOn.here && runsOn.sessionId ? { sessionId: runsOn.sessionId, deviceId: runsOn.deviceId, deviceName, botId: speaker.botId } : undefined);
+        return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target,
+          executor: runsOn ? { deviceName, ...(runsOn.here ? { here: true } : {}), ...(runsOn.model ? { model: runsOn.model } : {}) } : undefined }] : [];
       })
-    : []), [running, group, memberById, workTargets]);
+    : []), [running, group, memberById, workTargets, remoteDevices]);
   const stopSpeaker = interleaveBotGroupWork([], speakers.filter(speaker => speaker.activity !== 'planning')).at(-1)?.value;
   const stepSpeaker = runningStep
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === runningStep.step.botId)

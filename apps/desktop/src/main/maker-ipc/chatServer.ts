@@ -127,6 +127,8 @@ interface Execution {
   trigger?: unknown; trigger_type?: string | null;
   created_at?: string;
   context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
+  /** Which of the requester's computers runs it, in which task and with which model (shown to the requester only). */
+  executor?: { deviceId?: string; sessionId?: string; model?: string } | null;
 }
 interface ServerPlan {
   activeExecution?: { id: string; status: string };
@@ -139,6 +141,8 @@ interface ServerPlan {
   created_at: string; updated_at: string;
 }
 interface Running {
+  /** The group's Cindy: this computer, the task and model it reports to the requester's other devices. */
+  executor?: { deviceId: string; sessionId: string; model?: string };
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number; durationMs?: number;
   /** The conversation this turn answers in (see executionLane); unknown until its source is read. */
   lane?: string;
@@ -435,6 +439,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   let supportsDissolve = false;
   let supportsMessageReaders = false;
+  /** The server keeps where the group's Cindy runs a turn (`capabilities.executionExecutor`). */
+  let supportsExecutor = false;
   let supportsListRemoval = false;
   /** Receipts that arrived after the snapshot in use; see `createOthersReadOverlay`. */
   const othersRead = createOthersReadOverlay();
@@ -1031,6 +1037,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       localProfilesRead = profileRevision;
       const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
+      supportsExecutor = (me.capabilities as { executionExecutor?: number } | undefined)?.executionExecutor === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       personalMask = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
@@ -1942,6 +1949,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
         activity: e.plan_id ? 'step' : 'reply' };
+      // Where the group's Cindy runs it: this computer, or another of the requester's as it reported.
+      const executor = run?.executor ?? (e.executor?.deviceId ? e.executor : undefined);
+      if (executor?.deviceId) speaker.executor = { deviceId: executor.deviceId, here: executor.deviceId === selfDeviceId,
+        ...(executor.sessionId ? { sessionId: executor.sessionId } : {}), ...(executor.model ? { model: executor.model } : {}) };
       speakers.push(speaker);
     }
     // The organizer is visibly 「正在看」 while this device decides whether to arrange (§7.2),
@@ -2200,6 +2211,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Terminal retries keep their operation ID and immutable result body.
       operationId: action === 'heartbeat' ? randomUUID() : `chat:${run.execution.id}:${run.execution.epoch}:${action}`,
       executorId, epoch: run.execution.epoch, action, ...extra,
+      ...(action === 'heartbeat' && supportsExecutor && run.executor ? { executor: run.executor } : {}),
     }, run.execution.bot_id);
   }
   function postCapabilityNotice(run: Running, code: BotGroupCapabilityNoticeCode, threadRootId?: string): Promise<void> {
@@ -2829,6 +2841,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         } });
       if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));
       assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
+      // The requester's other devices learn at once where this runs; later renewals repeat it.
+      if (selfDeviceId) {
+        const model = (await deps.readGroupTaskStatus?.(sessionId).catch(() => null))?.model;
+        run.executor = { deviceId: selfDeviceId, sessionId, ...(model ? { model } : {}) };
+        if (live()) void checkLease(run);
+      }
       changed(roomId);
     } catch (error) {
       // Never silent: a request that does not reach the task says why in the log.

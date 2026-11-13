@@ -540,6 +540,11 @@ export interface BotGroupSpeaker {
   /** Hidden group lane or 分工 Session of the speaking Bot, for pending permission/question UI. */
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
+  /**
+   * The group's Cindy, for the member who asked: which of their computers runs the turn, in which
+   * task (`sessionId`) and with which model. Absent until that computer has reported it.
+   */
+  executor?: { deviceId: string; sessionId?: string; model?: string; here?: boolean };
 }
 
 export interface BotGroupRoundView {

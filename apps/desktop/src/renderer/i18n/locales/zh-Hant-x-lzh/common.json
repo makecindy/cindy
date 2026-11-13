@@ -11140,6 +11140,8 @@
         "step": "第 {{step}}/{{total}} 步",
         "speaking": "{{name}} 方發言…",
         "elapsed": "已行 {{time}}",
+        "onDevice": "於 {{device}}",
+        "onThisComputer": "於此機",
         "viewProcess": "觀其過程",
         "hideProcess": "收過程",
         "stop": "止",

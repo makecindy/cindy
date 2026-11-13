@@ -11185,6 +11185,8 @@
         "step": "Step {{step}}/{{total}}",
         "speaking": "{{name}} is replying…",
         "elapsed": "{{time}} so far",
+        "onDevice": "on {{device}}",
+        "onThisComputer": "on this computer",
         "viewProcess": "Show work",
         "hideProcess": "Hide work",
         "stop": "Stop",

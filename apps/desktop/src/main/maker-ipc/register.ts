@@ -712,6 +712,7 @@ import { botGroups as localBotGroups } from '../localDb/schema.js';
 import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
 import { botGroupFolderPath } from './botGroupWorkDir.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
+import { modelDisplayNames, usageModelKey } from '../menubar/collect.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
 import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
 import { getBotGroupStepNotificationBody, getInputHandoffNotificationBody } from '../sessionNotificationCopy.js';
@@ -13917,14 +13918,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // A group task card follows its task (bot-group-chat.md §10): title, live phase and recorded PR.
     readGroupTaskStatus: async (taskId) => {
-      const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status })
+      const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status, model: sessions.model })
         .from(sessions).where(eq(sessions.id, taskId)).limit(1);
       if (!row || row.status === 'deleted') return null;
+      // The model as the model picker names it, else its id.
+      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false }).catch(() => []);
+      const model = modelDisplayNames(providers).get(usageModelKey(row.model)) ?? row.model;
       const runtime = await tryGetOrcaCollabService()?.getSessionRuntime({ targetSessionId: taskId }).catch(() => undefined);
       const phase = runtime?.ok && typeof runtime.runtime.phase === 'string' ? runtime.runtime.phase : 'idle';
       const pr = (await listPrRefs(taskId).catch(() => [])).find(ref => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(ref.url));
       const state = botGroupLiveTaskStateOfPhase(phase);
-      return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}) };
+      return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}), ...(model ? { model } : {}) };
     },
     // A group's GitHub repository without a registered checkout gets Cindy's own.
     groupCheckouts: createDesktopGroupProjectCheckouts(log),

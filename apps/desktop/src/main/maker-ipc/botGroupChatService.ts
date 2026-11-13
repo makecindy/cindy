@@ -203,7 +203,7 @@ export interface BotGroupChatServiceDeps {
    * A task this computer runs, for its group card: title, state and recorded pull request; null
    * when the task is gone (bot-group-chat.md §10).
    */
-  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string } | null>;
+  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
   /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */
   readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
   /** Registered project folders on this computer whose git `origin` is this GitHub repository. */

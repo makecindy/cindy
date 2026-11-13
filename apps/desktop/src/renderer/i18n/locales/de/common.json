@@ -11185,6 +11185,8 @@
         "step": "Schritt {{step}}/{{total}}",
         "speaking": "{{name}} antwortet…",
         "elapsed": "Bisher {{time}}",
+        "onDevice": "auf {{device}}",
+        "onThisComputer": "auf diesem Computer",
         "viewProcess": "Arbeit anzeigen",
         "hideProcess": "Arbeit ausblenden",
         "stop": "Stoppen",

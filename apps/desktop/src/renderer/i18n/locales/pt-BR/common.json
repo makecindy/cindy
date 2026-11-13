@@ -11272,6 +11272,8 @@
         "step": "Etapa {{step}}/{{total}}",
         "speaking": "{{name}} está respondendo…",
         "elapsed": "{{time}} até agora",
+        "onDevice": "em {{device}}",
+        "onThisComputer": "neste computador",
         "viewProcess": "Mostrar trabalho",
         "hideProcess": "Ocultar trabalho",
         "stop": "Parar",

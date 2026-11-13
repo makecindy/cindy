@@ -2198,7 +2198,7 @@ describe('Chat Server result delivery and refresh', () => {
       let release!: () => void;
       let failures = 0;
       // Renewals fail only once the task is being prepared (the request was already checked).
-      deps.ensureGroupAssistantSession = vi.fn(() => new Promise(resolve => {
+      deps.ensureGroupAssistantSession = vi.fn(() => new Promise<{ ok: true; sessionId: string; created: boolean }>(resolve => {
         failures = 2;
         release = () => resolve({ ok: true as const, sessionId: 'group-task-1', created: true });
       }));
@@ -2245,6 +2245,28 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(4000);
       expect(dispatched()).toHaveLength(2);
       expect(dispatched()[1]!.message.startsWith('@Cindy from the phone')).toBe(true);
+    });
+
+    // 2026-11-14 owner report: «已连接到某台电脑» said nothing about which computer took the request.
+    // The computer running it tells the server where (itself, the task, the model) as soon as the
+    // request is in the task; the requester's devices show it and open the task there.
+    it('reports which computer and model run the request, where the server keeps it', async () => {
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === '/me'
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        : previous(route, method, body));
+      deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', state: 'running' as const, model: 'GPT-6.1 Sol' }));
+      await ask(5, 'Where do you run?');
+      const beats = fixture.handle.mock.calls.filter(([route, method, body]) => method === 'POST' && route.includes('/executions/') && body?.action === 'heartbeat');
+      expect(beats.at(-1)![2]).toMatchObject({ executor: { deviceId: 'studio-device', sessionId: 'group-task-1', model: 'GPT-6.1 Sol' } });
+      fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${roomId}/executions`
+        ? { body: [{ ...request(5), status: 'running' }] } : route === '/me'
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        : previous(route, method, body));
+      const shown = await service.getGroup(roomId);
+      if (!shown.ok) throw new Error(shown.errorCode);
+      expect(shown.group.round.speakers.find(speaker => speaker.executionId === request(5).id)?.executor)
+        .toEqual({ deviceId: 'studio-device', here: true, sessionId: 'group-task-1', model: 'GPT-6.1 Sol' });
     });
 
     // A task the group task opens while answering shows in the group as a card, posted as the group's Cindy.

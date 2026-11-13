@@ -11140,6 +11140,8 @@
         "step": "{{step}}/{{total}}단계",
         "speaking": "{{name}} 님이 답하는 중…",
         "elapsed": "{{time}} 경과",
+        "onDevice": "{{device}}에서",
+        "onThisComputer": "이 컴퓨터에서",
         "viewProcess": "과정 보기",
         "hideProcess": "과정 접기",
         "stop": "중지",
