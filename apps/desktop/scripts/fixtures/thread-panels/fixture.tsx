@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
+import { BotDmThreadHost } from '../../../src/renderer/features/bots/BotDmThreadHost';
+import { useBotDmThreads } from '../../../src/renderer/features/bots/botDmThreadsContext';
 import { BotDmThreadPanel } from '../../../src/renderer/features/bots/BotDmThreadViews';
 import { ChatThreadPanel } from '../../../src/renderer/features/bots/ChatThreadPanel';
 import { BotGroupComposer } from '../../../src/renderer/features/bots/BotGroupComposer';
@@ -41,6 +43,20 @@ function AttachmentComposer() {
     onSent={noop} /></div>;
 }
 
+function OpenTopic() {
+  const topics = useBotDmThreads();
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!topics || opened.current) return;
+    opened.current = true;
+    topics.openThread('root');
+  }, [topics]);
+  return <main className="min-w-0 flex-1">
+    <button type="button" onClick={() => topics?.openThread('root')}>Open topic</button>
+    <button type="button" onClick={() => topics?.openThread('other')}>Switch topic</button>
+  </main>;
+}
+
 function Scenario({ kind }: { kind: string }) {
   const [closed, setClosed] = useState(false);
   const [wallpaperEnabled, setWallpaperEnabled] = useState(false);
@@ -48,6 +64,9 @@ function Scenario({ kind }: { kind: string }) {
     background: wallpaperEnabled ? `url("${wallpaper}")` : undefined,
     visibility: 0.65, blur: 0, reducedMotion: true,
   });
+  if (kind === 'resized') return <div className="flex h-screen" data-ui-page-subject>
+    <BotDmThreadHost enabled bot={bot} rootSessionId="fixture-main" mentions={[]}><OpenTopic /></BotDmThreadHost>
+  </div>;
   return <div className="flex h-screen" data-ui-page-subject>
     <div className="min-w-0 flex-1 p-4">
       <button type="button" aria-pressed={wallpaperEnabled} data-ui-page-control
@@ -69,6 +88,7 @@ void mountPage({
   host: ctx => {
     let following = false;
     return {
+      localDb: { bots: { dmThread: { list: async () => [], ensure: () => new Promise(() => {}) } } },
       getFilePath: (file: File) => `/fixture/${file.name}`,
       cacheImageFromPath: async () => ctx.case === 'group-cache-pending'
         ? new Promise<{ url: string }>(resolve => { imageCacheControl.finish = () => resolve({ url: photoUrl }); })

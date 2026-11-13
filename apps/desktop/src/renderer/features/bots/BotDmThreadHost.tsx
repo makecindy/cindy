@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { cn } from '@/lib/utils';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 import { BotDmThreadPanel, type BotDmThreadPanelState } from './BotDmThreadViews';
@@ -51,7 +52,7 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
   // Same drag handle and arrow-key sizing as group topics. A private topic opens without a
   // width animation, so there is nothing to cancel when the reader starts dragging.
   const threadLayoutRef = useRef<HTMLDivElement>(null);
-  const threadResize = useThreadPanelResize(threadLayoutRef, open?.rootClientId ?? null, NO_THREAD_OPEN_ANIMATION);
+  const threadResize = useThreadPanelResize(threadLayoutRef, enabled ? open?.rootClientId ?? null : null, NO_THREAD_OPEN_ANIMATION);
   const attempt = useRef(0);
   const ensure = useCallback((rootClientId: string) => {
     const request = ++attempt.current;
@@ -68,7 +69,8 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
         return;
       }
       setOpen({ rootClientId, state: { kind: 'ready', sessionId: result.sessionId } });
-      handledLink.current = result.sessionId;
+      // The link effect marks the URL once navigation commits. Marking the new ID here
+      // would make the still-visible old URL look unhandled and reopen the previous topic.
       setSearchParams((params) => {
         const next = new URLSearchParams(params);
         next.set(BOT_DM_THREAD_PARAM, result.sessionId);
@@ -123,7 +125,7 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
   const openThread = open ? threads.get(open.rootClientId) : undefined;
   return (
     <BotDmThreadsProvider value={value}>
-      <div ref={threadLayoutRef} className="flex h-full min-w-0 flex-1">
+      <div ref={threadLayoutRef} className={cn('flex h-full min-w-0 flex-1', threadResize.isDragging && 'select-none [&_*]:cursor-col-resize')}>
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
         {enabled && open ? (
           <BotDmThreadPanel
