@@ -50,6 +50,9 @@ import {
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   MAKER_EVENT_BATCH_CHANNEL,
   expandMakerEventBatchPayload,
   RETIRED_CONTACTS_SYNC_CHANNEL,
@@ -638,6 +641,15 @@ const CONTROLLER_CAPABILITIES = [
   // 手机(review P1)。拆包在 main 完成(见 onFrame 的批分支),renderer 的既有
   // maker:event 订阅者零改动。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  // renderer 只用 resolvedContent 显示工具结果(makerChatStore tool_result / tool_result_full),
+  // 事件里的 data.fullText / summary 是同一正文的重复副本,被控端对声明者省掉。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  // 订阅重放后重读仍在显示的远程任务的最新页(useRemoteSessionSync);被控端因此把重连前
+  // 已读且折叠的任务保持折叠到重读完成,离线积压不留历史详情。
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  // 展开运行中的组时，超过 256 KB 的普通工具结果只收开头加截断标记(用户能看出的变化，
+  // 结束后本来也只剩落库的 8 KB)。卡片、媒体、过程媒体、MCP App 与非详情工具照旧收全文。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   // 供应商分享：受邀者连分享者电脑时声明，分享者只接受声明了它的控制端。
   PROVIDER_SHARE_RELAY_CAPABILITY,
 ] as const;

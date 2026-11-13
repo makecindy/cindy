@@ -7910,6 +7910,7 @@
         "install": "Install",
         "details": "Details",
         "detailsAria": "View details for {{name}}",
+        "loadingDetails": "Loading details…",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",

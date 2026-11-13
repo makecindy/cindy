@@ -40,7 +40,8 @@ const TOP_CHANNELS = 6;
 let enabled = false;
 let pushes = new Map<string, ChannelTiming>();
 let invokes = new Map<string, number>();
-type TransferCounters = { sent: number; results: number; payloadBytes: number; notModified: number; gzip: number };
+// `delta` only appears on rows that received one, so other rows keep the log's value budget.
+type TransferCounters = { sent: number; results: number; payloadBytes: number; notModified: number; gzip: number; delta?: number };
 let transfers = new Map<string, TransferCounters>();
 let storeSizeSource: (() => RemoteSessionStoreSizeMetrics) | null = null;
 
@@ -99,7 +100,7 @@ export function recordInvokeSent(channel: string): void {
  * Excludes peer-direct traffic, frame headers and retransmissions; not a wire-byte total.
  */
 export function recordInvokeTransfer(event: { channel: string; phase: 'sent' | 'result' | 'decoded';
-  payloadBytes?: number; notModified?: boolean; gzip?: boolean; inflateMs?: number; parseMs?: number }): void {
+  payloadBytes?: number; notModified?: boolean; gzip?: boolean; delta?: boolean; inflateMs?: number; parseMs?: number }): void {
   if (!enabled) return;
   if (event.phase === 'decoded') {
     const timing = decodes.get(event.channel) ?? { count: 0, inflateMs: 0, parseMs: 0 };
@@ -116,6 +117,7 @@ export function recordInvokeTransfer(event: { channel: string; phase: 'sent' | '
     entry.payloadBytes += event.payloadBytes ?? 0;
     if (event.notModified) entry.notModified++;
     if (event.gzip) entry.gzip++;
+    if (event.delta) entry.delta = (entry.delta ?? 0) + 1;
   }
   transfers.set(event.channel, entry);
 }

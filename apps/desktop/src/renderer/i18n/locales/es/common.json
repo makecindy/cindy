@@ -7977,6 +7977,7 @@
         "install": "Instalar",
         "details": "Detalles",
         "detailsAria": "Ver detalles de {{name}}",
+        "loadingDetails": "Cargando detalles…",
         "update": "Actualizar desde el mercado",
         "updateTo": "Actualizar a v{{version}}",
         "installed": "Instalado",
