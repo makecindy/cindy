@@ -28,6 +28,7 @@ import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../..
 import { getActiveCatalog, getLocalCatalogOverridesSnapshot } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { resolvePiCindyGatewayModelApi, resolvePiCindyGatewayModelSpec } from '../../../desktop/src/main/maker-host/piNativeProvidersCore.js';
 import { createHostPiNativeProviders } from './pi-native-providers.js';
+import { spawnHostPiSubagentRunner } from './pi-subagent-runner.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId, resolvePiGatewayDescriptorProviderId, resolvePiRuntimeModelDescriptor } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from '../../../desktop/src/main/maker-host/capability-routing.js';
 import { createCodexCapabilityRouting } from '../../../desktop/src/main/maker-host/codexCapabilityRouting.js';
@@ -720,6 +721,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop (pi-host.ts): the shared resolver with the Host's ports (pi-native-providers.ts),
         // and the Cindy gateway block's API and compat from the same probe state.
         resolvePiNativeProviders: (ctx) => piNativeProviders.resolvePiNativeProviders(ctx),
+        // As the desktop (pi-host.ts): durable Subagent runners, forked as Node child processes (pi-subagent-runner.ts).
+        spawnPiSubagentRunner: (request) => spawnHostPiSubagentRunner(request),
         resolvePiGatewayModelApi: resolvePiCindyGatewayModelApi,
         resolvePiGatewayModelSpec: resolvePiCindyGatewayModelSpec,
         ...piModelResolvers,

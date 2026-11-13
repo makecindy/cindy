@@ -30,6 +30,7 @@ export function hostRuntimeLayout() {
     atomicRenameBinary: release ? resource('tools', 'windows-atomic-rename', 'cindy-windows-atomic-rename.exe') : null,
     atomicRenameSource: release ? null : path.join(desktop, 'native', 'windows-atomic-rename', 'main.rs'),
     nodeWorker: release ? path.join(root, 'bin', 'node-worker.cjs') : null,
+    piSubagentRunner: release ? path.join(root, 'bin', 'pi-subagent-runner.cjs') : path.join(root, 'apps', 'host', 'src', 'agent', 'pi-subagent-runner-process.cts'),
     pluginBridge: release ? resource('plugin-bridge.js') : null,
     powerWorker: release ? path.join(root, 'bin', 'power-worker.cjs') : null,
     credentialScript: release ? path.join(root, 'bin', 'electron-codec.cjs') : path.join(root, 'apps', 'host', 'src', 'credentials', 'electron-codec.cjs'),
