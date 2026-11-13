@@ -57,10 +57,23 @@ function declaredReasoningEfforts(value: unknown, key: "effort" | "value") {
  * 回落保守默认(#386)。
  * 纯函数——OAuth 自动发现（本模块）与 API key 表单「获取模型列表」（provider-model-fetch）共用。
  */
+export interface ParsedModelsListResult {
+  models: DiscoveredModel[];
+  /** 响应数组中存在缺少有效 id 的非法条目而被跳过（正常重复 id 去重不触发）。 */
+  droppedInvalidItems: boolean;
+}
+
 export function parseModelsListResponse(
   json: unknown,
   sourceUrl?: string,
 ): DiscoveredModel[] | null {
+  return parseModelsListResponseWithStatus(json, sourceUrl)?.models ?? null;
+}
+
+export function parseModelsListResponseWithStatus(
+  json: unknown,
+  sourceUrl?: string,
+): ParsedModelsListResult | null {
   // OpenHubs can return HTTP 200 with a business error and an empty data array.
   // Such a failure must never clear the wizard's offline recommendations.
   if (sourceUrl && isOpenHubsModelsUrl(sourceUrl)) {
@@ -83,6 +96,7 @@ export function parseModelsListResponse(
   const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
+  let droppedInvalidItems = false;
   for (const item of list) {
     const generationMethods = item && typeof item === 'object'
       ? (item as { supportedGenerationMethods?: unknown }).supportedGenerationMethods
@@ -110,7 +124,11 @@ export function parseModelsListResponse(
                     ? (item as { model_id: string }).model_id
                     : google ? google.name.slice('models/'.length) : null
           : null;
-    if (!id || seen.has(id)) continue;
+    if (!id) {
+      droppedInvalidItems = true;
+      continue;
+    }
+    if (seen.has(id)) continue;
     seen.add(id);
     const rec =
       item && typeof item === "object"
@@ -308,5 +326,5 @@ export function parseModelsListResponse(
         : {}),
     });
   }
-  return out;
+  return { models: out, droppedInvalidItems };
 }

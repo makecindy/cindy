@@ -6978,6 +6978,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
+      gatewayKind?: 'magpie';
+      catalogComplete?: boolean;
     }> => ipcRenderer.invoke('maker:provider:models-fetch', input),
     /**
      * 本机 agent CLI 安装 / 登录态扫描（设置「检测建议」用）。只 stat 不读凭证内容;

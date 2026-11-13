@@ -489,8 +489,14 @@ export function mergeDiscoveredRuntimeModels(
   existing: readonly import("./types.js").ProviderRuntimeModelConfig[],
   discovered: readonly DiscoveredModel[],
   hideNew = false,
+  options?: { pruneMissing?: boolean },
 ) {
-  const models = existing.map((model) => ({ ...model }));
+  const discoveredIds = options?.pruneMissing
+    ? new Set(discovered.filter((m) => m.id && m.name).map((m) => m.id))
+    : undefined;
+  const models = (
+    discoveredIds ? existing.filter((model) => discoveredIds.has(model.id)) : existing
+  ).map((model) => ({ ...model }));
   // 新发现的型号排在已有型号之前(保持接口返回的相对顺序)，已有型号位置不动。
   const added: import("./types.js").ProviderRuntimeModelConfig[] = [];
   const seen = new Set<string>();

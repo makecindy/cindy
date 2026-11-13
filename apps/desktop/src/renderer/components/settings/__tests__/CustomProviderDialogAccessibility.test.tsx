@@ -3069,4 +3069,36 @@ describe('model summary and explicit model selection', () => {
     expect(fetchButton().hasAttribute('disabled')).toBe(false);
     expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull();
   });
+
+  it('removes canceled Magpie models after confirming the model picker without reviving them', async () => {
+    const fetch = vi.mocked(await openSummary(true));
+    expect(screen.getByText(`${selectedLabel}:1`)).toBeTruthy();
+    // 1) 服务端只剩 summary-1（原 summary-0 已在 Magpie 取消）
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      gatewayKind: 'magpie',
+      catalogComplete: true,
+      models: [{ id: 'summary-1', name: 'Summary 1' }],
+    });
+    fireEvent.click(fetchButton());
+    const picker = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
+    expect(within(picker).queryByRole('checkbox', { name: /summary-0$/ })).toBeNull();
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /summary-1$/ }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());
+    expect(screen.getByText(`${selectedLabel}:1`)).toBeTruthy();
+
+    // 2) Magpie 清空所有模型时，确认后选中数量归零
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      gatewayKind: 'magpie',
+      catalogComplete: true,
+      models: [],
+    });
+    fireEvent.click(fetchButton());
+    const emptyPicker = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
+    fireEvent.click(within(emptyPicker).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());
+    expect(screen.getByText(`${selectedLabel}:0`)).toBeTruthy();
+  });
 });

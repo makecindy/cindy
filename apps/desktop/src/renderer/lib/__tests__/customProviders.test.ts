@@ -805,6 +805,53 @@ describe('appendDiscoveredCustomProviderModels', () => {
       { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' } },
     ]);
   });
+
+  it('prunes removed models and reports removedIds when pruneMissing is true', () => {
+    const result = appendDiscoveredCustomProviderModels(
+      [
+        { id: 'a/old-1', name: 'Old 1', discoveredSource: { kind: 'magpie', providerId: 'a' } },
+        { id: 'a/kept', name: 'Custom Kept', contextWindow: 64000 },
+      ],
+      [
+        { id: 'a/kept', name: 'Kept', discoveredSource: { kind: 'magpie', providerId: 'a' } },
+        { id: 'b/new-1', name: 'New 1', discoveredSource: { kind: 'magpie', providerId: 'b' } },
+      ],
+      undefined,
+      { pruneMissing: true },
+    );
+    expect(result.models.map((m) => m.id)).toEqual(['b/new-1', 'a/kept']);
+    expect(result.addedIds).toEqual(['b/new-1']);
+    expect(result.removedIds).toEqual(['a/old-1']);
+  });
+
+  it('only enables pruning for complete Magpie responses and keeps empty Magpie provider view identity', async () => {
+    const { shouldPruneMissingModels, isMagpieProviderView } = await import('../customProviders');
+    expect(shouldPruneMissingModels({ gatewayKind: 'magpie', catalogComplete: true })).toBe(true);
+    expect(shouldPruneMissingModels({ gatewayKind: 'magpie', catalogComplete: false })).toBe(false);
+    expect(shouldPruneMissingModels({ gatewayKind: 'magpie' })).toBe(false);
+    expect(shouldPruneMissingModels({ catalogComplete: true })).toBe(false);
+
+    expect(isMagpieProviderView({
+      routing: { pi: { upstream: 'http://127.0.0.1:3425/v1', wireProtocol: 'openai-chat', authStrategy: 'api-key-header', catalogPresetId: 'magpie' } },
+      models: { pi: [] },
+    })).toBe(true);
+    expect(isMagpieProviderView({
+      routing: { pi: { upstream: 'https://relay.example/v1', wireProtocol: 'openai-chat', authStrategy: 'api-key-header' } },
+      models: { pi: [] },
+    })).toBe(false);
+
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const first = buildUserProvider({
+      id: 'magpie-empty',
+      name: 'Magpie',
+      runtimes: {
+        pi: { baseUrl: 'http://127.0.0.1:3425/v1', wireProtocol: 'openai-chat', catalogPresetId: 'magpie', models: [] },
+      },
+    });
+    const roundTripped = buildUserProvider(providerViewToCustomProviderConfig({ ...first, connected: true }));
+    expect(isMagpieProviderView(roundTripped)).toBe(true);
+    expect(roundTripped.routing.pi?.catalogPresetId).toBe('magpie');
+  });
 });
 
 describe('custom provider credential lifecycle', () => {

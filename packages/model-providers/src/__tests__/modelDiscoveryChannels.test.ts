@@ -459,4 +459,30 @@ describe('mergeDiscoveredRuntimeModels 排序', () => {
     ]);
     expect(merged.map((model) => model.id)).toEqual(['new-1', 'new-2', 'old-b', 'old-a']);
   });
+
+  it('pruneMissing=true 时同步移除服务端已取消的模型，同时保留已有模型用户设置', () => {
+    const existing = [
+      { id: 'removed-model', name: 'Removed' },
+      { id: 'kept-model', name: 'Custom Name', contextWindow: 128000, defaultEnabled: false },
+    ];
+    const pruned = mergeDiscoveredRuntimeModels(
+      existing,
+      [
+        { id: 'kept-model', name: 'Kept' },
+        { id: 'added-model', name: 'Added' },
+      ],
+      false,
+      { pruneMissing: true },
+    );
+    expect(pruned.map((model) => model.id)).toEqual(['added-model', 'kept-model']);
+    expect(pruned[1]).toMatchObject({
+      id: 'kept-model',
+      name: 'Custom Name',
+      contextWindow: 128000,
+      defaultEnabled: false,
+    });
+    expect(
+      mergeDiscoveredRuntimeModels(existing, [], false, { pruneMissing: true }),
+    ).toEqual([]);
+  });
 });
