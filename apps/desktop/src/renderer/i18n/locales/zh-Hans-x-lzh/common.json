@@ -18884,6 +18884,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "权柄模式",
       "noAvailableModels": "无可用之 {{agent}} 模型，请于规制中察供方之相通与凭证。",
+      "savedModelUnavailable": "前选模型或其来源今不可用。",
+      "reselectModel": "重选模型",
       "effortLabel": "思之深浅",
       "initialTaskLabel": "首件差事",
       "initialTaskPlaceholder": "书其首事以付之；留空则待命，由 Lead 分派",

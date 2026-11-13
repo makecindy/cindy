@@ -18884,6 +18884,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "権限モード",
       "noAvailableModels": "利用可能な {{agent}} モデルがありません。設定でプロバイダーの接続と認証情報を確認してください。",
+      "savedModelUnavailable": "前回選択したモデルまたはその接続元を利用できません。",
+      "reselectModel": "モデルを選び直す",
       "effortLabel": "推論強度",
       "initialTaskLabel": "初期タスク",
       "initialTaskPlaceholder": "最初に任せることを入力。空欄の場合は待機し、Lead が割り振ります",

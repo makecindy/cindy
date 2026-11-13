@@ -18884,6 +18884,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "权限模式",
       "noAvailableModels": "没有可用的 {{agent}} 模型，请在设置中检查供应商连接和凭证。",
+      "savedModelUnavailable": "上次选择的模型或来源当前不可用。",
+      "reselectModel": "重新选择模型",
       "effortLabel": "推理强度",
       "initialTaskLabel": "初始任务",
       "initialTaskPlaceholder": "写下交给它的第一件事；留空则先待命，由 Lead 分派",
