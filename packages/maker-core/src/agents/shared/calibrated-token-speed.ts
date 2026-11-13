@@ -272,6 +272,11 @@ export class CalibratedTokenSpeedMeter {
     this.thinkingTextScale.assume(scale);
   }
 
+  /** Explicitly configures whether streamed thinking arrives as bursty summaries or verbatim tokens. */
+  setSummarizedThinking(summarized: boolean): void {
+    this.summarizedThinking = summarized;
+  }
+
   /** The clock is wrong for the rest of this turn (host suspended, time went backwards). */
   invalidate(): void {
     this.invalid = true;
