@@ -329,3 +329,18 @@ it('keeps my own companion read-only when someone else requested its work', asyn
   expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
   expect(h.subscribe).not.toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
 });
+
+// Legacy steps without execution identity remain ambiguous across visual anchors.
+it('does not borrow a step description when matching work is in another anchor', async () => {
+  const group = workGroup();
+  group.plans = [{ id: 'p', kind: 'work', status: 'running', currentStep: 0, steps: [
+    { position: 0, status: 'running', botId: 'abu', task: 'Unresolved step identity' },
+  ] }] as any;
+  group.round.speakers = ['old', 'current'].map(executionId => ({ botId: 'abu', activity: 'step', executionId, executionStatus: 'running', sessionId: null }));
+  await act(async () => root.render(el('div', null, group.round.speakers.map(speaker => el(BotGroupWorkArea, {
+    key: speaker.executionId, group, speakers: [speaker], deviceId: 'mac', online: false,
+    identityFor: (botId, name) => ({ botId, name }), onError: vi.fn(),
+  })))));
+  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
+  expect(node.textContent).not.toContain('Unresolved step identity');
+});

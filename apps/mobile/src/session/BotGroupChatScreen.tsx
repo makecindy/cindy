@@ -129,7 +129,7 @@ import {
 } from './BotGroupPlan';
 import { BotGroupSettingsSheet } from './BotGroupSettingsSheet';
 import { MessageScrollToBottomButton } from './MessageScrollToBottomButton';
-import { BotGroupWorkArea } from './BotGroupWorkArea';
+import { BotGroupWorkArea, useBotGroupWorkTargets } from './BotGroupWorkArea';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { keyboardAvoidingBehaviorForPlatform } from './mobileNativeShellLayout';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
@@ -1038,9 +1038,13 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   const running = !threadRootId && group.round.status === 'running';
   const memberById = useMemo(() => new Map(group.members.map((member) => [member.botId, member])), [group.members]);
   const pendingFor = (planId: string | null) => planId && planPending?.planId === planId ? planPending.action : null;
-  const workAnchors = botGroupWorkAnchors(messages, group.round.speakers);
+  const workTargets = useBotGroupWorkTargets(group, deviceId, online && !!workArea && !group.archived && !group.dissolvedAt);
+  const workAnchors = botGroupWorkAnchors(messages.map(message => {
+    const receipt = pendingById.get(message.id)?.chat?.messageId;
+    return receipt ? { ...message, serverMessageId: receipt } : message;
+  }), group.round.speakers);
   const renderWork = (anchor: string | null) => workArea && workAnchors.has(anchor) && !group.archived && !group.dissolvedAt
-    ? <BotGroupWorkArea {...workArea} group={group} deviceId={deviceId} online={online} identityFor={identityFor} speakers={workAnchors.get(anchor)} /> : null;
+    ? <BotGroupWorkArea {...workArea} targets={workTargets} group={group} deviceId={deviceId} online={online} identityFor={identityFor} speakers={workAnchors.get(anchor)} /> : null;
   const firstNew = readBefore === undefined ? undefined : messages.findIndex(message => message.threadRootId === threadRootId && message.isSelf === false
     && message.kind === 'message' && BigInt(message.serverSequence ?? String(message.sequence)) > BigInt(readBefore));
   const firstReply = messages.findIndex(message => message.threadRootId === threadRootId);

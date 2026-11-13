@@ -15,27 +15,21 @@ import { Text } from '@/components/AppText';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, spacing, typeScale } from '@/theme/tokens';
 
-/** Live work is separate from messages. Only an owned companion's computer can
- * resolve its execution to a task; another member's private task is never queried. */
-export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError, speakers: shownSpeakers }: {
-  group: BotGroupRemoteChatData; deviceId: string; online: boolean;
-  identityFor(botId: string, name: string): BotGroupIdentity;
-  onStop?(scope?: 'all'): Promise<void>;
-  stopping?: boolean;
-  speakers?: readonly BotGroupSpeaker[];
-  onError(message: string | null): void;
-}) {
+type BotGroupWorkTarget = { deviceId: string; sessionId: string; botId: string };
+const EMPTY_TARGETS: ReadonlyMap<string, BotGroupWorkTarget> = new Map();
+
+/** Resolve once for the whole group, regardless of where its live rows are displayed. */
+export function useBotGroupWorkTargets(group: BotGroupRemoteChatData, deviceId: string, online: boolean) {
   const { accountGeneration } = useAuth();
-  const { t, i18n } = useTranslation();
-  const styles = useThemedStyles(makeStyles);
+  const { i18n } = useTranslation();
   const { invoke, openLink, connectionEpoch, presenceVersion, getPresenceAvailability, subscribe, unsubscribe, onRemoteResourceChanged } = useDeviceLink();
-  const candidates = (shownSpeakers ?? group.round.speakers).flatMap(speaker => {
+  const candidates = group.round.speakers.flatMap(speaker => {
     const member = group.members.find(member => member.botId === speaker.botId);
     return !speaker.sessionId && speaker.executionId && member?.isOwned && member.homeDeviceId
       ? [{ executionId: speaker.executionId, deviceId: member.homeDeviceId }] : [];
   });
   const scope = JSON.stringify([accountGeneration, group.id, deviceId, candidates]);
-  const [resolved, setResolved] = useState<{ scope: string; targets: Map<string, { deviceId: string; sessionId: string; botId: string }> }>();
+  const [resolved, setResolved] = useState<{ scope: string; targets: Map<string, BotGroupWorkTarget> }>();
   useFocusEffect(useCallback(() => {
     if (!online || !candidates.length) return;
     let cancelled = false;
@@ -73,6 +67,23 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     void read();
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
+  return resolved?.scope === scope ? resolved.targets : EMPTY_TARGETS;
+}
+
+/** Shared resource targets feed independent visual rows; controls remain group-scoped. */
+export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError, speakers: shownSpeakers, targets = EMPTY_TARGETS }: {
+  group: BotGroupRemoteChatData; deviceId: string; online: boolean;
+  identityFor(botId: string, name: string): BotGroupIdentity;
+  onStop?(scope?: 'all'): Promise<void>;
+  stopping?: boolean;
+  speakers?: readonly BotGroupSpeaker[];
+  targets?: ReadonlyMap<string, BotGroupWorkTarget>;
+  onError(message: string | null): void;
+}) {
+  const { accountGeneration } = useAuth();
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const { getPresenceAvailability } = useDeviceLink();
   if (group.round.status !== 'running' || !group.round.speakers.length) return null;
   const speakers = (shownSpeakers ?? group.round.speakers).filter(speaker => group.members.some(member => member.botId === speaker.botId));
   if (!speakers.length) return null;
@@ -98,11 +109,11 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
       {speakers.map((speaker) => {
         const member = group.members.find(member => member.botId === speaker.botId);
         if (!member) return null;
-        const target = speaker.executionId && resolved?.scope === scope ? resolved.targets.get(speaker.executionId) : undefined;
+        const target = speaker.executionId ? targets.get(speaker.executionId) : undefined;
         const host = target?.deviceId ?? deviceId;
         const plan = speaker.activity === 'step' ? group.plans?.find(plan => plan.status === 'running' && plan.kind !== 'talk'
           && plan.steps.some(step => step.position === plan.currentStep && step.status === 'running' && step.botId === speaker.botId
-            && (step.executionId ? step.executionId === speaker.executionId : speakers.filter(candidate => candidate.activity === 'step'
+            && (step.executionId ? step.executionId === speaker.executionId : group.round.speakers.filter(candidate => candidate.activity === 'step'
               && candidate.botId === step.botId && !candidate.stopping && candidate.executionStatus !== 'queued'
               && candidate.executionStatus !== 'stopping').length === 1))
           && !speaker.stopping && speaker.executionStatus !== 'queued' && speaker.executionStatus !== 'stopping') : undefined;

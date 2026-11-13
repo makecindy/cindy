@@ -16,6 +16,9 @@ const h = vi.hoisted(() => ({
   processRead: vi.fn(),
   processSubscribe: vi.fn(async () => {}),
   processUnsubscribe: vi.fn(async () => {}),
+  openLink: vi.fn(async () => {}),
+  resourceChanged: vi.fn((_listener: (host: string, payload: any) => void) => () => {}),
+  availability: () => true,
   textRender: vi.fn(),
   translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
@@ -168,7 +171,8 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(useColors()),
     useTheme: () => ({ mode: useContext(testThemeContext), colors: useColors() }), monoFont: 'mono' };
 });
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, subscribe: h.processSubscribe, unsubscribe: h.processUnsubscribe, getPresenceAvailability: () => true }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, subscribe: h.processSubscribe, unsubscribe: h.processUnsubscribe,
+  openLink: h.openLink, onRemoteResourceChanged: h.resourceChanged, getPresenceAvailability: h.availability }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
@@ -3499,4 +3503,38 @@ it.each([20, 40])('interleaves concurrent work and keeps another requester read-
   expect((requestedAt > 30 ? later.compareDocumentPosition(work[1]!) : work[1]!.compareDocumentPosition(later)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(work[0]!.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
   expect(work[1]!.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});
+
+// Receipt precedes canonical history; work must stay after its first local request.
+it('anchors receipt-backed work before the next pending send', async () => {
+  h.chat.pending = [10, 30].map(at => ({
+    item: { clientId: `send-${at}` }, createdAt: at, state: 'sent',
+    chat: { after: at, messageId: `server-${at}`, input: { text: `request-${at}`, mentions: { all: false, botIds: [] } } },
+  }));
+  await render(group({ serverBacked: true, messages: [], round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own', sourceMessageId: 'server-10', isSelfRequested: true },
+  ] } }));
+  const work = byId('speaker.mimi.reply')!;
+  expect(work.compareDocumentPosition(byId('botGroup.row.local:send-30')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// Separate visual anchors must share one group-resource read per home computer.
+it('resolves separated work anchors once per host on mount and notification', async () => {
+  const data = group({ serverBacked: true, messages: [message('a', 1, {}), message('b', 2, {})], round: {
+    status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'a-work', activity: 'reply', sourceMessageId: 'a', isSelfRequested: true },
+      { botId: 'abu', sessionId: null, executionId: 'b-work', activity: 'reply', sourceMessageId: 'b', isSelfRequested: true },
+    ],
+  } });
+  data.members = data.members.map(member => ({ ...member, isOwned: true, homeDeviceId: 'studio' }));
+  h.processRead.mockResolvedValue(null);
+  await render(data);
+  const reads = () => h.processRead.mock.calls.filter(call => call[1] === 'maker:remote-resources:get').length;
+  expect(reads()).toBe(1);
+  const changed = h.resourceChanged.mock.calls.at(-1)![0] as (host: string, payload: any) => void;
+  await act(async () => changed('studio', { collectionId: 'bot-groups', resourceRefs: [{ id: 'g1' }] }));
+  expect(reads()).toBe(2);
+  h.focused = false;
+  await render(data);
+  expect(h.processUnsubscribe).toHaveBeenCalledWith(expect.stringMatching(/^group-work:g1:focus:/), 'studio', ['sessions']);
 });
