@@ -357,9 +357,12 @@ export function resolveChatAbsPath(href: string, workdir: string): string {
  * resolveChatAbsPath 得到的 `\\host\…`(含 `\\.\` / `\\?\`)且不在 workdir 内 → true。
  * 这类路径不得在渲染时自动 stat / 取件:被控 Windows 桌面会向消息内容点名的主机发起 SMB
  * 连接(可能送出 NTLM 凭据);只在用户显式点开时访问。workdir 本身在共享上时,其子路径照常。
+ * 含 `..` 段的一律算 workdir 外:`\\nas\share\proj\..\secret.svg` 字面上以 workdir 开头,
+ * 被控端规范化后却落在 workdir 之外(与 toWorkdirRel 拒绝 `..` 同一口径)。
  */
 export function isUncPathOutsideWorkdir(workdir: string, absPath: string): boolean {
   if (!absPath.startsWith('\\\\')) return false;
+  if (absPath.split(/[\\/]/).includes('..')) return true;
   const base = workdir.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
   return !(base.startsWith('\\\\') && absPath.toLowerCase().startsWith(`${base}\\`));
 }

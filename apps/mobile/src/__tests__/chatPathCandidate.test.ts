@@ -70,8 +70,10 @@ describe('production path spans', () => {
   });
 
   // 渲染时自动 stat UNC 会让被控 Windows 桌面向消息点名的主机发起 SMB;workdir 自身在共享上时照常验证。
+  // 带 `..` 段的路径字面上以 workdir 开头,被控端规范化后却在 workdir 之外,不能按前缀算作 workdir 内。
   it.each([
     ['file://nas/share/x.pdf', 'C:\\proj', 0],
+    ['file://nas/share/proj/../secret.svg', '\\\\nas\\share\\proj', 0],
     ['C:\\x\\a.pdf', 'C:\\proj', 1],
     ['src/a.ts', '\\\\srv\\share\\proj', 1],
   ])('auto-verifies link %s in workdir %s %i time(s)', async (url, workdir, calls) => {
