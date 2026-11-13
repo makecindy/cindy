@@ -67,6 +67,7 @@ import {
   adoptReadyChannels,
   listSharedProjectPrefs,
   projectSharedOntoChannel,
+  rowsAfterServerSnapshot,
   setSharedProjectPref,
 } from './sharedProjectPrefs.js';
 import { createProjectWorkspaceSync } from './projectWorkspaceSync.js';
@@ -319,14 +320,19 @@ function channelProjectionTeams(channel: HookPrefsChannel): Array<string | null>
  * 连着的渠道: 没连着的等它下次连上时, 重连镜像结束后会再走到这里。
  */
 function syncSharedProjectPrefs(): void {
-  try {
-    for (const channel of OFFICIAL_PREFS_CHANNELS) {
+  for (const channel of OFFICIAL_PREFS_CHANNELS) {
+    // 各渠道互不牵连: 一个渠道写不下去, 排在它后面的照常对齐; 已经写下去的那部分也照常推送。
+    let changed: boolean;
+    try {
       if (!isSharedPrefsAdopted(channel) || channelLiveBindingKey(channel) === null) continue;
-      if (!projectSharedOntoChannel(channel, channelProjectionTeams(channel))) continue;
-      void mirrorWorkspacePrefs(channel);
+      changed = projectSharedOntoChannel(channel, channelProjectionTeams(channel));
+    } catch (err) {
+      log.warn(
+        `shared project prefs sync (${channel}) failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      changed = true;
     }
-  } catch (err) {
-    log.warn(`shared project prefs sync failed: ${err instanceof Error ? err.message : String(err)}`);
+    if (changed) void mirrorWorkspacePrefs(channel);
   }
 }
 
@@ -334,13 +340,20 @@ function syncSharedProjectPrefs(): void {
  * 某个渠道落完一份服务端快照之后: 第一次(刚把服务端那份导入本机)把它并入共用配置,
  * 之后把快照带来的改动(用户在 IM 里用 /model 卡改的)并回共用配置, 再让各渠道对齐。
  */
-function settleChannelIntoShared(channel: HookPrefsChannel, before: HookWorkspacePrefs[] | null): void {
+function settleChannelIntoShared(
+  channel: HookPrefsChannel,
+  snapshot: { before: HookWorkspacePrefs[]; server: HookWorkspacePrefs[] } | null,
+): void {
   try {
     let sharedChanged = false;
     if (!isSharedPrefsAdopted(channel)) {
       sharedChanged = adoptReadyChannels().length > 0;
-    } else if (before !== null) {
-      sharedChanged = absorbChannelChange(before, listWorkspacePrefs(channel)).length > 0;
+    } else if (snapshot !== null) {
+      sharedChanged =
+        absorbChannelChange(
+          snapshot.before,
+          rowsAfterServerSnapshot(listWorkspacePrefs(channel), snapshot.server),
+        ).length > 0;
     }
     if (sharedChanged) {
       broadcastSharedPrefs();
@@ -355,7 +368,10 @@ function settleChannelIntoShared(channel: HookPrefsChannel, before: HookWorkspac
 }
 
 /** 重连镜像拉到服务端快照那一刻, 这个渠道本机的行(用来看出快照带来了哪些改动)。 */
-const mirrorRowsBeforeSnapshot = new Map<HookPrefsChannel, HookWorkspacePrefs[]>();
+const mirrorRowsBeforeSnapshot = new Map<
+  HookPrefsChannel,
+  { before: HookWorkspacePrefs[]; server: HookWorkspacePrefs[] }
+>();
 
 function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWorkspacePrefs[]): void {
   try {
@@ -369,7 +385,7 @@ function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWor
       (remotePrefsSnapshotGenerations.get(channel) ?? 0) + 1,
     );
     markWorkspacePrefsMigrated(channel);
-    settleChannelIntoShared(channel, rowsBefore);
+    settleChannelIntoShared(channel, { before: rowsBefore, server: prefs });
   } catch (err) {
     log.warn(
       `local workspace prefs replace (${channel}) failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -419,7 +435,10 @@ const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
     const remote = await (channel === 'slack'
       ? manager.getWorkspacePrefs()
       : manager.getProviderWorkspacePrefs(channel));
-    mirrorRowsBeforeSnapshot.set(channel, listWorkspacePrefs(channel));
+    mirrorRowsBeforeSnapshot.set(channel, {
+      before: listWorkspacePrefs(channel),
+      server: remote.prefs,
+    });
     return remote;
   },
   setRemotePrefs: async (channel, workspace, patch, teamId) => {
@@ -432,9 +451,9 @@ const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
     rebroadcastWorkspaceProviderSources();
     // 快照可能把改名前旧名称下的行带回来; 没有可挪的行时什么也不做。
     applyRetiredProjectNames();
-    const before = mirrorRowsBeforeSnapshot.get(channel) ?? null;
+    const snapshot = mirrorRowsBeforeSnapshot.get(channel) ?? null;
     mirrorRowsBeforeSnapshot.delete(channel);
-    settleChannelIntoShared(channel, before);
+    settleChannelIntoShared(channel, snapshot);
   },
   onError: (channel, err) => {
     log.warn(

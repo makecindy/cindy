@@ -25,6 +25,7 @@ import {
   getSharedProjectPref,
   listSharedProjectPrefs,
   projectSharedOntoChannel,
+  rowsAfterServerSnapshot,
   setSharedProjectPref,
   stricterPermission,
 } from '../sharedProjectPrefs';
@@ -148,6 +149,58 @@ describe('sharedProjectPrefs', () => {
     setWorkspaceProviderSource('shared', null, 'repo', 'provider-for-m2');
     expect(absorbChannelChange(rowsBefore, rowsAfter)).toEqual([]);
     expect(getWorkspaceProviderSource('shared', null, 'repo')).toBe('provider-for-m2');
+  });
+
+  // 时序(评审指出): 合并结果不得取决于哪个机器人先连上。最小失败输入: Telegram 先并入,
+  // 飞书稍后才第一次连上; 另一个项目在两者之间被用户改过。
+  it('排在前面的渠道晚并入时顶替原样并入的行, 但不动用户改过的行', () => {
+    setWorkspacePref('telegram', null, 'repo', { agentKind: 'codex', model: 'tg-model', permissionMode: 'ask' });
+    setWorkspaceProviderSource('telegram', null, 'repo', 'tg-provider');
+    setWorkspacePref('telegram', null, 'edited', { model: 'tg-edited' });
+    markWorkspacePrefsMigrated('telegram');
+    expect(adoptReadyChannels()).toEqual(['telegram']);
+    setSharedProjectPref('edited', { model: 'picked-by-user' });
+
+    setWorkspacePref('feishu', null, 'repo', { agentKind: 'claude-code', model: 'feishu-model' });
+    setWorkspacePref('feishu', null, 'edited', { model: 'feishu-edited' });
+    markWorkspacePrefsMigrated('feishu');
+    expect(adoptReadyChannels()).toEqual(['feishu']);
+
+    // 飞书排在 Telegram 前面: 整组换成飞书的(它没配来源, Telegram 的来源随之作废), 权限仍取更严的。
+    expect(getSharedProjectPref('repo')).toMatchObject({
+      agentKind: 'claude-code', model: 'feishu-model', permissionMode: 'ask',
+    });
+    expect(getWorkspaceProviderSource('shared', null, 'repo')).toBeNull();
+    expect(getSharedProjectPref('edited').model).toBe('picked-by-user');
+  });
+
+  // 持久化(评审指出): 设置页可以只换来源不填别的, 这样的项目没有偏好行, 并入时不得丢。
+  it('只选过来源、没有偏好行的项目, 来源也并入共用那份', () => {
+    setWorkspaceProviderSource('telegram', null, 'source-only', 'tg-provider', 'device-1');
+    markWorkspacePrefsMigrated('telegram');
+    adoptReadyChannels();
+    expect(getWorkspaceProviderSource('shared', null, 'source-only')).toBe('tg-provider');
+  });
+
+  // 时序(评审指出): 在 IM 里把一个项目的设置全部清回默认时, 快照里这一行是全空的, 本机不存
+  // 全空行 —— 不能因此当成「快照里没有这一行」而把旧值又写回去。
+  it('服务端快照里明确清空的行并回共用那份; 快照里没有的行不算', () => {
+    setSharedProjectPref('cleared', { model: 'm1', permissionMode: 'ask' });
+    setSharedProjectPref('absent', { model: 'm2' });
+    const before = listSharedProjectPrefs();
+    const server = [
+      { workspace: 'cleared', model: null, effort: null, agentKind: null, permissionMode: null },
+    ];
+    // 落快照后本机这个渠道一行都没剩。
+    expect(absorbChannelChange(before, rowsAfterServerSnapshot([], server))).toEqual(['cleared']);
+    expect(listSharedProjectPrefs().map((row) => row.workspace)).toEqual(['absent']);
+  });
+
+  // 持久化上限(评审指出): Slack 多 workspace 每个 workspace 各有一整份, 条数上限按 workspace 各算。
+  it('Slack 两个 workspace 各写满一百多个项目不会撞上限', () => {
+    for (let index = 0; index < 130; index += 1) setSharedProjectPref(`p${index}`, { model: 'm' });
+    expect(projectSharedOntoChannel('slack', ['T1', 'T2'])).toBe(true);
+    expect(listWorkspacePrefs('slack').filter((row) => row.model === 'm')).toHaveLength(260);
   });
 
   // 持久化: 侧栏给项目改名时, 共用那份跟着挪到新名称下, 旧名称下不留行。

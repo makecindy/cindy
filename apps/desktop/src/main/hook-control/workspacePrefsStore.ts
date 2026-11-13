@@ -57,6 +57,11 @@ export interface WorkspacePrefsEntry {
    * 只有带这个标记的全空行才会被抄回来的值顶掉; 用户主动清空的设置不受改名影响。
    */
   renameTombstone?: boolean;
+  /**
+   * 只用于共用那一份(channel = shared): 这一行是升级时从哪个渠道原样并入的, 之后没人改过。
+   * 排在它前面的渠道稍后才并入时, 凭这个标记按固定顺序顶替; 任何一次写入都会去掉标记。
+   */
+  adoptedFrom?: HookPrefsChannel;
 }
 
 interface StoreFile {
@@ -121,7 +126,8 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
       (typeof r.rev === 'number' && Number.isInteger(r.rev) && r.rev >= 0 && r.rev <= 1_000_000_000)) &&
     (r.dirty === undefined || typeof r.dirty === 'boolean') &&
     (r.dirtyPatch === undefined || isDirtyPatch(r.dirtyPatch)) &&
-    (r.renameTombstone === undefined || typeof r.renameTombstone === 'boolean')
+    (r.renameTombstone === undefined || typeof r.renameTombstone === 'boolean') &&
+    (r.adoptedFrom === undefined || (isChannel(r.adoptedFrom) && r.adoptedFrom !== SHARED_PREFS_CHANNEL))
   );
 }
 
@@ -132,12 +138,14 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
 function exceedsPrefsCap(entries: readonly WorkspacePrefsEntry[]): boolean {
   // 上限按渠道各算各的: 共用那一份会投影到每个已连接的渠道, 合在一起算的话,
   // 配了几十个项目的用户一开第二个机器人就会撞上限。
+  // Slack 多 workspace 时每个 workspace 各有一整份, 所以再按 team 分开算。
   const counts = new Map<string, number>();
   for (const entry of entries) {
     if (entry.renameTombstone === true) continue;
-    const count = (counts.get(entry.channel) ?? 0) + 1;
+    const scope = `${entry.channel}::${entry.teamId ?? ''}`;
+    const count = (counts.get(scope) ?? 0) + 1;
     if (count > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) return true;
-    counts.set(entry.channel, count);
+    counts.set(scope, count);
   }
   return false;
 }
@@ -264,6 +272,27 @@ export function markWorkspacePrefsMigrated(channel: HookPrefsChannel): void {
   writeStore(fp, { ...store, migrated: { ...store.migrated, [channel]: true } });
 }
 
+/** 共用那一份里某个项目的行是从哪个渠道原样并入的(被改过或不存在则为 null)。 */
+export function getSharedPrefOrigin(workspace: string): HookPrefsChannel | null {
+  const row = readStore(filePath()).entries.find((entry) =>
+    sameKey(entry, SHARED_PREFS_CHANNEL, null, workspace),
+  );
+  return row?.adoptedFrom ?? null;
+}
+
+/** 给共用那一份里的行记上「从这个渠道原样并入」; 行不存在时什么也不做。 */
+export function setSharedPrefOrigin(workspace: string, channel: HookPrefsChannel): void {
+  const fp = filePath();
+  const store = readStore(fp);
+  let found = false;
+  const entries = store.entries.map((entry) => {
+    if (!sameKey(entry, SHARED_PREFS_CHANNEL, null, workspace)) return entry;
+    found = true;
+    return { ...entry, adoptedFrom: channel };
+  });
+  if (found) writeStore(fp, { ...store, entries });
+}
+
 export function isSharedPrefsAdopted(channel: HookPrefsChannel): boolean {
   return readStore(filePath()).sharedAdopted?.[channel] === true;
 }
@@ -346,6 +375,7 @@ export function setWorkspacePref(
   };
   // 用户亲手写过这一行, 它就不再是改名留下的墓碑(哪怕写进去的仍是全空)。
   delete nextRow.renameTombstone;
+  delete nextRow.adoptedFrom;
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
   // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null。
   // 镜像回执必须对上 rev，才允许 markWorkspacePrefMirrored 清墓碑或去掉 dirty。
