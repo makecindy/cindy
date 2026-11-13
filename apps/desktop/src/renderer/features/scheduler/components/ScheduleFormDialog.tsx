@@ -1762,8 +1762,10 @@ export function ScheduleFormDialog({
                 </Button>
               </header>
               <div className="min-h-0 flex-1 px-6 pb-6">
+                {/* 这一层的边框就是输入框自己的框:多行输入一律 8px(DESIGN §5),
+                    不随铺满面板升成 12px 容器档。紧凑卡片的 12px 属于装着输入框与工具条的外框。 */}
                 {promptField(
-                  'rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-4',
+                  'rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-4',
                   true,
                 )}
               </div>
