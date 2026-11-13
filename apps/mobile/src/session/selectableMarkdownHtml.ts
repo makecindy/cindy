@@ -73,12 +73,8 @@ export function buildSelectableMarkdownHtml(
   const wantsTargetLine =
     options.targetLine !== undefined && Number.isInteger(options.targetLine) && options.targetLine > 0;
   const blocks = parseMobileMarkdown(markdown, { srcLines: wantsTargetLine });
-  const css = buildSelectableMarkdownCss(options);
-  // KaTeX runtime 只在文档确实含公式时注入(绝大多数文档没有,不为它们付
-  // CDN 请求;失败降级由占位内容天然承担——块级是源码 <pre>、行内是斜体源码)。
-  // CSS/JS 一律由 loader 动态注入,不放静态 <link>/<script src>:阻塞式外链在
-  // 资源请求挂起时会让 WebView 永久白屏(见 mathWebViewHtml.ts 的硬约束说明)。
   const hasMath = blocksContainMath(blocks);
+  const css = buildSelectableMarkdownCss(options, hasMath);
   return [
     '<!doctype html>',
     '<html>',
@@ -168,7 +164,7 @@ best.addEventListener('animationend',function(){best.classList.remove('xdt-line-
 })();</script>`;
 }
 
-export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): string {
+export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions, includeMath = true): string {
   // 缺省走 light hex(调用方一般从 useTheme().colors 显式注入,见 MarkdownFileReader)。
   const textColor = cssValue(options.textColor ?? lightColors.textPrimary);
   const mutedColor = cssValue(options.mutedColor ?? lightColors.textSecondary);
@@ -423,14 +419,19 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       display: inline-block;
       max-width: 100%;
       overflow-x: auto;
-      vertical-align: middle;
+      vertical-align: baseline;
     }
     .xdt-math-block {
       max-width: 100%;
       min-width: 0;
+      padding: 4px 0;
       overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
       text-align: center;
     }
+    ${includeMath ? `.xdt-math-inline .katex { font-size: 1.05em; }
+    .xdt-math-block .katex-display { margin: 0; }` : ''}
     .xdt-math-block pre {
       text-align: left;
     }

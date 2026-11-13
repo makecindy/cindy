@@ -107,17 +107,34 @@ export function buildMathWebViewHtml(
       padding: 0;
       background: ${background};
       color: ${textPrimary};
+      font-size: 15px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     #root {
       box-sizing: border-box;
-      padding: 8px 4px;
+      width: 100%;
+      padding: 10px 8px;
       overflow-x: auto;
       overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
       text-align: center;
     }
     #root .katex-display {
       margin: 0;
+      overflow: visible;
+    }
+    #root .katex-display > .katex {
+      font-size: 1.08em;
+      line-height: 1.3;
+      white-space: nowrap;
+    }
+    #root .katex-display.katex-overflow {
+      text-align: left;
+    }
+    #root .katex-display.katex-overflow > .katex {
+      text-align: left;
+      display: inline-block;
+      min-width: 100%;
     }
     pre {
       margin: 0;
@@ -137,13 +154,39 @@ export function buildMathWebViewHtml(
     var source = ${serializedSource};
     var root = document.getElementById('root');
 
+    var BASE_KATEX_EM = 1.08;
+    var MIN_FIT_SCALE = 0.76;
+
+    function fitFormula() {
+      var displayEl = root.querySelector('.katex-display');
+      var katexEl = displayEl ? displayEl.querySelector('.katex') : root.querySelector('.katex');
+      if (!katexEl) return;
+      if (displayEl) displayEl.classList.remove('katex-overflow');
+      katexEl.style.fontSize = '';
+      var cs = window.getComputedStyle ? window.getComputedStyle(root) : null;
+      var padX = cs ? (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) : 16;
+      var available = root.clientWidth - padX;
+      var natural = katexEl.scrollWidth;
+      if (available > 0 && natural > available) {
+        var ratio = available / natural;
+        if (ratio >= MIN_FIT_SCALE) {
+          katexEl.style.fontSize = (BASE_KATEX_EM * ratio).toFixed(4) + 'em';
+        } else {
+          katexEl.style.fontSize = (BASE_KATEX_EM * MIN_FIT_SCALE).toFixed(4) + 'em';
+          if (displayEl && katexEl.scrollWidth > available) {
+            displayEl.classList.add('katex-overflow');
+          }
+        }
+      }
+    }
+
     var lastSentHeight = 0;
     var lastSentStage = '';
     // stage 语义:'source' = 源码占位的过渡态高度;'katex' = KaTeX 成品的最终
     // 态高度。宿主组件对已有最终高度缓存的公式会忽略过渡态上报,重访零跳动。
     function reportHeight(stage) {
       if (!window.ReactNativeWebView) return;
-      var height = Math.ceil(root.getBoundingClientRect().height);
+      var height = Math.ceil(Math.max(root.getBoundingClientRect().height, root.scrollHeight));
       // 滞回去抖:相近高度不重复上报(阈值与宿主同口径);stage 升级
       // (source → katex)即使高度相同也放行一次,宿主靠它落最终高度缓存。
       if (stage === lastSentStage && Math.abs(height - lastSentHeight) < 3) return;
@@ -152,6 +195,11 @@ export function buildMathWebViewHtml(
       window.ReactNativeWebView.postMessage(
         JSON.stringify({ kind: 'math-height', stage: stage, height: height }),
       );
+    }
+
+    function syncLayoutAndReport() {
+      fitFormula();
+      reportHeight('katex');
     }
 
     function renderKatex() {
@@ -164,11 +212,12 @@ export function buildMathWebViewHtml(
       if (${captureMarkup} && window.ReactNativeWebView && root.innerHTML.length <= 200000) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ kind: 'math-rendered', markup: root.innerHTML }));
       }
-      reportHeight('katex');
+      syncLayoutAndReport();
       // 字体异步就绪后度量可能微调,fonts.ready 后补报一次(幂等)。
       if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(function () { reportHeight('katex'); });
+        document.fonts.ready.then(syncLayoutAndReport);
       }
+      window.addEventListener('resize', syncLayoutAndReport);
     }
 
     // 首屏源码已绘制,先按它上报过渡态高度,WebView 立即获得正确尺寸的可见内容。
@@ -180,10 +229,11 @@ export function buildMathWebViewHtml(
       style.textContent = ${serializeForScript(MOBILE_KATEX_CSS)};
       document.head.appendChild(style);
       root.innerHTML = ${serializeForScript(cachedMarkup)};
-      reportHeight('katex');
+      syncLayoutAndReport();
       if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(function () { reportHeight('katex'); });
+        document.fonts.ready.then(syncLayoutAndReport);
       }
+      window.addEventListener('resize', syncLayoutAndReport);
       ` : buildKatexLoaderJs('renderKatex();')}
     }
   </script>

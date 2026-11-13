@@ -50,6 +50,23 @@ describe('buildMathWebViewHtml — 零阻塞外链约束', () => {
     expect(html).toContain("reportHeight('source')");
     expect(html).toContain("reportHeight('katex')");
   });
+
+  it('aligns base font size and fits/scrolls overflowing display formulas without clipping', () => {
+    expect(html).toContain('font-size: 15px;');
+    expect(html).toContain('font-size: 1.08em;');
+    expect(html).toContain('function fitFormula()');
+    expect(html).toContain('katex-overflow');
+    expect(html).toContain('Math.max(root.getBoundingClientRect().height, root.scrollHeight)');
+    expect(html).toContain("addEventListener('resize', syncLayoutAndReport)");
+  });
+
+  it('captures unscaled KaTeX markup before fitFormula mutates viewport font-size', () => {
+    const captureHtml = buildMathWebViewHtml('E = mc^2', {}, undefined, true);
+    const renderPos = captureHtml.indexOf("kind: 'math-rendered'");
+    const fitPos = captureHtml.indexOf('syncLayoutAndReport();', renderPos);
+    expect(renderPos).toBeGreaterThan(-1);
+    expect(fitPos).toBeGreaterThan(renderPos);
+  });
 });
 
 describe('buildMathWebViewHtml — 主题色净化', () => {
@@ -106,5 +123,13 @@ describe('buildSelectableMarkdownHtml — math 文档同守零阻塞约束', () 
   it('不含公式文档:不注入 KaTeX loader', () => {
     const html = buildSelectableMarkdownHtml('普通文档,没有公式。');
     expect(html).not.toContain('katex');
+  });
+
+  it('keeps inline math on baseline without vertical-align middle shifts', () => {
+    const html = buildSelectableMarkdownHtml('行内 $x^2$ 公式');
+    const rule = html.match(/\.xdt-math-inline\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(rule).toContain('display: inline-block;');
+    expect(rule).toContain('vertical-align: baseline;');
+    expect(rule).not.toContain('vertical-align: middle;');
   });
 });
