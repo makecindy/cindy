@@ -85,7 +85,7 @@ import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.j
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
-import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
@@ -101,8 +101,8 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 
-import { resolveSafe as resolveXdtImage } from '../imageCacheStore.js';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
+import { resolveSafe as resolveXdtImage } from '../imageCacheStore.desktop.js';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop.js';
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
@@ -153,7 +153,8 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
-import { getResolvedMainLocale, t } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.desktop.js';
+import { imText } from '../im/shared/imText.js';
 import { modernLocaleOf } from '../../shared/locale.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
@@ -179,8 +180,10 @@ function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin
   }
 }
 
-/** 路由不可用时附在错误后的恢复指引(渠道回帖与 request ledger 都看得到)。 */
-const ROUTE_RESELECT_HINT = '。请在 设置 → IM 机器人 中为这个渠道的工作目录重新选择模型。';
+/** 路由不可用时附在错误后的恢复指引(渠道回帖与 request ledger 都看得到; 抛错时按界面语言现取)。 */
+function routeReselectHint(): string {
+  return imText('imBot.text.hook.run.routeReselectHint');
+}
 
 type HookDispatchOverrides = {
   agentKind: string | null;
@@ -279,7 +282,7 @@ async function resolveNewSessionConfig(
       // Workspace sources are paired with their former model. Resolve the inherited
       // model first, then apply the existing stale-source checks below.
       : await resolveImAutomaticDefaults(imDefaults, undefined, providers, automaticAgent);
-    if (!resolved) throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} no available default model${ROUTE_RESELECT_HINT}`);
+    if (!resolved) throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} no available default model${routeReselectHint()}`);
     defaults = resolved;
   }
   const requestedAgent = mergedOverrides.agentKind === 'claude-code' || mergedOverrides.agentKind === 'codex' || mergedOverrides.agentKind === 'pi'
@@ -299,7 +302,7 @@ async function resolveNewSessionConfig(
       !isImDefaultPermissionMode(requestedPermissionMode) ||
       !permissionModes.includes(requestedPermissionMode)
     )) {
-      throw new Error('Selected permission mode is unavailable for the remote agent' + ROUTE_RESELECT_HINT);
+      throw new Error('Selected permission mode is unavailable for the remote agent' + routeReselectHint());
     }
     const remote = resolveHookSessionConfig({
       readDefaults: () => defaults,
@@ -360,7 +363,7 @@ async function resolveNewSessionConfig(
     : preferredProviderId;
   if (providers && preferredProviderId && !providerId) {
     throw new Error(
-      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" cannot serve model "${resolved.model}"${ROUTE_RESELECT_HINT}`,
+      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" cannot serve model "${resolved.model}"${routeReselectHint()}`,
     );
   }
   // 停用收口(PR #744 review 第十、十四轮):两条路径都必须经宽松降级裁决 ——
@@ -376,11 +379,11 @@ async function resolveNewSessionConfig(
     : await resolveLenientSessionRoute(resolved.agentKind, resolved.model, providerId ?? null);
   if (preferredProviderId && lenient.providerId !== preferredProviderId) {
     throw new Error(
-      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" is unavailable${ROUTE_RESELECT_HINT}`,
+      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" is unavailable${routeReselectHint()}`,
     );
   }
   if (!lenient.model) {
-    throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} model disabled in settings${ROUTE_RESELECT_HINT}`);
+    throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} model disabled in settings${routeReselectHint()}`);
   }
   if (lenient.degraded) {
     log.warn(
@@ -440,16 +443,15 @@ function isRenderableImageUrl(u: string): boolean {
  * **刻意不说卡片去了哪**: 投递位置由 hook server 决定(Telegram 群里的授权卡自
  * 2026-08 起改投宿主私聊), 客户端不知道对端版本, 写"已发到私聊"可能是假的。
  */
-const AWAITING_INTERACTION_NOTICE: Record<string, string> = {
-  permission: '等待授权 · 需要你确认',
-  ask_user_question: '等待回答 · 需要你选择',
-  plan_review: '等待审阅 · 需要你确认计划',
+const AWAITING_INTERACTION_NOTICE_KEY: Record<string, string> = {
+  permission: 'imBot.text.hook.run.awaitingPermission',
+  ask_user_question: 'imBot.text.hook.run.awaitingAnswer',
+  plan_review: 'imBot.text.hook.run.awaitingPlan',
 };
-/** 未知 kind(将来新增类型)不编造语义, 只说在等你。 */
-const AWAITING_INTERACTION_FALLBACK = '等待你的确认';
 
 function awaitingInteractionNotice(kind: string): string {
-  return AWAITING_INTERACTION_NOTICE[kind] ?? AWAITING_INTERACTION_FALLBACK;
+  // 未知 kind(将来新增类型)不编造语义, 只说在等你。
+  return imText(AWAITING_INTERACTION_NOTICE_KEY[kind] ?? 'imBot.text.hook.run.awaitingFallback');
 }
 
 /** 兜底账本图片白名单；X 还接收 MP4/MOV 视频:cindy-media 地址按扩展名判。 */
@@ -951,7 +953,10 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
       try {
-        await prepareUnhealthySessionForSend(req.sessionId);
+        if (await prepareUnhealthySessionForSend(req.sessionId)) {
+          // Recovery retained the context but retired the original native id.
+          createOpts.resumeSessionId = undefined;
+        }
         session = req.isNew
           ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
               sessionProviderId = admitted.providerId;
@@ -970,6 +975,68 @@ export function createMakerHookSessionRunner(deps: {
           void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
         }
         return fail(err instanceof Error ? err.message : String(err));
+      }
+
+      // 项目资源漂移(会话中途新增 skill/extension):createSession 可能复用活实例,
+      // 空闲时经 Maker 回收后重取 —— 再走一次同样的获取路径即得重建实例。
+      // 两种失败分开:回收本身失败 → 旧实例大概率仍可用,原样投递(hook 轮次
+      // 不因回收故障中断);回收成功(旧实例已关)后的重建失败必须上抛 —— 继续
+      // 用已关闭实例只会把真实启动原因(如新增扩展导致 pi 启动失败)换成误导
+      // 性的「会话已关闭」(2026-11-09 Greptile P2)。
+      let driftedRecycled = false;
+      try {
+        driftedRecycled = await maker.recyclePiRuntimeIfResourcesDrifted(session);
+      } catch {
+        // 回收抛出时 Session 已停在 error(close 失败不回退),旧实例不可用 ——
+        // 继续投递只会被 ensureActive 拒,必须走重建(Codex P2,2026-11-10)。
+        driftedRecycled = session.getStatus() !== 'active';
+      }
+      if (driftedRecycled) {
+        try {
+          session = req.isNew
+            ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
+                sessionProviderId = admitted.providerId;
+                return maker.createSession({
+                  ...createOpts,
+                  model: admitted.model,
+                  ...(admitted.providerId !== null ? { providerId: admitted.providerId } : {}),
+                  ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
+                });
+              }, assertAccount)
+            : await maker.createSession(createOpts);
+        } catch (err) {
+          // session 未建成: 预建 worktree 同步回收(同上方新建失败路径), 防孤儿泄漏
+          if (req.isNew && worktreeStore.get(req.sessionId)) {
+            void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
+          }
+          return fail(err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙)必须先于
+      // 取消探针:新建任务的行已落库但 providerId 未写(DesktopSessionStorage.create
+      // 不写、freezeSessionProviderAtStart 只写内存),取消早返回若跳过这里,应用重启
+      // 后复用会读到空来源,改走默认供应商或因模型不可用而失败。
+      // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
+      // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
+      if (req.isNew) {
+        if (sessionProviderId && accountStillCurrent()) {
+          setSessionProvider(session.id, sessionProviderId);
+        }
+      } else {
+        hydrateSessionProvider(session.id, rowProviderId);
+      }
+
+      // 取消探针:回收/重建是异步窗口,期间 task.cancel 的 abort 对旧实例无目标、
+      // 对新实例未登记 —— 喊停后不得把消息投给新进程执行。此处尚未发送,提前以
+      // error 收口;execute 收口会按取消账本把状态统一改写为 cancelled。
+      if (req.isCancelRequested?.()) {
+        return {
+          status: 'error',
+          finalText: '',
+          errorMessage: imText('imBot.text.hook.run.cancelledBeforeRun'),
+          durationMs: Date.now() - startedAt,
+        };
       }
 
       /**
@@ -1000,20 +1067,7 @@ export function createMakerHookSessionRunner(deps: {
         log.warn(
           `hook run aborted: live session ${req.sessionId} runs in a directory that is no longer in the workspace map`,
         );
-        return fail(
-          '这个任务正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个任务后重发。',
-        );
-      }
-
-      // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙):
-      // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
-      // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
-      if (req.isNew) {
-        if (sessionProviderId && accountStillCurrent()) {
-          setSessionProvider(session.id, sessionProviderId);
-        }
-      } else {
-        hydrateSessionProvider(session.id, rowProviderId);
+        return fail(imText('imBot.text.hook.run.liveSessionDirUnmapped'));
       }
 
       // renderer 可见性: 不 wire 则消息不落库、UI 空白(scheduler Phase 6 老坑)
@@ -1121,7 +1175,7 @@ export function createMakerHookSessionRunner(deps: {
         interactionRouteLease?.release('hook_turn_terminal');
         interactionRouteLease = null;
         for (const iid of [...ownInteractionIds]) {
-          cancelHookInteraction(iid, '任务已结束, 此交互已失效');
+          cancelHookInteraction(iid, imText('imBot.text.hook.run.interactionExpired'));
         }
         ownInteractionIds.clear();
         // 收口后不再有待决交互: 先清空, 各 handler 的 finally 随后只会摘掉状态行。
@@ -1545,7 +1599,7 @@ export function createMakerHookSessionRunner(deps: {
               handle: handleHookInteraction,
               onCancel: (requestId) => {
                 ownInteractionIds.delete(requestId);
-                return cancelHookInteraction(requestId, '任务已结束, 此交互已失效');
+                return cancelHookInteraction(requestId, imText('imBot.text.hook.run.interactionExpired'));
               },
             });
           },
@@ -1644,7 +1698,7 @@ export function createMakerHookSessionRunner(deps: {
         const message = isQuotaExhaustionFailure(observer.errorData)
           ? terminalErrorText(observer.errorData, {
             ...await resolveSessionErrorContext(session.id),
-            botLabel: req.source?.im === 'telegram' ? 'Telegram 官方 bot' : req.origin.connectionName,
+            botLabel: req.source?.im === 'telegram' ? imText('imBot.text.hook.run.telegramOfficialBot') : req.origin.connectionName,
             surface: 'official',
           })
           : err instanceof Error ? err.message : String(err);
@@ -1681,6 +1735,7 @@ export function createMakerHookSessionRunner(deps: {
           `item${inboundAttachmentFailures === 1 ? '' : 's'} could not be prepared.`;
         finalText = `${finalText.trimEnd()}${finalText.trim().length > 0 ? '\n\n' : ''}${warning}`;
       }
+      const process = observer.processRecord();
       return {
         status: 'ok',
         finalText,
@@ -1688,6 +1743,7 @@ export function createMakerHookSessionRunner(deps: {
         durationMs: Date.now() - startedAt,
         ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
         ...(xMediaIds !== undefined ? { xMediaIds } : {}),
+        ...(process ? { process } : {}),
       };
     },
 

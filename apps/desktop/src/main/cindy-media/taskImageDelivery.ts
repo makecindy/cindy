@@ -12,7 +12,7 @@ import { hasRef, removeRefById, withSessionMediaRefLock } from './ledger';
 import {
   captureMediaRefCompensationScope,
   withMediaRefCompensation,
-} from './refCompensationJournal';
+} from './refCompensationJournal.desktop';
 import { sniffMediaMime } from './sniffMediaMime';
 import {
   hasLocalTaskImages,

@@ -3,6 +3,7 @@ import type { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 /** Main-only card authorization; neither the View nor persisted queue can mint it. */
 export const MCP_APP_MESSAGE_GUARD = Symbol('MCP_APP_MESSAGE_GUARD');
 export type McpAppMessageGuard = () => Promise<void>;
+export interface McpAppMessageSource { serverId: string; title: string }
 export const MCP_APP_MESSAGE_CLIENT_PREFIX = 'mcp-app-message:';
 
 type McpAppQueuedMessage = {

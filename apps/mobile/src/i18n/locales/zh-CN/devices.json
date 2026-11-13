@@ -11,7 +11,7 @@
     "deleteMessage": "将此设备从账号中移除并断开远程连接。设备上的任务和文件会保留，重新登录后可再次加入。",
     "deleteFailed": "删除设备失败。",
     "deleteOnline": "当前服务端尚不支持移除在线设备，请待服务升级后重试。",
-    "deleteRejectedWhileOffline": "未能删除设备：服务端仍将它记为在线，与列表中的离线状态不一致",
+    "deleteRejectedWhileOffline": "未能删除设备：服务端仍将它记为在线，与列表中的离线状态不一致。",
     "currentlyOnline": "当前在线",
     "availableSection": "在线设备",
     "offlineSection": "离线设备",
@@ -46,7 +46,7 @@
     "emptyCopy": "电脑目前还没有提供这里的内容。",
     "loadFailed": "无法加载内容",
     "noHosts": "当前没有可用的兼容电脑。",
-    "noConversation": "这个项目目前没有可打开的任务。",
+    "noConversation": "这项内容目前没有可打开的任务。",
     "openFailed": "无法打开任务",
     "resolving": "正在打开最新任务…",
     "retry": "重试",
@@ -63,7 +63,7 @@
       "filterMeta": "{{available}} 台可进入",
       "filterMetaWithUnavailable": "{{available}} 台可进入 · {{unavailable}} 台需处理",
       "showUnavailableReason": "展开的设备会显示不可用原因",
-      "emptyCopy": "在电脑端登录同一账号，并在「设置 → 远程连接」中打开“允许同账号设备控制本机”。",
+      "emptyCopy": "在电脑端登录同一账号，并在「设置 → 远程连接」中打开「允许同账号设备控制本机」。",
       "emptyTitle": "还没有可显示的电脑",
       "hideUnavailableA11y": "隐藏不可用电脑",
       "showUnavailableA11y": "显示不可用电脑",
@@ -182,7 +182,7 @@
     "home": {
       "allDevices": "全部",
       "allComputers": "全部设备",
-      "waitingCount": "{{count}} 待处理",
+      "waitingCount": "{{count}} 个待处理",
       "synced": "已同步",
       "unknownComputer": "未知设备",
       "uncategorizedProject": "未分类项目",
@@ -256,7 +256,7 @@
       "newTask": "新建任务",
       "tryThese": "试试这些新任务",
       "shuffle": "换一组",
-      "syncHint": "在电脑上开始的任务，也会出现在这里",
+      "syncHint": "在电脑上开始的任务也会出现在这里。",
       "items": {
         "findFile": {
           "label": "找一份电脑上的文件",
@@ -294,7 +294,7 @@
     "allConversations": "所有任务",
     "syncFailed": "同步失败",
     "requestFailed": "请求失败",
-    "loading": "正在读取可控制设备",
+    "loading": "正在读取可控制设备…",
     "untitled": "未命名任务",
     "connection": {
       "connecting": "连接中",
@@ -323,7 +323,7 @@
       "openSettings": "打开设置",
       "syncing": "正在重新同步",
       "sync": "重新同步",
-      "pinnedConversations": "置顶 {{count}} 条任务",
+      "pinnedConversations": "{{count}} 个置顶任务",
       "newRemoteConversation": "新建任务",
       "renameDevice": "重命名 {{label}}",
       "project": "项目 {{title}}",
@@ -341,7 +341,7 @@
       "close": "关闭",
       "cancelRename": "取消重命名",
       "createdBy": "由 {{name}} 创建",
-      "ownedBy": "归属 {{name}}"
+      "ownedBy": "属于 {{name}}"
     },
     "accounts": {
       "title": "切换账号",
@@ -361,7 +361,7 @@
       "groupHeading": "分组",
       "sortHeading": "任务排序",
       "projectOrderHeading": "项目排序",
-      "projectOrderManualTip": "长按项目行拖动调整顺序，组内任务仍按上面的排序",
+      "projectOrderManualTip": "长按项目行拖动调整顺序，组内任务仍按上面的排序。",
       "statusHeading": "任务状态",
       "showDeviceTasks": "查看任务",
       "openDevice": "打开",
@@ -481,7 +481,7 @@
       "body": "「{{deviceName}}」撤销了本机的远程访问权限。请在该电脑的 {{appName}} 设置里重新授权本设备，然后点「重试访问」。",
       "retry": "重试访问"
     },
-    "viewAllConversations": "查看全部 {{count}} 条任务",
+    "viewAllConversations": "查看全部 {{count}} 个任务",
     "viewAllRuns": "查看全部 {{count}} 次运行",
     "preview": {
       "needAttention": "{{count}} 个需关注",
@@ -521,7 +521,7 @@
     },
     "search": {
       "openA11y": "搜索远程任务",
-      "closeA11y": "关闭搜索远程任务",
+      "closeA11y": "关闭远程任务搜索",
       "label": "搜索",
       "placeholder": "搜索标题或内容…",
       "clearA11y": "清除搜索",
@@ -542,7 +542,7 @@
     },
     "bulk": {
       "pinning": "置顶中",
-      "unpinning": "取消中",
+      "unpinning": "取消置顶中",
       "archiving": "归档中",
       "restoring": "取消归档中",
       "deleting": "删除中",
@@ -621,13 +621,11 @@
       "minutes": "{{n}} 分钟",
       "hoursMinutes": "{{h}} 小时 {{m}} 分"
     },
-    "retrying": "还没开始，正在重试…",
-    "stopTask": "停止任务",
     "actionFailed": "暂时无法读取或完成操作",
     "messages": "消息往来",
     "readOnly": "仅供查看",
     "directEmpty": "还没有可查看的消息。",
-    "directLimitReached": "本轮伙伴对话已到上限，双方已回到各自的主任务",
+    "directLimitReached": "本轮伙伴对话已到上限，双方已回到各自的主任务。",
     "directUnavailable": "这条伙伴对话已不可用。",
     "unread": "有新回复",
     "status": {
@@ -651,7 +649,7 @@
     "openProfile": "查看 {{name}} 的资料",
     "switchCompanion": "切换伙伴",
     "activity": {
-      "thinking": "在想",
+      "thinking": "正在思考",
       "typing": "正在输入",
       "helping": "在帮你处理"
     },
@@ -756,12 +754,10 @@
     "offline": "请重新连接 {{deviceName}} 后继续，未保存的编辑已保留。",
     "hostUpgrade": "请更新 {{deviceName}} 上的 Cindy 后重试，或在那台电脑上编辑伙伴设置。",
     "readFailed": "暂时无法确认最新状态。请刷新后再试，操作可能已经完成。你的编辑已保留。",
-    "deleteFailed": "删除没有完成。",
+    "deleteFailed": "未能删除伙伴。",
     "artifactsEmpty": "还没有成果，可以让伙伴创作一些内容。",
     "openSourceTask": "打开来源任务",
     "modelFollowsDefault": "跟随当前默认模型链",
-    "taskModel": "任务模型",
-    "taskInheritsPrimary": "继承主模型",
     "modelOverride": "使用此伙伴的自定义模型链",
     "modelsUnavailable": "暂无可用模型，请在电脑上检查此伙伴的模型设置后刷新。",
     "artifactsRecovery": "请从消息卡中打开文件，或在 {{deviceName}} 上浏览文件。",
@@ -825,7 +821,7 @@
     "modelMapping": "原来的模型配置尚需对应。",
     "contextMapping": "原来的工作目录或关联上下文尚需对应。",
     "deliveryFailed": "尚未验证原来的发送位置。",
-    "sourceChanged": "原任务已变化，请重新读取。",
+    "sourceChanged": "原任务已变化，请重新加载预览。",
     "credentialFailed": "凭证未能安全保存。",
     "scriptMissing": "缺少这项任务所需的脚本。",
     "sourceCommand": "找不到原 Agent 的控制命令。",
@@ -852,7 +848,7 @@
     "permissionDenied": "没有权限读取或保存此项，修复权限后可重试。",
     "setupDeferred": "可在伙伴对话中继续登录与验证。",
     "automationInvalid": "自动化定义无法转换，尚未创建。",
-    "itemFailed": "此项未完成，可重试并查看导入详情。",
+    "itemFailed": "此项未完成，可重试或查看导入详情。",
     "chatPartial": "伙伴已创建，但部分资料未完整保存。以下项目仍需处理；其他内容和对话可以正常使用。",
     "imBotOwnerMissing": "没找到主人的用户 ID，请到伙伴的「消息平台」页把这个机器人连上。",
     "imBotGatewayRunning": "原来的网关还在用这个机器人。先停掉它，再到「消息平台」页连接。",
@@ -867,7 +863,6 @@
   },
   "glance": {
     "open": "{{name}}的近况",
-    "dueUnseen": "有待办到期",
     "computers": "电脑",
     "runningHere": "正在这台上运行",
     "online": "在线",
@@ -875,37 +870,16 @@
     "current": "当前",
     "offlineCount_one": "离线 {{count}} 台",
     "offlineCount_other": "离线 {{count}} 台",
-    "todos": "待办",
     "showMore": "显示更多",
     "showLess": "收起",
     "doneCount_one": "已完成 {{count}}",
     "doneCount_other": "已完成 {{count}}",
-    "delete": "删除",
-    "deleted": "已删除，同一件事以后不再记",
-    "undo": "撤销",
-    "undoFailed": "没能撤销，请重试",
-    "deleteFailed": "没能删除，请重试",
-    "check": "帮我查查",
     "checkMeta": "在已连接的邮件和消息里找新待办",
-    "checkPrompt": "帮我查查已连接的邮箱、消息等来源里，有没有需要我处理的新事项，有就记成待办。",
-    "dailyCheck": "每天帮我查一次",
-    "dailyCheckMeta": "工作日 9:00，没有新待办不打扰",
     "recentTasks": "近期任务",
     "unread": "未读结果",
-    "stopDailyCheck": "停止每天检查",
     "openFailed": "无法打开链接",
-    "dailyCheckFailed": "没能保存，请重试",
-    "loadFailed": "没能读取待办",
     "outputs": "输出内容",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "你交代的",
-      "mail": "来自邮件",
-      "feishu": "来自飞书",
-      "github": "来自 GitHub",
-      "community": "来自社区",
-      "task": "来自任务"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "主力电脑「{{device}}」离线",
@@ -928,13 +902,15 @@
     "moveTo": "换到「{{device}}」",
     "moveTitle": "把 {{name}} 换到「{{device}}」运行？",
     "moveDescription": "从现在起 {{name}} 在「{{device}}」上运行，对话记录一起带过去。工作目录、连接和本机文件留在原来的电脑上。",
+    "olderTarget": "旧版 Cindy",
+    "olderTargetNote": "「{{device}}」上是旧版 Cindy，{{name}} 在那里按旧方式运行：对话记录照常同步，项目规则和自动化在那里不生效。",
     "moveAction": "换到「{{device}}」",
     "moving": "正在把 {{name}} 换到「{{device}}」…",
     "busyTitle": "{{name}} 还在回复",
-    "busyDescription": "可以等这一轮结束后再换到「{{device}}」，也可以停止这一轮马上换。",
+    "busyDescription": "可以等这条回复结束后再换到「{{device}}」，也可以停止回复马上换。",
     "busyWait": "等回复完再换",
     "busyStop": "停止并换",
-    "transferBusy": "{{name}} 还在回复，等这一轮结束再换电脑",
+    "transferBusy": "{{name}} 还在回复，等回复结束再换电脑",
     "switchConflict": "{{name}} 的主力电脑已经变了，这次没有更换",
     "homeOutdated": "主力电脑「{{device}}」上的 Cindy 版本较旧，请先更新它，或在那台电脑上更换",
     "homeUnreachable": "现在连不上「{{device}}」，它需要在线并开启「允许同账号设备控制本机」",
@@ -996,5 +972,8 @@
       "disk-full": "没导入成功：磁盘空间不足",
       "native-unloadable": "没导入成功：原记录无法加载"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "等待更新"
   }
 }

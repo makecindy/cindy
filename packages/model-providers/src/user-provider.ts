@@ -4,7 +4,7 @@ import { nativeModelAgents } from './modelProtocol.js';
 import { isMimoTokenPlanProvider } from './mimoPresentation.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
 import { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from './providerEndpointTemplate.js';
-import { PI_MODEL_APIS } from "./types.js";
+import { PI_MODEL_APIS, isProviderVideoApi } from "./types.js";
 import { providerModelRecord, providerModelGenerationRecord, providerPresetModelRecord, providerModelMetadata } from "./providerModelCatalog.js";
 import { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 import { providerMediaField } from "./providerMediaModels.js";
@@ -55,7 +55,7 @@ import {
 } from "./effortResolution.js";
 
 /** 自定义模型缺省上下文窗口（用户不填元数据时的保守默认，仅用于展示）。 */
-export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
+export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 500_000;
 
 /**
  * Older releases allowed a user provider to occupy `xai`, which is now the built-in SuperGrok
@@ -490,7 +490,7 @@ export function buildUserProvider(
       rt.supportsImageGeneration,
     );
     if (rt.imageApi === "openai-images") routing[agent]!.imageApi = rt.imageApi;
-    if (rt.videoApi === "xai-videos") routing[agent]!.videoApi = rt.videoApi;
+    if (isProviderVideoApi(rt.videoApi)) routing[agent]!.videoApi = rt.videoApi;
     const followsPreset =
       presetRuntime &&
       withoutTrailingSlashes(resolvedBaseUrl) ===
@@ -733,7 +733,7 @@ export function buildUserProvider(
     >
   > = {};
   const imageAgents = agents.filter((agent) => routing[agent]?.imageApi === "openai-images");
-  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi === "xai-videos");
+  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi !== undefined);
   for (const [agent, list] of Object.entries(models)) {
     for (const model of list ?? []) {
       const field = providerMediaField(model.mode);

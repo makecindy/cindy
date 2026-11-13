@@ -1,5 +1,7 @@
 # Cindy Mobile V1 Source-Based Implementation Plan
 
+> 反馈范围修订（2026-11-11）：本文旧有的 Issue Confirm「desktop-only／不做手机表单」限制及全屏表单方案仅作历史记录，已由[当前反馈卡片范围](remote-control-plan.md#反馈卡片当前范围)替代。
+
 > 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
 
 > 日期: 2026-06-18

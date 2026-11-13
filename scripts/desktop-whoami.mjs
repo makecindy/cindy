@@ -113,7 +113,7 @@ function commandContainsPath(command, candidatePath) {
     const before = normalizedCommand[index - 1];
     const after = normalizedCommand[index + normalizedPath.length];
     const start = before === undefined || /\s|["'=]/.test(before);
-    const end = after === undefined || after === '/' || after === '"' || after === "'";
+    const end = after === undefined || /\s/.test(after) || after === '/' || after === '"' || after === "'";
     if (start && end) return true;
     index = normalizedCommand.indexOf(normalizedPath, index + 1);
   }
@@ -142,7 +142,8 @@ function repositoryWorktrees(cwd = rootDir) {
 }
 
 function extractArgumentPath(command, name) {
-  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|\\s/prefetch:\\d+\\b|$)`));
+  // Windows Crashpad puts /prefetch:N between the profile path and --switches.
+  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|\\s/prefetch:\\d+(?:\\s|$)|$)`));
   return match?.[1]?.replace(/^['"]|['"]$/g, '') ?? null;
 }
 

@@ -2,6 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
 
+/** Consume launcher-only routing before Main can spawn agents or other dev apps. */
+export function consumePersonalMonitorEnvironment(env: NodeJS.ProcessEnv) {
+  const directory = env.CINDY_PERSONAL_MONITOR_DIR;
+  const generation = env.CINDY_PERSONAL_GENERATION;
+  delete env.CINDY_PERSONAL_MONITOR_DIR;
+  delete env.CINDY_PERSONAL_GENERATION;
+  return directory && generation ? { directory, generation } : null;
+}
+export const personalMonitorEnvironment = consumePersonalMonitorEnvironment(process.env);
+let monitorOwned = false;
+export function ownsPersonalBuildMonitor() { return monitorOwned; }
+
 export interface PersonalBuildMonitorDeps {
   directory: string;
   generation: string;
@@ -24,6 +36,18 @@ export function createPersonalBuildMonitor(d: PersonalBuildMonitorDeps) {
   const st = fs.lstatSync(d.directory);
   if (!st.isDirectory() || st.isSymbolicLink() || (st.mode & 0o077) !== 0)
     throw new Error('Personal build monitor needs a private directory');
+  // A pre-owner-file host may already be writing here. Do not adopt its generation either.
+  if (fs.existsSync(path.join(d.directory, 'heartbeat.json'))) return async () => {};
+  // A generation is single-use. Never reclaim it, even when its original PID has exited.
+  // Older hosts can still leak routing to a child; that child must not overwrite health evidence.
+  try {
+    fs.writeFileSync(path.join(d.directory, 'host-owner.json'), JSON.stringify({ pid: d.pid, generation: d.generation }),
+      { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return async () => {};
+    throw error;
+  }
+  monitorOwned = true;
   let active = false;
   const heartbeat = path.join(d.directory, 'heartbeat.json');
   const request = path.join(d.directory, 'request.json');

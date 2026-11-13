@@ -1,0 +1,5 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": { "modules": ["CindyHapticsModule"] },
+  "android": { "modules": ["app.cindy.haptics.CindyHapticsModule"] }
+}

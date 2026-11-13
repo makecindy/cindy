@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "今回は選択した {{selected}} ではなく {{actual}} が応答しました（サーバー側の一時的なダウングレード）",
     "copyStateCopying": "コピー中",
@@ -272,7 +273,7 @@
     },
     "contextRebuild": {
       "labelOverflow": "コンテキストを整理して続行しました",
-      "labelTimeout": "直前の応答がなかったため、整理して続行しました",
+      "labelTimeout": "直前の応答がなかったため、コンテキストを整理して続行しました",
       "labelStrip": "大きな画像を除いて続行しました",
       "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
       "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
@@ -283,9 +284,9 @@
       "auto": "自動圧縮",
       "aria": "会話を圧縮しました"
     },
-    "goalComplete": "目標を達成 · {{turns}} 回 · 所要 {{duration}}",
-    "goalResumed": "使用量が回復、目標を継続",
-    "goalCapacityRetry": "モデルサービスが混雑していました。目標を再試行します",
+    "goalComplete": "ゴールを達成 · {{turns}} ターン · 所要 {{duration}}",
+    "goalResumed": "使用量が回復、ゴールを継続",
+    "goalCapacityRetry": "モデルサービスが混雑していました。ゴールを再試行します",
     "autoResume": {
       "separator": "接続が中断されたため、自動的に再開しました",
       "succeeded": "再接続しました",
@@ -352,21 +353,21 @@
       "first": "すでにキューの先頭です。",
       "last": "すでにキューの末尾です。",
       "steering": "割り込み送信中",
-      "orcaTitle": "コラボレーションキュー {{index}}",
+      "orcaTitle": "協同キュー {{index}}",
       "title": "キュー {{index}}",
-      "orcaEditDisabled": "コラボレーションメッセージは編集できません。",
+      "orcaEditDisabled": "協同メッセージは編集できません。",
       "busy": "キュー操作を同期中です。完了後にもう一度操作してください。",
-      "steeringDisabled": "現在の turn に割り込みを送信中です。デスクトップから戻るまでお待ちください。",
+      "steeringDisabled": "現在のターンに割り込みを送信中です。デスクトップからの応答を待ってから操作してください。",
       "editLocked": "このキューメッセージは編集中です。完了後に操作してください。",
       "interactionLocked": "別の操作がキューをロックしています。完了後に操作してください。",
       "syntheticHint": "システムが自動生成した指令です。キャンセルはできますが、編集や割り込み送信はできません。",
-      "steeringHint": "現在の turn に割り込みを送信中のため、まだ編集や移動はできません。",
+      "steeringHint": "現在のターンに割り込みを送信中のため、まだ編集や移動はできません。",
       "editHint": "このメッセージは編集中で、デスクトップの自動送信は一時停止しています。",
       "interactionHint": "キューの並べ替えまたは別の操作中のため、まだ編集できません。"
     }
   },
   "payloadPresentation": {
-    "remoteFetchBody": "モバイルアプリがリモートのデスクトップからメディアを取得します。",
+    "remoteFetchBody": "モバイルアプリがリモートのデスクトップからメディアの取得を試みます。",
     "missingRemotePath": "表示できるリモートパスがありません",
     "missingRemotePathSentence": "表示できるリモートパスがありません。",
     "mermaidSourceTitle": "Mermaid 図のソース",

@@ -85,7 +85,7 @@
       "gitWorktreePrune": "Limpar referências a worktrees removidas",
       "ghPrList": "Listar pull requests",
       "ghPrView": "Ver pull request",
-      "ghPrChecks": "Verificar resultados dos testes do pull request",
+      "ghPrChecks": "Ver verificações do pull request",
       "ghPrStatus": "Verificar estado do pull request",
       "ghPrDiff": "Ver alterações do pull request",
       "ghPrCreate": "Criar pull request",
@@ -200,5 +200,13 @@
       }
     },
     "failed_many": "{{count}} chamadas falharam"
+  },
+  "subscriptionAccountError": {
+    "limited": "A conta de subscrição desta tarefa atingiu o limite de utilização. Aguarda a reposição ou escolhe outra origem de modelos. A conta não muda automaticamente.",
+    "limitedUntil": "A conta de subscrição desta tarefa atingiu o limite de utilização. Reposição prevista: {{resetAt}}. Aguarda até lá ou escolhe outra origem de modelos. A conta não muda automaticamente.",
+    "loginRequired": "A conta de subscrição desta tarefa requer um novo início de sessão. Inicia sessão no computador que executa a tarefa e tenta novamente.",
+    "signingIn": "O início de sessão na conta de subscrição desta tarefa está em curso. Tenta novamente quando terminar.",
+    "unavailable": "A conta de subscrição atribuída a esta tarefa não pode ser utilizada neste pedido. Verifica a conta nas definições do fornecedor de modelos no computador que executa a tarefa ou escolhe outra origem de modelos.",
+    "legacy": "A conta de subscrição atribuída a esta tarefa não está disponível. Verifica o início de sessão e a utilização no computador que executa a tarefa ou escolhe outra origem de modelos. A conta não muda automaticamente."
   }
 }

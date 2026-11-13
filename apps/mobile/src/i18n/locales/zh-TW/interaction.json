@@ -26,9 +26,16 @@
     "autoReviewReason": "自動審批需要你決定：{{reason}}",
     "fullAccessConfirm": {
       "title": "開啟完全訪問？",
-      "description": "完全訪問會關閉工作區沙箱並跳過常規審批。{{appName}} 可以修改工作區外的檔案、執行聯網命令且不再詢問；內建高風險操作仍會要求確認。",
+      "description": "完全存取會關閉工作區沙箱並跳過一般核准。{{appName}} 可以修改工作區外的檔案、執行連網命令且不再詢問；內建高風險操作仍會要求確認。",
       "confirm": "開啟完全訪問",
       "cancel": "保留當前權限"
+    },
+    "description": {
+      "default": "操作按需由你核准。",
+      "acceptEdits": "檔案編輯直接允許，其他操作按需由你核准。",
+      "auto": "操作由 AI 模型核准，可能需要額外等待；必要時由你確認。",
+      "bypass": "一般操作直接允許，可存取工作區外檔案及連網執行命令。",
+      "plan": "只分析和規劃，不修改檔案。"
     }
   },
   "planMode": {
@@ -40,7 +47,6 @@
     "questionWithdrawn": "無需再回答",
     "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
     "sendSupplement": "傳送補充",
-
     "readOnlyKind": "待確認",
     "readOnlyTitle": "電腦端正在等待確認",
     "pendingRequests": "待處理請求",
@@ -52,7 +58,7 @@
     "composerBlockedByPending": "先處理電腦端的待處理請求後才能繼續輸入。",
     "missingRequestId": "這個遠端互動缺少 requestId，無法回傳決定。",
     "desktopConfirmUnsupported": "此確認只能在遠端電腦上處理。請回到電腦端繼續。",
-    "unsupportedType": "手機版暫不支援這個遠端互動型別。",
+    "unsupportedType": "手機版暫不支援這個遠端互動類型。",
     "unsupportedKind": "暫不支援",
     "desktopOnlyKind": "電腦端處理",
     "cancelRequest": "取消這次請求",
@@ -72,7 +78,7 @@
     "selectAnswer": "選擇回答 {{label}}",
     "submittingHint": "正在把決定回傳到電腦端，請不要重複提交。",
     "decisionNotAccepted": "未能提交，請重試。",
-    "customAnswerInputAccessibility": "輸入自定義回答",
+    "customAnswerInputAccessibility": "輸入自訂回答",
     "customAnswerPlaceholder": "輸入其他回答",
     "customAnswerButtonText": "輸入其他回答…",
     "answerInput": "輸入回答",
@@ -93,19 +99,19 @@
     "planEditExit": "退出計劃編輯",
     "planCollapse": "收起計劃",
     "planExpandArea": "展開計劃瀏覽區",
-    "planHalf": "切換到半屏計劃",
+    "planHalf": "切換到半螢幕計劃",
     "planEditorAccessibility": "計劃編輯器",
     "planEditorPlaceholder": "編輯計劃",
     "planOutline": "目錄",
     "planJumpTo": "跳到計劃章節 {{title}}",
     "planEmpty": "計劃內容為空。",
     "planApproveAccessibility": "批准執行計劃",
-    "planApprove": "批准 Claude 的計劃並開始編碼",
-    "planFeedbackLabel": "計劃反饋",
+    "planApprove": "批准 Claude 的計劃並開始寫程式",
+    "planFeedbackLabel": "計劃回饋",
     "planFeedbackPlaceholder": "告訴 Claude 應該怎麼做",
-    "planFeedbackRequired": "輸入反饋後才能提交。",
-    "planFeedbackSubmit": "提交計劃反饋",
-    "planFeedbackAccessibility": "反饋修改計劃",
+    "planFeedbackRequired": "輸入回饋後才能提交。",
+    "planFeedbackSubmit": "提交計劃回饋",
+    "planFeedbackAccessibility": "提供回饋以修改計劃",
     "validation": {
       "required": "請填寫此必填項目。",
       "choice": "請選擇列出的選項。",
@@ -165,11 +171,11 @@
     "confirm": "確認回退",
     "confirming": "回退中",
     "titleLoading": "正在檢查回退影響",
-    "titleDefault": "確認回退到這條訊息？",
+    "titleDefault": "確認回退到這則訊息？",
     "titleEmpty": "只回退對話歷史",
     "titleError": "無法回退",
     "detailLoading": "手機端正在向電腦端讀取檔案回退預覽。",
-    "detailDefault": "會回滾下面這些檔案，並截斷這條訊息之後的對話歷史。",
+    "detailDefault": "會還原下面這些檔案，並截斷這則訊息之後的對話歷史。",
     "detailEmpty": "這則訊息之後沒有偵測到專案檔案改動。",
     "detailConversationOnly": "專案檔案不會回到之前的狀態。",
     "detailError": "電腦端拒絕了這次回退操作。"
@@ -187,6 +193,7 @@
     "fromLead": "來自 Lead 的訊息",
     "fromWorkerNamed": "來自 Worker「{{role}}」的訊息",
     "fromWorker": "來自 Worker 的訊息",
+    "fromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",
     "emptyMessageBody": "（空訊息）"
   },
   "contextSheet": {
@@ -222,13 +229,13 @@
     "photoPermissionHint": "照片權限未開啟，開啟後可快速新增最近照片。",
     "enablePhotoPermission": "開啟照片權限",
     "enable": "去開啟",
-    "icloudTimeout": "照片還在從 iCloud 下載，等待超時了。請檢查網路，稍後重試。",
+    "icloudTimeout": "照片還在從 iCloud 下載，等待逾時。請檢查網路，稍後重試。",
     "photoNotReadable": "這張照片暫時無法讀取（可能還沒從 iCloud 下載完成），請稍後重試。"
   },
   "pluginSetup": {
     "remoteDesktop": "開啟桌面",
     "completeOnDesktop": "可透過遠端桌面操作電腦完成設定。登入、授權和憑據儲存均在該電腦進行，本卡片會自動更新狀態。",
-    "chooseOne": "選擇一種配置方式",
+    "chooseOne": "選擇一種設定方式",
     "progress": "{{satisfied}}/{{total}} 已完成",
     "desktopActionHint": "在電腦端{{action}}",
     "a11ySeparator": "，",
@@ -243,7 +250,7 @@
     },
     "error": {
       "ACTION_FAILED": "設定操作未完成，請重試。",
-      "ACTION_STALE": "設定已更新，請重新選擇配置操作。",
+      "ACTION_STALE": "設定已更新，請重新選擇設定操作。",
       "AUTH_CANCELLED": "授權已取消，您可以重新授權。",
       "AUTH_FAILED": "未能完成授權，請重試。",
       "AUTH_NETWORK": "無法連線授權服務，請檢查網路後重試。",
@@ -253,8 +260,8 @@
       "SAVE_FAILED": "未能儲存配置，請重試。",
       "WINDOW_CLOSED": "發起設定的視窗已關閉，請回到該任務重試。",
       "TARGET_UNAVAILABLE": "插件已停用、解除安裝或不可用，請檢查插件狀態後重試。",
-      "ASSESSMENT_FAILED": "暫時無法重新整理配置狀態，請重試。",
-      "TIMEOUT": "等待設定超時，請重試。"
+      "ASSESSMENT_FAILED": "暫時無法重新整理設定狀態，請重試。",
+      "TIMEOUT": "等待設定逾時，請重試。"
     },
     "action": {
       "oauth_connect": "授權",
@@ -334,8 +341,8 @@
     "record": {
       "doneOn_one": "主人在 {{device}} 完成了 {{count}} 步輸入",
       "doneOn_other": "主人在 {{device}} 完成了 {{count}} 步輸入",
-      "doneHost_one": "主人在宿主電腦上完成了 {{count}} 步輸入",
-      "doneHost_other": "主人在宿主電腦上完成了 {{count}} 步輸入",
+      "doneHost_one": "主人在主機電腦上完成了 {{count}} 步輸入",
+      "doneHost_other": "主人在主機電腦上完成了 {{count}} 步輸入",
       "donePhone_one": "主人在手機上完成了 {{count}} 步輸入",
       "donePhone_other": "主人在手機上完成了 {{count}} 步輸入",
       "doneElsewhere_one": "主人在另一台裝置上完成了 {{count}} 步輸入",
@@ -348,7 +355,7 @@
     },
     "holder": {
       "elsewhere": "正在 {{device}} 上處理，也可以改在這裡處理。",
-      "host": "宿主電腦",
+      "host": "主機電腦",
       "phone": "手機",
       "otherDevice": "另一台裝置"
     },
@@ -399,7 +406,7 @@
       "submitting": "提交中"
     },
     "permission": {
-      "titleStdin": "允許向終端傳送輸入？",
+      "titleStdin": "允許向終端機傳送輸入？",
       "titleMcpUrl": "完成 {{server}} 的請求",
       "highRiskTitle": "高風險授權需要二次確認",
       "highRiskDetail": "先核對指令內容，再點一次確認允許；不確定就拒絕。",
@@ -455,5 +462,39 @@
       "ghost_id": "插件",
       "tool": "工具"
     }
+  },
+  "issueConfirm": {
+    "title": "確認提交回饋到 {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "功能建議",
+    "titleLabel": "標題",
+    "bodyLabel": "正文（Markdown）",
+    "privacyHint": "Issue 的標題與正文將公開顯示，且可能被搜尋或快取。系統只能遮蔽部分常見敏感資訊，無法辨識所有語意隱私。",
+    "relatedLogsHint": "本次提交包含上方顯示的相關客戶端日誌；日誌在公開前已經過來源與欄位篩選、脫敏及長度限制。",
+    "privacyConfirm": "我已檢查以上公開內容，不包含不應公開的個人、對話或業務資訊",
+    "submissionMethodLabel": "提交身分",
+    "identityGithubUser": "我的 GitHub 帳號 @{{login}}",
+    "identityGithubUserHint": "你將成為該 Issue 的 GitHub 作者，可以在 GitHub 編輯或關閉",
+    "identityPlatform": "Cindy 官方 Bot @{{login}}（預設）",
+    "identityPlatformHint": "無需設定 GitHub 帳號；Issue 由官方 Bot 建立，你可在正文中選擇公開署名",
+    "publicNameLabel": "公開署名",
+    "publicNameHint": "該署名會公開顯示在 Issue 正文中",
+    "anonymous": "匿名",
+    "useAnonymous": "使用匿名署名",
+    "envLine": "提交客戶端環境（提交時自動附加）：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 介面語言 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（目前任務）",
+    "regionLine": "版本區域：{{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "提交回饋",
+    "cancel": "取消",
+    "previewLabel": "GitHub · 公開回饋",
+    "edit": "修改",
+    "doneEditing": "完成修改",
+    "publicSubmit": "公開提交回饋",
+    "publicationNotice": "提交後，內容和署名將公開在 GitHub。",
+    "attribution": "署名：{{name}}",
+    "environment": "附帶執行環境",
+    "identitySettings": "署名與帳號"
   }
 }

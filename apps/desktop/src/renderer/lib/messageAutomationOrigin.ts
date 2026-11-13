@@ -3,6 +3,7 @@ import type {
   MessageSchedulerOrigin,
   StoredMessageOrigin,
 } from '@/lib/ccAgent.types';
+import { readMessageSourceGroupRequest, readMessageSourceGroupThread } from '@cindy/maker-shared/message-source';
 
 /**
  * 把落库的 agentMeta.origin 投影成气泡来源标签。
@@ -15,6 +16,9 @@ import type {
  *   来源标签只补可跳转的发送方任务——老数据没有 senderSessionId 时不出标签。
  */
 export function toMessageAutomationOrigin(origin: unknown): MessageAutomationOrigin | undefined {
+  if (isOrcaAutoBridgeBatch(origin)) {
+    return { kind: 'session', orca: true, orcaAutoBridgeBatchCount: (origin as { autoBridgeBatchCount: number }).autoBridgeBatchCount };
+  }
   if (!origin || typeof origin !== 'object') return undefined;
   const value = origin as Partial<StoredMessageOrigin> & Record<string, unknown>;
   if (value.kind === 'scheduler') return value as MessageAutomationOrigin;
@@ -30,11 +34,19 @@ export function toMessageAutomationOrigin(origin: unknown): MessageAutomationOri
       ...(orcaSenderLabel ? { orcaSenderLabel } : {}),
     };
   }
+  const senderBotId = readNonEmptyString(value.senderBotId);
+  const senderBotName = readNonEmptyString(value.senderBotName);
+  // A group member's words from a task card's Thread: no sending task, the speaker is the source.
+  // A request to the group's Cindy: the owner in the group is the source, there is no sending task.
+  const groupRequest = readMessageSourceGroupRequest(value);
+  if (groupRequest) return { kind: 'session', groupRequest };
+  const groupThread = readMessageSourceGroupThread(value);
+  if (groupThread) {
+    return { kind: 'session', groupThread, ...(senderBotId ? { senderBotId, ...(senderBotName ? { senderBotName } : {}) } : {}) };
+  }
   // 共享任务访客收到的是主机脱敏后的来源：仍标出「由其他任务发送」，但不带身份、不可跳转。
   if (!senderSessionId) return { kind: 'session' };
   const senderSessionTitle = readNonEmptyString(value.senderSessionTitle);
-  const senderBotId = readNonEmptyString(value.senderBotId);
-  const senderBotName = readNonEmptyString(value.senderBotName);
   return {
     kind: 'session',
     senderSessionId,
@@ -69,6 +81,15 @@ export function hookConnectionNameFromOrigin(origin: MessageSchedulerOrigin): st
   const name = readNonEmptyString(origin.scheduleName);
   if (!name) return undefined;
   return readNonEmptyString(name.replace(HOOK_SCHEDULE_NAME_PREFIX, ''));
+}
+
+/** 只有宿主盖章的系统合批才具有批次数量；单条和旧记录继续显示原发送方。 */
+export function isOrcaAutoBridgeBatch(origin: unknown): origin is { kind: 'orca'; autoBridge: true; autoBridgeBatchCount: number } {
+  return !!origin && typeof origin === 'object'
+    && (origin as { kind?: unknown }).kind === 'orca'
+    && (origin as { autoBridge?: unknown }).autoBridge === true
+    && Number.isSafeInteger((origin as { autoBridgeBatchCount?: unknown }).autoBridgeBatchCount)
+    && (origin as { autoBridgeBatchCount: number }).autoBridgeBatchCount >= 2;
 }
 
 function readNonEmptyString(value: unknown): string | undefined {

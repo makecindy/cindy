@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { formatAsyncQuestionSupplement } from '@cindy/maker-shared';
+import { formatAsyncQuestionReplyDisplay, formatAsyncQuestionSupplement } from '@cindy/maker-shared';
 import type { AskUserQuestionItem, InteractionDecision, InteractionRequest } from '../../types/events.js';
 
 interface PendingQuestion {
@@ -10,7 +10,7 @@ interface PendingQuestion {
   submission?: Promise<void>;
   delivered?: boolean;
   submissionText?: string;
-  deliveryMessage?: { answerText: string; text: string };
+  deliveryMessage?: { answerText: string; text: string; displayText: string };
 }
 
 /** Session-owned questions outlive provider turns; each question is independently answerable. */
@@ -22,7 +22,8 @@ export class AsyncUserQuestions {
     isActive(generation: number): boolean;
     isLateAnswer(generation: number): boolean;
     resolve(request: InteractionRequest): Promise<InteractionDecision>;
-    deliver(text: string, signal: AbortSignal, requestId: string): Promise<void>;
+    /** `text` goes to the model; `displayText` is the same answer as people read it. */
+    deliver(text: string, signal: AbortSignal, requestId: string, displayText: string): Promise<void>;
     dismiss(requestId: string, reason: string, withdrawalReason?: string): void;
     reportError(error: unknown): void;
   }) {}
@@ -60,8 +61,9 @@ export class AsyncUserQuestions {
         if (entry.deliveryMessage?.answerText !== text) entry.deliveryMessage = {
           answerText: text, text: formatAsyncQuestionSupplement([entry.question], answers,
             { late: this.deps.isLateAnswer(entry.generation) }),
+          displayText: formatAsyncQuestionReplyDisplay([entry.question], answers),
         };
-        await this.deps.deliver(entry.deliveryMessage.text, entry.abort.signal, requestId);
+        await this.deps.deliver(entry.deliveryMessage.text, entry.abort.signal, requestId, entry.deliveryMessage.displayText);
         entry.delivered = true;
       });
       this.sendTail = entry.submission.catch(() => undefined);

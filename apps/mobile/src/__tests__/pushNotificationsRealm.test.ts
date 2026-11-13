@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = vi.hoisted(() => new Map<string, string>());
 const envState = vi.hoisted(() => ({
+  platform: 'ios',
+  badgeNative: false,
   activeRealm: 'cn' as 'cn' | 'global',
   buildRegion: 'cn' as 'cn' | 'global' | 'dev',
   endpointByRealm: {
@@ -20,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   getDevicePushTokenAsync: vi.fn(),
   readIosPushEnvironment: vi.fn(),
   setNotificationHandler: vi.fn(),
+  setBadgeCountAsync: vi.fn(async (_count: number) => true),
+  dismissAllNotificationsAsync: vi.fn(async () => {}),
 }));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -35,6 +39,8 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 vi.mock('expo-notifications', () => ({
+  setBadgeCountAsync: mocks.setBadgeCountAsync,
+  dismissAllNotificationsAsync: mocks.dismissAllNotificationsAsync,
   setNotificationHandler: mocks.setNotificationHandler,
   getPermissionsAsync: mocks.getPermissionsAsync,
   requestPermissionsAsync: mocks.requestPermissionsAsync,
@@ -42,7 +48,14 @@ vi.mock('expo-notifications', () => ({
 }));
 
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
+  Platform: { get OS() { return envState.platform; } },
+}));
+
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: () => ({
+    get setTaskBadgeIdentity() { return envState.badgeNative ? async () => {} : undefined; },
+    get applyTaskBadge() { return envState.badgeNative ? async () => true : undefined; },
+  }),
 }));
 
 vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: mocks.readIosPushEnvironment }));
@@ -64,12 +77,21 @@ vi.mock('@/config/devServerEnvironment', () => ({
 }));
 
 import {
+  type AuthedApiFetch,
   configureForegroundNotificationBehavior,
   retryPendingUnregister,
   syncPushRegistration,
+  enablePushNotifications,
+  writePushEnabled,
+  readPushEnabled,
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
 import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+import { clearNotificationBadge, isNotificationRouteVisible, createTaskBadgeSync } from '@/notifications/notificationBadge';
+import { createServerTaskBadgeSync, type TaskBadgeSnapshot } from '@/notifications/taskBadgeSync';
+import { readAndroidPushAvailability, setAndroidPushAvailability } from '../notifications/androidPushAvailability';
+
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -90,6 +112,302 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  const snapshot = (version: string, badgeCount: number): TaskBadgeSnapshot => ({ schemaVersion: 1,
+    accountId: 'account', version, waitingCount: badgeCount, unreadCount: 0, runningCount: 3, badgeCount, complete: true });
+  // Unit: a delayed REST/local refresh must not overwrite a newer account-wide
+  // push. Existing native-writer tests do not exercise revision reconciliation.
+  it('keeps a newer push while a shared foreground fetch returns an older count', async () => {
+    let resolve!: (value: TaskBadgeSnapshot) => void;
+    const fetch = vi.fn(() => new Promise<TaskBadgeSnapshot>(done => { resolve = done; }));
+    const sync = createServerTaskBadgeSync(fetch, () => true, 'account');
+    const first = sync.refresh();
+    const second = sync.refresh();
+    expect(fetch).toHaveBeenCalledOnce();
+    await sync.accept(snapshot('9007199254740993', 8));
+    resolve(snapshot('9007199254740992', 3));
+    await Promise.all([first, second]);
+    await sync.accept(snapshot('9007199254740993', 3));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[8]]);
+    await sync.accept(snapshot('9007199254740994', 0));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[8], [0]]);
+    sync.dispose();
+  });
+
+  // Unit regression for #9547: existing reconciliation tests finish native writes
+  // before the next revision. A pending v1/count6 must not suppress v3/count6;
+  // native needs even an incomplete v3 watermark to reject delayed background v2.
+  it.each([true, false])('delivers a newer same-count native revision while a write awaits (complete=%s)', async complete => {
+    let release!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const write = vi.fn(async (value: TaskBadgeSnapshot) => {
+      if (value.version === '1') {
+        started();
+        await blocked;
+      }
+    });
+    const sync = createServerTaskBadgeSync(async () => undefined, () => true, 'account', write);
+    const first = sync.accept(snapshot('1', 6));
+    await entered;
+    await sync.accept({ ...snapshot('3', 6), complete });
+    release();
+    await first;
+    await sync.accept(snapshot('2', 2));
+    expect(write.mock.calls.map(([value]) => [value.version, value.badgeCount, value.complete]))
+      .toEqual([['1', 6, true], ['3', 6, complete]]);
+    sync.dispose();
+  });
+
+  it('preserves the native badge on unavailable data and discards late account responses', async () => {
+    let resolve!: (value: TaskBadgeSnapshot) => void;
+    const fetch = vi.fn<() => Promise<TaskBadgeSnapshot | undefined>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const sync = createServerTaskBadgeSync(fetch, () => true, 'account');
+    await sync.refresh();
+    await expect(sync.refresh()).rejects.toThrow('offline');
+    const pending = sync.refresh();
+    sync.dispose();
+    resolve(snapshot('22', 7));
+    await pending;
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+  });
+
+  it('rejects other accounts and incomplete totals, including older complete responses', async () => {
+    const sync = createServerTaskBadgeSync(async () => undefined, () => true, 'account');
+    await sync.accept(snapshot('8', 6));
+    await sync.accept({ ...snapshot('9', 0), complete: false });
+    await sync.accept(snapshot('8', 0));
+    await sync.accept({ ...snapshot('10', 0), accountId: 'other' });
+    await sync.accept({ ...snapshot('10', 0), badgeCount: -1 });
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6]]);
+    await sync.accept(snapshot('10', 0));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [0]]);
+    sync.dispose();
+  });
+
+  // Unit: fixed-1/notification counting could not represent real task counts.
+  // Registration tests do not cover native ordering, unknown state or read clears.
+  it('writes exact task counts, keeps unknown state and clears only a confirmed zero', async () => {
+    let count: number | undefined = 6;
+    const controller = createTaskBadgeSync(() => count, () => true);
+    await controller.sync();
+    await controller.sync();
+    count = undefined;
+    await controller.sync();
+    count = 2;
+    await controller.sync();
+    count = 0;
+    await controller.sync();
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [2], [0]]);
+    controller.dispose();
+  });
+
+  it('does not restore an old account count after sign-out during a native write', async () => {
+    expect(isNotificationRouteVisible('/companions/groups/group?threadRootId=thread',
+      { pathname: '/companions/groups/group' })).toBe(false);
+    expect(isNotificationRouteVisible('/sessions/task?deviceId=two',
+      { pathname: '/sessions/task', deviceId: 'one' })).toBe(false);
+    let release!: (value: boolean) => void;
+    mocks.setBadgeCountAsync.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const controller = createTaskBadgeSync(() => 6, () => true);
+    const writing = controller.sync();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'), { interval: 1 });
+    controller.dispose();
+    const clear = clearNotificationBadge();
+    release(true);
+    await Promise.all([writing, clear]);
+    await controller.sync();
+    expect(mocks.dismissAllNotificationsAsync).toHaveBeenCalledOnce();
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [0]]);
+  });
+
+  it('keeps a foreground task reminder in the tray without adding a banner', async () => {
+    store.set('cindy.push.enabled', '1');
+    configureForegroundNotificationBehavior();
+    const handler = mocks.setNotificationHandler.mock.calls.at(-1)![0];
+    expect(await handler.handleNotification({ request: { content: { data: { deepLink: '/sessions/task' } } } }))
+      .toEqual({ shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false });
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+    store.set('cindy.push.enabled', '0');
+    mocks.setBadgeCountAsync.mockClear();
+    expect(await handler.handleNotification({ request: { content: { data: { deepLink: '/sessions/task' } } } }))
+      .toMatchObject({ shouldShowList: false, shouldSetBadge: false });
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+  });
+
+  // #10113 + #9547 merge: preserve local action-failure alerts alongside badge
+  // push preferences. Existing tray tests cover ordinary pushes, not failed
+  // replies while push is disabled. Unit, real foreground handler; no native IO.
+  it.each([true, false])('shows an action failure only in its current lifecycle (current=%s)', async current => {
+    store.set('cindy.push.enabled', '0');
+    configureForegroundNotificationBehavior(() => true, () => current);
+    const handler = mocks.setNotificationHandler.mock.calls.at(-1)![0];
+    const notification = { request: { content: { data: { deepLink: '/sessions/task', cindyActionResult: true } } } };
+    expect(await handler.handleNotification(notification)).toEqual({
+      shouldShowBanner: current, shouldShowList: current, shouldPlaySound: current, shouldSetBadge: false,
+    });
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+  });
+
+  it('requests iOS badge permission along with alerts and sounds', async () => {
+    mocks.getPermissionsAsync.mockResolvedValueOnce({ status: 'undetermined', canAskAgain: true });
+    mocks.requestPermissionsAsync.mockResolvedValueOnce({ status: 'granted' });
+    await syncPushRegistration({ enabled: true, apiFetch: vi.fn().mockResolvedValue({}) });
+    expect(mocks.requestPermissionsAsync).toHaveBeenCalledWith({ ios: { allowAlert: true, allowSound: true, allowBadge: true } });
+  });
+  // Real mutation module + native token event simulation: old code re-PUT after logout DELETE.
+  // Also covers duplicate bootstrap events, which the separately mocked bridge test cannot prove.
+  it('fences native token callbacks during logout and permits a new authenticated lifecycle', async () => {
+    const requests: string[] = [], events: Promise<unknown>[] = [];
+    const apiFetch: AuthedApiFetch = async (_path, opts) => { requests.push(opts.method!); return {registered:true} as never; };
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => { requests.push(opts.method); return {ok:true,status:200}; }));
+    mocks.getDevicePushTokenAsync.mockImplementation(async () => {
+      const token = { type:'ios' as const, data:'apns-device-token' };
+      events.push(syncPushRegistration({enabled:true,apiFetch,deviceToken:token}));
+      return token;
+    });
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests).toEqual(['PUT','PUT']);
+    // AuthContext clears the synchronous owner before its async cleanup, while React still
+    // presents isAuthenticated=true. Both listener and bootstrap work must be rejected here.
+    setMobileAuthOwner(null);
+    await unregisterPushTokenBestEffort('fixture-access-token','cn');
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests).toEqual(['PUT','PUT','DELETE','DELETE']);
+    setMobileAuthOwner('next-user','cn');
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests.slice(4)).toEqual(['PUT','PUT']);
+  });
+  // Codex review r4525360529: a failed first registration leaves no lease, which used to make
+  // every later valid token event a silent no-op until restart or re-login.
+  it('lets a later token event recover after the first registration failed', async () => {
+    const offline = vi.fn(async () => { throw new Error('offline'); });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: offline as any })).rejects.toThrow();
+    const online = vi.fn().mockResolvedValue({ registered: true });
+    const token = { type: 'ios' as const, data: 'apns-device-token' };
+    await expect(syncPushRegistration({ enabled: true, apiFetch: online, deviceToken: token })).resolves.toBe('registered');
+    expect(online).toHaveBeenCalled();
+    await expect(syncPushRegistration({ enabled: true, apiFetch: online, deviceToken: token })).resolves.toBe('skipped');
+  });
+  it('retains per-service registration failure without leaking tokens or errors', async () => {
+    const apiFetch = vi.fn(async (path: string) => {
+      if (path === '/v1/push-token') throw Object.assign(new Error('secret-token-in-error'), { status: 503 });
+      return { registered: true };
+    });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).rejects.toThrow();
+    const raw = store.get('cindy.push.lastRegistration')!;
+    const result = JSON.parse(raw);
+    expect(result).toMatchObject({ realm: 'cn', appVariant: 'cn', apnsEnv: 'sandbox', stage: 'failed:registering' });
+    expect(result.endpoints).toEqual(expect.arrayContaining([
+      { service: 'device-link', outcome: 'accepted' },
+      { service: 'chat', outcome: 'failed', status: 503 },
+    ]));
+    expect(raw).not.toContain('secret-token-in-error');
+    expect(raw).not.toContain('apns-device-token');
+    expect(raw).not.toContain('https://');
+  });
+
+  // Codex review r4525113907: the deduped token-listener callback queued by the bootstrap
+  // read used to overwrite the real result with a bare `skipped` record.
+  it('keeps the registration result when the queued token event is deduplicated', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    const events: Promise<unknown>[] = [];
+    mocks.getDevicePushTokenAsync.mockImplementation(async () => {
+      const token = { type: 'ios' as const, data: 'apns-device-token' };
+      events.push(syncPushRegistration({ enabled: true, apiFetch, deviceToken: token }));
+      return token;
+    });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    await Promise.all(events.splice(0));
+    const record = JSON.parse(store.get('cindy.push.lastRegistration')!);
+    expect(record).toMatchObject({ stage: 'registered', apnsEnv: 'sandbox' });
+    expect(record.endpoints).toEqual(expect.arrayContaining([{ service: 'device-link', outcome: 'accepted' }]));
+  });
+
+  it('records native failure before HTTP and replaces it after a successful retry', async () => {
+    mocks.getDevicePushTokenAsync.mockRejectedValueOnce(new Error('private native details'));
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).rejects.toThrow();
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(JSON.parse(store.get('cindy.push.lastRegistration')!)).toMatchObject({ stage: 'failed:device-token' });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    expect(JSON.parse(store.get('cindy.push.lastRegistration')!)).toMatchObject({ stage: 'registered' });
+  });
+
+  // Unit r4512939585: first opt-in must notify the direct receiver before Google
+  // resolves. Existing registration tests only inspect the final sync result.
+  // Minimal input: permission granted, Google token promise pending indefinitely.
+  it('activates Android delivery after permission and before waiting for Google', async () => {
+    envState.platform = 'android';
+    await writePushEnabled(false);
+    let tokenEntered!: () => void;
+    const entered = new Promise<void>(resolve => { tokenEntered = resolve; });
+    let failToken!: (error: Error) => void;
+    mocks.getDevicePushTokenAsync.mockImplementationOnce(() => {
+      tokenEntered(); return new Promise((_, reject) => { failToken = reject; });
+    });
+    const onEnabled = vi.fn();
+    const sync = enablePushNotifications({ apiFetch: vi.fn(), onEnabled });
+    await entered;
+    try {
+      expect(await readPushEnabled()).toBe(true);
+      expect(onEnabled).toHaveBeenCalledTimes(1);
+    } finally { failToken(new Error('Google unavailable')); await sync; }
+  });
+  it.each(['ios', 'denied'])('does not early-activate delivery for %s', async condition => {
+    envState.platform = condition === 'ios' ? 'ios' : 'android';
+    if (condition === 'denied') mocks.getPermissionsAsync.mockResolvedValueOnce({ status: 'denied', canAskAgain: false });
+    const onEnabled = vi.fn();
+    mocks.getDevicePushTokenAsync.mockImplementationOnce(async () => {
+      expect(onEnabled).not.toHaveBeenCalled();
+      return { data: 'native-token' };
+    });
+    const result = await enablePushNotifications({ apiFetch: async <T,>() => ({} as T), onEnabled });
+    expect(result).toBe(condition === 'ios' ? 'registered' : 'permission-denied');
+    expect(onEnabled).toHaveBeenCalledTimes(condition === 'ios' ? 1 : 0);
+  });
+  // Unit: task-only registration cannot turn off the shared native fallback.
+  // Existing tests only covered throwing registration failures, not optional 404/405.
+  it.each([404, 405])('keeps direct delivery when task push succeeds but chat registration returns %s', async status => {
+    envState.platform = 'android'; envState.activeRealm = 'global';
+    setAndroidPushAvailability('available');
+    const apiFetch = vi.fn(async (path: string) => {
+      if (path === '/v1/push-token') throw Object.assign(new Error('unsupported'), { status });
+      return {};
+    });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).resolves.toBe('registered');
+    expect(readAndroidPushAvailability()).toBe('unavailable');
+    expect(readStoredRealms(REGISTERED_KEY)).toEqual(['global']);
+  });
+  // Unit merge regression: Android fallback tests previously had no badge-native
+  // boundary. Both old/new binaries register ordinary push; only new ones opt in
+  // to badge-only delivery, and that capability must never reach chat registration.
+  it.each([false, true])('allows cloud delivery with both registrations and scopes badge capability (native=%s)', async supported => {
+    envState.platform = 'android';
+    envState.badgeNative = supported;
+    setAndroidPushAvailability('unavailable');
+    const apiFetch = vi.fn(async (_path: string, _opts: { body?: Record<string, unknown> }) => ({}));
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).resolves.toBe('registered');
+    expect(readAndroidPushAvailability()).toBe('available');
+    expect(apiFetch.mock.calls.find(([path]) => path === '/api/device-link/push-token')?.[1].body?.taskBadgeVersion)
+      .toBe(supported ? 1 : undefined);
+    expect(apiFetch.mock.calls.find(([path]) => path === '/v1/push-token')?.[1].body).not.toHaveProperty('taskBadgeVersion');
+  });
+  // Unit: a cached FCM token must not make first enable fail when cloud registration is offline.
+  it('keeps Android opt-in usable through the direct channel when cloud registration fails', async () => {
+    envState.platform = 'android';
+    const apiFetch = vi.fn(async () => { throw new Error('offline'); });
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('local-only');
+    expect(readStoredRealms(REGISTERED_KEY)).toEqual(['cn']);
+    const { readAndroidPushAvailability } = await import('../notifications/androidPushAvailability');
+    expect(readAndroidPushAvailability()).toBe('unavailable');
+  });
   it('compensates both endpoints when first enable partially fails, retaining retry state if DELETE fails', async () => {
     let failDelete = true;
     const apiFetch = vi.fn(async (path: string, opts: { method?: string }) => {
@@ -108,6 +426,7 @@ describe('push notification realm routing', () => {
   });
   // Same group, another thread must still be noticeable while reading the main timeline.
   it('passes the thread route to the foreground visibility gate', async () => {
+    store.set('cindy.push.enabled', '1');
     const room = '00000000-0000-4000-8000-000000000001';
     const message = '00000000-0000-4000-8000-000000000002';
     const thread = '00000000-0000-4000-8000-000000000003';
@@ -121,8 +440,12 @@ describe('push notification realm routing', () => {
     expect(await handler.handleNotification(notification)).toMatchObject({ shouldShowBanner: false, shouldPlaySound: false });
   });
   beforeEach(() => {
+    setMobileAuthOwner(null);
+    setMobileAuthOwner('fixture-user', 'cn');
     vi.clearAllMocks();
     store.clear();
+    envState.platform = 'ios';
+    envState.badgeNative = false;
     envState.activeRealm = 'cn';
     envState.buildRegion = 'cn';
     devEnvironmentState.active = 'dev';
@@ -144,7 +467,24 @@ describe('push notification realm routing', () => {
     vi.stubGlobal('__DEV__', false);
     const apiFetch = vi.fn().mockResolvedValue({ registered: true });
     await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('registered');
-    expect(apiFetch.mock.calls[0][1].body).toMatchObject({ apnsEnv: 'sandbox' });
+    expect(apiFetch.mock.calls.find(([path]) => path === '/api/device-link/push-token')?.[1].body).toMatchObject({ apnsEnv: 'sandbox', taskBadgeVersion: 1 });
+    expect(apiFetch.mock.calls.find(([path]) => path === '/v1/push-token')?.[1].body).not.toHaveProperty('taskBadgeVersion');
+  });
+
+  // Regression: iOS token reads emit another token event. A rotation callback
+  // must upload the supplied token, not request a token and feed itself forever.
+  it('registers a rotated token without requesting another native token', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    apiFetch.mockClear(); mocks.getDevicePushTokenAsync.mockClear();
+    await expect(syncPushRegistration({ enabled: true, apiFetch,
+      deviceToken: { type: 'ios', data: 'rotated-device-token' },
+    })).resolves.toBe('registered');
+    expect(mocks.getDevicePushTokenAsync).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    for (const [, options] of apiFetch.mock.calls) {
+      expect(options.body).toMatchObject({ token: 'rotated-device-token', apnsEnv: 'sandbox' });
+    }
   });
 
   it('never uploads a token with an unknown signing environment', async () => {
@@ -290,6 +630,7 @@ describe('push notification realm routing', () => {
 
   it('切换区域前用旧 token 向显式冻结的旧区域撤销', async () => {
     setStoredRealms(REGISTERED_KEY, ['global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal('fetch', fetch);
@@ -319,6 +660,7 @@ describe('push notification realm routing', () => {
   it('只用当前会话补偿当前区域，另一区域标记保持不动', async () => {
     setStoredRealms(REGISTERED_KEY, ['cn', 'global']);
     setStoredRealms(PENDING_KEY, ['cn', 'global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const cnApiFetch = vi.fn().mockResolvedValue({ deleted: true });
 
@@ -351,6 +693,7 @@ describe('push notification realm routing', () => {
 
   it('旧 token 不可用时不跨区请求，只保留旧区域标记', async () => {
     setStoredRealms(REGISTERED_KEY, ['global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
@@ -371,6 +714,7 @@ describe('push notification realm routing', () => {
       syncPushRegistration({ enabled: false, apiFetch }),
     ).rejects.toThrow('offline');
 
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     expect(readStoredRealms(PENDING_KEY)).toEqual(['global']);
   });

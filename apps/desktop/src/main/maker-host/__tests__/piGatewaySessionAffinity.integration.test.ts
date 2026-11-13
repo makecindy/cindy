@@ -14,7 +14,7 @@ import type { Logger } from '../../../../../../packages/maker-core/src/interface
 // Skill discovery is unrelated to this isolated Gateway transport fixture.
 vi.mock('../managed-skills.js', () => ({ listCindyManagedSkills: async () => [], cindyManagedSkillRoots: async () => [] }));
 vi.mock('../model-discovery/xai.js', () => ({ discardXaiModelsDiskCache: vi.fn(async () => {}) }));
-vi.mock('../grok-oauth-login.js', () => ({ hasGrokOAuthLogin: () => false }));
+vi.mock('../grok-oauth-login.desktop.js', () => ({ hasGrokOAuthLogin: () => false }));
 vi.mock('../anthropic-compat-proxy-host.js', () => ({ getClaudeEndpoint: () => undefined }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ trace() {}, debug() {}, info() {}, warn() {}, error() {} }) }));
 import { resolvePiCindyGatewayModelSpec } from '../pi-host.js';

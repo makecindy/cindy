@@ -6,7 +6,10 @@ import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
 import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
-import { asyncQuestionNeedsSupplement, formatAsyncQuestionSupplement } from '@cindy/maker-shared/interaction';
+import {
+  asyncQuestionNeedsSupplement, asyncQuestionReplyDisplayText, formatAsyncQuestionReplyDisplay,
+  formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+} from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
@@ -67,6 +70,7 @@ import {
   isGatewayProxyTokenInvalidError,
   redactSensitiveText,
   parseAgentErrorCode,
+  localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import {
   formatRemoteError,
@@ -380,6 +384,8 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
+  const subscriptionGuidance = localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language);
+  if (subscriptionGuidance) return subscriptionGuidance;
   const recovery = sharedTaskRecoveryReason(msg);
   if (recovery) return i18n.t(`sharedTaskRecovery.reason.${recovery}`);
   const limitKey = remoteAgentLimitErrorKey(msg);
@@ -392,6 +398,9 @@ export function decodeRemoteErrorMessage(msg: string): string {
 
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
 export function remoteErrorMessageForBanner(msg: string): string {
+  // Subscription guidance has its own keys and reset metadata. Keep the raw
+  // error so live/tail banners can translate it after locale changes.
+  if (localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language)) return msg;
   const key = remoteErrorI18nKey(msg);
   return key && i18n.exists(key) ? msg : decodeRemoteErrorMessage(msg);
 }
@@ -467,6 +476,8 @@ export interface ChatMessage {
   replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   botTaskResults?: import('@cindy/maker-shared/botCollaboration').BotCollaborationMeta[];
+  /** Teammate chat, display only: the tasks this reply's turn started or handed work to (BotStartedTasks). */
+  botStartedTasks?: { sessionId: string; title: string | null; created: boolean }[];
   clientId: string;
   /** Server message id when this row came from history; used as a pagination cursor. */
   id?: string;
@@ -785,6 +796,8 @@ export interface AgentTaskUpdate {
   };
   lastToolName?: string;
   taskType?: string;
+  /** 后台命令(local_bash)是会自己结束的工作还是长驻服务;main 按命令写法判断,缺省按 work。 */
+  backgroundCommandKind?: 'work' | 'service';
   workflowName?: string;
   /** `null` is an explicit live-update instruction to clear a stale model badge. */
   model?: string | null;
@@ -813,6 +826,14 @@ export interface AgentStatus {
   contextWindowFromRuntime?: boolean;
   isRunning: boolean;
   startedAt: number | null;
+  /**
+   * Start clock of the turn that is current. Written to that turn's own
+   * `startedAt` every time a turn begins (stream start, continuation, reconnect
+   * recovery) and never copied forward from the previous turn. Unlike
+   * `startedAt`, it stays after the turn stops so a following needs-reply or
+   * error can still name this turn.
+   */
+  lastStartedAt?: number | null;
   /** Turn-cumulative output tokens for live TPS. */
   outputTokens?: number;
   /** Generation-only milliseconds including any open interval at emit time. */
@@ -3072,6 +3093,7 @@ function createInitialState(): SessionChatState {
       contextWindow: 0,
       isRunning: false,
       startedAt: null,
+      lastStartedAt: null,
     },
     error: null,
     usageLimitRecovery: null,
@@ -3158,6 +3180,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
     contextWindow: 0,
     isRunning: false,
     startedAt: null,
+    lastStartedAt: null,
   },
   error: null,
   usageLimitRecovery: null,
@@ -5185,6 +5208,7 @@ function markSessionHasUserMessage(sessionId: string): void {
 function requestInputProjection(
   sessionId: string,
   pinnedDeviceId?: string,
+  hostRecovery?: { isCurrent: () => boolean },
 ): Promise<InputProjectionRequestResult | undefined> {
   if (!sessionId) return Promise.resolve(undefined);
   const origin = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
@@ -5213,7 +5237,8 @@ function requestInputProjection(
     promise = api.input.getProjection(sessionId).then(
       (projection) => {
         request.settled = true;
-        const current = isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner);
+        const current = isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner)
+          && (!hostRecovery || hostRecovery.isCurrent());
         if (origin && current) {
           noteRemoteInputProjectionSuccess(
             sessionId,
@@ -5224,6 +5249,24 @@ function requestInputProjection(
           );
         }
         if (current) {
+          // Only an explicit Host recovery may settle a missed terminal event.
+          // Apply this in the same synchronous commit as the guarded projection:
+          // a newer live projection must win over a slow recovery read.
+          if (hostRecovery && projection.turnInProgress === false) {
+            flushPendingTextDelta(sessionId);
+            setState(sessionId, forceFinalizeOnSessionClosed);
+          } else if (hostRecovery && projection.turnInProgress === true) {
+            setState(sessionId, s => ({
+              ...s, isStreaming: true,
+              agentStatus: {
+                ...s.agentStatus,
+                isRunning: true,
+                // 断连期间新起的一轮：这个窗口从没见过它开始，必须铸一个新时钟。
+                // 沿用上一轮的残留会让这一轮的失败看起来是重复告警，主进程按 id 直接吞掉。
+                ...turnClockForRunning(s.agentStatus),
+              },
+            }));
+          }
           applyInputProjection(projection, { supersedeQueries: false });
         }
         return { projection, current };
@@ -5588,6 +5631,9 @@ function normalizeAgentTaskUpdate(
       ? { lastToolName: raw.lastToolName }
       : {}),
     ...(typeof raw.taskType === 'string' && raw.taskType ? { taskType: raw.taskType } : {}),
+    ...(raw.backgroundCommandKind === 'work' || raw.backgroundCommandKind === 'service'
+      ? { backgroundCommandKind: raw.backgroundCommandKind }
+      : {}),
     ...(typeof raw.workflowName === 'string' && raw.workflowName
       ? { workflowName: raw.workflowName }
       : {}),
@@ -6458,7 +6504,7 @@ export function handleStreamEvent(
           agentStatus: {
             ...state.agentStatus,
             isRunning: true,
-            startedAt: state.agentStatus.startedAt ?? Date.now(),
+            ...turnClockForRunning(state.agentStatus),
           },
         };
       }
@@ -6580,6 +6626,7 @@ export function handleStreamEvent(
           ...state.agentStatus,
           isRunning: false,
           startedAt: null,
+          ...stoppedTurnClock(state.agentStatus),
         },
       };
     }
@@ -6684,7 +6731,7 @@ export function handleStreamEvent(
                 : {
                     ...state.agentStatus,
                     isRunning: true,
-                    startedAt: state.agentStatus.startedAt ?? Date.now(),
+                    ...turnClockForRunning(state.agentStatus),
                   }),
             },
           };
@@ -6707,7 +6754,7 @@ export function handleStreamEvent(
           agentStatus: {
             ...state.agentStatus,
             isRunning: true,
-            startedAt: state.agentStatus.startedAt ?? Date.now(),
+            ...turnClockForRunning(state.agentStatus),
           },
         };
       }
@@ -6802,6 +6849,7 @@ export function handleStreamEvent(
           ...state.agentStatus,
           isRunning: false,
           startedAt: null,
+          ...stoppedTurnClock(state.agentStatus),
         },
       };
     }
@@ -7338,8 +7386,47 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
       ...finalized.agentStatus,
       isRunning: false,
       startedAt: null,
+      ...stoppedTurnClock(finalized.agentStatus),
     },
   };
+}
+
+/**
+ * Start clock for a turn that is only now beginning.
+ * `Date.now()` can land on the previous turn's stamp. Alert ids are built from
+ * this number, so an equal stamp would make the next failure look like one that
+ * was already notified.
+ */
+function freshTurnStartedAt(status: AgentStatus, now = Date.now()): number {
+  return status.lastStartedAt != null && now <= status.lastStartedAt
+    ? status.lastStartedAt + 1
+    : now;
+}
+
+/**
+ * `lastStartedAt` is the start clock of the turn that is current, not of the
+ * turn that happened to run most recently. A turn that is already running keeps
+ * its own clock (a late frame must not mint a second one). A turn that is only
+ * now starting gets a fresh clock: carrying the previous turn's value forward
+ * makes the next failure look like a repeat of the last one, and the desktop
+ * alert ledger then swallows it.
+ */
+function turnClockForRunning(
+  status: AgentStatus,
+  now = Date.now(),
+): { startedAt: number; lastStartedAt: number } {
+  const startedAt = status.startedAt ?? freshTurnStartedAt(status, now);
+  const lastStartedAt = status.startedAt != null
+    ? (status.lastStartedAt ?? status.startedAt)
+    : startedAt;
+  return { startedAt, lastStartedAt };
+}
+
+/** The turn stopped. Keep its start clock so a following alert can still name it. */
+function stoppedTurnClock(
+  status: AgentStatus,
+): { lastStartedAt: number | null | undefined } {
+  return { lastStartedAt: status.startedAt ?? status.lastStartedAt ?? null };
 }
 
 function mergeLiveGenerationStatus(
@@ -7449,7 +7536,19 @@ function handleStatusUpdate(
     // product turn running until its unclaimed terminal tail arrives.
     return state;
   }
-  const startedAt = update.isRunning ? (state.agentStatus.startedAt ?? Date.now()) : null;
+  const startedAt = update.isRunning
+    ? (state.agentStatus.startedAt ?? freshTurnStartedAt(state.agentStatus))
+    : null;
+  // A new product turn (not running → running) gets its own start clock. Keeping
+  // the previous turn's clock here made the next failure share that turn's alert
+  // id, so the desktop ledger treated it as a duplicate and dropped it. Once this
+  // turn is running, later frames reuse the clock already stamped on it; when it
+  // stops, the clock stays so a following needs-reply or error can still name it.
+  const lastStartedAt = update.isRunning
+    ? (state.agentStatus.startedAt != null
+      ? (state.agentStatus.lastStartedAt ?? state.agentStatus.startedAt)
+      : startedAt)
+    : (state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null);
 
   // skipTurnReset: side-channel running 信号 (mivo MJ 按钮等不走 LLM 的后台任务)。
   // 只翻 isRunning + 接收新的 status 文案("Mivo …"), 不当 turn 起止处理 —
@@ -7467,6 +7566,7 @@ function handleStatusUpdate(
         status: update.status || state.agentStatus.status,
         isRunning: update.isRunning,
         startedAt,
+        lastStartedAt,
         sideTaskRunning: update.isRunning,
       },
       isStreaming: update.isRunning
@@ -7557,6 +7657,7 @@ function handleStatusUpdate(
       contextWindowFromRuntime: hasContextSnapshot || state.agentStatus.contextWindowFromRuntime,
       isRunning: update.isRunning,
       startedAt,
+      lastStartedAt,
       ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
@@ -10424,6 +10525,12 @@ export interface SessionStatusInfo {
   hasActionableInputHandoff?: boolean;
   /** Stable identities for pending interactions; changes even when pending booleans stay true. */
   pendingRequestKeys?: readonly string[];
+  /**
+   * The turn this snapshot belongs to. Started when the agent begins running and
+   * kept after it stops, so a later needs-reply or error can name that turn.
+   * Absent for a pending card that appeared without a running edge in this window.
+   */
+  turnStartedAt?: number | null;
 }
 
 /**
@@ -10524,6 +10631,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     const hasActionableInputHandoff = !!state.pendingInputHandoff &&
       inputHandoffDialogHasContent(state.pendingInputHandoff, false);
     const requestKeys = pendingRequestKeys(state);
+    // Keep the turn clock after the agent stops. A needs-reply or error that
+    // follows this turn has to name the same turn, not "whatever is running now".
+    const turnStartedAt = state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null;
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -10548,6 +10658,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingInputHandoff,
         hasActionableInputHandoff,
         pendingRequestKeys: requestKeys,
+        turnStartedAt,
       });
     } else if (
       hasPendingAskUser ||
@@ -10568,6 +10679,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingInputHandoff,
         hasActionableInputHandoff,
         pendingRequestKeys: requestKeys,
+        turnStartedAt,
       });
     }
   }
@@ -10595,6 +10707,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       hasActionableInputHandoff: !!state.pendingInputHandoff &&
         inputHandoffDialogHasContent(state.pendingInputHandoff, false),
       pendingRequestKeys: pendingRequestKeys(state),
+      turnStartedAt: state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null,
     });
   }
 
@@ -10862,7 +10975,10 @@ function syncActiveTurnsFromMain(): void {
               ...s.agentStatus,
               status: s.agentStatus.status || 'Running',
               isRunning: true,
-              startedAt: s.agentStatus.startedAt ?? Date.now(),
+              // Reload recovery of a turn this window never saw start. Stamp a
+              // fresh clock; the previous turn's leftover would make this
+              // recovered turn's failure look like a repeat alert.
+              ...turnClockForRunning(s.agentStatus),
             },
           };
         });
@@ -13477,18 +13593,20 @@ function runRemoteReconcile(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
   preserveClientIds?: ReadonlySet<string>;
+  /** Loopback Host recovery also covers a view whose first read failed. */
+  hostRecovery?: { isCurrent: () => boolean };
 }, noteHydration?: (before: readonly ChatMessage[], after: readonly ChatMessage[]) => void): Promise<boolean> {
   // 挂起交互面板重建**无条件先行**,不受下方 isStreaming 守卫约束:turn 内弹出的
   // permission / ask / plan 正是 isStreaming=true 的常见态(pendingPermission 与
   // isRunning 共存),断连重连 / 聚焦时若被守卫吞掉,交互面板不重建、用户无法回应,
   // 会话会卡死。同时它并入下方同步代的完成语义(finally 处 await):needs-interaction
   // 未读的 passive 远程回执必须等提示真实重建后才放行。
-  const interactionsSync = reconcilePendingInteractions(sessionId);
+  const interactionsSync = reconcilePendingInteractions(sessionId, opts?.hostRecovery?.isCurrent);
   const state = sessions.get(sessionId);
   // A repair without force started while streaming is deliberately additive: it may insert
   // durable rows whose push was lost, but it must never hydrate or replace the
   // live row that the stream is still producing.
-  if (!state || !state.historyLoaded || (state.isStreaming && !opts?.force && !opts?.repair)) {
+  if (!state || (!state.historyLoaded && !opts?.hostRecovery) || (state.isStreaming && !opts?.force && !opts?.repair)) {
     // 消息对账被守卫挡下,但交互重建照跑。为它单独开一代:turn 进行中的
     // needs-interaction 未读,其「内容」就是权限 / ask / plan 提示本身——提示真实
     // 重建(count>0)才算一代完成,挂起的 passive 回执随之放行,不必等 turn 结束。
@@ -13538,6 +13656,10 @@ function runRemoteReconcile(sessionId: string, opts?: {
       let reachedHistoryStart = false;
       for (let page = 0; page < MAX_PAGES; page++) {
         const rows = await listMessagesFor(sessionId, { limit: 50, before });
+        if (opts?.hostRecovery && !opts.hostRecovery.isCurrent()) {
+          windowApplied = false;
+          return;
+        }
         if (rows.length === 0) {
           reachedHistoryStart = true;
           break;
@@ -13578,7 +13700,10 @@ function runRemoteReconcile(sessionId: string, opts?: {
         windowApplied = false;
         return;
       }
-      if (collected.length === 0) return;
+      if (collected.length === 0) {
+        if (opts?.hostRecovery) setState(sessionId, s => ({ ...s, historyLoaded: true }));
+        return;
+      }
       const mapped = mapServerMessages(collected).filter(
         (message) => !opts?.preserveClientIds?.has(message.clientId),
       );
@@ -13642,8 +13767,8 @@ function runRemoteReconcile(sessionId: string, opts?: {
           : mergeAuthoritativeRemoteWindow(mapped, lateArrivals, 'newest-first');
         noteHydration?.(s.messages, messages);
         // 无缺失且无权威字段变化 → 不换引用(视同已应用)。
-        if (messages === s.messages) return s;
-        if (isContiguous) return { ...s, messages };
+        if (messages === s.messages && (s.historyLoaded || !opts?.hostRecovery)) return s;
+        if (isContiguous) return { ...s, messages, historyLoaded: s.historyLoaded || !!opts?.hostRecovery };
         invalidateMessageHistoryWindow(sessionId);
         const oldestRow = oldestMessageRow(collected, 'newest-first');
         // 保留下来的晚到行是否**可证明**与新窗口连续:
@@ -13694,6 +13819,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
         return {
           ...s,
           messages,
+          historyLoaded: s.historyLoaded || !!opts?.hostRecovery,
           oldestMessageId: oldestRow?.id ?? s.oldestMessageId,
           hasMoreMessages: !reachedHistoryStart,
           // 锁归本次重置释放(与 reloadMessages / clear / trim / demote 同规矩):被作废的
@@ -13722,6 +13848,40 @@ function runRemoteReconcile(sessionId: string, opts?: {
     (err) => log.warn('reconcileRemoteMessages failed', { sessionId, err: String(err) }),
   );
   return run.then(() => windowApplied);
+}
+
+/** Repair only loaded/visible/running local slices of an explicit Host client.
+ * Reuse the normal projection, interaction and history reducers. This function
+ * never dispatches a message, clears drafts or touches Device Link sessions.
+ */
+async function reconcileHostConnection(isCurrent: () => boolean): Promise<void> {
+  const owner = getDataOwnerGeneration();
+  const current = () => isCurrent() && isDataOwnerGenerationCurrent(owner);
+  const candidates = [...sessions].filter(([id, state]) =>
+    !isRemoteSessionSticky(id) && (_activeViewSessions.has(id) || state.historyLoaded
+      || state.isStreaming || state.agentStatus.isRunning),
+  ).map(([id]) => id);
+  // Bound parallel reads, and keep the rest of the UI usable during recovery.
+  const failures: unknown[] = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, async () => {
+    while (next < candidates.length && current()) {
+      const id = candidates[next++];
+      const sessionCurrent = () => current() && sessions.has(id) && !isRemoteSessionSticky(id);
+      try {
+        const runtimeAtRead = sessions.get(id)?.agentStatus;
+        await requestInputProjection(id, undefined, {
+          isCurrent: () => sessionCurrent() && sessions.get(id)?.agentStatus === runtimeAtRead,
+        });
+        if (!sessionCurrent()) continue;
+        const applied = await runRemoteReconcile(id, {
+          force: true, repair: true, hostRecovery: { isCurrent: sessionCurrent },
+        });
+        if (!applied && sessionCurrent()) throw new Error('Host history changed during recovery');
+      } catch (error) { failures.push(error); }
+    }
+  }));
+  if (current() && failures.length) throw failures[0];
 }
 
 /**
@@ -15159,7 +15319,12 @@ async function updateQueueItemContent(
       burnFailure: 'abort',
     })) ?? [];
 
-  const textUnchanged = content.text === queued.text;
+  // A supplementary answer keeps two copies: the model's native reply format in `text`, and the
+  // readable "question + answer" in `chatMessage.content` that the edit draft starts from. Saving
+  // that draft untouched must not turn the readable copy into what the model receives.
+  const keepsReplyModelText = isAsyncQuestionReplyClientId(queued.clientId)
+    && content.text === (queued.chatMessage.content ?? queued.text);
+  const textUnchanged = keepsReplyModelText || content.text === queued.text;
   const queuedAgentReferences =
     queued.chatMessage.agentReferences?.length
       ? queued.chatMessage.agentReferences
@@ -15202,6 +15367,7 @@ async function updateQueueItemContent(
       createdAt: queued.chatMessage.createdAt ?? new Date().toISOString(),
     },
   );
+  if (keepsReplyModelText) replacement.text = queued.text;
   const replacementSessionRefs = extractSessionRefs(content.text, queued.sessionRefs);
   if (replacementSessionRefs.length > 0) replacement.sessionRefs = replacementSessionRefs;
   else delete replacement.sessionRefs;
@@ -15217,6 +15383,8 @@ async function updateQueueItemContent(
   } catch (error) {
     if (
       extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' &&
+      // The text-only channel would write the readable copy over the model's copy.
+      !keepsReplyModelText &&
       canFallbackQueueEditToText(queued, replacement, content, files)
     ) {
       try {
@@ -16563,6 +16731,7 @@ function stopSession(
         contextWindow: s.agentStatus.contextWindow,
         isRunning: false,
         startedAt: null,
+        ...stoppedTurnClock(s.agentStatus),
       },
     };
   });
@@ -17213,6 +17382,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
         contextWindow: 0,
         isRunning: false,
         startedAt: null,
+        lastStartedAt: null,
       },
     };
   });
@@ -17544,9 +17714,13 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(answerText));
     const answerId = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
     if (!current()) return;
-    const queued = buildQueuedMessage(sessionId, text, session.model, session.effort,
+    // History and the queue show the question and the answer; only the model's copy
+    // carries the native reply format and the delayed-answer note.
+    const queued = buildQueuedMessage(sessionId,
+      formatAsyncQuestionReplyDisplay(protectedQuestion.pending.questions, answers), session.model, session.effort,
       session.permissionMode, session.workingDir ?? '', undefined, undefined, undefined,
       { clientId: `question-reply:${requestId}:${answerId}`, createdAt: new Date().toISOString() });
+    queued.text = text;
     queued.createOpts = { ...queued.createOpts, planMode: false,
       agentKind: dbAgentKindToMakerKind(session.agentKind, state.agentKind),
       ...(session.sdkSessionId ? { resumeSessionId: session.sdkSessionId } : {}),
@@ -18910,6 +19084,7 @@ export const makerChatStore = {
   selectAskUserQuestion,
   setTitleUpdateCallback,
   syncActiveTurnsFromMain,
+  reconcileHostConnection,
   /**
    * 当前 running 的 claude-code 后台任务 taskId 集合(按 taskId 归一,别名键去重)。
    * 用途:快照对账的候选集捕获 —— 必须在发起 listSessionBackgroundTasks **之前**
@@ -18980,6 +19155,7 @@ export const makerChatStore = {
       toolUseId?: string;
       title?: string;
       provider?: 'pi' | 'claude-code';
+      backgroundCommandKind?: 'work' | 'service';
     }>,
     opts?: {
       staleRunningCandidates?: ReadonlySet<string>;
@@ -19010,6 +19186,7 @@ export const makerChatStore = {
             ...(t.taskType ? { taskType: t.taskType } : {}),
             ...(t.toolUseId ? { parentToolUseId: t.toolUseId } : {}),
             ...(t.title ? { title: t.title } : {}),
+            ...(t.backgroundCommandKind ? { backgroundCommandKind: t.backgroundCommandKind } : {}),
           },
         } as CCAgentStreamEvent);
       }
@@ -19497,6 +19674,9 @@ function readInputHandoffEndRecord(m: Message) {
 
 function isSyntheticTriggerRow(m: Message): boolean {
   if (m.role !== 'user') return false;
+  // The question card already shows this answer: the row keeps its place in the timeline
+  // without a bubble, so it is no visible anchor for history paging either.
+  if (isAnsweredAsyncQuestionClientId(m.clientId)) return true;
   const c = m.content;
   if (typeof c === 'string') return c.startsWith(UI_ACTION_TRIGGER_PREFIX);
   if (c && typeof c === 'object') {
@@ -20022,6 +20202,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         };
       }
       const parsed = parseUserContent(m.content);
+      // Replies saved before the readable copy existed hold the text sent to the model.
+      if (isAsyncQuestionReplyClientId(m.clientId)) parsed.text = asyncQuestionReplyDisplayText(parsed.text);
       // scheduler / 工具 / Orca 注入的消息带 agentMeta.origin(历史加载与
       // messages:created 直推两条路径都经过这里),投影后透传给 UserMessage 渲染来源标签。
       const automationOrigin = toMessageAutomationOrigin(m.agentMeta?.origin);

@@ -47,7 +47,7 @@ Orca 是 Cindy Desktop 内的多 agent 协同能力：一个 **Lead session** �
 
 - Orca Team 仍严格绑定单个 Lead session，不支持跨 Lead 共享 worker。
 - Worker focused 切换是“单 worker pane 替换”，不是多 worker 并排。
-- Worker archive 后 UI 内没有 unarchive 入口；DB 记录保留，用户需要新建 worker 继续。
+- Worker archive 后 UI 内没有 unarchive 入口；DB 记录保留，用户需要新建 worker 继续。已归档 Worker 不再占用名字，新 Worker 可以直接用原名（见「Worker 运行态」第 11 条）。
 - workflow_run / CC Workflow 编排还未纳入当前实现。
 - side_chat 尚未登记为 side activity 对象，也未挂进 pane；PR #107 只是 fork 数据动作。
 - device-link 协同的 Lead / Worker / team 全部在被控端进程内编排，控制端只按 session 来源经隧道路由（`makerTransport` 的 `makerApiFor` / `orcaWorkflowsFor` / `subscribeOrcaWorkerChanged`，channel 见 `packages/device-link/src/allowlist.ts` 的 Orca 段）。collab 开关同样查被控端（`maker:plugins:get-state` 经 `pluginEnableStateFor`）：项目读取被控端项目级策略，对话读取被控端用户级/全局级策略。控制端本机状态不能代表被控端真相。老被控端没有该 channel 时回 `CHANNEL_NOT_ALLOWED`，控制端 fail-closed 置灰入口并提示设备版本过旧，而不是放行到 `enableOrca` 才撞错。
@@ -127,6 +127,19 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 19. `get_workspace_info`（只读诊断）
 20. `worker_status`（只读诊断）
 21. `read_worker`（只读诊断）
+
+创建回执陈述交接事实，不让 Lead 猜（2026-11-10 现场：五个 Worker「创建成功、首条任务已排队」被说成
+「五个在跑」，随后全部因读不到 Lead 的文件受阻）。`create_worker` 与 `create_workers` 的每个成功项都带：
+
+- `initial_task_state`：`delivered`（已送达并开始处理）／`queued`（已排队、尚未开始）／`not_delivered`
+  （Worker 已创建但任务没送到）／`none`（没有附任务），由 `dispatched`、`queued_message_id` 与
+  `dispatch_outcome` 确定推出；`create_workers.user_report` 按这四类计数，不再让用户自己核对终态。
+- `file_access`：`lead_working_directory`（与 Lead 同一目录）／`own_worktree`／`explicit_directory`
+  （同一台电脑的另一个目录）／`other_computer`（运行设备），后三类附一句 `handoff_hint`。按创建参数与
+  实际落点判定，不读 Lead 目录。
+
+实现见 `create_worker.ts` 的 `initialTaskState` / `workerHandoffPayload`，回归见
+`createWorkersTool.test.ts`。任务正文要自包含写在这两个工具与 `send_to_worker` 的工具说明里，不进系统提示词。
 
 批量创建必须走一次 `create_workers` 调用，不能让 Lead 并行或连续发多个独立 `create_worker`。批量工具按输入顺序复用同一个 `OrcaLifecycleService.createWorker` 原语；首次收到 `WORKER_LIMIT_HARD_EXCEEDED` 或批次级 `HOST_NOT_READY` 后不再调用 host，剩余项稳定标为 `skipped`。返回值必须包含请求数、实际尝试数、成功数、失败数、跳过数、总未创建数、数量闸快照、代码确定生成的 `user_report`，以及逐项真实 worker/session 或失败终态，供 Lead 如实向用户收口；`success_count + failure_count + skipped_count` 必须等于 `request_count`，其中 `not_created_count = failure_count + skipped_count`。单个 `create_worker` 继续作为兼容入口，并返回相同的结构化 hard-limit 快照。
 
@@ -237,6 +250,58 @@ doc rail 不走右侧栏 tab，也不做 route navigate。WorkdirBrowseRoute 的
 Worker 不出现在普通 sidebar。renderer 用 `isOrcaWorkerSession(session) => session.orcaRole === 'worker'` 识别 worker，sidebar filter 直接排除 worker，见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `isOrcaWorkerSession` 与 `apps/desktop/src/renderer/features/cc-agent/CCAgentSidebarUpper.tsx` 的 `sidebarSessions` filter。worker deep link 会解析到所属 Lead 的普通 route，并通过 `?worker=` 一次性聚焦右侧栏协同 tab，见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `resolveSessionRoute`。
 
 Worker 虽不进侧栏，它的出错与等待确认会汇总到所属 Lead 行（2026-10 用户裁决，只覆盖本机 Lead）：Lead 行的状态点、项目折叠灯、rail 瓷砖、排序钉住与 Dock 角标都按「Worker 出错（红）> Worker 等待确认（蓝）> Lead 自己的状态」取一档，红 / 蓝同样盖过运行中；Worker 的完成不汇总。汇总只是读侧派生：来源是 Worker 自己在 `sessionAttentionStore` 里的 attention 与 Worker 投影（`workerProjectionStore` 中仍被持有的 Lead；已归档 Worker、已结束协同的团队不在投影里，自然不计），生命周期完全跟随 Worker 的 attention（重试 / 关横幅、Lead 重新派活、确认被回答即消失），点开 Lead 不会清掉，正在看该 Lead 时也照常显示。汇总结果**不得写回** `sessionAttentionStore`：那份会同步到 Main（Dock / 灵动岛 / 远端），并被「导航即已读」的被动清除抹掉，会破坏 Lead 自身的 attention 生命周期与完成保持判定。Dock 角标一个 Lead 只算 1，口径与侧栏行一致。逐行组件（`SessionItem` / `SessionCard` / `SessionStatusIcon`）只能用按 id 的 primitive 订阅 `useOrcaLeadWorkerAttentionKind`，聚合视图用 `useSessionAttentionKindsWithOrcaLeads` / `useOrcaLeadWorkerAttention` 与 `mergeOrcaLeadNotifications`。实现指针：`apps/desktop/src/renderer/features/cc-agent/lib/orcaLeadWorkerAttention.ts`、`workerProjectionStore.ts` 的 `listRetainedWorkerProjections`、`lib/appAttentionCount.ts` 的 `orcaLeadWorkerAttention` 入参。
+
+Desktop 的「开启协同」与「创建新 Worker」共用 `CreateWorkerPopover`，表单按「让 Worker 做什么 → 首条任务 → 更多设置」
+排列（2026-11-10）。预设只决定提交的角色名和任务框里带出的内容，不改变 Agent、模型、权限或能力，逻辑在
+`apps/desktop/src/renderer/features/cc-agent/workerTemplates.ts`，记忆在 `state/workerCreationPrefs.ts`：
+
+- **内置预设**与 `ORCA_PREDEFINED_WORKER_ROLES` 一一对应，只留主流分工里最常用的三类，依次为审查（`reviewer`）、开发
+  （`developer`）、测试（`tester`）（用户要求精简，审查排第一）：拆解与规划由 Lead 承担。这份清单同时决定桌面「编辑 Worker」
+  弹窗列出的角色，以及读不到被控端清单时手机与远程操作端列出的角色；已有 Worker 的角色名不受影响，不在清单里的名字
+  按自定义显示。
+- **用户添加的预设**：这一排末尾的加号原地变成角色名输入，起名并创建后这个角色留在这一排。最多保留
+  `MAX_CUSTOM_WORKER_ROLES` 个，再添加时最久没用的让位。
+- **所有预设都能移除**（用户要求），内置的也一样：移除按钮平时不显示，鼠标移到角色上或键盘聚焦到它时才出现在胶囊
+  右上角；点击后先经确认弹窗（用户要求），确认后立即生效并清掉它记的内容。移除的内置预设只是不再列出
+  （`removedBuiltinRoles`），用加号输入它的角色名或当前语言下的显示名（不分大小写）再创建一次就回来；这只影响这台电脑
+  这个账号的创建表单（含从手机或另一台电脑操作它时看到的），不影响「编辑 Worker」弹窗。全部移除后这一排只剩角色名输入。
+- **按最近使用排序**（用户要求）：创建时用到的角色排到最前（`recentRoles`），没用过的内置预设按默认顺序跟在后面，
+  加号始终在最后。打开时选中第一个，也就是上次用的角色。
+- **每个角色各自的记忆**（用户要求）：创建时记下这个角色的任务文字、权限和手动选定的模型路线，下次选中它时一起带回；
+  没记过的字段跟随通用的上次选择，切换到这样的角色时表单当前的模型和权限保持不动。任务文字为空、超过
+  `MAX_REMEMBERED_WORKER_TASK_LENGTH`，或就是内置预设自带的那句话时不记。模型路线沿用通用记忆的规则：按任务所在电脑
+  隔离，SSH Lead 与选了其他运行设备时不记也不套用。项目、worktree 与运行设备仍然每次打开回到默认，不随角色记忆。
+- **自带的首条任务**：「审查」「测试」检查的对象就是 Lead 已有的工作，没记过文字时在已有任务里带出一句话的任务
+  （审查是「看一下 Lead 的工作，给出一些建议」，措辞由用户定：口吻放轻，不附加「不要修改」之类的限制）；新建任务的草稿还没有可查的
+  工作（没有 `leadSessionId`），不带出。切换预设只替换空的或仍是带出原样的任务，用户正在写的内容保留。
+- 角色记忆按账号隔离（`rolesByOwner`）：任务文字是用户内容，换账号后不显示。通用的模型与权限记忆（含 Agent 工具创建
+  Worker 时读取的默认值）照旧在每次创建时更新，不受角色记忆影响。
+- **以任务所在的电脑为准**（用户裁决）：角色清单、每个角色的记忆，以及不分角色的「上次选择」（上次用的 Agent、各
+  Agent 的模型、权限、手动选定的路线）都只存在任务所在的那台电脑上。任务在另一台电脑（device-link 被控端）时，弹窗
+  打开即向那台读（`maker:worker-roles:get`），读到后在没动过的表单上按它恢复；创建与移除改的也是那台
+  （`maker:worker-roles:apply`），操作端不读不写自己的记忆。读到之前按首次默认值打开，不拿操作端自己的记忆垫底。
+  那台版本太旧、没有这组通道时只列内置角色、不提供移除，「上次选择」沿用操作端原来的本地记忆（给旧版留的兼容）；
+  一时读不到时保持首次默认值，创建时仍尝试写回那台。被控端 main 只转手：读的是 renderer 镜像过来的快照，写则转给
+  自身 renderer 落回真源。协议细节见 [`protocol-compatibility/orca-worker-creation-memory-on-controlled-computer.md`](protocol-compatibility/orca-worker-creation-memory-on-controlled-computer.md)
+  「协同创建 Worker 的记忆以被控端为准」。
+
+权限与模型放在任务框底部一行，与聊天输入框同序（用户裁决）：权限在左，模型在右。项目与运行设备收在「更多设置」，
+收起时显示当前取值，里面有需要用户处理的问题时自动展开。提交的字段与 `maker:session:enable-orca` /
+`maker:worker:create` 的入参不变。界面验证见 `pnpm ui:check --page collab-start`。
+
+**手机端**（`OrcaWorkerFormView` + `useOrcaWorkerForm`）是同一套规则的另一个操作端，始终读写任务所在的电脑：
+
+- 打开表单即读那台电脑的清单，按它的顺序列出角色并选中第一个，带回它记的任务、权限和模型；读到时用户已经动过表单
+  就只更新这一排。提交（含新建任务里确认协同草稿）后把这次的内容记回那台电脑；长按角色经确认后从那台移除。
+  角色名、任务文字和按角色的记忆不写进手机的存储。
+- 那台电脑读不到清单（版本太旧、一时连不上）时只列内置角色，不显示加号，长按无效，提交时不写。
+- 判定规则与电脑端共用 `@cindy/maker-shared/orca-team`（哪些内置角色自带首条任务、输入内置角色的名字就是那个内置
+  角色、换角色只替换没改过的任务）；文字各端自备。新建任务的草稿同样不带出自带的首条任务。
+- 不分角色的「上次选择」也读写那台电脑（用户裁决）：角色自己没记过时表单从它起步，切 Agent 带出的也是那台电脑
+  记的模型。手机本地的 `orcaWorkerPrefs` 只在那台电脑版本太旧、没有这组通道时沿用；那台电脑能读到时手机不读不写它。
+  本页读到的内容只留在内存里，提交后同步更新，马上再打开表单时不用等那台电脑答复。
+- 界面：一张卡片里是角色、任务和一行工具，工具行左边是只有图标的权限（对齐手机输入框里的权限圆钮），右边是模型；
+  Agent、运行设备与目录收在「更多设置」。细则见 `apps/mobile/docs/mobile-design-guide.md` §4。
 
 Worktree 是可选项。旧调用方与 MCP 不传新字段时，Worker 仍继承 Lead 记录的目录。
 本机 Desktop 手动创建 Worker（包括开启协同的首个 Worker）可选择项目，并可为 Worker 单独新建 worktree。
@@ -410,6 +475,27 @@ runtime 已在线的 session 之后才成为 Lead（例如从协同面板开启�
    `imageFiles` / `agentMessageTextWithImages`、`orcaImageAttachments.ts` 与 `register.ts` 的
    `validateImageAttachments`。
 
+1d. **系统兜底回报在 Lead drain 前合批（状态：不变量）**<br>
+   只有 `sendAutoBridgeToLead` 经 dispatcher 盖章 `origin.autoBridge=true` 的 Worker 回报可合批；主动
+   `send_to_lead`、Lead 派单、用户消息、scheduler / 插件 / 会话来源都不得命中。coordinator 在真正 drain 队首前，
+   只把连续且派发配置（model / effort / permissionMode / workingDir / createOpts / vendorOptions）相同的系统兜底回报
+   原子合并为一条：保留首条 `clientId`、`hostAcceptedAtMs`、队列位置与创建时间，移除项走既有 discard settlement；
+   合并本身一次交换、一次 emit/持久化，随后 drain 取出队首会再投影一次（中间态是“已合批仍在队首”，崩溃恢复按
+   clientId 与已落库行去重，不会二次发送）。发给模型的批次正文以 `[Auto-bridged batch: N worker reports]` 开头，按原顺序
+   保留每条 Worker 的 `[From Orca Worker ...(worker_id)]` 身份前缀、`[Auto-bridged: ...]` 状态与完整正文（供 Lead 路由）；
+   可见/持久化正文剥掉模型向批次头与 `worker_id` 内部标识、保留 role 前缀以区分多 Worker（单条可见正文无 role 行）；
+   共享访客的消息与排队投影都只拿这份可见正文，看不到 worker_id。持久化仍用既有
+   `{orcaSource:'worker',content}` 信封，`origin.autoBridgeBatchCount` 记录该批条数；origin 保留首条 `senderSessionId` 作
+   Host 团队授权证据（`taskActionHost.readOrcaTeam` 承重，仅宿主校验用）。所有展示/投影消费点必须对批次加闸门、不据此归属首个 Worker：
+   `messageSourceIdEntries`（悬停/长按 ID）、`describeHandoffUserSource`（交接摘要）、两端数量型标题与访客脱敏均已按 `autoBridge/autoBridgeBatchCount` 提前返回。不跨用户消息、不重排、不额外等待；
+   构造失败、附件 / 引用、非法计数或配置不一致时保留原条目逐条派发。合批受上限约束（均衡档：最多 8 条、批次正文累计 ≤32000 字符，
+   字符预算为主、条数兜底，见 `AUTO_BRIDGE_BATCH_MAX_ITEMS / AUTO_BRIDGE_BATCH_MAX_CHARS`）：条数按真实报告数累计（已合批项按其 `autoBridgeBatchCount`，而非队列行数），retry/re-flatten 不绕过上限；字符预算按含批次头/分隔符的最终正文预估（builder 再兜底校验最终条数与长度）；加入下一条会超限即停止合批，剩余回报留到
+   下一轮 drain 再合批，以保留轮间 compact 机会；队首必发（哪怕单条超预算也单独派发），不截断任何单条回报。暂停、编辑锁、插话、恢复与重试沿用 coordinator
+   既有守卫。批次界面用数量型标题，不把整批归到首个 Worker，也不提供只跳首个 Worker 的来源链接。Lead prompt 规则 7
+   只声明按批次头一次处理批内各回报，不改变派单 / 静默 / 终态验收边界。实现指针：`orcaAutoBridgeBatch.ts`、
+   `agent-input-coordinator.ts` 的 `coalesceAutoBridgeHead`、`orcaInterAgentDispatcher.ts` 的 `resolveOrigin`；回归见
+   `orcaInterAgentDispatcher.test.ts` 的 auto-bridge queue coalescing 用例。
+
 2. **accepted 才能产生运行副作用（状态：不变量）**<br>
    只有底层 send accepted 后，才能把 worker 标成 `running`、建立 auto-bridge pending 并广播 UI；dispatch 失败必须 rollback 到 accepted 前状态，且 rollback 不得覆盖已有终态。实现指针：`orcaTeamService.ts` 的 `dispatchResolvedWorker` 与 `rollbackAcceptedDispatchState`。
 
@@ -554,6 +640,38 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
     已知边界：Worker 处于 Plan 模式的自动轮次里，第 11 条所说的 `steer_queued_message` 会被行动授权
     拒绝，后面的消息照常作为后续轮次送达。
 
+13. **出错的 Worker 原地恢复，过期的异常终止回报不再唤醒 Lead（状态：不变量，2026-11-11）**<br>
+    起因：五个 Worker 同时撞上用量上限，Lead 把它们全部归档重建（丢了上下文，还撞上名字冲突），
+    剩下四条「异常终止」回报又逐条唤醒 Lead，各跑一轮只为确认「旧通知，忽略」。宿主做两件事：
+    - **回报里写明可以原地继续**：`bridgeWorkerCompletion` 在异常终止回报正文之后附一段 Host note
+      （`buildWorkerFailureRecoveryNote`）：Worker 的对话、工作目录与未提交改动都在，状态为 `error`；
+      继续就向同一个 Worker `send_to_worker`，用量上限或模型不可用时先用 `cindy_helper` 的
+      `get_session_runtime` / `set_session_runtime` 给它换模型（坑点 #6 的发送边界切换，运行设备 Worker
+      不适用）；归档重建会丢上下文。它是回报正文的一部分（用户在 Lead 对话里也看得到），不进系统提示词。
+      Worker 的用量上限仍不走普通任务的等待续跑（`isUsageLimitAutoResumeEligible`），由 Lead 决定。
+    - **Lead 已对该 Worker 采取行动时撤下它的旧回报**：归档（`archiveWorker`）成功后，或向状态为
+      `error` 的 Worker 重新派活／打断改派成功后，把该 Worker 排在 Lead 队列里、Lead 还没读到的异常终止
+      回报撤下（coordinator `remove`，与 Stop 清队列同一条结清路径）。正文不丢：`archive_worker` 回
+      `withdrawn_failure_notices`（条数），`send_to_worker` / `interrupt_worker` 回
+      `superseded_failure_notices`（编号与正文，限长）。
+    约束：只认宿主生成的固定开头（`ORCA_AUTO_BRIDGE_FAILURE_HEADER`）且 `origin.senderSessionId` 等于该
+    Worker 的协同消息——Worker 自己写的回报（成果、提问）与其他 Worker 的回报一律不动；正在投递或
+    插话中的条目不动。重新派活只撤**派发前**已在队列里的那几条：派发之后才进队列的属于新一轮
+    （新一轮可能立刻又失败），必须照常送达；派发失败时一条不撤。读队列或撤下失败只记日志，不能让
+    已经成立的归档或派发变成失败。实现指针：`orcaTeamService.ts` 的 `listQueuedFailureNotices` /
+    `withdrawQueuedFailureNotices`；回归见 `orcaTeamService.test.ts` 的
+    `superseded worker failure notices` 用例。
+
+14. **交给另一个任务的正文，路径必须是接收方读得到的（状态：不变量，2026-11-11）**<br>
+    Agent 在另一台电脑上运行的任务（远程供应商）看到的是自己的虚拟工作区路径，每个任务一套；它写进
+    `send_to_worker` / `create_worker(s)` 的 `initial_task` / `send_to_lead` 等正文里的路径原样转交后，
+    接收方读不到（2026-11-10 现场：Lead 给五个 Worker 的任务说明文件全部「不存在」）。远程 Agent 的
+    工具调用经 `remote-agent/controller/router.ts` 落到本机 MCP 时，`cindy_orca` 的 `message` /
+    `initial_task`、`orca_worker_bridge` 的 `message` 与 `cindy_helper` 的 `message`（任务间消息）按
+    `mapTextFromAgent` 还原成本机路径，与 #8728 的 `prompt` 同一做法；接收方若也是远程 Agent，出站时
+    再按它自己的工作区投影。只认这三个服务的这几个字段，插件的业务参数不做文本替换。本机 Agent 的
+    正文本来就是本机路径，不经过这里。回归见 `virtualWorkspace.test.ts`。
+
 #### Worker 运行态
 
 1. **worker 终态不被失败回滚覆盖（状态：不变量）**<br>
@@ -603,19 +721,19 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    Lead 派完活结束本轮时，团队仍在干活，这一轮不是完成：灵动岛保持 Lead 为运行中（不出完成卡片、不响完成音、不记未读），Work Louder 键盘、侧栏卡片与远程会话列表读同一份活动快照，因此一起保持运行中；renderer 不发完成通知（桌面／手机／飞书）、不亮完成角标。Worker 回报送达后 Lead 被唤起，那一轮的 done 才是团队完成。判据只有一份，在 Main：以「仍有 accepted 派活欠 Lead 回报」（auto-bridge pending）为准，最后一份回报送达或被丢弃（手动停止、归档等）时，若 Lead 空闲则补发被推迟的完成；renderer 不自行推算 Worker 状态，完成去抖落地时读灵动岛活动快照，Main 仍把该会话保持为 `running` 就不算完成（暂停的输入队列同样会让灵动岛保持运行中，但保留原有完成提醒，故排除）。Worker 自身仍不进灵动岛；Worker 的完成不单独通知，出错与需要确认以「Lead 标题 · Worker 标题」单独通知（桌面 / 飞书 / 手机推送，走同一个 `sendSessionEventNotification`；找不到 Lead 时退回 Worker 标题；只覆盖本机 Worker），点击按 Worker id 经 `resolveSessionRoute` 落到 Lead 并打开该 Worker。Worker 出错后 Lead 被唤起处理完还会有一条 Lead 完成通知，两条都保留。已知空档（用户接受）：开启灵动岛时渲染端不弹系统横幅，而 Worker 不进灵动岛，这段时间 Worker 的出错 / 确认收不到桌面弹窗，飞书 / 手机推送不受影响。实现指针：`CCAgentSidebarUpper.tsx` 的 `fireSessionNotification`，`orcaLeadWorkerAttention.ts` 的 `shouldNotifyOrcaWorkerEvent` / `formatOrcaWorkerNotificationTitle` / `findOrcaLeadSessionIdForWorker`。已知边界（刻意不处理，保持简单）：派给正忙 Worker、尚在其队列里未被接收的任务还没有待回报记录（Worker 正忙通常意味着已有同一 Lead 的待回报记录）；静默完成（如静默的自动运行）不走推迟，Lead 活动会直接变为完成。实现指针：`orcaTeamService.ts` 的 `hasPendingWorkerReports` / `deletePendingReport` / `onLeadWorkerReportsSettled`，`register.ts` 的 `setCompletionDeferResolver` 与 `onLeadWorkerReportsSettled` wiring，`agent-island/service.ts` 的 `notifyQueueEmptied`，renderer `state/agentIslandActivity.ts` 的 `isSessionCompletionHeldByAgentIsland` 与 `useSessionRunningStatus.ts` 的 done debounce。
 
 10. **远端 Worker 只在运行设备上跑（状态：不变量）**
-   Worker 可以放到同账号另一台电脑（运行设备）上运行：真实任务在那台，本机只有一条不跑 Agent、`working_dir` 为空的代理任务行，`orca_workers.execution_device_id` / `remote_session_id` 记录位置。代理行承接计槽、状态机、auto-bridge 与归档，任何路径都不得在本机为它起 Agent（`bootstrapSession` 对远端 Worker 直接拒绝）、不得把它复制到其他电脑；派活、停止与存活查询经 `orcaRemoteWorkers.ts` 的 `wrapTeamDeps` 分流到运行设备，其余依赖原样透传，不另造状态机。回报靠轮询：派出的消息已进入对话（投递回执 accepted）且设备不在跑时，分页读取 user / assistant 历史，按派活 user 的 clientId 定位对应的最后一条 assistant 回复并按消息 id 去重；后续用户插话的回复和异常状态不得归给此前派活，历史读取期间的新派活不得被旧回报清除。每轮最多扫描 2000 行，预算不足时保留游标下一轮续读，不误判缺少回复；宿主 onAccepted / onAcceptedCommit 完成后才冻结回报身份并允许轮询收尾，accepted 回调失败恢复上一代等待状态，保存旧结果期间不得消费新派活身份或写入其捕获文本。同一远端 Worker 的 enqueue、accepted / commit 和身份确认复用现成 session 发送锁串行执行，避免并发回调与投递顺序错位。用户在运行设备上直接发的消息算插话，不触发回报。设备不可达只是运行期投影（`executionDevice.reachable`），不扩展 `OrcaWorkerStatus`；派活时不可达直接失败，不回退到本机。远端 Worker 通过运行设备转发四个既有 Worker 桥接工具，Lead 按同账号来源设备、真实任务、Worker 与 active team 核对归属；旧端没有该通道时保留自动回报。远端队列编辑仍不支持（Worker 管理自己排队回报的四个工具在运行设备侧回 `REMOTE_WORKER_NOT_SUPPORTED`，见「消息派发与 auto-bridge」第 12 条）；send_to_lead 的 steer 由 Lead 所在电脑沿本机原有守卫判定。界面：创建弹窗的「运行设备」适用于桌面本机任务及手机控制的非 SSH Lead；桌面远控视角保留原目录读取边界，控制端自身不能经 device-link 读取自己的目录，跨设备派发仍可由 Lead 的 MCP 执行；Lead 的 Agent 在其他电脑运行也可派发跨设备 Worker。工作电脑与 Agent 所在电脑可独立选择，后者需工作电脑声明 `agentDevice` 能力。入口由 `CreateWorkerPopover.executionDevicesEnabled` 控制，复用标准下拉列表，以有界滚动和键盘按名称定位应对多设备；选了其他电脑后，工作目录提供「对话 / 指定目录」，「对话」不传 `workingDir`、在运行设备创建不绑定项目的任务，「指定目录」只使用那台电脑上的绝对路径。手机版的新任务「开启协同」与 Lead「创建 Worker」共用设备下拉列表和两种目录模式；设备列表从 Lead 所在电脑读取，Agent、模型和供应商目录从所选运行设备读取。协同面板对远端 Worker 展示运行设备上的真实任务（`RemoteWorkerSessionPane`，先登记归属再读写）。实现指针：`orcaRemoteWorkerRuntime.ts`、`orcaRemoteWorkers.ts`、`orcaWorkerCreationService.ts` 的 `createRemoteWorkerInTeam`、运行设备侧 `orcaRemoteWorkerHost.ts`；协议见 `protocol-compatibility.md`「协同远端 Worker」。
+   Worker 可以放到同账号另一台电脑（运行设备）上运行：真实任务在那台，本机只有一条不跑 Agent、`working_dir` 为空的代理任务行，`orca_workers.execution_device_id` / `remote_session_id` 记录位置。代理行承接计槽、状态机、auto-bridge 与归档，任何路径都不得在本机为它起 Agent（`bootstrapSession` 对远端 Worker 直接拒绝）、不得把它复制到其他电脑；派活、停止与存活查询经 `orcaRemoteWorkers.ts` 的 `wrapTeamDeps` 分流到运行设备，其余依赖原样透传，不另造状态机。回报靠轮询：派出的消息已进入对话（投递回执 accepted）且设备不在跑时，分页读取 user / assistant 历史，按派活 user 的 clientId 定位对应的最后一条 assistant 回复并按消息 id 去重；后续用户插话的回复和异常状态不得归给此前派活，历史读取期间的新派活不得被旧回报清除。每轮最多扫描 2000 行，预算不足时保留游标下一轮续读，不误判缺少回复；宿主 onAccepted / onAcceptedCommit 完成后才冻结回报身份并允许轮询收尾，accepted 回调失败恢复上一代等待状态，保存旧结果期间不得消费新派活身份或写入其捕获文本。同一远端 Worker 的 enqueue、accepted / commit 和身份确认复用现成 session 发送锁串行执行，避免并发回调与投递顺序错位。用户在运行设备上直接发的消息算插话，不触发回报。设备不可达只是运行期投影（`executionDevice.reachable`），不扩展 `OrcaWorkerStatus`；派活时不可达直接失败，不回退到本机。远端 Worker 通过运行设备转发四个既有 Worker 桥接工具，Lead 按同账号来源设备、真实任务、Worker 与 active team 核对归属；旧端没有该通道时保留自动回报。远端队列编辑仍不支持（Worker 管理自己排队回报的四个工具在运行设备侧回 `REMOTE_WORKER_NOT_SUPPORTED`，见「消息派发与 auto-bridge」第 12 条）；send_to_lead 的 steer 由 Lead 所在电脑沿本机原有守卫判定。界面：创建弹窗的「运行设备」适用于桌面本机任务及手机控制的非 SSH Lead；桌面远控视角保留原目录读取边界，控制端自身不能经 device-link 读取自己的目录，跨设备派发仍可由 Lead 的 MCP 执行；Lead 的 Agent 在其他电脑运行也可派发跨设备 Worker。工作电脑与 Agent 所在电脑可独立选择，后者需工作电脑声明 `agentDevice` 能力。入口由 `CreateWorkerPopover.executionDevicesEnabled` 控制，复用标准下拉列表，以有界滚动和键盘按名称定位应对多设备；选了其他电脑后，工作目录提供「对话 / 指定目录」，「对话」不传 `workingDir`、在运行设备创建不绑定项目的任务，「指定目录」只使用那台电脑上的绝对路径。手机版的新任务「开启协同」与 Lead「创建 Worker」共用设备下拉列表和两种目录模式；设备列表从 Lead 所在电脑读取，Agent、模型和供应商目录从所选运行设备读取。协同面板对远端 Worker 展示运行设备上的真实任务（`RemoteWorkerSessionPane`，先登记归属再读写）。实现指针：`orcaRemoteWorkerRuntime.ts`、`orcaRemoteWorkers.ts`、`orcaWorkerCreationService.ts` 的 `createRemoteWorkerInTeam`、运行设备侧 `orcaRemoteWorkerHost.ts`；协议见 `protocol-compatibility/orca-remote-worker.md`「协同远端 Worker」。
 
 11. **改名只改身份元数据，不重建执行单元（状态：不变量）**
-   Worker 的展示角色名 `role`（1-32 字符）与 team 内唯一标识 `label`（slug，`/^[a-z0-9_-]+$/i`，≤32）在创建后可通过 `update_worker` / `maker:worker:update` 修改。改名不是换执行单元：Agent、模型、权限、工作目录与已发起的 turn 都不受影响，也**不允许**借改名实施中途换模型（见坑点 #6）。`label` 唯一性由 `uniq_orca_workers_team_label` 最终把关（约束范围含已归档 worker），冲突必须回 `DUPLICATE_LABEL` 且零副作用；空操作必须 idempotent。同一 Worker 的读-改-写必须按 worker id 串行化，避免 UI 改 role 与 Lead 改 label 的并发请求互相完整回写覆盖；UI 保存时也只能提交用户实际改过的字段（服务端锁拦不住请求自带的旧值）。当 worker session 标题仍是 `orcaWorkerSessionTitle` 生成形态（`Worker · role · label`，role 与 label 相同时去重为 `Worker · role`）时同步改写为新形态；用户自定义/重命名过的标题不得被覆盖。插件 `releaseWorker` 同样按稳定的 Worker ID、团队归属与完成凭据归档，不按计划标签识别；改名不影响释放。成功的改名必须广播 `ORCA_WORKER_CHANGED`，并同步 worker session 的 `local-db:sessions:patched`（若标题被改写）。实现指针：`orcaTeamService.ts` 的 `updateWorker`、`orcaTeamStore.ts` 的 `updateWorkerIdentity`、`orcaWorkerCreationService.ts` 的 `orcaWorkerTitle`、`packages/lizi-mcps/src/xdt-helper/update_worker.ts`。
+   Worker 的展示角色名 `role`（1-32 字符）与 team 内唯一标识 `label`（slug，`/^[a-z0-9_-]+$/i`，≤32）在创建后可通过 `update_worker` / `maker:worker:update` 修改。改名不是换执行单元：Agent、模型、权限、工作目录与已发起的 turn 都不受影响，也**不允许**借改名实施中途换模型（见坑点 #6）。`label` 唯一性由 `uniq_orca_workers_team_label` 最终把关，冲突必须回 `DUPLICATE_LABEL` 且零副作用；唯一索引仍覆盖全部记录，但任务已归档或已删除的 Worker 在同名申请到来时让出名字——创建（`orca.reserveWorkerCreation`，worker 线程与内联两份实现）与改名（`updateWorkerIdentity`）都先把它的 `label` 改成 `<原名>~<worker id>`（`~` 不在可填写的字符集内，不会与任何新名字相撞），记录、历史与团队关联保留，所以只会与仍在团队里的 Worker 冲突（2026-11-10 现场：归档五个 Worker 后按原名重建，五个全部被拒）。回归见 `tx.test.ts` 与 `orcaTeamStore.test.ts`；空操作必须 idempotent。同一 Worker 的读-改-写必须按 worker id 串行化，避免 UI 改 role 与 Lead 改 label 的并发请求互相完整回写覆盖；UI 保存时也只能提交用户实际改过的字段（服务端锁拦不住请求自带的旧值）。当 worker session 标题仍是 `orcaWorkerSessionTitle` 生成形态（`Worker · role · label`，role 与 label 相同时去重为 `Worker · role`）时同步改写为新形态；用户自定义/重命名过的标题不得被覆盖。插件 `releaseWorker` 同样按稳定的 Worker ID、团队归属与完成凭据归档，不按计划标签识别；改名不影响释放。成功的改名必须广播 `ORCA_WORKER_CHANGED`，并同步 worker session 的 `local-db:sessions:patched`（若标题被改写）。实现指针：`orcaTeamService.ts` 的 `updateWorker`、`orcaTeamStore.ts` 的 `updateWorkerIdentity`、`orcaWorkerCreationService.ts` 的 `orcaWorkerTitle`、`packages/lizi-mcps/src/xdt-helper/update_worker.ts`。
 
 11. **Worker 的 Agent 位置：远程供应商与本机供应商一视同仁（状态：不变量，2026-10-10 用户裁决）**
-   与上一条「运行设备」不同，这里任务、目录、命令与文件都留在 Lead 所在电脑，只有 Worker 的 Agent 在另一台同账号电脑或分享来的供应商上运行（与普通任务的远程 Agent 同一机制，`sessions.agent_device_id`）。每个 Worker 可以单独选位置：`OrcaWorkerCreateParams.agentDeviceId` 不传 = 跟 Lead（旧调用方、旧控制端与没有适用面板记忆的 MCP 省略时都走这里），`null` = 任务所在电脑，string = 那台电脑或 `share:<id>`；等于本机设备 id 时按 `null`。模型与来源按 Worker 自己的位置读目录（那台只列允许被远程调用的供应商），只有与 Lead 同一位置时才沿用 Lead 的来源（来源 id 在不同电脑上不是一回事）；Agent 在另一台时不按本机的 Cindy AI key 判预算模型。那台读不到目录在占槽与启动前失败（`REMOTE_AGENT_DEVICE_UNREACHABLE` / `REMOTE_AGENT_SHARE_*`），不回退到本机。SSH Lead 不能指定另一台（`INVALID_PARAMS`）；跨设备 Worker 创建时可以指定独立的 Agent 电脑，`agentDeviceId` 相对工作电脑解释，省略或 null 使用工作电脑默认，不继承 Lead。工作电脑先按所选供应商电脑的目录准入，复用普通任务的远程 Agent 与工具执行通道，不迁移工作目录。入口一处一套：桌面「创建 Worker / 开启协同」弹窗与新建任务用同一个模型面板，任务所在电脑的供应商之后列其他电脑与分享（`useWorkerAgentDevices`），选中哪一行 Worker 的 Agent 就在哪运行，默认选中 Lead 的位置；选择远程供应商后仍保留工作电脑入口；切换工作电脑先恢复该电脑本机默认，随后可选择它能调用的远程供应商或分享。旧版工作电脑不开放独立 Agent 位置，显式请求不能被静默忽略。桌面手动选择模型并提交创建后，在 `workerCreationPrefs.modelSelectionByHost` 按账号与任务所在电脑保存完整选择（Agent、模型、来源、Agent 所在电脑、推理强度与 Fast），下次打开优先恢复，不被 Lead 后续换模型或换位置覆盖；未手动选择时仍跟随 Lead 的位置，取消未提交的编辑不保存。旧版逐 Agent 记忆继续可读，不推测它原先属于哪台电脑；SSH 与运行设备的临时选择不写入这份位置记忆。远程选择不覆盖旧版逐 Agent 的本机目录记忆，模型行的档位预设仍使用 `agentDeviceModelMemory`。回归见 `CreateWorkerPopover.test.tsx` 的重新打开与任务所在电脑隔离用例。手机同样支持选择 Agent 位置（`useOrcaWorkerForm` 的 `agentDeviceId`，模型面板 `remote` 与新建任务同一份 `useRemoteAgentCatalogs`），通过 `orcaWorkerPrefs.modelSelectionByHost` 在手机本地按账号与任务所在电脑保存同样的完整选择，创建成功或确认新任务协同草稿后写回；异步读取不能覆盖已编辑的表单。恢复的来源或模型不可用时保留原路线，由界面阻止或宿主明确拒绝，不静默换到别处；旧端不能兑现位置时同样拒绝。回归见 `useOrcaWorkerForm.test.tsx` 与 `orcaTeam.test.ts`。被控电脑声明 `supportsOrcaWorkerAgentDevice` 时新建任务的远程供应商与协同不再互斥。Lead 的 `list_available_models` 可按 `agent_device_id` 列那里的模型并给出 `locations`，`create_worker` / `create_workers` 用同一个 `agent_device_id`。Worker 列表投影 `session.agentDeviceId`，桌面 Worker 头像叠与远程任务同款的单波纹 + 点；手机 Worker 行保持原来的状态圆点，不加远程标识（2026-10-11 用户要求维持原样）。已开始的 Lead 与 Worker 可以由用户在模型列表里换 Agent 位置（本机供应商、其他电脑、分享来的供应商一起列出），与普通任务同一套换电脑事务：选择先登记为意图，下一次发送边界全量交接后在新位置重建，协同身份不变（2026-10-16 用户裁决：任务都在本机，只换供应商所在电脑，不应排除）。运行设备 Worker 与 SSH 任务仍不开放；被控电脑上的协同任务：被控端在 `maker:get-capabilities` 声明 `supportsOrcaAgentRelocation` 时，桌面控制端同样列出其他电脑与分享、走同一套换电脑事务（2026-11-04，makecindy/cindy#8840）；未声明的被控端不开放（v0.1.104–v0.1.110 的被控端会拒绝）。手机控制端按同一能力位开放（makecindy/cindy#8841）：声明后模型面板列出全部远程来源并可换电脑；未声明时与之前一样，只在 Agent 当前所在那台原地选模。供应商组为任务换电脑见第 12 条。实现指针：`orcaWorkerCreationService.ts` 的 `resolveWorkerAgentDeviceId` / `agentDeviceCatalogFailure`，`workerAgentLocations.ts` 的 `listWorkerAgentLocations` 与 `register.ts` 的 `listAvailableModels`，renderer `CreateWorkerPopover.tsx`、`hooks/useWorkerAgentDevices.ts`；协议见 `protocol-compatibility.md`「协同 Worker 的 Agent 位置」。
+   与上一条「运行设备」不同，这里任务、目录、命令与文件都留在 Lead 所在电脑，只有 Worker 的 Agent 在另一台同账号电脑或分享来的供应商上运行（与普通任务的远程 Agent 同一机制，`sessions.agent_device_id`）。每个 Worker 可以单独选位置：`OrcaWorkerCreateParams.agentDeviceId` 不传 = 跟 Lead（旧调用方、旧控制端与没有适用面板记忆的 MCP 省略时都走这里），`null` = 任务所在电脑，string = 那台电脑或 `share:<id>`；等于本机设备 id 时按 `null`。模型与来源按 Worker 自己的位置读目录（那台只列允许被远程调用的供应商），只有与 Lead 同一位置时才沿用 Lead 的来源（来源 id 在不同电脑上不是一回事）；Agent 在另一台时不按本机的 Cindy AI key 判预算模型。那台读不到目录在占槽与启动前失败（`REMOTE_AGENT_DEVICE_UNREACHABLE` / `REMOTE_AGENT_SHARE_*`），不回退到本机。SSH Lead 不能指定另一台（`INVALID_PARAMS`）；跨设备 Worker 创建时可以指定独立的 Agent 电脑，`agentDeviceId` 相对工作电脑解释，省略或 null 使用工作电脑默认，不继承 Lead。工作电脑先按所选供应商电脑的目录准入，复用普通任务的远程 Agent 与工具执行通道，不迁移工作目录。入口一处一套：桌面「创建 Worker / 开启协同」弹窗与新建任务用同一个模型面板，任务所在电脑的供应商之后列其他电脑与分享（`useWorkerAgentDevices`），选中哪一行 Worker 的 Agent 就在哪运行，默认选中 Lead 的位置；选择远程供应商后仍保留工作电脑入口；切换工作电脑先恢复该电脑本机默认，随后可选择它能调用的远程供应商或分享。旧版工作电脑不开放独立 Agent 位置，显式请求不能被静默忽略。桌面手动选择模型并提交创建后，在 `workerCreationPrefs.modelSelectionByHost` 按账号与任务所在电脑保存完整选择（Agent、模型、来源、Agent 所在电脑、推理强度与 Fast），下次打开优先恢复，不被 Lead 后续换模型或换位置覆盖；未手动选择时仍跟随 Lead 的位置，取消未提交的编辑不保存。旧版逐 Agent 记忆继续可读，不推测它原先属于哪台电脑；SSH 与运行设备的临时选择不写入这份位置记忆。远程选择不覆盖旧版逐 Agent 的本机目录记忆，模型行的档位预设仍使用 `agentDeviceModelMemory`。回归见 `CreateWorkerPopover.test.tsx` 的重新打开与任务所在电脑隔离用例。手机同样支持选择 Agent 位置（`useOrcaWorkerForm` 的 `agentDeviceId`，模型面板 `remote` 与新建任务同一份 `useRemoteAgentCatalogs`），通过 `orcaWorkerPrefs.modelSelectionByHost` 在手机本地按账号与任务所在电脑保存同样的完整选择，创建成功或确认新任务协同草稿后写回；异步读取不能覆盖已编辑的表单。恢复的来源或模型不可用时保留原路线，由界面阻止或宿主明确拒绝，不静默换到别处；旧端不能兑现位置时同样拒绝。回归见 `useOrcaWorkerForm.test.tsx` 与 `orcaTeam.test.ts`。被控电脑声明 `supportsOrcaWorkerAgentDevice` 时新建任务的远程供应商与协同不再互斥。Lead 的 `list_available_models` 可按 `agent_device_id` 列那里的模型并给出 `locations`，`create_worker` / `create_workers` 用同一个 `agent_device_id`。Worker 列表投影 `session.agentDeviceId`，桌面 Worker 头像叠与远程任务同款的单波纹 + 点；手机 Worker 行保持原来的状态圆点，不加远程标识（2026-10-11 用户要求维持原样）。已开始的 Lead 与 Worker 可以由用户在模型列表里换 Agent 位置（本机供应商、其他电脑、分享来的供应商一起列出），与普通任务同一套换电脑事务：选择先登记为意图，下一次发送边界全量交接后在新位置重建，协同身份不变（2026-10-16 用户裁决：任务都在本机，只换供应商所在电脑，不应排除）。SSH 任务仍不开放；运行设备 Worker 2026-11-12 起同样开放（见下方「换位置的入口」）；被控电脑上的协同任务：被控端在 `maker:get-capabilities` 声明 `supportsOrcaAgentRelocation` 时，桌面控制端同样列出其他电脑与分享、走同一套换电脑事务（2026-11-04，makecindy/cindy#8840）；未声明的被控端不开放（v0.1.104–v0.1.110 的被控端会拒绝）。手机控制端按同一能力位开放（makecindy/cindy#8841）：声明后模型面板列出全部远程来源并可换电脑；未声明时与之前一样，只在 Agent 当前所在那台原地选模。供应商组为任务换电脑见第 12 条。实现指针：`orcaWorkerCreationService.ts` 的 `resolveWorkerAgentDeviceId` / `agentDeviceCatalogFailure`，`workerAgentLocations.ts` 的 `listWorkerAgentLocations` 与 `register.ts` 的 `listAvailableModels`，renderer `CreateWorkerPopover.tsx`、`hooks/useWorkerAgentDevices.ts`；协议见 `protocol-compatibility/remote-agent.md`「协同 Worker 的 Agent 位置」。
 
 12. **协同任务归供应商组，换电脑不丢回报（状态：不变量，2026-10-10 用户裁决）**
    Lead 与 Worker 与普通任务一样归供应商组分配、出问题时自动换电脑（产品口径见 `docs/product-rules/provider-groups.md` §6.1「协同任务」），只有审查任务仍排除（`readProviderGroupSessionRow`）。要点：
    - **新 Worker 也分配**：Worker 的任务记录由启动这一步写入，分配时还读不到，`applyProviderGroupAssignment` 用启动参数作为「从没运行过」的快照（`assignBeforeStart` 的 `startRow`）；记录已存在时以记录为准。
    - **跟 Lead 就是跟 Lead 的组**：Lead 有组绑定、Worker 选的位置就是 Lead 现在所在且来源没另选（或选的就是 Lead 现在的来源 / 组那一项）、同一种 Agent 时，Worker 改用组那一项（本机的组：任务所在电脑 + 组的供应商；另一台电脑上的组：那台 + 组的供应商），再由组按策略选电脑；组那一项不提供该模型或读不到时照旧跟 Lead 所在那台。`list_available_models` 不指定位置时同口径。实现：`OrcaLeadSessionSnapshot.providerGroupEntry`、`leadProviderGroupFollowCandidate`。
-   - **换位置的入口**：Lead 与本机 Worker 显式改变 `agentDeviceId` 与普通任务一样走 `performSessionAgentSwitch`（2026-10-16 起，见第 11 条）。点的是别处的供应商组、组在发送时又选回当前位置且引擎不变时，协同任务按交接重建，不走原地换模型：原地换模型要点选时核对过的窗口，而换位置点选不做这项核对，换到更小窗口的模型会一直卡在发送前；用户点选时已确认过按交接重新开始。运行设备 Worker（`orcaRemoteLead`）的显式 `agentDeviceId` 仍只接受 main 内部带 `providerGroupRelocation` 的 applyNow 调用，且引擎与模型都不变；该标记不从 IPC 读取。
+   - **换位置的入口**：Lead 与本机 Worker 显式改变 `agentDeviceId` 与普通任务一样走 `performSessionAgentSwitch`（2026-10-16 起，见第 11 条）。点的是别处的供应商组、组在发送时又选回当前位置且引擎不变时，协同任务按交接重建，不走原地换模型：原地换模型要点选时核对过的窗口，而换位置点选不做这项核对，换到更小窗口的模型会一直卡在发送前；用户点选时已确认过按交接重新开始。运行设备 Worker（`orcaRemoteLead`）的任务在它所在的电脑上，2026-11-12 起（用户裁决：新建任务和创建 Worker 时运行设备都能选远程供应商，建好后的协同任务没道理不行）显式 `agentDeviceId` 同样走 `performSessionAgentSwitch` 登记意图、发送边界交接；重建时 `synthesizeOrcaVendorOptionsFromDb` 从 `orca_remote_lead` 恢复远端 Worker 身份，意图未落地时统一发送事务拒绝发到旧 Agent。控制端按那台的 `supportsOrcaRemoteWorkerAgentRelocation` 开放（协议见 `protocol-compatibility/remote-agent.md`「运行设备 Worker 换 Agent 位置」）。Lead 所在电脑的代理行仍只记录创建时的位置，换位置后 Lead 侧 Worker 列表的远程标识可能滞后。
    - **Lead 离开不可达的远程电脑**：Lead 的 Agent 在另一台电脑时，切换前要先关闭旧远程会话。关闭请求若因链路失败而没送到对方（`DeviceLinkError.code` 为 `DEVICE_OFFLINE`、`INVOKE_TIMEOUT`、`DEVICE_UNRESPONSIVE`、`NOT_CONNECTED`、`LINK_NOT_OPEN`、`PEER_RESET`、`BACKPRESSURE`，或消息里带对应的 `[DEVICE_LINK_*]` 前缀），`performSessionAgentSwitch` 记一条 warn 后仍提交新位置；权限、版本、业务类错误（如 `REMOTE_DISABLED`、`CHANNEL_NOT_ALLOWED`、`ACCESS_REVOKED`、`VERSION_MISMATCH`、无 code 的 `REMOTE_AGENT_UNAVAILABLE`）照旧中止，不写库。只对 Lead 生效，Worker 与普通任务的关闭失败语义不变。名单对应 `apps/desktop/src/main/device-link/ipc.ts` 的 `DEVICE_LINK_CODE_MAP`，改一处要看另一处。旧会话在本机已 finish，对方没收到 close 时由其 host 在 `REMOTE_AGENT_HOST_IDLE_MS`（3 分钟无 poll）后按 `controller-gone` 回收。未验证：未做实机 Orca 协同回归（Lead 离开不可达电脑后 team／Worker 回报链路）。
    - **换电脑资格与等额度恢复分开**：组的 `isFailoverEligible` 用 `isProviderGroupFailoverEligible`（Worker 可换），额度恢复后自动继续仍用 `isUsageLimitAutoResumeEligible`（Worker 不等，失败交给 Lead）。
    - **换过去仍是成员**：`bootstrapSwitchedSession` 对协同任务调 `synthesizeOrcaVendorOptionsFromDb`，新会话带着协同身份、提示词与 `cindy_orca` / `orca_worker_bridge`，不靠下一次发送二次重启。
@@ -702,6 +820,7 @@ Mobile 的入口读取和残留表单提交都检查该身份，元数据补齐�
 - Auto-resume × auto-bridge：pending/deferred 的 vendor 终态不得 bridge / 置 `error`；失败轮随后的 unclaimed `done` 同样不得收口（含用户接手 force-flush 之后、无 persist-id 的零输出尾巴）；无配对 `done` 的旧 tail 不得吞掉后续更大 generation 的产品 `done`；surface/exhaust 恰好一次收口；成功续跑保持 `running` 且 pending 仍在；手动 stop 仍不 bridge。见 `autoResumeBookkeeping.test.ts` 的 `shouldSkipOrcaWorkerTerminal` 与 `interruptedContinuationContract.test.ts`。
 - 空闲 live 直发：`orcaInterAgentDispatcher` 在 `session.send()` 前必须先 `prepareUnhealthySession`，再重新 `getLiveSession`；prepare 关闭旧 handle 后不得继续向旧对象 send。并发直发必须串行化到同一把 per-session 锁。
 - Worker 创建权限偏好：覆盖无保存偏好时默认 `bypassPermissions`、已保存的 `auto` / `bypassPermissions` 继续优先、MCP 显式 `auto → bypassPermissions` 必须先经用户确认且取消／超时零副作用、复用 Team 时省略不重置／显式才更新、首个与后续 Worker 都读取共享创建偏好、已有 Worker 权限不反写、renderer localStorage 启动同步与 tool 写回，以及旧 device-link 被控端被阻止开启协同并提示升级。
+- 交接与恢复（2026-11-11）：创建回执的 `initial_task_state` / `file_access`；出错 Worker 的异常终止回报带原地恢复说明；归档或重新派活后该 Worker 的过期异常终止回报被撤下且回执带回正文，成果与其他 Worker 的回报不动；已归档 Worker 的名字可重新使用；远程 Agent 写进协同正文的虚拟路径落成本机路径。
 - MCP 工具：`cindy_orca` 21 工具（18 team + 3 只读诊断）的 role gate、ctx 缺失、worker/main 误调用、soft/hard limit、duplicate label、budget model API mode gate；`create_workers` 另覆盖默认 hard limit、配置 hard=3、部分成功、连续失败与 hard-limit 后不再调用 host；`update_worker` 覆盖归属校验（跨 lead 拒绝）、role/label 归一、idempotent 空操作、duplicate label 与生成标题同步；诊断工具的纯只读语义（无 active team 时返回空 workspace、不建 team）；排队消息控制 6 工具的归属校验（跨 lead 拒绝）、完整 consuming 投影、非 lead 条目拒绝（`NOT_LEAD_MESSAGE`）、自身队列非协同条目拒绝（`NOT_ORCA_MESSAGE`）、steering 拒绝（`MESSAGE_CONSUMING`）、撤回结清 accepted 暂存、合并的连续性、冲突零修改与移除回调结清，以及转插话的原因回执与排序落点；`send_to_worker` / `send_to_lead` 的 `delivery` 缺省不透传、显式插话与各类 fallback 原因；`interrupt_worker` 另覆盖队首预留、暂停态、graceful-stop 全部 outcome、auto-bridge 抑制和 done 互斥。
 - Codex MCP context：`CodexMcpThreadContextStore` 覆盖按 threadId 查 context、unknown / missing threadId fail-closed、unregister 后清理、`vendorOptions` 引用保持；`codexHttpBridge` 覆盖从 JSON-RPC `params._meta.threadId` 注入真实 session context。
 - Host 归属校验：`send_to_worker`、`interrupt_worker`、队列控制、`idle_worker`、`archive_worker` 经共享 `resolveWorkerRef`（同时接受 worker_id / session_id 两种 id）必须以 caller 自身 Lead 身份校验，拒绝跨 workflow worker id 与 ctx 缺失；即使模型传错 id 或换用另一种 id，也不能越权操作。

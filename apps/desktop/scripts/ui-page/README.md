@@ -19,6 +19,7 @@ pnpm ui:check --page group-chat --case long-device --focus '[data-controlled-ban
 pnpm ui:check --entry tmp/my-card.tsx --case all         # 还没注册的组件
 pnpm ui:check --list                                     # 已注册页面与场景
 pnpm ui:preview --page group-chat --case long-thread     # 人工验收：保持窗口，改文件自动重载
+pnpm ui:preview --page remote-connection-v2 --motion     # 人工看动效：预览窗口里放开「减弱动效」
 ```
 
 ## 读结果
@@ -48,8 +49,9 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
 - 后台检查使用无边框窗口，Windows 额外启用离屏渲染，避免原生边框的 DPI 取整和隐藏
   窗口不刷新导致尺寸偏差或截图超时；仍严格核对实际视口与目标尺寸。`ui:preview` 保留
   正常的可见窗口。
-- Electron 复用隔离进程，每个场景新建窗口，防止前一场景的 CDP 视口、全屏或失败状态
-  污染后续检查。测试源仅允许 HTML 全屏，后台运行不改变系统全屏状态，其它权限仍拒绝；
+- Electron 每个变体使用独立进程与浏览器上下文，先关闭上一实例再启动下一实例；仅新建窗口
+  无法清除上下文级的模拟时钟、初始化脚本和存储。构建产物与证据目录仍复用，失败场景也不会
+  将这些状态带入后续检查。测试源仅允许 HTML 全屏，后台运行不改变系统全屏状态，其它权限仍拒绝；
   系统全屏切换需在完整 Desktop 验证。
 - 报告写到 stdout。环境里设置了 `NODE_DEBUG` 时 Node 会往 stderr 刷调试日志，用
   `env -u NODE_DEBUG pnpm ui:check …` 或丢弃 stderr。
@@ -235,7 +237,8 @@ Tailwind 配置由 Tailwind 直接从磁盘加载，两侧都用当前版本；�
 - `--platform` 默认是当前电脑的平台；指定其它平台只改变页面读到的 `electronAPI.platform`，
   报告会写明模拟的平台。
 - `ui:preview` 只用于人工验收：显示一个窗口，依赖的源码、样式、翻译或场景变化后自动重载，
-  关窗或 Ctrl+C 结束。自动检查不要用它保持窗口。修改运行器、依赖或 Tailwind 配置后重启命令。
+  关窗或 Ctrl+C 结束。默认和检查一样按「减弱动效」渲染；加 `--motion` 才播放页面真实的动效，
+  只给人看，检查与截图始终是减弱动效。自动检查不要用它保持窗口。修改运行器、依赖或 Tailwind 配置后重启命令。
 
 ## 维护
 

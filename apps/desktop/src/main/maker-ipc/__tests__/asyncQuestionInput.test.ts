@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
+import { ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX, isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 
 // Exercise the actual Host dispatcher without booting Electron or a real account.
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
@@ -37,10 +38,10 @@ function harness() {
     stampTrustedDeviceLinkQueuedOrigin: (item: unknown) => item, stampTrustedDesktopQueuedOrigin: (item: unknown) => item,
     stampMobileClientOrigin: (item: unknown) => item, isMobileControllerInvoke: () => false, isDeviceLinkInvoke: () => false,
     readDeviceLinkInvokeSourceDevice: () => undefined };
-  const run = new Function('maker', 'inputCoordinator', 'buildSessionControlInputItem', 'createHash', ...Object.keys(identityDeps), compiled)(
-    { getSessionMeta: async () => ({}), getSession: () => session }, coordinator, build, createHash, ...Object.values(identityDeps),
-  ) as (session: unknown, text: string, signal: AbortSignal, requestId: string) => Promise<void>;
-  return { coordinator, build, run: (text = 'Answer') => run(session, text, new AbortController().signal, 'q1'),
+  const run = new Function('maker', 'inputCoordinator', 'buildSessionControlInputItem', 'createHash', 'ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX', ...Object.keys(identityDeps), compiled)(
+    { getSessionMeta: async () => ({}), getSession: () => session }, coordinator, build, createHash, ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX, ...Object.values(identityDeps),
+  ) as (session: unknown, text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>;
+  return { coordinator, build, run: (text = 'Answer') => run(session, text, new AbortController().signal, 'q1', '> Q?\n\nAnswer'),
     pause: () => { paused = true; }, stop: () => { inputBoundary.abort(); paused = true; }, hold: () => { held = true; }, uncertainPause: () => { paused = true; uncertain = true; } };
 }
 
@@ -55,7 +56,11 @@ it.each(['steered', 'queued'])('does not replay or unpause a %s answer', async (
 it('enqueues an idle answer with stable identity and the task execution settings', async () => {
   const h = harness();
   await h.run(); await h.run();
-  expect(h.build.mock.calls[0][0]).toMatchObject({ targetSessionId: 'task', inheritTargetPlanMode: true });
+  // The model receives its own copy; history keeps the readable one under the identity
+  // that keeps an answer already shown on its question card out of the conversation.
+  expect(h.build.mock.calls[0][0]).toMatchObject({ targetSessionId: 'task', inheritTargetPlanMode: true,
+    message: 'Answer', persistedContent: '> Q?\n\nAnswer' });
+  expect(isAnsweredAsyncQuestionClientId(h.coordinator.enqueue.mock.calls[0][1].clientId)).toBe(true);
   expect(h.coordinator.enqueue.mock.calls[0][1].clientId).toBe(h.coordinator.enqueue.mock.calls[1][1].clientId);
   expect(h.coordinator.resume).not.toHaveBeenCalled();
 });

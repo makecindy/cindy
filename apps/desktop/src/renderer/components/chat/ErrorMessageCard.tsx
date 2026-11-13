@@ -25,6 +25,7 @@ import {
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
   redactSensitiveText,
+  localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
@@ -80,16 +81,18 @@ export function ErrorMessageCard({
         : i18nKey
           ? t(i18nKey)
           : undefined;
+  const subscriptionGuidance = localizeSubscriptionAccountError(message, t, i18n.resolvedLanguage ?? i18n.language);
+  const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
+    ? t('chat.errorBanner.requestFormatError')
+    : isStreamInterrupted
+      ? t('chat.errorBanner.streamInterruptedNoRetry')
+      : isGatewayProxyTokenInvalid
+        ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
+        : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+          ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
-    : isResponsesLiteParallelToolCallsError(decoded)
-      ? t('chat.errorBanner.requestFormatError')
-      : isStreamInterrupted
-        ? t('chat.errorBanner.streamInterruptedNoRetry')
-        : isGatewayProxyTokenInvalid
-          ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-          : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
-            ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+    : subscriptionGuidance ?? fallbackText;
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;
