@@ -1233,7 +1233,7 @@ interface ElectronAPI {
   windowSidebarExpansion?: (width: number, shrink?: number, adopt?: boolean) => Promise<number | void>;
   onSidebarWindowUserResize?: (callback: () => void) => () => void;
   windowExitFullscreen: () => void;
-  windowClose: (options?: { activeTurnChecked?: boolean }) => void;
+  windowClose: () => void;
   /**
    * 手动窗口拖拽(no-drag 元素上"按住拖动移动窗口"):start 后 main 用光标
    * 位置驱动本窗口跟随,直到 stop。renderer 侧统一经 useManualWindowDrag
@@ -2045,7 +2045,10 @@ interface ElectronAPI {
     ) => Promise<import('../shared/awayGuard').AwayGuardState>;
     previewAwayGuard: () => Promise<import('../shared/awayGuard').AwayGuardPreviewResult>;
     setSwallowActivationClick: (enabled: boolean) => Promise<{ ok: true }>;
-    quitNeedsConfirmation: () => Promise<boolean>;
+    requestQuit: () => Promise<import('../shared/windowBehavior').TitleBarQuitOutcome>;
+    resolveQuitConfirmation: (
+      confirmed: boolean,
+    ) => Promise<import('../shared/windowBehavior').TitleBarQuitOutcome>;
     getWindowsCloseBehavior: () => Promise<'quit' | 'tray' | null>;
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
     onWindowsCloseBehaviorRequested: (callback: () => void) => () => void;

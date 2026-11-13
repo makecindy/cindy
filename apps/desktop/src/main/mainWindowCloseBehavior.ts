@@ -1,4 +1,8 @@
-import type { LinuxCloseBehavior, WindowsCloseBehavior } from '../shared/windowBehavior.js';
+import type {
+  LinuxCloseBehavior,
+  TitleBarQuitOutcome,
+  WindowsCloseBehavior,
+} from '../shared/windowBehavior.js';
 import type { WindowsTrayWindow } from './windowsTrayLifecycle.js';
 
 /**
@@ -6,7 +10,7 @@ import type { WindowsTrayWindow } from './windowsTrayLifecycle.js';
  * state, and every quit path treats unknown as busy: confirming once too often is recoverable,
  * silently killing a running task is not.
  */
-export function readActiveTurnForQuit(probe: () => boolean): boolean {
+function readActiveTurnForQuit(probe: () => boolean): boolean {
   try {
     return probe();
   } catch {
@@ -15,59 +19,117 @@ export function readActiveTurnForQuit(probe: () => boolean): boolean {
 }
 
 /** Side effects for the single active-turn quit guard shared by every app-quit entry point. */
-export interface ActiveTurnQuitGuardDependencies {
+export interface ActiveTurnQuitGuardDependencies<TOwner> {
   /** Raw busy probe; a throw is handled by {@link readActiveTurnForQuit}. */
   hasActiveTurn(): boolean;
+  /** Main's own (native, synchronous) confirmation; true when the user chose to quit. */
   confirmQuit(): boolean;
   quit(): void;
-}
-
-export interface ActiveTurnQuitGuardOptions {
   /**
-   * The main-window renderer already asked main for the busy state and, when busy, the user
-   * confirmed in its own dialog. Skips the native confirmation so one close never prompts twice.
+   * Whether the user can be looking at the in-app confirmation drawn by `owner` (the main
+   * window's renderer): its window is shown and not minimized, and the renderer is alive.
    */
-  activeTurnChecked?: boolean;
-}
-
-/** Quit directly while idle, but require explicit confirmation during an active turn. */
-export function requestActiveTurnGuardedQuit(
-  deps: ActiveTurnQuitGuardDependencies,
-  options: ActiveTurnQuitGuardOptions = {},
-): void {
-  if (
-    !options.activeTurnChecked &&
-    readActiveTurnForQuit(() => deps.hasActiveTurn()) &&
-    !deps.confirmQuit()
-  ) {
-    return;
-  }
-  deps.quit();
+  canShowInAppConfirmation(owner: TOwner): boolean;
+  /** Bring `owner`'s window to the front so the user finds the confirmation already open. */
+  revealInAppConfirmation(owner: TOwner): void;
 }
 
 /**
- * Bind the guard's side effects once and ignore quit requests while its confirmation is open.
- * A synchronous native message box runs a nested message loop on Windows, so another Alt+F4,
- * taskbar close or tray Quit can re-enter the guard from inside confirmQuit; it must neither
- * stack a second dialog nor quit underneath the one the user is still answering.
+ * Main owns every quit confirmation. The title-bar X draws its confirmation in the renderer,
+ * but main decides whether one is needed and remembers that it asked; the renderer's answer
+ * only counts against that record.
  */
-export function createActiveTurnQuitGuard(
-  deps: ActiveTurnQuitGuardDependencies,
-): ActiveTurnQuitGuardDependencies {
+export interface ActiveTurnQuitGuard<TOwner> {
+  /**
+   * Tray Quit, native main-window close (Alt+F4, taskbar, window manager), the first-close
+   * chooser and any quit whose sender cannot be resolved. Returns true when it quit.
+   */
+  requestQuit(): boolean;
+  /**
+   * Title-bar X of the main window. Reads the busy state and acts on it in the same call:
+   * idle quits now ('quitting'); busy records a pending in-app confirmation for `owner`
+   * ('confirm'). 'none' when main's own confirmation is already open.
+   */
+  requestInAppQuit(owner: TOwner): TitleBarQuitOutcome;
+  /**
+   * The answer from `owner`'s in-app confirmation. A confirmation quits without asking again
+   * only when main holds the pending record for that same owner, which it consumes; otherwise
+   * main runs its own guard. A cancellation drops the record.
+   */
+  resolveInAppConfirmation(owner: TOwner, confirmed: boolean): TitleBarQuitOutcome;
+  /** `owner` can no longer be showing its confirmation (navigation, crash, hang, destroyed). */
+  dropInAppConfirmation(owner: TOwner): void;
+}
+
+/**
+ * Bind the guard's side effects once. Two confirmations never stack:
+ * - While main's native confirmation is open, every other quit request is ignored. A
+ *   synchronous message box runs a nested message loop on Windows, so another Alt+F4, taskbar
+ *   close or tray Quit can re-enter from inside confirmQuit; it must neither stack a second
+ *   dialog nor quit underneath the one the user is still answering.
+ * - While an in-app confirmation is pending and visible, the other routes only bring it to the
+ *   front. If the user cannot be looking at it (window hidden, minimized or gone, renderer
+ *   dead), the record is dropped and the route falls back to the native confirmation, so a
+ *   pending record can never make the app unquittable.
+ */
+export function createActiveTurnQuitGuard<TOwner>(
+  deps: ActiveTurnQuitGuardDependencies<TOwner>,
+): ActiveTurnQuitGuard<TOwner> {
   let confirming = false;
-  return {
-    hasActiveTurn: () => deps.hasActiveTurn(),
-    confirmQuit: () => {
-      if (confirming) return false;
+  let pending: { owner: TOwner } | null = null;
+
+  const quit = (): void => {
+    pending = null;
+    deps.quit();
+  };
+
+  const requestQuit = (): boolean => {
+    if (confirming) return false;
+    if (pending) {
+      if (deps.canShowInAppConfirmation(pending.owner)) {
+        deps.revealInAppConfirmation(pending.owner);
+        return false;
+      }
+      pending = null;
+    }
+    if (readActiveTurnForQuit(() => deps.hasActiveTurn())) {
       confirming = true;
+      let confirmed: boolean;
       try {
-        return deps.confirmQuit();
+        confirmed = deps.confirmQuit();
       } finally {
         confirming = false;
       }
+      if (!confirmed) return false;
+    }
+    quit();
+    return true;
+  };
+
+  return {
+    requestQuit,
+    requestInAppQuit(owner) {
+      if (confirming) return 'none';
+      if (readActiveTurnForQuit(() => deps.hasActiveTurn())) {
+        pending = { owner };
+        return 'confirm';
+      }
+      quit();
+      return 'quitting';
     },
-    quit: () => {
-      if (!confirming) deps.quit();
+    resolveInAppConfirmation(owner, confirmed) {
+      if (!confirmed) {
+        if (pending?.owner === owner) pending = null;
+        return 'none';
+      }
+      if (pending?.owner === owner) {
+        quit();
+        return 'quitting';
+      }
+      return requestQuit() ? 'quitting' : 'none';
+    },
+    dropInAppConfirmation(owner) {
+      if (pending?.owner === owner) pending = null;
     },
   };
 }
@@ -82,18 +144,17 @@ export interface MainWindowCloseRequestDependencies {
   requestLinuxCloseBehavior(): void;
   hideToTray(): void;
   minimize(): void;
-  quitGuard: ActiveTurnQuitGuardDependencies;
 }
 
 /**
  * Apply the main window's close policy for native closes (Alt+F4, taskbar, window manager) and
- * the custom title-bar X alike. macOS hide-on-close stays with the Electron adapter.
+ * the custom title-bar X alike; `quit` is the guarded quit of the calling route. macOS
+ * hide-on-close stays with the Electron adapter.
  */
 export function handleMainWindowCloseRequest(
   deps: MainWindowCloseRequestDependencies,
-  options: ActiveTurnQuitGuardOptions = {},
+  quit: () => void,
 ): void {
-  const quit = (): void => requestActiveTurnGuardedQuit(deps.quitGuard, options);
   if (deps.platform === 'win32') {
     const behavior = deps.readWindowsCloseBehavior();
     if (!behavior) {

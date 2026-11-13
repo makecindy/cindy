@@ -34,12 +34,26 @@ export const WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL =
   'window-behavior:linux-close-behavior-shown';
 
 /**
- * Main-owned active-turn probe for the main window's quit confirmation. Registered with the
- * window IPC at startup (not with the maker IPC after splash), so it answers during splash/login.
- * A probe failure resolves to true: quitting is confirmed rather than allowed blindly.
+ * Title-bar X of the main window asks main to quit. Main reads the busy state itself and, in
+ * the same call, either starts quitting or records that the renderer must confirm. Registered
+ * with the window IPC at startup, so it answers during splash/login (no Maker yet = idle).
  */
-export const WINDOW_BEHAVIOR_QUIT_NEEDS_CONFIRMATION_CHANNEL =
-  'window-behavior:quit-needs-confirmation';
+export const WINDOW_BEHAVIOR_REQUEST_QUIT_CHANNEL = 'window-behavior:request-quit';
+
+/**
+ * The user's answer (boolean) in the title-bar quit confirmation. Main quits on `true` without
+ * asking again only if it recorded that confirmation for this renderer; otherwise it runs its
+ * own native confirmation.
+ */
+export const WINDOW_BEHAVIOR_RESOLVE_QUIT_CONFIRMATION_CHANNEL =
+  'window-behavior:resolve-quit-confirmation';
+
+/**
+ * Main's reply to the title-bar quit channels: `quitting` (show the closing state), `confirm`
+ * (show the in-app confirmation) or `none` (nothing to show; main kept the app running or
+ * applied another close behavior).
+ */
+export type TitleBarQuitOutcome = 'quitting' | 'confirm' | 'none';
 
 export function isWindowsCloseBehavior(value: unknown): value is WindowsCloseBehavior {
   return value === 'quit' || value === 'tray';

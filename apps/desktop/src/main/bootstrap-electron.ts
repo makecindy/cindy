@@ -1140,10 +1140,7 @@ import {
   createCloseBehaviorPromptFallbackController,
   handleMainWindowCloseRequest,
   minimizeDesktopWindow,
-  readActiveTurnForQuit,
-  requestActiveTurnGuardedQuit,
   requestMainWindowCloseBehavior,
-  type ActiveTurnQuitGuardOptions,
 } from './mainWindowCloseBehavior.js';
 import {
   isLinuxCloseBehavior,
@@ -1151,14 +1148,16 @@ import {
   WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
-  WINDOW_BEHAVIOR_QUIT_NEEDS_CONFIRMATION_CHANNEL,
   WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
+  WINDOW_BEHAVIOR_REQUEST_QUIT_CHANNEL,
+  WINDOW_BEHAVIOR_RESOLVE_QUIT_CONFIRMATION_CHANNEL,
   WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
   WINDOW_BEHAVIOR_SET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
   type LinuxCloseBehavior,
+  type TitleBarQuitOutcome,
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior.js';
 import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './commands/index.js';
@@ -3862,15 +3861,32 @@ function openWindowsTrayMenu(): void {
   });
 }
 
+/** The main window is on screen, so a dialog it owns (native or drawn by its renderer) is too. */
+function isMainWindowOnScreen(mainWindow: BrowserWindow | null): mainWindow is BrowserWindow {
+  return (
+    mainWindow !== null &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible() &&
+    !mainWindow.isMinimized()
+  );
+}
+
 // One active-turn quit guard for tray Quit, native main-window close (Alt+F4, taskbar,
 // window manager), the first-close chooser and the custom title-bar X. The probe reads the
 // Maker without constructing it: before splash/login finishes there is no Maker and therefore
 // no turn, so closing there quits without a spurious prompt. A probe that throws counts as
-// busy (readActiveTurnForQuit). While the confirmation is open, further quit requests are
-// ignored (createActiveTurnQuitGuard). The confirmation is modal to the main window when the user
-// can see it (Alt+F4, taskbar close); a hidden or minimized window (tray Quit) would hide an
-// owned dialog with it, so it stays parentless there.
-const activeTurnQuitGuard = createActiveTurnQuitGuard({
+// busy (readActiveTurnForQuit). The title-bar X confirms in the renderer, but main records that
+// confirmation for the main window's webContents and only that record lets a renderer answer
+// skip the native confirmation; while it is open on screen, the other routes bring the window
+// to the front instead of stacking a native dialog (createActiveTurnQuitGuard). The native
+// confirmation is modal to the main window when the user can see it (Alt+F4, taskbar close); a
+// hidden or minimized window (tray Quit) would hide an owned dialog with it, so it stays
+// parentless there.
+//
+// Host client mode (CINDY_HOST_API) has no local Maker, so every route reads idle and quits
+// without asking. Quitting does not stop a turn there: the Host owns it and keeps running
+// after this window process exits (docs/host/electron-client-mode.md).
+const activeTurnQuitGuard = createActiveTurnQuitGuard<Electron.WebContents>({
   hasActiveTurn: () => anySessionInTurn(getMakerIfReady()),
   confirmQuit: () => {
     const options = {
@@ -3884,20 +3900,26 @@ const activeTurnQuitGuard = createActiveTurnQuitGuard({
       noLink: true,
     };
     const mainWindow = mainWindowRef;
-    const choice =
-      mainWindow &&
-      !mainWindow.isDestroyed() &&
-      mainWindow.isVisible() &&
-      !mainWindow.isMinimized()
-        ? dialog.showMessageBoxSync(mainWindow, options)
-        : dialog.showMessageBoxSync(options);
+    const choice = isMainWindowOnScreen(mainWindow)
+      ? dialog.showMessageBoxSync(mainWindow, options)
+      : dialog.showMessageBoxSync(options);
     return choice === 1;
   },
   quit: () => app.quit(),
+  canShowInAppConfirmation: (contents) => {
+    const mainWindow = mainWindowRef;
+    return (
+      isMainWindowOnScreen(mainWindow) &&
+      mainWindow.webContents === contents &&
+      !contents.isDestroyed() &&
+      !contents.isCrashed()
+    );
+  },
+  revealInAppConfirmation: () => mainWindowRef?.focus(),
 });
 
-function quitAppWithActiveTurnGuard(options?: ActiveTurnQuitGuardOptions): void {
-  requestActiveTurnGuardedQuit(activeTurnQuitGuard, options);
+function quitAppWithActiveTurnGuard(): void {
+  activeTurnQuitGuard.requestQuit();
 }
 
 function quitFromDesktopTray(): void {
@@ -3989,7 +4011,8 @@ function applyWindowsCloseBehavior(
 }
 
 // The disposable Cindy Make preview quits on every main-window close instead of applying the
-// close behavior. Both the main window's close handler and the 'window-close' IPC consult it.
+// close behavior. The main window's close handler, the 'window-close' IPC and the title-bar
+// quit request all consult it.
 const makeTestWindow = createMakeTestWindowBehavior({
   isPackaged: app.isPackaged,
   environment: process.env,
@@ -3997,10 +4020,13 @@ const makeTestWindow = createMakeTestWindowBehavior({
   quit: () => app.quit(),
 });
 
-/** Windows / Linux main-window close policy shared by native closes and the title-bar X. */
+/**
+ * Windows / Linux main-window close policy shared by native closes and the title-bar X; `quit`
+ * is the calling route's guarded quit (main's native confirmation by default).
+ */
 function closeMainWindowWithBehavior(
   mainWindow: BrowserWindow,
-  options?: ActiveTurnQuitGuardOptions,
+  quit: () => void = quitAppWithActiveTurnGuard,
 ): void {
   handleMainWindowCloseRequest(
     {
@@ -4011,9 +4037,8 @@ function closeMainWindowWithBehavior(
       requestLinuxCloseBehavior: () => linuxClosePromptFallback.request(),
       hideToTray: () => hideMainWindowToWindowsTray(mainWindow),
       minimize: () => minimizeWindow(mainWindow),
-      quitGuard: activeTurnQuitGuard,
     },
-    options,
+    quit,
   );
 }
 
@@ -4692,6 +4717,18 @@ const createWindow = () => {
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
+  // A pending title-bar quit confirmation lives in this renderer. Drop it as soon as the
+  // renderer can no longer be showing it, so tray Quit / Alt+F4 fall back to the native
+  // confirmation instead of waiting on a dialog that is gone. In-page (hash) navigations keep it.
+  const mainContents = mainWindow.webContents;
+  const dropTitleBarQuitConfirmation = (): void =>
+    activeTurnQuitGuard.dropInAppConfirmation(mainContents);
+  mainContents.on('did-start-navigation', (_event, _url, isSameDocument, isMainFrame) => {
+    if (isMainFrame && !isSameDocument) dropTitleBarQuitConfirmation();
+  });
+  mainContents.on('render-process-gone', dropTitleBarQuitConfirmation);
+  mainContents.once('destroyed', dropTitleBarQuitConfirmation);
+  mainWindow.on('unresponsive', dropTitleBarQuitConfirmation);
   applyMainWindowBackgroundThrottling();
   applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   mainWindow.webContents.on('did-finish-load', () => {
@@ -4739,8 +4776,8 @@ const createWindow = () => {
       return;
     }
     // Windows and Linux ask once on first close, then reuse the persisted choice.
-    // Hyprland has no native minimize surface, so it uses the Linux tray. A native close
-    // never passed the renderer's busy check, so "quit" goes through the active-turn guard.
+    // Hyprland has no native minimize surface, so it uses the Linux tray. "quit" goes through
+    // the active-turn guard.
     event.preventDefault();
     closeMainWindowWithBehavior(mainWindow);
   });
@@ -5834,12 +5871,38 @@ const registerIpcHandlers = () => {
       return { ok: true as const };
     },
   );
-  // Main owns the busy probe so the title-bar X gets the same answer as native closes and the
-  // tray, from splash onward (the maker IPC is only registered after splash).
-  ipcMain.handle(WINDOW_BEHAVIOR_QUIT_NEEDS_CONFIRMATION_CHANNEL, (event) => {
+  // Title-bar X of the main window. Main reads the busy state and acts on it in this call
+  // (idle: quit now; busy: record the in-app confirmation for this webContents), so no task can
+  // start between a renderer-side probe and the quit. Registered with the window IPC, so it
+  // answers from splash onward (the maker IPC is only registered after splash). Only the main
+  // window's renderer may quit the app this way.
+  ipcMain.handle(WINDOW_BEHAVIOR_REQUEST_QUIT_CHANNEL, (event): TitleBarQuitOutcome => {
     assertTrustedAppRendererEvent(event);
-    return readActiveTurnForQuit(activeTurnQuitGuard.hasActiveTurn);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win !== mainWindowRef) return 'none';
+    if (isQuitting) return 'quitting';
+    if (makeTestWindow.close({ preventDefault: () => {} })) return 'quitting';
+    let outcome = 'none' as TitleBarQuitOutcome;
+    closeMainWindowWithBehavior(win, () => {
+      outcome = activeTurnQuitGuard.requestInAppQuit(event.sender);
+    });
+    return outcome;
   });
+  // The user's answer in that confirmation. It skips main's native confirmation only against
+  // the record main holds for this same webContents, and consumes it.
+  ipcMain.handle(
+    WINDOW_BEHAVIOR_RESOLVE_QUIT_CONFIRMATION_CHANNEL,
+    (event, confirmed: unknown): TitleBarQuitOutcome => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof confirmed !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'quit confirmation answer required (boolean)');
+      }
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win || win !== mainWindowRef) return 'none';
+      if (isQuitting) return confirmed ? 'quitting' : 'none';
+      return activeTurnQuitGuard.resolveInAppConfirmation(event.sender, confirmed);
+    },
+  );
   ipcMain.handle(WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL, async () => {
     return readWindowBehaviorSettings().windowsCloseBehavior;
   });
@@ -6310,27 +6373,20 @@ const registerIpcHandlers = () => {
   //  - 主窗: 与原生关闭(Alt+F4 / 任务栏)走同一份关闭策略,由它决定托盘隐藏、最小化或退出。
   //    退出走 app.quit() 才能 trigger before-quit → disposer chain,把 codex 子进程 / im / db
   //    等都收掉;否则 voice overlay 这种 hidden BrowserWindow 还活着,window-all-closed
-  //    不 fire,残留进程。主窗 renderer 已向 main 查过 turn、忙时自绘确认过,会带
-  //    activeTurnChecked,main 不再二次弹窗;没带的请求照常经过 main 的确认。
+  //    不 fire,残留进程。这里的退出一律经过 main 的确认;标题栏 X 选择退出时走
+  //    window-behavior:request-quit(main 判定并记录自绘确认),不走这里。
   //    Cindy Make 预览实例与 close handler 一致,一律直接退出。
   //  - 解析不到 sender 的兜底: 走带确认的退出。
   //  - 「在新窗口打开」的副窗: 只关自己, 不退出 app(会话活在主进程, 不受影响)。
-  ipcMain.on('window-close', (event, rawOptions: unknown) => {
+  ipcMain.on('window-close', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win === mainWindowRef) {
       if (isQuitting) return;
-      const options: ActiveTurnQuitGuardOptions = {
-        activeTurnChecked:
-          win !== null &&
-          typeof rawOptions === 'object' &&
-          rawOptions !== null &&
-          (rawOptions as { activeTurnChecked?: unknown }).activeTurnChecked === true,
-      };
       if (!win) {
-        quitAppWithActiveTurnGuard(options);
+        quitAppWithActiveTurnGuard();
       } else if (!makeTestWindow.close({ preventDefault: () => {} })) {
         // Same first check as the close handler (there is no native close event to cancel).
-        closeMainWindowWithBehavior(win, options);
+        closeMainWindowWithBehavior(win);
       }
       return;
     }

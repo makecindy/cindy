@@ -11,6 +11,7 @@ import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isResourceUsageWindow } from '@/lib/resourceUsageWindow';
 import type {
   LinuxCloseBehavior,
+  TitleBarQuitOutcome,
   WindowsCloseBehavior,
 } from '../../../shared/windowBehavior';
 
@@ -45,6 +46,13 @@ function isHostServedWebClient(): boolean {
   return Boolean((window as unknown as { __CINDY_HOST_WEB__?: boolean }).__CINDY_HOST_WEB__);
 }
 
+/** Tell main the title-bar quit confirmation it recorded for this window was dismissed. */
+function cancelPendingQuitConfirmation(pending: { current: boolean }): void {
+  if (!pending.current) return;
+  pending.current = false;
+  void window.electronAPI.windowBehavior.resolveQuitConfirmation(false).catch(() => {});
+}
+
 export function WindowControls({
   iconClassName = DEFAULT_ICON_CLASS,
   onMinimize,
@@ -56,15 +64,26 @@ export function WindowControls({
   const [savingCloseBehavior, setSavingCloseBehavior] = useState(false);
   const savingCloseBehaviorRef = useRef(false);
   const closeBehaviorDialogVisibleRef = useRef(false);
-  // 点 X 后 (无论走确认框还是直接关) 进入不可取消的 closing 态:
+  // main 答复已开始退出后 (无论走确认框还是直接关) 进入不可取消的 closing 态:
   //   - 有 in-flight turn 路径: ConfirmDialog 显示 loading spinner + 锁住关闭
   //   - 无 in-flight 路径:      全屏 ClosingOverlay 显示 spinner + "正在关闭…"
   // 期间 main 端走 disposer chain (~4-5s, 受 db.backup 体积影响), 完成后窗口/进程退出。
-  // closingRef 与 setClosing 同步设置,用来让 onOpenChange 在 Radix Action
-  // 同步触发的 onOpenChange(false) 里也能立刻拦住 (state 还没 flush 到 props)。
+  // closingRef / resolvingQuitRef 与对应 state 同步设置,用来让 onOpenChange 在 Radix
+  // Action 同步触发的 onOpenChange(false) 里也能立刻拦住 (state 还没 flush 到 props)。
   const [closing, setClosing] = useState(false);
   const closingRef = useRef(false);
+  // 确认框里点了「退出」、正在等 main 答复(main 可能还要弹自己的确认):按钮转圈、
+  // 弹框不可关,答复不是 'quitting' 时再收起,不会卡在 closing 态。
+  const [resolvingQuit, setResolvingQuit] = useState(false);
+  const resolvingQuitRef = useRef(false);
+  // main 为本窗记着一次待答的退出确认(requestQuit 答 'confirm' 后)。弹框以任何方式
+  // 收起或组件卸载都要回报取消,main 才会让 Alt+F4 / 托盘退出恢复原生确认。
+  const quitConfirmationPendingRef = useRef(false);
   const { t } = useTranslation();
+
+  const cancelQuitConfirmation = (): void =>
+    cancelPendingQuitConfirmation(quitConfirmationPendingRef);
+  useEffect(() => () => cancelPendingQuitConfirmation(quitConfirmationPendingRef), []);
 
   useEffect(() => {
     if (
@@ -116,14 +135,33 @@ export function WindowControls({
     window.electronAPI.windowMinimize();
   };
 
-  // 进入 closing 态 + 调 main 端关闭。同时被"点 X 无 in-flight 直走"和 ConfirmDialog
-  // 的 onConfirm 调用,共用一份语义。幂等: closingRef 守住重复调用。
-  // 两条路都已过了 turn 确认,带 activeTurnChecked 让 main 不再弹原生确认框。
-  const beginClose = (): void => {
-    if (closingRef.current) return;
+  // main 已开始退出后才进入不可取消的 closing 态(无 in-flight 直走 / 确认后退出共用)。
+  const enterClosing = (): void => {
     closingRef.current = true;
     setClosing(true);
-    window.electronAPI.windowClose({ activeTurnChecked: true });
+  };
+
+  // ConfirmDialog 的「退出」。main 只认它自己记下的那次确认;没有记录(已被重置)时
+  // main 改走自己的确认,用户在那里取消就收起本弹框。
+  const confirmQuit = async (): Promise<void> => {
+    if (closingRef.current || resolvingQuitRef.current) return;
+    resolvingQuitRef.current = true;
+    setResolvingQuit(true);
+    quitConfirmationPendingRef.current = false;
+    let outcome: TitleBarQuitOutcome = 'none';
+    try {
+      outcome = await window.electronAPI.windowBehavior.resolveQuitConfirmation(true);
+    } catch {
+      // 答复没送达时 main 可能还记着这次确认,补一次取消,别让它挡住别的退出入口。
+      void window.electronAPI.windowBehavior.resolveQuitConfirmation(false).catch(() => {});
+    }
+    resolvingQuitRef.current = false;
+    setResolvingQuit(false);
+    if (outcome === 'quitting') {
+      enterClosing();
+    } else {
+      setShowCloseDialog(false);
+    }
   };
 
   const continueCloseWithBehavior = async (behavior: DesktopCloseBehavior): Promise<void> => {
@@ -136,17 +174,21 @@ export function WindowControls({
       return;
     }
 
-    // 与托盘退出 / Alt+F4 用 main 同一个判定;判定失败按忙处理(宁可多确认一次)。
-    let hasInFlight = true;
+    // main 自己判定有无 turn 并当场执行(与托盘退出 / Alt+F4 同一个守卫,判定失败按忙)。
+    let outcome: TitleBarQuitOutcome;
     try {
-      hasInFlight = await window.electronAPI.windowBehavior.quitNeedsConfirmation();
+      outcome = await window.electronAPI.windowBehavior.requestQuit();
     } catch {
-      hasInFlight = true;
+      // 请求没送达:交给 window-close,由 main 按关闭行为处理并在需要时弹原生确认。
+      // 不进 closing 态 —— 用户在原生确认里取消时窗口要照常可用。
+      window.electronAPI.windowClose();
+      return;
     }
-    if (hasInFlight) {
+    if (outcome === 'quitting') {
+      enterClosing();
+    } else if (outcome === 'confirm') {
+      quitConfirmationPendingRef.current = true;
       setShowCloseDialog(true);
-    } else {
-      beginClose();
     }
   };
 
@@ -174,14 +216,14 @@ export function WindowControls({
     }
   };
 
-  // 点 X 的入口: Windows 首次关闭先在 renderer 内选择关闭行为,之后再查是否
-  // 有 in-flight turn。系统 Alt+F4 / 任务栏关闭由 main 发同一个 request 事件,
-  // 复用这里的自绘弹窗与后续关闭流程。
-  //   - 有 → 走 ConfirmDialog 确认 (防止误关丢未完成的 turn)
-  //   - 无 → 直接 beginClose, 全屏 overlay 反馈 (跳过一次点击)
+  // 点 X 的入口: Windows 首次关闭先在 renderer 内选择关闭行为,之后再请求 main 退出。
+  // 系统 Alt+F4 / 任务栏关闭由 main 发同一个 request 事件,复用这里的自绘弹窗与后续
+  // 关闭流程。main 判定:
+  //   - 有 in-flight turn → 'confirm',走 ConfirmDialog 确认 (防止误关丢未完成的 turn)
+  //   - 无 → main 当场退出,答 'quitting',全屏 overlay 反馈 (跳过一次点击)
   //
-  // 判定由 main 的窗口 IPC 提供(启动即注册), splash / login 阶段 Maker 未构造时
-  // 直接答"无", 不会弹多余的确认。
+  // 请求走 main 的窗口 IPC(启动即注册), splash / login 阶段 Maker 未构造时
+  // 直接按"无"退出, 不会弹多余的确认。
   const handleCloseClick = async (): Promise<void> => {
     if (onClose) {
       await onClose();
@@ -314,17 +356,19 @@ export function WindowControls({
       <ConfirmDialog
         open={showCloseDialog}
         onOpenChange={(next) => {
-          // loading 期间 Radix Action 的同步 onOpenChange(false) / Cancel /
-          // 外部状态变化都一律不放过 —— 弹框必须留着直到进程死。
-          if (closingRef.current && !next) return;
+          // 「退出」之后(等 main 答复 / 已在退出)Radix Action 的同步 onOpenChange(false) /
+          // Cancel / 外部状态变化都一律不放过 —— 退出时弹框必须留着直到进程死。
+          if ((closingRef.current || resolvingQuitRef.current) && !next) return;
+          // 取消 / Esc 等任何收起都回报 main,清掉它记着的这次确认。
+          if (!next) cancelQuitConfirmation();
           setShowCloseDialog(next);
         }}
         title={t('titleBar.closeConfirm.title')}
         description={t('titleBar.closeConfirm.description')}
         confirmText={t('titleBar.closeConfirm.confirm')}
         cancelText={t('titleBar.closeConfirm.cancel')}
-        loading={closing}
-        onConfirm={beginClose}
+        loading={closing || resolvingQuit}
+        onConfirm={() => void confirmQuit()}
       />
       <ClosingOverlay visible={closing && !showCloseDialog} />
     </>

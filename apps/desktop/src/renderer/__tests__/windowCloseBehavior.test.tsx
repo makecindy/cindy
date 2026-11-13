@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WindowControls } from '@/components/title-bar/WindowControls';
+import type { TitleBarQuitOutcome as QuitOutcome } from '../../shared/windowBehavior';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -17,6 +18,21 @@ it('auxiliary close overrides do not require the main-window behavior bridge', (
   expect(close).toHaveBeenCalledOnce();
 });
 
+/** Main's title-bar quit channels; by default main finds no turn and starts quitting. */
+function quitRequestMocks() {
+  return {
+    requestQuit: vi.fn(async (): Promise<QuitOutcome> => 'quitting'),
+    resolveQuitConfirmation: vi.fn(
+      async (confirmed: boolean): Promise<QuitOutcome> => (confirmed ? 'quitting' : 'none'),
+    ),
+  };
+}
+
+/** The non-cancellable closing state (disabled X / closing overlay) is on screen. */
+function isClosing(): boolean {
+  return screen.queryAllByLabelText('titleBar.closing.title').length > 0;
+}
+
 function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
   let closeBehaviorRequested: (() => void) | null = null;
   const getWindowsCloseBehavior = vi.fn(async () => closeBehavior);
@@ -26,7 +42,7 @@ function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
     return vi.fn();
   });
   const notifyWindowsCloseBehaviorPromptShown = vi.fn();
-  const quitNeedsConfirmation = vi.fn(async () => false);
+  const { requestQuit, resolveQuitConfirmation } = quitRequestMocks();
   const windowClose = vi.fn();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -37,7 +53,8 @@ function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
         setWindowsCloseBehavior,
         onWindowsCloseBehaviorRequested,
         notifyWindowsCloseBehaviorPromptShown,
-        quitNeedsConfirmation,
+        requestQuit,
+        resolveQuitConfirmation,
       },
       windowClose,
       windowMinimize: vi.fn(),
@@ -49,7 +66,8 @@ function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
     setWindowsCloseBehavior,
     onWindowsCloseBehaviorRequested,
     notifyWindowsCloseBehaviorPromptShown,
-    quitNeedsConfirmation,
+    requestQuit,
+    resolveQuitConfirmation,
     windowClose,
     requestCloseBehavior: () => closeBehaviorRequested?.(),
   };
@@ -64,7 +82,7 @@ function installLinuxApi(closeBehavior: 'quit' | 'minimize' | null) {
     return vi.fn();
   });
   const notifyLinuxCloseBehaviorPromptShown = vi.fn();
-  const quitNeedsConfirmation = vi.fn(async () => false);
+  const { requestQuit, resolveQuitConfirmation } = quitRequestMocks();
   const windowClose = vi.fn();
   const windowMinimize = vi.fn();
   Object.defineProperty(window, 'electronAPI', {
@@ -76,7 +94,8 @@ function installLinuxApi(closeBehavior: 'quit' | 'minimize' | null) {
         setLinuxCloseBehavior,
         onLinuxCloseBehaviorRequested,
         notifyLinuxCloseBehaviorPromptShown,
-        quitNeedsConfirmation,
+        requestQuit,
+        resolveQuitConfirmation,
       },
       windowClose,
       windowMinimize,
@@ -88,7 +107,8 @@ function installLinuxApi(closeBehavior: 'quit' | 'minimize' | null) {
     setLinuxCloseBehavior,
     onLinuxCloseBehaviorRequested,
     notifyLinuxCloseBehaviorPromptShown,
-    quitNeedsConfirmation,
+    requestQuit,
+    resolveQuitConfirmation,
     windowClose,
     windowMinimize,
     requestCloseBehavior: () => closeBehaviorRequested?.(),
@@ -120,7 +140,7 @@ describe.each(['win32', 'linux'] as const)('%s close prompt dismissal', (platfor
     expect(setBehavior).not.toHaveBeenCalled();
     expect(api.windowClose).not.toHaveBeenCalled();
     expect(window.electronAPI.windowMinimize).not.toHaveBeenCalled();
-    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
+    expect(api.requestQuit).not.toHaveBeenCalled();
     act(() => api.requestCloseBehavior());
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
   });
@@ -191,44 +211,95 @@ describe('Windows close behavior', () => {
 
     await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
     expect(api.getWindowsCloseBehavior).toHaveBeenCalledTimes(1);
-    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
+    expect(api.requestQuit).not.toHaveBeenCalled();
   });
 
+  // Main reads the busy state and quits in the same request; the renderer only shows the
+  // closing state after main says it is quitting, and never sends a second close of its own.
   it('keeps the existing quit protection flow when quit is selected', async () => {
     const api = installWindowsApi('quit');
     render(<WindowControls />);
 
     fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
 
-    await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(isClosing()).toBe(true));
     expect(api.getWindowsCloseBehavior).toHaveBeenCalledTimes(1);
-    expect(api.quitNeedsConfirmation).toHaveBeenCalledTimes(1);
-    // The renderer already ran the guard, so main must not show its native confirm too.
-    expect(api.windowClose).toHaveBeenCalledWith({ activeTurnChecked: true });
+    expect(api.requestQuit).toHaveBeenCalledTimes(1);
+    expect(api.resolveQuitConfirmation).not.toHaveBeenCalled();
+    expect(api.windowClose).not.toHaveBeenCalled();
   });
 
-  // The X used to treat a rejected busy probe as idle and quit without asking, while tray Quit
-  // treated the same failure as busy. Both now fail closed: the X shows its confirm dialog,
-  // and only the user's confirmation sends the already-checked quit to main.
+  // Review findings (PR #9779): the X's confirmation used to end in a 'window-close' carrying a
+  // renderer-made "already checked" flag. The answer now goes back to main, which owns the
+  // confirmation record and may still ask natively; the renderer enters the closing state only
+  // when main reports it is quitting, so a declined or cancelled answer cannot strand it there.
   it.each([
-    ['busy', async (): Promise<boolean> => true],
-    [
-      'probe failure',
-      async (): Promise<boolean> => {
-        throw new Error('No handler registered');
-      },
-    ],
-  ] as const)('confirms before quitting on %s', async (_label, probe) => {
+    ['main quits', 'quitting', true],
+    ['main keeps running', 'none', false],
+  ] as const)('confirming the in-app dialog when %s', async (_label, answer, closing) => {
     const api = installWindowsApi('quit');
-    api.quitNeedsConfirmation.mockImplementation(probe);
+    api.requestQuit.mockResolvedValue('confirm');
+    api.resolveQuitConfirmation.mockResolvedValue(answer);
     render(<WindowControls />);
 
     fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
 
     expect(await screen.findByText('titleBar.closeConfirm.title')).toBeTruthy();
-    expect(api.windowClose).not.toHaveBeenCalled();
+    expect(isClosing()).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'titleBar.closeConfirm.confirm' }));
-    expect(api.windowClose).toHaveBeenCalledExactlyOnceWith({ activeTurnChecked: true });
+
+    await waitFor(() => expect(api.resolveQuitConfirmation).toHaveBeenCalledExactlyOnceWith(true));
+    if (closing) {
+      await waitFor(() => expect(isClosing()).toBe(true));
+      expect(screen.getByText('titleBar.closeConfirm.title')).toBeTruthy();
+    } else {
+      await waitFor(() => expect(screen.queryByText('titleBar.closeConfirm.title')).toBeNull());
+      expect(isClosing()).toBe(false);
+      expect(screen.getByRole('button', { name: 'titleBar.close' })).toBeTruthy();
+    }
+    expect(api.windowClose).not.toHaveBeenCalled();
+  });
+
+  // Main keeps the confirmation record until it hears back; every way the dialog goes away
+  // without confirming must report the cancel, or Alt+F4 / tray Quit keep deferring to it.
+  it.each(['cancel button', 'escape', 'unmount'] as const)(
+    'reports dismissal by %s of the in-app dialog to main',
+    async (method) => {
+      const api = installWindowsApi('quit');
+      api.requestQuit.mockResolvedValue('confirm');
+      const view = render(<WindowControls />);
+      fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
+      expect(await screen.findByText('titleBar.closeConfirm.title')).toBeTruthy();
+
+      if (method === 'cancel button') {
+        fireEvent.click(screen.getByRole('button', { name: 'titleBar.closeConfirm.cancel' }));
+      } else if (method === 'escape') {
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', code: 'Escape' });
+      } else {
+        view.unmount();
+      }
+
+      await waitFor(() => expect(api.resolveQuitConfirmation).toHaveBeenCalledExactlyOnceWith(false));
+      if (method !== 'unmount') {
+        await waitFor(() => expect(screen.queryByText('titleBar.closeConfirm.title')).toBeNull());
+        expect(isClosing()).toBe(false);
+      }
+      expect(api.windowClose).not.toHaveBeenCalled();
+    },
+  );
+
+  // If the quit request itself fails, main's 'window-close' route still runs the guarded close
+  // (native confirmation when busy); the renderer stays usable in case the user cancels there.
+  it('hands a failed quit request to the main-side guarded close', async () => {
+    const api = installWindowsApi('quit');
+    api.requestQuit.mockRejectedValue(new Error('No handler registered'));
+    render(<WindowControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
+
+    await waitFor(() => expect(api.windowClose).toHaveBeenCalledExactlyOnceWith());
+    expect(isClosing()).toBe(false);
+    expect(screen.queryByText('titleBar.closeConfirm.title')).toBeNull();
   });
 
   it('uses the Cindy dialog for the first close and persists the safe tray choice', async () => {
@@ -244,7 +315,7 @@ describe('Windows close behavior', () => {
 
     await waitFor(() => expect(api.setWindowsCloseBehavior).toHaveBeenCalledWith('tray'));
     await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
-    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
+    expect(api.requestQuit).not.toHaveBeenCalled();
   });
 
   it('opens the same dialog for a native Windows close request', async () => {
@@ -260,8 +331,8 @@ describe('Windows close behavior', () => {
     );
 
     await waitFor(() => expect(api.setWindowsCloseBehavior).toHaveBeenCalledWith('quit'));
-    await waitFor(() => expect(api.quitNeedsConfirmation).toHaveBeenCalledTimes(1));
-    expect(api.windowClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.requestQuit).toHaveBeenCalledTimes(1));
+    expect(api.windowClose).not.toHaveBeenCalled();
   });
 
   it('acknowledges another native close request while the custom dialog is already visible', async () => {
@@ -287,7 +358,7 @@ describe('Linux close behavior', () => {
 
     await waitFor(() => expect(api.windowMinimize).toHaveBeenCalledTimes(1));
     expect(api.getLinuxCloseBehavior).toHaveBeenCalledTimes(1);
-    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
+    expect(api.requestQuit).not.toHaveBeenCalled();
     expect(api.windowClose).not.toHaveBeenCalled();
   });
 
@@ -305,7 +376,7 @@ describe('Linux close behavior', () => {
 
     await waitFor(() => expect(api.setLinuxCloseBehavior).toHaveBeenCalledWith('minimize'));
     await waitFor(() => expect(api.windowMinimize).toHaveBeenCalledTimes(1));
-    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
+    expect(api.requestQuit).not.toHaveBeenCalled();
   });
 
   it('keeps the existing quit protection flow when quit is selected', async () => {
@@ -314,8 +385,9 @@ describe('Linux close behavior', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
 
-    await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
-    expect(api.quitNeedsConfirmation).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(isClosing()).toBe(true));
+    expect(api.requestQuit).toHaveBeenCalledTimes(1);
+    expect(api.windowClose).not.toHaveBeenCalled();
     expect(api.windowMinimize).not.toHaveBeenCalled();
   });
 
