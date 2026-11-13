@@ -38,10 +38,20 @@ function shortHash(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
 
+/**
+ * Fit a Responses tool identity into the strict Chat function-name alphabet.
+ *
+ * Dots are legal in Responses namespace identities (`mcp.server`), but a Chat function name may
+ * only carry letters, digits, `_` and `-`, and no provider accepts a longer name than 64. A
+ * rejected name fails the whole turn, so map anything else to a hash suffix; the spec stored on
+ * the context keeps the response side reversible.
+ */
 function clampChatToolName(name: string): string {
-  if (name.length <= CHAT_TOOL_NAME_MAX_LENGTH) return name;
+  const illegal = /[^A-Za-z0-9_-]/.test(name);
+  if (!illegal && name.length <= CHAT_TOOL_NAME_MAX_LENGTH) return name;
   const suffix = `__${shortHash(name)}`;
-  return `${name.slice(0, CHAT_TOOL_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
+  const head = illegal ? name.replace(/[^A-Za-z0-9_-]/g, '_') : name;
+  return `${head.slice(0, CHAT_TOOL_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
 }
 
 function normalizeFunctionParameters(parameters: unknown): Record<string, unknown> {

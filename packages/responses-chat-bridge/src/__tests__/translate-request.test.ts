@@ -991,6 +991,42 @@ describe('translateResponsesRequest', () => {
     expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['writer']);
   });
 
+  it('sanitizes dotted inline tool names for the Chat wire (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'namespace', name: 'mcp.server', tools: [{ type: 'function', name: 'read.file', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    const names = (out.tools ?? []).map((tool) => (tool as { function: { name: string } }).function.name);
+    expect(names).toHaveLength(1);
+    // Dots are legal in Responses identities but not in a Chat function name.
+    expect(names[0]).not.toContain('.');
+    expect(names[0]).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it('keeps a qualified loaded web_search function when the built-in is dropped (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      tools: [{ type: 'web_search' }],
+      input: [
+        {
+          type: 'tool_search_output',
+          tools: [{ type: 'namespace', name: 'search', tools: [{ type: 'function', name: 'web_search', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'web_search', namespace: 'search' },
+    }));
+
+    // The qualified loaded tool is advertised as search__web_search and must count as retained.
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'search__web_search' } });
+  });
+
   it('keeps a tool_search-loaded web_search function when the built-in is dropped (#9715)', () => {
     const out = translateResponsesRequest(base({
       tools: [{ type: 'web_search' }],
