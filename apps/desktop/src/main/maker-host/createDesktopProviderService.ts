@@ -29,7 +29,9 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
+import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
+  refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
+  resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
 import { readPool } from '../subscription-accounts/store.js';
 import {
   accountProviderId,
@@ -73,6 +75,7 @@ import {
   commitActiveCatalogSnapshot,
   clearDiscoveredProviderModels,
   getActiveCatalog,
+  getActiveCatalogWithCodexModels,
   getXdGatewayModels,
   getModelPlaneWarnings,
   setActiveCatalog,
@@ -623,6 +626,8 @@ export async function refreshDiscoveredCodexModels(
   authenticated = true,
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
+  if (!shouldApply()) return;
+  resetDefaultSubscriptionCodexDiscovery(authenticated);
   if (!authenticated) {
     if (shouldApply()) setDiscoveredCodexModels([]);
     return;
@@ -854,11 +859,11 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog());
+  return filterLegacyGptContextProfiles(projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog()));
 }
 
 function getDesktopSelectableBaseCatalog(): Catalog {
-  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+  return filterProviderCatalogForAccount(getActiveCatalog(), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }
@@ -897,6 +902,13 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
 
 /** Apply account membership to both selectable and full routing snapshots. */
 function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
+  const pooledModels = readSubscriptionPoolCodexModels();
+  if (pooledModels !== null) {
+    const openai = getActiveCatalogWithCodexModels(pooledModels).providers.find(provider => provider.id === 'openai');
+    // Providers created for OpenAI subscription accounts mirror the built-in one's models (2026-11-13).
+    if (openai) catalog = { ...catalog, providers: catalog.providers.map(provider => provider.id === 'openai' ? openai
+      : provider.subscriptionPool === 'openai' ? { ...provider, models: openai.models } : provider) };
+  }
   const pool = readPool('openai');
   const aliases = pool?.legacyCodexAccounts;
   if (!aliases) return catalog;
@@ -973,7 +985,10 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       };
     },
     getCatalog: getDesktopSelectableBaseCatalog,
-    projectCatalog: projectSubscriptionPoolCatalog,
+    projectCatalog: (catalog, routingCatalog) => {
+      const projected = projectSubscriptionPoolCatalog(catalog);
+      return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
+    },
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
@@ -1016,7 +1031,11 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
       openai: async ({ allowSideEffects, snapshotOnly }) => {
         if (readPool('openai')) {
-          if (!snapshotOnly) await refreshSubscriptionPoolsOfKind('openai');
+          if (!snapshotOnly) {
+            // Created providers of the kind are read with it (their connection state comes from it).
+            await refreshSubscriptionPoolsOfKind('openai');
+            await refreshSubscriptionPoolCodexModels();
+          }
           return hasConnectedSubscriptionPool('openai');
         }
         return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();

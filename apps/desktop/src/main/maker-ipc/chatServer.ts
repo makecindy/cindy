@@ -318,7 +318,7 @@ function mainGroupContext<V extends { text: string }>(messages: Message[], view:
 }
 /**
  * One turn of a discussion arrangement: the request, the earlier answers on this card and what
- * the requester added meanwhile — never the rest of the group (bot-group-chat.md §7).
+ * the requester added meanwhile. The conversation envelope supplies the request background (§7).
  */
 function discussionTurnBrief(plan: ServerPlan, position: number, history: readonly Message[]) {
   const step = plan.steps[position];
@@ -1919,14 +1919,25 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Keep execution identity across computers and concurrent threads. Only the executing
     // computer resolves a lane; authenticated peers retrieve it through the group resource.
     const speakers: BotGroupSpeaker[] = [];
+    const sourceMessages = new Map<string, Message | undefined>([...s.messages, ...page].map(message => [message.id, message]));
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
+      if (!e.plan_id && !summaryOnly && !sourceMessages.has(e.source_message_id)) {
+        const source = await (history()?.message<Message>(roomId, e.source_message_id) ?? readMessage(roomId, e.source_message_id)).catch(error => {
+          if (error instanceof ChatResponseError && [403, 404, 410].includes(error.status)) return undefined;
+          throw error;
+        });
+        sourceMessages.set(e.source_message_id, source);
+      }
+      const source = e.plan_id ? undefined : sourceMessages.get(e.source_message_id);
       const run = running.get(e.id);
       // Enqueue time anchors history across computers and queue transitions; only the
       // local start is an elapsed-work clock.
       const timelineAt = e.created_at ? Date.parse(e.created_at) : NaN;
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
-        executionId: e.id, ...(Number.isFinite(timelineAt) ? { timelineAt } : {}),
+        executionId: e.id, sourceMessageId: e.source_message_id,
+        ...(e.plan_id || source ? { threadRootId: e.plan_id ? null : source!.threadRootId ?? null } : {}),
+        ...(Number.isFinite(timelineAt) ? { timelineAt } : {}),
         ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
         activity: e.plan_id ? 'step' : 'reply' };
@@ -2966,7 +2977,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // A Thread lane sees only its Thread: the mixed room page carries no Thread structure,
         // so the root and replies are read explicitly, even when they predate the bounded page.
         // Neither the main group nor other Threads are included.
-        const threadRootId = run.plan || digest ? null : source?.threadRootId ?? null;
+        const threadRootId = digest || (plan && plan.kind !== 'talk') ? null : source?.threadRootId ?? null;
         let thread: { root?: Message; replies: Message[]; earlierRepliesOmitted: boolean } | undefined;
         if (threadRootId) {
           const repliesRead = api<Message[]>(`/conversations/${s.room.id}/messages?threadRootId=${id.parse(threadRootId)}&limit=100&before=${contextBefore}`);
@@ -3102,19 +3113,26 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       };
       const chronological = (messages: Message[]) => [...messages].sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
       const request = { currentRequest: source ? { ...focusMessage(source), location: thread ? 'thread' : 'main' } : { id: execution.source_message_id, unavailable: true } };
+      const talk = run.plan?.kind === 'talk' ? run.plan : undefined;
+      // Queue answers already have bounded handoffs below. Keep them out of both
+      // full and incremental Thread background, including the recovery snapshot.
+      const talkAnswerIds = new Set(talk?.steps.filter(step => step.position < execution.plan_step!)
+        .flatMap(step => step.resultMessageId ? [step.resultMessageId] : []));
+      const threadBackground = (messages: Message[]) => messages.filter(message => !talkAnswerIds.has(message.id));
       // A Thread lane gets its Thread alone; the main lane gets the main group without Thread replies.
       const fullConversation = digest ? { messages: chronological(history).map(promptMessage) } : thread ? {
         thread: { root: thread.root ? focusMessage(thread.root) : { id: threadRootId, unavailable: true },
-          replies: chronological(textHistory).map(focusMessage), earlierRepliesOmitted: thread.earlierRepliesOmitted },
-      } : run.plan?.kind === 'talk' ? {}
+          replies: chronological(threadBackground(textHistory)).map(focusMessage), earlierRepliesOmitted: thread.earlierRepliesOmitted },
+      } : run.plan?.kind === 'talk' ? mainGroupContext(chronological(history.filter(message =>
+        !message.threadRootId && source && BigInt(message.seq) <= BigInt(source.seq))), promptMessage)
         // The shortened main-group context belongs to single-speaker servers; older ones keep the full projection.
         : singleSpeaker ? mainGroupContext(chronological(history.filter(message => !message.threadRootId)), promptMessage)
         : { messages: chronological(history.filter(message => !message.threadRootId)).map(promptMessage) };
       const conversation = previous ? thread ? { thread: {
         root: thread.root ? previous.seen.get(thread.root.id) === messageVersion(thread.root)
           ? { id: thread.root.id, retainedInContext: true } : focusMessage(thread.root) : { id: threadRootId, unavailable: true },
-        replies: chronological(additions).map(focusMessage), earlierRepliesOmitted: false,
-      } } : run.plan?.kind === 'talk' ? {} : {
+        replies: chronological(threadBackground(additions)).map(focusMessage), earlierRepliesOmitted: false,
+      } } : run.plan?.kind === 'talk' ? fullConversation : {
         messages: chronological(additions.filter(m => !m.threadRootId)).map(mainMessage),
       } : fullConversation;
       // Retain both the bootstrap window and every addition for recovery, including
@@ -3125,7 +3143,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...additions.filter(m => !m.threadRootId),
         ].map(m => [m.id, m])).values()]).map(mainMessage),
       } : fullConversation;
-      const talk = run.plan?.kind === 'talk' ? run.plan : undefined;
       // Teammates ask each other with @ (bot-group-chat.md §4.0): the reply's @ wakes whom it names.
       // The speaker stays in the name table (its own name must not resolve to a namesake) and is
       // dropped from the result; alone, it has nobody to name.

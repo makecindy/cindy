@@ -6440,7 +6440,7 @@
         "hook": "Cindy IM bots"
       },
       "hook": {
-        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
+        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; every project’s model and permissions are shared by all channels, while each channel keeps its own account link.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
@@ -6459,32 +6459,20 @@
           "error": "Connection failed"
         },
         "form": {
-          "workspacesCardTitle": "Working directory mappings",
-          "workspacesCardDescription": "Alias → local absolute path; the directory list is shared across channels while run preferences stay per channel.",
-          "workspacesBoundCount_one": "{{count}} local working directory bound",
-          "workspacesBoundCount_other": "{{count}} local working directories bound",
+          "workspacesCardTitle": "Projects and models",
+          "workspacesCardDescription": "Shared by every official bot. Projects come from your sidebar — create, rename, or remove them there. Changes made with /model in a chat show up here too.",
+          "workspacesBoundCount_one": "{{count}} project",
+          "workspacesBoundCount_other": "{{count}} projects",
           "aliasPlaceholder": "Alias, e.g. my-server",
-          "addWorkspace": "Add working directory",
-          "removeWorkspace": "Remove this working directory",
-          "changeDir": "Click to change directory (alias and preferences kept)",
+          "addProject": "Add project",
           "defaultWorkspaceChip": "Default: {{name}}",
-          "defaultWorkspaceAria": "Choose the default working directory for dispatched tasks",
-          "defaultWorkspaceRadioAria": "Set “{{name}}” as the default working directory",
-          "defaultWorkspaceRowHint": "The selected directory is the default working directory: any Telegram DM, group or topic conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /workspace keep theirs). Mind the permission mode on the selected directory’s row — set to Full access, an @mention from any group runs with full access inside that repository.",
-          "legacyDefaultsTitle": "Legacy “new conversation” defaults are still in effect",
-          "legacyDefaultsDescription": "This device saved older official-bot defaults that still act as the fallback for directories without their own settings (official Telegram and X share one copy). These values are now set per directory. Restoring defaults clears all of the following:",
-          "legacyDefaultsRow": {
-            "agentKind": "Default agent: {{current}} → {{fallback}}",
-            "permissionMode": "Permission mode: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "model {{current}} → {{fallback}}",
-            "effort": "reasoning effort {{current}} → {{fallback}}",
-            "source": "model source {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "follows global settings"
+          "defaultWorkspaceAria": "Choose the default project for dispatched tasks",
+          "defaultWorkspaceRadioAria": "Set “{{name}}” as the default project",
+          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark and X conversations that have not picked a project run their tasks there.",
+          "defaultProjectTag": "Default",
+          "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
+          "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
+          "sharedSettingsPointerAction": "Open settings"
         },
         "binding": {
           "copyLink": "Copy link",
@@ -6502,7 +6490,8 @@
         "toast": {
           "saveFailed": "Failed to save",
           "toggleFailed": "Failed to toggle",
-          "actionFailed": "Operation failed"
+          "actionFailed": "Operation failed",
+          "addProjectFailed": "Failed to add project"
         },
         "loginRequired": "Sign in to your {{appName}} account first; the connection resumes automatically after login.",
         "standbyHint": "Another Cindy instance on this computer is using the Slack connection. Close it, then turn this switch back on to take over.",
@@ -6633,7 +6622,7 @@
             "usageBody": "Post on X mentioning @askmycindy and the task is dispatched to this device to run here; the result comes back as a reply.",
             "riskLabel": "Replies Are Public",
             "riskPublicBody": "Replies are public and visible to anyone. Use this for public questions and problems, not for private matters that could expose personal information.",
-            "riskWorkdirBody": "Every X task runs in the default working directory set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that directory points at a private repository, file contents may become public with it.",
+            "riskWorkdirBody": "Every X task runs in the default project set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that project points at a private repository, file contents may become public with it.",
             "withdrawLabel": "To Withdraw a Reply",
             "withdrawBody": "The person who asked can delete the answer by replying “@askmycindy /delete” to it. Include @askmycindy in the reply text. Only the public reply is deleted; the local task record is kept.",
             "ackTitle": "X Is Linked — How It Works and What to Watch For",
@@ -6713,8 +6702,8 @@
           "botFallback": "Cindy bot",
           "bridgeTitle": "Feishu / Lark Bots",
           "bridgeDescription": "Bots only pass your Feishu / Lark messages to Cindy. Each linked account’s messages go to its working computer, and sessions stay separate for each bot and account.",
-          "settingsTitle": "Working Directories and Models",
-          "settingsDescription": "These belong to your Cindy account on this computer, not to a bot or a Feishu / Lark account, so every Feishu / Lark bot uses the same ones. The directory list is also shared with other channels.",
+          "settingsTitle": "Projects and Models",
+          "settingsDescription": "These belong to your Cindy account on this computer, not to a bot or a Feishu / Lark account, so every Feishu / Lark bot uses the same ones. The projects are the local projects in the sidebar and are also shared with other channels.",
           "workingDeviceLabel": "Working computer: {{name}}",
           "workingDeviceThisComputer": "This computer",
           "workingDeviceUnknown": "Working computer not yet synced",
@@ -6928,9 +6917,10 @@
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
+        "loadFailed": "Could not load project settings.",
         "retry": "Retry",
         "toast": {
-          "saveFailed": "Failed to save directory preferences"
+          "saveFailed": "Failed to save project settings"
         },
         "teamChipAria": "Choose which Slack workspace these preferences belong to"
       }
@@ -7003,7 +6993,11 @@
         "remoteSessionEnded": "The remote device ended this session"
       },
       "control": "Control",
-      "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically."
+      "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -12550,7 +12544,7 @@
         "expiredCardNotice": "This card has expired",
         "slash": {
           "new": "🌱 Fresh start — I’ve cleared our previous conversation. Let’s take it from the top.",
-          "help": "🤖 Here’s what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a workspace on the desktop (send it again during control to switch sessions)\n/exctr       End remote control and return to our Discord DM\n/help        See what I can do\n\nNeed to stop something that’s running? Just send `!stop` — I’ll abort the current run right away and drop queued messages too. The session is kept, so you can continue later.\n\nOtherwise, just send me a message. I’m listening.",
+          "help": "🤖 Here’s what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a project on the desktop (send it again during control to switch sessions)\n/exctr       End remote control and return to our Discord DM\n/help        See what I can do\n\nNeed to stop something that’s running? Just send `!stop` — I’ll abort the current run right away and drop queued messages too. The session is kept, so you can continue later.\n\nOtherwise, just send me a message. I’m listening.",
           "unknownCommand": "I don’t recognize the command `{{cmd}}` 🤔\nCommands I know: /new, /model, /permission, /ctr, /exctr, /help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` isn’t available in server channels — it would expose the private sessions / projects on your desktop in public. To use it, send it to me in a DM.",
           "detachedBySlash": "🚪 Remote control ended — we’re back in our Discord DM. Send /ctr whenever you want to control the desktop again.",
@@ -12629,15 +12623,15 @@
             "fullAccessCancelled": "Cancelled — keeping current permissions"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to control yet. Open or create a session on the desktop, then come back._",
-            "hint": "Choose a workspace to continue; 🚪 Exit cancels.",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to control yet. Open or create a session on the desktop, then come back._",
+            "hint": "Choose a project to continue; 🚪 Exit cancels.",
             "attachedSwitchHint": "🎮 Currently controlling: **{{sessionTitle}}**\nPick a new session to switch to it; 🚪 Exit keeps things as they are.",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Left. Send /ctr whenever you want remote control again.",
             "sessionPickerTitle": "🎮 Sessions in {{displayName}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New starts a fresh one · ↩️ Back changes workspace · 🚪 Exit cancels",
-            "sessionPickerEmptyBody": "_No active sessions in workspace **{{displayName}}** yet. Why not start one with ➕ New?_",
+            "sessionPickerHint": "Pick a session to continue · ➕ New starts a fresh one · ↩️ Back changes project · 🚪 Exit cancels",
+            "sessionPickerEmptyBody": "_No active sessions in project **{{displayName}}** yet. Why not start one with ➕ New?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
             "resolvedSessionPick": "🎯 You’re in: **{{sessionTitle}}** ({{workspaceName}})\nYour messages now go straight to this session. Send `/exctr` anytime to leave.",
@@ -12747,7 +12741,7 @@
         "slash": {
           "start": "👋 Hi, I'm your personal Cindy assistant!\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages. Send /help to see all commands.",
           "new": "🌱 New session created — it's in your session list now. Let's start fresh!",
-          "help": "🤖 Here's what I can do:\n\n/new         Create a new session (old ones are kept; in groups, it's created for the current group topic)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/session     List recent desktop sessions; tap one to take it over and keep chatting\n/model       Bring in a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/settings    See the current project, Agent, model, effort, and permissions\n/ctr         Remotely take over a workspace on desktop (send it again during a takeover to switch sessions)\n/exctr       End the takeover and go back to the Telegram chat\n/help        See what I can do\n\nSomething running that you want to stop? Send /stop (or `!stop`) — I'll halt the current run right away and drop any queued messages. The session is kept so you can continue.\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages — and I remember recent group messages for context.",
+          "help": "🤖 Here's what I can do:\n\n/new         Create a new session (old ones are kept; in groups, it's created for the current group topic)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/session     List recent desktop sessions; tap one to take it over and keep chatting\n/model       Bring in a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/settings    See the current project, Agent, model, effort, and permissions\n/ctr         Remotely take over a project on desktop (send it again during a takeover to switch sessions)\n/exctr       End the takeover and go back to the Telegram chat\n/help        See what I can do\n\nSomething running that you want to stop? Send /stop (or `!stop`) — I'll halt the current run right away and drop any queued messages. The session is kept so you can continue.\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages — and I remember recent group messages for context.",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Current settings\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nTo change them, send /project, /model, or /permission.",
           "settingsCompanion": "⚙️ Current settings (teammate)\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nModel, permissions, and working directory follow the teammate's settings. Change them in the teammate settings in Cindy.",
@@ -12849,15 +12843,15 @@
             "dialogueName": "Chat (managed folder)"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to take over yet. Open or create a session in desktop, then come back._",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to take over yet. Open or create a session in desktop, then come back._",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently controlling: **{{title}}**\nPick another session to switch right over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 I'm out. Send /ctr next time you want remote control",
             "sessionPickerTitle": "🎮 Sessions in {{name}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New for a new session · ↩️ Back to change workspace · 🚪 Exit to cancel",
-            "sessionPickerEmptyBody": "_No active sessions in workspace **{{name}}** yet. Why not tap ➕ New to start one?_",
+            "sessionPickerHint": "Pick a session to continue · ➕ New for a new session · ↩️ Back to change project · 🚪 Exit to cancel",
+            "sessionPickerEmptyBody": "_No active sessions in project **{{name}}** yet. Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
             "resolvedSessionPick": "🎯 You're in: **{{title}}** ({{workspace}})\nYour messages now go straight into this session; send `/exctr` anytime to leave",
@@ -12866,7 +12860,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ That session is still running — here's a fresh card below, pick again",
             "recentSessions": {
               "title": "🕑 Recent sessions",
-              "hint": "Tap one to take over and keep chatting (sorted by time across workspaces) · Use /ctr to pick by workspace · 🚪 Exit to cancel",
+              "hint": "Tap one to take over and keep chatting (sorted by time across projects) · Use /ctr to pick by project · 🚪 Exit to cancel",
               "emptyBody": "_No active sessions on desktop yet. Start one in desktop first, then come back._"
             },
             "sessionBusyPrompts": {
@@ -13020,18 +13014,18 @@
           "permissionTimeout": "Timed out waiting for approval. The permission request was denied."
         },
         "run": {
-          "routeReselectHint": ". Choose a model again for this channel's working directory in Settings → IM bots.",
+          "routeReselectHint": ". Choose a model again for this channel's project in Settings → IM bots.",
           "awaitingPermission": "Waiting for approval · needs your confirmation",
           "awaitingAnswer": "Waiting for an answer · needs your choice",
           "awaitingPlan": "Waiting for review · needs you to confirm the plan",
           "awaitingFallback": "Waiting for your confirmation",
           "cancelledBeforeRun": "The task was stopped by the user, so this message was not run.",
-          "liveSessionDirUnmapped": "This task is running in a directory that's no longer in the working directory mappings, so this message was not run. Add that directory under Settings → Remote Connection → Working directory mappings, or close this task in the desktop app and resend.",
+          "liveSessionDirUnmapped": "This task is running in a directory that no longer belongs to any project, so this message was not run. Add that directory as a project in the sidebar, or close this task in the desktop app and resend.",
           "interactionExpired": "The task has ended, so this interaction is no longer valid.",
           "telegramOfficialBot": "Telegram official bot"
         },
         "dispatch": {
-          "dirUnmapped": "This task's directory is no longer in the working directory mappings, so this message was not run. Add its directory under Settings → Remote Connection → Working directory mappings, then send it again."
+          "dirUnmapped": "This task's directory no longer belongs to any project, so this message was not run. Add its directory as a project in the sidebar, then send it again."
         }
       },
       "wecom": {
@@ -13116,9 +13110,9 @@
             "fullAccessCancelled": "Cancelled. Current permissions kept"
           },
           "control": {
-            "title": "🎮 Choose a workspace",
-            "emptyBody": "_No workspaces are available to take over yet. Create a task in Cindy Desktop first._",
-            "hint": "Choose a workspace to continue, or exit.",
+            "title": "🎮 Choose a project",
+            "emptyBody": "_No projects are available to take over yet. Create a task in Cindy Desktop first._",
+            "hint": "Choose a project to continue, or exit.",
             "attachedSwitchHint": "Currently controlling: **{{sessionTitle}}**",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited takeover",
@@ -13180,7 +13174,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 Fresh start — I've cleared our previous conversation. Let's begin again!",
-          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a workspace in the desktop app (send it again while controlling to switch sessions)\n/exctr       End remote control and return to our DM\n/help        See what I can do\n\nNeed to stop something that's running? Just send `!stop` — I'll halt the current run right away and drop any queued messages. The session is kept, so you can pick it up again.\n\nOtherwise, just send me a message — I'm listening~",
+          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/model       Switch to a different model\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a project in the desktop app (send it again while controlling to switch sessions)\n/exctr       End remote control and return to our DM\n/help        See what I can do\n\nNeed to stop something that's running? Just send `!stop` — I'll halt the current run right away and drop any queued messages. The session is kept, so you can pick it up again.\n\nOtherwise, just send me a message — I'm listening~",
           "unknownCommand": "I don't recognize the `{{cmd}}` command 🤔\nCommands I understand: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Remote control ended — we're back in our DM. Send /ctr whenever you want to control the desktop app again",
           "detachedByRevoke": "⚠️ You ended remote control from the desktop app. New messages will go to our DM again.",
@@ -13277,15 +13271,28 @@
             "resolved": "✅ Switched to “Auto-review” — head back to the group and keep going~",
             "failed": "❌ Couldn't switch: {{reason}}. You can send /permission auto to switch manually"
           },
+          "project": {
+            "title": "📂 Switch project folder",
+            "hint": "**Current**: {{name}}\nPick a project and the next messages will work in that folder (context restarts; model and permission settings are kept)",
+            "emptyBody": "_No active project workspaces on desktop yet. Open a project in desktop first, then come back._",
+            "btnDialogue": "💬 Back to chat",
+            "btnCancel": "🚪 Never mind",
+            "resolvedPick": "📂 Switched to **{{name}}** — fresh context is ready, send an instruction to get started. To go back to a regular chat, send /project and pick “Back to chat”",
+            "resolvedDialogue": "💬 Back in the chat folder — context starts fresh.",
+            "resolvedCancel": "🚪 No switch — keeping things as they are",
+            "switchFailed": "❌ Couldn't switch: {{reason}} (the folder may have been moved or deleted)",
+            "attachedUnsupported": "🎮 You're taking over a desktop session via /ctr — during a takeover, messages go straight into that session, so /project isn't needed. To switch projects, send `/exctr` to end the takeover first",
+            "dialogueName": "Chat (managed folder)"
+          },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to control yet~ Open or create a session in the desktop app, then come back_",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to control yet~ Open or create a session in the desktop app, then come back_",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently controlling: **{{title}}**\nPick another session to switch over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited. Send /ctr next time you want remote control",
             "sessionPickerTitle": "🎮 Sessions in {{workspace}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New to start one · ↩️ Back to change workspace · 🚪 Exit to cancel",
+            "sessionPickerHint": "Pick a session to continue · ➕ New to start one · ↩️ Back to change project · 🚪 Exit to cancel",
             "sessionPickerEmptyBody": "_No active sessions in **{{workspace}}** yet~ Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
@@ -13330,7 +13337,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 Fresh start — I've cleared the previous conversation. Let's begin again~",
-          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch models\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely take over a workspace in the desktop app (send it again while in control to switch sessions)\n/exctr       End the takeover and return to our WeChat DM\n/help        See what I can do\n\nNeed to stop something that's in progress? Just send `!stop` — I'll halt the current run right away and drop queued messages. The session stays, so you can continue later.\n\nOtherwise, just message me. I'm listening~",
+          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch models\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely take over a project in the desktop app (send it again while in control to switch sessions)\n/exctr       End the takeover and return to our WeChat DM\n/help        See what I can do\n\nNeed to stop something that's in progress? Just send `!stop` — I'll halt the current run right away and drop queued messages. The session stays, so you can continue later.\n\nOtherwise, just message me. I'm listening~",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Takeover ended — we're back in our WeChat DM. Send /ctr next time you want to control the desktop app remotely",
           "detachedByRevoke": "⚠️ You took back control in the desktop app. New messages will go to our WeChat DM again.",
@@ -13413,14 +13420,14 @@
             "fullAccessCancelled": "Canceled. Current permissions kept"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to take over yet~ Open or create a session in the desktop app, then come back_",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to take over yet~ Open or create a session in the desktop app, then come back_",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently in control: **{{sessionTitle}}**\nPick a new session to switch over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited. Send /ctr whenever you want remote control again",
             "sessionPickerTitle": "🎮 Sessions in {{displayName}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New for a fresh one · ↩️ Back to change workspace · 🚪 Exit to cancel",
+            "sessionPickerHint": "Pick a session to continue · ➕ New for a fresh one · ↩️ Back to change project · 🚪 Exit to cancel",
             "sessionPickerEmptyBody": "_No active sessions in **{{displayName}}** yet~ Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",

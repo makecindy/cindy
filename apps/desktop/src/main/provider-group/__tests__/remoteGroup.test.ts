@@ -354,6 +354,43 @@ describe('assigning through a group on another computer', () => {
     expect(h.remote.pick).not.toHaveBeenCalled();
   });
 
+  // Test value: assignBeforeStart must respect a committed move while the old
+  // group owner is offline (2026-11-13: remote Claude -> local Codex kept failing
+  // against the old device). Existing outage cases keep the original route.
+  // Minimal input: persisted route changed, old binding remains, readGroup is
+  // unavailable. Unit tier; also verify later reconciliation within/outside the group.
+  // Single-file Windows wall time: 8.30s (55 cases; test bodies 57ms).
+  it.each([
+    { name: 'local Codex', route: { agentDeviceId: null, providerId: 'openai' },
+      agentKind: 'codex' as const, model: 'gpt-fixture', expectedMember: null },
+    { name: 'another group member', route: { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId },
+      agentKind: 'claude-code' as const, model: MODEL, expectedMember: STUDIO.key },
+  ])('keeps the user-selected $name route when the old group cannot be read', async ({ route, agentKind, model, expectedMember }) => {
+    const h = harness({ live: false, row: { ...route, agentKind, model } });
+    h.deps.hasAssistantHistory.mockResolvedValue(true);
+    const binding = { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 };
+    h.bindings.set('s1', binding);
+    h.remote.readGroup.mockResolvedValue(undefined);
+
+    expect(await h.service.assignBeforeStart({ ...START, agentKind, model })).toBeNull();
+    expect(h.row).toMatchObject(route);
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
+    expect(h.remote.pick).not.toHaveBeenCalled();
+    // A missing directory cannot prove the new location is outside the group.
+    expect(h.bindings.get('s1')).toEqual(binding);
+    expect(h.deps.markReleased).not.toHaveBeenCalled();
+
+    h.remote.readGroup.mockResolvedValue(h.config);
+    const restored = await h.service.assignBeforeStart({ ...START, agentKind, model });
+    if (expectedMember) {
+      expect(restored?.route).toEqual(route);
+      expect(h.bindings.get('s1')?.memberKey).toBe(expectedMember);
+    } else {
+      expect(restored).toBeNull();
+      expect(h.bindings.has('s1')).toBe(false);
+    }
+  });
+
   it('does not bind or route when the verified config is refused at admission', async () => {
     const h = harness();
     h.remote.readGroup.mockResolvedValueOnce(h.config!);

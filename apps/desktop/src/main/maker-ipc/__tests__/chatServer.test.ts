@@ -2775,17 +2775,35 @@ describe('Chat Server result delivery and refresh', () => {
   // bot-group-chat.md §3: a companion may answer in several Threads at once;
   // each execution keeps its identity so the UI can stop/open the exact task.
   it('shows a companion running in two Threads as two execution speakers', async () => {
+    const otherSource = '70000000-0000-4000-8000-000000000099';
+    const root = '70000000-0000-4000-8000-000000000098';
     fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, content: [], threadRootId: null } };
+      if (route.endsWith(`/messages/${otherSource}`)) return { body: { id: otherSource, content: [], threadRootId: root } };
       if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'running' },
-        { ...execution, id: '50000000-0000-4000-8000-000000000099', status: 'running' }] };
+        { ...execution, id: '50000000-0000-4000-8000-000000000099', source_message_id: otherSource, status: 'running' }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
     expect(result).toMatchObject({ ok: true, group: { round: { status: 'running', speakers: [
-      { activity: 'reply', executionId: execution.id, executionStatus: 'running' },
-      { activity: 'reply', executionId: '50000000-0000-4000-8000-000000000099', executionStatus: 'running' },
+      { activity: 'reply', executionId: execution.id, executionStatus: 'running', sourceMessageId: execution.source_message_id, threadRootId: null },
+      { activity: 'reply', executionId: '50000000-0000-4000-8000-000000000099', executionStatus: 'running', sourceMessageId: otherSource, threadRootId: root },
     ] } } });
     expect(result.ok && result.group.round.speakers).toHaveLength(2);
+  });
+
+  // Unit: missing source messages must be read once per detail, even with concurrent executions.
+  it('deduplicates missing execution sources without hiding their execution identities', async () => {
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { status: 404, body: { error: { code: 'MESSAGE_NOT_FOUND' } } };
+      if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'running' },
+        { ...execution, id: '50000000-0000-4000-8000-000000000099', status: 'needs_input' }] };
+      return response(route);
+    });
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.round.speakers).toHaveLength(2);
+    expect(result.ok && result.group.round.speakers.every(speaker => speaker.threadRootId === undefined)).toBe(true);
+    expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith(`/messages/${execution.source_message_id}`))).toHaveLength(1);
   });
 
   // Unit / #10345: remote and queued executions need history anchors without local elapsed starts.
@@ -3263,7 +3281,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(delivery[2]).not.toHaveProperty('continueDiscussion');
     });
 
-    // A queue turn reads only its own card; a division of work (every older plan is kind=work after
+    // A queue turn includes bounded background text but only its own card files; a division of work (every older plan is kind=work after
     // the server migration) keeps the main-group context it had, including chat-only steps without a workspace.
     it.each(['talk', 'work'] as const)('gives a %s step the context of its kind', async (kind) => {
       const planId = '80000000-0000-4000-8000-000000000001';
@@ -3291,7 +3309,7 @@ describe('Chat Server result delivery and refresh', () => {
       const downloaded = fixture.download.mock.calls.map(([, mediaId]) => mediaId);
       if (kind === 'talk') {
         expect(prompt()).toContain('You are turn 2 of 2. Your focus: tests.');
-        expect(prompt()).not.toContain('unrelated main group chatter');
+        expect(prompt()).toContain('unrelated main group chatter');
         expect(downloaded).toEqual([answerFile]);
         // A queue turn only talks: no project folder or worktree, its own queue lane rather than a 分工 lane
         // (an owner-access 分工 lane without a work directory cannot start).

@@ -6397,7 +6397,7 @@
         "hook": "Cindy IM 使者"
       },
       "hook": {
-        "description": "將 Slack、Telegram、飛書 / Lark 諸渠道接入同一 Cindy：訊皆派至此臺裝置，共用此間案之清單與差事；名籍繫結與執行偏好依渠道各自隔離。",
+        "description": "將 Slack、Telegram、飛書 / Lark 諸渠道接入同一 Cindy：訊皆派至此臺裝置，共用此間案之清單與差事；每案之模型與權限，諸渠道共用一份，名籍繫結依渠道各自隔離。",
         "slackDescription": "繫結 Slack workspace，於 Slack 中 @Cindy 派差事。",
         "slackDisabledHint": "開此開關即發起 Slack 授權，繫結畢即可於 Slack 中派活。",
         "slackBoundHint": "繫結已畢。關此開關將解除繫結，重開須再授權。",
@@ -6416,32 +6416,20 @@
           "error": "連線未成"
         },
         "form": {
-          "workspacesCardTitle": "工作目錄對照",
-          "workspacesCardDescription": "別名 → 本地絕對路徑；目錄清單諸渠道共用，執行偏好依渠道各立。",
-          "workspacesBoundCount_one": "已繫結本地工作目錄 {{count}} 個",
-          "workspacesBoundCount_other": "已繫結本地工作目錄 {{count}} 個",
+          "workspacesCardTitle": "案與模型",
+          "workspacesCardDescription": "諸官方機器人共用此一份。案出於側欄，立案、更名、除案皆於側欄行之；於 IM 中以 /model 更之，此處亦隨之而變。",
+          "workspacesBoundCount_one": "案 {{count}} 個",
+          "workspacesBoundCount_other": "案 {{count}} 個",
           "aliasPlaceholder": "別名，如 my-server",
-          "addWorkspace": "增工作目錄",
-          "removeWorkspace": "刪此工作目錄",
-          "changeDir": "點以更換目錄(別名與偏好仍留)",
+          "addProject": "增案",
           "defaultWorkspaceChip": "常例：{{name}}",
-          "defaultWorkspaceAria": "擇派差事時所用之常例工作目錄",
-          "defaultWorkspaceRadioAria": "立「{{name}}」為常例工作目錄",
-          "defaultWorkspaceRowHint": "所選目錄即常例工作目錄：Telegram 私聊、群與話題中，凡未另擇案者，差事皆落於此（以 /workspace 另擇者，仍從其擇）。請留意所選目錄此行之權限模式：若設為「完全存取」，任一群中 @ bot，皆將以完全存取之權於此倉庫中執行，慎之。",
-          "legacyDefaultsTitle": "舊版「新言談配置」猶在生效",
-          "legacyDefaultsDescription": "此臺裝置曾存一份舊版官方 bot 常例設定，凡未另行配置之目錄，仍以之為兜底（官方 Telegram 與 X 共用一份）。此等值今已統一於各目錄中設定。復常例將一併清除以下全部內容：",
-          "legacyDefaultsRow": {
-            "agentKind": "常例 Agent：{{current}} → {{fallback}}",
-            "permissionMode": "權柄模式：{{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}：{{fields}}",
-          "legacyDefaultsField": {
-            "model": "模型 {{current}} → {{fallback}}",
-            "effort": "思力 {{current}} → {{fallback}}",
-            "source": "模型所出 {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": "，",
-          "legacyDefaultsSourceFollowsGlobal": "從全域設定"
+          "defaultWorkspaceAria": "擇派差事時所用之常例案",
+          "defaultWorkspaceRadioAria": "立「{{name}}」為常例案",
+          "defaultWorkspaceRowHint": "所選者即常例案：Telegram、飛書 / Lark 與 X 中，未另擇案之私聊與群，差事皆落於此。",
+          "defaultProjectTag": "常例",
+          "defaultProjectFullAccessWarning": "常例案「{{name}}」之權限為完全存取：任一群中 @ 機器人，皆將以完全存取之權於其中執行，慎之。",
+          "sharedSettingsPointer": "案、模型與權限，諸官方機器人共用。",
+          "sharedSettingsPointerAction": "往設之"
         },
         "binding": {
           "copyLink": "錄連結",
@@ -6459,7 +6447,8 @@
         "toast": {
           "saveFailed": "存之未成",
           "toggleFailed": "切換未成",
-          "actionFailed": "操作未成"
+          "actionFailed": "操作未成",
+          "addProjectFailed": "增案未成"
         },
         "loginRequired": "須先登入 {{appName}} 名籍，登入後連線將自行恢復。",
         "standbyHint": "此機另一 Cindy 例項方用 Slack 連線。闔之後，重開此開關即可接管。",
@@ -6590,7 +6579,7 @@
             "usageBody": "於 X 上發一則推文 @askmycindy，差事即派至此臺裝置執行，結論以回帖覆君。",
             "riskLabel": "回帖乃公開",
             "riskPublicBody": "回覆乃公開推文，人人可見。宜於公開提問、解決難題；不宜處理私事，免洩隱私。",
-            "riskWorkdirBody": "X 差事皆落於 X 連線設定中之常例工作目錄，Agent 能讀寫其中之卷，而結論將公開回帖 —— 若常例目錄指向私密倉庫，卷中內容或隨之公開，慎之。",
+            "riskWorkdirBody": "X 差事皆落於 X 連線設定中之常例案，Agent 能讀寫其中之卷，而結論將公開回帖 —— 若常例案指向私密倉庫，卷中內容或隨之公開，慎之。",
             "withdrawLabel": "欲撤回",
             "withdrawBody": "提問者於欲刪之回答下回覆「@askmycindy /delete」（或「@askmycindy /删除」），正文中須親手帶上 @askmycindy。僅刪公開回帖，本地差事記錄仍存。",
             "ackTitle": "X 已關聯，請先觀用法與風險",
@@ -6670,8 +6659,8 @@
           "botFallback": "Cindy 機器人",
           "bridgeTitle": "飛書機器人",
           "bridgeDescription": "機器人惟轉飛書之訊於 Cindy。各飛書名籍之訊，交其工作電腦處理；差事依機器人與飛書名籍各立。",
-          "settingsTitle": "工作目錄與模型",
-          "settingsDescription": "屬君之 Cindy 名籍與此機，不隨機器人或飛書名籍而易：諸飛書機器人共用一份。工作目錄清單亦與他渠道共用。",
+          "settingsTitle": "案與模型",
+          "settingsDescription": "屬君之 Cindy 名籍與此機，不隨機器人或飛書名籍而易：諸飛書機器人共用一份。案即側欄本機諸案，亦與他渠道共用。",
           "workingDeviceLabel": "工作電腦：{{name}}",
           "workingDeviceThisComputer": "此機",
           "workingDeviceUnknown": "工作電腦尚未同步",
@@ -6885,9 +6874,10 @@
         "offlineLocal": "{{provider}} 暫連不上，變更存於此機；連上後同步至言談中之模型卡。",
         "requireBinding": "須先完成 {{provider}} 名籍關聯，方可修。",
         "serverUnsupported": "伺服器版本過舊或暫無應答，無法讀取偏好。",
+        "loadFailed": "讀案之設未成。",
         "retry": "再試",
         "toast": {
-          "saveFailed": "存目錄偏好未成"
+          "saveFailed": "存案之設未成"
         },
         "teamChipAria": "擇偏好所屬之 Slack workspace"
       }
@@ -6960,7 +6950,11 @@
         "remoteSessionEnded": "遠端裝置已結此遠端差事"
       },
       "control": "控",
-      "standbyHint": "此機另一 Cindy 例項方用遠端連線。闔之後，此例項將自行接管。"
+      "standbyHint": "此機另一 Cindy 例項方用遠端連線。闔之後，此例項將自行接管。",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -12504,7 +12498,7 @@
         "expiredCardNotice": "此卡已逾期",
         "slash": {
           "new": "🌱 新局已開，前番言談盡掃，從頭敘來~",
-          "help": "🤖 吾所能者如下：\n\n/new         新開一局（清去當前言談之脈絡）\n/model       易模型\n/permission  調權柄之式（auto / bypass / ask 等）\n/ctr         遠端接掌 desktop 上某工作區（接掌之中再遣，可徑易差事）\n/exctr       罷接掌，歸於你我之 Discord 私訊\n/help        觀吾所能\n\n有事方行而欲止之？徑遣 `!stop`，吾即止當前之行，並撤排隊之訊；差事仍存，可續。\n\n平日徑遣訊即可，吾在此靜聽~",
+          "help": "🤖 吾所能者如下：\n\n/new         新開一局（清去當前言談之脈絡）\n/model       易模型\n/permission  調權柄之式（auto / bypass / ask 等）\n/ctr         遠端接掌 desktop 上某案（接掌之中再遣，可徑易差事）\n/exctr       罷接掌，歸於你我之 Discord 私訊\n/help        觀吾所能\n\n有事方行而欲止之？徑遣 `!stop`，吾即止當前之行，並撤排隊之訊；差事仍存，可續。\n\n平日徑遣訊即可，吾在此靜聽~",
           "unknownCommand": "`{{cmd}}` 此令，吾不識也 🤔\n吾所識之令：/new、/model、/permission、/ctr、/exctr、/help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` 不可用於伺服器頻道——此令將使君桌面上之私人差事 / 案曝於公眾。欲用之，請於與吾之私訊中遣之。",
           "detachedBySlash": "🚪 接掌已罷，歸於 Discord 私訊。他日欲遠端操持 desktop，再遣 /ctr",
@@ -12582,15 +12576,15 @@
             "fullAccessCancelled": "已罷，仍守當前權柄"
           },
           "control": {
-            "title": "🎮 擇一工作區登場",
-            "emptyBody": "_尚無可接掌之工作區~ 先於 desktop 端開啟或新立一差事，再來_",
-            "hint": "點工作區以進；點 🚪 撤矣 以罷此回",
+            "title": "🎮 擇一案登場",
+            "emptyBody": "_尚無可接掌之案~ 先於 desktop 端開啟或新立一差事，再來_",
+            "hint": "點案以進；點 🚪 撤矣 以罷此回",
             "attachedSwitchHint": "🎮 方接掌：**{{sessionTitle}}**\n擇一新差事即可轉乘；點 🚪 撤矣 則仍其舊",
             "btnExit": "🚪 撤矣",
             "resolvedExit": "🚪 去也，他日欲遠端操持，再遣 /ctr",
             "sessionPickerTitle": "🎮 {{displayName}} 中之差事",
-            "sessionPickerHint": "擇一差事續行 · ➕ 新開 立新局 · ↩️ 退 易工作區 · 🚪 撤矣 罷之",
-            "sessionPickerEmptyBody": "_工作區 **{{displayName}}** 尚無活躍之差事~ 何不點 ➕ 新開 立一個？_",
+            "sessionPickerHint": "擇一差事續行 · ➕ 新開 立新局 · ↩️ 退 易案 · 🚪 撤矣 罷之",
+            "sessionPickerEmptyBody": "_案 **{{displayName}}** 尚無活躍之差事~ 何不點 ➕ 新開 立一個？_",
             "btnNew": "➕ 新開",
             "btnBack": "↩️ 退",
             "resolvedSessionPick": "🎯 已登場：**{{sessionTitle}}**（{{workspaceName}}）\n此後君所遣之訊，徑入此差事；欲撤，隨時 `/exctr`",
@@ -12695,7 +12689,7 @@
         "slash": {
           "start": "👋 幸會，吾乃君之私屬 Cindy 助手~\n\n私訊徑遣訊即可；群中須 @ 吾或回覆吾之訊，吾方應之。遣 /help 可覽諸令。",
           "new": "🌱 新差事已立 — 已列於差事錄，自頭始之~",
-          "help": "🤖 吾所能為者如下：\n\n/new         立新差事（舊者仍存；群中依當前群話題而立）\n/project     移至某案之目錄行事（於 bot 此端運行，不接掌桌面端）\n/session     列桌面端近日差事，擇其一即接掌續談\n/model       換一模型登場\n/permission  調權柄之式（auto / bypass / ask 等）\n/settings    覽今之案、Agent、模型、思之深淺、權柄\n/ctr         遠端接掌桌面端之某工作區（接掌中再遣，可徑換差事）\n/exctr       罷接掌，歸 Telegram 言談\n/help        覽吾所能\n\n有事方行而欲止之？遣 /stop（或 `!stop`），吾即止當前所行，並撤排隊之訊；差事仍存，可續為之。\n\n私訊徑遣訊即可；群中須 @ 吾或回覆吾之訊，吾方應之。群中近日之訊，吾亦記之以為上下文~",
+          "help": "🤖 吾所能為者如下：\n\n/new         立新差事（舊者仍存；群中依當前群話題而立）\n/project     移至某案之目錄行事（於 bot 此端運行，不接掌桌面端）\n/session     列桌面端近日差事，擇其一即接掌續談\n/model       換一模型登場\n/permission  調權柄之式（auto / bypass / ask 等）\n/settings    覽今之案、Agent、模型、思之深淺、權柄\n/ctr         遠端接掌桌面端之某案（接掌中再遣，可徑換差事）\n/exctr       罷接掌，歸 Telegram 言談\n/help        覽吾所能\n\n有事方行而欲止之？遣 /stop（或 `!stop`），吾即止當前所行，並撤排隊之訊；差事仍存，可續為之。\n\n私訊徑遣訊即可；群中須 @ 吾或回覆吾之訊，吾方應之。群中近日之訊，吾亦記之以為上下文~",
           "unknownCommand": "`{{cmd}}` 此令，吾未識也 🤔\n吾所能解者：/new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help",
           "settings": "⚙️ 今之所設\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深淺：{{effort}}\n權柄：{{permission}}\n\n欲改則遣 /project、/model、/permission～",
           "settingsCompanion": "⚙️ 今之所設（同僚）\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深淺：{{effort}}\n權柄：{{permission}}\n\n模型、權柄與工作目錄皆從同僚之設，請於 Cindy 之同僚規制中修之。",
@@ -12796,15 +12790,15 @@
             "dialogueName": "言談（託管目錄）"
           },
           "control": {
-            "title": "🎮 擇一工作區登場",
-            "emptyBody": "_暫無可接掌之工作區~ 請於桌面端啟或立一差事再來_",
-            "hint": "點工作區以進；點 🚪 退出 以罷此番",
+            "title": "🎮 擇一案登場",
+            "emptyBody": "_暫無可接掌之案~ 請於桌面端啟或立一差事再來_",
+            "hint": "點案以進；點 🚪 退出 以罷此番",
             "attachedSwitchHint": "🎮 方接掌：**{{title}}**\n擇一新差事即可轉乘；點 🚪 退出則一仍其舊",
             "btnExit": "🚪 退出",
             "resolvedExit": "🚪 去矣，他日欲遠端操持再遣 /ctr",
             "sessionPickerTitle": "🎮 {{name}} 中之差事",
-            "sessionPickerHint": "擇一差事以續 · ➕ 新立 開新差事 · ↩️ 返 換工作區 · 🚪 退出 以罷",
-            "sessionPickerEmptyBody": "_工作區 **{{name}}** 尚無活躍之差事~ 何不點 ➕ 新立 開其一？_",
+            "sessionPickerHint": "擇一差事以續 · ➕ 新立 開新差事 · ↩️ 返 換案 · 🚪 退出 以罷",
+            "sessionPickerEmptyBody": "_案 **{{name}}** 尚無活躍之差事~ 何不點 ➕ 新立 開其一？_",
             "btnNew": "➕ 新立",
             "btnBack": "↩️ 返",
             "resolvedSessionPick": "🎯 已登場：**{{title}}**（{{workspace}}）\n此後君所遣之訊，吾徑送入此差事；欲退，隨時 `/exctr`",
@@ -12813,7 +12807,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ 彼差事尚在行——下方已為君換新卡，請重擇之",
             "recentSessions": {
               "title": "🕑 近日差事",
-              "hint": "點其一即接掌續談（諸工作區依時序列）· 欲依工作區擇之用 /ctr · 🚪 退出以罷",
+              "hint": "點其一即接掌續談（諸案依時序列）· 欲依案擇之用 /ctr · 🚪 退出以罷",
               "emptyBody": "_桌面端尚無活躍之差事~ 請先於桌面端開其一再來_"
             },
             "sessionBusyPrompts": {
@@ -12967,18 +12961,18 @@
           "permissionTimeout": "候授權逾時，已拒此權柄之請"
         },
         "run": {
-          "routeReselectHint": "。請於 規制 → IM 機器人 為此渠道之工作目錄重擇模型。",
+          "routeReselectHint": "。請於 規制 → IM 機器人 為此渠道之案重擇模型。",
           "awaitingPermission": "候授權 · 待君確認",
           "awaitingAnswer": "候答 · 待君擇之",
           "awaitingPlan": "候審 · 待君確認其謀",
           "awaitingFallback": "候君確認",
           "cancelledBeforeRun": "差事已為用者喝止，此訊未行。",
-          "liveSessionDirUnmapped": "此差事方行於一已不在工作目錄對照之目錄，此訊未行。請將該目錄加入 規制 → 遠端連線 → 工作目錄對照，或於桌面端闔此差事後重發。",
+          "liveSessionDirUnmapped": "此差事所在之目錄已不屬任何一案，此訊未行。請於側欄將該目錄增為一案，或於桌面端闔此差事後重發。",
           "interactionExpired": "差事已畢，此番交互已失效",
           "telegramOfficialBot": "Telegram 官方 bot"
         },
         "dispatch": {
-          "dirUnmapped": "此差事所在之目錄已不在工作目錄對照中，此訊未行。請將其目錄加入 規制 → 遠端連線 → 工作目錄對照，再遣一次。"
+          "dirUnmapped": "此差事所在之目錄已不屬任何一案，此訊未行。請於側欄將其目錄增為一案，再遣一次。"
         }
       },
       "wecom": {
@@ -13062,9 +13056,9 @@
             "fullAccessCancelled": "已罷，仍舊權柄"
           },
           "control": {
-            "title": "🎮 擇工作區",
-            "emptyBody": "_今無可接管之工作區，請先於 desktop 立差事。_",
-            "hint": "擇工作區以續，或罷此舉。",
+            "title": "🎮 擇案",
+            "emptyBody": "_今無可接管之案，請先於 desktop 立差事。_",
+            "hint": "擇案以續，或罷此舉。",
             "attachedSwitchHint": "今方接管：**{{sessionTitle}}**",
             "btnExit": "🚪 退",
             "resolvedExit": "🚪 已退接管",
@@ -13126,7 +13120,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 另開新局，前番言談已拭，重頭說來~",
-          "help": "🤖 吾能為君效勞者如下：\n\n/new         另開新局（清今言談之上下文）\n/model       易模型出陣\n/permission  調權柄之式（auto / bypass / ask 等）\n/ctr         遠端接掌桌面端之某工作區（接掌中再發，可徑換差事）\n/exctr       罷接掌，歸於私聊\n/help        覽吾所能\n\n有事方行而欲止之？徑發 `!stop`，吾即止今之所行，並撤待列之訊；差事仍存，可續。\n\n平日徑發訊即可，吾在此恭聽~",
+          "help": "🤖 吾能為君效勞者如下：\n\n/new         另開新局（清今言談之上下文）\n/project     移至某案之目錄行事（於 bot 此端運行，不接掌桌面端）\n/model       易模型出陣\n/permission  調權柄之式（auto / bypass / ask 等）\n/ctr         遠端接掌桌面端之某案（接掌中再發，可徑換差事）\n/exctr       罷接掌，歸於私聊\n/help        覽吾所能\n\n有事方行而欲止之？徑發 `!stop`，吾即止今之所行，並撤待列之訊；差事仍存，可續。\n\n平日徑發訊即可，吾在此恭聽~",
           "unknownCommand": "`{{cmd}}` 之令，吾未識也 🤔\n吾所識者：/new、/model、/permission、/ctr、/exctr、/help",
           "detachedBySlash": "🚪 接掌已罷，歸於私聊。他日欲遠端操持桌面端，再發 /ctr 可也",
           "detachedByRevoke": "⚠️ 君已於桌面端收回接掌，此後之訊歸於私聊。",
@@ -13223,16 +13217,29 @@
             "resolved": "✅ 已切至「自審」— 歸群續發訊可也~",
             "failed": "❌ 未能切換：{{reason}}。可發 /permission auto 自行切換"
           },
+          "project": {
+            "title": "📂 移案之目錄",
+            "hint": "**當前**：{{name}}\n擇一案，其後之訊即於彼目錄行事（上下文重開，模型與權柄之設仍存）",
+            "emptyBody": "_桌面端尚無活躍之案工作區~ 請先於桌面端啟一案再來_",
+            "btnDialogue": "💬 歸言談",
+            "btnCancel": "🚪 罷",
+            "resolvedPick": "📂 已移至 **{{name}}** —— 新上下文已備，徑遣令即行。欲歸尋常言談，遣 /project 擇「歸言談」",
+            "resolvedDialogue": "💬 已歸言談目錄，上下文重始~",
+            "resolvedCancel": "🚪 未移，一仍其舊",
+            "switchFailed": "❌ 未能移：{{reason}}（目錄或已遷移或刪除）",
+            "attachedUnsupported": "🎮 君方以 /ctr 接掌桌面端之差事——接掌之際，訊徑入彼差事，無須 /project。欲移案，先以 `/exctr` 罷接掌",
+            "dialogueName": "言談（託管目錄）"
+          },
           "control": {
-            "title": "🎮 擇一工作區登場",
-            "emptyBody": "_尚無可接掌之工作區~ 請先於桌面端開或立一差事，再來_",
-            "hint": "點工作區以續；點 🚪 退 則罷",
+            "title": "🎮 擇一案登場",
+            "emptyBody": "_尚無可接掌之案~ 請先於桌面端開或立一差事，再來_",
+            "hint": "點案以續；點 🚪 退 則罷",
             "attachedSwitchHint": "🎮 今接掌：**{{title}}**\n擇新差事即換；點 🚪 退 則仍舊",
             "btnExit": "🚪 退",
             "resolvedExit": "🚪 去矣，他日欲遠端操持，再發 /ctr",
             "sessionPickerTitle": "🎮 {{workspace}} 之差事",
-            "sessionPickerHint": "擇一差事續行 · ➕ 新立 開新局 · ↩️ 歸 換工作區 · 🚪 退 罷之",
-            "sessionPickerEmptyBody": "_工作區 **{{workspace}}** 尚無活躍之差事~ 何不點 ➕ 新立 開一局？_",
+            "sessionPickerHint": "擇一差事續行 · ➕ 新立 開新局 · ↩️ 歸 換案 · 🚪 退 罷之",
+            "sessionPickerEmptyBody": "_案 **{{workspace}}** 尚無活躍之差事~ 何不點 ➕ 新立 開一局？_",
             "btnNew": "➕ 新立",
             "btnBack": "↩️ 歸",
             "resolvedSessionPick": "🎯 已登場：**{{title}}**（{{workspace}}）\n此後君之訊徑入此差事；欲退，隨時 `/exctr`",
@@ -13276,7 +13283,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 新檔已開 — 前番言談盡清，自頭再敘~",
-          "help": "🤖 吾所能為者如下：\n\n/new         新開一檔（清當前言談之上下文）\n/model       易模型\n/permission  調權柄之式（auto / bypass / ask 等）\n/ctr         遠端接管 desktop 上之某工作區（接管中再發，可逕換差事）\n/exctr       罷接管，復歸微信私聊\n/help        觀吾所能\n\n有事方行而欲止之？逕發 `!stop`，吾即止當前之行，並撤候列之訊；差事仍存，可續。\n\n平日逕發訊即可，吾在聽~",
+          "help": "🤖 吾所能為者如下：\n\n/new         新開一檔（清當前言談之上下文）\n/model       易模型\n/permission  調權柄之式（auto / bypass / ask 等）\n/ctr         遠端接管 desktop 上之某案（接管中再發，可逕換差事）\n/exctr       罷接管，復歸微信私聊\n/help        觀吾所能\n\n有事方行而欲止之？逕發 `!stop`，吾即止當前之行，並撤候列之訊；差事仍存，可續。\n\n平日逕發訊即可，吾在聽~",
           "unknownCommand": "`{{cmd}}` 此令，吾未識也 🤔\n吾所能解者：/new、/model、/permission、/ctr、/exctr、/help",
           "detachedBySlash": "🚪 接管已畢，復歸微信私聊。他日欲遠端操持 desktop，再發 /ctr",
           "detachedByRevoke": "⚠️ 君已於 desktop 收回接管，此後之訊復歸微信私聊。",
@@ -13359,15 +13366,15 @@
             "fullAccessCancelled": "已罷，仍守舊權"
           },
           "control": {
-            "title": "🎮 擇一工作區上陣",
-            "emptyBody": "_暫無可接管之工作區~ 且於 desktop 開／立一差事再來_",
-            "hint": "點工作區以進；點 🚪 退 則罷此番",
+            "title": "🎮 擇一案上陣",
+            "emptyBody": "_暫無可接管之案~ 且於 desktop 開／立一差事再來_",
+            "hint": "點案以進；點 🚪 退 則罷此番",
             "attachedSwitchHint": "🎮 方接管：**{{sessionTitle}}**\n擇新差事即可換乘；點 🚪 退 則一仍其舊",
             "btnExit": "🚪 退",
             "resolvedExit": "🚪 去矣，他日欲遠端操持，再 /ctr",
             "sessionPickerTitle": "🎮 {{displayName}} 之差事",
-            "sessionPickerHint": "擇一差事續之 · ➕ 新開 立新差事 · ↩️ 歸 易工作區 · 🚪 退 罷之",
-            "sessionPickerEmptyBody": "_工作區 **{{displayName}}** 尚無活躍差事~ 何不點 ➕ 新開 立其一？_",
+            "sessionPickerHint": "擇一差事續之 · ➕ 新開 立新差事 · ↩️ 歸 易案 · 🚪 退 罷之",
+            "sessionPickerEmptyBody": "_案 **{{displayName}}** 尚無活躍差事~ 何不點 ➕ 新開 立其一？_",
             "btnNew": "➕ 新開",
             "btnBack": "↩️ 歸",
             "resolvedSessionPick": "🎯 已上陣：**{{sessionTitle}}**（{{workspaceName}}）\n此後君之訊，逕入此差事；欲退，隨時 `/exctr`",
