@@ -101,9 +101,15 @@ describe('ensureBotProjectAutomations', () => {
       stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt } });
     expect((await run()).exitCode).toBe(2);
     insert.run('chat', 'user', null, firedAt - 1, null);
-    expect((await run()).exitCode).toBe(0);
+    expect((await run()).exitCode).toBe(2); // 1 human message is insufficient.
+    for (let i = 1; i < 19; i++) insert.run('chat', 'user', null, firedAt - 1, null);
+    expect((await run()).exitCode).toBe(2); // 19 humans plus automatic traffic is still insufficient.
+    insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ autoResume: true }));
+    expect((await run()).exitCode).toBe(2);
+    insert.run('chat', 'user', null, firedAt - 1, null);
+    expect((await run()).exitCode).toBe(0); // Exactly 20.
     db.exec('DELETE FROM messages');
-    insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ origin: { kind: 'scheduler', scheduleId: 'hook:telegram' } }));
+    for (let i = 0; i < 20; i++) insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ origin: { kind: 'scheduler', scheduleId: 'hook:telegram' } }));
     expect((await run()).exitCode).toBe(0);
     db.close();
     await fs.rm(database.path);
@@ -129,12 +135,48 @@ describe('ensureBotProjectAutomations', () => {
       CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
       INSERT INTO bot_session_links VALUES ('bot-1','group');`);
     const firedAt = Date.now();
-    db.prepare('INSERT INTO messages VALUES (?, ?, NULL, ?, ?, ?)')
-      .run('group', 'user', firedAt - 1, meta === null ? null : JSON.stringify(meta), content);
+    const insert = db.prepare('INSERT INTO messages VALUES (?, ?, NULL, ?, ?, ?)');
+    for (let i = 0; i < 19; i++) insert.run('group', 'user', firedAt - 1, null, 'Human request');
+    insert.run('group', 'user', firedAt - 1, meta === null ? null : JSON.stringify(meta), content);
     db.close();
     const result = await executePreRunHook({ ...config.preRunHook!, cwd: workingDir,
       stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt } });
     expect(result.exitCode).toBe(expectedExit);
+  });
+
+  // User correction 2026-11-13: the bundled minimum is 20, not a single human input.
+  // Unit, real generated hook + SQLite: installed cdb14543 allows 19; upgrade must skip
+  // 19 and admit 20 without changing a customized schedule or replacing owner-edited scripts.
+  it('upgrades the installed one-message check while preserving schedule choices and script edits', async () => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const supplied = { ...loader.upsertSchedule.mock.calls[0]![1], cronExpr: '0 5 * * *',
+      model: 'chosen-model', prompt: 'Owner-maintained review instructions' };
+    const checkFile = path.join(root, '.memory-review-check-v1.cjs');
+    const old = await fs.readFile(new URL('./fixtures/memory-review-cdb14543.cjs.txt', import.meta.url), 'utf8');
+    await fs.writeFile(checkFile, `const source = ${JSON.stringify({ databasePath: database.path,
+      botId: 'bot-1', syntheticPrefix: '[UI_ACTION_TRIGGER]' })};\n${old.slice(old.indexOf('\n') + 1)}`);
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      INSERT INTO bot_session_links VALUES ('bot-1','chat');`);
+    const firedAt = Date.now();
+    const insert = db.prepare("INSERT INTO messages VALUES ('chat', 'user', NULL, ?, NULL, 'Human request')");
+    for (let i = 0; i < 19; i++) insert.run(firedAt - 1);
+    const run = () => executePreRunHook({ ...supplied.preRunHook!, cwd: workingDir,
+      stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt } });
+    try {
+      expect((await run()).exitCode).toBe(0); // Actual predecessor behavior.
+      loader.loadProjectSchedules.mockResolvedValue([supplied]);
+      await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+      expect((await run()).exitCode).toBe(2);
+      insert.run(firedAt - 1);
+      expect((await run()).exitCode).toBe(0);
+      expect(loader.upsertSchedule).toHaveBeenCalledTimes(1);
+      const edited = (await fs.readFile(checkFile, 'utf8')) + '\n// Owner customization\n';
+      await fs.writeFile(checkFile, edited);
+      await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+      expect(await fs.readFile(checkFile, 'utf8')).toBe(edited);
+    } finally { db.close(); }
   });
 
   it('upgrades the supplied review while retaining choices, custom checks and removal', async () => {

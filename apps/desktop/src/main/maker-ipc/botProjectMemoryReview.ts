@@ -47,18 +47,19 @@ try {
     return !origin?.kind || (origin.kind === 'scheduler'
       && typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith('hook:'));
   }
-  // Stream only this teammate's recent user rows; stop at the first human input.
+  // Stop once the bundled minimum is met; synthetic messages never contribute.
   const rows = db.prepare(
     "SELECT m.content, m.agent_meta FROM bot_session_links l JOIN messages m ON m.session_id = l.session_id " +
     "WHERE l.bot_id = ? AND m.role = 'user' AND m.rewind_at IS NULL " +
     "AND m.created_at > ? AND m.created_at <= ?"
   ).iterate(source.botId, event.firedAt - 24 * 60 * 60 * 1000, event.firedAt);
-  let activity = false;
+  const minimumHumanMessages = 20;
+  let humanMessages = 0;
   for (const row of rows) {
-    if (humanInput(row)) { activity = true; break; }
+    if (humanInput(row) && ++humanMessages >= minimumHumanMessages) break;
   }
-  if (!activity) {
-    console.log('No human messages in the last day; memory and skills review skipped.');
+  if (humanMessages < minimumHumanMessages) {
+    console.log('Only ' + humanMessages + '/' + minimumHumanMessages + ' human messages in the last day; memory and skills review skipped.');
     process.exitCode = 2;
   }
 } finally {
@@ -86,7 +87,9 @@ process.stdout.write('', () => process.exit(process.exitCode || 0));
       || createHash('sha256').update(oldCheck).digest('hex')
         === '4765ed7d8092d3c2a594e965966db40a88336ddb0b858309b4b19febba64097f'
       || createHash('sha256').update(oldCheck).digest('hex')
-        === '8d85213bf0d533c2cf1bf9376a21f5994aa2fe73a1257f9e49096fa1fb8418cb';
+        === '8d85213bf0d533c2cf1bf9376a21f5994aa2fe73a1257f9e49096fa1fb8418cb'
+      || createHash('sha256').update(oldCheck).digest('hex')
+        === '8e97ec8f8733954427efb43d81b9cd58d5940baa2d4f238737727a3903e6dd65';
     if (oldCheck !== check && !previousBundled && input.previousCommand) {
       return { command: input.previousCommand, timeoutMs: 10_000 };
     }
