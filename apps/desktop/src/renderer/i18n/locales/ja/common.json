@@ -12899,6 +12899,19 @@
           "allow": "許可",
           "deny": "拒否",
           "approve": "承認"
+        },
+        "publicProgress": {
+          "working": "⚙️ 処理中 · {{elapsed}}",
+          "workingSteps_one": "⚙️ 処理中 · {{count}} ステップ完了 · {{elapsed}}",
+          "workingSteps_other": "⚙️ 処理中 · {{count}} ステップ完了 · {{elapsed}}",
+          "writing": "✍️ 回答をまとめています…"
+        },
+        "delivery": {
+          "failed": "⚠️ 出力を配信できませんでした。しばらくしてから再試行してください。",
+          "retrying_one": "⚠️ {{count}} 件の配信が確認できていません。ネットワークが復旧すると自動で再送します。",
+          "retrying_other": "⚠️ {{count}} 件の配信が確認できていません。ネットワークが復旧すると自動で再送します。",
+          "uncertain_one": "⚠️ {{count}} 件の配信が確認できていません。自動では再送しません。届いていない場合は依頼を再送してください。",
+          "uncertain_other": "⚠️ {{count}} 件の配信が確認できていません。自動では再送しません。届いていない場合は依頼を再送してください。"
         }
       },
       "hook": {
@@ -13040,7 +13053,21 @@
           "planFooter": "続けるには「{{approve}}」、取り消すには「{{deny}}」と返信してください。",
           "askNoQuestion": "Agent が回答を待っていますが、表示できる質問がありません。「続ける」と返信してください。",
           "askIntro": "Agent があなたの回答を必要としています:",
-          "askFooter": "選択肢の番号を返信するか、回答を直接入力してください。"
+          "askFooter": "選択肢の番号を返信するか、回答を直接入力してください。",
+          "confirmCard": {
+            "planTitle": "プランの承認待ち",
+            "planBody": "Agent が実行プランを提出しました。続行するか選んでください。",
+            "permissionTitle": "操作の確認が必要です",
+            "permissionBody": "ツール「{{toolName}}」による今回の操作を確認してください。",
+            "permissionFallback": "今回の操作には確認が必要です。",
+            "allowOnce": "今回のみ許可",
+            "denyOnce": "操作を拒否",
+            "approvePlan": "プランを承認",
+            "rejectPlan": "プランを拒否"
+          },
+          "planApproved": "✅ プランを承認しました",
+          "planRejected": "❌ プランを拒否しました",
+          "planExpired": "⌛ このプランの確認は無効になりました"
         }
       },
       "dingtalk": {

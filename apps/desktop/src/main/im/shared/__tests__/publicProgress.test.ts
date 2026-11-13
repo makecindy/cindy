@@ -9,7 +9,9 @@
  * - 最小失败输入: 一轮里同时有 Bash 命令、思考增量和重试提示 —— 公开视图只能出现后者。
  * - tier: unit（纯函数，无 IO）。
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { setMainLocale } from '../../../i18n.desktop';
 
 import { renderPublicStage } from '../publicProgress';
 import {
@@ -19,6 +21,9 @@ import {
   pushToolStep,
   setActivityNotice,
 } from '../turnActivity';
+
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('public progress stage', () => {
   it('shows coarse progress but never tool names, arguments or thinking text', () => {
@@ -49,4 +54,20 @@ describe('public progress stage', () => {
     const stage = renderPublicStage(createTurnActivity(0), 3_000);
     expect(stage).toBe('⚙️ 正在处理 · 3s');
   });
+});
+
+// #10202/r4558852226: the public view previously ignored the selected locale.
+it('localizes public stages and step plurals when the interface language changes', () => {
+  const activity = createTurnActivity(0);
+  setMainLocale('en');
+  expect(renderPublicStage(activity, 3_000)).toBe('⚙️ Working · 3s');
+  pushToolStep(activity, 'Bash', { command: 'secret' }, 'tool-1');
+  expect(renderPublicStage(activity, 3_000)).toContain('1 step completed');
+  pushToolStep(activity, 'Bash', {}, 'tool-2');
+  markActivityWriting(activity);
+  expect(renderPublicStage(activity, 3_000)).toContain('2 steps completed');
+  expect(renderPublicStage(activity, 3_000)).toContain('Preparing the answer');
+  setMainLocale('de');
+  expect(renderPublicStage(activity, 3_000)).toContain('2 Schritte abgeschlossen');
+  expect(renderPublicStage(activity, 3_000)).not.toContain('secret');
 });

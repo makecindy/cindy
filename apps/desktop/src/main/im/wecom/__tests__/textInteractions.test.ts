@@ -311,6 +311,30 @@ describe('wecom template card confirmation', () => {
     return { im, sentCards, updates, click: (event: unknown) => cardHandler?.(event) };
   }
 
+  // #10202/r4558852226: actual cards and settled plan results were Chinese even
+  // in non-Chinese locales. Unit through handle + authenticated card callback;
+  // switch locale after presentation to also protect the stable button value.
+  it.each(['permission', 'plan_review'] as const)('localizes %s cards and results across a language switch', async (kind) => {
+    setMainLocale('de');
+    const { im, sentCards, click } = cardIm();
+    const interactions = new WecomTextInteractions(im);
+    const request = kind === 'permission'
+      ? permissionRequest({ command: 'pwd' }, { displayName: 'Bash' })
+      : { kind: 'plan_review' as const, requestId: 'localized-plan', plan: 'Read logs.' };
+    const result = interactions.handle('owner', request);
+    await vi.waitFor(() => expect(sentCards).toHaveLength(1));
+    const spec = sentCards[0]!.spec as { title: string; body: string; buttons: Array<{ label: string; payload: { value: string } }> };
+    expect(spec.title).toContain(kind === 'permission' ? 'Aktion' : 'Plan');
+    expect(spec.buttons[0]!.label).toBe(kind === 'permission' ? 'Einmal erlauben' : 'Plan genehmigen');
+    expect(spec.buttons[1]!.label).toBe(kind === 'permission' ? 'Aktion ablehnen' : 'Plan ablehnen');
+    expect(spec.body).not.toMatch(/[\u3400-\u9fff]/);
+    setMainLocale('en');
+    click({ senderId: 'owner', messageId: 'card-1', payload: spec.buttons[0]!.payload });
+    await expect(result).resolves.toMatchObject({ kind, behavior: 'allow' });
+    await vi.waitFor(() => expect(im.sendText).toHaveBeenCalledWith('owner',
+      expect.stringContaining(kind === 'permission' ? 'Allowed' : 'Plan approved')));
+  });
+
   it('submits the button choice to the shared permission without waiting for a model', async () => {
     const { im, sentCards, click } = cardIm();
     const interactions = new WecomTextInteractions(im);

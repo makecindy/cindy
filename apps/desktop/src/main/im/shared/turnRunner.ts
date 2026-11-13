@@ -1760,8 +1760,7 @@ export function createTurnRunner(
         if (index >= 0) state.queue.splice(index, 1);
         if (output.kind === 'chunked-text' && item.turn.chunkedReplyBegun) {
           try {
-            await output.commitFinal({
-              userId,
+            await commitChunkedFinal(item.turn, {
               text: ui.agent.stopDone(0),
               terminal: 'aborted',
               threadTs: item.turn.scopeKey,
@@ -2153,10 +2152,9 @@ export function createTurnRunner(
     unresolved: number;
     retrying: number;
   }): string {
-    if (outcome.status === 'failed') return '⚠️ 本轮输出未能送达，请稍后重试。';
-    return outcome.retrying > 0
-      ? `⚠️ 有 ${outcome.unresolved} 项内容尚未确认送达，会在网络恢复后自动补发。`
-      : `⚠️ 有 ${outcome.unresolved} 项内容未确认送达，不会自动重发；若未收到请重新发送。`;
+    const key = 'imBot.text.shared.delivery';
+    if (outcome.status === 'failed') return imText(`${key}.failed`);
+    return imText(`${key}.${outcome.retrying > 0 ? 'retrying' : 'uncertain'}`, { count: outcome.unresolved });
   }
 
   /**

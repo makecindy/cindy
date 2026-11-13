@@ -2163,10 +2163,15 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     },
   );
 
-  it.each(['rich-card', 'chunked-text', 'chunked-final-error'] as const)(
-    'cancels stopped input waiting for the send lock with %s output', async (outputKind) => {
+  // Regression #10202/r4558852222: stop during runtime recycling must finish the
+  // same reply stream as stop at the earlier send lock. Unit, deferred IO only.
+  it.each(['send-lock', 'runtime-recycle'].flatMap((waitPhase) =>
+    (['rich-card', 'chunked-text', 'chunked-final-error'] as const).map((outputKind) => ({ waitPhase, outputKind })),
+  ))('cancels stopped input during $waitPhase with $outputKind output', async ({ waitPhase, outputKind }) => {
     const previousOutput = fakeAdapter.output;
-    const beginReply = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const settle = vi.fn(async () => undefined);
+    const beginReply = vi.fn(async (_userId: string, _options?: { turnId: string }) => ({ replace: vi.fn(), close, settle }));
     const commitFinal = vi.fn(async () => undefined);
     if (outputKind !== 'rich-card') {
       fakeAdapter.output = {
@@ -2180,9 +2185,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const lockEntered = deferred<void>();
     const releaseRefresh = deferred<void>();
     const releaseLock = vi.fn();
+    const recycle = vi.fn(async () => false);
     mocks.getMaker.mockReturnValue({
       createSession: vi.fn(async () => oldSession.session),
-      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
+      recyclePiRuntimeIfResourcesDrifted: recycle,
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -2192,7 +2198,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       }),
     });
     const acquirePendingAgentSwitch = vi.fn(async () => releaseLock);
-    acquirePendingAgentSwitch.mockImplementationOnce(async () => {
+    const waitForRefresh = async () => {
       live = undefined;
       emitMakerEvent({
         type: 'session:closed', sessionId: 'feishu-session',
@@ -2200,8 +2206,18 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       });
       lockEntered.resolve(undefined);
       await releaseRefresh.promise;
-      return releaseLock;
-    });
+    };
+    if (waitPhase === 'send-lock') {
+      acquirePendingAgentSwitch.mockImplementationOnce(async () => {
+        await waitForRefresh();
+        return releaseLock;
+      });
+    } else {
+      recycle.mockImplementationOnce(async () => {
+        await waitForRefresh();
+        return true;
+      });
+    }
     const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
       acquirePendingAgentSwitch,
     });
@@ -2231,8 +2247,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         expect(commitFinal).toHaveBeenCalledExactlyOnceWith({
           userId: 'ou_user', text: fakeAdapter.ui.agent.stopDone(0),
           terminal: 'aborted', threadTs: undefined,
-          turnId: expect.any(String),
+          turnId: beginReply.mock.calls[0]?.[1]?.turnId,
         });
+        expect(close).toHaveBeenCalledOnce();
+        expect(close.mock.invocationCallOrder[0]).toBeLessThan(commitFinal.mock.invocationCallOrder[0]!);
+        expect(settle).toHaveBeenCalledWith({ delivered: outputKind !== 'chunked-final-error', terminal: 'aborted' });
       } else {
         expect(commitFinal).not.toHaveBeenCalled();
       }

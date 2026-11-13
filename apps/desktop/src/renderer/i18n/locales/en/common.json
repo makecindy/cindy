@@ -12952,6 +12952,19 @@
           "allow": "allow",
           "deny": "deny",
           "approve": "approve"
+        },
+        "publicProgress": {
+          "working": "⚙️ Working · {{elapsed}}",
+          "workingSteps_one": "⚙️ Working · {{count}} step completed · {{elapsed}}",
+          "workingSteps_other": "⚙️ Working · {{count}} steps completed · {{elapsed}}",
+          "writing": "✍️ Preparing the answer…"
+        },
+        "delivery": {
+          "failed": "⚠️ The output could not be delivered. Try again later.",
+          "retrying_one": "⚠️ Delivery of {{count}} item has not been confirmed. Cindy will retry automatically when the network recovers.",
+          "retrying_other": "⚠️ Delivery of {{count}} items has not been confirmed. Cindy will retry automatically when the network recovers.",
+          "uncertain_one": "⚠️ Delivery of {{count}} item has not been confirmed. It will not be resent automatically; send your request again if you did not receive it.",
+          "uncertain_other": "⚠️ Delivery of {{count}} items has not been confirmed. They will not be resent automatically; send your request again if you did not receive them."
         }
       },
       "hook": {
@@ -13094,7 +13107,21 @@
           "planFooter": "Reply “{{approve}}” to continue, or “{{deny}}” to cancel.",
           "askNoQuestion": "The Agent is waiting for your answer, but there's no question to show. Reply “continue”.",
           "askIntro": "The Agent needs your answer:",
-          "askFooter": "Reply with an option number, or type your answer."
+          "askFooter": "Reply with an option number, or type your answer.",
+          "confirmCard": {
+            "planTitle": "Plan awaiting approval",
+            "planBody": "The Agent submitted a plan. Decide whether to continue.",
+            "permissionTitle": "Action needs confirmation",
+            "permissionBody": "Confirm this action by the tool “{{toolName}}”.",
+            "permissionFallback": "This action needs your confirmation.",
+            "allowOnce": "Allow once",
+            "denyOnce": "Deny action",
+            "approvePlan": "Approve plan",
+            "rejectPlan": "Reject plan"
+          },
+          "planApproved": "✅ Plan approved",
+          "planRejected": "❌ Plan rejected",
+          "planExpired": "⌛ This plan confirmation has expired"
         }
       },
       "dingtalk": {

@@ -68,11 +68,9 @@ export const ui = {
       retrying: number;
     }) => {
       if (status === 'failed') {
-        return '⚠️ 本轮输出未能送达，请稍后重试。';
+        return imText('imBot.text.shared.delivery.failed');
       }
-      return retrying > 0
-        ? `⚠️ 有 ${unresolved} 项内容尚未确认送达，会在网络恢复后自动补发。`
-        : `⚠️ 有 ${unresolved} 项内容未确认送达，不会自动重发；若未收到请重新发送。`;
+      return imText(`imBot.text.shared.delivery.${retrying > 0 ? 'retrying' : 'uncertain'}`, { count: unresolved });
     },
   },
   cards: {

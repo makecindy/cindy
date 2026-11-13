@@ -266,10 +266,10 @@ export class WecomTextInteractions {
       const reason = decision.kind === 'plan_review' ? decision.reason : undefined;
       text =
         behavior === 'allow'
-          ? '✅ 已批准计划'
+          ? imText(`${K}.planApproved`)
           : EXPIRED_INTERACTION_REASON.test(reason ?? '')
-            ? '⌛ 本次计划确认已失效'
-            : '❌ 已拒绝计划';
+            ? imText(`${K}.planExpired`)
+            : imText(`${K}.planRejected`);
     } else {
       return;
     }
@@ -300,7 +300,7 @@ export class WecomTextInteractions {
     try {
       // 空 buttons = 传输层的本地失效入口; 不会触发平台更新。
       await update.call(this.cardApi, entry.cardId, {
-        body: '这个确认已失效，无需再处理。',
+        body: imText('imBot.text.shared.permission.expired'),
         buttons: [],
       });
     } catch {
@@ -342,25 +342,28 @@ export class WecomTextInteractions {
 /**
  * 确认卡内容。按钮只带**语义值**, token 由传输层每次随机生成 —— 卡片上的按钮
  * 不是静态的 allow/deny id, 猜中 key 也无法代替主人作答。
+ * 展示文案现取 locale; payload 保留解析器认可的固定语义值, 切换语言不改变旧卡决定。
  */
 export function buildWecomConfirmCard(request: InteractionRequest): InteractiveCardSpec {
   if (request.kind === 'plan_review') {
     return {
-      title: '计划待批准',
-      body: 'Agent 提交了一份执行计划，需要你决定是否继续。',
+      title: imText(`${K}.confirmCard.planTitle`),
+      body: imText(`${K}.confirmCard.planBody`),
       buttons: [
-        { id: 'approve', label: '批准计划', type: 'primary', payload: { value: '批准' } },
-        { id: 'reject', label: '拒绝计划', type: 'danger', payload: { value: '拒绝' } },
+        { id: 'approve', label: imText(`${K}.confirmCard.approvePlan`), type: 'primary', payload: { value: '批准' } },
+        { id: 'reject', label: imText(`${K}.confirmCard.rejectPlan`), type: 'danger', payload: { value: '拒绝' } },
       ],
     };
   }
   const toolName = (request.kind === 'permission' ? request.displayName ?? request.toolName : '').slice(0, 40);
   return {
-    title: '需要确认操作',
-    body: toolName ? `需要确认工具「${toolName}」的这次操作。` : '需要你确认这次操作。',
+    title: imText(`${K}.confirmCard.permissionTitle`),
+    body: toolName
+      ? imText(`${K}.confirmCard.permissionBody`, { toolName })
+      : imText(`${K}.confirmCard.permissionFallback`),
     buttons: [
-      { id: 'allow', label: '允许本次操作', type: 'primary', payload: { value: '允许' } },
-      { id: 'deny', label: '拒绝本次操作', type: 'danger', payload: { value: '拒绝' } },
+      { id: 'allow', label: imText(`${K}.confirmCard.allowOnce`), type: 'primary', payload: { value: '允许' } },
+      { id: 'deny', label: imText(`${K}.confirmCard.denyOnce`), type: 'danger', payload: { value: '拒绝' } },
     ],
   };
 }

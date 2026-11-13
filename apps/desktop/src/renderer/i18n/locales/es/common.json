@@ -13063,6 +13063,22 @@
           "allow": "permitir",
           "deny": "denegar",
           "approve": "aprobar"
+        },
+        "publicProgress": {
+          "working": "⚙️ Procesando · {{elapsed}}",
+          "workingSteps_one": "⚙️ Procesando · {{count}} paso completado · {{elapsed}}",
+          "workingSteps_other": "⚙️ Procesando · {{count}} pasos completados · {{elapsed}}",
+          "writing": "✍️ Preparando la respuesta…",
+          "workingSteps_many": "⚙️ Procesando · {{count}} pasos completados · {{elapsed}}"
+        },
+        "delivery": {
+          "failed": "⚠️ No se pudo entregar el resultado. Inténtalo de nuevo más tarde.",
+          "retrying_one": "⚠️ No se ha confirmado la entrega de {{count}} elemento. Se reintentará automáticamente cuando se restablezca la red.",
+          "retrying_other": "⚠️ No se ha confirmado la entrega de {{count}} elementos. Se reintentará automáticamente cuando se restablezca la red.",
+          "uncertain_one": "⚠️ No se ha confirmado la entrega de {{count}} elemento. No se reenviará automáticamente; vuelve a enviar tu solicitud si no lo has recibido.",
+          "uncertain_other": "⚠️ No se ha confirmado la entrega de {{count}} elementos. No se reenviarán automáticamente; vuelve a enviar tu solicitud si no los has recibido.",
+          "retrying_many": "⚠️ No se ha confirmado la entrega de {{count}} elementos. Se reintentará automáticamente cuando se restablezca la red.",
+          "uncertain_many": "⚠️ No se ha confirmado la entrega de {{count}} elementos. No se reenviarán automáticamente; vuelve a enviar tu solicitud si no los has recibido."
         }
       },
       "hook": {
@@ -13206,7 +13222,21 @@
           "planFooter": "Responde “{{approve}}” para continuar o “{{deny}}” para cancelar.",
           "askNoQuestion": "El Agent espera tu respuesta, pero no hay ninguna pregunta que mostrar. Responde “continuar”.",
           "askIntro": "El Agent necesita tu respuesta:",
-          "askFooter": "Responde con el número de una opción o escribe tu respuesta."
+          "askFooter": "Responde con el número de una opción o escribe tu respuesta.",
+          "confirmCard": {
+            "planTitle": "Plan pendiente de aprobación",
+            "planBody": "El Agent ha presentado un plan. Decide si quieres continuar.",
+            "permissionTitle": "La acción requiere confirmación",
+            "permissionBody": "Confirma esta acción de la herramienta «{{toolName}}».",
+            "permissionFallback": "Esta acción requiere tu confirmación.",
+            "allowOnce": "Permitir una vez",
+            "denyOnce": "Denegar acción",
+            "approvePlan": "Aprobar plan",
+            "rejectPlan": "Rechazar plan"
+          },
+          "planApproved": "✅ Plan aprobado",
+          "planRejected": "❌ Plan rechazado",
+          "planExpired": "⌛ Esta confirmación del plan ha caducado"
         }
       },
       "dingtalk": {
