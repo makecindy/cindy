@@ -336,7 +336,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const releaseStat = fs.statSync(releaseAuth);
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
-    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue(true);
 
     await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
       authenticated: true,
