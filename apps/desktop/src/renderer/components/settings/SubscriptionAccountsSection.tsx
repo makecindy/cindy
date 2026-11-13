@@ -54,6 +54,18 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { isClassicalLocale, modernLocaleOf } from '../../../shared/locale';
 import { providersSettings } from './ProvidersSection.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
+import { codexResetScope } from '../../../shared/subscriptionAccounts';
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
+import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
+import { CodexResetCredits } from '../status/CodexResetCredits';
+
+function AccountResetCredits({ scope }: { scope: string }) {
+  const { snapshot, refresh } = useCodexRateLimits(true, scope);
+  const reset = useCodexRateLimitReset(snapshot, refresh, scope);
+  return <CodexResetCredits variant="embedded" providerId={scope} snapshot={snapshot}
+    onChanged={refresh} busy={reset.busy} canReset={reset.canReset} canRetry={reset.canRetry}
+    onReset={credit => void reset.reset(credit)} />;
+}
 
 const strategies: ProviderGroupStrategy[] = ['least', 'round', 'order', 'weight'];
 const statusDot: Record<SubscriptionAccountView['status'], string> = {
@@ -321,12 +333,20 @@ export function SubscriptionAccountsSection({
                 const signIn = () => void run({
                   action: 'login', providerId, accountId: account.id, loginKey: crypto.randomUUID(),
                 });
+                const resetScope = account.codexResetProviderId ?? codexResetScope(account.id);
+                // Reset settings do not depend on a successful usage read. A replaced
+                // identity remounts the reader; ordinary running-count changes do not.
+                const resetNode = providerId === 'openai' && connected ? (
+                  <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
+                ) : null;
                 const usageNode =
                   account.id === 'default' && defaultUsage ? (
                     defaultUsage
                   ) : usage ? (
-                    <QuotaHoverCard variant="embedded" hideIdentity account={usage} />
-                  ) : null;
+                    <QuotaHoverCard variant="embedded" hideIdentity account={usage}>
+                      {resetNode}
+                    </QuotaHoverCard>
+                  ) : resetNode;
                 return (
                   <div
                     key={account.id}
