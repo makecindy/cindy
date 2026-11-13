@@ -3,7 +3,7 @@ import { watch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
-import { app } from 'electron';
+import { getUserDataDir, getAppDataDir } from '../userDataPath.js';
 
 import { physicalWorktreeKey, worktreeResourceId } from './resourceLock';
 import type { WorktreeRecyclePolicy } from './recyclePolicy';
@@ -44,11 +44,11 @@ export interface WorktreeRecycleRecord {
 }
 
 export function recycleJournalRoot(): string {
-  return path.join(app.getPath('userData'), 'worktree-recycle');
+  return path.join(getUserDataDir(), 'worktree-recycle');
 }
 
 function sharedJournalLocationsRoot(): string {
-  return path.join(app.getPath('appData'), 'Cindy', 'shared-worktree-recycle-journals');
+  return path.join(getAppDataDir(), 'Cindy', 'shared-worktree-recycle-journals');
 }
 
 /** Keep publishing locators for older clients that may still borrow across profiles. */

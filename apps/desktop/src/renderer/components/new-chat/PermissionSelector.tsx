@@ -435,7 +435,7 @@ export function PermissionSelector({
       panelAriaLabel={t('newChat.permissionSelector.listAria')}
       startBg="var(--composer-pill-bg)"
       startBorderColor="var(--border-default)"
-      wrapperClassName="min-w-0 shrink"
+      wrapperClassName={cn('max-w-full shrink', isIconOnly ? 'min-w-[34px]' : 'min-w-[72px]')}
       trigger={triggerButton}
     >
       {optionsList}
