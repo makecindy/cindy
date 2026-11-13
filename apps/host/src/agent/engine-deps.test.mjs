@@ -21,6 +21,7 @@ import { createHostAgentGraph } from './runtime.ts';
 import { getDesktopClaudeReadOnlyAllowedTools } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.ts';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.ts';
 import { CodexCredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-host/codex-credential-switch.ts';
+import { readPiGlobalContext } from '../../../../packages/maker-core/src/agents/pi/global-context.ts';
 
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
 const TEST_TIMEOUT_MS = 120_000;
@@ -49,6 +50,7 @@ function buildGraph(t, ownerId, extra = {}) {
     // Never spawned: only the constructed agents' dependencies are called.
     binaryPath: path.join(profile, 'claude'),
     codexBinaryPath: path.join(profile, 'codex'),
+    piBinaryPath: path.join(profile, 'pi'),
     mcpRuntime: mcp,
     mcpProviders: [],
     storage: {},
@@ -175,4 +177,52 @@ test('Claude checks explicit subagent models with the Host gateway key and provi
   ].join('\n')));
   const desktop = fs.readFileSync(desktopIndex, 'utf8');
   assert.ok(desktop.includes('      resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,\n'));
+});
+
+test('Pi reads the user\'s own global context from the home the desktop uses', { timeout: TEST_TIMEOUT_MS }, async t => {
+  const graph = buildGraph(t, 'engine-deps-pi-context');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const saved = { HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
+  t.after(() => {
+    process.env.HOME = saved.HOME;
+    if (saved.PI_CODING_AGENT_DIR === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved.PI_CODING_AGENT_DIR;
+  });
+  process.env.HOME = home;
+  delete process.env.PI_CODING_AGENT_DIR;
+  fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.pi', 'agent', 'AGENTS.md'), 'fixture global context');
+  const resolve = graph.pi.deps.resolvePiGlobalContextHome;
+  assert.equal(resolve(), path.join(home, '.pi', 'agent'));
+  // What maker-core reads from it: only the context files under that home, inside the fixture.
+  assert.deepEqual(await readPiGlobalContext(resolve()), [{ name: 'AGENTS.md', content: 'fixture global context' }]);
+  process.env.PI_CODING_AGENT_DIR = '~/custom-pi';
+  assert.equal(resolve(), path.join(home, 'custom-pi'));
+  assert.equal(resolve('other-device'), '$HOME/.pi/agent');
+  for (const value of [resolve(), path.join(home, '.pi', 'agent')]) assert.ok(value.startsWith(`${home}${path.sep}`));
+});
+
+test('Pi resolves its live models and descriptors from the Host selectable catalog', { timeout: TEST_TIMEOUT_MS }, t => {
+  const graph = buildGraph(t, 'engine-deps-pi-models');
+  const deps = graph.pi.deps;
+  const models = deps.resolvePiRuntimeModels();
+  assert.deepEqual(models, graph.pi.capabilities.availableModels);
+  const sample = models.find(model => model.providerId && model.providerId !== 'xd') ?? models[0];
+  if (sample) {
+    assert.ok(deps.resolvePiRuntimeModelDescriptor(sample.providerId, sample.id), 'a listed model has a descriptor');
+  }
+  // The same expressions as the desktop's buildPiAgentForDesktop, over the Host catalog.
+  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
+  const desktop = fs.readFileSync(desktopIndex, 'utf8');
+  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
+  const body = (source, from, to) => {
+    const start = source.indexOf(from);
+    assert.ok(start >= 0, from);
+    return source.slice(start, source.indexOf(to, start)).split('\n').map(line => line.trim()).filter(line => !line.startsWith('//')).join('\n');
+  };
+  const desktopModels = body(desktop, 'resolvePiRuntimeModels: () =>', 'mcpProviders: piMcpProviders,').replaceAll('getDesktopSelectableCatalog()', 'modelContext.getSelectableCatalog()');
+  const hostModels = body(runtime, 'resolvePiRuntimeModels: () =>', '        mcpProviders,\n');
+  assert.ok(hostModels.startsWith(desktopModels), 'the three model resolvers are the desktop lines');
+  assert.equal(body(runtime, 'resolvePiGlobalContextHome: (remoteHostId) => {', '        },'),
+    body(piHost, 'resolvePiGlobalContextHome: (remoteHostId) => {', '    },'));
 });

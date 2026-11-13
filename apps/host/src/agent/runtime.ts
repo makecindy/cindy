@@ -5,6 +5,7 @@ import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/
 /** Node assembly of the shared Maker agents, provider configuration and MCP transports.
  * Native login, settings and platform integrations are assembled by the owning runtime. */
 
+import os from 'node:os';
 import path from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
@@ -21,8 +22,8 @@ import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHost
 import { isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
 import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
-import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
-import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
+import { getActiveCatalog, getLocalCatalogOverridesSnapshot } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId, resolvePiGatewayDescriptorProviderId, resolvePiRuntimeModelDescriptor } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from '../../../desktop/src/main/maker-host/capability-routing.js';
 import { createCodexCapabilityRouting } from '../../../desktop/src/main/maker-host/codexCapabilityRouting.js';
 import { createPluginRegistry } from '../../../desktop/src/main/maker-host/plugins/index.js';
@@ -646,6 +647,32 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
+        // As the desktop (pi-host.ts): the user's own Pi context root (AGENTS.md and the like),
+        // separate from Cindy's models and auth runtime home.
+        resolvePiGlobalContextHome: (remoteHostId) => {
+          if (remoteHostId) return '$HOME/.pi/agent';
+          const override = process.env.PI_CODING_AGENT_DIR;
+          return override
+            ? path.resolve(override.replace(/^~(?=$|[\\/])/, () => os.homedir()))
+            : path.join(os.homedir(), '.pi', 'agent');
+        },
+        // As the desktop (maker-host/index.ts buildPiAgentForDesktop), over the Host's selectable
+        // catalog: the live model list, and the descriptors for a resumed retired model and the gateway block.
+        resolvePiRuntimeModels: () => deriveAvailableModels(modelContext.getSelectableCatalog(), 'pi'),
+        resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
+          resolvePiRuntimeModelDescriptor(modelContext.getSelectableCatalog(), providerId, modelId, {
+            localOverrides: getLocalCatalogOverridesSnapshot(),
+          }),
+        resolvePiGatewayModelDescriptor: (providerId, modelId) => {
+          // `cindy` 始终是 XD Gateway 路由；其成员、能力与显式 API 都由 Model Access
+          // 决定，不能随当前订阅/BYOM provider 命中同 id 的另一条目录记录。
+          return resolvePiRuntimeModelDescriptor(
+            modelContext.getSelectableCatalog(),
+            resolvePiGatewayDescriptorProviderId(providerId),
+            modelId,
+            { localOverrides: getLocalCatalogOverridesSnapshot() },
+          );
+        },
         // Pi's loopback requests carry a per-session token the proxy checks (pi-host.ts).
         ...(claudeProxy ? { registerPiProxySession: claudeProxy.registerPiProxySession } : {}),
         resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
