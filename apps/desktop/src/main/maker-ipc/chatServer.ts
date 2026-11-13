@@ -143,6 +143,8 @@ interface ServerPlan {
 interface Running {
   /** The group's Cindy: this computer, the task and model it reports to the requester's other devices. */
   executor?: { deviceId: string; sessionId: string; model?: string };
+  /** A server replica refused `executor` (mid-rollout): this turn renews without it. */
+  executorRefused?: boolean;
   execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number; durationMs?: number;
   /** The conversation this turn answers in (see executionLane); unknown until its source is read. */
   lane?: string;
@@ -2220,13 +2222,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     changed(s.room.id);
   }
   async function updateExecution(run: Running, action: string, extra: Record<string, unknown> = {}) {
-    return api(`/conversations/${run.execution.conversation_id}/${run.execution.mask_owner_id ? 'mask/' : ''}executions/${run.execution.id}`, 'POST', {
+    const send = (withExecutor: boolean) => api(`/conversations/${run.execution.conversation_id}/${run.execution.mask_owner_id ? 'mask/' : ''}executions/${run.execution.id}`, 'POST', {
       // Each heartbeat must extend the lease rather than replay a cached receipt.
       // Terminal retries keep their operation ID and immutable result body.
       operationId: action === 'heartbeat' ? randomUUID() : `chat:${run.execution.id}:${run.execution.epoch}:${action}`,
       executorId, epoch: run.execution.epoch, action, ...extra,
-      ...(action === 'heartbeat' && supportsExecutor && run.executor ? { executor: run.executor } : {}),
+      ...(withExecutor ? { executor: run.executor } : {}),
     }, run.execution.bot_id);
+    const withExecutor = action === 'heartbeat' && supportsExecutor && !!run.executor && !run.executorRefused;
+    try { return await send(withExecutor); }
+    catch (error) {
+      // While the server is being rolled out an older replica refuses the unknown field: renew the
+      // lease without it at once, and keep this turn's later heartbeats plain.
+      if (!withExecutor || !(error instanceof ChatResponseError) || error.status !== 400) throw error;
+      run.executorRefused = true;
+      deps.log?.warn('Group execution location was refused; renewing without it', { executionId: run.execution.id, ...chatErrorDiagnostic(error) });
+      return send(false);
+    }
   }
   function postCapabilityNotice(run: Running, code: BotGroupCapabilityNoticeCode, threadRootId?: string): Promise<void> {
     if (!current() || running.get(run.execution.id) !== run || run.execution.mask_owner_id) return Promise.resolve();

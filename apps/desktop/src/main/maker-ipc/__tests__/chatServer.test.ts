@@ -2338,6 +2338,25 @@ describe('Chat Server result delivery and refresh', () => {
         .toEqual({ deviceId: 'studio-device', here: true, sessionId: 'group-task-1', model: 'GPT-6.1 Sol' });
     });
 
+    // cindy-server#1419 review: mid-rollout, a heartbeat may reach an older replica whose strict schema
+    // refuses `executor`. The lease is renewed at once without it and the turn goes on.
+    it('renews without the location when an older server refuses it', async () => {
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === '/me'
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        : method === 'POST' && route.includes('/executions/') && body?.action === 'heartbeat' && body.executor
+          ? { status: 400, body: { error: { code: 'VALIDATION_FAILED' } } }
+          : previous(route, method, body));
+      deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', state: 'running' as const, model: 'GPT-6.1 Sol' }));
+      await ask(5, 'Where do you run?');
+      await vi.advanceTimersByTimeAsync(31_000);
+      const beats = fixture.handle.mock.calls.filter(([route, method, body]) => method === 'POST' && route.includes('/executions/') && body?.action === 'heartbeat');
+      expect(beats.filter(([, , body]) => body.executor)).toHaveLength(1);
+      expect(beats.filter(([, , body]) => !body.executor).length).toBeGreaterThanOrEqual(2);
+      await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Here' });
+      expect(fixture.handle.mock.calls.some(([route, method, body]) => method === 'POST' && route.includes('/executions/') && body?.action === 'complete')).toBe(true);
+    });
+
     // A task the group task opens while answering shows in the group as a card, posted as the group's Cindy.
     it('shows tasks it opens as cards from the group Cindy', async () => {
       deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix CI', state: 'running' as const }));
