@@ -37,21 +37,53 @@ export type ComposerEnhancePromptSuccess = {
  * literal ``` inside a sentence (a draft asking to remove that marker, say) is
  * text the author wrote, not an opened block, and counting occurrences would
  * reject exactly the rewrites that preserved it.
+ *
+ * A fence is tracked by its character and length, the same way the composer's
+ * list renderer scans a document (renderer/lib/composerListDocument.ts): a
+ * block opened with `~~~` is closed by `~~~` or a longer run of tildes, and a
+ * ``` line inside it is literal text rather than another fence. Only counting
+ * backticks made a draft that displays a markdown block with `~~~` look
+ * unclosed — the literal backticks inside it were taken for an opening fence,
+ * and a perfectly valid rewrite was refused.
  */
 export function hasUnclosedFence(text: string): boolean {
-  let openFence: string | null = null;
+  let openFence: FenceState | null = null;
   for (const line of text.split(/\r?\n/)) {
-    // An opening fence may carry an info string (` ```ts `); a closing fence is
-    // backticks only. Both allow up to three leading spaces.
-    const match = /^ {0,3}(`{3,})/.exec(line);
-    if (!match) continue;
-    const ticks = match[1]!;
-    const rest = line.slice(match[0].length);
-    if (openFence === null) {
-      if (!rest.includes('`')) openFence = ticks;
+    if (openFence) {
+      if (isFenceClosing(line, openFence)) openFence = null;
       continue;
     }
-    if (rest.trim() === '' && ticks.length >= openFence.length) openFence = null;
+    const opening = fenceOpening(line);
+    if (opening) openFence = opening;
   }
   return openFence !== null;
+}
+
+/** The delimiter a fenced block was opened with. */
+interface FenceState {
+  char: '`' | '~';
+  length: number;
+}
+
+/**
+ * The fence a line opens, or null when the line does not open one.
+ *
+ * An opening fence may carry an info string (` ```ts `, ` ~~~markdown `); a
+ * backtick fence's info string may not contain a backtick, so such a line is
+ * literal text. Both allow up to three leading spaces.
+ */
+function fenceOpening(line: string): FenceState | null {
+  const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (!match) return null;
+  if (match[1][0] === '`' && match[2].includes('`')) return null;
+  return { char: match[1][0] as FenceState['char'], length: match[1].length };
+}
+
+/**
+ * True when the line closes the given fence: same character, at least as long
+ * as the opening run, and nothing but trailing spaces or tabs after it.
+ */
+function isFenceClosing(line: string, state: FenceState): boolean {
+  const pattern = new RegExp(`^ {0,3}${state.char}{${state.length},}[ \\t]*$`);
+  return pattern.test(line);
 }

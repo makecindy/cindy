@@ -193,6 +193,32 @@ describe('hasUnclosedFence', () => {
     expect(hasUnclosedFence('把文件里的 ``` 标记全部删掉')).toBe(false);
     expect(hasUnclosedFence('第一行\n用 ``` 包住整段再贴回来')).toBe(false);
   });
+
+  it('accepts a closed tilde block that shows a triple backtick of its own', () => {
+    // 波浪线围栏里的反引号只是块内的字面内容,不是另一个围栏。旧实现只数反引号,
+    // 把块内那一行三反引号当成了未闭合围栏,合法草稿因此被拒绝增强。
+    const draft = [
+      '看看这段 markdown：',
+      '~~~markdown',
+      '```',
+      '~~~',
+      '就这些',
+    ].join('\n');
+    expect(hasUnclosedFence(draft)).toBe(false);
+  });
+
+  it('still reports a tilde fence that was never closed', () => {
+    expect(hasUnclosedFence('~~~markdown\nconst a = 1;')).toBe(true);
+    // 波浪线围栏里的反引号不闭合它,只有同字符的波浪线才行。
+    expect(hasUnclosedFence('~~~markdown\n```\nconst a = 1;')).toBe(true);
+  });
+
+  it('keeps the backtick fence behaviour unchanged', () => {
+    expect(hasUnclosedFence('```ts\nconst a = 1;\n```')).toBe(false);
+    expect(hasUnclosedFence('```ts\nconst a = 1;')).toBe(true);
+    // 波浪线不能闭合反引号围栏。
+    expect(hasUnclosedFence('```ts\nconst a = 1;\n~~~')).toBe(true);
+  });
 });
 
 describe('buildEnhancePrompt', () => {

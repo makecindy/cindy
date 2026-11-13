@@ -2385,7 +2385,10 @@ function outputBudgetExhausted(wire: ProviderWire, parsed: unknown): boolean {
  *
  * `content_filter` is classified the same way the Responses↔Chat bridge
  * classifies it (packages/responses-chat-bridge/src/chat-sse-translator.ts):
- * the body carries a fragment, not the answer.
+ * the body carries a fragment, not the answer. The Messages route's `refusal`
+ * and `model_context_window_exceeded` are classified the way the
+ * Responses↔Anthropic bridge classifies them
+ * (packages/responses-anthropic-bridge/src/responses-sse-translator.ts).
  */
 function answerIncompleteByProvider(wire: ProviderWire, parsed: unknown): boolean {
   if (typeof parsed !== 'object' || parsed === null) return false;
@@ -2394,7 +2397,16 @@ function answerIncompleteByProvider(wire: ProviderWire, parsed: unknown): boolea
     return reason === 'max_output_tokens' || reason === 'content_filter';
   }
   if (wire === 'anthropic-messages') {
-    return (parsed as { stop_reason?: unknown }).stop_reason === 'max_tokens';
+    // `refusal` (the model declined) and `model_context_window_exceeded` (the
+    // prompt did not fit) are not answers either. The Anthropic↔Responses
+    // bridge already classifies both as incomplete
+    // (packages/responses-anthropic-bridge/src/responses-sse-translator.ts),
+    // so the native Messages route has to agree with it: a body that carries
+    // only the beginning of the answer must not be handed back as a rewrite.
+    const stopReason = (parsed as { stop_reason?: unknown }).stop_reason;
+    return stopReason === 'max_tokens'
+      || stopReason === 'refusal'
+      || stopReason === 'model_context_window_exceeded';
   }
   const finishReason = chatCompletionEmptyFingerprint(parsed).finishReason;
   return finishReason === 'length' || finishReason === 'content_filter';

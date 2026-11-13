@@ -1166,6 +1166,92 @@ describe('utility one-shot candidates', () => {
 
       expect(result.ok).toBe(false);
     });
+
+    /** Cindy AI serves a Messages-native model in its own wire format. */
+    const anthropicMessagesRoute = () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'xd',
+          name: 'Cindy AI',
+          source: 'builtin',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://gateway.example/v1', authStrategy: 'api-key-header' },
+          },
+          models: {
+            codex: [{
+              id: 'xd-mini',
+              name: 'XD Mini',
+              contextWindow: 100_000,
+              nativeApi: 'anthropic-messages',
+            }],
+          },
+        }],
+      } as never);
+      readKey.mockReturnValue('xd-key');
+    };
+
+    /** A Messages answer body that carries text but ends on the given reason. */
+    const messagesAnswer = (stopReason: string) => ({
+      ok: true,
+      text: async () => JSON.stringify({
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: '给这个页面加一个搜索框' }],
+        model: 'xd-mini',
+        stop_reason: stopReason,
+        usage: { input_tokens: 12, output_tokens: 8 },
+      }),
+    } as never);
+
+    it('开启后:Messages 路线以 refusal 收尾的非空正文被拒绝', async () => {
+      // `refusal` 是模型拒答,不是答案。Responses↔Anthropic 桥早就把它归为
+      // incomplete;原生 Messages 路线若只认 max_tokens,半截正文会被当成改写
+      // 结果回填,覆盖用户草稿。
+      anthropicMessagesRoute();
+      fetchMock.mockResolvedValueOnce(messagesAnswer('refusal'));
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:Messages 路线以 model_context_window_exceeded 收尾的非空正文被拒绝', async () => {
+      anthropicMessagesRoute();
+      fetchMock.mockResolvedValueOnce(messagesAnswer('model_context_window_exceeded'));
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+        requireCompleteOutput: true,
+      });
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('默认关闭:Messages 路线的同一份拒答响应仍按旧行为返回(钉住影响面)', async () => {
+      anthropicMessagesRoute();
+      fetchMock.mockResolvedValueOnce(messagesAnswer('refusal'));
+
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: 'xd-mini',
+        maxTokens: 200,
+      });
+
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个搜索框' });
+    });
   });
 
   it('responses 的 SSE 终止事件被 max_output_tokens 截断 → 也放大预算重试', async () => {
