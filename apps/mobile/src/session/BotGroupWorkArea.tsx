@@ -81,10 +81,11 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     disabled={stopPending} style={styles.stop} onPress={onPress}>
     <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
   </Pressable>;
-  const stopControl = online && onStop ? group.supportsScopedStop && group.canStopAll && group.round.othersActive
+  const canStopAll = group.supportsScopedStop && group.canStopAll && group.round.othersActive;
+  const stopControl = online && onStop && (group.round.canStop !== false || canStopAll) ? canStopAll
       ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}
           disabled={stopPending} testID="botGroup.work.stopMenu" sections={[{ id: 'scope', options: [
-            { id: 'mine', title: t('groupChat.progress.stopMine') },
+            ...(group.round.canStop !== false ? [{ id: 'mine', title: t('groupChat.progress.stopMine') }] : []),
             { id: 'all', title: t('groupChat.progress.stopAll'), subtitle: t('groupChat.progress.stopAllHint'), destructive: true },
           ] }]} onSelect={id => { void onStop(id === 'all' ? 'all' : undefined); }}>
           {stopButton}

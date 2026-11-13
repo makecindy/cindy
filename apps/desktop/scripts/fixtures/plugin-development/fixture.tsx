@@ -1,5 +1,6 @@
 import { mountPage, subscription } from '../../ui-page/harness';
 import { GhostPluginDetailView } from '../../../src/renderer/features/plugin/GhostPluginDetailView';
+import { MessageSourceLabels } from '../../../src/renderer/components/chat/MessageSourceLabels';
 import { GhostInstallConsentContent } from '../../../src/renderer/cindy-brain/GhostInstallConsentHost';
 import { toGhostPluginDetail } from '../../../src/renderer/features/plugin/lib/ghostPluginViewModel';
 import { ghostPermissionItems, type InstalledGhost } from '../../../src/shared/ghost';
@@ -20,6 +21,10 @@ const ghost: InstalledGhost = {
 };
 const marketGhost: InstalledGhost = { ...ghost, namespace: null, instanceKey: '_root__browser-dev',
   publishingSource: { kind: 'public-market', pluginId: 'fixture-plugin' } };
+const hostToolsGhost: InstalledGhost = { ...ghost, manifest: { ...ghost.manifest,
+  name: 'Task dashboard', agent: { hostTools: ['history', 'control', 'handoff', 'settings', 'scheduler'] },
+  subscribe: { topics: ['message', 'task-state'] },
+} };
 const candidateInstances = [
   { instanceId: '_root__example', version: '1.0.0', origin: 'public' as const, enabled: true },
   { instanceId: '_ns__local__example', version: '1.1.0', origin: 'local' as const, enabled: true },
@@ -54,14 +59,16 @@ mountPage({
     getFullscreenState: async () => false, onFullscreenChange: subscription('fullscreen'),
     ghosts: { activateBrowser: async () => ({ ok: true }), listSync: () => ({ ghosts: [ghost] }) },
   }),
-  render: ctx => ctx.case === 'authoring'
+  render: ctx => ctx.case === 'remote-source'
+    ? <main className="p-6"><MessageSourceLabels sourcePlugin={{ pluginId: 'source-device::dashboard', name: 'Dashboard' }} /></main>
+    : ctx.case === 'authoring'
     ? <MyPluginsPage reader={authorApi} cache={authorCache} installedPluginCount={2}
       localPlugins={candidateInstances.map(item => ({ id: item.instanceId, name: 'Example plugin', version: item.version } as GhostPluginListItem))}
       onViewLocal={noop} onSubmitUpdate={async instanceId => { document.documentElement.dataset.submittedInstance = instanceId; return false; }} />
-    : ctx.case === 'permissions'
+    : ctx.case === 'permissions' || ctx.case === 'host-tool-permissions'
     ? <main className="mx-auto max-w-xl p-6"><GhostInstallConsentContent facts={{ kind: 'install', ghostId: ghost.manifest.id,
-      name: ghost.manifest.name, version: ghost.manifest.version, permissions: ghostPermissionItems(ghost.manifest) }} /></main>
-    : <GhostPluginDetailView ghost={ctx.case === 'market' ? marketGhost : ghost}
-      detail={toGhostPluginDetail(ctx.case === 'market' ? marketGhost : ghost)} panelStatus={null}
+      name: ghost.manifest.name, version: ghost.manifest.version, permissions: ghostPermissionItems(ctx.case === 'host-tool-permissions' ? hostToolsGhost.manifest : ghost.manifest) }} /></main>
+    : <GhostPluginDetailView ghost={ctx.case === 'market' ? marketGhost : ctx.case === 'host-tools' ? hostToolsGhost : ghost}
+      detail={toGhostPluginDetail(ctx.case === 'market' ? marketGhost : ctx.case === 'host-tools' ? hostToolsGhost : ghost)} panelStatus={null}
       onBack={noop} onToggle={noop} onUse={noop} onUpdate={noop} onUpdateFromFile={noop} onUninstall={noop} toggleDisabled={false} />,
 });
