@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-import { refineShardName, shardNameSchema, withStore } from './_shared.js';
+import { shardNameSchema, withStore } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 import type { WriteOptions, WriteResult } from '@cindy/maker-core';
@@ -49,7 +49,6 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
       body: z.string().min(1),
       mode: z.enum(['create', 'update', 'append']).optional(),
     },
-    refine: refineShardName,
     handler: async (args) => {
       const saved = deps.beginWrite?.(deps.getSessionContext?.());
       let written: WriteResult | undefined;

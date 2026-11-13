@@ -4058,7 +4058,6 @@ class CindyMcpGateway {
             limit: { type: 'integer', minimum: 1, maximum: 50 },
             name: {
               type: 'string',
-pattern: '^[a-z0-9_-]{1,80}(?:\\.md)?$',
               description:
                 'Slug or a MEMORY.md index filename (may end with .md) required for write; both name the same record. A type prefix must match the selected type.',
             },
@@ -4075,20 +4074,6 @@ pattern: '^[a-z0-9_-]{1,80}(?:\\.md)?$',
           },
           required: ['action'],
           additionalProperties: false,
-          // JSON Schema 不能跨字段引用, 用 anyOf 给每个 type 钉死名字前缀与长度。
-          allOf: [
-            {
-              if: { properties: { action: { enum: ['write', 'consolidate'] } }, required: ['action'] },
-              then: {
-                anyOf: ['user', 'feedback', 'project', 'reference'].map((type) => ({
-                  properties: {
-                    type: { const: type },
-                    name: { pattern: '^(?:' + type + '[_-])?[a-z0-9_-]{1,64}(?:\.md)?$' },
-                  },
-                })),
-              },
-            },
-          ],
         },
         execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => this.executeBotMemory(params, signal),
       });

@@ -195,6 +195,13 @@ describe('MemoryStorage · 分片地址解析', () => {
     expect(await missing('project_project-fresh.md')).toBe(true);
   });
 
+  it('slug 长度以 storage 上限为准, 带 type 前缀与 .md 的索引写法不算超长', async () => {
+    await storage.write(opts('a'.repeat(64)));
+    await expect(storage.write(opts('b'.repeat(65)))).rejects.toThrow(/invalid-slug/);
+    const viaIndex = await storage.write(opts(`project_${'a'.repeat(64)}.md`, 'v2', 'update'));
+    expect(viaIndex.filename).toBe(`project_${'a'.repeat(64)}.md`);
+  });
+
   it('同 key 命中多个分片时报 ambiguous-address; 传完整文件名仍可消歧', async () => {
     await storage.write(opts('dup'));
     await copyFile(path.join(dir, 'project_dup.md'), path.join(dir, 'project_project-dup.md'));
