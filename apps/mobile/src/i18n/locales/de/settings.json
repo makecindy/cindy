@@ -244,6 +244,12 @@
     "emergencyLaunchYes": "Ja (OTA kann in diesem Durchlauf nicht angewendet werden)",
     "otaVersion": "OTA-Version"
   },
+  "feedback": {
+    "sectionTitle": "Feedback",
+    "label": "Wo senden",
+    "value": "/issue am Computer",
+    "hint": "Cindy auf deinem Computer macht daraus ein Issue. Gib dort in einer Aufgabe /issue ein; die Bestätigungskarte erscheint dann auch auf diesem Telefon, wo du sie bestätigen kannst."
+  },
   "legal": {
     "sectionTitle": "Rechtliches",
     "privacyPolicy": "Datenschutzerklärung",

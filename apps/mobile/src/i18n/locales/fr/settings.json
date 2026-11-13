@@ -244,6 +244,12 @@
     "emergencyLaunchYes": "Oui (l'OTA ne peut pas s'appliquer lors de cette exécution)",
     "otaVersion": "Version OTA"
   },
+  "feedback": {
+    "sectionTitle": "Retour",
+    "label": "Où l'envoyer",
+    "value": "/issue sur l'ordinateur",
+    "hint": "Cindy sur votre ordinateur transforme le retour en Issue. Saisissez /issue dans une tâche sur l'ordinateur ; la carte de confirmation apparaît aussi sur ce téléphone, où vous pouvez la confirmer."
+  },
   "legal": {
     "sectionTitle": "Mentions légales",
     "privacyPolicy": "Politique de confidentialité",

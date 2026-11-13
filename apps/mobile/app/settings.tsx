@@ -1042,6 +1042,12 @@ export default function SettingsScreen() {
           </SettingsGroup>
         ) : null}
 
+        {/* 反馈:手机不能自己发起 /issue(桌面命令在手机端执行不了),但整理好的确认卡会同步到手机、
+            能在手机上确认提交。入口只把这件事说清楚,不放一个点了没反应的按钮。 */}
+        <SettingsGroup footer={t('settings.feedback.hint')} title={t('settings.feedback.sectionTitle')}>
+          <InfoRow label={t('settings.feedback.label')} testID="settings.feedback.row" value={t('settings.feedback.value')} />
+        </SettingsGroup>
+
         {/* 法律信息:隐私政策/用户协议始终显示(链接区域分流走 legalLinks 单点);App 备案号仅国内版显示。
             使用统计开关(合规要求关闭途径可被找到)单独成组,说明与保存失败紧接在开关下方的 footer;
             「恢复默认」再单独成组,避免 footer 被夹在开关和它之间。 */}

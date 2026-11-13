@@ -244,6 +244,12 @@
     "emergencyLaunchYes": "是（此次运行内热更不能生效）",
     "otaVersion": "热更版本"
   },
+  "feedback": {
+    "sectionTitle": "问题回馈",
+    "label": "何处提交",
+    "value": "于电脑端输入 /issue",
+    "hint": "回馈由电脑端之 Cindy 理为 Issue。于彼机任务中输入 /issue；理毕后，确认卡亦现于手机，可于此确认提交。"
+  },
   "legal": {
     "sectionTitle": "备案信息",
     "privacyPolicy": "隐私政策",

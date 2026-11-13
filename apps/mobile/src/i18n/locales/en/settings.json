@@ -244,6 +244,12 @@
     "emergencyLaunchYes": "Yes (OTA cannot apply in this run)",
     "otaVersion": "OTA version"
   },
+  "feedback": {
+    "sectionTitle": "Feedback",
+    "label": "Where to send it",
+    "value": "/issue on your computer",
+    "hint": "Cindy on your computer turns feedback into an issue. Type /issue in a task there; when the card is ready it also appears on this phone, and you can confirm it here."
+  },
   "legal": {
     "sectionTitle": "Legal",
     "privacyPolicy": "Privacy Policy",
