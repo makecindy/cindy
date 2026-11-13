@@ -17,7 +17,7 @@ export function registerSessionShareTools(registry: XdtHelperToolRegistry, deps:
 }): void {
   registry.register({
     name: 'export_session', category: 'history',
-    description: 'Export an explicit local task as a native .cshare package with history, available attachments and engine transcripts. Requires per-call approval. For Agent calls, the user selects the export location in the native save dialog and the final file_path is returned; the Agent cannot specify a destination path. Plugins receive an instance-bound attachment_ref, never a host path. The package is unencrypted. Reports fidelity and missing content; a running task may not include its last turn. Remote tasks are unsupported.',
+    description: 'Export an explicit local task as a native .cshare package with history, available attachments and engine transcripts. Plugin calls use installation authorization; Agent calls follow their own runtime permissions. For Agent calls, the user selects the export location in the native save dialog and the final file_path is returned; the Agent cannot specify a destination path. Plugins receive an instance-bound attachment_ref, never a host path. The package is unencrypted. Reports fidelity and missing content; a running task may not include its last turn. Remote tasks are unsupported.',
     inputShape: {
       session_id: z.string().min(1),
       exclude_media: z.boolean().default(false),
@@ -38,7 +38,7 @@ export function registerSessionShareTools(registry: XdtHelperToolRegistry, deps:
   });
   registry.register({
     name: 'import_session', category: 'control',
-    description: 'Import a native .cshare or legacy .xdtshare package through Cindy’s existing importer. Requires per-call approval. Agent calls provide file_path (relative to this task) and optionally working_dir for project tasks. Plugins must use an existing attachment_ref belonging to their own instance and cannot supply paths; project selection uses the native import wizard. Encrypted packages also open that wizard for the owner to unlock; no password enters this tool. Default overwrite=false; no source data is changed. status=awaiting_user means the wizard was opened, not that import completed. Local computer only; SSH paths are unsupported.',
+    description: 'Import a native .cshare or legacy .xdtshare package through Cindy’s existing importer. Plugin calls use installation authorization; Agent calls follow their own runtime permissions. Agent calls provide file_path (relative to this task) and optionally working_dir for project tasks. Plugins must use an existing attachment_ref belonging to their own instance and cannot supply paths; project selection uses the native import wizard. Encrypted packages also open that wizard for the owner to unlock; no password enters this tool. Default overwrite=false; no source data is changed. status=awaiting_user means the wizard was opened, not that import completed. Local computer only; SSH paths are unsupported.',
     inputShape: {
       file_path: z.string().min(1).optional(),
       attachment_ref: z.string().regex(/^handoff:[0-9a-f-]{36}$/).optional(),

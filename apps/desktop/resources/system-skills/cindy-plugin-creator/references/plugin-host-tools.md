@@ -268,8 +268,8 @@ const result = await cindy.host.call('cindy_helper', 'read_session_attachment', 
 
 ## 原生任务包导入导出
 
-`history` 组的 `export_session` 与 `control` 组的 `import_session` 同时供 Agent 和插件调用，均使用
-`prompt-each-time`，沿用宿主现有权限流程。只处理本机；跨电脑仍使用原有任务迁移功能。
+`history` 组的 `export_session` 与 `control` 组的 `import_session` 同时供 Agent 和插件调用。
+插件按整体安装授权调用已声明能力；Agent 运行时遵循自身权限流程。只处理本机；跨电脑仍使用原有任务迁移功能。
 
 ```js
 const exported = await cindy.host.call('cindy_helper', 'export_session', {
