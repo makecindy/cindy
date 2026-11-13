@@ -84,6 +84,35 @@ describe('persisted Magpie source recovery', () => {
     expect(visible(after!).map(model => modelSupplierLabel(model.discoveredSource))).toEqual(['supplier', 'supplier']);
   });
 
+  // Unit regression: HTTP success is not catalog success. A business error must
+  // preserve expired receipts, including when it arrives after a successful page.
+  it.each([
+    { error: 'unavailable', data: [] },
+    { error_code: 401, data: [] },
+  ])('preserves retryable sources on HTTP 200 business errors: %j', async body => {
+    for (const laterPage of [false, true]) {
+      const before = saved();
+      const original = structuredClone(before);
+      const fetcher: typeof fetch = async url => fakeResponse(200, JSON.stringify(
+        laterPage && !String(url).includes('cursor=')
+          ? { data: [{ id: 'supplier/model' }], next_cursor: 'page2' }
+          : body,
+      ));
+      expect(await restoreProviderModelSources(before, () => 'saved-key', () => true, fetcher)).toBeNull();
+      expect(before).toEqual(original);
+      const after = await restoreProviderModelSources(before, () => 'saved-key', () => true, async () => reply());
+      expect(modelSupplierLabel(visible(after!)[0].discoveredSource)).toBe('Supplier');
+    }
+  });
+
+  it.each([{ data: [] }, { error_code: 0, data: [] }])
+  ('accepts a successful empty catalog as a supplier withdrawal: %j', async body => {
+    const after = await restoreProviderModelSources(saved(), () => 'saved-key', () => true,
+      async () => fakeResponse(200, JSON.stringify(body)));
+    expect(after!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+    expect(after!.runtimes.pi!.models[0].name).toBe('My model name');
+  });
+
   it('removes stale supplier labels when the current directory withdraws them', async () => {
     const after = await restoreProviderModelSources(saved(), () => 'saved-key', () => true,
       async () => fakeResponse(200, '{"data":[{"id":"supplier/model"}]}'));

@@ -29,6 +29,13 @@ export async function collectModelDiscoveryPages(
   let page = first;
   let current = origin;
   for (let count = 0; count < 100; count++) {
+    // HTTP 200 can still carry a gateway business error. Destructive recovery
+    // must not mistake any failed page (including speech) for a withdrawal.
+    if (requireComplete && page !== null && typeof page === 'object' && !Array.isArray(page)) {
+      const envelope = page as Record<string, unknown>;
+      if ((envelope.error != null && envelope.error !== '')
+        || (envelope.error_code !== undefined && envelope.error_code !== 0)) return null;
+    }
     const parsed = parseModelsListResponse(page, endpoint);
     if (!parsed) return !requireComplete && models.size ? [...models.values()] : null;
     append(parsed);

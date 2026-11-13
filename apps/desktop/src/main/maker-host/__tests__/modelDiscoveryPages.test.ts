@@ -47,6 +47,14 @@ describe('model list pagination', () => {
     expect(await collectModelDiscoveryPages(page, endpoint, async () => { throw new Error('offline'); })).toHaveLength(1);
   });
 
+  it.each([{ error: 'unavailable', data: [] }, { error_code: 401, data: [] }])
+  ('rejects supplemental speech business errors in recovery mode: %j', async body => {
+    expect(await collectModelDiscoveryPages({ data: ['chat-model'] },
+      'https://openrouter.ai/api/v1/models', async () => body, true)).toBeNull();
+    expect(await collectModelDiscoveryPages({ data: ['chat-model'] },
+      'https://openrouter.ai/api/v1/models', async () => body)).toHaveLength(1);
+  });
+
   // Unit recovery regression: the supplementary speech catalog is authoritative
   // only if its continuation also succeeds; ordinary discovery retains chat rows.
   it('requires complete supplemental speech pages in recovery mode', async () => {
