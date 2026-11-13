@@ -3684,14 +3684,10 @@ const inputObservations = new Map<string, {
  * Foreground delivery shares the keyboard and mouse with whoever is at this
  * Mac. The 2026-10 audit found eight sessions where the Agent's foreground
  * input landed while the person was typing in Slack / Chrome / another Cindy;
- * the model only noticed from a later screenshot. Before a foreground action,
- * treat any system input newer than the Agent's own last dispatch as a person
- * and refuse with a structured code instead of competing for focus.
- *
- * `powerMonitor.getSystemIdleTime()` is whole seconds since the last HID
- * event, including events the Agent itself posted, so the Agent's dispatch
- * time is subtracted: input is attributed to a person only when it is newer
- * than that by more than the clock granularity.
+ * the model only noticed from a later screenshot. Foreground admission must
+ * use the unadjusted system idle clock: it cannot distinguish the person's
+ * input from Agent HID events, including during dispatch and its delivery tail.
+ * Unknown activity is not permission to take the keyboard or pointer.
  */
 const USER_INPUT_ACTIVE_WINDOW_MS = 3_000;
 /**
@@ -3700,7 +3696,7 @@ const USER_INPUT_ACTIVE_WINDOW_MS = 3_000;
  * returned 2.2 s earlier left the idle clock at 1 s). Input inside this tail is
  * indistinguishable from the Agent's and is attributed to it; the cost is that a
  * person's input within this long of an Agent action is not seen by one check.
- * It is kept at the smallest value the smoke run needs.
+ * This heuristic is for presence detection only, never foreground admission.
  */
 const AGENT_INPUT_ATTRIBUTION_SLACK_MS = 1_500;
 let lastAgentInputEndedAt = 0;
@@ -3844,10 +3840,19 @@ function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<string,
   if (getComputerTool(name)?.readOnly === true || (args.delivery_mode !== 'foreground' && !isDesktopComputerTarget(args))) return;
   ports.assertAvailable?.();
   if (physicalInputShielded()) return;
-  const since = msSinceForeignDesktopInput();
-  if (since === null || since >= USER_INPUT_ACTIVE_WINDOW_MS) return;
+  let idleSeconds: number;
+  try {
+    idleSeconds = powerMonitor.getSystemIdleTime();
+  } catch {
+    idleSeconds = Number.NaN;
+  }
+  const known = Number.isFinite(idleSeconds) && idleSeconds >= 0;
+  if (known && idleSeconds * 1000 >= USER_INPUT_ACTIVE_WINDOW_MS) return;
+  const activity = known
+    ? `Recent keyboard or mouse input (${idleSeconds}s ago) may be from the person using this computer.`
+    : 'Keyboard and mouse activity could not be determined.';
   throw new ComputerDriverError(
-    `Someone is using this computer (keyboard or mouse input ${Math.max(0, Math.round(since / 100) / 10)}s ago). Foreground input was not sent so it cannot land in their window. Continue in the background: background delivery, window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change. Wait or ask them before taking the foreground only when none of these can do it.`,
+    `${activity} Foreground input was not sent so it cannot compete for their pointer or land in their window. Continue in the background: background delivery, window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change. Wait or ask them before taking the foreground only when none of these can do it.`,
     'USER_INPUT_ACTIVE',
   );
 }

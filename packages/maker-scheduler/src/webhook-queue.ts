@@ -56,6 +56,12 @@ export function scheduleWebhookEventMatches(allowed: readonly string[] | undefin
   return allowed.includes(event.event) || (event.action !== undefined && allowed.includes(`${event.event}.${event.action}`));
 }
 
+function matchesTrigger(trigger: Schedule['webhookTrigger'], event: ScheduleWebhookEvent): boolean {
+  const source = trigger?.source;
+  return scheduleWebhookEventMatches(trigger?.events, event)
+    && (source?.preset !== 'github-app' || source.repositories.some(repo => repo.toLowerCase() === event.repository?.toLowerCase()));
+}
+
 function canReceive(schedule: Schedule | null, now: number): schedule is Schedule {
   return Boolean(schedule?.webhookTrigger) && schedule?.status === 'active' && !(schedule.expireAt !== undefined && schedule.expireAt <= now);
 }
@@ -134,7 +140,7 @@ export class ScheduleWebhookQueue {
       endpoint.lastReceivedAt = now;
       const results = events.map((event): ScheduleWebhookAcceptResult => {
         if (endpoint.receipts[event.deliveryId] !== undefined && now - endpoint.receipts[event.deliveryId] < SCHEDULE_WEBHOOK_LIMITS.receiptTtlMs) return 'duplicate';
-        if (!scheduleWebhookEventMatches(schedule?.webhookTrigger?.events, event)) return 'filtered';
+        if (!matchesTrigger(schedule?.webhookTrigger, event)) return 'filtered';
         const result = canReceive(schedule, now) ? 'queued' : 'ignored';
         if (result === 'queued') {
           endpoint.received += 1;
@@ -248,6 +254,17 @@ export class ScheduleWebhookQueue {
         if (!canReceive(schedule, this.deps.now()) || endpoint.endpointId !== schedule.webhookTrigger?.endpointId) {
           this.discardPending(endpoint);
           return;
+        }
+        if (schedule.webhookTrigger?.source?.preset === 'github-app') {
+          // Recheck restored data too: earlier test builds persisted unscoped
+          // github.reconcile markers that must never bypass selected filters.
+          const retained = endpoint.pending.filter(event => matchesTrigger(schedule.webhookTrigger, event));
+          endpoint.ignored += endpoint.pending.length - retained.length;
+          endpoint.pending = retained;
+          if (!retained.length) {
+            endpoint.omitted = 0;
+            endpoint.firstPendingAt = undefined;
+          }
         }
         if (!endpoint.pending.length) return;
         const preparing = { events: endpoint.pending, omitted: endpoint.omitted, firstPendingAt: endpoint.firstPendingAt };

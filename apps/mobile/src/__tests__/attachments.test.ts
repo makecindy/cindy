@@ -18,6 +18,14 @@ import type { RemoteSerializedAttachment } from '@/session/types';
 const SHA256 = 'a'.repeat(64);
 
 describe('mobile remote file attachments', () => {
+  // #10143, unit: newly recognized text must survive remote preview/attachment classification.
+  it.each(['Directory.Build.props', 'App.CSPROJ.USER', '.globalconfig', 'Page.razor', 'Page.axaml',
+    'Module.vb', 'script.csx', 'query.gql', 'api.http', 'schema.thrift', 'schema.avsc'])(
+    'recognizes .NET text file %s', name => expect(categorizeMobileAttachment(name)).toBe('text'),
+  );
+  it('does not classify NuGet zip packages as text', () => {
+    expect(categorizeMobileAttachment('package.nupkg')).toBe('file');
+  });
   it('parses macOS and Windows remote paths without using local platform path rules', () => {
     expect(basenameRemotePath('/repo/docs/spec.pdf')).toBe('spec.pdf');
     expect(basenameRemotePath('C:\\repo\\docs\\notes.md')).toBe('notes.md');

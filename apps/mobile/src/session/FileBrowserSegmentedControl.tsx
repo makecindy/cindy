@@ -1,3 +1,4 @@
+import { playHaptic } from '@/platform/haptics';
 import SegmentedControl from '@expo/ui/community/segmented-control';
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { MainWindowOptionButton } from '@/components/MobilePrimitives';
@@ -42,7 +43,7 @@ export function FileBrowserSegmentedControl<T extends string>({
           appearance={mode}
           onChange={({ nativeEvent }) => {
             const next = options[nativeEvent.selectedSegmentIndex];
-            if (next && next.value !== value) onChange(next.value);
+            if (next && next.value !== value) { playHaptic('selection'); onChange(next.value); }
           }}
           selectedIndex={selectedIndex}
           style={styles.native}
@@ -66,7 +67,10 @@ export function FileBrowserSegmentedControl<T extends string>({
           density="default"
           key={option.value}
           label={option.label}
-          onPress={() => onChange(option.value)}
+          onPress={() => {
+            if (option.value !== value) playHaptic('selection');
+            onChange(option.value);
+          }}
           selected={option.value === value}
           style={styles.option}
           testID={option.testID}

@@ -33,7 +33,12 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
     const bot = args[0] === 'qa-work' || args[0] === 'qa-permission' ? 'qa-design' : args[0] === 'qa-question' ? 'qa-check' : 'qa-research';
     const execution = args[0] === 'qa-work' ? 'qa-e2-work' : args[0] === 'qa-permission' ? 'qa-e2' : args[0] === 'qa-question' ? 'qa-e3' : 'qa-e1';
     return [{ clientId: BOT_GROUP_CLIENT_ID.memberTurn(args[0] === 'qa-work' ? `${GROUP}-work` : GROUP, execution, bot), role: 'user', type: 'text', content: '合成执行输入', createdAt: new Date(NOW - 30_000).toISOString() },
-      { clientId: `note-${execution}`, role: 'assistant', type: 'text', content: '已核对现有信息，正在整理下一步。', createdAt: new Date(NOW - 25_000).toISOString() }];
+      { clientId: `note-${execution}`, role: 'assistant', type: 'text', content: '已核对现有信息，正在整理下一步。', createdAt: new Date(NOW - 25_000).toISOString() },
+      ...(args[0] === 'qa-work' ? [
+        { clientId: 'qa-full-input', role: 'tool_use', toolUseId: 'qa-full-input', content: { toolName: 'Bash', toolUseId: 'qa-full-input',
+          input: { command: `printf "${'group process input '.repeat(15)}COMPLETE_INPUT_END"` } }, createdAt: new Date(NOW - 24_000).toISOString() },
+        { clientId: 'qa-full-input-result', role: 'tool_result', toolUseId: 'qa-full-input', content: '合成工具结果，不会执行命令。', createdAt: new Date(NOW - 23_000).toISOString() },
+      ] : [])];
   }
   const groupId = request?.ref?.id ?? request?.resourceRef?.id;
   if (!groupId || ![GROUP, `${GROUP}-work`, `${GROUP}-talk`, `${GROUP}-member`, `${GROUP}-legacy`].includes(groupId)) return undefined;

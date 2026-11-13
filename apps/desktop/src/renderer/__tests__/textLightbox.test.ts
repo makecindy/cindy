@@ -31,7 +31,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { formatBytes } from '../components/chat/formatBytes';
-import { detectRenderable, buildFence } from '../lib/textPreview';
+import { detectRenderable, buildFence, isTextPreviewSupported, EXT_TO_LANG } from '../lib/textPreview';
+import { languageFromPath } from '../features/right-sidebar/plugins/review/DiffViewer/highlight';
+import { classHighlighter, highlightTree } from '@lezer/highlight';
+import { getCodeMirrorLanguage } from '../components/markdown/codemirrorLanguages';
+import { EditorState } from '@codemirror/state';
+import { syntaxTree } from '@codemirror/language';
 
 const sourcePath = resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx');
 const source = readFileSync(sourcePath, 'utf8');
@@ -252,6 +257,92 @@ describe('TextLightbox — formatBytes', () => {
 // ── detectRenderable — file-type dispatch ──────────────────────────────────
 
 describe('TextLightbox — detectRenderable', () => {
+  // #10143, unit: project/config files were readable but lost highlighting,
+  // dotfiles and compound project.user names never reached the right parser.
+  it.each([
+    ['App.csproj', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.fsproj', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.vbproj', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.props', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.targets', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.slnx', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.resx', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.nuspec', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.config', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.settings', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.manifest', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.runsettings', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.pubxml', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.filters', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.ruleset', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.dotsettings', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.testsettings', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.rdl', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.rdlc', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.resw', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.xaml', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.axaml', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.plist', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.ps1xml', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.csproj.user', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.fsproj.user', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.vbproj.user', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['.editorconfig', 'ini', 'root = true'],
+    ['.globalconfig', 'ini', 'is_global = true'],
+    ['team.globalconfig', 'ini', 'is_global = true'],
+    ['Solution.slnf', 'json', '{"solution": {"path": "App.sln"}}'],
+    ['schema.avsc', 'json', '{"type": "record"}'],
+    ...['csx', 'cake', 'linq'].map(ext => [`script.${ext}`, 'csharp', 'public class Item {}']),
+    ...['fs', 'fsi', 'fsx'].map(ext => [`script.${ext}`, 'fsharp', 'let answer = 42']),
+    ['Module.vb', 'vbnet', 'Public Class Item\nEnd Class'],
+    ...['psm1', 'psd1'].map(ext => [`Module.${ext}`, 'powershell', '$value = "hello"']),
+    ['schema.psql', 'sql', 'SELECT * FROM items'],
+    ...['graphql', 'gql', 'graphqls'].map(ext => [`schema.${ext}`, 'graphql', 'type Query { name: String }']),
+    ...['http', 'rest'].map(ext => [`request.${ext}`, 'http', 'GET /items HTTP/1.1']),
+    ['Index.vbhtml', 'xml', '<h1 class="title">Title</h1>'],
+  ])('recognizes and produces syntax tokens for %s', (path, lang, doc) => {
+    expect(isTextPreviewSupported(path)).toBe(true);
+    expect(detectRenderable(path)).toEqual({ kind: 'code', lang });
+    expect(languageFromPath(path)).toBe(lang);
+    const extension = getCodeMirrorLanguage(lang);
+    expect(extension).not.toBeNull();
+    const state = EditorState.create({ doc, extensions: extension ? [extension] : [] });
+    const tokens: string[] = [];
+    highlightTree(syntaxTree(state), classHighlighter, (_from, _to, classes) => tokens.push(classes));
+    expect(tokens.length).toBeGreaterThan(0);
+  });
+
+  it('keeps every advertised language connected to an editor parser or an explicit fallback', () => {
+    // makefile remains highlight.js-only; plaintext deliberately has no parser.
+    const unparsed = Object.values(EXT_TO_LANG).filter(lang => !getCodeMirrorLanguage(lang));
+    expect([...new Set(unparsed)].sort()).toEqual(['makefile', 'plaintext']);
+  });
+
+  it.each(['App.sln', 'build.cmd', 'infra.bicep', 'schema.fbs', 'schema.thrift', 'schema.capnp', 'main.tf'])(
+    'keeps %s readable with code chrome without guessing its grammar',
+    path => {
+      expect(isTextPreviewSupported(path)).toBe(true);
+      expect(detectRenderable(path)).toEqual({ kind: 'code', lang: 'plaintext' });
+    },
+  );
+
+  // Regression: Razor files fell through to plain text. Exercise the preview
+  // dispatch and its real editor parser; existing cases only covered web files.
+  it.each(['ErrorPage.razor', 'Index.CSHTML'])('highlights Razor markup in %s', (path) => {
+    expect(isTextPreviewSupported(path)).toBe(true);
+    const renderable = detectRenderable(path);
+    expect(renderable.kind).toBe('code');
+    if (renderable.kind !== 'code') throw new Error('Expected code preview');
+    const language = getCodeMirrorLanguage(renderable.lang);
+    expect(language).not.toBeNull();
+    const state = EditorState.create({
+      doc: '@page "/error"\n<PageTitle class="title">Error</PageTitle>',
+      extensions: language ? [language] : [],
+    });
+    expect(syntaxTree(state).toString()).toContain('TagName');
+    expect(syntaxTree(state).toString()).toContain('AttributeValue');
+  });
+
   it('routes Markdown extensions to the rich-text renderer', () => {
     expect(detectRenderable('/x/README.md')).toEqual({ kind: 'markdown' });
     expect(detectRenderable('a/b/notes.MARKDOWN')).toEqual({ kind: 'markdown' });
