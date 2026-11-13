@@ -83,6 +83,8 @@ import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { finishCompanionEnvironmentRemoval } from '../bot-import/runtime.js';
 import { setImportProbeConfirmation } from '../bot-import/probeAuthorization.js';
 import { requestHostInteraction, allowHostPagePermission } from './interactionRouter.js';
+import { createTaskActionConfirmation } from './taskActionConfirmation.js';
+import { readTaskActionInput } from './taskActionInput.js';
 import { registerMcpAppsIpc } from '../mcp-apps/ipc.js';
 import { createAppMessageSender } from '../mcp-apps/messageSender.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
@@ -696,7 +698,7 @@ import {
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
-import { withChatServer } from './chatServer.js';
+import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -3477,30 +3479,7 @@ const taskActionConfirmBridge = new OrcaWorkerPermissionConfirmBridge({
 export async function confirmTaskAction(
   sessionId: string, tool: string, args: unknown, context?: TaskActionConfirmation,
 ): Promise<boolean> {
-  const session = getMakerIfReady()?.getSession(sessionId);
-  if (!session) return false;
-  const controller = new AbortController();
-  const unsubscribe = session.onStatusChange(status => {
-    if (status !== 'active') controller.abort();
-  });
-  const input = structuredClone(args) as Record<string, unknown>;
-  const request: Extract<InteractionRequest, { kind: 'permission' }> = {
-    kind: 'permission', requestId: randomUUID(),
-    title: t('taskActionConfirmation.title'),
-    description: t('taskActionConfirmation.once'),
-    toolName: `mcp__${context?.server ?? 'cindy_helper'}__${tool}`,
-    input,
-    metadata: { hostOwnedConfirmation: 'task_action' },
-  };
-  try {
-    // Publish the ordinary waiting/permission lifecycle before awaiting a decision.
-    // Desktop, remote phone and IM resolve the same pending request, never a retry.
-    const result = await session.runHostInteraction(request,
-      () => requestHostInteraction(session, request, controller.signal));
-    return result.kind === 'permission' && result.behavior === 'allow';
-  } finally {
-    unsubscribe();
-  }
+  return createTaskActionConfirmation({ getSession: id => getMakerIfReady()?.getSession(id), t })(sessionId, tool, args, context);
 }
 
 /**
@@ -5050,26 +5029,8 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
 }
 
 export function getTaskActionInputState(sessionId: string, forSelfRewind = false) {
-  const input = getSessionInputProvenance(sessionId);
-  const session = getMakerIfReady()?.getSession(sessionId);
-  return {
-    key: JSON.stringify(input),
-    // Reuse the live permission/Plan generation guard; the DB can lag a mode change.
-    permission: resolveGhostFsSessionSnapshot(
-      (id) => getMakerIfReady()?.getSession(id), sessionId, session?.instanceId,
-    ),
-    ownerInput: isActiveInputOwnerAuthored(sessionId),
-    automatic: !!input.input && !isActiveInputOwnerAuthored(sessionId),
-    orcaSenderSessionId: input.input?.orcaSenderSessionId,
-    boundary: `${session?.instanceId ?? ''}:${agentInputCoordinatorHolder?.getGeneration(sessionId) ?? -1}`,
-    clearBoundaryMs: agentInputCoordinatorHolder?.getClearBoundaryMs(sessionId) ?? null,
-    ...(forSelfRewind && agentInputCoordinatorHolder ? { rewind: {
-      generation: agentInputCoordinatorHolder.getGeneration(sessionId),
-      signal: agentInputCoordinatorHolder.getInputAbortSignal(sessionId),
-      locked: rewindInputSessions.has(sessionId),
-      idle: !input.executing,
-    } } : {}),
-  };
+  return readTaskActionInput(sessionId, id => getMakerIfReady()?.getSession(id), agentInputCoordinatorHolder,
+    forSelfRewind ? rewindInputSessions.has(sessionId) : undefined);
 }
 
 /** Runtime-only account boundary for personal author tools; never grants external-write permission. */
@@ -9562,21 +9523,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 分享来的供应商被分享者建成了组：续接回到原来那台却接不下时，组所在电脑发来「需要换一台」凭证
         // (provider-groups.md §6.1 分享的人)：同一个分享位置带交接重新打开，打开时带回凭证，由组换一台。
         const guestRelocation = !next && o.id && o.resumeSessionId && isProviderShareAgentDeviceId(o.agentDeviceId)
-          && providerGroupService?.claimGuestStartSwitch(o.id) === true;
+          ? await providerGroupService?.prepareGuestStartSwitch(o.id) : null;
         if (!next && !guestRelocation) throw error;
         // 同 Harness 先搬原生记录；源端不可用或目标不支持时交接，绝不将旧电脑的 ID 直接用于目标端。
         if (o.id && o.resumeSessionId) {
           const target = next
             ? next.route
             : { agentDeviceId: o.agentDeviceId ?? null, providerId: o.providerId ?? null };
-          nativeRelocation = await relocateForFreshStart(agentSwitchDeps, {
-            sessionId: o.id,
-            agentDeviceId: target.agentDeviceId,
-            providerId: target.providerId,
-            from: failedRoute,
-            assertCurrent: assertAccess,
-            ...(guestRelocation ? { sharedRelocation: true } : {}),
-          });
+          let relocated = false;
+          try {
+            nativeRelocation = await relocateForFreshStart(agentSwitchDeps, {
+              sessionId: o.id,
+              agentDeviceId: target.agentDeviceId,
+              providerId: target.providerId,
+              from: failedRoute,
+              assertCurrent: () => {
+                assertAccess?.();
+                if (guestRelocation && !guestRelocation.isCurrent()) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+              },
+              ...(guestRelocation ? { sharedRelocation: true } : {}),
+            });
+            relocated = true;
+          } finally {
+            guestRelocation?.dispose();
+            if (guestRelocation && !relocated) getProviderGroupGuestSwitch().release(o.id);
+          }
           o.resumeSessionId = nativeRelocation.nativeId ?? undefined;
           if (o.vendorOptions) {
             const fresh = { ...o.vendorOptions };
@@ -12588,6 +12559,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   }
 
+  // 代表一个 turn 的 user 行只从这个入口写:silent-stop 自动续跑额度仅在 createUserMessageDurably
+  // 里按落库的用户消息充值。直投(send_to_session / Orca 派单)不走 composer 的 makeSendTransaction,
+  // 用裸 createDbMessage 写会让目标会话额度恒为 0 —— 模型第一次只输出思考的空响应就 exhausted。
+  // 注册期先用原始写入,durable 版定义后切换(直接前向引用那个 const 会命中 TDZ)。
+  let persistUserTurnMessage: typeof createDbMessage = createDbMessage;
+
   async function sendToSessionInternal(params: {
     taskActionDeliveryGuard?: TaskActionDeliveryGuard;
     botTaskCoordination?: BotTaskCoordination;
@@ -12972,7 +12949,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 clientId,
               });
               createdPreviewStarted = true;
-              await createDbMessage(session.id, {
+              await persistUserTurnMessage(session.id, {
                 clientId,
                 role: 'user',
                 content: persistedContent ?? message,
@@ -13171,7 +13148,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clientId,
         });
         userPromptPreviewStarted = true;
-        await createDbMessage(targetSessionId, {
+        await persistUserTurnMessage(targetSessionId, {
           clientId,
           role: 'user',
           content: persistedContent ?? message,
@@ -15766,7 +15743,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return inputCoordinator.reserveNextInput(sessionId, item, { onReserved }).reserved;
     },
     sendToSessionInternal,
-    createDbMessage,
+    // 直投兜底同样走用户 turn 的写入口,与 sendToSessionInternal 的两个直投分支一致。
+    createDbMessage: (sessionId, message) => persistUserTurnMessage(sessionId, message),
     beginDirectTurnChangeSet: async (sessionId, clientId) => {
       const liveSession = maker.getSession(sessionId);
       if (!liveSession) {
@@ -18654,6 +18632,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
+  persistUserTurnMessage = createUserMessageDurably;
+
   const readAutoReviewHistory = async (sessionId: string) => {
     await drainPersistQueue();
     return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
@@ -20951,6 +20931,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item), broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info })),
     beforeDispatchUserTurn: async (sessionId, item, signal) => {
+      if (isRetiredGroupWelcomeInput(item)) throw new Error('INVALID_EXECUTION_TRIGGER');
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
@@ -20995,7 +20976,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: async (sessionId) => {
       await restoreSavedUsageLimitWait(sessionId);
-      return loadAgentInputQueueSnapshot(sessionId);
+      return (await loadAgentInputQueueSnapshot(sessionId)).filter(item => !isRetiredGroupWelcomeInput(item));
     },
     getPersistedClientIds: getPersistedInputClientIds,
   });

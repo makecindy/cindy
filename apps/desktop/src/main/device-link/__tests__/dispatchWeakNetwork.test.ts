@@ -112,6 +112,7 @@ function mkClient(
     sendLinkAccept: over.sendLinkAccept ?? vi.fn(),
     closeLink: vi.fn(),
     onFrame: vi.fn(),
+    onInboundPeerReleased: vi.fn(() => () => {}),
     sendPush: vi.fn(),
   };
 }

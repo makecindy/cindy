@@ -30,6 +30,7 @@ import {
   parseFilePeerFile,
   type FilePeerFile,
   type FilePeerRequest,
+  shortDeviceRef,
 } from '@cindy/device-link';
 import { FILE_PEER_LOCAL, type FilePeerCommand } from '../../shared/filePeer';
 import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
@@ -47,7 +48,7 @@ import { createSourceFileAccessError, isSourceFileAccessError, withSourceFileHan
 
 // Local-only diagnostics (scope is not upload-allowlisted): stages, sizes and timings, never paths.
 const log = createLogger('device-link:filePeer');
-const short = (id: string | undefined) => (id ?? '?').slice(0, 8);
+const short = (id: string | undefined) => (id ? shortDeviceRef(id) : '?');
 const errorText = (error: unknown) =>
   (error instanceof Error ? error.message : String(error)).slice(0, 200);
 

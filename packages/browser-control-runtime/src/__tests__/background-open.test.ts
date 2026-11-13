@@ -82,10 +82,10 @@ describe('background tab creation', () => {
       getProfileState: () => profileState,
     });
 
-    // Keep the real public-address guard, without relying on local DNS or proxy answers.
-    // CDP creation is mocked above, so no connection is made to this address.
-    await expect(tabs.openTab('https://8.8.8.8', { background: true })).rejects.toBe(cdpError);
-    expect(createTargetViaCdpMock).toHaveBeenCalledTimes(1);
+    // Unit regression: real tab ops must propagate the CDP failure without an
+    // HTTP fallback. A numeric public address keeps the navigation guard real
+    // without external DNS (fake-IP DNS can block example.com before CDP).
+    await expect(tabs.openTab('https://93.184.216.34', { background: true })).rejects.toBe(cdpError);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
