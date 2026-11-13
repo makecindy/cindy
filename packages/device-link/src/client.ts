@@ -1,6 +1,6 @@
 import { isPeerResetRetryableInvoke, bypassInvokeScheduling, resolveInvokePriority } from './invokePolicy.js';
 import { InvokeScheduler } from './invokeScheduler.js';
-import { StallDiagnostics, diagnosticChannel, diagnosticOperation, diagnosticRef } from './stallDiagnostics.js';
+import { StallDiagnostics, diagnosticChannel, diagnosticOperation, diagnosticRef, shortDeviceRef } from './stallDiagnostics.js';
 import { SessionMessageReuse } from './sessionMessageReuse.js';
 import {
   InboundInvokeTransferOptions,
@@ -1316,7 +1316,7 @@ export class DeviceLinkClient {
       try {
         ws.close(1000, 'client stopped');
       } catch {
-        ws.terminate?.();
+        closeOrTerminate(ws);
       }
     }
     this.log.info(
@@ -1479,7 +1479,7 @@ export class DeviceLinkClient {
     this.detachDirectPath(deviceId, 'replaced');
     this.directPaths.set(deviceId, channel);
     const moved = this.moveRelayPendingToDirect(deviceId);
-    this.log.info(`device-link direct path attached dst=${deviceId.slice(0, 8)}${moved > 0 ? ` resendViaDirect=${moved}` : ''}`);
+    this.log.info(`device-link direct path attached dst=${shortDeviceRef(deviceId)}${moved > 0 ? ` resendViaDirect=${moved}` : ''}`);
     this.emitPeerPathChanged({ deviceId, path: 'direct' });
     return handle;
   }
@@ -1962,7 +1962,7 @@ export class DeviceLinkClient {
       });
     } catch (err) {
       // fire-and-forget：通知失败只记日志，不能把已经完成的本地断链重新暴露成失败。
-      this.log.debug(`link-close notification failed for ${dst.slice(0, 8)}`, err);
+      this.log.debug(`link-close notification failed for ${shortDeviceRef(dst)}`, err);
     }
   }
 
@@ -2020,7 +2020,7 @@ export class DeviceLinkClient {
       Math.min(timeoutMs ?? this.timing.requestTimeoutMs, 30_000), send, { channel: payload.channel, request: requestId, source: options?.diagnosticSource ?? 'client' },
     )).catch((error: unknown) => {
       if (error instanceof DeviceLinkError && error.code === 'BACKPRESSURE' && !error.inFlight) {
-        this.log.debug(`device-link invoke admission failed dst=${dst.slice(0, 8)} channel=${payload.channel} priority=${resolveInvokePriority(payload.channel, options?.background)} elapsedMs=${Math.round(this.monotonicNow() - queuedAt)} reason=${error.message}`);
+        this.log.debug(`device-link invoke admission failed dst=${shortDeviceRef(dst)} channel=${payload.channel} priority=${resolveInvokePriority(payload.channel, options?.background)} elapsedMs=${Math.round(this.monotonicNow() - queuedAt)} reason=${error.message}`);
       }
       throw error;
     });
@@ -2398,7 +2398,7 @@ export class DeviceLinkClient {
   }
 
   private describeRequest(env: Omit<Envelope, 'id'>, expectKind: 'invoke-result' | 'link-accept'): string {
-    const dst = env.dst ? env.dst.slice(0, 8) : 'unknown';
+    const dst = shortDeviceRef(env.dst);
     const channel = env.kind === 'invoke' ? (env.payload as InvokePayload | undefined)?.channel : env.kind;
     return `kind=${env.kind} channel=${channel ?? 'unknown'} dst=${dst} expect=${expectKind}`;
   }
@@ -2434,13 +2434,13 @@ export class DeviceLinkClient {
     ));
     if (candidates.length === 0) {
       this.log.debug(
-        `device-link peer-reset no retryable read request dst=${dst.slice(0, 8)} seq=${seq}`,
+        `device-link peer-reset no retryable read request dst=${shortDeviceRef(dst)} seq=${seq}`,
       );
       return;
     }
     for (const pending of candidates) {
       this.log.info(
-        `device-link peer-reset fast-fail read request dst=${dst.slice(0, 8)}`
+        `device-link peer-reset fast-fail read request dst=${shortDeviceRef(dst)}`
         + ` seq=${seq} action=retry-once`,
       );
       pending.retryAfterPeerReset?.();
@@ -2486,7 +2486,7 @@ export class DeviceLinkClient {
     try {
       this.sendReliableFrames(peer, pending);
     } catch (err) {
-      this.log.debug(`reliable transport skip placeholder send failed for ${dst.slice(0, 8)}`, err);
+      this.log.debug(`reliable transport skip placeholder send failed for ${shortDeviceRef(dst)}`, err);
     }
   }
 
@@ -2522,7 +2522,8 @@ export class DeviceLinkClient {
       try {
         prev.close(1000, 'reconnecting');
       } catch {
-        prev.terminate?.();
+        // 兜底硬断本身也可能抛(已断开 / 半关闭的 socket),不能让清理逃逸出 connect()。
+        closeOrTerminate(prev);
       }
       this.failNonReliablePending(
         new DeviceLinkError('NOT_CONNECTED', `connection restarted (${reason})`),
@@ -3347,7 +3348,7 @@ export class DeviceLinkClient {
         }
         this.log.warn(
           `relay-error: [${payload.code}] ${payload.message}`
-          + (payload.dst ? ` dst=${payload.dst.slice(0, 8)}` : ''),
+          + (payload.dst ? ` dst=${shortDeviceRef(payload.dst)}` : ''),
         );
         return this.emitFrame(env);
       }
@@ -3379,7 +3380,7 @@ export class DeviceLinkClient {
             // 可能仍在主动控制对方——若据此吞帧,存续的主动控制方向永不恢复。
             if (existing?.outboundExplicitlyClosed) {
               this.log.debug(
-                `ignoring late transport-timeout from ${env.src.slice(0, 8)} after local outbound close`,
+                `ignoring late transport-timeout from ${shortDeviceRef(env.src)} after local outbound close`,
               );
               return true;
             }
@@ -3462,7 +3463,7 @@ export class DeviceLinkClient {
       // 可靠业务帧只在双方完成 link-open/link-accept 能力协商后接收。断线后迟到的
       // pub/sub 帧可能被投到同 deviceId 的新进程；提前执行会绕过新基线并重复副作用。
       // 不回 ACK，让仍存活的发送端在链路重新建立后按同 seq 重放。
-      this.log.debug(`dropping reliable payload before link is ready from ${env.src.slice(0, 8)}`);
+      this.log.debug(`dropping reliable payload before link is ready from ${shortDeviceRef(env.src)}`);
       // 但发送端还在按可靠流发帧 = 它认为链路该通而本端没有 link ——
       // 光靠沉默丢弃两边会互等(死锁的另一半)。节流通知 host,由控制端
       // 决定是否主动重新 link-open 让双方 stream 重新对齐。
@@ -3471,7 +3472,7 @@ export class DeviceLinkClient {
     }
     if (peer.remoteStreamId && peer.remoteStreamId !== parsed.meta.streamId) {
       this.log.debug(
-        `dropping stale reliable stream from ${env.src.slice(0, 8)} expected=${peer.remoteStreamId.slice(0, 8)} got=${parsed.meta.streamId.slice(0, 8)}`,
+        `dropping stale reliable stream from ${shortDeviceRef(env.src)} expected=${peer.remoteStreamId.slice(0, 8)} got=${parsed.meta.streamId.slice(0, 8)}`,
       );
       return { handled: true };
     }
@@ -3486,7 +3487,7 @@ export class DeviceLinkClient {
     );
     // Only emitted on an existing rejection path; never log payload contents.
     const describeRejectedFrame = (): string =>
-      `src=${env.src?.slice(0, 8)} stream=${meta.streamId.slice(0, 8)} seq=${meta.seq}`
+      `src=${shortDeviceRef(env.src)} stream=${meta.streamId.slice(0, 8)} seq=${meta.seq}`
       + ` request=${typeof env.id === 'string' ? env.id.slice(0, 8) : 'none'} kind=${env.kind}`
       + ` next=${stream.lastDeliveredSeq + 1} delivering=${stream.deliveringSeq ?? 'none'}`
       + ` ready=${stream.ready.size} assemblies=${stream.assemblies.size} bufferedBytes=${stream.bufferedBytes}`;
@@ -3648,7 +3649,7 @@ export class DeviceLinkClient {
             this.stallDiagnostics.record('receive', { request: diagnosticRef(logical.id), src: diagnosticRef(src), seq: nextSeq,
               assemblyMs, orderedWaitMs, bytes: deliveredBytes });
             this.log.debug(`device-link receive timing kind=${logical.kind} request=${logical.id?.slice(0, 8) ?? 'none'}`
-              + ` src=${src.slice(0, 8)} seq=${nextSeq}`
+              + ` src=${shortDeviceRef(src)} seq=${nextSeq}`
               + ` assemblyMs=${assemblyMs} orderedWaitMs=${orderedWaitMs}`);
           }
           let handled: boolean;
@@ -3882,7 +3883,7 @@ export class DeviceLinkClient {
         && this.monotonicNow() - oldest.enqueuedAt > this.timing.stalledLinkPendingMaxAgeMs
       ) {
         this.log.warn(
-          `abandoning ${peer.pending.size} stalled reliable frame(s) for peer ${env.dst.slice(0, 8)} (link down > ${this.timing.stalledLinkPendingMaxAgeMs}ms)`,
+          `abandoning ${peer.pending.size} stalled reliable frame(s) for peer ${shortDeviceRef(env.dst)} (link down > ${this.timing.stalledLinkPendingMaxAgeMs}ms)`,
         );
         this.abandonReliablePending(env.dst, 'reliable link stalled; pending abandoned');
       }
@@ -3954,7 +3955,7 @@ export class DeviceLinkClient {
       this.warnSendBacklog(env.dst, peer, 'full');
       throw new DeviceLinkError(
         'BACKPRESSURE',
-        `reliable transport buffer is full for peer ${env.dst.slice(0, 8)}`,
+        `reliable transport buffer is full for peer ${shortDeviceRef(env.dst)}`,
       );
     }
     // link 暂未恢复时帧先进入有界 pending，等 link-open/link-accept 后再发
@@ -3995,7 +3996,7 @@ export class DeviceLinkClient {
           if (peer.nextSeq === seq + 1) peer.nextSeq = seq;
           throw err;
         }
-        this.log.debug(`reliable transport initial send interrupted for ${env.dst.slice(0, 8)}`, err);
+        this.log.debug(`reliable transport initial send interrupted for ${shortDeviceRef(env.dst)}`, err);
       }
     }
     if (isBusinessTraffic(env)) peer.lastBusinessSentAt = this.monotonicNow();
@@ -4125,7 +4126,7 @@ export class DeviceLinkClient {
     if ((pending.envelope.kind === 'invoke' || pending.envelope.kind === 'invoke-result')
       && (ageMs >= 250 || pending.attempts > 0)) {
       this.log.debug(`device-link send timing kind=${pending.envelope.kind} request=${pending.envelope.id?.slice(0, 8) ?? 'none'}`
-        + ` dst=${pending.envelope.dst!.slice(0, 8)} seq=${pending.seq} path=${path}`
+        + ` dst=${shortDeviceRef(pending.envelope.dst)} seq=${pending.seq} path=${path}`
         + ` ${pending.attempts === 0 ? 'queueMs' : 'ageMs'}=${ageMs}`
         + ` attempt=${pending.attempts + 1} frames=${sent} bytes=${pending.bytes}`
         + ` pending=${peer.pending.size} congestion=${this.congestionCloseStreak}`
@@ -4188,7 +4189,7 @@ export class DeviceLinkClient {
         this.assertTransportAllowed();
         channel.send(JSON.stringify(frame));
       } catch (err) {
-        this.log.debug(`device-link direct send failed dst=${dst.slice(0, 8)} seq=${pending.seq} frames=${sent}`, err);
+        this.log.debug(`device-link direct send failed dst=${shortDeviceRef(dst)} seq=${pending.seq} frames=${sent}`, err);
         break;
       }
       sent += 1;
@@ -4246,7 +4247,7 @@ export class DeviceLinkClient {
         peer.recoveryFramesSent = 0;
       }
     }
-    const message = `device-link direct path closed dst=${deviceId.slice(0, 8)} reason=${reason} resendViaRelay=${resent}`;
+    const message = `device-link direct path closed dst=${shortDeviceRef(deviceId)} reason=${reason} resendViaRelay=${resent}`;
     if (reason === 'ack-timeout' || reason === 'buffer-timeout' || reason === 'send-failed') this.log.warn(message);
     else this.log.info(message);
     this.emitPeerPathChanged({ deviceId, path: 'relay', reason, ...(resent > 0 ? { resent } : {}) });
@@ -4275,7 +4276,7 @@ export class DeviceLinkClient {
     try {
       channel.close(reason);
     } catch (err) {
-      this.log.debug(`device-link direct path close failed dst=${deviceId.slice(0, 8)}`, err);
+      this.log.debug(`device-link direct path close failed dst=${shortDeviceRef(deviceId)}`, err);
     }
   }
 
@@ -4308,7 +4309,7 @@ export class DeviceLinkClient {
       if (byteLength(text) > MAX_FRAME_BYTES) throw new Error('direct frame too large');
       parsed = JSON.parse(text) as unknown;
     } catch {
-      this.log.warn(`dropping invalid direct frame from ${deviceId.slice(0, 8)}`);
+      this.log.warn(`dropping invalid direct frame from ${shortDeviceRef(deviceId)}`);
       return;
     }
     if (
@@ -4322,7 +4323,7 @@ export class DeviceLinkClient {
       || parsed.dst !== (localAddress ?? self)
       || (parsed.id !== undefined && typeof parsed.id !== 'string')
     ) {
-      this.log.warn(`dropping disallowed direct frame from ${deviceId.slice(0, 8)}`);
+      this.log.warn(`dropping disallowed direct frame from ${shortDeviceRef(deviceId)}`);
       return;
     }
     const env: Envelope = {
@@ -4334,7 +4335,7 @@ export class DeviceLinkClient {
       payload: parsed.payload,
     };
     if (!isValidInboundEnvelope(env)) {
-      this.log.warn(`dropping invalid direct frame kind=${env.kind} from ${deviceId.slice(0, 8)}`);
+      this.log.warn(`dropping invalid direct frame kind=${env.kind} from ${shortDeviceRef(deviceId)}`);
       return;
     }
     const ack = parseTransportAck(env);
@@ -4348,7 +4349,7 @@ export class DeviceLinkClient {
     if (sharePeer && !(sharePeer.role === 'guest' ? env.kind === 'invoke'
       : env.kind === 'invoke-result' || env.kind === 'push')) return;
     if (!parseTransportPayload(env.payload)) {
-      this.log.warn(`dropping non-reliable direct frame kind=${env.kind} from ${deviceId.slice(0, 8)}`);
+      this.log.warn(`dropping non-reliable direct frame kind=${env.kind} from ${shortDeviceRef(deviceId)}`);
       return;
     }
     const transport = this.ingestTransportEnvelope(env, 'direct');
@@ -4434,7 +4435,7 @@ export class DeviceLinkClient {
     const now = Date.now();
     if (now - this.rejectedSignatureLogAt < 60_000) return;
     this.log.warn(
-      `dropping device-link frame without a valid device signature src=${src.slice(0, 8)} kind=${kind} count=${this.rejectedSignatureCount}`,
+      `dropping device-link frame without a valid device signature src=${shortDeviceRef(src)} kind=${kind} count=${this.rejectedSignatureCount}`,
     );
     this.rejectedSignatureLogAt = now;
     this.rejectedSignatureCount = 0;
@@ -4653,7 +4654,7 @@ export class DeviceLinkClient {
       ) {
         throw new DeviceLinkError(
           'BACKPRESSURE',
-          `route attempt history is full for peer ${deviceId.slice(0, 8)}`,
+          `route attempt history is full for peer ${shortDeviceRef(deviceId)}`,
         );
       }
       if (!peerAttempts) {
@@ -4671,7 +4672,7 @@ export class DeviceLinkClient {
     if (generationRuns.length >= MAX_OUTBOUND_ROUTE_GENERATION_RUNS_PER_ID) {
       throw new DeviceLinkError(
         'BACKPRESSURE',
-        `route generation history is full for peer ${deviceId.slice(0, 8)}`,
+        `route generation history is full for peer ${shortDeviceRef(deviceId)}`,
       );
     }
     generationRuns.push({ linkGeneration, count: 1 });
@@ -5125,7 +5126,7 @@ export class DeviceLinkClient {
         this.logRecoveryStage(dst, 'ack-sent', ` receiveStream=${streamId.slice(0, 8)} ack=${ackSeq}`, false);
         return true;
       } catch (err) {
-        this.log.debug(`reliable transport direct ACK send failed dst=${dst.slice(0, 8)}`, err);
+        this.log.debug(`reliable transport direct ACK send failed dst=${shortDeviceRef(dst)}`, err);
         this.detachDirectPath(dst, 'send-failed');
       }
     }
@@ -5135,7 +5136,7 @@ export class DeviceLinkClient {
       return true;
     } catch (err) {
       this.log.debug(
-        `reliable transport ACK send failed dst=${dst.slice(0, 8)}`
+        `reliable transport ACK send failed dst=${shortDeviceRef(dst)}`
         + ` stream=${streamId.slice(0, 8)} ack=${ackSeq} conn=${this.connEpoch}`,
         err,
       );
@@ -5212,7 +5213,7 @@ export class DeviceLinkClient {
       && ackSeq <= peer.nextSeq - 1
     ) {
       this.log.info(
-        `device-link recovery dst=${src.slice(0, 8)} trigger=link-confirm-ack`
+        `device-link recovery dst=${shortDeviceRef(src)} trigger=link-confirm-ack`
         + ` stream=${peer.streamId.slice(0, 8)} request=${confirmation.requestId.slice(0, 8)}`
         + ` ack=${ackSeq} conn=${this.connEpoch}`,
       );
@@ -5343,9 +5344,9 @@ export class DeviceLinkClient {
       peer.lastDuplicateOpenRepairAt = this.monotonicNow();
       if (head.seq < throughSeq) peer.confirmedGapRepair = { awaitingSeq: head.seq, throughSeq };
       this.noteRecoveryFrames(peer, frames);
-      this.log.debug(`device-link confirmed gap repair dst=${dst.slice(0, 8)} seq=${head.seq} frames=${frames}`);
+      this.log.debug(`device-link confirmed gap repair dst=${shortDeviceRef(dst)} seq=${head.seq} frames=${frames}`);
     } catch (err) {
-      this.log.debug(`device-link confirmed gap repair deferred dst=${dst.slice(0, 8)}`, err);
+      this.log.debug(`device-link confirmed gap repair deferred dst=${shortDeviceRef(dst)}`, err);
     }
   }
 
@@ -5388,7 +5389,7 @@ export class DeviceLinkClient {
       trace.ackProgressLogs++;
     }
     this.log.debug(
-      `device-link recovery-stage dst=${dst.slice(0, 8)} stage=${stage}`
+      `device-link recovery-stage dst=${shortDeviceRef(dst)} stage=${stage}`
       + ` elapsedMs=${elapsedMs.toFixed(1)} request=${trace.requestId.slice(0, 8)}`
       + ` conn=${this.connEpoch} link=${peer.linkGeneration}`
       + ` pending=${peer.pending.size}/${peer.pendingBytes}${detail}`,
@@ -5459,7 +5460,7 @@ export class DeviceLinkClient {
     }
     if (dropped > 0) {
       this.log.warn(
-        `dropped ${dropped} discardable pending frame(s) (best-effort push / transport-skip) for peer ${dst.slice(0, 8)} ${reason}`,
+        `dropped ${dropped} discardable pending frame(s) (best-effort push / transport-skip) for peer ${shortDeviceRef(dst)} ${reason}`,
       );
     }
     return dropped;
@@ -5536,7 +5537,7 @@ export class DeviceLinkClient {
         || now - peer.pushAdmissionDropLogAt >= PUSH_ADMISSION_DROP_LOG_INTERVAL_MS
       ) {
         this.log.warn(
-          `dropped ${peer.pushAdmissionDropCount} oldest discardable pending frame(s) for peer ${dst.slice(0, 8)} latest-wins push admission (aggregated since last report)`,
+          `dropped ${peer.pushAdmissionDropCount} oldest discardable pending frame(s) for peer ${shortDeviceRef(dst)} latest-wins push admission (aggregated since last report)`,
         );
         peer.pushAdmissionDropCount = 0;
         peer.pushAdmissionDropLogAt = now;
@@ -5676,13 +5677,13 @@ export class DeviceLinkClient {
         const sinceSendMs = now - pending.lastSentAt;
         sentFrames = this.sendReliableFrames(peer, pending);
         if (sentFrames > 0 && pending === head && previousAttempts > 0 && pending.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL) {
-          this.log.debug(`reliable head retry dst=${dst.slice(0, 8)} seq=${pending.seq}`
+          this.log.debug(`reliable head retry dst=${shortDeviceRef(dst)} seq=${pending.seq}`
             + ` request=${pending.envelope.id?.slice(0, 8) ?? 'none'} bytes=${pending.bytes}`
             + ` attempts=${previousAttempts} sinceSendMs=${sinceSendMs} frames=${sentFrames}`
             + ` pending=${peer.pending.size} ack=${peer.highestAckSeq}`);
         }
       } catch (err) {
-        this.log.debug(`reliable transport retry failed for ${dst.slice(0, 8)}`, err);
+        this.log.debug(`reliable transport retry failed for ${shortDeviceRef(dst)}`, err);
         break;
       }
       if (sentFrames === 0) break; // Paced locally: no attempt/ACK failure has occurred.
@@ -5805,7 +5806,7 @@ export class DeviceLinkClient {
       peer.retryTimer = null;
     }
     this.log.info(
-      `device-link recovery dst=${dst.slice(0, 8)} trigger=await-link-confirm`
+      `device-link recovery dst=${shortDeviceRef(dst)} trigger=await-link-confirm`
       + ` pending=${peer.pending.size}/${peer.pendingBytes}`
       + ` stream=${peer.streamId.slice(0, 8)} request=${requestId.slice(0, 8)}`
       + ` conn=${this.connEpoch}`,
@@ -5829,7 +5830,7 @@ export class DeviceLinkClient {
         return;
       }
       this.log.warn(
-        `device-link link confirmation timeout for ${dst.slice(0, 8)}`
+        `device-link link confirmation timeout for ${shortDeviceRef(dst)}`
         + ` request=${requestId.slice(0, 8)}; resetting peer link`,
       );
       this.handleReliableRetryExhausted(dst, confirmation.minimumAckSeq);
@@ -5881,7 +5882,7 @@ export class DeviceLinkClient {
     duplicateOpen: boolean,
   ): void {
     this.log.info(
-      `device-link recovery dst=${dst.slice(0, 8)} trigger=${trigger}`
+      `device-link recovery dst=${shortDeviceRef(dst)} trigger=${trigger}`
       + ` pending=${peer.pending.size}/${peer.pendingBytes}`
       + ` recoveryFrames=${peer.recoveryFramesSent}/${this.recoveryPassBudget()}`
       + ` needsAck=${peer.recoveryNeedsAck} duplicateOpen=${duplicateOpen}`
@@ -6003,7 +6004,7 @@ export class DeviceLinkClient {
       this.cancelTimeoutCloseNotify(dst);
     } catch (err) {
       this.log.debug(
-        `transport-timeout link-close notification failed for ${dst.slice(0, 8)} (attempt ${attempt})`,
+        `transport-timeout link-close notification failed for ${shortDeviceRef(dst)} (attempt ${attempt})`,
         err,
       );
       if (attempt >= this.timing.transportMaxRetryAttempts) {
@@ -6157,7 +6158,7 @@ export class DeviceLinkClient {
   ): string {
     this.stallDiagnostics.record('ack', { dst: diagnosticRef(dst), seq, transport: this.transportDiagnostic(dst) });
     if (!peer) {
-      return `dst=${dst.slice(0, 8)} seq=${seq} peer=missing conn=${this.connEpoch}`;
+      return `dst=${shortDeviceRef(dst)} seq=${seq} peer=missing conn=${this.connEpoch}`;
     }
     const pending = peer.pending.get(seq)
       ?? (peer.pending.values().next().value as PendingReliableMessage | undefined);
@@ -6168,7 +6169,7 @@ export class DeviceLinkClient {
     const channel = typeof rawChannel === 'string'
       && (PUSH_FORWARD_ALLOWLIST.has(rawChannel) || REMOTE_INVOKE_ALLOWLIST.has(rawChannel))
       ? rawChannel : 'unknown';
-    return `dst=${dst.slice(0, 8)} seq=${seq}`
+    return `dst=${shortDeviceRef(dst)} seq=${seq}`
       + ` kind=${pending?.envelope.kind ?? 'missing'}`
       + ` channel=${channel}`
       + ` request=${pending?.envelope.id?.slice(0, 8) ?? 'none'}`

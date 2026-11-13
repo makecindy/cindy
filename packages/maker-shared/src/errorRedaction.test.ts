@@ -11,8 +11,35 @@ import {
   redactSensitiveText,
   redactSensitiveTextDeep,
   parseAgentErrorCode,
+  requiresAgentErrorConfigurationChange,
   localizeSubscriptionAccountError,
 } from './errorRedaction.js';
+
+// #10187: unit coverage for the host's explicit guest resume refusal. Existing
+// code-only cases cannot distinguish it from other REMOTE_AGENT_INVALID errors.
+// Pi's casing/punctuation variant shares presentation only, never automatic replay.
+describe('guest resume rejection guidance', () => {
+  const refusal = '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+  it.each([
+    refusal,
+    '[REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.',
+    '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer.',
+    `LAZY_CREATE_FAILED: ${refusal}`,
+    `Error invoking remote method 'maker:send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: ${refusal}`,
+  ])('does not offer unchanged continuation for %s', message => {
+    expect(parseAgentErrorCode(message)?.code).toBe('REMOTE_AGENT_RESUME_UNAVAILABLE');
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(true);
+  });
+  it.each([
+    '[REMOTE_AGENT_INVALID] invalid request',
+    '[REMOTE_AGENT_UNAUTHORIZED] this conversation cannot be resumed on this computer',
+    '[REMOTE_AGENT_OFFLINE] connection timed out',
+    '[REMOTE_FUTURE] this conversation cannot be resumed on this computer',
+    'this conversation cannot be resumed on this computer',
+  ])('preserves the existing fallback for other refusals and network errors: %s', message => {
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(false);
+  });
+});
 
 describe('explicit Codex history recovery offer', () => {
   const message = 'stream disconnected before completion: stream closed before response.completed';
@@ -122,6 +149,21 @@ describe('redactSensitiveText', () => {
 
     expect(output).toBe('Proxy-Authorization: [REDACTED]');
     expect(output).not.toContain('dXNlcjpwYXNz');
+  });
+
+  // #9836: provider 403 must survive redaction; opaque credential digits must not become routing signals.
+  it.each([
+    ['HTTP 403: The caller does not have permission', 403],
+    ['{"status":403,"message":"Forbidden"}', 403],
+    ['Request rejected (403): Forbidden', 403],
+    ['Authorization: Bearer tok-403-x', undefined],
+    ['HTTP 4030: unrelated code', undefined],
+    ['Permission denied: HTTP 403', undefined],
+    ['HTTP 403: Permission denied', undefined],
+  ])('preserves an explicit provider access status in %s', (input, errorStatus) => {
+    expect(extractNonSecretErrorSignals(input)).toEqual({
+      ...(errorStatus === undefined ? {} : { errorStatus }), usageLimit: false,
+    });
   });
 
   it('preserves only explicit status and quota signals', () => {
@@ -398,5 +440,29 @@ describe('subscription account startup guidance', () => {
     expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset', t)).toBe('chat.subscriptionAccountError.legacy');
     expect(localizeSubscriptionAccountError('An upstream diagnostic mentions quota reset', t)).toBeNull();
     expect(localizeSubscriptionAccountError('[REMOTE_FUTURE] quota reset', t)).toBeNull();
+  });
+});
+
+// #10187: released hosts reject an unowned native resume before starting an
+// Agent. Presentation must offer a route change, not an endless resend (unit).
+describe('remote native resume rejection', () => {
+  it.each([
+    '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer',
+    'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer',
+    'REHYDRATE_FAILED: [REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.',
+    "Error invoking remote method 'maker:send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer",
+  ])('classifies the released-host error through %s', message => {
+    expect(parseAgentErrorCode(message)?.code).toBe('REMOTE_AGENT_RESUME_UNAVAILABLE');
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(true);
+  });
+  it.each([
+    '[REMOTE_AGENT_INVALID] invalid remote agent request',
+    '[REMOTE_AGENT_INVALID] this shared task is not authorized on this computer',
+    '[REMOTE_AGENT_INVALID] this conversation cannot be forked on this computer',
+    '[REMOTE_AGENT_UNAVAILABLE] this conversation cannot be resumed on this computer',
+    'this conversation cannot be resumed on this computer',
+  ])('does not reinterpret a different rejection: %s', message => {
+    expect(parseAgentErrorCode(message)?.code).not.toBe('REMOTE_AGENT_RESUME_UNAVAILABLE');
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(false);
   });
 });

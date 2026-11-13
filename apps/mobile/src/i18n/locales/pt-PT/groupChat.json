@@ -27,7 +27,7 @@
     "namePlaceholder": "Por exemplo, Viagem de fim de semana",
     "nameRequired": "Introduza um nome para o grupo",
     "membersLabel": "Escolher amigos",
-    "selectedCount_one": "{{count}} selecionados, até {{max}}",
+    "selectedCount_one": "{{count}} selecionado, até {{max}}",
     "selectedCount_other": "{{count}} selecionados, até {{max}}",
     "close": "Fechar",
     "submitShort": "Criar",
@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} não começou a processar dentro do prazo de espera. Este pedido terminou.",
-        "advice": "Peça ao proprietário do parceiro para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede.",
+        "advice": "Peça ao proprietário do colega para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede.",
         "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
       }
     },
@@ -174,7 +174,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
-      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
+      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento)."
     }
   },
   "plan": {
@@ -190,7 +191,7 @@
     "pauseNote": "O trabalho fica em pausa após cada passo até clicar em «Iniciar passo seguinte».",
     "superseded": "Atualizado",
     "dismissed": "Ignorado",
-    "stopped": "Parada",
+    "stopped": "Interrompido",
     "stepDone": "Concluído",
     "stepRunning": "Em curso",
     "stepFailed": "Não concluído",
@@ -215,7 +216,7 @@
     "stepExecuting": "Em execução",
     "stepSkipped": "Ignorado",
     "skippingTurn": "A saltar…",
-    "queueWaiting": "À espera que continues",
+    "queueWaiting": "À espera que continue",
     "skipTurnLabel": "Saltar {{name}}",
     "stepSpoken": "Concluído",
     "allTurns_one": "O {{count}} amigo",
@@ -408,7 +409,7 @@
     "postedSelf": "Publicou isto na conversa principal",
     "postedOther": "Publicado na conversa principal",
     "retryShare": "Enviar novamente para a conversa principal",
-    "mentioned": "@you",
+    "mentioned": "Menção a si",
     "newRepliesDivider": "Novo",
     "newReplies_one": "{{count}} nova resposta",
     "newReplies_other": "{{count}} novas respostas",
@@ -581,7 +582,7 @@
     "accessMenu": "Permissões neste grupo",
     "transfer": "Transferir propriedade",
     "transferTitle": "Transferir a propriedade para {{name}}?",
-    "transferHint": "A outra pessoa passará a proprietária; o utilizador passará a administrador.",
+    "transferHint": "Essa pessoa passará a ser a proprietária; quanto a si, passará a administrador.",
     "removeTitle": "Remover {{name}} deste grupo?",
     "removeHint": "Perderá o acesso às mensagens. Os seus amigos também sairão.",
     "confirm": "Confirmar",
@@ -616,7 +617,7 @@
     "alreadyMember": "Já faz parte deste grupo.",
     "openGroup": "Abrir grupo",
     "editLink": "Editar ligação",
-    "otherInvitation": "Este convite não foi substituído por outro. Para o ver, reabra a ligação original.",
+    "otherInvitation": "Este convite não foi substituído por outro. Para ver o outro convite, reabra a ligação original dele.",
     "countUnknown": "Número de membros indisponível",
     "until": "Válido até {{date}}",
     "retryAccept": "Tentar aderir novamente",
@@ -640,7 +641,7 @@
       "network": "Não foi possível carregar o convite",
       "uncertain": "Resultado da adesão não confirmado"
     },
-    "externalFormatError": "Voltar a abrir a ligação completa da mensagem original."
+    "externalFormatError": "Volte a abrir a ligação completa a partir da mensagem original."
   },
   "memberCount_many": "{{count}} membros",
   "waitingForOwner": "A aguardar confirmação"
