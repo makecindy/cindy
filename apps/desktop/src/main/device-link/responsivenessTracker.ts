@@ -25,6 +25,7 @@ import {
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   isProviderSharePeer,
+  shortDeviceRef,
   REMOTE_AGENT_CHANNEL,
   type DeviceLinkErrorCode,
 } from '@cindy/device-link';
@@ -248,7 +249,7 @@ export function createResponsivenessTracker(
       if (open) unresponsive.add(deviceId);
       else unresponsive.delete(deviceId);
       log.info(
-        `device ${deviceId.slice(0, 8)} responsiveness circuit ${open ? 'opened' : 'closed'}`,
+        `device ${shortDeviceRef(deviceId)} responsiveness circuit ${open ? 'opened' : 'closed'}`,
       );
       deps.onUnresponsiveChanged(deviceId, open, !open && recoveryEvidence);
     },
@@ -283,7 +284,7 @@ export function createResponsivenessTracker(
       },
       (recoveryErr) => {
         if (linkRecoveryInFlight.get(deviceId) === recovery) linkRecoveryInFlight.delete(deviceId);
-        log.debug(`peer link recovery failed for ${deviceId.slice(0, 8)}`, recoveryErr);
+        log.debug(`peer link recovery failed for ${shortDeviceRef(deviceId)}`, recoveryErr);
       },
     );
   };
@@ -349,7 +350,7 @@ export function createResponsivenessTracker(
       lifecycleEpochs.set(deviceId, lifecycleEpoch);
       if (!breaker.probeDue(deviceId)) continue;
       if (!deps.isProbeEligible(deviceId)) continue;
-      log.debug(`probing unresponsive device ${deviceId.slice(0, 8)}`);
+      log.debug(`probing unresponsive device ${shortDeviceRef(deviceId)}`);
       const slot = breaker.acquire(deviceId, breaker.createCohort(deviceId), {
         allowProbe: true,
       });
@@ -393,7 +394,7 @@ export function createResponsivenessTracker(
           },
         )
         .catch((err) => {
-          log.debug(`responsiveness probe failed for ${deviceId.slice(0, 8)}`, err);
+          log.debug(`responsiveness probe failed for ${shortDeviceRef(deviceId)}`, err);
         });
     }
   };

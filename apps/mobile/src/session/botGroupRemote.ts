@@ -361,6 +361,7 @@ function parseRound(value: unknown): BotGroupRoundView {
     status: record?.status === 'running' ? 'running' : 'idle',
     speakers,
     canContinue: record?.canContinue === true,
+    ...(typeof record?.canStop === 'boolean' ? { canStop: record.canStop } : {}),
     ...(record?.othersActive === true ? { othersActive: true } : {}),
   };
 }

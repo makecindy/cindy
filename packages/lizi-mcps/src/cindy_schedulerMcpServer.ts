@@ -243,6 +243,7 @@ export function createSchedulerMcpServer(
   const call = registerCallToolEntry(server, registry, deps.withAccountDataAccess, getSessionContext, deps.authorizeCall);
 
   return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
     describe(name: string) {
       const tool = registry.get(name);
       return tool ? { name: tool.name, category: tool.category } : undefined;

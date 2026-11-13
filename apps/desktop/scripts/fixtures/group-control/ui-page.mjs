@@ -37,6 +37,9 @@ export default {
   notCovered:
     'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'public-cindy': { about: 'Public Cindy work remains visible to a peer without private process or stop access',
+      data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, workState: 'unknown', canStop: false } },
+
     'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
     'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
     'plan-read-missing': { about: '#9398: a confirmed missing plan has a neutral visible fallback', data: { ...base, sidebar: false, messages: 1, planRead: 'missing' } },
@@ -181,6 +184,17 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'public-cindy') {
+      await page.getByTestId('bot-group-work').waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), 1);
+      assert.ok((await page.getByTestId('bot-group-work').innerText()).includes('Cindy'));
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true }).count(), 0);
+      await ui.capture('public-work');
+      return;
+    }
+
     if (definition.data.planRead) {
       const missing = page.getByText(await ui.t('bots.groupChat.plan.missing'), { exact: true });
       const organizer = page.getByText(await ui.t('bots.groupChat.organizer'), { exact: true });

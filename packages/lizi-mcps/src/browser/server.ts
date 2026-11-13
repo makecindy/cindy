@@ -6,6 +6,7 @@ import type { BrowserMcpDeps } from '../types.js';
 import { BrowserToolRegistry } from './tool-registry.js';
 import { registerBrowserTools } from './tools.js';
 import { renderBrowserWorkflowRules } from './workflow-rules.js';
+import type { HostToolMcpServer } from '../host-tool-runtime.js';
 
 const D_LIST_TOOLS =
   '探索浏览器自动化可用工具(渐进式发现入口)。当网页抓取未取得用户所需内容时，可用浏览器继续读取动态页面或图片。' +
@@ -113,7 +114,7 @@ function registerCallToolEntry(server: McpServer, registry: BrowserToolRegistry)
   );
 }
 
-export function createBrowserMcpServer(deps: BrowserMcpDeps): McpServer {
+export function createBrowserMcpServer(deps: BrowserMcpDeps): HostToolMcpServer {
   const server = new McpServer({
     name: 'cindy_browser',
     version: '1.0.0',
@@ -122,5 +123,10 @@ export function createBrowserMcpServer(deps: BrowserMcpDeps): McpServer {
   registerBrowserTools(registry, deps);
   registerListToolsEntry(server, registry, deps);
   registerCallToolEntry(server, registry);
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
+    describe: (name: string) => registry.list().find(tool => tool.name === name),
+    call: (name: string, args?: Record<string, unknown>) => registry.call(name, args),
+    close: () => server.close(),
+  } });
 }

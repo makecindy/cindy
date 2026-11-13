@@ -119,6 +119,7 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   observeSubscriptionAccountUsage,
+  readSubscriptionAccountBlocked,
   pooledCodexResetTarget,
   hasRestoredPooledCodexQuota,
 } from '../runtime.js';
@@ -596,7 +597,7 @@ describe('paused account next-turn handoff', () => {
     h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'openai', state: 'bound', account: { isDefault: false, number: 1, paused: true, status: 'ready' } } })
       .mockImplementationOnce(async () => ({ ok: true, result: { providerId: 'openai', model, available: await readSubscriptionPoolModelAvailability('openai', model, { remote: true }) } }));
     const result = needsSubscriptionAccountHandoff('task', { providerId: 'openai', agentKind: 'codex', model, sdkSessionId: 'native', agentDeviceId: 'mini' });
-    if (limited || !allowed) await expect(result).rejects.toThrow('No subscription account');
+    if (!allowed) await expect(result).rejects.toThrow('No subscription account');
     else expect(await result).toBe(true);
     expect(h.remote.mock.calls[1].slice(0, 3)).toEqual(['mini', 'maker:subscription-pool:quota', ['openai', model]]);
     expect(h.accountAllowed).toHaveBeenCalledWith('old-imported', model, { remote: true, ownComputer: false, newRoute: true });
@@ -696,7 +697,7 @@ describe('tasks using imported Codex connections', () => {
 
   // PR #9837 review / unit: a healthy imported account cannot clear a group's
   // cooldown for a new route its original grants deny. Prior tests only gated
-  // allocation. Two accounts (exhausted default + healthy imported) reproduce it.
+  // allocation. Two accounts (signed-out default + healthy imported) reproduce it.
   it.each([false, true])('checks imported-account grants before recovering pool cooling (remote=%s)', async (remote) => {
     const model = 'chatgpt/gpt-6-astra';
     h.pools.openai = {
@@ -704,6 +705,7 @@ describe('tasks using imported Codex connections', () => {
       legacyCodexAccounts: { 'openai-old': 'imported' },
     };
     let grant = 'all';
+    h.read.mockImplementation(async (_provider, directory) => ({ authenticated: !directory.endsWith('default') }));
     h.accountAllowed.mockImplementation((_provider, target, options) =>
       !options.newRoute || (target === model && (grant === 'all' || (grant === 'local' && !options.remote))));
     h.usage.mockImplementation(async (_provider, dir) => {
@@ -979,6 +981,34 @@ describe('tasks using imported Codex connections', () => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // Unit regression (2026-11-13): account pools rejected ChatGPT before the upstream could
+  // spend credits. Prior coverage asserted exhausted windows were admission failures; it never
+  // started/resumed a full-window account with available, unknown or depleted cached credits.
+  it.each([
+    { hasCredits: true, unlimited: false, balance: '52768.87' },
+    null,
+    { hasCredits: false, unlimited: false, balance: '0' },
+  ])('leaves ChatGPT credit admission to upstream for new, resumed and explicit accounts (%j)', async credits => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.usage.mockResolvedValue({ codexUsage: { appServerBuckets: { codex: {
+      limitId: 'codex', updatedAt: Date.now(),
+      primary: { usedPercent: 10, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 },
+      secondary: { usedPercent: 100, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 86400 },
+    } }, webSnapshot: null }, codexCredits: credits });
+    h.bindings.set('task:existing', { providerId: 'openai', accountId: 'default' });
+    for (const [keys, options] of [
+      [[], {}],
+      [['task:existing'], { resuming: true }],
+      [[], { accountId: 'second', resuming: true, remote: true, ownComputer: true }],
+    ] as const) {
+      const lease = await acquireSubscriptionAccount('openai', 'gpt-6', [...keys], false, options);
+      expect(lease?.account.configDir).toBe('accountId' in options ? 'openai/second' : 'openai/default');
+      expect(readSubscriptionAccountBlocked('openai', lease!.accountId, 'gpt-6')).toBe(false);
+      lease!.release();
+    }
+    expect(h.bindings.get('task:existing')?.accountId).toBe('default');
+  });
+
   // Regression: a pinned exhausted account was reported as login-or-reset even
   // when another account was ready. Unit: exercise acquisition, not UI heuristics.
   it.each([null, 3600])('reports the bound account limit and only its trusted reset (%s)', async delay => {
@@ -1792,7 +1822,7 @@ describe('native account assignment on the executing computer', () => {
     expect(fork).toHaveBeenCalledOnce();
     expect(h.bindings.get('native:fork-second')?.accountId).toBe('second');
   });
-  it('merges direct Codex quota events by bucket and keeps exhausted pools ineligible for every engine', async () => {
+  it('merges direct Codex quota events by bucket without blocking pool credit admission for any engine', async () => {
     h.pools.openai = { strategy: 'order', accounts: [account('default')] };
     const window = (usedPercent: number) => ({
       usedPercent,
@@ -1828,15 +1858,15 @@ describe('native account assignment on the executing computer', () => {
     for (const kind of ['codex', 'pi', 'claude-code']) {
       expect(
         providerGroupMemberUsageState(pooled!, 'chatgpt/gpt-6', Date.now(), kind).limited,
-      ).toBe(true);
+      ).toBe(false);
       expect(
         providerGroupMemberUsageState(pooled!, 'chatgpt/special-model', Date.now(), kind).limited,
       ).toBe(false);
     }
-    await expect(acquireSubscriptionAccount('openai', 'gpt-6', [])).rejects.toThrow(
-      'No subscription account',
-    );
     lease?.release();
+    const next = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+    expect(next?.account.configDir).toBe('openai/default');
+    next?.release();
   });
   // Upgrade regression: existing authorizations must not be rewritten by installing or opening the new UI.
   it('passes existing single-account sessions through unchanged until a pool is configured', async () => {
@@ -2388,15 +2418,16 @@ describe('native account assignment on the executing computer', () => {
     h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
     h.usage.mockResolvedValue({ codexUsage: { appServerBuckets: { codex: {
       limitId: 'codex', updatedAt: Date.now(),
-      primary: { usedPercent: 10, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 },
+      primary: { usedPercent: 100, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 },
       secondary: null,
-    } }, webSnapshot: null } });
+    } }, webSnapshot: null }, codexCredits: { hasCredits: true, unlimited: false, balance: '52768.87' } });
     const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async () => ({
       id: 'codex-failed', close: async () => {},
       events: async function* () { yield { type: 'error', data: { codexErrorInfo: 'usageLimitExceeded' } }; },
     }) } as unknown as BaseAgent);
     const handle = await agent.startSession({ providerId: 'openai', model: 'gpt-6-astra' } as StartSessionOptions);
     for await (const _event of handle.events()) { /* actual host wrapper */ }
+    expect(readSubscriptionAccountBlocked('openai', 'default', 'gpt-6-astra')).toBe(true);
     await handle.close();
     const next = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', []);
     expect(next?.account.configDir).toBe('openai/second');
@@ -2471,8 +2502,10 @@ describe('native account assignment on the executing computer', () => {
     const chosen = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', []);
     expect(chosen?.account.configDir).toBe('openai/second');
     try {
-      // Full is an admission result, not a model-bucket quota limit (PR #9998).
-      await expect(acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', ['task:new'])).rejects.toThrow('SUBSCRIPTION_ACCOUNTS_FULL');
+      // The other account can ask upstream to spend credits even though its plan window is full.
+      const credits = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', ['task:new']);
+      expect(credits?.account.configDir).toBe('openai/default');
+      credits?.release();
       const quota = (await readSubscriptionPoolUsage('openai'))?.codexUsage?.appServerBuckets;
       expect(quota?.codex.primary?.usedPercent).toBe(15);
       expect(quota?.special.primary?.usedPercent).toBe(5);
@@ -2643,8 +2676,14 @@ describe('native account assignment on the executing computer', () => {
           await readSubscriptionPool(provider);
           expect(h.usage).toHaveBeenCalledTimes(readCount);
         }
-        await expect(acquireSubscriptionAccount(provider, provider === 'anthropic' ? 'claude-sonnet' : 'gpt-6', []))
-          .rejects.toThrow('No subscription account is available');
+        if (provider === 'anthropic') {
+          await expect(acquireSubscriptionAccount(provider, 'claude-sonnet', []))
+            .rejects.toThrow('No subscription account is available');
+        } else {
+          const next = await acquireSubscriptionAccount(provider, 'gpt-6', []);
+          expect(next?.account.configDir).toBe('openai/default');
+          next?.release();
+        }
       }
       lease!.release();
     } finally { releaseRead?.(); clock.mockRestore(); }

@@ -1,3 +1,4 @@
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { isQuotaExhaustedErrorMessage } from './providerErrors';
 
 /** Public, bounded diagnostics: never forward upstream messages, URLs or identities to a guest. */
@@ -18,6 +19,7 @@ export function sharedTaskRecoveryFor(message: string, agentDeviceId?: string | 
   const detailed = sharedTaskRecoveryReason(message);
   if (detailed) return detailed;
   if (!agentDeviceId?.startsWith('share:')) return undefined;
+  if (parseAgentErrorCode(message)?.code === 'REMOTE_AGENT_RESUME_UNAVAILABLE') return 'history';
   // These errors already explain model/member budget actions precisely.
   if (/\[REMOTE_AGENT_(?:GROUP_USAGE_LIMIT|MEMBER_BUDGET_PAUSED)\]/.test(message)) return undefined;
   if (isQuotaExhaustedErrorMessage(message)) return 'budget';

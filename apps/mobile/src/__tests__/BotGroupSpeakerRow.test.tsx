@@ -302,3 +302,12 @@ it.each([true, false])('labels only an unambiguous current step execution (ident
   expect(rows[1].textContent?.includes('Only the current execution')).toBe(identified);
   expect(rows[2].textContent).not.toContain('Only the current execution');
 });
+
+// Unit regression: hide only the unauthorized control, never the public execution rows.
+it('keeps all work visible without offering an unauthorized stop', async () => {
+  const group = workGroup();
+  group.round.canStop = false;
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});

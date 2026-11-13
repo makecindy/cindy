@@ -38,6 +38,28 @@ function installed(
 }
 
 describe('plugin install consent', () => {
+  it.each(['browser', 'computer', 'ssh', 'docs', 'discovery'] as const)('requires explicit approval for a newly recognized %s group', group => {
+    const next = manifest({ agent: { hostTools: [group] } });
+    const old = installed(next);
+    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+      added: expect.arrayContaining([expect.objectContaining({ key: `agent:host-tools:${group}` })]) });
+    expect(evaluateGhostInstallConsent({ ...old, approvedHostToolGroups: [group] }, next)).toBeNull();
+  });
+
+  // §21 unit: a group retained as unknown by an older Host is not an explicit
+  // filesystem approval. Existing cases did not cover a newly recognized group.
+  it('将亲选目录 files 组单列为扩权，旧声明不补批准', () => {
+    const next = manifest({ pick: true, agent: { hostTools: ['files'] } });
+    const old = installed(next);
+    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+      // The code row also changes from the isolated-page explanation to the
+      // approved Host-file explanation; it must remain visible in the consent.
+      added: [expect.objectContaining({ key: 'agent:host-tools:files' }), expect.objectContaining({ key: 'code', detailKey: 'codeDetailFiles' })] });
+    expect(evaluateGhostInstallConsent({ ...old, approvedHostToolGroups: ['files'] }, next)).toBeNull();
+    expect(evaluateGhostInstallConsent(null, next)).toMatchObject({ kind: 'install',
+      permissions: expect.arrayContaining([expect.objectContaining({ key: 'agent:host-tools:files' })]) });
+  });
+
   // Static system text is itself reviewed capability content: changing it must
   // trigger update consent, even when the capability name stays the same.
   it('shows static system fragments and asks again when their content changes', () => {

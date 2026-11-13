@@ -230,10 +230,11 @@ describe('parseBotGroupChatData', () => {
   // Unit/protocol: old hosts silently ignore scope, so only literal capabilities permit all.
   it.each([true, false, undefined, 'true'])('preserves stop permission separately from scope support (%s)', supportsScopedStop => {
     const parsed = parseBotGroupChatData(chatData({ canStopAll: true, supportsScopedStop,
-      round: { status: 'running', speakers: [], othersActive: true },
+      round: { status: 'running', speakers: [], othersActive: true, canStop: false },
     }))!;
     expect(parsed.canStopAll).toBe(true);
     expect(parsed.round.othersActive).toBe(true);
+    expect(parsed.round.canStop).toBe(false);
     expect(parsed.supportsScopedStop).toBe(supportsScopedStop === true);
   });
 

@@ -53,8 +53,11 @@ function createDatabase(): Database.Database {
       working_dir TEXT,
       project_dir TEXT
     );
-    -- The real deletion transaction also cleans up view state for deleted tasks.
-    CREATE TABLE messages (id TEXT PRIMARY KEY);
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      content TEXT NOT NULL
+    );
     CREATE TABLE mcp_app_view_states (
       message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -487,6 +490,14 @@ describe('Bot lifecycle coordinator', () => {
         insert.run('backslash-is-not-separator', 'desktop', 'active', `${stored}\\notes`, null);
         insert.run('different-literal', 'desktop', 'active', stored.replace('\\literal', '/literal'), null);
       }
+      // The real deletion transaction also clears saved MCP app state only for
+      // deleted tasks. Keep real rows so this checks cleanup, not just table presence.
+      for (const sessionId of ['canonical', 'project-only', 'neighbour']) {
+        sqlite.prepare('INSERT INTO messages (id, session_id, content) VALUES (?, ?, ?)')
+          .run(`message-${sessionId}`, sessionId, '{}');
+        sqlite.prepare('INSERT INTO mcp_app_view_states VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(`message-${sessionId}`, sessionId, 'fixture-server', 'revision', null, '{}', 2);
+      }
       const deletion = vi.fn(async (botId: string, sessionIds: string[], keep: boolean, projectSessionIds?: string[]) => {
         await runWorkerTx(sqlite, { name: 'bots.deleteProfile', args: {
           botId, sessionIds, keepTaskHistory: keep, projectSessionIds, at: 10,
@@ -516,6 +527,9 @@ describe('Bot lifecycle coordinator', () => {
       expect(row(sqlite, 'sessions', 'canonical').status).toBe(expectedStatus);
       expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeUndefined();
       expect(result).toMatchObject({ status: 'deleted', affected: { sessions: matched.length + 2 } });
+      expect(sqlite.prepare('SELECT session_id FROM mcp_app_view_states ORDER BY session_id').pluck().all())
+        .toEqual(keepTaskHistory ? ['canonical', 'neighbour', 'project-only'] : ['neighbour']);
+      expect(sqlite.prepare('SELECT COUNT(*) FROM messages').pluck().get()).toBe(3);
     });
   });
 });

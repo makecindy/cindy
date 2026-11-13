@@ -83,6 +83,8 @@ import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { finishCompanionEnvironmentRemoval } from '../bot-import/runtime.js';
 import { setImportProbeConfirmation } from '../bot-import/probeAuthorization.js';
 import { requestHostInteraction, allowHostPagePermission } from './interactionRouter.js';
+import { createTaskActionConfirmation } from './taskActionConfirmation.js';
+import { readTaskActionInput } from './taskActionInput.js';
 import { registerMcpAppsIpc } from '../mcp-apps/ipc.js';
 import { createAppMessageSender } from '../mcp-apps/messageSender.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
@@ -103,6 +105,7 @@ import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote
 import { createNativeHistoryRelocator } from '../remote-agent/controller/relocateNativeHistory.js';
 import { forgetCredentialGrants } from '../remote-agent/executor/credentialGrants.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+import { withSharedSessionResumeRecovery } from './sharedSessionResumeRecovery.js';
 import {
   isProviderGroupReleased,
   listRemoteProviderGroupBindings,
@@ -696,7 +699,7 @@ import {
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
-import { withChatServer } from './chatServer.js';
+import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -3477,30 +3480,7 @@ const taskActionConfirmBridge = new OrcaWorkerPermissionConfirmBridge({
 export async function confirmTaskAction(
   sessionId: string, tool: string, args: unknown, context?: TaskActionConfirmation,
 ): Promise<boolean> {
-  const session = getMakerIfReady()?.getSession(sessionId);
-  if (!session) return false;
-  const controller = new AbortController();
-  const unsubscribe = session.onStatusChange(status => {
-    if (status !== 'active') controller.abort();
-  });
-  const input = structuredClone(args) as Record<string, unknown>;
-  const request: Extract<InteractionRequest, { kind: 'permission' }> = {
-    kind: 'permission', requestId: randomUUID(),
-    title: t('taskActionConfirmation.title'),
-    description: t('taskActionConfirmation.once'),
-    toolName: `mcp__${context?.server ?? 'cindy_helper'}__${tool}`,
-    input,
-    metadata: { hostOwnedConfirmation: 'task_action' },
-  };
-  try {
-    // Publish the ordinary waiting/permission lifecycle before awaiting a decision.
-    // Desktop, remote phone and IM resolve the same pending request, never a retry.
-    const result = await session.runHostInteraction(request,
-      () => requestHostInteraction(session, request, controller.signal));
-    return result.kind === 'permission' && result.behavior === 'allow';
-  } finally {
-    unsubscribe();
-  }
+  return createTaskActionConfirmation({ getSession: id => getMakerIfReady()?.getSession(id), t })(sessionId, tool, args, context);
 }
 
 /**
@@ -5050,26 +5030,8 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
 }
 
 export function getTaskActionInputState(sessionId: string, forSelfRewind = false) {
-  const input = getSessionInputProvenance(sessionId);
-  const session = getMakerIfReady()?.getSession(sessionId);
-  return {
-    key: JSON.stringify(input),
-    // Reuse the live permission/Plan generation guard; the DB can lag a mode change.
-    permission: resolveGhostFsSessionSnapshot(
-      (id) => getMakerIfReady()?.getSession(id), sessionId, session?.instanceId,
-    ),
-    ownerInput: isActiveInputOwnerAuthored(sessionId),
-    automatic: !!input.input && !isActiveInputOwnerAuthored(sessionId),
-    orcaSenderSessionId: input.input?.orcaSenderSessionId,
-    boundary: `${session?.instanceId ?? ''}:${agentInputCoordinatorHolder?.getGeneration(sessionId) ?? -1}`,
-    clearBoundaryMs: agentInputCoordinatorHolder?.getClearBoundaryMs(sessionId) ?? null,
-    ...(forSelfRewind && agentInputCoordinatorHolder ? { rewind: {
-      generation: agentInputCoordinatorHolder.getGeneration(sessionId),
-      signal: agentInputCoordinatorHolder.getInputAbortSignal(sessionId),
-      locked: rewindInputSessions.has(sessionId),
-      idle: !input.executing,
-    } } : {}),
-  };
+  return readTaskActionInput(sessionId, id => getMakerIfReady()?.getSession(id), agentInputCoordinatorHolder,
+    forSelfRewind ? rewindInputSessions.has(sessionId) : undefined);
 }
 
 /** Runtime-only account boundary for personal author tools; never grants external-write permission. */
@@ -9324,6 +9286,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }> {
     let session: Awaited<ReturnType<typeof maker.createSession>> | undefined;
     const creationSignal = o.id ? currentSessionCreationSignal(o.id) : undefined;
+    const resumeRecoveryOwner = captureDataOwnerBroadcastScope();
+    const assertResumeRecoveryCurrent = () => {
+      assertAccess?.();
+      creationSignal?.throwIfAborted();
+      if (!isDataOwnerBroadcastScopeCurrent(resumeRecoveryOwner)) throw new Error('REMOTE_AGENT_ACCOUNT_CHANGED');
+    };
     const closeCancelled = () => {
       if (session) void maker.closeSessionIfCurrent(session).catch(error => {
         log.warn('Cancelled creation cleanup failed', { sessionId: o.id, error: String(error) });
@@ -9477,7 +9445,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
-        session = await createSessionWithRuntimePlugins(o, creationSignal);
+        const start = () => createSessionWithRuntimePlugins(o, creationSignal);
+        session = nativeHistoryResume || nativeRelocation?.nativeId
+          ? await start()
+          : await withSharedSessionResumeRecovery(o, start, {
+              assertCurrent: assertResumeRecoveryCurrent,
+              readGeneration: id => agentHandoffPending.readGeneration(id),
+              getSessionRow: async id => {
+                await drainPersistQueue();
+                assertResumeRecoveryCurrent();
+                const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+                return row;
+              },
+              listMessages: id => listMessagesForAgentHandoff(id, 400),
+              commit: commitContextRebuild,
+              setPending: (id, handoff, generation) => agentHandoffPending.set(id, handoff, generation),
+              publish: id => broadcastSessionPatched(id, { sdkSessionId: null, contextTokens: 0 }),
+            });
         try { assertAccess?.(); assertTaskPromptCurrent(session.id); } catch (error) {
           const cancelledSession = session;
           session = undefined;
@@ -20912,6 +20896,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item), broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info })),
     beforeDispatchUserTurn: async (sessionId, item, signal) => {
+      if (isRetiredGroupWelcomeInput(item)) throw new Error('INVALID_EXECUTION_TRIGGER');
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
@@ -20956,7 +20941,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: async (sessionId) => {
       await restoreSavedUsageLimitWait(sessionId);
-      return loadAgentInputQueueSnapshot(sessionId);
+      return (await loadAgentInputQueueSnapshot(sessionId)).filter(item => !isRetiredGroupWelcomeInput(item));
     },
     getPersistedClientIds: getPersistedInputClientIds,
   });

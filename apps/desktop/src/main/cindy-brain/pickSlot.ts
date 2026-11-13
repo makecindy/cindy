@@ -34,6 +34,7 @@ import {
 } from '../../shared/ghost.js';
 import { pickedFileNameBudget } from './pickedFiles.js';
 import { sanitizeGhostNoticeText } from './notifySlot.js';
+import { hasPluginHostToolGroupApproval } from './taskCapability.js';
 
 export interface PickSlotDeps {
   getGhost(id: string): InstalledGhost | null;
@@ -45,7 +46,9 @@ export interface PickSlotDeps {
    * 弹系统级选文件夹窗口;返回所选绝对路径,取消返回 null。
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
    */
-  showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string }): Promise<string | null>;
+  showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string; fileAccess?: true }): Promise<string | null>;
+  approveFiles?(ghostId: string, current: () => boolean): Promise<boolean>;
+  issueDirectory?(ghostId: string, dirAbs: string, assertCurrent: () => void): Promise<string>;
   showFileDialog?(params: { ghostName: string; purpose: string | null; accept: string[]; multiple: boolean }): Promise<string[] | null>;
   importFiles?(ghostId: string, paths: string[], input: {
     into: 'media' | 'library'; path?: string; callId?: string; assertCurrent(): void;
@@ -97,6 +100,14 @@ export class GhostPickSlot {
       return fail('INVALID_REQUEST', 'callId 必须是非空字符串');
     }
     const fileMode = request.mode === 'file';
+    const fileAccess = request.access === 'files';
+    if (request.access !== undefined && (!fileAccess || fileMode)) return fail('INVALID_REQUEST', 'access 仅支持目录模式的 files');
+    if (fileAccess && (!ghost.manifest.agent?.hostTools?.includes('files') || !this.deps.issueDirectory)) {
+      return fail('PERMISSION_DENIED', '插件未声明或宿主未提供 files 能力');
+    }
+    // A remote picker cannot silently turn the controller's folder into a root
+    // on the execution computer. Keep the existing deposit selection unchanged.
+    if (fileAccess && request.mobilePageId !== undefined) return fail('UNSUPPORTED', '请在执行电脑上授权目录');
     if (request.mode !== 'directory' && !fileMode) {
       return fail('INVALID_REQUEST', 'mode 只支持 directory / file');
     }
@@ -123,7 +134,7 @@ export class GhostPickSlot {
     }
     const wantDeposit = request.deposit === true;
     const hasNode = ghost.manifest.node !== undefined;
-    if (!fileMode && !hasNode && !wantDeposit) {
+    if (!fileMode && !fileAccess && !hasNode && !wantDeposit) {
       return fail(
         'INVALID_REQUEST',
         '未声明 node 槽的插件必须带 deposit:true(选完只有过户票据可发,不给绝对路径)',
@@ -153,6 +164,11 @@ export class GhostPickSlot {
     const remainsActive = () => shouldContinue() && !signal?.aborted &&
       (!callId || this.deps.getPendingCallSignal?.(ghostId, callId) === signal);
     if (!remainsActive()) return fail('CANCELLED', '原页面或调用已结束');
+    const stillInstalled = () => remainsActive() && this.deps.getMutationTarget(ghostId) === target;
+    if (fileAccess && !hasPluginHostToolGroupApproval(ghost, 'files')) {
+      if (!await this.deps.approveFiles?.(ghostId, stillInstalled) || !stillInstalled() ||
+          !hasPluginHostToolGroupApproval(this.deps.getGhost(ghostId), 'files')) return fail('PERMISSION_DENIED', '目录操作权限未获批准');
+    }
     if (callId) this.deps.holdCall?.(ghostId, callId, GHOST_PIPE_CALL_MAX_TOTAL_MS);
     // A cancelled logical request does not close Electron's native panel. Keep
     // BUSY owned by the dialog promise, not by the cancellation race below.
@@ -169,6 +185,7 @@ export class GhostPickSlot {
           ghostName: ghost.manifest.name,
           purpose,
           ghostId,
+          ...(fileAccess ? { fileAccess: true as const } : {}),
           ...(typeof request.mobilePageId === 'string' ? { mobilePageId: request.mobilePageId } : {}),
         });
       } catch (error) {
@@ -215,12 +232,21 @@ export class GhostPickSlot {
       }
       // 用户已亲手选中:先记台账再分档发结果(票据签发失败也不该丢掉这次
       // 授权事实——用户确实选了)。
-      this.deps.recordPickedDir?.(ghostId, picked);
+      if (!fileAccess) this.deps.recordPickedDir?.(ghostId, picked);
 
       const result: Extract<GhostPipePickResult, { ok: true }> = {
         ok: true,
         name: path.basename(picked),
       };
+      if (fileAccess) {
+        const assertCurrent = () => {
+          if (!stillInstalled() || !hasPluginHostToolGroupApproval(this.deps.getGhost(ghostId), 'files')) throw new Error('DIRECTORY_SELECTION_CANCELLED');
+        };
+        try {
+          result.directoryRef = await this.deps.issueDirectory!(ghostId, picked, assertCurrent);
+          assertCurrent();
+        } catch { return fail('PERMISSION_DENIED', '所选目录不可授权或授权状态已变化'); }
+      }
       if (wantDeposit) {
         const deposited = this.deps.depositDir(ghostId, picked);
         if (!deposited.ok) {

@@ -711,6 +711,9 @@ importers:
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
+      '@cindy/plugin-protocol':
+        specifier: workspace:*
+        version: link:../../packages/plugin-protocol
       better-sqlite3:
         specifier: ^12.9.0
         version: 12.11.1

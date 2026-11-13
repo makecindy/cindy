@@ -2,6 +2,14 @@
 
 2026-11-07 用户要求：Anthropic / OpenAI 的本机订阅连接各保留一个供应商，内部可登录多个账号。
 
+- **ChatGPT credits 准入修复（2026-11-13）**：账号池不能把套餐 5 小时／周窗口用满当成请求不可用。
+  新任务、原账号续聊、旧连接固定账号、同账号远程与供应商组入口都交给上游判断是否能使用 credits；
+  缓存余额有值、未知或显示耗尽均不代替上游准入。窗口仍用于展示与新分配排序，不能仅凭窗口用满
+  交接已有任务。真实限额、登录和过载错误仍按原规则冷却、换号与等待，不因显示有 credits 立即重试。
+  Anthropic 保持窗口准入；重置卡提前唤醒仍须确认实际账号的套餐额度恢复。实现与回归见
+  `subscription-accounts/runtime.ts`、`provider-group/usage.ts`、`subscription-accounts/__tests__/runtime.test.ts`
+  及 `provider-group/__tests__/router.usage.test.ts`。
+
 - 首个账号使用官方默认目录（`~/.claude` / `~/.codex`）；新增账号使用用户目录下带 Cindy 随机标识的兄弟目录。目录名不含邮箱，不接受 Renderer 或远程传入任意路径。
 - 登录交给未修改的官方 CLI。Claude 使用 `CLAUDE_CONFIG_DIR`，Codex 使用 `CODEX_HOME`。Cindy 不实现 Claude OAuth，也不读取或复制 Claude 凭证。
 - Codex `account/read` 明确返回 `account: null` 且 `requiresOpenaiAuth: false` 时，表示当前供应商管理认证，不能当作普通未登录再启动登录。连接及重连在所选目录预检并给出独立账号的操作指引；不改写原生配置、不按供应商名称拒绝、不读取凭证来猜账号。已有 ChatGPT 账号及缺少该标志的旧 CLI 保持原判定。实现与回归见 `nativeCli.ts`、`runtime.ts` 及对应测试。

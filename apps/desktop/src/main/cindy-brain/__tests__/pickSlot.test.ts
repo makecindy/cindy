@@ -81,6 +81,31 @@ describe('pickSlot · 资格审与载荷校验', () => {
 });
 
 describe('pickSlot · 授权 = 用户亲选', () => {
+  // Unit, §21: a previous pick never implies autonomous filesystem authority.
+  // Existing cases only cover paths/deposits. The new minimum is one approved
+  // files group and a fresh native selection returning an opaque directory ref.
+  it('files 选择只为已批准组签发目录引用，取消或旧选择不签发', async () => {
+    const ghost = pickGhost({ node: false });
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ghost.manifest.agent = { hostTools: ['files'] };
+    ghost.approvedHostToolGroups = ['files'];
+    const issueDirectory = vi.fn(async () => 'directory-fixture');
+    const { slot, deps } = makeSlot({ getGhost: () => ghost, issueDirectory });
+    expect(await slot.handleRequest('pick-ghost', { mode: 'directory', access: 'files' })).toEqual({
+      ok: true, name: 'projects', directoryRef: 'directory-fixture',
+    });
+    expect(deps.showDirectoryDialog).toHaveBeenCalledWith(expect.objectContaining({ fileAccess: true }));
+    ghost.approvedHostToolGroups = [];
+    expect(await slot.handleRequest('pick-ghost', { mode: 'directory', access: 'files' })).toMatchObject({
+      ok: false, errorCode: 'PERMISSION_DENIED',
+    });
+    expect(issueDirectory).toHaveBeenCalledTimes(1);
+    ghost.approvedHostToolGroups = ['files'];
+    const cancelled = makeSlot({ getGhost: () => ghost, issueDirectory, showDirectoryDialog: async () => null });
+    expect(await cancelled.slot.handleRequest('pick-ghost', { mode: 'directory', access: 'files' })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(issueDirectory).toHaveBeenCalledTimes(1);
+  });
+
   it('用户选中:node 槽插件拿到 path;deposit:true 再拿票据', async () => {
     const { slot, deps } = makeSlot();
     const result = await slot.handleRequest('pick-ghost', {

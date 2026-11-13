@@ -10,6 +10,16 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // §21 unit: the shared files dispatcher contains both reads and destructive
+  // operations. Trusted helper approval must never turn a write into a read.
+  it('keeps file writes and deletions in per-call approval for direct and progressive calls', () => {
+    for (const op of ['write', 'delete', undefined]) {
+      const args = { op, directoryRef: 'selected', path: 'a.txt' };
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'file_request', toolParams: args })).toBe('prompt-each-time');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name: 'file_request', args } })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'file_request', toolParams: { op: 'read' } })).toBe('auto-approve');
+  });
   // Unit: profile changes remain risk actions even when they are the only runtime field.
   it.each(['acceptEdits', 'auto', 'bypassPermissions'])('reviews explicit permission profile %s', permission_mode => {
     const args = { session_id: 'target', expected_generation: 0, permission_mode };
@@ -23,6 +33,11 @@ describe('desktop Claude read-only allowlist', () => {
     ['cindy_scheduler', 'schedule_delete'],
     ['cindy_helper', 'delete_session'],
     ['cindy_helper', 'rewind_session'],
+    ['cindy_helper', 'terminal_start'],
+    ['cindy_helper', 'terminal_write'],
+    ['cindy_helper', 'terminal_resize'],
+    ['cindy_helper', 'terminal_stop'],
+    ['cindy_helper', 'terminal_forget'],
   ])('routes %s %s through ordinary per-call approval', (serverName, name) => {
     for (const toolParams of [{ id: 'automation' }, { id: 'automation', device: 'local' }]) {
       expect(getDesktopMcpToolApprovalPolicy({ serverName, toolName: name, toolParams })).toBe('prompt-each-time');

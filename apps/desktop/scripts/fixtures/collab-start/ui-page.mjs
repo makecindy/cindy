@@ -6,15 +6,16 @@ export default {
   name: 'collab-start',
   entry: './fixture.tsx',
   viewport: { width: 640, height: 760 },
-  real: 'CreateWorkerPopover, worker roles and their memory, ModelSelector trigger, PermissionSelector, WorkerProjectField, execution device field, ConfirmDialog, Radix Dialog, translations and themes',
+  real: 'CreateWorkerPopover, worker roles and their memory, ModelSelector trigger and saved-selection recovery, PermissionSelector, WorkerProjectField, execution device field, ConfirmDialog, Radix Dialog, translations and themes',
   notCovered:
-    'Actual team start and Worker creation, main-side validation and mirroring, the real device-link transport, SSH Leads, model panel contents, native folder dialog and real worktree creation',
+    'Actual team start and Worker creation, main-side validation and mirroring, the real device-link transport, SSH Leads, remote model panel contents, native folder dialog and real worktree creation',
   cases: {
     default: { about: 'Start collaboration in an existing task: roles ordered by recent use, adding a role inline, per-role task and settings, hover-to-remove with confirmation' },
     draft: { about: 'New-task draft: no project or device section and no starter task' },
     'add-worker': { about: 'Add a Worker to a running team: same form without the introduction' },
     'missing-project': { about: 'A problem inside More Settings opens the section by itself' },
     remote: { about: 'Task on another computer: that computer’s roles and memory, changes sent to it, nothing kept here' },
+    'saved-unavailable': { about: 'Saved source disconnected: explain the disabled form and recover through the real model picker without switching sources silently' },
   },
   async ready(page) {
     await page.getByRole('dialog').waitFor();
@@ -31,6 +32,41 @@ export default {
       ),
       exact: true,
     });
+
+    if (ui.case === 'saved-unavailable') {
+      const notice = page.getByRole('status');
+      await notice.getByText(await ui.t('orca.createWorker.savedModelUnavailable')).waitFor();
+      assert.equal(await submit.isDisabled(), true);
+      await ui.capture('saved-source-unavailable');
+      const choose = page.getByRole('button', { name: await ui.t('orca.createWorker.reselectModel'), exact: true });
+      await choose.click();
+      const panel = page.getByRole('listbox', { name: await ui.t('newChat.modelSelector.modelListAria') });
+      await panel.waitFor();
+      await ui.capture('choose-available-model');
+      // Dismissing and reopening the action must work, even without changing the saved route.
+      await page.keyboard.press('Escape');
+      await panel.waitFor({ state: 'hidden' });
+      await choose.click();
+      await panel.getByText('Fixture Model', { exact: true }).click();
+      await notice.waitFor({ state: 'hidden' });
+      assert.equal(await submit.isDisabled(), false);
+      await ui.capture('model-reselected');
+      await submit.click();
+      await page.waitForFunction(() => globalThis.collabStart.submitted() !== null);
+      const form = await page.evaluate(() => globalThis.collabStart.submitted());
+      assert.equal(form.model, 'fixture-model');
+      assert.equal(form.providerId, 'fixture-codex');
+      const dialog = page.getByRole('dialog', { name: await ui.t('orca.createWorker.enableCollabTitle'), exact: true });
+      await dialog.waitFor({ state: 'hidden' });
+      await page.getByRole('button', { name: 'Reopen', exact: true }).click();
+      await dialog.waitFor();
+      const modelTrigger = dialog.getByRole('button', { name: /Fixture Model/ });
+      assert.equal(await modelTrigger.getAttribute('aria-expanded'), 'false', 'a consumed request must not reopen the picker with the whole dialog');
+      assert.equal(await notice.count(), 0, 'the explicitly selected usable source stays valid');
+      assert.equal(await submit.isDisabled(), false);
+      await ui.capture('reopened-after-recovery');
+      return;
+    }
 
     if (ui.case === 'remote') {
       // 那台电脑的清单：它加过的角色排在最前并带回记的内容，它移除过的「测试」不出现。

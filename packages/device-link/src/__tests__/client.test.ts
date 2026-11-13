@@ -36,6 +36,7 @@ import {
 } from '../transport.js';
 import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
 import { BACKLOG_WARN_MESSAGES, summarizeBacklog } from '../transportBacklog.js';
+import { diagnosticRef } from '../stallDiagnostics.js';
 import { sharedTaskGuestPeer } from '../sharedTaskPeer.js';
 import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from '../directNegotiation.js';
 import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
@@ -7690,6 +7691,19 @@ describe('DeviceLinkClient', () => {
       expect(line).toMatch(/dst=share:deviceaa pending=2\/3KiB direct=1\/2KiB top=\[result:unknown=2\/3KiB\]/);
       expect(line).toMatch(/otherPeers=2\/3KiB \[share:devicebb=1\/2KiB,task:devicecc=1\/1KiB\] otherDirect=1\/4KiB$/);
       expect(line).not.toMatch(/share-a|task-x|member|direct-o/);
+    });
+
+    // 2026-11-13: development computers all start with `dev-dev-`, so their first eight characters were
+    // identical and diagnostics printed `unknown`; two Macs looked like one machine in every log line.
+    it('keeps computers that share an id prefix apart in log lines; plain production ids are unchanged', () => {
+      const macA = `dev-dev-${'a1'.repeat(28)}`, macB = `dev-dev-${'b2'.repeat(28)}`;
+      const cloud = `cloud-device-${'c3'.repeat(12)}`, production = 'd4'.repeat(32);
+      const peers = new Map([macA, macB, cloud, production].map((id) => [id, { pendingBytes: 1024, pending: new Map([[1, { bytes: 1024 }]]) }]));
+      const line = summarizeBacklog(macA, peers, 'high');
+      expect(line).toMatch(/dst=dev-dev-a1a1a1a1 /);
+      expect(line).toMatch(/\[(?=.*dev-dev-b2b2b2b2=)(?=.*cloud-device-c3c3c3c3=)(?=.*d4d4d4d4=).*\]/);
+      expect([macA, macB, cloud, production].map(diagnosticRef))
+        .toEqual(['dev-dev-a1a1a1a1', 'dev-dev-b2b2b2b2', 'cloud-device-c3c3c3c3', 'd4d4d4d4']);
     });
 
     it.each([

@@ -10,14 +10,14 @@ const tick = async () => { for (let i = 0; i < 20; i++) await Promise.resolve();
 let stop: (() => void) | undefined;
 beforeEach(() => vi.useFakeTimers());
 afterEach(async () => { stop?.(); await tick(); vi.useRealTimers(); });
-function harness() {
+function harness(confirmations = false) {
   const states: HostConnectionState[] = [];
   const events: Record<string, unknown>[] = [];
   const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
   const open = vi.fn(async (_query: string, _signal: AbortSignal) => new Response(new ReadableStream<Uint8Array>({
     start(controller) { streams.push(controller); },
   }), { headers: { 'x-cindy-event-protocol': '2' } }));
-  const client = startHostEventStream({ open, onEvent: e => events.push(e), onState: s => states.push(s) });
+  const client = startHostEventStream({ confirmations, open, onEvent: e => events.push(e), onState: s => states.push(s) });
   stop = client.stop;
   const frame = (data: object) => streams.at(-1)!.enqueue(encode.encode(`data: ${JSON.stringify(data)}\n\n`));
   const control = (runtime: string, seq: number, reason: string | null, phase = 'start') =>
@@ -27,6 +27,22 @@ function harness() {
 }
 
 describe('Host event transport', () => {
+  // Plugin approval must not be replayed or consume the durable task cursor.
+  // Existing event tests cover persisted task events, not transient owner UI.
+  it('negotiates live confirmations without advancing or weakening the task cursor', async () => {
+    const h = harness(true);
+    h.control('run-a', 4, 'initial'); h.ready('run-a', 4, 'initial');
+    h.frame({ type: 'host_prompt', channel: 'ghosts:confirm-request', payload: { requestId: 'owner-request' } });
+    h.frame({ seq: 5, type: 'done' }); await tick();
+    expect(h.events).toEqual([{ type: 'plugin_push', channel: 'ghosts:confirm-request', payload: { requestId: 'owner-request' } },
+      { seq: 5, type: 'done' }]);
+    h.streams[0].close(); await tick(); await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.open.mock.calls[1][0]).toBe('?protocol=2&confirmations=1&since=5&runtime=run-a');
+    h.control('run-a', 5, null); h.ready('run-a', 5, null);
+    h.frame({ seq: 7, type: 'done' }); await tick();
+    expect(h.events).toHaveLength(2);
+    expect(h.states.at(-1)?.status).toBe('disconnected');
+  });
   it('decodes split UTF-8, CRLF and multiline SSE data', () => {
     const got: unknown[] = [];
     const decode = createHostFrameDecoder(frame => got.push(frame));

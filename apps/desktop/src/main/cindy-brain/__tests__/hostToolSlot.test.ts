@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import { authorizePluginHostToolCall, getPluginHostToolCaller } from '../../mcp-integrations/hostToolCaller.js';
+import { authorizePluginHostToolCall, createHostToolRuntime, disposePluginHostTools, getPluginHostToolCaller, setHostToolProviders } from '../../mcp-integrations/hostToolCaller.js';
 import { createTaskToolCallAuthorizer } from '../../maker-ipc/taskToolCallAuthorizer.js';
 import { captureTaskActionSyncGuard, captureTaskActionDeliveryGuard, hasTaskActionAuthorization, bindTaskActionInput, taskActionInputGuard } from '../../maker-ipc/taskActionAuthorization.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -11,10 +11,20 @@ import { createSchedulerMcpServer, type SchedulerMcpDeps } from '@cindy/mcps';
 import { Scheduler, type Schedule } from '@cindy/maker-scheduler';
 import { getDesktopMcpToolApprovalPolicy } from '../../maker-host/mcp-tool-approval-policy.js';
 import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
+import { GhostRuntime, type SandboxHandle } from '../runtime/GhostRuntime.js';
+import { isValidPluginInstallRelId, pluginInstallStoragePart } from '../../../shared/pluginIdentity.js';
 
 const uiPipe = createGhostProductionCallbacks<{
   send(event: { sender: { id: number; isDestroyed(): boolean } }, payload: unknown): Promise<unknown>;
 }>({ variables: ['executionPipe'], callbacks: { send: ['ipcMain.handle', 'ghost-pipe:send'] } });
+
+const lifecycle = createGhostProductionCallbacks<{ getGhostRuntime(): GhostRuntime }>({
+  functions: ['getGhostRuntime', 'disposePluginRuntimeHostServices'], initialize: 'let runtimeSingleton = null;',
+});
+const hostLifecycle = createGhostProductionCallbacks<{ runtime: GhostRuntime }>({
+  source: new URL('../../../../../host/src/plugins/runtime.ts', import.meta.url),
+  variables: ['disposeRuntimeHostServices', 'runtime'],
+});
 
 // Test value: the production gateway must preserve raw tool results and enforce §1.2/§3
 // approval and owner/install fences for a caller without a Session. Existing taskSlot tests
@@ -56,6 +66,10 @@ function fixture() {
 }
 const code = (value: Awaited<ReturnType<typeof handlePluginHostToolRequest>>) => JSON.parse(value.content[0].type === 'text' ? value.content[0].text : '{}').errorCode;
 
+const desktopEntry = createGhostProductionCallbacks<{
+  requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
+}>({ functions: ['requestPluginHostToolCall'] });
+
 describe('plugin Host tool entry', () => {
   // Unit, §1.2: runtime.close is asynchronous too. The old last check ran
   // before cleanup, so an owner switch during close could return old data.
@@ -68,6 +82,168 @@ describe('plugin Host tool entry', () => {
     f.ports.createRuntime = (server, caller) => ({ ...create(server, caller)!, close });
     expect(code(await f.call())).toBe('PERMISSION_DENIED');
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  // Unit performance regression: the new service admission constructed a runtime
+  // for undeclared groups, and Desktop created directories before approval. The
+  // existing policy cases asserted only the final error, missing these side effects.
+  // Include Node's shared browser/computer providers: an undeclared request must
+  // not probe a provider, ask for approval or reach a confirmation before returning.
+  it.each([
+    ['cindy_docs', 'read_sheet'], ['cindy_browser', 'browser'], ['cindy_computer', 'status'],
+  ])('rejects undeclared %s before constructing its runtime', async (server, tool) => {
+    const f = fixture();
+    const create = vi.spyOn(f.ports, 'createRuntime');
+    expect(code(await handlePluginHostToolRequest('dashboard', {
+      type: 'host-tool-request', server, tool, args: {},
+    }, () => true, f.ports))).toBe('PERMISSION_DENIED');
+    expect(create).not.toHaveBeenCalled();
+    expect(f.ports.approveGroup).not.toHaveBeenCalled();
+    expect(f.ports.confirm).not.toHaveBeenCalled();
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it('creates a private output directory only for an approved Desktop service execution', async () => {
+    const f = fixture(), mkdirSync = vi.fn(), mkdir = vi.fn(async () => {});
+    f.ghost.manifest.agent!.hostTools = ['docs'];
+    f.ghost.approvedHostToolGroups = [];
+    const api = desktopEntry({ handlePluginHostToolRequest, findGhostForInstanceId: () => f.ghost,
+      getActiveDataOwnerPushStamp: f.ports.owner, ghostInstallApprovalToken: () => 'r1',
+      ownerScopedUserDataPath: () => '/fixture/private', fs: { mkdirSync, promises: { mkdir } },
+      createHostToolRuntime: () => ({ describe: () => ({ name: 'read_sheet', category: 'read' }), call: f.invoke, close: async () => {} }),
+      requestPluginTaskApproval: async () => f.ghost.approvedHostToolGroups!.includes('docs'),
+      getDesktopMcpToolApprovalPolicy: () => 'auto-approve', log: { info: vi.fn() },
+    });
+    const request = () => api.requestPluginHostToolCall('dashboard', { type: 'host-tool-request', server: 'cindy_docs', tool: 'read_sheet', args: {} }, () => true);
+    await request();
+    expect(mkdirSync).not.toHaveBeenCalled();
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(f.invoke).not.toHaveBeenCalled();
+    f.ghost.approvedHostToolGroups = ['docs'];
+    expect(await request()).toEqual(f.result);
+    expect(mkdirSync).not.toHaveBeenCalled();
+    expect(mkdir).toHaveBeenCalledExactlyOnceWith('/fixture/private', { recursive: true });
+  });
+  // Item 28, unit: the real sandbox lifecycle and production exit callback must
+  // close the native service scope. Node stop coverage missed the logic-page
+  // stop/crash/update path added for computer connections in item 26.
+  // #9825 review: resident Node resources can predate the first logic page.
+  // Prior stop/crash/update coverage opened connections only after starting.
+  // Execute both production callbacks with the real GhostRuntime transitions.
+  it.each([
+    ['desktop', 'stop'], ['desktop', 'crash'], ['desktop', 'update'],
+    ['host', 'stop'], ['host', 'crash'], ['host', 'update'],
+  ] as const)('%s keeps an existing connection while starting, then releases it after logic-page %s', async (environment, action) => {
+    const owner = { dataOwnerId: 'owner', ownerGeneration: 31 };
+    const caller = { ...owner, kind: 'plugin' as const, pluginId: 'dashboard' };
+    setHostToolProviders([{ name: 'cindy_computer', toClaudeSdkConfig: () => null, toHostTools: () => {
+      let count = 0, open = true;
+      return { list: () => [{ name: 'status', category: 'computer' }],
+        describe: name => ({ name, category: 'computer' }),
+        call: async () => { if (!open) throw new Error('CONNECTION_CLOSED'); return { content: [{ type: 'text', text: String(++count) }] }; },
+        close: async () => { open = false; } };
+    } }], owner);
+    const handles: Array<SandboxHandle & { gone(): void }> = [];
+    const noop = () => {};
+    const deps = { GhostRuntime,
+      electronSandboxAdapter: { create() {
+        let onGone: ((details: { reason: string }) => void) | null = null;
+        const handle = { load: async () => {}, destroy: noop, onGone: (fn: (details: { reason: string }) => void) => { onGone = fn; },
+          crashForTest: () => onGone?.({ reason: 'crashed' }), gone: () => onGone?.({ reason: 'oom' }) };
+        handles.push(handle); return handle;
+      } },
+      isValidPluginInstallRelId, pluginInstallStoragePart,
+      log: { info: noop, warn: noop }, disconnectRoutineSource: noop,
+      releasePluginUiRegions: noop, releasePluginAppearance: noop,
+      pluginDeviceSync: { invalidate: noop }, pluginLiveScreenViews: { invalidate: noop }, getGhostPipeDispatcher: () => ({ onRuntimeState: noop }),
+      networkSlotSingleton: null, fsSlotSingleton: null, getDesktopHostTerminalService: () => ({ disposePlugin: noop }),
+      disposePluginHostTools, modelPickerSingleton: null, pluginInvocations: { invalidate: noop },
+      invocationRuntimeGenerations: new Map(), broadcastGhostRuntimeStates: noop,
+    };
+    const runtime = environment === 'desktop' ? lifecycle(deps).getGhostRuntime() : hostLifecycle({
+      GhostRuntime, sandbox: { adapter: deps.electronSandboxAdapter }, log: deps.log,
+      network: { disposeGhost: noop }, fsSlot: { disposePlugin: noop },
+      options: { publish: noop, onPluginStopped: disposePluginHostTools }, dispatcher: { onRuntimeState: noop },
+    }).runtime;
+    const ghost = fixture().ghost;
+    try {
+      const old = createHostToolRuntime('cindy_computer', caller)!;
+      expect((await old.call('status')).content[0]).toMatchObject({ text: '1' });
+      await runtime.spawn(ghost);
+      expect((await old.call('status')).content[0]).toMatchObject({ text: '2' });
+      if (action === 'stop') runtime.stop('dashboard');
+      if (action === 'crash') handles.at(-1)!.gone();
+      if (action === 'update') await runtime.spawn({ ...ghost, manifest: { ...ghost.manifest, version: '2.0.0' }, approval: { state: 'approved', revision: 'r2' } });
+      await expect(old.call('status')).rejects.toThrow('CONNECTION_CLOSED');
+      if (action !== 'update') await runtime.spawn(ghost);
+      expect((await createHostToolRuntime('cindy_computer', caller)!.call('status')).content[0]).toMatchObject({ text: '1' });
+    } finally { runtime.destroyAll(); setHostToolProviders([], { ...owner, ownerGeneration: 32 }); }
+  });
+
+  it('rejects malformed server identities before service lookup', async () => {
+    const f = fixture();
+    expect(code(await handlePluginHostToolRequest('dashboard', {
+      type: 'host-tool-request', server: { toString: null }, tool: 'browser', args: {},
+    }, () => true, f.ports))).toBe('INVALID_PARAMS');
+    expect(f.ports.approveGroup).not.toHaveBeenCalled();
+  });
+
+  it('keeps computer observations per plugin until stop and honors live provider disable', async () => {
+    const owner = { dataOwnerId: 'owner', ownerGeneration: 4 };
+    const caller = { ...owner, kind: 'plugin' as const, pluginId: 'one' };
+    let enabled = true;
+    const close = vi.fn(async () => {});
+    const create = vi.fn(() => { let count = 0; return {
+      describe: (name: string) => ({ name, category: 'computer' }),
+      call: async () => ({ content: [{ type: 'text' as const, text: String(++count) }] }), close,
+    }; });
+    setHostToolProviders([{ name: 'cindy_computer', isEnabled: () => enabled, toClaudeSdkConfig: () => null, toHostTools: create }], owner);
+    // Catalog inspection closes its own detached descriptor before active calls.
+    create.mockClear(); close.mockClear();
+    try {
+      const first = createHostToolRuntime('cindy_computer', caller)!;
+      expect((await first.call('status')).content[0]).toMatchObject({ text: '1' });
+      await first.close();
+      const next = createHostToolRuntime('cindy_computer', caller)!;
+      expect((await next.call('status')).content[0]).toMatchObject({ text: '2' });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect((await createHostToolRuntime('cindy_computer', { ...caller, pluginId: 'two' })!.call('status')).content[0]).toMatchObject({ text: '1' });
+      enabled = false;
+      expect(createHostToolRuntime('cindy_computer', caller)).toBeNull();
+      enabled = true;
+      disposePluginHostTools('one');
+      expect((await createHostToolRuntime('cindy_computer', caller)!.call('status')).content[0]).toMatchObject({ text: '1' });
+      setHostToolProviders([], { ...owner, ownerGeneration: 5 });
+      expect(createHostToolRuntime('cindy_computer', caller)).toBeNull();
+      expect(close).toHaveBeenCalledTimes(3);
+    } finally { setHostToolProviders([], { ...owner, ownerGeneration: 6 }); }
+  });
+
+  // Item 26: these existing services were inaccessible from the public plugin entry.
+  // One approved plugin is enough to expose group/category confusion and risky calls.
+  it.each([
+    ['cindy_browser', 'browser', 'browser', { action: 'status' }, false],
+    ['cindy_browser', 'browser', 'browser', { action: 'setBackend', backend: 'user-browser' }, true],
+    ['cindy_computer', 'computer', 'status', {}, false],
+    ['cindy_ssh', 'ssh', 'ssh_exec', { host: 'example', command: 'pwd' }, true],
+    ['cindy_docs', 'docs', 'read_sheet', { path: 'own.csv' }, false],
+    ['cindy_docs', 'docs', 'make_docx', { outPath: 'own.docx', markdown: 'Report' }, true],
+  ] as const)('opens %s/%s through its existing risk policy', async (server, group, tool, args, confirmed) => {
+    const f = fixture();
+    f.ghost.manifest.agent!.hostTools = [group];
+    f.ghost.approvedHostToolGroups = [group];
+    f.ports.createRuntime = () => ({ describe: name => ({ name, category: group === 'docs' ? 'read' : group }),
+      call: async () => f.result, close: async () => {} });
+    f.ports.policy = (serverName, name, input) => getDesktopMcpToolApprovalPolicy(serverName === 'cindy_docs'
+      ? { serverName, toolName: name, toolParams: input }
+      : { serverName, toolName: 'call_tool', toolParams: { name, args: input } });
+    const call = () => handlePluginHostToolRequest('dashboard', { type: 'host-tool-request', server, tool, args }, () => true, f.ports);
+    expect(await call()).toEqual(f.result);
+    expect(f.ports.confirm).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+    f.ghost.approvedHostToolGroups = [];
+    expect(code(await call())).toBe('PERMISSION_DENIED');
+    f.ghost.approvedHostToolGroups = [group];
+    f.ghost.manifest.agent!.hostTools = ['history'];
+    expect(code(await call())).toBe('PERMISSION_DENIED');
   });
 
   it('routes the public UI API through the real IPC dispatcher using the sender identity', async () => {
