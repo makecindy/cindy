@@ -1,5 +1,6 @@
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
+import { createHostClaudeSubagentModelAccess } from './subagent-model-access.js';
 import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
 /** Node assembly of the shared Maker agents, provider configuration and MCP transports.
  * Native login, settings and platform integrations are assembled by the owning runtime. */
@@ -569,6 +570,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // the desktop: concurrent external-model subagents report their real usage.
     registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
     getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
+    // As the desktop: an explicit Agent/Task model is checked against the live account facts at
+    // each call; only an authoritative XD snapshot can deny it.
+    resolveClaudeSubagentModelAccess: createHostClaudeSubagentModelAccess({
+      readGatewayKey: () => options.gateway?.credential ?? null,
+      listProviderViews: () => config.publicViews(Boolean(options.gateway?.credential)),
+    }),
     // Skills the user disabled in Cindy, from the profile's activation preferences.
     getDisabledSkillPaths: readDisabledSkillPaths,
     ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),

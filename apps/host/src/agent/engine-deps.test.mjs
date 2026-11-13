@@ -159,3 +159,20 @@ test('Claude gets the MCP duplicate choices main.ts builds from the plugin gatew
   assert.ok(desktop.includes("import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';"));
   assert.ok(desktop.includes('    const claudeAgent = new ClaudeCodeAgent({\n      resolveLocalMcpDuplicateChoices,\n'));
 });
+
+test('Claude checks explicit subagent models with the Host gateway key and provider views', { timeout: TEST_TIMEOUT_MS }, async t => {
+  const graph = buildGraph(t, 'engine-deps-subagent-access');
+  const resolve = graph.agent.deps.resolveClaudeSubagentModelAccess;
+  assert.equal(typeof resolve, 'function');
+  // No authoritative XD snapshot in this process: nothing can be denied.
+  assert.deepEqual(await resolve({ providerId: 'xd', parentModel: 'fixture-model', model: 'claude-haiku-4-5' }), { status: 'unknown' });
+  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
+  assert.ok(runtime.includes([
+    '    resolveClaudeSubagentModelAccess: createHostClaudeSubagentModelAccess({',
+    '      readGatewayKey: () => options.gateway?.credential ?? null,',
+    '      listProviderViews: () => config.publicViews(Boolean(options.gateway?.credential)),',
+    '    }),',
+  ].join('\n')));
+  const desktop = fs.readFileSync(desktopIndex, 'utf8');
+  assert.ok(desktop.includes('      resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,\n'));
+});
