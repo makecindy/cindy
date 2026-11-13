@@ -7,7 +7,13 @@
 原有 worktree 源分支选择不变。SSH 不接入，Mobile 本次不新增入口。
 新通道使用既有可信 Renderer / 同账号 invoke 身份与 `baseRepo` 路径检查，不加入共享任务访客白名单。
 `status` 返回检出目录、占用分支与本机任务的只读状态；`switch / undo / restore` 在执行电脑
-重新检查状态再操作 Git。每次显式写入带唯一 `operationId`，耗时操作返回 pending，
+重新检查状态再操作 Git。`CheckoutStatus.ignoredCollision` 是可选的冲突详情，包含目标分支
+和会被覆盖的被忽略文件路径；缺少该字段的旧端仍按通用 `blocked: "conflict"` 处理，不能
+把缺少详情当成没有冲突。`CheckoutReceipt.fetchedCommits` 是可选的本次切换前从所选远程
+引用快进获取的提交数；缺少该字段的旧端按 0 处理，只是不显示“已拉取新提交”的附加说明，
+不影响切换、撤销或回执本身。新端收到未知字段继续忽略，发送方不得把这两个可选字段变成
+请求必填项。
+每次显式写入带唯一 `operationId`，耗时操作返回 pending，
 `result` 只查询同账号、同控制端、同目录的原操作，不重放 checkout 或 stash。
 暂存写入具名 `refs/stash`，可经 Git 自行恢复；不依赖数据库迁移，降级也不丢暂存内容。
 撤销仅允许当前仍在切换后的分支，不回滚快进获取的提交。
