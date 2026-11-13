@@ -104,7 +104,7 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 本机目录包含隐藏和归档伙伴；远程目录沿用来源宿主既有的远程伙伴可见范围，在分页前过滤并在返回时复核，不扩大远程管理权限。
 `list_sessions` 包含隐藏任务，并在隐藏时返回 `hiddenAt`。普通任务、独立对话、伙伴私聊、话题和渠道专线均以数据库里实际保存的来源和关系为准。未查到的电脑保留错误与 `partial`，不据此认定任务不存在。
 
-`get_chat_history`、`search_chat_history` 与 `get_task_digest` 沿用原工具。完整导出由插件逐页读取历史后组装，不另设宿主导出接口。
+`get_chat_history`、`search_chat_history` 与 `get_task_digest` 沿用原工具。需要原生可导入任务包时使用 `export_session`，不必自行组装历史。
 
 `read_session_attachment` 只覆盖已有宿主授权的本机媒体和交接引用：Cindy 管理的聊天媒体、已授予当前插件的 grant / deposit，以及已有的 handoff 回执。历史消息 JSON 的 `files.path`、绝对路径或旧文件直读 URL 不构成授权，返回 `UNSUPPORTED_CAPABILITY`；跨电脑任务也返回此错误，不发起远程查询或传输。
 `attachment_index` 从 0 开始，沿用先图片、后普通文件的历史位置；普通文件位置不能直接取源，须使用已有 `attachment_ref`：
@@ -118,3 +118,40 @@ const result = await cindy.host.call('cindy_helper', 'read_session_attachment', 
 文本结果中的 `base64` 为本段字节，每次最多 64 KiB；`name`、`mimeType`、`size` 与 `sha256` 描述整份附件。`nextOffset` 非空时继续传 `offset:nextOffset`，媒体带回 `mediaHash`，普通文件带回原 `attachment_ref`，直到返回 null；保留同一组任务、消息和附件序号。两类续读都从已有 grant / 交接副本按范围读取，不重复读取来源、入仓或对整份文件重算摘要。普通文件的摘要标识原交接内容，组装完成后必须核对 SHA-256；交接副本被编辑或校验不符时丢弃本次组装，使用既有授权交接流程重新取得。不能混合不同版本的分块，也不能把正文里的路径或链接当成附件传入。
 
 媒体复用既有聊天附件账本或当前插件的 grant / deposit，返回 `mediaHash`；不把孤立媒体或其他插件的作品当作公共附件。普通文件仅读取已有的 7 天 handoff 交接副本，回执也可交给现有 `upload.handoff`，本工具不凭历史路径创建副本。插件逻辑页和 Node 都只得到引用、元数据与分块字节，不得到宿主绝对路径。回执过期返回 `HANDOFF_UNAVAILABLE`，通过既有交接流程重新取得；账号、安装或批准变化使读取失效。
+
+## 原生任务包导入导出
+
+`history` 组的 `export_session` 与 `control` 组的 `import_session` 同时供 Agent 和插件调用，均使用
+`prompt-each-time`，沿用宿主现有权限流程。只处理本机；跨电脑仍使用原有任务迁移功能。
+
+```js
+const exported = await cindy.host.call('cindy_helper', 'export_session', {
+  session_id: selectedSessionId, exclude_media: false
+});
+// 解析 MCP 文本结果中的 attachment_ref，再交给已有文件上传/读取流程，或原生导入：
+const imported = await cindy.host.call('cindy_helper', 'import_session', {
+  attachment_ref: selectedFileRef, overwrite: false
+});
+```
+
+导出复用原生 `.cshare` 打包器，包含可见历史、可用媒体、原生续做记录与适用的协同关系；原生导入也兼容旧
+`.xdtshare`。文件默认不加密，可能含敏感任务内容；不会自动上传。运行中的任务可能缺最后一轮。
+`fidelity`、`missing_transcript_count`、`media_missing`、`media_dropped` 和 `orca_workers` 如实描述打包结果。
+原生超限返回 `status: 'oversize'`，不产生文件；可显式选择 `exclude_media:true` 再导出。
+
+插件导出返回本实例的 `attachment_ref`、`name`、`size`、`sha256`，不返回宿主文件路径。复用既有 handoff
+的 7 天生命周期、单文件 64 MiB 和每实例 512 MiB / 200 文件配额；引用可用于已有 `upload.handoff` 与
+`read_session_attachment`。插件导入只接本实例已有 `attachment_ref`，例如此前用户通过 `ghost_call.attachments`
+交出的文件，或本实例的导出结果。插件不能提交 `output_path`、`file_path` 或 `working_dir`，也不能借引用读取其他实例的文件。
+导入从既有 handoff 的同一安全句柄读取并核对原始 SHA-256，再把已核对字节交给原生解析器；副本被编辑后须重新交接。
+
+Agent 导出由用户在原生保存对话框中选择位置，成功后将最终 `file_path` 返回给 Agent；取消选择则返回 `canceled`。
+导出工具不接受 `output_path`，沿用既有 schema 的未知参数校验返回 `INVALID_ARGS`，不允许 Agent 指定导出位置。
+Agent 导入传 `file_path`，
+项目任务还可传 `working_dir` 和 `use_worktree`；相对路径按调用任务的本机工作目录解析，SSH 路径不支持。
+导入复用原生校验、事务、资源补偿和通知，默认不覆盖；`overwrite:true` 表示按原生规则替换冲突任务，须明确有此意图。
+
+加密包，或未提供目标目录的项目包，会打开同一个原生导入向导，由主人填写密码或选择目录。
+此时返回 `status: 'awaiting_user'` 和 `reason`，不代表已导入；向导里的目录、模型、worktree 与覆盖选择以主人实际填写为准。
+工具不收密码、不代替主人确认。直接导入完成才返回 `status: 'imported'`、`session_id`、`fidelity`、`notes` 和 `orca_workers`。
+引用失效返回 `HANDOFF_UNAVAILABLE`；冲突返回 `SHARE_CONFLICT`，不会自动覆盖或重试。结果不明时先查任务历史，避免重复导入。
