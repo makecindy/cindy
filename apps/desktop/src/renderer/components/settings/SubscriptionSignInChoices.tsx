@@ -223,6 +223,7 @@ function SignInPlacementChoice({
           const selected = option.id === into;
           return (
             <button
+              data-settings-search-action="Choose whether a new subscription account becomes its own provider or joins one"
               key={option.id ?? ''}
               type="button"
               role="radio"
@@ -258,7 +259,13 @@ function SignInPlacementChoice({
         >
           {t('subscriptionAccounts.placement.signInContinue')}
         </Button>
-        <Button variant="secondary" size="lg" type="button" onClick={onBack}>
+        <Button
+          data-settings-search-action="Go back to the subscription sign-in choices without signing in"
+          variant="secondary"
+          size="lg"
+          type="button"
+          onClick={onBack}
+        >
           {t('subscriptionAccounts.placement.signInBack')}
         </Button>
       </div>
