@@ -46,12 +46,11 @@ export function isSupportedControllerPlatform(platform: string | undefined | nul
 const platformByDevice = new Map<string, string>();
 const appByDevice = new Map<string, string>();
 
-/** presence / 冷启动目录快照变更时登记；未知值删除旧连接代残留，保持 fail-closed。 */
+/** 平台未知时清除旧值；旧帧缺省 app 不擦除已知标识，显式新值或 owner reset 才替换。 */
 export function setControllerPlatform(deviceId: string, platform: string | null, app?: string): void {
   if (platform) platformByDevice.set(deviceId, platform);
   else platformByDevice.delete(deviceId);
   if (app) appByDevice.set(deviceId, app);
-  else appByDevice.delete(deviceId);
 }
 
 /** App labels have the same self-reported, presentation-only trust as platform. */

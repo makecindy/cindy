@@ -13,6 +13,9 @@
 - `HelloPayload`、`PresenceSnapshot`、Device Link `DeviceView` 及 Desktop 的目录投影增加可选 app，
   把 App 标识送到实时分流与桌面/手机共享可控列表；Cindy 两端 hello 显式报 `cindy`。
   Node SDK 和 portable SDK 都把元数据传入 presence；V1 服务不需要实现这个标识。
+- 在线对等帧省略 app 时，用已验目录或同一节点的已知 App 补齐；目录更新也发布给已有在线对等连接。
+  Desktop 冷启动目录与实时 presence 共用 App 缓存，缺省帧不擦除已知值，显式值可替换；
+  账号/连接边界仍按原入口清空进程内缓存，未知旧设备继续按 Cindy 处理。
 - App 与 platform 都是自报值，只用于体验和分流。登录、成员证明、控制开关、撤销名单、通道白名单与最终授权不变。
   **设备证书仍是原来的固定 11 字段，不加 app；capabilities 仍仅为在线能力。**
 

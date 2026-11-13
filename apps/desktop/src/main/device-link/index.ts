@@ -339,17 +339,19 @@ export function applyControllerPresenceListSnapshot(
     forgetOnline: (deviceId) => { if (!hasOfflineDirectPath(deviceId)) presenceOnlineByDevice.delete(deviceId); },
     setPlatform: setControllerPlatform,
     setName: (deviceId, name) => presenceNameByDevice.set(deviceId, name),
-    shouldNotifyPeerOnline: ({ deviceId, online, platform, app }) =>
-      online &&
-      isCindyApp(app) &&
-      !isDeviceRevoked(deviceId) &&
-      (isMobilePlatform(platform) ||
-        shouldExchangeDictionaryWith({
-          online,
-          platform,
-          app,
-          revoked: false,
-        })),
+    shouldNotifyPeerOnline: ({ deviceId, online, platform, app }) => {
+      const controllerApp = app ?? getControllerApp(deviceId);
+      return online &&
+        isCindyApp(controllerApp) &&
+        !isDeviceRevoked(deviceId) &&
+        (isMobilePlatform(platform) ||
+          shouldExchangeDictionaryWith({
+            online,
+            platform,
+            app: controllerApp,
+            revoked: false,
+          }));
+    },
     onPeerControlEnabled: (deviceId) => {
       client?.noteRemoteControlEnabled(deviceId);
       presenceOnlineByDevice.set(deviceId, true);
@@ -1263,7 +1265,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     transportTimeoutReopen.trigger(deviceId);
     return true;
   });
-  client.onPresenceChanged((snap: PresenceSnapshot) => {
+  client.onPresenceChanged((received: PresenceSnapshot) => {
+    const snap = { ...received, app: received.app ?? getControllerApp(received.deviceId) };
     markControllerPresenceFresh(controllerPresenceFreshness, snap.deviceId);
     if (snap.online === true && snap.remoteControlEnabled === false) {
       presenceControlDisabledByDevice.add(snap.deviceId);
