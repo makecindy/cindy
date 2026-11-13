@@ -5,9 +5,8 @@ const DEFAULT_ACQUIRE_TIMEOUT_MS = 5_000;
 // CI workers two shards can start this helper together and exceed five seconds
 // before the script emits its first status line.
 const HELPER_START_TIMEOUT_MS = 15_000;
-// Add-Type loads the CLR compiler and can take several seconds on a saturated
-// Windows runner. Keep the mutex already held while giving that cold path a
-// larger, bounded budget so a healthy helper is not mistaken for a timeout.
+// Bound native-probe preparation and the window query independently from mutex
+// contention. Preparing P/Invoke in memory avoids a C# compiler cold start.
 const HELPER_PROBE_TIMEOUT_MS = 15_000;
 const HELPER_EXIT_TIMEOUT_MS = 2_000;
 const MAX_HELPER_OUTPUT_BYTES = 16 * 1024;
@@ -33,26 +32,42 @@ try {
 
   [Console]::Out.WriteLine('{"status":"locked"}')
   [Console]::Out.Flush()
-  Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-public static class CindyProcessSingletonProbe {
-  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  public static extern IntPtr FindWindowEx(
-    IntPtr parent,
-    IntPtr childAfter,
-    string className,
-    string windowName
-  );
-
-  [DllImport("user32.dll", SetLastError = true)]
-  public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
-}
-'@
+  # Define the two existing user32 calls without launching the C# compiler or
+  # generating temporary assemblies. All preparation and probing stay under
+  # the startup mutex; failures still reject adoption and release it in finally.
+  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly(
+    [System.Reflection.AssemblyName]::new('CindyProcessSingletonProbe'),
+    [System.Reflection.Emit.AssemblyBuilderAccess]::Run
+  )
+  $module = $assembly.DefineDynamicModule('CindyProcessSingletonProbe')
+  $probe = $module.DefineType('CindyProcessSingletonProbe', 'Public, Abstract, Sealed')
+  $methods = @(
+    @{ Name = 'FindWindowEx'; EntryPoint = 'FindWindowExW'; Result = [IntPtr];
+       Parameters = [Type[]]@([IntPtr], [IntPtr], [string], [string]) },
+    @{ Name = 'GetWindowThreadProcessId'; EntryPoint = 'GetWindowThreadProcessId'; Result = [uint32];
+       Parameters = [Type[]]@([IntPtr], [uint32].MakeByRefType()) }
+  )
+  foreach ($definition in $methods) {
+    $method = $probe.DefinePInvokeMethod(
+      $definition.Name,
+      'user32.dll',
+      $definition.EntryPoint,
+      [System.Reflection.MethodAttributes]'Public, Static, PinvokeImpl',
+      [System.Reflection.CallingConventions]::Standard,
+      $definition.Result,
+      $definition.Parameters,
+      [System.Runtime.InteropServices.CallingConvention]::Winapi,
+      [System.Runtime.InteropServices.CharSet]::Unicode
+    )
+    $method.SetImplementationFlags([System.Reflection.MethodImplAttributes]::PreserveSig)
+    if ($definition.Name -eq 'GetWindowThreadProcessId') {
+      [void]$method.DefineParameter(2, [System.Reflection.ParameterAttributes]::Out, 'processId')
+    }
+  }
+  $nativeProbe = $probe.CreateType()
 
   $messageOnlyWindow = [IntPtr]::new(-3)
-  $window = [CindyProcessSingletonProbe]::FindWindowEx(
+  $window = $nativeProbe::FindWindowEx(
     $messageOnlyWindow,
     [IntPtr]::Zero,
     $env:CINDY_SINGLETON_WINDOW_CLASS,
@@ -60,7 +75,7 @@ public static class CindyProcessSingletonProbe {
   )
   if ($window -ne [IntPtr]::Zero) {
     [uint32]$ownerPid = 0
-    [void][CindyProcessSingletonProbe]::GetWindowThreadProcessId($window, [ref]$ownerPid)
+    [void]$nativeProbe::GetWindowThreadProcessId($window, [ref]$ownerPid)
     if ($ownerPid -ne [uint32]$env:CINDY_SINGLETON_SELF_PID) {
       [Console]::Out.WriteLine((@{ status = 'occupied'; pid = $ownerPid } | ConvertTo-Json -Compress))
       [Console]::Out.Flush()
@@ -129,7 +144,7 @@ function waitForBarrierStatus(
       child.off('exit', onExit);
       settle();
     };
-    // timeoutMs 只度量 mutex 竞争；PowerShell 冷启动与 Add-Type 编译是独立阶段，
+    // timeoutMs 只度量 mutex 竞争；PowerShell 冷启动与原生探测准备是独立阶段，
     // 满载 CI 上共预算会把健康的 acquire 误杀成超时。
     const armTimeout = (durationMs: number, stage: string): void => {
       clearTimeout(timer);
@@ -164,7 +179,7 @@ function waitForBarrierStatus(
         if (status.status === 'started') {
           armTimeout(timeoutMs + 1_000, 'waiting for');
         } else if (status.status === 'locked') {
-          // Add-Type + message-window 探测只在 mutex 安全持有后发生。
+          // Native preparation + message-window 探测只在 mutex 安全持有后发生。
           armTimeout(HELPER_PROBE_TIMEOUT_MS, 'probing');
         } else {
           finish(() => resolve({ line, stderr }));
