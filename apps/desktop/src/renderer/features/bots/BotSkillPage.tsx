@@ -165,7 +165,6 @@ function LearnedPage({ bot, slug, editing, onEdit, onDeleted, onChanged, editorD
   };
   const remove = async () => {
     const ok = await confirm({
-      presentation: 'standard',
       title: t('bots.capabilities.learned.deleteTitle', { name: detail.name }),
       description: t('bots.capabilities.learned.deleteBody'),
       confirmText: t('bots.capabilities.learned.delete'),

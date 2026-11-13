@@ -371,15 +371,21 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
   // 撤回 11-10 的默认开放：等拿到本账号完整的分享快照，那段时间里用户建过分享的供应商补记为打开。
   // 补记只做一次，有分享服务暂时读不到、或账号池文件读不了时不做，等下一次再试。
+  let accessDefaultMigrated = false;
+  let accessDefaultMigrating = false;
   const migrateAccessDefault = () => {
+    if (accessDefaultMigrated || accessDefaultMigrating) return;
     const loaded = getProviderShareHostCompleteSnapshot();
     if (!loaded) return;
     const ids = sharedProviderIdsForRevert(loaded, readOpenAiLegacyAccountsIfReadable);
     if (!ids) return;
+    accessDefaultMigrating = true;
     void keepSharedProvidersOpen(ids)
-      .catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }));
+      .then(() => { accessDefaultMigrated = true; })
+      .catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }))
+      .finally(() => { accessDefaultMigrating = false; });
   };
-  const stopAccessDefault = onProviderShareHostChanged(migrateAccessDefault);
+  const stopAccessDefault = onProviderShareHostChanged(migrateAccessDefault, { refreshed: true });
   migrateAccessDefault();
   const timer = setInterval(queueAvailabilityPublish, 60_000);
   timer.unref?.();

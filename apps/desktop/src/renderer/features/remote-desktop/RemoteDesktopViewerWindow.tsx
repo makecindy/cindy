@@ -963,7 +963,6 @@ export function RemoteDesktopViewerWindow() {
       </div>
       <ToastContainer />
       <ConfirmDialog
-        presentation="standard"
         open={closeGeneration !== null}
         onOpenChange={(open) => {
           if (!open) setCloseGeneration(null);

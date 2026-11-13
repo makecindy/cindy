@@ -27,6 +27,9 @@ import {
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
@@ -202,7 +205,7 @@ import {
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
 import { prepareVisualMockDeviceLinkContext } from '@/debug/visualMock';
 import { meterDeviceLinkInvokes, recordDeviceLinkPush } from '@/debug/deviceLinkTraffic';
-import { decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
+import { decodeDeflateRawBase64TextBounded, decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
 import { gunzipBase64OffThread } from '@/utils/gunzipOffThread';
 import { createLowPriorityReadGate, isLowPriorityRead, type LowPriorityReadGate } from './lowPriorityReadGate';
 import { invokeMetricLabel, jankMetricsEnabled, recordInvokeSent, recordInvokeTransfer, recordPresenceUpdate, recordPushHandled } from '@/debug/jankMetrics';
@@ -309,6 +312,13 @@ const CONTROLLER_CAPABILITIES = [
   // (见 remoteSessionStore 的 MAKER_EVENT_BATCH_CHANNEL 分支)。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  // 工具行只从 messages:created 建;tool_result 事件不读正文,tool_use 事件只当边界
+  // (update_plan 例外,被控端照发 input)。见 remoteSessionStore.applyMakerEvent。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
+  // 重连后 rebuildSessionSnapshot 重读打开中的任务页;被控端因此把重连前已读且折叠的任务
+  // 保持折叠到重读完成,离线积压不留历史详情。
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
 ];
 
 // 任意目标端真实应答的独立时序证据。它不等同于 presence verdict,也不参与 IPC/DB
@@ -1189,6 +1199,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         capabilities: [SHARED_TASK_CAPABILITY],
         deviceName: mobileDeviceName(),
         platform: Platform.OS,
+        app: 'cindy',
         appVersion: Constants.expoConfig?.version ?? '0.0.0',
         remoteControlEnabled: false,
         busy: false,
@@ -1198,7 +1209,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       logger: mobileDeviceLinkLogger,
       // 弱网减流量：声明可解 gzip，大结果压缩、内容未变的结果只回标记（被控端支持时）。
       // 大结果在后台 runtime 解压，不占 JS 线程；不可用时内部回落 pako。
-      transferCodec: { gunzipBase64: decodeGzipBase64TextBounded, gunzipBase64Async: gunzipBase64OffThread },
+      // inflateRawBase64 让建链时声明 push-deflate：推送按序在 JS 线程同步解开（单条推送有界）。
+      transferCodec: {
+        gunzipBase64: decodeGzipBase64TextBounded,
+        gunzipBase64Async: gunzipBase64OffThread,
+        inflateRawBase64: decodeDeflateRawBase64TextBounded,
+      },
       invokeMetrics: { enabled: jankMetricsEnabled, record: recordInvokeTransfer, label: invokeMetricLabel },
       // Mobile 具备按 deviceId 独立 openLink/订阅/快照恢复能力。可靠 ACK
       // 耗尽时只复位该 peer，共享 WSS 和其它远端继续工作；恢复仍只使用所有
@@ -1812,7 +1828,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isBackground: () => AppState.currentState === 'background',
       releaseTopics: releaseHeavyTopics,
       pendingTransitions: () => [...backgroundTransitions.current],
-      stop: () => client.stop(),
+      // 同一 client 的结果缓存跨后台保留；通知动作的 hold / reconnect 逻辑沿用主干。
+      stop: () => client.stop({ retainResultCache: true }),
       isHeld: () => backgroundHoldsRef.current > 0,
       // A tapped notification action is an explicit request too: it may leave the cooldown.
       connect: (reason) => client.connectAllNow(reason === 'hold' ? 'notification-action' : 'appstate-active', {

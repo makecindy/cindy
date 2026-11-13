@@ -45,6 +45,13 @@ it("keeps every row and tag while reducing a >4MiB result below legacy frame lim
   );
   expect(decodeSessionTagCatalog(channel, packed)).toEqual(rows);
 });
+it("numbers tags independently of row order so a moved task leaves other rows byte-identical", () => {
+  const red = { id: "red", name: "Red" };
+  const blue = { id: "blue", name: "Blue" };
+  const before = encodeSessionTagCatalog(channel, options, [{ id: "a", tags: [red] }, { id: "b", tags: [blue] }]) as { sessions: unknown[] };
+  const after = encodeSessionTagCatalog(channel, options, [{ id: "b", tags: [blue] }, { id: "a", tags: [red] }]) as { sessions: unknown[] };
+  expect(after.sessions[1]).toEqual(before.sessions[0]);
+});
 it("preserves absent/empty tags, order and differing versions of the same tag ID", () => {
   const rows = [
     { id: "a" },
