@@ -6,6 +6,9 @@ const FAILURE_RETRY_MS = 5 * 60_000;
 const MAX_PARALLEL_DISCOVERIES = 4;
 type DiscoveryScheduler = <T>(work: () => Promise<T>) => Promise<T>;
 
+/** Local cancellation before dispatch is not a failed upstream read. */
+export class ModelSourceRecoveryCanceled extends Error {}
+
 interface ModelSourceRevalidationDeps {
   fetchModels(config: CustomProviderConfig, agent: AgentKind, isCurrent: () => boolean, schedule: DiscoveryScheduler): Promise<DiscoveredModel[] | null | { retryAt: number }>;
   save(id: string, previous: CustomProviderConfig, next: CustomProviderConfig): Promise<boolean>;
@@ -83,14 +86,20 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
       const agents = eligible.map(context => context.agent);
       // Cooling eligibility changes independently of the shared in-flight work.
       const signature = modelSourceRequestSignature(JSON.stringify([scope, contexts.map(context =>
-        [context.agent, context.deadlineSignature])]), {});
+        [context.agent, context.deadlineSignature, [...new Set(context.runtime.models.map(model => model.id))].sort()])]), {});
       let read = reads.get(config.id);
       if (!read || read.signature !== signature) {
         const promise = Promise.all(eligible.map(async ({ agent, retainDeadline }) => {
           // The HTTP layer coalesces identical requests before taking a slot;
           // queued sibling runtimes must join the same read rather than refetch.
-          const result = await Promise.resolve().then(() =>
-            isCurrent() ? deps.fetchModels(config, agent, isCurrent, discover) : null).catch(() => null);
+          const result = await Promise.resolve().then(() => {
+            if (!isCurrent()) throw new ModelSourceRecoveryCanceled();
+            return deps.fetchModels(config, agent, isCurrent, work => discover(async () => {
+              if (!isCurrent()) throw new ModelSourceRecoveryCanceled();
+              return work();
+            }));
+          }).catch(error => error instanceof ModelSourceRecoveryCanceled ? error : null);
+          if (result instanceof ModelSourceRecoveryCanceled) return { agent, models: null };
           if (!Array.isArray(result)) {
             const deadline = Math.max(deps.now() + FAILURE_RETRY_MS, result?.retryAt ?? 0);
             retainDeadline(deadline);

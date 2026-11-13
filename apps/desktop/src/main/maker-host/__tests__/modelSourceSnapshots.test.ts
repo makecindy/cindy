@@ -48,6 +48,59 @@ const savedGateway = (): CustomProviderConfig => ({
 });
 
 describe('model source automatic revalidation', () => {
+  // #9882 canceled-read finding, unit: production queue + deferred replies.
+  // Old coverage stopped after invalidation, missing the next same-owner hint.
+  // Neither pre-dispatch nor slot-queued cancellation may impose a cooldown.
+  it.each([false, true])('immediately retries a canceled recovery queued=%s', async queued => {
+    const configs = Array.from({ length: queued ? 5 : 1 }, (_, i) => ({ ...savedGateway(), id: `cancel-${i}` }));
+    let current = true;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const requests: string[] = [];
+    const revalidate = createModelSourceRevalidator({
+      fetchModels: (config, _agent, isCurrent, schedule) => schedule(async () => {
+        if (!isCurrent()) return null;
+        requests.push(config.id);
+        await gate; return issue();
+      }),
+      save: async () => true, now: () => 0, credentialRevision: () => 0, isMutating: () => false,
+    });
+    const first = revalidate(configs, 'old', () => current, 'owner');
+    if (queued) await vi.waitFor(() => expect(requests).toHaveLength(4));
+    current = false; release();
+    await first;
+    expect(await revalidate([configs.at(-1)!], 'new', () => true, 'owner')).toBe(true);
+    expect(requests.filter(id => id === configs.at(-1)!.id)).toHaveLength(1);
+  });
+
+  // Independent #9882 finding, unit: old discovery filters out a newly saved ID.
+  // Previous edit tests only rejected the old CAS; this second load can pass CAS
+  // with the new config and must retain both models' provenance and user fields.
+  it('isolates in-flight results when saved model membership changes', async () => {
+    const original = savedGateway();
+    let saved = original;
+    let reply!: (models: DiscoveredModel[]) => void;
+    const response = new Promise<DiscoveredModel[]>(resolve => { reply = resolve; });
+    const fetchModels = vi.fn(async () => response);
+    const revalidate = createModelSourceRevalidator({ fetchModels, now: () => 0,
+      credentialRevision: () => 0, isMutating: () => false,
+      save: async (_id, previous, next) => {
+        if (previous !== saved) return false;
+        saved = next; return true;
+      },
+    });
+    const first = revalidate([original], 'scope', () => true);
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalledOnce());
+    const added = { ...original.runtimes.pi!.models[0], id: 'two', name: 'Added model' };
+    saved = { ...original, runtimes: { pi: { ...original.runtimes.pi!, models: [...original.runtimes.pi!.models, added] } } };
+    const second = revalidate([saved], 'scope', () => true);
+    reply([...issue(), { ...issue()[0], id: 'two' }]);
+    await Promise.all([first, second]);
+    expect(saved.runtimes.pi!.models.map(model => [model.id, model.discoveredSource?.providerId]))
+      .toEqual([['a/foo', 'A'], ['two', 'A']]);
+    expect(saved.runtimes.pi!.models[1].name).toBe('Added model');
+  });
+
   // Sub-agent review, #9882: a newly cooling sibling must not invalidate the
   // shared discovery while CAS is pending. Unit, production entry + deferred save.
   it('shares discovery through pending CAS when another runtime begins cooling', async () => {

@@ -1,6 +1,7 @@
 import { issueModelSourceSnapshot, modelSourceRequestSignature, stampRecoveredModelSources } from './model-source-snapshots.js';
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
+import { ModelSourceRecoveryCanceled } from './model-source-revalidation.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -28,6 +29,7 @@ import {
   deriveModelsDiscoveryUrl,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
+  type GenericOAuthRefreshResult,
 } from './generic-oauth.desktop.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
 
@@ -120,6 +122,10 @@ export interface ProviderModelsFetchResult {
   detail?: string;
 }
 
+// Coalesce token refreshes before scheduling, just like model reads. Only
+// in-flight work is retained; owner/generation/credentials and descriptor bind it.
+const sourceRecoveryOAuthRefreshes = new Map<string, Promise<void | GenericOAuthRefreshResult>>();
+
 /** Refresh a saved OAuth connection using only Main's route and credential snapshot. */
 export async function fetchSavedOAuthProviderModels(
   provider: Provider | undefined,
@@ -132,18 +138,49 @@ export async function fetchSavedOAuthProviderModels(
 ): Promise<ProviderModelsFetchResult> {
   const oauth = provider?.auth.oauth;
   const route = provider?.routing[agent];
+  if (options.sourceRecovery && !isCurrent()) throw new ModelSourceRecoveryCanceled();
   if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
     return { ok: false, code: 'AUTH_INVALID' };
   }
+  let refreshResult: void | GenericOAuthRefreshResult;
   try {
-    await refreshGenericOAuthIfNeeded(storageProviderId, oauth);
-  } catch {
+    const refresh = async () => {
+      if (options.sourceRecovery && !isCurrent()) throw new ModelSourceRecoveryCanceled();
+      return refreshGenericOAuthIfNeeded(storageProviderId, oauth);
+    };
+    if (options.sourceRecovery && options.scheduleSourceRecovery) {
+      const signature = modelSourceRequestSignature(JSON.stringify([options.sourceRecoveryScope, storageProviderId, oauth]), {});
+      // An absent owner scope cannot authorize sharing across callers.
+      if (!options.sourceRecoveryScope) refreshResult = await options.scheduleSourceRecovery(refresh);
+      else {
+        let pending = sourceRecoveryOAuthRefreshes.get(signature);
+        if (!pending) {
+          pending = options.scheduleSourceRecovery(refresh);
+          sourceRecoveryOAuthRefreshes.set(signature, pending);
+        }
+        try { refreshResult = await pending; } finally {
+          if (sourceRecoveryOAuthRefreshes.get(signature) === pending) sourceRecoveryOAuthRefreshes.delete(signature);
+        }
+      }
+    } else refreshResult = await refresh();
+  } catch (error) {
+    if (error instanceof ModelSourceRecoveryCanceled) throw error;
     return { ok: false, code: 'UNKNOWN' };
+  }
+  // Preserve token-endpoint deadlines even after same-owner generation expiry.
+  // The revalidator independently rejects changed owner/credential contexts.
+  if (options.sourceRecovery && refreshResult?.retryAt) {
+    return { ok: false, code: 'UNKNOWN', retryAt: refreshResult.retryAt };
   }
   // A token refresh can outlive logout, account switching, or edits to this connection.
   // Never use the old endpoint snapshot with credentials from the new owner/configuration.
-  if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
-  const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
+  if (!isCurrent()) {
+    if (options.sourceRecovery) throw new ModelSourceRecoveryCanceled();
+    return { ok: false, code: 'AUTH_INVALID' };
+  }
+  // Recovery already awaited its bounded refresh. A failed refresh must not
+  // trigger another unscheduled attempt through the ordinary hot-path reader.
+  const token = readCachedGenericOAuthAccessToken(storageProviderId, options.sourceRecovery ? undefined : oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
   const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
