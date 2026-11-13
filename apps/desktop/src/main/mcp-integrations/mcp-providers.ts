@@ -13,6 +13,7 @@ import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
+import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
@@ -123,7 +124,7 @@ import { createHostServiceToolExecutor } from '../cindy-brain/hostServiceCatalog
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
 import { forkTaskAtMessage } from '../maker-ipc/fork.js';
 import { commitTaskRewind } from '../maker-ipc/rewind.js';
-import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
+import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
@@ -241,7 +242,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       return {
         ok: false as const,
         errorCode: 'DISABLED_BY_OWNER',
-        message: 'The owner turned off input handoff for this teammate. Tell the owner what is still needed instead.',
+        message: 'The user turned off input handoff for this buddy. Tell the user what is still needed instead.',
       };
     const row = await getSessionRowSnapshot(context.sessionId).catch(() => null);
     return { ok: true as const, service, sessionId: context.sessionId, requester: row?.title?.trim().slice(0, 120) };
@@ -1132,6 +1133,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             ...(['DELIVERY_UNKNOWN', 'CREATED_NOT_DELIVERED'].includes(result.errorCode)
               ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
           const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
+          // Opened from a group: the group shows the task as a card (bot-group-chat.md §10).
+          reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: title?.trim() || message.split('\n')[0].slice(0, 60) });
           if (recordCreation) {
             try { await (recordCreation as (sessionId: string) => Promise<void>)(qualifiedId); }
             catch { return { ...accepted, responsibilityRecorded: false }; }
@@ -1169,6 +1172,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               : {}),
             ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
           });
+          if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
+            reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
+              title: title?.trim() || message.split('\n')[0].slice(0, 60) });
           if (result.ok && result.wakeKind === 'created' && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
             catch { return { ...result, responsibilityRecorded: false }; }
@@ -1187,7 +1193,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         listAgents: async ({ callerSessionId }) => {
           if (isSessionSharedTaskActive(callerSessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
           const svc = tryGetBotDirectMessageService();
-          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate service is not ready' };
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Buddy service is not ready' };
           return svc.listAgents(callerSessionId);
         },
       },
@@ -1237,7 +1243,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const runtime = activeCompanionCloud();
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const choices = await runtime.homeChoices(teammateId);
-          if (choices.reason === 'NOT_FOUND') return { ok: false, errorCode: 'NOT_FOUND', message: 'No such teammate in this account' };
+          if (choices.reason === 'NOT_FOUND') return { ok: false, errorCode: 'NOT_FOUND', message: 'No such buddy in this account' };
           return { ok: true, teammateId, mode: choices.mode, ...(choices.reason ? { reason: choices.reason } : {}),
             home: choices.homeDeviceId ? { deviceId: choices.homeDeviceId, name: choices.homeName ?? '', isSelf: choices.mode === 'local' } : null,
             choices: choices.targets.map(target => ({ deviceId: target.deviceId, name: target.name, isSelf: target.isSelf === true })) };
@@ -1247,7 +1253,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const result = await runtime.switchHome(teammateId, targetDeviceId, whenBusy ? { whenBusy } : undefined);
           return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
-            : { ok: false, errorCode: result.code, message: `The teammate did not move (${result.code})` };
+            : { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
       },
       botProfiles: {
@@ -1324,6 +1330,29 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             return { ok: false, errorCode: error instanceof PiKernelError ? error.reason : 'PI_RUNTIME_FAILED',
               message: 'Pi 操作未确认完成；请重新读取版本和状态。' };
           }
+        }),
+      },
+      themePackages: {
+        import: (context, filePath) => withAccountDataAccess(context.sessionId, async assertCurrent => {
+          const sessionId = context.sessionId;
+          if (!sessionId) throw new Error('Task caller unavailable');
+          const assertAction = captureTaskActionSyncGuard();
+          const assertCaller = async () => {
+            await assertCurrent();
+            await assertTaskActionCurrent();
+            if (!deps.isCurrentLocalSessionInstance?.(sessionId, context.sessionInstanceId)) throw new Error('Task instance changed');
+          };
+          return importThemePackageFromTask({ filePath, workingDir: context.workingDir ?? '' }, {
+            assertCurrent: assertCaller,
+            assertCurrentSync: () => {
+              assertAction?.();
+              if (!deps.isCurrentLocalSessionInstance?.(sessionId, context.sessionInstanceId)) throw new Error('Task instance changed');
+            },
+            authorizePath: absolutePath => authorizeDesktopSessionPath({
+              sessionId, sessionInstanceId: context.sessionInstanceId, workingDir: context.workingDir ?? '',
+              path: absolutePath, toolName: 'cindy_helper.import_theme_package', operation: 'read',
+            }, deps.getLiveSessionGrantState),
+          });
         }),
       },
       appSettings: {

@@ -111,7 +111,7 @@ function botTaskDispatchSlice(): string {
     '\n  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);',
   );
   const groupDispatch = slice(
-    '({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>',
+    '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, onQueued, onAccepted }) =>',
     ',\n    prepareAttachments:',
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );

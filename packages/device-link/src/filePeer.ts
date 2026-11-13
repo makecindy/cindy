@@ -1,6 +1,16 @@
 /** File bytes travel on WebRTC; this channel carries only authorized signaling. */
 export const FILE_PEER_CHANNEL = "device-link:file-peer";
 export const FILE_PEER_VERSION = 1;
+/** Negotiated seek reads reuse the existing files-v2 data channel. */
+export const FILE_PEER_RANGE_BYTES = 1024 * 1024;
+export interface FilePeerRange { start: number; end: number; version: string; }
+export function parseFilePeerRange(value: unknown): FilePeerRange {
+  const r = value as FilePeerRange | null;
+  if (!r || !Number.isSafeInteger(r.start) || !Number.isSafeInteger(r.end) || r.start < 0 ||
+    r.end < r.start || r.end >= FILE_PEER_MAX_BYTES || r.end - r.start >= FILE_PEER_RANGE_BYTES ||
+    typeof r.version !== 'string' || !/^[a-f0-9]{64}$/.test(r.version)) throw new Error('FILE_PEER_RANGE');
+  return { start: r.start, end: r.end, version: r.version };
+}
 export const FILE_PEER_CHUNK_BYTES = 16 * 1024;
 export const FILE_PEER_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 export const FILE_PEER_MAX_CONNECTIONS = 4;
@@ -11,7 +21,7 @@ export const FILE_PEER_WRITE_BATCH_BYTES = 256 * 1024;
 export type FilePeerRequest =
   | { action: "caps" }
   | { action: "offer"; sdp: string; sessionBound?: boolean }
-  | { action: "open"; connection: string; url: string }
+  | { action: "open"; connection: string; url: string; range?: FilePeerRange }
   | { action: "attachment"; connection: string; request: Record<string, unknown> }
   | { action: "close"; connection: string };
 
@@ -46,7 +56,8 @@ export function parseFilePeerRequest(value: unknown): FilePeerRequest {
     v.url.length > 0 &&
     v.url.length <= 16 * 1024
   )
-    return { action: "open", connection: v.connection, url: v.url };
+    return { action: "open", connection: v.connection, url: v.url,
+      ...(v.range !== undefined ? { range: parseFilePeerRange(v.range) } : {}) };
   throw new Error("INVALID_FILE_PEER_REQUEST");
 }
 

@@ -121,6 +121,23 @@ describe('Maker agent status', () => {
     });
   });
 
+  // Unit regression: offline startup registers agents with a lazy runtime getter.
+  // Status must report the missing install instead of rejecting the IPC.
+  it('reports a registered agent whose lazy runtime is not installed as binary-missing', async () => {
+    const agent = createAgent(async () => undefined, 'claude-code');
+    Object.assign(agent, {
+      getBinaryPath: () => { throw new Error('Claude Code is not installed'); },
+      getAuthState: async () => ({ authenticated: true }),
+    });
+    const maker = new Maker({ agents: { 'claude-code': agent }, storage: createStorage(), logger: createLogger() });
+    await expect(maker.getAgentStatus('claude-code')).resolves.toEqual({
+      binaryReady: false,
+      binaryPath: null,
+      authReady: true,
+      identity: undefined,
+    });
+  });
+
   it('registers an optional agent after construction idempotently', () => {
     const maker = new Maker({
       agents: {},

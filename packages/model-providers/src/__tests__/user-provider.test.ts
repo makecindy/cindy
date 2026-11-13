@@ -857,6 +857,28 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(p.models.codex?.[0].defaultEnabled).toBe(false);
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    'uses a 500K fallback only for unknown %s models without pinning or verifying it', agent => {
+      const models = [
+        { id: 'private-unknown', name: 'Unknown' },
+        { id: 'private-discovered', name: 'Discovered', discoveredMetadata: { contextWindow: 1_000_000 } },
+        { id: 'private-small', name: 'Small', discoveredMetadata: { contextWindow: 32_000 } },
+        { id: 'private-explicit', name: 'Explicit', contextWindow: 200_000,
+          discoveredMetadata: { contextWindow: 1_000_000 } },
+      ];
+      const before = JSON.stringify(models);
+      const provider = buildUserProvider({ id: 'private-relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://private.example/v1', models },
+      } });
+      expect(DEFAULT_CUSTOM_CONTEXT_WINDOW).toBe(500_000);
+      expect(provider.models[agent]?.map(model => model.contextWindow))
+        .toEqual([500_000, 1_000_000, 32_000, 200_000]);
+      expect(provider.models[agent]?.[0].contextWindowVerified).not.toBe(true);
+      expect(provider.models[agent]?.[0].contextWindowExplicit).not.toBe(true);
+      expect(provider.models[agent]?.[0].userModelConfig).not.toHaveProperty('contextWindow');
+      expect(JSON.stringify(models)).toBe(before);
+    });
+
   it("uses explicit runtime model contextWindow and defaults only when absent", () => {
     const p = buildUserProvider({
       ...codexOnly,
@@ -878,15 +900,15 @@ describe("buildUserProvider (per-runtime)", () => {
       ["long-context", 1_000_000],
       ["default-context", DEFAULT_CUSTOM_CONTEXT_WINDOW],
     ]);
-    // 只有用户自己填的窗口算「已核实」,可以拿去收敛运行期上报值;走 200K 兜底的那条
-    // 不标记 —— 否则真实 1M 的端点会被这个展示用默认值压到 200K。
+    // 只有用户自己填的窗口算「已核实」,可以拿去收敛运行期上报值;走兜底的那条
+    // 不标记 —— 否则真实 1M 的端点会被这个展示用默认值压低。
     expect(p.models.codex?.map((m) => [m.id, m.contextWindowVerified])).toEqual(
       [
         ["long-context", true],
         ["default-context", undefined],
       ],
     );
-    // 显式配置打标、缺省物化不打标:编辑表单靠它区分「显式 200K」与「默认 200K」,
+    // 显式配置打标、缺省物化不打标:编辑表单靠它区分显式值与默认值,
     // 不能靠与默认等值推断(显式覆盖必须在默认升级后原样保留)。
     expect(
       p.models.codex?.map((m) => [m.id, m.contextWindowExplicit ?? null]),

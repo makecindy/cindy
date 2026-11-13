@@ -56,6 +56,7 @@ export function TaskRuntimePluginsDialog({ session, onDismiss }: { session: Sess
             for (const target of selected) if (!list.some(item => item.pluginId === target.pluginId)) {
               list.push({ pluginId: target.pluginId, name: t('scheduler.editor.preRunPlugin.unavailable') });
             }
+            if (!list.length) return null;
             const unsupported = point === 'will-model-request' && (session.agentKind !== 'pi' || !!session.remoteHostId || !!session.agentDeviceId)
               || point === 'system-prompt' && session.agentKind === 'pi' && !!session.agentDeviceId;
             const spec = GHOST_CONTROL_POINTS[point];
@@ -63,7 +64,6 @@ export function TaskRuntimePluginsDialog({ session, onDismiss }: { session: Sess
               <legend className="mb-2 text-14 font-medium text-[var(--text-primary)]">{t(`settings.ghosts.perm.${spec.labelKey}`)}</legend>
               {(point === 'will-compose-context' || point === 'will-search-memory') && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(`settings.ghosts.perm.${spec.detailKey}`)}</p>}
               {unsupported && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(point === 'system-prompt' ? 'runtimePlugins.promptUnsupported' : 'runtimePlugins.unsupported')}</p>}
-              {loaded && !list.length && <p className="text-13 text-[var(--text-secondary)]">{t('scheduler.editor.preRunPlugin.empty')}</p>}
               {list.map(plugin => {
                 const target = selected.find(item => item.pluginId === plugin.pluginId);
                 return <div key={plugin.pluginId} className="flex flex-wrap items-center justify-between gap-2">

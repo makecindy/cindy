@@ -21,6 +21,11 @@ import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { mobileAgentNetPushSelected, mutateMobileAgentNetPush, clearMobileAgentNetPush, refreshMobileAgentNetPushPreferences } from '@/device-link/agentNetPushRegistry';
 import Notifications from './nativeNotifications';
 import { readIosPushEnvironment } from './nativePushEnvironment';
+import {
+  ACTION_RESULT_DATA_KEY, APPROVE_ACTION, DENY_ACTION, OPEN_ACTION, PERMISSION_CATEGORY, QUESTION_CARD_CATEGORY,
+  REPLY_ACTION, REPLY_CATEGORY,
+} from './notificationActionIds';
+import { clearNotificationBadge } from './notificationBadge';
 import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 
 /** APNs / FCM registration, scoped to the current account realm and lifecycle. */
@@ -244,7 +249,12 @@ async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointR
   const results = await Promise.allSettled(targets.map(async target => {
     const service = target.optional ? 'chat' as const : 'device-link' as const;
     try {
-      await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(body ? { body } : {}) });
+      let requestBody = body;
+      if (method === 'PUT' && target.path === PUSH_TOKEN_PATH && body) {
+        const supported = Platform.OS === 'ios' || (await import('./nativeTaskBadge')).supportsTaskBadgePush();
+        requestBody = { ...body, ...(supported ? { taskBadgeVersion: 1 } : {}) };
+      }
+      await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(requestBody ? { body: requestBody } : {}) });
       outcomes.push({ service, outcome: 'accepted' });
       return { service: target.service, registered: true };
     }
@@ -336,16 +346,57 @@ export async function readPushEnabled(): Promise<boolean> {
 export async function writePushEnabled(enabled: boolean): Promise<void> {
   await AsyncStorage.setItem(PUSH_ENABLED_KEY, enabled ? '1' : '0');
   if (!enabled) clearMobileAgentNetPush();
+  if (!enabled && isPushSupported()) await clearNotificationBadge().catch(() => undefined);
   for (const listener of pushPreferenceListeners) listener();
 }
 
+/**
+ * Registers the buttons a task alert can carry (iOS; Android alerts are drawn by the app's
+ * own receiver and stay as they are). The push service picks a category per alert; an alert
+ * without one, or an app that has not registered it, simply has no buttons. Wording is the
+ * permission card's, so the alert and the app say the same thing. "Allow once" needs an
+ * unlocked device (a worn, unlocked Apple Watch counts); denying and replying do not.
+ */
+export async function registerNotificationActionCategories(): Promise<void> {
+  if (Platform.OS !== 'ios') return;
+  const background = { opensAppToForeground: false };
+  await Notifications.setNotificationCategoryAsync(PERMISSION_CATEGORY, [
+    { identifier: APPROVE_ACTION, buttonTitle: i18n.t('interaction.permission.allowOnce'),
+      options: { ...background, isAuthenticationRequired: true } },
+    { identifier: DENY_ACTION, buttonTitle: i18n.t('interaction.permission.deny'),
+      options: { ...background, isDestructive: true } },
+  ]);
+  const reply = {
+    identifier: REPLY_ACTION, buttonTitle: i18n.t('message.renderer.reply'), options: background,
+    textInput: { submitButtonTitle: i18n.t('message.renderer.reply'), placeholder: i18n.t('settings.notifications.actionReplyPlaceholder') },
+  };
+  await Notifications.setNotificationCategoryAsync(REPLY_CATEGORY, [reply]);
+  // The question card adds the option buttons when the alert is expanded; these are the buttons
+  // every question alert has.
+  // With "Reply" alone a long press goes straight to typing and never shows the expanded alert,
+  // so a question also offers to open the task.
+  const open = { identifier: OPEN_ACTION, buttonTitle: i18n.t('plugins.openTask'), options: { opensAppToForeground: true } };
+  await Notifications.setNotificationCategoryAsync(QUESTION_CARD_CATEGORY, [reply, open]);
+}
+
 /** Suppress a foreground banner only while its conversation and thread are visible. */
-export function configureForegroundNotificationBehavior(isReading: (path: string) => boolean = () => false): void {
+export function configureForegroundNotificationBehavior(
+  isReading: (path: string) => boolean = () => false,
+  current: () => boolean = () => true,
+): void {
   Notifications.setNotificationHandler({
     handleNotification: async notification => {
+      const generation = pushLifecycleGeneration;
       const route = parseNotificationResponseDeepLink({ notification });
-      const show = !!route?.startsWith('/companions/groups/') && !isReading(route);
-      return { shouldShowBanner: show, shouldShowList: show, shouldPlaySound: show, shouldSetBadge: false };
+      const enabled = await readPushEnabled();
+      const stillCurrent = () => generation === pushLifecycleGeneration && current();
+      const unread = enabled && stillCurrent() && !!route && !isReading(route);
+      // Action failures remain visible even when ordinary push previews are suppressed.
+      const undelivered = stillCurrent() && notification.request.content.data?.[ACTION_RESULT_DATA_KEY] === true;
+      const show = undelivered || (unread && !!route?.startsWith('/companions/groups/'));
+      // TaskBadgeBridge owns the foreground count. A push is not another task:
+      // never increment here or overwrite the projection with an older payload.
+      return { shouldShowBanner: show, shouldShowList: undelivered || unread, shouldPlaySound: show, shouldSetBadge: false };
     },
   });
 }
@@ -421,7 +472,9 @@ async function syncPushRegistrationInternal(
   let permission = await Notifications.getPermissionsAsync();
   if (!registrationCurrent()) return 'skipped';
   if (permission.status !== 'granted' && permission.canAskAgain) {
-    permission = await Notifications.requestPermissionsAsync();
+    permission = await Notifications.requestPermissionsAsync({
+      ios: { allowAlert: true, allowSound: true, allowBadge: true },
+    });
     if (!registrationCurrent()) return 'skipped';
   }
   if (permission.status !== 'granted') {
@@ -597,6 +650,7 @@ export function unregisterPushTokenBestEffort(
   realm: ClientEndpointRegion = getActiveMobileSessionRealm(),
 ): Promise<void> {
   pushLifecycleGeneration += 1;
+  if (isPushSupported()) void clearNotificationBadge().catch(() => undefined);
   clearMobileAgentNetPush();
   eventRegistration = null;
   if (Platform.OS === 'android') setAndroidPushAvailability('unknown');
