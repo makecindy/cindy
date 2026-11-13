@@ -36,7 +36,8 @@ it('strips Fast control paths from shell environments without mutating the runne
   const compiled = ts.transpileModule(source.slice(start, end) + '\nresult = withoutPiSecrets(input);', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const input = { PATH: '/fixture/bin', CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json' };
+  const input = { PATH: '/fixture/bin', CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json',
+    CINDY_PI_TASK_SYSTEM_PROMPT_FILE: '/fixture/task-system-prompt.md' };
   const sandbox = {
     process: { env: {} }, input, result: undefined,
     PI_PACKAGE_MANAGEMENT_ENV: 'CINDY_PI_PACKAGE_MANAGEMENT',
@@ -47,6 +48,7 @@ it('strips Fast control paths from shell environments without mutating the runne
   runInNewContext(compiled, sandbox);
   expect(sandbox.result).toEqual({ PATH: '/fixture/bin' });
   expect(input.CINDY_PI_MODEL_REQUEST_PREFS_FILE).toBe('/fixture/prefs.json');
+  expect(input.CINDY_PI_TASK_SYSTEM_PROMPT_FILE).toBe('/fixture/task-system-prompt.md');
 });
 
 it('keeps text-only policy local and ordinary tools independent of host UI failures', async () => {
@@ -103,6 +105,41 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
   handlers.get('agent_settled')!({}, ctx);
   expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+});
+
+// Performance contract, unit: execute the generated production bridge helper.
+// A plugin-free native turn must not gain an awaited before_agent_start handler;
+// the existing real-Pi request tests cannot observe native handler registration.
+it('registers model routing only after the first selected RPC input', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('let textOnlyTurnActive = false');
+  const end = source.indexOf('function currentPermissionState', start);
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  const compiled = ts.transpileModule(source.slice(start, end)
+    + '\nconst runtime = installRuntimeModelControl(pi);\ninstallTextOnlyTurnPolicy(pi, runtime.prepare);',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const physical = { provider: 'fixture', id: 'original' };
+  const router = { provider: 'cindy-runtime-router', id: 'selected-task' };
+  const setModel = vi.fn(async () => true);
+  const registerVirtualModel = vi.fn();
+  runInNewContext(compiled, { process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
+    pi: { on: (name: string, handler: (event: any, ctx: any) => any) => handlers.set(name, handler),
+      setModel, registerVirtualModel, setThinkingLevel: vi.fn() } });
+  const input = handlers.get('input')!;
+  const ctx = { isIdle: () => true, model: physical, modelRegistry: { find: () => router } };
+  expect(input({ source: 'rpc', text: 'Ordinary input' }, ctx)).toBeUndefined();
+  expect(handlers.has('before_agent_start')).toBe(false);
+  expect(setModel).not.toHaveBeenCalled();
+  expect(await input({ source: 'rpc', text: '[CINDY_MODEL_REQUEST]:runtime-token\nSelected input' }, ctx))
+    .toEqual({ action: 'transform', text: 'Selected input', images: undefined });
+  expect(setModel).toHaveBeenCalledWith(router);
+  expect(registerVirtualModel).toHaveBeenCalledOnce();
+  expect(handlers.has('before_agent_start')).toBe(false);
+  await input({ source: 'rpc', text: 'Deselected input' }, { ...ctx, model: router });
+  expect(setModel).toHaveBeenLastCalledWith(physical);
+  setModel.mockClear();
+  expect(input({ source: 'rpc', text: 'Next ordinary input' }, ctx)).toBeUndefined();
+  expect(setModel).not.toHaveBeenCalled();
 });
 
 it('lets a shared user\'s Pi call only tools that Cindy extensions registered', async () => {
@@ -1636,18 +1673,8 @@ describe('cindy-bridge extension source', () => {
   it('keeps generic MCP behind two tools and gives frequent Bot actions typed fast paths', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task'",
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("'send_to_agent'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("'start_session_task'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate'",
     );
@@ -1659,11 +1686,7 @@ describe('cindy-bridge extension source', () => {
       "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, {\n        botMemoryFacade: cfg.botMemoryFacade === true,');
-    // A system Skill the owner switched off keeps its tools out of Pi's direct list too.
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],",
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
     // Post-compaction amnesia drives voluntary re-inspection: the persisted
@@ -2494,54 +2517,15 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
   const ordinary: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => ordinary.push(tool) });
   expect(ordinary.map((tool) => tool.name)).toEqual(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
-  expect(gateway.resolveDirectHelperTool('start_session_task', {})).toBeNull();
+  expect(gateway.resolveDirectHelperTool('list_agents', {})).toBeNull();
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'routine_delivery_targets', 'schedule_list_models', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
+  for (const name of ['list_agents', 'create_teammate', 'get_task_digest']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
-    const args = name === 'routine_save' ? {
-      name: 'Rest', prompt: 'Remind me to rest', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs' },
-      modelOverride: { agentKind: 'codex', model: 'economy', providerId: 'connected', agentDeviceId: null, effort: 'low', fastMode: 'ultrafast' },
-      sessionMode: 'fresh', delivery: { kind: 'companion', mode: 'direct' },
-      triggers: [
-        { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
-        { id: 'one-shot', kind: 'once', at: 90000 },
-      ],
-    } : name === 'schedule_list_models' ? { agent: 'codex', agentDeviceId: 'local' } : name === 'schedule_notify_current_run' || name === 'get_workbench' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'continue_workbench_task' ? { task_id: 'laptop::session-1', message: 'Report progress and continue' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' || name === 'routine_delivery_targets' ? {}
-      : name.startsWith('routine_') ? { id: 'routine-1' }
-      : name === 'start_session_task' ? { instruction: 'Prepare a report' }
-      : name === 'send_to_agent' ? { target_id: 'd'.repeat(80) + '::' + 'b'.repeat(128), message: 'Please review' }
-      : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
-      : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
-      : { task_id: 'task-1' };
-    if (name === 'routine_save') {
-      expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
-      expect(tool.parameters.properties.botId).toBeUndefined();
-      // Regression: the host accepted these fields, but Pi's direct schema hid them.
-      expect(tool.parameters.properties.sessionMode.enum).toEqual(['persistent', 'fresh']);
-      expect(tool.parameters.properties.modelOverride.anyOf).toContainEqual({ type: 'null' });
-      const model = tool.parameters.properties.modelOverride.anyOf.find((schema: any) => schema.type === 'object');
-      expect(model.required).toEqual(['agentKind', 'model']);
-      expect(model.properties.fastMode.anyOf).toContainEqual({ type: 'string', enum: ['ultrafast'] });
-      const variants = tool.parameters.properties.triggers.items.anyOf;
-      const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
-      expect(interval.properties.intervalMs.minimum).toBe(60000);
-      expect(interval.properties.anchorMs).toMatchObject({ type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-      expect(interval.required).not.toContain('anchorMs');
-      const once = variants.find((item: any) => item.properties.kind.enum.includes('once'));
-      expect(once).toMatchObject({
-        required: ['id', 'kind', 'at'], additionalProperties: false,
-        properties: { at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
-      });
-    }
-    if (name === 'start_session_task') {
-      expect(tool.description).toContain('A repository, multiple files, tools, or a deliverable alone is not a reason to delegate');
-      expect(tool.description).toContain('the user explicitly requests an independent task');
-      expect(tool.description).toContain('Follow up with message_session_task on the same task');
-    }
-    if (name === 'send_to_agent') expect(tool.parameters.properties.target_id.maxLength).toBe(210);
+    const args = name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'list_agents' ? {}
+      : { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' };
     const resolved = gateway.resolveDirectHelperTool(name, args);
     expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);
     expect(resolved.args).toEqual(args); // Permission review retains the actual operation and arguments.

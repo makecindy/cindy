@@ -8,6 +8,7 @@
  * 本条附带的引用消息与群聊背景分组折叠; prompt 中的技术指引不显示。
  */
 
+import '@/styles/chatContentDirection.css';
 import { useId, useState } from 'react';
 import { ChevronRight, MessageSquare, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -62,7 +63,7 @@ function ImIcon({ im }: { im: string }) {
 
 // Component-specific bare-text treatment registered in DESIGN.md §4.
 const disclosureClassName =
-  'inline-flex min-h-6 min-w-6 items-center py-1 w-fit cursor-pointer text-12 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] focus-visible:outline-offset-2';
+  'inline-flex min-h-6 min-w-6 items-center py-1 w-fit cursor-pointer text-12 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 
 /** IM 渠道的显示名(卡片头与 Hook 来源标签共用)。未知渠道原样显示。 */
 export function imLabel(im: string, t: TFunction): string {
@@ -181,12 +182,12 @@ export default function HookTaskCard({
             <div
               ref={mirrorRef}
               aria-hidden="true"
-              className="invisible absolute inset-x-0 top-0 max-h-0 overflow-hidden"
+              className="chat-content-text invisible absolute inset-x-0 top-0 max-h-0 overflow-hidden"
             >
               {userText}
             </div>
           )}
-          <div data-selection-quote-body="" className={cn(shouldCollapse && !bodyExpanded && 'line-clamp-10')}>{userText}</div>
+          <div data-selection-quote-body="" className={cn('chat-content-text', shouldCollapse && !bodyExpanded && 'line-clamp-10')}>{userText}</div>
           {shouldCollapse && (
             <button
               type="button"
@@ -241,11 +242,11 @@ export default function HookTaskCard({
                         ? t('chat.threadContext.referencedMessages', { count: replyCount })
                         : t('chat.threadContext.referencedContext')}
                     </h4>
-                    {hasReplyContext && <div className="whitespace-pre-wrap">{replyContext}</div>}
+                    {hasReplyContext && <div className="chat-content-text whitespace-pre-wrap">{replyContext}</div>}
                     {entries.map((entry, i) => (
                       // biome-ignore lint/suspicious/noArrayIndexKey: 消息内容不可变,index 稳定。
-                      <div key={i} className="whitespace-pre-wrap">
-                        <span className="font-semibold">[{entry.author}]</span> {entry.text}
+                      <div key={i} className="chat-content-text whitespace-pre-wrap">
+                        <bdi className="font-semibold">[{entry.author}]</bdi> {entry.text}
                       </div>
                     ))}
                   </section>
@@ -260,7 +261,7 @@ export default function HookTaskCard({
                         ? t('chat.threadContext.groupBackgroundCount', { count: groupCount })
                         : t('chat.threadContext.groupBackground')}
                     </h4>
-                    <div className="whitespace-pre-wrap">{groupContext}</div>
+                    <div className="chat-content-text whitespace-pre-wrap">{groupContext}</div>
                   </section>
                 )}
               </div>

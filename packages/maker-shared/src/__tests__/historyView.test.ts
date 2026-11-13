@@ -19,6 +19,16 @@ describe('history reading projection', () => {
     expect(projected.flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id))
       .toContain('1');
   });
+  // Tier: behavior. A teammate's reply lists the tasks it started from these receipts; folded into
+  // deferred work they never reached the chat (2026-11-10).
+  it('keeps a send_to_session receipt available outside deferred work', () => {
+    const rows = [row(0, 'user', 'Start a task'), row(1, 'thinking', 'plan'),
+      row(2, 'tool_use', { toolName: 'mcp__cindy_helper__call_tool', toolUseId: 'send', input: { name: 'send_to_session', args: {} } }),
+      { ...row(3, 'tool_result', JSON.stringify({ ok: true, target_session_id: 's-1', wake_kind: 'created', target_title: 'Fix it' })), toolUseId: 'send' },
+      { ...row(4, 'assistant', 'Started it.'), agentMeta: { turnCompleted: true } }];
+    const visible = projectHistoryView(rows, false, true).flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id);
+    expect(visible).toEqual(expect.arrayContaining(['2', '3']));
+  });
   it.each([false, true])('archives interrupted progress in recoverable history ranges (streaming=%s)', (streaming) => {
     const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Checking the build'),
       row(2, 'thinking', 'detail'), row(3, 'error', { message: 'Usage limit reached' }),

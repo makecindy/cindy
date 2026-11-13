@@ -24,6 +24,14 @@ describe('teammate learning receipt ownership', () => {
     tracker.seal('s', 'instance:1', 'reply-one');
     expect(publish).toHaveBeenCalledWith('reply-one', [memory, skill]);
   });
+  // 依据：项目模式伙伴写的是项目记忆（非 bot: 作用域），学到的东西仍要在气泡底部提示；普通任务不提示。tier：unit。
+  it('counts project-memory writes only for a project-mode teammate session', () => {
+    const tracker = createBotLearningTracker();
+    tracker.markProjectTeammate('teammate');
+    expect(tracker.learnsFrom('teammate', '/work/teammate')).toBe('teammate');
+    expect(tracker.learnsFrom('ordinary', '/work/app')).toBe('');
+    expect(tracker.learnsFrom('classic', 'bot:classic')).toBe('classic');
+  });
   it('a late save stays with its original bubble while a new reply is running', () => {
     const tracker = createBotLearningTracker(),
       publish = vi.fn();

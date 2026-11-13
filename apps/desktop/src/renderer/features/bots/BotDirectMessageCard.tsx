@@ -57,7 +57,7 @@ function BotDirectMessageCardBody({ meta, sessionId }: { meta: BotDirectMessageM
           'border-[var(--msg-tool-card-border)] bg-[var(--surface)] px-2.5 py-1',
           'text-11 text-[var(--text-secondary)] transition-colors',
           'hover:bg-[var(--msg-tool-card-bg)] hover:text-[var(--text-primary)]',
-          'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         )}
         title={t('bots.directMessage.open')}
       >

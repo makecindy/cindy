@@ -1,3 +1,5 @@
+import { teammateFolderName, teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
+
 import type { Session } from '@/lib/ccAgent.types';
 
 import {
@@ -111,6 +113,23 @@ function isSessionInHiddenProjectComparisonSet(
   localPlatform: string,
 ): boolean {
   return isSessionInProjectComparisonSet(session, hiddenProjectComparisonKeys, localPlatform);
+}
+
+/**
+ * A teammate's project on this computer while the teammate runs on another computer (its copy here
+ * is demoted, cloud-companions.md §2.1): hidden, its files stay; shown again once it comes back.
+ */
+export function withoutTeammateProjectsElsewhere(
+  projects: readonly ProjectNode[],
+  demotedBotIds: readonly string[],
+): ProjectNode[] {
+  if (demotedBotIds.length === 0) return Array.from(projects);
+  const folders = new Set(demotedBotIds.map(teammateFolderName));
+  return projects.filter((project) => {
+    if (project.remoteHostId || project.deviceLinkDeviceId) return true;
+    const folder = teammateFolderOfProjectPath(project.workingDir);
+    return !folder || !folders.has(folder);
+  });
 }
 
 export function visibleSidebarProjects(

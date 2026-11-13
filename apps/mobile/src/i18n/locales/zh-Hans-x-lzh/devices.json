@@ -11,10 +11,10 @@
     "deleteMessage": "将此器自名籍中移除，并断其远程连接。器上之差事与卷皆存；重新登门后可再加入。",
     "deleteFailed": "删器未成。",
     "deleteOnline": "服务器今尚不能移除在线之器，请待服务升级后再试。",
-    "deleteRejectedWhileOffline": "删器未成：服务器仍记其在线，与此处所示脱机之状不符",
+    "deleteRejectedWhileOffline": "删器未成：服务器仍记其在线，与此处所示离线之状不符",
     "currentlyOnline": "今在线",
     "availableSection": "在线之器",
-    "offlineSection": "脱机之器",
+    "offlineSection": "离线之器",
     "showAllOffline": "尽示 {{count}} 台",
     "showFewerOffline": "收之",
     "nameTooLong": "器名不得逾 {{limit}} 字。",
@@ -96,7 +96,7 @@
     },
     "sessionList": {
       "section": {
-        "pinned": "居首",
+        "pinned": "置顶",
         "dialogue": "言谈"
       },
       "filterWithCount": "{{label}} {{count}}",
@@ -105,7 +105,7 @@
       "sessionCount": "差事 {{count}} 件",
       "messageCount": "讯 {{count}} 则",
       "status": {
-        "archived": "已归档",
+        "archived": "已封存",
         "deleted": "已删"
       },
       "preview": {
@@ -125,7 +125,7 @@
         "detail": "{{result}}{{rows}} · {{filter}} · 依{{group}}分类",
         "searchResults": "寻得之果",
         "title": {
-          "active": "方兴之差事",
+          "active": "活跃之差事",
           "waiting": "待理之差事",
           "automation": "自运所生之差事",
           "archived": "封存之差事",
@@ -137,7 +137,7 @@
           "waiting": "须于手机确认之权柄、计划与问题，皆聚于此。",
           "automation": "自运所生之差事依计划汇集，展之可入单次所行。",
           "archived": "长按封存之差事可批量择取，而后解封存或删之。",
-          "all": "方兴、封存与自运所生之差事并列于此，便于速寻。"
+          "all": "活跃、封存与自运所生之差事并列于此，便于速寻。"
         }
       },
       "empty": {
@@ -158,7 +158,7 @@
           "copy": "长按差事，可批量封存或删之。"
         },
         "active": {
-          "title": "此机今无方兴之差事",
+          "title": "此机今无活跃之差事",
           "copy": "先于机上立或续差事，手机即见于此。"
         }
       },
@@ -202,7 +202,7 @@
         },
         "archived": {
           "title": "无封存之差事",
-          "copy": "转至「全」或「方兴」之筛，续览今之案与差事。"
+          "copy": "转至「全」或「活跃」之筛，续览今之案与差事。"
         },
         "noSession": {
           "title": "尚无差事，吾闲极矣",
@@ -230,9 +230,9 @@
     },
     "bulk": {
       "action": {
-        "archive": "归档",
+        "archive": "封存",
         "delete": "删",
-        "pin": "居首",
+        "pin": "置顶",
         "restore": "解封存",
         "unpin": "解置顶"
       },
@@ -251,7 +251,7 @@
       "connected": "机已连接",
       "title": "身不在机前，\n亦可运筹千里。",
       "copy": "自此托付 Cindy，于机上代君料理。差事进展，随时以手机观之。",
-      "footerTitle": "其次，令机为君…",
+      "footerTitle": "继而，令机为君…",
       "footerCopy": "新开一差事，于手机观其进展。",
       "newTask": "新开差事",
       "tryThese": "试此新差事",
@@ -306,8 +306,8 @@
       "noDevice": "无器可用。请先于机上打开远程控制，然后重新同步。"
     },
     "alert": {
-      "cacheSaveFailed": "脱机缓存未能存之",
-      "cacheSaveFailedDetail": "请察手机所余保存空间。君仍可连接使用，然部分内容或不能脱机观之。",
+      "cacheSaveFailed": "离线缓存未能存之",
+      "cacheSaveFailedDetail": "请察手机所余存储空间。君仍可联网使用，然部分内容或不能离线观之。",
       "actionFailed": "所为未成",
       "renameFailed": "易名未成",
       "deleteTitle": "删此差事乎？",
@@ -378,12 +378,12 @@
         "custom": "手调"
       },
       "status": {
-        "active": "方兴",
+        "active": "活跃",
         "archived": "已封存",
         "all": "全"
       },
       "filterHeading": "筛",
-      "filterSummaryActive": "{{count}} 项已行",
+      "filterSummaryActive": "{{count}} 项生效",
       "filterReset": "清筛",
       "filterAll": "全",
       "filterProjectsHeading": "案",
@@ -420,7 +420,7 @@
       "summaryNone": "无",
       "summarySeparator": "、",
       "filterEmptyCopy": "可于显示规制之「筛」中调之或重设。",
-      "filterTeammatesHeading": "同僚",
+      "filterTeammatesHeading": "同伴",
       "filterAnySource": "全",
       "filterHideAllTeammates": "皆不示",
       "filterSelectedTeammates": "已择 {{count}} 位"
@@ -445,7 +445,7 @@
           "activityAsc": "最早动"
         },
         "status": {
-          "active": "方兴",
+          "active": "活跃",
           "archived": "已封存",
           "all": "全"
         },
@@ -498,7 +498,7 @@
   },
   "detail": {
     "filter": {
-      "active": "方兴",
+      "active": "活跃",
       "waiting": "待理",
       "automation": "自运",
       "archived": "封存",
@@ -512,10 +512,10 @@
       "a11y": "依{{label}}分类"
     },
     "metric": {
-      "active": "方兴",
+      "active": "活跃",
       "waiting": "待理",
       "automation": "自运",
-      "activeA11y": "筛方兴之差事",
+      "activeA11y": "筛活跃之差事",
       "waitingA11y": "筛待理之差事",
       "automationA11y": "筛自运所生之差事"
     },
@@ -553,8 +553,8 @@
       "deleteA11y": "批量删所择差事",
       "cancelA11y": "罢批量之为",
       "partialFailure": "已理 {{done}} 件，{{failed}} 件未成（已还原，可再试）。",
-      "noArchivable": "所择之中，无可封存之方兴差事。",
-      "noPinnable": "所择之中，无可置顶之方兴差事。",
+      "noArchivable": "所择之中，无可封存之活跃差事。",
+      "noPinnable": "所择之中，无可置顶之活跃差事。",
       "noRestorable": "所择之中，无封存之差事。",
       "noUnpinnable": "所择之中，无已置顶之差事。",
       "noDeletable": "所择之中，无可删之差事。",
@@ -572,8 +572,8 @@
       "emptyTitle": "此案尚无差事，虚位以待"
     },
     "subtitle": {
-      "deviceActive": "{{deviceName}} · 方兴差事 {{count}} 件",
-      "activeAndProjects": "方兴差事 {{count}} 件 · 案 {{projects}} 个"
+      "deviceActive": "{{deviceName}} · 活跃差事 {{count}} 件",
+      "activeAndProjects": "活跃差事 {{count}} 件 · 案 {{projects}} 个"
     },
     "row": {
       "a11yAutomationGroup": "自运组 {{title}}",
@@ -589,7 +589,7 @@
       "sessionCount": "差事 {{count}} 件",
       "aggregate": "汇",
       "running": "方行",
-      "unread": "未阅 {{count}}"
+      "unread": "未读 {{count}}"
     },
     "child": {
       "openA11y": "启自运所生之差事 {{title}}"
@@ -602,7 +602,7 @@
       "showAllA11y": "尽示 {{count}} 位",
       "showLess": "收"
     },
-    "noCreateHosts": "今无兼容之机可用。于机上启 Cindy 并登门同一名籍，即可新立同僚。",
+    "noCreateHosts": "今无兼容之机可用。于机上启 Cindy 并登门同一名籍，即可新立同伴。",
     "messageSent": "已遣讯于背景差事",
     "sentTo": "已遣讯于 {{name}}",
     "receivedFrom": "讯自 {{name}}",
@@ -621,14 +621,12 @@
       "minutes": "{{n}} 分",
       "hoursMinutes": "{{h}} 时 {{m}} 分"
     },
-    "retrying": "尚未起始，方再试…",
-    "stopTask": "止差事",
     "actionFailed": "暂不能读取或完成所为",
     "messages": "往来之讯",
     "readOnly": "仅供观览",
     "directEmpty": "鱼雁未至，尚无可观之讯。",
-    "directLimitReached": "此轮同僚言谈已达上限，双方各归本差事",
-    "directUnavailable": "此同僚言谈已不可用。",
+    "directLimitReached": "此轮同伴言谈已达上限，双方各归本差事",
+    "directUnavailable": "此同伴言谈已不可用。",
     "unread": "有新覆",
     "status": {
       "queued": "方起",
@@ -640,16 +638,16 @@
       "timed-out": "逾时",
       "unknown": "状未明"
     },
-    "title": "同僚",
-    "search": "寻同僚",
+    "title": "同伴",
+    "search": "寻同伴",
     "startChat": "始言谈",
     "automation": {
       "unsavedTitle": "弃所改乎？",
       "unsavedBody": "君之所改尚未存之。",
       "discard": "弃所改"
     },
-    "openProfile": "观 {{name}} 之数据",
-    "switchCompanion": "易同僚",
+    "openProfile": "观 {{name}} 之资料",
+    "switchCompanion": "易同伴",
     "activity": {
       "thinking": "方思",
       "typing": "方书",
@@ -673,7 +671,7 @@
       "checking": "方察代码…",
       "reviewing-memory": "方核记忆…",
       "reviewing-files": "方核卷…",
-      "reviewing-sources": "方核网页数据…",
+      "reviewing-sources": "方核网页资料…",
       "reviewing-checks": "方核所察之果…"
     },
     "invitation": {
@@ -692,7 +690,7 @@
     "viewResult": "观其果",
     "noWrittenResult": "无文字之果。",
     "errorDetails": "谬误详情",
-    "createTeammate": "增同僚",
+    "createTeammate": "增同伴",
     "createMenu": "增",
     "awaiting": "候君确认",
     "taskResult": "差事之果",
@@ -723,67 +721,65 @@
     "memorySearch": "寻记忆",
     "memoryEmpty": "尚无前尘",
     "memoryNoResults": "无相关记忆",
-    "memoryDisabled": "记忆已阖，同僚不读亦不存记忆；已存者仍可观之、删之。",
+    "memoryDisabled": "记忆已阖，同伴不读亦不存记忆；已存者仍可观之、删之。",
     "memoryLoadFailed": "记忆未能读取",
     "memoryToday": "今日",
-    "memoryUpdated": "{{time}} 更",
+    "memoryUpdated": "更于 {{time}}",
     "memoryEdit": "修",
     "memoryDone": "毕",
     "memoryTooLong": "内容过长，缩之方可存",
     "memoryRequired": "标题与内容皆不可空。",
-    "memoryChanged": "{{name}}方更此条记忆",
+    "memoryChanged": "{{name}}顷已更此条记忆",
     "memoryUseLatest": "用最新者",
     "memoryKeepMine": "留吾所改",
     "memorySaved": "已存",
     "memorySaveFailed": "未能存之，君之修改仍在。",
     "memoryMissing": "此条记忆已不存。",
     "memoryDeleteFailed": "删之未成",
-    "create": "新立同僚",
+    "create": "新立同伴",
     "createFailed": "创建之果尚未确认，请再试以核之。",
-    "title": "同僚数据",
-    "profile": "数据与性情",
+    "title": "同伴数据",
+    "profile": "资料与性情",
     "memory": "忆",
     "skills": "技艺与连接",
     "artifacts": "所成",
-    "direct": "同僚往来",
+    "direct": "同伴往来",
     "settings": "模型与权柄",
     "search": "寻讯",
-    "models": "模型次第",
+    "models": "模型链",
     "permissions": "所为之权柄",
     "personalSkills": "技艺",
     "connections": "所引技艺与连接",
     "save": "存所改",
     "offline": "请重连 {{deviceName}} 后续之，未存之修改仍在。",
-    "hostUpgrade": "请更新 {{deviceName}} 上之 Cindy 后再试，或于彼机修同僚之设。",
+    "hostUpgrade": "请更新 {{deviceName}} 上之 Cindy 后再试，或于彼机修同伴之设。",
     "readFailed": "暂不能确认最新之状。请刷新后再试，所为或已完成。君之修改仍在。",
     "deleteFailed": "删之未竟。",
-    "artifactsEmpty": "尚无成果。令同僚挥毫一二，自见文章。",
+    "artifactsEmpty": "尚无成果。令同伴挥毫一二，自见文章。",
     "openSourceTask": "启来源差事",
     "modelFollowsDefault": "从今之预设模型链",
-    "taskModel": "差事模型",
-    "taskInheritsPrimary": "承主模型",
-    "modelOverride": "用此同僚自订之模型链",
-    "modelsUnavailable": "暂无可用之模型，请于机上察此同僚之模型设置，再刷新。",
+    "modelOverride": "用此同伴自订之模型链",
+    "modelsUnavailable": "暂无可用之模型，请于机上察此同伴之模型设置，再刷新。",
     "artifactsRecovery": "请自讯卡中启卷，或于 {{deviceName}} 上览之。",
-    "directRecovery": "暂不能读同僚往来，请更新 {{deviceName}} 上之 Cindy 后再试。",
-    "directEmpty": "同僚尚无书信往还",
-    "skillsEmpty": "尚无自习之技艺，可令同僚记其行事之法。",
+    "directRecovery": "暂不能读同伴往来，请更新 {{deviceName}} 上之 Cindy 后再试。",
+    "directEmpty": "同伴尚无书信往还",
+    "skillsEmpty": "尚无自习之技艺，可令同伴记其行事之法。",
     "connectionsEmpty": "尚未择技艺或连接",
-    "largeProfileRecovery": "此数据过长，手机上不能修。请于 {{deviceName}} 上修其全文。",
+    "largeProfileRecovery": "此资料过长，手机上不能修。请于 {{deviceName}} 上修其全文。",
     "addModel": "增备用模型",
     "removeModel": "去模型",
     "moveModelUp": "模型上移",
     "backupModels": "候补模型（{{count}}）",
-    "settingsTitle": "同僚之规制",
+    "settingsTitle": "同伴之规制",
     "name": "名",
     "portraitNumber": "肖像 {{number}}",
-    "uploadAvatar": "上呈头像",
+    "uploadAvatar": "上呈肖像",
     "avatarFailed": "此图不能打开，请易一张。",
-    "nameTaken": "已有同名之同僚，请易一名。",
+    "nameTaken": "已有同名之同伴，请易一名。",
     "home": "主力之机",
     "chat": "言谈",
     "showReplyTarget": "示所覆之讯",
-    "showReplyTargetHint": "于同僚所覆之上，标其所答乃君何讯。诸同僚皆适用，较早之覆不示。",
+    "showReplyTargetHint": "于同伴所覆之上，标其所答乃君何讯。诸同伴皆适用，较早之覆不示。",
     "channels": "讯之平台",
     "channelsEmpty": "尚未连接讯之平台",
     "channelTasksEmpty": "尚无差事之录",
@@ -797,7 +793,7 @@
     }
   },
   "companionImport": {
-    "title": "纳同僚",
+    "title": "纳同伴",
     "entry": "自他 Agent 纳之",
     "description": "择欲自 Hermes 或 OpenClaw 携来之物。",
     "empty": "遍寻此机，未见已安装之 Agent。",
@@ -812,7 +808,7 @@
     "takeoverNote": "数据连接验证既过，方暂停原差事。若舍所需之依赖，原差事照常续行。",
     "submit": "纳",
     "back": "归",
-    "open": "启同僚",
+    "open": "启同伴",
     "running": "方纳之并察连接…",
     "complete": "所纳已存",
     "attention": "部分内容待处置，详见下方。",
@@ -829,7 +825,7 @@
     "credentialFailed": "凭证未能安全存之。",
     "scriptMissing": "阙此差事所需之脚本。",
     "sourceCommand": "寻不得原 Agent 之控制命令。",
-    "readFailed": "此差事实需之数据查找尚未验证。",
+    "readFailed": "此差事实需之数据查询尚未验证。",
     "search": "寻",
     "selectAll": "尽择",
     "previous": "前页",
@@ -850,75 +846,53 @@
     "attachmentUnsupported": "此附件格式暂不支持，原卷仍留于来源。",
     "diskFull": "磁盘空间不足，腾出空间后可再试。",
     "permissionDenied": "无读取或保存此项之权柄，修复权柄后可再试。",
-    "setupDeferred": "可于同僚言谈中续行登门与验证。",
+    "setupDeferred": "可于同伴言谈中续行登门与验证。",
     "automationInvalid": "自运之定义不能转换，尚未创建。",
     "itemFailed": "此项未竟，可再试并观所纳之详。",
-    "chatPartial": "同僚已立，然部分数据未尽存。下列诸项仍待处置；余者与言谈皆可如常使用。",
-    "imBotOwnerMissing": "寻不得主人之用户 ID，请至同僚之「讯之平台」页连上此机器人。",
+    "chatPartial": "同伴已立，然部分数据未尽存。下列诸项仍待处置；余者与言谈皆可如常使用。",
+    "imBotOwnerMissing": "寻不得主人之用户 ID，请至同伴之「讯之平台」页连上此机器人。",
     "imBotGatewayRunning": "原闸道仍在用此机器人。先止之，再至「讯之平台」页连接。",
-    "imBotInUse": "此机器人已于此机使用：在 设置 → IM 机器人 中，或在另一同僚处。",
-    "imBotConnectFailed": "未能连上此机器人，请至同僚之「讯之平台」页再试。",
-    "imBotSourceStopUnconfirmed": "原机器人尚未停下，故未交予同僚。可稍后于同僚之「讯之平台」页连接。",
+    "imBotInUse": "此机器人已于此机使用：在 设置 → IM 机器人 中，或在另一同伴处。",
+    "imBotConnectFailed": "未能连上此机器人，请至同伴之「讯之平台」页再试。",
+    "imBotSourceStopUnconfirmed": "原机器人尚未停下，故未交予同伴。可稍后于同伴之「讯之平台」页连接。",
     "imBotSourceChanged": "原机器人于先览之后已更换，故未停之。请重新读取后再纳。",
     "bots": "讯之机器人",
-    "botsNote": "纳后，{{source}} 中此等机器人将禁用，由同僚接掌。",
+    "botsNote": "纳后，{{source}} 中此等机器人将禁用，由同伴接掌。",
     "sourceDisabled": "原已禁用",
     "botOwner": "主人 ID {{id}}"
   },
   "glance": {
     "open": "{{name}}之近况",
-    "dueUnseen": "有待办届期",
     "computers": "机",
     "runningHere": "方行于此机",
     "online": "在线",
     "offline": "离线",
     "current": "今",
-    "offlineCount_one": "脱机 {{count}} 台",
-    "offlineCount_other": "脱机 {{count}} 台",
-    "todos": "待理",
+    "offlineCount_one": "离线 {{count}} 台",
+    "offlineCount_other": "离线 {{count}} 台",
     "showMore": "示余者",
     "showLess": "收",
     "doneCount_one": "已毕 {{count}}",
     "doneCount_other": "已毕 {{count}}",
-    "delete": "删",
-    "deleted": "已删，同事此后不复记",
-    "undo": "复",
-    "undoFailed": "不能复之，请再试",
-    "deleteFailed": "不能删之，请再试",
-    "check": "为吾查之",
     "checkMeta": "于已连之邮件与讯中寻新待办",
-    "checkPrompt": "请为吾查已连之信箱、消息等来源中，有无须吾处理之新事；若有，记为待办。",
-    "dailyCheck": "每日为吾查一次",
-    "dailyCheckMeta": "工作日 9:00，无新待办则不扰",
     "recentTasks": "近日差事",
     "unread": "未读之果",
-    "stopDailyCheck": "止每日之查",
     "openFailed": "链接不能打开",
-    "dailyCheckFailed": "未能存之，请再试",
-    "loadFailed": "待办不能读取",
     "outputs": "所出",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "君所嘱",
-      "mail": "自邮件",
-      "feishu": "自飞书",
-      "github": "自 GitHub",
-      "community": "自社区",
-      "task": "自差事"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
-    "homeOffline": "主力之机「{{device}}」脱机",
+    "homeOffline": "主力之机「{{device}}」离线",
     "switchAction": "易机续之",
-    "composerHint": "主力之机脱机，易机后续之",
+    "composerHint": "主力之机离线，易机后续之",
     "readOnlyNote": "此乃云端所存之言谈，仅可观览。",
     "empty": "云端言谈，尚无一字。",
     "loadFailed": "云端言谈暂不能读取。",
     "loadOlder": "加载更早之讯",
-    "noTargets": "无他机可用。请于另一机上启 Cindy、登门同一名籍，并打开「允许同帐号设备控制本机」后再试。",
+    "noTargets": "无他机可用。请于另一机上启 Cindy、登门同一名籍，并打开「允许同账号设备控制本机」后再试。",
     "devicesFailed": "君之机录暂不能读取，请稍后再试。",
     "preparing": "方于「{{device}}」上筹备…",
-    "preparingHint": "彼机将依云端数据接掌同僚，备妥后自行打开。",
+    "preparingHint": "彼机将依云端数据接掌同伴，备妥后自行打开。",
     "timeout": "「{{device}}」尚未备妥。请确认彼机上之 Cindy 已启且已连网，再试一次。",
     "conflict": "{{name}} 已移至「{{device}}」续行矣。",
     "switchFailed": "主力之机暂不能更换，请稍后再试。",
@@ -928,6 +902,8 @@
     "moveTo": "移至「{{device}}」",
     "moveTitle": "令 {{name}} 移至「{{device}}」行事乎？",
     "moveDescription": "自今以后，{{name}} 行于「{{device}}」，言谈之录一并携往。工作目录、连接与此机之卷，仍留原机。",
+    "olderTarget": "旧版 Cindy",
+    "olderTargetNote": "「{{device}}」之 Cindy 为旧版，{{name}} 于彼循旧法而行：言谈之录照常同步，然案之规约与自运于彼不行。",
     "moveAction": "移至「{{device}}」",
     "moving": "方将 {{name}} 移至「{{device}}」…",
     "busyTitle": "{{name}} 尚在作覆",
@@ -937,8 +913,8 @@
     "transferBusy": "{{name}} 尚在作覆，待此轮毕再易机",
     "switchConflict": "{{name}} 之主力机已变，此次未更换",
     "homeOutdated": "主力之机「{{device}}」上之 Cindy 版本较旧，请先更新之，或于彼机更换",
-    "homeUnreachable": "今连不上「{{device}}」，彼须在线并打开「允许同帐号设备控制本机」",
-    "sendUnreachable": "讯尚未达主力之机「{{device}}」，彼或已脱机。可易机续之。"
+    "homeUnreachable": "今连不上「{{device}}」，彼须在线并打开「允许同账号设备控制本机」",
+    "sendUnreachable": "讯尚未达主力之机「{{device}}」，彼或已离线。可易机续之。"
   },
   "sessionImport": {
     "entry": "自他器纳入",
@@ -996,5 +972,8 @@
       "disk-full": "纳之未成：磁盘空间不足",
       "native-unloadable": "纳之未成：原始记录无法加载"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "待更新"
   }
 }

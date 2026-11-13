@@ -6,6 +6,7 @@ import {
   resolveRemoteInvokeTimeoutMs,
   type InvokeResultPayload,
 } from '@cindy/device-link';
+import { creationOperation } from '../../../shared/remoteSessionCreation.js';
 import { createRemoteSessionHandoff } from '../sessionHandoffRemote.js';
 import { releaseRemoteTaskActionReceipt, validateRemoteTaskActionReceipt } from '../../maker-ipc/remoteTaskActionReceipt.js';
 import { captureAgentRequest } from '../../maker-ipc/forwardedRequest.js';
@@ -40,9 +41,78 @@ function setup(outcome: unknown = { ok: true, result: accepted }) {
 }
 
 describe('cross-device send_to_session sender', () => {
+  // Unit regression: a failed read-only capability probe cannot have created a task,
+  // whether returned or thrown. The same IPC error after create stays uncertain.
+  it.each(['probe-return', 'probe-throw', 'create-return'] as const)(
+    'classifies creation failure at the actual send phase (%s)', async phase => {
+      const failure = { ok: false as const, error: { code: 'IPC_ERROR' as const, message: 'Error: [PRECONDITION_FAILED] Task visibility is not ready' } };
+      const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+        if ((args[0] as { action?: string }).action === 'task-action-capability') {
+          if (phase === 'probe-throw') throw new Error(failure.error.message);
+          return phase === 'probe-return' ? failure : { ok: true, result: { taskActionVersion: 1, ordinaryCreateVersion: 1 } };
+        }
+        issued.push((args[0] as { taskActionReceipt: string }).taskActionReceipt);
+        return failure;
+      });
+      const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+      expect(await send({ deviceId: 'mbp', sessionId: 'new-id' }, {
+        message: 'hi', sender: async () => ({ sessionId: 'me' }), create: async () => ({ permissionMode: 'ask' }),
+      })).toMatchObject({ ok: false, errorCode: phase === 'create-return' ? 'DELIVERY_UNKNOWN' : 'REMOTE_UNAVAILABLE' });
+      expect(invoke).toHaveBeenCalledTimes(phase === 'create-return' ? 2 : 1);
+      if (phase !== 'create-return') expect(invoke.mock.calls[0]![2][0]).toEqual({ action: 'task-action-capability', sessionId: 'new-id' });
+    },
+  );
+
+  // Unit regression: the destination can explicitly reject a budget model before
+  // persistence. Preserve its remedy and release the unused authorization receipt.
+  it('preserves an explicit budget-model creation rejection', async () => {
+    const rejection = { ok: false as const, errorCode: 'BUDGET_MODEL_REQUIRES_API_MODE', message: 'Connect Cindy AI to use this model' };
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      if ((args[0] as { action?: string }).action === 'task-action-capability')
+        return { ok: true, result: { taskActionVersion: 1, ordinaryCreateVersion: 1 } };
+      issued.push((args[0] as { taskActionReceipt: string }).taskActionReceipt);
+      return { ok: true, result: rejection };
+    });
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+    const create = { permissionMode: 'ask' as const, model: 'codex/test-budget-model' };
+    expect(await send({ deviceId: 'mbp', sessionId: 'new-id' }, {
+      message: 'hi', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    })).toEqual(rejection);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(await validateRemoteTaskActionReceipt('mbp', { receiptId: issued.at(-1)!, sessionId: 'me', targetSessionId: 'new-id',
+      message: 'hi', operation: creationOperation(create) })).toBe(false);
+  });
+
+  // Unit/protocol: creation must negotiate before mutation, bind all options to its
+  // receipt and preserve the receipt until the queued first message is consumed.
+  it('negotiates ordinary creation and binds its configuration without retrying', async () => {
+    const create = { permissionMode: 'ask' as const, projectDir: '/remote/project', model: 'selected' };
+    let supported = false;
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      const wire = args[0] as { action?: string; taskActionReceipt: string; create?: unknown };
+      if (wire.action === 'task-action-capability') return { ok: true, result: { taskActionVersion: 1, ordinaryCreateVersion: supported ? 1 : undefined } };
+      issued.push(wire.taskActionReceipt);
+      expect(wire).toMatchObject({ action: 'create', create });
+      return { ok: true, result: { ...accepted, wakeKind: 'created', targetSessionId: 'new-id', model: 'selected', workingDir: '/remote/project' } };
+    });
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+    const run = () => send({ deviceId: 'mbp', sessionId: 'new-id' }, {
+      message: 'hi', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    });
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
+    expect(invoke).toHaveBeenCalledOnce();
+    supported = true;
+    expect(await run()).toMatchObject({ ok: true, wakeKind: 'created', model: 'selected' });
+    expect(invoke).toHaveBeenCalledTimes(3);
+    const receipt = { receiptId: issued.at(-1)!, sessionId: 'me', targetSessionId: 'new-id', message: 'hi' };
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation(create) })).toBe(true);
+    expect(await validateRemoteTaskActionReceipt('mbp', receipt)).toBe(false);
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...create, permissionMode: 'bypassPermissions' }) })).toBe(false);
+  });
+
   // 2026-11-05: a newer receiver takes the agent's own text with a checked hand-off; an older one
   // still verifies the quoted envelope, so it keeps receiving exactly what it received before.
-  // Unit: real capture and sender against both capability answers, plus a refused hand-off.
+  // Unit: real capture and sender against both capability answers.
   it.each([
     [{ taskActionVersion: 1, plainRequestBody: 1 }, 'plain'],
     [{ taskActionVersion: 1 }, 'legacy'],
@@ -53,8 +123,7 @@ describe('cross-device send_to_session sender', () => {
       return { ok: true, result: accepted };
     });
     const captureRequest = (sessionId: string, message: string, target?: { sessionId?: string }) => captureAgentRequest(sessionId, message,
-      { clientId: 'owner-input', authoredText: '修好就合进去' }, async () => [], true, true,
-      { targetSessionId: target?.sessionId, authorize: async () => ({ kind: 'authorized' }) });
+      { clientId: 'owner-input', authoredText: '修好就合进去' }, async () => [], true, true, target?.sessionId);
     const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {}, captureRequest });
     expect(await send({ deviceId: 'mbp', sessionId: 's9' },
       { message: 'Fix #12 and merge it.', sender: async () => ({ sessionId: 'me', title: 'T' }) })).toEqual(accepted);
@@ -67,18 +136,6 @@ describe('cross-device send_to_session sender', () => {
       expect(wire.message).toContain('修好就合进去');
       expect(wire.requestSource).toEqual({ userText: '修好就合进去', sessionId: 'me', clientId: 'owner-input', ownerVerified: true });
     }
-  });
-
-  it('sends nothing to the other computer when this computer refuses the hand-off', async () => {
-    const invoke = vi.fn(async (): Promise<InvokeResultPayload> => ({ ok: true, result: accepted }));
-    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {},
-      captureRequest: (sessionId, message) => captureAgentRequest(sessionId, message,
-        { clientId: 'owner-input', authoredText: 'Only check it' }, async () => [], true, true,
-        { authorize: async () => ({ kind: 'blocked', reason: 'Not requested.' }) }) });
-    expect(await send({ deviceId: 'mbp', sessionId: 's9' },
-      { message: 'Deploy it.', sender: async () => ({ sessionId: 'me', title: 'T' }) }))
-      .toEqual({ ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: 'Not requested.' });
-    expect(invoke).not.toHaveBeenCalled();
   });
 
   // #6399, unit: the existing result-code matrix did not inspect receipt lifetime.

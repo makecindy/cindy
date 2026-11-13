@@ -28,6 +28,7 @@ import { CompanionProfileArtifacts } from './CompanionProfileArtifacts';
 import { companionEditorSections, loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
 import { CompanionMemoryPage } from './CompanionMemoryPage';
 import { useCompanionMemory } from './useCompanionMemory';
+import { useCompanionAutomations } from './useCompanionAutomations';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
 
 // Same identity block as iOS: a 48pt avatar and the name, not a navigation target.
@@ -75,7 +76,6 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const [page, setPage] = useState('home');
   const [modelStage, setModelStage] = useState<'profile' | 'closing-profile' | 'picker' | 'closing-picker'>('profile');
   const [modelIndex, setModelIndex] = useState(0);
-  const [modelPurpose, setModelPurpose] = useState<'primary' | 'task'>('primary');
   const [editor, setEditor] = useState<CompanionProfileData | null>(null);
   const [editorPanel, setEditorPanel] = useState<string | null>(null);
   const [editorResourceId, setEditorResourceId] = useState('');
@@ -115,6 +115,9 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const memoryList = data?.panels.find(item => item.id === 'memories')?.entries?.[0]?.resourceId;
   const memory = useCompanionMemory({ invoke, openLink, deviceId, deviceName, collectionId, resourceKind: resource?.ref.kind ?? 'bot',
     listResourceId: memoryList, online, active: page === 'memoryEntries', binding });
+  // The teammate project's automations page: each with its timing and a switch that applies at once.
+  const automations = useCompanionAutomations({ invoke, openLink, deviceId, deviceName, botRef: resource ? { ...resource.ref, collectionId } : null,
+    resourceId: page === 'editor' && /\/automations$/.test(editorResourceId) ? editorResourceId : undefined, online, visible, binding, locale: i18n.language });
   const read = useCallback(async () => {
     if (!online || !resource) return null;
     await openLink(deviceId);
@@ -320,26 +323,14 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const memoryPage = <CompanionMemoryPage memory={memory} online={online} botName={name} memoryEnabled={actionPanel('memory')?.values.memory !== false} />;
   const modelValues = editing ? values : panel?.values ?? {};
   const changeValues = (next: ProfileValues) => { if (!editing) draftBase.current = panel?.values ?? {}; setValues(next); setEditing(true); };
-  const taskValues = {
-    modelChain: modelValues.taskFollowsPrimary === true
-      ? serializeModelRoutes(readCompanionModelChain(modelValues.modelChain).slice(0, 1))
-      : modelValues.taskModel,
-    followsDefault: modelValues.taskFollowsPrimary === true,
-  };
-  const pickModel = (purpose: 'primary' | 'task', index: number) => {
-    setModelPurpose(purpose); setModelIndex(index); setModelStage('closing-profile');
+  const pickModel = (index: number) => {
+    setModelIndex(index); setModelStage('closing-profile');
   };
   const models = <View style={{ gap: spacing.lg }}>
     {unsupportedModelSelection ? note('hostUpgrade') : null}
     <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={next => { setModelSelection(true); changeValues(next); }}
-      onPick={index => pickModel('primary', index)} />
-    {panel?.action?.fields?.some(field => field.id === 'taskModel') && <View style={{ gap: spacing.sm }}>
-      <Text style={{ fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium, color: colors.textPrimary }}>{t('devices.companionProfile.taskModel')}</Text>
-      <CompanionModelChain single deviceId={deviceId} values={taskValues} disabled={busy || !online || !panel?.action}
-        inheritanceLabel={t('devices.companionProfile.taskInheritsPrimary')}
-        onChange={next => changeValues({ ...modelValues, taskFollowsPrimary: next.followsDefault === true, taskModel: String(next.modelChain ?? '[]') })}
-        onPick={index => pickModel('task', index)} />
-    </View>}
+      onPick={pickModel} />
+    {/* An older host still lists the retired task model fields; they are not shown and go back unchanged. */}
   </View>;
   const afterClosed = () => {
     if (modelStage === 'closing-profile') { setModelStage('picker'); return; }
@@ -355,12 +346,9 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const confirm = (target: ProfilePanel | null) => { setConfirmation(target); if (target && (target.id === 'delete' || page === 'home')) { setValues({}); setEditing(false); } };
   const selectEditorPanel = (item: ProfilePanel) => { setEditorPanel(item.id); setValues(item.values); setEditing(false); };
   const retry = () => { if (page === 'editor') void retryEditor(); else void refresh(); };
-  const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelPurpose === 'task' ? taskValues.modelChain : modelValues.modelChain)[modelIndex]}
+  const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelValues.modelChain)[modelIndex]}
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('profile')}
     onSelect={route => {
-      if (modelPurpose === 'task') {
-        changeValues({ ...modelValues, taskModel: serializeModelRoutes([route]), taskFollowsPrimary: false }); return true;
-      }
       const chain = readCompanionModelChain(modelValues.modelChain);
       if (chain.some((item, index) => index !== modelIndex && item.harness === route.harness && item.model === route.model && item.providerId === route.providerId && (item.agentDeviceId ?? null) === (route.agentDeviceId ?? null))) return false;
       chain[modelIndex] = route; setModelSelection(true); changeValues({ ...modelValues, modelChain: serializeModelRoutes(chain), followsDefault: false }); return true; }} />;
@@ -372,7 +360,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : nameTakenOnSave ? t('devices.companionProfile.nameTaken') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
     channels={resource ? <CompanionChannelTasks deviceId={deviceId} botId={resource.ref.id} online={online} onOpenTask={openArtifactTask} /> : null}
     artifacts={sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')}
-    memoryPage={memoryPage} hasMemoryEntries={!!memoryList}
+    memoryPage={memoryPage} hasMemoryEntries={!!memoryList} automations={automations}
     onClose={dismiss} onClosed={afterClosed} onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
     onOpen={open}
     onChange={changeValues}
@@ -386,7 +374,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const save = (target: ProfilePanel, blocked: boolean) => <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy,
     disabled: blocked || !online || !dirty || conflict?.page === page, onPress: () => void submit(target) }} />;
   const formPanel = (target: ProfilePanel | undefined) => target?.action ? <>
-    {(target.id === 'capability' || target.id === 'follow-up' || target.id === 'project') && target.text ? noteText(target.text) : null}
+    {['capability', 'follow-up', 'project', 'automation'].includes(target.id) && target.text ? noteText(target.text) : null}
     <CompanionProfileForm panel={target} values={editing ? values : target.values} onChange={changeValues} disabled={busy || !online || !!target.action.disabled} />
     {save(target, !!target.action.disabled)}
   </> : target?.text ? <Text selectable style={styles.body}>{target.text}</Text> : !data && online ? spinner : note('hostUpgrade');
@@ -410,14 +398,26 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       </View></View>
       {note('showReplyTargetHint')}
     </View>
-    {data?.panels.filter(item => item.id === 'projects' || item.id === 'followUp').flatMap(item => item.entries ?? [])?.map(entry => <View style={styles.group} key={entry.id}><ContextSheetRow icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} disabled={!online} /></View>)}
+    {data?.panels.filter(item => ['projects', 'automations', 'followUp'].includes(item.id)).flatMap(item => item.entries ?? [])?.map(entry => <View style={styles.group} key={entry.id}><ContextSheetRow icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} disabled={!online} /></View>)}
     <View style={styles.group}>{row('channels', MessageCircle)}{row('artifacts', FileText)}{onOpenSearch ? row('search', History, onOpenSearch) : null}{row('permissions', Hand)}</View>
     {onOpenHome ? <View style={styles.group}>{row('home', Monitor, onOpenHome)}</View> : null}
     {/* Host order, like iOS: restart / resume / delete are whatever the computer offers now. */}
     {management.length ? <View style={styles.group}>{management.map(item => actionRow(item, () => confirm(item), item.id === 'delete'))}</View> : null}
     {online && data && !actionPanel('profile') ? note('hostUpgrade') : null}
   </>;
-  const editorView = panel ? <>
+  const automationsView = automations.rows?.length ? <View style={styles.field} testID="companionProfile.automations">
+      {panel?.text ? noteText(panel.text) : null}
+      <View style={styles.group}>{automations.rows.map((row, index) => <View key={row.id} style={[styles.inline, styles.automationRow, index > 0 && styles.rowDivider]}>
+        <View style={styles.automationText}>
+          <Text style={styles.switchLabel} numberOfLines={2}>{label(row.title)}</Text>
+          {row.subtitle ? <Text style={styles.note} numberOfLines={2}>{label(row.subtitle)}</Text> : null}
+        </View>
+        <NativeSwitch accessibilityLabel={label(row.title)} value={row.on} disabled={!online || !!automations.pending}
+          onValueChange={on => automations.toggle(row.id, on)} seedColor={colors.inputCaret} />
+      </View>)}</View>
+    </View> : null;
+  // The switches come from their own read; until it lands, a spinner rather than a Save form.
+  const editorView = panel?.id === 'automations' && page === 'editor' ? automationsView ?? spinner : panel ? <>
     {formPanel(panel)}
     {editor?.panels.filter(item => item.id === 'remove' && item.action).map(item => <View key={item.id} style={styles.group}>{actionRow(item, () => confirm(item), true)}</View>)}
   </> : editor ? <>{companionEditorSections(editor.panels).map(section => {
@@ -458,7 +458,8 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         : page === 'settings' ? <View style={styles.group}>{row('permissions', Hand)}</View>
         : page === 'skills' ? <>
           {skills?.entries?.length ? <View style={styles.group}>{row('personalSkills', Settings2)}</View> : noteText(skills?.text || t('devices.companionProfile.skillsEmpty'))}
-          {connections?.entries?.length ? <View style={styles.group}>{row('connections', Link2)}</View> : noteText(connections?.text || t('devices.companionProfile.emptyEditor'))}
+          {/* A V2 teammate has no capability selection; its host sends no connections block. */}
+          {!connections ? null : connections.entries?.length ? <View style={styles.group}>{row('connections', Link2)}</View> : noteText(connections.text || t('devices.companionProfile.emptyEditor'))}
         </>
         : page === 'channels' ? resource ? <CompanionChannelTasks deviceId={deviceId} botId={resource.ref.id} online={online} onOpenTask={openArtifactTask} /> : null
         : page === 'artifacts' ? sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')
@@ -662,6 +663,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   spinner: { paddingVertical: spacing.md },
   field: { gap: spacing.sm },
   inline: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 44 },
+  automationRow: { paddingVertical: spacing.sm },
+  automationText: { flex: 1, gap: 2 },
+  rowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   flex: { flex: 1 },
   input: { minHeight: 44, borderRadius: radius.pill, borderColor: colors.border, borderWidth: 1, padding: spacing.md, color: colors.textPrimary, backgroundColor: colors.surfaceElevated, fontSize: typeScale.body },
   multiline: { minHeight: 120, borderRadius: radius.control, textAlignVertical: 'top' },

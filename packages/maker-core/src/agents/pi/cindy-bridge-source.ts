@@ -1,5 +1,6 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
+import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -55,6 +56,7 @@ const SENSITIVE_CREDENTIAL_SELECTOR_GLOBS = [...new Set(
 
 export const CINDY_BRIDGE_EXTENSION_FILENAME = "cindy-bridge.ts";
 export const CINDY_PI_TEXT_ONLY_INPUT_PREFIX = '[CINDY_TEXT_ONLY_INPUT]:';
+export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
@@ -187,6 +189,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
   'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
@@ -1856,22 +1859,33 @@ function commandReadsProcessEnviron(command: unknown): boolean {
 }
 
 let textOnlyTurnActive = false;
+let modelRequestControlActive = false;
 function toolsDisabledForTurn(): boolean { return textOnlyTurnActive; }
 
-function installTextOnlyTurnPolicy(pi: any): void {
+function installTextOnlyTurnPolicy(pi: any, prepareRuntimeControl?: (ctx: any) => Promise<void> | undefined): void {
   const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
   if (!token) return;
   const prefix = ${JSON.stringify(CINDY_PI_TEXT_ONLY_INPUT_PREFIX)} + token + '\n';
+  const modelPrefix = ${JSON.stringify(CINDY_PI_MODEL_REQUEST_INPUT_PREFIX)} + token + '\n';
   pi.on('input', (event: any, ctx: any) => {
     if (event.source !== 'rpc' || typeof event.text !== 'string') return;
-    if (!event.text.startsWith(prefix)) {
+    let text = event.text;
+    const wasControlled = modelRequestControlActive;
+    const controlled = text.startsWith(modelPrefix);
+    if (controlled) text = text.slice(modelPrefix.length);
+    if (ctx.isIdle() && !event.streamingBehavior) modelRequestControlActive = controlled;
+    if (controlled) modelRequestControlActive = true;
+    const prepared = controlled || wasControlled ? prepareRuntimeControl?.(ctx) : undefined;
+    if (!text.startsWith(prefix)) {
       // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
       // resets their latch; steer, follow-ups and extension continuations retain it.
       if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
-      return;
+      const result = controlled ? { action: 'transform', text, images: event.images } : undefined;
+      return prepared ? prepared.then(() => result) : result;
     }
     textOnlyTurnActive = true;
-    return { action: 'transform', text: event.text.slice(prefix.length), images: event.images };
+    const result = { action: 'transform', text: text.slice(prefix.length), images: event.images };
+    return prepared ? prepared.then(() => result) : result;
   });
   // agent_end is too early: native retries, compaction and follow-ups retain the policy.
   pi.on('agent_settled', (_event: any, ctx: any) => {
@@ -1883,6 +1897,81 @@ function installTextOnlyTurnPolicy(pi: any): void {
   pi.on('session_shutdown', (_event: any, ctx: any) => {
     ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_CLOSED_PREFIX)} + token, 'info');
   });
+}
+
+// Native virtual routing preserves the user's selected physical model while each
+// assistant message records the model actually dispatched by this request.
+function installRuntimeModelControl(pi: any) {
+  const provider = 'cindy-runtime-router';
+  const id = 'selected-task';
+  let baseline: any;
+  let baselineThinking: any;
+  let dispatched: any;
+  let requestFast: boolean | undefined;
+  let registered = false;
+  const prepare = (ctx: any): Promise<void> | undefined => {
+    if (ctx.model?.provider !== provider) {
+      baseline = ctx.model;
+    }
+    baselineThinking = ctx.thinkingLevel;
+    dispatched = undefined;
+    requestFast = undefined;
+    if (!modelRequestControlActive) {
+      if (ctx.model?.provider === provider && baseline) {
+        return pi.setModel(baseline).then((ok: boolean) => {
+          if (!ok) throw new Error('Cannot restore the selected model');
+          pi.setThinkingLevel(baselineThinking);
+        });
+      }
+      return;
+    }
+    if (!registered) {
+      pi.registerVirtualModel({ provider, id, name: 'Selected task routing',
+        thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+        contextWindow: baseline?.contextWindow, maxTokens: baseline?.maxTokens,
+        route: async (request: any, routeCtx: any) => {
+          const response = await runtimeModelControl(routeCtx, {
+            phase: 'select', provider: baseline.provider, model: baseline.id,
+            thinkingLevel: request.thinkingLevel,
+          });
+          const route = response.route;
+          const model = route ? routeCtx.modelRegistry.find(route.provider, route.model) : baseline;
+          if (!model) throw new Error('Requested model is unavailable');
+          dispatched = model;
+          requestFast = typeof route?.fastMode === 'boolean' ? route.fastMode : undefined;
+          return { model, thinkingLevel: route?.thinkingLevel ?? request.thinkingLevel ?? baselineThinking };
+        },
+      });
+      registered = true;
+    }
+    const router = ctx.modelRegistry.find(provider, id);
+    if (!router) throw new Error('Model request routing is unavailable');
+    return pi.setModel(router).then((ok: boolean) => {
+      if (!ok) throw new Error('Model request routing is unavailable');
+    });
+  };
+  return { prepare, requestModel: () => modelRequestControlActive ? { model: dispatched ?? baseline, fast: requestFast } : undefined };
+}
+
+async function runtimeModelControl(ctx: any, input: any): Promise<any> {
+  let serialized = JSON.stringify(input);
+  // The placeholder is itself JSON-encoded in an extension UI frame. Keep room
+  // for the native envelope and report transport failure without sending a
+  // truncated request. The host applies the selected task's existing policy.
+  const frameBudget = ${MAX_JSONL_BUFFER_CHARS - 4096};
+  if (input.phase === 'payload' && serialized.length > frameBudget / 2
+    && JSON.stringify(serialized).length > frameBudget) {
+    serialized = JSON.stringify({ phase: 'payload', provider: input.provider, model: input.model,
+      failure: 'request-too-large' });
+  }
+  const raw = await ctx.ui.input('cindy:model-request-control', serialized);
+  const result = typeof raw === 'string' ? JSON.parse(raw) : null;
+  if (result?.skip === true) {
+    ctx.abort();
+    throw new Error('Selected task plugin skipped this request');
+  }
+  if (!result || result.error) throw new Error(result?.error ?? 'Model request control is unavailable');
+  return result;
 }
 
 function currentPermissionState(): {
@@ -2592,30 +2681,16 @@ const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
 const CINDY_ASYNC_QUESTION_TOOL = 'ask_user_question_async';
 const CINDY_MANAGE_QUESTIONS_TOOL = 'manage_user_questions';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
-const CINDY_START_SESSION_TASK_TOOL = 'start_session_task';
-const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task';
-const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task';
-const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
-const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
-const CINDY_CHECK_AGENT_MESSAGE_TOOL = 'check_agent_message';
 const CINDY_LIST_AGENTS_TOOL = 'list_agents';
 const CINDY_LIST_MACHINES_TOOL = 'list_machines';
 const CINDY_INPUT_HANDOFF_TOOL = 'request_input_handoff';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 const CINDY_DIRECT_BOT_TOOLS = new Set([
-  CINDY_START_SESSION_TASK_TOOL,
-  CINDY_CHECK_SESSION_TASK_TOOL,
-  CINDY_MESSAGE_SESSION_TASK_TOOL,
-  CINDY_STOP_SESSION_TASK_TOOL,
-  CINDY_SEND_TO_AGENT_TOOL,
-  CINDY_CHECK_AGENT_MESSAGE_TOOL,
   CINDY_LIST_AGENTS_TOOL,
   CINDY_CREATE_TEAMMATE_TOOL,
-  'routine_list', 'routine_save', 'routine_sources', 'routine_delivery_targets',
-  'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'schedule_list_models',
-  // Follow-up loop: a woken companion reads the short task summary first, then its glance.
-  'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task',
+  // A companion reads the short task summary of a task it is told about.
+  'get_task_digest',
 ]);
 
 interface ConnectedMcpTool {
@@ -3389,10 +3464,6 @@ class CindyMcpGateway {
     return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
   }
 
-  resolveStartSessionTask(input: unknown): ResolvedMcpGatewayCall | null {
-    return this.resolveDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, input);
-  }
-
   resolveCreateTeammate(input: unknown): ResolvedMcpGatewayCall | null {
     return this.resolveDirectHelperTool(CINDY_CREATE_TEAMMATE_TOOL, input);
   }
@@ -3905,13 +3976,6 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved, signal);
   }
 
-  private async executeStartSessionTask(params: unknown, signal?: AbortSignal): Promise<{
-    content: Array<Record<string, unknown>>;
-    details: unknown;
-  }> {
-    return this.executeDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, params, signal);
-  }
-
   private async executeCreateTeammate(params: unknown, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
@@ -3934,7 +3998,7 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved, signal);
   }
 
-  register(pi: any, options: { botMemoryFacade?: boolean; deniedTools?: string[] } = {}): void {
+  register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
     // Aborted turns may approve a call that Pi never executes.
     pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); });
     pi.on?.('tool_result', (event: any) => {
@@ -4011,30 +4075,6 @@ class CindyMcpGateway {
       });
     }
 
-    if (this.resolveStartSessionTask({})) {
-      pi.registerTool({
-        name: CINDY_START_SESSION_TASK_TOOL,
-        label: 'Start a Cindy Session task',
-        description:
-          'Start one real independent Cindy Session task in the background. Prefer completing work in the current chat, including status checks, bounded code or document reading, explaining existing results, and simple file work. A repository, multiple files, tools, or a deliverable alone is not a reason to delegate. Use this when the user explicitly requests an independent task or the work needs separate ongoing execution, an isolated workspace, parallel delivery, or independent tracking. Decide by execution needs, not time or file-count thresholds. When warranted, act without asking again merely to start a task; respect an explicit request to work inline. Include the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. This never selects or wakes a Bot, including a Bot named Cindy. Start it once, do not duplicate its work or poll, and review the result when it returns automatically. Follow up with message_session_task on the same task.',
-        parameters: {
-          type: 'object',
-          properties: {
-            instruction: { type: 'string', minLength: 1, maxLength: 12000 },
-            title: { type: 'string', minLength: 1, maxLength: 120 },
-            working_dir: { type: 'string', minLength: 1, maxLength: 1024 },
-            use_worktree: { type: 'boolean' },
-            context_refs: { type: 'array', items: { type: 'string' }, maxItems: 32 },
-            timeout_ms: { type: 'integer', minimum: 1000, maximum: 86400000 },
-          },
-          required: ['instruction'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeStartSessionTask(params, signal),
-      });
-    }
-
     // Match synchronous question discoverability while retaining the host schema and lifecycle.
     for (const questionTool of [CINDY_ASYNC_QUESTION_TOOL, CINDY_MANAGE_QUESTIONS_TOOL]) {
       const definition = this.tools.get(mcpGatewayKey('cindy_helper', questionTool));
@@ -4080,192 +4120,21 @@ class CindyMcpGateway {
       pi.registerTool({
         name: CINDY_LIST_AGENTS_TOOL,
         label: 'Find teammates',
-        description: 'Discover teammates on this device and authorized remote devices. Use the exact returned id with send_to_agent; device names distinguish namesakes. Unavailable devices are reported separately. Do not guess IDs or poll.',
+        description: 'Discover teammates on this device and authorized remote devices. To talk to one, pass its session_id (its main chat; deviceId::sessionId on another computer) to send_to_session. Device names distinguish namesakes. Unavailable devices are reported separately. Do not guess IDs or poll.',
         parameters: { type: 'object', properties: {}, additionalProperties: false },
         execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
           this.executeDirectHelperTool(CINDY_LIST_AGENTS_TOOL, params, signal),
       });
     }
 
-    if (this.resolveDirectHelperTool(CINDY_CHECK_AGENT_MESSAGE_TOOL, {})) {
-      pi.registerTool({
-        name: CINDY_CHECK_AGENT_MESSAGE_TOOL,
-        label: 'Read teammate reply',
-        description: 'Read persisted ordinary replies to a message sent through an older remote conversation. Use the message_id from send_to_agent when transport is remote-conversation, or after uncertain delivery. Does not resend. No remote tool-call or completed-turn claim. Check on follow-up; do not poll.',
-        parameters: { type: 'object', properties: { message_id: { type: 'string', minLength: 1, maxLength: 80 } },
-          required: ['message_id'], additionalProperties: false },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_CHECK_AGENT_MESSAGE_TOOL, params, signal),
-      });
-    }
-
-    if (this.resolveDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, {})) {
-      pi.registerTool({
-        name: CINDY_SEND_TO_AGENT_TOOL,
-        label: 'Send message to teammate',
-        description:
-          'Send one bounded asynchronous message to a named Cindy Bot teammate. This does not create a task or progress state. Use start_session_task for tracked work. Use the exact stable ID from list_agents or a structured @Bot reference. Remote IDs contain deviceId::botId; never route by name. Accepted or queued does not mean delivered or replied.',
-        parameters: {
-          type: 'object',
-          properties: {
-            // deviceId (80) + separator (2) + existing Bot profile ID (128).
-            target_id: { type: 'string', minLength: 1, maxLength: 210 },
-            message: { type: 'string', minLength: 1, maxLength: 12000 },
-          },
-          required: ['target_id', 'message'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, params, signal),
-      });
-    }
-
-    if (this.resolveDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, {})) {
-      pi.registerTool({
-        name: CINDY_CHECK_SESSION_TASK_TOOL,
-        label: 'Check Session task',
-        description: 'Read one Session task state when the user asks for progress or automatic completion appears to be missing. Do not poll.',
-        parameters: { type: 'object',
-          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 },
-            queued_message_id: { type: 'string', minLength: 1, maxLength: 256 } },
-          required: ['task_id'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, params, signal),
-      });
-    }
-
-    if (this.resolveDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, {})) {
-      pi.registerTool({
-        name: CINDY_MESSAGE_SESSION_TASK_TOOL,
-        label: 'Message Session task',
-        description: 'Queue instructions (default), steer the running turn with mode=steer, or release a reversible pause with mode=resume. Steer never falls back to queue. If paused, resume before answering pending interactions. A terminal task with ordinary input starts a fresh execution under the same task ID.',
-        parameters: {
-          type: 'object',
-          properties: {
-            task_id: { type: 'string', minLength: 1, maxLength: 128 },
-            mode: { type: 'string', enum: ['queue', 'steer', 'resume', 'edit', 'withdraw'] },
-            queued_message_id: { type: 'string', minLength: 1, maxLength: 256 },
-            message: { type: 'string', minLength: 1, maxLength: 4000 },
-            decision: { type: 'string', enum: ['approve', 'deny'] },
-            answers: { type: 'object', additionalProperties: { type: 'string' } },
-            reason: { type: 'string', maxLength: 4000 },
-            idempotency_key: { type: 'string', minLength: 1, maxLength: 128 },
-          },
-          required: ['task_id'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, params, signal),
-      });
-    }
-
-    if (this.resolveDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, {})) {
-      pi.registerTool({
-        name: CINDY_STOP_SESSION_TASK_TOOL,
-        label: 'Stop Session task',
-        description: 'mode=cancel (default) terminates the task; request-stop requests graceful stop only; pause holds the same task and queued input until explicit resume. Check returned control state: pausing/unconfirmed is not stopped.',
-        parameters: {
-          type: 'object',
-          properties: {
-            task_id: { type: 'string', minLength: 1, maxLength: 128 },
-            mode: { type: 'string', enum: ['cancel', 'request-stop', 'pause'] },
-          },
-          required: ['task_id'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, params, signal),
-      });
-    }
-
-    // Native companion routines use the same direct facade and permission identity
-    // as teammate creation. A generic MCP gateway would require nested discovery
-    // and would not disclose the inner routine arguments to the model.
-    const routineTriggerProperties = {
-      id: { type: 'string' },
-    };
-    const routineTools = [
-      { name: 'schedule_list_models', description: 'Discover currently available automation models and locations before choosing a routine model. providers[].modelDetails contains source-specific capabilities, efforts and known pricing; cost is USD per million tokens; currency applies to displayPricing. Compare suitable models using source prices and discounts, not names. Missing price is unknown, subscription reference prices are not charges. Save the exact agent/model/provider/location with routine_save.modelOverride; use null for the local location.', properties: {
-        agent: { type: 'string', enum: ['claude-code', 'codex', 'pi'] },
-        agentDeviceId: { type: 'string', minLength: 1, description: 'local or a returned locations[].agentDeviceId.' },
-      }, required: [] },
-      { name: 'schedule_notify_current_run', description: 'Request one final report from the current silent automation run when there is a new actionable result or an explicit reminder. No run ID needed.', properties: {}, required: [] },
-      { name: 'schedule_set_pre_run_hook', description: 'Install and immediately test a Node ESM pre-run check using the existing host installer. exit 0 wakes the model, exit 2 skips it, other errors fail visibly. Attach returned command with routine_save.preRunHook. Only invoke when authorized to install and test the check.', properties: {
-        script: { type: 'string', description: 'Node ESM source; output a concise change summary. Use CINDY_PRECHECK_OK only after a complete successful check.' },
-        scheduleName: { type: 'string' },
-      }, required: ['script'] },
-      { name: 'routine_list', description: 'List your own persistent Cindy routines. Use before creating to avoid duplicates, and after saving to verify.', properties: {}, required: [] },
-      { name: 'routine_sources', description: 'List available local event sources, event types, filter fields and listening status. Read before creating event triggers; never guess source IDs.', properties: {}, required: [] },
-      { name: 'routine_delivery_targets', description: 'List connected message bots and known recipients for final routine delivery. Use the returned id; choose recipients only as requested by the owner.', properties: {}, required: [] },
-      { name: 'routine_save', description: 'Create or fully update your own persistent Cindy routine when the user requests scheduled reminders, recurring work or event-triggered automation. Multiple triggers are OR. Do not use a background Session or shell loop for recurring work. Do not invent an end time. Read back with routine_list before confirming success.',
-        properties: {
-          id: { type: 'string', description: 'Existing routine ID for updates; omit to create.' },
-          name: { type: 'string', minLength: 1 },
-          prompt: { type: 'string', minLength: 1, description: 'Instructions to execute at each trigger.' },
-          enabled: { type: 'boolean' },
-          modelOverride: { anyOf: [{ type: 'null' }, { type: 'object', properties: {
-            agentKind: { type: 'string', enum: ['claude-code', 'codex', 'pi'] },
-            model: { type: 'string', minLength: 1, maxLength: 512 },
-            providerId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 512 }] },
-            agentDeviceId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 512 }] },
-            effort: { type: 'string', enum: ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
-            fastMode: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['ultrafast'] }] },
-          }, required: ['agentKind', 'model'], additionalProperties: false }], description: 'This routine only: choose a complete route from schedule_list_models. null follows the companion; omission preserves the saved choice. Read back with routine_list.' },
-          delivery: { anyOf: [
-            { type: 'object', properties: { kind: { const: 'companion' }, mode: { type: 'string', enum: ['direct', 'process'] } }, required: ['kind', 'mode'], additionalProperties: false },
-            { type: 'object', properties: { kind: { const: 'im' }, targetId: { type: 'string' } }, required: ['kind', 'targetId'], additionalProperties: false },
-            { type: 'object', properties: { kind: { const: 'none' } }, required: ['kind'], additionalProperties: false },
-          ], description: 'Final delivery defaults to companion/direct without a model call. process wakes the companion only when requested; im uses routine_delivery_targets.id; none keeps the independent task. Omission preserves saved choices.' },
-          sessionMode: { type: 'string', enum: ['persistent', 'fresh'], description: 'persistent reuses this routine task and context; fresh starts a new task each trigger. Omission preserves the saved mode. Read back with routine_list.' },
-          silentWhenIdle: { type: 'boolean', description: 'Set true for checks with no-change reporting suppressed. Set false for reminders/scheduled delivery. Omitted defaults to false; preserve user choices.' },
-          preRunHook: { anyOf: [{ type: 'null' }, { type: 'object', properties: {
-            command: { type: 'string', minLength: 1, maxLength: 32000 },
-            timeoutMs: { type: 'integer', minimum: 1 },
-          }, required: ['command'], additionalProperties: false }], description: 'Install scripts with schedule_set_pre_run_hook; exit 2 skips the model, exit 0 passes stdout, failures stay visible. null removes; omission preserves.' },
-          triggers: { type: 'array', minItems: 1, maxItems: 32, items: { anyOf: [
-            { type: 'object', properties: { ...routineTriggerProperties,
-              kind: { type: 'string', enum: ['interval'] },
-              intervalMs: { type: 'integer', minimum: 60000, description: 'Interval in milliseconds. One minute = 60000.' },
-              anchorMs: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'Original interval anchor in Unix milliseconds; preserve when editing.' },
-            }, required: ['id', 'kind', 'intervalMs'], additionalProperties: false },
-            { type: 'object', properties: { ...routineTriggerProperties,
-              kind: { type: 'string', enum: ['cron'] },
-              expression: { type: 'string' }, timezone: { type: 'string' },
-            }, required: ['id', 'kind', 'expression', 'timezone'], additionalProperties: false },
-            { type: 'object', properties: { ...routineTriggerProperties,
-              kind: { type: 'string', enum: ['once'] },
-              at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'One-time trigger timestamp in Unix milliseconds.' },
-            }, required: ['id', 'kind', 'at'], additionalProperties: false },
-            { type: 'object', properties: { ...routineTriggerProperties,
-              kind: { type: 'string', enum: ['event'] },
-              sourceId: { type: 'string' }, eventType: { type: 'string' },
-              filters: { type: 'array', items: { type: 'object', properties: {
-                field: { type: 'string' }, operator: { type: 'string', enum: ['equals', 'contains', 'not-equals'] },
-                value: { type: 'string' },
-              }, required: ['field', 'operator', 'value'], additionalProperties: false } },
-            }, required: ['id', 'kind', 'sourceId', 'eventType', 'filters'], additionalProperties: false },
-          ] } },
-        }, required: ['name', 'prompt', 'enabled', 'triggers'] },
-      ...[
-        { name: 'routine_history', description: 'Read execution history and results of one of your routines.' },
-        { name: 'routine_delete', description: 'Delete one of your routines when requested. To pause instead, save its complete configuration with enabled=false.' },
-        { name: 'routine_run_now', description: 'Run one of your saved routines now when requested.' },
-      ].map((tool) => ({ ...tool, properties: { id: { type: 'string', minLength: 1 } }, required: ['id'] })),
-    ];
-    // Follow-up tools use the same direct facade so a routine-woken companion does not need
-    // nested discovery before reading the event's task.
+    // The task digest uses the same direct facade as teammate creation, so a companion does not
+    // need nested discovery before reading a task it is told about.
     const taskIdProperty = { type: 'string', minLength: 1, description: 'Local task ID, or deviceId::sessionId for another computer.' };
     const followUpTools = [
       { name: 'get_task_digest', description: 'Read a short (<=2KB) summary of one task: phase, elapsed minutes, last ask and answer, pending question, error, route, suggested next route, PR status and queue. Read this before deciding how to follow up.', properties: { session_id: taskIdProperty }, required: ['session_id'] },
-      { name: 'get_workbench', description: 'Your workbench at a glance: tasks waiting for the owner and tasks in progress, with the last sweep time.', properties: {}, required: [] },
-      { name: 'read_workbench_task', description: 'Read the recent bounded transcript of a task you follow (all tasks if you follow every task).', properties: { task_id: taskIdProperty }, required: ['task_id'] },
-      { name: 'continue_workbench_task', description: 'Send one message into a task you follow so it continues. Use get_task_digest first; never resend after DELIVERY_UNKNOWN without checking.', properties: { task_id: taskIdProperty, message: { type: 'string', minLength: 1, maxLength: 4000 } }, required: ['task_id', 'message'] },
     ];
-    const deniedTools = new Set(options.deniedTools ?? []);
-    for (const tool of [...routineTools, ...followUpTools]) {
-      if (deniedTools.has(tool.name) || !this.resolveDirectHelperTool(tool.name, {})) continue;
+    for (const tool of followUpTools) {
+      if (!this.resolveDirectHelperTool(tool.name, {})) continue;
       pi.registerTool({
         name: tool.name,
         label: tool.name,
@@ -4536,7 +4405,7 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
-async function nativeFastPayload(payload, model, ctx) {
+async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
   let models;
@@ -4544,6 +4413,10 @@ async function nativeFastPayload(payload, model, ctx) {
   if (!Array.isArray(models) || !models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
   const out = { ...payload };
   delete out.service_tier;
+  if (requestFast !== undefined) {
+    if (requestFast) out.service_tier = 'priority';
+    return out;
+  }
   let timer;
   try {
     // No UI is shown: Cindy answers this internal query from current host memory.
@@ -4736,6 +4609,13 @@ export default async function cindyBridge(piApi: any) {
     ? createCindyGuestToolGate(piApi, [${JSON.stringify(CINDY_SUBAGENT_TOOL_NAME)}])
     : null;
   const pi = guestToolGate ? guestToolGate.pi : piApi;
+  const taskSystemPromptFile = process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
+  // switch_session reloads extensions. Keep the launch path in this Pi only;
+  // shell environments and independent subagents strip it before spawning.
+  const taskSystemPrompt = taskSystemPromptFile ? readFileSync(taskSystemPromptFile, 'utf8') : '';
+  if (taskSystemPrompt) pi.on('before_agent_start', (event: any) => ({
+    systemPrompt: event.systemPrompt + '\n\n' + taskSystemPrompt,
+  }));
   if (localHostToolsOnly) {
     const allowed = new Set(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
     const isolate = () => pi.setActiveTools([...allowed]);
@@ -4752,7 +4632,9 @@ export default async function cindyBridge(piApi: any) {
       if (allowed.length !== active.length) pi.setActiveTools(allowed);
     });
   }
-  installTextOnlyTurnPolicy(pi);
+  const runtimeModelRouting = installRuntimeModelControl(pi);
+  installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
+  const runtimeRequestModel = runtimeModelRouting.requestModel;
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
@@ -4807,8 +4689,15 @@ export default async function cindyBridge(piApi: any) {
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
   pi.on('before_provider_request', async (event, ctx) => {
     const preparationStarted = performance.now();
-    const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
-    const next = (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
+    const runtimeRequest = runtimeRequestModel();
+    const model = runtimeRequest?.model ?? ctx.model;
+    const payload = astraResponsesPayload(event.payload, model) ?? event.payload;
+    let next = (await nativeFastPayload(payload, model, ctx, runtimeRequest?.fast)) ?? payload;
+    if (modelRequestControlActive) {
+      const response = await runtimeModelControl(ctx, { phase: 'payload', provider: model.provider,
+        model: model.id, request: next });
+      next = response.request ?? next;
+    }
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
     const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
@@ -5747,7 +5636,7 @@ export default async function cindyBridge(piApi: any) {
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;
   if (!raw) return;
-  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean; deniedTools?: string[] };
+  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean };
   try {
     cfg = JSON.parse(raw);
   } catch {
@@ -5774,10 +5663,7 @@ export default async function cindyBridge(piApi: any) {
   // every low-frequency/external MCP still stays behind discovery.
   if (servers.length > 0) {
     try {
-      mcpGateway.register(pi, {
-        botMemoryFacade: cfg.botMemoryFacade === true,
-        deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],
-      });
+      mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });
       console.error('[cindy-bridge] MCP gateway ready (' + mcpGateway.size + ' tools; companion facade=' + (cfg.botMemoryFacade === true) + ')');
     } catch (err) {
       console.error('[cindy-bridge] MCP gateway registration failed: ' + String(err));

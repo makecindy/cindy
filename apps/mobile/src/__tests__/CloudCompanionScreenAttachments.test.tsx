@@ -7,6 +7,9 @@ const h = vi.hoisted(() => ({
   stub: (_name: string) => () => null,
   room: { status: 'ready', messages: [] as unknown[], before: null, loadingOlder: false, reload: vi.fn(), loadOlder: vi.fn(), media: vi.fn() },
   strips: [] as Array<{ messageId: string; align: string; names: string[]; resolve: unknown; previewServerImages: boolean }>,
+  roster: { items: [] as unknown[], online: false },
+  openTeammate: vi.fn(),
+  navState: undefined as undefined | { index: number; routes: Array<{ name: string; params?: unknown }> },
 }));
 vi.mock('react-native', async () => {
   const { createElement: el } = await import('react');
@@ -14,7 +17,7 @@ vi.mock('react-native', async () => {
   return { View: view, ScrollView: view, ActivityIndicator: view, Platform: { OS: 'ios', select: (o: any) => o.ios ?? o.default },
     StyleSheet: { create: (s: any) => s, hairlineWidth: 1 } };
 });
-vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useRouter: () => ({}) }));
+vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useRouter: () => ({}), useNavigation: () => ({ getState: () => h.navState }) }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 0 }));
 vi.mock('react-native-safe-area-context', async () => ({ SafeAreaView: (await import('react-native')).View }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -56,8 +59,9 @@ vi.mock('@/session/ChatIdentityHeader', () => ({ CHAT_HEADER_MARK_SIZE: 32, Chat
 vi.mock('@/session/CompanionCardButton', () => ({ CompanionCardActions: h.stub('actions'), CompanionCardButton: h.stub('button') }));
 vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: h.stub('row') }));
 vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: h.stub('sheet') }));
-vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ openTeammate: vi.fn() }) }));
-vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates', useTeammateRoster: () => ({ items: [], refresh: vi.fn(), isOnline: () => false }) }));
+vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ openTeammate: h.openTeammate }) }));
+vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates',
+  useTeammateRoster: () => ({ items: h.roster.items, refresh: vi.fn(), isOnline: () => h.roster.online }) }));
 vi.mock('@/session/BotGroupMessageAttachments', async () => {
   const { createElement: el } = await import('react');
   return { BotGroupMessageAttachments: (props: any) => {
@@ -75,6 +79,7 @@ let root: Root;
 let container: HTMLElement;
 beforeEach(() => {
   h.strips.length = 0; h.room.status = 'ready';
+  h.roster = { items: [], online: false }; h.openTeammate.mockReset(); h.navState = undefined;
   container = document.createElement('div'); root = createRoot(container);
 });
 afterEach(() => act(() => root.unmount()));
@@ -130,4 +135,26 @@ it('caps the owner\'s bubble at 86% of a full-width column so long text wraps', 
   expect(style(bubble).maxWidth).toBe('86%');
   expect(style(column).maxWidth).toBeUndefined();
   expect(style(column).alignItems).toBe('flex-end');
+});
+
+// Tier: behavior. The cloud view never looked at the main computer again: after it came back online
+// (or allowed control), the companion stayed "offline" until the app restarted (2026-11-10).
+it('hands back to the live chat once the main computer answers, unless opened from that chat', async () => {
+  h.room.messages = [];
+  const row = { key: 'k', host: { deviceId: 'mac', deviceName: 'Mac' },
+    item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'mia' }, display: { title: 'Mia' }, links: [], revision: '1' } };
+  h.roster = { items: [row], online: false };
+  await render();
+  expect(h.openTeammate).not.toHaveBeenCalled();
+
+  h.roster = { items: [row], online: true };
+  await render();
+  expect(h.openTeammate).toHaveBeenCalledTimes(1);
+  expect(h.openTeammate).toHaveBeenCalledWith(row, { replace: true });
+
+  act(() => root.unmount()); root = createRoot(container); h.openTeammate.mockReset();
+  h.navState = { index: 1, routes: [{ name: 'resources/[collectionId]/[resourceId]', params: { resourceId: 'mia', deviceId: 'mac' } },
+    { name: 'companions/cloud/[actorId]' }] };
+  await render();
+  expect(h.openTeammate).not.toHaveBeenCalled();
 });

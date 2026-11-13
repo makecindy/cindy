@@ -1,5 +1,6 @@
 import { and, desc, eq, isNull, ne, or } from 'drizzle-orm';
 import path from 'node:path';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirs.js';
@@ -15,7 +16,8 @@ export async function listPluginTargetCandidates(
   let result: PluginTargetCandidate[];
   if (kind === 'project') {
     result = (await listRecentWorkdirs(snapshot.client))
-      .filter((row) => row.exists)
+      // Teammates are offered as their own kind; their project is not a second entry.
+      .filter((row) => row.exists && !isTeammateProjectPath(row.path))
       .map((row) => ({
         id: row.path,
         label: path.basename(row.path) || row.path,

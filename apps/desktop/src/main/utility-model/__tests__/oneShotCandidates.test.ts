@@ -52,12 +52,12 @@ vi.mock('../../maker-host/anthropic-responses-bridge-host.js', () => ({
   getChatgptBridgeAuthForDispatch: vi.fn(),
 }));
 
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: vi.fn(),
   getGrokOAuthCredentialGeneration: vi.fn(() => 0),
 }));
 
-vi.mock('../../maker-host/generic-oauth.js', () => ({
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: vi.fn(),
 }));
 
@@ -112,8 +112,8 @@ import { fetch as undiciFetch } from 'undici';
 import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../../maker-host/anthropic-responses-bridge-host.js';
-import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.js';
-import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
+import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.desktop.js';
+import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.desktop.js';
 import {
   getActiveCatalog,
   isXdGatewayPaymentRequiredRoute,

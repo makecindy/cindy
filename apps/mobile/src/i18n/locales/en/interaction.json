@@ -29,6 +29,13 @@
       "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
       "confirm": "Enable Full access",
       "cancel": "Keep current permissions"
+    },
+    "description": {
+      "default": "You approve actions when needed.",
+      "acceptEdits": "File edits are allowed directly; you approve other actions when needed.",
+      "auto": "An AI model approves actions, which may take extra time; you confirm when needed.",
+      "bypass": "Routine actions are allowed directly, including files outside the workspace and network commands.",
+      "plan": "Analyzes and plans without changing files."
     }
   },
   "planMode": {
@@ -40,7 +47,6 @@
     "questionWithdrawn": "No longer needs an answer",
     "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
     "sendSupplement": "Send additional information",
-
     "readOnlyKind": "Pending",
     "readOnlyTitle": "Waiting for confirmation on your computer",
     "pendingRequests": "Pending requests",
@@ -71,7 +77,7 @@
     "collapsedHint": "Tap to answer",
     "selectAnswer": "Select answer {{label}}",
     "submittingHint": "Sending the decision to your computer. Don't submit again.",
-    "decisionNotAccepted": "Your response was not accepted. Please try again.",
+    "decisionNotAccepted": "Your response wasn't accepted. Try again.",
     "customAnswerInputAccessibility": "Enter a custom answer",
     "customAnswerPlaceholder": "Enter another answer",
     "customAnswerButtonText": "Enter another answer…",
@@ -163,8 +169,8 @@
     "cancel": "Cancel",
     "cancelAccessibility": "Cancel rewind",
     "confirm": "Confirm rewind",
-    "confirming": "Rewinding",
-    "titleLoading": "Checking rewind impact",
+    "confirming": "Rewinding…",
+    "titleLoading": "Checking rewind impact…",
     "titleDefault": "Rewind to this message?",
     "titleEmpty": "Rewind chat only",
     "titleError": "Can't rewind",
@@ -187,6 +193,7 @@
     "fromLead": "Message from Lead",
     "fromWorkerNamed": "Message from Worker “{{role}}”",
     "fromWorker": "Message from Worker",
+    "fromWorkerBatch": "System report: {{count}} Worker results",
     "emptyMessageBody": "(Empty message)"
   },
   "contextSheet": {
@@ -204,7 +211,7 @@
     "goalObjectiveAccessibility": "Goal content",
     "goalPlaceholder": "What do you want to achieve? The agent keeps working toward this goal until it's done or hits a limit.",
     "advancedSettings": "Advanced settings",
-    "limitsHint": "When unchanged, follows the remote computer's default limits; the goal stops automatically when any limit is reached and can be stopped manually anytime; \"Unlimited\" means no limit is set.",
+    "limitsHint": "When unchanged, follows the remote computer's default limits; the goal stops automatically when any limit is reached and can be stopped manually anytime; “Unlimited” means no limit is set.",
     "maxTurns": "Max turns",
     "tokenBudget": "Token budget",
     "noProgressLimit": "No-progress limit",
@@ -283,7 +290,7 @@
     },
     "terminal": {
       "succeeded": "Handed back to the agent.",
-      "cancelled": "Input handoff canceled.",
+      "cancelled": "Input handoff cancelled.",
       "failed": "Input handoff ended.",
       "expired": "Input handoff ended after waiting too long."
     },
@@ -382,7 +389,7 @@
       "share": "Save or Share Image",
       "copyLink": "Copy Link",
       "copyText": "Copy Text",
-      "copied": "Copied.",
+      "copied": "Copied",
       "copyFailed": "Couldn't copy. Try again.",
       "openFailed": "This device can't open the link. Save the image and pick it from Photos in the app's scanner.",
       "shareFailed": "Couldn't open sharing. Try again.",
@@ -455,5 +462,39 @@
       "ghost_id": "Plugin",
       "tool": "Tool"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirm feedback submission to {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "Feature",
+    "titleLabel": "Title",
+    "bodyLabel": "Body (Markdown)",
+    "privacyHint": "The Issue title and body will be public and may be searchable or cached. Automatic redaction only covers some common patterns and cannot detect all sensitive context.",
+    "relatedLogsHint": "This submission includes the related client logs shown above. They are filtered, redacted, and length-limited before publication.",
+    "privacyConfirm": "I reviewed the public content above and it contains no personal, conversation, or business information that should remain private",
+    "submissionMethodLabel": "Submission Identity",
+    "identityGithubUser": "My GitHub account @{{login}}",
+    "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",
+    "identityPlatform": "Cindy official bot @{{login}} (default)",
+    "identityPlatformHint": "No GitHub account setup is required. The official bot creates the Issue, and you can add a public attribution in the body",
+    "publicNameLabel": "Public Attribution",
+    "publicNameHint": "This attribution will appear publicly in the Issue body",
+    "anonymous": "Anonymous",
+    "useAnonymous": "Use Anonymous Attribution",
+    "envLine": "Submitting client environment (attached automatically on submit): client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (this session)",
+    "regionLine": "Build region: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Submit Feedback",
+    "cancel": "Cancel",
+    "previewLabel": "GitHub · Public feedback",
+    "edit": "Edit",
+    "doneEditing": "Done editing",
+    "publicSubmit": "Submit publicly",
+    "publicationNotice": "Your feedback and attribution will be public on GitHub.",
+    "attribution": "By {{name}}",
+    "environment": "Environment included",
+    "identitySettings": "Name and account"
   }
 }

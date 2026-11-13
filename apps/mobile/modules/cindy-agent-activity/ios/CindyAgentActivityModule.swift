@@ -1,6 +1,7 @@
 import ActivityKit
 import ExpoModulesCore
 import UIKit
+import OSLog
 
 private struct ActivitySnapshot: Decodable {
   var accountId: String
@@ -10,6 +11,7 @@ private struct ActivitySnapshot: Decodable {
 @MainActor
 private final class AgentActivityController {
   static let shared = AgentActivityController()
+  private let log = Logger(subsystem: "app.cindy.activity", category: "freshness")
   private var tail: Task<Void, Never>?
   private var observed: Activity<CindyAgentActivityAttributes>?
   private var dismissedAccount: String? {
@@ -71,6 +73,7 @@ private final class AgentActivityController {
     return ["accountScope": account as Any? ?? NSNull(),
             "supportsInputPushToken": supportsInputPushToken,
             "enabled": ActivityAuthorizationInfo().areActivitiesEnabled,
+            "isStale": current?.activityState == .stale,
             "startToken": hex(startToken), "updateToken": hex(current?.pushToken),
             "activityId": current?.id as Any? ?? NSNull(),
             "dismissed": account != nil && dismissedAccount == account]
@@ -90,9 +93,14 @@ private final class AgentActivityController {
     guard watches[activity.id] == nil else { return }
     observed = activity
     watches[activity.id] = [Task {
+      for await content in activity.contentUpdates {
+        log.debug("content observed; expiry: \(content.staleDate?.timeIntervalSince1970 ?? 0)")
+      }
+    }, Task {
       for await _ in activity.pushTokenUpdates { registrationChanged?() }
     }, Task {
       for await state in activity.activityStateUpdates {
+        if state == .stale { log.info("activity became stale") }
         if state == .dismissed || state == .ended {
           if state == .dismissed && activity.attributes.accountId == account {
             dismissedAccount = activity.attributes.accountId
@@ -126,6 +134,7 @@ private final class AgentActivityController {
         guard account == owner else { return }
         guard activity.attributes.accountId == owner else { continue }
         guard activity.activityState == .active else { continue }
+        log.info("activity marked stale: connection unverified")
         await activity.update(ActivityContent(state: activity.content.state, staleDate: .distantPast))
       }
     }
@@ -161,7 +170,11 @@ private final class AgentActivityController {
       }
     }
     guard snapshot.accountId == account else { return }
-    let content = ActivityContent(state: snapshot.state, staleDate: Date().addingTimeInterval(120))
+    let now = Date()
+    var state = snapshot.state
+    state.confirmedAt = now.timeIntervalSince1970
+    let content = ActivityContent(state: state, staleDate: now.addingTimeInterval(state.freshnessInterval))
+    log.debug("local content confirmed; freshness seconds: \(state.freshnessInterval)")
     if let current {
       observed = current
       observe(current)

@@ -1,3 +1,5 @@
+import { createSessionOptionsReconciler } from '../sessionOptionsReconciler.js';
+import type { MakerSessionCreateOpts } from '../sessionRequest.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -28,9 +30,12 @@ describe('Pi session-tree lazy resume provider route', () => {
 
     expect(listSkills).toContain('const kind = requireAgentKind(agentKind);');
     expect(listSkills).toContain('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();');
+    // Guard discovery order independently of optional host verification arguments.
+    const skillsDiscoveryIdx = listSkills.indexOf('maker.listAgentSkills(');
+    expect(skillsDiscoveryIdx).toBeGreaterThanOrEqual(0);
     expect(
       listSkills.indexOf('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();'),
-    ).toBeLessThan(listSkills.indexOf('maker.listAgentSkills(kind, skillParams)'));
+    ).toBeLessThan(skillsDiscoveryIdx);
 
     expect(listCustomizations).toContain("else if (agentKind === 'pi') {");
     expect(listCustomizations).toContain(
@@ -41,40 +46,23 @@ describe('Pi session-tree lazy resume provider route', () => {
     ).toBeLessThan(listCustomizations.indexOf('maker.listCustomizations(opts)'));
   });
 
-  it('preserves the persisted providerId null/undefined distinction', () => {
+  // Cross-file routing guard: the factory controls eligibility, while register
+  // must carry persisted provider/host authority into the native bootstrap.
+  it('preserves route identity and requires native history for cold actions', () => {
     const lazyResume = sourceBetween(
-      'async function getOrResumeSessionTreeSession',
+      'const getOrResumeSessionForHistory = createSessionActionRuntime',
       'ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE',
     );
-
     expect(lazyResume).toContain('providerId: row.providerId,');
-    expect(lazyResume).not.toContain('providerId: row.providerId ?? undefined');
+    expect(lazyResume).toContain('remoteHostId: row.remoteHostId ?? undefined,');
+    expect(lazyResume).toContain('agentDeviceId: row.agentDeviceId ?? undefined,');
+    expect(lazyResume).toContain('bootstrapSession(createOpts, assertCurrent, true)');
   });
 
-  it('guards non-active (archived/deleted) sessions against lazy resume (round 40-w3 MEDIUM)', () => {
-    const lazyResume = sourceBetween(
-      'async function getOrResumeSessionTreeSession',
-      'ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE',
-    );
-
-    // lazy resume 的 DB 查询必须带出 status, 且在 bootstrap 前拒绝非 active。
-    expect(lazyResume).toContain('status: sessions.status,');
-    expect(lazyResume).toContain("row.status !== 'active'");
-    // 拒绝分支发生在任何 bootstrapSession / ensureRemoteReadyForSessionStart 之前。
-    const statusGuardIdx = lazyResume.indexOf("row.status !== 'active'");
-    const bootstrapIdx = lazyResume.indexOf('bootstrapSession(');
-    expect(statusGuardIdx).toBeGreaterThan(-1);
-    expect(bootstrapIdx).toBeGreaterThan(statusGuardIdx);
-  });
-
-  it('keeps the same three-state route contract across every persisted-session bootstrap', () => {
+  it('keeps the same three-state route contract across every persisted-session bootstrap', async () => {
     const preHydrate = sourceBetween(
       'async function hydrateProviderIdBeforeSessionStart',
       'async function markOrcaRoleIfNeeded',
-    );
-    const reconcile = sourceBetween(
-      'async function reconcileCreateOptsAgainstDb',
-      'const agentSwitchDeps:',
     );
     const queued = sourceBetween(
       'async function buildCreateOptsForQueuedSession',
@@ -82,7 +70,12 @@ describe('Pi session-tree lazy resume provider route', () => {
     );
 
     expect(preHydrate).toContain('o.providerId = row.providerId?.trim() || null;');
-    expect(reconcile).toContain('co.providerId = row.providerId;');
+    for (const providerId of [null, undefined, 'selected-provider']) {
+      const co = { agentKind: 'pi', providerId: 'stale' } as MakerSessionCreateOpts;
+      await createSessionOptionsReconciler({ log: { warn() {} },
+        readSession: async () => ({ model: 'm', agentKind: 'pi', providerId }) })('task', co);
+      expect(co.providerId).toBe(providerId);
+    }
     expect(queued).toContain('providerId: row.providerId,');
     expect(registerSource).toContain('providerId: row?.providerId,');
     expect(registerSource).toContain('providerId: inherited.providerId,');

@@ -29,6 +29,13 @@
       "description": "O acesso total desativa o sandbox do espaço de trabalho e dispensa aprovações de rotina. {{appName}} pode modificar arquivos fora do espaço de trabalho e executar comandos de rede sem perguntar; operações de alto risco integradas ainda exigirão confirmação.",
       "confirm": "Ativar acesso total",
       "cancel": "Manter permissões atuais"
+    },
+    "description": {
+      "default": "Você aprova as ações quando necessário.",
+      "acceptEdits": "Edições de arquivos são permitidas diretamente; você aprova outras ações quando necessário.",
+      "auto": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário.",
+      "bypass": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede.",
+      "plan": "Analisa e planeja sem alterar arquivos."
     }
   },
   "planMode": {
@@ -40,7 +47,6 @@
     "questionWithdrawn": "Não precisa mais de resposta",
     "withdrawnDraft": "Esta pergunta não precisa mais de resposta.\n{{reason}}\nSeu rascunho foi mantido e pode ser enviado como complemento.",
     "sendSupplement": "Enviar complemento",
-
     "readOnlyKind": "Pendente",
     "readOnlyTitle": "Aguardando confirmação no seu computador",
     "pendingRequests": "Solicitações pendentes",
@@ -128,7 +134,7 @@
       "label": "Plano"
     },
     "issue_confirm": {
-      "title": "O problema precisa de confirmação",
+      "title": "A Issue precisa de confirmação",
       "label": "Issue"
     },
     "rename_sessions_confirm": {
@@ -148,8 +154,8 @@
       "label": "Solicitação"
     },
     "input_handoff": {
-      "title": "Transferência de controle de entrada necessária",
-      "label": "Transferência de controle de entrada"
+      "title": "Entrada manual necessária",
+      "label": "Entrada manual"
     }
   },
   "rewind": {
@@ -187,6 +193,7 @@
     "fromLead": "Mensagem do Lead",
     "fromWorkerNamed": "Mensagem do Worker “{{role}}”",
     "fromWorker": "Mensagem do Worker",
+    "fromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
     "emptyMessageBody": "(Mensagem vazia)"
   },
   "contextSheet": {
@@ -226,7 +233,7 @@
     "photoNotReadable": "Não é possível ler esta foto agora (talvez o download do iCloud ainda não tenha terminado). Tente novamente mais tarde."
   },
   "pluginSetup": {
-    "remoteDesktop": "Abrir aplicativo de computador",
+    "remoteDesktop": "Abrir área de trabalho remota",
     "completeOnDesktop": "Use a área de trabalho remota para concluir a configuração no computador. O login, a autorização e as credenciais permanecem nesse computador; este cartão é atualizado automaticamente.",
     "chooseOne": "Escolha um método de configuração",
     "progress": "{{satisfied}}/{{total}} concluídos",
@@ -283,17 +290,17 @@
     },
     "terminal": {
       "succeeded": "Controle devolvido ao Agent.",
-      "cancelled": "Transferência de controle de entrada cancelada.",
-      "failed": "Transferência de controle de entrada encerrada.",
-      "expired": "Transferência de controle de entrada encerrada por tempo de espera excedido."
+      "cancelled": "Entrada manual cancelada.",
+      "failed": "Entrada manual encerrada.",
+      "expired": "Entrada manual encerrada por tempo de espera excedido."
     },
     "failure": {
       "permission": "O Cindy não consegue ler a tela deste computador. Permita o acesso do Cindy em Acessibilidade nas Configurações do Sistema.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler esta tela. Você pode concluir esta etapa no computador host e devolver o controle ao Agent.",
       "action_failed": "Essa ação não teve efeito. Verifique a tela e tente novamente.",
-      "timeout": "Transferência de controle de entrada encerrada por tempo de espera excedido.",
-      "unsupported": "Este computador ainda não oferece transferência de entrada.",
+      "timeout": "Entrada manual encerrada por tempo de espera excedido.",
+      "unsupported": "Este computador ainda não oferece entrada manual.",
       "origin_changed": "A página mudou antes que Cindy pudesse preenchê-la, então nada foi inserido. Verifique a página atual e tente novamente.",
       "picture_unavailable": "Não foi possível mostrar esta etapa como imagem. Permita que Cindy grave a tela nas Configurações do Sistema e verifique se a janela não está minimizada.",
       "screen_locked": "A tela deste computador está bloqueada (a suspensão da tela também a bloqueia). Ative e desbloqueie a tela e peça ao Agent para tentar novamente.",
@@ -340,11 +347,11 @@
       "donePhone_other": "O proprietário concluiu {{count}} etapas de entrada em um celular",
       "doneElsewhere_one": "O proprietário concluiu {{count}} etapa de entrada em outro dispositivo",
       "doneElsewhere_other": "O proprietário concluiu {{count}} etapas de entrada em outro dispositivo",
-      "done": "Transferência de entrada concluída",
+      "done": "Entrada manual concluída",
       "nothingToFill": "Nada para digitar; controle devolvido ao Agent",
-      "cancelled": "Transferência de entrada cancelada",
-      "expired": "O tempo da transferência de entrada esgotou",
-      "failed": "A transferência de entrada não foi concluída",
+      "cancelled": "Entrada manual cancelada",
+      "expired": "O tempo da entrada manual esgotou",
+      "failed": "A entrada manual não foi concluída",
       "doneOn_many": "O proprietário concluiu {{count}} etapas de entrada em {{device}}",
       "doneHost_many": "O proprietário concluiu {{count}} etapas de entrada no computador host",
       "donePhone_many": "O proprietário concluiu {{count}} etapas de entrada em um celular",
@@ -424,7 +431,7 @@
       "singleSelect": "Selecione uma resposta ou insira outra resposta.",
       "emptyTitle": "Nenhuma pergunta específica",
       "emptyDetail": "Você pode enviar uma resposta vazia para que o computador continue.",
-      "waiting": "Agent está aguardando confirmação"
+      "waiting": "O Agent está aguardando confirmação"
     },
     "plan": {
       "outlineCount": "{{count}} seções",
@@ -459,5 +466,39 @@
       "ghost_id": "Plugin",
       "tool": "Ferramenta"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirmar envio de feedback para {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "Recurso",
+    "titleLabel": "Título",
+    "bodyLabel": "Corpo (Markdown)",
+    "privacyHint": "O título e o corpo da issue serão públicos e poderão aparecer em buscas ou ser armazenados em cache. A ocultação automática de dados cobre apenas alguns padrões comuns e não consegue detectar todos os contextos sensíveis.",
+    "relatedLogsHint": "Este envio inclui os logs do cliente relacionados exibidos acima. Eles são filtrados, têm dados sensíveis ocultados e tamanho limitado antes da publicação.",
+    "privacyConfirm": "Revisei o conteúdo público acima e ele não contém informações pessoais, de conversas ou comerciais que devam permanecer privadas",
+    "submissionMethodLabel": "Identidade do envio",
+    "identityGithubUser": "Minha conta do GitHub @{{login}}",
+    "identityGithubUserHint": "Você será o autor no GitHub e poderá editar ou fechar esta issue no GitHub",
+    "identityPlatform": "Bot oficial do Cindy @{{login}} (padrão)",
+    "identityPlatformHint": "Não é necessário configurar uma conta do GitHub. O bot oficial cria a issue, e você pode adicionar uma atribuição pública no corpo",
+    "publicNameLabel": "Atribuição pública",
+    "publicNameHint": "Esta atribuição aparecerá publicamente no corpo da issue",
+    "anonymous": "Anônimo",
+    "useAnonymous": "Usar atribuição anônima",
+    "envLine": "Ambiente do cliente que está enviando (anexado automaticamente no envio): cliente {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · Idioma da interface {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · ID do modelo {{modelId}} (esta sessão)",
+    "regionLine": "Região da compilação: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Enviar feedback",
+    "cancel": "Cancelar",
+    "previewLabel": "GitHub · Feedback público",
+    "edit": "Editar",
+    "doneEditing": "Concluir edição",
+    "publicSubmit": "Enviar publicamente",
+    "publicationNotice": "O conteúdo e seu nome ficarão públicos no GitHub.",
+    "attribution": "Por {{name}}",
+    "environment": "Ambiente incluído",
+    "identitySettings": "Nome e conta"
   }
 }

@@ -2,7 +2,7 @@
 
 ## 排队消息展示
 
-Desktop 与 Mobile 都把待发消息作为消息流气泡展示，气泡下方的「排队中」菜单提供插话、编辑、上移、下移与取消发送。输入框不再承载独立队列列表。
+Desktop 与 Mobile 都把待发消息作为消息流气泡展示，气泡下方的「排队中」菜单提供插话、编辑、上移、下移与取消发送。输入框不再承载独立队列列表。已在提问卡展示的异步回答不产生待发气泡或菜单，判据与手机共用 `isAnsweredAsyncQuestionClientId`；后台投递照常。
 
 Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），避免待发输入提前截断当前助手轮次。待发项与正式回流使用相同的 `msg-clientId` key，已回流的历史优先，防止队列快照迟到造成双显。`PendingQueueBubble` 复用 `UserMessage`，操作可用性使用 `maker-shared/queue` 的共享判据。编辑锁由任务页持有，不随气泡虚拟化卸载而释放；队列通知放在消息流 footer。
 
@@ -66,6 +66,12 @@ Agent 没有 TTY 时，dev 会在新开的 Terminal（macOS）／cmd（Windows�
 只保留前 8MB，足够覆盖启动过程；之后的运行日志看按天轮转的 `main-*.log`），窗口关掉后仍可查；启动失败时命令会直接打印日志末尾，verdict 带 `log=` 指向该文件。
 排查启动失败先读这份日志，不要靠反复重启猜原因。
 
+Forge 开发进程默认使用 8 GiB 的 Node 堆上限，为主进程／Worker 的 watch 图和 Renderer
+冷启动转换留出空间；已复现过 6 GiB 上限在完整冷启动时触发 `JavaScript heap out of memory`
+并以 `134` 退出。显式设置的 `NODE_OPTIONS` 堆上限仍优先，入口见
+`scripts/shared/desktop-dev-node-options.mjs`。restart 的就绪等待包含完整冷构建与窗口／登录态／
+数据库初始化，默认等待 180 秒，避免在构建刚完成时误报超时。
+
 停止旧实例后的 macOS Terminal 标签页清理，只访问已经运行的 Terminal，并按旧实例的精确
 TTY 匹配标签页；Terminal 未运行时直接跳过，不能因清理 iTerm 等终端的 TTY 而将它启动。
 实现与回归见 `scripts/restart-desktop-remote.mjs` 和 `scripts/__tests__/restart-desktop-remote.test.mjs`。
@@ -93,6 +99,11 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 模型与其他服务仍按原清单和账号区域运行。跨电脑可使用经明确授权的临时回环隧道。
 不要为只替换设备互联服务而启动完整 `local` 模式：它会把两个账号区域固定到同一套
 本机服务，不能承载真实双区企业 SSO。
+
+只调试本机 Webhook/GitHub App 时，使用相同的 remote 隔离启动方式，并设置 `XDT_WEBHOOK_GLOBAL_LOCAL_URL=http://127.0.0.1:8793`（中国大陆账号用 `XDT_WEBHOOK_CN_LOCAL_URL`）。只替换本区 Webhook API，保留真实认证；只接受带端口的回环地址，正式版忽略此覆盖。
+
+个人版与普通开发版默认使用端点清单，`CINDY_PERSONAL_FIXED_APP` 不改变 Webhook 地址。内部 GitHub App 测试必须显式设置上述本区开发覆盖；它会替换该隔离实例的整个 Webhook 服务，不能将仅开放 `/github/*` 的临时代理当作普通 Webhook 的公网接收入口。正式包始终忽略开发覆盖。
+
 
 两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
 命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
@@ -271,6 +282,49 @@ Codex / Pi 进程数起落，持续上涨说明有客户端退出后会话没被
 「最近一帧应用代码」和「分配帧」两种口径列出仍存活的采样内存。对比前后几份摘要，持续
 变大的那几行就是泄漏点。不要在用户正在用的 GB 级主进程上拍完整堆快照：会冻结一两分钟
 并额外占用同等内存。正式版不读这个开关。
+
+## macOS 菜单栏位置保存
+
+菜单栏 helper 的 `NSStatusItem.autosaveName` 只标识条目；AppKit 还需要稳定的应用偏好域。
+`native/menubar/Info.plist` 在编译时嵌入 Mach-O 的 `__TEXT/__info_plist`，正式构建使用
+当前区域 appId 的 `.menubar` 子标识，随后沿用 tools 目录的签名流程。开发构建再附加
+userData 路径的摘要，使同一沙箱跨重启保持身份、不同沙箱与正式版互不覆盖位置；编译缓存
+同时包含 Swift 源码和最终 plist。偏好由 AppKit 管理，不自行写入或迁移系统位置键。
+
+验收需真实 ⌘ 拖动图标，保持分辨率不变并重启客户端，核对其相对位置、折叠后的可见性
+和菜单点击。仅看到 `autosaveName`、构建成功或偏好键存在不能证明恢复成功。嵌入 plist
+不是把 helper 改成 `.app` bundle，也不据此声称完成第三方菜单栏工具的所有身份兼容。
+
+## Computer Use 的窗口与桌面目标
+
+普通控件继续使用 `get_window_state` 和窗口内元素／坐标。macOS 菜单栏、状态栏图标不属于
+设置窗口：不能删除 `window_id` 或关闭驱动的窗口归属检查来让窗口 token 越界操作。
+经用户允许占用前台键鼠后，先通过 `cindy_computer.get_desktop_state` 取得桌面截图，再以
+`click`／`drag` 的 `target: { kind: "desktop", display_id: "primary" }`、该截图的
+`capture_id` 和 `delivery_mode: "foreground"` 操作。坐标来自这次截图，不混用窗口截图、
+AX token 或 zoom；操作后重新截图核实。窗口失败不会自动转成桌面输入。
+
+桌面输入沿用 Computer Use 总开关、任务归属、输入队列和用户操作保护；旧驱动未声明
+桌面目标时明确返回不兼容，不降级为窗口输入。CUA 0.47 的 drag 不接收 capture_id，
+由 Cindy 在输入队列内验证最新、未使用的截图后，转换为同一驱动任务的桌面拖动；click 保留驱动凭据。新任务、用户输入、其他任务的
+操作或失败的桌面读取之后，都需要新的桌面观察。新字段只用于本机 CUA 调用，无新增
+device-link 帧、IPC 或服务端接口。
+
+桌面截图记录读取开始时间，并在输入排队前、取得队列及派发前核对系统 HID 空闲时钟。
+截图后出现输入，即使用户已停顿超过忙碌保护窗口，旧截图仍失效；读取期间的输入同样失效。
+系统空闲时钟只有整秒精度，输入时间与截图重叠或无法读取时要求重新观察，不使用上次 Agent
+输入的归因宽限期放行。连续桌面操作应在上一动作的输入落定后重新截图。
+
+未指定 `screenshot_out_file` 的桌面截图属于当前读取的私有临时目录：下一次桌面读取、
+失败／取消或任务结束时清理；并发的旧读取在返回后清理自己的文件，不影响新截图。
+显式指定的输出路径由调用方保留，不参与宿主自动清理。这里不扫描或删除旧版本遗留的
+共享临时目录，也不承诺进程被强杀后的回收；需要长期留存的截图应显式保存或导入附件。
+
+原生接入回归可用 `CINDY_CUA_SMOKE=desktop-pointer pnpm restart:desktop:remote -- --mock --region=global --isolated=cua-desktop-test`。
+它通过真实 Cindy MCP → host → CUA 在自己的临时窗口点击计数按钮，验证旧截图拒绝和
+新截图精确点击、桌面滑块拖动、临时截图替换和任务结束清理，并确认显式导出保留；
+结果写入该隔离沙箱的 `computer-use-smoke.json`，测试窗口、截图及驱动
+任务会自动收尾。开发客户端仍需按本任务的进程归属关闭。这是接入测试，不替代实际产品场景验收。
 
 ## 分层验证
 
@@ -478,7 +532,7 @@ node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
 
 展开／收起时 `sidebarPresentation` 暂时固定内容区旧宽度并保留旧侧栏状态；主进程
 回传实际增量后，等待 renderer 观察到对应 viewport 宽度，再在同一帧释放旧宽并切换
-侧栏。原生窗口有尺寸变化时不叠加侧栏的 250ms 宽度动画，避免聊天消息先压缩或
+侧栏。原生窗口有尺寸变化时不叠加侧栏的宽度动画，避免聊天消息先压缩或
 拉宽再恢复；无可用空间时保留窗口内动画。快速反向操作丢弃迟到回包。
 
 侧栏开关归聊天区所有，点击展开、再次点击收起；展开后仍留在聊天区原来的角上
@@ -530,6 +584,9 @@ allowlist；SSH、远程任务及手机不会误触本机重启提示。此功�
 关闭侧边栏或离开对应页面后恢复打开前的矩形。最大化／全屏时不强制修改窗口边界。
 窗口状态持久化同样读取这份基准，重启后若侧边栏仍打开，则从基准重新展开，
 不能再次从已保存的主窗口宽度中扣除侧边栏。旧版本保存的矩形作为首次升级后的基准。
+同一原生窗口再次打开侧边栏时，恢复上次展开的总宽度，并应用布局中已保存的侧栏宽度；
+不能把拖动分隔线后的侧栏宽度当成新增窗口宽度，否则聊天区域会被重置。展开宽度在
+窗口生命周期内独立记忆，关闭状态的调整只更新独立主窗口基准；重新打开仍受当前屏幕边界限制。
 Windows 的贴边／贴满判断仍读真实窗口（程序自己的展开不算贴满），贴满照常记为最大化。
 若打开期间显示器被拔掉或分辨率变小，收起时旧矩形改放回当前工作区内。
 实现见 `main/sidebarWindowExpansion.ts`、`renderer/layout/sidebarPresentation.ts`；

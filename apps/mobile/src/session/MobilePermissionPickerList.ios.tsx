@@ -21,6 +21,7 @@ export function MobilePermissionPickerList(
           <ComposerNativeRow
             key={option.id}
             title={presentation.label}
+            subtitle={presentation.description}
             leading={<RNHostView matchContents>
               <View accessible={false} pointerEvents="none" style={{ width: iconSize.action, height: iconSize.action }}>
                 <presentation.Icon
