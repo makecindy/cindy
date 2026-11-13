@@ -167,9 +167,11 @@ export function MathFormulaWebView({
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   container: {
+    alignSelf: 'stretch',
     backgroundColor: colors.surface,
     borderRadius: radius.container,
     overflow: 'hidden',
+    width: '100%',
   },
   webView: {
     backgroundColor: 'transparent',
