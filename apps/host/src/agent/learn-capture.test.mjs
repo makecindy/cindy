@@ -3,7 +3,8 @@
  * - 可观察结果：Host 的捕获依赖（learn-capture.ts）对一条持久化的用户回合，按桌面同一个
  *   createCindyLearnInvocationCapture 的条件给出授权快照：桌面发布过、启用着的内置 learn，经真实的
  *   Host 引擎列出 Skill 后恰好一个候选时，Claude（/cindy:learn、/learn）与 Pi（/skill:learn、
- *   /cindy:learn）得到指向这份内置文件的快照；Codex 在 Skill 投影（第 25 行）之前拿不到。持久化与
+ *   /cindy:learn）得到指向这份内置文件的快照；Codex 在 Skill 投影（第 25 行）之前拿不到（夹具没有 Codex
+ *   程序；main 3b6a7dd883 起未登录的 Codex 也会起一个短命引擎列 Skill，这里列不出来，捕获随之失败）。持久化与
  *   派发不一致、会话被换掉或不在 active、远程任务、机器人会话的无前缀 Claude /learn、learn 被禁用、
  *   出现两个候选、桌面从没发布过，一律不给。
  * - 规则依据：桌面 makerSendTransaction 的捕获与 register.ts 的依赖；评审批准的第 18 行清单。
@@ -23,7 +24,7 @@ import { learnFixture as fixture, learnDescriptor, inside } from './learn-fixtur
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
 const TEST_TIMEOUT_MS = 120_000;
 
-test('Claude and Pi get the published built-in learn; Codex waits for the Skill projection', { timeout: TEST_TIMEOUT_MS }, async t => {
+test('Claude and Pi get the published built-in learn; Codex gets none', { timeout: TEST_TIMEOUT_MS }, async t => {
   const f = await fixture(t);
   const descriptor = learnDescriptor(f);
   assert.ok(descriptor, 'the bundled learn Skill was published into the fixture');
@@ -32,11 +33,14 @@ test('Claude and Pi get the published built-in learn; Codex waits for the Skill 
   for (const [kind, list] of [
     ['claude-code', () => f.graph.maker.listAgentRuntimeSkills('claude-code', { workingDir: f.project, runtimeConfigDir: process.env.CLAUDE_CONFIG_DIR })],
     ['pi', () => f.graph.maker.listAgentSkills('pi', { workingDir: f.project })],
-    ['codex', () => f.graph.maker.listAgentSkills('codex', { workingDir: f.project })],
   ]) {
     const listed = await list();
     for (const skill of listed.skills) if (skill.path) assert.ok(inside(f.root, skill.path), `${kind}: ${skill.path}`);
   }
+  // Without a Codex login, Codex lists Skills through a short-lived engine of its own (maker-core,
+  // since main 3b6a7dd883). The fixture has no Codex binary, so that listing cannot start, and a
+  // Codex /learn turn gets no snapshot: the capture fails with the listing instead.
+  await assert.rejects(f.graph.maker.listAgentSkills('codex', { workingDir: f.project }), /spawn .*codex ENOENT/);
 
   const expect = async (id, kind, text) => {
     const s = f.session(id, kind);
@@ -57,7 +61,7 @@ test('Claude and Pi get the published built-in learn; Codex waits for the Skill 
       `${kind}: the pinned file is the published built-in learn (${grant.resolvedSkillPath})`);
   }
   // Codex lists Cindy's built-in Skills only through the Skill projection (release table row 25).
-  assert.equal(await expect('codex', 'codex', '/cindy:learn how we deploy'), null);
+  await assert.rejects(expect('codex', 'codex', '/cindy:learn how we deploy'), /spawn .*codex ENOENT/);
   // Not a /learn turn at all.
   assert.equal(await expect('claude-other', 'claude-code', 'please learn how we deploy'), null);
 });
