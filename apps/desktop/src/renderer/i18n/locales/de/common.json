@@ -18941,6 +18941,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "Berechtigungsmodus",
       "noAvailableModels": "Kein {{agent}}-Modell verfügbar. Prüfe die Anbieterverbindung und die Zugangsdaten in den Einstellungen.",
+      "savedModelUnavailable": "Das gespeicherte Modell oder seine Quelle ist nicht verfügbar.",
+      "reselectModel": "Modell auswählen",
       "effortLabel": "Denkintensität",
       "initialTaskLabel": "Erste Aufgabe",
       "initialTaskPlaceholder": "Erste Aufgabe für den Worker eingeben oder leer lassen, dann verteilt der Lead die Arbeit",

@@ -18941,6 +18941,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
+      "savedModelUnavailable": "The saved model or its source is unavailable.",
+      "reselectModel": "Choose a model",
       "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",
       "initialTaskPlaceholder": "Write the first thing to hand it, or leave blank and let the Lead assign work",

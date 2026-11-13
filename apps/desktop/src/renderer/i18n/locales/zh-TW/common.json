@@ -18866,6 +18866,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "權限模式",
       "noAvailableModels": "沒有可用的 {{agent}} 模型，請在設定中檢查供應商連線和憑證。",
+      "savedModelUnavailable": "上次選擇的模型或來源目前無法使用。",
+      "reselectModel": "重新選擇模型",
       "effortLabel": "推理強度",
       "initialTaskLabel": "初始任務",
       "initialTaskPlaceholder": "寫下交給它的第一件事；留空則先待命，由 Lead 分派",
