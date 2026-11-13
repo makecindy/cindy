@@ -51,6 +51,7 @@ export default {
         await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).click();
         const row = page.locator('[data-device-id="friend"]');
         await row.getByText(friend, { exact: true }).waitFor();
+        await row.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} 1.4.0`, { exact: false }).waitFor();
         assert.equal(await row.getByText(await ui.t('settings.remoteControl.myDevices.peerControlOff'), { exact: true }).count(), 0);
         assert.equal(await row.getByText(await ui.t('settings.remoteControl.myDevices.controlIt'), { exact: true }).count(), 0);
         await page.getByText('future-app · Lab Mac', { exact: true }).waitFor();
@@ -59,10 +60,17 @@ export default {
         await page.getByRole('button', { name: new RegExp(`^${friend}`) }).click();
         const card = page.getByRole('dialog');
         await card.getByText(friend, { exact: true }).waitFor();
+        await card.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} 1.4.0`, { exact: false }).waitFor();
         assert.equal(await card.getByRole('button').count(), 0);
         await ui.capture('friend-card');
         await page.keyboard.press('Escape');
         await page.getByText('future-app · Lab Mac', { exact: true }).waitFor();
+        await page.getByRole('button', { name: /^future-app · Lab Mac/ }).click();
+        const unknownCard = page.getByRole('dialog');
+        await unknownCard.getByText('future-app 1.4.0', { exact: false }).waitFor();
+        assert.equal(await unknownCard.getByRole('button').count(), 0);
+        await ui.capture('unknown-app-card');
+        await page.keyboard.press('Escape');
         await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).waitFor();
       }
       return;

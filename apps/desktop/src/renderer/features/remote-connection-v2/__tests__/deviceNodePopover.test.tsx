@@ -11,12 +11,22 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: { value?: number }) =>
-      key === 'settings.remoteControl.v2.ms' ? `${options?.value} ms` : key,
-  }),
-}));
+vi.mock('react-i18next', async () => {
+  const { default: common } = await import('../../../i18n/locales/en/common.json');
+  return {
+    useTranslation: () => ({
+      t: (key: string, options?: { value?: number; version?: string }) => {
+        if (key === 'settings.remoteControl.v2.ms') return `${options?.value} ms`;
+        if (key === 'settings.devices.apps.cindy') return common.settings.devices.apps.cindy;
+        if (key === 'settings.devices.apps.cindyFriend') return common.settings.devices.apps.cindyFriend;
+        if (key === 'settings.remoteControl.v2.popover.version') {
+          return common.settings.remoteControl.v2.popover.version.replace('{{version}}', options?.version ?? '');
+        }
+        return key;
+      },
+    }),
+  };
+});
 
 import { DeviceNodePopover, HubNodePopover } from '../DeviceNodePopover';
 import { RemoteSwitchBatch } from '../RemoteSwitchBatch';
@@ -48,18 +58,28 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
 const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.title' });
 
 // Non-Cindy Apps on desktop platforms must not be probed as outdated Cindy or
-// offered remote desktop. Existing card/batch tests only varied platform. Unit.
+// offered remote desktop. The real locale also exposes the fixed Cindy version
+// brand that a key-only translation stub missed. Minimal input: App + version. Unit.
 it.each(['cindy-friend', 'other-app'])('labels app=%s and excludes it from card and batch computer actions', app => {
   const command = vi.fn();
   vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
-  const peer = node({ id: app, app, encrypted: true });
+  const peer = node({ id: app, app, appVersion: '1.4.0', encrypted: true });
   render(<><DeviceNodePopover node={peer} relayName="Cindy" onRemoteDesktop={vi.fn()} onSwitch={vi.fn()} />
     <RemoteSwitchBatch nodes={[peer]} entries={new Map()} /></>);
-  const appName = app === 'cindy-friend' ? 'settings.devices.apps.cindyFriend' : app;
+  const appName = app === 'cindy-friend' ? 'Cindy Friend' : app;
   expect(screen.getByText(`${appName} · Work PC`)).toBeTruthy();
+  expect(screen.getByText(`Windows · ${appName} 1.4.0`)).toBeTruthy();
   expect(remoteDesktop()).toBeNull();
   expect(screen.queryByRole('button')).toBeNull();
   expect(command).not.toHaveBeenCalled();
+});
+
+// App version routing must preserve both legacy omission and explicit Cindy.
+it.each([undefined, 'cindy'])('keeps the Cindy version label for app=%s', app => {
+  render(<DeviceNodePopover node={node({ id: `version-${app ?? 'legacy'}`, app, appVersion: '1.4.0', remoteControlEnabled: false })}
+    relayName="Cindy" onRemoteDesktop={vi.fn()} />);
+  expect(screen.getByText('Work PC')).toBeTruthy();
+  expect(screen.getByText('Windows · Cindy 1.4.0')).toBeTruthy();
 });
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });

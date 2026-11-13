@@ -12,7 +12,7 @@
 import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
-import { deviceLabel } from '@/components/settings/deviceLabels';
+import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
 import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -276,7 +276,7 @@ export function DeviceNodePopover({
   const sub = [
     node.modelLabel,
     platformLabel(node.platform),
-    node.appVersion?.trim() ? t('settings.remoteControl.v2.popover.version', { version: node.appVersion.trim() }) : null,
+    node.appVersion?.trim() ? `${appLabel(node.app, t)} ${node.appVersion.trim()}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
