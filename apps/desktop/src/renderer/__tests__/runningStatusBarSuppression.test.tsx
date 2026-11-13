@@ -281,4 +281,20 @@ it('shows streamed token count while tokenSpeed is warming up with rate 0', () =
     />,
   );
   expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');
+
+  // After a tool call starts a new request within the same turn, streaming=true & rate=0 falls back to tokenCount.
+  rerender(
+    <RunningStatusBar
+      visible
+      status="Generating..."
+      startedAt={1}
+      tokenUsage={0}
+      outputTokens={0}
+      generationDurationMs={0}
+      generationReliable
+      tokenSpeed={{ rate: 0, average: 70, tokens: 230, elapsedMs: 3_400, streaming: true, peak: 85 }}
+    />,
+  );
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenCount');
+  expect(trigger()?.textContent).not.toContain('chat.runningStatus.tokenRate');
 });
