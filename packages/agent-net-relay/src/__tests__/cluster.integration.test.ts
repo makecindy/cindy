@@ -12,10 +12,17 @@
  *   负责副本接住 HTTP／升级却不响应，验证等待有界、已建立的 WebSocket 不被握手超时误关。
  *   延迟状态通知后立即用设备、访客、分享身份与主机证明鉴权，撤权仍拒绝，后端故障返回 503；
  *   使用真实 HTTP 流逐块上传并推进 fake clock 超过 10 秒，验证持续进展不会被响应头期限误切断。
+ *   共享状态提交失败时，写请求返回可重试的 503 CLUSTER_STATE_UNAVAILABLE（而不是 500），后端恢复后同一写入成功。
+ *   两个 ClusterStore 经每程 1 ms 的 fake-timer 后端争用同一文档：一方持续写入时另一方的单次写入仍能提交；
+ *   去掉重试退避（或去掉抖动）后后者 16 次尝试全部落败并返回 STATE_CONTENDED。
+ *   已加入的副本在成员名单里找不到负责者（后端自我隔离后名单为空）时以 1012 关闭会话，并对该网络的 HTTP／升级回 503；
+ *   恢复为原来的「无名单即承载全部」时，该副本会继续承载新负责副本也在承载的网络。
+ *   集群模式未显式配置共享附件目录时拒绝启动（CLUSTER_MEDIA_DIR_REQUIRED），避免各副本落到自己的数据目录；
+ *   后端可从包入口取得 checkMemberUrl 校验名单 URL（合法地址通过，非 http(s)、带凭据／路径／查询的地址抛 INVALID_CLUSTER_URL）。
  * - tier：integration；需要真实 socket 和多个副本，单进程 fixture 与 handler mock 都替代不了。
  *   单独成文件是因为每个用例的副本组生命周期与 relay.integration 的单进程 fixture 不同。
- * - 实测耗时：2026-11-13 本机单独运行 `pnpm exec vitest run src/__tests__/cluster.integration.test.ts` 5.34 秒
- *   （测试体 3.87 秒；包含真实 HTTP／WS 资源的关闭确认，不增加真实 sleep）。
+ * - 实测耗时：2026-11-14 本机单独运行 `pnpm exec vitest run src/__tests__/cluster.integration.test.ts` 4.32 秒
+ *   （测试体 3.71 秒，其中新增的 503 与写入争用两条合计约 50 ms；包含真实 HTTP／WS 资源的关闭确认，不增加真实 sleep）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -31,8 +38,10 @@ import { once } from 'node:events';
 import { API, sharingIdentityPayload, type DelegationRequest, type DeviceCertificate } from '@cindy/agent-net-protocol';
 import { AppError } from '@cindy/device-link-sharing/errors';
 import { startAgentNetRelay, type RelayHandle, type RelayOptions } from '../server.js';
-import { clusterOwner, type RelayClusterMember } from '../cluster.js';
+import { clusterOwner, type RelayClusterBackend, type RelayClusterMember } from '../cluster.js';
+import { ClusterStore } from '../clusterStore.js';
 import { createMemoryRelayCluster } from '../memoryCluster.js';
+import { checkMemberUrl } from '../index.js';
 import { generateIdentity, issueCertificate, publicBytes, createRequestProof, createDelegation, sha256, type Identity } from '../identity.js';
 import { AgentNetClient, authorization, type AgentNetUplink } from '../client.js';
 import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
@@ -444,5 +453,86 @@ describe('replicated official relay', () => {
     expect((await call('/provider-shares/members/' + approved.body.memberId + '/pause', 'POST', {}, true)).status).toBe(200);
     expect(await closed).toEqual([4410]);
     await expect(guest.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+  });
+});
+
+// A replica without an explicit shared attachment directory would default to its own data directory and lose
+// attachments on every handover. Minimal failing input: cluster options without mediaDir.
+describe('replicated official relay: configuration', () => {
+  it('refuses to start a replica without an explicit shared attachment directory', async () => {
+    const set = await replicaSet({ mediaDir: undefined });
+    await expect(set.start('replica-a')).rejects.toThrow('CLUSTER_MEDIA_DIR_REQUIRED');
+  });
+  it('lets a backend check member URLs through the package entry before publishing them', () => {
+    expect(checkMemberUrl('http://10.0.0.7:3348/').host).toBe('10.0.0.7:3348');
+    for (const bad of ['not a url', 'ftp://10.0.0.7/', 'http://user:pass@10.0.0.7/', 'http://10.0.0.7/path', 'http://10.0.0.7/?q=1'])
+      expect(() => checkMemberUrl(bad), bad).toThrow('INVALID_CLUSTER_URL');
+  });
+});
+
+// A replica that fenced itself (its own lease lapsed) and found nobody else in the member list must stop serving,
+// not fall back to single-process ownership while a new owner takes over.
+// Minimal failing input: one joined replica whose backend member list becomes empty.
+describe('replicated official relay: ownerless networks', () => {
+  it('closes sessions and refuses the network once the joined replica finds no owner in its member list', async () => {
+    const set = await replicaSet();
+    const a = await set.start('replica-a');
+    await set.enroll(a, 'owner');
+    const uplink = await set.client(a, 'owner').connect(); set.uplinks.push(uplink);
+    const closed = once(uplink, 'close');
+    await set.backend.leave('replica-a');
+    expect((await closed)[0]).toBe(1012);
+    await expect(set.client(a, 'owner').connect()).rejects.toThrow('AGENT_NET_UPGRADE_503');
+    await expect(set.client(a, 'owner').directory()).rejects.toMatchObject({ status: 503, code: 'REPLICA_UNAVAILABLE' });
+    // Back in the list: it serves again.
+    await set.backend.join({ id: 'replica-a', url: a.url });
+    await vi.waitFor(async () => { const again = await set.client(a, 'owner').connect(); set.uplinks.push(again); });
+  });
+});
+
+// A write whose shared-state commit cannot complete is a retryable outage (503), not an internal error (500).
+// Minimal failing input: the backend rejects the commit of an authenticated rename.
+describe('replicated official relay: retryable write outages', () => {
+  it('answers 503 CLUSTER_STATE_UNAVAILABLE, not 500, when a write cannot be committed, and recovers', async () => {
+    const set = await replicaSet();
+    const a = await set.start('replica-a');
+    await set.enroll(a, 'owner');
+    const commit = set.backend.commit.bind(set.backend);
+    const spy = vi.spyOn(set.backend, 'commit').mockImplementation(async input => {
+      if (input.writes.length) throw new Error('unit backend down');
+      return commit(input);
+    });
+    await expect(set.client(a, 'owner').request('PATCH', '/devices/owner', { name: 'Desk' }))
+      .rejects.toMatchObject({ status: 503, code: 'CLUSTER_STATE_UNAVAILABLE' });
+    spy.mockRestore();
+    expect(await set.client(a, 'owner').request('PATCH', '/devices/owner', { name: 'Desk' })).toMatchObject({ name: 'Desk' });
+  });
+});
+
+// Optimistic retries alone starve a replica: the one that just committed starts its next commit a round
+// trip ahead of the one that lost. Minimal failing input: one store rewrites a document continuously over
+// a backend with 1 ms per leg; without a growing, jittered pause the other store's single write loses all
+// 16 attempts. Fixed backoff without jitter stays in phase with the writer and still loses.
+describe('replicated official relay: write contention', () => {
+  it('commits a single write while another replica keeps writing the same document', async () => {
+    vi.useFakeTimers();
+    // Deterministic jitter, so the outcome does not depend on the run.
+    let seed = 1;
+    vi.spyOn(Math, 'random').mockImplementation(() => (seed = seed * 16_807 % 2_147_483_647) / 2_147_483_647);
+    const base = createMemoryRelayCluster();
+    const leg = () => new Promise(resolve => setTimeout(resolve, 1));
+    const backend: RelayClusterBackend = { ...base, async commit(input) { await leg(); const result = await base.commit(input); await leg(); return result; } };
+    const [busy, single] = await Promise.all([ClusterStore.open(backend, 'busy'), ClusterStore.open(backend, 'single')]);
+    let stop = false;
+    const writer = (async () => {
+      for (let n = 0; !stop; n++) await busy.transaction((state) => { state.primaryNetworkId = 'busy-' + n; });
+    })();
+    await vi.advanceTimersByTimeAsync(7);
+    const outcome = single.transaction((state) => { state.primaryNetworkId = 'single'; })
+      .then(() => 'committed', (error: Error) => error.message).finally(() => { stop = true; });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await outcome).toBe('committed');
+    await writer;
+    busy.close(); single.close();
   });
 });
