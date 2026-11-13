@@ -47,7 +47,7 @@ export default {
           x: box.x,
           y: box.y,
           height: box.height,
-          ...(ui.case === 'switching' ? { width: box.width } : {}),
+          ...(ui.case === 'switching' || ui.case === 'sync-off' ? { width: box.width } : {}),
         };
       }
       return result;
