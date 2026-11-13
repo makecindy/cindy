@@ -188,6 +188,8 @@ export interface ImChannelAdapter {
   queuedEmoji?: string;
   /** 没有可撤销状态反馈的渠道静默排队，避免永久残留提示。 */
   silentQueue?: boolean;
+  /** 渠道专属排队回执, 不得消费留给后续任务的回复窗口。 */
+  notifyQueued?(userId: string, position: number): Promise<void>;
   /**
    * turn 终态时可将状态替换为错误表情。返回 null = 该终态不放表情(撤掉 ack);
    * 缺省 = 全部按默认撤掉。仅真正跑过的 turn 生效, pre-dispatch 失败不放。
@@ -226,7 +228,8 @@ export interface ImChannelAdapter {
   handleTextInteraction?(
     userId: string,
     request: InteractionRequest,
-    options?: { timeoutMs?: number; sharedPermission?: import('../../maker-ipc/sharedPermission').SharedPermission },
+    options?: { timeoutMs?: number; sharedPermission?: import('../../maker-ipc/sharedPermission').SharedPermission;
+      onStop?: () => Promise<{ stopped: boolean; droppedQueued: number }> },
   ): Promise<InteractionDecision>;
   /**
    * Cancel a channel-owned text interaction when the central route times out,

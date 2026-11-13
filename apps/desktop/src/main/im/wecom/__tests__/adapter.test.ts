@@ -183,3 +183,13 @@ describe('wecom group window', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS n FROM hook_group_messages').get()).toEqual({ n: 0 });
   });
 });
+
+// Regression: new messages need an immediate receipt without closing the reply reserved for execution.
+it('uses an active queue receipt instead of silent queueing or consuming the callback', async () => {
+  const sendMarkdownText = vi.fn(async () => ({ messageId: 'queue-receipt' }));
+  const im = { getOwnerUserId: () => 'owner', sendMarkdownText } as unknown as WecomIM;
+  const adapter = buildWecomAdapter(im, interactions, CONFIG);
+  expect(adapter.silentQueue).not.toBe(true);
+  await adapter.notifyQueued!('owner', 2);
+  expect(sendMarkdownText).toHaveBeenCalledWith('owner', expect.stringContaining('第 2 位'), { usePendingFrame: false });
+});

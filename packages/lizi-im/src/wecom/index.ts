@@ -61,14 +61,14 @@ import {
   resolveAllowedWecomOutboundFile,
   safeWecomFilename,
 } from "./media.js";
-import { createWecomProgress } from "./progress.js";
+import { createWecomProgress, WECOM_STREAM_PROGRESS_WINDOW_MS } from "./progress.js";
 
 const BOT_ID_SECRET_KEY = "wecom-bot-id";
 const BOT_SECRET_SECRET_KEY = "wecom-bot-secret";
 const OWNER_USER_ID_SECRET_KEY = "wecom-owner-user-id";
 const CALLBACK_TTL_MS = 4 * 60_000;
 const CALLBACK_QUEUE_CAPACITY = 64;
-const STREAM_SAFE_TIMEOUT_MS = 2 * 60_000 + 45_000;
+const STREAM_SAFE_TIMEOUT_MS = WECOM_STREAM_PROGRESS_WINDOW_MS;
 const DEDUPE_CAPACITY = 2_048;
 const MAX_TERMINAL_ATTACHMENTS = 4;
 const SECRET_WRITE_FAILED_REASON = "无法使用系统安全存储保存企业微信机器人凭证";
@@ -366,8 +366,9 @@ export class WecomIM extends BaseIM implements TextChannelIM {
   async sendMarkdownText(
     userId: string,
     markdown: string,
+    opts?: { threadTs?: string; fallbackOpenerId?: string; usePendingFrame?: boolean },
   ): Promise<{ messageId: string }> {
-    return this.sendChunks(userId, chunkWecomMarkdown(markdown));
+    return this.sendChunks(userId, chunkWecomMarkdown(markdown), opts?.usePendingFrame === false ? "none" : "newest");
   }
 
   async sendFile(
@@ -428,8 +429,8 @@ export class WecomIM extends BaseIM implements TextChannelIM {
    * active markdown message.
    *
    * 返回这一轮的过程反馈面: 真正用同一个 streamId 原地刷新公开进度, 终稿
-   * (`commitFinal`) 用 `finish=true` 收口同一消息。没有可用回调窗口时返回 null
-   * (终稿改走主动发送)。
+   * (`commitFinal`) 用 `finish=true` 收口同一消息。没有可用回调窗口时仍返回主动
+   * 状态反馈面; 过期/失败不影响终稿走主动发送。
    */
   async beginReply(
     userId: string,
@@ -446,17 +447,16 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       ...(opts?.turnId ? { turnId: opts.turnId } : {}),
     };
     this.enqueueResponse(userId, response);
-    if (!response.frame) return null;
     try {
-      await client.replyStream(response.frame, response.streamId, " ", false);
-      response.passiveStarted = true;
+      if (response.frame) {
+        await client.replyStream(response.frame, response.streamId, " ", false);
+        response.passiveStarted = true;
+      }
     } catch (error) {
       this.log.warn(
         "failed to start passive stream; final reply will use active send",
         safeError(error),
       );
-      response.closed = true;
-      return null;
     }
     if (this.client !== client || this.generation !== generation) {
       response.closed = true;
@@ -469,6 +469,19 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       ...(opts?.turnId ? { turnId: opts.turnId } : {}),
       streamId: response.streamId,
       now: this.now,
+      // 排队太久导致回调过期、或占位发送失败时, 仍必须有主动状态反馈。
+      streamStartedAt: response.passiveStarted ? response.startedAt : this.now() - WECOM_STREAM_PROGRESS_WINDOW_MS,
+      finishStream: async (streamId, content) => {
+        if (!frame || !response.passiveStarted) return;
+        response.passiveStarted = false;
+        await progressClient.replyStream(frame, streamId, content, true);
+      },
+      sendStatus: async (content) => {
+        response.passiveStarted = false;
+        await progressClient.sendMessage(decodeWecomLane(userId).targetId, {
+          msgtype: "markdown", markdown: { content },
+        });
+      },
       shouldContinue: () =>
         !response.closed && this.isCurrent(progressClient, generation),
       replyStream: async (streamId, content) => {
@@ -477,6 +490,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
           typeof progressClient.replyStreamNonBlocking === "function"
             ? progressClient.replyStreamNonBlocking.bind(progressClient)
             : progressClient.replyStream.bind(progressClient);
+        if (!frame) throw new Error("WECOM_REPLY_WINDOW_UNAVAILABLE");
         await sender(frame, streamId, content, false);
       },
       log: this.log,

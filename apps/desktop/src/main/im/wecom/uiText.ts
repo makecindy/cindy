@@ -44,7 +44,7 @@ export const ui = {
     credentialBusy: '⏳ 本地 Agent 正在运行，暂时不能切换凭证模式，请稍后重试。',
     queuedNotice: (position: number) =>
       position <= 1
-        ? '⏳ 上一轮仍在运行，这条消息已排队。需要中止可发送 `!stop`。'
+        ? '⏳ 已收到，这条消息已排队。上一任务正在运行或等待确认；可处理确认卡，或发送 `!stop` 终止并清空排队。'
         : `⏳ 上一轮仍在运行，这条消息排在第 ${position} 位。需要中止可发送 \`!stop\`。`,
     stopDone: (droppedQueued: number) =>
       droppedQueued > 0

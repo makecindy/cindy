@@ -701,6 +701,7 @@ export interface ImTurnRunner {
    */
   stopActiveTurn(args: {
     notificationSessionId?: string;
+    expectedTurnId?: string;
     botContextId: string;
     userId: string;
     scopeKey?: string;
@@ -2310,7 +2311,8 @@ export function createTurnRunner(
     if (item.notified) return;
     item.notified = true;
     try {
-      await im.sendMarkdownText(userId, ui.agent.queuedNotice(position), {
+      if (adapter.notifyQueued) await adapter.notifyQueued(userId, position);
+      else await im.sendMarkdownText(userId, ui.agent.queuedNotice(position), {
         threadTs: item.turn.scopeKey,
       });
     } catch (err) {
@@ -2605,7 +2607,9 @@ export function createTurnRunner(
     if (!richIm) {
       try {
         if (adapter.handleTextInteraction) {
-          resolve(await adapter.handleTextInteraction(userId, req));
+          resolve(await adapter.handleTextInteraction(userId, req, {
+            onStop: stopForInteraction(localSessionId, userId, scopeKey),
+          }));
         } else {
           const kind = req.kind as InteractionDecision['kind'];
           resolve(
@@ -4274,6 +4278,16 @@ export function createTurnRunner(
 
   // ── interaction handling ────────────────────────────────────────────────────
 
+  function stopForInteraction(sessionId: string, userId: string, scopeKey?: string) {
+    const turn = sessionStates.get(sessionId)?.queue[0];
+    // 没有渠道拥有的轮次时不展示会误导为可停止的按钮; 文字停止仍走既有路由。
+    if (!turn) return undefined;
+    return async () => {
+      return stopActiveTurn({ notificationSessionId: sessionId, botContextId: '', userId, scopeKey,
+        expectedTurnId: turn.turnId });
+    };
+  }
+
   function handleInteractionFor(
     localSessionId: string,
     userId: string,
@@ -4316,6 +4330,7 @@ export function createTurnRunner(
           }
           return adapter.handleTextInteraction(userId, req, {
             sharedPermission,
+            onStop: stopForInteraction(localSessionId, userId, scopeKey),
             ...(confirmationTimeoutMs ? { timeoutMs: confirmationTimeoutMs } : {}),
           });
         }
@@ -4703,6 +4718,7 @@ export function createTurnRunner(
 
   async function stopActiveTurn(args: {
     notificationSessionId?: string;
+    expectedTurnId?: string;
     botContextId: string;
     userId: string;
     scopeKey?: string;
@@ -4714,6 +4730,9 @@ export function createTurnRunner(
       : await resolveExistingRouteTarget(botContextId, userId, scopeKey);
     const state = target ? sessionStates.get(target.row.id) : undefined;
     if (!state) return { stopped: false, droppedQueued: 0 };
+    if (args.expectedTurnId && state.queue[0]?.turnId !== args.expectedTurnId) {
+      return { stopped: false, droppedQueued: 0 };
+    }
     const current = getMaker().getSession(state.makerSession.id);
     if (args.notificationSessionId) {
       const matches = (turn: TurnState) => turn.userId === userId && turn.scopeKey === scopeKey;

@@ -258,6 +258,56 @@ describe('wecom template card confirmation', () => {
     return { im, sentCards, updates, click: (event: unknown) => cardHandler?.(event) };
   }
 
+  // Regression: a pending approval must offer a real stop, never an approval disguised as stop.
+  it('offers stop while waiting and stops only the live request once', async () => {
+    const { im, sentCards, click } = cardIm();
+    const interactions = new WecomTextInteractions(im);
+    const onStop = vi.fn(async () => ({ stopped: true, droppedQueued: 2 }));
+    const result = interactions.handle('owner', permissionRequest({ command: 'ls' }), { onStop });
+    await vi.waitFor(() => expect(sentCards).toHaveLength(1));
+    const spec = sentCards[0]!.spec as { buttons: Array<{ id: string; label: string; payload: unknown }> };
+    const stop = spec.buttons.find(b => b.id === 'stop');
+    expect(stop?.label).toBe('终止任务');
+    expect(spec).toMatchObject({ body: expect.stringContaining('排队') });
+    const event = { channelName: 'wecom', senderId: 'owner', messageId: 'card-1', payload: stop!.payload };
+    click({ ...event, messageId: 'old-card' });
+    expect(onStop).not.toHaveBeenCalled();
+    click(event); click(event);
+    await expect(result).resolves.toMatchObject({ behavior: 'deny', reason: 'wecom_interaction_cancelled_by_stop' });
+    expect(onStop).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(im.sendText).toHaveBeenCalledWith('owner', expect.stringContaining('2 条排队')));
+  });
+
+  it('terminates a host-paused shared confirmation without granting its operation', async () => {
+    const { im, sentCards, click } = cardIm();
+    const interactions = new WecomTextInteractions(im);
+    const sharedPermission = createSharedPermission();
+    sharedPermission.decide = vi.fn(() => true);
+    const onStop = vi.fn(async () => {
+      sharedPermission.settle({ kind: 'permission', behavior: 'deny', reason: 'session_aborted' });
+      return { stopped: true, droppedQueued: 0 };
+    });
+    const result = interactions.handle('owner', permissionRequest({ command: 'ls' }), { sharedPermission, onStop });
+    await vi.waitFor(() => expect(sentCards).toHaveLength(1));
+    click({ senderId: 'owner', messageId: 'card-1', payload: { value: '__stop_turn' } });
+    await expect(result).resolves.toMatchObject({ behavior: 'deny' });
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(sharedPermission.decide).not.toHaveBeenCalledWith(expect.objectContaining({ behavior: 'allow' }));
+  });
+
+  it('lets new requests and slash commands reach the queue instead of swallowing them as invalid approvals', async () => {
+    const { im } = cardIm();
+    let consume!: (event: IMMessageEvent) => boolean;
+    vi.mocked(im.onTextMessageIntercept).mockImplementation(handler => { consume = handler; return () => {}; });
+    const interactions = new WecomTextInteractions(im);
+    const result = interactions.handle('owner', permissionRequest({ command: 'ls' }));
+    await Promise.resolve();
+    expect(consume({ senderId: 'owner', text: '再帮我检查另一个文件' } as IMMessageEvent)).toBe(false);
+    expect(consume({ senderId: 'owner', text: '/permission' } as IMMessageEvent)).toBe(false);
+    expect(consume({ senderId: 'owner', text: '拒绝' } as IMMessageEvent)).toBe(true);
+    await result;
+  });
+
   it('submits the button choice to the shared permission without waiting for a model', async () => {
     const { im, sentCards, click } = cardIm();
     const interactions = new WecomTextInteractions(im);

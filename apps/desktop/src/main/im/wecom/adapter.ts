@@ -157,7 +157,9 @@ export function buildWecomAdapter(
       }),
     },
     processingEmoji: '',
-    silentQueue: true,
+    notifyQueued: async (userId, position) => {
+      await wecomIm.sendMarkdownText(userId, ui.agent.queuedNotice(position), { usePendingFrame: false });
+    },
     buildVendorOptions: (userId) => ({
       source: 'wecom',
       wecomConversationId: userId,
@@ -177,6 +179,7 @@ export function buildWecomAdapter(
       return owner && userId === owner ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId };
     },
     handleTextInteraction: (userId, request, options) => interactions.handle(userId, request, options),
+    cancelTextInteraction: (userId, requestId, decision) => interactions.cancel(userId, requestId, decision),
     // 逐轮渠道说明: 保留默认的来源(群/私聊、发言人)事实, 再补一条**宿主自动交付附件**
     // 的能力说明 —— 模型据此不再推断“没有发送能力”。
     channelNoteSourceFor: (event) => ({

@@ -1013,6 +1013,30 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(isHeadlessGhostSetupTurn('feishu-session')).toBe(false);
   });
 
+  // Regression: the confirmation stop control is bound to the exact turn, not just a reusable session id.
+  it('stops a waiting turn through the shared control and rejects a late stop for the next turn', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const callbacks: Array<() => Promise<{ stopped: boolean; droppedQueued: number }>> = [];
+    const channelAdapter: ImChannelAdapter = { ...fakeAdapter, output: { kind: 'chunked-text', im: mocks.feishuIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined) },
+      handleTextInteraction: async (_user, _request, options) => { callbacks.push(options!.onStop!); return { kind: 'permission', behavior: 'deny' }; } };
+    const localRunner = createTurnRunner(channelAdapter, fakeRepo, fakeCards);
+    const run = (id: string) => localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: id, text: 'test', attachments: [] });
+    try {
+      await run('first');
+      await h.dispatchInteraction({ kind: 'permission', requestId: 'pending-stop', toolName: 'bash', input: { command: 'ls' } });
+      expect(callbacks).toHaveLength(1);
+      await run('queued');
+      await expect(callbacks[0]!()).resolves.toEqual({ stopped: true, droppedQueued: 1 });
+      expect(h.abort).toHaveBeenCalledOnce();
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+      await run('next');
+      await expect(callbacks[0]!()).resolves.toEqual({ stopped: false, droppedQueued: 0 });
+      expect(h.abort).toHaveBeenCalledOnce();
+      h.emit({ type: 'done', data: {} });
+    } finally { await localRunner.disposeAllSessions(); }
+  });
+
   it('holds a host turn lease and applies channel policy timeout/state metadata', async () => {
     const h = setupSession(async () => ({ accepted: true }));
     const handleTextInteraction = vi.fn(
@@ -1068,6 +1092,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         metadata: expect.objectContaining({ imSourceDescription: expect.stringContaining('来源：') }),
       }), {
         sharedPermission: expect.objectContaining({ decide: expect.any(Function) }),
+        onStop: expect.any(Function),
         timeoutMs: 12_345,
       });
       expect(states).toEqual(['waiting', 'resolved']);

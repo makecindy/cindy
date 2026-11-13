@@ -29,6 +29,7 @@ interface PendingInteraction {
    * 只能回"已收到"; 非共享请求当场就有最终结果, 直接发结果即可。
    */
   paused: boolean;
+  onStop?: () => Promise<{ stopped: boolean; droppedQueued: number }>;
 }
 
 /**
@@ -75,7 +76,7 @@ export class WecomTextInteractions {
     this.cardApi.onCardAction?.((event) => this.consumeCard(event));
   }
 
-  async handle(userId: string, request: InteractionRequest, options?: { sharedPermission?: SharedPermission }): Promise<InteractionDecision> {
+  async handle(userId: string, request: InteractionRequest, options?: { sharedPermission?: SharedPermission; onStop?: () => Promise<{ stopped: boolean; droppedQueued: number }> }): Promise<InteractionDecision> {
     const shared = options?.sharedPermission;
     if (shared?.decision) return shared.result;
     const previous = this.pending.get(userId);
@@ -96,6 +97,7 @@ export class WecomTextInteractions {
       settled: false,
       cardExpired: false,
       paused: Boolean(shared),
+      onStop: options?.onStop,
     };
     const timer = setTimeout(() => {
       // 超时也走统一的收口: 幂等、只作用这一条 entry, 并让已发出的卡失效。
@@ -181,14 +183,14 @@ export class WecomTextInteractions {
     // 提示发送期间请求可能已经被桌面/手机/超时/stop/新请求收口: 不再发可批准卡。
     if (!this.isLive(userId, entry)) return;
     const wantsCard =
-      request.kind !== 'ask_user_question' &&
+      (request.kind !== 'ask_user_question' || Boolean(entry.onStop)) &&
       this.cardApi.supportsTemplateCards === true &&
       typeof this.cardApi.sendInteractiveCard === 'function';
     if (!wantsCard) return;
     try {
       const sent = await this.cardApi.sendInteractiveCard!(
         userId,
-        buildWecomConfirmCard(request),
+        buildWecomConfirmCard(request, Boolean(entry.onStop)),
         {
           // 传输层在发 IO 之前登记活卡并回报确定身份: 平台可能先把卡展示给主人,
           // 点击帧先于 SDK 回执到达。绑定必须发生在点击之前, 否则唯一一次有效
@@ -211,6 +213,35 @@ export class WecomTextInteractions {
     if (!this.isLive(userId, entry)) void this.expireCard(entry);
   }
 
+  cancel(userId: string, requestId: string, decision: InteractionDecision): boolean {
+    const entry = this.pending.get(userId);
+    return entry?.request.requestId === requestId ? this.settleEntry(userId, entry, decision) : false;
+  }
+
+  private async stopEntry(userId: string, entry: PendingInteraction): Promise<void> {
+    if (!this.isLive(userId, entry) || !entry.onStop) return;
+    // 先撤销按钮及文字等待; 重复/迟到点击不能再触发第二次停止。
+    entry.settled = true;
+    clearTimeout(entry.timer);
+    this.pending.delete(userId);
+    void this.expireCard(entry);
+    try {
+      const stopping = entry.onStop();
+      void this.im.sendText(userId, '⏹ 已收到，正在终止当前任务。').catch(() => undefined);
+      entry.resolve(defaultDecision(entry.request, 'wecom_interaction_cancelled_by_stop'));
+      const result = await stopping;
+      await this.im.sendText(userId, result.stopped
+        ? result.droppedQueued > 0
+          ? `⏹ 已终止当前任务，并移除 ${result.droppedQueued} 条排队消息。`
+          : '⏹ 已终止当前任务。'
+        : '这条任务已结束，无需再终止。');
+    } catch {
+      entry.resolve(defaultDecision(entry.request, 'wecom_interaction_cancelled_by_stop'));
+      log.warn('wecom stop request failed');
+      await this.im.sendText(userId, '未能确认任务已终止，请发送 !stop 再次请求终止。').catch(() => undefined);
+    }
+  }
+
   private cancelAll(reason: string): void {
     for (const pending of this.pending.values()) {
       pending.settled = true;
@@ -228,6 +259,10 @@ export class WecomTextInteractions {
     // 只认本请求那张卡: 旧卡(已被替换/收口的)点击一律忽略。
     if (!pending.cardId || pending.cardId !== event.messageId) return;
     const value = typeof event.payload.value === 'string' ? event.payload.value : '';
+    if (value === '__stop_turn') {
+      void this.stopEntry(event.senderId, pending);
+      return;
+    }
     const decision = value ? parseReply(pending.request, value) : null;
     if (!decision) return;
     // 只提交一次: 收口后重复/迟到点击不会再调用 decide。
@@ -316,14 +351,10 @@ export class WecomTextInteractions {
       );
       return false;
     }
+    // 命令必须交还共享路由; 非审批回答按新消息排队, 不能当格式错误吞掉。
+    if (event.text.trim().startsWith('/')) return false;
     const decision = parseReply(pending.request, event.text);
-    if (!decision) {
-      void this.im.sendText(
-        event.senderId,
-        '回复格式不正确。请按上一条消息提示回复；权限确认只支持“允许”或“拒绝”。',
-      );
-      return true;
-    }
+    if (!decision) return false;
     this.settleEntry(event.senderId, pending, decision);
     // 仅共享路径回"已收到"(宿主可能还暂停着); 非共享由最终结果说明覆盖, 不双发。
     if (pending.paused) {
@@ -339,24 +370,33 @@ export class WecomTextInteractions {
  * 确认卡内容。按钮只带**语义值**, token 由传输层每次随机生成 —— 卡片上的按钮
  * 不是静态的 allow/deny id, 猜中 key 也无法代替主人作答。
  */
-export function buildWecomConfirmCard(request: InteractionRequest): InteractiveCardSpec {
+export function buildWecomConfirmCard(request: InteractionRequest, canStop = false): InteractiveCardSpec {
+  const stopButtons: InteractiveCardSpec['buttons'] = canStop
+    ? [{ id: 'stop', label: '终止任务', type: 'danger', payload: { value: '__stop_turn' } }]
+    : [];
+  const stopHint = canStop ? '终止会停止当前任务，并清空本对话的排队消息。' : '';
+  if (request.kind === 'ask_user_question') {
+    return { title: '等待你的回答', body: `请回复上一条问题。${stopHint}`, buttons: stopButtons };
+  }
   if (request.kind === 'plan_review') {
     return {
       title: '计划待批准',
-      body: 'Agent 提交了一份执行计划，需要你决定是否继续。',
+      body: `任务已暂停，等待你决定是否执行计划。${stopHint}`,
       buttons: [
         { id: 'approve', label: '批准计划', type: 'primary', payload: { value: '批准' } },
         { id: 'reject', label: '拒绝计划', type: 'danger', payload: { value: '拒绝' } },
+        ...stopButtons,
       ],
     };
   }
   const toolName = (request.kind === 'permission' ? request.displayName ?? request.toolName : '').slice(0, 40);
   return {
     title: '需要确认操作',
-    body: toolName ? `需要确认工具「${toolName}」的这次操作。` : '需要你确认这次操作。',
+    body: `${toolName ? `任务已暂停，等待确认工具「${toolName}」的操作。` : '任务已暂停，等待你确认操作。'}${stopHint}`,
     buttons: [
       { id: 'allow', label: '允许本次操作', type: 'primary', payload: { value: '允许' } },
       { id: 'deny', label: '拒绝本次操作', type: 'danger', payload: { value: '拒绝' } },
+      ...stopButtons,
     ],
   };
 }
@@ -374,7 +414,7 @@ ${permissionOperationPreview(request)}
 \`\`\`
 ` : ''}
 
-回复“允许”执行一次，或回复“拒绝”取消本次操作。企业微信内不支持永久授权。`;
+回复“允许”执行一次，或回复“拒绝”取消本次操作。企业微信内不支持永久授权。需要终止整个任务并清空排队消息，可点击“终止任务”或发送 !stop。`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;
@@ -382,7 +422,7 @@ ${permissionOperationPreview(request)}
 
 ${plan}
 
-回复“批准”继续，或回复“拒绝”取消。`;
+回复“批准”继续，或回复“拒绝”取消本次计划。需要终止任务并清空排队消息，请发送 !stop。`;
   }
   const question = request.questions[0];
   if (!question) return 'Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。';
@@ -393,7 +433,7 @@ ${plan}
   return `Agent 需要你的回答：
 ${escapeWecomMarkdown(question.question)}
 ${options ? `\n${options}\n` : ''}
-请回复选项序号，或直接输入你的回答。`;
+请回复选项序号，或直接输入你的回答。需要终止任务并清空排队消息，请发送 !stop。`;
 }
 
 function defaultDecision(request: InteractionRequest, reason: string): InteractionDecision {

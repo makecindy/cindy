@@ -20,6 +20,9 @@ import { DELIVERY_FAILURE } from '../safeLog.js';
 
 /** 过程帧最小间隔。企业微信没有公开的流式频率上限, 与飞书/Telegram 卡片的节流同量级。 */
 export const WECOM_PROGRESS_INTERVAL_MS = 1_500;
+/** 平台在 10 分钟后拒绝更新; 提前收起旧流, 后续以一分钟一条的状态继续。 */
+export const WECOM_STREAM_PROGRESS_WINDOW_MS = 9 * 60_000 + 30_000;
+export const WECOM_STATUS_INTERVAL_MS = 60_000;
 /** 流式消息 content 上限 20480 字节, 留出换行与截断省略号的余量。 */
 export const WECOM_STREAM_MAX_BYTES = 20_000;
 
@@ -27,6 +30,10 @@ export interface WecomProgressDeps {
   userId: string;
   turnId?: string;
   streamId: string;
+  streamStartedAt?: number;
+  finishStream?: (streamId: string, content: string) => Promise<unknown>;
+  /** 主动状态消息只包含公开阶段, 不重复发送未完成的正文。 */
+  sendStatus?: (content: string) => Promise<unknown>;
   now?: () => number;
   /** 连接/账号代次仍属于本轮时返回 true。 */
   shouldContinue?: () => boolean;
@@ -48,6 +55,9 @@ export function composeWecomProgressContent(view: ImProgressView): string {
 export function createWecomProgress(deps: WecomProgressDeps): ImProgressHandle {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? { warn: () => {} };
+  const streamStartedAt = deps.streamStartedAt ?? now();
+  let statusMode = false;
+  let lastStatusAttemptAt: number | null = null;
   let closed = false;
   /**
    * 本轮已经失效(连接/账号代次不再属于本轮)。失效后**立即闭闸**:
@@ -89,13 +99,18 @@ export function createWecomProgress(deps: WecomProgressDeps): ImProgressHandle {
     return true;
   }
 
+  const windowExpired = () => Boolean(deps.sendStatus) && now() - streamStartedAt >= WECOM_STREAM_PROGRESS_WINDOW_MS;
+  const visibleContent = (view: ImProgressView) => statusMode
+    ? truncateUtf8(`${view.stage.trim() || '任务仍在处理中。'}\n\n任务仍在继续，完成后会发送结果。可发送 !stop 终止任务。`, 2_000)
+    : composeWecomProgressContent(view);
+
   function schedule(): void {
     if (!alive() || timer || inflight) return;
     // 第一帧立即发(用户刚发完消息就该看到反馈); 之后按窗口节流(按尝试计)。
-    const wait =
-      lastAttemptAt === null
-        ? 0
-        : Math.max(0, WECOM_PROGRESS_INTERVAL_MS - (now() - lastAttemptAt));
+    const useStatus = statusMode || windowExpired();
+    const previousAttempt = useStatus ? lastStatusAttemptAt : lastAttemptAt;
+    const interval = useStatus ? WECOM_STATUS_INTERVAL_MS : WECOM_PROGRESS_INTERVAL_MS;
+    const wait = previousAttempt === null ? 0 : Math.max(0, interval - (now() - previousAttempt));
     if (wait === 0) {
       scheduleBurst += 1;
       if (scheduleBurst > MAX_SCHEDULE_BURST) {
@@ -119,7 +134,7 @@ export function createWecomProgress(deps: WecomProgressDeps): ImProgressHandle {
       if (inflight === running) inflight = null;
       if (!alive()) return;
       // 只有出现**新的、既没成功也没失败过**的内容时才排下一帧。
-      const content = latest ? composeWecomProgressContent(latest) : '';
+      const content = latest ? visibleContent(latest) : '';
       if (content && content !== lastContent && content !== failedContent) schedule();
     });
     inflight = running;
@@ -129,17 +144,38 @@ export function createWecomProgress(deps: WecomProgressDeps): ImProgressHandle {
     if (!alive()) return;
     const view = latest;
     if (!view) return;
-    const content = composeWecomProgressContent(view);
+    if (!statusMode && windowExpired()) {
+      statusMode = true;
+      lastContent = '';
+      failedContent = '';
+      try {
+        await deps.finishStream?.(deps.streamId, truncateUtf8(`${composeWecomProgressContent(view)}\n\n任务仍在继续，后续进度将以新消息发送。`, WECOM_STREAM_MAX_BYTES));
+      } catch {
+        // 窗口可能已经过期; 不再尝试这个 stream, 主动状态仍然继续。
+      }
+      if (!alive()) return;
+    }
+    const content = visibleContent(view);
     // 真正有内容才发: 阶段行为空时不要把空占位当成进度帧; 内容相同不重复刷。
     if (!content.trim() || content === lastContent || content === failedContent) return;
     // 节流按尝试计: 失败也占窗口, 密集事件不会变成请求风暴。
-    lastAttemptAt = now();
+    if (statusMode) lastStatusAttemptAt = now();
+    else lastAttemptAt = now();
     try {
-      await deps.replyStream(deps.streamId, content);
+      if (statusMode) await deps.sendStatus!(content);
+      else await deps.replyStream(deps.streamId, content);
       lastContent = content;
       failedContent = '';
       scheduleBurst = 0;
     } catch (error) {
+      if (!statusMode && deps.sendStatus && isExpiredStreamError(error)) {
+        statusMode = true;
+        lastContent = '';
+        failedContent = '';
+        // SDK 已明确拒绝旧窗口; 后续永不再重试这个 stream。
+        await flush();
+        return;
+      }
       failedContent = content;
       log.warn(`wecom progress ${DELIVERY_FAILURE.progress}: frame failed`);
     }
@@ -170,4 +206,11 @@ function truncateUtf8(value: string, maxBytes: number): string {
     result += char;
   }
   return `${result}…`;
+}
+
+function isExpiredStreamError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const value = error as { errcode?: unknown; code?: unknown; message?: unknown };
+  return Number(value.errcode ?? value.code) === 846608
+    || (typeof value.message === 'string' && /846608|stream.*(?:expired|cannot update)/i.test(value.message));
 }

@@ -191,3 +191,48 @@ describe('wecom streaming progress', () => {
     expect(content.startsWith('⚙️ 正在处理')).toBe(true);
   });
 });
+
+// Regression: >10-minute turns must keep a visible, bounded status channel (unit).
+describe('wecom expired progress surface', () => {
+  it('finishes the old stream and sends bounded status updates without repeating the answer', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1_000);
+    const replyStream = vi.fn(async () => undefined);
+    const finishStream = vi.fn(async () => undefined);
+    const sendStatus = vi.fn(async () => undefined);
+    const progress = createWecomProgress({ userId: 'owner', streamId: 'long', streamStartedAt: 1_000,
+      replyStream, finishStream, sendStatus });
+    progress.replace({ stage: '正在处理 · 1s', body: 'partial answer' });
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(601_000);
+    progress.replace({ stage: '正在处理 · 10m', body: 'do not repeat the partial answer' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replyStream).toHaveBeenCalledTimes(1);
+    expect(finishStream).toHaveBeenCalledTimes(1);
+    expect(sendStatus).toHaveBeenCalledWith(expect.stringContaining('正在处理 · 10m'));
+    expect(sendStatus.mock.calls.flat().join('')).not.toContain('partial answer');
+    progress.replace({ stage: '正在等待确认', body: 'more answer' });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(sendStatus).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(58_500);
+    expect(sendStatus).toHaveBeenCalledTimes(2);
+    await progress.close();
+    progress.replace({ stage: 'late', body: '' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sendStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('switches to active status on platform expiry and never retries the expired stream', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1_000);
+    const replyStream = vi.fn(async () => { throw Object.assign(new Error('stream update expired'), { errcode: 846608 }); });
+    const sendStatus = vi.fn(async () => undefined);
+    const progress = createWecomProgress({ userId: 'owner', streamId: 'expired', replyStream, sendStatus });
+    progress.replace({ stage: '正在处理', body: '' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sendStatus).toHaveBeenCalledTimes(1);
+    progress.replace({ stage: '正在整理回答', body: 'answer' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(replyStream).toHaveBeenCalledTimes(1);
+    expect(sendStatus).toHaveBeenCalledTimes(2);
+    await progress.close();
+  });
+});

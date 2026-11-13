@@ -467,6 +467,48 @@ describe("WecomIM routing and ownership", () => {
     await im.dispose();
   });
 
+  // Regression: queue receipts must preserve the callback; expired/missing callbacks still need status.
+  it('acknowledges a queued message without consuming its future streaming reply', async () => {
+    const { host, secrets } = createHost(); secrets.set('wecom-owner-user-id', 'owner');
+    const client = new FakeClient(); const im = new WecomIM(host, { clientFactory: () => client as never });
+    await im.init(); const frame = message({ id: 'queued', sender: 'owner', text: 'next task' });
+    client.emit('message.text', frame); await flush();
+    await im.sendMarkdownText('owner', '已排队', { usePendingFrame: false });
+    expect(client.sendMessage).toHaveBeenCalledWith('owner', { msgtype: 'markdown', markdown: { content: '已排队' } });
+    expect(client.replyStream).not.toHaveBeenCalled();
+    const progress = await im.beginReply('owner', { turnId: 'queued-turn' });
+    expect(client.replyStream).toHaveBeenCalledWith(frame, expect.any(String), ' ', false);
+    await progress?.close(); await im.dispose();
+  });
+
+  it('keeps status and terminal delivery working after the stream has expired', async () => {
+    const { host, secrets } = createHost(); secrets.set('wecom-owner-user-id', 'owner');
+    let now = 1_000; const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never, now: () => now });
+    await im.init(); client.emit('message.text', message({ id: 'long', sender: 'owner', text: 'long task' })); await flush();
+    const progress = await im.beginReply('owner', { turnId: 'long-turn' });
+    now += 600_000;
+    progress!.replace({ stage: '正在等待确认 · 10m', body: 'partial answer must not be reposted' }); await flush();
+    expect(client.sendMessage).toHaveBeenCalledWith('owner', expect.objectContaining({ markdown: { content: expect.stringContaining('正在等待确认') } }));
+    expect(JSON.stringify(client.sendMessage.mock.calls)).not.toContain('partial answer');
+    await progress!.close();
+    await im.commitFinal({ userId: 'owner', turnId: 'long-turn', text: 'final answer', terminal: 'done' });
+    expect(client.sendMessage).toHaveBeenLastCalledWith('owner', { msgtype: 'markdown', markdown: { content: 'final answer' } });
+    const streamCalls = client.replyStream.mock.calls.length;
+    progress!.replace({ stage: 'late', body: '' }); await flush();
+    expect(client.replyStream).toHaveBeenCalledTimes(streamCalls); await im.dispose();
+  });
+
+  it('provides active status even when a queued callback is no longer available', async () => {
+    const { host } = createHost(); const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never }); await im.init();
+    const progress = await im.beginReply('owner', { turnId: 'no-frame' });
+    expect(progress).not.toBeNull();
+    progress!.replace({ stage: '正在处理', body: '' }); await flush();
+    expect(client.sendMessage).toHaveBeenCalledWith('owner', expect.objectContaining({ markdown: { content: expect.stringContaining('正在处理') } }));
+    expect(client.replyStream).not.toHaveBeenCalled(); await progress!.close(); await im.dispose();
+  });
+
   it("streams public progress into the reserved reply before the final answer", async () => {
     const { host, secrets } = createHost();
     secrets.set("wecom-owner-user-id", "owner");
@@ -633,6 +675,18 @@ describe("WecomIM routing and ownership", () => {
     }
   });
 
+  it('finishes the original stream for a turn longer than three minutes but inside the platform window', async () => {
+    const { host, secrets } = createHost(); secrets.set('wecom-owner-user-id', 'owner');
+    let now = 1_000; const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never, now: () => now });
+    await im.init(); const frame = message({ id: 'medium', sender: 'owner', text: 'task' });
+    client.emit('message.text', frame); await flush(); await im.beginReply('owner');
+    now += 3 * 60_000;
+    await im.commitFinal({ userId: 'owner', text: 'finished', terminal: 'done' });
+    expect(client.replyStream).toHaveBeenLastCalledWith(frame, expect.any(String), 'finished', true);
+    expect(client.sendMessage).not.toHaveBeenCalled(); await im.dispose();
+  });
+
   it("falls back to active send after the passive stream safety window", async () => {
     const { host, secrets } = createHost();
     secrets.set("wecom-owner-user-id", "owner");
@@ -650,7 +704,7 @@ describe("WecomIM routing and ownership", () => {
     );
     await flush();
     await im.beginReply("owner");
-    now += 3 * 60_000;
+    now += 10 * 60_000;
 
     await im.commitFinal({
       userId: "owner",
