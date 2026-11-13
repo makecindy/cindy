@@ -639,9 +639,11 @@ export function resolveWorkspacePrefOverrides(
 /**
  * 项目改名后, 把按旧名称存的偏好挪到新名称下; 返回有改动的渠道。
  *
- * 新名称下还没有行时照抄旧行(整行作为本机正本镜像出去); 已经有行(用户在新名称下改过,
- * 或显式清空留下的墓碑)就不覆盖。旧行一律收成未同步的清空墓碑, 镜像后两边一起消失 ——
- * 留着它, 用户之后清空新名称下的偏好时, 下一次整理又会把旧值抄回来。
+ * 新名称下没有实值时照抄旧行(整行作为本机正本镜像出去); 已有实值(用户在新名称下改过)
+ * 就不覆盖。新名称下只有一条全空行时照样抄过去: 那多半是上一次改名留在这个名称下、还没
+ * 镜像出去的清空墓碑(项目离线改名又改回来), 当成「已有设置」就会两头都清空。
+ * 旧行一律收成未同步的清空墓碑, 镜像后两边一起消失 —— 留着它, 用户之后清空新名称下的
+ * 偏好时, 下一次整理又会把旧值抄回来。
  * 可重复执行: 旧名称下没有实值时什么也不做。
  */
 export function moveWorkspacePrefsToRenamed(
@@ -655,7 +657,8 @@ export function moveWorkspacePrefsToRenamed(
   for (const { from, to } of renames) {
     if (from === to || !HOOK_WORKSPACE_ALIAS_RE.test(to)) continue;
     for (const row of entries.filter((entry) => entry.workspace === from && !isBlankRow(entry))) {
-      const hasTarget = entries.some((entry) => sameKey(entry, row.channel, row.teamId, to));
+      const target = entries.find((entry) => sameKey(entry, row.channel, row.teamId, to));
+      const keepTarget = target !== undefined && !isBlankRow(target);
       const tombstone: WorkspacePrefsEntry = {
         channel: row.channel,
         teamId: row.teamId,
@@ -675,13 +678,13 @@ export function moveWorkspacePrefsToRenamed(
         effort: row.effort,
         agentKind: row.agentKind,
         permissionMode: row.permissionMode,
-        rev: 1,
+        rev: (target ? rowRev(target) : 0) + 1,
         dirty: true,
       };
       entries = [
-        ...entries.filter((entry) => entry !== row),
+        ...entries.filter((entry) => entry !== row && (keepTarget || entry !== target)),
         tombstone,
-        ...(hasTarget ? [] : [moved]),
+        ...(keepTarget ? [] : [moved]),
       ];
       touched.add(row.channel);
     }

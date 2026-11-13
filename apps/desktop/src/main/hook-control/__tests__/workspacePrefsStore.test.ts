@@ -638,7 +638,22 @@ describe('workspacePrefsStore', () => {
     expect(moveWorkspacePrefsToRenamed([{ from: 'xdmaker', to: '主仓库' }])).toEqual([]);
   });
 
-  it('项目改名: 新名称下已有偏好(含显式清空)时不覆盖; 来源偏好一并挪过去', () => {
+  // PR #10291 review: 离线时 app -> main 再改回 app, app 下留着上一次改名的清空墓碑, 被当成
+  // 「已有设置」后既不抄 main 的值、又把 main 清空, 模型与权限档全丢。
+  it('项目离线改名又改回原名: 偏好回到原名下, 不被残留的清空墓碑挡住', () => {
+    setWorkspacePref('feishu', null, 'app', { model: 'm1', permissionMode: 'default' });
+    moveWorkspacePrefsToRenamed([{ from: 'app', to: 'main' }]);
+    expect(getWorkspacePref('feishu', null, 'app').model).toBeNull();
+
+    moveWorkspacePrefsToRenamed([{ from: 'main', to: 'app' }]);
+    expect(getWorkspacePref('feishu', null, 'app')).toMatchObject({
+      model: 'm1',
+      permissionMode: 'default',
+    });
+    expect(getWorkspacePref('feishu', null, 'main').model).toBeNull();
+  });
+
+  it('项目改名: 新名称下已有偏好时不覆盖; 来源偏好一并挪过去', () => {
     setWorkspacePref('feishu', null, 'xdmaker', { model: 'old' });
     setWorkspacePref('feishu', null, '主仓库', { model: 'new' });
     setWorkspaceProviderSource('feishu', null, 'xdmaker', 'provider-1');

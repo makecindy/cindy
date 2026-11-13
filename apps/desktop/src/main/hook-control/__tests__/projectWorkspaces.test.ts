@@ -93,6 +93,41 @@ describe('planProjectWorkspaces', () => {
     expect(Object.keys(again.workspaces)).toEqual(['报表', 'x/报表', '报表 2']);
   });
 
+  // PR #10291 review: 项目 A 从 app 改名后, 别的项目拿走 app, 服务端仍按 app 记着的会话
+  // 就会落进另一个目录。最小失败输入: A 改名的同一次整理里 B 也叫 app; 以及之后才来的 B。
+  it('还指着某个项目的旧名称不让给别的项目; 项目自己可以改回原名', () => {
+    const sameRun = plan({ app: '/a/app' }, [
+      { path: '/a/app', name: 'main' },
+      { path: '/b/app', name: 'app' },
+    ]);
+    expect(sameRun.workspaces).toEqual({ main: '/a/app', 'b/app': '/b/app' });
+    expect(sameRun.retired).toEqual({ app: '/a/app' });
+
+    const later = plan(
+      { main: '/a/app' },
+      [
+        { path: '/a/app', name: 'main' },
+        { path: '/c/x', name: 'app' },
+      ],
+      { app: '/a/app' },
+    );
+    expect(later.workspaces).toEqual({ main: '/a/app', 'c/app': '/c/x' });
+    expect(lookupWorkspaces(later.workspaces, later.retired).app).toBe('/a/app');
+
+    const back = plan({ main: '/a/app' }, [{ path: '/a/app', name: 'app' }], { app: '/a/app' });
+    expect(back.workspaces).toEqual({ app: '/a/app' });
+    expect(back.retired).toEqual({ main: '/a/app' });
+  });
+
+  // PR #10291 review: 纯数字的旧名称(如 2025)原先被排除在查找之外, 服务端按它派发就被拒。
+  it('纯数字的旧名称照样能找到目录', () => {
+    const result = plan({ '2025': '/code/reports' }, [{ path: '/code/reports', name: 'reports' }]);
+    expect(lookupWorkspaces(result.workspaces, result.retired)).toEqual({
+      '2025': '/code/reports',
+      reports: '/code/reports',
+    });
+  });
+
   it('侧栏里移除的项目退出清单, 它的旧名称一并丢掉; 只换顺序不算名称变化', () => {
     const removed = plan(
       { cindy: '/code/cindy', docs: '/code/docs' },
@@ -161,6 +196,37 @@ describe('createProjectWorkspaceSync', () => {
     await sync.run();
     expect(registered).toEqual(['/code/cindy']);
     expect(onSynced).toHaveBeenLastCalledWith({ changed: false, mappingChanged: false });
+  });
+
+  // PR #10291 review: 登记失败被吞掉后迁移照样记成完成, 清单随即按项目列表重排, 没登记上的
+  // 目录从机器人那里永久消失且不再重试。最小失败输入: 第一次登记抛错, 第二次成功。
+  it('升级迁移有目录没登记上: 原清单不动、不记成已迁移, 下次整理重试', async () => {
+    const mem = memoryStore({ workspaces: { xdmaker: '/code/cindy' } });
+    const catalog: ProjectCatalogSnapshot = { projects: [], isCurrent: () => true, isRemoved: () => false };
+    let attempts = 0;
+    const onSynced = vi.fn();
+    const sync = createProjectWorkspaceSync({
+      getStore: () => mem.store,
+      loadCatalog: async () => catalog,
+      registerDirectory: async (directory) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('INTERNAL: write failed');
+        catalog.projects = [{ path: directory, name: 'cindy' }];
+      },
+      onSynced,
+      log: { warn: () => {} },
+    });
+
+    await sync.run();
+    expect(mem.state().workspaces).toEqual({ xdmaker: '/code/cindy' });
+    expect(mem.state().projectCatalogMigrated).toBeUndefined();
+    expect(onSynced).not.toHaveBeenCalled();
+
+    await sync.run();
+    expect(mem.state()).toMatchObject({
+      projectCatalogMigrated: true,
+      workspaces: { cindy: '/code/cindy' },
+    });
   });
 
   it('项目存储没就绪或读取期间换了账号: 不动现有清单, 也不记成已迁移', async () => {

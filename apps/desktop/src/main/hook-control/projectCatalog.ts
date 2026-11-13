@@ -79,9 +79,13 @@ export type RegisterImProjectResult =
 
 /**
  * 把一个本机目录登记成项目(侧栏与 IM 机器人共用的那一份); 之前移除过的恢复显示。
- * 目录必须存在, 不能是对话的托管目录、任务 worktree 或伙伴的项目。
+ * 不能是对话的托管目录、任务 worktree 或伙伴的项目。默认要求目录存在; 升级迁移传
+ * `requireExisting: false`, 暂时不在的目录(外接盘没插)也登记。
  */
-export async function registerImProjectDirectory(directory: string): Promise<RegisterImProjectResult> {
+export async function registerImProjectDirectory(
+  directory: string,
+  options: { requireExisting?: boolean } = {},
+): Promise<RegisterImProjectResult> {
   const lexical = validateLocalProjectDirectory(directory);
   if (!lexical.ok) return lexical;
   if (isTeammateProjectPath(lexical.workingDir)) {
@@ -92,13 +96,15 @@ export async function registerImProjectDirectory(directory: string): Promise<Reg
     return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Cindy project storage is not ready.' };
   }
   const owner = getActiveDataOwnerPushStamp();
-  let physical: Awaited<ReturnType<typeof validateExistingLocalProjectDirectory>>;
   try {
-    physical = await validateExistingLocalProjectDirectory(lexical.workingDir);
+    // 先按字面拦对话托管目录, 再看磁盘; 目录不在时 stat 抛错。
+    const physical = await validateExistingLocalProjectDirectory(lexical.workingDir);
+    if (!physical.ok) return physical;
   } catch {
-    return { ok: false, errorCode: 'NOT_FOUND', message: 'Directory does not exist.' };
+    if (options.requireExisting !== false) {
+      return { ok: false, errorCode: 'NOT_FOUND', message: 'Directory does not exist.' };
+    }
   }
-  if (!physical.ok) return physical;
   if (tryGetDbClient() !== client || isAppSessionBoundaryPending()) {
     return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'The active Cindy account changed.' };
   }

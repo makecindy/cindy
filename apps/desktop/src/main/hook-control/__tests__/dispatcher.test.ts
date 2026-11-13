@@ -1443,6 +1443,24 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
+  // PR #10291 review: 纯数字的旧名称在对象里恒排最前, 按目录反查名称不能靠键序。
+  it('旧名称是纯数字时: 仍能按它派发, 报出的是现用名称', async () => {
+    const fr = fakeRunner();
+    const config: HookConnectionConfig = {
+      ...CONFIG,
+      workspaces: { reports: WS_DIR, '2025': WS_DIR },
+      retiredWorkspaceNames: ['2025'],
+    };
+    const { d } = makeDispatcher({ runner: fr.runner, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ workspace: '2025' }), c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload.result).toBe('accepted');
+    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'reports' });
+    fr.finish();
+  });
+
   it('在工作目录映射内换目录 -> 无感跟随复用(边界内的移动不受影响)', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};

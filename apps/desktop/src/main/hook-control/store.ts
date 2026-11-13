@@ -128,6 +128,11 @@ export interface HookConnectionConfig {
   enabled: boolean;
   companionBotId?: string | null;
   workspaces: Record<string, string>;
+  /**
+   * workspaces 里只供查找的旧名称(项目改名前的名称)。按目录反查名称时它们排在现用名称
+   * 之后; 缺省视为没有。
+   */
+  retiredWorkspaceNames?: readonly string[];
   createdAt: number;
 }
 

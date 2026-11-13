@@ -2382,9 +2382,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         .some((root) => isPathWithin(root, dir));
     const workspaceAliasFor = (dir: string): { workspaceAlias?: string } => {
       if (inDialogueRoot(dir)) return { workspaceAlias: HOOK_CHAT_WORKSPACE_ALIAS };
-      const alias = Object.entries(getConnection(connectionId)?.workspaces ?? config.workspaces)
+      const connection = getConnection(connectionId) ?? config;
+      // 同一个目录可能同时有现用名称和改名前的旧名称: 偏好按现用名称存, 所以现用的优先。
+      const retiredNames = new Set(connection.retiredWorkspaceNames ?? []);
+      const alias = Object.entries(connection.workspaces)
         .filter(([, root]) => isPathWithin(root, dir))
-        .sort(([, left], [, right]) => path.resolve(right).length - path.resolve(left).length)[0]?.[0];
+        .sort(
+          ([leftName, left], [rightName, right]) =>
+            path.resolve(right).length - path.resolve(left).length ||
+            Number(retiredNames.has(leftName)) - Number(retiredNames.has(rightName)),
+        )[0]?.[0];
       return alias !== undefined ? { workspaceAlias: alias } : {};
     };
     // 显式接管的目标失效时会从旧目录 / 本次别名提示里挑一个安全落点, 然后

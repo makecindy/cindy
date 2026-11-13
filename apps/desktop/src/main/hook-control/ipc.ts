@@ -443,7 +443,13 @@ const projectWorkspaceSync = createProjectWorkspaceSync({
   getStore: () => store,
   loadCatalog: loadImProjectCatalog,
   registerDirectory: async (directory) => {
-    await registerImProjectDirectory(directory);
+    // 升级前配置的目录此刻不在(外接盘没插)也照样登记 —— 侧栏本来就能显示暂时不可用的项目。
+    const registered = await registerImProjectDirectory(directory, { requireExisting: false });
+    // 不能当项目的目录(对话托管目录、任务 worktree、伙伴的项目)跳过; 其余失败(存储没就绪、
+    // 写库失败)抛出去, 这次不算迁移完成, 下次整理再试 —— 否则这个目录会从机器人那里永久消失。
+    if (!registered.ok && registered.errorCode !== 'INVALID_ARGS' && registered.errorCode !== 'NOT_A_DIRECTORY') {
+      throw new Error(`${registered.errorCode}: ${registered.message}`);
+    }
   },
   onSynced: ({ changed, mappingChanged }) => {
     if (!store || !manager) return;
@@ -559,6 +565,9 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
           ...(provider === 'x' ? { companionBotId: config.xCompanionBotId ?? null } : {}),
           // 现用名称 + 改名前的旧名称(只供查找): 服务端可能还按旧名称派发。
           workspaces: lookupWorkspaces(config.workspaces, config.retiredWorkspaces ?? {}),
+          retiredWorkspaceNames: Object.keys(config.retiredWorkspaces ?? {}).filter(
+            (name) => !Object.hasOwn(config.workspaces, name),
+          ),
           createdAt: 0,
         };
       },

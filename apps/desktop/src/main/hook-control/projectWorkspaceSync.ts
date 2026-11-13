@@ -24,7 +24,10 @@ export interface ProjectWorkspaceSyncDeps {
   getStore(): SlackHookStore | null;
   /** 侧栏的本机项目(最近使用在前); null = 还读不了。 */
   loadCatalog(): Promise<ProjectCatalogSnapshot | null>;
-  /** 把升级前手动配置的目录登记成项目(已移除的恢复显示); 目录不可用时自行跳过。 */
+  /**
+   * 把升级前手动配置的目录登记成项目(已移除的恢复显示)。不能当项目的目录自行跳过并正常返回;
+   * 其余失败须 reject —— 本次迁移不算完成, 下次整理重试。
+   */
   registerDirectory(directory: string): Promise<void>;
   /** 一次整理结束(无论有没有变化)。 */
   onSynced(result: { changed: boolean; mappingChanged: boolean }): void;
@@ -51,15 +54,20 @@ export function createProjectWorkspaceSync(deps: ProjectWorkspaceSyncDeps): Proj
     if (store.get().projectCatalogMigrated !== true) {
       const ready = await deps.loadCatalog();
       if (!ready || !ready.isCurrent() || deps.getStore() !== store) return;
+      let failed = false;
       for (const directory of Object.values(store.get().workspaces)) {
         try {
           await deps.registerDirectory(directory);
         } catch (err) {
+          failed = true;
           deps.log.warn(
             `project registration for a configured IM directory failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }
+      // 有目录没登记上: 保持原清单不动, 不记成已迁移, 下次整理重试。继续往下走会按项目列表
+      // 重排清单, 没登记上的目录就从机器人那里消失, 而且再也不会重试。
+      if (failed) return;
       if (!ready.isCurrent() || deps.getStore() !== store) return;
       store.markProjectCatalogMigrated();
     }

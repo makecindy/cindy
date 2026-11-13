@@ -106,13 +106,17 @@ function stillFits(alias: string, project: ProjectCatalogEntry, base: string): b
   return match !== null && Number(match[2]) >= 2 && numbered(base, Number(match[2])) === alias;
 }
 
-function pickName(project: ProjectCatalogEntry, base: string, taken: ReadonlySet<string>): string {
-  if (isUsableName(base) && !taken.has(base)) return base;
+function pickName(
+  project: ProjectCatalogEntry,
+  base: string,
+  isFree: (name: string) => boolean,
+): string {
+  if (isUsableName(base) && isFree(base)) return base;
   const parent = withParent(project, base);
-  if (parent !== null && !taken.has(parent)) return parent;
+  if (parent !== null && isFree(parent)) return parent;
   for (let index = 2; ; index += 1) {
     const candidate = numbered(base, index);
-    if (isUsableName(candidate) && !taken.has(candidate)) return candidate;
+    if (isUsableName(candidate) && isFree(candidate)) return candidate;
   }
 }
 
@@ -150,9 +154,23 @@ export function planProjectWorkspaces(input: {
     if (!currentAliasByKey.has(key)) currentAliasByKey.set(key, alias);
   }
 
+  // 一个名称只要还指着清单里的某个项目(现用, 或改名后留作查找的旧名称), 别的项目就不能用它:
+  // 服务端的会话还按这个名称记着选的项目, 让它改指另一个目录, 下一条指令就会跑进错的项目。
+  // 项目自己可以把旧名称拿回去(改名后又改回来)。
+  const catalogKeys = new Set(projects.map((project) => keyOf(project.path)));
+  const ownerOfName = new Map<string, string>();
+  for (const source of [input.retired, input.current]) {
+    for (const [alias, directory] of Object.entries(source)) {
+      const key = keyOf(directory);
+      if (catalogKeys.has(key)) ownerOfName.set(alias, key);
+    }
+  }
+
   const bases = projects.map((project) => projectWorkspaceBaseName(project.name));
   const assigned = new Map<number, string>();
   const taken = new Set<string>();
+  const isFreeFor = (projectKey: string) => (name: string): boolean =>
+    !taken.has(name) && (ownerOfName.get(name) ?? projectKey) === projectKey;
   // 先留住仍然说得通的现有名称, 再给其余项目取名 —— 新项目不会抢走旧项目的名字。
   projects.forEach((project, index) => {
     const existing = currentAliasByKey.get(keyOf(project.path));
@@ -169,7 +187,7 @@ export function planProjectWorkspaces(input: {
   const renames: ProjectWorkspaceRename[] = [];
   projects.forEach((project, index) => {
     if (assigned.has(index)) return;
-    const name = pickName(project, bases[index]!, taken);
+    const name = pickName(project, bases[index]!, isFreeFor(keyOf(project.path)));
     assigned.set(index, name);
     taken.add(name);
     const previous = currentAliasByKey.get(keyOf(project.path));
@@ -206,15 +224,16 @@ export function planProjectWorkspaces(input: {
   };
 }
 
-/** 现用名称在前, retired 补在后: 派发按名称找目录、按目录找名称都用这一份。 */
+/**
+ * 现用名称加上 retired: 派发按名称找目录用这一份。按目录反查名称时要现用名称优先,
+ * 不能靠这里的键序(纯数字键在对象里恒排最前) —— 调用方另用 retired 名单区分。
+ */
 export function lookupWorkspaces(
   workspaces: Readonly<Record<string, string>>,
   retired: Readonly<Record<string, string>>,
 ): Record<string, string> {
   const lookup: Record<string, string> = { ...workspaces };
   for (const [alias, directory] of Object.entries(retired)) {
-    // 纯数字键在对象里会排到最前, 「按目录找名称」就可能先碰到旧名称; 这种旧名称不补。
-    if (/^(0|[1-9]\d*)$/.test(alias)) continue;
     if (!Object.hasOwn(lookup, alias)) lookup[alias] = directory;
   }
   return lookup;
