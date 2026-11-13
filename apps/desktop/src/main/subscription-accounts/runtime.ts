@@ -1011,7 +1011,13 @@ async function readSubscriptionPoolView(
   const provider = ref.kind;
   // Only built-in providers have the CLI default slot before any account exists.
   const pool = readPool(provider) ?? (ref.providerId === provider ? defaultPool() : { ...defaultPool(), accounts: [] });
-  const bound = taskId ? readAccountBinding(`task:${taskId}`, provider)?.accountId : undefined;
+  // The task's account shows under this provider only where the task would run on it: the provider
+  // it was bound through, or the one that account belongs to now (same rule as acquiring). Under
+  // another provider of the kind the task would hand over to that provider's own accounts, so the
+  // picker must not show this account's quota there (2026-11-13).
+  const binding = taskId ? readAccountBinding(`task:${taskId}`, provider) : undefined;
+  const bound = binding && (ref.providerId === (binding.via ?? provider)
+    || accountProviderId(provider, binding.accountId) === ref.providerId) ? binding.accountId : undefined;
   // A provider lists its own accounts. A task's read also keeps the task's own account when it now
   // belongs to another provider, so the task never shows someone else's account.
   const listed = pool.accounts.filter(
@@ -1073,7 +1079,7 @@ async function readSubscriptionPoolView(
     kind: provider,
     configured: readPool(provider) !== null,
     strategy: providerStrategy(ref.providerId, provider, pool),
-    ...(taskId ? { boundAccountId: readAccountBinding(`task:${taskId}`, provider)?.accountId ?? null } : {}),
+    ...(taskId ? { boundAccountId: bound ?? null } : {}),
     accounts,
   };
 }

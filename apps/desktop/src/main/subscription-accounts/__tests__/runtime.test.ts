@@ -2184,6 +2184,10 @@ describe('native account assignment on the executing computer', () => {
     const row = (providerId: string) => ({ providerId, agentKind: kind === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'switch-history' });
     expect(await needsSubscriptionAccountHandoff('switch', row(kind))).toBe(false);
     expect(await needsSubscriptionAccountHandoff('switch', row(created!))).toBe(true);
+    // Isolated-sandbox regression: the picker showed the task's account and quota under every
+    // provider of the kind, although another provider would hand the task over to its own account.
+    expect((await readSubscriptionPool(kind, false, 'switch')).boundAccountId).toBe('default');
+    expect((await readSubscriptionPool(created!, false, 'switch')).boundAccountId).toBeNull();
     const fresh = await acquireSubscriptionAccount(created!, undefined, ['task:switch'], false, { resuming: false });
     expect(fresh!.account.configDir).toBe(`${kind}/third`);
     fresh!.release();
