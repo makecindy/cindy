@@ -80,7 +80,7 @@ export function createHostPluginAuthorization(options: {
     return source ? [source] : [];
   });
   const oauth = new GhostOauthAccountManager({
-    connectionSources,
+    connectionSources, connectionSource,
     vault: { read: secret.readGhostSecret, readStrict: secret.readGhostSecretStrict,
       store: secret.storeGhostSecret, remove: secret.removeGhostSecret },
     fetchImpl: (url, init) => hostOutbound.outboundFetch(url, { ...init,

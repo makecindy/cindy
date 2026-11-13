@@ -334,6 +334,8 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   const oauth = new GhostOauthAccountManager({
     vault: { read: (id, key) => values.get(id + ':' + key) ?? null, store: (id, key, value) => { values.set(id + ':' + key, value); return true; }, remove: (id, key) => values.delete(id + ':' + key) },
     connectionSources: () => [ghost, original].map(item => ({ instanceKey: item.manifest.id, name: item.manifest.id, manifest: item.manifest })),
+    connectionSource: id => [ghost, original].map(item => ({ instanceKey: item.manifest.id, name: item.manifest.id, manifest: item.manifest }))
+      .find(item => item.instanceKey === id) ?? null,
     confirmAccountReuse: async () => true, openExternal: () => { throw new Error('reuse must not log in again'); },
     fetchImpl: async () => Response.json({ access_token: 'synthetic-host-only-access', token_type: 'Bearer', expires_in: 3600 }),
   });

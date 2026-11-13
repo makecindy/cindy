@@ -147,15 +147,44 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     let available = true;
     const fetchImpl = vi.fn(async () => jsonResponse({ access_token: 'source-access', token_type: 'Bearer', expires_in: 3600 }));
     const confirmAccountReuse = vi.fn(async () => confirm);
+    const connectionSource = vi.fn((id: string) => id === consumer ? { instanceKey: consumer, name: 'Consumer', manifest: consumerManifest }
+      : id === GHOST && available ? { instanceKey: GHOST, name: 'Source', manifest: sourceManifest } : null);
+    const connectionSources = vi.fn(() => [{ instanceKey: consumer, name: 'Consumer', manifest: consumerManifest },
+      ...(available ? [{ instanceKey: GHOST, name: 'Source', manifest: sourceManifest }] : [])]);
     const mgr = new GhostOauthAccountManager({ vault, fetchImpl: fetchImpl as typeof fetch, openExternal: vi.fn(),
-      connectionSources: () => [{ instanceKey: consumer, name: 'Consumer', manifest: consumerManifest },
-        ...(available ? [{ instanceKey: GHOST, name: 'Source', manifest: sourceManifest }] : [])],
+      connectionSource, connectionSources,
       confirmAccountReuse,
     });
     const selection = { instanceKey: GHOST, secretKey: KEY, accountId: 'acc-1' };
-    return { mgr, vault, fetchImpl, confirmAccountReuse, consumer, sourceManifest, consumerManifest, selection,
+    return { mgr, vault, fetchImpl, confirmAccountReuse, connectionSource, connectionSources, consumer, sourceManifest, consumerManifest, selection,
       hideSource: () => { available = false; } };
   }
+
+  // #10130 / 4561806989, unit: functional reuse tests missed catalogue IO on
+  // each token/stream guard. The real manager must query only exact instances,
+  // still observe revocation, and leave ordinary OAuth on its original path.
+  it('resolves and rechecks tokens without enumerating the source catalogue', async () => {
+    const h = setup();
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(h.mgr.listReusableAccounts(h.consumer, KEY, decl)).toHaveLength(1);
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
+    h.connectionSources.mockClear(); h.connectionSource.mockClear();
+    const token = await h.mgr.getFreshAccessToken(h.consumer, KEY, decl);
+    expect(token).toMatchObject({ ok: true, reused: true });
+    if (!token.ok) return;
+    for (let i = 0; i < 3; i++) token.assertCurrent?.();
+    expect(h.connectionSources).not.toHaveBeenCalled();
+    expect(h.connectionSource).toHaveBeenCalledWith(h.consumer);
+    expect(h.connectionSource).toHaveBeenCalledWith(GHOST);
+    h.hideSource();
+    expect(() => token.assertCurrent?.()).toThrow('OAUTH_REFERENCE_CHANGED');
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
+    expect(h.connectionSources).not.toHaveBeenCalled();
+    h.connectionSource.mockClear();
+    expect(await h.mgr.getFreshAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true });
+    expect(h.connectionSource).not.toHaveBeenCalled();
+    expect(h.connectionSources).not.toHaveBeenCalled();
+  });
 
   it('stores a reference, reuses the source refresh path, and forwards 401 invalidation', async () => {
     const h = setup();
@@ -249,6 +278,7 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     h.sourceManifest.network!.secrets![0]!.oauth!.tokenBroker = 'google';
     const refresh = vi.fn(async () => ({ ok: true as const, bundle: { accessToken: 'broker-access', refreshToken: null, expiresAt: Date.now() + 3600000, grantedScope: null } }));
     const mgr = new GhostOauthAccountManager({ vault: h.vault, fetchImpl: vi.fn(), openExternal: vi.fn(),
+      connectionSource: h.connectionSource,
       connectionSources: () => [{ instanceKey: GHOST, name: 'Source', manifest: h.sourceManifest }, { instanceKey: h.consumer, name: 'Consumer', manifest: h.consumerManifest }],
       confirmAccountReuse: async () => true, isTokenBrokerAuthorized: id => id === GHOST,
       broker: { refresh, exchange: vi.fn() },

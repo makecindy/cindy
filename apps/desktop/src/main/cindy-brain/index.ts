@@ -6475,6 +6475,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
   if (!ghostOauthManagerSingleton) {
     ghostOauthManagerSingleton = new GhostOauthAccountManager({
       connectionSources: ghostReusableConnectionSources,
+      connectionSource: ghostReusableConnectionSource,
       confirmAccountReuse: confirmGhostAccountReuse,
       vault: {
         read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),

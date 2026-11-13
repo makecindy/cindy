@@ -117,6 +117,8 @@ export interface GhostOauthVault {
 export interface GhostOauthAccountManagerDeps {
   /** Only approved, enabled installations of the currently committed owner. */
   connectionSources?(): readonly { instanceKey: string; name: string; manifest: GhostManifest }[];
+  /** Same live checks for one exact instance; token/stream guards never enumerate the catalogue. */
+  connectionSource?(instanceKey: string): { instanceKey: string; name: string; manifest: GhostManifest } | null;
   /** Native owner confirmation; unavailable means reuse is denied. */
   confirmAccountReuse?(input: { instanceKey: string; secretKey: string; source: GhostReusableOauthAccount; hosts: string[] }): Promise<boolean>;
   vault: GhostOauthVault;
@@ -810,7 +812,7 @@ export class GhostOauthAccountManager {
   }
 
   private connectionSecret(instanceKey: string, secretKey: string) {
-    const source = this.deps.connectionSources?.().find(item => item.instanceKey === instanceKey);
+    const source = this.deps.connectionSource?.(instanceKey);
     const secret = source?.manifest.network?.secrets?.find(item => item.key === secretKey && item.source === 'oauth' && item.oauth);
     return source && secret?.oauth ? { source, secret: { ...secret, oauth: secret.oauth } } : null;
   }
