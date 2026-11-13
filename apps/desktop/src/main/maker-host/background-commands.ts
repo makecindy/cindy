@@ -11,10 +11,11 @@
  *  - 应用重启丢回注:注册表只在内存。进程本身不杀(POSIX detached / Windows
  *    无父子连带),日志保留在磁盘,重启后模型可凭 log_path 自行读取。
  *  - 不跨电脑:命令在会话所属的本机运行;远程会话由工具层直接拒绝。
- *  - 命令自行脱离的后代(`&`/`start /b`)只占名额,不保证被清理:POSIX 上
- *    detached 进程组在硬顶到点时随组被杀;Windows 上 shell 退出后宿主不再按
- *    PID 查杀(仓库既有约定,防 PID 复用误杀),这类后代不受硬顶治理。工具描述
- *    已把「不要自行后台化」写成使用约束。
+ *  - 名额与治理分离：并发名额在命令 exit 时让出，已退出的命令不占名额（2026-11-13
+ *    事故：win32 名额占到硬顶，秒死命令堵满全局 8 槽，所有会话 TOO_MANY_RUNS）；
+ *    其后代（`&`/`start /b`）的治理照旧到硬顶——POSIX 上 detached 进程组到点随组
+ *    被杀；Windows 上 shell 退出后宿主不再按 PID 查杀（仓库既有约定，防 PID 复用
+ *    误杀），到点只日志留痕。工具描述已把「不要自行后台化」写成使用约束。
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -82,7 +83,20 @@ export interface BackgroundCommandServiceDeps {
 }
 
 export function createBackgroundCommandService(deps: BackgroundCommandServiceDeps) {
-  const running = new Map<string, { startedAt: number; timeoutTimer: NodeJS.Timeout; groupPoll: NodeJS.Timeout | null; killTree: () => void }>();
+  // active=false：命令已退出、并发名额已让出；条目保留是因为治理计时器（硬顶杀树 /
+  // POSIX 组探测）仍在管进程树，树死透或硬顶到点才整体移除。
+  const running = new Map<string, {
+    startedAt: number;
+    timeoutTimer: NodeJS.Timeout;
+    groupPoll: NodeJS.Timeout | null;
+    killTree: () => void;
+    active: boolean;
+  }>();
+  const activeCommandCount = (): number => {
+    let n = 0;
+    for (const entry of running.values()) if (entry.active) n += 1;
+    return n;
+  };
   // 切账号时置位:在途报告(含 retry 循环)不再投递——旧账号会话的回注不能落进新账号。
   let disposed = false;
 
@@ -236,11 +250,12 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           message: `${SHELL_DESKTOP_INPUT_DENIAL_CODE}: ${SHELL_DESKTOP_INPUT_DENIAL_REASON}`,
         };
       }
-      if (running.size >= BACKGROUND_COMMAND_MAX_CONCURRENT) {
+      const activeCommands = activeCommandCount();
+      if (activeCommands >= BACKGROUND_COMMAND_MAX_CONCURRENT) {
         return {
           ok: false,
           errorCode: 'TOO_MANY_RUNS',
-          message: `already ${running.size} background commands running (max ${BACKGROUND_COMMAND_MAX_CONCURRENT})`,
+          message: `already ${activeCommands} background commands running (max ${BACKGROUND_COMMAND_MAX_CONCURRENT})`,
         };
       }
       const timeoutMs = Math.min(
@@ -366,23 +381,29 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         });
       };
 
-      // 名额与硬顶治理整棵树(含 `&` 脱离的后代):报告按 exit 即时回注,但 24h 到点
-      // 仍会 killProcessTree 杀树并释放名额;树提前死透(POSIX 进程组探测)也释放。
+      // 名额与硬顶治理整棵树（含 `&` 脱离的后代）分两本账：并发名额在命令 exit 时
+      // 让出（报告即时回注，新命令不被已死命令堵住）；治理（硬顶杀树 / POSIX 组探测）
+      // 留到树死透或硬顶到点才整体移除。
       let groupPoll: NodeJS.Timeout | null = null;
       const releaseSlot = () => {
+        const entry = running.get(runId);
+        if (entry) entry.active = false;
+      };
+      const endGovernance = () => {
         if (!running.has(runId)) return;
         running.delete(runId);
         clearTimeout(timeoutTimer);
         if (groupPoll) clearInterval(groupPoll);
       };
       if (process.platform !== 'win32' && child.pid) {
-        // detached(setsid)后整棵树同组,组 id = shell pid;组空即树死透。
-        // Windows 无轻量等价探测,名额占用到硬顶。
+        // detached(setsid)后整棵树同组，组 id = shell pid；组空即树死透。
+        // Windows 无轻量等价探测，治理计时器占到硬顶（名额已在 exit 让出）。
         const checkGroupGone = () => {
           try {
             process.kill(-child.pid!, 0);
           } catch {
-            releaseSlot();
+            // 树死透：整体移除（治理对象已不存在）。
+            endGovernance();
           }
         };
         const firstCheck = setTimeout(checkGroupGone, 1_000);
@@ -407,14 +428,14 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
               : '[background-command] hard cap reached after command exit; cleared remaining process group (if any)',
           { runId, platform: process.platform },
         );
-        releaseSlot();
+        endGovernance();
       }, timeoutMs);
       timeoutTimer.unref?.();
 
       // 结算以 exit(进程退出)为准:stdio 转 pipe 后,'close' 要等两条 pipe EOF,
       // shell 留下的后代(如 `pnpm dev &`)持有 pipe 会让报告迟到甚至拖到超时。
-      // exit 后给 pipe 一个短宽限收尾部缓冲。注意:结算只管报告,名额与硬顶
-      // 治理由上方的 releaseSlot/timeoutTimer 继续,不随后代一起结束。
+      // exit 后给 pipe 一个短宽限收尾部缓冲。注意：结算只管报告，名额在 exit 让出
+      // （releaseSlot），治理由 timeoutTimer/组探测继续，不随后代一起结束。
       let settled = false;
       const settle = (exit: {
         code: number | null;
@@ -450,21 +471,24 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         timeoutTimer,
         groupPoll,
         killTree: () => killProcessTree(child.pid, child, () => {}),
+        active: true,
       });
       child.once('exit', (code, signal) => {
+        // 命令已退出即让出并发名额：报告跟着回注，新命令不被死名额堵住。
+        releaseSlot();
         settle({ code, signal, timedOut });
       });
       child.once('error', (error) => {
         deps.logger.warn?.('[background-command] spawn error', { runId, error: error.message });
-        // spawn 失败没有进程树,立即释放名额;kill 失败等后续 error 不影响已释放的幂等性。
-        releaseSlot();
+        // spawn 失败没有进程树，直接整体移除；kill 失败等后续 error 不影响幂等性。
+        endGovernance();
         settle({ code: null, signal: null, timedOut: false, spawnError: error.message });
       });
       return { ok: true, runId, logPath, pid: child.pid };
     },
 
     runningCount(): number {
-      return running.size;
+      return activeCommandCount();
     },
 
     /**
@@ -476,7 +500,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       disposed = true;
       for (const [runId, entry] of running) {
         clearTimeout(entry.timeoutTimer);
-        // POSIX 的进程组探测定时器一并清掉：记录已删后 releaseSlot 会提前返回，
+        // POSIX 的进程组探测定时器一并清掉：记录已删后 releaseSlot 查不到条目，
         // 不清的话每 30s 的轮询会带着闭包活到进程退出。
         if (entry.groupPoll) clearInterval(entry.groupPoll);
         try {

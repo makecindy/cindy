@@ -11,9 +11,10 @@
  * - 现有覆盖缺口:新模块,无既有覆盖。
  * - 最小失败输入:退出码非 0 且带输出的短命令;启动参数缺失;不存在 cwd。
  * - tier:unit(真实短命子进程 + 临时目录,无网络/DB)。
- * - 最小失败输入还包括:单条输出超过 5MB 上限的命令(验文件截断 + 内存尾部);
- *   日志目录不可建(验拒绝启动不静默无日志);`&` 后代存活时名额不提前释放。
- * - 实测耗时:本机 < 4s(4 用例,含 5MB 输出用例与名额释放等待)。
+ * - 最小失败输入还包括：单条输出超过 5MB 上限的命令（验文件截断 + 内存尾部）；
+ *   日志目录不可建（验拒绝启动不静默无日志）；命令退出后名额立即让出（2026-11-13
+ *   事故：win32 名额占到硬顶，秒死命令堵满全局 8 槽），治理计时器不随名额失效。
+ * - 实测耗时：本机 < 8s（6 用例，含 5MB 输出用例与名额让出等待）。
  */
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -23,6 +24,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import {
   BACKGROUND_COMMAND_LOG_CAP_BYTES,
+  BACKGROUND_COMMAND_MAX_CONCURRENT,
   createBackgroundCommandService,
   type BackgroundCommandServiceDeps,
 } from '../background-commands.js';
@@ -92,10 +94,58 @@ it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler
   // 日志文件真实存在且含命令输出。
   const logText = await readFile((result as { ok: true; logPath: string }).logPath, 'utf8');
   expect(logText).toContain('gate-output-line');
-  // 报告后名额不再立即释放:整棵树(含 `&` 后代)要等树死透(POSIX 进程组探测)
-  // 或硬顶。普通命令组在秒级退空,探测在 1s 后首次触发。
-  if (process.platform !== 'win32') {
-    await vi.waitFor(() => expect(service.runningCount()).toBe(0), { timeout: 10_000 });
+  // 报告即名额让出：命令退出后并发名额立即回收，秒死命令不再堵住新命令
+  // （2026-11-13 事故回归：旧口径 win32 名额占到硬顶，全局 8 槽被死命令堵满）。
+  // 治理不随名额走：POSIX 组探测照旧等树死透，win32 硬顶计时器照旧到点留痕。
+  expect(service.runningCount()).toBe(0);
+});
+
+it('秒死命令不堵名额：满额退出后第 9 条立即起得来（2026-11-13 事故回归）', async () => {
+  const capture = vi.fn();
+  const service = buildService(capture);
+  const start = () =>
+    service.start({
+      sessionId: 'sess-1',
+      command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      cwd: logDir,
+    });
+  for (let i = 0; i < BACKGROUND_COMMAND_MAX_CONCURRENT; i += 1) {
+    expect(start().ok).toBe(true);
+  }
+  // 满额全部退出回注后，名额应全部让出：第 9 条不再 TOO_MANY_RUNS
+  // （旧口径 win32 在这里直接拒绝）。
+  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(BACKGROUND_COMMAND_MAX_CONCURRENT), {
+    timeout: 15_000,
+  });
+  const ninth = start();
+  expect(ninth.ok).toBe(true);
+  // 第 9 条也等它退出回注:子进程 cwd 在临时目录里,不等会让 afterEach 清目录时
+  // 撞 win32 的 EBUSY。
+  await vi.waitFor(
+    () => expect(capture).toHaveBeenCalledTimes(BACKGROUND_COMMAND_MAX_CONCURRENT + 1),
+    { timeout: 15_000 },
+  );
+});
+
+it('名额让出后治理仍在：win32 硬顶到点留痕，POSIX 组探测等树死透', async () => {
+  const warn = vi.fn();
+  const capture = vi.fn();
+  const service = buildService(capture, undefined, { logger: { info: () => {}, warn } });
+  service.start({
+    sessionId: 'sess-1',
+    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    cwd: logDir,
+    timeoutMs: 1_000,
+  });
+  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+  // 名额已让出；治理条目仍在：win32 到硬顶留痕（杀树对已退出命令是空操作，
+  // 只做日志与整体移除）；POSIX 探测到树死透后整体移除，不再有到点留痕。
+  expect(service.runningCount()).toBe(0);
+  if (process.platform === 'win32') {
+    await vi.waitFor(
+      () => expect(warn).toHaveBeenCalledWith(expect.stringContaining('hard cap reached'), expect.anything()),
+      { timeout: 10_000 },
+    );
   }
 });
 
