@@ -47,6 +47,16 @@ function call(source: string, start: string): string {
 }
 
 describe('Host main.ts wiring', () => {
+  // MCP 注册协议：platformTools 已并入 hostTools，最终交给引擎时不能再次展开。
+  // Bug：main 合并冲突会重复注册同名服务；main 顶层会启动 Host，故在 guard 层保护组装边界。
+  it('registers platform providers once through the shared Host tools list', () => {
+    const main = read(path.join(hostSrc, 'main.ts'));
+    assert.equal(main.split('hostTools.providers.push(...platformTools.providers);').length - 1, 1);
+    const registration = call(main, 'pluginGateway.prepareMcpProviders(');
+    assert.equal(registration.split('...hostTools.providers').length - 1, 1);
+    assert.equal(registration.includes('platformTools.providers'), false);
+  });
+
   // 规则：Host 的 main.ts 先加载 boot-env（清掉终端继承来的 Anthropic 变量），紧接着 boot-settings
   // （读不懂的设置文件保留）。失效后果：别的模块先读到继承来的凭据，或在默认值设好之前删掉用户的设置文件。
   it('loads boot-env first and boot-settings right after it', () => {

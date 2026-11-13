@@ -220,6 +220,59 @@ test('stopping a direct Host turn drains its pending start marker', async () => 
   await executor.close('scheduled');
 });
 
+// Unit regression: main's unused direct-turn adapter has no accepted input/start hook.
+// Its terminal must not consume a user turn's baseline or leak raw event fields.
+// Existing direct-turn cases only assert persistence/queue ordering, not these boundaries.
+for (const terminal of ['done', 'error', 'stop']) {
+  test(`a direct Host turn ending with ${terminal} does not settle an unstarted Git baseline`, async t => {
+    const calls = [];
+    const h = createHarness({ getGitSnapshot: () => ({
+      onTurnStart() { calls.push('start'); }, onTurnAbort() { calls.push('abort'); },
+      onTurnEnd() { calls.push('end'); }, onSessionClosed() {},
+    }) });
+    t.after(() => h.queue.dispose());
+    const session = await h.maker.createSession({ id: `direct-${terminal}`, agentKind: 'codex', workingDir: '/tmp' });
+    h.queue.wireHostSession(session);
+    await h.queue.beginHostTurn(session.id);
+    const event = { type: 'tool_use', sessionTurnGeneration: session.generation,
+      sessionInstanceId: session.instanceId, data: { toolUseId: 'browser', toolName: 'mcp__cindy_browser__call_tool',
+        input: { name: 'browser', args: { proxyServer: 'http://fixture-user:fixture-pass@proxy.test' } } } };
+    session.emit(event);
+    const published = h.events.find(item => item.type === 'tool_use');
+    assert.deepEqual(published.event, redactEventForRenderer(event));
+    assert.equal('sessionTurnGeneration' in published, false);
+    assert.equal(JSON.stringify(published).includes('fixture-pass'), false);
+    if (terminal === 'stop') await h.queue.stop(session.id);
+    else session.emit({ type: terminal, data: terminal === 'error' ? { message: 'failed', isTerminal: true } : {} });
+    await waitFor(() => !h.queue.projection(session.id).turnInProgress);
+    assert.deepEqual(calls, []);
+  });
+}
+
+test('a direct Host terminal cannot take a preceding user turn baseline whose snapshot is still settling', async t => {
+  const calls = [];
+  let baseline;
+  let completeSnapshot;
+  const snapshotPending = new Promise(resolve => { completeSnapshot = resolve; });
+  const h = createHarness({ getGitSnapshot: () => ({
+    onTurnStart(id) { baseline = id; calls.push('start'); },
+    onTurnAbort() { baseline = undefined; calls.push('abort'); },
+    async onTurnEnd() { calls.push('end'); await snapshotPending; baseline = undefined; },
+    onSessionClosed() {},
+  }) });
+  t.after(async () => { completeSnapshot(); await h.queue.dispose(); });
+  await enqueue(h, 'snapshot-pending', { clientId: 'ordinary', text: 'edit' });
+  const session = h.maker.getSession('snapshot-pending');
+  session.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection(session.id).turnInProgress);
+  await h.queue.beginHostTurn(session.id);
+  session.emit({ type: 'error', data: { message: 'direct failed', isTerminal: true } });
+  session.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection(session.id).turnInProgress);
+  assert.deepEqual(calls, ['start', 'end']);
+  assert.equal(baseline, session.id);
+});
+
 // Host lifecycle / integration: desktop runner tests inject the queue bridge;
 // these enter its real admission, persistence and accepted callback pipeline.
 const scheduledInput = (overrides = {}) => ({ sessionId: 'scheduled-task',
