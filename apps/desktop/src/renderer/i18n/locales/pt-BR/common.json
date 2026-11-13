@@ -12194,6 +12194,15 @@
     },
     "starterOptions": "Opções iniciais",
     "channels": {
+      "edit": {
+        "button": "Editar",
+        "title": "Editar conexão do iMessage",
+        "description": "Salve para reconectar. O modelo segue as configurações do seu amigo.",
+        "keepPassword": "Deixe em branco para manter a senha salva",
+        "save": "Salvar e reconectar",
+        "loadFailed": "Não foi possível carregar as configurações da conexão. Tente novamente.",
+        "failed": "Não foi possível salvar a conexão. Verifique as configurações e tente novamente."
+      },
       "title": "Plataformas de mensagens",
       "platform": {
         "telegram": "Telegram",

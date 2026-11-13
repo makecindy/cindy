@@ -12050,6 +12050,15 @@
     },
     "starterOptions": "スタートの選択肢",
     "channels": {
+      "edit": {
+        "button": "編集",
+        "title": "iMessage 接続を編集",
+        "description": "保存すると再接続します。モデルは仲間の設定に従います。",
+        "keepPassword": "空欄なら保存済みのパスワードを使用",
+        "save": "保存して再接続",
+        "loadFailed": "接続設定を読み込めませんでした。再試行してください。",
+        "failed": "接続を保存できませんでした。設定を確認して再試行してください。"
+      },
       "title": "メッセージプラットフォーム",
       "platform": {
         "telegram": "Telegram",

@@ -12194,6 +12194,15 @@
     },
     "starterOptions": "Opciones iniciales",
     "channels": {
+      "edit": {
+        "button": "Editar",
+        "title": "Editar conexión de iMessage",
+        "description": "Guarda para volver a conectar. El modelo sigue la configuración de tu amigo.",
+        "keepPassword": "Déjalo en blanco para conservar la contraseña guardada",
+        "save": "Guardar y volver a conectar",
+        "loadFailed": "No se pudo cargar la configuración de la conexión. Inténtalo de nuevo.",
+        "failed": "No se pudo guardar la conexión. Comprueba la configuración e inténtalo de nuevo."
+      },
       "title": "Plataformas de mensajería",
       "platform": {
         "telegram": "Telegram",

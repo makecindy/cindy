@@ -12194,6 +12194,15 @@
     },
     "starterOptions": "Options de démarrage",
     "channels": {
+      "edit": {
+        "button": "Modifier",
+        "title": "Modifier la connexion iMessage",
+        "description": "Enregistrez pour vous reconnecter. Le modèle suit les paramètres de votre ami.",
+        "keepPassword": "Laissez vide pour conserver le mot de passe enregistré",
+        "save": "Enregistrer et reconnecter",
+        "loadFailed": "Impossible de charger les paramètres de connexion. Réessayez.",
+        "failed": "Impossible d’enregistrer la connexion. Vérifiez les paramètres et réessayez."
+      },
       "title": "Plateformes de messagerie",
       "platform": {
         "telegram": "Telegram",

@@ -12050,6 +12050,15 @@
     },
     "starterOptions": "시작 옵션",
     "channels": {
+      "edit": {
+        "button": "편집",
+        "title": "iMessage 연결 편집",
+        "description": "저장하면 다시 연결합니다. 모델은 동반자 설정을 따릅니다.",
+        "keepPassword": "비워 두면 기존 비밀번호 유지",
+        "save": "저장 후 다시 연결",
+        "loadFailed": "연결 설정을 불러오지 못했습니다. 다시 시도하세요.",
+        "failed": "연결을 저장하지 못했습니다. 설정을 확인하고 다시 시도하세요."
+      },
       "title": "메시지 플랫폼",
       "platform": {
         "telegram": "Telegram",
