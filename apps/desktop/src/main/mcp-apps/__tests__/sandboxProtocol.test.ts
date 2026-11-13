@@ -442,3 +442,66 @@ it('reuses parsed preparation across views while replacing each view URL', async
   expect(first).toContain('cindy-mcp-app://first-view-view/__cindy/sdk/ext-apps/app.js');
   expect(second).toContain('cindy-mcp-app://second-view-view/__cindy/sdk/ext-apps/app.js');
 });
+it('preheats Cindy theme variables for dual-scheme pages and leaves single-scheme pages alone', async () => {
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  const context = {
+    theme: 'dark',
+    styles: { variables: {
+      '--color-background-primary': '#111', '--color-text-primary': '#eee',
+      '--font-sans': 'Author Font',
+    } },
+  };
+  const dual = mountRemoteAppDocument({ ...document,
+    html: '<!doctype html><html><head><meta name="color-scheme" content="light dark"><style>:root{--color-background-primary:#author}</style></head><body>App</body></html>',
+  }, 'renderer:1', undefined, undefined, context);
+  const dualResponse = await handler(new Request(`cindy-mcp-app://${dual}-view/resource`));
+  const dualHtml = await dualResponse.text();
+  expect(dualHtml).toContain('data-cindy-theme');
+  expect(dualHtml).toContain('"theme":"dark"');
+  expect(dualHtml).toContain('"--color-background-primary":"#111"');
+  expect(dualHtml).not.toContain('--font-sans');
+  expect(dualHtml.indexOf('data-cindy-theme')).toBeLessThan(dualHtml.indexOf('</head>'));
+  expect(dualResponse.headers.get('Content-Security-Policy')).toContain("script-src 'self' 'unsafe-inline'");
+
+  const singleSource = '<!doctype html><html><head><style>:root{color-scheme:light}</style></head><body>App</body></html>';
+  const single = mountRemoteAppDocument({ ...document, viewId: 'single', html: singleSource }, 'renderer:1', undefined, undefined, context);
+  const singleHtml = await (await handler(new Request(`cindy-mcp-app://${single}-view/resource`))).text();
+  expect(singleHtml.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '').replace(/<script type="importmap">[\s\S]*?<\/script>/, '')).toBe(singleSource);
+
+  const style = { colorScheme: '', values: new Map<string, string>(),
+    setProperty(name: string, value: string) { this.values.set(name, value); } };
+  const authored = new Map([['--color-background-primary', '#author']]);
+  const listeners: ((event: { data: unknown; source?: unknown }) => void)[] = [];
+  const fakeDocument = { documentElement: { style }, querySelectorAll: () => [{
+    getAttribute: () => 'light dark',
+  }] };
+  const themeSource = dualHtml.match(/<script data-cindy-theme>([\s\S]*?)<\/script>/)?.[1];
+  expect(themeSource).toBeDefined();
+  const parent = {};
+  new Function('document', 'getComputedStyle', 'addEventListener', 'parent', themeSource!)(
+    fakeDocument, () => ({
+      colorScheme: style.colorScheme || 'light dark',
+      getPropertyValue: (name: string) => style.values.get(name) ?? authored.get(name) ?? '',
+    }), (_name: string, listener: (event: { data: unknown; source?: unknown }) => void) => listeners.push(listener), parent,
+  );
+  expect(style.colorScheme).toBe('dark');
+  expect(style.values.has('--color-background-primary')).toBe(false);
+  expect(authored.get('--color-background-primary')).toBe('#author');
+  listeners[0]({ source: parent, data: {
+    jsonrpc: '2.0', method: 'ui/notifications/host-context-changed',
+    params: { theme: 'light', styles: { variables: {
+      '--color-background-primary': '#updated-author', '--color-text-primary': '#111', '--font-sans': 'Updated Font',
+    } } },
+  } });
+  expect(style.colorScheme).toBe('light');
+  expect(style.values.get('--color-text-primary')).toBe('#111');
+  expect(style.values.has('--color-background-primary')).toBe(false);
+  expect(style.values.has('--font-sans')).toBe(false);
+  listeners[0]({ source: {}, data: {
+    jsonrpc: '2.0', method: 'ui/notifications/host-context-changed',
+    params: { theme: 'dark', styles: { variables: { '--color-text-primary': '#evil' } } },
+  } });
+  expect(style.values.get('--color-text-primary')).toBe('#111');
+});
