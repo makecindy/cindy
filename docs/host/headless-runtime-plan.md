@@ -1354,7 +1354,8 @@ Host 构造三个 agent 时一个都没传，也没有启动钩子，只有 Code
 | `auth`、`runtimeConfig`、`binaryPath`、`logger`、`mcpProviders`、`makerMemory`、`getMcpToolApprovalPolicy` | 三个 | 已接 | `runtimeConfig` 已于 m1-cp5c 与桌面同源（放行表第 23 行），endpoint 仍是账号网关（第 24 行）；`mcpProviders` 只是键已接：内置工具服务只有 browser、computer、cindy_memory，见第 22 行 |
 | Codex 凭证与路由：`resolveCodexLocalAuthPolicy`、`isCodexAccountProvider`、`isolateCodexAccountSessions`、`createCodexAuthTokenReader`、`onCodexLocalModelsListed`、`resolveCodexSubagentRoutingSignature`、`resolveCodexThreadContextWindow`、`disableCodexPluginRuntime` | Codex | 已接 | |
 | Codex 代理与 MCP：`prepareCodexExtraSpawnConfig`、`registerCodexSystemPromptForThread`、`registerCodexChildThreadForParent`、`getCodexSubagentIdentity`、`armCodexHttpRecovery`、`registerCodexTextOnlyPolicy`、`registerCodexMcpThreadContext`、`unregisterCodexMcpThreadContext`、`prepareCodexMcpToolCancellation`、`withCodexMcpDiscoveryContext` | Codex | 已接 | |
-| `resolvePiAgentHome`、`resolvePiNativeProviders` | Pi | 已接 | |
+| `resolvePiAgentHome` | Pi | 已接 | |
+| `resolvePiNativeProviders` | Pi | 部分（m1-cp18b 更正，原写“已接”） | Host 传的是自己的实现，只按自定义供应商配置生成（`provider-config.ts`）：没有 ChatGPT、SuperGrok 订阅供应商，Pi 的订阅任务预计走不通。m1-cp18b2 对齐，见放行表第 24 行 |
 | **`preparePiExtraSpawnConfig`**（Pi 的 MCP 桥） | Pi | **键名不对，实际未接** | Host 传的是 `prepareMcpBridge`，PiAgent 只读 `preparePiExtraSpawnConfig`（`runtime.mjs` 是 JS，没有类型检查拦住）。Host 上的 Pi 任务拿不到进程内 MCP（记忆、插件工具等）。单独小修复，不放进 1a |
 | 上下文窗口 5 个解析器 + 启动时应用任务预算 | 三个 | 行为不同 | 见上一节 |
 | 技能：`getDisabledSkillPaths`、`getManagedSkills`、`scanLocalCustomizations`、`prepareCodexSkills`、`resolveLocalMcpDuplicateChoices`；启动前共享项目 Skill 链接（`prepareStartOptions`、`onBeforeStart`） | 三个 | 行为不同 | 用户禁用的 Skill 仍会被加载；Cindy 内置与插件带的 Skill 不注入 |
