@@ -40,22 +40,28 @@ const source = ts.createSourceFile(
   ts.ScriptKind.TSX,
 );
 const factories = new Map<string, (...args: unknown[]) => unknown>();
-function compile<T>(id: string, find: (node: ts.Node) => ts.Node | undefined, bindings: Record<string, unknown>): T {
+function compile<T>(
+  id: string,
+  find: (node: ts.Node) => ts.Node | undefined,
+  bindings: Record<string, unknown>,
+  src: ts.SourceFile = source,
+  cache: Map<string, (...args: unknown[]) => unknown> = factories,
+): T {
   const keys = Object.keys(bindings);
-  let factory = factories.get(id);
+  let factory = cache.get(id);
   if (!factory) {
     let expression: ts.Node | undefined;
     const visit = (node: ts.Node) => {
       expression ??= find(node);
       ts.forEachChild(node, visit);
     };
-    visit(source);
+    visit(src);
     if (!expression) throw new Error(`Missing draft callback: ${id}`);
-    const code = ts.transpileModule(`const callback = ${expression.getText(source)};`, {
+    const code = ts.transpileModule(`const callback = ${expression.getText(src)};`, {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText;
     factory = new Function(...keys, code + ';return callback;') as (...args: unknown[]) => unknown;
-    factories.set(id, factory);
+    cache.set(id, factory);
   }
   return factory(...Object.values(bindings)) as T;
 }
@@ -86,6 +92,23 @@ function effect(marker: string, bindings: Record<string, unknown>): () => void {
     && node.getText(source).includes(marker)
     ? node.arguments[0]
     : undefined, bindings);
+}
+
+// 播种 effect 在 useRemoteDraftDefaults.ts（不是路由文件），单独开一份源文件编译。
+const defaultsSource = ts.createSourceFile(
+  'useRemoteDraftDefaults.ts',
+  readFileSync(resolve(__dirname, '..', 'useRemoteDraftDefaults.ts'), 'utf8'),
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TS,
+);
+const defaultsFactories = new Map<string, (...args: unknown[]) => unknown>();
+function defaultsEffect(marker: string, bindings: Record<string, unknown>): () => void {
+  return compile<() => void>(marker, node => ts.isCallExpression(node)
+    && node.expression.getText(defaultsSource) === 'useEffect'
+    && node.getText(defaultsSource).includes(marker)
+    ? node.arguments[0]
+    : undefined, bindings, defaultsSource, defaultsFactories);
 }
 
 function provider(id: string, efforts: Effort[]): ProviderView {
@@ -1501,5 +1524,109 @@ describe('the seeded source is pinned only by an explicit model or source choice
     expect(h.dlExplicitChoiceRef.current).toBe(true);
     expect(h.dlSel.providerId).toBe('picked-source');
     expect(h.explicitProviderId()).toBe('picked-source');
+  });
+});
+
+/**
+ * 播种 effect（useRemoteDraftSelection）在换目标时的显式标记处理。
+ *
+ * 测试价值（engineering-conventions §3.2）：
+ * - 生产入口与可观察结果：真实编译 useRemoteDraftDefaults.ts 里 useRemoteDraftSelection 的
+ *   播种 effect，断言换目标播种后 dlExplicitChoiceRef 的取值 —— 它是 explicitDraftProviderId
+ *   的第一分支，也是 remember effect 写回记忆的标记来源（用户可观察结果：切回远程 Agent
+ *   草稿后，他以前明确选过的来源在断连 / 清单发现失败时仍被保护，不静默换账号）。
+ * - Bug／规则依据：Greptile P1（#9369 NewMakerDraftRoute.tsx:1864-1868 写回处）——播种无条件
+ *   清零 ref，随后 remember effect 把 false 写回记忆，恢复出来的明确选择被降级成自动默认。
+ * - 现有覆盖缺口：explicitPin 用例只测「快照标记 → 钉不钉」，rememberFlag 用例只测
+ *   「ref → 记忆标记」的透传，没人测播种这一环把 ref 清成什么 —— 断链正好在中间。
+ * - 最小失败输入：deviceDraftDefaults 带 modelChosenByUser: true 的新目标播种，断言 ref 为 true
+ *   （改动前恒为 false）；自动播种（标着 false）仍须记 false，防止把修复过头。
+ * - 反向验证：把播种处的 `deviceDraftDefaults?.modelChosenByUser === true` 改回 false，
+ *   第一条用例立刻变红、第二条仍绿（已实测）。
+ * - tier：unit（编译真实 effect 源码 + 内存 fake，无网络 / 无真实等待）。
+ */
+describe('the seed keeps a restored explicit choice', () => {
+  function runSeed(options: {
+    /** 换回的目标记着的默认值：带 modelChosenByUser 即「恢复」，不带 / false 即自动播种。 */
+    deviceDraftDefaults: RemoteDraftDefaults | null;
+  }) {
+    const dlExplicitChoiceRef = { current: false };
+    const dlRuntimeTouchedRef = { current: true };
+    const setDlSel = vi.fn();
+    const capabilities: AgentCapabilities = {
+      availableModels: [{
+        id: 'shared-model', displayName: 'Shared model', contextWindow: 200_000,
+        efforts: ['medium', 'high'], defaultEffort: 'high', effortsUnknown: false,
+      }],
+      hasFastMode: false, effortLevels: ['medium', 'high'],
+      permissionModes: [{ id: 'default', displayName: 'Default' }],
+    };
+    defaultsEffect('provider revision 驱逐时 hook 会保留旧快照但标 loading', {
+      usesDeviceCatalog: true,
+      catalogDeviceId: 'dev-1',
+      capabilityAgentKind: 'pi',
+      capabilities,
+      capabilitiesLoading: false,
+      deviceProvidersLoading: false,
+      deviceProvidersUnsupported: false,
+      deviceDraftDefaultsReady: true,
+      deviceDraftDefaults: options.deviceDraftDefaults,
+      isAgentDeviceDraft: true,
+      agentCatalogProviders: [provider('source', ['medium', 'high'])],
+      shouldReseedDeviceLinkDraftDefaults,
+      resolveDeviceLinkDraftDefaults,
+      dlSeedKeyRef: { current: null as string | null },
+      dlSeedCapabilitiesRef: { current: null as unknown },
+      dlSeedDefaultsRef: { current: null as unknown },
+      dlRuntimeTouchedRef,
+      dlExplicitChoiceRef,
+      setDlSel,
+    })();
+    return { dlExplicitChoiceRef, dlRuntimeTouchedRef, setDlSel };
+  }
+
+  it('keeps the restored explicit choice when switching back to a target', () => {
+    const restored = runSeed({
+      deviceDraftDefaults: {
+        model: 'shared-model', providerId: 'source', effort: 'medium',
+        fastMode: false, modelChosenByUser: true,
+      },
+    });
+    // 恢复的标记保住：既让 explicitDraftProviderId 当场钉住那家，也保证随后的 remember
+    // effect 写回 true —— 否则记忆被改成 false，下一次进入就再也证明不了那是他选的。
+    expect(restored.dlExplicitChoiceRef.current).toBe(true);
+    expect(restored.dlRuntimeTouchedRef.current).toBe(false);
+    expect(restored.setDlSel).toHaveBeenCalled();
+  });
+
+  it('still records a genuine automatic seed as not user-chosen', () => {
+    const seeded = runSeed({
+      deviceDraftDefaults: {
+        model: 'shared-model', providerId: 'source', effort: 'medium',
+        fastMode: false, modelChosenByUser: false,
+      },
+    });
+    expect(seeded.dlExplicitChoiceRef.current).toBe(false);
+    expect(seeded.setDlSel).toHaveBeenCalled();
+  });
+
+  it('the restored marker survives the seed → remember round-trip', () => {
+    const { dlExplicitChoiceRef } = runSeed({
+      deviceDraftDefaults: {
+        model: 'shared-model', providerId: 'source', effort: 'medium',
+        fastMode: false, modelChosenByUser: true,
+      },
+    });
+    const spy = vi.fn();
+    effect('标记跟着「用户明确选过模型 / 来源」走', {
+      isAgentDeviceDraft: true,
+      effectiveAgentDeviceId: 'dev-1',
+      capabilityAgentKind: 'pi',
+      dlSel: { model: 'shared-model', providerId: 'source', effort: 'medium', fastMode: false },
+      dlExplicitChoiceRef,
+      rememberAgentDeviceSelection: spy,
+    })();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[3]).toBe(true);
   });
 });

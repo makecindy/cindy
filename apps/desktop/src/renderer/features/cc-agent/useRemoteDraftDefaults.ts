@@ -227,7 +227,11 @@ export function useRemoteDraftSelection({
     dlSeedDefaultsRef.current = deviceDraftDefaults;
     if (newTarget) {
       dlRuntimeTouchedRef.current = false;
-      dlExplicitChoiceRef.current = false;
+      // 恢复出来的明确选择（记忆 / 被控端快照标着 modelChosenByUser）继续当显式：一律清零
+      // 会把用户以前选过的来源降级成「自动默认」，随后 remember effect 把 false 写回记忆，
+      // 快照从此再也证明不了那是他选的 —— 断连 / 清单发现失败时静默换到另一家账号 / 计费
+      // 路径（Greptile P1, #9369）。只有真正的自动播种（无标记或标着 false）才记 false。
+      dlExplicitChoiceRef.current = deviceDraftDefaults?.modelChosenByUser === true;
     }
     setDlSel(
       resolveDeviceLinkDraftDefaults(
