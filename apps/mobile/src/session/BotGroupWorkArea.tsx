@@ -15,7 +15,7 @@ import { Text } from '@/components/AppText';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, spacing, typeScale } from '@/theme/tokens';
 
-export interface BotGroupWorkRow { key: string; startedAt?: number; node: ReactNode }
+export interface BotGroupWorkRow { key: string; startedAt?: number; timelineAt?: number; node: ReactNode }
 
 /** Live work is inserted into messages by its original timestamp. Only an owned companion's computer can
  * resolve its execution to a task; another member's private task is never queried. */
@@ -107,7 +107,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
           && !speaker.stopping && speaker.executionStatus !== 'queued' && speaker.executionStatus !== 'stopping') : undefined;
         const step = plan?.steps.find(step => step.position === plan.currentStep);
         const key = `${accountGeneration}:${group.id}:${deviceId}:${speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}`;
-        return [{ key, startedAt: speaker.startedAt, node: <BotGroupSpeakerRow key={key}
+        return [{ key, startedAt: speaker.startedAt, timelineAt: speaker.timelineAt, node: <BotGroupSpeakerRow key={key}
           deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
           identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
           executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}

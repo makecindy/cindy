@@ -3446,6 +3446,24 @@ it.each(['pending', 'failed'] as const)('keeps a paused discussion independent o
   expect(h.chat.act).toHaveBeenLastCalledWith(status === 'failed' ? 'plan-retry' : 'plan-continue', { planId: 'p1' });
 });
 
+// Unit / #10345: the real timeline must carry server enqueue time through WorkArea,
+// even without an elapsed start or a resolvable private session.
+it('keeps direct-server work between its neighboring messages when elapsed timing arrives', async () => {
+  const data = group({ plans: [], openPlan: null, serverBacked: true,
+    messages: [message('before', 1, { createdAt: 10_000 }), message('after', 2, { createdAt: 50_000 })],
+    round: { status: 'running', canContinue: false, speakers: [{ botId: 'abu', executionId: 'run', sessionId: null,
+      activity: 'reply', timelineAt: 40_000, executionStatus: 'needs_input' }] } });
+  await render(data);
+  const work = byId('speaker.abu.reply')!;
+  const order = () => Array.from(node.querySelectorAll('[data-testid]')).map(row => row.getAttribute('data-testid'));
+  expect(order().indexOf('botGroup.row.before')).toBeLessThan(order().indexOf('speaker.abu.reply'));
+  expect(order().indexOf('speaker.abu.reply')).toBeLessThan(order().indexOf('botGroup.row.after'));
+  await render({ ...data, round: { ...data.round,
+    speakers: [{ ...data.round.speakers[0]!, executionStatus: 'running', startedAt: 60_000 }] } });
+  expect(byId('speaker.abu.reply')).toBe(work);
+  expect(order().indexOf('speaker.abu.reply')).toBeLessThan(order().indexOf('botGroup.row.after'));
+});
+
 // Unit: missing timing must not be replaced by when the screen opened; completed
 // step time belongs to its exact result message, even when another bot is running.
 it('shows the real step start and handoff time and keeps missing timing absent', async () => {
