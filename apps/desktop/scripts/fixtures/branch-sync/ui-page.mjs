@@ -61,18 +61,15 @@ export default {
     assert.equal(await remote.count(), ui.case === 'old-host' ? 0 : 1);
     await ui.capture('branches');
     if (ui.case === 'unchecked') {
-      assert.equal(
-        await page
-          .getByRole('button', {
-            name: await ui.t('newChat.branchSync.action', {
-              remote: 'origin',
-              remoteBranch: 'main',
-            }),
-            exact: false,
-          })
-          .count(),
-        0,
-      );
+      const action = page.getByRole('button', {
+        name: await ui.t('newChat.branchSync.action', {
+          remote: 'origin',
+          remoteBranch: 'main',
+        }),
+        exact: false,
+      });
+      await action.waitFor();
+      assert.equal(await action.isDisabled(), false);
     }
     if (ui.case === 'ahead') {
       await page.keyboard.press('Escape');

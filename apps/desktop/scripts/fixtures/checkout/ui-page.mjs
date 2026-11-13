@@ -9,6 +9,7 @@ export default {
     'Real Git and remote devices; switch responses are simulated in memory, no Git executes',
   cases: {
     'default-source': { about: 'Worktree without a saved source defaults to origin/main' },
+    'sync-off': { about: 'Unchecked worktree still exposes remote branch refresh' },
     default: { about: 'Actual branch while unchecked and an occupied branch in the menu' },
     busy: { about: 'Running session blocks checkout with an explicit worktree alternative' },
     idle: { about: 'Idle sessions are named without blocking branch choices' },
@@ -64,6 +65,32 @@ export default {
         'true',
       );
       assert.equal(await page.locator('[data-toast-id]').count(), 0);
+      return;
+    }
+    if (ui.case === 'sync-off') {
+      const refresh = page.getByRole('button', {
+        name: await ui.t('newChat.branchSync.action', {
+          branch: 'main',
+          remote: 'origin',
+          remoteBranch: 'main',
+        }),
+      });
+      await refresh.waitFor();
+      assert.equal(await refresh.isDisabled(), false);
+      await ui.capture('unchecked-refresh');
+      await page.getByTestId('create-agent-worktree-chip').click();
+      await page
+        .getByRole('button', {
+          name: await ui.t('newChat.branchSync.action', {
+            branch: 'main',
+            remote: 'origin',
+            remoteBranch: 'main',
+          }),
+        })
+        .waitFor();
+      const after = await geometry();
+      assert.deepEqual(after, before, 'Toggling worktree must not hide refresh or resize the row');
+      await ui.capture('checked-refresh');
       return;
     }
     await page.getByTestId('create-agent-branch-chip').click();

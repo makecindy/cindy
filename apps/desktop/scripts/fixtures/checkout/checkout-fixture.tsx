@@ -12,9 +12,17 @@ if (!crypto.randomUUID) {
   crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
 }
 
-function Page({ switching, defaultSource }: { switching: boolean; defaultSource: boolean }) {
+function Page({
+  switching,
+  defaultSource,
+  syncOff,
+}: {
+  switching: boolean;
+  defaultSource: boolean;
+  syncOff: boolean;
+}) {
   const [enabled, setEnabled] = useState(false);
-  const [source, setSource] = useState(defaultSource ? '' : 'release');
+  const [source, setSource] = useState(syncOff ? 'main' : defaultSource ? '' : 'release');
   return (
     <Tooltip.Provider>
       <div className="p-4 pt-44 text-foreground" data-ui-page-subject>
@@ -68,13 +76,29 @@ void mountPage({
       worktreeSuggestName: async () => ({ name: 'fixture' }),
       worktreeBranchSyncStatus: async () => ({
         branch: 'main',
+        remote: 'origin',
+        remoteBranch: 'main',
         remoteOnly: false,
         ahead: 0,
-        behind: 0,
+        behind: ctx.case === 'sync-off' ? 3 : 0,
         dirtyFiles: 0,
-        blocked: 'no-remote',
+        ...(ctx.case === 'sync-off' ? {} : { blocked: 'no-remote' }),
       }),
-      worktreeSyncBranch: forbid('worktreeSyncBranch'),
+      worktreeSyncBranch:
+        ctx.case === 'sync-off'
+          ? async () => ({
+              status: {
+                branch: 'main',
+                remote: 'origin',
+                remoteBranch: 'main',
+                remoteOnly: false,
+                ahead: 0,
+                behind: 0,
+                dirtyFiles: 0,
+              },
+              updated: 3,
+            })
+          : forbid('worktreeSyncBranch'),
       worktreeCheckout: async (req: { action: string; branch?: string }) => {
         // Hold only this in-memory reply so the real row stays in its pending state.
         if (req.action === 'switch' && ctx.case === 'switching') return new Promise(() => {});
@@ -139,6 +163,10 @@ void mountPage({
     };
   },
   render: (ctx) => (
-    <Page switching={ctx.case === 'switching'} defaultSource={ctx.case === 'default-source'} />
+    <Page
+      switching={ctx.case === 'switching'}
+      defaultSource={ctx.case === 'default-source'}
+      syncOff={ctx.case === 'sync-off'}
+    />
   ),
 });

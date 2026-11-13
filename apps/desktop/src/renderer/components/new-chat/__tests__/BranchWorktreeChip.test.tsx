@@ -208,13 +208,16 @@ it('combines diverged counts into one status segment and keeps dirty files', asy
   expect(screen.queryByText(/newChat.branchSync.ahead/)).toBeNull();
   expect(screen.queryByText(/newChat.branchSync.behind/)).toBeNull();
 });
-it('offers origin sources while unchecked without a separate unchecked sync mutation', async () => {
+it('offers origin sources and remote refresh while unchecked', async () => {
   render(<BranchWorktreeChip {...props} checked={false} />);
   await act(async () => {
     fireEvent.click(branchButton());
   });
   expect(screen.getByRole('group', { name: 'newChat.branchSync.remoteGroup' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: /newChat.branchSync.action/ })).toBeNull();
+  await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
+  fireEvent.click(refreshButton());
+  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
+  expect(sync).toHaveBeenCalled();
   fireEvent.click(screen.getAllByRole('option', { name: 'origin/main' })[0]);
   expect(props.onPick).toHaveBeenCalledWith('refs/remotes/origin/main');
 });
@@ -435,6 +438,32 @@ it('shows pending checkout until its reply arrives and prevents duplicate branch
   await waitFor(() => expect(branchButton().getAttribute('aria-busy')).toBeNull());
   expect(branchButton().getAttribute('aria-disabled')).toBe('false');
   expect(branchButton().textContent).toBe('feature');
+});
+it('keeps remote refresh available while worktree is off and disables it during checkout', async () => {
+  const checkout = setupCheckout();
+  render(<CheckoutRow />);
+  await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
+  fireEvent.click(refreshButton());
+  await screen.findByRole('button', { name: /newChat.branchSync.updated/ });
+  expect(sync).toHaveBeenCalled();
+
+  let resolve!: (reply: unknown) => void;
+  checkout.mockImplementation(async (req) => {
+    if (req.action === 'switch')
+      return new Promise((done) => {
+        resolve = done;
+      });
+    return { status: checkoutStatus };
+  });
+  await act(async () => {
+    fireEvent.click(branchButton());
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  });
+  await waitFor(() => expect(branchButton().getAttribute('aria-busy')).toBe('true'));
+  expect(screen.getByRole('button', { name: /newChat.branchSync/ }).hasAttribute('disabled')).toBe(
+    true,
+  );
+  await act(async () => resolve({ status: { ...checkoutStatus, current: 'feature' } }));
 });
 it('shows actual checkout when off and the remembered source when on; toggles never mutate Git', async () => {
   const checkout = setupCheckout();

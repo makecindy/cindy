@@ -588,6 +588,7 @@ export function BranchWorktreeChip({
   );
   const displayBranch = (value: string) =>
     value === remoteDefaultBranch ? value.replace(/^refs\/remotes\//, '') : value;
+  const syncDisabled = sync.disabled || checkoutBusy;
 
   // 分支菜单内搜索词(2026-08-20 用户裁决:对齐 Codex 分支选择器,菜单顶部加搜索框)。
   // 菜单关闭即清空——搜索只是本次挑选的临时过滤,不是需要记忆的偏好。
@@ -940,19 +941,19 @@ export function BranchWorktreeChip({
       )}
     >
       {branchArea}
-      {sync.visible && (checked || branchOnly) && (
+      {sync.visible && (
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span
               className="inline-flex h-full"
-              tabIndex={sync.disabled ? 0 : undefined}
+              tabIndex={syncDisabled ? 0 : undefined}
               onMouseEnter={sync.onHover}
               onFocus={sync.onHover}
             >
               <button
                 type="button"
-                disabled={sync.disabled}
-                aria-disabled={sync.disabled}
+                disabled={syncDisabled}
+                aria-disabled={syncDisabled}
                 aria-label={sync.hint}
                 onClick={() => void sync.sync()}
                 className={cn(
