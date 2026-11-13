@@ -10873,6 +10873,15 @@
       "contents": "Contient SOUL.md, USER.md, system_prompt.md, skills/ et memories/. Les modèles, les autorisations et les connexions restent gérés par Cindy.",
       "open": "Ouvrir le dossier",
       "openFailed": "Impossible d'ouvrir le dossier de l’ami.",
+      "repository": {
+        "ready": "Git est prêt",
+        "notReadyTitle": "Git n’est pas encore prêt",
+        "needsIdentity": "Sur l’ordinateur de cet Ami, ouvre son dossier, puis le sous-dossier workspace. Configure user.name et user.email de Git à cet endroit, puis réessaie.",
+        "notReady": "La première version n’a pas été enregistrée. Réessaie pour terminer la configuration de Git.",
+        "unavailable": "Installe Git sur l’ordinateur de cet Ami, puis réessaie.",
+        "failed": "Git n’a pas pu lire ou enregistrer la première version. Vérifie le dépôt sur l’ordinateur de cet Ami, puis réessaie.",
+        "keepUsing": "Tu peux continuer à utiliser ton Ami. Les fichiers et réglages Git existants sont conservés."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Ranger la mémoire",
         "carryover": {
