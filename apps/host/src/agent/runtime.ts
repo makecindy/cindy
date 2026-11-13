@@ -494,7 +494,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     subscriptionAccountState: id => subscriptionAccountKind(id) === 'claude'
       ? { authenticated: false, errorReason: 'claude_account_retired', authSource: 'oauth' }
       : { authenticated: config.grok.hasGrokOAuthLogin(id), identity: config.grok.grokAccountIdentity(id), authSource: 'oauth' },
-    isOpenAiSubscriptionProviderId: id => id === 'openai' || getActiveCatalog().providers.some(provider => provider.id === id && provider.auth.native === 'codex'),
+    // The desktop's predicate (codex-account-auth.ts): openai, or a user-added provider with a native Codex login.
+    isOpenAiSubscriptionProviderId: id => config.codexAccounts.isOpenAiSubscriptionProviderId(id),
     desktopCodexAuthAdapter: codexAuth,
     hasGrokOAuthLogin: config.grok.hasGrokOAuthLogin,
     listCustomProvidersWithSecureHeaders: config.list,

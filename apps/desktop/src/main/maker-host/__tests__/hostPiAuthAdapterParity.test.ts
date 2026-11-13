@@ -4,7 +4,8 @@
  *   鉴权适配器（apps/host/src/agent/runtime.ts 的 createPiAuthAdapter 实例，Host 自己的端口）对每个
  *   来源给出的 getState 与 getAuthEnv。两边读同一组事实：网关 key、SuperGrok 登录、订阅账号种类、
  *   目录里的 Codex 账号供应商、自定义供应商（各种鉴权方式）及其 key 与 OAuth 令牌、同一个 codex-home。
- * - 规则依据：放行表第 19 行丙 3（审核方 m1-cp18e：只加对照，差异列出，不改代码）。
+ * - 规则依据：放行表第 19 行丙 3（审核方 m1-cp18e：只加对照，差异列出，不改代码；m1-cp18b2 对齐
+ *   codex-builtin 那一类：判断 OpenAI 订阅时只算用户添加的来源，差别清零）。
  * - 断言方式：逐格比较；不同的格子按类别写死在 KNOWN_DIFFERENCES 里，类别有增减都会失败。
  * - tier：unit（真实临时 profile；HOME 是空目录且跑完仍为空；凭据是合成的，不起 Pi，不连网）。
  */
@@ -170,14 +171,13 @@ function fieldDifferences(a: Record<string, unknown>, b: Record<string, unknown>
 }
 const settle = (promise: Promise<unknown>) => promise.then(value => value as Record<string, unknown>, error => ({ thrown: String((error as Error).message) }));
 
-/** The differences found (m1-cp18e), by source and field, with the number of fact sets (of 4) where each occurs. */
-const KNOWN_DIFFERENCES: Record<string, number> = {
-  // The Host predicate (runtime.ts isOpenAiSubscriptionProviderId) takes any catalog provider with a
-  // native Codex login as an OpenAI subscription; the desktop's only user-added ones. The builtin catalog
-  // has none besides openai, so this occurs only for such a provider.
-  "codex-builtin | state authSource: \"api-key\" -> absent; authenticated: true -> false; errorReason: absent -> \"not_connected\"; identity: \"Cindy AI\" -> absent | env CINDY_PI_API_KEY: \"sk-xd-gateway\" -> \"cindy-pi-provider-auth-placeholder\"": 2,
-  "codex-builtin | state errorReason: \"cindy_gateway_key_unavailable\" -> \"not_connected\" | env =": 2,
-};
+/**
+ * The differences found, by source and field, with the number of fact sets (of 4) where each occurs.
+ * m1-cp18e found one class (codex-builtin: the Host took any catalog provider with a native Codex login
+ * as an OpenAI subscription); m1-cp18b2 aligned it. Codex-routed sources inherit the Codex adapter, whose
+ * differences are recorded in hostCodexAuthAdapterParity; none shows here on these facts.
+ */
+const KNOWN_DIFFERENCES: Record<string, number> = {};
 
 describe('Host and desktop Pi auth adapters', () => {
   it('differ only where recorded, for every source on every set of facts', async () => {
@@ -202,5 +202,10 @@ describe('Host and desktop Pi auth adapters', () => {
     }
     expect(cells).toBe(facts.length * providers.length);
     expect(observed).toEqual(KNOWN_DIFFERENCES);
+  });
+
+  it('take the OpenAI subscription predicate from the same Codex account service', () => {
+    const runtime = fs.readFileSync(path.join(__dirname, '../../../../../host/src/agent/runtime.ts'), 'utf8');
+    expect(runtime).toContain('    isOpenAiSubscriptionProviderId: id => config.codexAccounts.isOpenAiSubscriptionProviderId(id),\n');
   });
 });
