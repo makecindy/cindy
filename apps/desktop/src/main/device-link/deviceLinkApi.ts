@@ -84,10 +84,16 @@ function throttledDirectoryRead<T>(
   read: (extra: { beforeHop: (hopBaseUrl: string) => void }) => Promise<T>,
 ): Promise<T> {
   const owner = currentDirectoryThrottleOwner();
-  /** 某个端点正在限流窗口里就给出该拒的那一次;账号已换则不拦(旧桶不代表这次读)。 */
+  /**
+   * 某个端点正在限流窗口里就给出该拒的那一次。
+   *
+   * 按**这一跳发出时的当前账号**查桶,而不是发起这条读时的账号:401 之后的刷新重试会
+   * 重新解析 token 与端点,中途换了账号,那一跳带的就是新账号的 token —— 放行等于用新
+   * 账号的请求去撞新账号自己还没过期的限流窗口(Codex review #9360)。发起时的 owner
+   * 只用于下面的记账(换了账号的结果不属于旧账本)。
+   */
   const throttleError = (scope: string): ServerApiError | null => {
-    if (currentDirectoryThrottleOwner() !== owner) return null;
-    const throttledUntil = directoryRetryDeadline(owner, scope);
+    const throttledUntil = directoryRetryDeadline(currentDirectoryThrottleOwner(), scope);
     if (throttledUntil <= Date.now()) return null;
     return new ServerApiError('UNAVAILABLE', 429, '设备目录限流退避中', throttledUntil, scope);
   };

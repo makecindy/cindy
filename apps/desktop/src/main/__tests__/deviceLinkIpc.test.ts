@@ -176,6 +176,8 @@ import { DeviceLinkError, PLUGIN_OAUTH_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL } fr
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
 import { invokeWithClosedLinkRecovery } from '../device-link/linkRecovery';
 import { ServerApiError } from '../serverApiClient.desktop';
+import { directoryRetryDeadline } from '../device-link/directoryThrottle';
+
 import { createIpcError } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization';
 import {
@@ -462,12 +464,15 @@ describe('device-link IPC handlers', () => {
       .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
     const deps = makeDeps({ apiFetch });
     try {
-      // 第一次读撞上限流:没有旧快照可沿用,这次读以失败告终。
+      // 第一次读撞上限流:没有旧快照可沿用,这次读以失败告终,期限记进共享账本。
       await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
       expect(apiFetch).toHaveBeenCalledTimes(1);
-      // 窗口内的第二次读:不发物理读(否则每次追问都会把限流窗口推后)。
+      // 「窗口内不再发物理读」由路由层的共享闸门负责(deviceLinkApi.test.ts 的
+      // directory cooldown gate),不在 IPC 预检里拦:预检挡在路由之前会把 V2 那一腿
+      // 一起挡掉(Codex review #9360)。这里的 apiFetch 是路由层的替身,所以第二次读
+      // 仍然到达它 —— 判据是「IPC 不再自己短路」。
       await expect(handleListDevices(deps)).rejects.toThrow();
-      expect(apiFetch).toHaveBeenCalledTimes(1);
+      expect(apiFetch).toHaveBeenCalledTimes(2);
     } finally {
       // 限流期限是模块级状态:留给下一个用例就等于替它限流。
       __resetDeviceListCoalescingForTests();
@@ -488,10 +493,7 @@ describe('device-link IPC handlers', () => {
     try {
       await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
       expect(apiFetch).toHaveBeenCalledTimes(1);
-      // 同一个中转:限流窗口内不再发物理读。
-      await expect(handleListDevices(deps)).rejects.toThrow();
-      expect(apiFetch).toHaveBeenCalledTimes(1);
-      // 换中转:新的限流桶,立刻发物理读。
+      // 换中转:新的限流桶,期限记在旧中转上,新中转立刻发物理读。
       relayScope.baseUrl = 'https://relay-b.test.invalid';
       await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
       expect(apiFetch).toHaveBeenCalledTimes(2);
@@ -509,10 +511,11 @@ describe('device-link IPC handlers', () => {
     relayScope.baseUrl = 'https://relay-a.test.invalid';
     const retryAtA = Date.now() + 60_000;
     const retryAtB = Date.now() + 90_000;
+    const retryAtA2 = Date.now() + 120_000;
     const apiFetch = vi.fn()
       .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtA))
       .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtB))
-      .mockResolvedValue({ devices: [] });
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtA2));
     const deps = makeDeps({ apiFetch });
     try {
       await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
@@ -521,10 +524,12 @@ describe('device-link IPC handlers', () => {
       relayScope.baseUrl = 'https://relay-b.test.invalid';
       await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
       expect(apiFetch).toHaveBeenCalledTimes(2);
-      // 切回中转 A:A 的限流窗口还在(期限按桶各自保留),不该再发物理读。
+      // 切回中转 A 再撞一次更新的期限:A 的桶必须还在(没有被 B 覆盖),新期限落在 A 上。
       relayScope.baseUrl = 'https://relay-a.test.invalid';
-      await expect(handleListDevices(deps)).rejects.toThrow(/限流退避中/);
-      expect(apiFetch).toHaveBeenCalledTimes(2);
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(3);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAtA2);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(retryAtB);
     } finally {
       relayScope.baseUrl = 'https://relay-a.test.invalid';
       __resetDeviceListCoalescingForTests();
@@ -547,9 +552,10 @@ describe('device-link IPC handlers', () => {
     try {
       await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
       expect(apiFetch).toHaveBeenCalledTimes(1);
-      // 期限记在新中转上:下一次读(还在新中转)不该发物理读。
-      await expect(handleListDevices(deps)).rejects.toThrow();
-      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 期限记在真正服务了这次响应的新中转上,发起时的旧中转桶是干净的。
+      // (窗口内不再发物理读由路由层闸门负责,见 deviceLinkApi.test.ts。)
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(retryAt);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(0);
     } finally {
       relayScope.baseUrl = 'https://relay-a.test.invalid';
       __resetDeviceListCoalescingForTests();
@@ -575,12 +581,11 @@ describe('device-link IPC handlers', () => {
     try {
       await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
       expect(apiFetch).toHaveBeenCalledTimes(1);
-      // 期限记在旧中转 A 上:当前中转 B 的桶是干净的,立刻发物理读。
+      // 期限记在发起它的旧中转 A 上,当前中转 B 的桶是干净的。
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAt);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(0);
+      // B 的桶干净:立刻发物理读。
       await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
-      expect(apiFetch).toHaveBeenCalledTimes(2);
-      // 切回中转 A:A 的限流窗口还在(有旧快照可沿用,这轮回 stale),不该再发物理读。
-      relayScope.baseUrl = 'https://relay-a.test.invalid';
-      await handleListDevices(deps);
       expect(apiFetch).toHaveBeenCalledTimes(2);
     } finally {
       relayScope.baseUrl = 'https://relay-a.test.invalid';
@@ -616,12 +621,9 @@ describe('device-link IPC handlers', () => {
       // 旧响应跟随新结果(既有的让位规则),不会自己再走一遍收尾。
       await expect(older).resolves.toMatchObject({ devices: [{ name: 'Host.local' }] });
 
-      // 期限还在:窗口内不再发**物理读**。已经有过权威快照,所以这一轮回的是 stale 快照
-      // (不是抛错),判据是「没有开出第三条在途请求」—— 被清掉的话这里就会多一条。
-      const third = handleListDevices(deps);
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(settles).toHaveLength(2);
-      await expect(third).resolves.toMatchObject({ stale: true });
+      // 期限还在:后发那条的成功只清掉它发起之前的期限,并发请求刚记下的不动。
+      // (窗口内不再发物理读由路由层闸门负责;这里 apiFetch 是替身,判据直接看账本。)
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAt);
     } finally {
       vi.restoreAllMocks();
       __resetDeviceListCoalescingForTests();
@@ -678,10 +680,9 @@ describe('device-link IPC handlers', () => {
       // 第一次读撞上限流:期限记进共享账本。
       await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
       expect(apiFetch).toHaveBeenCalledTimes(1);
-      // 同账号只 bump 代次:服务端的限流桶没变,窗口内的追问照旧不发物理读。
+      // 同账号只 bump 代次:服务端的限流桶没变,期限仍按账号成员记在同一个桶里。
       metadataOwner.generation += 1;
-      await expect(handleListDevices(deps)).rejects.toThrow(/限流退避中/);
-      expect(apiFetch).toHaveBeenCalledTimes(1);
+      expect(directoryRetryDeadline('directory-owner-a', relayScope.baseUrl)).toBe(retryAt);
     } finally {
       metadataOwner.generation = 0;
       metadataOwner.key = 'directory-owner-a';
@@ -740,13 +741,43 @@ describe('device-link IPC handlers', () => {
       const pending = handleListDevices(deps);
       expect(apiFetch).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(9_000);
-      // 拒绝本身照旧:IPC 层把非 ServerApiError 的错误统一映射成 INTERNAL,状态码不外泄。
+      // 401 没有专门的 IPC code,照旧落 INTERNAL。
       await expect(pending).rejects.toThrow();
       // 真正的可观察结果:401 是权威拒绝,目录失效广播必须触发,渲染侧才会清掉旧快照
       // 重读,而不是带着旧快照一直重试那个被拒的端点。
       expect(denials).toHaveLength(1);
     } finally {
       off();
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值(#9360 review)
+  // - 生产入口与可观察结果:`handleListDevices` 在「响应头已表态 404、正文卡到总期限」时
+  //   抛出的是调用方自造的 TimeoutError,必须映射成 `[NOT_FOUND]` 而不是 `[INTERNAL]`。
+  // - Bug/规则依据:Codex review #9360「Preserve terminal status across response-body
+  //   timeouts」—— 只贴 statusCode 过不了 rethrowServerError 的 instanceof ServerApiError,
+  //   渲染侧不把 [INTERNAL] 当终态,按 5–60 秒一直追问一个已经不存在的端点。
+  // - 现有覆盖缺口:上面的 401 用例只断言目录失效广播,404/400/409 不走广播、只靠 IPC code,
+  //   没有任何用例覆盖这条映射。
+  // - 最小失败输入:apiFetch 在期限到点 reject 一个带 httpStatus:404 的中止原因。
+  // - 反向验证:把 ServerApiError 包装撤掉,这条用例变红。
+  // - tier:unit(fake timers + 进程内假响应)。
+  it('listDevices:响应头已表态 404 但正文卡到总期限,按 NOT_FOUND 收口而不是 INTERNAL', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          no(Object.assign(opts.signal?.reason, { httpStatus: 404 }));
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      await vi.advanceTimersByTimeAsync(9_000);
+      await expect(pending).rejects.toThrow('[NOT_FOUND]');
+    } finally {
       vi.useRealTimers();
       __resetDeviceListCoalescingForTests();
     }

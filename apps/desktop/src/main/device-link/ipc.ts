@@ -537,14 +537,11 @@ export function handleListDevices(
   /** 这一轮物理读**发起**时的账本序号:成功只清掉序号不晚于它的限流期限(见 directoryThrottle)。 */
   let issuedSeq = 0;
     const request = readProviderDirectoryContinuity(() => {
-      // 限流窗口内不再发**物理读**:每次追问都会让服务端把窗口重新推后,越问越久。
-      // 冷启动(没有旧快照可沿用)时尤其明显:本地退避是 5 秒起,一路追问到窗口之后。
-      // 这里按桶身份(账号成员) + 中转记住的期限直接回一个暂时性失败(429),让调用方按
-      // 自己的节奏重试;换账号不该继承上一个账号的限流期限,换中转也不该继承上一个中转的。
-      const throttledUntil = directoryRetryDeadline(throttleOwner, relay);
-      if (throttledUntil !== 0 && throttledUntil > Date.now()) {
-        throw Object.assign(new Error('设备目录限流退避中'), { statusCode: 429 });
-      }
+      // 限流窗口内的「不再发物理读」不在这里拦:这条预检在路由之前抛,会把整条目录读
+      // (含 V2 / agent-net 那一腿)一起挡掉,而冷却只约束旧版 REST 那一腿 ——
+      // readCurrentDeviceDirectory 的 allSettled 兜底根本没机会跑(Codex review #9360)。
+      // REST 腿的窗口内短路由 deviceLinkApi.ts 的 throttledDirectoryRead 负责,它在
+      // 发任何物理请求之前就以带期限的 429 拒绝,并且只拒 REST 那一腿。
       // 整条目录读有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它
       // 里面(官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时),于是一次目录读可以
       // 无限期挂着 —— 渲染侧的退避每轮都再开一条这样的等待,越挂越多。用调用方的期限
@@ -591,9 +588,21 @@ export function handleListDevices(
         // 会带着旧快照每 5–60 秒重试那个端点(Codex review #9360「Preserve terminal
         // status across response-body timeouts」)。200 + 卡住的正文仍然是暂时性失败。
         if (isAbortError(error)) {
+          // 响应头已表态(400/404/409)、正文卡到总期限:抛出的是调用方自造的 TimeoutError,
+          // 只贴 statusCode 过不了 rethrowServerError 的 instanceof ServerApiError ——
+          // 终态会被报成 [INTERNAL],渲染侧把终态当暂时性失败按 5–60 秒一直追问
+          // (Codex review #9360)。包成真正的 ServerApiError,让既有映射生效
+          // (404→NOT_FOUND / 400→INVALID_PARAMS / 409→ALREADY_EXISTS / 503→UNAVAILABLE)。
           const knownStatus = (error as { httpStatus?: unknown } | null | undefined)?.httpStatus;
           if (typeof knownStatus === 'number' && knownStatus >= 400) {
-            throw Object.assign(error as object, { statusCode: knownStatus });
+            const cause = error as { message?: unknown; retryAt?: unknown; servedBaseUrl?: unknown };
+            throw new ServerApiError(
+              'HTTP_' + knownStatus,
+              knownStatus,
+              typeof cause.message === 'string' ? cause.message : '设备目录读取超时',
+              typeof cause.retryAt === 'number' ? cause.retryAt : undefined,
+              typeof cause.servedBaseUrl === 'string' ? cause.servedBaseUrl : undefined,
+            );
           }
           throw Object.assign(new Error('设备目录读取超时'), { statusCode: 0 });
         }

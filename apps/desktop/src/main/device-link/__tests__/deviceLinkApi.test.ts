@@ -50,7 +50,7 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.sc
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi.desktop';
 import { __resetDeviceDirectoryUnionForTests } from '../agentNetDeviceDirectory';
 import { invalidateProviderDirectoryContinuity } from '../providerMetadataContinuity';
-import { __resetDirectoryThrottleForTests, recordDirectoryRetryDeadline } from '../directoryThrottle';
+import { __resetDirectoryThrottleForTests, recordDirectoryRetryDeadline, setDirectoryThrottleOwnerSource } from '../directoryThrottle';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
 import { remoteLocalAgentModels } from '../../local-agent/remoteCatalog.js';
 
@@ -67,6 +67,9 @@ describe('deviceLinkApiFetch', () => {
     mocks.relay = null;
     mocks.officialBase = 'https://device-link.official.invalid';
     mocks.hasV2 = false; mocks.scope = 'owner-a';
+    // 账本按账号分桶:登记 owner 源,否则账本 owner 恒为 '' ,换账号的用例测不到。
+    setDirectoryThrottleOwnerSource(() => mocks.scope);
+    __resetDirectoryThrottleForTests();
     mocks.v2Active = false; mocks.onlyEncrypted = false; mocks.selection = 'route-a';
     mocks.readV2Secrets.mockReset().mockImplementation(() => mocks.hasV2 ? { agentNet: {} } : null);
     mocks.v2Directory.mockReset(); mocks.v2Request.mockReset().mockResolvedValue({});
@@ -351,7 +354,7 @@ describe('deviceLinkApiFetch', () => {
   it("rechecks the refreshed endpoint's directory cooldown before the retry hop", async () => {
     try {
       // 新端点的桶已在限流窗口里;进请求时的旧端点没有 —— 外层检查放行,拦得住的只有每跳复查。
-      recordDirectoryRetryDeadline('', 'https://device-link.new-region.invalid', Date.now() + 60_000);
+      recordDirectoryRetryDeadline('owner-a', 'https://device-link.new-region.invalid', Date.now() + 60_000);
       mocks.netFetch.mockResolvedValueOnce(
         new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }),
       );
@@ -371,6 +374,102 @@ describe('deviceLinkApiFetch', () => {
       // 账本是模块级共享状态:留给下一个用例就等于替它限流。
       __resetDirectoryThrottleForTests();
     }
+  });
+
+  // 测试价值(#9360 review)
+  // - 生产入口与可观察结果:`deviceLinkApiFetch('/api/device-link/devices')` 经真实
+  //   `serverApiFetch` 的 401 刷新重试 —— 刷新期间换了账号后,那一跳带的是新账号的 token,
+  //   必须按**新账号**的桶复查冷却:新账号的桶还在窗口里就以 429 拒绝,不再发第二跳。
+  // - Bug/规则依据:Codex review #9360「Recheck cooldowns after account switches」——
+  //   owner 变化分支直接放行,会用新账号的请求去撞新账号自己没过期的限流窗口,把窗口推后。
+  // - 现有覆盖缺口:上面的用例只覆盖「同一账号、换端点」;账本 owner 此前恒为 '',换账号
+  //   这条路径没有任何用例。
+  // - 最小失败输入:owner-b 的桶已记期限 + 首跳以 owner-a 发出并 401,刷新回调里把 scope
+  //   切到 owner-b。
+  // - 反向验证:把复查改回「owner 变了就放行」,这条用例变红(第二跳照发)。
+  // - tier:unit(electron net 与 authManager 为进程内 fake)。
+  it('rechecks the new account cooldown when the account changes during refresh', async () => {
+    recordDirectoryRetryDeadline('owner-b', 'https://device-link.official.invalid', Date.now() + 60_000);
+    mocks.netFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }),
+    );
+    mocks.refresh.mockImplementationOnce(async () => {
+      mocks.scope = 'owner-b';
+      return true;
+    });
+
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+
+    // 第二跳(新账号)被新账号自己的桶拦下:整个过程只发过一次物理读。
+    expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.invalidateSession).not.toHaveBeenCalled();
+  });
+
+  // 测试价值(#9360 review)
+  // - 生产入口与可观察结果:真实 `deviceLinkApiFetch` 的限流闸门(throttledDirectoryRead)
+  //   —— 窗口内不发物理读、按中转分桶、中转来回切后原桶仍有效、同账号只 bump 代次不失效。
+  //   这道闸门此前由 IPC 层的预检承担,预检挡在路由之前会把 V2 那一腿一起拦掉,已删除;
+  //   行为改由这里的共享闸门承担,断言跟着搬过来。
+  // - Bug/规则依据:Codex review #9360 的冷却分桶系列(换中转不继承、来回切保留、同账号
+  //   代次稳定)。
+  // - 最小失败输入:先记一次 429 的期限,再按下面四种方式发起下一次读。
+  // - tier:unit。
+  describe('directory cooldown gate (REST 腿)', () => {
+    const limited = () => new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'rate limited' } }), {
+      status: 429,
+      headers: { 'Retry-After': '60' },
+    });
+
+    it('窗口内不再发物理读', async () => {
+      mocks.netFetch.mockResolvedValueOnce(limited());
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      // 窗口内的第二次读:闸门直接拒绝,不再发物理读。
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('换中转后不继承上一个中转的限流期限', async () => {
+      mocks.relay = {
+        baseUrl: 'http://relay-a.test.invalid', credential: 'relay-credential', role: 'member',
+        relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43),
+      };
+      mocks.netFetch.mockResolvedValueOnce(limited()).mockResolvedValue(new Response(JSON.stringify({ devices: [] }), { status: 200 }));
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      // 换中转:新的限流桶,立刻发物理读。
+      mocks.relay = { ...mocks.relay, baseUrl: 'http://relay-b.test.invalid' };
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).resolves.toEqual({ devices: [] });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('中转来回切后回到原中转,原中转的限流期限仍然有效', async () => {
+      const relayOf = (base: string) => ({
+        baseUrl: base, credential: 'relay-credential', role: 'member' as const,
+        relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43),
+      });
+      mocks.relay = relayOf('http://relay-a.test.invalid');
+      mocks.netFetch.mockResolvedValueOnce(limited()).mockResolvedValueOnce(limited());
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      mocks.relay = relayOf('http://relay-b.test.invalid');
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+      // 切回 A:A 的窗口还在,不再发物理读。
+      mocks.relay = relayOf('http://relay-a.test.invalid');
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('同账号只 bump 代次后,限流期限仍然拦得住', async () => {
+      mocks.netFetch.mockResolvedValueOnce(limited());
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      // 同账号只 bump 代次(scope 的冒号后半段):桶身份不变,窗口照旧拦得住。
+      mocks.scope = 'owner-a:generation-2';
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('keeps the official relay on the account token', async () => {
