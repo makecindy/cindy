@@ -73,6 +73,8 @@ import {
 import { prefetchDeviceCapabilities, evictDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceProviders, evictDeviceProviders } from '@/hooks/useDeviceProviders';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { isModelCatalogSourceChange } from '../../../shared/controlledModelCatalog';
+import { PROVIDER_GROUP_IPC } from '../../../shared/providerGroup';
 import {
   evictDeviceGitSafetySettings,
   prefetchDeviceGitSafetySettings,
@@ -1081,7 +1083,10 @@ export function useDeviceLinkRemoteProjects(
         scheduleEventRefreshes.set(deviceId, { timer, firstAt });
         return;
       }
-      if (push.channel !== 'maker:provider:changed') return;
+      // Main fences in-flight catalog reads for each of these source changes.
+      // Advance the renderer generation and queue the latest read as well, or a
+      // late 'Metadata scope changed' can leave the selector in a terminal error.
+      if (!isModelCatalogSourceChange(push.channel) && push.channel !== PROVIDER_GROUP_IPC.CHANGED) return;
       if (readProviderMetadataContinuity(push.payload)?.remainingMs === 0) {
         // A Main-observed denial or expired budget must not reopen the target.
         void refreshRemoteCatalogSnapshot(push.deviceId, push.payload, { retireOnly: true });

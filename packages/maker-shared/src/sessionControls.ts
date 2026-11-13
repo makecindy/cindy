@@ -134,7 +134,7 @@ export function summarizeContextTextEstimate(value: unknown, localizer?: Present
   if (estimate?.method !== 'text-heuristic') return [];
   const labels: Record<string, string> = {
     delivery: 'Answer delivery', host: 'Cindy instructions', plugins: 'Plugin catalogue',
-    memoryRules: 'Memory instructions', memoryIndex: 'Memory index', profile: 'Teammate profile',
+    memoryRules: 'Memory instructions', memoryIndex: 'Memory index', profile: 'Buddy profile',
     user: 'User instructions', directories: 'Additional directories', native: 'Pi instructions',
     skills: 'Skill catalogue', project: 'Project instructions', tools: 'Tool definitions',
     messages: 'Conversation text', other: 'Other instructions',

@@ -7,7 +7,7 @@ import { createLogger } from '../logger.js';
 import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
 import { isUiMockDataEnabled } from '../localDb/uiMockSeed.js';
 import { groupMcpDuplicateConnections, type McpDuplicateChoice } from '../../shared/customMcp.js';
-import { getBuiltinMcpServerNames, listRegistrableCustomMcpServers } from '../mcp-integrations/custom-mcp-registry.js';
+import { getBuiltinMcpServerNames, listRegistrableCustomMcpServers } from '../mcp-integrations/custom-mcp-registry.desktop.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
 import { detectMcpDuplicates, readMcpJson, resolveMcpDuplicateChoices } from './mcp-duplicate-detection.js';
 

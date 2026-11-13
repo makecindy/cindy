@@ -30,6 +30,34 @@ describe('capture background activity is isolated from the chat window', () => {
 });
 
 describe('remote desktop state polling', () => {
+  // Regression: plugin live screens reused the desktop lease and showed a false
+  // desktop-control warning. Existing polling coverage only exercised idle state.
+  // Unit: invoke the production STATE handler with the same active lease, with
+  // and without a plugin session; real desktop viewing/control must remain visible.
+  it.each([false, true])(
+    'excludes plugin screens from the desktop notice (controlling=%s)',
+    async (controlling) => {
+      const active = { peer: 'other-computer', controlling };
+      for (const liveSession of [null, {}]) {
+        let handler!: () => Promise<Record<string, unknown>>;
+        compile(between(source, '  ipcMain.handle(DESKTOP_LOCAL.STATE', '  let windowsSetupBusy'), {
+          ipcMain: {
+            handle: (_name: string, callback: typeof handler) => {
+              handler = callback;
+            },
+          },
+          DESKTOP_LOCAL: { STATE: 'state' },
+          assertTrustedAppRendererEvent: () => {},
+          readDeviceLinkSettings: () => ({ remoteDesktopEnabled: true }),
+          remoteDesktop: { state: active },
+          liveSession,
+          controlledOverlay: { visible: false },
+          permissions: { guideOpen: false },
+        });
+        expect((await handler()).active).toEqual(liveSession ? null : active);
+      }
+    },
+  );
   it('does not probe Windows for routine polls, but checks fresh status on explicit requests', async () => {
     const readWindowsDesktopSupport = vi.fn(async () => 'ready');
     const assertTrustedAppRendererEvent = vi.fn();
@@ -44,6 +72,7 @@ describe('remote desktop state polling', () => {
       assertTrustedAppRendererEvent,
       readDeviceLinkSettings: () => ({ remoteDesktopEnabled: false }),
       remoteDesktop: { state: null },
+      liveSession: null,
       controlledOverlay: { visible: false },
       permissions: { guideOpen: false },
       readWindowsDesktopSupport,

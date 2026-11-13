@@ -111,7 +111,8 @@ export function buildTelegramAdapter(
     output: { kind: 'rich-card', im: telegramIm },
     config,
     ui,
-    interactionExpiredNotice: telegramUiText.expiredCardNotice,
+    // getter: 用到时按当前界面语言取文案, 不在建 adapter 时冻结。
+    get interactionExpiredNotice() { return telegramUiText.expiredCardNotice; },
     sessions: {
       source: 'telegram',
       sessionIdFor: (botId, userId) => `telegram_${botId}_${sessionSafeUserId(userId)}`,
@@ -136,8 +137,8 @@ export function buildTelegramAdapter(
     terminalReactionEmoji: (kind) => (kind === 'error' ? '👎' : null),
     // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
     projectSwitching: true,
-    // 伙伴自有连接: 主人私聊进主任务; 群 / topic 按 lane 一条专线; 对外开放后的
-    // 陌生人私聊(transport guestDm)按用户一条专线。
+    // 伙伴自有连接: 主人私聊进主任务; 群 / topic 按 lane 一条专线。
+    // guest-dm 路由保留兼容旧专线；新陌生私信由 transport 在派发前拒绝。
     companionLane: (userId) => {
       const lane = decodeTelegramLaneUserId(userId);
       if (lane) return { kind: 'group', chatId: lane.chatId, threadId: lane.threadId };
@@ -220,8 +221,8 @@ export function buildTelegramAdapter(
       mode === 'bypassPermissions' && (companion || ownerGroupTurnPolicies.has(policy)),
     groupHistoryAccessFor: (event): GroupHistoryAccessScope | undefined => {
       const lane = decodeTelegramLaneUserId(event.senderId);
-      // Companion bots admit guest DMs too. Reuse the verified requester identity
-      // used by channelToolScopeFor; a DM alone is not proof of ownership.
+      // Keep the verified identity check even though transport rejects guest DMs;
+      // a DM alone is never proof of ownership (including legacy guest lanes).
       if (
         !lane &&
         !(event.speaker ? event.speaker.isOwner : event.senderId === telegramIm.getOwnerUserId())

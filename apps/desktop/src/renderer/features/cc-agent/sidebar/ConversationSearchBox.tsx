@@ -1,3 +1,4 @@
+import { TaskTagDots } from '@/features/task-tags/TaskTags';
 import { getSearchDraft, setSearchDraft, subscribeSearchDraft } from './conversationSearchDraft';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { Button } from '@/components/ui/button';
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { NavigateFunction } from 'react-router-dom';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
@@ -971,6 +973,7 @@ export function SearchFilterMenu({
           lockedProjectComparisonKey,
       ) ?? null
     : null;
+  const choosableProjects = allKnownProjects.filter((project) => !isTeammateProjectPath(project.workingDir));
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
     : lockedProjectName;
@@ -1085,11 +1088,11 @@ export function SearchFilterMenu({
             <span className="truncate">{t('ccAgent.search.filter.allProjects')}</span>
             {projects === 'all' && <Check size={15} className="ml-auto shrink-0 text-[var(--text-primary)]" />}
           </DropdownMenuItem>
-          {allKnownProjects.length > 0 && (
+          {choosableProjects.length > 0 && (
             <DropdownMenuSeparator className="my-1 bg-[var(--cmd-palette-border)]" />
           )}
           <div className="max-h-[280px] overflow-y-auto">
-            {allKnownProjects.map((project) => {
+            {choosableProjects.map((project) => {
               const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
               const selected = comparisonKey != null && (selectedProjects?.has(comparisonKey) ?? false);
               const remoteIdentity = getRemoteProjectMachineIdentity(project);
@@ -1288,8 +1291,13 @@ function SearchResultRow({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
-                {highlightSegments(displayTitle, item.titleMatchIndices)}
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1">
+                <span className="min-w-0 flex-[1_0_6rem] truncate text-13 font-medium text-[var(--text-primary)]">
+                  {highlightSegments(displayTitle, item.titleMatchIndices)}
+                </span>
+                <span className="max-w-full overflow-x-auto">
+                  <TaskTagDots tags={item.session.tags} />
+                </span>
               </span>
               <Tip text={sourceText} side="top" delay={150}>
                 <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">

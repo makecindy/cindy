@@ -14,7 +14,7 @@ import type { OutputLimitDetails } from '@cindy/maker-shared';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
-import type { MessageSourceDevice, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
+import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
@@ -349,6 +349,8 @@ export interface AgentInputQueuedMessage {
         displayText?: string;
         /** 发出本条的 Lead / Worker 会话；接收方据此渲染可点击的来源标签。老快照没有。 */
         senderSessionId?: string;
+        autoBridge?: true;
+        autoBridgeBatchCount?: number;
       }
     | {
         /**
@@ -380,6 +382,16 @@ export interface AgentInputQueuedMessage {
         /** 来源会话属于某个伙伴时的伙伴身份快照；接收方标签改显示伙伴名与头像。 */
         senderBotId?: string;
         senderBotName?: string;
+        /**
+         * 群成员在伙伴任务卡的话题里说的话，由伙伴转进这件任务（bot-group-chat.md §10）。
+         * 标签与 `[消息来源]` 都写出是谁、在哪个群；此时没有来源任务（senderSessionId 为空）。
+         */
+        groupThread?: MessageSourceGroupThread;
+        /**
+         * 本机主人在群里交给「群里的 Cindy」的请求，送进这台电脑上这个群的普通任务（bot-group-chat.md
+         * 「群里的 Cindy」）。标签与 `[消息来源]` 写出是谁、在哪个群；没有来源任务（senderSessionId 为空）。
+         */
+        groupRequest?: MessageSourceGroupRequest;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。

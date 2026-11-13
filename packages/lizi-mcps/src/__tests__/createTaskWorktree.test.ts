@@ -45,6 +45,14 @@ describe('create_task_worktree MCP', () => {
       });
       expect(createTaskWorktree).toHaveBeenLastCalledWith({ callerSessionId: 'caller', repoDir: '/repo' });
 
+      // #9513:base_ref is optional; when given it reaches the host as the explicit base branch.
+      expect(await call({ repo_dir: '/repo', base_ref: 'release/2.x' })).toMatchObject({ ok: true });
+      expect(createTaskWorktree).toHaveBeenLastCalledWith({
+        callerSessionId: 'caller',
+        repoDir: '/repo',
+        baseRef: 'release/2.x',
+      });
+
       createTaskWorktree.mockResolvedValueOnce({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: 'not a git repository' } as never);
       expect(await call({})).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
       expect(createTaskWorktree).toHaveBeenLastCalledWith({ callerSessionId: 'caller' });

@@ -32,7 +32,7 @@ beforeEach(() => {
   h.list.isOnline.mockReturnValue(true);
   h.snapshot.mockResolvedValue({ home: [], items: {}, read: {} });
   h.link.readDeviceList.mockResolvedValue({ devices: ['old', 'new'].map(deviceId => ({ device: { deviceId, name: deviceId }, canOpen: true, state: 'online' })) });
-  h.link.invoke.mockImplementation(async (deviceId) => ({ protocolVersion: 1, collections: [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', ...(deviceId === 'new' ? { actions: [{ id: 'open-create', label: 'Create' }] } : {}) }] }));
+  h.link.invoke.mockImplementation(async (deviceId) => ({ protocolVersion: 1, collections: [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', ...(deviceId === 'new' ? { actions: [{ id: 'open-create', label: 'Create' }] } : {}) }] }));
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 it('offers only real online hosts advertising create, including a host with an empty roster', async () => {
@@ -93,7 +93,7 @@ it('drops old account discovery replies', async () => {
 
 it('clears prior-account create and group capabilities before the new directory answers', async () => {
   h.link.invoke.mockResolvedValue({ protocolVersion: 1, collections: [
-    { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
+    { id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
     { id: 'bot-groups', title: 'Groups', resourceKind: 'bot-group' },
   ] });
   await render();
@@ -132,7 +132,7 @@ it('shows cached teammates while host discovery is pending, then removes revoked
 
 it('exposes only computers whose manifest advertises group chats, keeping them through a failed read', async () => {
   const manifest = (groups: boolean) => ({ protocolVersion: 1, collections: [
-    { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope' },
+    { id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope' },
     ...(groups ? [{ id: 'bot-groups', title: 'Group Chats', resourceKind: 'bot-group' }] : []),
   ] });
   h.link.invoke.mockImplementation(async (deviceId) => manifest(deviceId === 'new'));
@@ -151,7 +151,7 @@ it('exposes only computers whose manifest advertises group chats, keeping them t
 it('publishes a discovered teammate host without waiting for an unrelated manifest', async () => {
   let finish!: (value: unknown) => void;
   h.link.invoke.mockImplementation(async device => device === 'old'
-    ? { protocolVersion: 1, collections: [{ id: 'teammates', resourceKind: 'bot', title: 'Teammates', placement: 'home-scope' }] }
+    ? { protocolVersion: 1, collections: [{ id: 'teammates', resourceKind: 'bot', title: "Buddies", placement: 'home-scope' }] }
     : new Promise(resolve => { finish = resolve; }));
   await render();
   expect(result.targets.map(host => host.deviceId)).toEqual(['old']);
@@ -166,7 +166,7 @@ it('retries only failed manifests while preserving healthy capabilities and stab
   h.link.invoke.mockImplementation(async device => {
     if (device === 'new') throw new Error('INVOKE_TIMEOUT');
     return { protocolVersion: 1, collections: [
-      { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
+      { id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
       { id: 'bot-groups', title: 'Groups', resourceKind: 'bot-group' },
     ] };
   });
@@ -178,7 +178,7 @@ it('retries only failed manifests while preserving healthy capabilities and stab
   h.link.invoke.mockImplementation(async device => device === 'new'
     ? { protocolVersion: 1, collections: [] }
     : { protocolVersion: 1, collections: [
-      { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
+      { id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
       { id: 'bot-groups', title: 'Groups', resourceKind: 'bot-group' },
     ] });
   await act(async () => vi.advanceTimersByTimeAsync(900));
@@ -236,12 +236,12 @@ it('keeps every cached roster host in the list targets while a partial home mani
   const rows = hosts.map(host => ({ key: host.deviceId, host, item: {
     ref: { collectionId: 'teammates', kind: 'bot', id: host.deviceId }, revision: '1', display: { title: host.deviceId }, links: [],
   } }));
-  h.snapshot.mockResolvedValue({ home: [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets: [hosts[0]] }],
+  h.snapshot.mockResolvedValue({ home: [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', targets: [hosts[0]] }],
     items: { teammates: rows }, read: {} });
   h.list.items = rows;
   let finish!: (value: unknown) => void;
   h.link.invoke.mockImplementation(async device => device === 'old'
-    ? { protocolVersion: 1, collections: [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope' }] }
+    ? { protocolVersion: 1, collections: [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope' }] }
     : new Promise(resolve => { finish = resolve; }));
   await render();
   // The real list reader may persist a successful old-host shard now. It must

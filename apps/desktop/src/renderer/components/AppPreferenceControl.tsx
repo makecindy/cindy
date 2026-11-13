@@ -15,6 +15,7 @@ import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { useHomeUsageDashboardPreference } from '@/hooks/useHomeUsageDashboardPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { getThemeFamilies, tryGetFamily } from '@/themes/families';
+import { refreshLocalThemes } from '@/themes/local-themes';
 
 /** Validate persistence separately from hook memory: legacy setters may swallow quota errors. */
 const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknown }> = {
@@ -41,22 +42,29 @@ export function AppPreferenceControl() {
     webLinks: web.preference, localLinks: local.preference, streamFade: fade.preference,
     messageNavigation: navigation.enabled, showIgnoredDirectories: files.showIgnoredDirs,
     homeUsageDashboard: home.enabled, promptRecommendations: recommendations.enabled };
-  const current = useRef<{ state: Required<AppPreferencePatch>; apply: (patch: AppPreferencePatch) => void }>({ state, apply: () => {} });
-  current.current = { state, apply: patch => {
+  const current = useRef<{ state: Required<AppPreferencePatch>; apply: (patch: AppPreferencePatch, active: () => boolean) => Promise<void> | undefined }>({ state, apply: () => undefined });
+  current.current = { state, apply: (patch, active) => {
     if (patch.themeFamily !== undefined && !tryGetFamily(patch.themeFamily)) throw new Error('UNKNOWN_THEME');
     // The shortcut setter can reject a voice-input conflict, before other fields change.
     if (patch.sendShortcut !== undefined && !shortcut.setPreference(patch.sendShortcut).ok) throw new Error('SHORTCUT_CONFLICT');
-    if (patch.theme !== undefined) theme.setTheme(patch.theme);
-    if (patch.themeFamily !== undefined) theme.setFamily(patch.themeFamily);
-    if (patch.language !== undefined) locale.setLocale(patch.language);
-    if (patch.notifications !== undefined) notifications.setEnabled(patch.notifications);
-    if (patch.webLinks !== undefined) web.setPreference(patch.webLinks);
-    if (patch.localLinks !== undefined) local.setPreference(patch.localLinks);
-    if (patch.streamFade !== undefined) fade.setPreference(patch.streamFade);
-    if (patch.messageNavigation !== undefined) navigation.setEnabled(patch.messageNavigation);
-    if (patch.showIgnoredDirectories !== undefined) files.setShowIgnoredDirs(patch.showIgnoredDirectories);
-    if (patch.homeUsageDashboard !== undefined) home.setEnabled(patch.homeUsageDashboard);
-    if (patch.promptRecommendations !== undefined) recommendations.setEnabled(patch.promptRecommendations);
+    const applyOtherFields = () => {
+      if (patch.language !== undefined) locale.setLocale(patch.language);
+      if (patch.notifications !== undefined) notifications.setEnabled(patch.notifications);
+      if (patch.webLinks !== undefined) web.setPreference(patch.webLinks);
+      if (patch.localLinks !== undefined) local.setPreference(patch.localLinks);
+      if (patch.streamFade !== undefined) fade.setPreference(patch.streamFade);
+      if (patch.messageNavigation !== undefined) navigation.setEnabled(patch.messageNavigation);
+      if (patch.showIgnoredDirectories !== undefined) files.setShowIgnoredDirs(patch.showIgnoredDirectories);
+      if (patch.homeUsageDashboard !== undefined) home.setEnabled(patch.homeUsageDashboard);
+      if (patch.promptRecommendations !== undefined) recommendations.setEnabled(patch.promptRecommendations);
+    };
+    const pending = patch.theme !== undefined || patch.themeFamily !== undefined
+      ? theme.setSelection({ theme: patch.theme, familyId: patch.themeFamily }, active) : undefined;
+    if (pending) return pending.then(applied => {
+      if (!applied) throw new Error('THEME_PREPARATION_NOT_CONFIRMED');
+      flushSync(applyOtherFields);
+    });
+    applyOtherFields();
   } };
   useEffect(() => window.electronAPI?.appPreferenceControl?.onSettingsChanged(event => {
     if (event.section !== 'memory' || !isDataOwnerPushStampCurrent(event.ownerStamp)) return;
@@ -72,6 +80,11 @@ export function AppPreferenceControl() {
         bridge.reply({ requestId: request.requestId, ok: false }); return;
       }
       try {
+        if (request.operation === 'refresh-themes') {
+          const refreshed = await refreshLocalThemes();
+          if (!refreshed.success || !isDataOwnerPushStampCurrent(request.ownerStamp) || Date.now() > request.expiresAt)
+            throw new Error('THEME_REFRESH_NOT_CONFIRMED');
+        }
         let modelVisibility: { visible: boolean; customized: boolean } | undefined;
         if (request.operation === 'model-visibility') {
           const change = request.modelVisibility;
@@ -87,7 +100,10 @@ export function AppPreferenceControl() {
         if (request.operation === 'reset') throw new Error('RESET_NOT_SUPPORTED');
         if (request.operation === 'update') {
           const patch = appPreferenceSchema.parse(request.patch);
-          flushSync(() => current.current.apply(patch));
+          let pending: Promise<void> | undefined;
+          flushSync(() => { pending = current.current.apply(patch,
+            () => isDataOwnerPushStampCurrent(request.ownerStamp) && Date.now() <= request.expiresAt); });
+          if (pending) await pending;
           for (const [key, expected] of Object.entries(patch)) {
             const storage = persisted[key as keyof AppPreferencePatch];
             const raw = localStorage.getItem(storage.key);

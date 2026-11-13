@@ -71,6 +71,7 @@ import {
 import { useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
 import { SETTINGS_SECTION_TITLE_CLASS, SettingsPageHeader } from '@/components/ui/settings-rows';
+import appI18n from 'i18next';
 
 type CatalogOfferEntry = {
   product: BillingCatalogProduct;
@@ -248,7 +249,7 @@ function catalogOfferUnavailableReason(
 function currencyFractionDigits(currency: string): number {
   try {
     return (
-      new Intl.NumberFormat(undefined, {
+      new Intl.NumberFormat(appI18n.language, {
         style: 'currency',
         currency: currency.toUpperCase(),
       }).resolvedOptions().maximumFractionDigits ?? 2

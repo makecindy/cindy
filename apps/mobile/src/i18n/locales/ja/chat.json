@@ -1,6 +1,42 @@
 {
-  "teammateProcess": {"retry": "再試行",
-    "empty": "この返信には表示できる処理記録がありません","unavailable": "処理記録を読み込めませんでした","record":"作業履歴","operations":"操作履歴","elapsed":"処理中 {{duration}}","took":"所要時間 {{duration}}","processing":"処理中","worked":"作業履歴","thinking":"考えています","thought":"考えました","failed_one":"{{count}} 件の呼び出しに失敗","failed_other":"{{count}} 件の呼び出しに失敗","separator":"・","actions":{"running":{"read":"ファイルを確認しています","edit":"ファイルを編集しています","search":"検索しています","web":"ウェブを調べています","command":"コマンドを実行しています","tools":"ツールを使用しています","delegate":"作業を依頼しています","plan":"計画を更新しています"},"done":{"read":"ファイルを確認しました","edit":"ファイルを編集しました","search":"検索しました","web":"ウェブを調べました","command":"コマンドを実行しました","tools":"ツールを使用しました","delegate":"作業を依頼しました","plan":"計画を更新しました"}}},
+  "teammateProcess": {
+    "retry": "再試行",
+    "empty": "この返信には表示できる処理記録がありません",
+    "unavailable": "処理記録を読み込めませんでした",
+    "record": "作業履歴",
+    "operations": "操作履歴",
+    "elapsed": "処理中 {{duration}}",
+    "took": "所要時間 {{duration}}",
+    "processing": "処理中",
+    "worked": "作業履歴",
+    "thinking": "考えています",
+    "thought": "考えました",
+    "failed_one": "{{count}} 件の呼び出しに失敗",
+    "failed_other": "{{count}} 件の呼び出しに失敗",
+    "separator": "・",
+    "actions": {
+      "running": {
+        "read": "ファイルを確認しています",
+        "edit": "ファイルを編集しています",
+        "search": "検索しています",
+        "web": "ウェブを調べています",
+        "command": "コマンドを実行しています",
+        "tools": "ツールを使用しています",
+        "delegate": "作業を依頼しています",
+        "plan": "計画を更新しています"
+      },
+      "done": {
+        "read": "ファイルを確認しました",
+        "edit": "ファイルを編集しました",
+        "search": "検索しました",
+        "web": "ウェブを調べました",
+        "command": "コマンドを実行しました",
+        "tools": "ツールを使用しました",
+        "delegate": "作業を依頼しました",
+        "plan": "計画を更新しました"
+      }
+    }
+  },
   "imageDelivery": {
     "stored": "画像を受け取りました",
     "failed": "画像の転送に失敗しました。既存の画像の転送を再試行できます。",
@@ -68,7 +104,7 @@
       "gitRebase": "ブランチをリベース",
       "gitMerge": "ブランチをマージ",
       "gitCherryPick": "コミットをチェリーピック",
-      "gitStash": "作業内容をスタッシュ",
+      "gitStash": "スタッシュを管理",
       "gitRestore": "ファイルを復元",
       "gitSubmodule": "サブモジュールを管理",
       "gitRemote": "Git リモートを確認",
@@ -139,8 +175,8 @@
       "updated_other": "ToDo を更新",
       "searched_one": "検索を実行",
       "searched_other": "検索を実行",
-      "fetched_one": "Web を取得",
-      "fetched_other": "Web を取得",
+      "fetched_one": "ウェブにアクセス",
+      "fetched_other": "ウェブにアクセス",
       "used_one": "ツール 1 件を使用",
       "used_other": "ツール {{count}} 件を使用"
     },
@@ -153,5 +189,13 @@
     "working": "作業中…",
     "worked": "{{duration}} 作業しました",
     "workDetails": "作業内容"
+  },
+  "subscriptionAccountError": {
+    "limited": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。上限のリセットを待って再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
+    "limitedUntil": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。リセット予定：{{resetAt}}。リセット後に再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
+    "loginRequired": "このタスクで使用しているサブスクリプションアカウントへの再ログインが必要です。タスクを実行しているコンピューターで再ログインしてから、再試行してください。",
+    "signingIn": "このタスクで使用しているサブスクリプションアカウントにログイン中です。完了後に再試行してください。",
+    "unavailable": "このタスクに割り当てられたサブスクリプションアカウントは、このリクエストに使用できません。実行先のコンピューターでモデルプロバイダーのアカウント設定を確認するか、別のモデル接続先を選んでください。",
+    "legacy": "このタスクに割り当てられたサブスクリプションアカウントを利用できません。実行先のコンピューターでログイン状態と使用量を確認するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。"
   }
 }

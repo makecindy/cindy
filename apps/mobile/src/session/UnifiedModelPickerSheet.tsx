@@ -1,3 +1,4 @@
+import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
 import { modelNeedsReselection } from './modelReselection';
 import { mobileProviderAccountTitle } from "./mobileModelRowPresentation";
 import { mobileCostMarks } from "./mobileModelRowPresentation";
@@ -8,6 +9,8 @@ import * as ExpoCrypto from "expo-crypto";
 import {
   agentDeviceFavoriteSource,
   parseAgentDeviceFavoriteSource,
+  parseProviderShareFavoriteSource,
+  providerShareFavoriteWireKey,
 } from "@cindy/device-link";
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
@@ -192,10 +195,21 @@ export interface UnifiedMobileRow {
   /** 这一行来自哪台其他电脑的目录(图标带远程标记);缺省 = 被控电脑自己的。 */
   remoteDevice?: { deviceId: string; name: string };
 }
+export interface UnifiedMobileQuota {
+  remaining?: number;
+  label: string;
+  summary?: string;
+  resetSoon?: boolean;
+  reset?: { remaining: number; time: string; level: 'normal' | 'warn' | 'crit' };
+  resetParts?: string[];
+  resetDescription?: string;
+  members?: { remaining?: number; label: string }[];
+}
 export interface UnifiedMobileGroup {
   key: string;
   title: string;
   rows: UnifiedMobileRow[];
+  quota?: UnifiedMobileQuota;
 }
 export interface UnifiedMobilePickerViewProps {
   visible: boolean;
@@ -212,7 +226,7 @@ export interface UnifiedMobilePickerViewProps {
     id: string;
     label: string;
     providerMark?: MobileProviderMarkProps;
-    quota?: { remaining: number; label: string };
+    quota?: UnifiedMobileQuota;
     /**
      * 另一台电脑上的供应商:来源页里每台电脑单独一块(块标题 = 电脑名,行标题 = providerLabel),
      * 图标带远程标记;label 是带电脑名的完整说法,用在搜索栏旁的来源按钮上。
@@ -251,10 +265,12 @@ export function UnifiedModelPickerSheet(
   p: ModelPickerSheetProps & { unified: UnifiedMobilePickerOptions },
 ) {
   const { t } = useTranslation();
-  const { quotas, now } = useMobileModelQuotas(
+  const { quotas, now, quotaOf } = useMobileModelQuotas(
     p.unified.scope,
     p.visible,
     p.providers,
+    p.unified.remote?.catalogs ?? NO_REMOTE_CATALOGS,
+    p.subscriptionTaskId,
   );
   const prefs = useMobileModelPreferences(p.unified.scope, p.visible, p.unified.preferenceScope === 'request');
   const rememberRemote = p.unified.preferenceScope !== 'request';
@@ -504,16 +520,46 @@ export function UnifiedModelPickerSheet(
           defaultValue: config.effort,
         })
       : "";
+  const accountQuotaOf = (providerId: string, sourceDeviceId?: string) =>
+    sourceDeviceId ? quotaOf(sourceDeviceId, providerId) : quotas[providerId];
+  const accountIdentityOf = (providerId: string, sourceDeviceId?: string) => {
+    const quota = accountQuotaOf(providerId, sourceDeviceId);
+    if (quota?.members?.length) return t('models.unified.accountCount', { count: quota.members.length });
+    const identity = quota?.accountIdentity;
+    return identity === null ? t("models.unified.accountUnassigned") : identity;
+  };
   const describe = (
     entry: UnifiedModelEntry,
     config: MobileModelConfiguration,
     providers: readonly (typeof p.providers)[number][] = p.providers,
+    sourceDeviceId?: string,
   ) => {
     const provider = providers.find((item) => item.id === entry.providerId);
-    const identity =
-      provider?.openAiAccount?.identity?.trim() ||
-      provider?.subscriptionAccount?.identity?.trim();
+    const identity = accountIdentityOf(entry.providerId, sourceDeviceId) ?? (
+      provider?.openAiAccount?.identity?.trim() || provider?.subscriptionAccount?.identity?.trim());
     return [identity, effortText(config)].filter(Boolean).join(" · ");
+  };
+  const modelQuotaLabel = (providerId: string, modelId: string, deviceId?: string) => {
+    const q = accountQuotaOf(providerId, deviceId);
+    if (q?.members?.length) return null;
+    const modelQuota = q
+      ? mobileWeeklyQuota(q.source, q.raw, now, modelId)
+      : null;
+    return modelQuota
+      ? [
+          modelQuota.resetsAt
+            ? formatQuotaResetCountdown(
+                modelQuota.resetsAt,
+                now,
+                t,
+                modelQuota.windowMinutes,
+              )
+            : null,
+          `${modelQuota.remaining}%`,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : null;
   };
   const makeRow = (
     entry: UnifiedModelEntry,
@@ -561,27 +607,7 @@ export function UnifiedModelPickerSheet(
         config.agent,
         p.pricing,
       ),
-      quotaLabel: (() => {
-        const q = quotas[entry.providerId];
-        const modelQuota = q
-          ? mobileWeeklyQuota(q.source, q.raw, now, entry.modelId)
-          : null;
-        return modelQuota
-          ? [
-              modelQuota.resetsAt
-                ? formatQuotaResetCountdown(
-                    modelQuota.resetsAt,
-                    now,
-                    t,
-                    modelQuota.windowMinutes,
-                  )
-                : null,
-              `${modelQuota.remaining}%`,
-            ]
-              .filter(Boolean)
-              .join(" · ")
-          : null;
-      })(),
+      quotaLabel: modelQuotaLabel(entry.providerId, entry.modelId),
     };
   };
   const rows = entries.map((entry) => makeRow(entry));
@@ -601,12 +627,12 @@ export function UnifiedModelPickerSheet(
   const providerName = (id: string) => {
     const provider = p.providers.find((item) => item.id === id);
     if (!provider) return id;
-    return withGroupBadge(null, id, mobileProviderAccountTitle(provider));
+    return withGroupBadge(null, id, mobileProviderAccountTitle(provider, accountIdentityOf(id)));
   };
   // 另一台电脑目录里的供应商,说法带电脑名(「Claude 订阅 · 工作室 Mac」)。
   const remoteAccountTitle = (catalog: RemoteAgentCatalog, id: string) => {
     const provider = catalog.providers.find((item) => item.id === id);
-    return provider ? mobileProviderAccountTitle(provider) : id;
+    return provider ? mobileProviderAccountTitle(provider, accountIdentityOf(id, catalog.deviceId)) : id;
   };
   const remoteProviderName = (catalog: RemoteAgentCatalog, id: string) =>
     withGroupBadge(catalog.deviceId, id, remoteAccountTitle(catalog, id));
@@ -651,7 +677,7 @@ export function UnifiedModelPickerSheet(
         // Remote catalog capabilities are independent of the host installation.
         fastCapable: () => true,
       });
-    const details = describe(entry, config, catalog.providers);
+    const details = describe(entry, config, catalog.providers, catalog.deviceId);
     return {
       key,
       entry,
@@ -677,8 +703,7 @@ export function UnifiedModelPickerSheet(
         config.agent,
         p.pricing,
       ),
-      // 用量镜像按被控电脑的供应商取,另一台电脑的不在这里显示。
-      quotaLabel: null,
+      quotaLabel: modelQuotaLabel(entry.providerId, entry.modelId, catalog.deviceId),
     };
   };
   const remoteRows = remoteDirectories.map((directory) => ({
@@ -687,7 +712,7 @@ export function UnifiedModelPickerSheet(
   }));
   // 收藏和本机收藏排在同一节里:位置编在 providerId 里的,到那台电脑的目录里找模型,
   // 点开即在那台运行。那台电脑离线(包括只因任务的 Agent 在那台、靠缓存留在列表里)或没开放远程调用时
-  // 先不显示,收藏本身保留。
+  // 先不显示,收藏本身保留。分享来的模型用同一套规则:键必须对上当前这条分享的成员身份。
   const favorites = prefs.value.favorites.flatMap((item) => {
     const source = parseAgentDeviceFavoriteSource(item.providerId);
     if (source) {
@@ -701,6 +726,23 @@ export function UnifiedModelPickerSheet(
             makeRemoteRow(directory, entry, {
               ...item,
               providerId: source.providerId,
+            }),
+          ]
+        : [];
+    }
+    const share = parseProviderShareFavoriteSource(item.providerId);
+    if (share) {
+      const directory = remoteDirectories.find((value) => {
+        const identity = value.catalog.favoriteSource;
+        return !!identity && !value.catalog.offline
+          && providerShareFavoriteWireKey(identity) === item.providerId;
+      });
+      const entry = directory && resolveStoredModelEntry(directory.entries, share.providerId, item.modelId);
+      return directory && entry
+        ? [
+            makeRemoteRow(directory, entry, {
+              ...item,
+              providerId: share.providerId,
             }),
           ]
         : [];
@@ -773,6 +815,7 @@ export function UnifiedModelPickerSheet(
         groups.push({
           key: provider.id,
           title: providerName(provider.id),
+          quota: poolQuota(provider.id),
           rows: group,
         });
     }
@@ -788,9 +831,20 @@ export function UnifiedModelPickerSheet(
         groups.push({
           key: id,
           title: remoteProviderLabel(catalog, provider.id),
+          quota: poolQuota(provider.id, catalog.deviceId),
           rows: group,
         });
     }
+  // Recommended/favorites can contain the only rows for a source. Keep its
+  // overview visible there when no provider section already presents it.
+  for (const group of groups) {
+    if (group.quota || !group.rows.length) continue;
+    const first = group.rows[0];
+    const sameSource = (row: UnifiedMobileRow) => row.entry.providerId === first.entry.providerId
+      && row.remoteDevice?.deviceId === first.remoteDevice?.deviceId;
+    if (group.rows.every(sameSource) && !groups.some(other => other !== group && other.quota && other.rows.every(sameSource)))
+      group.quota = poolQuota(first.entry.providerId, first.remoteDevice?.deviceId);
+  }
   const sourceRow = target
     ? (target.deviceId
         ? remoteRows.find((item) => item.catalog.deviceId === target.deviceId)
@@ -818,12 +872,16 @@ export function UnifiedModelPickerSheet(
     config: favoriteEdit?.config ?? target?.config ?? sourceRow.config,
     favorite: originFavorite,
   };
-  // 这一行存进收藏时用的来源:被控电脑自己的供应商照旧;同账号另一台电脑的供应商把电脑编进去
-  // (同 id 供应商在两台电脑上不是同一个)。分享来的供应商暂不支持收藏,返回 null。
+  // 这一行存进收藏时用的来源:被控电脑自己的供应商照旧;同账号另一台电脑把电脑编进去。
+  // 分享来的供应商用 Desktop 同一套键(分享、成员、供应商、区域),并且必须能经收藏通道往返。
   const favoriteSourceOf = (value: UnifiedMobileRow): string | null => {
     const device = value.remoteDevice;
     if (!device) return value.entry.providerId;
-    if (isProviderShareAgentDeviceId(device.deviceId)) return null;
+    if (isProviderShareAgentDeviceId(device.deviceId)) {
+      const identity = remoteCatalogs.find((item) => item.deviceId === device.deviceId)?.favoriteSource;
+      if (!identity || identity.providerId !== value.entry.providerId) return null;
+      return providerShareFavoriteWireKey(identity);
+    }
     try {
       return agentDeviceFavoriteSource({
         deviceId: device.deviceId,
@@ -1111,12 +1169,51 @@ export function UnifiedModelPickerSheet(
       })
     : null;
   // 来源页:其他电脑的供应商按电脑分块(一个都没开放的电脑没有行,整块不出现)。
+  function poolQuota(providerId: string, deviceId?: string): UnifiedMobileQuota | undefined {
+    const quota = accountQuotaOf(providerId, deviceId);
+    if (!quota?.members?.length) return undefined;
+    const overview = subscriptionQuotaOverview(quota.members, now);
+    const summary = overview.average === null ? t('models.unified.quotaUpdating')
+      : t('models.unified.quotaAverage', { percent: overview.average });
+    const members = quota.members.map((member, index) => ({
+      remaining: overview.members[index].remaining ?? undefined,
+      label: [member.accountIdentity ?? t('models.unified.accountFallback', { index: index + 1 }),
+        overview.members[index].remaining === null ? '—' : t('session.menu.usage.remaining', { percent: overview.members[index].remaining }),
+        overview.members[index].resetSoon ? t('models.unified.quotaResetSoon') : null,
+        member.resetsAt ? formatQuotaResetCountdown(member.resetsAt, now, t, member.windowMinutes ?? null) : null,
+      ].filter(Boolean).join(' · '),
+    }));
+    const nextReset = overview.nextResetIndex === null ? null : quota.members[overview.nextResetIndex];
+    const resetDescription = nextReset ? [
+      t('models.unified.quotaResetIn', { duration: formatQuotaResetCountdown(nextReset.resetsAt!, now, t, nextReset.windowMinutes ?? null) }),
+      t('session.menu.usage.remaining', { percent: overview.members[overview.nextResetIndex!].remaining }),
+    ].filter(Boolean).join(' · ') : undefined;
+    return { remaining: overview.average ?? undefined, summary, reset: overview.reset ?? undefined, resetParts: t('models.unified.quotaResetIn', { duration: '{time}' }).split('{time}'), resetDescription,
+      resetSoon: overview.resetSoonCount > 0, members,
+      label: [summary, ...members.map(member => member.label), t('models.unified.quotaAverageHint'),
+        overview.resetSoonCount ? t('models.unified.quotaResetHint') : null].filter(Boolean).join('\n'),
+    };
+  }
+  const sourceQuota = (providerId: string, deviceId?: string) => {
+    const pool = poolQuota(providerId, deviceId);
+    if (pool) return pool;
+    const quota = accountQuotaOf(providerId, deviceId);
+    return quota?.remaining === undefined ? undefined : {
+      remaining: quota.remaining,
+      label: [
+        (quota.resetsAt ? formatQuotaResetCountdown(quota.resetsAt, now, t, quota.windowMinutes ?? null) : null)
+          ?? t("session.menu.usage.week"),
+        t("session.menu.usage.remaining", { percent: quota.remaining }),
+      ].join(" · "),
+    };
+  };
   const remoteFilters = remoteDirectories.flatMap(({ catalog, entries }) =>
     catalog.providers
       .filter((provider) => entries.some((e) => e.providerId === provider.id))
       .map((provider) => ({
         id: remoteFilterId(catalog.deviceId, provider.id),
         label: remoteProviderLabel(catalog, provider.id),
+        quota: sourceQuota(provider.id, catalog.deviceId),
         providerMark: {
           providerId: provider.id,
           name: provider.name,
@@ -1197,25 +1294,7 @@ export function UnifiedModelPickerSheet(
           .map((provider) => ({
             id: provider.id,
             label: providerName(provider.id),
-            quota:
-              quotas[provider.id]?.remaining !== undefined
-                ? {
-                    remaining: quotas[provider.id]!.remaining!,
-                    label: [
-                      (quotas[provider.id]!.resetsAt
-                        ? formatQuotaResetCountdown(
-                            quotas[provider.id]!.resetsAt!,
-                            now,
-                            t,
-                            quotas[provider.id]!.windowMinutes ?? null,
-                          )
-                        : null) ?? t("session.menu.usage.week"),
-                      t("session.menu.usage.remaining", {
-                        percent: quotas[provider.id]!.remaining,
-                      }),
-                    ].join(" · "),
-                  }
-                : undefined,
+            quota: sourceQuota(provider.id),
             providerMark: {
               providerId: provider.id,
               name: provider.name,

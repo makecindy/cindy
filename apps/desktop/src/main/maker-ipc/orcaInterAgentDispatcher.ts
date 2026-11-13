@@ -1,3 +1,4 @@
+import { createQueuedAcceptedCallbacks } from './queuedAcceptedCallbacks.js';
 import {
   formatAgentMessage,
   formatOrcaCommunicationMessage,
@@ -24,7 +25,7 @@ import type {
   AgentInputSendOpts,
   AgentInputSendResult,
   ControlSteerOutcome,
-} from './agent-input-coordinator.js';
+} from './agent-input-coordinator.desktop.js';
 import { runAcceptedCallback, runAcceptedRollback } from './acceptedCallbackRunner.js';
 import { prependHandoffToUserMessage } from './agentHandoff.js';
 
@@ -63,6 +64,8 @@ export interface DispatchOrcaInterAgentMessageParams {
   source: OrcaInterAgentMessageSource;
   senderLabel: string;
   workerId?: string;
+  /** 宿主盖章：仅系统兜底回报可进入 Lead 队列合批；主动回报/派单不设置。 */
+  autoBridge?: true;
   /** 发送方显式选择；缺省排队。steer 只在目标正在运行时插进当前 turn。 */
   delivery?: 'queue' | 'steer';
   /** 可选, 随消息发给目标的本机图片绝对路径; 仅本机 session 支持, SSH 远端目标拒绝。 */
@@ -191,6 +194,11 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   /** 直发前与 sendToSessionInternal 共用同一套满窗 / compact 失败换窗预检。 */
   prepareUnhealthySession?: (sessionId: string) => Promise<boolean | void>;
   /**
+   * 项目资源漂移时的 runtime 回收(空闲口径, pi only)。true=已按 runtime-refresh
+   * 关闭旧 runtime,调用方应转 queued/lazy 路径重建投递,不拿旧 argv 跑这一轮。
+   */
+  recycleProjectResourceRuntime?: (sessionId: string) => Promise<boolean>;
+  /**
    * 直发前补齐 Orca 装载：目标在 runtime 已启动后才成为 Lead/Worker（例如从协同面板
    * 开启协同）时，live handle 还没有 Orca 说明与工具。与用户发送共用同一套重建；
    * 已装载或非 Orca 时是空操作。
@@ -245,14 +253,6 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   log?: OrcaInterAgentDispatcherLogger;
 }
 
-/** queued 消息的 accepted 副作用状态，用于派发失败时只回滚已经执行过的副作用。 */
-interface QueuedOrcaInterAgentAcceptedCallback {
-  accepted: () => void | Promise<void>;
-  rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>;
-  commit?: () => void | Promise<void>;
-  didRun: boolean;
-}
-
 /** Orca lead/worker 派发协调器，集中管理直发、排队、accepted 副作用和回滚生命周期。 */
 export interface OrcaInterAgentDispatcher {
   dispatchOrEnqueueOrcaInterAgentMessage: (
@@ -288,77 +288,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
 ): OrcaInterAgentDispatcher {
   const log = deps.log ?? defaultLog;
-  const queuedOrcaInterAgentAcceptedCallbacks = new Map<string, QueuedOrcaInterAgentAcceptedCallback>();
-
-  const registerQueuedOrcaInterAgentAcceptedCallback = (
-    clientId: string,
-    accepted: () => void | Promise<void>,
-    rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>,
-    commit?: () => void | Promise<void>,
-  ): void => {
-    queuedOrcaInterAgentAcceptedCallbacks.set(clientId, {
-      accepted,
-      rollback,
-      commit,
-      didRun: false,
-    });
-  };
-
-  const rollbackQueuedOrcaInterAgentAcceptedCallback = async (
-    sessionId: string,
-    clientId: string | undefined,
-  ): Promise<void> => {
-    if (!clientId) return;
-    const callback = queuedOrcaInterAgentAcceptedCallbacks.get(clientId);
-    if (!callback?.didRun) return;
-    queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
-    await runAcceptedRollback(callback.rollback, sessionId, clientId, log);
-  };
-
-  const settleQueuedOrcaInterAgentAcceptedCallback = async (
-    sessionId: string,
-    sendOpts: AgentInputSendOpts,
-    result: AgentInputSendResult,
-  ): Promise<void> => {
-    const clientId = sendOpts.persistUserMessage?.clientId;
-    if (!clientId) return;
-    const callback = queuedOrcaInterAgentAcceptedCallbacks.get(clientId);
-    if (!callback) return;
-    if (result.kind === 'session-dispatch' && result.dispatched) {
-      queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
-      if (callback.didRun) {
-        await runAcceptedCallback(callback.commit, sessionId, clientId, log);
-      }
-      return;
-    }
-    if (callback.didRun) {
-      queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
-      const reason =
-        result.kind === 'session-dispatch' && result.reason === 'cancelled-before-dispatch'
-          ? result.reason
-          : undefined;
-      await runAcceptedRollback(
-        () => callback.rollback?.(reason),
-        sessionId,
-        clientId,
-        log,
-      );
-    }
-  };
-
-  const runQueuedOrcaInterAgentAcceptedCallback = (
-    sessionId: string,
-    item: AgentInputQueuedMessage,
-  ): Promise<void> | undefined => {
-    const callback = queuedOrcaInterAgentAcceptedCallbacks.get(item.clientId);
-    if (!callback) return undefined;
-    callback.didRun = true;
-    return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);
-  };
-
-  const discardQueuedOrcaInterAgentAcceptedCallback = (clientId: string): void => {
-    queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
-  };
+  const queuedAccepted = createQueuedAcceptedCallbacks(log);
+  const registerQueuedOrcaInterAgentAcceptedCallback = queuedAccepted.register;
+  const rollbackQueuedOrcaInterAgentAcceptedCallback = queuedAccepted.rollback;
+  const settleQueuedOrcaInterAgentAcceptedCallback = queuedAccepted.settle;
+  const runQueuedOrcaInterAgentAcceptedCallback = queuedAccepted.run;
+  const discardQueuedOrcaInterAgentAcceptedCallback = queuedAccepted.discard;
 
   const dispatchOrEnqueueOrcaInterAgentMessage = async (
     params: DispatchOrcaInterAgentMessageParams,
@@ -505,6 +440,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         senderLabel,
         displayText: params.rawContent,
         ...(senderSessionId ? { senderSessionId } : {}),
+        ...(params.autoBridge ? { autoBridge: true } : {}),
       };
     };
     let steerFallbackReason: OrcaSteerFallbackReason | undefined;
@@ -697,6 +633,11 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         }
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
+        // 项目资源漂移:回收旧 runtime 后转 queued/lazy 路径(sendToSessionInternal
+        // 的 lazy-resume 会重扫重算 argv 重建),不在旧 argv 上跑这一轮。
+        if (await deps.recycleProjectResourceRuntime?.(params.targetSessionId) === true) {
+          return null;
+        }
         const origin = await resolveOrigin();
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
@@ -794,7 +735,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       },
       createOpts,
     });
-    const callbackAlreadyRegistered = queuedOrcaInterAgentAcceptedCallbacks.has(clientId);
+    const callbackAlreadyRegistered = queuedAccepted.has(clientId);
     if (params.onAccepted && !callbackAlreadyRegistered) {
       registerQueuedOrcaInterAgentAcceptedCallback(
         clientId,

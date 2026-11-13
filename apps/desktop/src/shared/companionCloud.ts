@@ -1,3 +1,5 @@
+import type { BotProfileSourceFailure } from './botProfileSources.js';
+
 /** Cloud companions (docs/product-rules/cloud-companions.md): which computer runs each companion. */
 export interface CompanionCloudHomeDevice {
   deviceId: string;
@@ -25,6 +27,8 @@ export interface CompanionCloudActor {
   homeDevice?: CompanionCloudHomeDevice | null;
   /** Only in the renderer view: shown once after the companion arrived here, then dismissed. */
   arrivalNotices?: CompanionArrivalNoticeKind[];
+  /** This computer could not restore the source. No user content; absent on older hosts. */
+  profileFailure?: BotProfileSourceFailure;
 }
 
 export interface CompanionCloudSnapshot {
@@ -47,14 +51,31 @@ export const EMPTY_COMPANION_CLOUD_SNAPSHOT: CompanionCloudSnapshot = Object.fre
 
 export type CompanionCloudFailureCode =
   | 'HOME_CONFLICT' | 'OFFLINE' | 'NOT_ENABLED' | 'FAILED' | 'TARGET_UNAVAILABLE' | 'BUSY'
+  /** A different, still effective local Cindy must be merged or moved explicitly. */
+  | 'LOCAL_CINDY_CONFLICT'
   /** The home runs a Cindy that cannot be asked from another computer; change it there. */
   | 'HOME_OUTDATED'
   /** The companion (one of the copies, for a merge) is paused: resume it first. */
-  | 'PAUSED';
+  | 'PAUSED'
+  /** The chosen computer runs a Cindy too old for a V2 teammate (a project): update it first. */
+  | 'TARGET_OUTDATED';
 
 export type CompanionCloudActionResult =
   | { ok: true }
-  | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null };
+  | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
+      /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
+      conflictingBotId?: string; conflictingDeviceId?: string | null;
+      /** Optional detail of FAILED; older clients retain the existing generic failure. */
+      profileFailure?: BotProfileSourceFailure;
+      /** Only on the local recovery editor response; no source text in broadcasts. */
+      profileRepairError?: 'changed' | 'invalid' | 'backup' };
+
+export interface CompanionProfileRepairField extends BotProfileSourceFailure { source: string }
+export interface CompanionProfileRepairDraft { token: string; fields: CompanionProfileRepairField[] }
+export type CompanionProfileRepairRequest = { action: 'read' }
+  | { action: 'save'; token: string; values: Partial<Record<BotProfileSourceFailure['field'], string>> };
+export type CompanionProfileRepairResult = { ok: true; draft?: CompanionProfileRepairDraft }
+  | Extract<CompanionCloudActionResult, { ok: false }>;
 
 /**
  * What a move does while the companion is still working (a turn running or queued in any of
@@ -100,6 +121,8 @@ export interface CompanionTransferTarget {
   online: boolean;
   /** The computer asking (only in `CompanionHomeChoices`). */
   isSelf?: boolean;
+  /** Its Cindy cannot run a V2 teammate yet: shown, not selectable, until it is updated. */
+  outdated?: boolean;
 }
 
 /**

@@ -50,6 +50,13 @@ vi.mock('../managed-skills.js', () => ({
   listCindyManagedSkills: async () => [],
   cindyManagedSkillRoots: async () => [],
 }));
+// Subscription discovery is outside this local auth-file ownership fixture.
+vi.mock('../model-discovery/xai.js', () => ({ discardXaiModelsDiskCache: vi.fn(async () => {}) }));
+// This file exercises local auth ownership, not remote share revocation. Do not
+// initialize the authenticated server transport (and the full app) to read files.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: vi.fn(async () => { throw new Error('Unexpected share revocation in auth fixture'); }),
+}));
 vi.mock('@cindy/maker-core', () => ({}));
 
 vi.mock('../../agent-binaries/index.js', () => ({
@@ -482,7 +489,8 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       }),
     );
     const releaseBytes = fs.readFileSync(releaseAuth);
-    const releaseStat = fs.statSync(releaseAuth);
+    // NTFS file IDs can exceed Number.MAX_SAFE_INTEGER; compare exact identities.
+    const releaseStat = fs.statSync(releaseAuth, { bigint: true });
     const releaseBinding = path.join(h.userDataDir, 'native-provider-auth.json');
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -493,8 +501,10 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     });
     await expect(adapter.getAccessToken()).resolves.toBeNull();
     expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
-    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
-    expect(fs.statSync(releaseAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.statSync(releaseAuth, { bigint: true }).ino).toBe(releaseStat.ino);
+    expect(fs.statSync(releaseAuth, { bigint: true }).ino).not.toBe(
+      fs.statSync(systemAuth, { bigint: true }).ino,
+    );
     expect(fs.existsSync(releaseBinding)).toBe(false);
   });
 

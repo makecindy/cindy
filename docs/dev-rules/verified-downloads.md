@@ -56,7 +56,7 @@ Codex 即使只执行 `--version` 也会写入辅助程序，因此版本探测�
 
 ## GitHub 连接
 
-本机 PR 徽标缺少 gh／登录态时，点击打开 `GithubSetupDialog`。主进程统一发现
+本机 PR 徽标缺少 gh／登录态时，在 PR 信息浮窗内点击安装／登录入口打开 `GithubSetupDialog`。主进程统一发现
 受管安装、系统安装和 `~/.local/bin`，使用绝对路径调用 gh，不要求刷新 PATH 或重启。
 GitHub 插件详情与「我的 Issues」通过 `GithubConnectButton` 复用同一窗口。
 连接成功后分别重新加载插件配置区与强制刷新 Issues；列表已有请求时排队刷新，避免漏掉新登录态。

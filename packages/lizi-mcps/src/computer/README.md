@@ -94,6 +94,27 @@ Xcode's project navigator stays on "No Selection". Cindy reports it as
 variant where the driver delivered a coordinate click and read the selection
 back stays confirmed.
 
+## Window-local scroll coordinates
+
+`scroll` accepts `x/y` in the latest `get_window_state` screenshot's pixels,
+with an exact `pid/window_id`. Supply both coordinates and omit element selectors.
+The host forwards the point through the ordinary session, input-ownership and
+driver-contract checks; it does not convert the point to screen coordinates.
+Drivers that do not advertise coordinates reject the call before delivery instead
+of dropping the point and scrolling somewhere else.
+
+On Windows, [cua-driver 0.46.1](https://github.com/trycua/cua/blob/cua-driver-rs-v0.46.1/libs/cua-driver/rust/crates/platform-windows/src/tools/scroll.rs)
+tries the indexed element's UIA scroll action first.
+For a project-row button without that action, its foreground wheel fallback uses
+the window center unless `x/y` is supplied. Use a screenshot point for nested web
+scrollers. A fresh observation must confirm movement; do not replay an uncertain
+scroll automatically. Background refusals and input guards still apply.
+
+This coordinate entry fixes Cindy's previously closed schema, which described
+point targeting but rejected `x/y`. It does not change the upstream element fallback.
+The MCP-entry regression covers coordinate delivery and malformed targets; native
+movement must be validated separately against the running version.
+
 ## Input failure advice
 
 For `type_text`, `background_unavailable` and `type_text_incomplete` preserve

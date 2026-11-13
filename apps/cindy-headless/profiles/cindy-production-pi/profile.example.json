@@ -3,10 +3,8 @@
   "version": 1,
   "agentBackend": "pi",
   "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
-  "agentBinaryVersion": "1.4.0",
-  "supportedModelIds": [
-    "claude-sonnet-4-6"
-  ],
+  "agentBinaryVersion": "1.5.2",
+  "supportedModelIds": ["claude-sonnet-4-6"],
   "model": {
     "provider": "cindy",
     "requestedId": "claude-sonnet-4-6",
@@ -17,7 +15,7 @@
   },
   "permissionMode": "bypassPermissions",
   "systemPromptFile": "prompt.md",
-  "expectedSystemPromptDigest": "2234f951233ca95a677a487d48f677eaa4c3e4d5223f50f1b6ce66eb4a18cd58",
+  "expectedSystemPromptDigest": "dd9fa6076ff2e9340d7e38a37d15b29e55297f6f87c0f4fed3fccbd8d40bdb24",
   "makerMemory": true,
   "nativeMemory": false,
   "projectContext": true,

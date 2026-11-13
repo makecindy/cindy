@@ -17,9 +17,20 @@ export const LIST_PREVIEW_EXTRACT_SQL = `CASE
   ELSE NULL
 END`;
 
+/**
+ * 空正文的 assistant 行（任务导入的时间线标记、模型切换卡等）只用于显示，没有可预览的文字，
+ * 不能盖住前面真实的消息。按 content 判定：见下方 agent_meta 的读取约束。
+ */
+export const EMPTY_ASSISTANT_CONTENT_SQL = `('""', '')`;
+
+export function isEmptyAssistantContent(content: string): boolean {
+  return content === '""' || content === '';
+}
+
 /** autoResume 只出现在注入的 user「继续」行；assistant 不读 agent_meta，避免跨越多 MB content overflow。 */
 export const LATEST_VISIBLE_PREVIEW_FILTER_SQL = `m.role IN ('user', 'assistant')
     AND m.rewind_at IS NULL
+    AND (m.role != 'assistant' OR m.content NOT IN ${EMPTY_ASSISTANT_CONTENT_SQL})
     AND (m.role != 'user' OR m.agent_meta IS NULL OR CASE WHEN json_valid(m.agent_meta) THEN json_extract(m.agent_meta, '$.autoResume') END IS NOT 1)`;
 
 const LATEST_VISIBLE_PREVIEW_FROM_SQL = `FROM messages m
@@ -33,17 +44,19 @@ const LATEST_VISIBLE_PREVIEW_FROM_SQL = `FROM messages m
  * 绑定 JSON 数组，只用 `id`；preview/count 在本句内从 messages 现算，
  * 避免 list 读出的旧 payload 盖住读后、写回前的失效。
  * 只填当前仍是 NULL 的列，避免盖掉写路径已经落好的值。
+ * 空串等同未回填：旧版本曾把导入标记行的空正文写成 ''，那些任务没有新消息就不会失效，在这里自愈；
+ * 抽不出文字时存 NULL，不再写入 ''。
  */
 export const SESSION_LIST_PROJECTION_BACKFILL_SQL = `UPDATE sessions
 SET
   list_preview = CASE
-    WHEN sessions.list_preview IS NULL THEN (
+    WHEN NULLIF(sessions.list_preview, '') IS NULL THEN NULLIF((
       SELECT ${LIST_PREVIEW_EXTRACT_SQL} ${LATEST_VISIBLE_PREVIEW_FROM_SQL}
-    )
+    ), '')
     ELSE sessions.list_preview
   END,
   list_preview_role = CASE
-    WHEN sessions.list_preview IS NULL THEN (
+    WHEN NULLIF(sessions.list_preview, '') IS NULL THEN (
       SELECT m.role ${LATEST_VISIBLE_PREVIEW_FROM_SQL}
     )
     ELSE sessions.list_preview_role
