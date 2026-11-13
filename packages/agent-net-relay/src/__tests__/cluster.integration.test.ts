@@ -17,7 +17,8 @@
  *   去掉重试退避（或去掉抖动）后后者 16 次尝试全部落败并返回 STATE_CONTENDED。
  *   已加入的副本在成员名单里找不到负责者（后端自我隔离后名单为空）时以 1012 关闭会话，并对该网络的 HTTP／升级回 503；
  *   恢复为原来的「无名单即承载全部」时，该副本会继续承载新负责副本也在承载的网络。
- *   集群模式未显式配置共享附件目录时拒绝启动（CLUSTER_MEDIA_DIR_REQUIRED），避免各副本落到自己的数据目录。
+ *   集群模式未显式配置共享附件目录时拒绝启动（CLUSTER_MEDIA_DIR_REQUIRED），避免各副本落到自己的数据目录；
+ *   后端可从包入口取得 checkMemberUrl 校验名单 URL（合法地址通过，非 http(s)、带凭据／路径／查询的地址抛 INVALID_CLUSTER_URL）。
  * - tier：integration；需要真实 socket 和多个副本，单进程 fixture 与 handler mock 都替代不了。
  *   单独成文件是因为每个用例的副本组生命周期与 relay.integration 的单进程 fixture 不同。
  * - 实测耗时：2026-11-14 本机单独运行 `pnpm exec vitest run src/__tests__/cluster.integration.test.ts` 4.32 秒
@@ -40,6 +41,7 @@ import { startAgentNetRelay, type RelayHandle, type RelayOptions } from '../serv
 import { clusterOwner, type RelayClusterBackend, type RelayClusterMember } from '../cluster.js';
 import { ClusterStore } from '../clusterStore.js';
 import { createMemoryRelayCluster } from '../memoryCluster.js';
+import { checkMemberUrl } from '../index.js';
 import { generateIdentity, issueCertificate, publicBytes, createRequestProof, createDelegation, sha256, type Identity } from '../identity.js';
 import { AgentNetClient, authorization, type AgentNetUplink } from '../client.js';
 import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
@@ -460,6 +462,11 @@ describe('replicated official relay: configuration', () => {
   it('refuses to start a replica without an explicit shared attachment directory', async () => {
     const set = await replicaSet({ mediaDir: undefined });
     await expect(set.start('replica-a')).rejects.toThrow('CLUSTER_MEDIA_DIR_REQUIRED');
+  });
+  it('lets a backend check member URLs through the package entry before publishing them', () => {
+    expect(checkMemberUrl('http://10.0.0.7:3348/').host).toBe('10.0.0.7:3348');
+    for (const bad of ['not a url', 'ftp://10.0.0.7/', 'http://user:pass@10.0.0.7/', 'http://10.0.0.7/path', 'http://10.0.0.7/?q=1'])
+      expect(() => checkMemberUrl(bad), bad).toThrow('INVALID_CLUSTER_URL');
   });
 });
 
