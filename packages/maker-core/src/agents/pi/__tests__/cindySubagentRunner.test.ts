@@ -376,6 +376,7 @@ const path = require('node:path');
 if (!process.env.PI_CODING_AGENT_DIR || !fs.existsSync(path.join(process.env.PI_CODING_AGENT_DIR, 'models.json'))) {
   process.exit(9);
 }
+if (process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE) process.exit(14);
 if (Object.keys(process.env).some((key) => key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_'))) {
   process.exit(10);
 }
@@ -570,6 +571,7 @@ process.stdin.on('end', () => {
       CINDY_TEST_PI_TOKENS: tokensFile,
       CINDY_PI_SESSION_TOKEN: 'parent-session-token-must-not-reach-direct-child',
       CINDY_PI_REMOTE_MCP_SECRET_FIXTURE: 'must-not-reach-child',
+      CINDY_PI_TASK_SYSTEM_PROMPT_FILE: path.join(root, 'parent-task-system-prompt.md'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

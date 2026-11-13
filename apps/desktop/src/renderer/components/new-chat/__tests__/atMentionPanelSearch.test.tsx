@@ -11,8 +11,9 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MENU_CURRENT_ROW_ATTR, MENU_ROW_ATTR } from '@/components/ui/dropdown-menu-highlight';
-import { MORPH_CONTENT_RESIZE_EVENT, MorphPopover } from '@/components/ui/morph-popover';
+import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
 import { AtMentionPanel } from '../AtMentionPanel';
+import { ExtraDirsButton } from '../ExtraDirsButton';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 
 vi.mock('react-i18next', () => ({
@@ -120,15 +121,18 @@ describe('「+」面板的搜索框', () => {
   });
 
   // #9536 / #9573：内嵌长列表必须在真实外壳里只有一层能滚。
-  // 生产入口：AtMentionPanel 嵌进 MorphPopover。旧断言只看 class 字面量，列表被裁掉也会过。
-  // 最小输入：外壳上限 240，内容自然高 400。外壳 overflow 为 hidden，内滚根高度等于 240，
+  // 生产入口：ExtraDirsButton 挂载 AtMentionPanel 与 MorphPopover。旧断言只看 class 字面量，列表被裁掉也会过。
+  // 最小输入：外壳上限 240，内容自然高 600。外壳 overflow 为 hidden，内滚根高度等于 240，
   // 资源行保持 44px 且不被 flex 压扁。搜索把内容收到 80 后，外壳和内滚根一起收到 80。
   // 独立 @ 浮层不走外壳，仍用自己的 maxHeight。Tier: unit。
-  it('内嵌长列表只让外壳锁住的那一层滚动，独立 @ 浮层仍用自己的高度上限', async () => {
+  // #9573 移交限高后漏了默认值；原用例直接传 240，未经过真实 + 入口。
+  // 默认聊天：自然高 600、未传上限，应收在 400；新建任务仍收在 240。
+  it.each([undefined, 240])('内嵌长列表经 + 入口限高并滚动（上限 %s）', async (maxContentHeight) => {
+    const expectedHeight = maxContentHeight ?? 400;
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
     const heights = new WeakMap<HTMLElement, number>();
     vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
-      if (this.getAttribute('role') === 'group') return heights.get(this) ?? 400;
+      if (this.getAttribute('role') === 'group') return heights.get(this) ?? 600;
       return 0;
     });
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
@@ -138,6 +142,7 @@ describe('「+」面板的搜索框', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
+      writable: true,
       value: vi.fn().mockImplementation(() => ({
         matches: true,
         media: '(prefers-reduced-motion: reduce)',
@@ -164,42 +169,42 @@ describe('「+」面板的搜索框', () => {
           <button type="button" onClick={() => setQuery('file-0')}>
             Filter
           </button>
-          <MorphPopover
+          <ExtraDirsButton
+            extraDirsCount={0}
+            hasReferenceDirs={false}
             open={open}
             onOpenChange={setOpen}
-            panelWidth={480}
-            maxContentHeight={240}
-            panelAriaLabel="Add menu"
-            trigger={<span />}
-          >
-            <AtMentionPanel
-              embedded
-              query={query}
-              state={{ kind: 'ready', items: [], truncated: false }}
-              entries={shown}
-              focusedIndex={0}
-              onFocusedIndexChange={() => {}}
-              onSelect={() => {}}
-              onClose={() => setOpen(false)}
-              onRetry={() => {}}
-              searchValue={query}
-              onSearchChange={setQuery}
-              maxHeight={240}
-            />
-          </MorphPopover>
+            maxContentHeight={maxContentHeight}
+            panel={
+              <AtMentionPanel
+                embedded
+                query={query}
+                state={{ kind: 'ready', items: [], truncated: false }}
+                entries={shown}
+                focusedIndex={0}
+                onFocusedIndexChange={() => {}}
+                onSelect={() => {}}
+                onClose={() => setOpen(false)}
+                onRetry={() => {}}
+                searchValue={query}
+                onSearchChange={setQuery}
+                maxHeight={240}
+              />
+            }
+          />
         </>
       );
     }
 
     render(<Host />);
-    const panel = await screen.findByRole('group', { name: 'Add menu' });
+    const panel = await screen.findByRole('group', { name: 'extraDirs.menuAria' });
     const shell = panel.firstElementChild as HTMLElement;
     await waitFor(() => {
-      expect(panel.style.height).toBe('240px');
+      expect(panel.style.height).toBe(`${expectedHeight}px`);
       expect(shell.style.overflowY).toBe('hidden');
     });
     const inner = shell.querySelector('[data-morph-scroll="inner"]') as HTMLElement;
-    expect(inner.style.height).toBe('240px');
+    expect(inner.style.height).toBe(`${expectedHeight}px`);
     const row = screen.getByText('file-0.txt').closest('button') as HTMLElement;
     expect(row.className).toContain('h-[44px]');
     expect(row.className).toContain('shrink-0');

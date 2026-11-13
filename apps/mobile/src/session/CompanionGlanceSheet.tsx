@@ -67,17 +67,18 @@ export function CompanionGlanceSheet({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { accountGeneration } = useAuth();
+  const [closedVersion, setClosedVersion] = useState(0);
   // Row actions that leave the sheet run once it has closed, so nothing is presented over it.
   const pending = useRef<(() => void) | null>(null);
   const afterClose = (action: () => void) => { pending.current = action; onClose(); };
   return <CompanionSheet visible={visible} onClose={onClose} title="" contentScrolls testID="companion.glance"
-    onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}>
+    onClosed={() => { setClosedVersion(value => value + 1); const action = pending.current; pending.current = null; action?.(); }}>
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <RemoteCompanionAvatar avatar={avatar} name={name} deviceId={deviceId} online={online} size={HEADER_AVATAR} framed />
         <Text numberOfLines={1} style={styles.headerName}>{name}</Text>
       </View>
-      <Computers botId={botId} deviceId={deviceId} deviceName={deviceName} online={online} cloudHome={cloudHome}
+      <Computers key={`${deviceId}:${closedVersion}`} botId={botId} deviceId={deviceId} deviceName={deviceName} online={online} cloudHome={cloudHome}
         onOpenCindy={hosted => afterClose(() => onOpenCindy(hosted))} onSwitchHome={() => afterClose(onSwitchHome)} />
       {visible ? <Activity key={`${accountGeneration}:${deviceId}:${botId}`} botId={botId} deviceId={deviceId} deviceName={deviceName} sessionId={sessionId} online={online}
         onOpenTask={(taskId, taskDeviceId) => afterClose(() => onOpenTask(taskId, taskDeviceId))} /> : null}
@@ -141,7 +142,7 @@ function Computers({ botId, deviceId, deviceName, online, cloudHome, onOpenCindy
   const { user, accountGeneration } = useAuth();
   // getPresenceAvailability is stable and reads live presence; presenceVersion is what changes.
   const { status, getPresenceAvailability, presenceVersion } = useDeviceLink();
-  const [showOffline, setShowOffline] = useState(false);
+  const [showOthers, setShowOthers] = useState(false);
   // Cindy runs a copy on each computer: the other copies come from the teammate list already read
   // on this phone (no extra discovery); other teammates only show the computer they run on.
   const copies = useMemo(() => {
@@ -159,13 +160,17 @@ function Computers({ botId, deviceId, deviceName, online, cloudHome, onOpenCindy
   const rows: ReactNode[] = [
     <Row key="current" icon={monitor('here')} title={deviceName} meta={online ? t('devices.glance.runningHere') : t('devices.glance.offline')} inlineMeta
       trailing={<Check size={iconSize.lg} strokeWidth={iconStroke.medium} color={colors.textPrimary} />} testID="companion.glance.computer.current" />,
+  ];
+  // Keep recent tasks and outputs reachable even when Cindy lives on many computers.
+  if (showOthers) rows.push(
     ...onlineCopies.map(copy => <Row key={copy.row.key} icon={monitor('online')} title={copy.row.host.deviceName} meta={t('devices.glance.online')} inlineMeta
       onPress={() => onOpenCindy(copy.row)} testID={`companion.glance.computer.${copy.row.host.deviceId}`} />),
-  ];
-  if (offlineCopies.length > 0) rows.push(<FoldRow key="offline" inset label={t('devices.glance.offlineCount', { count: offlineCopies.length })}
-    open={showOffline} onPress={() => setShowOffline(value => !value)} testID="companion.glance.computer.offline" />);
-  if (showOffline) rows.push(...offlineCopies.map(copy => <Row key={copy.row.key} icon={monitor('offline')} title={copy.row.host.deviceName}
-    meta={t('devices.glance.offline')} inlineMeta muted />));
+    ...offlineCopies.map(copy => <Row key={copy.row.key} icon={monitor('offline')} title={copy.row.host.deviceName}
+      meta={t('devices.glance.offline')} inlineMeta muted />),
+  );
+  if (copies.length > 0) rows.push(<FoldRow key="more" inset
+    label={showOthers ? t('devices.glance.showLess') : `${t('devices.glance.showMore')} (${copies.length})`}
+    open={showOthers} onPress={() => setShowOthers(value => !value)} testID="companion.glance.computer.more" />);
   if (cloudHome && online) rows.push(<FoldRow key="switch" inset label={t('devices.cloudCompanion.switchAction')} open={false}
     onPress={onSwitchHome} testID="companion.glance.computer.switch" />);
   return <Section label={t('devices.glance.computers')}>{joinRows(rows, true, styles)}</Section>;

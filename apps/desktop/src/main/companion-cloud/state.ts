@@ -46,6 +46,14 @@ const bot = z.object({
   pendingRebuild: z.boolean().optional(),
   /** The never-synced local copy was backed up before a take-over; retries do not back it up again. */
   backedUp: z.boolean().optional(),
+  /** Owner-approved correction for an unfinished restore; local/account scoped, never sent on the wire. */
+  profileCorrection: z.object({
+    homeDeviceId: z.string(), version: z.string(),
+    values: z.object({ identitySource: z.string().max(12000).optional(), userContextSource: z.string().max(12000).optional() }),
+    backedUp: z.boolean().optional(),
+    /** Once restored, the uploader owns retries. Drop this only after its profile revision advances. */
+    restored: z.object({ preference: z.number(), store: z.number() }).optional(),
+  }).optional(),
   /**
    * What the last take-over could not keep of the old setup (cloud-companions.md §2): shown once
    * after the move, then cleared by the owner.

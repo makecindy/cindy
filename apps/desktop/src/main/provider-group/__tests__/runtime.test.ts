@@ -36,6 +36,13 @@ vi.mock('../../subscription-accounts/runtime.js', async importOriginal => ({
   ...await importOriginal<Record<string, unknown>>(),
   onSubscriptionAccountsChanged: (listener: () => void) => { io.localAccountPush = listener; return () => {}; },
 }));
+// The account runtime now statically imports route admission. These directory/cache tests never
+// dispatch accounts; keep that permission leaf fail-closed without loading share/fast-policy assembly.
+vi.mock('../../subscription-accounts/legacyAccountAccess.js', () => ({
+  legacyCodexAccountCanRun: () => false,
+  openAiRouteAllowsModel: () => false,
+  setLegacyCodexAccountPaused: vi.fn(),
+}));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => owner, isAppSessionBoundaryPending: () => false }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: io.shares,
   captureProviderShareGroupRecovery: () => async () => undefined }));

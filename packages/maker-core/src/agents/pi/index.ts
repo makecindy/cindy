@@ -35,6 +35,7 @@ import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
+import { findPiCloudContextFile, piCloudContextDisplayPath } from './startup-context-diagnostic.js';
 import { scanPiSessionJsonl } from './session-jsonl-scan.js';
 
 /**
@@ -4127,6 +4128,8 @@ export class PiAgent extends BaseAgent {
       const additionalSkillPaths = [...new Map([
         ...(loadProjectResourcesInPlace || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
           !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
+        // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local, non-Review runtime only.
+        ...(opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (opts.hostSkills ?? []).map((skill) => skill.path)),
       ].map((skillPath) => [canonicalSkillPath(skillPath), skillPath])).values()];
 
       // One explicit directory also works with --no-skills. Keep its lifetime in
@@ -6878,8 +6881,25 @@ export class PiAgent extends BaseAgent {
         cleanupRuntimeFiles();
       }
       if (cleanupPending) throw cleanupPending;
+      // Diagnose only a failed local startup, after executor cleanup is confirmed.
+      // A dataless context file is evidence of a possible cause, not proof of
+      // which read stalled Pi. Never inspect remote paths on the control machine.
+      let startupError = err;
+      if (!remote && !rpcReadyLogged && !args.includes('--no-context-files')
+        && err instanceof Error && 'code' in err && err.code === 'PI_RPC_TIMEOUT') {
+        try {
+          const file = await findPiCloudContextFile(opts.workingDir);
+          if (file) {
+            const display = piCloudContextDisplayPath(file);
+            const hint = this.deps.formatPiStartupCloudFileHint?.(display)
+              ?? `A cloud-only instruction file may be delaying Pi startup: ${display}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.`;
+            // Presentation marker survives legacy string-only startup envelopes.
+            startupError = new Error(`[PI_STARTUP_CLOUD_CONTEXT_FILE] ${hint}\n${err.message}`, { cause: err });
+          }
+        } catch { /* Optional diagnostics must not replace the original failure. */ }
+      }
       // Only a successful close proves exit; do not infer it from the startup error.
-      throw new AgentStartupStoppedError(err);
+      throw new AgentStartupStoppedError(startupError);
     }
 
     const deps = this.deps;

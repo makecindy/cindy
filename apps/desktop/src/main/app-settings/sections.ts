@@ -6,6 +6,7 @@ import { readGoalSettingsState, writeGoalSettings, resetGoalSettings } from '../
 import { readAgentResourceSettingsState, writeAgentResourceSetting, resetAgentResourceSettings } from '../maker-host/agent-resource-settings-store.js';
 import { notifyAppSettingsChanged } from './changes.js';
 import { runtimeSettingsSections } from './runtime.js';
+import { pluginSettingsSections } from './plugins.js';
 import { appPreferenceSchema } from '../../shared/appPreferenceControl.js';
 import { z } from 'zod';
 import { APP_ICONS, APPEARANCE_LIMITS, WALLPAPER_IDS } from '../../shared/appearanceSettings.js';
@@ -72,10 +73,11 @@ export const appSettingsSections: AppSettingsSection[] = [{
 }];
 
 export const manageAppSettings: ReturnType<typeof createAppSettingsService> = async (input, assertCurrent) => {
-  const result = await createAppSettingsService([...appSettingsSections, ...runtimeSettingsSections()])(input, assertCurrent);
+  const result = await createAppSettingsService([...appSettingsSections, ...runtimeSettingsSections(), ...pluginSettingsSections()])(input, assertCurrent);
   if ((input.operation === 'update' || input.operation === 'reset') && !('errorCode' in result)) {
     await assertCurrent();
-    notifyAppSettingsChanged(input.section!);
+    // Plugin KV publishes the same event for every write path, including /kv.
+    if (!input.section?.startsWith('plugins.')) notifyAppSettingsChanged(input.section!);
   }
   return result;
 };

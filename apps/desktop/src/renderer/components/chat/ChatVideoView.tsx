@@ -3,7 +3,7 @@
 
 import { CHAT_FOCUS_CLASS } from './chatChrome';
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, VideoOff, Copy, Maximize2 } from 'lucide-react';
+import { FolderOpen, VideoOff, Copy, Maximize2, Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -167,12 +167,19 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
           tabIndex={0}
           preload="metadata"
           controls
+          controlsList="nodownload"
           playsInline
           style={style}
           className={cn(className, 'block', CHAT_FOCUS_CLASS)}
           onError={() => setFailedSrc(displaySrc)}
         />
-      <div className="absolute right-2 top-2 rounded-full bg-[var(--surface-elevated)]">
+      <div className="absolute right-2 top-2 flex rounded-full bg-[var(--surface-elevated)]">
+          <PreviewButton label={t('chat.media.saveAs')} onClick={() => {
+            void window.electronAPI.saveMediaAs({ url: displaySrc })
+              .catch(() => toast.error(t('chat.userMessage.attachmentSaveFailed')));
+          }}>
+            <Download className="h-4 w-4" />
+          </PreviewButton>
           <PreviewButton
             label={t('attachmentPreview.open')}
             onClick={() => {

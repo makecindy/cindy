@@ -39,6 +39,8 @@ export interface BotSettingsTarget {
   online: boolean;
   /** Pages whose host operations exist; the local target supports all of them. */
   pages: ReadonlySet<string>;
+  /** Optional on older hosts. Reads and retries execute on the buddy's computer. */
+  projectRepository?: (botId: string, retry: boolean) => Promise<import('../../../shared/botProjectMode').BotProjectRepositoryStatus>;
   profile: {
     update(botId: string, patch: BotProfileUpdatePatch): Promise<BotProfile>;
     /** Gallery / uploaded image bytes; omitted bytes open the native chooser (local only). */

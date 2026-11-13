@@ -60,6 +60,12 @@ export function normalizePoolFile(raw: unknown): PoolFile {
         .slice(0, MAX_SUBSCRIPTION_ACCOUNTS)
         .map((a) => ({
           id: a.id,
+          ...(provider === 'anthropic' && typeof a.lastConfirmedIdentity === 'string' && a.lastConfirmedIdentity.trim()
+            && a.lastConfirmedIdentity.length <= 320
+            ? { lastConfirmedIdentity: a.lastConfirmedIdentity.trim() } : {}),
+          ...(provider === 'anthropic' && typeof a.reloginIdentity === 'string' && a.reloginIdentity.trim()
+            && a.reloginIdentity.length <= 320
+            ? { reloginIdentity: a.reloginIdentity.trim() } : {}),
           paused: a.paused === true,
           limit: Number.isInteger(a.limit) && a.limit >= 1 && a.limit <= 16 ? a.limit : 4,
           ...(a.limitSet === true ? { limitSet: true as const } : {}),
@@ -108,6 +114,12 @@ export function accountDirectory(provider: SubscriptionProvider, id: string): st
 export function readPool(provider: SubscriptionProvider): SubscriptionPoolConfig | null {
   store.invalidateIfChanged();
   return store.read().pools[provider] ?? null;
+}
+/** OpenAI 池里从旧 Codex 连接导入的账号(旧连接 ID → 账号)；账号池文件读不了时返回 null，不当成没有。 */
+export function readOpenAiLegacyAccountsIfReadable(): Readonly<Record<string, string>> | null {
+  store.invalidateIfChanged();
+  if (store.isUnreadable()) return null;
+  return store.read().pools.openai?.legacyCodexAccounts ?? {};
 }
 export function readLegacyCodexAccountId(providerId: string): string | undefined {
   const accountId = readPool('openai')?.legacyCodexAccounts?.[providerId];
