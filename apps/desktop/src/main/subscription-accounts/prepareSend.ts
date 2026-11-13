@@ -14,7 +14,7 @@ interface PrepareAccountSendDeps {
    * Moves an idle task off a merged legacy Codex connection id onto the merged `openai` route
    * after its context handoff (same as failover.ts). Without it such tasks are left as before.
    */
-  moveRoute?(id: string, providerId: SubscriptionProvider, assertCurrent: () => void): Promise<void>;
+  moveRoute?(id: string, providerId: SubscriptionProvider, assertCurrent: () => void, fromProviderId: string): Promise<void>;
 }
 
 /** Called under the ordinary send lock, before lazy bootstrap or reuse of a live handle.
@@ -65,7 +65,7 @@ export async function prepareSubscriptionAccountForSend(
       // The old id would pin the paused account again; continue on the merged route instead.
       const latest = await deps.readSession(sessionId);
       if (latest?.providerId !== task.legacyRoute) throw new Error('The task route changed');
-      await deps.moveRoute!(sessionId, provider, assertCurrent);
+      await deps.moveRoute!(sessionId, provider, assertCurrent, task.legacyRoute);
       assertCurrent();
     }
     // Commit context first. A failed binding write leaves a recoverable handoff on the

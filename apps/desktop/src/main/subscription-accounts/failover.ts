@@ -52,7 +52,7 @@ export interface AccountFailoverDeps {
    * (runtime routing and the saved task source), after its context handoff. Must call
    * `assertCurrent` before writing. Without it such tasks stay on their account.
    */
-  moveRoute?(id: string, providerId: SubscriptionProvider, assertCurrent: () => void): Promise<void>;
+  moveRoute?(id: string, providerId: SubscriptionProvider, assertCurrent: () => void, fromProviderId: string): Promise<void>;
   /** Owner-only session-account read on the task's executing computer. */
   invokeRemote?: RemoteSubscriptionInvoke;
   log?(message: string, fields: Record<string, unknown>): void;
@@ -171,7 +171,7 @@ export async function prepareSubscriptionAccountFailover(
     if (row.sdkSessionId) await deps.rebuild(sessionId, assertCurrent);
     await assertSource(true);
     // The executing host admitted the merged destination; a fresh start there chooses the account.
-    await deps.moveRoute(sessionId, 'openai', assertCurrent);
+    await deps.moveRoute(sessionId, 'openai', assertCurrent, row.providerId);
     deps.log?.('subscription account failover: moved remote legacy task before send', { sessionId });
     return true;
   }
@@ -209,7 +209,7 @@ export async function prepareSubscriptionAccountFailover(
       // The old id would pin the old account again; continue on the merged route instead.
       const latest = await deps.readSession(sessionId);
       if (latest?.providerId !== bound.legacyRoute) throw new Error('The task route changed');
-      await deps.moveRoute!(sessionId, bound.provider, assertCurrent);
+      await deps.moveRoute!(sessionId, bound.provider, assertCurrent, bound.legacyRoute);
       assertCurrent();
     }
     await lease.bind([`task:${sessionId}`]);

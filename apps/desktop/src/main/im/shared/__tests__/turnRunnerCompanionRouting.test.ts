@@ -11,6 +11,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMainLocale } from '../../../i18n.desktop';
+import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, clearSessionRuntimeControlState,
+  getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider } from '../../../maker-ipc/sessionRuntimeControl';
+afterEach(() => clearSessionRuntimeControlState('mimi-main'));
 
 import type { AgentEvent, MakerEvent, Session, SessionSendResult, TurnPermissionPolicy } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
@@ -312,9 +315,11 @@ afterEach(() => setMainLocale('en'));
 describe('turnRunner: connection handed to a companion bot', () => {
   // PR #10271, unit: cold wiring used to start the exhausted legacy source before the shared
   // pre-send recovery could run. A real runner input must use the recovered row on its first startup.
-  it('prepares a cold legacy task before wiring its first channel message', async () => {
+  it.each([false, true])('prepares a cold legacy task before wiring its first channel message (temporary settings: %s)', async temporary => {
     const id = 'mimi-main';
-    botRows.set(id, rowFor(id, { providerId: 'openai-old', model: 'bot-model', sdkSessionId: 'old-native' }));
+    botRows.set(id, rowFor(id, { providerId: 'openai-old', model: temporary ? 'saved-model' : 'bot-model', sdkSessionId: 'old-native' }));
+    if (temporary) acceptSessionRuntimeMutation({ sessionId: id, source: 'agent', deferred: false,
+      profile: { agentKind: 'claude-code', model: 'bot-model', providerId: 'openai-old', effort: 'max', fastMode: true } });
     const providers = await mocks.listProviders();
     mocks.listProviders.mockResolvedValue([
       ...providers,
@@ -326,11 +331,14 @@ describe('turnRunner: connection handed to a companion bot', () => {
     maker.createSession.mockImplementation(async (args: { id: string; providerId: string; resumeSessionId?: string }) => {
       expect(args.providerId).toBe('openai');
       expect(args.resumeSessionId).toBeUndefined();
+      if (temporary) expect(args).toMatchObject({ model: 'bot-model', effort: 'max', fastMode: true });
       return create(args);
     });
     const release = vi.fn();
     acquirePendingAgentSwitch.mockImplementation(async () => {
-      botRows.set(id, rowFor(id, { providerId: 'openai', model: 'bot-model', sdkSessionId: null }));
+      botRows.set(id, rowFor(id, { providerId: 'openai', model: temporary ? 'saved-model' : 'bot-model', sdkSessionId: null }));
+      remapSessionRuntimeProvider({ sessionId: id, fromProviderId: 'openai-old', toProviderId: 'openai',
+        expectedOwnerEpoch: captureSessionRuntimeControlOwnerEpoch(), expectedGeneration: getSessionRuntimeControlSnapshot(id).generation });
       return release;
     });
     mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
@@ -344,6 +352,7 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(harnesses.get(id)?.send).toHaveBeenCalledOnce();
     expect(acquirePendingAgentSwitch.mock.invocationCallOrder[0]!).toBeLessThan(maker.createSession.mock.invocationCallOrder[0]!);
     expect(release.mock.invocationCallOrder[0]!).toBeGreaterThan(maker.createSession.mock.invocationCallOrder[0]!);
+    clearSessionRuntimeControlState(id);
   });
 
   // Cold subscription admission has the same early-rejection contract, before TurnState exists.

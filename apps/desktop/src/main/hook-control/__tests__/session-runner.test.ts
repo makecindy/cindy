@@ -20,6 +20,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMainLocale } from '../../i18n.desktop';
+import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, clearSessionRuntimeControlState,
+  getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider } from '../../maker-ipc/sessionRuntimeControl';
+afterEach(() => clearSessionRuntimeControlState('sess-new'));
 import fs from 'node:fs/promises';
 import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
@@ -589,15 +592,25 @@ describe('hook task model selection on next send', () => {
   // PR #10271 / Codex review, unit: recovery now also migrates the persisted source. The real
   // Hook runner must refresh both startup and bridge routing, not just clear the old native id.
   // The earlier input only checked unchanged-provider recovery; minimal failure is old-id -> OpenAI.
-  it('refreshes the migrated provider and drops the stale native id after pre-send account recovery', async () => {
+  it.each([false, true])('refreshes the migrated provider and drops the stale native id after pre-send account recovery (temporary settings: %s)', async temporary => {
     const { getSessionRowSnapshot, getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshot).mockResolvedValueOnce({ providerId: 'openai-old', agentDeviceId: null } as never);
     vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({ status: 'active', providerId: 'openai' } as never);
-    h.prepareUnhealthy.mockResolvedValueOnce(true);
+    if (temporary) acceptSessionRuntimeMutation({ sessionId: 'sess-new', source: 'agent', deferred: false,
+      profile: { agentKind: 'claude-code', model: 'effective-model', providerId: 'openai-old', effort: 'max', fastMode: true } });
+    h.prepareUnhealthy.mockImplementationOnce(async () => {
+      remapSessionRuntimeProvider({ sessionId: 'sess-new', fromProviderId: 'openai-old', toProviderId: 'openai',
+        expectedOwnerEpoch: captureSessionRuntimeControlOwnerEpoch(), expectedGeneration: getSessionRuntimeControlSnapshot('sess-new').generation });
+      return true;
+    });
     const result = await createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
     expect(result.status, result.errorMessage ?? undefined).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'openai', resumeSessionId: undefined }));
     expect(h.hydrateSessionProvider).toHaveBeenCalledWith(expect.any(String), 'openai');
+    if (temporary) expect(fakeMaker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'effective-model', effort: 'max', fastMode: true,
+    }));
+    clearSessionRuntimeControlState('sess-new');
   });
 
   // Regression #6493: createSession options do not hydrate Claude's bridge.

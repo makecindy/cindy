@@ -1,4 +1,5 @@
 import { imText } from './imText';
+import { getSessionRuntimeStartOverride } from '../../maker-ipc/sessionRuntimeControl';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import {
   createLocalImSource,
@@ -1172,7 +1173,7 @@ export function createTurnRunner(
     // Keep the entry row for title/new-conversation decisions; use the refreshed execution
     // row for authentication and wiring after a recovery clears its native id.
     const row = target.row;
-    const routeRow = cold?.row ?? row;
+    const routeRow = effectiveRuntimeAuthRow(cold?.row ?? row);
     const coldCompanion = target.botOwned && (!!cold || (!sessionStates.has(row.id)
       && !wiringInFlight.has(row.id) && !getMaker().getSession(row.id)));
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
@@ -1324,7 +1325,7 @@ export function createTurnRunner(
         // 授权检查只验过新默认路由 —— 按实际路由补一次, 旧供应商断开时在这里给出
         // 缺授权提示, 而不是进旧路由的发送流程运行时失败(PR #5155 review P2)。
         if (!sameImDefaultRoute(routeOfRow(refreshed), followTarget)) {
-          const auth = await checkImRouteAuthDetailed(refreshed, undefined, authCheckDeps());
+          const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(refreshed), undefined, authCheckDeps());
           if (!auth.ok) {
             const authStatus = { ...auth, agentKind: refreshed.agentKind, model: refreshed.model };
             if (args.queueMode === 'internal') {
@@ -1679,7 +1680,7 @@ export function createTurnRunner(
           throw new Error(`companion session ${rowId} missing before route authentication`);
         }
         if (landed && (state.botLane || (followAuthRoute && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)))) {
-          const auth = await checkImRouteAuthDetailed(landed, undefined, authCheckDeps());
+          const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(landed), undefined, authCheckDeps());
           if (!auth.ok) {
             const attached = state.attached || !!state.botLane;
             const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
@@ -2144,6 +2145,12 @@ export function createTurnRunner(
     }
   }
 
+  function effectiveRuntimeAuthRow(row: ImSessionRow): ImSessionRow {
+    const profile = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    return { ...row, model: profile.model ?? row.model,
+      providerId: profile.providerId === undefined ? row.providerId : profile.providerId };
+  }
+
   async function refreshSessionAfterPendingAgentSwitch(
     state: SessionState,
     sessionId: string,
@@ -2172,9 +2179,10 @@ export function createTurnRunner(
         throw new Error(`session ${sessionId} missing after deferred agent switch`);
       }
       const agentKind = toCoreAgentKind(row.agentKind);
-      hydrateSessionProvider(sessionId, row.providerId ?? null);
-      if (row.effort) setSessionEffort(sessionId, row.effort);
-      setSessionFastMode(sessionId, (row.fastMode ?? false));
+      const startOverride = getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
+      hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
+      setSessionEffort(sessionId, startOverride.model ? startOverride.effort : row.effort);
+      setSessionFastMode(sessionId, startOverride.fastMode ?? row.fastMode ?? false);
       current = await maker.createSession({
         id: sessionId,
         agentKind,
@@ -2188,6 +2196,7 @@ export function createTurnRunner(
         agentDeviceId: row.agentDeviceId ?? undefined,
         remoteHostId: row.remoteHostId ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
+        ...startOverride,
         vendorOptions: ownsChannelOutput(state)
           ? adapter.buildVendorOptions(userId, state.scopeKey)
           : undefined,
@@ -2428,11 +2437,12 @@ export function createTurnRunner(
     // routingTransform)读它决定走哪个供应商上游/钥匙。进程重启后 IM turn 首次起会话时,
     // 内存 store 是空的;不 hydrate 的话 /model 选过的供应商会丢、回落默认路由。对齐
     // renderer 开会话(register.ts)与 scheduler(runner.ts)的 hydrate 时机。
-    hydrateSessionProvider(row.id, row.providerId);
+    const startOverride = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
     // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
     // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
-    if (row.effort) setSessionEffort(row.id, row.effort);
-    setSessionFastMode(row.id, (row.fastMode ?? false));
+    setSessionEffort(row.id, startOverride.model ? startOverride.effort : row.effort);
+    setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
     // 接管路径: 必须传 resumeSessionId 让 Claude SDK 用 desktop 留下的 sdkSessionId
     // resume, 否则 maker.activeSessions 没该 row.id 时会 spawn 全新空会话——oneshot
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
@@ -2450,6 +2460,7 @@ export function createTurnRunner(
       providerId: row.providerId,
       agentDeviceId: row.agentDeviceId ?? undefined,
       remoteHostId: row.remoteHostId ?? undefined,
+      ...startOverride,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
       // 仅作防御兜底(原 feishu 实现传 '飞书会话' 字面量, 语义等价)。
       title: preserveSessionConfig ? undefined : adapter.sessions.defaultTitle(userId),

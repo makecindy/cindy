@@ -6,7 +6,9 @@ import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock';
 import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessions';
 import { effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
-import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl';
+import { resolveSessionRuntimeAxes, acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch,
+  sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider,
+  clearSessionRuntimeControlState } from '../sessionRuntimeControl';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
 import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
 
@@ -21,12 +23,28 @@ let piWindowOverride = '';
 let directSendAdapter = '';
 let scheduledAccountPreparation = '';
 let scheduledExecutionSelection = '';
+let subscriptionRuntimeRead = '';
+let subscriptionRouteMove = '';
+let bootstrapRuntimeOverride = '';
 let directSendEntry = '';
 let archivedAdmission = '';
 let terminalGuard = '';
 let stageAxisAdapter = '';
 let scheduledAxisAdapter = '';
 function visit(node: ts.Node) {
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'readSubscriptionRuntimeSession') {
+    subscriptionRuntimeRead = node.getText(source);
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'subscriptionAccountRecoveryDeps') {
+    const expression = ts.isSatisfiesExpression(node.initializer!) ? node.initializer.expression : node.initializer;
+    if (expression && ts.isObjectLiteralExpression(expression)) {
+      const move = expression.properties.find(prop => ts.isPropertyAssignment(prop) && prop.name.getText(source) === 'moveRoute');
+      if (move && ts.isPropertyAssignment(move)) subscriptionRouteMove = move.initializer.getText(source);
+    }
+  }
+  if (ts.isIfStatement(node) && node.expression.getText(source) === 'runtimeOverride && runtimeOverride.agentKind === o.agentKind') {
+    bootstrapRuntimeOverride = node.getText(source);
+  }
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'acquirePendingAgentSwitchForDirectSend' && node.body) {
     directSendEntry = node.getText(source).replace(/^export /, '');
   }
@@ -179,6 +197,36 @@ describe('pending target axis admission', () => {
 // Renderer persistence. Exercise the real queue/lease and recovery boundary;
 // Renderer-to-IPC persistence is covered in the existing cross-file guard suite.
 describe('complete selection commit boundaries', () => {
+  // Unit #10271: run the actual account reader, route-move adapter and bootstrap
+  // override block. The old reader checked the saved model, while a stale Agent
+  // override then re-pinned startup; a different saved provider must survive.
+  it.each(['saved-alias', 'temporary-alias'] as const)('hands off the effective route and preserves preferences (%s)', async mode => {
+    const id = 'runtime-account-' + mode;
+    const saved = { status: 'active', agentKind: 'codex', model: 'saved-model',
+      providerId: mode === 'saved-alias' ? 'openai-old' : 'saved-provider', agentDeviceId: null };
+    const profile = { agentKind: 'codex' as const, providerId: 'openai-old', model: 'effective-model',
+      effort: 'max' as const, fastMode: 'ultrafast' as const, agentDeviceId: null };
+    acceptSessionRuntimeMutation({ sessionId: id, source: 'agent', profile, deferred: false });
+    const persist = vi.fn(async (_id: string, patch: object) => Object.assign(saved, patch));
+    const setProvider = vi.fn();
+    const bindings = { getSessionRowSnapshotStrict: async () => ({ ...saved }), dbToMakerAgentKind: (kind: string) => kind,
+      captureSessionRuntimeControlOwnerEpoch, sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot,
+      remapSessionRuntimeProvider, persistSessionFields: persist, setSessionProvider: setProvider };
+    try {
+      const read = compile(subscriptionRuntimeRead, bindings);
+      expect(await read(id)).toMatchObject({ providerId: 'openai-old', model: 'effective-model' });
+      const move = compile(subscriptionRouteMove, bindings);
+      await move(id, 'openai', vi.fn(), 'openai-old');
+      expect(saved).toMatchObject({ model: 'saved-model', providerId: mode === 'saved-alias' ? 'openai' : 'saved-provider' });
+      expect(persist).toHaveBeenCalledTimes(mode === 'saved-alias' ? 1 : 0);
+      expect(setProvider).toHaveBeenCalledWith(id, 'openai');
+      const bootstrap = compile('(o, runtimeOverride) => { const providerGroupStart = null; ' + bootstrapRuntimeOverride + '; return o; }', {});
+      expect(bootstrap({ ...saved }, getSessionRuntimeControlSnapshot(id).effectiveOverride))
+        .toMatchObject({ ...profile, providerId: 'openai' });
+      expect(await read(id)).toMatchObject({ model: 'effective-model', providerId: 'openai' });
+    } finally { clearSessionRuntimeControlState(id); }
+  });
+
   // Unit #10271: after the first fire migrates the task to account B, the saved
   // alias still pins account A. Exercise two real lease acquisitions and prove
   // the second fire never reapplies the alias, locally or on the same remote host.

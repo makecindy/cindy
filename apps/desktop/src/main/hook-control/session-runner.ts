@@ -28,6 +28,7 @@
  */
 
 import { beginChannelToolScope } from '../im/shared/channelToolScope.js';
+import { getSessionRuntimeStartOverride } from '../maker-ipc/sessionRuntimeControl.js';
 
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -959,7 +960,13 @@ export function createMakerHookSessionRunner(deps: {
           const recovered = await getSessionRowSnapshotStrict(req.sessionId);
           assertAccount?.();
           if (!recovered || recovered.status === 'deleted') throw new Error('The task route changed');
-          rowProviderId = recovered.providerId ?? null;
+          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, createOpts.agentKind, createOpts.agentDeviceId);
+          Object.assign(createOpts, { providerId: recovered.providerId ?? null }, runtimeOverride);
+          if (runtimeOverride.model) {
+            setSessionEffort(req.sessionId, runtimeOverride.effort);
+            setSessionFastMode(req.sessionId, runtimeOverride.fastMode ?? false);
+          }
+          rowProviderId = createOpts.providerId ?? null;
           sessionProviderId = rowProviderId;
           createOpts.providerId = rowProviderId;
         }

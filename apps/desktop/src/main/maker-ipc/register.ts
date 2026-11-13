@@ -1452,6 +1452,7 @@ import {
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
+  remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeEffort,
   resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
@@ -1926,7 +1927,7 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   resolveResetAt: resolveSessionUsageResetAt,
   // Same-account remote Agent tasks ask their executing computer (subscription-account-pools.md 账号间自动换号).
   canSwitchAccount: (sessionId) =>
-    canSwitchSubscriptionAccount(sessionId, getSessionRowSnapshotStrict, remoteBackgroundInvoke),
+    canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke),
   arm: (sessionId, token, resumeAt) =>
     agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
@@ -5138,8 +5139,18 @@ export async function acquirePendingAgentSwitchForDirectSend(
  * 订阅账号的发送前换号共用同一套运行时判定与交接：暂停／移出走 prepareSend；绑定账号此刻接不了这个模型
  * (撞限、登录失效、过载)时按供应商组口径换到账号池选出的另一个账号(failover.ts，provider-groups.md §5/§6.1)。
  */
+async function readSubscriptionRuntimeSession(id: string) {
+  const owner = captureSessionRuntimeControlOwnerEpoch();
+  const row = await getSessionRowSnapshotStrict(id);
+  if (!sessionRuntimeControlOwnerEpochMatches(owner)) throw new Error('Subscription account owner changed');
+  const effective = getSessionRuntimeControlSnapshot(id).effectiveOverride;
+  return row && effective && effective.agentKind === dbToMakerAgentKind(row.agentKind)
+    && (effective.agentDeviceId ?? null) === (row.agentDeviceId ?? null)
+    ? { ...row, model: effective.model, providerId: effective.providerId } : row;
+}
+
 const subscriptionAccountRecoveryDeps = {
-  readSession: getSessionRowSnapshotStrict,
+  readSession: readSubscriptionRuntimeSession,
   invokeRemote: remoteBackgroundInvoke,
   isRunning: (id: string) => {
     const live = getMaker().getSession(id);
@@ -5152,10 +5163,21 @@ const subscriptionAccountRecoveryDeps = {
       agentInputCoordinatorHolder?.getInputAbortSignal(id));
   },
   // 旧独立 Codex 连接 ID 会固定原账号：任务换号后改走归并后的 OpenAI 来源(与换模型同样写运行路由和任务来源)。
-  moveRoute: async (id: string, providerId: string, assertCurrent: () => void) => {
+  moveRoute: async (id: string, providerId: string, assertCurrent: () => void, fromProviderId: string) => {
+    const owner = captureSessionRuntimeControlOwnerEpoch();
+    const control = getSessionRuntimeControlSnapshot(id);
+    const saved = await getSessionRowSnapshotStrict(id);
     assertCurrent();
+    if (!saved || saved.status === 'deleted'
+      || (saved.providerId !== fromProviderId && control.effectiveOverride?.providerId !== fromProviderId))
+      throw new Error('The task route changed');
+    // A temporary source must not overwrite the user's different saved provider.
+    if (saved.providerId === fromProviderId) await persistSessionFields(id, { providerId });
+    assertCurrent();
+    if (remapSessionRuntimeProvider({ sessionId: id, fromProviderId, toProviderId: providerId,
+      expectedOwnerEpoch: owner, expectedGeneration: control.generation }) === null)
+      throw new Error('The task route changed');
     setSessionProvider(id, providerId);
-    await persistSessionFields(id, { providerId });
   },
   log: (message: string, fields: Record<string, unknown>) => log.info(message, fields),
 } satisfies AccountFailoverDeps;
@@ -11893,7 +11915,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 撞限／登录失效的只是那台电脑上的一个账号：账号池里另一个账号能接时可原地换号(由执行电脑判断)。
     readAccountSwitch: (sessionId) =>
-      readSubscriptionAccountSwitch(sessionId, getSessionRowSnapshotStrict, remoteBackgroundInvoke),
+      readSubscriptionAccountSwitch(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke),
     fallback: (sessionId, signals, token, recovery) => usageLimitAutoResume.onTurnError(sessionId, signals, token, recovery),
     // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
     readResetAt: (signals) => readTurnUsageResetAt(signals, Date.now(), { localTimeZoneTrusted: false }),
