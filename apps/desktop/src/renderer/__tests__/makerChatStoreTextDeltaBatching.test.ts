@@ -2621,6 +2621,8 @@ describe('makerChatStore text delta batching', () => {
     afterEach(() => {
       for (const sessionId of backgroundSessions) makerChatStore.purgeSession(sessionId);
       backgroundSessions.length = 0;
+      remoteProjectsStore.clear();
+      remoteProjectsStore.__resetPinnedOriginsForTest();
     });
 
     const backgroundSession = (label: string): string => {
@@ -2629,12 +2631,18 @@ describe('makerChatStore text delta batching', () => {
       return sessionId;
     };
 
-    const broadcastRow = (sessionId: string, clientId: string, content: string, index: number) =>
+    const broadcastRow = (
+      sessionId: string,
+      clientId: string,
+      content: string,
+      index: number,
+      createdAt?: string,
+    ) =>
       emitDbMessageCreated({
         clientId,
         role: 'assistant',
         content,
-        createdAt: new Date(Date.UTC(2026, 10, 12, 0, 0, index)).toISOString(),
+        createdAt: createdAt ?? new Date(Date.UTC(2026, 10, 12, 0, 0, index)).toISOString(),
       }, sessionId);
 
     it('keeps only a short tail for a session this window never opened', () => {
@@ -2674,6 +2682,58 @@ describe('makerChatStore text delta batching', () => {
       } finally {
         dispose();
       }
+    });
+
+    // 正在流式生成的那一行还没落库：文本块落库前库里没有它，后续增量也只会去替换
+    // 那条已经不存在的行 —— 裁掉它，用户打开会话就看不到「正在生成的回复」。
+    it('keeps the reply that is still streaming for a session this window never opened', () => {
+      const sessionId = backgroundSession('background-streaming');
+      emitTextDelta('partial-reply', sessionId, 'stream-row');
+      // 文本增量按批落进 chat state（32ms 一批），先把它冲出来。
+      vi.advanceTimersByTime(32);
+
+      // 后到的落库行时间戳比流式行新：流式行因此排在最前面，正是会被裁掉的位置。
+      const after = Date.now() + 60_000;
+      for (let index = 0; index < 30; index += 1) {
+        broadcastRow(sessionId, `bg-row-${index}`, `row-${index}`, index,
+          new Date(after + index).toISOString());
+      }
+
+      const rows = makerChatStore.getSnapshot(sessionId).messages;
+      expect(rows.some((row) => row.clientId === 'stream-row')).toBe(true);
+    });
+
+    // device-link 路径：远端任务可以在首次打开之前就断连，这时被裁掉的行再也取不回来。
+    it('keeps the rows of a remote session whose device is disconnected', () => {
+      const sessionId = backgroundSession('background-remote-offline');
+      remoteProjectsStore.pinSessionOrigin('device-1', sessionId);
+      remoteProjectsStore.markDeviceDisconnected('device-1');
+
+      for (let index = 0; index < 30; index += 1) {
+        broadcastRow(sessionId, `bg-row-${index}`, `row-${index}`, index);
+      }
+
+      expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(30);
+    });
+
+    // 群专线面板的 BotGroupProcessNotes 直接读这个会话的 messages —— 那是用户正在看的
+    // 界面内容，不是「打开时能重读」的历史。
+    it('keeps the rows of a session a visible surface is consuming', () => {
+      const sessionId = backgroundSession('background-pinned');
+      const unpin = makerChatStore.pinVisibleSurfaceSession(sessionId);
+
+      try {
+        for (let index = 0; index < 30; index += 1) {
+          broadcastRow(sessionId, `bg-row-${index}`, `row-${index}`, index);
+        }
+        expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(30);
+      } finally {
+        unpin();
+      }
+
+      // 登记撤销后，这个会话回到「纯后台」口径：新行一落库就重新裁剪。
+      broadcastRow(sessionId, 'bg-row-30', 'row-30', 31);
+      expect(makerChatStore.getSnapshot(sessionId).messages.length).toBeLessThanOrEqual(10);
     });
   });
 

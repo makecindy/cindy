@@ -4443,12 +4443,45 @@ function leaveView(sessionId: string): void {
 const UNOPENED_SESSION_MESSAGE_CAP = 10;
 const UNOPENED_SESSION_CHARACTER_BUDGET = 128 * 1024;
 
+/**
+ * 有别的可见界面正在消费这个会话的行（例如群专线面板的 BotGroupProcessNotes
+ * 直接读某个隐藏 group-lane 会话的 messages）。这样的行不能被后台裁剪丢掉：
+ * 丢掉的是用户正在看的界面内容，而不是「打开时能重读」的历史。
+ */
+const _visibleSurfaceSessions = new Set<string>();
+
+/**
+ * 登记「有可见界面正在消费这个会话的行」。返回一个注销函数，组件卸载时调用。
+ */
+function pinVisibleSurfaceSession(sessionId: string): () => void {
+  _visibleSurfaceSessions.add(sessionId);
+  return () => {
+    _visibleSurfaceSessions.delete(sessionId);
+  };
+}
+
 /** 这个窗口从没打开、也没亲手碰过的会话：纯后台，可以只留一小段。 */
 function _isBackgroundOnlySession(sessionId: string): boolean {
   if (_activeViewSessions.has(sessionId)) return false;
   if (_lastViewedAt.has(sessionId)) return false;
+  if (_visibleSurfaceSessions.has(sessionId)) return false;
   if (_locallyEngagedSessions.has(sessionId)) return false;
   return true;
+}
+
+/**
+ * 这个会话的行还能不能从别处取回？取不回的行不能丢。
+ *
+ * - 本地会话：行在本地库里，打开会话时能重读 → 可取回；
+ * - 远端会话：行在远端主机上。设备已断开、或远端视图不能再拉详情时取不回来，
+ *   此时裁掉的行就永远丢了（device-link 路径下远端任务可以在首次打开前就断连）。
+ */
+function _rowsAreReloadable(sessionId: string): boolean {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (!deviceId) return true;
+  if (isRemoteDeviceMarkedDisconnected(deviceId)) return false;
+  const view = getRemoteHistoryView(sessionId);
+  return view ? view.canReloadDetails() : false;
 }
 
 function _capUnopenedSessionMessages(sessionId: string, state: SessionChatState): void {
@@ -4457,6 +4490,11 @@ function _capUnopenedSessionMessages(sessionId: string, state: SessionChatState)
   if (state.historyLoaded) return;
   // 本地乐观行还没落库：库里取不回来，不能丢（与软淘汰同一条口径）。
   if (state.messages.some((message) => message.isPendingPersist === true)) return;
+  // 正在流式生成的这一行还没落库：文本块落库前库里没有它，丢了用户就看不到
+  // 「正在生成的回复」，而后续增量只会去替换那条已经不存在的行。
+  if (state.streamingClientId !== null) return;
+  // 远端行取不回来（设备断开 / 远端视图不能再拉详情）：不能丢。
+  if (!_rowsAreReloadable(sessionId)) return;
   let characters = 0;
   const kept: ChatMessage[] = [];
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
@@ -9287,8 +9325,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       mapped.role === 'user' && isAwaitingHistoryView(sessionId, mapped.clientId);
     // Stop 会乐观置 Idle，但真正的 interrupt 可能还在 IPC 队列里；此时旧 turn 继续喷出的
     // live tool + DB echo 仍必须走批通知，否则按钮一按下就退化回事故中的逐行 React fan-out。
+    // 后台会话（这个窗口从没打开过）也走批通知：它的行随后还要过一遍 MEM-OPT-3 的裁剪，
+    // 裁剪本身也是一次状态写入 —— 若这里同步通知，裁剪再排一次延迟通知，
+    // 同一批落库广播就会让侧栏刷新两次（两次都在用户看不见的后台会话上）。
     const deferNotification =
-      current.agentStatus.isRunning || current.isStreaming || isLiveToolEcho;
+      current.agentStatus.isRunning || current.isStreaming || isLiveToolEcho
+      || _isBackgroundOnlySession(sessionId);
     setState(
       sessionId,
       (s) => {
@@ -19150,6 +19192,8 @@ export const makerChatStore = {
   enterView,
   /** MEM-OPT-2: Mark a session view unmounted. */
   leaveView,
+  /** MEM-OPT-3: 有别的可见界面正在消费这个会话的行时登记它（返回注销函数）。 */
+  pinVisibleSurfaceSession,
   insertSystemCard,
   moveLearnCardToEnd,
   updateLastSystemCardData,

@@ -4,7 +4,7 @@ import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSession
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 /** Latest public progress in the current turn, including the note before a tool call.
  * Remote work uses the authenticated activity summary and opens the original task. */
-import { useCallback, useLayoutEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { cn } from '@/lib/utils';
@@ -53,6 +53,9 @@ export function BotGroupLivePreview({ sessionId, lines = 2, className }: { sessi
 
 /** All public stage notes from this execution, kept in original order between tool calls. */
 export function BotGroupProcessNotes({ sessionId, executionId, since }: { sessionId: string; executionId?: string; since: number }) {
+  // 这个面板直接读这个会话的 messages —— 它是可见界面正在消费这些行，
+  // 后台裁剪（MEM-OPT-3）不能把它们当成「没人看的历史」丢掉。
+  useEffect(() => makerChatStore.pinVisibleSurfaceSession(sessionId), [sessionId]);
   const subscribe = useCallback((listener: () => void) => makerChatStore.subscribe(sessionId, listener), [sessionId]);
   const read = useCallback(() => JSON.stringify(makerChatStore.getSnapshot(sessionId).messages
     .filter(message => isBotGroupProcessMessageVisible({ ...message, agentMeta: message })
