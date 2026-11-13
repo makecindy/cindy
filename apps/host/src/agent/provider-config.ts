@@ -20,7 +20,10 @@ import { createGrokOAuthService } from '../../../desktop/src/main/maker-host/gro
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
 import { createClaudeNativeCli } from '../../../desktop/src/main/maker-host/claude-native-cli.js';
 import { readClaudeCliLoginStatusBySpawn } from '@cindy/maker-core/claude-cli-login-status';
-import { setActiveCatalog, setCustomProviderConfigs, setLocalCatalogOverrides, getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { setActiveCatalog, setCustomProviders, setCustomProviderConfigs, setSubscriptionPoolProviders, setLocalCatalogOverrides, getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { publishSubscriptionPoolProviders } from '../../../desktop/src/main/maker-host/subscriptionPoolCatalog.js';
+import { readCreatedSubscriptionProviders } from '../../../desktop/src/main/subscription-accounts/placement.js';
+import { createLogger } from '../../../desktop/src/main/logger.js';
 import { createCatalogCache } from '../../../desktop/src/main/maker-host/catalogCache.js';
 import { readModelCatalogOverrides } from '../../../desktop/src/main/maker-host/model-catalog-override-store.js';
 import { readModelDisableOverrides } from '../../../desktop/src/main/maker-host/model-disable-store.js';
@@ -117,11 +120,27 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     },
   });
   const readKey = (id: string, agent: string) => options.credentials.read(key(customProviderSecretStorageKey(storedCustomProviderId(id), agent)));
+  const log = createLogger('host-provider-config');
+  let listGeneration = 0;
   const list = async () => {
-    const configs = await headers.listCustomProvidersWithSecureHeaders(); check();
-    setCustomProviderConfigs(configs);
-    setLocalCatalogOverrides(readModelCatalogOverrides());
-    return configs;
+    check();
+    const generation = ++listGeneration;
+    try {
+      const configs = await headers.listCustomProvidersWithSecureHeaders(); check();
+      if (generation !== listGeneration) return configs;
+      setCustomProviderConfigs(configs);
+      publishSubscriptionPoolProviders({ readCreatedSubscriptionProviders, setSubscriptionPoolProviders, log });
+      setLocalCatalogOverrides(readModelCatalogOverrides());
+      return configs;
+    } catch (err) {
+      check();
+      if (generation === listGeneration) {
+        // Desktop's failed refresh clears both ordinary and subscription providers.
+        setCustomProviders([]);
+        log.warn('failed to load custom providers; cleared current owner catalog snapshot', { err: String(err) });
+      }
+      throw err;
+    }
   };
   const cache = createCatalogCache(() => { check(); return options.profileDir; });
   const cancelLogins = async () => {
