@@ -698,7 +698,7 @@ import {
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
-import { withChatServer } from './chatServer.js';
+import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -9523,21 +9523,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 分享来的供应商被分享者建成了组：续接回到原来那台却接不下时，组所在电脑发来「需要换一台」凭证
         // (provider-groups.md §6.1 分享的人)：同一个分享位置带交接重新打开，打开时带回凭证，由组换一台。
         const guestRelocation = !next && o.id && o.resumeSessionId && isProviderShareAgentDeviceId(o.agentDeviceId)
-          && providerGroupService?.claimGuestStartSwitch(o.id) === true;
+          ? await providerGroupService?.prepareGuestStartSwitch(o.id) : null;
         if (!next && !guestRelocation) throw error;
         // 同 Harness 先搬原生记录；源端不可用或目标不支持时交接，绝不将旧电脑的 ID 直接用于目标端。
         if (o.id && o.resumeSessionId) {
           const target = next
             ? next.route
             : { agentDeviceId: o.agentDeviceId ?? null, providerId: o.providerId ?? null };
-          nativeRelocation = await relocateForFreshStart(agentSwitchDeps, {
-            sessionId: o.id,
-            agentDeviceId: target.agentDeviceId,
-            providerId: target.providerId,
-            from: failedRoute,
-            assertCurrent: assertAccess,
-            ...(guestRelocation ? { sharedRelocation: true } : {}),
-          });
+          let relocated = false;
+          try {
+            nativeRelocation = await relocateForFreshStart(agentSwitchDeps, {
+              sessionId: o.id,
+              agentDeviceId: target.agentDeviceId,
+              providerId: target.providerId,
+              from: failedRoute,
+              assertCurrent: () => {
+                assertAccess?.();
+                if (guestRelocation && !guestRelocation.isCurrent()) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+              },
+              ...(guestRelocation ? { sharedRelocation: true } : {}),
+            });
+            relocated = true;
+          } finally {
+            guestRelocation?.dispose();
+            if (guestRelocation && !relocated) getProviderGroupGuestSwitch().release(o.id);
+          }
           o.resumeSessionId = nativeRelocation.nativeId ?? undefined;
           if (o.vendorOptions) {
             const fresh = { ...o.vendorOptions };
@@ -20912,6 +20922,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item), broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info })),
     beforeDispatchUserTurn: async (sessionId, item, signal) => {
+      if (isRetiredGroupWelcomeInput(item)) throw new Error('INVALID_EXECUTION_TRIGGER');
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
@@ -20956,7 +20967,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: async (sessionId) => {
       await restoreSavedUsageLimitWait(sessionId);
-      return loadAgentInputQueueSnapshot(sessionId);
+      return (await loadAgentInputQueueSnapshot(sessionId)).filter(item => !isRetiredGroupWelcomeInput(item));
     },
     getPersistedClientIds: getPersistedInputClientIds,
   });

@@ -319,6 +319,8 @@ export interface ProviderGroupService {
    * (§6.1)：取走凭证、登记给下一次打开，返回 true，调用方带交接后在同一个分享位置重新打开，由组换一台。
    */
   claimGuestStartSwitch(sessionId: string): boolean;
+  /** Startup counterpart of guestFailover, fenced through the history handoff. */
+  prepareGuestStartSwitch(sessionId: string): Promise<{ isCurrent(): boolean; dispose(): void } | null>;
   /** 用户亲自接手：这一轮重新从头试。 */
   noteUserAction(sessionId: string): void;
   /**
@@ -1340,6 +1342,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       }
       return await failoverRun(sessionId, signals, token, hooks, decision, lease, run, directRecovery);
     } finally {
+      directRecovery?.dispose?.();
       done();
     }
   }
@@ -2315,6 +2318,29 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const claimed = deps.guestSwitch?.claim(sessionId) === true;
       if (claimed) deps.log.info('provider group: reopening a shared task through the sharer’s group after it did not start', { sessionId });
       return claimed;
+    },
+
+    async prepareGuestStartSwitch(sessionId) {
+      const recovery = deps.directGuestSession?.(sessionId)?.captureRecovery?.();
+      const { run, done } = trackRun(sessionId);
+      let claimed = false;
+      const isCurrent = () => !run.superseded && (recovery === undefined || (recovery !== null && recovery.isCurrent()));
+      const dispose = () => { recovery?.dispose?.(); done(); };
+      try {
+        if (!isCurrent()) return null;
+        if (!deps.guestSwitch?.hasOffer(sessionId) && recovery) {
+          const row = await deps.readSessionRow(sessionId);
+          if (!isCurrent() || row?.agentDeviceId !== recovery.ownerRoute) return null;
+          const token = await recovery.requestSwitch().catch(() => undefined);
+          if (!token || !isCurrent()) return null;
+          deps.guestSwitch?.offer(sessionId, token);
+        }
+        if (!isCurrent() || !deps.guestSwitch?.claim(sessionId)) return null;
+        claimed = true;
+        return { isCurrent, dispose };
+      } finally {
+        if (!claimed) dispose();
+      }
     },
 
     noteUserAction(sessionId) {
