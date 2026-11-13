@@ -338,7 +338,7 @@ export class GhostFsSlot {
     const op = req.op as GhostFsOp;
     if (!current() || !GHOST_FS_OPS.includes(op)) return fail('当前任务或文件操作已失效');
     return this.handleDirectoryOperation(`task:${sessionId}`, op, req, { key: `task:${sessionId}:${instanceId ?? ''}`,
-      sessionId, session, root: await fs.promises.realpath(session.workingDir), current, signal, mutationApproved: true,
+      sessionId, session, root: await fs.promises.realpath(session.workingDir), current, signal,
       verify: async () => { if (!current()) throw new Error('TASK_AUTHORIZATION_EXPIRED'); },
     });
   }
@@ -458,7 +458,7 @@ export class GhostFsSlot {
 
   private async handleDirectoryOperation(ghostId: string, op: GhostFsOp, req: Record<string, unknown>,
     scope: { key: string; sessionId: string | null; session: FsSessionSnapshot | null; root: string; current(): boolean;
-      verify(): Promise<void>; signal?: AbortSignal; mutationApproved?: true }): Promise<GhostPipeFsResult> {
+      verify(): Promise<void>; signal?: AbortSignal }): Promise<GhostPipeFsResult> {
     const { key: callId, sessionId, session, root, current, signal } = scope;
     if (op === 'changes' || op === 'unwatch') {
       const watchId = typeof req.watchId === 'string' ? req.watchId : '';
@@ -563,25 +563,8 @@ export class GhostFsSlot {
       return { ok: true, op: 'read', path: relPath, content: bytes.toString(encoding), encoding, bytes: bytes.byteLength };
     }
     if (op !== 'delete') return fail('不支持的工作目录操作');
-    // Delete always has its own decision; a previous write confirmation grants no delete authority.
-    let verdict = session && !scope.mutationApproved ? workdirWriteVerdict(session.permissionMode, session.planModeEnabled) : 'allow';
-    if (verdict === 'deny') return fail('当前会话处于计划/只读模式，不允许删除');
-    if (verdict === 'review') {
-      let decision: AutoReviewDecision;
-      try { decision = await session?.reviewAction?.({ kind: 'other', description: `Delete ${relPath} from the current working directory`, requireConsent: true }) ?? { verdict: 'ask' }; }
-      catch { decision = { verdict: 'ask' }; }
-      if (!current()) return fail('调用已结束');
-      if (decision.verdict === 'block') return fail('自动审核拒绝删除');
-      verdict = decision.verdict === 'allow' ? 'allow' : 'confirm';
-    }
-    if (verdict === 'confirm') {
-      const decision = await this.deps.requestWriteConfirm(sessionId!, {
-        ghostId, ghostName: this.deps.getGhost(ghostId)?.manifest.name ?? ghostId, lane: 'fs_delete',
-        items: [{ name: path.basename(target), absPath: target, size: stat.size, isDirectory: stat.isDirectory() }],
-      });
-      if (!decision.confirmed) return fail('本次删除未获批准');
-    }
-    // Re-resolve after confirmation; neither an installation replacement nor a new symlink inherits it.
+    if (session && (session.planModeEnabled || session.permissionMode === 'plan')) return fail('当前会话处于计划/只读模式，不允许删除');
+    // Keep the target and live-call checks at the IO boundary without a second approval.
     if (!current() || !await deepestExistingAncestorInside(root, target)) return fail('目录或调用授权已失效');
     const latest = await fs.promises.lstat(target);
     if (latest.isSymbolicLink() || latest.dev !== stat.dev || latest.ino !== stat.ino || !current()) return fail('删除目标已变化');

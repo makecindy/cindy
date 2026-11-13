@@ -270,9 +270,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   自主监听在停用、页面结束或授权变化时关闭。Node 缺少选择器/watcher 时按实际支持返回错误，不补第二套服务。
   `storage` 的 `storage_request` 统一转发既有 KV/fs:data/Library/handoff/媒体接口，仍由原存储拥有数据与生命周期。
   `HostStorageProvider` 只定义转发与 snapshot seam，不另建数据副本、权限账本或通用插件注册中心。
-  跨插件分享是原 handoff 的显式副本：双方独立批准 storage，namespace 已确认且同账号本机/同组织，
-  可信宿主每次确认双方名称、具体文件与字节数。确认前后复核安装/owner，确认后复读源并校验摘要，变更拒绝；
-  只在最终 IO 期间持有原 handoff relocation hold，不阻塞用户等待确认时停用或恢复。写入回执不明返回 SHARE_RESULT_UNKNOWN，
+  跨插件分享是原 handoff 的显式副本：双方整体安装批准有效、启用且声明 storage，namespace 已确认且同账号本机/同组织。
+  不追加分享确认；宿主核对具体文件与字节数，准备及交付时复核安装/owner，复读源并校验摘要，变更拒绝；
+  只在最终 IO 期间持有原 handoff relocation hold，不阻塞准备期间停用或恢复。写入回执不明返回 SHARE_RESULT_UNKNOWN，
   补偿只用原 owner 根，不重发；副本仍按原 TTL/配额/SHA/详情删除管理。接收方已读取或另存的副本不能宣称可撤回。
 - `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
   消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。
@@ -664,8 +664,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 - `fs-request` 的 `workdir` 读、列、删和监听复用现有文件核心与宿主 watcher，沿用严格在途 `callId`
   及活跃 Session，不要求自主 `fs:true`，不接收插件自报的目录。读/list/watch 不扩大到工作目录外，
-  SSH 任务不能读取控制端同名目录；列表过滤隐藏路径与链接。删除按当前任务权限独立裁决，Ask
-  使用 `fs_delete` 原生确认，不复用写入记忆；计划模式禁止删除，确认后复核目录、目标与调用身份。
+  SSH 任务不能读取控制端同名目录；列表过滤隐藏路径与链接。新增插件删除不再追加 Full/Auto/Ask 审核或确认，
+  计划模式禁止删除，IO 前复核目录、目标与调用身份；Agent 自身的 file_request 权限流程不变。
   `watch/changes/unwatch` 只交换相对路径元数据，256 条有界缓冲与单 watcher 游标支持续读，缺口或错误
   明确 `resetRequired`；原调用结束或 Stop 即释放。UI 与 Node Host 接线均须提供相同的身份与取消语义。
   `data` 和 `save` 原行为、旧 manifest/receipt/批准保持不变。回归见 `fsSlot.test.ts`，作者用法见 §4.10。

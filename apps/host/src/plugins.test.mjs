@@ -252,13 +252,7 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   const storage = new HostStorageService({ ownerKey: () => 'fixture-owner:1', getGhost, handoff, listGhosts: () => [ghost, receiver],
     providers: createHostStorageProviders({ kv, files: fileService, library: null, handoff,
       media: { describe: async () => null, read: async () => new Response(null, { status: 404 }) } }),
-    confirmShare: async (facts, current) => {
-      assert.equal(facts.sourceId, 'test-node'); assert.equal(facts.targetId, 'test-receiver');
-      assert.equal(facts.fileName, 'record.json');
-      const answer = await confirmations.confirm({ ghostId: facts.sourceId, ghostName: facts.sourceName,
-        body: `${facts.fileName} → ${facts.targetName}`, confirmText: null, cancelText: null, danger: false });
-      return current() && answer;
-    } });
+  });
   const hostTools = createHostToolService({ terminal: terminals, files: () => fileService, storage: () => storage,
     profileDir: dir, ownerId: 'fixture-owner', owner,
     getGhost, getSession: () => undefined, current: () => true, confirmations, t: key => key,

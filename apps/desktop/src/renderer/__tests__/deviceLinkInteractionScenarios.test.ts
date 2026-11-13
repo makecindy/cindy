@@ -442,21 +442,16 @@ describe('device-link 远程交互往返 — plan_review', () => {
 });
 
 describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
-  // 测试价值：第21项删除确认必须进入真实 store，不能被旧 lane 白名单丢弃。
-  // 既有测试只覆盖远控只读投影；最小输入为本机挂起的 fs_delete，tier=unit。
-  it('本机删除确认从权威快照恢复，保留完整目标并经原确认入口作答', async () => {
+  // 第21项不再产生删除确认，旧 lane 不能恢复成新的插件权限卡，tier=unit。
+  it('不把已移除的插件删除确认恢复为权限卡', async () => {
     const s = sid();
     local.localGetPendingInteractions.mockResolvedValue([{ request: {
       kind: 'ghost_grant_confirm', requestId: 'delete-confirm', ghostId: 'file-smoke', ghostName: 'File smoke',
       lane: 'fs_delete', items: [{ name: 'reports', absPath: '/workspace/reports', size: 128, isDirectory: true }],
     } }]);
     await makerChatStore.reconcilePendingInteractions(s);
-    expect(makerChatStore.getSnapshot(s).pendingGhostGrantConfirm).toMatchObject({
-      requestId: 'delete-confirm', lane: 'fs_delete', items: [{ name: 'reports', isDirectory: true }],
-    });
-    makerChatStore.respondToGhostGrantConfirm(s, { confirmed: false });
-    await flush();
-    expect(local.localResolveInteraction).toHaveBeenCalledWith('delete-confirm', { confirmed: false });
+    expect(makerChatStore.getSnapshot(s).pendingGhostGrantConfirm).toBeNull();
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
     expect(host.resolved).toHaveLength(0);
   });
 

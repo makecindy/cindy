@@ -72,8 +72,6 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
           ? 'ghostGrant.confirm.descriptionRevealPath'
           : pending.lane === 'fs_write'
             ? 'ghostGrant.confirm.descriptionFsWrite'
-            : pending.lane === 'fs_delete'
-              ? 'ghostGrant.confirm.descriptionFsDelete'
             : pending.lane === 'workspace'
               ? 'ghostGrant.confirm.descriptionWorkspace'
               : pending.lane === 'forge_source'

@@ -192,10 +192,10 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 
 `storageService.ts` 的 `HostStorageProvider` 统一路由已有 KV、fs:data、Library、handoff 和媒体，
 `storageProviders.ts` 只做适配；Library 的 binding、SQL、原子写、迁移和卸载不删语义保持。
-插件经独立批准的 `storage` 组调用 helper `storage_request`，不能代报调用方或直接读另一个实例。
-分享原子内容快照时，宿主确认双方与实际大小，复核源摘要后调用原 handoff.import；
+整体安装批准有效且启用的插件声明 `storage` 后调用 helper `storage_request`，不追加组批准，不能代报调用方或直接读另一个实例。
+分享原子内容快照时，不再弹调用确认；宿主核对双方与实际大小，复核源摘要后调用原 handoff.import；
 目标必须同账号本机、namespace 已确认且同组织范围。个人 root/local 属个人范围。
-接收方拿到自己的 handoff 引用，不获得源 Library 根或后续读取权。确认期间不持安装迁移锁，
+接收方拿到自己的 handoff 引用，不获得源 Library 根或后续读取权。准备快照期间不持安装迁移锁，
 最终写入短暂复用 handoff hold，IO 失败保留结果未知语义及原 owner 根补偿。作者参数见 §4.10.4。
 
 ## Review 清单
