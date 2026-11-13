@@ -1,4 +1,5 @@
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
+import { extractPlainText } from './agentHandoff.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
@@ -247,7 +248,7 @@ const isGroupRoom = (room: Pick<Room, 'kind'>) => room.kind === 'group';
  */
 export function isRetiredGroupWelcomeInput(item: { clientId: string; retrySourceClientId?: string; persistedContent: string }): boolean {
   const groupInput = item.clientId.startsWith('bot-group:') || item.retrySourceClientId?.startsWith('bot-group:');
-  return Boolean(groupInput) && item.persistedContent.startsWith(
+  return Boolean(groupInput) && extractPlainText(item.persistedContent).startsWith(
     `${UI_ACTION_TRIGGER_PREFIX}You are participating as yourself in a Cindy group chat. The host has validated a server-issued event confirming that a real human joined this group.`);
 }
 const ordinaryExecution = (execution: Execution) => execution.trigger === undefined && execution.trigger_type == null;

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import ts from 'typescript';
+import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { HOST_ONLY_AGENT_PREFIX, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 const avatarUpload = vi.hoisted(() => vi.fn());
 vi.mock('../../ossPublicUpload.js', () => ({ uploadPublicAsset: avatarUpload }));
 const fixture = vi.hoisted(() => ({ upload: vi.fn<(...args: Parameters<ReturnType<typeof import('../chatServerMedia.js').createChatMedia>['upload']>) => Promise<unknown[]>>(async () => []), download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[], token: 'isolated-test-token', refresh: vi.fn(async () => true), requests: [] as Array<{ url: string; token: string; actor?: string }> }));
@@ -2877,6 +2881,42 @@ describe('Chat Server result delivery and refresh', () => {
     expect(isRetiredGroupWelcomeInput(chatOnly)).toBe(true);
     expect(isRetiredGroupWelcomeInput({ ...chatOnly, retrySourceClientId: 'ordinary-retry' })).toBe(false);
     expect(isRetiredGroupWelcomeInput({ ...chatOnly, persistedContent: '[UI_ACTION_TRIGGER]Reply to my request' })).toBe(false);
+  });
+
+  // Upgrade regression (unit): execute the production queue builder and persist
+  // through the coordinator. Attachment serialization previously hid the envelope.
+  it('recognizes an attachment-wrapped welcome after actual queue persistence', async () => {
+    const source = (await readFile(new URL('../register.ts', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+    const start = source.indexOf('  async function buildSessionControlInputItem(params: {');
+    const end = source.indexOf('  const orcaInterAgentDispatcher:', start);
+    if (start < 0 || end < start) throw new Error('Queue builder not found');
+    const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX', 'bindTaskActionInput',
+      ts.transpileModule(`${source.slice(start, end)}\nreturn buildSessionControlInputItem;`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+      }).outputText)(async () => ({ agentKind: 'codex', model: 'm', permissionMode: 'ask' }),
+      (mode: string) => mode, '[UI_ACTION_TRIGGER]', HOST_ONLY_AGENT_PREFIX, () => {});
+    const text = '[UI_ACTION_TRIGGER]You are participating as yourself in a Cindy group chat. The host has validated a server-issued event confirming that a real human joined this group.';
+    const queued: AgentInputQueuedMessage = await build({ targetSessionId: 'lane', clientId: 'random-queue-id',
+      message: text, persistedContent: text, meta: {}, toolsDisabled: true,
+      files: [{ category: 'document', name: 'history.txt', path: '/isolated/history.txt' }] });
+    queued.retrySourceClientId = `bot-group:${roomId}:${execution.id}:local-bot`;
+    let snapshot: AgentInputQueuedMessage[] = [];
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: vi.fn(), steerToAgent: vi.fn(), abortSession: vi.fn(),
+      isTurnRunning: () => true, hasPendingInteraction: () => false,
+      getAgentKind: () => 'codex', getSdkSessionId: async () => undefined,
+      createUserMessage: vi.fn(), touchUserSend: vi.fn(async () => {}), emitProjection: vi.fn(),
+      loadQueueSnapshot: async () => [],
+      persistQueueSnapshot: (_sessionId, items) => { snapshot = JSON.parse(JSON.stringify(items)); },
+    });
+    await coordinator.ensureQueueRestored('lane');
+    coordinator.enqueue('lane', queued);
+    expect(snapshot).toHaveLength(1);
+    expect(JSON.parse(snapshot[0].persistedContent)).toMatchObject({ text, files: [{ path: '/isolated/history.txt' }] });
+    expect(isRetiredGroupWelcomeInput(snapshot[0])).toBe(true);
+    expect(isRetiredGroupWelcomeInput({ ...snapshot[0], retrySourceClientId: 'ordinary-retry' })).toBe(false);
+    expect(isRetiredGroupWelcomeInput({ ...snapshot[0], persistedContent: JSON.stringify({ text: 'Ordinary group request', files: [] }) })).toBe(false);
+    expect(isRetiredGroupWelcomeInput({ ...snapshot[0], persistedContent: '{broken JSON' })).toBe(false);
   });
 
   // Removal regression (unit): a valid queued legacy welcome used to start an Agent.
