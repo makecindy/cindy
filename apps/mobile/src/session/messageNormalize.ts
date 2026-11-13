@@ -27,7 +27,6 @@ import {
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText, parseInputHandoffEndRecord } from '@cindy/maker-shared/synthetic-trigger';
 import {
-import {
   asyncQuestionReplyDisplayText, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
 } from '@cindy/maker-shared/interaction';
 import {
