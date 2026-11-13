@@ -6,7 +6,7 @@
   "appName": "MCP App",
   "cardTitle": "{{title}} · $t(mcpApps.appName)",
   "messageSource": "Gesendet von $t(mcpApps.appName) „{{name}}“",
-  "serverId": "MCP Server ID: {{id}}",
+  "serverId": "MCP-Server-ID: {{id}}",
   "exitFullscreen": "Vollbild beenden",
   "mobileUpdateRequired": "Aktualisiere Cindy auf diesem Smartphone, um diese Karte zu öffnen.",
   "filesOnExecutionComputer": "Dateiinhalt auf dem ausführenden Computer anzeigen"

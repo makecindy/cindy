@@ -41,6 +41,8 @@ import {
   REMOTE_RESOURCE_INVOKE_CHANNEL,
   type PluginPageConfirm,
   type PluginPagePoll,
+  type PluginNativeIntent as NativeIntent,
+  type PluginPageFetchResult,
 } from "@cindy/device-link";
 import { Text, TextInput } from "@/components/AppText";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
@@ -65,6 +67,7 @@ import { MobileMailHtmlPreview } from "./MobileMailHtmlPreview";
 import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
+import { PluginNativeIntent } from "./PluginNativeIntent";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { Check, CircleMinus, CircleX, Clock, ExternalLink, Settings, ChevronDown } from 'lucide-react-native';
 import { prStatusVisual } from '@/session/prStatusVisual';
@@ -364,6 +367,8 @@ function CardControls({
     setFormState({ key: formKey, values: formValues, base: incoming });
   }
   const [confirm, setConfirm] = useState<PluginPageConfirm>();
+  const [previewIntent, setPreviewIntent] = useState<Extract<NativeIntent, { kind: 'preview' }>>();
+  const dismissedPreviews = useRef(new Set<string>());
   const [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false),
     [answering, setAnswering] = useState(false);
@@ -394,6 +399,8 @@ function CardControls({
   useEffect(() => {
     if (!lease) return;
     if (!focused || !foreground || status !== "online") {
+      // The host discards preview resources on suspend. Resume only from a fresh receipt.
+      setPreviewIntent(undefined);
       if (current() && status === "online")
         void invokePlugin(invoke, deviceId, pluginId, "suspend", {
           pageId: lease,
@@ -412,7 +419,13 @@ function CardControls({
           "poll",
           { pageId: lease, after: 0 },
         );
-        if (!disposed && current()) setConfirm(result.confirms[0]);
+        if (!disposed && current()) {
+          setConfirm(result.confirms[0]);
+          setPreviewIntent(result.intents?.find(
+            (intent): intent is Extract<NativeIntent, { kind: 'preview' }> =>
+              intent.kind === 'preview' && !dismissedPreviews.current.has(intent.id),
+          ));
+        }
       } catch {
         if (!disposed && current()) {
           setUnknown(true);
@@ -644,6 +657,30 @@ function CardControls({
   }
   return (
     <View style={[styles.root, mail && !history && styles.mailCard]}>
+      {previewIntent && lease && focused && foreground && status === 'online' && current() ? (
+        <PluginNativeIntent
+          key={previewIntent.id}
+          intent={previewIntent}
+          deviceId={deviceId}
+          onClose={() => {
+            const token = lifetime.current;
+            const intentId = previewIntent.id;
+            dismissedPreviews.current.add(intentId);
+            setPreviewIntent(undefined);
+            void invokePlugin(invoke, deviceId, pluginId, 'intent:ack', { pageId: lease, intentId })
+              .catch(() => { if (lifetime.current === token && current()) setUnknown(true); });
+          }}
+          readPreview={(url, offset, revision) => {
+            if (!current() || !focusedRef.current || AppState.currentState !== 'active')
+              return Promise.reject(new Error('PLUGIN_PAGE_CLOSED'));
+            return invokePlugin<PluginPageFetchResult>(invoke, deviceId, pluginId, 'preview:fetch', {
+              pageId: lease, intentId: previewIntent.id, url, offset,
+              ...(revision ? { revision } : {}),
+            });
+          }}
+          readMedia={() => Promise.reject(new Error('PLUGIN_PAGE_CLOSED'))}
+        />
+      ) : null}
       {lines.length ? (
         <View style={styles.headerRow}>
         <View style={[styles.cardHeader, styles.headerContent]}>

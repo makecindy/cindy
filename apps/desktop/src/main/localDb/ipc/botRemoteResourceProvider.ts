@@ -87,7 +87,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
       placement: 'home-scope',
       icon: { name: 'users', fallbackText: '••' },
       // `management:settings` tells a desktop controller this host runs the teammate settings pages itself.
-      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }, { id: BOT_SETTINGS_ACTION_ID, label: 'Teammate settings' }] } : {}),
+      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }, { id: BOT_SETTINGS_ACTION_ID, label: 'Buddy settings' }] } : {}),
     },
     async list(_context, request) {
       const scope = captureDataOwnerBroadcastScope();
@@ -126,7 +126,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         // Teammates no longer keep todos. An older computer still opens this page, so answer with
         // an empty list rather than an error; new clients are never linked here.
         const source = await readVisibleBotSource(request.ref.id.slice(6));
-        if (!source) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        if (!source) throw new RemoteResourceRegistryError('NOT_FOUND', 'Buddy unavailable');
         return { ref: request.ref, revision: 'empty', display: { title: source.name }, links: [],
           blocks: [{ id: 'todos', primitive: 'teammate-todos', fallbackMarkdown: '', data: { items: [], total: 0 } }] };
       }
@@ -143,10 +143,10 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         const scope = captureDataOwnerBroadcastScope();
         const source = await readVisibleBotSource(botId);
         if (!source || !isDataOwnerBroadcastScopeCurrent(scope))
-          throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Buddy unavailable');
         const activity = (await rosterBotActivities([source])).get(source.id);
         if (activity?.phase !== 'running' || !isDataOwnerBroadcastScopeCurrent(scope))
-          throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate is not running');
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Buddy is not running');
         const result = await getWorkingStatusCopy({ sessionId: activity.sessionId, phase, locale: resolveSystemLocale(request.client.locale) });
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
         return { ref: request.ref, revision: String(source.currentVersion), display: { title: source.name }, links: [],
@@ -187,7 +187,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
           throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Invalid read position');
         }
         const source = await readVisibleBotSource(botId);
-        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Buddy unavailable');
         if (threadSessionId !== undefined) {
           const [link] = await getDbClient().drizzle.select({ id: botSessionLinks.id }).from(botSessionLinks).where(and(
             eq(botSessionLinks.botId, botId), eq(botSessionLinks.sessionId, threadSessionId),
@@ -209,7 +209,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'companion-import', kind: 'import', id: 'sources' } } }],
       };
       if (management) return management.invoke(context, request);
-      throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Unknown teammate action');
+      throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Unknown buddy action');
     },
   });
   getAgentIslandService()?.subscribeSessionActivity(({ sessionId, previous, current }) => {

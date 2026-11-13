@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubscriptionPoolConfig } from '../../../shared/subscriptionAccounts.js';
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown) => Promise<unknown>>(),
-  context: null as null | { sharedTask?: object },
+  context: null as null | { sharedTask?: object; controllerDeviceId?: string },
   trusted: true,
   execute: vi.fn(),
   availability: vi.fn(),
@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   beforeWrite: undefined as (() => void) | undefined,
   access: { disabledModels: {}, disabledProviders: {} } as { disabledModels: Record<string, true>; disabledProviders: Record<string, true> },
   remoteAllowed: new Set<string>(),
+  ownComputers: false,
   remoteModels: null as string[] | null,
 }));
 vi.mock('electron', () => ({
@@ -67,6 +68,7 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => h.remoteAllowed.has(id),
+  isRemoteProviderOpenToOwnComputers: (id: string) => h.remoteAllowed.has(id) || h.ownComputers,
 }));
 vi.mock('../../device-link/remoteModelAccess.js', () => ({
   remoteModelAccess: { allows: (_id: string, model: string) => !!model && (h.remoteModels === null || h.remoteModels.includes(model)) },
@@ -81,7 +83,7 @@ vi.mock('../runtime.js', () => ({
   readSubscriptionSessionAccount: h.sessionRead,
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
-import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId } from '../store.js';
+import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { legacyCodexAccountCanRun, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
@@ -97,6 +99,7 @@ beforeEach(() => {
   h.beforeWrite = undefined;
   h.access = { disabledModels: {}, disabledProviders: {} };
   h.remoteAllowed.clear();
+  h.ownComputers = false;
   h.remoteModels = null;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
   h.availability.mockReset().mockResolvedValue(true);
@@ -118,6 +121,16 @@ describe('legacy Codex account upgrade', () => {
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(false);
     setLegacyCodexAccountPaused('openai-a', false);
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(true);
+  });
+
+  // PR #10150 review: with 「让我的其他电脑用本机模型」 on, an imported account serves the owner's other
+  // computers, but a provider-share guest still needs the per-provider grant.
+  it('admits imported accounts for own computers through the own-computer switch, never for guests', () => {
+    h.ownComputers = true;
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(true);
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, newRoute: true })).toBe(false);
+    h.ownComputers = false;
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(false);
   });
 
   // PR #9900, standard: a provider switch alone must not bypass the imported
@@ -184,8 +197,9 @@ describe('subscription management boundary', () => {
     expect(await quota({}, 'anthropic')).toEqual({ providerId: 'anthropic', pooled: false, usage: null });
     h.availability.mockImplementation(async (_provider, _model, options) => options?.remote !== true);
     expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: true });
-    h.context = {};
+    h.context = { controllerDeviceId: 'own-mac' };
     expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: false });
+    expect(h.availability).toHaveBeenLastCalledWith('openai', 'gpt-model', { remote: true, ownComputer: true });
     for (const model of ['', ' ', 1, {}, 'x'.repeat(513)])
       await expect(quota({}, 'anthropic', model)).rejects.toThrow('INVALID_PARAMS');
     h.context = { sharedTask: {} };
@@ -194,6 +208,21 @@ describe('subscription management boundary', () => {
     h.trusted = false;
     await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('untrusted');
     expect(h.availability).toHaveBeenCalledTimes(2);
+  });
+
+  // Standard: a wrong browser account must survive IPC as an actionable error,
+  // and its original identity guard must survive metadata normalization/restart.
+  it.each([
+    ['account_mismatch', 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'],
+    ['account_identity_unknown', 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'],
+  ])('preserves Claude identity metadata and the owner-facing %s error', async (reason, code) => {
+    const account = { id: 'default', paused: false, limit: 4, weight: 1,
+      reloginIdentity: 'original@example.test', lastConfirmedIdentity: 'original@example.test' };
+    const normalized = normalizePoolFile({ pools: { anthropic: { strategy: 'least', accounts: [account] } } });
+    expect(normalized.pools.anthropic?.accounts[0]).toEqual(account);
+    h.execute.mockRejectedValue(new Error(reason));
+    const error = await invoke({ action: 'login', providerId: 'anthropic', accountId: 'default', loginKey: 'renew' }).catch(error => error);
+    expect(mapIpcErrorToI18nKey(error)).toBe(`ipcError.${code}`);
   });
 
   // #9517, unit: CLI provider-managed auth must survive the real handler and
@@ -221,9 +250,12 @@ describe('subscription management boundary', () => {
   it('serves the task-account read to the owner only, with validated ids', async () => {
     const query = { action: 'session', providerId: 'openai', sessionId: 'task-1', nativeSessionId: 'sdk-1' };
     await expect(invoke(query)).resolves.toEqual({ providerId: 'anthropic', state: 'legacy' });
-    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query);
-    h.context = {};
-    await invoke({ action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1' });
+    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query, { remote: false, ownComputer: false });
+    h.context = { controllerDeviceId: 'own-mac' };
+    const remoteQuery = { action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1', model: 'claude-sonnet' };
+    await invoke(remoteQuery);
+    // PR #10150 review: the account-switch probe for the owner's other computer honours the own-computer switch.
+    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', remoteQuery, { remote: true, ownComputer: true });
     h.context = { sharedTask: {} };
     await expect(invoke(query)).rejects.toThrow('PERMISSION_DENIED');
     h.context = null;
@@ -232,6 +264,7 @@ describe('subscription management boundary', () => {
       { action: 'session', providerId: 'anthropic', sessionId: '' },
       { action: 'session', providerId: 'anthropic', sessionId: 'x'.repeat(257) },
       { action: 'session', providerId: 'anthropic-second', sessionId: 'task-1' },
+      ...['', ' ', 1, {}, 'x'.repeat(513)].map(model => ({ ...query, model })),
     ])
       await expect(invoke(bad)).rejects.toThrow('INVALID_PARAMS');
     h.sessionRead.mockRejectedValue(new Error('fixture-private-path'));

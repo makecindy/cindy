@@ -17,9 +17,11 @@ import { describe, expect, it } from 'vitest';
 import {
   ELLIPSIS_LOCALES,
   HALFWIDTH_PUNCT_LOCALES,
+  auditEnglishCopy,
   findCaseMismatch,
   findHalfWidthPunct,
   hasAsciiEllipsis,
+  makeEnglishCopyExemptChecker,
   makeExemptChecker,
   normalizeForPunctuation,
   occursIn,
@@ -50,8 +52,16 @@ const glossary = JSON.parse(
   locales: string[];
   sourceLocale: string;
   punctuationExempt?: string[];
+  englishCopyExempt?: Record<string, string[]>;
   terms: GlossaryTerm[];
 };
+
+/**
+ * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时本 catalog 的既有问题,指纹为
+ * `key\trule\t命中次数\t文案摘要`(与根门禁 baseline 同口径,见 auditEnglishCopy)。
+ * 只减不增:修好一条就删一条,新增违规直接失败。
+ */
+const KNOWN_ENGLISH_COPY_ISSUES: readonly string[] = [];
 
 /**
  * 摊平成 (locale, key, value)。前缀必须是 `desktop:`——glossary.json 的 exempt 按
@@ -143,5 +153,15 @@ describe('端点清单弹框文案符合术语表', () => {
       }
     }
     expect(violations, `端点弹框标点不符:\n${violations.join('\n')}`).toEqual([]);
+  });
+
+  it('英文写法符合 DESIGN.md §11.1 / §11.2', () => {
+    // 根门禁只读 locale JSON,这里补上英文写法规则,豁免与根门禁同源。
+    const { added, stale } = auditEnglishCopy(
+      entries.filter((e) => e.locale === glossary.sourceLocale),
+      { isExempt: makeEnglishCopyExemptChecker(glossary.englishCopyExempt), known: KNOWN_ENGLISH_COPY_ISSUES },
+    );
+    expect(added, `端点清单弹框英文写法违规:\n${added.join('\n')}`).toEqual([]);
+    expect(stale, '端点清单弹框已修好的英文写法存量请从清单删除').toEqual([]);
   });
 });
