@@ -195,8 +195,8 @@ describe('local catalog recovery lifecycle', () => {
   // Minimum regression: startup commits a successful catalog containing an
   // unreadable pool; no user/online/account event follows. Use the existing
   // bounded timer and fake time to prove recovery after the 3-second CLI cache.
-  it('recovers a transient pool read without another foreground event', async () => {
-    const unreadable = { ...snapshot, providers: [{ id: 'openai', connected: false, subscriptionReadUnavailable: true } as ProviderView] };
+  it.each([false, true])('recovers a transient pool read without another foreground event (connected=%s)', async connected => {
+    const unreadable = { ...snapshot, providers: [{ id: 'openai', connected, subscriptionReadUnavailable: true } as ProviderView] };
     const recovered = { ...snapshot, providers: [{ id: 'openai', connected: true } as ProviderView] };
     mocks.initializeVisibility.mockResolvedValue(true);
     mocks.loadProviders.mockResolvedValueOnce(unreadable).mockResolvedValueOnce(unreadable).mockResolvedValue(recovered);

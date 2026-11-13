@@ -586,6 +586,11 @@ export interface Provider {
    * （anthropic / openai / xai 现状）。
    */
   auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: NativeSubscriptionAuth };
+  /**
+   * 2026-11-13：Cindy 为订阅账号新建的供应商（单独供应商或用户合并出的同类供应商），沿用该内置订阅
+   * （`openai` / `anthropic`）的路由与模型，账号由本机账号池按该供应商自己的账号分配。旧端忽略。
+   */
+  subscriptionPool?: 'openai' | 'anthropic';
   /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
   access?: ProviderAccess;
   /**

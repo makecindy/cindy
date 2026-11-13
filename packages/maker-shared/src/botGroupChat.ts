@@ -530,14 +530,24 @@ export type BotGroupSpeakerActivity = 'reply' | 'planning' | 'step';
 
 export interface BotGroupSpeaker {
   botId: string;
+  sourceMessageId?: string;
+  /** null is the main timeline; absent with a source ID means ownership is unresolved. */
+  threadRootId?: string | null;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
+  /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
+  timelineAt?: number;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
   /** Hidden group lane or 分工 Session of the speaking Bot, for pending permission/question UI. */
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
+  /**
+   * The group's Cindy, for the member who asked: which of their computers runs the turn, in which
+   * task (`sessionId`) and with which model. Absent until that computer has reported it.
+   */
+  executor?: { deviceId: string; sessionId?: string; model?: string; here?: boolean };
 }
 
 export interface BotGroupRoundView {
@@ -607,8 +617,10 @@ export interface BotGroupSummary {
   projectDirAuto?: boolean;
   /** The server keeps the group's shared project; absent on older servers/hosts. */
   supportsGroupProject?: boolean;
+  /** The group's repository may be on GitLab, CNB or another git host, not only GitHub. */
+  supportsGroupProjectGit?: boolean;
   /** The group's shared project (a GitHub repository); null when none is set. */
-  project?: { kind: 'github'; repo: string } | null;
+  project?: GroupRepository | null;
   /** The server gives each group its own Cindy (`groupAssistant`); absent on older servers/hosts. */
   supportsGroupAssistant?: boolean;
   /** The group's Cindy is on (group management 「群里的 Cindy」); only with `supportsGroupAssistant`. */
@@ -713,7 +725,14 @@ export interface BotGroupFailure {
 export type BotGroupListResult = { ok: true; groups: BotGroupSummary[] } | BotGroupFailure;
 export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | BotGroupFailure;
 export type BotGroupCreateResult = { ok: true; groupId: string } | BotGroupFailure;
-export type BotGroupMutationResult = { ok: true } | BotGroupFailure;
+export type BotGroupMutationResult = {
+  ok: true;
+  /**
+   * After choosing this computer's folder (bot-group-chat.md §7.5): the GitHub repository it is a
+   * checkout of. `filled`: the group had none and now uses it; otherwise the group's differs.
+   */
+  folderRepository?: { repo: string; filled: boolean };
+} | BotGroupFailure;
 export type BotGroupSendResult = { ok: true; messageId: string } | BotGroupFailure;
 
 export interface BotGroupCreateInput {
@@ -733,8 +752,11 @@ export interface BotGroupUpdateInput {
   organizerBotId?: string | null;
   /** Absolute existing local directory; null uses the group's own folder. */
   projectDir?: string | null;
-  /** Server groups: the shared GitHub repository (`owner/name`); null clears it. */
-  githubRepo?: string | null;
+  /**
+   * Server groups: the shared repository as typed — `owner/name` (GitHub) or a link to a GitLab,
+   * CNB or other git repository (`parseGroupRepository`); null clears it.
+   */
+  repository?: string | null;
   /** Server groups: whether 分工 you start go on by themselves (kept on this computer). */
   autoContinue?: boolean;
 }
@@ -1080,4 +1102,84 @@ export interface ChatServerApi {
   revokeInvite(input: { groupId: string; link: string; clientId: string }): Promise<ChatServerResult<{ revoked: true }>>;
   previewInvite(input: { link: string }): Promise<ChatServerResult<ChatInvitePreview>>;
   acceptInvite(input: { link: string; clientId: string }): Promise<ChatServerResult<{ groupId: string }>>;
+}
+
+/**
+ * A group's shared repository (bot-group-chat.md §7.5): a GitHub repository (`owner/name`, cloned
+ * with Cindy's GitHub sign-in) or a repository on any other git host — GitLab, a company's own
+ * GitLab, CNB (cnb.cool) — kept as its host and path and cloned with this computer's own git access.
+ * The Chat Server stores the same shape (`room.project`, `groupProjectGit` for `git`).
+ */
+export type GroupRepository =
+  | { kind: 'github'; repo: string }
+  | { kind: 'git'; host: string; path: string };
+
+const GITHUB_REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+const SEGMENT = /^[A-Za-z0-9_.-]+$/;
+const HOST_LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?';
+const HOST = new RegExp(`^${HOST_LABEL}(?:\\.${HOST_LABEL})+$`);
+const GITHUB_HOST = /^(?:www\.)?github\.com$/i;
+
+function fromHostAndPath(host: string, port: string | undefined, rawPath: string): GroupRepository | null {
+  const hostname = host.toLowerCase();
+  if (!HOST.test(hostname) || (port !== undefined && !(/^[0-9]{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65535))) return null;
+  // A host the standard URL parser reads differently (`999.999.999.999`, `1.2.3`) never becomes a clone URL.
+  try { if (new URL(`https://${hostname}/`).hostname !== hostname) return null; } catch { return null; }
+  const path = rawPath.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+  const parts = path.split('/');
+  if (parts.length < 2 || parts.some(part => !SEGMENT.test(part) || part === '.' || part === '..')) return null;
+  if (GITHUB_HOST.test(hostname)) {
+    // A page of the repository (`/tree/main`, `/pull/1`) names the repository by its first two parts.
+    const repo = `${parts[0]}/${parts[1]}`;
+    return GITHUB_REPO.test(repo) ? { kind: 'github', repo } : null;
+  }
+  return { kind: 'git', host: port ? `${hostname}:${port}` : hostname, path };
+}
+
+/**
+ * What someone typed or a git remote points at: `owner/name` (GitHub), an HTTPS link
+ * (`https://gitlab.example.com/group/sub/name`), an SSH address (`git@cnb.cool:org/name.git`,
+ * `ssh://git@host:2222/group/name`) or `host/group/name`. Null for anything else. An SSH port is the
+ * SSH port, not the web one, so it is dropped; an HTTPS port is kept.
+ */
+export function parseGroupRepository(input: string): GroupRepository | null {
+  const text = input.trim().replace(/[?#].*$/, '');
+  if (!text || /\s/.test(text)) return null;
+  if (GITHUB_REPO.test(text)) return { kind: 'github', repo: text };
+  let match = /^https?:\/\/(?:[^@/]+@)?([^/:]+)(?::([0-9]+))?\/(.+)$/i.exec(text);
+  if (match) return fromHostAndPath(match[1]!, match[2], match[3]!.replace(/\/-\/.*$/, ''));
+  match = /^ssh:\/\/(?:[^@/]+@)?([^/:]+)(?::[0-9]+)?\/(.+)$/i.exec(text);
+  if (match) return fromHostAndPath(match[1]!, undefined, match[2]!);
+  match = /^[^@/\s]+@([^:/]+):(?!\/)(.+)$/.exec(text);
+  if (match) return fromHostAndPath(match[1]!, undefined, match[2]!);
+  match = /^([^/:]+\.[^/:]+)(?::([0-9]+))?\/(.+)$/.exec(text);
+  if (match) return fromHostAndPath(match[1]!, match[2], match[3]!);
+  return null;
+}
+
+/** How the repository is shown and named in messages: `owner/name`, or `host/group/name`. */
+export function groupRepositoryLabel(repository: GroupRepository): string {
+  return repository.kind === 'github' ? repository.repo : `${repository.host}/${repository.path}`;
+}
+
+/** Equal for the same repository however it was written (case, port, scheme). */
+export function groupRepositoryKey(repository: GroupRepository): string {
+  return (repository.kind === 'github' ? `github.com/${repository.repo}` : `${repository.host.replace(/:[0-9]+$/, '')}/${repository.path}`).toLowerCase();
+}
+
+/** The HTTPS address a background clone uses. */
+export function groupRepositoryCloneUrl(repository: GroupRepository): string {
+  return repository.kind === 'github' ? `https://github.com/${repository.repo}.git` : `https://${repository.host}/${repository.path}.git`;
+}
+
+/** A stored or received value that is a group repository, else null. */
+export function readGroupRepository(value: unknown): GroupRepository | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind === 'github' && typeof record.repo === 'string' && GITHUB_REPO.test(record.repo)) return { kind: 'github', repo: record.repo };
+  if (record.kind === 'git' && typeof record.host === 'string' && typeof record.path === 'string') {
+    const parsed = parseGroupRepository(`https://${record.host}/${record.path}`);
+    return parsed?.kind === 'git' ? parsed : null;
+  }
+  return null;
 }

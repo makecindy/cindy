@@ -26,6 +26,15 @@ function device(patch: Partial<DeviceListDeviceLike> = {}): DeviceListDeviceLike
 }
 
 describe('shared device list presentation model', () => {
+  // Agent-Net app routing: platform alone incorrectly offered Friend/unknown Apps
+  // as computers. Unit: real list entry points; missing app preserves old Cindy.
+  it.each([undefined, 'cindy', 'cindy-friend', 'other-app'])('routes app=%s without offering other Apps as controllable computers', (app) => {
+    const peer = device({ app });
+    const cindy = app === undefined || app === 'cindy';
+    expect(isControllableDevice(peer)).toBe(cindy);
+    expect(toDeviceListItems([peer])).toHaveLength(cindy ? 1 : 0);
+  });
+
   it('requires online, remoteControlEnabled and not self', () => {
     expect(isControllableDevice(device())).toBe(true);
     expect(isControllableDevice(device({ busy: true }))).toBe(true);

@@ -3,6 +3,7 @@
 //! owned window's light/dark mode, which tints its Windows 11 system backdrop.
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
+mod deep_link;
 use windows::{
     core::{w, PCWSTR},
     Win32::{

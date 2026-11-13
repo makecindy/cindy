@@ -55,6 +55,8 @@ describe('默认态与持久化', () => {
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
+      retiredWorkspaces: {},
+      projectCatalogMigrated: false,
       bindingsCache: [],
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
@@ -91,10 +93,16 @@ describe('默认态与持久化', () => {
 });
 
 describe('workspaces 校验', () => {
-  it('非法别名 / 相对路径拒绝', () => {
-    expect(() => validateWorkspaces({ 别名: path.join(dir, 'x') })).toThrow(
-      HookConnectionValidationError,
-    );
+  it('非法名称 / 相对路径拒绝; 侧栏项目名(含中文、空格)可以用', () => {
+    // 名称来自侧栏项目名, 不限字符集; 但像绝对路径的名称会被协议拒收(路径不出本机),
+    // 控制字符与首尾空白也不行。
+    for (const name of ['/etc/passwd', 'C:\\repo', 'a\nb', ' 前导空格', 'x'.repeat(33)]) {
+      expect(() => validateWorkspaces({ [name]: path.join(dir, 'x') })).toThrow(
+        HookConnectionValidationError,
+      );
+    }
+    const abs = path.join(dir, 'x');
+    expect(validateWorkspaces({ '周报 整理': abs })).toEqual({ '周报 整理': abs });
     expect(() => validateWorkspaces({ ok: 'relative/path' })).toThrow(
       HookConnectionValidationError,
     );
@@ -182,6 +190,8 @@ describe('旧多连接文件迁移', () => {
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
+      retiredWorkspaces: {},
+      projectCatalogMigrated: false,
       bindingsCache: [],
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
@@ -369,37 +379,76 @@ describe('provider 与 Cindy 账号隔离', () => {
       expect(store.setProviderDefaultWorkspace('x', null).xDefaultWorkspace).toBeNull();
     });
 
-    it('两个 provider 各存一份, 互不影响', () => {
+    // 规则: 清单由侧栏项目投影而来(projectWorkspaces.ts)。项目改名时默认项目必须跟着改名 ——
+    // 按「清单外」清掉的话, 侧栏里改个名字, 默认项目就悄悄退回「对话」。
+    it('按项目列表落清单: 改名的默认项目跟着改名, 移除的清掉, 旧名称与迁移标记落盘', () => {
       const store = makeStore();
-      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
+      store.setWorkspaces({ xdmaker: '/code/cindy', docs: '/code/docs' });
+      store.setProviderDefaultWorkspace('feishu', 'xdmaker');
 
-      store.setProviderDefaultWorkspace('telegram', 'cindy');
-      store.setProviderDefaultWorkspace('x', 'other');
-      expect(store.get().telegramDefaultWorkspace).toBe('cindy');
-      expect(store.get().xDefaultWorkspace).toBe('other');
+      const next = store.applyProjectWorkspaces({
+        workspaces: { 主仓库: '/code/cindy' },
+        retired: { xdmaker: '/code/cindy' },
+        renames: [{ from: 'xdmaker', to: '主仓库' }],
+      });
+      expect(next.workspaces).toEqual({ 主仓库: '/code/cindy' });
+      expect(next.feishuDefaultWorkspace).toBe('主仓库');
+      expect(next.xDefaultWorkspace).toBe('主仓库');
+      store.markProjectCatalogMigrated();
 
-      // 清掉一个不得连带清掉另一个 —— 泛化前只有一个字段, 很容易写成共用。
-      store.setProviderDefaultWorkspace('telegram', null);
-      expect(store.get().telegramDefaultWorkspace).toBeNull();
-      expect(store.get().xDefaultWorkspace).toBe('other');
+      expect(makeStore().get()).toMatchObject({
+        workspaces: { 主仓库: '/code/cindy' },
+        retiredWorkspaces: { xdmaker: '/code/cindy' },
+        projectCatalogMigrated: true,
+        feishuDefaultWorkspace: '主仓库',
+      });
     });
 
-    it('旧配置文件没有 telegram.defaultWorkspace 键: 读成 null, 不需要迁移动作', () => {
+    // 规则: 默认项目所有官方机器人共用一个(不再每个机器人各选一个)。
+    // 生产入口: store 的读写。可观察结果: 从任一机器人的入口改, 三处读到同一个值, 清空也一起清。
+    // 最小失败输入: 先后从两个入口各写一次。tier: unit。
+    it('默认项目所有官方机器人共用一个: 任一入口写入或清空, 三处一起变', () => {
       const store = makeStore();
-      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy' });
+      store.setWorkspaces({ cindy: '/code/cindy', other: '/tmp/other' });
+
+      store.setProviderDefaultWorkspace('telegram', 'cindy');
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: 'cindy', xDefaultWorkspace: 'cindy', feishuDefaultWorkspace: 'cindy',
+      });
+      store.setProviderDefaultWorkspace('x', 'other');
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: 'other', xDefaultWorkspace: 'other', feishuDefaultWorkspace: 'other',
+      });
+      store.setProviderDefaultWorkspace('feishu', null);
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: null, xDefaultWorkspace: null, feishuDefaultWorkspace: null,
+      });
+    });
+
+    // 持久化兼容: 升级前每个机器人各存各的默认项目, 存档里三处可能不一样(也可能缺键)。
+    // 可观察结果: 不需要迁移动作, 读出来按 飞书 -> Telegram -> X 取第一个仍然可选的。
+    // 最小失败输入: 飞书没设、Telegram 缺键、X 设过。tier: unit。
+    it('升级前各存各的默认项目: 读出来按 飞书 -> Telegram -> X 取第一个可选的', () => {
+      const store = makeStore();
+      store.setWorkspaces({ cindy: '/code/cindy', other: '/tmp/other' });
       store.setProviderDefaultWorkspace('x', 'cindy');
-
-      // 手工把这个键删掉, 模拟升级前写下的存档。
       const raw = JSON.parse(fs.readFileSync(filePath(), 'utf-8')) as {
-        accounts: Record<string, { telegram: Record<string, unknown> }>;
+        accounts: Record<string, Record<'telegram' | 'x' | 'feishu', Record<string, unknown>>>;
       };
-      delete raw.accounts['account-test'].telegram.defaultWorkspace;
+      const account = raw.accounts['account-test'];
+      account.feishu.defaultWorkspace = null;
+      delete account.telegram.defaultWorkspace;
+      account.x.defaultWorkspace = 'cindy';
       fs.writeFileSync(filePath(), JSON.stringify(raw), 'utf-8');
+      expect(makeStore().get()).toMatchObject({
+        telegramDefaultWorkspace: 'cindy', xDefaultWorkspace: 'cindy', feishuDefaultWorkspace: 'cindy',
+      });
 
-      const reopened = makeStore();
-      expect(reopened.get().telegramDefaultWorkspace).toBeNull();
-      // 同一份存档里 X 那份不受影响。
-      expect(reopened.get().xDefaultWorkspace).toBe('cindy');
+      account.telegram.defaultWorkspace = 'other';
+      fs.writeFileSync(filePath(), JSON.stringify(raw), 'utf-8');
+      expect(makeStore().get()).toMatchObject({
+        telegramDefaultWorkspace: 'other', xDefaultWorkspace: 'other', feishuDefaultWorkspace: 'other',
+      });
     });
 
     it('目录被删掉后每个 provider 的默认值都归零(存档层面也删掉)', () => {

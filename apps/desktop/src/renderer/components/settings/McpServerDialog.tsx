@@ -202,7 +202,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
   const content = <>
           <div className="flex shrink-0 items-center gap-2.5 p-4">
             <Sparkles size={20} className="shrink-0 text-[var(--settings-section-title)]" />
-            <Title className="text-18 font-semibold text-[var(--settings-section-title)]">
+            <Title className="text-18 font-medium text-[var(--settings-section-title)]">
               {editing ? t('settings.mcp.dialog.editTitle') : t('settings.mcp.dialog.createTitle')}
             </Title>
           </div>

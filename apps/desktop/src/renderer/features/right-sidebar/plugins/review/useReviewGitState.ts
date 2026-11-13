@@ -227,6 +227,7 @@ export function useReviewGitState(
   sessionId: string | null,
   ignoreWhitespace = false,
   deviceId: string | null = null,
+  workdir: string | null = null,
 ): LoadState<ReviewData> {
   const fetchReviewData = useCallback(
     (currentSessionId: string) =>
@@ -235,9 +236,9 @@ export function useReviewGitState(
   );
   return useGitReviewLoad(sessionId, fetchReviewData, 'git review load failed', {
     cacheKey: sessionId
-      ? `${deviceId ?? 'local'}:worktree:${sessionId}:${ignoreWhitespace ? 'w' : 'plain'}`
+      ? `${deviceId ?? 'local'}:worktree:${sessionId}:${workdir ?? ''}:${ignoreWhitespace ? 'w' : 'plain'}`
       : null,
-    scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}` : null,
+    scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}:${workdir ?? ''}` : null,
   });
 }
 
@@ -259,14 +260,15 @@ export function useReviewCommits(
   sessionId: string | null,
   baseRef: string | null,
   deviceId: string | null = null,
+  workdir: string | null = null,
 ): LoadState<ReviewCommitListData> {
   const fetchReviewCommits = useCallback(
     (currentSessionId: string) =>
       gitReviewApiFor(deviceId).commits({ sessionId: currentSessionId, baseRef }),
-    [baseRef, deviceId],
+    [baseRef, deviceId, workdir],
   );
   return useGitReviewLoad(sessionId, fetchReviewCommits, 'git review commits failed', {
-    scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}` : null,
+    scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}:${workdir ?? ''}` : null,
   });
 }
 
@@ -275,6 +277,7 @@ export function useReviewCommitDiff(
   oid: string | null,
   ignoreWhitespace = false,
   deviceId: string | null = null,
+  workdir: string | null = null,
 ): LoadState<ReviewCommitDiffData> {
   const fetchCommitDiff = useCallback(
     (currentSessionId: string) => {
@@ -294,9 +297,9 @@ export function useReviewCommitDiff(
     {
       cacheKey:
         sessionId && oid
-          ? `${deviceId ?? 'local'}:commit:${sessionId}:${oid}:${ignoreWhitespace ? 'w' : 'plain'}`
+          ? `${deviceId ?? 'local'}:commit:${sessionId}:${workdir ?? ''}:${oid}:${ignoreWhitespace ? 'w' : 'plain'}`
           : null,
-      scopeKey: sessionId && oid ? `${deviceId ?? 'local'}:${sessionId}` : null,
+      scopeKey: sessionId && oid ? `${deviceId ?? 'local'}:${sessionId}:${workdir ?? ''}` : null,
       preserveWhenDisabled: true,
     },
   );
@@ -308,6 +311,7 @@ export function useReviewBranchDiff(
   ignoreWhitespace = false,
   enabled = true,
   deviceId: string | null = null,
+  workdir: string | null = null,
 ): LoadState<ReviewBranchDiffData> {
   const fetchBranchDiff = useCallback(
     (currentSessionId: string) =>
@@ -324,9 +328,9 @@ export function useReviewBranchDiff(
     'git review branch diff failed',
     {
       cacheKey: sessionId
-        ? `${deviceId ?? 'local'}:branch:${sessionId}:${baseRef ?? 'default'}:${ignoreWhitespace ? 'w' : 'plain'}`
+        ? `${deviceId ?? 'local'}:branch:${sessionId}:${workdir ?? ''}:${baseRef ?? 'default'}:${ignoreWhitespace ? 'w' : 'plain'}`
         : null,
-      scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}` : null,
+      scopeKey: sessionId ? `${deviceId ?? 'local'}:${sessionId}:${workdir ?? ''}` : null,
       preserveWhenDisabled: true,
     },
   );
@@ -337,6 +341,7 @@ export function useReviewFileDiff(
   request: ReviewFileDiffRequest | null,
   refreshVersion = 0,
   deviceId: string | null = null,
+  workdir: string | null = null,
 ): LoadState<ReviewFileDiffData> {
   const source = request?.source ?? null;
   const path = request?.path ?? null;
@@ -361,7 +366,7 @@ export function useReviewFileDiff(
   );
   const cacheKey =
     sessionId && source && path
-      ? `${deviceId ?? 'local'}:file:${sessionId}:${source}:${commitOid ?? branchBaseRef ?? 'worktree'}:${oldPath ?? ''}:${path}:${ignoreWhitespace ? 'w' : 'plain'}:${refreshVersion}`
+      ? `${deviceId ?? 'local'}:file:${sessionId}:${workdir ?? ''}:${source}:${commitOid ?? branchBaseRef ?? 'worktree'}:${oldPath ?? ''}:${path}:${ignoreWhitespace ? 'w' : 'plain'}:${refreshVersion}`
       : null;
   return useGitReviewLoad(
     sessionId && source && path ? sessionId : null,
@@ -369,7 +374,7 @@ export function useReviewFileDiff(
     'git review file diff failed',
     {
       cacheKey,
-      scopeKey: sessionId && source && path ? `${deviceId ?? 'local'}:${sessionId}` : null,
+      scopeKey: sessionId && source && path ? `${deviceId ?? 'local'}:${sessionId}:${workdir ?? ''}` : null,
       preserveWhenDisabled: true,
     },
   );
@@ -379,6 +384,7 @@ export function useReviewFileDiffs(
   sessionId: string | null,
   requests: readonly ReviewFileDiffRequest[],
   deviceId: string | null = null,
+  workdir: string | null = null,
 ): LoadState<ReviewFileDiffData[]> {
   const requestKey =
     requests.length > 0
@@ -415,8 +421,8 @@ export function useReviewFileDiffs(
     'git review file diff batch failed',
     {
       cacheKey:
-        sessionId && requestKey ? `${deviceId ?? 'local'}:files:${sessionId}:${requestKey}` : null,
-      scopeKey: sessionId && requestKey ? `${deviceId ?? 'local'}:${sessionId}` : null,
+        sessionId && requestKey ? `${deviceId ?? 'local'}:files:${sessionId}:${workdir ?? ''}:${requestKey}` : null,
+      scopeKey: sessionId && requestKey ? `${deviceId ?? 'local'}:${sessionId}:${workdir ?? ''}` : null,
       preserveWhenDisabled: false,
     },
   );

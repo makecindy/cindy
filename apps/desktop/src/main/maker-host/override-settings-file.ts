@@ -47,6 +47,23 @@ interface CachedState<T> extends OverrideSettingsState<T> {
 }
 
 /**
+ * The process-wide value of `preserveUnreadableFile` for stores that do not set it. The desktop
+ * never changes it, so an unreadable file is deleted as before. The Host sets it once at boot:
+ * while it shares a settings directory with the desktop window process, it must not delete a
+ * user settings file it cannot read. A store's own `preserveUnreadableFile` takes precedence.
+ */
+let preserveUnreadableFilesByDefault = false;
+
+export function setPreserveUnreadableSettingsFilesByDefault(preserve: boolean): void {
+  preserveUnreadableFilesByDefault = preserve;
+}
+
+/** The same default, for the settings files read outside createOverrideSettingsFile. */
+export function isPreservingUnreadableSettingsFilesByDefault(): boolean {
+  return preserveUnreadableFilesByDefault;
+}
+
+/**
  * Atomic mutations use the ordinary/advisory lock tier and still require the
  * lock to be held. `scopeKey` guards owner/session drift separately; neither
  * concern is an authorization decision that should inherit the plugin
@@ -105,6 +122,7 @@ export function createOverrideSettingsFile<T>(options: {
     const file = options.filePath();
     cachedResolvedPath = file;
     let readStatus: CachedState<T>['readStatus'] = 'missing';
+    const preserveUnreadableFile = options.preserveUnreadableFile ?? preserveUnreadableFilesByDefault;
     try {
       let stat: fs.BigIntStats | null;
       if (strict) {
@@ -120,7 +138,7 @@ export function createOverrideSettingsFile<T>(options: {
         }
         const text = fs.readFileSync(file, 'utf-8');
         const parsed = JSON.parse(text);
-        if (options.preserveUnreadableFile && !isLoggableObject(parsed)) {
+        if (preserveUnreadableFile && !isLoggableObject(parsed)) {
           throw new Error('settings file root must be an object');
         }
         const overrides = isLoggableObject(parsed) ? parsed : {};
@@ -146,14 +164,14 @@ export function createOverrideSettingsFile<T>(options: {
       }
     } catch (err) {
       if (strict) throw new Error(`${options.label} settings file is unavailable`);
-      if (options.preserveUnreadableFile) readStatus = 'unreadable';
+      if (preserveUnreadableFile) readStatus = 'unreadable';
       options.log.warn(`${options.label} settings read failed; falling back to defaults`, {
         ...(options.logReadErrorDetails === false
           ? {}
           : { error: err instanceof Error ? err.message : String(err) }),
         path: file,
       });
-      if (!options.preserveUnreadableFile) {
+      if (!preserveUnreadableFile) {
         try {
           fs.unlinkSync(file);
         } catch {

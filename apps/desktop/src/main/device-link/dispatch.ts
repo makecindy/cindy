@@ -131,10 +131,13 @@ import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
+import { clearHistoryViewDeltas, withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
+import { createToolBodyPushProjector } from './toolBodyProjection';
+import { createToolResultLiveLimiter } from './toolResultLiveLimit';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import type { readDeviceLinkSettings } from './settings-store.desktop';
 import type { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
@@ -1139,6 +1142,7 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    if (!sameAccountController) delete rest.subscriptionPoolTarget;
     // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
@@ -1207,14 +1211,18 @@ function projectInvokeResultForTunnel(
  * Mutates the projected entries in place.
  */
 function foldSubscriptionPoolAliases(providers: Record<string, unknown>[]): void {
-  const pool = providers.find(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true);
-  const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
   for (const provider of providers) {
     if (!provider.subscriptionPoolAlias) continue;
+    const target = typeof provider.subscriptionPoolTarget === 'string' ? provider.subscriptionPoolTarget : 'openai';
+    const pool = providers.find(entry => entry.id === target && entry.remoteInvocationEnabled === true);
+    const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
     const models = remoteInvocationModels(provider as unknown as ProviderView).models;
     const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
       (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
-    if (!covered) delete provider.subscriptionPoolAlias;
+    if (!covered) {
+      delete provider.subscriptionPoolAlias;
+      delete provider.subscriptionPoolTarget;
+    }
   }
 }
 
@@ -2450,15 +2458,20 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     : null;
   // Project lazily once, before batching/offline queueing. Another Desktop or old Mobile
   // on the same relay must still receive its unchanged payload.
-  let mobilePayload: unknown;
-  let mobilePayloadReady = false;
+  // Tool-body rules follow each controller's own declaration; guests keep their existing path.
+  // The Mobile projection follows and sees the already projected event.
+  const projectToolBodies = createToolBodyPushProjector(channel, remotePayload);
+  // tool-result-live-limit-v1: an ordinary live result over 256 KB keeps its head and a marker.
+  const limitLiveResult = createToolResultLiveLimiter(channel, remotePayload,
+    (sessionId, toolUseId) => readHistoryToolName(sessionId, toolUseId));
+  const mobilePayloads = new Map<unknown, unknown>();
   const projectedPayloadFor = (dst: string): unknown => {
-    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return remotePayload;
-    if (!mobilePayloadReady) {
-      mobilePayload = projectMobileToolPush(channel, remotePayload);
-      mobilePayloadReady = true;
-    }
-    return mobilePayload;
+    const supports = (capability: string) => subscriptions.controllerSupports(dst, capability);
+    const base = isSharedTaskPeer(dst) || isProviderSharePeer(dst) ? remotePayload
+      : limitLiveResult(projectToolBodies(supports), supports);
+    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return base;
+    if (!mobilePayloads.has(base)) mobilePayloads.set(base, projectMobileToolPush(channel, base));
+    return mobilePayloads.get(base);
   };
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
@@ -2478,8 +2491,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   const thinkingLine = deferred && historySessionId !== null && thinkingDeltaUpdatesWorkLine(historySessionId, remotePayload);
   const offlineTargets = targetsFor(true)
     .filter((dst) => !liveTargets.includes(dst));
+  // Kept folded across a link change until the controller re-reads (history-relink-folded-v1).
+  const keptFolded = (dst: string) => deferred && historySessionId !== null
+    && subscriptions.keepsFoldedAcrossLink(dst, historySessionId);
   for (const dst of offlineTargets) {
-    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId)) continue;
+    if (deferred && historySessionId && (subscriptions.hasHistoryView(dst, historySessionId) || keptFolded(dst))) continue;
     const sharedMetadata = isSharedTaskPeer(dst) && sharedTaskTopic !== null;
     if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel) || sharedMetadata) {
       offlinePushQueue.enqueue(dst, {
@@ -2494,9 +2510,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   for (const dst of liveTargets) {
     let targetPayload = payloadFor(dst);
     // A pending read also needs notices: its sampled rows can precede this push.
-    // Filtering still requires ready in projectsHistoryDetails, so raw survives.
-    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId, true)) {
-      const folded = subscriptions.projectsHistoryDetails(dst, historySessionId);
+    // Filtering still requires ready in projectsHistoryDetails, so raw survives, except for a
+    // session kept folded across a link change (history-relink-folded-v1) until it is re-read.
+    const kept = keptFolded(dst);
+    if (deferred && historySessionId && (kept || subscriptions.hasHistoryView(dst, historySessionId, true))) {
+      const folded = kept || subscriptions.projectsHistoryDetails(dst, historySessionId);
       const event = (remotePayload as { event?: { type?: string; data?: { stage?: string } } })?.event;
       // A folded duration ticks locally. Token deltas do not change its summary.
       if (!folded || event?.type !== 'thinking' || event.data?.stage !== 'delta'
@@ -2758,6 +2776,9 @@ function dropAllControllers(
     }
     clearReportedControllerName(dst);
   }
+  // 登出 / 失去持有权：随后的 client.stop() 清空全部列表增量基准，历史页增量基页也一并全部释放，
+  // 包括此前普通断线、为重连保留的控制端（它们不在上面的 controllerIds 里）。
+  if (reason === 'shutdown') clearHistoryViewDeltas();
   clearAllRemoteInvokeState();
   subscriptions.clearAll();
   topicSubscriptionControllers.clear();
@@ -2920,7 +2941,9 @@ function purgeRevokedController(deviceId: string, preservePendingOpen = false): 
  */
 function wireInboundDispatch(client: DeviceLinkClient): () => void {
   activeClient = client;
-  return client.onFrame((env: Envelope) => {
+  // 历史页增量的被控端基页与列表增量基准同时释放：控制端被主动关掉时，普通断线保留。
+  const offReleased = client.onInboundPeerReleased((peer) => clearHistoryViewDeltas(peer));
+  const offFrame = client.onFrame((env: Envelope) => {
     // 可靠传输的 ACK 边界是“已进入本地执行状态机”，不是“耗时 IPC 已执行完成”。
     // handleInvoke 会在第一次 await 前登记 in-flight requestId 去重；这里不把它的
     // Promise 交回 transport，避免一个慢查询把后续 stop/steer/push 全部堵在队头。
@@ -2928,6 +2951,10 @@ function wireInboundDispatch(client: DeviceLinkClient): () => void {
       log.error('inbound frame handling failed', err);
     });
   });
+  return () => {
+    offReleased();
+    offFrame();
+  };
 }
 
 async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<void> {
@@ -4108,7 +4135,7 @@ function compactInvokeResultForDeviceLink(
   }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')
     && result.result && typeof result.result === 'object') {
-    const page = result.result as Record<string, unknown>;
+    const page = withoutHistoryViewDeltaToken(result.result as Record<string, unknown>);
     const mapPage = (map: (row: unknown) => unknown): InvokeResultPayload => ({ ok: true, result: {
       ...page,
       ...(Array.isArray(page.messages) ? { messages: page.messages.map(map) } : {}),
@@ -4843,14 +4870,17 @@ function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown
  * 选择器出现重复入口，菜单栏还会为已在池里的账号多读一次配额。
  */
 function refoldOwnComputerPoolAliases(source: unknown, final: unknown): unknown {
-  const aliases = new Map<string, unknown>();
+  const aliases = new Map<string, { subscriptionPoolAlias: unknown; subscriptionPoolTarget?: unknown }>();
   mapProviderEntries(source, (entry) => {
-    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, entry.subscriptionPoolAlias);
+    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, {
+      subscriptionPoolAlias: entry.subscriptionPoolAlias,
+      ...(typeof entry.subscriptionPoolTarget === 'string' ? { subscriptionPoolTarget: entry.subscriptionPoolTarget } : {}),
+    });
     return entry;
   });
   if (aliases.size === 0) return final;
   const restored = mapProviderEntries(final, (entry) => typeof entry.id === 'string' && aliases.has(entry.id)
-    ? { ...entry, subscriptionPoolAlias: aliases.get(entry.id) }
+    ? { ...entry, ...aliases.get(entry.id) }
     : entry);
   const providers = (restored as { providers?: unknown }).providers;
   if (Array.isArray(providers)) {
@@ -5305,6 +5335,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
 
     const historyView = (payload.channel === 'local-db:messages:view' || payload.channel === 'local-db:messages:view-intent')
       && typeof args[0] === 'string' ? subscriptions.prepareHistoryView(src, args[0]) : undefined;
+    // history-relink-folded-v1: a raw list read means the controller renders raw rows for this
+    // session, so it gets full pushes again until its next page read.
+    if (payload.channel === 'local-db:messages:list' && typeof args[0] === 'string') subscriptions.forgetFoldedAcrossLink(src, args[0]);
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
@@ -5378,6 +5411,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
   } catch (err) {
+    // A failed page read releases a session kept folded across a link change.
+    const failedSessionId = payload.channel === 'local-db:messages:view' ? payload.args?.[0] : undefined;
+    if (typeof failedSessionId === 'string') subscriptions.forgetFoldedAcrossLink(src, failedSessionId);
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
     const message = err instanceof Error ? err.message : String(err);

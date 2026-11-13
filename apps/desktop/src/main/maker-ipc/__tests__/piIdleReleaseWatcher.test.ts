@@ -2,10 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { and, eq, sql } from 'drizzle-orm';
+import os from 'node:os';
+import path from 'node:path';
+import { Maker, type AgentSessionHandle, type BaseAgent, type SessionMeta, type SessionStorage, type StartSessionOptions } from '@cindy/maker-core';
+import { createRehydrateCloseSuppression, shouldSkipOnCloseSideEffects } from '../../maker-host/rehydrateCloseSuppression';
 import { sessions } from '../../localDb/schema.js';
 
 import {
   createPiIdleReleaseWatcher,
+  createPiIdleReleaseClose,
   piIdleReleaseCandidateWhere,
   piIdleReleaseIdleSince,
   type PiIdleReleaseCandidate,
@@ -22,9 +27,11 @@ function createCandidate(overrides: Partial<PiIdleReleaseCandidate> = {}): PiIdl
 
 function createDeps(overrides: Partial<PiIdleReleaseWatcherDeps> = {}) {
   const session = {
+    id: 'session-1',
     isTurnRunning: vi.fn<() => boolean>(() => false),
     listBackgroundTasks: vi.fn<() => readonly unknown[]>(() => []),
     countPendingWakeContinuations: vi.fn<() => number>(() => 0),
+    manageAsyncUserQuestions: vi.fn(() => ({ questions: [] })),
     closeIfIdle: vi.fn<() => Promise<boolean>>(async () => true),
   };
   const deps: PiIdleReleaseWatcherDeps = {
@@ -35,6 +42,7 @@ function createDeps(overrides: Partial<PiIdleReleaseWatcherDeps> = {}) {
     hasPendingInput: vi.fn(async () => false),
     readIdleSinceMs: vi.fn(async () => 0),
     hasScheduledAutoResume: vi.fn(() => false),
+    closeSession: vi.fn((current) => current.closeIfIdle()),
     now: vi.fn(() => 120_000),
     timer: { setInterval, clearInterval },
     log: {
@@ -50,11 +58,97 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// #10424, unit: use real Maker/Session teardown and resume. Mock-only watcher
+// tests cannot catch close facts that accidentally clean task resources or IDs.
+it('retires only the Pi runtime and resumes the same native identity', async () => {
+  const rows = new Map<string, SessionMeta>();
+  const storage: SessionStorage = {
+    create: async meta => { const row = { ...meta, createdAt: 1, updatedAt: 1 }; rows.set(meta.id, row); return row; },
+    get: async id => rows.get(id) ?? null,
+    list: async () => [...rows.values()],
+    update: async (id, patch) => { const row = { ...rows.get(id)!, ...patch }; rows.set(id, row); return row; },
+    delete: vi.fn(async id => { rows.delete(id); }),
+    compareAndClearSdkSessionId: vi.fn(async () => false),
+  };
+  const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+  const suppression = createRehydrateCloseSuppression(log);
+  const removeTaskResources = vi.fn(async () => {});
+  const handles: AgentSessionHandle[] = [];
+  const startSession = vi.fn(async (opts: StartSessionOptions) => {
+    let finish!: () => void;
+    const ended = new Promise<void>(resolve => { finish = resolve; });
+    const handle: AgentSessionHandle = {
+      id: opts.resumeSessionId ?? 'pi-native-history', agentKind: 'pi', model: 'model',
+      send: vi.fn(async () => {}), steer: async () => {}, abort: async () => {},
+      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+      close: vi.fn(async () => { finish(); }),
+      async *events() { await ended; },
+      isTurnRunning: () => false, setInteractionResolver() {},
+    };
+    handles.push(handle);
+    return handle;
+  });
+  const agent = { kind: 'pi', capabilities: { sameTurnSteer: { supported: true } }, startSession,
+    filterActiveSkillCommands: (result: unknown) => result, dispose: async () => {} } as unknown as BaseAgent;
+  const maker = new Maker({ agents: { pi: agent }, storage, logger: log,
+    lifecycleHooks: {
+      isTransientCloseRequest: id => suppression.isSuppressed(id),
+      onClose: (id, _options, close) => suppression.runOnCloseSideEffects(id, removeTaskResources,
+        { skip: shouldSkipOnCloseSideEffects(close, suppression.isSuppressed(id)) }),
+    },
+  });
+  const opts = { id: 'session-1', agentKind: 'pi' as const,
+    workingDir: path.join(os.tmpdir(), 'pi-idle-fixture'), model: 'model' };
+  const first = await maker.createSession(opts);
+  const stored = { ...rows.get(first.id)! };
+  const { watcher } = createDeps({
+    getSession: id => maker.getSession(id) ?? null,
+    closeSession: createPiIdleReleaseClose(maker, suppression.withSuppressed),
+  });
+  try {
+    // Async cards survive turn completion, unlike synchronous interactions.
+    first.setInteractionListener(() => new Promise(() => {}));
+    const question = first.askUserQuestionAsync([{ question: 'Continue?' }]);
+    await watcher.scanNow();
+    expect(handles[0].close).not.toHaveBeenCalled();
+    expect(first.manageAsyncUserQuestions({ action: 'list' }).questions).toHaveLength(1);
+    first.manageAsyncUserQuestions({ action: 'withdraw', request_ids: [question.request_id], reason: 'Answered in test' });
+    // An exclusive native operation is visible only to Session's atomic gate.
+    handles[0].hasPendingHostOperation = () => true;
+    await watcher.scanNow();
+    expect(handles[0].close).not.toHaveBeenCalled();
+    expect(maker.getSessionCloseReason(first)).toBe('unexpected');
+    handles[0].hasPendingHostOperation = () => false;
+    await watcher.scanNow();
+    expect(handles[0].close).toHaveBeenCalledOnce();
+    expect(maker.getSession(first.id)).toBeUndefined();
+    expect(maker.getSessionCloseReason(first)).toBe('runtime-refresh');
+    expect(rows.get(first.id)).toEqual(stored);
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(storage.compareAndClearSdkSessionId).not.toHaveBeenCalled();
+    expect(removeTaskResources).not.toHaveBeenCalled();
+    expect(suppression.isSuppressed(first.id)).toBe(false);
+    const persisted = (await maker.getSessionMeta(first.id))!;
+    const resumed = await maker.createSession({ ...opts, resumeSessionId: persisted.sdkSessionId });
+    expect(resumed).not.toBe(first);
+    expect(resumed.id).toBe(first.id);
+    expect(startSession.mock.calls[1][0].resumeSessionId).toBe('pi-native-history');
+    await resumed.send('continue');
+    expect(handles[1].send).toHaveBeenCalledOnce();
+    expect(handles[0].send).not.toHaveBeenCalled();
+    expect(rows.get(first.id)?.sdkSessionId).toBe('pi-native-history');
+  } finally {
+    watcher.stop();
+    await maker.shutdown();
+    suppression.resetForTest();
+  }
+});
+
 describe('createPiIdleReleaseWatcher', () => {
-  // Unit regression: the real scan/recheck SQL excluded hidden plugin tasks.
-  // Existing tests injected preselected candidates and could not catch that leak.
-  // Minimal input: one idle hidden Pi plugin task; use in-memory SQLite, no user DB.
-  it.each(['active', 'archived'])('releases idle %s plugin runtimes through the database filter', async (status) => {
+  // #10424: scan/recheck SQL excluded bot and scheduler processes indefinitely.
+  // Unit tier: an idle source row in real in-memory SQLite must reach release;
+  // preselected candidate mocks cannot detect a missing source in the predicate.
+  it.each(['active', 'archived'])('releases idle %s host-owned runtimes through the database filter', async (status) => {
     const sqlite = new Database(':memory:');
     try {
       sqlite.exec(`CREATE TABLE sessions (
@@ -70,6 +164,18 @@ describe('createPiIdleReleaseWatcher', () => {
       insert.run('ssh', 'pi', status, 'plugin', null, 1, 'ssh', null, 0, 0, 0);
       insert.run('device', 'pi', status, 'plugin', null, 1, null, 'device', 0, 0, 0);
       insert.run('bot', 'pi', status, 'bot', null, null, null, null, 0, 0, 0);
+      insert.run('hidden-bot', 'pi', status, 'bot', null, 1, null, null, 0, 0, 0);
+      insert.run('scheduler', 'pi', status, 'scheduler', null, null, null, null, 0, 0, 0);
+      insert.run('hidden-scheduler', 'pi', status, 'scheduler', null, 1, null, null, 0, 0, 0);
+      for (const source of ['bot', 'scheduler']) {
+        insert.run(`${source}-worker`, 'pi', status, source, 'worker', null, null, null, 0, 0, 0);
+        insert.run(`${source}-lead`, 'pi', status, source, 'lead', null, null, null, 0, 0, 0);
+        insert.run(`${source}-ssh`, 'pi', status, source, null, null, 'ssh', null, 0, 0, 0);
+        insert.run(`${source}-device`, 'pi', status, source, null, null, null, 'device', 0, 0, 0);
+        insert.run(`${source}-deleted`, 'pi', 'deleted', source, null, null, null, null, 0, 0, 0);
+        insert.run(`${source}-recent`, 'pi', status, source, null, null, null, null, 0, 0, 90_000);
+      }
+      insert.run('hidden-other', 'pi', status, 'im', null, 1, null, null, 0, 0, 0);
       insert.run('codex', 'codex', status, 'plugin', null, 1, null, null, 0, 0, 0);
       insert.run('deleted', 'pi', 'deleted', 'plugin', null, 1, null, null, 0, 0, 0);
       insert.run('recent', 'pi', status, 'plugin', null, 1, null, null, 0, 90_000, 0);
@@ -82,11 +188,32 @@ describe('createPiIdleReleaseWatcher', () => {
           .where(and(eq(sessions.id, id), piIdleReleaseCandidateWhere())).get()?.idleSinceMs ?? null,
       });
       await watcher.scanNow();
-      expect(vi.mocked(deps.getSession).mock.calls.map(([id]) => id).sort()).toEqual(['desktop', 'plugin']);
-      expect(session.closeIfIdle).toHaveBeenCalledTimes(2);
-      // The lock recheck must also see plugin activity that arrived after selection.
+      expect(vi.mocked(deps.getSession).mock.calls.map(([id]) => id).sort()).toEqual([
+        'bot', 'desktop', 'hidden-bot', 'hidden-scheduler', 'plugin', 'scheduler',
+      ]);
+      expect(session.closeIfIdle).toHaveBeenCalledTimes(6);
+      // Each existing busy gate must also protect the newly eligible SQL rows.
+      for (const [mock, busy, idle] of [
+        [session.isTurnRunning, true, false],
+        [session.listBackgroundTasks, [{ taskId: 'background' }], []],
+        [session.countPendingWakeContinuations, 1, 0],
+        [vi.mocked(deps.hasScheduledAutoResume), true, false],
+        [vi.mocked(deps.hasPendingInput), true, false],
+      ] as const) {
+        session.closeIfIdle.mockClear();
+        // The tuple covers synchronous and asynchronous runtime capabilities.
+        (mock as ReturnType<typeof vi.fn>).mockImplementation(() => busy);
+        await watcher.scanNow();
+        expect(session.closeIfIdle).not.toHaveBeenCalled();
+        (mock as ReturnType<typeof vi.fn>).mockImplementation(() => idle);
+      }
+      // Recheck newly admitted sources too: both activity and ownership can change.
       vi.mocked(deps.withSessionLock).mockImplementation(async (id, task) => {
-        if (id === 'plugin') sqlite.prepare('UPDATE sessions SET user_send_at = 100000 WHERE id = ?').run(id);
+        if (['plugin', 'bot', 'scheduler'].includes(id)) {
+          sqlite.prepare('UPDATE sessions SET user_send_at = 100000 WHERE id = ?').run(id);
+        }
+        if (id === 'hidden-bot') sqlite.prepare('UPDATE sessions SET agent_device_id = ? WHERE id = ?').run('device', id);
+        if (id === 'hidden-scheduler') sqlite.prepare('UPDATE sessions SET orca_role = ? WHERE id = ?').run('worker', id);
         return task();
       });
       session.closeIfIdle.mockClear();

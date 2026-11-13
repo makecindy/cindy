@@ -190,48 +190,55 @@ export function resolveAgentNetProviderShareLink(input: string): { invitation: s
 /** Only the share's authenticated host device may authorize a same-account executor. */
 export async function grantProviderShareDelegation(input: {
   shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
-}): Promise<{ expiresAt: number; generation: string }> {
+}, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<{ expiresAt: number; generation: string }> {
   const privateGrant = await grantAgentNetProviderExecutor(input); if (privateGrant) return privateGrant;
   if (!agentNetAllowsLegacy()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Encrypted sharing route required');
-  const scope = captureScope();
-  const value = await serverApiFetch<{ expiresAt?: unknown; generation?: unknown }>('/api/device-link/provider-shares/delegations', {
-    method: 'POST', body: input,
-    baseUrl: () => {
-      if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
-      return getClientEndpoint('deviceLinkApiBaseUrl');
-    },
-    timeoutMs: 15_000, cache: 'no-store',
-    logLabel: '/api/device-link/provider-shares/delegations',
-    redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
-  });
-  if (!Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()
-    || typeof value.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(value.generation)) {
-    throw new Error('Provider share delegation was not confirmed');
-  }
-  return { expiresAt: value.expiresAt as number, generation: value.generation };
+  const body = { ...input };
+  return delegationChecks.run(JSON.stringify(['grant', body.shareId, body.memberId, body.guestDeviceId, body.executorDeviceId]), async (scope, timeoutMs, signal) => {
+    const value = await serverApiFetch<{ expiresAt?: unknown; generation?: unknown }>('/api/device-link/provider-shares/delegations', {
+      method: 'POST', body,
+      baseUrl: () => {
+        if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+        return getClientEndpoint('deviceLinkApiBaseUrl');
+      },
+      timeoutMs, signal, cache: 'no-store',
+      logLabel: '/api/device-link/provider-shares/delegations',
+      redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
+    });
+    if (!Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()
+      || typeof value.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(value.generation)) {
+      throw new Error('Provider share delegation was not confirmed');
+    }
+    return { expiresAt: value.expiresAt as number, generation: value.generation };
+  }, options);
 }
 
 export async function revokeProviderShareDelegation(input: {
   shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string; generation: string;
-}): Promise<void> {
+}, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<void> {
   if (await revokeAgentNetProviderExecutor(input)) return;
   if (!agentNetAllowsLegacy()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Encrypted sharing route required');
-  const scope = captureScope();
-  await serverApiFetch('/api/device-link/provider-shares/delegations/revoke', {
-    method: 'POST', body: input,
-    baseUrl: () => {
-      if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
-      return getClientEndpoint('deviceLinkApiBaseUrl');
-    },
-    timeoutMs: 15_000, cache: 'no-store',
-    logLabel: '/api/device-link/provider-shares/delegations/revoke',
-    redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
-  });
+  const body = { ...input };
+  return delegationChecks.run(JSON.stringify(['revoke', body.shareId, body.memberId, body.guestDeviceId, body.executorDeviceId, body.generation]), async (scope, timeoutMs, signal) => {
+    await serverApiFetch('/api/device-link/provider-shares/delegations/revoke', {
+      method: 'POST', body,
+      baseUrl: () => {
+        if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+        return getClientEndpoint('deviceLinkApiBaseUrl');
+      },
+      timeoutMs, signal, cache: 'no-store',
+      logLabel: '/api/device-link/provider-shares/delegations/revoke',
+      redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
+    });
+  }, options);
 }
 
 /** M verifies that the server accepted O's delegation before trusting a cross-account guest. */
 const delegationChecks = createProviderShareDelegationChecks({
-  captureScope,
+  // Only the delegation budget survives an owner generation change. Ordinary
+  // sharing and private invitations keep their existing scope dependency.
+  captureScope: () => ({ ...captureScope(),
+    key: JSON.stringify([providerShareOwnerKey(), getClientEndpoint('deviceLinkApiBaseUrl')]) }),
   scopeChanged: () => new ProviderShareScopeChangedError(),
   async request(input, scope, timeoutMs, signal) {
     const privateCheck = await checkAgentNetProviderExecutor(input, signal); if (privateCheck) return privateCheck;
@@ -257,13 +264,16 @@ const delegationChecks = createProviderShareDelegationChecks({
 });
 
 export function checkProviderShareDelegation(input: DelegationCheckInput,
-  generation?: string): Promise<DelegationCheckResult> {
-  return delegationChecks.check(input, generation);
+  generation?: string, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<DelegationCheckResult> {
+  return delegationChecks.check(input, generation, options);
 }
 
 export function clearProviderShareDelegationChecks(): void {
   delegationChecks.clear();
 }
+
+/** Local shared account/endpoint cooldown, not a claim about the server's quota. */
+export function providerShareDelegationRetryAt(): number { return delegationChecks.retryAt(); }
 
 /**
  * 供应商分享运行时的账号作用域：模式 + 数据所有者，不含代次。同一账号的投影修复会推进代次但不
