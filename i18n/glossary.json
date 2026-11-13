@@ -19,6 +19,19 @@
   "punctuationExempt": [
     "desktop:settings.help.qnaFeedbackBodyTemplate"
   ],
+  "englishCopyExempt": {
+    "en-straight-quote": [
+      "desktop:ccAgent.sidebar.newProjectDialog.nameInvalid",
+      "desktop:settings.appearance.font.previewSamples.terminal",
+      "desktop:settings.ghosts.market.sources.guide.manifestBody",
+      "desktop:settings.providers.import.formatAuth",
+      "desktop:settings.providers.import.formatBatch",
+      "desktop:settings.providers.import.formatEndpoint",
+      "desktop:settings.providers.import.formatIdentity",
+      "desktop:settings.providers.import.formatTargets",
+      "desktop:settings.remote.hostKeyError.repair"
+    ]
+  },
   "terms": [
     {
       "id": "accessories",
@@ -55,6 +68,13 @@
       },
       "checkCase": false,
       "alsoAllowed": {
+        "fr": [
+          { "text": "Actif", "when": "标题或状态标签使用大写首字母。" },
+          { "text": "active", "when": "阴性名词使用 active / actives，阳性复数 actifs 已包含标准词干。" }
+        ],
+        "de": [
+          { "text": "aktiv", "when": "句中形容词使用小写，并按性、数、格变为 aktive / aktiven 等。" }
+        ],
         "zh-CN": [
           {
             "text": "生效中",
@@ -579,16 +599,23 @@
     },
     {
       "id": "bot-market",
-      "status": "proposed",
-      "en": "Discover Teammates",
+      "status": "decided",
+      "en": "Discover Buddies",
       "translations": {
         "zh-CN": "发现伙伴",
         "zh-TW": "發現夥伴",
         "ja": "仲間を探す",
-        "ko": "동료 찾기"
+        "ko": "동반자 찾기",
+        "de": "Freunde entdecken",
+        "fr": "Découvrir des amis",
+        "es": "Descubrir amigos",
+        "pt-PT": "Descobrir amigos",
+        "pt-BR": "Descobrir amigos",
+        "zh-Hans-x-lzh": "访同伴",
+        "zh-Hant-x-lzh": "訪同伴"
       },
       "checkCase": false,
-      "note": "预制伙伴目录与邀请入口，仅 Desktop。入口菜单项与弹窗标题同用 bots.market.heading，不再另设英文品牌名 Bot Market；英文句中小写 teammates（Discover teammates 作动作时），作功能名保持 Discover Teammates。"
+      "note": "预制伙伴目录与邀请入口；使用 Buddy 对应的本地化产品术语。"
     },
     {
       "id": "bot-reply-post",
@@ -1587,6 +1614,19 @@
       "note": "伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。"
     },
     {
+      "id": "group-cindy",
+      "status": "proposed",
+      "en": "Group Cindy",
+      "translations": {
+        "zh-CN": "群里的 Cindy",
+        "zh-TW": "群裡的 Cindy",
+        "ja": "グループの Cindy",
+        "ko": "그룹의 Cindy"
+      },
+      "checkCase": false,
+      "note": "每个服务器群自带的那位 Cindy 成员（docs/product-rules/bot-group-chat.md 第 9 节，2026-11-12）：谁 @ 它就在谁自己的电脑上替他做事，不属于任何人，也不是个人伙伴。名字各语言都叫 Cindy，群管理开关与说明里用这个称呼；不叫「群助手」「群伙伴」「默认伙伴」。先登记为 proposed，等 UI 走查后再定。"
+    },
+    {
       "id": "group-main-chat",
       "status": "proposed",
       "en": "Main Chat",
@@ -2154,6 +2194,19 @@
         "ko": "음성 합성"
       },
       "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。"
+    },
+    {
+      "id": "model-group",
+      "status": "proposed",
+      "en": "Model Group",
+      "translations": {
+        "zh-CN": "模型组",
+        "zh-TW": "模型組",
+        "ja": "モデルグループ",
+        "ko": "모델 그룹"
+      },
+      "checkCase": false,
+      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一条条「路线」（几个来源加一种选法，可选推理强度，英文 Route；2026-11-11 原「模式」并入路线）；这个词只在模型组语境下这样用，不约束网络路由等其它语境。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。"
     },
     {
       "id": "model-id",
@@ -3770,16 +3823,65 @@
     },
     {
       "id": "teammate",
-      "status": "proposed",
-      "en": "Teammate",
+      "status": "decided",
+      "en": "Buddy",
       "translations": {
         "zh-CN": "伙伴",
         "zh-TW": "夥伴",
         "ja": "仲間",
-        "ko": "동료"
+        "ko": "동반자",
+        "de": "Freund",
+        "fr": "Ami",
+        "es": "Amigo",
+        "pt-PT": "Amigo",
+        "pt-BR": "Amigo",
+        "zh-Hans-x-lzh": "同伴",
+        "zh-Hant-x-lzh": "同伴"
       },
       "checkCase": false,
-      "note": "Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以用 send_to_session 给其它任务和伙伴发消息或新开普通 Cindy 任务（2026-11-08 起 V2：伙伴 = 一个项目 + 它的任务 + 身份，伙伴私信已下线）。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。"
+      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。",
+      "alsoAllowed": {
+        "fr": [
+          {
+            "text": "ami",
+            "when": "句中使用小写首字母。"
+          },
+          {
+            "text": "amis",
+            "when": "按语法使用复数形式。"
+          }
+        ],
+        "es": [
+          {
+            "text": "amigo",
+            "when": "句中使用小写首字母。"
+          },
+          {
+            "text": "amigos",
+            "when": "按语法使用复数形式。"
+          }
+        ],
+        "pt-PT": [
+          {
+            "text": "amigo",
+            "when": "句中使用小写首字母。"
+          },
+          {
+            "text": "amigos",
+            "when": "按语法使用复数形式。"
+          }
+        ],
+        "pt-BR": [
+          {
+            "text": "amigo",
+            "when": "句中使用小写首字母。"
+          },
+          {
+            "text": "amigos",
+            "when": "按语法使用复数形式。"
+          }
+        ]
+      }
     },
     {
       "id": "teammate-core-skill",

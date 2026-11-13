@@ -15,6 +15,7 @@ async function runBridge(
   effort = 'high',
   fast = false,
   inboundHeaders: Record<string, string> = {},
+  requestBody: Record<string, unknown> = {},
 ) {
   const handler = createClaudeProviderBridge({
     url: `https://supplier.example/v1/${protocol === 'openai-chat' ? 'chat/completions' : 'responses'}`,
@@ -43,6 +44,7 @@ async function runBridge(
       body: JSON.stringify({ model: 'test-model', stream, max_tokens: 8192,
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' },
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }] }],
+        ...requestBody,
       }),
     });
     return { status: response.status, body: await response.text() };
@@ -54,6 +56,53 @@ const chatStream = [
 ].map(frame => `data: ${JSON.stringify(frame)}\r\n\r\n`).join('') + 'data: [DONE]\r\n\r\n';
 
 describe('Claude Code custom provider translation', () => {
+  // #10269, unit: exercise the real Messages bridge and installed Chat adapter;
+  // protocol projection alone did not detect the rejected claude-code identity.
+  it('round-trips Carbon tools through the Claude Messages bridge with Copilot IDE identity', async () => {
+    const upstream = 'https://api.business.githubcopilot.com';
+    const provider = buildUserProvider({ id: 'copilot-carbon', name: 'Copilot', runtimes: { 'claude-code': {
+      baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot',
+      models: [{ id: 'gemini-4-carbon', name: 'Carbon' }],
+    } } });
+    // OAuth selects the account host after resolving the stored preset route.
+    const model = invocationModelRecord(provider.models['claude-code']![0], 'https://api.individual.githubcopilot.com')!;
+    const frames = [
+      { choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'carbon-call',
+        type: 'function', function: { name: 'lookup', arguments: '{"key":"fixture"}' } }] } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+    ].map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('') + 'data: [DONE]\n\n';
+    const messages: unknown[] = [{ role: 'user', content: 'Look up fixture' }];
+    const requests: Record<string, any>[] = [];
+    const onRequest = (url: string, init?: RequestInit) => {
+      expect(url).toBe(`${upstream}/chat/completions`);
+      const headers = new Headers(init?.headers);
+      expect(headers.get('copilot-integration-id')).toBe('vscode-chat');
+      expect(headers.get('editor-version')).toBe(model.execution.pi.headers!['Editor-Version']);
+      expect(headers.get('authorization')).toBe('Bearer fixture-supplier-key');
+      expect(headers.has('x-api-key')).toBe(false);
+      expect(JSON.stringify([...headers])).not.toContain('fixture-claude-subscription');
+      const body = JSON.parse(String(init?.body));
+      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body).not.toHaveProperty('store');
+      requests.push(body);
+    };
+    const extras = { model, providerId: provider.id, nativeUpstream: upstream };
+    const body = { model: model.id, system: 'Use lookup', messages,
+      tools: [{ name: 'lookup', input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } }] };
+    const first = await runBridge('openai-chat', false, frames, onRequest, extras, 'high', false, {}, body);
+    expect(first.status).toBe(200);
+    const result = JSON.parse(first.body);
+    expect(result).toMatchObject({ stop_reason: 'tool_use', content: [expect.objectContaining({ type: 'tool_use', name: 'lookup', input: { key: 'fixture' } })] });
+    const call = result.content.find((item: { type: string }) => item.type === 'tool_use');
+    const second = await runBridge('openai-chat', false, chatStream, onRequest, extras, 'high', false, {}, {
+      ...body, messages: [...messages, { role: 'assistant', content: [call] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: call.id, content: 'fixture result' }] }],
+    });
+    expect(second.status).toBe(200);
+    expect(JSON.parse(second.body)).toMatchObject({ content: [{ type: 'text', text: 'Hello' }] });
+    expect(requests[1].messages).toContainEqual(expect.objectContaining({ role: 'tool', content: 'fixture result' }));
+  });
+
   it.each(['openai-chat', 'openai-responses'] as const)(
     'reconciles saved effort against current capabilities before %s forwarding', async protocol => {
       const sent: unknown[] = [];

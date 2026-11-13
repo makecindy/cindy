@@ -9,7 +9,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, options: Record<string, unknown> = {}) =>
-      key === 'quotaCard.modelWeeklyLabel' ? `${String(options.model)} weekly` : key,
+      key === 'quotaCard.modelWeeklyLabel' ? `${String(options.model)} weekly`
+        : key === 'subscriptionAccounts.loginExpiresInDays' ? `Expires in about ${options.days} days`
+          : key === 'subscriptionAccounts.loginAccountAria' ? `Sign in again to ${options.name}` : key,
   }),
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -32,6 +34,7 @@ const view: SubscriptionPoolView = {
       id: 'cindy-owner-second',
       paused: false,
       limit: 4,
+      limitSet: true,
       weight: 1,
       directory: '/home/.claude-second',
       status: 'ready',
@@ -60,6 +63,81 @@ beforeEach(() => {
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // Unit regression: the real second-account row must expose the shared reset UI
+  // and send its own scope/key. Previously only the supplied default card had it.
+  it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {
+    const scope = 'openai-account:cindy-owner-second';
+    const autoUse = { accountKey: 'second-account-key', settings: {
+      enabled: false, lowQuota: true, minimumDays: 3, expiring: true, expiryMinutes: 60,
+    }, customized: false, lastUsedAt: null };
+    const snapshot = { providerId: scope, account: { email: 'se***@example.test', accountId: '…second', planType: 'pro' },
+      rateLimits: {}, rateLimitsByLimitId: null, rateLimitResetCredits: { availableCount: 1, credits: null }, resetOffer: null, autoUse };
+    const getCodexRateLimits = vi.fn(async () => snapshot);
+    const setCodexResetAutoUse = vi.fn(async () => ({ ...snapshot, autoUse: {
+      ...autoUse, settings: { ...autoUse.settings, enabled: true }, customized: true,
+    } }));
+    Object.assign(window.electronAPI, { maker: { usage: { getCodexRateLimits, setCodexResetAutoUse } } });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, providerId: 'openai', accounts: [
+      view.accounts[0], { ...view.accounts[1], codexResetProviderId: scope, usage: hasQuota ? { codex: { credits: null, buckets: {
+        codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
+          secondary: { usedPercent: 20, windowMinutes: 10080, resetsAt } },
+      } } } : undefined },
+    ] });
+    render(<SubscriptionAccountsSection providerId="openai" defaultUsage={<div>Default quota</div>} />);
+    const toggle = await screen.findByRole('switch', { name: 'codexResets.autoUse.label' });
+    const rows = screen.getAllByTestId('subscription-account');
+    expect(within(rows[0]).getByText('Default quota')).toBeTruthy();
+    expect(within(rows[1]).getByText('codexResets.title')).toBeTruthy();
+    expect(getCodexRateLimits).toHaveBeenCalledWith(scope);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setCodexResetAutoUse).toHaveBeenCalledWith({ enabled: true }, 'second-account-key', scope));
+  });
+  // Unit: independent expiry dates and the inline renewal target are observable
+  // through the real component; existing tests only exercised the overflow menu.
+  it('shows each account expiry and renews only the account clicked', async () => {
+    let current = { ...view, accounts: view.accounts.map((account, i) => ({
+      ...account, loginExpiresAt: new Date(Date.now() + (i === 0 ? 18 : 3) * 86_400_000).toISOString(),
+    })) };
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'login') current = { ...current, accounts: current.accounts.map(account =>
+        account.id === request.accountId ? { ...account, loginExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() } : account) };
+      return current;
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const rows = await screen.findAllByTestId('subscription-account');
+    expect(within(rows[0]).getByText('Expires in about 18 days')).toBeTruthy();
+    expect(within(rows[1]).getByText('Expires in about 3 days')).toBeTruthy();
+    expect(within(rows[0]).queryByRole('button', { name: 'Sign in again to first@example.test' })).toBeNull();
+    fireEvent.click(within(rows[1]).getByRole('button', { name: 'Sign in again to second@example.test' }));
+    await screen.findByText('Expires in about 30 days');
+    expect(command).toHaveBeenCalledWith({ action: 'login', providerId: 'anthropic', accountId: 'cindy-owner-second', loginKey: expect.any(String) });
+    expect(within(rows[0]).getByText('Expires in about 18 days')).toBeTruthy();
+  });
+  it('keeps a past estimate connected, disables renewal while busy, and tolerates older hosts', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view, accounts: [{ ...view.accounts[0], loginExpiresAt: '2020-01-01T00:00:00Z', running: 1 }, view.accounts[1]],
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    await screen.findByText('subscriptionAccounts.loginMayHaveExpired');
+    expect(screen.queryByText('subscriptionAccounts.signedOut')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign in again to first@example.test' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('subscriptionAccounts.loginExpiryUnknown')).toBeTruthy();
+  });
+  it.each([
+    ['SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH', 'loginIdentityMismatch'],
+    ['SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN', 'loginIdentityUnknown'],
+  ])('explains %s instead of claiming renewal succeeded', async (code, message) => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'login') throw new Error(`[${code}] Sign in again`);
+      return { ...view, accounts: [{ ...view.accounts[0], status: 'signed-out', authIssue: 'claude-account-mismatch' }] };
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again to first@example.test' }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith(`subscriptionAccounts.${message}`));
+    expect(screen.getByText('subscriptionAccounts.loginIdentityMismatchStatus')).toBeTruthy();
+  });
   // #9517, unit: existing settings tests never exercised an account operation
   // failure. A serialized provider-auth error must show the recovery instruction.
   it('explains provider-managed authentication when account login fails', async () => {
@@ -162,6 +240,11 @@ describe('SubscriptionAccountsSection usage', () => {
     render(<SubscriptionAccountsSection providerId="anthropic" />);
     expect(await screen.findByRole('radiogroup', { name: 'subscriptionAccounts.strategy' })).toBeTruthy();
     expect(screen.getAllByLabelText('providerGroup.member.weightAria')).toHaveLength(2);
+    // 2026-11-11: an unset (legacy default 4) limit reads as unlimited; a chosen limit shows its number.
+    const [first, second] = screen.getAllByTestId('subscription-account');
+    expect(within(first).getByText('providerGroup.member.limitUnlimited')).toBeTruthy();
+    expect(within(second).getByText('providerGroup.member.limitOption')).toBeTruthy();
+    expect(within(second).queryByText('providerGroup.member.limitUnlimited')).toBeNull();
   });
   // The folder path used to be an always-visible disclosure under every account; it is now a menu action.
   it('opens the account folder from the account menu and reports a failure', async () => {

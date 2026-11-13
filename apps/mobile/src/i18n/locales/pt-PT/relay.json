@@ -8,26 +8,26 @@
     "failed": "Não foi possível alterar as definições do Agent-Net. Verifique a ligação ao relay e tente novamente."
   },
   "settings": {
-    "sectionTitle": "Serviço de retransmissão",
-    "currentLabel": "Serviço de retransmissão",
-    "official": "Retransmissão oficial de {{appName}}",
-    "switchToOfficial": "Voltar à retransmissão oficial",
-    "officialHint": "Os seus dispositivos ligam-se através da retransmissão oficial de {{appName}}. Quando um dos seus computadores usa uma retransmissão própria, aparece aqui: toque para aderir. Para aderir a uma retransmissão que alguém partilhou consigo, leia o código QR com a câmara do telemóvel.",
-    "selfHostedHint": "Os seus dispositivos ligam-se através da sua própria retransmissão em {{address}}. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}.",
-    "removedHint": "Este telemóvel foi removido da retransmissão ou a retransmissão foi desativada. Volte à retransmissão oficial ou adira novamente a partir do computador.",
-    "credentialMissingHint": "A credencial de retransmissão já não está neste telemóvel. Adira novamente a partir do computador ou volte à retransmissão oficial.",
-    "confirmTitle": "Voltar à retransmissão oficial?",
+    "sectionTitle": "Serviço de relay",
+    "currentLabel": "Serviço de relay",
+    "official": "Relay oficial de {{appName}}",
+    "switchToOfficial": "Voltar ao relay oficial",
+    "officialHint": "Os seus dispositivos ligam-se através do relay oficial de {{appName}}. Quando um dos seus computadores usa um relay próprio, aparece aqui: toque para aderir. Para aderir a um relay que alguém partilhou consigo, leia o código QR com a câmara do telemóvel.",
+    "selfHostedHint": "Os seus dispositivos ligam-se através do seu próprio relay em {{address}}. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}.",
+    "removedHint": "Este telemóvel foi removido do relay ou o relay foi desativado. Volte ao relay oficial ou adira novamente a partir do computador.",
+    "credentialMissingHint": "A credencial do relay já não está neste telemóvel. Adira novamente a partir do computador ou volte ao relay oficial.",
+    "confirmTitle": "Voltar ao relay oficial?",
     "confirmBody": "Este telemóvel vai sair de “{{name}}” e usar o relay oficial de {{appName}}. Para voltar a usar esse relay, adira novamente a partir do computador.",
     "confirmAction": "Voltar ao oficial",
     "switchFailed": "Não foi possível voltar ao relay oficial. Tente novamente dentro de momentos.",
     "pushUnavailable": "Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel.",
     "accountManagedOn": "Gerido em «{{device}}»",
     "accountSwitchTitle": "Aderir a «{{name}}»?",
-    "accountSwitchBody": "Esta retransmissão é da sua conta. «{{device}}» autoriza este telemóvel automaticamente, sem ligação de partilha. Enquanto usar uma retransmissão própria, este telemóvel não recebe as notificações de tarefas do computador.",
+    "accountSwitchBody": "Este relay é da sua conta. «{{device}}» autoriza este telemóvel automaticamente, sem ligação de partilha. Enquanto usar um relay próprio, este telemóvel não recebe as notificações de tarefas do computador.",
     "accountSwitchAction": "Aderir",
-    "sharedHint": "Os seus dispositivos ligam-se através de uma retransmissão partilhada consigo em {{address}} e só chegam aos seus próprios dispositivos. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}.",
-    "sharedCurrent": "{{name}} (partilhada por {{owner}})",
-    "accountSharedBy": "Partilhada por {{owner}} · adesão em «{{device}}»",
+    "sharedHint": "Os seus dispositivos ligam-se através de um relay partilhado consigo em {{address}} e só chegam aos seus próprios dispositivos. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}.",
+    "sharedCurrent": "{{name}} (partilhado por {{owner}})",
+    "accountSharedBy": "Partilhado por {{owner}} · adesão em «{{device}}»",
     "accountSharedOn": "Adesão em «{{device}}»"
   },
   "issue": {
@@ -54,7 +54,7 @@
     "cancelled": "A adesão foi cancelada. Para aderir a este relay, crie uma nova ligação de partilha no computador.",
     "accountRequesting": "A pedir autorização a «{{device}}»…",
     "accountWaiting": "A aderir, à espera de «{{device}}»…",
-    "openOnComputer": "Esta retransmissão foi partilhada por outra conta. Abra esta ligação no seu computador para aderir. Depois de o computador aderir, este telemóvel vê-a em Definições > Retransmissão e pode aderir com um toque."
+    "openOnComputer": "Este relay foi partilhado por outra conta. Abra esta ligação no seu computador para aderir. Depois de o computador aderir, este telemóvel vê-o em Definições > Serviço de relay e pode aderir com um toque."
   },
   "errors": {
     "unreachable": "Não é possível aceder a este relay. Certifique-se de que o telemóvel e o computador estão na mesma rede ou de que o telemóvel consegue abrir este endereço.",
@@ -70,8 +70,8 @@
     "failed": "Não foi possível aderir ao relay. Tente novamente mais tarde.",
     "saveFailed": "O pedido foi aprovado, mas não foi possível guardar a credencial do relay neste telemóvel. Crie uma nova ligação de partilha no computador e tente novamente.",
     "credentialUnavailable": "Este telemóvel não tem uma credencial de relay utilizável. Adira novamente ou volte ao relay oficial nas Definições.",
-    "ownerUnavailable": "«{{device}}» não respondeu. Verifique se a {{appName}} está aberta e online nesse computador, ou peça uma ligação de partilha.",
-    "relayUnavailable": "«{{device}}» já não usa esta retransmissão.",
-    "accountDirectoryUnavailable": "Não foi possível contactar o serviço de contas de {{appName}}, pelo que as retransmissões da sua conta não foram carregadas. Tente mais tarde ou peça uma ligação de partilha."
+    "ownerUnavailable": "«{{device}}» não respondeu. Verifique se o {{appName}} está aberto e online nesse computador, ou peça uma ligação de partilha.",
+    "relayUnavailable": "«{{device}}» já não usa este relay.",
+    "accountDirectoryUnavailable": "Não foi possível contactar o serviço de contas de {{appName}}, pelo que os relays da sua conta não foram carregados. Tente mais tarde ou peça uma ligação de partilha."
   }
 }

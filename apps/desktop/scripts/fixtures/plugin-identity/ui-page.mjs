@@ -8,8 +8,12 @@ export default {
     'src/renderer/contexts/AuthContext': `export const useAuth = () => ({ mode: 'cloud', dataOwnerId: 'fixture', dataOwnerGeneration: 1, isAuthenticated: true, user: { id: 'fixture-user', membershipKind: 'personal' } }); export const useOptionalAuthUser = () => null; export const useOptionalAuthDeviceId = () => 'fixture'; export const useOptionalDataOwnerGeneration = () => ({ dataOwnerId: 'fixture', generation: 1 });`,
   },
   cases: {
+    preview: { about: 'Chinese recommendations with package icons, alongside the same marketplace cards.' },
     default: { about: 'Five source identities and three recommendations with download counts.' },
     narrow: { about: 'Long names retain identity and download labels at 320px.', viewport: { width: 320, height: 1400 } },
+    'detail-loading': { about: 'Detail reads show a named status in both card styles; install actions keep their labels.' },
+    'detail-loading-narrow': { about: 'Detail feedback remains readable in narrow cards.', viewport: { width: 320, height: 1400 } },
+    'install-loading': { about: 'Explicit installation keeps the install spinner in both card styles.' },
     'market-detail': { about: 'Community detail explains its identity without publishing an author.' },
     'local-detail': { about: 'Installed local detail keeps a distinct source mark.' },
   },

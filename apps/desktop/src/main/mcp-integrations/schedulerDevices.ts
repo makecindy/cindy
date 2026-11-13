@@ -82,6 +82,8 @@ function failure(code: string, message: string): { ok: false; code: string; mess
 export function createSchedulerRemoteDeps(deps: {
   listDevices(): Promise<SchedulerDevice[]>;
   captureAccess(): () => void;
+  /** Plugin approval must remain current after connection setup, at the wire boundary. */
+  captureInvocationGuard?(): (() => void) | undefined;
   invoke(
     deviceId: string,
     channel: string,
@@ -94,7 +96,9 @@ export function createSchedulerRemoteDeps(deps: {
     async invoke(deviceId, op, args) {
       let assertCurrent: () => void;
       try {
-        assertCurrent = deps.captureAccess();
+        const access = deps.captureAccess();
+        const invocation = deps.captureInvocationGuard?.();
+        assertCurrent = invocation ? () => { access(); invocation(); } : access;
       } catch {
         return {
           ok: false,

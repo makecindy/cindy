@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveRemoteText } from '@cindy/device-link';
 import { i18n } from '@/i18n';
-import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupNewMessageCount, interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -805,6 +805,21 @@ it('projects waiting and stopping executions without inventing task IDs or losin
   ]);
 });
 
+// Unit / #10345: direct-server executions had no elapsed start and disappeared above loaded history.
+it('positions direct-server work by enqueue time without inventing elapsed time across refreshes', () => {
+  const messages = [message(20), message(21), message(22)].map((row, index) => ({ ...row,
+    createdAt: new Date([10_000, 30_000, 50_000][index]!).toISOString() }));
+  const execution = { source_message_id: id(21), bot_id: id(12), epoch: 1, id: id(30),
+    status: 'queued', created_at: new Date(40_000).toISOString() };
+  for (const status of ['queued', 'running', 'needs_input', 'stopping']) {
+    const view = chatGroupView({ snapshot: snapshot(), messages, before: null,
+      executions: [{ ...execution, status, updated_at: new Date(100_000).toISOString() }] }, id(11));
+    expect(view.round.speakers[0]?.startedAt).toBeUndefined();
+    expect(interleaveBotGroupWork(view.messages, view.round.speakers).map(row =>
+      row.kind === 'work' ? row.value.executionId : row.value.id)).toEqual([id(20), id(21), id(30), id(22)]);
+  }
+});
+
 // Unit: cross-device Cindy filters use profile identity, including exact legacy presets.
 it('reads Cindy preset identity without inferring from names and retains known IDs on transient failure', async () => {
   const { CINDY_DEFAULT_IDENTITY } = await import('@cindy/maker-shared/bot-template-preset');
@@ -1196,4 +1211,17 @@ it('uses my admin companion actor for an explicit all, preserving server plan re
     [`/conversations/${id(1)}/plans/${id(40)}`, 'POST', { operationId: `all-op:plan:${id(40)}`, expectedRevision: 7, action: 'stop' }, id(12)],
     [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `all-op:execution:${id(30)}`, action: 'stop' }, id(12)],
   ]);
+});
+
+// Unit regression: public execution rows must survive denial of the stop affordance.
+// Earlier projection coverage did not distinguish request ownership.
+// Stopping own work plus a running peer exposed a stop that the real route cannot act on.
+it.each([10, 11].flatMap(requester => ['running', 'stopping'].map(status => ({ requester, status }))))('keeps public work visible while projecting stop permission for $requester ($status)', ({ requester, status }) => {
+  const page = { snapshot: snapshot(), messages: [], before: null, executions: [
+    { id: id(30), source_message_id: id(20), bot_id: id(12), epoch: 1, status, requester_id: id(requester) },
+    { id: id(31), source_message_id: id(21), bot_id: id(12), epoch: 1, status: 'running', requester_id: id(10) },
+  ] };
+  const view = chatGroupView(page, id(11));
+  expect(view.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
+  expect(view.round.canStop).toBe(requester === 11 && status === 'running');
 });

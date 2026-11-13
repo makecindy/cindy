@@ -21,6 +21,7 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js';
 import { z } from 'zod';
 import { jsonObjectArg } from './json-object-arg.js';
 
@@ -60,6 +61,7 @@ export interface SchedulerMcpSessionCtx {
   getSessionContext?: () => LiziMcpSessionContext | undefined;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;
+  hostCaller?: LiziMcpSessionContext['hostCaller'];
 }
 
 // ── Entry-tool descriptions ─────────────────────────────────────────────────
@@ -168,7 +170,16 @@ function registerCallToolEntry(
   access: AccountDataAccess | undefined,
   getSessionContext: () => LiziMcpSessionContext,
   authorizeCall: ToolCallAuthorizer | undefined,
-): void {
+): HostToolRuntime['call'] {
+  const call: HostToolRuntime['call'] = async (name, args) => {
+    const sessionId = getSessionContext().sessionId;
+    return withToolCallAuthority(
+      authorizeCall,
+      { sessionId, server: 'cindy_scheduler', tool: name, args,
+        ...(getSessionContext().hostCaller ? { caller: getSessionContext().hostCaller } : {}) },
+      () => withAccountDataAccess(access, sessionId, () => registry.call(name, args)),
+    );
+  };
   server.tool(
     'call_tool',
     D_CALL_TOOL,
@@ -178,15 +189,9 @@ function registerCallToolEntry(
         .describe('工具名，从 list_tools 获取（如 schedule_create / schedule_list）'),
       args: jsonObjectArg('工具参数（JSON 对象）。不确定 schema 时可先传 {} 触发错误反馈。'),
     },
-    async ({ name, args }) => {
-      const sessionId = getSessionContext().sessionId;
-      return withToolCallAuthority(
-        authorizeCall,
-        { sessionId, server: 'cindy_scheduler', tool: name, args },
-        () => withAccountDataAccess(access, sessionId, () => registry.call(name, args)),
-      );
-    },
+    ({ name, args }) => call(name, args),
   );
+  return call;
 }
 
 // ── Factory ────────────────────────────────────────────────────────────────
@@ -194,7 +199,7 @@ function registerCallToolEntry(
 export function createSchedulerMcpServer(
   deps: SchedulerMcpDeps,
   sessionCtx?: SchedulerMcpSessionCtx,
-): McpServer {
+): HostToolMcpServer {
   const server = new McpServer({
     name: 'cindy_scheduler',
     version: '1.0.0',
@@ -235,7 +240,15 @@ export function createSchedulerMcpServer(
   registerScheduleDeleteTool(registry, deps, getSessionContext);
 
   registerListToolsEntry(server, registry, deps.withAccountDataAccess, getSessionContext);
-  registerCallToolEntry(server, registry, deps.withAccountDataAccess, getSessionContext, deps.authorizeCall);
+  const call = registerCallToolEntry(server, registry, deps.withAccountDataAccess, getSessionContext, deps.authorizeCall);
 
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
+    describe(name: string) {
+      const tool = registry.get(name);
+      return tool ? { name: tool.name, category: tool.category } : undefined;
+    },
+    call,
+    close: () => server.close(),
+  } });
 }

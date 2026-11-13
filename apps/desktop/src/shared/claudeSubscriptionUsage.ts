@@ -347,7 +347,11 @@ export function mergeClaudeSubscriptionUsageSnapshot(
       fiveHour: mergeHeaderWindow(prev.fiveHour, incoming.fiveHour, incoming.updatedAt, prev.source),
       sevenDay: mergeHeaderWindow(prev.sevenDay, incoming.sevenDay, incoming.updatedAt, prev.source),
       rateLimitStatus: incoming.rateLimitStatus ?? prev.rateLimitStatus,
-      representativeClaim: incoming.representativeClaim ?? prev.representativeClaim,
+      // A new status owns its claim, including an unknown/null claim. Reusing
+      // an older shared-window claim misattributes a later model-only rejection.
+      representativeClaim: incoming.rateLimitStatus != null
+        ? incoming.representativeClaim ?? null
+        : incoming.representativeClaim ?? prev.representativeClaim,
       updatedAt: incoming.updatedAt ?? prev.updatedAt,
       accountFingerprint: incoming.accountFingerprint ?? prev.accountFingerprint,
       // 展示来源标为最近一次更新者;scoped / extraUsage 仍是 endpoint 的旧值。

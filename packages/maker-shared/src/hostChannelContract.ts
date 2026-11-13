@@ -16,9 +16,24 @@ export interface HostChannelDef {
   readonly body?: (args: unknown[]) => unknown;
   /** How host response maps to client expected format */
   readonly map?: (response: unknown) => unknown;
+  /** Desktop-only settings: preserve trusted-renderer admission; no web shim. */
+  readonly trustedRenderer?: boolean;
 }
 
+export const HOST_BROWSER_SETTINGS_ACTIONS = {
+  'get-state': 'getState', 'set-kind': 'setKind', 'set-use-real-profile': 'setUseRealProfile',
+  reset: 'reset', 'get-health': 'getHealth', recover: 'recover',
+  'probe-source-read': 'probeSourceRead', 'open-extension-store': 'openExtensionStore',
+} as const;
+
 export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
+  ...Object.entries(HOST_BROWSER_SETTINGS_ACTIONS).map(([action, handler]) => ({
+    desktopChannel: `browser-backend:${action}`,
+    webPath: `browserBackend.${handler}`,
+    hostPath: `/api/browser-backend/${action}`,
+    trustedRenderer: true,
+    body: ([payload]: unknown[]) => payload ?? {},
+  })),
   {
     desktopChannel: 'local-db:task-tags:execute',
     webPath: 'localDb.taskTags.execute',
@@ -31,6 +46,12 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     hostPath: '/api/conversations/search',
     body: ([request]) => ({ request }),
   },
+  ...(['list', 'ensure-singleton', 'upsert', 'close', 'setActive', 'reorder'] as const).map(action => ({
+    desktopChannel: `local-db:right-sidebar-tabs:${action}`,
+    webPath: `localDb.rightSidebarTabs.${action === 'ensure-singleton' ? 'ensureSingleton' : action}`,
+    hostPath: `/api/right-sidebar-tabs/${action}`,
+    body: ([payload]: unknown[]) => payload ?? {},
+  })),
   // --- Sessions ---
   {
     desktopChannel: 'local-db:sessions:list',
@@ -440,13 +461,31 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     hostPath: '/api/ghosts/set-enabled',
     body: ([id, enabled, expectedInstalledApproval]) => ({ id, enabled, expectedInstalledApproval }),
   },
+  {
+    desktopChannel: 'ghosts:request-task-approval',
+    webPath: 'ghosts.requestTaskApproval',
+    hostPath: '/api/ghosts/request-task-approval',
+    body: ([id, capability]) => ({ id, capability }),
+  },
+  {
+    desktopChannel: 'ghosts:confirm:resolve',
+    webPath: 'ghosts.resolveConfirm',
+    hostPath: '/api/ghosts/confirm/resolve',
+    body: ([requestId, confirmed]) => requestId && typeof requestId === 'object' ? requestId : ({ requestId, confirmed }),
+  },
+  {
+    desktopChannel: 'ghosts:install-consent:resolve',
+    webPath: 'ghosts.resolveInstallConsent',
+    hostPath: '/api/ghosts/install-consent/resolve',
+    body: ([requestId, confirmed]) => requestId && typeof requestId === 'object' ? requestId : ({ requestId, confirmed }),
+  },
 ];
 
 /** Transport stays with the caller: web uses its paired cookie, main its token. */
 export function createHostChannelHandlers(
   request: (path: string, body: unknown, method: 'POST' | 'GET') => Promise<unknown>,
 ): Record<string, (args?: unknown[]) => Promise<unknown>> {
-  return Object.fromEntries(HOST_CONTRACT_CHANNELS.map(def => [
+  return Object.fromEntries(HOST_CONTRACT_CHANNELS.filter(def => !def.trustedRenderer).map(def => [
     def.webPath,
     async (args: unknown[] = []) => {
       const response = await request(def.hostPath, def.body?.(args) ?? null, def.method ?? 'POST');

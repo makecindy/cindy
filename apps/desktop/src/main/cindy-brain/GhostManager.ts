@@ -112,6 +112,8 @@ import {
 } from './pluginInstanceRegistryService.js';
 import {
   assertManagedPluginParentSync,
+  approvedHostToolGroupsField,
+  approvedEventTopicsField,
   createGhostInstallReceipt,
   effectiveInstallOrigin,
   legacyFirstPartyEligibilityAfterUpdate,
@@ -124,6 +126,7 @@ import {
 } from './ghostInstallReceipt.js';
 import { parseInstalledGhostManifest } from '../installedGhostManifest.js';
 import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
+import { pluginDeclaresCapability, pluginHostToolGroup, type PluginTaskCapability } from './taskCapability.js';
 import {
   decodeGhostManualMarkdown,
   ghostManualLogicalPathForEntry,
@@ -1195,7 +1198,15 @@ export class GhostManager {
   }
 
 
-  private async confirmUnconfirmedInstances(refresh?: GhostBackgroundRefresh): Promise<void> {
+  /** After the update's source ledger commits, restore only this instance using positive evidence. */
+  async confirmUpdatedInstanceNamespace(ghost: InstalledGhost, replacementPluginId?: string): Promise<InstalledGhost> {
+    if (ghost.namespaceState !== 'unconfirmed') return ghost;
+    const instanceKey = installedGhostStoragePart(ghost);
+    await this.confirmUnconfirmedInstances(undefined, instanceKey, replacementPluginId);
+    return this.findInstalledInstance(instanceKey) ?? ghost;
+  }
+
+  private async confirmUnconfirmedInstances(refresh?: GhostBackgroundRefresh, instanceKey?: string, replacementPluginId?: string): Promise<void> {
     const result = await confirmUnconfirmedInstances({
       readEvidence: this.options.readUnconfirmedConfirmationEvidence,
       isBlocked: () => this.instanceRegistryService.isBlocked(),
@@ -1226,7 +1237,7 @@ export class GhostManager {
         this.instanceRegistryStore().write(registry);
         this.instanceRegistryService.replaceCache(registry);
       },
-    });
+    }, instanceKey, replacementPluginId);
     if (result.mutationFailures > 0) {
       throw new Error('plugin instance namespace confirmation failed');
     }
@@ -3083,6 +3094,8 @@ export class GhostManager {
           ...approvedAutoToolsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+          ...approvedHostToolGroupsField(receipt.approvedHostToolGroups, receipt.manifest),
+          ...approvedEventTopicsField(receipt.approvedEventTopics, receipt.manifest),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -3291,21 +3304,27 @@ export class GhostManager {
   }
 
   /** Called only after Host permission UI confirms this exact installed revision. */
-  async approveTaskCapability(id: string, revision: string, isCurrent: () => boolean, capability: 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions' = 'tasks'): Promise<boolean> {
+  async approveTaskCapability(id: string, revision: string, isCurrent: () => boolean, capability: PluginTaskCapability = 'tasks'): Promise<boolean> {
     return this.runExclusiveMutation(async () => {
       const relId = this.approvalRelIdFor(id);
       if (!relId) return false;
       const approval = this.readApproval(relId);
       if (!isCurrent() || approval.state !== 'approved' || approval.receipt.revision !== revision ||
-          (capability === 'observe' || capability === 'companions' ? approval.receipt.manifest.agent?.[capability] !== true : approval.receipt.manifest.agent?.tasks !== true) ||
+          !pluginDeclaresCapability(approval.receipt.manifest, capability) ||
           (capability === 'targets' && (approval.receipt.manifest.agent?.targets !== true || approval.receipt.taskCapabilityApproved !== true)) ||
           (capability === 'delegation' && (approval.receipt.manifest.agent?.delegation !== true || approval.receipt.manifest.agent?.targets !== true || approval.receipt.targetCapabilityApproved !== true || approval.receipt.taskCapabilityApproved !== true)) ||
           !findInstalledGhostByInstanceId(this.list(), id)?.enabled) return false;
       const field = capability === 'companions' ? 'companionsCapabilityApproved' : capability === 'observe' ? 'observeCapabilityApproved' : capability === 'delegation' ? 'delegationCapabilityApproved' : capability === 'targets' ? 'targetCapabilityApproved' : 'taskCapabilityApproved';
-      if (approval.receipt[field] !== true) {
+      const group = pluginHostToolGroup(capability);
+      const topic = capability === 'event:message' ? 'message' : capability === 'event:task-state' ? 'task-state' : undefined;
+      if (topic ? !approval.receipt.approvedEventTopics?.includes(topic) : group ? !approval.receipt.approvedHostToolGroups?.includes(group) : approval.receipt[field] !== true) {
         const expired = new Error('Task capability approval owner changed');
         try {
-          await this.receiptStore.write({ ...approval.receipt, [field]: true }, {
+          await this.receiptStore.write({ ...approval.receipt, ...(topic
+            ? { approvedEventTopics: [...approval.receipt.approvedEventTopics ?? [], topic] }
+            : group
+            ? { approvedHostToolGroups: [...approval.receipt.approvedHostToolGroups ?? [], group] }
+            : { [field]: true }) }, {
             relId,
             assertCurrent: () => { if (!isCurrent()) throw expired; },
           });
@@ -4039,6 +4058,8 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4075,6 +4096,8 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4256,6 +4279,8 @@ export class GhostManager {
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.approvedHostUi?.length ? { approvedHostUi: opts.approvedHostUi } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
+          approvedHostToolGroups: opts?.approvedHostToolGroups,
+          approvedEventTopics: opts?.approvedEventTopics,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4390,9 +4415,13 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
+      /** Main-selected instance key; never a renderer-supplied path or a logical namespace address. */
+      expectedInstalledInstanceId?: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'manual' | 'agent-forge';
@@ -4423,9 +4452,12 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
+      expectedInstalledInstanceId?: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'manual' | 'agent-forge';
@@ -4467,7 +4499,24 @@ export class GhostManager {
 
     const root = this.contentRootDir();
     const identity = createPluginLogicalIdentity(opts.namespace ?? null, manifest.id);
-    const relId =
+    // Updating an existing instance must retain its physical directory and data
+    // key, including legacy installs whose receipt was rewritten by an old client.
+    // The retained namespace selects an address; it does not authorize new capabilities.
+    const selectedInstance = opts.expectedInstalledInstanceId === undefined ? undefined
+      : this.syncInstanceRegistry().instances[opts.expectedInstalledInstanceId];
+    if (opts.expectedInstalledInstanceId !== undefined &&
+        (this.instanceRegistryService.isBlocked() || !selectedInstance?.active ||
+          selectedInstance.instanceKey !== opts.expectedInstalledInstanceId ||
+          selectedInstance.ghostId !== manifest.id ||
+          !isValidPluginInstallRelId(selectedInstance.contentRelId) ||
+          // An unlabeled pending instance may only retain that unknown state;
+          // an explicit root/org request cannot claim it by its directory key.
+          (selectedInstance.namespaceState === 'pending'
+            ? opts.namespace !== undefined
+            : selectedInstance.namespace !== opts.namespace))) {
+      return { rejection: { code: 'state-changed', reason: '插件安装状态在检查后发生了变化，请重试' } };
+    }
+    const relId = selectedInstance?.contentRelId ??
       this.resolvePhysicalRelId(pluginNewInstallRelId(identity), true) ?? pluginNewInstallRelId(identity);
     const previousRelId = opts.simulatorPreviousRelId;
     const sourceRelId = previousRelId ?? relId;
@@ -4482,7 +4531,7 @@ export class GhostManager {
       this.untrustedApprovals.add(this.isolationKey(relId));
       return { rejection: { code: 'io', reason: '意识正在恢复，请稍后重试' } };
     }
-    const fromPart = this.storageKeyForContent(relId);
+    const fromPart = selectedInstance?.instanceKey ?? this.storageKeyForContent(relId);
     const archiveId = opts.sourceStateArchiveId;
     if (archiveId !== undefined &&
         (!isValidGhostSourceStateArchiveId(archiveId) || archiveId === fromPart ||
@@ -4493,10 +4542,16 @@ export class GhostManager {
     const sourceDir = this.contentPath(sourceRelId);
     if (!this.isRealDirChildRel(sourceRelId) || this.hasPendingMutationJournal(sourceRelId)) {
       return {
-        rejection: { code: 'not-installed', reason: `意识 ${manifest.id} 未装入,无从更新` },
+        rejection: selectedInstance
+          ? { code: 'state-changed', reason: '插件安装状态在检查后发生了变化，请重试' }
+          : { code: 'not-installed', reason: `意识 ${manifest.id} 未装入,无从更新` },
       };
     }
     const approvalResult = this.readApproval(sourceRelId);
+    if (selectedInstance && approvalResult.state === 'approved' &&
+        hasDeliveryNamespace(approvalResult.receipt) && approvalResult.receipt.namespace !== opts.namespace) {
+      return { rejection: { code: 'state-changed', reason: '插件安装状态在检查后发生了变化，请重试' } };
+    }
     if (previousRelId && (approvalResult.state !== 'approved' || approvalResult.receipt.namespace != null)) {
       return { rejection: { code: 'state-changed', reason: 'Simulator migration needs an approved root installation' } };
     }
@@ -4719,6 +4774,14 @@ export class GhostManager {
         approvedAutoTools: [
           ...(opts.approvedAutoTools ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedAutoTools ?? [] : []),
+        ],
+        approvedHostToolGroups: [
+          ...(opts.approvedHostToolGroups ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHostToolGroups ?? [] : []),
+        ],
+        approvedEventTopics: [
+          ...(opts.approvedEventTopics ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedEventTopics ?? [] : []),
         ],
         ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
@@ -5142,6 +5205,8 @@ export class GhostManager {
         approvedControlPoints: [...new Set([...(approvedManifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(approvedManifest)])],
         approvedHostUi: current.state === 'approved' ? current.receipt.approvedHostUi : undefined,
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
+        approvedHostToolGroups: current.state === 'approved' ? current.receipt.approvedHostToolGroups : undefined,
+        approvedEventTopics: current.state === 'approved' ? current.receipt.approvedEventTopics : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

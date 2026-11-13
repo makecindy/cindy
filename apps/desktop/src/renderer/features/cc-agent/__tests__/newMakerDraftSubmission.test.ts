@@ -24,6 +24,7 @@ import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
+import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -108,6 +109,10 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 async function submit(options: {
   entry?: 'send' | 'goal';
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
+  /** 选了模型组：发送时解析出的结果。 */
+  modelGroupRoute?: ModelGroupResolveResult;
+  /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
+  remoteModelListStatus?: 'ready' | 'loading' | 'error';
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -215,6 +220,10 @@ async function submit(options: {
   const environment = {
     deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
+    // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
+    activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
+    resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
+    bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     ...draftEffort, getModel, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
@@ -230,7 +239,7 @@ async function submit(options: {
     collabPolicy: { enabled: true }, collabPolicyEligible: true,
     usesDeviceCatalog: !!options.agentDeviceId || !!options.deviceId, deviceLinkInitial: null,
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
-    isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: 'ready', remoteDraftState: { status: 'ready' },
+    isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: options.remoteModelListStatus ?? 'ready', remoteDraftState: { status: 'ready' },
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
     effectiveWorkingDir: hasWorktree ? baseRepo : options.remoteHostId ? '/remote/project' : null,
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
@@ -521,6 +530,39 @@ describe('homepage submission to Main admission and first-message handoff', () =
     }) });
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'share:fixture', providerId });
+  });
+  // 模型组选到另一台电脑上的来源：两条新建路径都要把运行位置带进任务，登录检查读那台的目录，
+  // 撞配额用的记录也带上位置。之前只有插件选路覆盖了这条路径。Tier: unit。
+  it.each(['send', 'goal'] as const)('creates %s on the computer a model group picked', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: '两台电脑', modelName: modelId, sourceName: 'Studio',
+      route: { agentKind: 'pi', model: modelId, providerId, agentDeviceId: 'dev-2' },
+      why: 'order', quota: null, trace: [],
+    };
+    const result = await submit({ entry, modelGroupRoute, authCatalogKey: 'dev-2' });
+    expect(result.errors).toEqual([]);
+    expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+  });
+  // PR #10067 review：草稿选着另一台电脑的模型、那台目录读失败时，模型组仍要先选路；选到本机就照常建任务，
+  // 只有沿用原模型时才因那台目录没就绪而拦下。之前目录检查在选路之前，整笔发送被挡住。Tier: unit。
+  it.each(['send', 'goal'] as const)('lets a model group route %s away from a computer whose catalog failed to load', async (entry) => {
+    const local: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: '两台电脑', modelName: modelId, sourceName: 'Local',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [],
+    };
+    const routed = await submit({ entry, agentDeviceId: 'old-pc', remoteModelListStatus: 'error', modelGroupRoute: local });
+    expect(routed.errors).toEqual([]);
+    expect(routed.ipcCreate.mock.calls[0][0].agentDeviceId).toBeUndefined();
+
+    const kept = await submit({
+      entry, agentDeviceId: 'old-pc', remoteModelListStatus: 'error',
+      modelGroupRoute: { outcome: 'unavailable', groupName: '两台电脑', trace: [] },
+    });
+    expect(kept.ipcCreate).not.toHaveBeenCalled();
+    if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
+    else expect(String(kept.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');
   });
   // PR #8460 / unit: a source reachable only through task computer B must keep B in
   // the readiness catalog key. Existing fixtures always allowed readiness regardless

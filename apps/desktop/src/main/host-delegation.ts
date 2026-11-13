@@ -17,11 +17,13 @@ import path from 'node:path';
 import type { IpcMainInvokeEvent } from 'electron';
 import { HOST_CONTRACT_CHANNELS, type HostChannelDef } from '@cindy/maker-shared/host-channel-contract';
 import { createIpcError } from '../shared/ipc-errors.js';
+import { guardIpcRegistration, type IpcChannelUsage } from './ipcChannelUsage';
 import { startHostEventStream, type HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 
 export interface HostDelegationConfig {
   readonly baseUrl: string;
   readonly token: string;
+  readonly instanceId?: string;
 }
 
 /** Env var that enables client mode; the value is the loopback base URL. */
@@ -56,7 +58,9 @@ export function resolveHostDelegation(input: {
     throw new Error(`host delegation requires the profile API token at ${tokenPath}; run cindy-host once first`);
   }
   if (!token) throw new Error('host delegation token is empty');
-  return { baseUrl: url.origin, token };
+  const instanceId = input.env.CINDY_HOST_INSTANCE?.trim();
+  if (instanceId && !/^[a-zA-Z0-9-]{1,128}$/.test(instanceId)) throw new Error('Invalid Host instance identity');
+  return { baseUrl: url.origin, token, ...(instanceId ? { instanceId } : {}) };
 }
 
 export interface HostClient {
@@ -68,10 +72,12 @@ export function createHostClient(config: HostDelegationConfig): HostClient {
     async request(path, body, signal) {
       const response = await fetch(`${config.baseUrl}${path}`, {
         method: 'POST',
+        redirect: 'error',
         signal,
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${config.token}`,
+          ...(config.instanceId ? { 'x-cindy-host-instance': config.instanceId } : {}),
         },
         body: JSON.stringify(body ?? null),
       });
@@ -85,6 +91,7 @@ export function createHostClient(config: HostDelegationConfig): HostClient {
 }
 
 interface ProxiedChannel {
+  readonly trustedRenderer?: boolean;
   readonly channel: string;
   readonly path: string;
   /** Renderer args → request body. */
@@ -100,6 +107,7 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
     path: def.hostPath,
     body: def.body ?? (() => null),
     map: def.map,
+    trustedRenderer: def.trustedRenderer,
   })),
   {
     // Legacy composer path: enqueue and report acceptance; the answer arrives on
@@ -163,7 +171,10 @@ export function claimProxiedChannels(ipcMain: unknown, log: (channel: string) =>
 }
 
 export interface HostDelegatedIpcDeps {
+  readonly assertTrusted?: (event: IpcMainInvokeEvent) => void;
   readonly client: HostClient;
+  /** Newly delegated approval paths require the real registered top-level window. */
+  readonly authorizePluginApproval?: (event: IpcMainInvokeEvent, channel: string, args: unknown[]) => boolean;
   readonly ipcMain: {
     removeHandler(channel: string): void;
     handle(
@@ -196,7 +207,14 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
 
   for (const entry of PROXIED_CHANNELS) {
     deps.ipcMain.removeHandler(entry.channel);
-    rawHandle(entry.channel, async (_event, ...args: unknown[]) => {
+    rawHandle(entry.channel, async (event, ...args: unknown[]) => {
+      if (entry.trustedRenderer) {
+        if (!deps.assertTrusted) throw new Error('Trusted renderer admission is required');
+        deps.assertTrusted(event);
+      }
+      if (['ghosts:request-task-approval', 'ghosts:confirm:resolve', 'ghosts:install-consent:resolve'].includes(entry.channel)
+        && deps.authorizePluginApproval?.(event, entry.channel, args) !== true)
+        throw createIpcError('PERMISSION_DENIED', 'Host approval requires its trusted owner window.');
       const response = await deps.client.request(entry.path, entry.body(args));
       return entry.map ? entry.map(response) : response;
     });
@@ -208,12 +226,16 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
 export interface UnsupportedMakerFallbackDeps {
   readonly ipcMain: unknown;
   readonly channels?: readonly string[];
+  /** Called the first time each `maker:*` channel falls back. */
   readonly log?: (channel: string) => void;
+  /** Counts every invoke that reaches no handler, ranked later against the channel inventory. */
+  readonly usage?: IpcChannelUsage;
 }
 
 /**
  * In client mode, any `maker:*` channel outside the proxied contract fails with
  * explicit UNSUPPORTED_CAPABILITY error rather than "No handler registered".
+ * Other unhandled channels keep Electron's error and are counted.
  */
 export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackDeps): void {
   const target = deps.ipcMain as {
@@ -235,20 +257,6 @@ export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackD
     );
   };
 
-  if (target._invokeHandlers instanceof Map) {
-    const handlers = target._invokeHandlers;
-    const origGet = handlers.get.bind(handlers);
-    handlers.get = (channel: string) => {
-      const existing = origGet(channel);
-      if (existing) return existing;
-      if (typeof channel === 'string' && channel.startsWith('maker:')) {
-        deps.log?.(channel);
-        return createFallback(channel);
-      }
-      return undefined;
-    };
-  }
-
   if (deps.channels && target.handle) {
     const rawHandle = target.__originalHandle
       ? target.__originalHandle.bind(target)
@@ -259,6 +267,36 @@ export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackD
         rawHandle(ch, createFallback(ch));
       }
     }
+  }
+
+  if (target._invokeHandlers instanceof Map) {
+    const handlers = target._invokeHandlers;
+    // Electron asks has() before get() on every invoke, and handle() asks has()
+    // before it registers. Answer only invokes, so later desktop registrations
+    // of a `maker:*` channel still succeed.
+    const registering = guardIpcRegistration(target);
+    const origHas = handlers.has.bind(handlers);
+    const origGet = handlers.get.bind(handlers);
+    const fallsBack = (channel: unknown): channel is string =>
+      typeof channel === 'string' && channel.startsWith('maker:');
+    const logged = new Set<string>();
+    handlers.has = (channel: string) => {
+      if (origHas(channel)) return true;
+      if (registering()) return false;
+      if (fallsBack(channel)) return true;
+      if (typeof channel === 'string') deps.usage?.record(channel, 'invoke', 'missing');
+      return false;
+    };
+    handlers.get = (channel: string) => {
+      const existing = origGet(channel);
+      if (existing || registering() || !fallsBack(channel)) return existing;
+      if (!logged.has(channel)) {
+        logged.add(channel);
+        deps.log?.(channel);
+      }
+      deps.usage?.record(channel, 'invoke', 'unsupported');
+      return createFallback(channel);
+    };
   }
 }
 
@@ -290,18 +328,21 @@ export function registerHostDelegatedSync(input: {
 export interface HostEventBridgeInput {
   readonly baseUrl: string;
   readonly token: string;
+  readonly instanceId?: string;
   readonly broadcast: (payload: unknown) => void;
   readonly onSettingsChanged?: (domain: string, value: unknown) => void;
   readonly onSessionChanged?: (event: unknown) => void;
   readonly onMessageCreated?: (event: unknown) => void;
   readonly onMessageDeleted?: (event: unknown) => void;
   readonly onErrorPersisted?: (event: unknown) => void;
+  readonly onRightSidebarTabsChanged?: (event: unknown) => void;
   readonly onSubagentRunsChanged?: (event: unknown) => void;
   readonly onProjectAliasesChanged?: () => void;
   readonly onInputProjection?: (projection: unknown) => void;
   readonly onInteractionRequest?: (payload: unknown) => void;
   readonly onInteractionDismissed?: (payload: unknown) => void;
   readonly onAuthChanged?: (payload: unknown) => void;
+  readonly onPluginPush?: (channel: string, payload: unknown) => void;
   readonly onError?: (error: unknown) => void;
   readonly onConnectionState?: (state: HostConnectionState) => void;
   readonly beforeEvents?: (signal: AbortSignal) => Promise<void>;
@@ -313,8 +354,10 @@ export interface HostEventBridgeInput {
  */
 export function startHostEventBridge(input: HostEventBridgeInput): (() => void) & { reconnect(): void } {
   const connection = startHostEventStream({
+    confirmations: true,
     open: (query, signal) => fetch(`${input.baseUrl}/events${query}`, {
-      headers: { authorization: `Bearer ${input.token}` }, signal,
+      headers: { authorization: `Bearer ${input.token}`,
+        ...(input.instanceId ? { 'x-cindy-host-instance': input.instanceId } : {}) }, signal, redirect: 'error',
     }),
     onState: state => input.onConnectionState?.(state),
     beforeEvents: input.beforeEvents,
@@ -328,6 +371,8 @@ export function startHostEventBridge(input: HostEventBridgeInput): (() => void) 
         input.onInteractionDismissed?.({ sessionId: payload.sessionId, requestId: payload.requestId, reason: payload.reason });
       } else if (payload?.type === 'auth_changed') {
         input.onAuthChanged?.(payload);
+      } else if (payload?.type === 'plugin_push') {
+        input.onPluginPush?.(payload.channel, payload.payload);
       } else if (payload?.type === 'settings_changed') {
         input.onSettingsChanged?.(payload.domain, payload.value);
       } else if (payload?.type === 'appearance_changed') {
@@ -340,6 +385,8 @@ export function startHostEventBridge(input: HostEventBridgeInput): (() => void) 
         input.onMessageDeleted?.(payload);
       } else if (payload?.type === 'error_persisted') {
         input.onErrorPersisted?.(payload);
+      } else if (payload?.type === 'right_sidebar_tabs_changed') {
+        input.onRightSidebarTabsChanged?.({ sessionId: payload.sessionId });
       } else if (payload?.type === 'subagent_runs_changed') {
         input.onSubagentRunsChanged?.(payload);
       } else if (payload?.type === 'project_aliases_changed') {

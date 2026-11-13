@@ -3,7 +3,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from './server.js';
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { startSocks5Stub } from './test-socks5-stub.js';
 import type { ProxyHandle } from './types.js';
 
@@ -19,6 +19,7 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
 
   afterEach(async () => {
     if (proxy) { await proxy.dispose(); proxy = null; }
+    await closeTestConnections();
     while (cleanups.length) await cleanups.pop()!();
   });
 
@@ -251,6 +252,7 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
     expect(warns.some((m) => m.includes('outbound proxy resolver threw'))).toBe(true);
 
     await proxy.dispose();
+    await closeTestConnections();
 
     const warns2: string[] = [];
     proxy = await createAnthropicCompatProxy({
