@@ -19,6 +19,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
+import WebSocket from 'ws';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, createHash } from 'node:crypto';
@@ -185,11 +186,16 @@ describe('replicated official relay', () => {
     const a = await set.start('replica-a'); await set.start('replica-b');
     await set.enroll(a, 'owner'); await set.enroll(a, 'member');
     const { entry } = set.roles();
-    const httpEntered = deferred(), upgradeEntered = deferred();
+    const httpEntered = deferred(), upgradeEntered = deferred(), backendClosed = deferred();
     const sockets = new Set<Duplex>();
     const stalled = createServer(() => httpEntered.resolve());
     stalled.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
-    stalled.on('upgrade', () => upgradeEntered.resolve());
+    stalled.on('upgrade', (_req, socket) => {
+      socket.once('close', backendClosed.resolve);
+      // HTTP upgrade sockets are half-open: acknowledge EOF so the fixture closes its own side too.
+      socket.once('end', () => { backendClosed.resolve(); socket.end(); });
+      socket.resume(); upgradeEntered.resolve();
+    });
     await new Promise<void>(resolve => stalled.listen(0, '127.0.0.1', resolve));
     cleanups.push(async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => stalled.close(() => resolve())); });
     const stalledId = set.joinerTakingOver('stalled-owner-');
@@ -201,8 +207,18 @@ describe('replicated official relay', () => {
       const response = fetch(entry.url + target, { headers: { authorization: client.header('GET', target) } });
       await httpEntered.promise; await vi.advanceTimersByTimeAsync(10_001);
       expect((await response).status).toBe(503);
-      const rejected = expect(client.connect()).rejects.toThrow();
-      await upgradeEntered.promise; await vi.advanceTimersByTimeAsync(10_001); await rejected;
+      // AgentNetClient has its own 10 s timeout: using it here would mask a missing relay deadline.
+      const wsPath = API + '/ws';
+      const ws = new WebSocket(entry.url.replace(/^http/, 'ws') + wsPath, { headers: { authorization: client.header('GET', wsPath) } });
+      ws.on('error', () => undefined);
+      cleanups.push(() => ws.terminate());
+      const closed = new Promise<number>(resolve => ws.once('close', code => resolve(code)));
+      await upgradeEntered.promise; await vi.advanceTimersByTimeAsync(10_001);
+      await vi.waitFor(() => expect(ws.readyState).toBe(WebSocket.CLOSED));
+      expect(await closed).toBe(1006);
+      let backendEnded = false;
+      void backendClosed.promise.then(() => { backendEnded = true; });
+      await vi.waitFor(() => expect(backendEnded).toBe(true));
       await set.backend.leave(stalledId);
       await new Promise<void>(resolve => setImmediate(resolve));
       const x = await client.connect(), y = await set.client(entry, 'member').connect();
