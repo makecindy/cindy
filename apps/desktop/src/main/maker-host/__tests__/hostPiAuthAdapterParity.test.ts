@@ -203,3 +203,4 @@ describe('Host and desktop Pi auth adapters', () => {
     expect(observed).toEqual(KNOWN_DIFFERENCES);
   });
 
+});
