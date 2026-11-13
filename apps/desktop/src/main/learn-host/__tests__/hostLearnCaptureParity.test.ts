@@ -6,7 +6,7 @@
  *   (captureCindyLearnInvocation); the Host ones come from apps/host/src/agent/learn-capture.ts.
  *   On the same profile, published built-in Skills, Skill settings, bot-session table and
  *   Skill listing, every scenario gives the same snapshot (or none), and the Skill listing is
- *   asked with the same arguments. HOME and CLAUDE_CONFIG_DIR point into the fixture.
+ *   asked with the same arguments. os.homedir() and CLAUDE_CONFIG_DIR point into the fixture.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,7 +16,18 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AgentKind, ListAgentSkillsResult } from '@cindy/maker-core';
 
-const h = vi.hoisted(() => ({ userData: '', appData: '' }));
+const h = vi.hoisted(() => ({ userData: '', appData: '', home: '' }));
+// Both sides fall back to os.homedir() for the Claude configuration directory. Assigning
+// process.env.HOME does not reach it in a worker thread (vitest threads pool) or on Windows
+// (USERPROFILE), so the module is mocked; a read before the fixture home exists fails.
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  const homedir = () => {
+    if (!h.home) throw new Error('homedir read before the fixture home was set');
+    return h.home;
+  };
+  return { ...actual, default: { ...actual, homedir }, homedir };
+});
 vi.mock('electron', () => ({
   app: { getPath: (name: string) => (name === 'appData' ? h.appData : h.userData), getAppPath: () => h.userData, isPackaged: true },
   safeStorage: { isEncryptionAvailable: () => false },
@@ -39,6 +50,7 @@ type Capture = (session: Session, persisted: unknown, dispatched: string) => Pro
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-learn-capture-parity-')));
 const home = path.join(root, 'home');
+h.home = home;
 const project = path.join(root, 'project');
 const sqlite = new Database(':memory:');
 const db = { drizzle: drizzle(sqlite) };
@@ -53,12 +65,11 @@ const maker = {
 };
 let desktop: Capture;
 let host: Capture;
-const saved = { HOME: process.env.HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
 
 beforeAll(async () => {
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.mkdirSync(project);
-  process.env.HOME = home;
   process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
   h.userData = path.join(root, 'user-data');
   h.appData = path.join(root, 'app-data');
@@ -126,6 +137,10 @@ async function both(name: string, session: Session, persisted: string, dispatche
   const hst = await host(session, persisted, dispatched);
   expect(hst, name).toEqual(d);
   expect(calls, `${name}: Skill listing arguments`).toEqual(desktopCalls);
+  // Every Claude configuration directory either side asked about is inside the fixture.
+  for (const [, , opts] of calls as Array<[string, AgentKind, { runtimeConfigDir?: string }]>) {
+    if (opts.runtimeConfigDir !== undefined) expect(opts.runtimeConfigDir.startsWith(`${root}${path.sep}`), name).toBe(true);
+  }
   return d;
 }
 
@@ -174,20 +189,16 @@ describe('the Host /learn capture decides as the desktop one', () => {
     await setCindySkillEnabled(descriptor.absolutePath, true);
   }, 60_000);
 
-  // The copy above is only evidence while it matches what the desktop passes.
-  it('copies the desktop dependencies exactly as register.ts passes them', () => {
-    const read = (file: string) => fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n');
-    const between = (text: string, start: string, end: string) => {
-      const from = text.indexOf(start);
-      expect(from, start).toBeGreaterThanOrEqual(0);
-      const to = text.indexOf(end, from + start.length);
-      expect(to, end).toBeGreaterThan(from);
-      return text.slice(from + start.length, to).split('\n').map(line => line.trim()).filter(Boolean).join('\n');
-    };
-    const register = read(path.resolve(__dirname, '..', '..', 'maker-ipc', 'register.ts'));
-    const desktopDeps = between(register, 'captureCindyLearnInvocation: createCindyLearnInvocationCapture({', '\n    }),\n    createDbMessage:');
-    const copied = between(read(__filename), '  desktop = createCindyLearnInvocationCapture({', '\n  }) as Capture;');
-    expect(desktopDeps.length).toBeGreaterThan(0);
-    expect(copied).toBe(desktopDeps);
+  it('without CLAUDE_CONFIG_DIR, both fall back to the home os.homedir() reports, here the fixture one', async () => {
+    const configDir = process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CLAUDE_CONFIG_DIR;
+    try {
+      listing = fixtureListing(false);
+      await both('no CLAUDE_CONFIG_DIR', s('no-config-dir', 'claude-code'), '/cindy:learn x');
+      expect(calls).toEqual([['runtime', 'claude-code', expect.objectContaining({ runtimeConfigDir: path.join(home, '.claude') })]]);
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+    }
   });
+
 });

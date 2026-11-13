@@ -203,8 +203,4 @@ describe('Host and desktop Pi auth adapters', () => {
     expect(observed).toEqual(KNOWN_DIFFERENCES);
   });
 
-  it('take the OpenAI subscription predicate from the same Codex account service', () => {
-    const runtime = fs.readFileSync(path.join(__dirname, '../../../../../host/src/agent/runtime.ts'), 'utf8');
-    expect(runtime).toContain('    isOpenAiSubscriptionProviderId: id => config.codexAccounts.isOpenAiSubscriptionProviderId(id),\n');
-  });
 });

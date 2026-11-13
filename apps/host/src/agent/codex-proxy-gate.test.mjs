@@ -35,6 +35,7 @@ import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/m
 import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore.ts';
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 const GATEWAY_KEY = 'synthetic-gateway-key';
 
@@ -69,11 +70,15 @@ function upgradeStatus(endpoint, headers = []) {
 }
 
 test('every Codex proxy of the Host runtime admits only its token and never forwards it', { timeout: 120_000 }, async t => {
+  t = lifoCleanup(t);
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-host-codex-gate-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const savedEnv = { ...process.env };
   t.after(() => { for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key]; Object.assign(process.env, savedEnv); });
-  process.env.HOME = path.join(root, 'home');
+  process.env.HOME = process.env.USERPROFILE = path.join(root, 'home');
+  // In-process reads go through os.homedir(), which reads USERPROFILE on Windows.
+  const fixtureHome = process.env.HOME;
+  t.mock.method(os, 'homedir', () => fixtureHome);
   await fs.mkdir(process.env.HOME);
   for (const key of ['XDT_OFFICIAL_SHARED_PROFILE', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_HOME', 'XDT_CODEX_API_KEY', 'ANTHROPIC_API_KEY']) delete process.env[key];
 

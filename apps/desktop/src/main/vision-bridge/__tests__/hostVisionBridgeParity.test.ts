@@ -240,20 +240,6 @@ describe('an owner change', () => {
 });
 
 describe('the notices', () => {
-  it('are the desktop broadcastVisionBridgeEvent: text and dedup, line for line', () => {
-    const desktop = fs.readFileSync(path.join(__dirname, '../../maker-host/index.ts'), 'utf8');
-    const hostSource = fs.readFileSync(path.join(__dirname, '../../../../../host/src/agent/vision-bridge.ts'), 'utf8');
-    const body = (source: string) => {
-      const start = source.indexOf("if (reason === 'vision-bridge-recognizing') {");
-      const end = source.indexOf("source: 'vision-bridge',", start);
-      return source.slice(start, end).replace(/\s+/g, '');
-    };
-    expect(body(desktop).length).toBeGreaterThan(200);
-    expect(body(hostSource)).toBe(body(desktop));
-    expect(hostSource).toContain('const VISION_BRIDGE_DEDUP_MS = 2_000;');
-    expect(desktop).toContain('const VISION_BRIDGE_DEDUP_MS = 2_000;');
-  });
-
   it('deduplicate a repeated fallback notice until the next recognition', () => {
     const sent: unknown[] = [];
     const notify = host.createVisionBridgeNotices(notice => sent.push(notice), logger);

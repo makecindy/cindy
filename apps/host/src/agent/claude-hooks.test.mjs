@@ -18,6 +18,7 @@ import path from 'node:path';
 import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -43,6 +44,7 @@ const shape = table => Object.fromEntries(Object.entries(table).map(([event, mat
   [event, matchers.map(matcher => [matcher.matcher ?? null, matcher.hooks.length])]));
 
 test('the Claude agent the Host assembles gets the desktop hooks: read-image, Bash gate, desktop-input guard', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-claude-hooks-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'claude-hooks-owner' });
@@ -122,26 +124,4 @@ test('the Claude agent the Host assembles gets the desktop hooks: read-image, Ba
   }
 });
 
-/** The call starting at `start` up to its matching close, comments and layout removed. */
-function call(source, start) {
-  const at = source.indexOf(start);
-  assert.ok(at >= 0, `${start} not found`);
-  let depth = 0;
-  let end = at;
-  for (let i = at + start.length - 1; i < source.length; i++) {
-    if ('({['.includes(source[i])) depth += 1;
-    if (')}]'.includes(source[i])) depth -= 1;
-    if (depth === 0) { end = i + 1; break; }
-  }
-  return source.slice(at, end).replace(/\/\/[^\n]*/g, '').replace(/\s+/g, '').replace(/,([)\]}])/g, '$1');
-}
 
-test('the Host hooks are the desktop composition, line for line', { timeout: TEST_TIMEOUT_MS }, () => {
-  const desktop = fs.readFileSync(new URL('../../../desktop/src/main/maker-host/index.ts', import.meta.url), 'utf8');
-  const host = fs.readFileSync(new URL('./runtime.ts', import.meta.url), 'utf8');
-  // The only differences: the logger instance and getPluginRegistry(), which is createPluginRegistry().
-  const asHost = text => text.replaceAll('desktopMakerLogger', 'LOGGER').replaceAll('getPluginRegistry()', 'createPluginRegistry()');
-  for (const start of ['createCommandConcurrencyGate({', 'mergeClaudeHooks(']) {
-    assert.equal(call(host, start), asHost(call(desktop, start)), start);
-  }
-});

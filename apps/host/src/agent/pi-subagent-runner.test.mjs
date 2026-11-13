@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnHostPiSubagentRunner } from './pi-subagent-runner.ts';
-import { startParentWatchdog } from './pi-subagent-parent-watchdog.cts';
+import { probeProcessStartTimeSec, startParentWatchdog } from './pi-subagent-parent-watchdog.cts';
 import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
@@ -35,7 +35,7 @@ setInterval(() => {}, 1000);
   fs.writeFileSync(path.join(runDir, 'config.json'), '{}');
   return { runDir, status, request: {
     runId, runDir, runnerFile: path.join(runDir, 'runner.cjs'), configFile: path.join(runDir, 'config.json'),
-    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home') },
+    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home') },
   } };
 }
 
@@ -101,42 +101,6 @@ test('paths outside the declared run directory are refused before any process st
   }
 });
 
-// Source shape: the Host entry is the desktop entry except how the ready frame is sent and how the
-// channel is dropped (reviewer, P4), and the parent watchdog: a utilityProcess ends with Electron's
-// main process, a Node fork does not (reviewer, m1-cp18c review, option B).
-test('the Host runner entry matches the desktop entry except the ready frame and the channel', () => {
-  // Bracket-only lines appear in both files and are not compared.
-  const lines = file => fs.readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//'));
-  const desktop = lines(path.join(here, '../../../desktop/src/main/cindy-brain/piSubagentRunnerProcess.ts'));
-  const host = lines(path.join(here, 'pi-subagent-runner-process.cts'));
-  assert.deepEqual(desktop.filter(line => !host.includes(line)), [
-    'interface ParentPortLike {',
-    'postMessage(message: unknown): void;',
-    'const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;',
-    "if (!parentPort) throw new Error('PI Subagent runner process is missing parentPort');",
-    "parentPort.postMessage({ type: 'ready' });",
-    'try {',
-    "Object.defineProperty(process, 'parentPort', {",
-    'configurable: true,',
-    'value: undefined,',
-    '} catch {',
-  ]);
-  assert.deepEqual(host.filter(line => !desktop.includes(line)), [
-    "import { startParentWatchdog } from './pi-subagent-parent-watchdog.cjs';",
-    'const send = process.send?.bind(process);',
-    'const hostPid = process.ppid;',
-    "if (!send) throw new Error('PI Subagent runner process is missing its IPC channel');",
-    "send({ type: 'ready' }, (error: Error | null) => {",
-    'if (error) throw error;',
-    'process.disconnect?.();',
-    'startParentWatchdog({',
-    'parentPid: hostPid,',
-    'onParentGone: () => {',
-    'setTimeout(() => process.exit(1), 5_000);',
-    "process.kill(process.pid, 'SIGTERM');",
-    '},',
-  ]);
-});
 
 // maker-core's runner source as a release build produces it. Under tsx (this test, any Host source
 // run) the embedded createPiCacheInputTracker.toString() carries tsx's __name helper, which the
@@ -175,7 +139,7 @@ setInterval(() => {}, 1000);
   }));
   return { piPids, request: {
     runId, runDir, runnerFile: path.join(runDir, 'runner.cjs'), configFile: path.join(runDir, 'config.json'),
-    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home') },
+    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home') },
   } };
 }
 const readPids = file => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number) : []);
@@ -204,8 +168,14 @@ function hostPiGraph(root) {
 // terminate path (terminateSubagentRunner) and through Host shutdown (Maker.shutdown -> PiAgent.dispose)
 // leaves neither the runner nor its Pi child. A runner that ignores SIGTERM is killed by the fallback.
 // The launch and terminate methods are private in PiAgent; the test calls them as the Subagent tool does.
+// The fake Pi below is a script the runner starts without a shell, and Windows ends a process on
+// SIGTERM instead of delivering it; the tests that need either are POSIX only. The watchdog's
+// Windows probe is covered without a script by 'the start-time probe reads this process'.
+const posixOnly = process.platform === 'win32'
+  && 'the fake Pi is a script started without a shell, and Windows cannot deliver an ignorable SIGTERM';
+
 for (const ending of ['terminate (account boundary, terminate action)', 'Host shutdown (Maker.shutdown)']) {
-  test(`a real runner and its Pi child end through ${ending}`, { timeout: 60_000 }, async () => {
+  test(`a real runner and its Pi child end through ${ending}`, { timeout: 60_000, skip: posixOnly }, async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-runner-')));
     fs.mkdirSync(path.join(root, 'home'));
     const { graph, mcp } = hostPiGraph(root);
@@ -234,7 +204,7 @@ for (const ending of ['terminate (account boundary, terminate action)', 'Host sh
   });
 }
 
-test('a runner that ignores SIGTERM is killed after the grace period; its detached child is not reaped', { timeout: 60_000 }, async () => {
+test('a runner that ignores SIGTERM is killed after the grace period; its detached child is not reaped', { timeout: 60_000, skip: posixOnly }, async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-runner-')));
   fs.mkdirSync(path.join(root, 'home'));
   const { graph, mcp } = hostPiGraph(root);
@@ -323,5 +293,14 @@ setInterval(() => {}, 1000);
   }
 }
 
-test('a real runner and its Pi child end after the Host is killed', { timeout: 60_000 }, () => killHostThenWait(false));
-test('a runner whose SIGTERM cleanup hangs still ends after the Host is killed', { timeout: 60_000 }, () => killHostThenWait(true));
+test('a real runner and its Pi child end after the Host is killed', { timeout: 60_000, skip: posixOnly }, () => killHostThenWait(false));
+test('a runner whose SIGTERM cleanup hangs still ends after the Host is killed', { timeout: 60_000, skip: posixOnly }, () => killHostThenWait(true));
+
+// The real start-time probe on this platform (ps on POSIX, PowerShell on Windows), against this
+// process: its answer is the moment this process started, to the second the probe reports.
+test('the start-time probe reads this process', { timeout: 60_000 }, () => {
+  const started = (Date.now() - process.uptime() * 1000) / 1000;
+  const probed = probeProcessStartTimeSec(process.pid);
+  assert.equal(typeof probed, 'number');
+  assert.ok(Math.abs(probed - started) <= 3, `probed ${probed}, started ${started}`);
+});

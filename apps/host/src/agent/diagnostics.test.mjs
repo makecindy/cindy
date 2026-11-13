@@ -18,7 +18,6 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { configureHostOwner } from './claude-auth.mjs';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
@@ -26,14 +25,12 @@ import { createHostAgentGraph } from './runtime.ts';
 import { listCodexProcessPids, resolveAgentProcessRegistration } from '../../../desktop/src/main/process-monitor/codex-process-registry.ts';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../../../desktop/src/main/logger.ts';
 import { reapCodexToolTreesSync } from '../../../desktop/src/main/codex-tool-tree-reaper.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
 const TEST_TIMEOUT_MS = 120_000;
 
-const agentDir = path.dirname(fileURLToPath(import.meta.url));
-const srcDir = path.dirname(agentDir);
-const desktopMain = path.join(srcDir, '..', '..', 'desktop', 'src', 'main');
 
 function fixtureHarnessRoot(profile) {
   const root = path.join(profile, 'harnesses');
@@ -71,6 +68,7 @@ function buildGraph(t, ownerId) {
 }
 
 test('the three engines the Host assembles register their processes as the desktop does, and Claude gets the desktop cc-debug files', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'diagnostics-registration');
   // PIDs no process holds here: only the in-memory registry is touched.
   const claude = graph.agent.deps.registerLocalAgentProcess({ pid: 999_991, kind: 'claude', role: 'task-host', sessionId: 'claude-task' });
@@ -147,6 +145,7 @@ function startFake(t, recorded, script, name) {
 }
 
 test('Host exit reaps only the tool trees below the Host\'s own registered app-servers', { skip: process.platform === 'win32', timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'diagnostics-reaper');
   // Every process this test starts, by the PID recorded when it started; nothing else is stopped.
   const recorded = new Set();
@@ -178,31 +177,3 @@ test('Host exit reaps only the tool trees below the Host\'s own registered app-s
   }
 });
 
-test('main.ts reaps on the Host exit only, before the Maker shutdown, and turns the cc-debug tailer on as the desktop does', { timeout: TEST_TIMEOUT_MS }, () => {
-  const main = fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8');
-  const bootstrap = fs.readFileSync(path.join(desktopMain, 'bootstrap-electron.ts'), 'utf8');
-  const sources = [];
-  const walk = dir => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const file = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(file);
-      else if (/\.(ts|mjs)$/.test(entry.name) && !/\.test\./.test(entry.name)) sources.push(file);
-    }
-  };
-  walk(srcDir);
-  const callers = sources.filter(file => fs.readFileSync(file, 'utf8').includes('reapCodexToolTreesSync('));
-  assert.deepEqual(callers, [path.join(srcDir, 'main.ts')]);
-  assert.equal(main.split('reapCodexToolTreesSync(').length - 1, 1);
-  const stop = main.slice(main.indexOf('const stop = () => {'), main.indexOf("process.once('SIGINT', stop);"));
-  assert.ok(stop.includes('reapCodexToolTreesSync();'));
-  assert.ok(stop.indexOf('reapCodexToolTreesSync();') < stop.indexOf('await disposeOwnerRuntime();'));
-  // An owner change or logout tears the runtime down without the reap.
-  const dispose = main.slice(main.indexOf('async function disposeOwnerRuntime('));
-  assert.equal(dispose.slice(0, dispose.indexOf('\n}\n')).includes('reapCodexToolTreesSync'), false);
-  // The desktop runs it at quit, in the sync phase before the async Maker shutdown.
-  assert.match(bootstrap, /onQuit\(\s*'reap-codex-tool-trees',\s*\(\) => {\s*reapCodexToolTreesSync\(\);\s*},\s*'sync',\s*\);/);
-
-  const tailer = "setCcDebugTailingEnabled(process.env.XDT_CC_DEBUG_NET === '1');";
-  assert.ok(bootstrap.includes(tailer));
-  assert.ok(main.indexOf(tailer) > main.indexOf("initLogger({ userDataDir: profileDir, isPackaged: true, logDir: path.join(profileDir, 'logs') });"));
-});

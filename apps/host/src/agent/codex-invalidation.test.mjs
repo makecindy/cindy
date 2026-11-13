@@ -18,16 +18,21 @@ import {
 } from '../../../desktop/src/main/maker-host/codex-auth-invalidation.ts';
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
 const TEST_TIMEOUT_MS = 120_000;
 
 const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-invalidation-home-'));
-const originalHome = process.env.HOME;
-process.env.HOME = emptyHome;
+const originalHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+// Child processes get HOME and USERPROFILE (what os.homedir() reads on Windows) through the
+// environment; in-process reads go through os.homedir(), which is mocked as well.
+process.env.HOME = process.env.USERPROFILE = emptyHome;
+test.mock.method(os, 'homedir', () => emptyHome);
 test.after(() => {
-  process.env.HOME = originalHome;
+  test.mock.restoreAll();
+  for (const [key, value] of Object.entries(originalHome)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   fs.rmSync(emptyHome, { recursive: true, force: true });
 });
 
@@ -51,6 +56,7 @@ function profile(t, token = 'fixture-token-1') {
 }
 
 test('the rejected current login is marked, unbound and removed, then announced', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const p = profile(t);
   const rejected = currentCodexCredentialGeneration(p.authPath);
   const steps = [];
@@ -84,6 +90,7 @@ test('the rejected current login is marked, unbound and removed, then announced'
 });
 
 test('a credential replaced before the failure arrived is left alone', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   for (const late of [
     { credentialGeneration: JSON.stringify({ dev: '1', ino: '1', size: 1, mtimeMs: 1, sha256: 'f'.repeat(64) }) },
   ]) {
@@ -101,6 +108,7 @@ test('a credential replaced before the failure arrived is left alone', { timeout
 });
 
 test('independent accounts and logged-out profiles change nothing', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const p = profile(t);
   const before = fs.readFileSync(p.authPath, 'utf8');
   let called = false;
@@ -120,6 +128,7 @@ test('independent accounts and logged-out profiles change nothing', { timeout: T
 });
 
 test('an unattributed failure suppresses the current login without touching it', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const p = profile(t);
   const before = fs.readFileSync(p.authPath, 'utf8');
   const steps = [];
@@ -147,6 +156,7 @@ test('an unattributed failure suppresses the current login without touching it',
 });
 
 test('an unattributed failure during a login or after a disconnect changes nothing', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const during = profile(t);
   let called = false;
   assert.equal(await invalidateHostCodexLogin({ codexHome: during.codexHome, reason: 'token_revoked', credentialAttribution: 'unproven',
@@ -164,6 +174,7 @@ test('an unattributed failure during a login or after a disconnect changes nothi
 });
 
 test('a late failure after an explicit disconnect does not reopen the sign-in prompt', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const p = profile(t);
   assert.equal(writeInvalidatedSystemCodexAuthMarker(p.codexHome, path.join(p.codexHome, 'missing-system-auth.json'),
     'user_disconnected', p.authPath), true);
@@ -177,6 +188,7 @@ test('a late failure after an explicit disconnect does not reopen the sign-in pr
 });
 
 test('an unwritable marker falls back to revoking the native authorization', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const p = profile(t);
   // A non-empty directory where the marker belongs makes the atomic rename fail.
   fs.mkdirSync(path.join(getCodexAuthInvalidationMarkerPath(p.codexHome), 'occupied'), { recursive: true });
@@ -191,6 +203,7 @@ test('an unwritable marker falls back to revoking the native authorization', { t
 });
 
 test('a login linked to a file outside the profile: neither invalidation changes that file', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   for (const link of ['hard', 'symbolic']) {
     for (const attribution of ['attributed', 'unattributed']) {
       const p = profile(t);
@@ -216,34 +229,12 @@ test('a login linked to a file outside the profile: neither invalidation changes
   }
 });
 
-// As the desktop's invalidate(reason, context): the Host's entry takes exactly the context
-// maker-core sends (AuthAdapter.invalidate), nothing the desktop does not receive.
-test('the Host invalidation takes only the context maker-core reports', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const { createRequire } = await import('node:module');
-  const { fileURLToPath } = await import('node:url');
-  const root = fileURLToPath(new URL('../../../../', import.meta.url));
-  const ts = createRequire(path.join(root, 'apps/desktop/package.json'))('typescript');
-  const source = rel => ts.createSourceFile(rel, fs.readFileSync(path.join(root, rel), 'utf8'), ts.ScriptTarget.ESNext, true);
-  const members = type => type && ts.isTypeLiteralNode(type) ? type.members.map(member => member.name.getText()).sort() : null;
-  let core = null;
-  let host = null;
-  const visit = node => {
-    if (ts.isMethodSignature(node) && node.name.getText() === 'invalidate' && node.parameters.length === 2) core = members(node.parameters[1].type);
-    if (ts.isVariableDeclaration(node) && node.name.getText() === 'invalidateNative' && node.initializer && ts.isArrowFunction(node.initializer)) {
-      host = members(node.initializer.parameters[1]?.type);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source('packages/maker-core/src/interfaces/auth-adapter.ts'));
-  visit(source('apps/host/src/agent/codex-runtime.ts'));
-  assert.deepEqual(core, ['credentialAttribution', 'credentialGeneration', 'providerId']);
-  assert.deepEqual(host, core);
-});
 
 // As the desktop (auth-adapters.ts invalidate): only an independent account is left to the account
 // service; a task on the gateway or a custom provider reporting a ChatGPT login failure
 // invalidates the native login.
 test('a failure reported by a task on the gateway or a custom provider invalidates the native login', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   for (const providerId of ['xd', 'cprov-fixture']) {
     const p = profile(t);
     let scope = null;
@@ -256,15 +247,11 @@ test('a failure reported by a task on the gateway or a custom provider invalidat
   }
 });
 
-// The runtime hands the account service's predicate, without the native connection.
-test('the Codex runtime passes the account service predicate to the invalidation', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const source = fs.readFileSync(new URL('./codex-runtime.ts', import.meta.url), 'utf8');
-  assert.ok(source.includes("isCodexAccountProvider: id => id !== 'openai' && options.config.codexAccounts.isCodexAccountProvider(id),"));
-});
 
 // As the desktop's disconnectCodexOAuth: when codex-home is itself a link to the system login's
 // directory, the invalidation removes nothing there; the system file keeps its bytes and inode.
 test('a codex-home that is a link to the system login directory keeps the system login file', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const p = profile(t);
   const systemDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-system-dir-'));
   t.after(() => fs.rmSync(systemDir, { recursive: true, force: true }));
@@ -286,11 +273,16 @@ test('a codex-home that is a link to the system login directory keeps the system
 // A source run has no system login path; as the desktop's getCodexCliAuthPath, the user's
 // ~/.codex/auth.json is still never removed through a codex-home that links to it.
 test('without a system login path, a codex-home linked to ~/.codex keeps ~/.codex/auth.json', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const p = profile(t);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-fake-home-'));
-  const savedHome = process.env.HOME;
-  process.env.HOME = home;
-  t.after(() => { process.env.HOME = savedHome; fs.rmSync(home, { recursive: true, force: true }); });
+  const savedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = process.env.USERPROFILE = home;
+  t.mock.method(os, 'homedir', () => home);
+  t.after(() => {
+    for (const [key, value] of Object.entries(savedHome)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
   const systemDir = path.join(home, '.codex');
   fs.mkdirSync(systemDir);
   const systemAuth = path.join(systemDir, 'auth.json');
@@ -307,6 +299,7 @@ test('without a system login path, a codex-home linked to ~/.codex keeps ~/.code
 // marker instead of memory. A marker rewritten during the cleanup with another reason or another
 // scope means a newer invalidation owns the announcement.
 test('an invalidation whose marker changes during the cleanup is not announced', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   for (const [reason, scope, announced] of [['token_revoked', 'instance-isolated', true], ['other_reason', 'instance-isolated', false],
     ['token_revoked', 'unknown', false]]) {
     const p = profile(t);

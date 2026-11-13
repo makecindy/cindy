@@ -11,7 +11,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 
 import { configureHostOwner } from './claude-auth.mjs';
 import { createHostProviderConfig } from './provider-config.ts';
@@ -26,16 +25,21 @@ import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore.ts';
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
 const TEST_TIMEOUT_MS = 120_000;
 
 test('the Host registers smart subagent routes with the parent reasoning effort, as on the desktop', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-host-codex-routes-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const savedEnv = { ...process.env };
   t.after(() => { for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key]; Object.assign(process.env, savedEnv); });
-  process.env.HOME = path.join(root, 'home');
+  process.env.HOME = process.env.USERPROFILE = path.join(root, 'home');
+  // In-process reads go through os.homedir(), which reads USERPROFILE on Windows.
+  const fixtureHome = process.env.HOME;
+  t.mock.method(os, 'homedir', () => fixtureHome);
   await fs.mkdir(process.env.HOME);
   for (const key of ['XDT_OFFICIAL_SHARED_PROFILE', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_HOME', 'XDT_CODEX_API_KEY', 'ANTHROPIC_API_KEY']) delete process.env[key];
   const profile = path.join(root, 'profile');
@@ -94,18 +98,4 @@ test('the Host registers smart subagent routes with the parent reasoning effort,
   assert.deepEqual(registered[0][3].smartSubagentRoutes, [{ ...routes[0], reasoningEffort: 'xhigh' }]);
   assert.equal(registered[1][3].smartSubagentRoutes.some(route => 'reasoningEffort' in route), false, 'no effort is stamped when none was selected');
   assert.equal(registered[2][3].smartSubagentRoutes.some(route => 'reasoningEffort' in route), false, 'an empty choice is not replaced by a default');
-
-  // The same lines as the desktop.
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const lines = (text, from, to) => {
-    const start = text.indexOf(from);
-    assert.ok(start >= 0, from);
-    const end = text.indexOf(to, start);
-    assert.ok(end > start, to);
-    return text.slice(start, end).split('\n').map(line => line.trim()).filter(Boolean).join('\n');
-  };
-  const desktopIndex = await fs.readFile(path.join(here, '../../../desktop/src/main/maker-host/index.ts'), 'utf8');
-  const host = await fs.readFile(path.join(here, 'codex-runtime.ts'), 'utf8');
-  const from = '...(subagentRoute ? { subagentRoute } : {}),';
-  assert.equal(lines(host, from, 'getCodexSubagentIdentity:'), lines(desktopIndex, from, 'getCodexSubagentIdentity:').replace(/\}\),$/, '});\n},'));
 });

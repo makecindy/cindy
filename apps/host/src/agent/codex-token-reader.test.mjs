@@ -3,7 +3,7 @@
  * - 可观察结果：Host 交给 CodexAgent 的 createCodexAuthTokenReader：先经本引擎的鉴权适配器取 oauth-bearer
  *   状态（Host 适配器里含作废标记、与系统登录对账、恢复要求），已登录才读凭据；每次读取都核对 owner、
  *   区域与本引擎运行时，跨 await 核对 owner 范围。
- * - 规则依据：桌面 maker-host/index.ts 的同一段（源码形状断言逐行比较，只换三个端口）。
+ * - 规则依据：桌面 maker-host/index.ts 的同一段（逐行比较在 hostDesktopSourceContracts.guard.test.ts，只换三个端口）。
  * - 最小失败输入：不经 getState 直接读；未登录也读；owner、区域、运行时或会话边界变化后仍返回令牌。
  * - tier：unit（真实 app session 状态，假适配器与凭据；不读真实登录，不连网）。
  */
@@ -12,11 +12,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 
 import { createHostCodexAuthTokenReader } from './codex-token-reader.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { beginAppSessionBoundary, commitVolatileAppSession } from '../../../desktop/src/main/appSessionState.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 const TEST_TIMEOUT_MS = 60_000;
 
@@ -41,6 +41,7 @@ function fixture() {
 }
 
 test('the Codex token reader reads the login only through an authenticated oauth-bearer state', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   profile(t);
   commitVolatileAppSession('cloud', 'reader-owner', true);
   const f = fixture();
@@ -59,6 +60,7 @@ test('the Codex token reader reads the login only through an authenticated oauth
 });
 
 test('every read is fenced to the owner, the realm, this agent and the session boundary', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   profile(t);
   const owner = () => commitVolatileAppSession('cloud', 'reader-owner', true);
   const changed = /Codex authentication owner changed/;
@@ -95,26 +97,3 @@ test('every read is fenced to the owner, the realm, this agent and the session b
   await assert.rejects(read(), changed, 'a scope change across the await');
 });
 
-test('the reader is the desktop createCodexAuthTokenReader body with its three ports', { timeout: TEST_TIMEOUT_MS }, () => {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const desktop = fs.readFileSync(path.join(here, '../../../desktop/src/main/maker-host/index.ts'), 'utf8');
-  const host = fs.readFileSync(path.join(here, 'codex-token-reader.ts'), 'utf8');
-  const shape = text => text.split('\n').map(line => line.trim()).filter(Boolean).join('\n');
-  const start = desktop.indexOf('      createCodexAuthTokenReader: (providerId) => {\n');
-  assert.ok(start >= 0);
-  const desktopBody = desktop.slice(desktop.indexOf('\n', start) + 1, desktop.indexOf('\n      },\n', start));
-  const hostStart = host.indexOf('  return (providerId?: string) => {\n');
-  const hostBody = host.slice(host.indexOf('\n', hostStart) + 1, host.indexOf('\n  };\n}', hostStart));
-  assert.equal(shape(hostBody), shape(desktopBody)
-    .replace('desktopCodexAuthAdapter.getState(', 'codexAuthAdapter.getState(')
-    .replace('desktopCodexAuthAdapter.readOneShotCreds(providerId)', 'readOneShotCreds(providerId)')
-    .replace('_codexAgent !== codexAgent', '!isCodexAgentCurrent()')
-    .replaceAll('getActiveAuthRealm()', 'readAuthRealm()'));
-  // runtime.ts gives CodexAgent this reader over the agent's own adapter and runtime.
-  const runtime = fs.readFileSync(path.join(here, 'runtime.ts'), 'utf8');
-  for (const line of ['createCodexAuthTokenReader: createHostCodexAuthTokenReader({', 'codexAuthAdapter: codexAuth,',
-    'readOneShotCreds: providerId => options.codexRuntime?.native.readOneShotCreds(providerId) ?? null,',
-    'isCodexAgentCurrent: () => options.codexRuntime?.isCurrent() ?? false,', 'readAuthRealm: () => options.readAuthRealm?.() ?? null,']) {
-    assert.ok(runtime.includes(line), line);
-  }
-});

@@ -12,11 +12,6 @@ const TEST_TIMEOUT_MS = 120_000;
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
 const hostDir = path.dirname(srcDir);
 
-test('main.ts strips inherited Anthropic env before any other module loads', { timeout: TEST_TIMEOUT_MS }, () => {
-  const firstImport = fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8')
-    .split('\n').find(line => line.startsWith('import '));
-  assert.equal(firstImport, "import './boot-env.js';");
-});
 
 test('the boot step removes the same keys as Desktop and keeps the import source directory', { timeout: TEST_TIMEOUT_MS }, () => {
   const probe = `

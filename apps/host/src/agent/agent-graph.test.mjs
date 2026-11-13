@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -36,6 +37,7 @@ function fixtureHarnessRoot(profile) {
 }
 
 test('the PiAgent the Host assembles gets the MCP bridge under the key it reads, with the session context intact', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   // A new temporary profile and owner; no real CLI or account is read.
@@ -68,9 +70,6 @@ test('the PiAgent the Host assembles gets the MCP bridge under the key it reads,
   for (const key of ['resolvePiManagedPackageResources', 'resolvePiNativePackagePaths', 'mutatePiManagedPackage', 'onPiManagedPackageMutationSettled']) {
     assert.equal(graph.pi.deps[key], graph.piPackages.deps[key], key);
   }
-  // The retirement hooks need the Host's Maker (source shape: the attach after Maker is built, the close on teardown).
-  assert.ok(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'runtime.ts'), 'utf8').includes('  piPackages.attachMaker(maker);\n'));
-  assert.ok(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../main.ts'), 'utf8').includes('    agentGraph?.piPackages.close();\n'));
   graph.piPackages.close();
 
   // PiAgent calls it as (providers, ctx). The environment records the session's runtime MCP
@@ -90,6 +89,7 @@ test('the PiAgent the Host assembles gets the MCP bridge under the key it reads,
  * - tier：unit（只构造实例，不起子进程、不调模型）。
  */
 test('every engine the Host assembles resolves per-model context the way the desktop does', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const { getActiveCatalog } = await import('../../../desktop/src/main/maker-host/active-catalog.ts');
   const { filterLegacyGptContextProfiles } = await import('../../../desktop/src/main/maker-host/legacy-context-profiles.ts');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
@@ -183,7 +183,8 @@ test('every engine the Host assembles resolves per-model context the way the des
  * - tier：unit（只构造实例，偏好写进临时 profile）。
  */
 test('every engine the Host assembles skips the Skills the user disabled and gets the plugin roster and managed Skills', { timeout: TEST_TIMEOUT_MS }, async t => {
-  const { setCindySkillEnabled } = await import('../../../desktop/src/main/skillhub/activationPreferences.ts');
+  t = lifoCleanup(t);
+  const { setCindySkillEnabled, skillActivationKey } = await import('../../../desktop/src/main/skillhub/activationPreferences.ts');
   const { configureAppDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
@@ -210,7 +211,8 @@ test('every engine the Host assembles skips the Skills the user disabled and get
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
     },
   });
-  const disabled = fs.realpathSync.native(skill);
+  // The key the activation store records (real path; lower case on Windows).
+  const disabled = skillActivationKey(skill);
   for (const [kind, agent] of [['claude-code', graph.agent], ['codex', graph.codex], ['pi', graph.pi]]) {
     assert.equal(typeof agent.deps.getDisabledSkillPaths, 'function', kind);
     assert.ok(agent.deps.getDisabledSkillPaths().includes(disabled), `${kind} sees the disabled Skill`);
@@ -233,6 +235,7 @@ test('every engine the Host assembles skips the Skills the user disabled and get
  *   源文件独立拼出，不经被测代码。
  */
 test('every engine the Host assembles gets the desktop runtime config: product prompt, answer delivery, flags and live memory settings', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } = await import('@cindy/maker-shared/rich-answer-guide');
   const { DEFAULT_MODEL_COMPACTION_PCT } = await import('../../../desktop/src/shared/modelContextLimit.ts');
   const { writeMemorySetting, readMemorySettings } = await import('../../../desktop/src/main/maker-host/memory-settings-store.ts');
@@ -317,6 +320,7 @@ test('every engine the Host assembles gets the desktop runtime config: product p
  * - tier：unit。
  */
 test('without the bundled ripgrep the Host fails the way the desktop does', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'agent-graph-no-ripgrep' });
@@ -344,6 +348,7 @@ test('without the bundled ripgrep the Host fails the way the desktop does', { ti
  * - tier：unit（只构造实例）。
  */
 test('with the loopback proxy, Claude and Pi use its endpoint and Pi registers its session tokens', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-proxy-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId: 'agent-graph-proxy' });
@@ -351,7 +356,7 @@ test('with the loopback proxy, Claude and Pi use its endpoint and Pi registers i
   t.after(() => mcp.close());
   let endpoint = 'https://gateway.test/v1';
   const registerPiProxySession = () => () => {};
-  const claudeProxy = { endpoint: () => endpoint, isReady: () => true, inboundSecret: () => 'secret', registerPiProxySession, closeSession() {} };
+  const claudeProxy = { endpoint: () => endpoint, isReady: () => true, inboundSecret: () => 'secret', gatewayInboundSecret: () => 'gateway-secret', registerPiProxySession, closeSession() {} };
   const graph = createHostAgentGraph({
     userDataDir: profile, harnessRoot: fixtureHarnessRoot(profile), claudeProxy,
     gateway: { endpoint: 'https://gateway.test/v1', credential: 'fixture-key' },

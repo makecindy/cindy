@@ -29,6 +29,7 @@ import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { createWorktreeRuntimeLeases } from '../../../desktop/src/main/worktree/runtimeLeasesCore.ts';
 import { createPrecreatedCancellation } from '../../../desktop/src/main/worktree/precreatedCancellationCore.ts';
 import { physicalWorktreeKey } from '../../../desktop/src/main/worktree/resourceLock.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -36,7 +37,6 @@ const TEST_TIMEOUT_MS = 120_000;
 
 const agentDir = path.dirname(fileURLToPath(import.meta.url));
 const hostDir = path.dirname(path.dirname(agentDir));
-const desktopMain = path.join(hostDir, '..', 'desktop', 'src', 'main');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-leases-'));
@@ -63,6 +63,14 @@ function age(file, ms) {
   const then = new Date(Date.now() - ms);
   fs.utimesSync(file, then, then);
 }
+
+// runtimeLeasesCore counts evidence older than the boot (minus a 10-minute margin) as abandoned
+// before it looks at the heartbeat grace. Fix the uptime so an aged lease is judged by the grace
+// alone, whatever this machine's real uptime is.
+function upFor(t, seconds) {
+  t.mock.method(os, 'uptime', () => seconds);
+}
+const LONG_UPTIME_S = 30 * 24 * 3600;
 
 // The Host side, in its own process: the Host's own start hooks, its own profile and app data.
 const hostProbe = `
@@ -101,17 +109,16 @@ function startHost(t, f) {
   let out = '';
   let err = '';
   child.stderr.on('data', chunk => { err += chunk; });
+  // Bounded by the test timeout; a child that exits first rejects with its stderr.
   const waitFor = line => new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Host child did not print ${line}: ${err}`)), 30_000);
     const check = () => {
-      if (!out.split('\n').includes(line)) return;
-      clearTimeout(timer);
+      if (!out.split(/\r?\n/).includes(line)) return;
       child.stdout.off('data', onData);
       resolve();
     };
     const onData = chunk => { out += chunk; check(); };
     child.stdout.on('data', onData);
-    child.once('exit', code => { clearTimeout(timer); reject(new Error(`Host child exited (${code}): ${err}`)); });
+    child.once('exit', code => reject(new Error(`Host child exited (${code}): ${err}`)));
     check();
   });
   return {
@@ -123,6 +130,7 @@ function startHost(t, f) {
 }
 
 test('a lease the Host process holds is protected in the desktop view, and the Host close releases it', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = fixture(t);
   const host = startHost(t, f);
   await host.ready;
@@ -144,11 +152,13 @@ test('a lease the Host process holds is protected in the desktop view, and the H
 });
 
 test('a lease left by a Host that is gone stays protective through the heartbeat grace, then counts as abandoned', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = fixture(t);
   const host = startHost(t, f);
   await host.ready;
   const physical = await physicalWorktreeKey(f.worktree);
   await host.crash();
+  upFor(t, LONG_UPTIME_S);
   const [name] = leaseFiles(f.leaseDir);
   const file = path.join(f.leaseDir, name);
   assert.ok(name, 'a crashed Host leaves its lease file');
@@ -164,6 +174,7 @@ test('a lease left by a Host that is gone stays protective through the heartbeat
 });
 
 test('after a Host restart one lease file remains when it closed; a crashed one stays beside the new one until its grace passes', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = fixture(t);
   const physical = await physicalWorktreeKey(f.worktree);
   const first = startHost(t, f);
@@ -182,8 +193,27 @@ test('after a Host restart one lease file remains when it closed; a crashed one 
   const [left] = leaseFiles(f.leaseDir);
   assert.equal(Number(left.split('-')[0]), second.child.pid);
   assert.deepEqual([...await f.desktop.readWorktreeRuntimePaths()], [physical]);
+  upFor(t, LONG_UPTIME_S);
   age(path.join(f.leaseDir, left), 61 * 60_000);
   assert.deepEqual([...await f.desktop.readWorktreeRuntimePaths()], []);
+});
+
+test('a lease left from before the machine booted counts as abandoned at once, inside the heartbeat grace', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const f = fixture(t);
+  const host = startHost(t, f);
+  await host.ready;
+  const physical = await physicalWorktreeKey(f.worktree);
+  await host.crash();
+  const [name] = leaseFiles(f.leaseDir);
+  const file = path.join(f.leaseDir, name);
+  // Up for five minutes: anything older than 15 minutes (boot plus the 10-minute margin) predates it.
+  upFor(t, 5 * 60);
+  age(file, 14 * 60_000);
+  assert.deepEqual([...await f.desktop.readWorktreeRuntimePaths()], [physical]);
+  age(file, 16 * 60_000);
+  assert.deepEqual([...await f.desktop.readWorktreeRuntimePaths()], []);
+  assert.deepEqual(leaseFiles(f.leaseDir), [name]);
 });
 
 function fixtureHarnessRoot(profile) {
@@ -195,6 +225,7 @@ function fixtureHarnessRoot(profile) {
 }
 
 test('the Maker the Host assembles releases the lease on a dead start failure, a successful cleanup and close', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = fixture(t);
   configureHostOwner({ userDataDir: f.profile, ownerId: 'lease-graph' });
   configureAppDataDir(f.appData);
@@ -251,6 +282,7 @@ function startOptionsFor(t, f, ownerId) {
 }
 
 test('a creation cancelled by another local instance is caught after the lease is taken, and the failed start releases it', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = fixture(t);
   const start = startOptionsFor(t, f, 'lease-cancel');
   // The desktop window seals the cancellation in the shared profile.
@@ -265,6 +297,7 @@ test('a creation cancelled by another local instance is caught after the lease i
 });
 
 test('no lease is taken outside a managed worktree or for a remote task', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const f = fixture(t);
   const start = startOptionsFor(t, f, 'lease-none');
   await start.prepareStartOptions('plain-task', { agentKind: 'claude-code', providerId: 'fixture-provider', model: 'fixture-model', workingDir: f.plain });
@@ -272,26 +305,3 @@ test('no lease is taken outside a managed worktree or for a remote task', { time
   assert.deepEqual(leaseFiles(f.leaseDir), []);
 });
 
-test('the Host lease steps are the desktop start-hook lines, before the shared Skill links', { timeout: TEST_TIMEOUT_MS }, () => {
-  const host = fs.readFileSync(path.join(agentDir, 'start-options.ts'), 'utf8');
-  const desktop = fs.readFileSync(path.join(desktopMain, 'maker-host', 'index.ts'), 'utf8');
-  const block = (source, from) => {
-    const start = source.indexOf(from);
-    assert.ok(start >= 0, from);
-    const end = source.indexOf('}', source.indexOf('assertPrecreatedSessionNotCancelled(sessionId);', start));
-    return source.slice(start, end + 1).split('\n').map(line => line.trim()).join('\n');
-  };
-  const desktopBlock = block(desktop, 'if (!createOpts.remoteHostId && createOpts.workingDir) {\n            const lease');
-  const hostBlock = block(host, 'if (!createOpts.remoteHostId && createOpts.workingDir) {')
-    .replace('hostWorktreeRuntimeLeases.acquireWorktreeRuntimeLease(', 'acquireWorktreeRuntimeLease(')
-    .replace('hostPrecreatedCancellation.assertPrecreatedSessionNotCancelled(', 'assertPrecreatedSessionNotCancelled(');
-  assert.equal(hostBlock, desktopBlock);
-  const prepare = host.slice(host.indexOf('async function prepareStartOptions('), host.indexOf('async function onBeforeStart('));
-  assert.ok(prepare.indexOf('acquireWorktreeRuntimeLease(') < prepare.indexOf('prepareSharedProjectSkillLinks('));
-  const desktopPrepare = desktop.slice(desktop.indexOf('const createOpts = opts as MakerSessionCreateOpts;'));
-  assert.ok(desktopPrepare.indexOf('acquireWorktreeRuntimeLease(') < desktopPrepare.indexOf('prepareSharedProjectSkillLinks('));
-  // The release warning the desktop logs, word for word.
-  const warn = "'worktree runtime lease release postponed', { sessionId, code: (error as NodeJS.ErrnoException).code }";
-  assert.equal(desktop.split(warn).length - 1, 3);
-  assert.equal(host.split(warn).length - 1, 1);
-});

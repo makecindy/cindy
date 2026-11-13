@@ -66,9 +66,35 @@ export function createTurnExecutor(deps) {
     return history;
   }
 
+  // The Git baseline of one turn, settled as the desktop's event delivery settles it
+  // (sessionEventDelivery.ts: a done takes the after-edit savepoint, a terminal error cancels the
+  // baseline), each at most once for this turn of this instance. A failed turn that reports its
+  // error and then its done settles both, as there. A stop the Host settles itself takes the
+  // savepoint once the engine is idle and closes both, so a late done or error of the stopped
+  // turn takes nothing from the next turn's baseline.
+  function settleGitBaseline(sessionId, turn, kind) {
+    const git = turn.gitBaseline ??= { aborted: false, ended: false };
+    const snapshot = deps.getGitSnapshot?.();
+    if (kind === 'end') {
+      if (git.ended) return;
+      git.ended = true;
+      void snapshot?.onTurnEnd(sessionId);
+    } else if (kind === 'abort') {
+      if (git.aborted || git.ended) return;
+      git.aborted = true;
+      snapshot?.onTurnAbort(sessionId);
+    } else {
+      if (!git.aborted && !git.ended) void snapshot?.onTurnEnd(sessionId);
+      git.aborted = git.ended = true;
+    }
+  }
+
   function finish(sessionId, turn, error, event) {
     if (turn.terminal) return turn.settlement;
     turn.terminal = true;
+    // A stop the engine acknowledged without a terminal event: the engines' stop paths end in a
+    // done on the desktop, which takes the after-edit savepoint there.
+    if (!event && !error && turn.abortRequested && !deps.isStoppingRuntime()) settleGitBaseline(sessionId, turn, 'stopped');
     turn.endedAt = Date.now();
     turn.interruptedByShutdown = deps.isStoppingRuntime();
     const history = historyFor(sessionId);
@@ -122,9 +148,15 @@ export function createTurnExecutor(deps) {
       const turn = turns.get(sessionId);
       if (!turn || turn.session !== session || !deps.isCurrent()) return;
       if (event.turnScope !== 'background') {
-        if (turn.terminal || event.hostProjection) return;
-        if (typeof event.sessionTurnGeneration === 'number' && typeof turn.generation === 'number'
-          && event.sessionTurnGeneration !== turn.generation) return;
+        if (event.hostProjection) return;
+        if (typeof event.sessionTurnGeneration === 'number' && (typeof turn.generation === 'number'
+          ? event.sessionTurnGeneration !== turn.generation : event.sessionTurnGeneration === turn.previousGeneration)) return;
+        if (turn.terminal) {
+          // The turn has ended for the Host; only its Git baseline still listens.
+          if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
+          else if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');
+          return;
+        }
       }
       if (event.type === 'compact_boundary') wireNotes.reset(sessionId);
       // Desktop records Codex's native turn diff from the event stream (register.ts)
@@ -147,7 +179,8 @@ export function createTurnExecutor(deps) {
       }
       publishAgentEvent(deps.hub, sessionId, event, { ...stream, inputClientId: turn.clientId });
       // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
-      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) void deps.getGitSnapshot?.()?.onTurnEnd(sessionId);
+      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
+      if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');
       if ((event.type === 'done' || isTerminalTurnErrorEvent(event))
         && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)) {
         turn.terminalMeta = { sessionTurnGeneration: event.sessionTurnGeneration,
@@ -418,8 +451,9 @@ export function createTurnExecutor(deps) {
 
   async function send(sessionId, message, createOpts, sendOpts) {
     createOpts = { ...createOpts };
+    // Until this turn reserves its own generation, events of the previous one are recognised by theirs.
     const turn = { running: true, terminal: false, dbKind: dbKind(createOpts.agentKind),
-      createOpts, sendOpts, clientId: sendOpts.persistUserMessage?.clientId };
+      createOpts, sendOpts, clientId: sendOpts.persistUserMessage?.clientId, previousGeneration: turns.get(sessionId)?.generation };
     turns.set(sessionId, turn);
     const check = () => {
       deps.assertCurrent();

@@ -13,7 +13,6 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { configureHostOwner } from './claude-auth.mjs';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
@@ -23,12 +22,11 @@ import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/
 import { CodexCredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-host/codex-credential-switch.ts';
 import { readPiGlobalContext } from '../../../../packages/maker-core/src/agents/pi/global-context.ts';
 import { createMainI18n } from '../../../desktop/src/main/i18n.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
 const TEST_TIMEOUT_MS = 120_000;
 
-const agentDir = path.dirname(fileURLToPath(import.meta.url));
-const desktopIndex = path.join(agentDir, '..', '..', '..', 'desktop', 'src', 'main', 'maker-host', 'index.ts');
 
 function fixtureHarnessRoot(profile) {
   const root = path.join(profile, 'harnesses');
@@ -71,12 +69,14 @@ function buildGraph(t, ownerId, extra = {}) {
 }
 
 test('Claude gets the desktop read-only allowed tools', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-allowed');
   assert.deepEqual(graph.agent.deps.claudeAllowedTools, getDesktopClaudeReadOnlyAllowedTools());
   assert.ok(graph.agent.deps.claudeAllowedTools.length > 0);
 });
 
 test('Claude subagent usage goes through the process-wide bridge the loopback proxy fills', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-usage');
   t.after(() => claudeSubagentUsageBridge.clear());
   const prompt = 'Summarize the fixture repository layout';
@@ -98,6 +98,7 @@ function fakeSession(id, { agentKind = 'codex', hostKey = 'local', remoteHostId,
 }
 
 test('a Codex credential-mode switch closes the idle local sessions of that host only', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-switch-idle', { isSessionInTurn: () => false });
   const closed = [];
   graph.maker.listActiveSessions = () => [
@@ -115,6 +116,7 @@ test('a Codex credential-mode switch closes the idle local sessions of that host
 });
 
 test('a Codex credential-mode switch is refused while a session is busy, by its own turn or the Host tracker', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const inTurn = new Set(['tracked']);
   const graph = buildGraph(t, 'engine-deps-switch-busy', { isSessionInTurn: id => inTurn.has(id) });
   const closed = [];
@@ -127,72 +129,37 @@ test('a Codex credential-mode switch is refused while a session is busy, by its 
   assert.deepEqual(closed, []);
 });
 
-test('the three Host lines are the desktop constructor lines', { timeout: TEST_TIMEOUT_MS }, () => {
-  const desktop = fs.readFileSync(desktopIndex, 'utf8');
-  const host = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  for (const line of [
-    'claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),',
-    'registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),',
-    'getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),',
-  ]) {
-    assert.equal(desktop.split(line).length - 1, 1, `desktop: ${line}`);
-    assert.equal(host.split(line).length - 1, 1, `host: ${line}`);
-  }
-  // The same arguments to the shared switch, in the same order; the desktop's guard for a Maker that
-  // is not built yet has no Host counterpart (the Host closes over its Maker).
-  const args = (source) => {
-    const start = source.indexOf('await prepareLocalCodexCredentialModeSwitch({');
-    const body = source.slice(start, source.indexOf('});', start));
-    return [...body.matchAll(/^\s+(\w+)(?::|,)/gm)].map(m => m[1]);
-  };
-  assert.deepEqual(args(desktop), ['maker', 'isSessionInTurn', 'hostKey', 'fromMode', 'fromModeEffective', 'toMode']);
-  assert.deepEqual(args(host), args(desktop));
-  // The proxy core the Host's Claude proxy uses records into the default (process-wide) bridge.
-  const core = fs.readFileSync(path.join(path.dirname(desktopIndex), 'anthropicCompatProxyHostCore.ts'), 'utf8');
-  assert.ok(core.includes('createClaudeSubagentUsageResponseObserver(),'));
-  assert.ok(core.includes('createClaudeSubagentUsageRequestTransform(),'));
-});
 
 test('Claude gets the MCP duplicate choices main.ts builds from the plugin gateway reads', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const resolveLocalMcpDuplicateChoices = async () => ({ skipHostServers: [], denyNativeServers: [] });
   const graph = buildGraph(t, 'engine-deps-mcp-duplicates', { resolveLocalMcpDuplicateChoices });
   assert.equal(graph.agent.deps.resolveLocalMcpDuplicateChoices, resolveLocalMcpDuplicateChoices);
   assert.equal(buildGraph(t, 'engine-deps-mcp-duplicates-absent').agent.deps.resolveLocalMcpDuplicateChoices, undefined);
-  const main = fs.readFileSync(path.join(agentDir, '..', 'main.ts'), 'utf8');
-  assert.ok(main.includes('resolveLocalMcpDuplicateChoices: createHostMcpDuplicateChoices(pluginGateway.customMcp).resolveLocalMcpDuplicateChoices,'));
-  // The desktop Claude constructor takes the same function from the same module family.
-  const desktop = fs.readFileSync(desktopIndex, 'utf8');
-  assert.ok(desktop.includes("import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';"));
-  assert.ok(desktop.includes('    const claudeAgent = new ClaudeCodeAgent({\n      resolveLocalMcpDuplicateChoices,\n'));
 });
 
 test('Claude checks explicit subagent models with the Host gateway key and provider views', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-subagent-access');
   const resolve = graph.agent.deps.resolveClaudeSubagentModelAccess;
   assert.equal(typeof resolve, 'function');
   // No authoritative XD snapshot in this process: nothing can be denied.
   assert.deepEqual(await resolve({ providerId: 'xd', parentModel: 'fixture-model', model: 'claude-haiku-4-5' }), { status: 'unknown' });
-  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  assert.ok(runtime.includes([
-    '    resolveClaudeSubagentModelAccess: createHostClaudeSubagentModelAccess({',
-    '      readGatewayKey: () => options.gateway?.credential ?? null,',
-    '      listProviderViews: () => config.publicViews(Boolean(options.gateway?.credential)),',
-    '    }),',
-  ].join('\n')));
-  const desktop = fs.readFileSync(desktopIndex, 'utf8');
-  assert.ok(desktop.includes('      resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,\n'));
 });
 
 test('Pi reads the user\'s own global context from the home the desktop uses', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-pi-context');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-home-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const saved = { HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
   t.after(() => {
-    process.env.HOME = saved.HOME;
+    for (const key of ['HOME', 'USERPROFILE']) if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
     if (saved.PI_CODING_AGENT_DIR === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved.PI_CODING_AGENT_DIR;
   });
-  process.env.HOME = home;
+  process.env.HOME = process.env.USERPROFILE = home;
+  // In-process reads go through os.homedir(), which reads USERPROFILE on Windows.
+  t.mock.method(os, 'homedir', () => home);
   delete process.env.PI_CODING_AGENT_DIR;
   fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
   fs.writeFileSync(path.join(home, '.pi', 'agent', 'AGENTS.md'), 'fixture global context');
@@ -207,6 +174,7 @@ test('Pi reads the user\'s own global context from the home the desktop uses', {
 });
 
 test('Pi resolves its live models and descriptors from the Host selectable catalog', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-pi-models');
   const deps = graph.pi.deps;
   const models = deps.resolvePiRuntimeModels();
@@ -215,23 +183,10 @@ test('Pi resolves its live models and descriptors from the Host selectable catal
   if (sample) {
     assert.ok(deps.resolvePiRuntimeModelDescriptor(sample.providerId, sample.id), 'a listed model has a descriptor');
   }
-  // The same expressions as the desktop's buildPiAgentForDesktop, over the Host catalog.
-  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  const desktop = fs.readFileSync(desktopIndex, 'utf8');
-  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
-  const body = (source, from, to) => {
-    const start = source.indexOf(from);
-    assert.ok(start >= 0, from);
-    return source.slice(start, source.indexOf(to, start)).split('\n').map(line => line.trim()).filter(line => !line.startsWith('//')).join('\n');
-  };
-  const desktopModels = body(desktop, 'resolvePiRuntimeModels: () =>', 'mcpProviders: piMcpProviders,').replaceAll('getDesktopSelectableCatalog()', 'modelContext.getSelectableCatalog()');
-  const hostModels = body(runtime, 'resolvePiRuntimeModels: () =>', '        mcpProviders,\n');
-  assert.ok(hostModels.startsWith(desktopModels), 'the three model resolvers are the desktop lines');
-  assert.equal(body(runtime, 'resolvePiGlobalContextHome: (remoteHostId) => {', '        },'),
-    body(piHost, 'resolvePiGlobalContextHome: (remoteHostId) => {', '    },'));
 });
 
 test('Pi learns cache compatibility in the profile file the desktop uses and reads it back', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const graph = buildGraph(t, 'engine-deps-pi-compat');
   const profile = graphProfiles.get(graph);
   const deps = graph.pi.deps;
@@ -254,25 +209,10 @@ test('Pi learns cache compatibility in the profile file the desktop uses and rea
   // A later bridge write is seen on the next read, as on the desktop.
   write({});
   assert.equal(deps.resolvePiNativeCompatOverride('openai', 'gpt-x', routeKey), undefined);
-  // The same lines as the desktop's buildPiAgent, over the Host profile and the Host instance.
-  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
-  const body = (source, from, to) => {
-    const start = source.indexOf(from);
-    assert.ok(start >= 0, from);
-    const end = source.indexOf(to, start);
-    assert.ok(end > start, to);
-    return source.slice(start, end).split('\n').map(line => line.trim()).filter(line => !line.startsWith('//')).join('\n');
-  };
-  assert.equal(body(runtime, 'resolvePiNativeCompatStorePath:', 'resolvePiNativeProviders:'),
-    body(piHost, 'resolvePiNativeCompatStorePath:', 'getManagedSkills:')
-      .replaceAll("app.getPath('userData')", 'options.userDataDir')
-      .replaceAll('readPiNativeCompatOverride(providerId', 'piNativeCompatOverrides.readPiNativeCompatOverride(providerId'));
-  assert.ok(runtime.includes("const piNativeCompatOverrides = createPiNativeCompatOverridesStore({ app: { getPath: () => options.userDataDir } });"));
-  assert.ok(runtime.includes("import { createPiNativeCompatOverridesStore } from '../../../desktop/src/main/maker-host/piNativeCompatOverridesStoreCore.js';"));
 });
 
 test('Pi gets the desktop startup hint and extension dialog strings in the system language', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
   const deps = buildGraph(t, 'engine-deps-pi-strings').pi.deps;
   // What i18n.desktop.ts gives when the system reports this language and the window has not set one.
   const desktop = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
@@ -303,17 +243,4 @@ test('Pi gets the desktop startup hint and extension dialog strings in the syste
   // Every string is a translation, not a key the lookup fell back to.
   const values = [strings.confirm, strings.cancel, strings.mutationFailed, ...Object.values(strings.mutationFailure), ...Object.values(strings.mutationSuccess)];
   for (const value of values) assert.ok(value.trim() && !value.startsWith('settings.piPackages.'), value);
-  // The same lines as the desktop's buildPiAgent.
-  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
-  const lines = (source, from, to) => {
-    const start = source.indexOf(from);
-    assert.ok(start >= 0, from);
-    const end = source.indexOf(to, start);
-    assert.ok(end > start, to);
-    return source.slice(start, end).split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//')).join('\n');
-  };
-  assert.equal(lines(runtime, 'formatPiStartupCloudFileHint: (file) =>', 'resolvePiVisionBridgeEnv:'),
-    lines(piHost, 'formatPiStartupCloudFileHint: (file) =>', 'preparePiExtraSpawnConfig:'));
-  assert.ok(runtime.includes('const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);'));
 });

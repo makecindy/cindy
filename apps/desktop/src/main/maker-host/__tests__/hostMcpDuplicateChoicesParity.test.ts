@@ -18,6 +18,9 @@ import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 
 const h = vi.hoisted(() => ({
   root: '',
+  home: '',
+  realHome: '',
+  reads: [] as string[],
   userData: '',
   customs: [] as unknown[],
   builtins: [] as string[],
@@ -25,6 +28,17 @@ const h = vi.hoisted(() => ({
   outside: [] as string[],
 }));
 
+// The user home both sides read comes from os.homedir(). Assigning process.env.HOME does not reach it
+// in a worker thread (vitest threads pool) or on Windows (USERPROFILE), so the module is mocked.
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  h.realHome = actual.homedir();
+  const homedir = () => {
+    if (!h.home) throw new Error('homedir read before the fixture home was set');
+    return h.home;
+  };
+  return { ...actual, default: { ...actual, homedir }, homedir };
+});
 vi.mock('electron', () => ({ app: { isPackaged: true, getPath: () => h.userData } }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomMcpToken: (id: string) => h.tokens[id] ?? null }));
 vi.mock('../../mcp-integrations/custom-mcp-registry.desktop.js', () => ({
@@ -38,6 +52,7 @@ vi.mock('../mcp-duplicate-detection.js', async (importActual) => {
   return {
     ...actual,
     readMcpJson: async (file: string) => {
+      h.reads.push(file);
       if (h.root && (file === h.root || file.startsWith(`${h.root}${path.sep}`))) return actual.readMcpJson(file);
       h.outside.push(file);
       return {};
@@ -56,7 +71,7 @@ type HostModule = typeof import('../../../../../host/src/agent/mcp-duplicate-cho
 const hostModule = '../../../../../host/src/agent/mcp-duplicate-choices.ts';
 
 describe('Host MCP duplicate choices match the desktop', () => {
-  const saved = { HOME: process.env.HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+  const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
   let home = '';
   let workingDir = '';
   let host: ReturnType<HostModule['createHostMcpDuplicateChoices']>;
@@ -64,11 +79,11 @@ describe('Host MCP duplicate choices match the desktop', () => {
   beforeAll(async () => {
     h.root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mcp-duplicate-parity-')));
     home = path.join(h.root, 'home');
+    h.home = home;
     workingDir = path.join(h.root, 'project');
     h.userData = path.join(h.root, 'user-data');
     // An empty .git ends the canonical-root search inside the fixture.
     for (const dir of [path.join(home, '.claude'), path.join(workingDir, '.git'), h.userData]) fs.mkdirSync(dir, { recursive: true });
-    process.env.HOME = home;
     delete process.env.CLAUDE_CONFIG_DIR;
     configureUserDataDir(h.userData);
     commitVolatileAppSession('local');
@@ -91,7 +106,6 @@ describe('Host MCP duplicate choices match the desktop', () => {
   });
 
   afterAll(() => {
-    process.env.HOME = saved.HOME;
     if (saved.CLAUDE_CONFIG_DIR === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = saved.CLAUDE_CONFIG_DIR;
     fs.rmSync(h.root, { recursive: true, force: true });
@@ -143,5 +157,12 @@ describe('Host MCP duplicate choices match the desktop', () => {
       expect(h.root.startsWith(path.dirname(path.basename(file) === '.mcp.json' ? file : path.dirname(file)))).toBe(true);
     }
     expect(Object.keys(host)).toEqual(['resolveLocalMcpDuplicateChoices']);
+  });
+
+  it('read the user-level configuration from the fixture home, never from the real one', () => {
+    expect(h.reads).toContain(path.join(home, '.claude.json'));
+    if (!h.root.startsWith(`${h.realHome}${path.sep}`)) {
+      expect(h.reads.filter((file) => file.startsWith(`${h.realHome}${path.sep}`))).toEqual([]);
+    }
   });
 });

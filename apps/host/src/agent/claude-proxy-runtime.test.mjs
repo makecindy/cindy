@@ -25,6 +25,7 @@ import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/claude-gateway-config.ts';
 import { readClaudeSessionRoute } from '../../../desktop/src/main/maker-host/claude-session-route-registry.ts';
 import { authenticatePiProxySession } from '../../../desktop/src/main/maker-host/pi-proxy-session-auth.ts';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
@@ -57,9 +58,10 @@ async function fixture(t, owner) {
   t.after(() => new Promise(resolve => upstream.close(resolve)));
   const gatewayEndpoint = `http://127.0.0.1:${upstream.address().port}`;
   const tasks = new Map();
+  let gatewayKey = GATEWAY_KEY;
   const start = async (extra = {}) => {
     const runtime = createHostClaudeProxyRuntime({ ...extra, profileDir: profile,
-      gateway: () => ({ credential: GATEWAY_KEY, endpoint: gatewayEndpoint }),
+      gateway: () => ({ credential: gatewayKey, endpoint: gatewayEndpoint }),
       fastRequestPolicy: { subscriptionRequestAllowsFast: () => false, withSubscriptionFastRequestPolicy: decision => decision },
       isOpenAiSubscriptionProviderId: id => id === 'openai',
       resolveTaskId: sdk => tasks.get(sdk) ?? null,
@@ -68,7 +70,8 @@ async function fixture(t, owner) {
     await runtime.ready();
     return runtime;
   };
-  return { requests, upgrades: () => upgrades, gatewayEndpoint, tasks, start };
+  return { requests, upgrades: () => upgrades, gatewayEndpoint, tasks, start, profile,
+    setGatewayKey: key => { gatewayKey = key; } };
 }
 
 const post = (runtime, headers, body = { model: 'claude-sonnet-4-5', max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] }) =>
@@ -92,6 +95,7 @@ function upgradeStatus(endpoint, headers = []) {
 }
 
 test('the Host loopback proxy listens on 127.0.0.1 and admits only the credentials Cindy gave its agents', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-gate');
   const runtime = await env.start();
   assert.equal(runtime.isReady(), true);
@@ -128,6 +132,7 @@ test('the Host loopback proxy listens on 127.0.0.1 and admits only the credentia
 });
 
 test('the public provider placeholder is not an inbound credential on the Host', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-placeholder');
   const runtime = await env.start();
   const res = await post(runtime, { 'x-api-key': CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY });
@@ -136,6 +141,7 @@ test('the public provider placeholder is not an inbound credential on the Host',
 });
 
 test('without a Codex runtime, subscription routes are refused locally and never reach the gateway', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-subscription');
   const runtime = await env.start();
   const claude = await post(runtime, { 'x-api-key': GATEWAY_KEY }, { model: 'chatgpt/gpt-5.4', max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] });
@@ -151,6 +157,7 @@ test('without a Codex runtime, subscription routes are refused locally and never
 });
 
 test('with the subscription bridge, the proxy hands ChatGPT routes to it and never to the gateway', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-bridge');
   const calls = [];
   const answer = (res, lane) => {
@@ -189,6 +196,7 @@ test('with the subscription bridge, the proxy hands ChatGPT routes to it and nev
 });
 
 test('closing the runtime forgets the route records and Pi tokens of its tasks; the next runtime has a new secret', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-close');
   const first = await env.start();
   env.tasks.set('sdk-1', 'task-1');
@@ -197,17 +205,68 @@ test('closing the runtime forgets the route records and Pi tokens of its tasks; 
   first.registerPiProxySession('task-2', 'pi-token-2');
   assert.equal(authenticatePiProxySession('task-2', 'pi-token-2'), true);
   const oldSecret = first.inboundSecret();
+  const oldGatewaySecret = first.gatewayInboundSecret();
   const oldEndpoint = first.endpoint();
   await first.close();
   assert.equal(readClaudeSessionRoute('task-1'), null);
   assert.equal(authenticatePiProxySession('task-2', 'pi-token-2'), false);
   await assert.rejects(post({ endpoint: () => oldEndpoint }, { 'x-api-key': oldSecret }));
+  await assert.rejects(post({ endpoint: () => oldEndpoint }, { 'x-api-key': oldGatewaySecret }));
   const second = await env.start();
   assert.notEqual(second.inboundSecret(), oldSecret);
+  assert.notEqual(second.gatewayInboundSecret(), oldGatewaySecret);
   assert.equal((await post(second, { 'x-api-key': oldSecret })).status, 401);
+  assert.equal((await post(second, { 'x-api-key': oldGatewaySecret })).status, 401);
+});
+
+// The Claude CLI of a gateway session holds the gateway secret, not the key. Each request goes out
+// with the key current when it arrives, routed as the desktop routes a CLI holding the key, so a key
+// change does not stop a running task. The secret stops working with its owner and its runtime.
+test('a gateway request carries the key current when it arrives, through a key change; an owner change refuses it', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const env = await fixture(t, 'claude-proxy-gateway-secret');
+  const runtime = await env.start();
+  const secret = runtime.gatewayInboundSecret();
+  assert.equal(Buffer.from(secret, 'base64url').length, 32);
+  assert.notEqual(secret, runtime.inboundSecret());
+  env.tasks.set('sdk-key', 'task-key');
+  env.tasks.set('sdk-secret', 'task-secret');
+  // Routed as the desktop routes a CLI holding the key: the same route record as the key itself.
+  assert.equal((await post(runtime, { 'x-api-key': GATEWAY_KEY, 'x-claude-code-session-id': 'sdk-key' })).status, 200);
+  assert.equal((await post(runtime, { 'x-api-key': secret, 'x-claude-code-session-id': 'sdk-secret' })).status, 200);
+  assert.equal(env.requests.at(-1).headers['x-api-key'], GATEWAY_KEY);
+  assert.equal(readClaudeSessionRoute('task-secret'), readClaudeSessionRoute('task-key'));
+  assert.equal(readClaudeSessionRoute('task-secret'), 'gateway');
+  // The key changes while the CLI keeps the same secret: its next request goes out with the new key.
+  env.setGatewayKey('fixture-gateway-key-2');
+  assert.equal((await post(runtime, { 'x-api-key': secret })).status, 200);
+  assert.equal(env.requests.at(-1).headers['x-api-key'], 'fixture-gateway-key-2');
+  assert.equal((await post(runtime, { 'x-api-key': GATEWAY_KEY })).status, 401, 'the replaced key is no longer admitted');
+  // Without a gateway key there is nothing to send: refused, as a request without credentials.
+  env.setGatewayKey(null);
+  assert.equal((await post(runtime, { 'x-api-key': secret })).status, 401);
+  env.setGatewayKey(GATEWAY_KEY);
+  assert.equal((await post(runtime, { 'x-api-key': secret })).status, 200);
+  // Pi is admitted by its session token, not by a key, so a key change does not make the Host refuse
+  // a running Pi task. Its gateway request keeps the key Pi holds, routed as on the desktop.
+  const releasePi = runtime.registerPiProxySession('task-pi-key', 'pi-key-token');
+  t.after(releasePi);
+  const pi = { 'x-cindy-pi-session-id': 'task-pi-key', 'x-cindy-pi-session-token': 'pi-key-token', 'x-api-key': GATEWAY_KEY };
+  assert.equal((await post(runtime, pi)).status, 200);
+  env.setGatewayKey('fixture-gateway-key-3');
+  assert.equal((await post(runtime, pi)).status, 200);
+  assert.equal(env.requests.at(-1).headers['x-api-key'], GATEWAY_KEY);
+  env.setGatewayKey(GATEWAY_KEY);
+  // Another owner: the secret of the previous owner's runtime is refused.
+  configureHostOwner({ userDataDir: env.profile, ownerId: 'claude-proxy-gateway-secret-next' });
+  const before = env.requests.length;
+  assert.equal((await post(runtime, { 'x-api-key': secret })).status, 401);
+  assert.equal(env.requests.length, before);
+  assert.ok(env.requests.every(request => !JSON.stringify(request.headers).includes(secret)), 'the secret never leaves the Host');
 });
 
 test('an Auto classifier request that fails reaches the agent as the error it is', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-classifier');
   const runtime = await env.start();
   env.tasks.set('sdk-auto', 'task-auto');
@@ -220,6 +279,7 @@ test('an Auto classifier request that fails reaches the agent as the error it is
 });
 
 test('a non-Claude model loses the Anthropic-only field its upstream rejects; a Claude model keeps it', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
   const env = await fixture(t, 'claude-proxy-strip');
   const runtime = await env.start();
   const body = model => ({ model, max_tokens: 8, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hi' }] });
