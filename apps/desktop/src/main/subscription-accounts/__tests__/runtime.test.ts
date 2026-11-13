@@ -114,6 +114,7 @@ import {
   refreshSubscriptionPoolCodexModels,
   readSubscriptionPoolCodexModels,
   resetDefaultSubscriptionCodexDiscovery,
+  readSubscriptionAccountBlocked,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
   readSubscriptionPoolModelAvailability,
@@ -153,7 +154,12 @@ beforeEach(() => {
   h.pools = { anthropic: { strategy: 'least', accounts: [account('default'), account('second')] } };
   h.bindings.clear();
   h.read.mockReset().mockResolvedValue({ authenticated: true, identity: 'account' });
-  h.rpc.mockReset();
+  // Existing quota/lease tests assume these fixture models are offered by both
+  // native profiles; membership-specific tests override this control response.
+  h.rpc.mockReset().mockImplementation(async (_directory: string, method: string) => method === 'model/list'
+    ? { data: ['gpt-6', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.3-codex-spark', 'gpt-model',
+      'special-model', 'model-a', 'model-b', 'shared-model', 'claude-model'].map(id => ({ id })), nextCursor: null }
+    : undefined);
   h.tokens.mockReset().mockImplementation(async (directory: string) => ({
     chatgptAccountId: directory, canDispatch: () => true,
   }));
@@ -181,6 +187,79 @@ beforeEach(() => {
 // independent model discovery. Existing dispatch tests never read the supplier
 // catalog after default logout. Minimal input: default revoked, second healthy.
 describe('pooled Codex model discovery', () => {
+  // PR #10327 review: aggregation alone allowed a new task or failover to pick
+  // a healthy account that never reported its model. The real admission path
+  // must use exact per-account membership (including the ChatGPT bridge alias).
+  it.each(['order', 'least', 'round'] as const)('uses account membership for %s selection and replacement', async strategy => {
+    h.pools.openai = { strategy, accounts: [account('default'), account('second')] };
+    h.rpc.mockImplementation(async (directory: string) => ({
+      data: [{ id: directory.endsWith('default') ? 'default-only' : 'gpt-second-only' }], nextCursor: null,
+    }));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    for (const model of ['gpt-second-only', 'chatgpt/gpt-second-only']) {
+      const lease = await acquireSubscriptionAccount('openai', model, []);
+      expect(lease?.accountId).toBe('second');
+      const apply = vi.fn(async () => {});
+      await expect(lease?.changeModel('default-only', apply)).rejects.toThrow('does not offer this model');
+      expect(apply).not.toHaveBeenCalled();
+      lease?.release();
+      h.bindings.set('task:replace', { providerId: 'openai', accountId: 'default' });
+      const replacement = await acquireSubscriptionAccount('openai', model, ['task:replace'], false, { resuming: false });
+      expect(replacement?.accountId).toBe('second');
+      replacement?.release();
+    }
+  });
+
+  // PR #10327 review: failed discovery was cached as valid empty membership.
+  // Unit: retry without an auth change, retain only this login's LKG, and let
+  // the public manual refresh force a fresh read rather than reusing failure.
+  it('recovers transient model reads in the same auth snapshot and supports manual retry', async () => {
+    vi.useFakeTimers();
+    try {
+      h.pools.openai = { strategy: 'order', accounts: [{ ...account('default'), paused: true }, account('second')] };
+      await refreshSubscriptionPool('openai');
+      h.rpc.mockRejectedValueOnce(new Error('temporary read failure'))
+        .mockResolvedValue({ data: [{ id: 'gpt-recovered' }], nextCursor: null });
+      await refreshSubscriptionPoolCodexModels();
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+      expect(readSubscriptionAccountBlocked('openai', 'second', 'gpt-recovered')).toBe(false);
+      await vi.advanceTimersByTimeAsync(3_000);
+      await refreshSubscriptionPoolCodexModels();
+      expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-recovered']);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      const before = h.read.mock.calls.length;
+      const nativeRefresh = vi.fn();
+      const agent = withSubscriptionAccounts({ kind: 'codex', refreshLocalModels: nativeRefresh } as unknown as BaseAgent);
+      let started!: () => void;
+      const entered = new Promise<void>(resolve => { started = resolve; });
+      let complete!: (value: unknown) => void;
+      h.rpc.mockImplementationOnce(() => { started(); return new Promise(resolve => { complete = resolve; }); });
+      const callsBeforeRefresh = h.rpc.mock.calls.length;
+      const manual = agent.refreshLocalModels();
+      const joined = agent.refreshLocalModels();
+      await entered;
+      complete({ data: [{ id: 'gpt-recovered' }], nextCursor: null });
+      expect(await Promise.all([manual, joined])).toEqual([true, true]);
+      expect(h.rpc).toHaveBeenCalledTimes(callsBeforeRefresh + 1);
+      h.rpc.mockRejectedValueOnce(new Error('another temporary failure'));
+      expect(await agent.refreshLocalModels()).toBe(false);
+      expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['gpt-recovered']);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+      expect(await agent.refreshLocalModels()).toBe(true);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      expect(h.read).toHaveBeenCalledTimes(before);
+      h.rpc.mockResolvedValue({ data: [], nextCursor: null });
+      expect(await agent.refreshLocalModels()).toBe(true);
+      expect(readSubscriptionPoolCodexModels()).toEqual([]);
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      const calls = h.rpc.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3_000);
+      await refreshSubscriptionPoolCodexModels();
+      expect(h.rpc).toHaveBeenCalledTimes(calls);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('publishes only healthy saved accounts, restores the default, and fails closed without a healthy account', async () => {
     h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
     let defaultHealthy = false;

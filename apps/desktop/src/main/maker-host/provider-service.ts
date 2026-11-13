@@ -251,7 +251,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),
-      ...(!provider.connected && deps.subscriptionReadUnavailable?.(provider.id)
+      ...(deps.subscriptionReadUnavailable?.(provider.id)
         ? { subscriptionReadUnavailable: true as const } : {}),
     })).map(
       (provider) =>

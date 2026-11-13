@@ -114,8 +114,8 @@ interface OwnerRuntime {
   invalidated: Map<string, { token: string; reason: string }>;
   /** Actual account failures outrank optimistic cached quota for new assignments. */
   quotaCooling: Map<string, Record<string, number>>;
-  codexModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[] }>;
-  codexModelFlights: Map<string, Promise<void>>;
+  codexModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number }>;
+  codexModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
   codexCatalog?: readonly CatalogModel[];
   defaultCodexAuthEpoch: number;
 }
@@ -589,21 +589,22 @@ export function resetDefaultSubscriptionCodexDiscovery(authenticated: boolean): 
 /** Owner-local model/list discovery; shares the account snapshot lifetime and in-flight work.
  * No inference or credential copying. Never publish a partial pagination result or a late login.
  */
-export async function refreshSubscriptionPoolCodexModels(): Promise<void> {
+export async function refreshSubscriptionPoolCodexModels(force = false): Promise<void> {
   const state = currentRuntime();
   const pool = readPool('openai');
   if (!pool || pool.disconnected) return;
-  await Promise.all(pool.accounts.filter(account => !account.paused && !readLegacyCodexProviderId(account.id)).map(async account => {
-    const id = account.id;
+  const refreshAccount = async (id: string): Promise<void> => {
     const loggingIn = () => [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id);
     const auth = state.cache.get(keyOf('openai', id))?.auth;
     if (!auth?.authenticated || loggingIn()) { state.codexModels.delete(id); return; }
-    if (state.codexModels.get(id)?.auth === auth) return;
+    const previous = state.codexModels.get(id);
+    if (!force && previous?.auth === auth && (previous.failedAt === undefined
+      || Date.now() - previous.failedAt < ACCOUNT_SNAPSHOT_FAILURE_TTL_MS)) return;
     const pending = state.codexModelFlights.get(id);
     if (pending) {
-      await pending;
-      if (state.codexModels.get(id)?.auth !== state.cache.get(keyOf('openai', id))?.auth)
-        await refreshSubscriptionPoolCodexModels();
+      await pending.promise;
+      if ((force && !pending.forced) || state.codexModels.get(id)?.auth !== state.cache.get(keyOf('openai', id))?.auth)
+        await refreshAccount(id);
       return;
     }
     const directory = directoryFor('openai', id);
@@ -651,19 +652,22 @@ export async function refreshSubscriptionPoolCodexModels(): Promise<void> {
           };
         }) });
       } catch (error) {
-        // Other healthy accounts still publish their own directory. Do not reuse
-        // a prior login's list when discovery for the current auth snapshot fails.
+        // Failure is retryable evidence, not an authoritative empty list. Only
+        // this same login may retain its last complete list while recovery runs.
         if (isCurrent()) {
-          state.codexModels.set(id, { auth, models: [] });
+          const sameLogin = previous?.auth === auth || (auth.identity && previous?.auth.identity === auth.identity);
+          state.codexModels.set(id, { auth, models: sameLogin ? previous?.models ?? [] : [], failedAt: Date.now() });
           log.warn('subscription account model read failed', {
             accountId: id, error: error instanceof Error ? error.name : typeof error,
           });
         }
       }
     })();
-    state.codexModelFlights.set(id, flight);
-    try { await flight; } finally { if (state.codexModelFlights.get(id) === flight) state.codexModelFlights.delete(id); }
-  }));
+    state.codexModelFlights.set(id, { promise: flight, forced: force });
+    try { await flight; } finally { if (state.codexModelFlights.get(id)?.promise === flight) state.codexModelFlights.delete(id); }
+  };
+  await Promise.all(pool.accounts.filter(account => !account.paused && !readLegacyCodexProviderId(account.id))
+    .map(account => refreshAccount(account.id)));
 }
 
 /** null preserves pre-pool discovery; [] is authoritative empty membership.
@@ -679,7 +683,8 @@ export function readSubscriptionPoolCodexModels(): readonly CatalogModel[] | nul
     if ([...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === account.id)) continue;
     const auth = state.cache.get(keyOf('openai', account.id))?.auth;
     const snapshot = state.codexModels.get(account.id);
-    if (!auth?.authenticated || !snapshot || snapshot.auth.identity !== auth.identity) continue;
+    if (!auth?.authenticated || !snapshot || !(snapshot.auth === auth
+      || (!!auth.identity && snapshot.auth.identity === auth.identity))) continue;
     for (const model of snapshot.models) if (!models.has(model.id)) models.set(model.id, model);
   }
   const next = [...models.values()];
@@ -693,7 +698,21 @@ export function hasUnavailableSubscriptionPoolAccount(provider: SubscriptionProv
   if (!pool || pool.disconnected) return false;
   const state = currentRuntime();
   return pool.accounts.some(account => !account.paused
-    && state.cache.get(keyOf(provider, account.id))?.unavailable === true);
+    && (state.cache.get(keyOf(provider, account.id))?.unavailable === true
+      || (provider === 'openai' && state.cache.get(keyOf(provider, account.id))?.auth.authenticated
+        && state.codexModels.get(account.id)?.failedAt !== undefined)));
+}
+
+/** Native account membership is independent of the supplier's union. Imported
+ * connections retain their original route/permission gate instead of this list.
+ */
+function codexAccountSupportsModel(state: OwnerRuntime, id: string, model: string | undefined): boolean {
+  if (!model || readLegacyCodexProviderId(id)) return true;
+  const info = state.cache.get(keyOf('openai', id));
+  const catalog = state.codexModels.get(id);
+  return !!info?.auth.authenticated && !!catalog
+    && (catalog.auth === info.auth || (!!info.auth.identity && catalog.auth.identity === info.auth.identity))
+    && catalog.models.some(entry => entry.id === model.replace(/^chatgpt\//, ''));
 }
 export async function disconnectSubscriptionPool(provider: SubscriptionProvider): Promise<void> {
   const pool = readPool(provider);
@@ -766,6 +785,9 @@ export function readSubscriptionAccountBlocked(
   const info = state.cache.get(keyOf(provider, accountId));
   if (!info || info.unavailable) return false;
   if (!info.auth.authenticated) return true;
+  if (provider === 'openai' && model && state.codexModels.has(accountId)
+    && state.codexModels.get(accountId)?.failedAt === undefined
+    && !codexAccountSupportsModel(state, accountId, model)) return true;
   // ChatGPT plan windows do not establish whether upstream can spend credits. Only a real
   // failure (checked above) can retire this account and its native context before sending.
   if (provider === 'openai') return false;
@@ -788,6 +810,7 @@ export async function readSubscriptionPoolModelAvailability(
   // Match new-account allocation without loading remote-access dependencies for
   // unrelated providers. Check current grants after the asynchronous quota read.
   const legacyAccess = provider === 'openai' ? await import('./legacyAccountAccess.js') : null;
+  if (provider === 'openai') await refreshSubscriptionPoolCodexModels();
   assertOwner(state);
   const latest = readPool(provider);
   if (!latest || latest.disconnected) return false;
@@ -798,6 +821,7 @@ export async function readSubscriptionPoolModelAvailability(
       || [...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id)
       || (account.id === 'default' && !defaultAccountBound(provider))) return false;
     const imported = provider === 'openai' ? readLegacyCodexProviderId(account.id) : undefined;
+    if (provider === 'openai' && !codexAccountSupportsModel(state, account.id, model)) return false;
     if (imported && !legacyAccess?.legacyCodexAccountCanRun(imported, model, {
       remote: options.remote === true, ownComputer: options.ownComputer === true, newRoute: true,
     })) return false;
@@ -1303,6 +1327,8 @@ export async function acquireSubscriptionAccount(
   if (bindings.some(entry => entry?.accountId !== binding?.accountId))
     throw new Error('The task subscription account changed');
   const snapshots = await Promise.all(pool.accounts.map((a) => snapshot(state, provider, a.id)));
+  const needsModelMembership = provider === 'openai' && !control && !!model && options.resuming !== true;
+  if (needsModelMembership) await refreshSubscriptionPoolCodexModels();
   // Remote access stores also wire share lifecycle dependencies. Load them only
   // for actual OpenAI selection, not while unrelated catalogs initialize.
   const legacyAccess = provider === 'openai' ? await import('./legacyAccountAccess.js') : null;
@@ -1350,6 +1376,7 @@ export async function acquireSubscriptionAccount(
       // credits cannot establish whether this request can run. Keep quota ranking and real cooling.
       usable: !loggingIn && info?.auth.authenticated === true && (control || ((provider === 'openai' || !usage.limited)
         && ((Boolean(binding) && !rebind) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
+        && (!needsModelMembership || codexAccountSupportsModel(state, a.id, model))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
           remote: options.remote === true, ownComputer: options.ownComputer === true,
           newRoute: (!binding || rebind) && !options.resuming,
@@ -1532,6 +1559,12 @@ export async function acquireSubscriptionAccount(
         : {}),
     },
     changeModel: async (nextModel, apply) => {
+      if (provider === 'openai' && !control && !readLegacyCodexProviderId(selected)) {
+        await snapshot(state, provider, selected);
+        await refreshSubscriptionPoolCodexModels();
+        if (!codexAccountSupportsModel(state, selected, nextModel))
+          throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account does not offer this model');
+      }
       assertCurrent(nextModel, true);
       const previous = currentModel;
       currentModel = nextModel;
