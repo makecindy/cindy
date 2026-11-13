@@ -169,6 +169,8 @@ export interface UnifiedModelPanelProps {
   fastMode?: boolean | 'ultrafast';
   /** live 选中行的深度实时值(同上)。 */
   selectedEffort?: Effort;
+  thinkingEnabled?: boolean;
+  onThinkingChangeLive?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   modelMemory?: ModelMemoryAccessors;
   preferenceStore?: ModelPickerPreferenceStore;
   /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode)。 */
@@ -413,6 +415,8 @@ export function UnifiedModelPanel({
   liveAgentKind,
   fastMode = false,
   selectedEffort,
+  thinkingEnabled = true,
+  onThinkingChangeLive,
   modelMemory,
   preferenceStore,
   agentFastModeCapable,
@@ -448,6 +452,7 @@ export function UnifiedModelPanel({
   remoteSources,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
+  const [, refreshThinkingMemory] = useState(0);
   const storedFavorites = useModelFavorites();
   const isSharedProvider = isProviderShareAgentDeviceId(deviceId);
   // 远程 Agent:收藏一律读写任务所在电脑那一份(§1.5),浏览其他电脑的目录时也不读那台自己的收藏;
@@ -1785,6 +1790,22 @@ export function UnifiedModelPanel({
                   applyEffort(target.anchor, target.entry, config, effort)
                 }
                 onFastChange={(enabled) => applyFast(target.anchor, target.entry, config, enabled)}
+                thinking={{
+                  enabled: isLiveRow(target.entry, config) ? thinkingEnabled
+                    : modelMemory?.getThinking?.(config.agent, target.entry.providerId,
+                        config.wireModelId ?? target.entry.modelId) ?? true,
+                  disabled: isLiveRow(target.entry, config) ? !onThinkingChangeLive : !modelMemory?.setThinking,
+                  onChange: enabled => {
+                    // Use the panel's write lock and the caller's existing owner-aware
+                    // route. A rejected live write must not prewrite model memory.
+                    void runExternal(async () => {
+                      if (isLiveRow(target.entry, config)) return onThinkingChangeLive?.(enabled);
+                      modelMemory?.setThinking?.(config.agent, target.entry.providerId,
+                        config.wireModelId ?? target.entry.modelId, enabled);
+                      refreshThinkingMemory(value => value + 1);
+                    });
+                  },
+                }}
                 onResetToRecommended={() => resetToRecommended(target.anchor, target.entry, config)}
                 onAddFavorite={() => addFavorite(target.anchor, config)}
                 onRemoveFavorite={() => removeFavorite(target.anchor, target.entry)}

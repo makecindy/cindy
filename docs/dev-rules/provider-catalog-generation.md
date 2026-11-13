@@ -105,6 +105,21 @@ BYOK 导入报价进入实际参考价发布链；用户价格覆盖仍最后应
 添加页只对明确默认开启项标推荐，完整目录成功后清除下架的预设候选；刷新可纠正
 经完整 OpenRouter 目录确认的发现结果错误前缀，保留手填 ID 与显式模型参数。
 
+### MiMo V2.6 思考开关
+
+MiMo 官方 Chat 路由的 `high` 是 Pi 开启思考时使用的内部级别，不是界面上的推理强度。
+`tools/pi/catalog-format.mjs` 在导入与在线刷新时，对确切的 V2.6 Pro / Flash / Pro UltraSpeed
+及 API、CN/AMS/SGP Token Plan 路由投影 `thinkingToggle: true`、空 `efforts` 和 `defaultEffort: null`，
+保留 `execution.pi.thinkingLevelMap`。连接投影只在精确路由上补该开关，保留用户覆盖且不写回存储；
+Pi 启动配置保留内部级别与 off 映射。新旧连接共用该路径。
+
+统一模型面板也须传递该能力：Pi 参数浮层显示思考开关，当前模型复用调用方的思考设置入口，
+未选模型只写其所属来源的模型记忆；失败不得提前改写当前值或模型记忆。
+
+共享兼容层的 Chat 开关映射独立于固定上游快照，不套用到原生 Responses / Anthropic。
+回归分别经过实际连接投影、目录转换、Pi 启动配置及真实 Pi 进程的本地 HTTP 请求，
+验证开启→关闭→开启；不代表 Server 目录已修改、生产已部署或真实服务请求已验收。
+
 ### OpenCode mixed-protocol regression
 
 Zen/Go can return a model ID list without capabilities. Pi import enumerates all known APIs at

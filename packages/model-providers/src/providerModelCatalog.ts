@@ -20,6 +20,8 @@ export interface ProviderModelRecord extends ModelMetadata {
   /** Connection-scoped declaration; absent does not authorize a Fast request. */
   supportsFastMode?: boolean;
   reasoning?: boolean;
+  /** UI on/off capability; native Pi reasoning levels stay in execution.pi. */
+  thinkingToggle?: boolean;
   efforts?: NonNullable<ModelMetadata["efforts"]>;
   defaultEffort?: ModelMetadata["defaultEffort"];
   cost?: ModelCost;

@@ -39,6 +39,22 @@ function policySignature(profile: ProviderCompatibilityProfile): string {
 
 /** Upstream provider declarations are compatibility data only: they never add accounts or models. */
 export function resolveProviderCompatibilityProfile(route: CompatibilityRoute): ProviderCompatibilityProfile | null {
+  // Cindy's reviewed supplement is separate from the reproducible upstream
+  // snapshot. MiMo V2.6 Chat supports a switch, not reasoning_effort tiers.
+  // Native Responses and Anthropic have their own contracts.
+  const mimoModels = ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.6-pro-ultraspeed'];
+  const mimoBase = route.protocol === 'openai-chat' && mimoModels.includes(route.model)
+    ? ['api', 'token-plan-cn', 'token-plan-ams', 'token-plan-sgp']
+      .map(host => `https://${host}.xiaomimimo.com/v1`)
+      .find(base => servesEndpoint(base, route.upstreamBase)) : undefined;
+  if (mimoBase) return {
+    id: 'cindy-mimo-v2.6-chat', baseUrl: mimoBase, adapter: 'openai-chat',
+    thinkingToggleModels: mimoModels,
+    modelReasoningEffortMap: Object.fromEntries(mimoModels.map(model => [model, {
+      none: 'disabled', off: 'disabled', minimal: 'enabled', low: 'enabled',
+      medium: 'enabled', high: 'enabled', xhigh: 'enabled', max: 'enabled',
+    }])),
+  };
   // OpenCodex's xAI OAuth transport rewrites the public registry base to this exact
   // subscription endpoint. Reuse that transport predicate, not a model-name alias.
   if (isXaiSchemaTarget({ baseUrl: route.upstreamBase })) {

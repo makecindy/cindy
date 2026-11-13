@@ -181,7 +181,8 @@ export function piNativeCatalogModelDefaults(
     (candidate) => candidate.id === modelId,
   );
   if (!row) return undefined;
-  const efforts = piSupportedEfforts(row);
+  const declared = PROVIDER_MODEL_CATALOG.providers[piProviderId]?.find(model => model.id === modelId);
+  const efforts = declared?.thinkingToggle ? [] : piSupportedEfforts(row);
   return {
     contextWindow: row.contextWindow,
     ...(Number.isFinite(row.maxTokens) && row.maxTokens! > 0

@@ -21,6 +21,79 @@ const binary = process.env.CINDY_TEST_PI_BINARY ?? path.resolve('../../apps/pi-b
   `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'pi.exe' : 'pi');
 const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
 
+// #10434, E2E: the native map alone cannot prove that a UI switch with no
+// intensity default survives startup, off and on again in the actual Pi SDK.
+describe.skipIf(!existsSync(binary))('MiMo thinking switch through real Pi', () => {
+  it('sends enabled, disabled and enabled without reasoning_effort', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cindy-mimo-switch-'));
+    const workingDir = path.join(root, 'work');
+    mkdirSync(workingDir);
+    const requests: Array<Record<string, unknown>> = [];
+    const server = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      requests.push(body);
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const choice of [
+        { index: 0, delta: { role: 'assistant', content: 'fixture-ok' }, finish_reason: null },
+        { index: 0, delta: {}, finish_reason: 'stop' },
+      ]) res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1,
+        model: body.model, choices: [choice] })}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const endpoint = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+      const config = { id: 'mimo-fixture', name: 'MiMo', runtimes: { pi: {
+        baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat' as const,
+        piCatalogProviderId: 'xiaomi-token-plan-cn', models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }],
+      } } };
+      const projected = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      expect(projected.models.pi![0]).toMatchObject({ thinkingToggle: true, efforts: [], defaultEffort: null });
+      const native = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined,
+        { ...BUNDLED_CATALOG, providers: [projected] });
+      const provider = native.providers[0];
+      // Redirect only the destination. Preserve the production model, adapter,
+      // capabilities and native level map; no real account or paid request.
+      provider.baseUrl = `${endpoint}/v1`;
+      const deps: AgentDeps = {
+        auth: { getState: async () => ({ authenticated: true, identity: 'fixture', authSource: 'api-key' as const }),
+          triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+        binaryPath: binary, logger, runtimeConfig: { endpoint },
+        resolvePiAgentHome: () => path.join(root, 'agent'), resolvePiGlobalContextHome: () => root,
+        resolvePiNativeProviders: async () => native,
+      };
+      handle = await new PiAgent(deps).startSession({ sessionId: 'mimo-switch', workingDir,
+        providerId: provider.id, model: 'mimo-v2.6-pro', thinkingEnabled: true });
+      for (const enabled of [undefined, false, true]) {
+        if (enabled !== undefined) await handle.setThinkingEnabled!(enabled);
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'Hello' });
+        await collected;
+        expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'completed' });
+      }
+      expect(requests.map(body => body.thinking)).toEqual([
+        { type: 'enabled' }, { type: 'disabled' }, { type: 'enabled' },
+      ]);
+      for (const body of requests) expect(body).not.toHaveProperty('reasoning_effort');
+    } finally {
+      try { await handle?.close(); } finally {
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  }, 30_000);
+});
+
 describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () => {
   it.each([
     { status: 200, staleRoute: false },
