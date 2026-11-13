@@ -213,6 +213,12 @@ describe('MemoryStorage · 分片地址解析', () => {
     expect((await storage.read('project_dup.md')).body).toBe('v1');
   });
 
+  it('显式文件名可在空目录重建存量双前缀分片 (云端恢复)', async () => {
+    const restored = await storage.write(opts(legacy, 'restored'));
+    expect(restored.filename).toBe(legacy);
+    expect((await storage.read(legacy)).body).toBe('restored');
+  });
+
   it('重复 .md 后缀会被拒绝, 不写出 parseFilename 认不出的分片', async () => {
     await expect(storage.write(opts('note.md.md'))).rejects.toThrow(/invalid-slug/);
     expect(await missing('project_note.md.md')).toBe(true);

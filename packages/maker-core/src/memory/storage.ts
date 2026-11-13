@@ -372,14 +372,13 @@ export class MemoryStorage {
     }
     // 后缀大小写统一成 .md: parseFilename 只认小写, 否则 .MD 会绕过内嵌 type 检查
     const supplied = rawName.trim().replace(/\.md$/i, '.md');
-    if (supplied.endsWith('.md')) {
-      const parsed = parseFilename(supplied);
-      if (parsed && parsed.type !== type) {
-        throw new MemoryError(
-          'invalid-type',
-          `文件名 "${supplied}" 属于 type "${parsed.type}", 与传入的 type "${type}" 不符`,
-        );
-      }
+    // 完整文件名 = 显式目标: 云端恢复存量分片时必须能原样重建 (含旧的双前缀名)
+    const explicit = supplied.endsWith('.md') ? parseFilename(supplied) : null;
+    if (explicit && explicit.type !== type) {
+      throw new MemoryError(
+        'invalid-type',
+        `文件名 "${supplied}" 属于 type "${explicit.type}", 与传入的 type "${type}" 不符`,
+      );
     }
     const name = supplied.replace(/\.md$/, '');
     // 只剥一次 .md 后的名字不能带第二个后缀 (note.md.md), 长度按去掉 type 前缀的 slug 算
@@ -392,13 +391,8 @@ export class MemoryStorage {
     const matches = (await fs.readdir(this.dir))
       .filter((filename) => parseFilename(filename)?.type === type)
       .filter((filename) => addressKey(type, filename) === key);
+    if (explicit && matches.includes(supplied)) return supplied;
     if (matches.length > 1) {
-      // 完整文件名 (含 .md) 按字面命中, 否则同 key 无解
-      if (/\.md$/i.test(supplied)) {
-        const exact = `${name}.md`;
-        const hit = matches.find((filename) => filename === exact);
-        if (hit) return hit;
-      }
       throw new MemoryError(
         'ambiguous-address',
         `多个分片都指向 "${key}": ${matches.join(', ')}; ` +
@@ -406,6 +400,7 @@ export class MemoryStorage {
       );
     }
     if (matches.length === 1) return matches[0];
+    if (explicit) return supplied;
     return buildFilename(type, name);
   }
 

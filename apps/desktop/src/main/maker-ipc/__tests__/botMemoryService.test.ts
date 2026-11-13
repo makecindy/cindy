@@ -335,6 +335,12 @@ describe('cloud companion restore', () => {
     expect(requestRefresh).toHaveBeenCalledWith('session-1');
   });
 
+  it('restores a legacy double-prefixed shard on an empty destination', async () => {
+    const { service } = setup();
+    await service.restoreRaw('bot-1', 'project_project-legacy-note.md', '---\ntitle: Legacy\n---\nold body');
+    expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
+  });
+
   it('rejects filenames outside the memory naming rule', async () => {
     const { service } = setup();
     await expect(service.restoreRaw('bot-1', '../evil.md', 'x')).rejects.toThrow();
