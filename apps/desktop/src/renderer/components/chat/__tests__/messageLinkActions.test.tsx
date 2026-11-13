@@ -27,6 +27,7 @@ vi.mock('../useDeleteMessage', () => ({ useDeleteMessage: () => async () => {} }
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { UserMessageImageLink } from '../UserMessageImageLink';
 import { UserMessage } from '../UserMessage';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { MemoryRouter } from 'react-router-dom';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { _resetLinkOpenPreferenceForTests } from '@/hooks/useLinkOpenPreference';
@@ -71,7 +72,7 @@ describe('message link entry points', () => {
     const automationOrigin = toMessageAutomationOrigin({ kind: 'orca', senderLabel: 'A', senderSessionId: 'worker-1',
       ...(count ? { autoBridge: true, autoBridgeBatchCount: count } : {}) });
     render(<MemoryRouter><UserMessage content={JSON.stringify({ orcaSource: 'worker', content: body })}
-      workingDir="/workspace" automationOrigin={automationOrigin} /></MemoryRouter>);
+      workingDir="/workspace" automationOrigin={automationOrigin} pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} /></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: count
       ? `chat.userMessage.orcaFromWorkerBatch:${count}` : 'chat.userMessage.orcaFromWorkerNamed:A' }));
     expect(await screen.findByText((_content, element) => element?.tagName === 'PRE' && element.textContent === body)).toBeTruthy();
