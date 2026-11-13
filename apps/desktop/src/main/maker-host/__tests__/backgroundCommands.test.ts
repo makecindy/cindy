@@ -11,7 +11,8 @@
  * - 现有覆盖缺口:新模块,无既有覆盖。
  * - 最小失败输入:退出码非 0 且带输出的短命令;启动参数缺失;不存在 cwd。
  * - tier:unit(真实短命子进程 + 临时目录,无网络/DB)。
- * - 最小失败输入还包括：单条输出超过 5MB 上限的命令（验文件截断 + 内存尾部）；
+ * - 最小失败输入还包括：持续输出超过 5MB 上限的命令（验体量巡检杀树 + 文件有界）、
+ *   输出超过 64KB 尾窗的命令（验报告尾部取自文件末尾，长输出的结论不丢）；
  *   日志目录不可建（验拒绝启动不静默无日志）；命令退出后名额立即让出（2026-11-13
  *   事故：win32 名额占到硬顶，秒死命令堵满全局 8 槽），治理计时器不随名额失效。
  * - 实测耗时：本机 < 8s（6 用例，含 5MB 输出用例与名额让出等待）。
@@ -209,33 +210,48 @@ it('桌面键鼠模拟命令直接拒绝且不 spawn（与 Bash PreToolUse 守�
   expect(capture).not.toHaveBeenCalled();
 });
 
-it('超上限的输出:文件截断到上限,完成报告仍带最后的输出(内存尾部)', async () => {
+it('超上限的输出:体量巡检杀树,文件有界,报告标记超限(fd 直写后无转写截断)', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
-  const overshoot = BACKGROUND_COMMAND_LOG_CAP_BYTES + 1024;
   const result = service.start({
     sessionId: 'sess-3',
-    // 分两段写:先写满超限的垃圾,再写结论行 —— 验证内存尾部保留的是最后的输出。
-    command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(${overshoot})); console.log('final-line-after-cap')"`,
+    // 每 20ms 写 256KB:一个 500ms 巡检周期内越限,杀树后文件有界。
+    command: `${JSON.stringify(process.execPath)} -e "setInterval(() => process.stdout.write('x'.repeat(256 * 1024)), 20)"`,
     cwd: logDir,
   });
   expect(result.ok).toBe(true);
 
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 30_000 });
   const report = firstReport(capture);
-  expect(report.text).toContain('final-line-after-cap');
+  // 杀树不是成功退出:报告必须说明超限被终止。
+  expect(report.text).toContain('输出超过');
+  expect(report.text).toContain('终止');
+  expect(report.text).not.toContain('成功（exit 0）');
   const logPath = (result as { ok: true; logPath: string }).logPath;
   const { stat: statFile } = await import('node:fs/promises');
   const info = await statFile(logPath);
-  // 头部保留 + 截断标记行,不能超过上限太多。
-  expect(info.size).toBeLessThanOrEqual(BACKGROUND_COMMAND_LOG_CAP_BYTES + 256);
-  const head = await readFile(logPath, 'utf8');
-  // 标记在原始输出之后、文件末尾,不插进正文。
-  const markerIdx = head.indexOf('[log truncated at');
-  expect(markerIdx).toBeGreaterThan(0);
-  expect(/^x*\s*$/.test(head.slice(0, markerIdx))).toBe(true);
-  expect(head.trimEnd().endsWith('discarded]')).toBe(true);
-  expect(head).toContain('[log truncated at');
+  // 杀树时越限写仍在途:允许一个巡检周期的越冲,不能写穿磁盘。
+  expect(info.size).toBeGreaterThan(BACKGROUND_COMMAND_LOG_CAP_BYTES);
+  expect(info.size).toBeLessThan(BACKGROUND_COMMAND_LOG_CAP_BYTES * 3);
+});
+
+it('长输出命令:报告尾部取自文件末尾,结论行不丢(fd 直写后无内存尾部)', async () => {
+  const capture = vi.fn();
+  const service = buildService(capture);
+  const result = service.start({
+    sessionId: 'sess-tail',
+    // 10000 行 ≈ 110KB,超过 64KB 尾窗:验证尾部读的是文件末尾而非开头。
+    command: `${JSON.stringify(process.execPath)} -e "for(let i=1;i<=10000;i++)console.log('line-'+String(i).padStart(5,'0'));console.log('final-tail-line')"`,
+    cwd: logDir,
+  });
+  expect(result.ok).toBe(true);
+
+  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 30_000 });
+  const report = firstReport(capture);
+  expect(report.text).toContain('final-tail-line');
+  expect(report.text).toContain('line-10000');
+  // 头部行已被尾窗裁掉:报告里不该再出现第一行。
+  expect(report.text).not.toContain('line-00001');
 });
 
 it('日志目录建不出来:拒绝启动且不回注', async () => {

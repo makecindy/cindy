@@ -20,7 +20,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createWriteStream, mkdirSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
 import { readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -45,8 +45,8 @@ const REPORT_RETRY_DELAY_MS = 60_000;
 const REPORT_RETRY_MAX_DELAY_MS = 300_000;
 /** 日志保留天数;过期文件在服务使用时清理(报告可能已消费,磁盘不应无限涨)。 */
 const LOG_RETENTION_DAYS = 14;
-/** exit 后等 pipe 收尾的宽限;shell 后代可能长期持有 pipe,不能等它们 EOF。 */
-const PIPE_GRACE_MS = 1000;
+/** exit 后读日志文件尾部的短延迟:容让杀毒/索引器对日志文件的瞬时锁。 */
+const SETTLE_READ_DELAY_MS = 200;
 
 export interface BackgroundCommandStartInput {
   sessionId: string;
@@ -90,6 +90,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     timeoutTimer: NodeJS.Timeout;
     groupPoll: NodeJS.Timeout | null;
     killTree: () => void;
+    capPoll: NodeJS.Timeout;
     active: boolean;
   }>();
   const activeCommandCount = (): number => {
@@ -122,7 +123,6 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     command: string;
     logPath: string;
     logTruncated: boolean;
-    logWriteFailed: boolean;
     durationMs: number;
     exit: {
       code: number | null;
@@ -146,10 +146,8 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
             : `被信号终止（${input.exit.signal ?? 'unknown'}）`;
     const head = input.command.length > 160 ? `${input.command.slice(0, 160)}…` : input.command;
     const logLine = input.logTruncated
-      ? `日志文件（前 ${BACKGROUND_COMMAND_LOG_CAP_BYTES} 字节，后续输出已丢弃）：${input.logPath}`
-      : input.logWriteFailed
-        ? `日志文件（写入中断，可能不完整，例如磁盘已满）：${input.logPath}`
-        : `完整日志：${input.logPath}`;
+      ? `输出超过 ${BACKGROUND_COMMAND_LOG_CAP_BYTES} 字节上限，进程树已被终止。日志文件（终止前的记录）：${input.logPath}`
+      : `完整日志：${input.logPath}`;
     const text =
       `〔后台命令完成〕这条消息由宿主在后台命令结束时自动发来，不是主人输入。\n` +
       `命令：${head}\n状态：${status}\n耗时：${duration}\n` +
@@ -165,7 +163,6 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     command: string;
     logPath: string;
     logTruncated: boolean;
-    logWriteFailed: boolean;
     durationMs: number;
     exit: {
       code: number | null;
@@ -268,24 +265,12 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       const startedAt = Date.now();
       pruneOldLogs();
 
-      // 日志:stdio 走 pipe 由宿主转写,文件保头部(5MB 上限),内存保尾部(64KB)供
-      // 完成报告用 —— 长命令的结论都在最后,文件截断不能让报告丢结论。
-      // 同步建目录+流:attach 在下一行就要接住首批 data,不能让初始化输给第一个 chunk。
-      let writer: ReturnType<typeof createWriteStream> | null = null;
-      let fileBytes = 0;
-      let markerWritten = false;
-      let tail = Buffer.alloc(0);
-      // 写入中途失败(磁盘满等)不算启动失败,但报告必须说明日志不完整;
-      // write-after-end(后代在命令退出后续写)不算失败。
-      let logWriteFailed = false;
-      let writerEnded = false;
+      // 日志:子进程直接持有 append fd 写文件,宿主侧没有管道读端 —— 应用退出/
+      // 重启不再把在跑命令的输出写断(POSIX SIGPIPE/win32 EPIPE)。体量上限改由
+      // 体量巡检兜底(capPoll):超限杀树,文件有界。尾部报告在结算时读文件末尾 ——
+      // 长命令的结论都在最后,不能丢。
       try {
         mkdirSync(logDir, { recursive: true });
-        writer = createWriteStream(logPath, { flags: 'a' });
-        writer.on('error', () => {
-          if (!writerEnded) logWriteFailed = true;
-          writer = null;
-        });
       } catch {
         // 日志建不出来就兑现不了「完成时有日志可核对」:拒绝启动,不静默无日志。
         return {
@@ -294,38 +279,23 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           message: `cannot create background command log (dir not writable?): ${logDir}`,
         };
       }
-      const attach = (stream: NodeJS.ReadableStream | null): void => {
-        stream?.on('data', (chunk: Buffer) => {
-          tail = Buffer.concat([tail, chunk]);
-          if (tail.length > TAIL_CAP_BYTES) tail = tail.subarray(tail.length - TAIL_CAP_BYTES);
-          if (!writer || writer.destroyed) return;
-          if (fileBytes >= BACKGROUND_COMMAND_LOG_CAP_BYTES) {
-            // 恰好按 chunk 边界对齐到上限时走这里;标记不能只写在跨越分支。
-            if (!markerWritten) {
-              markerWritten = true;
-              writer.write(
-                `\n[log truncated at ${BACKGROUND_COMMAND_LOG_CAP_BYTES} bytes; later output discarded]\n`,
-              );
-            }
-            return;
-          }
-          // 先写输出、后写标记:文件保持「原始头部 + 截断标记」顺序,标记不插进正文。
-          if (fileBytes + chunk.length > BACKGROUND_COMMAND_LOG_CAP_BYTES) {
-            const piece = chunk.subarray(0, BACKGROUND_COMMAND_LOG_CAP_BYTES - fileBytes);
-            fileBytes = BACKGROUND_COMMAND_LOG_CAP_BYTES;
-            writer.write(piece);
-            if (!markerWritten) {
-              markerWritten = true;
-              writer.write(
-                `\n[log truncated at ${BACKGROUND_COMMAND_LOG_CAP_BYTES} bytes; later output discarded]\n`,
-              );
-            }
-            return;
-          }
-          fileBytes += chunk.length;
-          writer.write(chunk);
-        });
-        stream?.on('error', () => {});
+      let logFd: number;
+      try {
+        logFd = openSync(logPath, 'a');
+      } catch {
+        return {
+          ok: false,
+          errorCode: 'LOG_FAILED',
+          message: `cannot open background command log (dir not writable?): ${logPath}`,
+        };
+      }
+      const closeHostFd = (): void => {
+        // 宿主自己的 fd 副本即关即了;子进程继承的副本不受影响。重复关闭按 EBADF 吞掉。
+        try {
+          closeSync(logFd);
+        } catch {
+          // already closed
+        }
       };
 
       let child: ChildProcess;
@@ -334,7 +304,8 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           shell: true,
           cwd: input.cwd,
           windowsHide: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
+          // stdio 直接接日志文件 fd:子进程及其后代都写同一文件,宿主重启无感。
+          stdio: ['ignore', logFd, logFd],
           detached: process.platform !== 'win32',
           env: {
             ...process.env,
@@ -345,19 +316,39 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           },
         });
       } catch (error) {
+        closeHostFd();
         return {
           ok: false,
           errorCode: 'SPAWN_FAILED',
           message: error instanceof Error ? error.message : String(error),
         };
       }
-      attach(child.stdout);
-      attach(child.stderr);
+      // spawn 成功后宿主立即关掉自己的 fd 副本;子进程的继承副本不受影响。
+      child.once('spawn', closeHostFd);
 
       // spawn error 与 close 在个别路径可能都到达;同一次 run 只回注一份报告,
       // 且时长在退出时刻定格(不含排队/重试等待),报告各次重试内容一致。
       const durationMs = () => Date.now() - startedAt;
       let reportSent = false;
+      // 报告尾部从文件末尾读:子进程直写,宿主没有内存副本。读不到(文件被外部
+      // 清掉等)按空尾部处理,报告主体不受影响。
+      const readLogTail = (): string => {
+        try {
+          const size = statSync(logPath).size;
+          const start = Math.max(0, size - TAIL_CAP_BYTES);
+          const length = Math.min(size, TAIL_CAP_BYTES);
+          const buffer = Buffer.alloc(length);
+          const handle = openSync(logPath, 'r');
+          try {
+            readSync(handle, buffer, 0, length, start);
+          } finally {
+            closeSync(handle);
+          }
+          return buffer.toString('utf8');
+        } catch {
+          return '';
+        }
+      };
       const reportOnce = (exit: {
         code: number | null;
         signal: NodeJS.Signals | null;
@@ -366,18 +357,15 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (reportSent) return;
         reportSent = true;
-        writerEnded = true;
-        writer?.end();
         deliverReport({
           sessionId: input.sessionId,
           runId,
           command,
           logPath,
-          logTruncated: markerWritten,
-          logWriteFailed,
+          logTruncated: outputCapped,
           durationMs: durationMs(),
           exit,
-          tail: tail.length ? tail.toString('utf8') : '',
+          tail: readLogTail(),
         });
       };
 
@@ -394,6 +382,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         running.delete(runId);
         clearTimeout(timeoutTimer);
         if (groupPoll) clearInterval(groupPoll);
+        clearInterval(capPoll);
       };
       if (process.platform !== 'win32' && child.pid) {
         // detached(setsid)后整棵树同组，组 id = shell pid；组空即树死透。
@@ -432,9 +421,28 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }, timeoutMs);
       timeoutTimer.unref?.();
 
-      // 结算以 exit(进程退出)为准:stdio 转 pipe 后,'close' 要等两条 pipe EOF,
-      // shell 留下的后代(如 `pnpm dev &`)持有 pipe 会让报告迟到甚至拖到超时。
-      // exit 后给 pipe 一个短宽限收尾部缓冲。注意：结算只管报告，名额在 exit 让出
+      // 体量巡检(替代管道时代的转写截断):输出是子进程直写文件,宿主拦不住写入,
+      // 只能看体量——超上限即按异常输出杀树,`yes` 之类的裸输出写不穿磁盘。巡检
+      // 持续到治理结束:shell 已退而后代仍持 fd 续写时,POSIX 按组清得掉;Windows
+      // 按既有约定查杀不到后代,只记日志留痕(与硬顶治理同一口径)。
+      let outputCapped = false;
+      const capPoll = setInterval(() => {
+        if (outputCapped) return;
+        try {
+          if (statSync(logPath).size <= BACKGROUND_COMMAND_LOG_CAP_BYTES) return;
+        } catch {
+          return; // stat 失败的 tick 跳过(文件被外部移动等)
+        }
+        outputCapped = true;
+        deps.logger.warn?.(
+          '[background-command] output log exceeded cap; killing process tree',
+          { runId, logPath },
+        );
+        killProcessTree(child.pid, child, () => {});
+      }, 500);
+      capPoll.unref?.();
+
+      // 结算以 exit(进程退出)为准。注意：结算只管报告，名额在 exit 让出
       // （releaseSlot），治理由 timeoutTimer/组探测继续，不随后代一起结束。
       let settled = false;
       const settle = (exit: {
@@ -445,31 +453,17 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (settled) return;
         settled = true;
-        let pending = (child.stdout ? 1 : 0) + (child.stderr ? 1 : 0);
-        if (pending === 0) {
-          reportOnce(exit);
-          return;
-        }
-        const grace = setTimeout(() => reportOnce(exit), PIPE_GRACE_MS);
+        // stdio 直写文件后没有 pipe EOF 要等;短延迟只为读尾部时避开杀毒/索引器
+        // 的瞬时文件锁。
+        const grace = setTimeout(() => reportOnce(exit), SETTLE_READ_DELAY_MS);
         grace.unref?.();
-        const onEnd = () => {
-          pending -= 1;
-          if (pending === 0) {
-            clearTimeout(grace);
-            reportOnce(exit);
-          }
-        };
-        child.stdout?.on('end', onEnd);
-        child.stderr?.on('end', onEnd);
-        // end 只在两路都 EOF 时触发;任一路已提前结束时补一次计数,防 pending 卡住。
-        if (child.stdout?.readableEnded) onEnd();
-        if (child.stderr?.readableEnded) onEnd();
       };
 
       running.set(runId, {
         startedAt,
         timeoutTimer,
         groupPoll,
+        capPoll,
         killTree: () => killProcessTree(child.pid, child, () => {}),
         active: true,
       });
@@ -482,6 +476,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         deps.logger.warn?.('[background-command] spawn error', { runId, error: error.message });
         // spawn 失败没有进程树，直接整体移除；kill 失败等后续 error 不影响幂等性。
         endGovernance();
+        closeHostFd();
         settle({ code: null, signal: null, timedOut: false, spawnError: error.message });
       });
       return { ok: true, runId, logPath, pid: child.pid };
@@ -503,6 +498,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         // POSIX 的进程组探测定时器一并清掉：记录已删后 releaseSlot 查不到条目，
         // 不清的话每 30s 的轮询会带着闭包活到进程退出。
         if (entry.groupPoll) clearInterval(entry.groupPoll);
+        clearInterval(entry.capPoll);
         try {
           entry.killTree();
         } catch {
