@@ -104,6 +104,7 @@ import {
 } from './ghostBackgroundRefresh.js';
 import {
   commitPendingNamespaceMigration,
+  namespaceCommitReceiptSnapshot,
   reconcilePendingNamespaceMigrations,
   type NamespaceCommitReceiptSnapshot,
 } from './pluginNamespaceMigration.js';
@@ -335,6 +336,8 @@ export interface GhostManagerOptions {
    * 生产接线明确放行。
    */
   isTrustedBundledId?: (id: string) => boolean;
+  /** Historical seed ownership only restricts namespace inference; it never grants approval. */
+  wasBuiltinSeeded?: (id: string) => boolean;
   /**
    * tokenBroker 装入闸。缺省拒绝（测试夹具须显式注入）。生产接线问
    * first-party 判据：名称前缀不构成资格。
@@ -1301,6 +1304,23 @@ export class GhostManager {
     basis: NamespaceMigrationBasis,
     expectedReceipt?: NamespaceCommitReceiptSnapshot,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (namespace === null && (basis === 'builtin' || (basis === 'manual-after-sync' &&
+        (this.options.isTrustedBundledId?.(ghostId) || this.options.wasBuiltinSeeded?.(ghostId))))) {
+      const approval = this.readApproval(ghostId);
+      if (approval.state === 'approved' && !hasDeliveryNamespace(approval.receipt)) {
+        // A roster/tombstone id is not root provenance. Pre-namespace bundled
+        // receipts use the approved directory hash, while market/manual packages
+        // use the archive hash. Verify the old seed's actual approved bytes so a
+        // newer bundle can still migrate it without adopting a same-name market
+        // install when its ledger is absent (also after seed withdrawal).
+        if (!isCindyOfficialTrustInfo(approval.receipt.trust) ||
+            approval.receipt.installOrigin === 'agent-forge' || !approval.receipt.packageSha256 ||
+            await hashApprovedDirectory(this.contentPath(ghostId)) !== approval.receipt.packageSha256) {
+          return { ok: false, reason: 'awaiting-builtin-provenance' };
+        }
+        expectedReceipt ??= namespaceCommitReceiptSnapshot(approval);
+      }
+    }
     return commitPendingNamespaceMigration({
       ownerContextKey: () => this.currentOwnerContextKey(),
       ensureCensus: () => this.ensureNamespaceMigrationCensus(),

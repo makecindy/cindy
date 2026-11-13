@@ -10,6 +10,7 @@ import {
   PROVISIONING_STATE_FILE,
   provisionBuiltinGhosts,
   readBuiltinTombstones,
+  readBuiltinSeededIds,
   recordBuiltinTombstone,
   renameBuiltinTombstone,
 } from '../builtinGhostProvisioner.js';
@@ -17,6 +18,7 @@ import { isGhostInstallLockHeld } from '../ghostInstallLock.js';
 import { builtinSeedStoreInstall, isRetainedSeedMarketTarget } from '../builtinSeedStoreInstall.js';
 import { GhostManager, CINDY_OFFICIAL_GHOST_TRUST } from '../GhostManager.js';
 import { createGhostInstallReceipt, GhostInstallReceiptStore } from '../ghostInstallReceipt.js';
+import { classifyNamespaceMigration, readNamespaceMigrationMarketRecord } from '../pluginNamespaceMigration.js';
 import { PluginMarketLedger } from '../../plugin-market/ledger.js';
 import { validateGhostManifest, ghostInstallApprovalToken } from '../../../shared/ghost.js';
 import { writeTestCindyPackage } from './cindyPackageFixture.js';
@@ -74,8 +76,19 @@ describe('builtin provisioning physical market identity', () => {
       packageSha256: receipt.packageSha256!, active: true };
     const registryStore = createPluginInstanceRegistryStore(pluginInstanceRegistryPath(stateRoot));
     registryStore.write(registry);
-    const manager = new GhostManager({ getRootDir: () => repoRoot,
-      isTrustedBundledId: id => id === 'builtin-test',
+    const manager: GhostManager = new GhostManager({ getRootDir: () => repoRoot,
+      isTrustedBundledId: id => id === 'builtin-test' && fs.existsSync(seedDir),
+      wasBuiltinSeeded: id => readBuiltinSeededIds(repoRoot).includes(id),
+      classifyPendingNamespace: (ghostId, marketSyncCompleted = false) => classifyNamespaceMigration({
+        ghostId, marketSyncCompleted, builtin: ghostId === 'builtin-test' && fs.existsSync(seedDir),
+        installOrigin: manager.readApprovedInstallOriginStrict(ghostId),
+        marketRecord: readNamespaceMigrationMarketRecord(() => {
+          const found = ledger.lookupInstallationsForNamespaceMigration(ghostId);
+          if (found.kind === 'invalid') throw new Error('invalid ledger');
+          return found.kind === 'found' ? found.records : [];
+        }),
+        currentOrganization: { organizationId: 'org-1', orgSlug: 'xd', pluginPrefix: 'xd' },
+      }),
       isTrustedBundledSource: (id, source) => id === 'builtin-test' && path.resolve(source) === seedDir,
       readUnconfirmedConfirmationEvidence: instance => ({
         marketRecords: [{ namespace, organizationId: 'org-1', scope: 'organization',
@@ -152,7 +165,7 @@ describe('builtin provisioning physical market identity', () => {
     ['absent', 'orphan'], ['uninstalled', 'orphan'],
   ])('preserves pending identity with %s ledger during %s', async (ledgerState, action) => {
     const fixture = await harness();
-    const legacyReceipt = { ...fixture.receipt };
+    const legacyReceipt = { ...fixture.receipt, enabled: true };
     delete legacyReceipt.namespace;
     await fixture.receipts.write(legacyReceipt, { relId: fixture.relId });
     Object.assign(fixture.registry.instances['builtin-test']!, {
@@ -172,16 +185,50 @@ describe('builtin provisioning physical market identity', () => {
       fs.renameSync(fixture.seedDir, path.join(path.dirname(fixture.seedRoot), 'withdrawn-seed'));
     }
     const before = fixture.receipts.read(fixture.relId);
+    // Startup performs namespace migration before seed reconciliation. The
+    // same-name roster and an empty market sync must not first stamp root.
+    await fixture.manager.reconcilePendingRootNamespaces(false);
+    await fixture.manager.reconcilePendingRootNamespaces(true);
     const outcome = await provisionBuiltinGhosts(fixture.deps);
-    expect(outcome.updated).not.toContain('builtin-test');
-    expect(outcome.approved).not.toContain('builtin-test');
+    expect(outcome.updated.map(item => item.id)).not.toContain('builtin-test');
+    expect(outcome.approved.map(item => item.id)).not.toContain('builtin-test');
     expect(outcome.removed).not.toContain('builtin-test');
     expect(outcome.retryPending).toBe(true);
     expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
     expect(fixture.receipts.read(fixture.relId)).toEqual(before);
+    expect(fixture.manager.list().find(ghost => ghost.manifest.id === 'builtin-test')).toMatchObject({ enabled: true, namespaceState: 'pending',
+      approval: { state: 'approved', revision: legacyReceipt.revision } });
     expect(fixture.manager.readInstanceForContent(fixture.relId)).toMatchObject({
       namespace: null, namespaceState: 'pending', instanceKey: 'builtin-test',
     });
+  });
+
+  it('migrates an approved pre-namespace seed and updates it without changing its storage key or enabled state', async () => {
+    const fixture = await harness(null);
+    const legacyReceipt = { ...fixture.receipt, enabled: true,
+      packageSha256: (await fingerprintDirContent(fixture.installedDir)).hash };
+    delete legacyReceipt.namespace;
+    await fixture.receipts.write(legacyReceipt, { relId: fixture.relId });
+    Object.assign(fixture.registry.instances['builtin-test']!, {
+      namespace: null, namespaceState: 'pending', source: 'legacy', pluginId: null,
+    });
+    fixture.registryStore.write(fixture.registry);
+    await fs.promises.unlink(path.join(path.dirname(fixture.stateRoot), 'market', 'ledger.v1.json'));
+    await fixture.manager.reconcilePendingRootNamespaces(false);
+    expect(fixture.manager.list()[0]).toMatchObject({ namespace: null, namespaceState: 'confirmed',
+      instanceKey: 'builtin-test', enabled: true });
+    const seed = JSON.parse(fs.readFileSync(path.join(fixture.seedDir, 'ghost.json'), 'utf8'));
+    fs.writeFileSync(path.join(fixture.seedDir, 'ghost.json'), JSON.stringify({ ...seed, version: '2.0.0' }));
+    await fixture.manager.runExclusiveMutation(async mutation => {
+      const outcome = await provisionBuiltinGhosts({ ...fixture.deps,
+        publishSeed: (id, dir, options) => mutation.publishTrustedBundledSeed(id, dir, options) });
+      expect(outcome.updated.map(item => item.id)).toEqual(['builtin-test']);
+      for (const manifest of outcome.approved) {
+        await mutation.approveTrustedBundledInstall(manifest, true, { sourceDir: fixture.seedDir });
+      }
+    });
+    expect(fixture.manager.list()[0]).toMatchObject({ namespace: null, namespaceState: 'confirmed',
+      instanceKey: 'builtin-test', enabled: true, manifest: { version: '2.0.0' }, approval: { state: 'approved' } });
   });
 
   it.each(['restore', 'wrong-source', 'changed-bytes'])('a retained organization overwritten by a root seed: %s', async mode => {

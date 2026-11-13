@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
 import { PluginMarketLedger } from '../../plugin-market/ledger.js';
 import { StableOwnerPostCommitCoordinator } from '../../stableOwnerPostCommit.js';
-import { GhostManager, type GhostManagerOptions } from '../GhostManager.js';
+import { GhostManager, CINDY_OFFICIAL_GHOST_TRUST, type GhostManagerOptions } from '../GhostManager.js';
+import { fingerprintDirContent } from '../builtinGhostProvisioner.js';
 import { resolveGhostFirstPartyPrivilege } from '../ghostFirstPartyPrivilege.js';
 import {
   classifyNamespaceMigration,
@@ -166,6 +167,16 @@ async function makeCindy(id: string, withSkill = false): Promise<string> {
     'main.js': '// ok\n',
     ...(withSkill ? { 'skills/demo/SKILL.md': demoSkillSource } : {}),
   });
+}
+
+// Model a released pre-namespace seed receipt, whose provenance is a directory
+// digest rather than the archive digest used by marketplace/manual installs.
+async function approveLegacySeed(id: string): Promise<void> {
+  const store = receiptStore(mutateSnapshot);
+  const approval = store.read(id);
+  if (approval.state !== 'approved') throw new Error('expected legacy receipt');
+  await store.write({ ...approval.receipt, trust: CINDY_OFFICIAL_GHOST_TRUST,
+    packageSha256: (await fingerprintDirContent(path.join(rootDir, id))).hash }, { relId: id });
 }
 
 async function stampLegacyOrganizationInstall(id = 'hello', withSkill = false): Promise<void> {
@@ -1097,6 +1108,7 @@ describe('GhostManager namespace migration census', () => {
 
   it.each([null, 'xd'] as const)('commits namespace %s without moving the directory or storage key', async (namespace) => {
     await plantLegacyInstall('xd-feishu');
+    if (namespace === null) await approveLegacySeed('xd-feishu');
     manager.list();
     const committed = namespace === null
       ? manager.commitPendingRootNamespace('xd-feishu', 'builtin')
@@ -1413,6 +1425,7 @@ describe('GhostManager namespace migration census', () => {
 
   it('skips the first namespace stamp while the plugin is busy', async () => {
     await plantLegacyInstall('hello');
+    await approveLegacySeed('hello');
     const busyManager = createManager({
       isNamespaceMigrationBusy: () => true,
       mutateSnapshot,
@@ -1671,6 +1684,7 @@ describe('downgrade then upgrade', () => {
     await plantLegacyInstall('manual-tool');
     await plantLegacyInstall('org-tool');
     await plantLegacyInstall('cindy-helper');
+    await approveLegacySeed('cindy-helper');
     await expect(manager.commitPendingNamespace('public-tool', null, 'market-public')).resolves.toEqual({ ok: true });
     await expect(manager.commitPendingNamespace('manual-tool', null, 'manual-after-sync')).resolves.toEqual({ ok: true });
     await expect(manager.commitPendingNamespace('org-tool', 'acme', 'market-organization')).resolves.toEqual({ ok: true });
