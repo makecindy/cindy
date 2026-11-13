@@ -319,6 +319,8 @@ export interface CcMeta {
   botPrivateReply?: boolean;
   /** The accepted user input (clientId) the turn that wrote this row answers. */
   replyToClientId?: string;
+  /** Explicit quote selected by the agent; separate from input provenance. */
+  replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
   /** Main-owned input receipt, retained for audit; never an authorization grant. */
   botTaskCoordinationInput?: import('../../shared/botTaskCoordination').BotTaskCoordination;
   /** Accepted internal coordination turn, used to suppress successful completion attention. */

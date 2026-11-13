@@ -108,6 +108,7 @@ function Fixture({ kind }: { kind: string }) {
                 isStreaming={false}
                 currentSessionId={rootSessionId}
                 messageClientId="answer"
+                replyQuote={{ clientId: 'owner', role: 'user', excerpt: messages[0].content }}
                 showActionBar
                 simplifiedBotConversation
               />

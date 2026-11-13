@@ -7179,6 +7179,7 @@ const MessageItem = memo(function MessageItem({
             createdAt={message.createdAt}
             messageClientId={message.clientId}
             replyToClientId={message.replyToClientId}
+            replyQuote={message.replyQuote}
             agentKind={agentKind}
             remoteHostId={remoteHostId}
             forkBlocked={assistantForkBlocked}

@@ -30,9 +30,14 @@ function isOwnerMessage(message: ChatMessage | undefined): message is ChatMessag
  * that never recorded it.
  */
 export function BotChatReplyTarget({ message, context }: {
-  message: Pick<ChatMessage, 'clientId' | 'replyToClientId'>;
+  message: Pick<ChatMessage, 'clientId' | 'replyToClientId' | 'replyQuote'>;
   context: BotChatQuoteValue;
 }) {
+  if (message.replyQuote) return (
+    <div data-bot-reply-target={message.replyQuote.clientId} className="mb-1.5 flex min-w-0 max-w-full">
+      <BotChatQuoteInBubble quote={message.replyQuote} context={context} align="left" />
+    </div>
+  );
   const target = message.replyToClientId;
   if (!context.showReplyTargets || !target) return null;
   const original = context.getMessage(target);

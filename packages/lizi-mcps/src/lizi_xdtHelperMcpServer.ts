@@ -1,3 +1,4 @@
+import { registerSetReplyQuoteTool, type SetReplyQuote } from './xdt-helper/set_reply_quote.js';
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
@@ -146,6 +147,7 @@ export type {
 const D_LIST_TOOLS =
   'Cindy 设置/控制入口：query 搜索壁纸、模型、伙伴、自动化、设备等；key 读单项说明；name 读已发现工具的参数。例：list_tools({query:"伙伴模型"})。' +
   `探索当前任务获准的 ${BRAND_NAME} 能力。登录、保密输入或扫码用 request_input_handoff；提问用各自的提问工具；连接 Grok 在 auth 类目，插件账号用 cindy 的 connect_account；` +
+  '伙伴回复较早话题时可查 name=set_reply_quote 主动引用，紧邻回复可不用。' +
   'github 类目用于定时追踪 PR/CI/评审变化与管理任务 PR 关联，不替代 gh 等命令行；查询不会建立任务关联。其它先不传 category 查看用途与本机/跨电脑范围，再按类目发现工具，用 call_tool 执行。';
 
 const D_CALL_TOOL =
@@ -194,6 +196,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     'Grok 设备码登录、状态查询与取消（支持远程任务）。',
   ].join(''),
   control: [
+    '伙伴聊天可用 set_reply_quote 主动选择本轮回复的引用，较远话题按需使用，紧邻回复可省略；在当前任务宿主执行，桌面和手机显示。',
     'list_projects(device) 可查询远程项目。',
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
     '归档/取消归档支持本机与跨电脑（deviceId::sessionId）；',
@@ -553,6 +556,7 @@ export interface XdtHelperMcpDeps {
    * set_current_session_title 会被注册; 不注入则不出现在 list_tools 里。
    */
   setCurrentSessionTitle?: SetCurrentSessionTitleDeps['setCurrentSessionTitle'];
+  setReplyQuote?: SetReplyQuote;
   askUserQuestionAsync?: AskUserQuestionAsyncCallback;
   manageUserQuestions?: ManageUserQuestionsCallback;
   /**
@@ -656,6 +660,12 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       execute: deps.sessionTags,
     });
+  if (deps.setReplyQuote) {
+    registerSetReplyQuoteTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setReplyQuote: deps.setReplyQuote,
+    });
+  }
   if (deps.setCurrentSessionTitle) {
     registerSetCurrentSessionTitleTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),

@@ -1,3 +1,4 @@
+import { readChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import type { ViewInstance } from 'react-native';
 import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
@@ -3796,8 +3797,10 @@ function MessageBubble({
   // 伙伴与普通任务都保留正文原生长按选字；消息操作由气泡下方按钮承接。
   const companionQuote = actions.companionQuoteActions;
   const bubbleTextSelectable = canSelectVisibleText;
-  const replyQuote = companionQuote && item.message.kind === 'user' ? item.message.replyQuote : undefined;
-  const replyTargetId = companionQuote?.showReplyTargets && item.message.kind === 'assistant' && clientId
+  const replyQuote = companionQuote
+    ? item.message.kind === 'user' ? item.message.replyQuote : readChatReplyQuote(item.message.source.agentMeta?.replyQuote)
+    : undefined;
+  const replyTargetId = !replyQuote && companionQuote?.showReplyTargets && item.message.kind === 'assistant' && clientId
     ? readReplyToClientId(item.message) : null;
   const replyTargetMessage = replyTargetId ? companionQuote?.getMessage(replyTargetId) : undefined;
   const replyTarget = replyTargetId && isOwnerTypedMessage(replyTargetMessage)

@@ -519,3 +519,18 @@ vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: (
 
 // Native blur rendering is outside the attachment layout contract.
 vi.mock('expo-blur', () => ({ BlurView: () => null }));
+
+// Regression: an agent-selected quote must render with the automatic-target preference off,
+// even when history pagination has not loaded the original.
+it('shows an explicit companion quote from its snapshot with automatic reply targets off', () => {
+  const items = buildMobileMessageRenderItems([
+    msg('a1', 'assistant', 'Returning to that question', { agentMeta: {
+      replyToClientId: 'latest-input', replyQuote: { clientId: 'old-input', role: 'user', excerpt: 'Earlier question snapshot' },
+    } }),
+  ], { isSessionStreaming: false });
+  const html = renderClient(<MessageRenderer items={items} companion companionQuote={{
+    names: { owner: 'Me', companion: 'Cindy' }, showReplyTargets: false, onQuote: vi.fn(), onLocate: vi.fn(),
+  }} />);
+  expect(html).toContain('Earlier question snapshot');
+  expect(html).not.toContain('message.replyTarget');
+});

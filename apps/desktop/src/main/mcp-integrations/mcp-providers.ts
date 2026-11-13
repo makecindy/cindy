@@ -931,6 +931,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
         setSessionRuntime: wrap((service, params) => service.setSessionRuntime(params)),
       },
+      setReplyQuote: async (context, messageId) => {
+        const { selectReplyQuote } = await import('../maker-ipc/selectedReplyQuote.desktop.js');
+        return selectReplyQuote(context, messageId);
+      },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };

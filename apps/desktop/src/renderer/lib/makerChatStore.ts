@@ -1,3 +1,4 @@
+import { readChatReplyQuote } from '../../shared/chatReplyQuote';
 import { recordGithubStarPromptSend, recordGithubStarPromptCompletion } from './githubStarPrompt';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
@@ -5922,6 +5923,7 @@ export function handleStreamEvent(
   const assistantMetaFields: {
     botPrivateReply?: boolean;
     replyToClientId?: string;
+    replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
     assistantPhase?: string;
     model?: string;
     parentToolUseId?: string;
@@ -5936,6 +5938,7 @@ export function handleStreamEvent(
       : {}),
     ...(incomingMeta?.turnCompleted === true ? { turnCompleted: true } : {}),
     ...(typeof incomingMeta?.botPrivateReply === 'boolean' ? { botPrivateReply: incomingMeta.botPrivateReply } : {}),
+    ...(readChatReplyQuote(incomingMeta?.replyQuote) ? { replyQuote: readChatReplyQuote(incomingMeta?.replyQuote)! } : {}),
     ...(typeof incomingMeta?.replyToClientId === 'string' && incomingMeta.replyToClientId
       ? { replyToClientId: incomingMeta.replyToClientId } : {}),
   };
@@ -6089,7 +6092,7 @@ export function handleStreamEvent(
           assistantMetaFields.parentToolUseId !== undefined ||
           assistantMetaFields.turnCompleted === true ||
           assistantMetaFields.botPrivateReply !== undefined ||
-          assistantMetaFields.replyToClientId !== undefined;
+          assistantMetaFields.replyToClientId !== undefined || assistantMetaFields.replyQuote !== undefined;
         const shouldCalibrateText = Boolean(
           isFullText === true &&
           text &&
@@ -20394,6 +20397,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(botStarterOptions.length ? { botStarterOptions } : {}),
       ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
       ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
+      ...(m.role === 'assistant' && readChatReplyQuote(m.agentMeta?.replyQuote)
+        ? { replyQuote: readChatReplyQuote(m.agentMeta?.replyQuote)! } : {}),
       ...(m.role === 'assistant' && typeof m.agentMeta?.replyToClientId === 'string' && m.agentMeta.replyToClientId
         ? { replyToClientId: m.agentMeta.replyToClientId } : {}),
       ...(m.role === 'assistant' && m.agentMeta?.turnCompleted === true

@@ -1,3 +1,4 @@
+import { selectedReplyQuote } from './selectedReplyQuote.js';
 import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
@@ -248,6 +249,11 @@ export function prepareSessionEvent(
         },
       }
     : event;
+  const replyQuote = event.turnScope !== 'background'
+    ? selectedReplyQuote(session, event.sessionTurnGeneration) : undefined;
+  if (replyQuote) attributedEvent = {
+    ...attributedEvent, agentMeta: { ...attributedEvent.agentMeta, replyQuote },
+  };
   // Personal IM dispatches directly, outside AgentInputCoordinator. Preserve
   // its accepted durable input on the reply before the turn lease is released.
   if (!activeInputId && event.turnScope !== 'background') {

@@ -1430,3 +1430,23 @@ it('routes Pi version checks and exact-version installs to the managed runtime',
     expect(call).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
 });
+
+// Unit: quote selection is discoverable and uses host context, never a model-supplied target session.
+it('discovers reply quoting and passes selection and cancellation through the bound context', async () => {
+  const setReplyQuote = vi.fn(async () => ({ ok: true as const }));
+  const context = { agentKind: 'codex' as const, workingDir: '/fixture', sessionId: 'owner', sessionInstanceId: 'instance' };
+  const server = createXdtHelperMcpServer({ setReplyQuote }, context);
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'reply-quote-test', version: '1' });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const catalog = await client.callTool({ name: 'list_tools', arguments: { category: 'control' } });
+    expect(JSON.stringify(catalog)).toContain('set_reply_quote');
+    for (const message_id of ['original-message', null]) {
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'set_reply_quote', args: { message_id },
+      } }))).toMatchObject({ ok: true, selected: message_id !== null });
+      expect(setReplyQuote).toHaveBeenLastCalledWith(expect.objectContaining(context), message_id);
+    }
+  } finally { await client.close(); await server.close(); }
+});

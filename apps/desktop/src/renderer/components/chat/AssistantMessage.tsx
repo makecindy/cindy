@@ -195,6 +195,7 @@ interface AssistantMessageProps {
   messageClientId?: string;
   /** The owner message this reply answers; shown above the bubble when the setting is on. */
   replyToClientId?: string;
+  replyQuote?: import('../../../shared/chatReplyQuote').ChatReplyQuote;
   /** Owning agent kind — gates Fork icon visibility via capabilities,
    *  same scheme as UserMessage. */
   agentKind?: RendererAgentKind;
@@ -252,6 +253,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   createdAt,
   messageClientId,
   replyToClientId,
+  replyQuote,
   agentKind,
   remoteHostId,
   forkBlocked,
@@ -409,7 +411,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         className={botBubble ? cn(CHAT_BUBBLE_COLUMN_CLASS, hasRichAnswer(content) ? 'w-full' : 'w-fit') : undefined}
       >
         {botBubble && botQuote && messageClientId ? (
-          <BotChatReplyTarget message={{ clientId: messageClientId, replyToClientId }} context={botQuote} />
+          <BotChatReplyTarget message={{ clientId: messageClientId, replyToClientId, replyQuote }} context={botQuote} />
         ) : null}
         {failedSamplingAttempt && (
           <div className="mb-1 text-13 font-normal leading-[1.384615]" style={{ color: 'var(--text-secondary)' }}>

@@ -780,7 +780,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
       message(sessionId, 'b2b-send-result', 'tool_result', { ok: true, accepted: true }, -69000, { toolUseId: 'b2b-send', agentMeta: { botPrivateReply: true } }),
       message(sessionId, 'b2b-internal', 'assistant', 'B2B-INTERNAL-HIDDEN', -65000, { agentMeta: { botPrivateReply: true, assistantPhase: 'final_answer', turnCompleted: true } }),
       message(sessionId, 'b2b-owner', 'user', '把核对结果告诉我。', -30000),
-      message(sessionId, 'b2b-owner-answer', 'assistant', '入口已经左对齐，完整往来可以点开查看。', -20000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+      message(sessionId, 'b2b-owner-answer', 'assistant', '入口已经左对齐，完整往来可以点开查看。', -20000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true, replyQuote: { clientId: 'b2b-owner', role: 'user', excerpt: '把核对结果告诉我。' } } }),
     ];
   }
   if (sessionId === VISUAL_MAIL_DRAFT_SESSION_ID) return [
