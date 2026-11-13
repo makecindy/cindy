@@ -5,6 +5,9 @@ import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { getDraft } from '../../../src/renderer/lib/composerDraftStore';
+import { PluginUiProvider } from '../../../src/renderer/cindy-brain/PluginUiContributions';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../src/shared/ghost';
+import { pluginUiInterestKey, type PluginUiInterest } from '../../../src/shared/pluginUi';
 import fixturePhoto from '../../../src/renderer/assets/bot-presets/cindy.png';
 import {
   __testing as promptRecommendations,
@@ -23,6 +26,21 @@ if (!crypto.randomUUID) {
 const noop = () => {};
 const imageCache = { finish: undefined as (() => void) | undefined,
   getDraft: () => getDraft('fixture-cache-draft') };
+const pluginActions: string[] = [];
+const plugin: InstalledGhost = {
+  enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'fixture' },
+  uiCapabilityApproved: true,
+  manifest: {
+    schemaVersion: 3, id: 'composer-fixture', name: 'Composer fixture', kind: 'chip', entry: 'main.js', version: '1',
+    tools: [{ name: 'run', description: 'Run the fixture action' }],
+    mcpApps: { ui: { resources: [], tools: { run: { visibility: ['app'] } } }, host: {
+      contributions: Array.from({ length: Number(ctx.data.pluginToolbar) || 0 }, (_, index) => ({
+        id: `action-${index}`, title: String(ctx.data.pluginTitle || `Plugin ${index + 1}`), position: 'composer.toolbar' as const, tool: 'run',
+      })),
+    } },
+  },
+};
+plugin.approvedHostUi = ghostHostUiApprovalTokens(plugin.manifest);
 
 function CacheComposer() {
   const attachmentState = useAttachments('fixture-cache-draft');
@@ -152,6 +170,13 @@ void mountPage({
       onPiPackagesChanged: subscription('pi-packages'),
       listAgentSkills: async () => ({ success: true, skills: [] }),
       getSessionAgentSwitchIntent: async () => null,
+      onPluginUiState: subscription('plugin-ui'),
+      mcpApps: async (_session: string | null, input: { op: string; id?: string; entries?: PluginUiInterest[] }) => {
+        if (input.op === 'plugin-action' && input.id) pluginActions.push(input.id);
+        return { updates: ctx.data.pluginHidden ? (input.entries ?? []).map(interest => ({
+          key: pluginUiInterestKey(interest), revision: 1, state: { visible: false },
+        })) : [] };
+      },
     },
     voiceInput: {
       getDataSnapshot: () => ({
@@ -162,10 +187,11 @@ void mountPage({
       onGlobalShortcutTrigger: subscription('voice-shortcut'),
     },
     deviceLink: { onRemotePush: subscription('remote-push') },
-    ghosts: { listSync: () => ({ ghosts: [] }) },
+    ghosts: { listSync: () => ({ ghosts: ctx.data.pluginToolbar ? [plugin] : [] }), onChanged: subscription('ghosts') },
   },
   render: () => {
     (window as unknown as { __composerImageCache: typeof imageCache }).__composerImageCache = imageCache;
-    return ctx.case === 'late-attachment' ? <CacheScenario /> : <Fixture />;
+    (window as unknown as { __pluginActions: string[] }).__pluginActions = pluginActions;
+    return <PluginUiProvider>{ctx.case === 'late-attachment' ? <CacheScenario /> : <Fixture />}</PluginUiProvider>;
   },
 });

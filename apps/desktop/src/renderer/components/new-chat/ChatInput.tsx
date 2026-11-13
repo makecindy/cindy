@@ -9485,8 +9485,9 @@ export function ChatInput({
     isCreateAgentVariant && (toolbarWidthMeasured ? autoNarrowToolbar : narrowToolbar);
   const useUltraCompactToolbar =
     useNarrowToolbar && (!toolbarWidthMeasured || toolbarWidthMode === 'ultra' || toolbarWidthMode === 'tight');
-  // Keep the recording controls reachable when they expand in an already narrow pane.
-  const allowToolbarWrap = toolbarWidthMode === 'tight' || (useUltraCompactToolbar && voiceInput.isListening);
+  // Keep recording and plugin controls reachable in an already narrow pane.
+  const allowToolbarWrap = toolbarWidthMode === 'tight' ||
+    (useUltraCompactToolbar && (voiceInput.isListening || hasPluginToolbar));
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
@@ -10064,7 +10065,17 @@ export function ChatInput({
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               {hasPluginToolbar && (
-                <div className="mx-1 min-w-0 flex-1 overflow-x-auto">
+                // Keep a scrollable share for actual controls, without reserving a fixed
+                // minimum for remote tasks or plugins that hide all their contributions.
+                <div
+                  className={cn('mx-1 w-max min-w-0 shrink-0 overflow-x-auto',
+                    allowToolbarWrap ? 'max-w-[60%]' : useNarrowToolbar ? 'max-w-[33%]' : 'max-w-[50%]')}
+                  onFocus={(event) => {
+                    if (event.target instanceof HTMLElement) {
+                      event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    }
+                  }}
+                >
                   <div className="w-max">
                     <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
                   </div>
@@ -10073,7 +10084,8 @@ export function ChatInput({
               <div
                 className={cn(
                   allowToolbarWrap
-                    ? 'flex max-w-full min-w-0 flex-1 flex-wrap items-center justify-end gap-1'
+                    ? cn('flex max-w-full flex-1 flex-wrap items-center justify-end gap-1',
+                        hasPluginToolbar ? (hideRuntimeControls ? 'min-w-[30px]' : 'min-w-[72px]') : 'min-w-0')
                     : useNarrowToolbar
                     ? 'flex min-w-0 shrink items-center justify-end gap-1'
                     : effectiveCompactToolbar
