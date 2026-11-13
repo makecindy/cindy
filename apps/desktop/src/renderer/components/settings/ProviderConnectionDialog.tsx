@@ -2160,6 +2160,13 @@ export function ProviderConnectionDialog({
       const saved = runtimes[a];
       const previous = initial?.runtimes[a];
       const norm = (value: string | null | undefined) => (value ?? '').trim();
+      // 端点一变,已存的 Key 与密文头都不再保留(两处都以 endpointChangedForAgent
+      // 为条件):patch() 清空表单里未改动的 hydrated key,planProviderKeyMutations /
+      // planProviderHeaderMutations 清除落库的旧密文。
+      const endpointUnchanged =
+        !!previous
+        && norm(previous.baseUrl) === norm(saved?.baseUrl)
+        && norm(previous.modelsUrl) === norm(saved?.modelsUrl);
       // main 侧保留既存密文鉴权头的条件(planProviderHeaderMutations 'update' 分支):
       // runtime 仍在、仍是 apiKey 鉴权、本次未显式带 headers、且端点(baseUrl /
       // modelsUrl)未变。判据与上面「已存密文头徽标」(activeHeadersCanRemainSaved)
@@ -2174,8 +2181,7 @@ export function ProviderConnectionDialog({
         && authMode === 'apiKey'
         && (!initial?.auth || initial.auth.method === 'apiKey')
         && Object.keys(mergedHeaderNames(rt[a].headers)).length === 0
-        && norm(previous.baseUrl) === norm(saved?.baseUrl)
-        && norm(previous.modelsUrl) === norm(saved?.modelsUrl);
+        && endpointUnchanged;
       return {
         agent: a,
         apiKey: rt[a].apiKey,
@@ -2183,7 +2189,8 @@ export function ProviderConnectionDialog({
         baseUrl: saved?.baseUrl ?? '',
         ...(saved?.modelsUrl ? { modelsUrl: saved.modelsUrl } : {}),
         keyEdited: !editing || keyEditRevisionRef.current[a] > 0,
-        hasStoredKey: (loadedKeyRef.current[a] ?? '').trim().length > 0,
+        hasStoredKey:
+          (loadedKeyRef.current[a] ?? '').trim().length > 0 && endpointUnchanged,
         preservesStoredHeaderCredential,
       };
     });

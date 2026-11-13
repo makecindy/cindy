@@ -30,7 +30,15 @@ export interface CredentialRuntimeDraft<TAgent extends string = string> {
    * 未动过时已存的 Key 仍然有效,不能当成缺凭据。
    */
   keyEdited: boolean;
-  /** 该 runtime 在保存前已经存有 Key。 */
+  /**
+   * 该 runtime 在保存前已经存有 Key,**且这次保存后仍会留着**。
+   *
+   * 已存的 Key 绑定在原端点上:端点一变,`patch()` 会清空表单里未改动的
+   * hydrated key,`planProviderKeyMutations` 也会清除落库的旧密文
+   * (两处都以 `endpointChangedForAgent` 为条件)。所以调用方必须在端点变过时
+   * 把它置 false —— 否则「未碰 Key + 存过 Key」会放行一个保存后无凭据的
+   * runtime(PR #9034 review P1)。
+   */
   hasStoredKey: boolean;
   /**
    * 编辑既有 Provider 时,main 侧会保留该 runtime 既存的密文鉴权头

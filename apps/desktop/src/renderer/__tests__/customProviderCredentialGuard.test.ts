@@ -66,6 +66,21 @@ describe('missingCredentialRuntime', () => {
     ).toBeUndefined();
   });
 
+  /**
+   * PR #9034 review 第三轮 (P1, codex):已存的 Key 绑定在原端点上。端点一改,
+   * `patch()` 清空表单里未改动的 hydrated key,`planProviderKeyMutations` 也清除
+   * 落库的旧密文(两处同以 `endpointChangedForAgent` 为条件)。此时若仍把
+   * `hasStoredKey` 当凭据,保存出的 runtime 没有任何可用凭证。
+   *
+   * 调用方因此在端点变过时把 `hasStoredKey` 置 false;本判据只消费那个布尔,
+   * 所以这里断言的是:置 false 后必须命中。
+   */
+  it('flags an untouched key whose endpoint changed', () => {
+    expect(
+      missingCredentialRuntime('apiKey', [runtime({ keyEdited: false, hasStoredKey: false })]),
+    ).toBe('pi');
+  });
+
   it('still flags an existing provider whose stored key was cleared', () => {
     expect(
       missingCredentialRuntime('apiKey', [runtime({ keyEdited: true, hasStoredKey: true })]),
