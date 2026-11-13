@@ -16,6 +16,8 @@ import { useTranslation } from 'react-i18next';
 
 import {
   classifyVisionCapability,
+  isModelSelectableForNewRoute,
+  providersForAgent,
   type VisionCapability,
 } from '@cindy/model-providers';
 
@@ -25,10 +27,13 @@ import { SETTINGS_HINT, SettingsCard, SettingsField, SettingsRow, SettingsSectio
 import { Switch } from '@/components/ui/switch';
 import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
-import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
 import type { VisionBackendRef } from '../../../shared/visionBridgeSettings';
 import { VISION_BRIDGE_SETTINGS_DEFAULTS } from '../../../shared/visionBridgeSettings';
+import {
+  mergeVisionCapabilities,
+  resolveProviderRouteVisionCapability,
+} from '../../../shared/visionRouteCapability';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const log = createLogger('VisionBridgeSection');
@@ -163,17 +168,27 @@ export function VisionBridgeSection() {
     [persistPatch],
   );
 
-  // 目标模型清单：跨 agent 模型并集（同 id 去重），附三态能力标注。
+  // 目标模型清单：跨 agent/provider 模型并集（同 id 聚合），按线路实际能力 + 兜底三态标注。
   const targetRows = useMemo<TargetRow[]>(() => {
-    const seen = new Set<string>();
-    const rows: TargetRow[] = [];
+    const byId = new Map<string, TargetRow>();
     for (const agent of ['claude-code', 'codex', 'pi'] as const) {
-      for (const m of deriveModelsFromProviders(providers, agent, { admissionFiltered: true })) {
-        if (seen.has(m.id)) continue;
-        seen.add(m.id);
-        rows.push({ id: m.id, name: m.displayName, capability: classifyVisionCapability(m.id) });
+      for (const provider of providersForAgent(providers, agent)) {
+        if (provider.suspended) continue;
+        for (const m of provider.models[agent] ?? []) {
+          if (!isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' })) {
+            continue;
+          }
+          const capability = resolveProviderRouteVisionCapability(provider, agent, m);
+          const existing = byId.get(m.id);
+          if (existing) {
+            existing.capability = mergeVisionCapabilities(existing.capability, capability);
+          } else {
+            byId.set(m.id, { id: m.id, name: m.name, capability });
+          }
+        }
       }
     }
+    const rows = Array.from(byId.values());
     // 稳定排序：已知无视觉在前（最相关），其余按 id。
     const rank = (c: VisionCapability) => (c === 'no-vision' ? 0 : c === 'vision' ? 2 : 1);
     return rows.sort((a, b) => rank(a.capability) - rank(b.capability) || a.id.localeCompare(b.id));
@@ -213,20 +228,57 @@ export function VisionBridgeSection() {
     const seen = new Set<string>();
     const rows: Array<{ id: string; displayName: string }> = [];
     for (const agent of ['claude-code', 'codex', 'pi'] as const) {
-      for (const m of deriveModelsFromProviders(providers, agent, { admissionFiltered: true })) {
-        if (classifyVisionCapability(m.id) === 'no-vision') continue;
-        if (seen.has(m.id)) continue;
-        seen.add(m.id);
-        rows.push({ id: m.id, displayName: m.displayName });
+      for (const provider of providersForAgent(providers, agent)) {
+        if (provider.suspended) continue;
+        for (const m of provider.models[agent] ?? []) {
+          if (!isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' })) {
+            continue;
+          }
+          if (resolveProviderRouteVisionCapability(provider, agent, m) === 'no-vision') continue;
+          if (seen.has(m.id)) continue;
+          seen.add(m.id);
+          rows.push({ id: m.id, displayName: m.name });
+        }
       }
     }
     return rows;
   }, [providers]);
 
+  const isVisionBackendBlocked = useCallback(
+    (modelId: string, providerId?: string | null) => {
+      if (providerId) {
+        const provider = providers.find((p) => p.id === providerId);
+        if (provider) {
+          let cap: VisionCapability | undefined;
+          for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+            const model = provider.models[agent]?.find((m) => m.id === modelId);
+            if (model) {
+              cap = mergeVisionCapabilities(
+                cap,
+                resolveProviderRouteVisionCapability(provider, agent, model),
+              );
+            }
+          }
+          if (cap !== undefined) return cap === 'no-vision';
+        }
+      }
+      const row = targetRows.find((r) => r.id === modelId);
+      return (row?.capability ?? classifyVisionCapability(modelId)) === 'no-vision';
+    },
+    [providers, targetRows],
+  );
+
   const visionProviders = useMemo(() => providers.filter((provider) => provider.auth.method !== 'oauth').map((provider) => ({
     ...provider,
     models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
-      agent, models?.filter((model) => classifyVisionCapability(model.id) !== 'no-vision'),
+      agent,
+      models?.filter((model) =>
+        resolveProviderRouteVisionCapability(
+          provider,
+          agent as 'claude-code' | 'codex' | 'pi',
+          model,
+        ) !== 'no-vision',
+      ),
     ])),
   })), [providers]);
 
@@ -447,7 +499,7 @@ export function VisionBridgeSection() {
                       return setBackend('primary', null);
                     }
                     // 已知无视觉模型不能作视觉后端（选中运行时必失败，表现为「视觉桥不可用」）。
-                    if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                    if (isVisionBackendBlocked(modelId, providerId)) return false;
                     return setBackend('primary', { providerId, modelId });
                   }}
                   onModelChange={(modelId) => {
@@ -456,9 +508,10 @@ export function VisionBridgeSection() {
                     }
                     // 降级路径（onProviderChange 未触发时）：跨面查找提供该模型的 provider
                     // （视觉后端可能只在 codex/pi 面配置），多 provider 场景由 onProviderChange 覆盖。
-                    if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                    const resolvedProviderId = findProviderForModel(modelId);
+                    if (isVisionBackendBlocked(modelId, resolvedProviderId)) return false;
                     return setBackend('primary', {
-                      providerId: findProviderForModel(modelId) ?? '',
+                      providerId: resolvedProviderId ?? '',
                       modelId,
                     });
                   }}
@@ -500,16 +553,17 @@ export function VisionBridgeSection() {
                     if (!providerId || !modelId) {
                       return setBackend('fallback', null);
                     }
-                    if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                    if (isVisionBackendBlocked(modelId, providerId)) return false;
                     return setBackend('fallback', { providerId, modelId });
                   }}
                   onModelChange={(modelId) => {
                     if (!modelId) {
                       return setBackend('fallback', null);
                     }
-                    if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                    const resolvedProviderId = findProviderForModel(modelId);
+                    if (isVisionBackendBlocked(modelId, resolvedProviderId)) return false;
                     return setBackend('fallback', {
-                      providerId: findProviderForModel(modelId) ?? '',
+                      providerId: resolvedProviderId ?? '',
                       modelId,
                     });
                   }}

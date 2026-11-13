@@ -51,7 +51,12 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { providerModelRecord, modelWithInterface, type Provider } from '@cindy/model-providers';
+import {
+  providerModelRecord,
+  modelWithInterface,
+  resolveExplicitVisionSupport,
+  type Provider,
+} from '@cindy/model-providers';
 import { outboundFetch } from './outbound-fetch.desktop.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
@@ -184,7 +189,7 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
       catalogPresetId: model.catalogPresetId,
       ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, nativeUpstream: base } : {}),
       capabilities: {
-        ...(model.supportsImageInput ? { imageInput: 'image_url' as const } : {}),
+        ...(resolveExplicitVisionSupport(model) ? { imageInput: 'image_url' as const } : {}),
         reasoningField: thinkingFormat === 'qwen' ? 'enable_thinking'
           : thinkingFormat === 'zai' ? 'thinking.type' : 'reasoning_effort',
       },
@@ -1302,7 +1307,18 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // 旧 #794 strip 继续兜底。
         // 供应商分享受邀者的请求不走视觉桥：视觉后端是本机用户自己配的其它供应商，
         // 受邀者只能用分享给它的那一个(图片照原样交给分享的模型)。
-        buildVisionBridgeProxyTransform(log, isGuestProviderShareRequest),
+        buildVisionBridgeProxyTransform(log, isGuestProviderShareRequest, (ctx) => {
+          const sdkSessionId = ctx.headers['x-claude-code-session-id'];
+          const sessionId = sdkSessionId ? observeCcSessionId(sdkSessionId) : null;
+          if (sessionId) return { sessionId };
+          const piSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
+          const piSessionToken = headerValue(ctx.headers, 'x-cindy-pi-session-token');
+          const piProviderId = piSessionId
+            ? getPiProxySessionProvider(piSessionId, piSessionToken)
+            : null;
+          if (piProviderId) return { providerId: piProviderId, agentKind: 'pi' };
+          return undefined;
+        }),
         createXdToolResultImageNoticeTransform(claudeUpstreamEndpoint),
         // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
         // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。

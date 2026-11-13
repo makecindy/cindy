@@ -109,3 +109,42 @@ export function isKnownNoVisionModel(model: string): boolean {
 export function isKnownVisionModel(model: string): boolean {
   return classifyVisionCapability(model) === 'vision';
 }
+
+export interface VisionCapabilityModelLike {
+  id: string;
+  supportsImageInput?: boolean;
+  modalities?: { input: readonly string[] };
+}
+
+/**
+ * 读取模型/线路的显式图片输入能力声明（supportsImageInput 优先，其次 modalities.input）。
+ * 未显式声明时返回 undefined，由调用方按线路协议决定是否允许 id 兜底。
+ */
+export function resolveExplicitVisionSupport(
+  model: Pick<VisionCapabilityModelLike, 'supportsImageInput' | 'modalities'> | null | undefined,
+): boolean | undefined {
+  if (!model) return undefined;
+  if (model.supportsImageInput !== undefined) return model.supportsImageInput;
+  if (model.modalities) return model.modalities.input.includes('image');
+  return undefined;
+}
+
+/**
+ * 结合线路实际能力声明与模型 id 判定视觉能力（三态）。
+ *
+ * - 若模型/线路显式声明了图片能力（supportsImageInput / modalities），以显式声明为准；
+ * - 若线路为需要显式声明才允许原图转发的桥接通道（如无原生记录的 openai-chat 中继），
+ *   未显式声明支持图片时，发送层会拒绝原图，因此按 'no-vision' 处理以保留视觉桥；
+ * - 否则回退到基于模型 id 的三态分类（classifyVisionCapability）。
+ */
+export function resolveRouteVisionCapability(
+  model: VisionCapabilityModelLike,
+  opts?: {
+    allowsUnverifiedImageForwarding?: boolean;
+  },
+): VisionCapability {
+  const explicit = resolveExplicitVisionSupport(model);
+  if (explicit !== undefined) return explicit ? 'vision' : 'no-vision';
+  if (opts?.allowsUnverifiedImageForwarding === false) return 'no-vision';
+  return classifyVisionCapability(model.id);
+}

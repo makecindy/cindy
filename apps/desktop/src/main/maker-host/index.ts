@@ -191,7 +191,16 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import {
+  captureCodexLocalAuthPolicy,
+  providerRoutingForModel,
+  resolveConnectedDefaultProviderIdForModel,
+  resolveVisionBackendRoute,
+  sessionProviderRoutingForModel,
+  setVisionGatewayKeyReader,
+} from './provider-route.js';
+import { routeLookupModelId } from './claude-model-id.js';
+import { resolveProviderRouteVisionCapability } from '../../shared/visionRouteCapability.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -292,6 +301,7 @@ import {
   getCodexControlPlaneProxyEndpoint,
   getCodexCustomContextProxyEndpoint,
   getCodexProxyAuthInjectionState,
+  chatBridgeCapabilitiesForRoute,
   getCodexProxyEndpoint,
   getObservedCodexSubagentIdentity,
   getCodexThreadUpstreamOrigin,
@@ -2542,6 +2552,39 @@ export function getMaker(): Maker {
         if (!session || !providerId) return null;
         const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
         return provider?.models[session.agentKind]?.find((model) => model.id === modelId) ?? null;
+      },
+      resolveTargetCapability: (modelId, routeContext) => {
+        const sessionId = routeContext?.sessionId;
+        const session = sessionId ? _maker?.getSession(sessionId) : undefined;
+        const agentKind = routeContext?.agentKind ?? session?.agentKind;
+        const providerId = routeContext?.providerId ?? (sessionId ? getSessionProvider(sessionId) : null);
+        if (!agentKind || !providerId) return null;
+        const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
+        if (!provider) return null;
+        const effectiveModelId = routeContext?.modelId ?? modelId;
+        const lookupModel = agentKind === 'claude-code' ? routeLookupModelId(provider, effectiveModelId) : effectiveModelId;
+        const catalogModel = provider.models[agentKind]?.find((model) => model.id === lookupModel);
+        if (!catalogModel) return null;
+        const routing = sessionId
+          ? sessionProviderRoutingForModel(sessionId, provider, agentKind, lookupModel)
+          : providerRoutingForModel(provider, agentKind, lookupModel);
+        const codexChatImageForwardingAllowed =
+          agentKind === 'codex' && routing?.wireProtocol === 'openai-chat' && !catalogModel.api
+            ? chatBridgeCapabilitiesForRoute(
+                routing.upstream,
+                routing.modelInterface?.wireModelId ?? catalogModel.id,
+                undefined,
+                routing.modelInterface,
+              ).imageInput === 'image_url'
+            : undefined;
+        return resolveProviderRouteVisionCapability(provider, agentKind, catalogModel, {
+          ...(routing ? {
+            upstream: routing.upstream,
+            wireProtocol: routing.wireProtocol,
+            modelInterface: routing.modelInterface,
+          } : {}),
+          ...(codexChatImageForwardingAllowed !== undefined ? { codexChatImageForwardingAllowed } : {}),
+        });
       },
       readCustomProviderKey,
       readGatewayKey: readClaudeApiKey,

@@ -86,7 +86,7 @@ export function buildPiVisionBridgeEnv(
   if (!settings.primary) return null;
   // 按 session model 判定（与层 B / 层 A 同源 shouldBridge）：未命中目标模型
   // 不注入 env、不注册 vision 工具（codex P1 零干扰要求）。
-  if (!getVisionBridgeController()?.shouldBridge(model)) return null;
+  if (!getVisionBridgeController()?.shouldBridge(model, sessionId ? { sessionId, agentKind: 'pi' } : { agentKind: 'pi' })) return null;
   const primary = resolveSpec(settings.primary.providerId, settings.primary.modelId, deps, sessionId);
   if (!primary) return null;
   const fallback = settings.fallback

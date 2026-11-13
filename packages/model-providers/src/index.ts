@@ -294,8 +294,10 @@ export {
   isKnownNoVisionModel,
   isKnownVisionModel,
   normalizeVisionModelId,
+  resolveExplicitVisionSupport,
+  resolveRouteVisionCapability,
 } from "./visionCapability.js";
-export type { VisionCapability } from "./visionCapability.js";
+export type { VisionCapability, VisionCapabilityModelLike } from "./visionCapability.js";
 
 export {
   parseLocalModelCatalog,

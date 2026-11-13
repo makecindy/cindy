@@ -10,6 +10,8 @@ import {
   classifyVisionCapability,
   isKnownNoVisionModel,
   normalizeVisionModelId,
+  resolveExplicitVisionSupport,
+  resolveRouteVisionCapability,
 } from '../visionCapability.js';
 
 describe('normalizeVisionModelId', () => {
@@ -106,5 +108,30 @@ describe('classifyVisionCapability', () => {
   it('isKnownNoVisionModel helper', () => {
     expect(isKnownNoVisionModel('deepseek/deepseek-v4-flash')).toBe(true);
     expect(isKnownNoVisionModel('anthropic/claude-opus-4-8')).toBe(false);
+  });
+
+  // Bug/rule: explicit route capability overrides ID fallback, and routes without
+  // unverified image forwarding keep the bridge when metadata-free.
+  // Minimal failing input: deepseek-flash with supportsImageInput:false or unverified Chat route. Tier: unit.
+  it('prefers explicit route capability and keeps bridge when unverified forwarding is disallowed', () => {
+    expect(resolveExplicitVisionSupport({ supportsImageInput: false })).toBe(false);
+    expect(resolveExplicitVisionSupport({ modalities: { input: ['text', 'image'] } })).toBe(true);
+    expect(resolveExplicitVisionSupport({})).toBeUndefined();
+
+    expect(
+      resolveRouteVisionCapability({ id: 'deepseek-flash', supportsImageInput: false }),
+    ).toBe('no-vision');
+    expect(
+      resolveRouteVisionCapability(
+        { id: 'deepseek-flash' },
+        { allowsUnverifiedImageForwarding: false },
+      ),
+    ).toBe('no-vision');
+    expect(
+      resolveRouteVisionCapability(
+        { id: 'deepseek-flash', supportsImageInput: true },
+        { allowsUnverifiedImageForwarding: false },
+      ),
+    ).toBe('vision');
   });
 });
