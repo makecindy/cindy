@@ -1537,18 +1537,21 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     setCustomProviders([]);
   });
 
-  it.each(['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses'].map(api => ({ account, api }))))('keeps the Copilot adapter for $api on the $account host', async ({ account, api }) => {
+  // #10269: Carbon discovery has only an ID, unlike the existing explicit API cases.
+  it.each(['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses', 'openai-completions'].map(api => ({ account, api }))))('keeps the Copilot adapter for $api on the $account host', async ({ account, api }) => {
     const host = await freshCodexProxyHost();
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setOAuthTokenReader } = await import('../provider-route.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId } = await import('@cindy/model-providers');
-    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(model => model.execution.pi.api === api)!;
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(model => api === 'openai-completions'
+      ? model.id === 'gemini-4-carbon' : model.execution.pi.api === api)!;
     const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
     setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
       auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
       runtimes: { codex: { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
-        wireProtocol: api as 'anthropic-messages' | 'openai-responses', models: [{ id: row.id, name: row.name, api: api as 'anthropic-messages' | 'openai-responses' }] } },
+        wireProtocol: api === 'openai-completions' ? 'anthropic-messages' : api as 'anthropic-messages' | 'openai-responses',
+        models: [{ id: row.id, name: row.name, ...(api === 'openai-completions' ? {} : { api: api as 'anthropic-messages' | 'openai-responses' }) }] } },
     })]);
     setOAuthTokenReader(() => token);
     host.registerComposed('session-copilot', 'thread-copilot', 'PRODUCT_PROMPT');
@@ -1570,6 +1573,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       }));
       const nativeOptions = (mockState.createPiProviderFetch.mock.calls as unknown as Array<[{ row: typeof row }]>).at(-1)![0];
       expect(providerModelAdapterId(nativeOptions.row)).toBe('github-copilot');
+      expect(nativeOptions.row.execution.pi.api).toBe(api);
     } finally {
       clearSessionProvider('session-copilot');
       setOAuthTokenReader(() => null);

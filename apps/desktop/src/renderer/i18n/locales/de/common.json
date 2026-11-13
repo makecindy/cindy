@@ -2602,7 +2602,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "Klassische Prosa (Standard)",
+          "prose": "Klassische Prosa",
           "tang-poetry": "Tang-Lyrik",
           "song-ci": "Song-Ci",
           "yuan-qu": "Yuan-Qu",
@@ -10789,6 +10789,15 @@
       "contents": "Enthält SOUL.md, USER.md, system_prompt.md, skills/ und memories/. Modelle, Berechtigungen und Verbindungen werden weiterhin von Cindy verwaltet.",
       "open": "Ordner öffnen",
       "openFailed": "Der Ordner des Freundes konnte nicht geöffnet werden.",
+      "repository": {
+        "ready": "Git ist bereit",
+        "notReadyTitle": "Git ist noch nicht bereit",
+        "needsIdentity": "Öffne auf dem Computer dieses Freundes seinen Ordner und dann den Unterordner workspace. Richte dort user.name und user.email für Git ein und versuche es erneut.",
+        "notReady": "Die erste Version wurde noch nicht gespeichert. Versuche es erneut, um Git fertig einzurichten.",
+        "unavailable": "Installiere Git auf dem Computer dieses Freundes und versuche es erneut.",
+        "failed": "Git konnte die erste Version nicht lesen oder speichern. Prüfe das Repository auf dem Computer dieses Freundes und versuche es erneut.",
+        "keepUsing": "Du kannst deinen Freund weiter nutzen. Vorhandene Dateien und Git-Einstellungen bleiben erhalten."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Erinnerungen ordnen",
         "carryover": {
@@ -15485,6 +15494,7 @@
       "REMOTE_AGENT_BUSY": "Auf dem anderen Computer laufen zu viele Sitzungen. Beende einige davon und versuch es erneut.",
       "REMOTE_AGENT_UNSUPPORTED": "Dieser Agent ist auf dem anderen Computer nicht verfügbar. Installiere ihn dort oder melde dich dort an, oder wähle einen anderen Agent.",
       "REMOTE_AGENT_INVALID": "Bei der Kommunikation mit dem Computer, auf dem der Agent läuft, ist etwas schiefgelaufen. Versuch es erneut. Falls das Problem weiterhin besteht, aktualisiere Cindy auf beiden Computern.",
+      "REMOTE_AGENT_RESUME_REJECTED": "Der Computer, auf dem das Modell läuft, kann diese Sitzung nicht fortsetzen. Erstelle über die Sitzungsliste eine neue Sitzung und kopiere die benötigten Inhalte dorthin. Die ursprüngliche Sitzung und die Nachrichten in der Warteschlange bleiben erhalten.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Dieses Modell hat das vom Eigentümer festgelegte Limit für die Modellfreigabe erreicht. Wähle ein anderes verfügbares Modell, um fortzufahren.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer gibt dir keinen Zugriff auf diesen Anbieter oder das gewählte Modell. Ist es dein eigener Computer, aktiviere dort unter Remote-Verbindungen „Meine anderen Computer die Modelle dieses Computers nutzen lassen“. Wurde er mit dir geteilt, bitte den Eigentümer, den Zugriff unter „Remote & Freigabe“ anzupassen. Oder wähle ein anderes Modell.",
       "REMOTE_AGENT_FORK_FAILED": "Der Computer, auf dem der Agent läuft, konnte von hier aus keine neue Sitzung starten. Versuch es erneut oder wähle eine andere Nachricht.",
@@ -17535,6 +17545,7 @@
       "copied": "{{label}} kopiert",
       "copyFailed": "{{label}} konnte nicht kopiert werden. Manuell auswählen und kopieren.",
       "urlUnavailable": "Die Empfangsadresse ist derzeit nicht verfügbar.",
+      "unsupportedFormat": "Diese Version unterstützt das Format dieses Absenders nicht.",
       "quotaNotifyTitle": "Webhook-Empfangslimit erreicht",
       "quotaExhausted": "Die heutigen {{limit}} Webhook-Empfänge sind aufgebraucht. Fortsetzung um {{time}}. Bis dahin lösen externe Ereignisse keine Aufgaben aus. Geplante Ausführungen und die Modellnutzung sind nicht betroffen.",
       "signedOut": "Melde dich bei deinem Cindy-Konto an, um den Empfang fortzusetzen. Deine Einstellungen bleiben erhalten.",

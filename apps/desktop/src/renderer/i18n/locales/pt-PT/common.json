@@ -2640,7 +2640,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "Prosa clássica (predefinição)",
+          "prose": "Prosa clássica",
           "tang-poetry": "Poesia Tang",
           "song-ci": "Ci dos Song",
           "yuan-qu": "Qu dos Yuan",
@@ -10873,6 +10873,15 @@
       "contents": "Contém SOUL.md, USER.md, system_prompt.md, skills/ e memories/. Os modelos, as permissões e as ligações continuam a ser geridos por Cindy.",
       "open": "Abrir pasta",
       "openFailed": "Não foi possível abrir a pasta do amigo.",
+      "repository": {
+        "ready": "O Git está pronto",
+        "notReadyTitle": "O Git ainda não está pronto",
+        "needsIdentity": "No computador deste Amigo, abre a pasta dele e depois a subpasta workspace. Configura user.name e user.email do Git nessa pasta e tenta novamente.",
+        "notReady": "A primeira versão ainda não foi guardada. Tenta novamente para concluir a configuração do Git.",
+        "unavailable": "Instala o Git no computador deste Amigo e tenta novamente.",
+        "failed": "O Git não conseguiu ler ou guardar a primeira versão. Verifica o repositório no computador deste Amigo e tenta novamente.",
+        "keepUsing": "Podes continuar a usar o teu Amigo. Os ficheiros e as definições do Git existentes são preservados."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Organizar memória",
         "carryover": {
@@ -15626,6 +15635,7 @@
       "REMOTE_AGENT_BUSY": "Estão em execução demasiadas sessões no outro computador. Termine algumas e tente novamente.",
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou inicie sessão nele nesse computador, ou escolha outro Agent.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy em ambos os computadores.",
+      "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Cria uma nova sessão a partir da lista de sessões e copia o conteúdo necessário para continuar. A sessão original e as mensagens em fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de partilha definido pelo proprietário. Escolha outro modelo disponível para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não lhe abriu este fornecedor ou o modelo selecionado. Se for o seu próprio computador, ative “Permitir que os meus outros computadores usem os modelos deste” na ligação remota dele. Se alguém o partilhou consigo, peça ao proprietário para ajustar o acesso em Acesso remoto e partilha. Também pode escolher outro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tenta novamente ou tenta uma mensagem diferente.",
@@ -17700,6 +17710,7 @@
       "copied": "{{label}} copiado",
       "copyFailed": "Não foi possível copiar {{label}}. Selecione o conteúdo e copie-o manualmente.",
       "urlUnavailable": "O endereço de receção não está disponível de momento.",
+      "unsupportedFormat": "Esta versão não suporta o formato deste remetente.",
       "quotaNotifyTitle": "Limite de receções de Webhook atingido",
       "quotaExhausted": "As {{limit}} receções de Webhook de hoje esgotaram-se e são retomadas às {{time}}. Até lá, os eventos externos não acionam tarefas. As execuções agendadas e a utilização do modelo não são afetadas.",
       "signedOut": "Inicie sessão na sua conta Cindy para retomar a receção. As suas definições foram mantidas.",

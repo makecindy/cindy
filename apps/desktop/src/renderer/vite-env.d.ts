@@ -858,6 +858,8 @@ interface CCAgentStatusUpdate {
   costUsd?: number;
   contextTokens: number;
   contextWindow: number;
+  /** A confirmed mid-turn snapshot may be zero; old hosts omit this flag. */
+  contextSnapshotAuthoritative?: boolean;
   outputTokens?: number;
   generationDurationMs?: number;
   generationActive?: boolean;
@@ -4307,7 +4309,7 @@ interface ElectronAPI {
     onReshareRequested(cb: () => void): () => void;
   };
   subscriptionAccounts: {
-    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
+    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider; resetAccountId?: string }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
     /** Validate the reply with parseSubscriptionSessionAccountView. */
     sessionAccount?(query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown>;
@@ -5189,6 +5191,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     bots: {
+      projectRepository: (botId: string, retry: boolean) => Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus>;
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;
@@ -7442,7 +7445,7 @@ interface ElectronAPI {
         received: number;
         ignored: number;
         connected?: boolean;
-        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+        problem?: 'limit' | 'failed' | 'unsupported' | 'suspended' | 'quota' | 'released';
         quotaLimit?: number;
         quotaResetAt?: number;
       } | null>;

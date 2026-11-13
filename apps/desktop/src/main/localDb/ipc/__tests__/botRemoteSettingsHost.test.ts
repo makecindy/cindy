@@ -107,6 +107,26 @@ it('does not run anything for a controller that lost authorization or for a hidd
   expect(hidden.deps.readProfile).not.toHaveBeenCalled();
 });
 
+// #10216 unit: retry must target the authorized buddy, not a caller-supplied
+// filesystem path. An older host without this service advertises neither operation.
+it('scopes repository status and retry to the authorized buddy', async () => {
+  const projectRepository = vi.fn(async () => 'needs-identity');
+  const { call } = setup({ deps: { projectRepository } });
+  expect(await call('project.repository')).toMatchObject({ ok: true, value: 'needs-identity' });
+  await call('project.retryRepository', { workingDir: '/other-buddy' });
+  expect(projectRepository.mock.calls).toEqual([
+    ['bot-1', false, expect.any(Function)], ['bot-1', true, expect.any(Function)],
+  ]);
+  projectRepository.mockClear();
+  expect(await setup({ allowed: false, deps: { projectRepository } }).call('project.retryRepository'))
+    .toMatchObject({ ok: false, code: 'PRECONDITION_FAILED' });
+  expect(await setup({ visible: false, deps: { projectRepository } }).call('project.retryRepository'))
+    .toMatchObject({ ok: false, code: 'NOT_FOUND' });
+  expect(projectRepository).not.toHaveBeenCalled();
+  const caps = await setup().call('caps', undefined, null);
+  expect(caps).toMatchObject({ ok: true, value: { ops: expect.not.arrayContaining(['project.retryRepository']) } });
+});
+
 it('never delivers a result produced after the account changed', async () => {
   let current = true;
   const { call } = setup({ ownerCurrent: () => current, deps: { readProfile: vi.fn(async () => { current = false; return rawProfile; }) } });
