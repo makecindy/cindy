@@ -57,8 +57,21 @@ async function install(local: string, enabled = true, namespaced = false) {
     kind: 'chip',
     entry: 'main.js',
     settingsHtml: 'settings.html',
-    slots: ['network', 'skill'],
+    slots: ['network', 'skill', 'node'],
     skill: { items: [{ dir: 'skills/demo', name: 'demo', description: 'Demo skill' }] },
+    node: {
+      entry: 'worker.cjs',
+      protocol: 'json-rpc-stdio',
+      secretBindings: [
+        { key: 'manual_token', label: 'Manual token', methods: ['account/import'] },
+        {
+          key: 'oauth_token',
+          label: 'OAuth token',
+          methods: ['account/read'],
+          oauthSecret: 'account',
+        },
+      ],
+    },
     network: {
       hosts: ['api.example.com'],
       secrets: [
@@ -66,6 +79,17 @@ async function install(local: string, enabled = true, namespaced = false) {
           key: 'api_key',
           label: 'API key',
           inject: { header: 'Authorization', format: 'Bearer {value}' },
+        },
+        {
+          key: 'account',
+          label: 'Account',
+          source: 'oauth',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+          oauth: {
+            authorizeUrl: 'https://api.example.com/auth',
+            tokenUrl: 'https://api.example.com/token',
+            scopes: ['account'],
+          },
         },
       ],
     },
@@ -77,6 +101,7 @@ async function install(local: string, enabled = true, namespaced = false) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(raw));
   fs.writeFileSync(path.join(dir, 'main.js'), 'module.exports = {};');
+  fs.writeFileSync(path.join(dir, 'worker.cjs'), 'module.exports = {};');
   fs.chmodSync(path.join(dir, 'main.js'), 0o444);
   fs.writeFileSync(path.join(dir, 'settings.html'), '<p>fixture</p>');
   fs.mkdirSync(path.join(dir, 'skills/demo'), { recursive: true });
@@ -118,12 +143,17 @@ describe('first verified cloud owner adopts local assets', () => {
         'provider_headers_opendesign_codex',
         `ghost_secret_${instanceKey}_api_key`,
         `ghost_hint_${instanceKey}_api_key`,
+        `ghost_secret_${instanceKey}_manual_token`,
+        `ghost_hint_${instanceKey}_manual_token`,
       ];
       const excluded = [
         'provider_oauth_opendesign',
         'provider_key_xai',
         'ghost_secret_opendesign-trial_api_key-rt-test-account',
         'ghost_secret_uninstalled_api_key',
+        `ghost_secret_${instanceKey}_oauth_token`,
+        `ghost_hint_${instanceKey}_oauth_token`,
+        `ghost_secret_${instanceKey}_account`,
       ];
       for (const key of [...keys, ...excluded])
         f.write(f.secret('local-v1', key), `test-ciphertext:${key}`);
@@ -163,6 +193,9 @@ describe('first verified cloud owner adopts local assets', () => {
       fs.unlinkSync(f.secret('cloud-a', keys[0]!));
       expect(await adoptLocalProfileAssets('cloud-a', f.deps)).toBe('complete');
       expect(fs.existsSync(f.secret('cloud-a', keys[0]!))).toBe(false);
+      for (const key of keys.slice(1))
+        expect(fs.readFileSync(f.secret('cloud-a', key), 'utf8')).toBe(`test-ciphertext:${key}`);
+      for (const key of excluded) expect(fs.existsSync(f.secret('cloud-a', key))).toBe(false);
       expect(
         fs
           .readdirSync(f.cloud, { withFileTypes: true })
