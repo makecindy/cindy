@@ -1,10 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { GhostManifest } from '../../../shared/ghost.js';
 import { GhostConnectionManager } from '../ghostConnections.js';
 import { GhostSavedCredentialManager } from '../ghostSavedCredentials.js';
 import { handleGhostSecretsRequest } from '../runtime/ghostSecretsEndpoint.js';
 import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../../shared/pluginAccountReuse.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+import { withGhostOauthMutationLock } from '../ghostOauthMutationLock.js';
+
+const createReuseLifecycle = createGhostProductionCallbacks<{
+  relocateGhostUserData(from: string, to: string): Promise<void>;
+  uninstallGhostAndCleanup(id: string): Promise<void>;
+}>({ functions: ['relocateGhostUserData', 'uninstallGhostAndCleanup', 'relocateGhostAccountReuseReferences'] });
 
 const createReuseIpc = createGhostProductionCallbacks<{
   list(event: { trusted: boolean }, id: string): unknown;
@@ -14,7 +23,7 @@ const createReuseIpc = createGhostProductionCallbacks<{
 // §4 credential handoff: OAuth reuse tests cannot exercise saved PATs or
 // connection tokens. Unit tier; the public manager must persist references,
 // observe source rotation/removal and reject unconfirmed or changed installs.
-function setup() {
+function setup(withMutationLock: <T>(id: string, task: () => T | Promise<T>) => Promise<T> = async (_id, task) => task()) {
   const data = new Map<string, string>();
   const vault = {
     read: (id: string, key: string) => data.get(`${id}\0${key}`) ?? null,
@@ -38,15 +47,104 @@ function setup() {
     connectionSource: id => sources.find(source => source.instanceKey === id) ?? null,
     captureTarget: id => `${generation}:${id}`,
     confirm,
-    withMutationLock: async (_id, task) => task(),
+    withMutationLock,
   });
   vault.store('source', 'token', 'private-source-token');
-  return { manager, vault, data, source, target, sources, connections, confirm, connectionSources,
+  return { manager, vault, data, source, target, sources, connections, confirm, connectionSources, withMutationLock,
     boundary: () => { generation++; },
     ref: { kind: 'secret' as const, instanceKey: 'source', secretKey: 'token', accountId: 'saved' } };
 }
 
+function lifecycle(h: ReturnType<typeof setup>) {
+  const noop = () => {};
+  return createReuseLifecycle({
+    getGhostHandoffStore: () => ({ blockForRelocation: () => noop }),
+    relocateIdleGhostUserData: async (from: string, to: string) => {
+      for (const [key, value] of [...h.data]) {
+        if (key.startsWith(from + '\0')) { h.data.set(to + key.slice(from.length), value); h.data.delete(key); }
+      }
+      const index = h.sources.findIndex(source => source.instanceKey === from);
+      if (index !== -1) h.sources.splice(index, 1);
+      if (to === h.source.instanceKey && !h.sources.some(source => source.instanceKey === to)) h.sources.unshift(h.source);
+    },
+    parsePluginInstanceId: () => ({ ghostId: 'source' }),
+    withGhostInstallLock: async (_id: string, task: () => unknown) => task(),
+    withActiveOwnerGhostOauthMutationLock: h.withMutationLock,
+    findGhostForInstanceId: () => h.source, installedGhostStoragePart: (ghost: typeof h.source) => ghost.instanceKey,
+    uninstallGhostAndCleanupLocked: async () => { h.sources.splice(0, 1); h.vault.remove('source', 'token'); },
+    getGhostManager: () => ({ list: () => h.sources }), getGhostSavedCredentialManager: () => h.manager,
+    listGhostAccountReferenceKeys: (ids: string[]) => ids.map(instanceKey => ({ instanceKey,
+      keys: [...h.data.keys()].filter(key => key.startsWith(instanceKey + '\0')).map(key => key.slice(instanceKey.length + 1)) })),
+    getGhostOauthAccountManager: () => ({ relocateSourceReferences: async () => {} }), beginGhostMutation: () => noop,
+  });
+}
+
 describe('saved credential references', () => {
+  // #10130 / 4560156890: resolve-only removal coverage missed reinstalling
+  // the same physical source. Unit: production lifecycle entry + real manager;
+  // a replacement PAT must not inherit the old native reuse confirmation.
+  it.each(['uninstall', 'archive'] as const)('does not reuse a replacement PAT after source %s', async kind => {
+    const h = setup();
+    await h.manager.reuse('target', 'token', h.ref);
+    const entry = lifecycle(h);
+    if (kind === 'uninstall') await entry.uninstallGhostAndCleanup('source');
+    else await entry.relocateGhostUserData('source', 'archive');
+    h.sources.unshift({ ...h.source });
+    h.vault.store('source', 'token', 'replacement-pat');
+    expect(h.manager.resolve('target', 'token')).toBeNull();
+    expect(h.manager.list('target', 'token').accounts).toEqual(kind === 'uninstall' ? [] : [
+      { id: 'saved', label: 'token', status: 'expired' },
+    ]);
+    expect(h.manager.list('target', 'token').options).toHaveLength(1);
+    expect(await h.manager.reuse('target', 'token', h.ref)).toEqual({ ok: true });
+    expect(h.manager.resolve('target', 'token')?.value).toBe('replacement-pat');
+  });
+
+  it('preserves a confirmed reference across ordinary source updates and credential rotation', async () => {
+    const h = setup();
+    await h.manager.reuse('target', 'token', h.ref);
+    const before = [...h.data].filter(([key]) => key.startsWith('target\0'));
+    h.source.manifest.version = '2.0.0'; h.boundary();
+    expect(h.manager.resolve('target', 'token')?.value).toBe('private-source-token');
+    h.vault.store('source', 'token', 'rotated-source-token');
+    expect(h.manager.resolve('target', 'token')?.value).toBe('rotated-source-token');
+    expect([...h.data].filter(([key]) => key.startsWith('target\0'))).toEqual(before);
+    expect(h.confirm).toHaveBeenCalledOnce();
+  });
+
+  it.each(['uninstall', 'archive'] as const)('revokes orphaned references before a removed declaration is restored after source %s', async kind => {
+    const h = setup();
+    await h.manager.reuse('target', 'token', h.ref);
+    const declarations = h.target.manifest.network!.secrets;
+    h.target.manifest.network!.secrets = [];
+    const entry = lifecycle(h);
+    if (kind === 'uninstall') await entry.uninstallGhostAndCleanup('source');
+    else await entry.relocateGhostUserData('source', 'archive');
+    h.target.manifest.network!.secrets = declarations;
+    h.sources.unshift({ ...h.source });
+    h.vault.store('source', 'token', 'replacement-pat');
+    expect(h.manager.resolve('target', 'token')).toBeNull();
+  });
+
+  it('archives mutually referring plugins without holding either source lock while acquiring consumer locks', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-reuse-locks-'));
+    try {
+      const h = setup((id, task) => withGhostOauthMutationLock('owner', id, path.join(dir, `${id}.lock`), task));
+      for (const plugin of h.sources) plugin.manifest.network!.secrets!.push({
+        key: 'borrowed', label: 'Borrowed', inject: { header: 'Authorization', format: 'Bearer {value}' },
+      });
+      h.vault.store('target', 'token', 'target-owned-token');
+      expect(await h.manager.reuse('target', 'borrowed', h.ref)).toEqual({ ok: true });
+      expect(await h.manager.reuse('source', 'borrowed', { ...h.ref, instanceKey: 'target' })).toEqual({ ok: true });
+      const entry = lifecycle(h);
+      await Promise.all([entry.relocateGhostUserData('source', 'archive-source'), entry.relocateGhostUserData('target', 'archive-target')]);
+      expect(h.vault.read('archive-source', 'token')).toBe('private-source-token');
+      expect(h.vault.read('archive-target', 'token')).toBe('target-owned-token');
+      expect(h.manager.resolve('source', 'borrowed')).toBeNull();
+      expect(h.manager.resolve('target', 'borrowed')).toBeNull();
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
   // #10130 / 4547237926 + 4547298763, unit: manager-only disconnect
   // coverage missed ordinary /secrets replacement/deletion followed by marker replay.
   it.each(['PUT', 'POST', 'DELETE'])('clears delegated access on ordinary %s and rejects marker replay', async method => {

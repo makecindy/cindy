@@ -183,6 +183,21 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     expect(h.fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('moves only incoming reused OAuth rows with source archival and removes them on uninstall', async () => {
+    const h = setup();
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
+    const targets = [{ instanceKey: h.consumer, keys: [KEY + '-accounts'] }];
+    await h.mgr.relocateSourceReferences(GHOST, 'archive-source', targets);
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
+    await h.mgr.relocateSourceReferences('archive-source', GHOST, targets);
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: true, accessToken: 'source-access' });
+    await h.mgr.relocateSourceReferences(GHOST, null, targets);
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'NO_ACCOUNT' });
+    expect(h.vault.read(GHOST, KEY + '-rt-acc-1')).toBe('source-refresh');
+    expect(await h.mgr.getFreshAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true });
+  });
+
   it('does not bind without the native owner confirmation or to an incompatible service', async () => {
     const denied = setup(false);
     const decl = denied.consumerManifest.network!.secrets![0]!.oauth!;

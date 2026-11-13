@@ -885,6 +885,26 @@ export class GhostOauthAccountManager {
     });
   }
 
+  /** Follow the existing source archive (including inverse recovery), or remove
+   * incoming reuse rows after uninstall. Ordinary accounts are untouched. */
+  async relocateSourceReferences(from: string, to: string | null, targets: readonly { instanceKey: string; keys: readonly string[] }[]): Promise<void> {
+    const read = this.deps.vault.readStrict ?? this.deps.vault.read;
+    for (const target of targets) {
+      for (const key of target.keys) {
+        if (!key.endsWith(accountsKey(''))) continue;
+        if (!parseManifest(read(target.instanceKey, key)).accounts.some(row => row.reused?.instanceKey === from)) continue;
+        await this.withMutationLock(target.instanceKey, () => {
+          const manifest = parseManifest(read(target.instanceKey, key));
+          const accounts = manifest.accounts.flatMap(row => row.reused?.instanceKey !== from ? [row]
+            : to === null ? [] : [{ ...row, reused: { ...row.reused, instanceKey: to } }]);
+          const next = { ...manifest, accounts,
+            defaultAccountId: accounts.some(row => row.id === manifest.defaultAccountId) ? manifest.defaultAccountId : accounts[0]?.id ?? null };
+          if (!this.deps.vault.store(target.instanceKey, key, JSON.stringify(next))) throw new Error('VAULT_WRITE_FAILED');
+        });
+      }
+    }
+  }
+
   /** 默认账号相对当前声明缺失的 scope；空数组 = 无需重连或判不准。 */
   defaultMissingScopes(instanceKey: string, secretKey: string, decl: GhostOauthDecl): string[] {
     const manifest = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey)));

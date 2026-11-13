@@ -224,6 +224,31 @@ it.each(['empty', 'available', 'in-use'] as const)('shows account reuse controls
   }
 });
 
+// #10130 / 4560156890: backend revocation must project through the existing
+// Refresh action, without inventing another UI state or reconnecting a source.
+it.each(['archived', 'removed', 'replacement'] as const)('refreshes revoked source reuse as %s', async state => {
+  const source = { kind: 'secret' as const, instanceKey: 'source', secretKey: 'token', accountId: 'saved',
+    pluginName: 'Source', label: 'PAT', scopes: [] };
+  let groups = [{ key: 'token', label: 'PAT', options: [source],
+    accounts: [{ id: 'saved', label: 'PAT', status: 'connected' as 'connected' | 'expired' }] }];
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts: vi.fn(async () => groups), reuseAccount: vi.fn() } });
+  const view = render(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  expect(await screen.findByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeTruthy();
+  groups = [{ key: 'token', label: 'PAT', options: state === 'replacement' ? [source] : [],
+    accounts: state === 'archived' ? [{ id: 'saved', label: 'PAT', status: 'expired' }] : [] }];
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountRefresh' }));
+  await waitFor(() => {
+    if (state === 'removed') expect(view.container.childElementCount).toBe(0);
+    else if (state === 'archived') {
+      expect(screen.getByText('settings.ghosts.detail.reuseAccountUnavailable')).toBeTruthy();
+      expect((screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' }) as HTMLButtonElement).disabled).toBe(false);
+    } else {
+      expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeNull();
+      expect((screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountUse' }) as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+});
+
 // A failed catalogue read is not a successful empty result: preserve the
 // existing error and refresh path, then hide only after an empty read succeeds.
 it('keeps the account catalogue error and refresh until a successful empty read', async () => {

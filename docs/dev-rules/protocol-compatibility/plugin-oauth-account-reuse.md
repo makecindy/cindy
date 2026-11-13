@@ -23,3 +23,6 @@
   来源仍独立管理；停止使用只删除目标引用，持久化失败返回 `VAULT_WRITE_FAILED`。
   手机端建立这类引用尚不支持，调用既有引用不扩大凭证与账号边界。
   Node Host 用同一 `GhostSavedCredentialManager` 和既有 owner vault/connections 解析并注入，来源撤回即拒绝；不新增引用创建、存储或迁移流程。
+- 来源成功卸载清除消费方复用；同物理键重装不能复活旧授权。真正换源仅改写已有引用中的来源实例键，
+  随既有 archive 身份变为不可用，沿原逆向归档恢复；旧端原本无法执行此 Host 私有引用，无协议字段增减。
+  普通同来源更新及凭证轮换保留引用，不持久化 receipt revision，不新增 journal 或状态源。

@@ -25,14 +25,37 @@ interface Deps {
 export class GhostSavedCredentialManager {
   constructor(private readonly deps: Deps) {}
 
-  private reference(id: string, key: string): GhostSavedCredentialReference | null {
-    if (this.deps.vault.read(id, key) !== GHOST_SAVED_CREDENTIAL_MARKER) return null;
+  private reference(id: string, key: string, strict = false): GhostSavedCredentialReference | null {
+    const read = strict ? this.deps.vault.readStrict ?? this.deps.vault.read : this.deps.vault.read;
+    if (read(id, key) !== GHOST_SAVED_CREDENTIAL_MARKER) return null;
+    // Cleanup must not mistake a keyring/IO failure for an absent reference.
+    const raw = strict ? read(id, referenceKey(key)) : undefined;
     try {
-      const ref = JSON.parse(this.deps.vault.read(id, referenceKey(key)) ?? 'null') as GhostSavedCredentialReference | null;
+      const ref = JSON.parse((strict ? raw : read(id, referenceKey(key))) ?? 'null') as GhostSavedCredentialReference | null;
       return ref && (ref.kind === 'secret' || ref.kind === 'connection') &&
         ['instanceKey', 'secretKey', 'accountId'].every(k => typeof ref[k as keyof typeof ref] === 'string' &&
           ref[k as keyof typeof ref].length > 0 && ref[k as keyof typeof ref].length <= 512) ? ref : null;
     } catch { return null; }
+  }
+
+  /** Only an explicit uninstall/source archive calls this, never resolve().
+   * Archive keys belong to the existing reversible user-data transaction. */
+  async relocateSourceReferences(from: string, to: string | null, targets: readonly { instanceKey: string; keys: readonly string[] }[]): Promise<void> {
+    for (const target of targets) {
+      const suffix = referenceKey('');
+      const keys = target.keys.filter(key => key.endsWith(suffix)).map(key => key.slice(0, -suffix.length));
+      if (!keys.some(key => this.reference(target.instanceKey, key, true)?.instanceKey === from)) continue;
+      await this.deps.withMutationLock(target.instanceKey, () => {
+        for (const key of keys) {
+          const ref = this.reference(target.instanceKey, key, true);
+          if (ref?.instanceKey !== from) continue;
+          const ok = to !== null
+            ? this.deps.vault.store(target.instanceKey, referenceKey(key), JSON.stringify({ ...ref, instanceKey: to }))
+            : this.disconnect(target.instanceKey, key, ref.accountId).ok;
+          if (!ok) throw new Error('VAULT_WRITE_FAILED');
+        }
+      });
+    }
   }
 
   private candidate(id: string, key: string, ref: GhostSavedCredentialReference) {

@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import JSZip from 'jszip';
+import { GhostSavedCredentialManager } from '../ghostSavedCredentials.js';
+import { GhostConnectionManager } from '../ghostConnections.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -6509,7 +6511,7 @@ describe('GhostManager · update(原位换版)', () => {
       sourceKey,
       store: (archiveManager as unknown as { receiptStore: GhostInstallReceiptStore }).receiptStore,
       update: (options: Pick<Parameters<GhostManager['update']>[1], 'beforePackageCommit'> = {}) => archiveManager.update(file, {
-        expectedInstalledApproval: ghostInstallApprovalToken(archiveManager.list()[0]?.approval),
+        expectedInstalledApproval: ghostInstallApprovalToken(archiveManager.list().find(ghost => ghost.manifest.id === manifest.id)?.approval),
         sourceStateArchiveId: archiveId,
         ...options,
       }),
@@ -6523,6 +6525,102 @@ describe('GhostManager · update(原位换版)', () => {
     state.delete('_root__hello');
     state.set(sourceKey, value);
   }
+
+  // #10130 / 4560156890: a source archive can acquire consumers' credential
+  // locks. Acquiring an ordinary update's lock before this queue would invert
+  // the order. Unit: real Manager updates and archive callback, no timed waits.
+  it('queues ordinary credential locks behind source archival and holds them through the entire update', async () => {
+    let entered!: () => void;
+    const inArchive = new Promise<void>(resolve => { entered = resolve; });
+    let finish!: () => void;
+    const archiveGate = new Promise<void>(resolve => { finish = resolve; });
+    let credentialHeld = false;
+    const stages: string[] = [];
+    const { update } = await prepareSourceArchiveUpdate(async () => {
+      entered(); await archiveGate;
+      expect(credentialHeld).toBe(false);
+      stages.push('archive');
+    });
+    await manager.install(await makeCindy('consumer.cindy', goodManifest('consumer')));
+    const consumer = manager.list().find(ghost => ghost.manifest.id === 'consumer')!;
+    const file = await makeCindy('consumer-update.cindy', { ...goodManifest('consumer'), version: '2.0.0' });
+    const archival = update();
+    await inArchive;
+    const ordinary = manager.update(file, {
+      expectedInstalledApproval: ghostInstallApprovalToken(consumer.approval),
+      withCredentialMutation: async run => {
+        expect(stages).toEqual(['archive']);
+        credentialHeld = true; stages.push('lock');
+        try { return await run(); }
+        finally { credentialHeld = false; stages.push('unlock'); }
+      },
+      beforePackageCommit: () => { expect(credentialHeld).toBe(true); stages.push('prepare'); },
+      onPackagePlaced: () => { expect(credentialHeld).toBe(true); stages.push('placed'); },
+    });
+    expect(credentialHeld).toBe(false);
+    finish();
+    expect(await archival).toHaveProperty('ghost');
+    expect(await ordinary).toHaveProperty('ghost');
+    expect(stages).toEqual(['archive', 'lock', 'prepare', 'placed', 'unlock']);
+    expect(credentialHeld).toBe(false);
+  });
+
+  // Real receipt failure/restart recovery must reverse incoming references too;
+  // manager-only resolution and successful archives do not exercise this journal.
+  it.each(['rollback', 'restart'] as const)('restores saved credential reuse through source archive %s', async recovery => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'network'], settingsHtml: 'settings.html', network: { hosts: ['api.example.com'],
+      secrets: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }] } };
+    let relocate!: (from: string, to: string) => Promise<void>;
+    let blockInverse = recovery === 'restart';
+    const { store, update, sourceKey } = await prepareSourceArchiveUpdate(async (from, to) => {
+      if (from === archiveId && blockInverse) throw new Error('inverse interrupted');
+      await relocate(from, to);
+    }, manifest);
+    const installed = await manager.install(await makeCindy('reuse-consumer.cindy', { ...manifest, id: 'consumer', name: 'Consumer' }));
+    if (!('ghost' in installed)) throw new Error('consumer install failed');
+    const targetKey = installedGhostStoragePart(installed.ghost);
+    const data = new Map<string, string>([[`${sourceKey}\0token`, 'old-source-pat']]);
+    const vault = { read: (id: string, key: string) => data.get(`${id}\0${key}`) ?? null,
+      store: (id: string, key: string, value: string) => { data.set(`${id}\0${key}`, value); return true; },
+      remove: (id: string, key: string) => { data.delete(`${id}\0${key}`); }, readTail: () => null };
+    const source = (id: string) => {
+      const ghost = manager.list().find(item => installedGhostStoragePart(item) === id);
+      return ghost?.enabled && ghost.approval.state === 'approved'
+        ? { instanceKey: id, manifest: ghost.manifest, name: ghost.manifest.name } : null;
+    };
+    const references = new GhostSavedCredentialManager({ vault, connections: new GhostConnectionManager({ vault }),
+      connectionSource: source, connectionSources: () => [], captureTarget: id => source(id) ? id : null,
+      confirm: async () => true, withMutationLock: async (_id, task) => task() });
+    const noop = () => {};
+    ({ relocateGhostUserData: relocate } = createGhostProductionCallbacks<{ relocateGhostUserData(from: string, to: string): Promise<void> }>({
+      functions: ['relocateGhostUserData', 'relocateGhostAccountReuseReferences'],
+    })({ getGhostHandoffStore: () => ({ blockForRelocation: () => noop }),
+      relocateIdleGhostUserData: async (from: string, to: string) => {
+        for (const [key, value] of [...data]) if (key.startsWith(from + '\0')) {
+          data.set(to + key.slice(from.length), value); data.delete(key);
+        }
+      },
+      withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
+      getGhostManager: () => manager, getGhostSavedCredentialManager: () => references,
+      listGhostAccountReferenceKeys: (ids: string[]) => ids.map(instanceKey => ({ instanceKey,
+        keys: [...data.keys()].filter(key => key.startsWith(instanceKey + '\0')).map(key => key.slice(instanceKey.length + 1)) })),
+      getGhostOauthAccountManager: () => ({ relocateSourceReferences: async () => {} }), beginGhostMutation: () => noop,
+    }));
+    expect(await references.reuse(targetKey, 'token', { kind: 'secret', instanceKey: sourceKey, secretKey: 'token', accountId: 'saved' })).toEqual({ ok: true });
+    const write = vi.spyOn(store, 'write').mockRejectedValueOnce(new Error('receipt interrupted'));
+    expect(await update()).toHaveProperty('rejection'); write.mockRestore();
+    if (recovery === 'restart') {
+      expect(JSON.parse(vault.read(targetKey, 'token-reused-credential')!).instanceKey).toBe(archiveId);
+      expect(references.resolve(targetKey, 'token')).toBeNull();
+      expect(store.readPendingMutationSync('_ns/_root/hello').state).toBe('valid');
+      blockInverse = false;
+      manager = sourceArchiveManager(relocate);
+      await manager.retryInterruptedMutationsAfterDbReady();
+    }
+    expect(JSON.parse(vault.read(targetKey, 'token-reused-credential')!).instanceKey).toBe(sourceKey);
+    expect(references.resolve(targetKey, 'token')?.value).toBe('old-source-pat');
+    expect(store.readPendingMutationSync('_ns/_root/hello').state).toBe('missing');
+  });
 
   it('archives source state before package side effects and leaves the replacement with empty state', async () => {
     const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { tasks: true } };

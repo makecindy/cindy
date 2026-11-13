@@ -166,6 +166,18 @@ function removeGhostSecrets(instanceKey: string): void {
   }
 }
 
+/** Lifecycle-only name census. The platform IO already limits list() to the
+ * current owner. Never open/decrypt records merely to enumerate references. */
+function listGhostAccountReferenceKeys(instanceKeys: readonly string[]): Array<{ instanceKey: string; keys: string[] }> {
+  if (!instanceKeys.length) return [];
+  const keys = io.list().filter(key => key.startsWith(GHOST_SECRET_PREFIX) &&
+    (key.endsWith('-reused-credential') || key.endsWith('-accounts')));
+  return instanceKeys.map(instanceKey => {
+    const prefix = ghostSecretStorageKey(instanceKey, 'x').slice(0, -1);
+    return { instanceKey, keys: keys.filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length)) };
+  });
+}
+
 function ghostSecretRelocationPrefixes(fromGhostId: string, toGhostId: string): Array<[string, string]> {
   return [
     [`${GHOST_SECRET_PREFIX}${fromGhostId}_`, `${GHOST_SECRET_PREFIX}${toGhostId}_`],
@@ -248,5 +260,5 @@ function migrateGhostSecrets(
   return rollback;
 }
 
-  return { migrateInstalledGhostSecretAliases, readGhostSecret, readGhostSecretStrict, ghostSecretSaved, storeGhostSecret, readGhostSecretTailFromIo, readGhostSecretTail, removeGhostSecret, removeGhostSecrets, assertGhostSecretsCanRelocate, migrateGhostSecrets };
+  return { migrateInstalledGhostSecretAliases, readGhostSecret, readGhostSecretStrict, ghostSecretSaved, storeGhostSecret, readGhostSecretTailFromIo, readGhostSecretTail, removeGhostSecret, removeGhostSecrets, listGhostAccountReferenceKeys, assertGhostSecretsCanRelocate, migrateGhostSecrets };
 }

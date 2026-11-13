@@ -4430,6 +4430,8 @@ export class GhostManager {
       installOrigin?: 'manual' | 'agent-forge';
       namespace?: string | null;
       sourceStateArchiveId?: string;
+      /** Acquire the existing credential lock only after entering the mutation lane. */
+      withCredentialMutation?: <T>(operation: () => Promise<T>) => Promise<T>;
       /** Host-only official market transition; package authors cannot request this. */
       simulatorPreviousRelId?: string;
       simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -4438,7 +4440,9 @@ export class GhostManager {
       onPackagePlaced?: () => void;
     },
   ) {
-    return this.runExclusiveMutation(() => this.updateUnlocked(lizFilePath, opts));
+    return this.runExclusiveMutation(() => opts.withCredentialMutation
+      ? opts.withCredentialMutation(() => this.updateUnlocked(lizFilePath, opts))
+      : this.updateUnlocked(lizFilePath, opts));
   }
 
   private async updateUnlocked(
