@@ -386,8 +386,13 @@ Chat Server 声明 `capabilities.groupSingleSpeaker: 1` 时，服务器群按下
   本次运行期间关闭重开话题也保留发送身份：发送中禁用重发，失败后沿用原附件和标注生成图重试。
   待发送的标注生成图参与草稿图片保护，成功、编辑或丢弃草稿后解除；删除群或失去访问时一并丢弃主群及其话题草稿。
   成功回执只清理与此次发送快照一致的附件，关闭重开话题后的新标注保留。「同时发到群聊」沿用现有先回复、再贴回的流程。
-  话题内不预留侧边操作栏的空白：共用的消息操作栏常显在气泡底部，正文使用可用列宽；宽表格在自身容器内横向滚动，
-  文件 chip 不超出气泡、长文件名省略。群聊与私聊同由 `ThreadPanel.css` 约束（回归：`scripts/fixtures/thread-panels`）。
+  Desktop 群聊话题复用主群聊气泡外侧顶部的消息操作栏：自己消息在左侧，其他成员消息在右侧；悬停或键盘聚焦时显示，
+  触屏沿用主群聊规则。表情与更多两项操作预留 64px 侧边空白，避开气泡右下角的已读标记，保留已读能力。
+  私聊话题保持气泡底部常显的消息操作栏，不预留侧边空白。两者均保持宽表格在自身容器内横向滚动，文件 chip 不超出气泡、
+  长文件名省略。布局分支由 [ThreadPanel](../../apps/desktop/src/renderer/features/bots/ThreadPanel.tsx) 与
+  [ThreadPanel.css](../../apps/desktop/src/renderer/features/bots/ThreadPanel.css) 约束；群聊由
+  [ChatThreadPanel](../../apps/desktop/src/renderer/features/bots/ChatThreadPanel.tsx) 选择外侧操作栏，私聊沿用默认底部布局
+  （回归：[thread-panels](../../apps/desktop/scripts/fixtures/thread-panels/ui-page.mjs)）。
 - 视觉遵循 [`DESIGN.md`](../design-rules/DESIGN.md)；Light 与 Dark 同时实现。
 - 成员卡优先使用消息中的点名身份；服务器消息缺少身份时，只对群成员中唯一匹配的名字显示卡片，重名和广播标签不猜测。表情角标换行时，悬停操作栏仍以实际气泡顶边为基准定位。
 
