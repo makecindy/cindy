@@ -230,9 +230,11 @@ it('超上限的输出:体量巡检杀树,文件有界,报告标记超限(fd 直
   const logPath = (result as { ok: true; logPath: string }).logPath;
   const { stat: statFile } = await import('node:fs/promises');
   const info = await statFile(logPath);
-  // 杀树时越限写仍在途:允许一个巡检周期的越冲,不能写穿磁盘。
+  // 杀树时越限写仍在途:巡检间隔 + kill 落地延迟内的在途写入都算越冲。CI 上
+  // 实测过 3×cap(调度抖动让 500ms 巡检晚到),上界给 5×cap —— 体量上限是护栏,
+  // 只保证「写不穿磁盘」的量级,不是字节级合同。
   expect(info.size).toBeGreaterThan(BACKGROUND_COMMAND_LOG_CAP_BYTES);
-  expect(info.size).toBeLessThan(BACKGROUND_COMMAND_LOG_CAP_BYTES * 3);
+  expect(info.size).toBeLessThan(BACKGROUND_COMMAND_LOG_CAP_BYTES * 5);
 });
 
 it('长输出命令:报告尾部取自文件末尾,结论行不丢(fd 直写后无内存尾部)', async () => {
