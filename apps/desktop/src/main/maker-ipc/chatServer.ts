@@ -245,8 +245,9 @@ const isGroupRoom = (room: Pick<Room, 'kind'>) => room.kind === 'group';
 /** Compatibility only: never restore a host-generated welcome left in an old input snapshot.
  * Match both the host client ID and the exact old envelope; ordinary user text is not a marker.
  */
-export function isRetiredGroupWelcomeInput(item: { clientId: string; persistedContent: string }): boolean {
-  return item.clientId.startsWith('bot-group:') && item.persistedContent.startsWith(
+export function isRetiredGroupWelcomeInput(item: { clientId: string; retrySourceClientId?: string; persistedContent: string }): boolean {
+  const groupInput = item.clientId.startsWith('bot-group:') || item.retrySourceClientId?.startsWith('bot-group:');
+  return Boolean(groupInput) && item.persistedContent.startsWith(
     `${UI_ACTION_TRIGGER_PREFIX}You are participating as yourself in a Cindy group chat. The host has validated a server-issued event confirming that a real human joined this group.`);
 }
 const ordinaryExecution = (execution: Execution) => execution.trigger === undefined && execution.trigger_type == null;

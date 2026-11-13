@@ -2871,6 +2871,12 @@ describe('Chat Server result delivery and refresh', () => {
     expect(isRetiredGroupWelcomeInput({ ...item, clientId: 'user-message' })).toBe(false);
     expect(isRetiredGroupWelcomeInput({ ...item, persistedContent: text })).toBe(false);
     expect(isRetiredGroupWelcomeInput({ ...item, persistedContent: '[UI_ACTION_TRIGGER]Reply to my request' })).toBe(false);
+    // Chat-only dispatch persisted a fresh queue ID and retained the group
+    // execution identity separately; this is the actual pre-upgrade snapshot shape.
+    const chatOnly = { ...item, clientId: 'random-queue-id', retrySourceClientId: item.clientId, toolsDisabled: true };
+    expect(isRetiredGroupWelcomeInput(chatOnly)).toBe(true);
+    expect(isRetiredGroupWelcomeInput({ ...chatOnly, retrySourceClientId: 'ordinary-retry' })).toBe(false);
+    expect(isRetiredGroupWelcomeInput({ ...chatOnly, persistedContent: '[UI_ACTION_TRIGGER]Reply to my request' })).toBe(false);
   });
 
   // Removal regression (unit): a valid queued legacy welcome used to start an Agent.
