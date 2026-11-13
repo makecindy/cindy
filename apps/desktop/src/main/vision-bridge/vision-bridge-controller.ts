@@ -16,9 +16,16 @@ import {
   type RequestTransformCtx,
 } from '@cindy/anthropic-compat-proxy';
 
+export interface VisionBridgeRouteContext {
+  sessionId?: string;
+  providerId?: string;
+  agentKind?: 'claude-code' | 'codex' | 'pi';
+  modelId?: string;
+}
+
 /** 视觉桥 transform 所需的两个能力（对应 createVisionBridge 的 isTargetModel / describeImage）。 */
 export interface VisionBridgeController {
-  shouldBridge(model: string): boolean;
+  shouldBridge(model: string, routeContext?: VisionBridgeRouteContext): boolean;
   /**
    * 描述一张图。imageUrl（data:/http(s): URL）与 imagePath（本地绝对路径）二选一；
    * 供层 A proxy transform（imageUrl 形态）与 ghost 工具结果描述（imagePath 形态）复用。
@@ -52,8 +59,9 @@ export function buildVisionBridgeProxyTransform(
   logger?: ProxyLogger,
   /** 返回 true 的请求不走视觉桥(供应商分享受邀者：视觉后端是本机用户自己的其它供应商)。 */
   skipRequest?: (ctx: RequestTransformCtx) => boolean,
+  resolveRouteContext?: (ctx: RequestTransformCtx) => VisionBridgeRouteContext | undefined,
 ): RequestTransform {
-  const transform = buildVisionBridgeTransform(logger);
+  const transform = buildVisionBridgeTransform(logger, resolveRouteContext);
   if (!skipRequest) return transform;
   const guarded: RequestTransform = (body, ctx) => (skipRequest(ctx) ? null : transform(body, ctx));
   guarded.errorMode = transform.errorMode;
@@ -61,9 +69,13 @@ export function buildVisionBridgeProxyTransform(
   return guarded;
 }
 
-function buildVisionBridgeTransform(logger?: ProxyLogger): RequestTransform {
+function buildVisionBridgeTransform(
+  logger?: ProxyLogger,
+  resolveRouteContext?: (ctx: RequestTransformCtx) => VisionBridgeRouteContext | undefined,
+): RequestTransform {
   return createVisionBridgeTransform({
-    shouldBridge: (model) => _controller?.shouldBridge(model) ?? false,
+    shouldBridge: (model, ctx) =>
+      _controller?.shouldBridge(model, ctx ? resolveRouteContext?.(ctx) : undefined) ?? false,
     describeImage: (input) => {
       if (!_controller) {
         return Promise.reject(new Error('vision bridge not configured'));

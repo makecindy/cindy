@@ -49,44 +49,48 @@ vi.mock('@/hooks/useModelPricing', () => ({
   useReferenceModelPricing: () => null,
 }));
 
+const defaultProviders = vi.hoisted(() => [
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    source: 'builtin',
+    auth: { method: 'oauth' },
+    agents: ['claude-code', 'codex', 'pi'],
+    connected: true,
+    suspended: false,
+    routing: { 'claude-code': { upstream: 'https://x', authStrategy: 'gateway-key' } },
+    models: {
+      'claude-code': [{ id: 'claude-opus-5', name: 'Claude Opus 5' }],
+      codex: [],
+      pi: [],
+    },
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    source: 'user',
+    auth: { method: 'apiKey' },
+    agents: ['claude-code', 'codex', 'pi'],
+    connected: true,
+    suspended: false,
+    routing: { 'claude-code': { upstream: 'https://x', authStrategy: 'api-key-header' } },
+    models: {
+      'claude-code': [
+        { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        { id: 'deepseek/deepseek-v3', name: 'DeepSeek V3' },
+        { id: 'mystery/m1', name: 'Mystery M1' },
+      ],
+      codex: [],
+      pi: [],
+    },
+  },
+]);
+
+const providersMock = vi.hoisted(() => ({ current: defaultProviders as unknown[] }));
+
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
-    providers: [
-      {
-        id: 'anthropic',
-        name: 'Anthropic',
-        source: 'builtin',
-        auth: { method: 'oauth' },
-        agents: ['claude-code', 'codex', 'pi'],
-        connected: true,
-        suspended: false,
-        routing: { 'claude-code': { upstream: 'https://x', authStrategy: 'gateway-key' } },
-        models: {
-          'claude-code': [{ id: 'claude-opus-5', name: 'Claude Opus 5' }],
-          codex: [],
-          pi: [],
-        },
-      },
-      {
-        id: 'deepseek',
-        name: 'DeepSeek',
-        source: 'user',
-        auth: { method: 'apiKey' },
-        agents: ['claude-code', 'codex', 'pi'],
-        connected: true,
-        suspended: false,
-        routing: { 'claude-code': { upstream: 'https://x', authStrategy: 'api-key-header' } },
-        models: {
-          'claude-code': [
-            { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-            { id: 'deepseek/deepseek-v3', name: 'DeepSeek V3' },
-            { id: 'mystery/m1', name: 'Mystery M1' },
-          ],
-          codex: [],
-          pi: [],
-        },
-      },
-    ],
+    providers: providersMock.current,
     loading: false,
     providerOrder: [],
     ownerGeneration: 0,
@@ -136,6 +140,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  providersMock.current = defaultProviders;
 });
 
 describe('VisionBridgeSection', () => {
@@ -243,5 +248,97 @@ describe('VisionBridgeSection', () => {
     expect(screen.getAllByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })[0].getAttribute('aria-checked')).toBe('true');
     expect(settingsSetMock.mock.calls).toEqual([[{ enabled: true }], [{ enabled: false }], [{ enabled: true }]]);
     expect(settingsResetMock).not.toHaveBeenCalled();
+  });
+
+  // Bug/rule: PR #8451 P1 #discussion_r4542952804 — explicit supportsImageInput: false on a
+  // deepseek-flash route must keep it marked no-vision and included in toggleTarget's first seed.
+  // Minimal failing input: deepseek-flash with supportsImageInput:false + toggling unrelated model. Tier: unit (jsdom).
+  it('preserves explicit supportsImageInput: false routes in target rows and initial seed', async () => {
+    providersMock.current = [
+      {
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        auth: { method: 'oauth' },
+        agents: ['claude-code', 'codex', 'pi'],
+        connected: true,
+        suspended: false,
+        routing: { 'claude-code': { upstream: 'https://x', authStrategy: 'gateway-key' } },
+        models: {
+          'claude-code': [{ id: 'claude-opus-5', name: 'Claude Opus 5', supportsImageInput: true }],
+          codex: [],
+          pi: [],
+        },
+      },
+      {
+        id: 'deepseek',
+        name: 'DeepSeek',
+        source: 'builtin',
+        auth: { method: 'apiKey' },
+        agents: ['claude-code', 'codex', 'pi'],
+        connected: true,
+        suspended: false,
+        routing: {
+          'claude-code': { upstream: 'https://api.deepseek.com/anthropic', wireProtocol: 'anthropic-messages', authStrategy: 'api-key-header' },
+          codex: { upstream: 'https://api.deepseek.com/v1', wireProtocol: 'openai-chat', authStrategy: 'api-key-header' },
+        },
+        models: {
+          'claude-code': [{ id: 'deepseek-flash', name: 'DeepSeek Flash', supportsImageInput: true }],
+          codex: [{ id: 'deepseek-flash', name: 'DeepSeek Flash', supportsImageInput: false }],
+          pi: [],
+        },
+      },
+    ];
+    settingsGetMock.mockResolvedValue(baseSettings({ enabled: true }));
+    render(<VisionBridgeSection />);
+
+    await screen.findByText('DeepSeek Flash');
+    const toggles = screen.getAllByLabelText('settings.visionBridge.targetModels.toggleAria');
+    expect(toggles).toHaveLength(2);
+    expect(toggles[0].getAttribute('aria-checked')).toBe('true');
+    expect(toggles[1].getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggles[1]);
+
+    await waitFor(() =>
+      expect(settingsSetMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetModels: ['deepseek-flash', 'claude-opus-5'],
+        }),
+      ),
+    );
+  });
+
+  // Bug/rule: PR #8451 P1 #discussion_r4544710845 — Claude custom openai-chat relay without
+  // explicit supportsImageInput cannot forward images; settings UI must treat it as no-vision.
+  // Minimal failing input: user openai-chat provider with metadata-free deepseek-flash. Tier: unit (jsdom).
+  it('marks metadata-free Claude custom openai-chat routes as no-vision in settings', async () => {
+    providersMock.current = [
+      {
+        id: 'custom-relay',
+        name: 'Custom Relay',
+        source: 'user',
+        auth: { method: 'apiKey' },
+        agents: ['claude-code'],
+        connected: true,
+        suspended: false,
+        routing: {
+          'claude-code': {
+            upstream: 'https://relay.example.com/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'bearer',
+          },
+        },
+        models: {
+          'claude-code': [{ id: 'deepseek-flash', name: 'DeepSeek Flash' }],
+        },
+      },
+    ];
+    settingsGetMock.mockResolvedValue(baseSettings({ enabled: true }));
+    render(<VisionBridgeSection />);
+
+    await screen.findByText('DeepSeek Flash');
+    expect(screen.getByText('settings.visionBridge.capability.noVision')).toBeTruthy();
+    const toggle = screen.getByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
   });
 });

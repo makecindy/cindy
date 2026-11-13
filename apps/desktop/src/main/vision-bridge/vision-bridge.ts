@@ -17,7 +17,14 @@ import { createHash } from 'node:crypto';
 import type { UserContentBlock, UserMessage } from '@cindy/maker-core';
 import type { VisionBridgeHook, VisionBridgeResult } from '@cindy/maker-core';
 
-import { isKnownNoVisionModel, normalizeVisionModelId, type CatalogModel } from '@cindy/model-providers';
+import {
+  isKnownNoVisionModel,
+  normalizeVisionModelId,
+  resolveExplicitVisionSupport,
+  type CatalogModel,
+  type VisionCapability,
+} from '@cindy/model-providers';
+import type { VisionBridgeRouteContext } from './vision-bridge-controller.js';
 
 import {
   isTargetModelsCustomized,
@@ -41,6 +48,11 @@ export interface VisionBridgeDeps extends VisionChannelDeps {
   logger?: LoggerLike;
   /** Resolve only the current task route; never borrow metadata from another provider. */
   resolveTargetModel?: (modelId: string, sessionId: string) => CatalogModel | null;
+  /** Resolve route-aware vision capability (explicit metadata + send-layer forwarding check + ID fallback). */
+  resolveTargetCapability?: (
+    modelId: string,
+    routeContext?: VisionBridgeRouteContext,
+  ) => VisionCapability | null;
   /** 视觉桥不可用 / fallback 生效时的提示回调（host 可据此发 UI 事件）。sessionId 由 hook ctx 传入。
    *  kind 是结构化原因（'unavailable' | 'fallback'），host 据此分流，不做字符串匹配。 */
   onNote?: (note: string, sessionId: string, kind: 'unavailable' | 'fallback') => void;
@@ -110,7 +122,7 @@ function buildBridgedMessage(
 export function createVisionBridge(deps: VisionBridgeDeps): {
   hook: VisionBridgeHook;
   /** 判定某 model 是否启用视觉桥（层 A proxy transform 复用）。 */
-  isTargetModel: (model: string) => boolean;
+  isTargetModel: (model: string, sessionIdOrContext?: string | VisionBridgeRouteContext) => boolean;
   /** 描述一张图（层 A proxy transform / ghost 工具结果描述复用，imageUrl 或 imagePath 形态）。 */
   describeImage: (input: {
     imageUrl?: string;
@@ -176,7 +188,15 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
   }
 
   /** 判定某 model 是否启用视觉桥（总开关 + 目标模型命中）。层 B 与层 A 共用。 */
-  function isTargetModel(model: string, sessionId?: string): boolean {
+  function isTargetModel(
+    model: string,
+    sessionIdOrContext?: string | VisionBridgeRouteContext,
+  ): boolean {
+    const routeContext: VisionBridgeRouteContext | undefined =
+      typeof sessionIdOrContext === 'string'
+        ? { sessionId: sessionIdOrContext }
+        : sessionIdOrContext;
+    const sessionId = routeContext?.sessionId;
     const settings = readVisionBridgeSettings();
     if (!settings.enabled) {
       logTargetDecision(model, 'disabled', {});
@@ -193,10 +213,15 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
     // 走视觉桥——对齐设计文档「no-vision 默认勾选」。用户显式保存过 targetModels 后，
     // 按用户勾选（可显式取消 no-vision）。
     const customized = isTargetModelsCustomized();
-    const entry = sessionId ? deps.resolveTargetModel?.(model, sessionId) : null;
-    const supportsImage = entry?.supportsImageInput ??
-      (entry?.modalities ? entry.modalities.input.includes('image') : undefined);
-    const knownNoVision = supportsImage !== undefined ? !supportsImage : isKnownNoVisionModel(model);
+    const resolvedCapability = deps.resolveTargetCapability?.(model, routeContext) ?? null;
+    let knownNoVision: boolean;
+    if (resolvedCapability !== null) {
+      knownNoVision = resolvedCapability === 'no-vision';
+    } else {
+      const entry = sessionId ? deps.resolveTargetModel?.(model, sessionId) : null;
+      const supportsImage = resolveExplicitVisionSupport(entry);
+      knownNoVision = supportsImage !== undefined ? !supportsImage : isKnownNoVisionModel(model);
+    }
     if (!customized && knownNoVision) {
       logTargetDecision(model, 'default no-vision hit', { normalizedModel });
       return true;
