@@ -1,4 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
+import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
@@ -218,6 +219,8 @@ export interface GhostCardNeeds {
  *   可重新提交"处理)。
  */
 export interface GhostAgentNeeds {
+  /** Each known group requires its own explicit Host receipt approval. */
+  hostTools?: string[];
   background?: boolean;
   errand?: boolean;
   tasks?: boolean;
@@ -378,6 +381,7 @@ export const GHOST_NODE_CHILD_MODE_FLAG = '__cindy-node-child__';
 
 /** worker → 主机:代启/喂 stdin/收 stdin/杀进程。 */
 export type GhostNodeChildToHostMessage =
+  | (GhostPipeHostToolRequest & { reqId: string })
   | { type: 'authenticated-fetch'; reqId: string; rpcId: string; authorization: string; request: Record<string, unknown> }
   | { type: 'plugin-authorize'; reqId: string; rpcId: string; request: PluginAuthorizationRequest }
   | { type: 'device-authorize'; reqId: string; rpcId: string; url: string }
@@ -405,6 +409,12 @@ function isChildId(v: unknown): v is string {
 export function parseGhostNodeChildToHostMessage(raw: unknown): GhostNodeChildToHostMessage | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
+  if (m.type === 'host-tool-request') {
+    if (Object.keys(m).sort().join(',') !== 'args,reqId,server,tool,type' || !isChildId(m.reqId) ||
+      typeof m.server !== 'string' || typeof m.tool !== 'string' || !m.args || typeof m.args !== 'object' || Array.isArray(m.args)) return null;
+    try { JSON.stringify(m.args); } catch { return null; }
+    return { type: m.type, reqId: m.reqId, server: m.server, tool: m.tool, args: m.args as Record<string, unknown> };
+  }
   if (m.type === 'authenticated-fetch') {
     if (!isChildId(m.reqId) || typeof m.rpcId !== 'string' || !/^\d{1,16}$/.test(m.rpcId)) return null;
     if (Object.keys(m).sort().join(',') !== 'authorization,reqId,request,rpcId,type'
@@ -694,11 +704,20 @@ export interface GhostCindyNeeds {
  * turn = 轮次开始/结束(agent/模型/耗时/用量,不含消息内容);
  * activity = 轮次内思考/审批/等待用户输入的开始结束边界(只含 id 元数据);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
- * 正文级主题(消息内容旁听)刻意不开——隐私最重,等真实场景再议,权限文案
- * 也要另分一档。
+ * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
+ * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
+export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state'] as const;
+export type GhostTaskEventTopic = (typeof GHOST_TASK_EVENT_TOPICS)[number];
+export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subscribe'>): GhostTaskEventTopic[] {
+  return GHOST_TASK_EVENT_TOPICS.filter(topic => manifest.subscribe?.topics?.includes(topic));
+}
+export function ghostTaskEventApproved(ghost: InstalledGhost, topic: GhostSubscribeTopic): boolean {
+  return !GHOST_TASK_EVENT_TOPICS.includes(topic as GhostTaskEventTopic) ||
+    (ghost.approval?.state === 'approved' && ghost.approvedEventTopics?.includes(topic as GhostTaskEventTopic) === true);
+}
 
 /**
  * 订阅槽 will- 拦截钩子(真 hook:主机停等裁决)。两个点,一进一出:
@@ -1968,6 +1987,8 @@ export interface InstalledGhost {
   observeCapabilityApproved?: true;
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
+  approvedHostToolGroups?: GhostHostToolGroup[];
+  approvedEventTopics?: GhostTaskEventTopic[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2397,6 +2418,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     if (manifest.agent?.companions === true) {
       items.unshift({ key: 'agent:companions', kind: 'agent', labelKey: 'agentCompanions', detailKey: 'agentCompanionsDetail' });
     }
+    for (const group of declaredGhostHostToolGroups(manifest)) {
+      items.push({ key: `agent:host-tools:${group}`, kind: 'agent', labelKey: `hostTools_${group}`, detailKey: `hostTools_${group}Detail` });
+    }
     // 后台隐藏任务:独立 key 单列(理由同 schedule —— 并进 agent:tasks 会让更新里
     // 新增 hiddenTasks 时 added 为空,扩权复核拦不住)。排在 agent:tasks 之后。
     if (ghostDeclaresHiddenTasks(manifest)) {
@@ -2691,6 +2715,11 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       // unshift 排到清单最顶(敏感项排最上)。
       const topics = manifest.subscribe?.topics;
       if (topics?.length) {
+        for (const topic of declaredGhostTaskEventTopics(manifest)) items.push({
+          key: `subscribe:topics:${topic}`, kind: 'subscribe',
+          labelKey: topic === 'message' ? 'subscribeMessage' : 'subscribeTaskState',
+          detailKey: topic === 'message' ? 'subscribeMessageDetail' : 'subscribeTaskStateDetail',
+        });
         // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
         // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
         // 多报的能力,用户可能据此误拒。存量已批准插件必然含 turn 或 session(activity
@@ -2974,10 +3003,11 @@ export function diffGhostPermissionItems(
  */
 function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifest['subscribe'] {
   const subscribe = installed.manifest.subscribe;
-  if (!subscribe?.hooks) return subscribe;
-  const hooks = subscribe.hooks.filter((hook) =>
+  if (!subscribe) return subscribe;
+  const topics = subscribe.topics?.filter(topic => ghostTaskEventApproved(installed, topic));
+  const hooks = subscribe.hooks?.filter((hook) =>
     !isGhostControlPointId(hook) || installed.approvedControlPoints?.includes(hook) === true);
-  return { ...subscribe, hooks: hooks.length > 0 ? hooks : undefined };
+  return { ...subscribe, topics, hooks: hooks?.length ? hooks : undefined };
 }
 
 /** 声明了 `approval: "auto"` 但用户从没确认过的工具,不算旧权限。 */
@@ -3004,6 +3034,9 @@ export function diffInstalledGhostPermissionItems(
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
           host: getApprovedGhostHostUi(installed) }
         : undefined,
+      ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
+        hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
+      } } : {}),
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
       systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
@@ -5076,6 +5109,9 @@ function validateGhostManifestInput(
       return { ok: false, reason: '声明了 agent 能力详单但 slots 未包含 "agent"' };
     }
     const agentRaw = raw.agent as Record<string, unknown>;
+    if (!preserveHistoricalTasks && agentRaw.hostTools !== undefined && (!Array.isArray(agentRaw.hostTools) || agentRaw.hostTools.some(group => typeof group !== 'string'))) {
+      return { ok: false, reason: 'agent.hostTools must be a string array' };
+    }
     if (agentRaw.background !== undefined && typeof agentRaw.background !== 'boolean') {
       return { ok: false, reason: 'agent.background 必须是布尔值' };
     }
@@ -7104,6 +7140,13 @@ export type GhostAppRegion = 'cn' | 'global';
  * 上行:读取宿主公开上下文。`cindy.request({kind:'app-context'})` 是 preload
  * 提供的语法糖,底层仍走同一根 ghost-pipe 与主机公开上下文校验。
  */
+export interface GhostPipeHostToolRequest {
+  type: 'host-tool-request';
+  server: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
 export type GhostPipeHostRequest =
   | {
       type: 'host-request';
@@ -8935,8 +8978,10 @@ export type GhostActivityEventName =
   | 'did-user-input-start'
   | 'did-user-input-end';
 
-/** did- 旁听事件名(topic 归属:turn / session / activity)。 */
+/** did- 旁听事件名，按声明并批准的 topic 分发。 */
 export type GhostDidEventName =
+  | 'did-message-created'
+  | 'did-task-state-changed'
   | 'did-turn-start'
   | 'did-turn-end'
   | 'did-session-created'
@@ -8997,9 +9042,18 @@ export interface GhostEventInteractionActivityData {
 
 export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteractionActivityData;
 
-/** 所有 did- 旁听事件共享的安全元数据载荷。 */
+/** did- 旁听载荷；消息内容与任务状态使用各自的批准主题。 */
 export type GhostDidEventData =
-  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData;
+  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData;
+export interface GhostTaskEventData {
+  sessionId: string;
+  messageId?: string;
+  role?: 'user' | 'assistant';
+  content?: unknown;
+  createdAt?: string;
+  historyCursor?: string;
+  state?: Record<string, unknown>;
+}
 
 export type GhostMessageHookData = { sessionId: string; text: string; model?: string };
 
