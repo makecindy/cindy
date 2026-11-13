@@ -90,7 +90,7 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, stopPending = false, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
@@ -101,6 +101,7 @@ export function BotGroupComposer({
   deviceId: string;
   online: boolean;
   running: boolean;
+  canStop?: boolean;
   stopPending?: boolean;
   planState: BotGroupComposerPlanState | null;
   /** The active server/computer path takes attachments on send. */
@@ -188,7 +189,7 @@ export function BotGroupComposer({
   // Attachments picked while the computer said yes stay unsendable if it later says no.
   const canSend = online && (trimmed.length > 0 || hasAttachments) && !tooLong && hasMembers
     && (attachmentsSupported || !hasAttachments);
-  const showStop = running && trimmed.length === 0 && !hasAttachments;
+  const showStop = canStop && running && trimmed.length === 0 && !hasAttachments;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
