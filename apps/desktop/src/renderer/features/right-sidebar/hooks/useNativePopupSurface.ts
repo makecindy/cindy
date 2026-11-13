@@ -26,17 +26,24 @@ const EMPTY_SNAPSHOT: RsbNativePopupSnapshot = {
  * chat tree) can cover the native page without destroying its browsing context.
  * Local content and the slot's own full-window ancestors are not occluders. */
 function isCoveredByGlobalOverlay(slot: HTMLElement, x: number, y: number): boolean {
-  let element = document.elementFromPoint(x, y);
-  while (element && !element.contains(slot)) {
-    if (element === document.fullscreenElement) return true;
-    if (getComputedStyle(element).position === 'fixed') {
-      const rect = element.getBoundingClientRect();
-      if (
-        rect.left <= 0 && rect.top <= 0 &&
-        rect.right >= window.innerWidth && rect.bottom >= window.innerHeight
-      ) return true;
+  // Preview panels have margins and are siblings of their full-window scrim.
+  // Walking only the top hit's ancestors misses the scrim beneath the panel.
+  for (const hit of document.elementsFromPoint(x, y)) {
+    // Layers below the slot do not cover it. Also stop for a slot descendant
+    // (e.g. a guest placeholder) or ancestor instead of hiding for background UI.
+    if (hit.contains(slot) || slot.contains(hit)) return false;
+    let element: Element | null = hit;
+    while (element && !element.contains(slot)) {
+      if (element === document.fullscreenElement) return true;
+      if (getComputedStyle(element).position === 'fixed') {
+        const rect = element.getBoundingClientRect();
+        if (
+          rect.left <= 0 && rect.top <= 0 &&
+          rect.right >= window.innerWidth && rect.bottom >= window.innerHeight
+        ) return true;
+      }
+      element = element.parentElement;
     }
-    element = element.parentElement;
   }
   return false;
 }
