@@ -51,6 +51,7 @@ import {
 
 import { createLogger } from '../logger.js';
 import { codexAccountState } from './codex-account-auth.desktop.js';
+import { projectSubscriptionPoolCatalog as projectSubscriptionPoolCatalogWith } from './subscriptionPoolCatalog.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -851,27 +852,9 @@ function getDesktopSelectableBaseCatalog(): Catalog {
   });
 }
 
-/** Apply account membership to both selectable and full routing snapshots. */
+/** Apply account membership to both selectable and full routing snapshots (subscriptionPoolCatalog.ts). */
 function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
-  const pool = readPool('openai');
-  const aliases = pool?.legacyCodexAccounts;
-  if (!aliases || pool.disconnected) return catalog;
-  const accounts = new Set(pool.accounts.filter(account => !account.paused).map(account => account.id));
-  const imported = catalog.providers.filter(provider => provider.auth.native === 'codex'
-    && Object.hasOwn(aliases, provider.id) && accounts.has(aliases[provider.id])
-    && codexAccountState(provider.id).authenticated);
-  if (!imported.length) return catalog;
-  // Reuse these accounts' existing membership; do not discover an unrelated default CLI login.
-  return { ...catalog, providers: catalog.providers.map(provider => {
-    if (provider.id !== 'openai') return provider;
-    const models = Object.fromEntries(provider.agents.map(agent => {
-      const models = new Map((provider.models[agent] ?? []).map(model => [model.id, model]));
-      for (const source of imported) for (const model of source.models[agent] ?? [])
-        if (!models.has(model.id)) models.set(model.id, model);
-      return [agent, [...models.values()]];
-    }));
-    return { ...provider, models };
-  }) };
+  return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState });
 }
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
