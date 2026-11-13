@@ -22,6 +22,7 @@ import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHost
 import { isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
 import { createPiNativeCompatOverridesStore } from '../../../desktop/src/main/maker-host/piNativeCompatOverridesStoreCore.js';
+import { createMainI18n } from '../../../desktop/src/main/i18n.js';
 import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import { getActiveCatalog, getLocalCatalogOverridesSnapshot } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId, resolvePiGatewayDescriptorProviderId, resolvePiRuntimeModelDescriptor } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
@@ -635,6 +636,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // The desktop's learned Pi cache compatibility (pi-native-compat-overrides-store.ts), on this
   // profile; the Pi bridge writes the file and the runtime reads it back.
   const piNativeCompatOverrides = createPiNativeCompatOverridesStore({ app: { getPath: () => options.userDataDir } });
+  // The desktop's main-process strings (i18n.desktop.ts) in the system language, as
+  // plugins/authorization.ts does; the window's language choice does not reach the Host.
+  const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   const pi = options.piBinaryPath
     ? new PiAgent({
         auth: piAuth,
@@ -695,6 +699,26 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           registerAgentProcess(pid, kind, role, sessionId),
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+        // As the desktop (pi-host.ts): the cloud-file startup hint and the extension dialog strings.
+        formatPiStartupCloudFileHint: (file) => t('logic.errors.piStartupCloudFile').replace('{{path}}', () => file),
+        getPiExtensionUiStrings: () => ({
+          confirm: t('settings.piPackages.extensionDialogConfirm'),
+          cancel: t('settings.piPackages.cancel'),
+          mutationFailed: t('settings.piPackages.operationFailed'),
+          mutationFailure: {
+            'source-unavailable': t('settings.piPackages.failure.sourceUnavailable'),
+            'package-not-found': t('settings.piPackages.failure.packageNotFound'),
+            'version-not-found': t('settings.piPackages.failure.versionNotFound'),
+            'state-unavailable': t('settings.piPackages.failure.stateUnavailable'),
+            'native-command-failed': t('settings.piPackages.failure.nativeCommandFailed'),
+          },
+          mutationSuccess: {
+            install: t('settings.piPackages.success.install'),
+            installEnabled: t('settings.piPackages.success.installEnabled'),
+            update: t('settings.piPackages.success.update'),
+            remove: t('settings.piPackages.success.remove'),
+          },
+        }),
         // Only for Pi models the vision bridge targets (layer C), as on the desktop.
         resolvePiVisionBridgeEnv: visionBridge.resolvePiVisionBridgeEnv,
       })

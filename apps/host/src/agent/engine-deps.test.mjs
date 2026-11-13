@@ -2,7 +2,7 @@
  * 测试价值
  * - 生产入口与可观察结果：createHostAgentGraph 组装出的引擎上 maker-core 读取的几项专有依赖
  *   （放行表第 19 行）调用后的结果：Claude 的只读工具白名单、子代理用量（经回环代理共用的进程级
- *   桥）、Codex 凭证形态切换前对本机会话的处理；Pi 的全局上下文目录、模型解析与缓存兼容记录。
+ *   桥）、Codex 凭证形态切换前对本机会话的处理；Pi 的全局上下文目录、模型解析、缓存兼容记录，以及启动提示与扩展对话框文案（按系统语言）。
  * - 规则依据：桌面 maker-host/index.ts 与 pi-host.ts 的构造点用同样的拼法注入这几项。
  * - 最小失败输入：不传白名单；用量登记或读取接到别的桥；凭证切换不拦忙的会话、不关闲置会话、
  *   误关别的 host 或远程会话、不看 Host 的回合追踪。
@@ -22,6 +22,7 @@ import { getDesktopClaudeReadOnlyAllowedTools } from '../../../desktop/src/main/
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.ts';
 import { CodexCredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-host/codex-credential-switch.ts';
 import { readPiGlobalContext } from '../../../../packages/maker-core/src/agents/pi/global-context.ts';
+import { createMainI18n } from '../../../desktop/src/main/i18n.ts';
 
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
 const TEST_TIMEOUT_MS = 120_000;
@@ -270,4 +271,50 @@ test('Pi learns cache compatibility in the profile file the desktop uses and rea
       .replaceAll('readPiNativeCompatOverride(providerId', 'piNativeCompatOverrides.readPiNativeCompatOverride(providerId'));
   assert.ok(runtime.includes("const piNativeCompatOverrides = createPiNativeCompatOverridesStore({ app: { getPath: () => options.userDataDir } });"));
   assert.ok(runtime.includes("import { createPiNativeCompatOverridesStore } from '../../../desktop/src/main/maker-host/piNativeCompatOverridesStoreCore.js';"));
+});
+
+test('Pi gets the desktop startup hint and extension dialog strings in the system language', { timeout: TEST_TIMEOUT_MS }, t => {
+  const deps = buildGraph(t, 'engine-deps-pi-strings').pi.deps;
+  // What i18n.desktop.ts gives when the system reports this language and the window has not set one.
+  const desktop = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
+  const file = '~/Documents/$&$1/AGENTS.md';
+  const hint = deps.formatPiStartupCloudFileHint(file);
+  assert.equal(hint, desktop.t('logic.errors.piStartupCloudFile').split('{{path}}').join(file));
+  assert.ok(hint.includes(file) && !hint.includes('{{path}}'), 'the path is inserted literally');
+  const strings = deps.getPiExtensionUiStrings();
+  const key = name => `settings.piPackages.${name}`;
+  assert.deepEqual(strings, {
+    confirm: desktop.t(key('extensionDialogConfirm')),
+    cancel: desktop.t(key('cancel')),
+    mutationFailed: desktop.t(key('operationFailed')),
+    mutationFailure: {
+      'source-unavailable': desktop.t(key('failure.sourceUnavailable')),
+      'package-not-found': desktop.t(key('failure.packageNotFound')),
+      'version-not-found': desktop.t(key('failure.versionNotFound')),
+      'state-unavailable': desktop.t(key('failure.stateUnavailable')),
+      'native-command-failed': desktop.t(key('failure.nativeCommandFailed')),
+    },
+    mutationSuccess: {
+      install: desktop.t(key('success.install')),
+      installEnabled: desktop.t(key('success.installEnabled')),
+      update: desktop.t(key('success.update')),
+      remove: desktop.t(key('success.remove')),
+    },
+  });
+  // Every string is a translation, not a key the lookup fell back to.
+  const values = [strings.confirm, strings.cancel, strings.mutationFailed, ...Object.values(strings.mutationFailure), ...Object.values(strings.mutationSuccess)];
+  for (const value of values) assert.ok(value.trim() && !value.startsWith('settings.piPackages.'), value);
+  // The same lines as the desktop's buildPiAgent.
+  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
+  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
+  const lines = (source, from, to) => {
+    const start = source.indexOf(from);
+    assert.ok(start >= 0, from);
+    const end = source.indexOf(to, start);
+    assert.ok(end > start, to);
+    return source.slice(start, end).split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//')).join('\n');
+  };
+  assert.equal(lines(runtime, 'formatPiStartupCloudFileHint: (file) =>', 'resolvePiVisionBridgeEnv:'),
+    lines(piHost, 'formatPiStartupCloudFileHint: (file) =>', 'preparePiExtraSpawnConfig:'));
+  assert.ok(runtime.includes('const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);'));
 });
