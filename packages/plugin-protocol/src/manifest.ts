@@ -1384,7 +1384,8 @@ function prepareGhostManifestForValidation(
       unknownV3Fields: Object.fromEntries(
         Object.entries(value).filter(
           ([key]) => key === 'model' ||
-            (key === 'wallpaper' && preserveHistoricalWallpaper && value.wallpaper !== true) ||
+            // Keep the legacy key position: owner-recovery digests serialize this projection.
+            (key === 'wallpaper' && preserveHistoricalWallpaper) ||
             !GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS.has(key),
         ),
       ),

@@ -5231,3 +5231,19 @@ it('preserves historical wallpaper values in stored releases without granting pe
     expect(validateStoredGhostManifest({ ...input, agent: { tasks: 'historical' } }).ok).toBe(false);
   }
 });
+
+// Unit regression for #9682: owner recovery freezes JSON-serialized validated
+// manifests in its approval digest. Existing false/string cases did not exercise
+// true declarations becoming known fields. Pin the pre-wallpaper validator's
+// serialized projection, including its ordering among other unknown fields.
+it('preserves the historical wallpaper projection used by interrupted owner recovery', () => {
+  const input = { schemaVersion: 3, minCindyVersion: '0.1.129', id: 'legacy-wallpaper',
+    name: 'Legacy wallpaper', version: '1.0.0', entry: 'main.js',
+    futureBefore: 1, wallpaper: true, futureAfter: 2 };
+  const historical = '{"futureBefore":1,"wallpaper":true,"futureAfter":2,"schemaVersion":3,"id":"legacy-wallpaper","name":"Legacy wallpaper","version":"1.0.0","minCindyVersion":"0.1.129","kind":"chip","entry":"main.js"}';
+  for (const validate of [validateStoredGhostManifest, validateInstalledGhostManifest, validateStoredProtocolManifest]) {
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(JSON.stringify(result.manifest)).toBe(historical);
+  }
+});
