@@ -269,7 +269,12 @@ import {
   resolveHomeDeviceSyncIds,
   runHomeDeviceSyncBatch,
 } from '@/session/homeDeviceSync';
-import { createHomeRefreshRequests, createHomeListFreshness, planHomeListFocusReturn } from '@/session/homeListFreshness';
+import {
+  createHomeInstalledRows,
+  createHomeListFreshness,
+  createHomeRefreshRequests,
+  planHomeListFocusReturn,
+} from '@/session/homeListFreshness';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
@@ -1066,6 +1071,34 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         await subscribe(HOME_LIST_SUBSCRIPTION_OWNER, device.deviceId, ['sessions']);
         assertCurrentScope();
       });
+      // schedule-index(1+N 个 listRuns)是次要徽标数据,延后发,避开"开 app→立刻点会话"时和会话关键读
+      // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo
+      // 兜底,徽标晚半拍出现即可。
+      // 按设备 id 登记:同设备上一轮还没执行的延后任务会被先取消,避免较早回调用旧快照覆盖新状态。
+      // 延后刷新若因首页失焦被跳过，回首页时补刷（列表已标新鲜，不会再触发 hydrate）。
+      // 白名单在执行时取已装入的行：补全晚到的历史任务也在内。
+      const scheduleIndexRefresh = () => {
+        markHomeScheduleIndexDirty(device.deviceId);
+        scheduleIndexDeferRegistryRef.current.schedule(device.deviceId, () => {
+          void (async () => {
+            while (syncInFlightRef.current) await syncInFlightRef.current;
+            if (
+              homeAccountGenerationRef.current !== expectedAccountGeneration
+              || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
+            ) return;
+            refreshDeviceScheduleIndex(device.deviceId, installedRows.sessionIds(), {
+              accountGeneration: expectedAccountGeneration,
+              homeSyncGeneration: expectedHomeSyncGeneration,
+            });
+          })();
+        });
+      };
+      const installedRows = createHomeInstalledRows({
+        limit: LIST_LIMIT,
+        onBounded: () => homeListFreshnessRef.current.markBounded(device.deviceId, freshnessToken,
+          remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId)),
+        onScheduleScopeGrew: scheduleIndexRefresh,
+      });
       // Applied before history-only lanes enter the store; their publish restores lost alerts.
       let appliedActivitySnapshot: { response: unknown; epoch: number } | null = null;
       const publishList = (rows: RemoteSession[], mutationEpoch: number) => {
@@ -1094,6 +1127,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
               remoteSessionStore.setDeviceSessions(device.deviceId, device.name, rows);
               restoreActivityForInstalledRows(remoteSessionStore, device.deviceId, appliedActivitySnapshot, rows);
             });
+            installedRows.install(rows);
             scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
           },
           onDiscard: () => {
@@ -1177,31 +1211,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         );
         appliedActivitySnapshot = { response: activeSessions, epoch: activeSessionSnapshotEpoch };
       }
-      // schedule-index(1+N 个 listRuns)是次要徽标数据,延后发,避开"开 app→立刻点会话"时和会话关键读
-      // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo
-      // 兜底,徽标晚半拍出现即可。
-      // 按设备 id 登记:同设备上一轮还没执行的延后任务会被先取消,避免较早回调用旧 nextSessions 覆盖新状态。
-      // 延后刷新若因首页失焦被跳过，回首页时补刷（列表已标新鲜，不会再触发 hydrate）。
-      markHomeScheduleIndexDirty(device.deviceId);
-      scheduleIndexDeferRegistryRef.current.schedule(device.deviceId, () => {
-        void (async () => {
-          while (syncInFlightRef.current) await syncInFlightRef.current;
-          if (
-            homeAccountGenerationRef.current !== expectedAccountGeneration
-            || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
-          ) return;
-          refreshDeviceScheduleIndex(device.deviceId, nextSessions.map((session) => session.id), {
-            accountGeneration: expectedAccountGeneration,
-            homeSyncGeneration: expectedHomeSyncGeneration,
-          });
-        })();
-      });
+      scheduleIndexRefresh();
+      installedRows.armSchedule();
       // 列表被 LIST_LIMIT 截断时，补丁可能改变前 N 条的成员（如归档后第 N+1 条该补进、
       // 窗口外任务因活动排进来），本地无法补全：记下 mutation epoch，回首页时有变就重拉。
+      // 历史补全晚于此处装满上限时，由 installedRows 补记。
       homeListFreshnessRef.current.markFresh(
         device.deviceId,
         freshnessToken,
-        nextSessions.length >= LIST_LIMIT
+        installedRows.markFresh(nextSessions.length)
           ? remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId)
           : null,
       );

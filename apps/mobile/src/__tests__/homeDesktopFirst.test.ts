@@ -981,7 +981,7 @@ describe('Home list sync wiring', () => {
     const hydrate = source.slice(source.indexOf('const hydrateDeviceSessionsOnce = useCallback('), source.indexOf('const hydrateDeviceSessions = useCallback('));
     expect(hydrate.indexOf('markHomeScheduleIndexDirty(device.deviceId);'))
       .toBeLessThan(hydrate.indexOf('scheduleIndexDeferRegistryRef.current.schedule(device.deviceId'));
-    expect(hydrate).toContain('nextSessions.length >= LIST_LIMIT');
+    expect(hydrate).toContain('installedRows.markFresh(nextSessions.length)');
     expect(hydrate).toContain('remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId)');
   });
 

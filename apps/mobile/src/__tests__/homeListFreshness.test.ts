@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rehydrateDeviceLinkPeer, type DeviceLinkRehydrateDeps } from '@/device-link/rehydrate';
 import {
+  createHomeInstalledRows,
   createHomeListFreshness,
   createHomeRefreshRequests,
   HOME_LIST_FOCUS_REUSE_MAX_MS,
@@ -218,4 +219,48 @@ it('clears account-owned intent and prevents old freshness tokens from reviving 
   expect(requests.captureFull()).toBeNull();
   expect([...requests.scheduleDeviceIds()]).toEqual([]);
   expect(freshness.isFresh('old-account-pc')).toBe(false);
+});
+
+// Review #9752: enrichment now lands after Home marks the list fresh and arms the automation
+// index. A raw list under the limit plus a capped history-only page must still behave as
+// truncated, and history-only lanes must enter the index scope without a redundant reread.
+describe('history enrichment installed after the list is ready', () => {
+  const rows = (prefix: string, count: number) => Array.from({ length: count }, (_, i) => ({ id: `${prefix}${i}` }));
+
+  it('re-pulls after a list push once enrichment fills the page limit', () => {
+    remoteSessionStore.upsertDeviceSession('old-desktop', 'old-desktop', {
+      id: 'raw0', status: 'active', title: 'raw0', source: 'desktop',
+      createdAt: '2026-10-20T00:00:00Z', updatedAt: '2026-10-20T00:00:00Z',
+    } as RemoteSession);
+    const freshness = createHomeListFreshness();
+    const epoch = () => remoteSessionStore.captureDeviceSessionListMutationEpoch('old-desktop');
+    const token = freshness.capture('old-desktop');
+    const installed = createHomeInstalledRows({
+      limit: 200,
+      onBounded: () => freshness.markBounded('old-desktop', token, epoch()),
+      onScheduleScopeGrew: () => undefined,
+    });
+    installed.install(rows('raw', 120));
+    freshness.markFresh('old-desktop', token, installed.markFresh(120) ? epoch() : null);
+    installed.install([...rows('raw', 120), ...rows('lane', 200)]);
+    expect(freshness.isFresh('old-desktop', epoch())).toBe(true);
+
+    remoteSessionStore.applyRemotePush('old-desktop', 'local-db:sessions:patched', { sessionId: 'raw0', patch: { status: 'archived' } });
+    expect(freshness.isFresh('old-desktop', epoch())).toBe(false);
+  });
+
+  it('rereads the automation index only when enrichment adds rows outside its scope', () => {
+    const refreshes: string[][] = [];
+    const installed = createHomeInstalledRows({
+      limit: 200,
+      onBounded: () => undefined,
+      onScheduleScopeGrew: () => refreshes.push([...installed.sessionIds()]),
+    });
+    installed.install(rows('raw', 2));
+    installed.armSchedule();
+    installed.install(rows('raw', 2)); // a current Desktop already lists every lane
+    expect(refreshes).toEqual([]);
+    installed.install([...rows('raw', 2), { id: 'routine-lane' }]);
+    expect(refreshes).toEqual([['raw0', 'raw1', 'routine-lane']]);
+  });
 });
