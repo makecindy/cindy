@@ -433,10 +433,10 @@ describe('Cindy Core media invocation state and security boundary', () => {
   }
 
   function recoveryVideoOperation(taskIdPath = ['job'], statusPath = ['phase'], mediaPath = ['movie']) {
-    return { ...operation({ mode: 'async', taskIdPath, poll: { method: 'GET', path: '/jobs/{taskId}',
+    const response = { mode: 'async', taskIdPath, poll: { method: 'GET', path: '/jobs/{taskId}',
       statusPath, successValues: ['ready'], failureValues: ['error'], recommendedIntervalMs: 1000,
-      timeoutMs: 1000, maxResponseBytes: 1048576, media: [{ path: mediaPath, encoding: 'base64', kind: 'video' }] } }),
-      capability: 'video.generate' };
+      timeoutMs: 1000, maxResponseBytes: 1048576, media: [{ path: mediaPath, encoding: 'base64', kind: 'video' }] } };
+    return { ...operation(response), response, capability: 'video.generate' };
   }
 
   // #10137: an empty media catalog must lead to connection/declaration repair,
@@ -502,6 +502,49 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(await callCindyMedia({ action: 'request', invocationId: String(next.invocation_id), body: {} })).toMatchObject({ ok: true });
     expect(mocks.rows.get(String(first.invocation_id))!.guide).toEqual(originalGuide);
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['before-request', 'during-ingest'] as const)('rechecks the original connection for a saved sync response (%s)', async boundary => {
+    const { model, value, connection } = setupGuideDriven();
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ wrong: PNG.toString('base64') }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-image',
+      operations: [operation({ mode: 'sync', media: [{ path: ['wrong'], encoding: 'base64', kind: 'image' }] })] } });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate', sourceInvocationId: String(first.invocation_id) });
+    if (boundary === 'before-request') mocks.httpConnection.mockReturnValue({ ...connection, revision: 'changed' });
+    else mocks.ingestMedia.mockImplementationOnce(async ({ assertStillValid }: { assertStillValid: () => void }) => {
+      connection.assertCurrent.mockImplementation(() => { throw new Error('source changed'); });
+      assertStillValid();
+      return { url: `cindy-media://blobs/${'b'.repeat(64)}.png` };
+    });
+    expect(await callCindyMedia({ action: 'request', invocationId: String(next.invocation_id), body: {} }))
+      .toMatchObject({ ok: false, errorCode: 'CONNECTION_CHANGED' });
+    expect(mocks.rows.get(String(next.invocation_id))?.state).toBe('pending');
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['job/1', 'job.1', '..'])('uses a Guide content path with encoded task ID %s without changing its origin', async taskId => {
+    const video = recoveryVideoOperation();
+    const { model } = setupGuideDriven({ ...video, response: { ...video.response, poll: { ...video.response.poll,
+      contentPath: '/jobs/{taskId}/content', media: [{ path: ['movie'], encoding: 'url', kind: 'video', allowedUrlHosts: [] }],
+    } } });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: taskId }))
+      .mockResolvedValueOnce(Response.json({ phase: 'ready' }))
+      .mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } });
+    const result = await callCindyMedia({ action: 'poll', invocationId: String(prepared.invocation_id) });
+    if (taskId === '..') {
+      expect(result).toMatchObject({ ok: false, errorCode: 'MEDIA_RESULT_INVALID' });
+      expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
+    } else {
+      expect(result).toMatchObject({ ok: true, xdt_video_urls: expect.any(Array) });
+      const download = mocks.outboundFetch.mock.calls[2]!;
+      expect(download[0]).toBe(`https://relay.example/proxy/v2/jobs/${encodeURIComponent(taskId)}/content`);
+      expect(download[1]).toMatchObject({ method: 'GET', redirect: 'manual', headers: { authorization: 'Bearer test-private-key' } });
+    }
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
   });
 
   it.each(['missing', 'wrong'] as const)('recovers an original video task when the first Guide extracts a %s task ID', async failure => {

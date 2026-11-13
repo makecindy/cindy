@@ -1491,6 +1491,11 @@ async function submitInvocation(
     invocation.guide.response.mode === 'sync' &&
     invocation.responseJson
   ) {
+    if (invocation.guide.binding.executor === 'provider-http') {
+      const connection = await resolveInvocationConnection(invocation);
+      scope.assertSourceCurrent = connection.assertCurrent;
+      assertAuthScope(scope, invocation.owner);
+    }
     return materializeSyncInvocation(invocation, persistedResponse(invocation), scope, db);
   }
   if (invocation.state !== 'prepared') {
