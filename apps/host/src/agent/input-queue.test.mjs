@@ -18,6 +18,8 @@ import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedI
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 
 import { createInputQueue } from './input-queue.mjs';
+import { createEventHub } from '../events.mjs';
+import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 import { applyLiveSessionSettings } from './session-settings.mjs';
 import { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.ts';
 import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/maker-ipc/acceptedCallbackRunner.ts';
@@ -539,6 +541,52 @@ test('persists thinking and tool work with the shared message identities', async
   assert.equal(result.toolUseId, 'read-1');
   assert.equal(result.content, 'contents');
   assert.equal(h.events.find(event => event.type === 'tool_result').persistId, result.clientId);
+  await h.queue.dispose();
+});
+
+// Host event exits: what the hub carries to the event stream (and its replay), /api/chat and the
+// device link is the desktop's renderer-boundary projection (rendererEventRedaction.ts), never the
+// raw agent event. Fixture credentials only; no network.
+test('agent events leave the Host as the desktop renderer-boundary projection', { timeout: 60_000 }, async () => {
+  const hub = createEventHub();
+  const live = [];
+  hub.subscribe(event => live.push(event));
+  const h = createHarness({ hub });
+  await enqueue(h, 'boundary', { clientId: 'input', text: 'open the page' });
+  const session = h.maker.getSession('boundary');
+  const lifecycle = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId,
+    turnAttemptToken: 'fixture-attempt', backgroundTurnStartedAt: 1, runtimeRecovery: false };
+  const raw = [
+    { type: 'tool_use', ...lifecycle, data: { toolUseId: 'browse', toolName: 'mcp__cindy_browser__call_tool',
+      input: { name: 'browser', args: { action: 'open', url: 'https://example.test', proxyServer: 'http://fixture-user:fixture-pass@proxy.test:8080' } } } },
+    { type: 'tool_use', ...lifecycle, data: { toolUseId: 'browse-codex', toolName: 'mcp:cindy_browser:call_tool',
+      input: JSON.stringify({ name: 'browser', args: { proxyServer: 'socks5://fixture-user:fixture-pass@proxy.test:1080' } }) } },
+    { type: 'tool_result', ...lifecycle, data: { toolUseIds: ['browse', 'browse-codex'], summary: 'opened' } },
+    { type: 'text', ...lifecycle, data: { text: 'done', isFinal: true } },
+    { type: 'done', ...lifecycle },
+  ];
+  for (const event of raw) session.emit(event);
+  await waitFor(() => !h.queue.projection('boundary').turnInProgress);
+  const published = live.filter(event => event.sessionId === 'boundary' && event.event);
+  assert.equal(published.length, raw.length);
+  for (const [index, event] of published.entries()) {
+    const expected = redactEventForRenderer(raw[index]);
+    assert.deepEqual(event.event, expected, `event ${index} is the desktop projection`);
+    for (const [key, value] of Object.entries(expected)) assert.deepEqual(event[key], value, `top-level ${key}`);
+    for (const key of ['sessionTurnGeneration', 'sessionInstanceId', 'turnAttemptToken', 'backgroundTurnStartedAt', 'runtimeRecovery']) {
+      assert.equal(key in event, false, `${key} stays inside the Host`);
+      assert.equal(key in event.event, false, `${key} stays inside the Host`);
+    }
+  }
+  // What a reconnecting client gets (server.mjs /events with Last-Event-ID).
+  const { runtime } = hub.replay({ since: null });
+  const replayed = hub.replay({ since: '0', runtime }).events.filter(event => event.sessionId === 'boundary');
+  assert.ok(replayed.filter(event => event.event).length >= raw.length, 'the replay buffer holds the same projection');
+  for (const event of [...published, ...replayed]) assert.equal(JSON.stringify(event).includes('fixture-pass'), false);
+  assert.equal(JSON.stringify(published[0].event.data.input.args.proxyServer), '"[REDACTED]"');
+  // Persistence and bookkeeping keep the original; the persisted tool row uses the shared redaction.
+  assert.equal(raw[0].data.input.args.proxyServer.includes('fixture-pass'), true);
+  assert.equal(JSON.stringify(h.persisted).includes('fixture-pass'), false);
   await h.queue.dispose();
 });
 

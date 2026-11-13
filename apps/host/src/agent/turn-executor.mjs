@@ -21,6 +21,7 @@ import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/m
 import { setSessionEffort } from '../../../desktop/src/main/maker-host/session-effort-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
+import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -31,6 +32,16 @@ const errorText = error => error instanceof Error ? error.message : String(error
  * dispatch ownership belong to AgentInputCoordinator, never to this adapter.
  * A terminal is handed back only after all visible reply rows have settled.
  */
+/**
+ * Publishes an agent event to the Host's clients (the event stream and the device link read the
+ * hub). As on the desktop (sessionEventPreparation.ts broadcastEvent), what leaves is the
+ * renderer-boundary projection of the event; persistence and bookkeeping keep the original.
+ */
+export function publishAgentEvent(hub, sessionId, event, fields) {
+  const clientEvent = redactEventForRenderer(event);
+  hub.publish({ ...clientEvent, sessionId, event: clientEvent, ...fields });
+}
+
 export function createTurnExecutor(deps) {
   const turns = new Map();
 
@@ -128,7 +139,7 @@ export function createTurnExecutor(deps) {
       }
       if (isTerminalTurnErrorEvent(event)) void finalizeTurnChangeSet(sessionId, null, 'partial');
       const stream = history.event(session, event);
-      deps.hub.publish({ ...event, sessionId, event, ...stream, inputClientId: turn.clientId });
+      publishAgentEvent(deps.hub, sessionId, event, { ...stream, inputClientId: turn.clientId });
       // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
       if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) void deps.getGitSnapshot?.()?.onTurnEnd(sessionId);
       if ((event.type === 'done' || isTerminalTurnErrorEvent(event))
