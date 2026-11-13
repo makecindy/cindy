@@ -17,7 +17,7 @@ import {
 } from '@cindy/agent-net-protocol';
 import { sha256, verifySignature, verifyCertificate, verifyDelegation, verifyJoinRequest, verifyRequestProof, verifyRequestDigestProof, verifyTenantJoinRequest } from './identity.js';
 import { Store, type NetworkRecord, type RelayStore } from './store.js';
-import { ClusterStore, type RelayStoreChange } from './clusterStore.js';
+import { ClusterStore, RelayStateUnavailableError, type RelayStoreChange } from './clusterStore.js';
 import { CLUSTER_PATH, checkClusterOptions, clusterOwner, createClusterRouter, routingNetwork, type RelayClusterMember, type RelayClusterOptions } from './cluster.js';
 import type { SharingState } from '@cindy/device-link-sharing/repositories';
 import type { DelegationRequest } from '@cindy/agent-net-protocol';
@@ -456,6 +456,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       res.end(asset.body); return;
     }
     if (url.pathname === '/health' && method === 'GET') return writeJson(res, 200, { status: 'ok', protocolVersion: AGENT_NET_VERSION, udp: options.udpPort === undefined ? 'disabled' : 'ok' });
+    // Readiness for load balancers: a leaving replica stops receiving new connections; liveness stays /health.
+    if (url.pathname === '/ready' && method === 'GET') return draining ? writeJson(res, 503, { status: 'draining' }) : writeJson(res, 200, { status: 'ready' });
     if (url.pathname.startsWith(CLUSTER_PATH + '/')) {
       // Between replicas only; the hop secret never reaches clients.
       if (!router?.trusted(req)) return fail(404, 'NOT_FOUND');
@@ -898,6 +900,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const owner = networkId === undefined ? undefined : ownerOf(networkId);
     return owner && owner.id !== cluster.replicaId ? owner : undefined;
   }
+  let stateWarnedAt = -Infinity;
+  function stateUnavailable(error: RelayStateUnavailableError): void {
+    // An outage fails every write; one line per interval is enough to alert on.
+    if (now() - stateWarnedAt < 10_000) return;
+    stateWarnedAt = now();
+    logger.warn({ code: error.code }, 'agent-net shared state unavailable');
+  }
   const onRequest = (req: IncomingMessage, res: ServerResponse) => {
     if (closing) { writeJson(res, 503, { error: { code: 'SERVER_CLOSING', message: 'Server closing' } }); return; }
     const target = forwardTarget(req);
@@ -906,6 +915,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       if (res.headersSent || res.destroyed) { res.destroy(); return; }
       if (error instanceof AgentNetError) writeJson(res, error.status, { error: { code: error.code, message: error.message } });
       else if (error instanceof SharingError) writeJson(res, error.statusCode, { error: { code: error.code, message: error.message } });
+      // Shared state unreachable or contended: retryable, never an authorization result.
+      else if (error instanceof RelayStateUnavailableError) { stateUnavailable(error); writeJson(res, 503, { error: { code: 'CLUSTER_STATE_UNAVAILABLE', message: 'Shared state unavailable' } }); }
       else { logger.error({ name: error instanceof Error ? error.name : 'Unknown' }, 'agent-net request failed'); writeJson(res, 500, { error: { code: 'INTERNAL_ERROR', message: 'Internal error' } }); }
     });
     pendingRequests.add(operation);
@@ -1037,6 +1048,15 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     advertisedUdpPort = (udp.address() as AddressInfo).port;
   }
   let sweeping = false;
+  const expiredEntries = (n: NetworkRecord, at: number) => {
+    for (const [id, join] of Object.entries(n.joins)) if (join.expiresAt <= at) delete n.joins[id];
+    for (const [id, code] of Object.entries(n.joinCodes)) if (code.expiresAt <= at) delete n.joinCodes[id];
+    for (const [id, grant] of Object.entries(n.grants)) if (grant.delegation.expiresAt <= at
+      && (grant.revokedAt === null || grant.revokedAt + MAX_GRANT_LIFETIME_MS <= at)) delete n.grants[id];
+  };
+  const hasExpiredEntries = (n: NetworkRecord, at: number) => Object.values(n.joins).some(join => join.expiresAt <= at)
+    || Object.values(n.joinCodes).some(code => code.expiresAt <= at)
+    || Object.values(n.grants).some(grant => grant.delegation.expiresAt <= at && (grant.revokedAt === null || grant.revokedAt + MAX_GRANT_LIFETIME_MS <= at));
   const sweep = setInterval(() => {
     const at = now();
     for (const [nonce, until] of nonces) if (until <= at) nonces.delete(nonce);
@@ -1060,16 +1080,21 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (!sweeping) {
       sweeping = true;
-      void store.transaction((state) => {
-        for (const n of ownedIds ? ownedIds.flatMap(id => state.networks[id] ?? []) : Object.values(state.networks)) {
-          for (const [id, join] of Object.entries(n.joins)) if (join.expiresAt <= at) delete n.joins[id];
-          for (const [id, code] of Object.entries(n.joinCodes)) if (code.expiresAt <= at) delete n.joinCodes[id];
-          for (const [id, grant] of Object.entries(n.grants)) if (grant.delegation.expiresAt <= at
-            && (grant.revokedAt === null || grant.revokedAt + MAX_GRANT_LIFETIME_MS <= at)) delete n.grants[id];
-        }
-        for (const [id, invite] of Object.entries(state.tenantInvites ?? {})) if (invite.expiresAt <= at) delete state.tenantInvites![id];
-        for (const [id, r] of Object.entries(state.tenantRequests ?? {})) if (r.expiresAt <= at) delete state.tenantRequests![id];
-      }).catch(() => logger.error({}, 'agent-net state cleanup failed')).finally(() => { sweeping = false; });
+      const cleanup = ownedIds
+        // One small commit per owned network with expired entries: a transaction over every owned
+        // network would conflict with each write any other replica makes to any of them.
+        ? (async () => {
+          for (const n of swept) if (hasExpiredEntries(n, at)) await store.transaction((state) => {
+            const current = state.networks[n.id];
+            if (current) expiredEntries(current, at);
+          });
+        })()
+        : store.transaction((state) => {
+          for (const n of Object.values(state.networks)) expiredEntries(n, at);
+          for (const [id, invite] of Object.entries(state.tenantInvites ?? {})) if (invite.expiresAt <= at) delete state.tenantInvites![id];
+          for (const [id, r] of Object.entries(state.tenantRequests ?? {})) if (r.expiresAt <= at) delete state.tenantRequests![id];
+        });
+      void cleanup.catch(() => logger.error({}, 'agent-net state cleanup failed')).finally(() => { sweeping = false; });
     }
   }, 30_000);
   unrefTimer(sweep);

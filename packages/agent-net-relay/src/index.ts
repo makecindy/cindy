@@ -1,6 +1,7 @@
 export { startAgentNetRelay, AgentNetError, type RelayHandle, type RelayOptions, type Bootstrap, type Enrollment, type RelayLogger } from './server.js';
 export { Store, type NetworkRecord, type DeviceRecord, type RelayStore } from './store.js';
-export { clusterOwner, type RelayClusterBackend, type RelayClusterMember, type RelayClusterOptions, type RelayStateEntry, type RelayStateCommit } from './cluster.js';
+export { clusterOwner, RELAY_CLUSTER_COMPAT, type RelayClusterBackend, type RelayClusterMember, type RelayClusterOptions, type RelayStateEntry, type RelayStateCommit } from './cluster.js';
+export { RelayStateUnavailableError } from './clusterStore.js';
 export { createMemoryRelayCluster } from './memoryCluster.js';
 export * from './identity.js';
 export { createPrivateNetwork } from './bootstrap.js';
