@@ -11593,6 +11593,7 @@
           "signInOpened": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: ligue primeiro a sua conta do GitHub. O Cindy abriu o início de sessão do GitHub neste computador; depois de iniciar sessão, mencione @Cindy outra vez e o projeto será transferido.",
           "signIn": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: ligue primeiro a sua conta do GitHub. Inicie sessão no GitHub através do Cindy neste computador e mencione @Cindy outra vez.",
           "unavailable": "(Cindy) Não foi possível transferir o projeto {{repo}} do grupo para este computador: a sua conta do GitHub pode não ter acesso, ou a rede está indisponível. Confirme que consegue abrir o repositório no GitHub e mencione @Cindy outra vez.",
+          "accessRequired": "(Cindy) Não foi possível transferir o projeto do grupo {{repo}} para este computador: o git deste computador ainda não consegue aceder a {{host}}. Clone o repositório uma vez com git neste computador (ou configure um token de acesso) e volte a chamar @Cindy.",
           "installGit": {
             "darwin": "No Terminal, execute xcode-select --install e siga as indicações.",
             "win32": "Transfira o Git em https://git-scm.com/download/win e instale-o com as opções predefinidas.",
@@ -11806,6 +11807,9 @@
           "projectCaption": "Os amigos respondem e fazem as divisões do trabalho neste projeto. O repositório é partilhado com o grupo; a pasta fica neste computador.",
           "githubRepo": "Repositório do GitHub",
           "githubRepoHint": "Introduza owner/name. Os computadores sem pasta escolhida usam a sua própria cópia deste projeto ou transferem uma.",
+          "repository": "Repositório",
+          "repositoryHint": "GitHub: escreva owner/name. GitLab (incluindo da própria empresa), CNB e outros: cole a ligação do repositório. Os computadores sem pasta escolhida usam a sua própria cópia deste projeto ou transferem uma.",
+          "repositoryPlaceholder": "owner/name ou ligação do repositório",
           "githubRepoSaveFailed": "O repositório não foi guardado. Verifique e tente novamente.",
           "folderRepoFilled": "O repositório {{repo}} foi preenchido a partir desta pasta. Os computadores dos outros membros também o vão usar.",
           "folderRepoDiffers": "Esta pasta é um projeto de {{repo}}, diferente do repositório do grupo. Este computador continua a trabalhar nesta pasta.",

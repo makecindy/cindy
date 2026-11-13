@@ -76,7 +76,7 @@ import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-hi
 import { createOthersReadOverlay, isReadByOthers, parseReadReceiptFrame, projectMessageReaders } from '@cindy/maker-shared/chat-read-receipts';
 import { readAllRoomMessages } from '../companion-cloud/room.js';
 import type { ChatMaskState, ChatMaskSettings, ChatMaskMention } from '../../shared/botGroupChat.js';
-import { isGithubRepository } from '../../shared/cindyMakePersonalRemote.js';
+import { groupRepositoryKey, groupRepositoryLabel, parseGroupRepository, readGroupRepository, type GroupRepository } from '../../shared/botGroupChat.js';
 
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null; homeDeviceId?: string | null; disabled?: boolean }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
@@ -98,7 +98,7 @@ interface Room {
   id: string; name: string; topic: string; description: string; response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential';
   allow_mention_all_bots?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
   /** The group's shared project (servers with `groupProject`); each computer keeps its own folder. */
-  project?: { kind: 'github'; repo: string } | null;
+  project?: GroupRepository | null;
   /** The group's own Cindy is on (servers with `groupAssistant`); absent means on. */
   assistant?: boolean;
 }
@@ -523,6 +523,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let singleSpeaker = false;
   /** The server keeps a group's shared GitHub project (capability groupProject). */
   let supportsGroupProject = false;
+  /** The group's repository may be on another git host (GitLab, CNB, ...), not only GitHub. */
+  let supportsGroupProjectGit = false;
   /** A reply's @ wakes the teammates it names (capability groupTeammateMentions). */
   let supportsTeammateMentions = false;
   /**
@@ -1048,6 +1050,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
       supportsGroupProject = (me.capabilities as { groupProject?: number } | undefined)?.groupProject === 1;
+      supportsGroupProjectGit = supportsGroupProject && (me.capabilities as { groupProjectGit?: number } | undefined)?.groupProjectGit === 1;
       supportsTeammateMentions = (me.capabilities as { groupTeammateMentions?: number } | undefined)?.groupTeammateMentions === 1;
       const assistant = (me.capabilities as { groupAssistant?: number } | undefined)?.groupAssistant === 1
         ? (me as { groupAssistantActorId?: unknown }).groupAssistantActorId : undefined;
@@ -2004,7 +2007,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           avatarUrl: m.avatar?.startsWith('https://') ? m.avatar : null,
           name: memberName(m, ownerMembers), avatar: m.groupAvatar ? '' : p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
       }), organizerBotId: direct ? null : ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => isCompanion(m) && m.state === 'joined')?.id), projectDir: folder.dir, ...(folder.dir && folder.auto ? { projectDirAuto: true } : {}),
-      ...(!direct && supportsGroupProject ? { supportsGroupProject: true, project: s.room.project ?? null } : {}),
+      ...(!direct && supportsGroupProject ? { supportsGroupProject: true, project: readGroupRepository(s.room.project), ...(supportsGroupProjectGit ? { supportsGroupProjectGit: true } : {}) } : {}),
       ...(!direct && assistantActorId ? { supportsGroupAssistant: true, assistantEnabled: s.room.assistant !== false } : {}),
       // Only servers that tell a 分工 from a queue (kind) can hand one on by itself.
       ...(singleSpeaker ? { autoContinue: workspace?.autoContinue === true } : {}), lastMessage: last && lastView ? {
@@ -2735,11 +2738,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     folders: projectFolders, get ensureSession() { return deps.ensureGroupAssistantSession; },
   });
   /** What a request says when the group's repository is not on this computer yet: why, and what to do. */
-  function checkoutNote(repo: string, pending: NonNullable<GroupAssistantTask['pending']>): string {
+  function checkoutNote(repository: GroupRepository, pending: NonNullable<GroupAssistantTask['pending']>): string {
     const key = pending.status === 'preparing' ? 'preparing' : pending.status === 'git-missing' ? 'gitMissing'
-      : pending.status === 'sign-in-required' ? pending.signInOpened ? 'signInOpened' : 'signIn' : 'unavailable';
+      : pending.status === 'access-required' ? 'accessRequired'
+        : pending.status === 'sign-in-required' ? pending.signInOpened ? 'signInOpened' : 'signIn' : 'unavailable';
     const guide = t(`bots.groupChat.assistant.checkout.installGit.${process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux'}`);
-    return t(`bots.groupChat.assistant.checkout.${key}`).replaceAll('{{repo}}', () => repo).replaceAll('{{guide}}', () => guide);
+    const host = repository.kind === 'github' ? 'github.com' : repository.host;
+    return t(`bots.groupChat.assistant.checkout.${key}`).replaceAll('{{repo}}', () => groupRepositoryLabel(repository))
+      .replaceAll('{{host}}', () => host).replaceAll('{{guide}}', () => guide);
   }
   /**
    * The group's messages a request to the group's Cindy carries as background: those of its
@@ -2823,7 +2829,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       });
       const words = bodyText(source).trim();
       const message = formatGroupRequest({ words, heading, background,
-        ...(task.pending && s.room.project ? { note: checkoutNote(s.room.project.repo, task.pending) } : {}) });
+        ...(task.pending && readGroupRepository(s.room.project) ? { note: checkoutNote(readGroupRepository(s.room.project)!, task.pending) } : {}) });
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
@@ -4220,7 +4226,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     updateGroup: input => safe(async () => {
       const i = z.object({ groupId: id, name: z.string().min(1).max(40).optional(), replyMode: z.enum(['all', 'mentioned']).optional(),
         speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional(), autoContinue: z.boolean().optional(), expectedRevision: z.number().int().positive().optional(),
-        githubRepo: z.string().trim().max(200).refine(isGithubRepository).nullable().optional() }).parse(input);
+        repository: z.string().trim().max(600).nullable().optional() }).parse(input);
       i.groupId = await resolveGroup(i.groupId);
       // Local only, so saved before any server read: a handoff deciding meanwhile must already see it.
       if (i.autoContinue !== undefined) workspaces().save(i.groupId, { projectDir: null, plans: {}, ...workspaces().read(i.groupId), autoContinue: i.autoContinue });
@@ -4230,8 +4236,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (projectDir) { const checked = await deps.validateProjectDir?.(projectDir); if (!checked?.ok) throw new Error('INVALID_DIRECTORY'); projectDir = checked.dir; }
       const organizerId = i.organizerBotId ? actors.find(a => a.externalId === i.organizerBotId)?.id ?? id.parse(i.organizerBotId) : i.organizerBotId;
       if (i.allowMentionAllBots !== undefined && !supportsMentionAudiences) throw new Error('CHAT_UNAVAILABLE');
-      if (i.githubRepo !== undefined && !supportsGroupProject) throw new Error('CHAT_UNAVAILABLE');
-      const project = i.githubRepo === undefined ? undefined : i.githubRepo ? { kind: 'github' as const, repo: i.githubRepo } : null;
+      if (i.repository !== undefined && !supportsGroupProject) throw new Error('CHAT_UNAVAILABLE');
+      const project = i.repository === undefined ? undefined : i.repository ? parseGroupRepository(i.repository) : null;
+      if (project === null && i.repository) throw new Error('INVALID_REPOSITORY');
+      // Only GitHub on servers that keep no other host: said plainly rather than refused as malformed.
+      if (project?.kind === 'git' && !supportsGroupProjectGit) throw new Error('REPOSITORY_HOST_UNSUPPORTED');
       if (i.allowMentionAllBots !== undefined || i.name !== undefined || i.replyMode !== undefined || i.speakingMode !== undefined || organizerId !== undefined || project !== undefined) await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: i.expectedRevision ?? s.room.revision,
         name: i.name, responseMode: i.replyMode, speakingMode: i.speakingMode, organizerId, allowMentionAllBots: i.allowMentionAllBots, project }, managementActor(s));
       if (projectDir !== undefined) workspaces().save(i.groupId, { ...workspaces().read(i.groupId) ?? { plans: {} }, projectDir });
@@ -4240,18 +4249,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // out. The folder is saved either way; filling in is best effort.
       let folderRepository: { repo: string; filled: boolean } | undefined;
       if (projectDir && project === undefined && supportsGroupProject) {
-        const repos = (await deps.repositoriesOfFolder?.(projectDir).catch(() => []) ?? []).filter(isGithubRepository);
-        const current = s.room.project?.kind === 'github' ? s.room.project.repo : null;
+        const repos = (await deps.repositoriesOfFolder?.(projectDir).catch(() => []) ?? [])
+          .filter(repo => repo.kind === 'github' || supportsGroupProjectGit);
+        const current = readGroupRepository(s.room.project);
         const manager = managementActor(s);
         if (repos[0] && !current && manager) {
           const filled = await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: s.room.revision,
-            project: { kind: 'github', repo: repos[0] } }, manager).then(() => true, error => {
+            project: repos[0] }, manager).then(() => true, error => {
             deps.log?.warn('Group repository was not filled in from the chosen folder', { groupId: i.groupId, ...chatErrorDiagnostic(error) });
             return false;
           });
-          if (filled) folderRepository = { repo: repos[0], filled: true };
-        } else if (repos[0] && current && !repos.some(repo => repo.toLowerCase() === current.toLowerCase())) {
-          folderRepository = { repo: repos[0], filled: false };
+          if (filled) folderRepository = { repo: groupRepositoryLabel(repos[0]), filled: true };
+        } else if (repos[0] && current && !repos.some(repo => groupRepositoryKey(repo) === groupRepositoryKey(current))) {
+          folderRepository = { repo: groupRepositoryLabel(repos[0]), filled: false };
         }
       }
       changed(i.groupId);

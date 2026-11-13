@@ -11502,6 +11502,7 @@
           "signInOpened": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Cindy opened GitHub sign-in on this computer; once you are signed in, @Cindy again and Cindy will download the project.",
           "signIn": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Sign in to GitHub in Cindy on this computer, then @Cindy again.",
           "unavailable": "(Cindy) The group's project {{repo}} could not be downloaded to this computer: your GitHub account may not have access to it, or the network is unavailable. Make sure you can open the repository on GitHub, then @Cindy again.",
+          "accessRequired": "(Cindy) The group's project {{repo}} could not be downloaded to this computer: git on this computer cannot access {{host}} yet. Clone the repository once with git on this computer (or set up an access token), then @Cindy again.",
           "installGit": {
             "darwin": "In Terminal, run xcode-select --install and follow the prompts.",
             "win32": "Download and install Git from https://git-scm.com/download/win with the default options.",
@@ -11722,6 +11723,9 @@
           "projectCaption": "Buddies reply and do work splits in this project. The repository is shared with the group; the folder stays on this computer.",
           "githubRepo": "GitHub repository",
           "githubRepoHint": "Enter owner/name. Computers without a chosen folder use their own copy of this project, or download one.",
+          "repository": "Repository",
+          "repositoryHint": "GitHub: enter owner/name. GitLab (self-hosted too), CNB and others: paste the repository link. Computers without a chosen folder use their own copy of this project, or download one.",
+          "repositoryPlaceholder": "owner/name or repository link",
           "githubRepoSaveFailed": "The repository wasn’t saved. Check it and try again.",
           "folderRepoFilled": "Filled in the repository {{repo}} from this folder. Other members’ computers will use it too.",
           "folderRepoDiffers": "This folder is a checkout of {{repo}}, not the group’s repository. This computer still works in this folder.",

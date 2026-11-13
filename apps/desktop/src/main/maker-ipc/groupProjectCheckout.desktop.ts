@@ -27,7 +27,7 @@ export function createDesktopGroupProjectCheckouts(log?: Log) {
     root: () => {
       // Never a stand-in folder while the account is switching.
       if (isAppSessionBoundaryPending()) throw new Error('OWNER_CHANGED');
-      return ownerScopedUserDataPath('projects', 'github');
+      return ownerScopedUserDataPath('projects');
     },
     git: async (args, { cwd, timeoutMs }) => {
       try {

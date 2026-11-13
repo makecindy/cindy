@@ -11593,6 +11593,7 @@
           "signInOpened": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: primero conecta tu cuenta de GitHub. Cindy abrió el inicio de sesión de GitHub en este ordenador; cuando hayas iniciado sesión, vuelve a mencionar a @Cindy y descargará el proyecto.",
           "signIn": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: primero conecta tu cuenta de GitHub. Inicia sesión en GitHub desde Cindy en este ordenador y vuelve a mencionar a @Cindy.",
           "unavailable": "(Cindy) No se pudo descargar el proyecto {{repo}} del grupo en este ordenador: puede que tu cuenta de GitHub no tenga acceso o que no haya conexión. Comprueba que puedes abrir el repositorio en GitHub y vuelve a mencionar a @Cindy.",
+          "accessRequired": "(Cindy) No se pudo descargar el proyecto del grupo {{repo}} a este ordenador: git en este ordenador aún no puede acceder a {{host}}. Clona el repositorio una vez con git en este ordenador (o configura un token de acceso) y vuelve a @Cindy.",
           "installGit": {
             "darwin": "En Terminal, ejecuta xcode-select --install y sigue las indicaciones.",
             "win32": "Descarga Git desde https://git-scm.com/download/win e instálalo con las opciones predeterminadas.",
@@ -11806,6 +11807,9 @@
           "projectCaption": "Los amigos responden y hacen los repartos de trabajo en este proyecto. El repositorio se comparte con el grupo; la carpeta se queda en este ordenador.",
           "githubRepo": "Repositorio de GitHub",
           "githubRepoHint": "Escribe owner/name. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "repository": "Repositorio",
+          "repositoryHint": "GitHub: escribe owner/name. GitLab (también propio de tu empresa), CNB y otros: pega el enlace del repositorio. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "repositoryPlaceholder": "owner/name o enlace del repositorio",
           "githubRepoSaveFailed": "No se guardó el repositorio. Revísalo e inténtalo de nuevo.",
           "folderRepoFilled": "Se completó el repositorio {{repo}} a partir de esta carpeta. Los ordenadores de los demás miembros también lo usarán.",
           "folderRepoDiffers": "Esta carpeta es un proyecto de {{repo}}, distinto del repositorio del grupo. Este ordenador seguirá trabajando en esta carpeta.",

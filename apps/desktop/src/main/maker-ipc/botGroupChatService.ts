@@ -67,6 +67,7 @@ import {
   type BotGroupSpeakingMode,
   type BotGroupSummary,
 } from '../../shared/botGroupChat.js';
+import type { GroupRepository } from '../../shared/botGroupChat.js';
 
 /** docs/product-rules/bot-group-chat.md §4.2 — enforced here, never by prompt. */
 const MAX_CIRCLES_PER_ROUND = 3;
@@ -206,10 +207,10 @@ export interface BotGroupChatServiceDeps {
   readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
   /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */
   readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
-  /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
-  findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
-  /** GitHub repositories a folder's git remotes point at, best guess first (`folderRepositories`). */
-  repositoriesOfFolder?: (dir: string) => Promise<string[]>;
+  /** Registered project folders on this computer that are checkouts of this repository (any remote). */
+  findProjectDirsForRepo?: (repository: GroupRepository) => Promise<string[]>;
+  /** Repositories a folder's git remotes point at, best guess first (`folderRepositories`). */
+  repositoriesOfFolder?: (dir: string) => Promise<GroupRepository[]>;
   /**
    * Cindy's own checkouts of a group's GitHub repository (`groupProjectCheckout.ts`): cloned on
    * first need when no registered project is that repository, fast-forwarded when clean.

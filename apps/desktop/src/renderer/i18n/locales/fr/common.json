@@ -11593,6 +11593,7 @@
           "signInOpened": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Cindy a ouvert la connexion GitHub sur cet ordinateur ; une fois connecté, mentionnez à nouveau @Cindy et le projet sera téléchargé.",
           "signIn": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Connectez-vous à GitHub dans Cindy sur cet ordinateur, puis mentionnez à nouveau @Cindy.",
           "unavailable": "(Cindy) Le projet {{repo}} du groupe n'a pas pu être téléchargé sur cet ordinateur : votre compte GitHub n'y a peut-être pas accès, ou le réseau est indisponible. Vérifiez que vous pouvez ouvrir le dépôt sur GitHub, puis mentionnez à nouveau @Cindy.",
+          "accessRequired": "(Cindy) Le projet du groupe {{repo}} n’a pas pu être téléchargé sur cet ordinateur : git sur cet ordinateur ne peut pas encore accéder à {{host}}. Clonez une fois le dépôt avec git sur cet ordinateur (ou configurez un jeton d’accès), puis mentionnez à nouveau @Cindy.",
           "installGit": {
             "darwin": "Dans Terminal, exécutez xcode-select --install et suivez les instructions.",
             "win32": "Téléchargez Git sur https://git-scm.com/download/win et installez-le avec les options par défaut.",
@@ -11806,6 +11807,9 @@
           "projectCaption": "Les amis répondent et effectuent les répartitions du travail dans ce projet. Le dépôt est partagé avec le groupe ; le dossier reste sur cet ordinateur.",
           "githubRepo": "Dépôt GitHub",
           "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet ou en téléchargent une.",
+          "repository": "Dépôt",
+          "repositoryHint": "GitHub : saisissez owner/name. GitLab (y compris auto-hébergé), CNB et autres : collez le lien du dépôt. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet, ou en téléchargent une.",
+          "repositoryPlaceholder": "owner/name ou lien du dépôt",
           "githubRepoSaveFailed": "Le dépôt n’a pas été enregistré. Vérifiez-le et réessayez.",
           "folderRepoFilled": "Le dépôt {{repo}} a été renseigné à partir de ce dossier. Les ordinateurs des autres membres l’utiliseront aussi.",
           "folderRepoDiffers": "Ce dossier est un projet de {{repo}}, différent du dépôt du groupe. Cet ordinateur continue de travailler dans ce dossier.",

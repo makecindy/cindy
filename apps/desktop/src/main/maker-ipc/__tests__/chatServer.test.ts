@@ -1381,7 +1381,7 @@ describe('Chat Server result delivery and refresh', () => {
     const shown = await service.getGroup(roomId);
     if (!shown.ok) throw new Error(shown.errorCode);
     expect(shown.group).toMatchObject({ projectDir: '/projects/cindy', projectDirAuto: true, supportsGroupProject: true, project });
-    expect(deps.findProjectDirsForRepo).toHaveBeenCalledWith('makecindy/cindy');
+    expect(deps.findProjectDirsForRepo).toHaveBeenCalledWith({ kind: 'github', repo: 'makecindy/cindy' });
   });
   // #10009 real run: a miss was cached like a found folder, so a checkout registered after the
   // repository was set stayed unused for 5 minutes and replies worked in Home. A miss is retried
@@ -1416,11 +1416,13 @@ describe('Chat Server result delivery and refresh', () => {
   // a GitHub checkout now names it (a fork's upstream first) when the group has none and you manage
   // the group; a different repository already set is only pointed out, never replaced.
   it('names the group\'s repository from a folder chosen here and only points out a different one', async () => {
-    let project: { kind: 'github'; repo: string } | null = null;
+    let project: Record<string, string> | null = null;
     let role = 'owner';
-    deps.repositoriesOfFolder = vi.fn(async () => ['makecindy/cindy', 'me/cindy']);
+    const capabilities: Record<string, number> = { groupProject: 1 };
+    let folder = [{ kind: 'github' as const, repo: 'makecindy/cindy' }, { kind: 'github' as const, repo: 'me/cindy' }];
+    deps.repositoriesOfFolder = vi.fn(async () => folder);
     fixture.handle.mockImplementation((route: string) => {
-      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities } };
       if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project },
         members: [{ id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role }], messages: [], cursor: '1' } };
       return response(route);
@@ -1436,6 +1438,37 @@ describe('Chat Server result delivery and refresh', () => {
     project = { kind: 'github', repo: 'ME/cindy' };
     expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true });
     expect(patches()).toHaveLength(1);
+    // A company GitLab checkout names nothing on a server that keeps GitHub only (see below for one that keeps any host).
+    project = null; folder = [];
+    folder.push({ kind: 'git', host: 'gitlab.example.com', path: 'platform/cindy' } as never);
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/gitlab' })).toEqual({ ok: true });
+    expect(patches()).toHaveLength(1);
+  });
+  // 2026-11-14 request: the group's repository may be on GitLab (a company's own too) or CNB. A link is
+  // kept as its host and path where the server takes any host; elsewhere it is refused plainly.
+  it('keeps a GitLab or CNB repository typed as a link where the server takes any git host', async () => {
+    let capabilities: Record<string, number> = { groupProject: 1, groupProjectGit: 1 };
+    fixture.handle.mockImplementation((route: string) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities } };
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project: null },
+        members: [{ id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role: 'owner' }], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const projects = () => fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH').map(call => (call[2] as { project: unknown }).project);
+    expect(await service.updateGroup({ groupId: roomId, repository: 'https://gitlab.example.com/platform/tools/cindy/-/tree/main' })).toEqual({ ok: true });
+    expect(await service.updateGroup({ groupId: roomId, repository: 'git@cnb.cool:org/name.git' })).toEqual({ ok: true });
+    expect(await service.updateGroup({ groupId: roomId, repository: 'https://github.com/makecindy/cindy/tree/main' })).toEqual({ ok: true });
+    expect(projects()).toEqual([{ kind: 'git', host: 'gitlab.example.com', path: 'platform/tools/cindy' }, { kind: 'git', host: 'cnb.cool', path: 'org/name' },
+      { kind: 'github', repo: 'makecindy/cindy' }]);
+    deps.repositoriesOfFolder = vi.fn(async () => [{ kind: 'git' as const, host: 'gitlab.example.com', path: 'platform/cindy' }]);
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/gitlab' }))
+      .toEqual({ ok: true, folderRepository: { repo: 'gitlab.example.com/platform/cindy', filled: true } });
+    expect((await service.updateGroup({ groupId: roomId, repository: 'not a repository' })).ok).toBe(false);
+    capabilities = { groupProject: 1 };
+    service.dispose?.();
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    expect((await service.updateGroup({ groupId: roomId, repository: 'https://gitlab.example.com/platform/cindy' })).ok).toBe(false);
+    expect(projects()).toHaveLength(4);
   });
   // bot-group-chat.md §7.5 (#10009 review): a folder chosen here but gone now made the reply run in
   // Home. The choice is binding, so the round fails instead. A folder found from the repository was
@@ -2210,7 +2243,7 @@ describe('Chat Server result delivery and refresh', () => {
         };
         await ask(5, 'Where are the docs?');
         await delivered(1);
-        expect(ensure).toHaveBeenCalledWith('makecindy/cindy', expect.objectContaining({ signIn: true }));
+        expect(ensure).toHaveBeenCalledWith({ kind: 'github', repo: 'makecindy/cindy' }, expect.objectContaining({ signIn: true }));
         expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: dir });
         expect(dispatched()[0]!.message.startsWith(`Where are the docs?\n\n${t('bots.groupChat.assistant.checkout.preparing').replaceAll('{{repo}}', 'makecindy/cindy')}`)).toBe(true);
         await cloned();

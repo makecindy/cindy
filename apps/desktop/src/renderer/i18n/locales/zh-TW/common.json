@@ -11457,6 +11457,7 @@
           "signInOpened": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。Cindy 已在這台電腦上開啟 GitHub 登入，登入後再 @Cindy，Cindy 會自動下載專案。",
           "signIn": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。請在這台電腦的 Cindy 裡登入 GitHub，然後再 @Cindy。",
           "unavailable": "（Cindy）這個群的專案 {{repo}} 沒能下載到這台電腦：你的 GitHub 帳號可能沒有這個儲存庫的權限，或者網路不通。確認能在 GitHub 上開啟這個儲存庫後再 @Cindy。",
+          "accessRequired": "（Cindy）這個群的專案 {{repo}} 沒能下載到這台電腦：這台電腦的 git 還不能存取 {{host}}。先在這台電腦上用 git 複製過一次這個儲存庫（或設定好存取權杖），再 @Cindy。",
           "installGit": {
             "darwin": "在「終端機」裡執行 xcode-select --install，依提示安裝即可。",
             "win32": "從 https://git-scm.com/download/win 下載 Git 安裝，全部使用預設選項即可。",
@@ -11677,6 +11678,9 @@
           "projectCaption": "夥伴在群裡回覆和分工都在這個專案裡做。儲存庫全群共用，資料夾只存在這台電腦上。",
           "githubRepo": "GitHub 儲存庫",
           "githubRepoHint": "填 owner/name。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "repository": "程式碼儲存庫",
+          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等貼上儲存庫連結。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "repositoryPlaceholder": "owner/name 或儲存庫連結",
           "githubRepoSaveFailed": "儲存庫沒有儲存，請檢查後再試。",
           "folderRepoFilled": "已依這個資料夾填好儲存庫 {{repo}}，群裡其他人的電腦也會使用它。",
           "folderRepoDiffers": "這個資料夾是 {{repo}} 的專案，和群裡填的儲存庫不同。這台電腦仍在這個資料夾裡工作。",

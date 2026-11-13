@@ -11457,6 +11457,7 @@
           "signInOpened": "（Cindy）此群之项目 {{repo}} 未至此机：须先连君之 GitHub。Cindy 已于此机启 GitHub 登录，登毕再 @Cindy，Cindy 自取项目。",
           "signIn": "（Cindy）此群之项目 {{repo}} 未至此机：须先连君之 GitHub。请于此机之 Cindy 登 GitHub，而后再 @Cindy。",
           "unavailable": "（Cindy）此群之项目 {{repo}} 未能取至此机：君之 GitHub 或无此库之权，或网路不通。能于 GitHub 启此库，再 @Cindy。",
+          "accessRequired": "（Cindy）此群之项目 {{repo}} 未能取至此机：此机之 git 尚不得访 {{host}}。先于此机以 git 克隆此库一次（或设访问令牌），再 @Cindy。",
           "installGit": {
             "darwin": "于「终端」行 xcode-select --install，循其示而装。",
             "win32": "自 https://git-scm.com/download/win 取 Git 而装，皆从其默认。",
@@ -11666,6 +11667,9 @@
           "projectCaption": "同僚于群中应答、分工，皆于此案行之。库为全群所共，文件夹唯存此机。",
           "githubRepo": "GitHub 库",
           "githubRepoHint": "书 owner/name。未择文件夹之机，用本机此案；无之，则自取一份。",
+          "repository": "代码之库",
+          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等，贴库之链接。未择夹之机，用本机此项目，无则自取一份。",
+          "repositoryPlaceholder": "owner/name 或库之链接",
           "githubRepoSaveFailed": "库未存，请察而再试。",
           "folderRepoFilled": "已依此夹填库 {{repo}}，群中他人之机亦用之。",
           "folderRepoDiffers": "此夹乃 {{repo}} 之项目，与群所填之库不同。此机仍于此夹作业。",

@@ -11502,6 +11502,7 @@
           "signInOpened": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Cindy hat die GitHub-Anmeldung auf diesem Computer geöffnet; nach der Anmeldung @Cindy erneut, dann lädt Cindy das Projekt herunter.",
           "signIn": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Melde dich in Cindy auf diesem Computer bei GitHub an und @Cindy dann erneut.",
           "unavailable": "(Cindy) Das Projekt {{repo}} der Gruppe konnte nicht auf diesen Computer geladen werden: Dein GitHub-Konto hat eventuell keinen Zugriff darauf, oder das Netzwerk ist nicht erreichbar. Prüfe, ob du das Repository auf GitHub öffnen kannst, und @Cindy dann erneut.",
+          "accessRequired": "(Cindy) Das Projekt {{repo}} der Gruppe konnte nicht auf diesen Computer geladen werden: git auf diesem Computer hat noch keinen Zugriff auf {{host}}. Klone das Repository einmal mit git auf diesem Computer (oder richte ein Zugriffstoken ein) und erwähne dann erneut @Cindy.",
           "installGit": {
             "darwin": "Führe im Terminal xcode-select --install aus und folge den Hinweisen.",
             "win32": "Lade Git von https://git-scm.com/download/win herunter und installiere es mit den Standardoptionen.",
@@ -11711,6 +11712,9 @@
           "projectCaption": "Freunde antworten und arbeiten bei Arbeitsteilungen in diesem Projekt. Das Repository teilt die ganze Gruppe; der Ordner bleibt auf diesem Computer.",
           "githubRepo": "GitHub-Repository",
           "githubRepoHint": "owner/name eingeben. Computer ohne gewählten Ordner verwenden ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "repository": "Repository",
+          "repositoryHint": "GitHub: owner/name eingeben. GitLab (auch selbst gehostet), CNB und andere: den Repository-Link einfügen. Computer ohne gewählten Ordner nutzen ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "repositoryPlaceholder": "owner/name oder Repository-Link",
           "githubRepoSaveFailed": "Das Repository wurde nicht gespeichert. Bitte prüfen und erneut versuchen.",
           "folderRepoFilled": "Das Repository {{repo}} wurde aus diesem Ordner übernommen. Die Computer der anderen Mitglieder verwenden es ebenfalls.",
           "folderRepoDiffers": "Dieser Ordner ist ein Projekt von {{repo}} und nicht das Repository der Gruppe. Dieser Computer arbeitet weiterhin in diesem Ordner.",

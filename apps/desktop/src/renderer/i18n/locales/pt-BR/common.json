@@ -11593,6 +11593,7 @@
           "signInOpened": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: conecte primeiro sua conta do GitHub. O Cindy abriu o login do GitHub neste computador; depois de entrar, mencione @Cindy de novo e o projeto será baixado.",
           "signIn": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: conecte primeiro sua conta do GitHub. Entre no GitHub pelo Cindy neste computador e mencione @Cindy de novo.",
           "unavailable": "(Cindy) Não foi possível baixar o projeto {{repo}} do grupo neste computador: sua conta do GitHub talvez não tenha acesso a ele, ou a rede está indisponível. Confira se você consegue abrir o repositório no GitHub e mencione @Cindy de novo.",
+          "accessRequired": "(Cindy) Não foi possível baixar o projeto do grupo {{repo}} neste computador: o git deste computador ainda não acessa {{host}}. Clone o repositório uma vez com git neste computador (ou configure um token de acesso) e chame @Cindy de novo.",
           "installGit": {
             "darwin": "No Terminal, execute xcode-select --install e siga as instruções.",
             "win32": "Baixe o Git em https://git-scm.com/download/win e instale com as opções padrão.",
@@ -11806,6 +11807,9 @@
           "projectCaption": "Os amigos respondem e fazem as divisões do trabalho neste projeto. O repositório é compartilhado com o grupo; a pasta fica neste computador.",
           "githubRepo": "Repositório do GitHub",
           "githubRepoHint": "Digite owner/name. Computadores sem pasta escolhida usam a própria cópia deste projeto ou baixam uma.",
+          "repository": "Repositório",
+          "repositoryHint": "GitHub: digite owner/name. GitLab (inclusive próprio da empresa), CNB e outros: cole o link do repositório. Computadores sem pasta escolhida usam a própria cópia deste projeto ou baixam uma.",
+          "repositoryPlaceholder": "owner/name ou link do repositório",
           "githubRepoSaveFailed": "O repositório não foi salvo. Confira e tente de novo.",
           "folderRepoFilled": "O repositório {{repo}} foi preenchido a partir desta pasta. Os computadores dos outros membros também vão usá-lo.",
           "folderRepoDiffers": "Esta pasta é um projeto de {{repo}}, diferente do repositório do grupo. Este computador continua trabalhando nesta pasta.",
