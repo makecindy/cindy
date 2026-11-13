@@ -19,4 +19,18 @@ describe('live group work in message order', () => {
     expect(botGroupWorkAnchors(messages, [{ sourceMessageId: 'first' }]).has('first')).toBe(true);
     expect(botGroupWorkAnchors(messages, [{}]).has('later')).toBe(true);
   });
+  // Live /executions can omit enqueue time; a delayed start must stay with the request.
+  it('uses the source before a later start when enqueue time is unavailable', () => {
+    const work = { executionId: 'a', sourceMessageId: 'first', startedAt: 50 };
+    expect(botGroupWorkAnchors(messages, [work]).get('first')).toEqual([work]);
+  });
+  // A confirmed send keeps its optimistic row ID until history catches up.
+  it('anchors a receipt to its optimistic row without changing speaker identity', () => {
+    const own = { executionId: 'a', sourceMessageId: 'server-first' };
+    const other = { executionId: 'b', sourceMessageId: 'later' };
+    const rows = [{ id: 'pending:local-first', serverMessageId: 'server-first', createdAt: 10 }, messages[1]!];
+    const anchors = botGroupWorkAnchors(rows, [other, own]);
+    expect(anchors.get('pending:local-first')?.[0]).toBe(own);
+    expect(anchors.get('later')?.[0]).toBe(other);
+  });
 });

@@ -5885,6 +5885,36 @@ it('does not reread group history for busy-only online presence', async () => {
 });
 
 // Multi-member requests retain chronology and controls follow the requester, not bot ownership.
+// Unit regression: a send receipt arrives before its history row; live work must use that row's alias.
+it('anchors live work to a confirmed optimistic request before later messages', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [] }) });
+  let stored: BotGroupOutboxStoredEntry[] = [];
+  window.electronAPI.maker.botGroupOutbox = async () => stored;
+  window.electronAPI.maker.botGroupOutboxCommand = async request => {
+    if (request.action === 'enqueue') stored = [{ ...request.entry, status: 'sent', messageId: 'own-source', entryRevision: 1, queueOrdinal: 1 }];
+    return { ok: true, owner: request.owner, instanceId: 'anchor-test', revision: 1, entries: stored, accepted: true };
+  };
+  renderView();
+  await screen.findByRole('textbox');
+  const input = { groupId: 'g1', clientId: 'own-optimistic', text: 'Own optimistic request', mentions: { all: false, botIds: [] } };
+  await act(async () => enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, ''), draft: input.text,
+    tracked: [], files: [], attachmentScope: botGroupAttachmentScope('g1') }));
+  await waitFor(() => expect(getBotGroupOutbox('g1')[0]?.messageId).toBe('own-source'));
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    messages: [msg({ id: 'later-source', sequence: 2, createdAt: 30, content: 'Later foreign request', isSelf: false })],
+    round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'other-work', sourceMessageId: 'later-source', isSelfRequested: false },
+      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own-work', sourceMessageId: 'own-source', isSelfRequested: true },
+    ] },
+  }) });
+  await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+  const work = await screen.findAllByTestId('bot-group-work');
+  const later = screen.getByText('Later foreign request');
+  expect(work[0]!.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(work[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeTruthy();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+});
+
 // Unit regression: the same Cindy has concurrent requests; each live row must name its requester.
 it('names the requester on each running and queued Cindy execution', async () => {
   const group = detail({ serverBacked: true, round: { status: 'running', canContinue: false, speakers: [

@@ -1250,7 +1250,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const planRunningSince = runningStep ? stepLive?.startedAtMs ?? runningStep.plan.updatedAt : null;
 
   const controlSpeaker = [...speakers].reverse().find(speaker => speaker.isSelfRequested) ?? (group?.canStopAll ? speakers.at(-1) : undefined);
-  const workAnchors = botGroupWorkAnchors(rows, speakers);
+  const workAnchors = botGroupWorkAnchors(rows.map(row => row.outbox?.messageId
+    ? { ...row, serverMessageId: row.outbox.messageId } : row), speakers);
   const renderWork = (anchor: string | null) => sharing || group?.archived || group?.dissolvedAt ? null : (workAnchors.get(anchor) ?? []).map(speaker => (
     <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
       {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
