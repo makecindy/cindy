@@ -1260,7 +1260,10 @@ import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { createUsageLimitRecoveryStore, type SavedUsageLimitWait } from './usageLimitRecoveryStore.js';
 import { type MakerSessionCreateOpts, createSessionStderrOptions, isSessionRunningError } from './sessionRequest.js';
 import { createScheduledSessionBootstrap, type ScheduledSessionBootstrap } from './scheduledSessionBootstrap.js';
-import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
+import {
+  hydrateProviderIdBeforeSessionStart as restoreProviderIdBeforeSessionStart,
+  persistAndHydrateSessionProvider,
+} from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
 import {
   registerReviewStartHandler,
@@ -9010,31 +9013,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 否则 agent 首轮 auth gate 会按默认 fallback 判断,之后 hydrate 路由表已经太晚。
    */
   async function hydrateProviderIdBeforeSessionStart(o: CreateOpts): Promise<void> {
-    if (o.providerId !== undefined) {
-      if (typeof o.providerId === 'string') {
-        o.providerId = o.providerId.trim() || null;
-      }
-      return;
-    }
-    if (typeof o.id !== 'string' || !o.id) return;
     try {
-      const db = getDbClient().drizzle;
-      const [row] = await db
-        .select({ providerId: sessions.providerId })
-        .from(sessions)
-        .where(eq(sessions.id, o.id))
-        .limit(1);
-      if (row) {
-        // DB null 是显式默认路由，不等于「调用方未指定」。保留该三态才能阻止
-        // Pi 在同名 BYOM 存在时把默认路由误反查成自定义来源。
-        o.providerId = row.providerId?.trim() || null;
-      }
+      await restoreProviderIdBeforeSessionStart(o, async (sessionId) => {
+        const [row] = await getDbClient().drizzle
+          .select({ providerId: sessions.providerId })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        return row?.providerId;
+      });
     } catch (err) {
-      // 读不到只能按「调用方未指定」继续 → 整个会话跑在非用户所选的上游上。
-      log.warn('pre-hydrate session provider failed (non-fatal)', {
+      log.warn('pre-hydrate session provider failed; refusing default route', {
         sessionId: o.id,
         error: err instanceof Error ? err.message : String(err),
       });
+      throwIpcError('PRECONDITION_FAILED', 'Could not restore the selected model provider. Retry the task.');
     }
   }
 
@@ -9573,18 +9566,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
     assertAccess?.();
-    wireSessionToIpc(session);
-    markOrcaMcpHydratedIfNeeded(session.id, o);
-
-    // per-session 供应商:从 DB(sessions.provider_id)回填路由 store —— 跨重启恢复会话显式选定的
-    // 供应商,让首个请求就按所选来源路由;无值则保持未设(→ 默认路由,行为不变)。hydrate 不覆盖
-    // 运行中已有的选择。读失败不致命(回落默认路由)。所有 create/resume 路径都经本funnel,单点覆盖。
-    //
-    // device-link 远程 create(P2):DesktopSessionStorage.create 从 maker-core SessionMeta 建行,
-    // SessionMeta 不含 providerId → 远程新建行 provider_id 恒 NULL。这里在 hydrate 前用 create opts
-    // 的 providerId 补写 DB。providerId=null 是显式清除来源,也必须写库覆盖旧值;只有
-    // providerId=undefined 才表示调用方没有携带来源选择。懒启动路径会在 maker.createSession
-    // 前从 DB 预补 o.providerId,所以下面同时承担「新建落库」和「恢复路由 store」两件事。
+    // New tasks persist providerId in the same INSERT as their model. Existing
+    // task selections still need this update; a failed write must not be reported
+    // as a successful startup. Temporary runtime overrides retain the saved baseline.
     try {
       const db = getDbClient().drizzle;
       await persistAndHydrateSessionProvider({
@@ -9603,6 +9587,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
         hydrateSessionProvider: (...args) => { assertAccess?.(); hydrateSessionProvider(...args); },
       });
+    } catch (err) {
+      log.warn('session provider persistence failed; refusing task startup', {
+        sessionId: session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // A duplicate create can reuse a running Session; do not interrupt its turn.
+      await maker.closeSessionIfCurrent(session, 'requested', { onlyIfIdle: true }).catch((closeError) => {
+        log.warn('failed to close task after provider persistence failure', {
+          sessionId: session!.id, error: String(closeError),
+        });
+      });
+      throwIpcError('PRECONDITION_FAILED', 'Could not save the selected model provider. Retry the task.');
+    }
+    assertAccess?.();
+    wireSessionToIpc(session);
+    markOrcaMcpHydratedIfNeeded(session.id, o);
+    try {
+      const db = getDbClient().drizzle;
       // bridge 会话态(effort / fast)同点 hydrate:让 resume / 重启后的首个 bridge 请求就带上
       // 用户上次选定的思维深度与 Fast(否则要等用户再点一次开关才写进内存 store)。
       const [efRow] = await db
@@ -9637,8 +9639,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         setSessionFastMode(session.id, (efRow?.fastMode ?? false));
       }
     } catch (err) {
-      // 来源没能落库 → 所选来源在下次冷启动后消失(本次路由已在启动边界冻结)。
-      log.warn('hydrate session provider failed (non-fatal)', {
+      log.warn('hydrate session runtime options failed (non-fatal)', {
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
       });
