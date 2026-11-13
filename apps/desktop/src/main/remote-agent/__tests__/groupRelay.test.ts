@@ -1735,6 +1735,30 @@ describe('provider group relay: starting, load and cleanup', () => {
 });
 
 describe('provider group "switch to another computer" for shared users', () => {
+  // Unit, direct-execution §7: an owner-verified account replacement may keep M
+  // once, with a fresh isolated native session. Empty exclusions are a valid
+  // token, not a missing token; it must still retire the old durable direct pin.
+  it('accepts an account-handoff token with no excluded machines once per round', async () => {
+    const switched = vi.fn(async () => {});
+    const env = setup({ owner: { directGuestExecution: { switched, ownerScope: () => 'owner',
+      sessionAllowed: () => true, sessionDelegated: () => false } as never } });
+    const guest = providerShareGuestPeer('share', 'member', 'laptop');
+    const excluded = new Set([MEMBER_MINI.memberKey]);
+    const token = env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true);
+    expect(token).toBeTruthy();
+    expect(env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true)).toBeNull();
+    const opened = await openAsGuest(env, guest, openPayload(SESSION, { acceptsGroupSwitch: true, groupSwitchToken: token }));
+    try {
+      expect(switched).toHaveBeenCalledWith(guest, SESSION, token);
+      expect(env.relay.plan).toHaveBeenCalledWith(expect.objectContaining({ exclude: new Set() }));
+      expect(env.memberStarted.mini[0].input.options.resumeSessionId).toBeUndefined();
+      const next = env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded);
+      expect(next).toBeTruthy();
+    } finally {
+      await opened.client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
   // provider-groups.md §6.1, unit: exercise the real host, relay and run client.
   // Existing cases emitted a terminal event independently of send(), missing the
   // quota RPC rejection that could overtake the switch offer and lose recovery.

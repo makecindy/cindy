@@ -319,6 +319,7 @@
     "memberLimit": "Une conversation de groupe nécessite de 2 à 6 amis",
     "memberUnavailable": "L'un de ces amis est indisponible. Choisissez-en un autre et réessayez.",
     "mentionUnavailable": "Un membre mentionné n'est plus disponible. Choisissez qui mentionner avant de renvoyer.",
+    "mentionAmbiguous": "Plusieurs membres s'appellent « {{name}} ». Choisissez le bon dans la liste @.",
     "notFound": "Cette conversation de groupe n'existe plus",
     "hostNotReady": "Cindy est encore en cours de préparation. Réessayez dans un instant.",
     "planOpen": "Une répartition du travail est en cours. Terminez-la ou arrêtez-la avant d'en lancer une autre.",

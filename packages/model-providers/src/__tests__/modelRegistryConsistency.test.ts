@@ -147,6 +147,7 @@ describe("model registry data consistency", () => {
     // usage. Their public API bands must not enlarge today's subscription window.
     const subscriptionApiReferences = new Set([
       "openai/gpt-6.1-sol",
+      "openai/gpt-6.1-terra",
       "openai/gpt-6-astra",
       "openai/gpt-6-sol",
       "openai/gpt-6-luna",
@@ -206,6 +207,14 @@ describe("model registry data consistency", () => {
           ) {
             expect(group).toHaveLength(1);
             expect(top.maxInputTokens).toBe(272_001);
+            continue;
+          }
+          // Server #1384 deliberately publishes only M3's verified short USD
+          // quote. The price consumer must keep >512K unknown (covered by
+          // referencePriceCoverage), without shrinking the model capacity.
+          if (entry.id === "minimax/minimax-m3" && route.providerId === "minimax-global") {
+            expect(group).toHaveLength(1);
+            expect(top).toMatchObject({ currency: "USD", variant: "standard", maxInputTokens: 512_001, inputPerMtok: 0.3 });
             continue;
           }
           for (const agent of route.agents) {

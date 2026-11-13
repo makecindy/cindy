@@ -359,16 +359,19 @@ export function BotGroupComposer({
    */
   const sendThreadReply = async () => {
     if (!canSend || sendingRef.current || getBotGroupThreadReplyAttempt(draftKey)?.sending || !sendReply) return;
-    groupMask?.participate();
     const files = attachmentState.attachments;
     const attachmentSignature = botGroupAttachmentSignature(files);
     const previous = getBotGroupThreadReplyAttempt(draftKey);
-    const attempt: BotGroupThreadReplyAttempt =
-      previous && previous.text === trimmed
+    const retry = previous && previous.text === trimmed
       && previous.attachmentSignature === attachmentSignature
-      && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions)
-        ? previous
-        : {
+      && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions) ? previous : null;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    // A retry is read against its own roster, like its targets: a later namesake does not hold it.
+    const [ambiguousName] = mention.ambiguous(text, retry?.roster);
+    if (ambiguousName) { setError(t('bots.groupChat.errors.mentionAmbiguous', { name: ambiguousName })); return; }
+    groupMask?.participate();
+    const attempt: BotGroupThreadReplyAttempt =
+      retry ?? {
             text: trimmed, draft: text, clientId: crypto.randomUUID(), attachmentSignature, files,
             mentions: mention.resolve(text), roster: members, tracked: mention.tracked, sending: true,
           };
@@ -483,6 +486,12 @@ export function BotGroupComposer({
     if (!canSend || sendingRef.current || textRef.current !== text || attachmentsRef.current !== attachmentState.attachments) return;
     if (!botGroupApi()) {
       toast.error(t('bots.groupChat.composer.sendFailed'));
+      return;
+    }
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = mention.ambiguous(text);
+    if (ambiguousName) {
+      toast.error(t('bots.groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
       return;
     }
     groupMask?.participate();

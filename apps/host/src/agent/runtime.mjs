@@ -1,4 +1,3 @@
-import { getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
 /** Node assembly of the shared Maker agents, provider configuration and MCP transports.
  * Native login, settings and platform integrations are assembled by the owning runtime. */
@@ -22,6 +21,7 @@ import { GatewayCodexRestartService } from '../../../desktop/src/main/maker-ipc/
 import { createDeferredRestartSettledWake } from '../../../desktop/src/main/maker-ipc/deferredRestartQueueWiring.js';
 import { refreshCodexGatewayRuntime } from '../../../desktop/src/main/maker-host/codexGatewayRefresh.js';
 import { isLocalSessionBusy } from '../../../desktop/src/main/maker-host/codex-credential-switch.js';
+import { getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 
 export const LOGGER = createMakerLogger('maker');
 
@@ -215,6 +215,7 @@ export function createHostAgentGraph(options) {
     readClaudeApiKey: () => options.gateway?.credential ?? null,
   }));
   const agent = options.binaryPath ? new ClaudeCodeAgent({
+    getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative),
     runtimeConfig: {
       get endpoint() { return options.gateway?.endpoint || undefined; },
@@ -229,6 +230,7 @@ export function createHostAgentGraph(options) {
   }) : null;
   const codex = options.codexBinaryPath
     ? new CodexAgent({
+        getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         auth: codexAuth,
         ...options.mcpRuntime.codexDeps,
         ...options.codexRuntime?.deps,
@@ -242,6 +244,7 @@ export function createHostAgentGraph(options) {
     : null;
   const pi = options.piBinaryPath
     ? new PiAgent({
+        getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         auth: piAuth,
         prepareMcpBridge: options.mcpRuntime.preparePiMcpBridge,
         runtimeConfig: {
