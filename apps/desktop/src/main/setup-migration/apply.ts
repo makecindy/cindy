@@ -172,6 +172,9 @@ export async function applySetupPlan(
         }
         return deps.windowPrompt(request);
       };
+      // Preserve the host-owned capability negotiation through both batch and fallback
+      // confirmation; a legacy controller must still not grant the metadata channel.
+      prompt.taskStatusCapabilityApproval = deps.windowPrompt.taskStatusCapabilityApproval;
       const installed = await deps.installPlugin(
         item.pluginId,
         {

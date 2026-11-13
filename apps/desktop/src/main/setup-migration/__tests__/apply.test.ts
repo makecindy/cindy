@@ -5,7 +5,9 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createOverrideSettingsFile, portableOverrideSettings } from '../../maker-host/override-settings-file.js';
-import type { GhostManifest } from '../../../shared/ghost.js';
+import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
+import { evaluateGhostInstallConsent } from '../../../shared/ghostInstallConsent.js';
+import { assertGhostInstallConsent, confirmedTaskStatusCapability, obtainGhostInstallConsent } from '../../cindy-brain/ghostInstallConsent.js';
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent.js';
 import type { SetupMigrationProgress } from '../../../shared/setupMigration.js';
 import { applySetupPlan, type InstalledGhostRef, type SetupApplyDeps } from '../apply.js';
@@ -68,6 +70,44 @@ describe('applySetupPlan', () => {
     expect(installed.get('gmail')?.enabled).toBe(false);
     expect(deps.installPlugin).toHaveBeenCalledWith('plg_gmail', { expectedReleaseId: 'rel-plg_gmail' }, expect.any(Function));
     expect(progress.map((p) => p.phase)).toEqual(['running', 'done']);
+  });
+
+  // PR #9676: applying a migration must retain the prompt's negotiated support.
+  // Existing cases only called the prompt, not the production consent/receipt grant path.
+  // Minimal unit regression: a non-default plugin with statusBar:true, batch or fallback
+  // confirmation, and a supporting/legacy controller. No real installation or network.
+  it.each([
+    [true, true], [true, false], [false, true], [false, false], [undefined, true],
+  ] as const)('preserves status consent support=%s with batch approval=%s', async (supported, batch) => {
+    const validated = validateGhostManifest({
+      schemaVersion: 3, minCindyVersion: '0.1.61', id: 'gmail', name: 'Gmail',
+      version: '1.0.0', kind: 'chip', entry: 'main.js',
+      taskView: { html: 'task.html', statusBar: true },
+    });
+    if (!validated.ok) throw new Error('invalid fixture');
+    const next = validated.manifest;
+    const facts = evaluateGhostInstallConsent(null, next)!;
+    const source = snapshot({ plugins: [plugin({ ghostId: 'gmail' })] });
+    const plan = buildSetupPlan(planInputs({
+      snapshot: source,
+      catalog: new Map([['plg_gmail', { pluginId: 'plg_gmail', releaseId: 'r', version: '1.0.0', consent: facts }]]),
+    }));
+    let granted: boolean | undefined;
+    const windowPrompt = Object.assign(vi.fn(async () => true), { taskStatusCapabilityApproval: supported });
+    const { deps } = harness({
+      windowPrompt,
+      installPlugin: vi.fn(async (_id, _options, prompt) => {
+        const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'market' }, null, next, 'package');
+        assertGhostInstallConsent(decision, null, next, 'package');
+        granted = confirmedTaskStatusCapability(decision, null, next);
+        return { instanceKey: '_root__gmail', enabled: true, approval: 'approved:1' };
+      }),
+    });
+    const key = plan.plugins[0].key;
+    const result = await applySetupPlan({ plan, snapshot: source, keys: new Set([key]), approvedPluginKeys: new Set(batch ? [key] : []), emit: () => {} }, deps);
+    expect(result.results).toEqual([{ key, outcome: 'done' }]);
+    expect(granted).toBe(supported === true ? true : undefined);
+    expect(windowPrompt).toHaveBeenCalledTimes(batch ? 0 : 1);
   });
 
   it('falls back to the ordinary confirmation when the real package asks for different permissions', async () => {
