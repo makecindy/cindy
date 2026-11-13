@@ -139,6 +139,7 @@ function deviceViewFromPresence(
     selfName: snapshot.selfName ?? previous?.selfName ?? null,
     deviceInfo: snapshot.deviceInfo ?? previous?.deviceInfo ?? null,
     platform: snapshot.platform || previous?.platform || null,
+    app: snapshot.app ?? previous?.app,
     appVersion: snapshot.appVersion || previous?.appVersion || null,
     lastSeenAt: new Date(snapshot.lastSeenAt).toISOString(),
     online: snapshot.online,
@@ -154,6 +155,7 @@ function shallowDeviceViewEqual(a: DeviceView, b: DeviceView): boolean {
     && (a.selfName ?? null) === (b.selfName ?? null)
     && deviceInfoEqual(a.deviceInfo, b.deviceInfo)
     && a.platform === b.platform
+    && a.app === b.app
     && a.appVersion === b.appVersion
     && a.lastSeenAt === b.lastSeenAt
     && a.online === b.online
