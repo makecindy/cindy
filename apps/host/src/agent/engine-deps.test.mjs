@@ -2,8 +2,8 @@
  * 测试价值
  * - 生产入口与可观察结果：createHostAgentGraph 组装出的引擎上 maker-core 读取的几项专有依赖
  *   （放行表第 19 行）调用后的结果：Claude 的只读工具白名单、子代理用量（经回环代理共用的进程级
- *   桥）、Codex 凭证形态切换前对本机会话的处理。
- * - 规则依据：桌面 maker-host/index.ts 的 Claude 与 Codex 构造点用同样的拼法注入这几项。
+ *   桥）、Codex 凭证形态切换前对本机会话的处理；Pi 的全局上下文目录、模型解析与缓存兼容记录。
+ * - 规则依据：桌面 maker-host/index.ts 与 pi-host.ts 的构造点用同样的拼法注入这几项。
  * - 最小失败输入：不传白名单；用量登记或读取接到别的桥；凭证切换不拦忙的会话、不关闲置会话、
  *   误关别的 host 或远程会话、不看 Host 的回合追踪。
  * - tier：unit（只构造实例并调用依赖，不起引擎进程、不调模型）。
@@ -37,13 +37,15 @@ function fixtureHarnessRoot(profile) {
   return root;
 }
 
+const graphProfiles = new WeakMap();
+
 function buildGraph(t, ownerId, extra = {}) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-engine-deps-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId });
   const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: () => null });
   t.after(() => mcp.close());
-  return createHostAgentGraph({
+  const graph = createHostAgentGraph({
     userDataDir: profile,
     harnessRoot: fixtureHarnessRoot(profile),
     gateway: null,
@@ -64,6 +66,8 @@ function buildGraph(t, ownerId, extra = {}) {
     },
     ...extra,
   });
+  graphProfiles.set(graph, profile);
+  return graph;
 }
 
 test('Claude gets the desktop read-only allowed tools', { timeout: TEST_TIMEOUT_MS }, t => {
@@ -225,4 +229,45 @@ test('Pi resolves its live models and descriptors from the Host selectable catal
   assert.ok(hostModels.startsWith(desktopModels), 'the three model resolvers are the desktop lines');
   assert.equal(body(runtime, 'resolvePiGlobalContextHome: (remoteHostId) => {', '        },'),
     body(piHost, 'resolvePiGlobalContextHome: (remoteHostId) => {', '    },'));
+});
+
+test('Pi learns cache compatibility in the profile file the desktop uses and reads it back', { timeout: TEST_TIMEOUT_MS }, t => {
+  const graph = buildGraph(t, 'engine-deps-pi-compat');
+  const profile = graphProfiles.get(graph);
+  const deps = graph.pi.deps;
+  const file = path.join(profile, 'pi-native-compat-overrides.json');
+  assert.equal(deps.resolvePiNativeCompatStorePath(), file);
+  assert.equal(deps.resolvePiNativeCompatStorePath(null), file);
+  assert.equal(deps.resolvePiNativeCompatStorePath('other-device'), '$HOME/.xdt-server/v1/pi-agent-home/pi-native-compat-overrides.json');
+  // What the Pi bridge writes there (cache-recovery-source.ts persist): one live and one expired route.
+  const routeKey = 'a'.repeat(64);
+  const now = Date.now();
+  const write = routes => fs.writeFileSync(file, JSON.stringify({ routes }));
+  write({
+    [JSON.stringify(['openai', 'gpt-x', routeKey])]: { supportsLongCacheRetention: false, learnedAt: now - 1000, expiresAt: now + 86_400_000, evidence: 'explicit' },
+    [JSON.stringify(['openai', 'gpt-old', routeKey])]: { supportsLongCacheRetention: false, learnedAt: now - 3 * 86_400_000, expiresAt: now - 1000, evidence: 'opaque' },
+  });
+  assert.deepEqual(deps.resolvePiNativeCompatOverride('openai', 'gpt-x', routeKey), { supportsLongCacheRetention: false });
+  assert.equal(deps.resolvePiNativeCompatOverride('openai', 'gpt-old', routeKey), undefined);
+  assert.equal(deps.resolvePiNativeCompatOverride('openai', 'gpt-x', 'not-a-digest'), undefined);
+  assert.equal(deps.resolvePiNativeCompatOverride('other', 'gpt-x', routeKey), undefined);
+  // A later bridge write is seen on the next read, as on the desktop.
+  write({});
+  assert.equal(deps.resolvePiNativeCompatOverride('openai', 'gpt-x', routeKey), undefined);
+  // The same lines as the desktop's buildPiAgent, over the Host profile and the Host instance.
+  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
+  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
+  const body = (source, from, to) => {
+    const start = source.indexOf(from);
+    assert.ok(start >= 0, from);
+    const end = source.indexOf(to, start);
+    assert.ok(end > start, to);
+    return source.slice(start, end).split('\n').map(line => line.trim()).filter(line => !line.startsWith('//')).join('\n');
+  };
+  assert.equal(body(runtime, 'resolvePiNativeCompatStorePath:', 'resolvePiNativeProviders:'),
+    body(piHost, 'resolvePiNativeCompatStorePath:', 'getManagedSkills:')
+      .replaceAll("app.getPath('userData')", 'options.userDataDir')
+      .replaceAll('readPiNativeCompatOverride(providerId', 'piNativeCompatOverrides.readPiNativeCompatOverride(providerId'));
+  assert.ok(runtime.includes("const piNativeCompatOverrides = createPiNativeCompatOverridesStore({ app: { getPath: () => options.userDataDir } });"));
+  assert.ok(runtime.includes("import { createPiNativeCompatOverridesStore } from '../../../desktop/src/main/maker-host/piNativeCompatOverridesStoreCore.js';"));
 });

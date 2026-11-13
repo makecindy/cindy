@@ -21,6 +21,7 @@ import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostC
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
+import { createPiNativeCompatOverridesStore } from '../../../desktop/src/main/maker-host/piNativeCompatOverridesStoreCore.js';
 import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import { getActiveCatalog, getLocalCatalogOverridesSnapshot } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId, resolvePiGatewayDescriptorProviderId, resolvePiRuntimeModelDescriptor } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
@@ -631,6 +632,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
     : null;
+  // The desktop's learned Pi cache compatibility (pi-native-compat-overrides-store.ts), on this
+  // profile; the Pi bridge writes the file and the runtime reads it back.
+  const piNativeCompatOverrides = createPiNativeCompatOverridesStore({ app: { getPath: () => options.userDataDir } });
   const pi = options.piBinaryPath
     ? new PiAgent({
         auth: piAuth,
@@ -675,6 +679,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         },
         // Pi's loopback requests carry a per-session token the proxy checks (pi-host.ts).
         ...(claudeProxy ? { registerPiProxySession: claudeProxy.registerPiProxySession } : {}),
+        // As the desktop (pi-host.ts): 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
+        resolvePiNativeCompatStorePath: remoteHostId => remoteHostId
+          ? '$HOME/.xdt-server/v1/pi-agent-home/pi-native-compat-overrides.json'
+          : path.join(options.userDataDir, 'pi-native-compat-overrides.json'),
+        resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
+          piNativeCompatOverrides.readPiNativeCompatOverride(providerId, modelId, routeKey),
         resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
