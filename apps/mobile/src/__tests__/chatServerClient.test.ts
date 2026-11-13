@@ -1197,3 +1197,14 @@ it('uses my admin companion actor for an explicit all, preserving server plan re
     [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `all-op:execution:${id(30)}`, action: 'stop' }, id(12)],
   ]);
 });
+
+// Unit regression: public execution rows must survive denial of the stop affordance.
+// Earlier projection coverage did not distinguish request ownership.
+it.each([10, 11])('keeps public work visible while projecting stop permission for requester %s', requester => {
+  const page = { snapshot: snapshot(), messages: [], before: null, executions: [
+    { id: id(30), source_message_id: id(20), bot_id: id(12), epoch: 1, status: 'running', requester_id: id(requester) },
+  ] };
+  const view = chatGroupView(page, id(11));
+  expect(view.round.speakers).toHaveLength(1);
+  expect(view.round.canStop).toBe(requester === 11);
+});
