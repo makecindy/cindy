@@ -2114,6 +2114,8 @@ export interface StartSessionOptions {
    * can observe different memory generations.
    */
   makerMemoryIndexSnapshot?: string;
+  /** Project-local Markdown memory on the task's computer; load on demand, never as an index snapshot. */
+  makerMemoryProjectDir?: string;
   /**
    * 设备托管：任务所在电脑在打开任务时按真实工作目录生成的插件花名册段。插件工具经隧道
    * 回到那台电脑，花名册也必须来自那台；Agent 所在电脑不读自己的已装插件。

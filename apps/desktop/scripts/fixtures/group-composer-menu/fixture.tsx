@@ -1,9 +1,19 @@
-import { mountPage, subscription } from '../../ui-page/harness';
+import { forbid, mountPage, subscription } from '../../ui-page/harness';
 import { BotGroupComposer } from '../../../src/renderer/features/bots/BotGroupComposer';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../src/shared/appearanceSettings';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 
 void mountPage({
   host: ({ data }) => ({
+    voiceInput: {
+      getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), fastActivationEnabled: false }, history: [] }),
+      onDataChanged: subscription('voiceDataChanged'),
+      onEvent: subscription('voiceEvent'),
+      onGlobalShortcutTrigger: subscription('voiceShortcut'),
+      setGlobalShortcut: async () => ({ ok: true }),
+      prewarm: async () => ({ ok: true }),
+      start: forbid('voiceInput.start'),
+    },
     appearanceSettings: {
       getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, uiFamily: data.uiFamily ?? '' }),
       onChanged: subscription('appearance'),

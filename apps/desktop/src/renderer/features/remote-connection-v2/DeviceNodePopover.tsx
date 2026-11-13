@@ -11,6 +11,8 @@
 
 import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
+import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
 import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -30,21 +32,53 @@ import {
 } from './agentNetRemoteSwitch';
 import { PlatformGlyph } from './PlatformGlyph';
 import type { TopologyModel, TopologyNode } from './topologyModel';
-import { flowLabel, formatRtt, pathLabel, platformLabel, protocolLabel, relativeTime } from './topologyPresentation';
+import { ProtocolMark } from './ProtocolMark';
+import { flowLabel, formatRtt, pathLabel, platformLabel, protocolKind, protocolLabel, relativeTime } from './topologyPresentation';
 
 /** 卡片里的「路径」只写怎么连;要处理的原因写在「状态」里。 */
 function routeOf(node: TopologyNode): TopologyNode {
   return node.attention ? { ...node, attention: null } : node;
 }
 
-function Row({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
+function Row({
+  label,
+  value,
+  valueClassName,
+  children,
+}: {
+  label: string;
+  /** 纯文字值，也用作悬停提示;给了 children 时只作提示 */
+  value: string;
+  valueClassName?: string;
+  children?: ReactNode;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-12">
       <span className="shrink-0 text-[var(--text-tertiary)]">{label}</span>
       <span className={cn('min-w-0 truncate text-right', valueClassName ?? 'text-[var(--text-primary)]')} title={value}>
-        {value}
+        {children ?? value}
       </span>
     </div>
+  );
+}
+
+/** 路径:「协议 · 怎么连」,协议用与拓扑同一个图标 + 名称(Agent-Net 紫色)。 */
+function PathRow({ node, relayName, reconnecting }: { node: TopologyNode; relayName: string; reconnecting: boolean }) {
+  const { t } = useTranslation();
+  const label = t('settings.remoteControl.v2.popover.path');
+  if (reconnecting) return <Row label={label} value={t('settings.remoteControl.v2.peerSwitch.reconnecting')} />;
+  const kind = protocolKind(node);
+  const protocol = protocolLabel(node, t);
+  const path = pathLabel(routeOf(node), relayName, t);
+  const text = [protocol, path].filter(Boolean).join(' · ');
+  if (!kind || !protocol) return <Row label={label} value={text} />;
+  return (
+    <Row label={label} value={text}>
+      <span className="inline-flex max-w-full items-baseline justify-end gap-1">
+        <ProtocolMark kind={kind} label={protocol} className="shrink-0 self-center" />
+        <span className="min-w-0 truncate">· {path}</span>
+      </span>
+    </Row>
   );
 }
 
@@ -242,7 +276,7 @@ export function DeviceNodePopover({
   const sub = [
     node.modelLabel,
     platformLabel(node.platform),
-    node.appVersion?.trim() ? t('settings.remoteControl.v2.popover.version', { version: node.appVersion.trim() }) : null,
+    node.appVersion?.trim() ? `${appLabel(node.app, t)} ${node.appVersion.trim()}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -264,18 +298,15 @@ export function DeviceNodePopover({
         ? 'text-[var(--warning-accent)]'
         : undefined;
   const canRemoteDesktop =
-    node.status !== 'offline' && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
+    node.status !== 'offline' && isCindyApp(node.app) && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
   return (
     <div className="flex flex-col gap-3">
-      <Heading name={node.name} sub={sub} platform={node.platform} isMobile={node.isMobile} />
+      <Heading name={deviceLabel(node, t)} sub={sub} platform={node.platform} isMobile={node.isMobile} />
       <div className="flex flex-col gap-1.5">
         {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
         <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />
         {node.status !== 'offline' ? (
-          <Row
-            label={t('settings.remoteControl.v2.popover.path')}
-            value={reconnecting ? t('settings.remoteControl.v2.peerSwitch.reconnecting') : [protocolLabel(node, t), pathLabel(routeOf(node), relayName, t)].filter(Boolean).join(' · ')}
-          />
+          <PathRow node={node} relayName={relayName} reconnecting={reconnecting} />
         ) : null}
         {node.flow ? (
           <Row label={t('settings.remoteControl.v2.popover.activity')} value={flowLabel(node.flowText ?? node.flow, t)} />

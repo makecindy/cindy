@@ -1204,7 +1204,7 @@ function projectXdGatewayMediaModels(
   };
 }
 
-function computeMerged(): Catalog {
+function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex): Catalog {
   const source = base ?? BUNDLED_CATALOG;
   const b =
     baseCapabilityEvidence === 'current'
@@ -1252,7 +1252,7 @@ function computeMerged(): Catalog {
 
   // Codex root 消费其发现快照；Pi 后续独立补新型号，不继承 Codex 专属能力。
   const withCodexDiscovery = providers.map((p) =>
-    p.id === 'openai' ? augmentModels(p, 'codex', discoveredCodex, true) : p,
+    p.id === 'openai' ? augmentModels(p, 'codex', [...codexModels], true) : p,
   );
   if (withCodexDiscovery.some((p, index) => p !== providers[index])) {
     providers = withCodexDiscovery;
@@ -1331,7 +1331,7 @@ function computeMerged(): Catalog {
       const discoveredAccountCodex = discoveredByProvider.get(p.id)?.codex ?? [];
       const accountCodex =
         p.id === 'openai'
-          ? discoveredCodex
+          ? codexModels
           : discoveredAccountCodex.length > 0 || p.auth.native !== 'codex'
             ? discoveredAccountCodex
             : (p.models.codex ?? []);
@@ -2023,6 +2023,18 @@ export function getActiveCatalog(): Catalog {
     merged = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
   }
   return merged;
+}
+
+let pooledCodexProjection: { revision: number; models: readonly CatalogModel[]; catalog: Catalog } | undefined;
+
+/** Reuse the normal metadata/bridge/override pipeline without mutating default-account discovery. */
+export function getActiveCatalogWithCodexModels(models: readonly CatalogModel[]): Catalog {
+  if (pooledCodexProjection?.revision === revision && pooledCodexProjection.models === models)
+    return pooledCodexProjection.catalog;
+  const catalog = computeMerged(models);
+  const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  pooledCodexProjection = { revision, models, catalog: projected };
+  return projected;
 }
 
 /**

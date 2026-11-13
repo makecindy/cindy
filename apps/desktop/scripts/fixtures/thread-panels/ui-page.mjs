@@ -5,11 +5,11 @@ import assert from 'node:assert/strict';
 export default {
   name: 'thread-panels', entry: './fixture.tsx', viewport: { width: 960, height: 640 },
   real: 'BotDmThreadPanel, ChatThreadPanel, shared ThreadPanel/ThreadPanelRoot, BotGroupTimelineItem, Markdown, wallpaper, theme and translations',
-  notCovered: 'Private ready-state task runtime, model execution, real media upload, server persistence and attachment IO; attachment selection and layout use scenario host data',
+  notCovered: 'Private ready-state task runtime, model execution, real media upload, server persistence and attachment IO, microphone/ASR and native voice shortcuts; attachment selection and layout use scenario host data',
   stubs: {
     'src/renderer/features/cc-agent/CCAgentSessionView': 'export const CCAgentSessionView = () => { throw new Error("Use full Desktop for ready-state task verification"); };',
     'src/renderer/lib/makerChatStore': { partial: 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => window.__threadRoot };' },
-    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice is outside this layout fixture"); };',
+    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
   },
   cases: {
     group: { about: 'Group topic with a long source message and working follow switch, with and without wallpaper' },
