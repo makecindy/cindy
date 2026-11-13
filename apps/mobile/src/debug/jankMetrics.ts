@@ -58,6 +58,8 @@ const emptyUiThread = () => ({ pings: 0, maxLagMs: 0, over250: 0 });
 let gunzip = emptyGunzip();
 let loopLag = emptyLoopLag();
 let uiThread = emptyUiThread();
+/** Presence messages applied. Screens refresh on them, so a high count explains repeated reads. */
+let presenceUpdates = 0;
 
 function resetCounters(): void {
   pushes = new Map();
@@ -67,6 +69,7 @@ function resetCounters(): void {
   gunzip = emptyGunzip();
   loopLag = emptyLoopLag();
   uiThread = emptyUiThread();
+  presenceUpdates = 0;
 }
 
 export function setJankMetricsEnabled(next: boolean): void {
@@ -161,6 +164,10 @@ export function recordLoopLag(lagMs: number): void {
   if (lagMs > 1000) loopLag.over1000++;
 }
 
+export function recordPresenceUpdate(): void {
+  if (enabled) presenceUpdates++;
+}
+
 export function recordUiThreadLag(lagMs: number): void {
   if (!enabled) return;
   uiThread.pings++;
@@ -250,10 +257,12 @@ export function takeSyncWorkMetrics() {
     gunzip: { ...gunzip, onThreadMs: Math.round(gunzip.onThreadMs) },
     loopLag: { ...loopLag, maxMs: Math.round(loopLag.maxMs) },
     uiThread: { ...uiThread, maxLagMs: Math.round(uiThread.maxLagMs) },
+    presenceUpdates,
   };
   decodes = new Map();
   gunzip = emptyGunzip();
   loopLag = emptyLoopLag();
   uiThread = emptyUiThread();
+  presenceUpdates = 0;
   return snapshot;
 }

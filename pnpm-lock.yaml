@@ -44,7 +44,7 @@ patchedDependencies:
     hash: 476334336418f46357c772c57f5fc6b535f76092a64beb479b1c833e64ae40f2
     path: dependency-patches/react-native-screens@4.30.1.patch
   react-native-uitextview@2.2.0:
-    hash: 700355f829f9dce2142d8651340fca2dbc4c8ef100ca7fc25229f5df717e9bab
+    hash: 0fd5ae94e21c0ec89ce719a90730f2660957ba45260d4ceaba10dd49c22d1909
     path: dependency-patches/react-native-uitextview@2.2.0.patch
   react-native-webview@14.0.1:
     hash: a5418ce60809f2cb171596780f5fd8f3399172512bec33f6cf6238fdfff3142f
@@ -918,7 +918,7 @@ importers:
         version: 15.16.0(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       react-native-uitextview:
         specifier: 2.2.0
-        version: 2.2.0(patch_hash=700355f829f9dce2142d8651340fca2dbc4c8ef100ca7fc25229f5df717e9bab)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+        version: 2.2.0(patch_hash=0fd5ae94e21c0ec89ce719a90730f2660957ba45260d4ceaba10dd49c22d1909)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       react-native-web:
         specifier: ~0.21.4
         version: 0.21.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -22434,7 +22434,7 @@ snapshots:
       react: 19.3.0
       react-native: 0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0)
 
-  react-native-uitextview@2.2.0(patch_hash=700355f829f9dce2142d8651340fca2dbc4c8ef100ca7fc25229f5df717e9bab)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
+  react-native-uitextview@2.2.0(patch_hash=0fd5ae94e21c0ec89ce719a90730f2660957ba45260d4ceaba10dd49c22d1909)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
     dependencies:
       react: 19.3.0
       react-native: 0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0)

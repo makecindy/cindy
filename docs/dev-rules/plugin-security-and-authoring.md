@@ -2,7 +2,7 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改插件（`.cindy`）的运行时、沙箱、权限、能力声明、面板供片、
-> 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对与使用统计，插件作者可见的
+> 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对、使用统计与远程插件状态读取，插件作者可见的
 > 身份卡、管子协议、打包与编写手册，或批准状态、安装布局、指纹格式等**存量安装读得到的任何东西**之前
 
 本文治理 Cindy 中运行的插件——以 `ghost.json` 为身份卡的 `.cindy` 包。它约束三件
@@ -213,6 +213,28 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` 工具组，每组独立展示和批准。
+  receipt 的可选 `approvedHostToolGroups` 仅记录显式批准；旧记录缺失时首次调用复用现有确认，拒绝后由详情页手动重试。
+  新增组算扩权，同来源更新只保留仍声明的已批准组，移除或卸载即失效，不改变旧插件其它能力。
+  `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
+  插件没有已批准的 `node` 能力时，不支持提交或修改脚本、前置命令，也不支持运行或恢复实际配置中带有脚本或前置命令的调度，返回 `UNSUPPORTED_CAPABILITY`。
+  更新时读取实际配置，不能只凭入参判断；普通调度更新、运行和恢复经既有 `callerScope` / `getApprovedScheduleGuard` 传入主干 `expectedSchedule`，在执行点拒绝期间的配置改动。不新增确认层、锁或授权缓存。
+  普通定时任务读改、已有 `node` 的插件与 Agent 的原共享策略分类保持，不能用 `scheduler` 组批准替代本机命令执行批准。
+  调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
+  每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
+  依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
+  外部 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 在共享 handler 中对插件返回 `UNSUPPORTED_CAPABILITY`，不进入扫描、状态或导入回调；前两者会触发既有中断导入恢复，不能作为纯读取开放。Agent 和设置页不变。
+  持有任务 admission 的调用任务修改自身 `permission_mode`（含混合运行设置请求）在任何写入前返回 `UNSUPPORTED_CAPABILITY`，不改写权限快照或放宽守卫；插件、修改其他任务、无 admission 及仅改模型保持原行为。
+  合法的模型与权限组合仍可单次调用；按 live Session 能力在模型写入前拒绝不支持的权限档。模型已应用或延后后权限失败，保持原权限提交/回滚，错误回执明确已生效字段、代次及原权限错误，不新增跨字段回滚。
+  已接受的插件消息复用现有独立投递守卫，正常关闭逻辑页或回收 Node 不撤销；实际投递仍核对 owner、安装目录/批准版本、enabled、最新组批准及精确目标/正文/clientId。停用、卸载、更新重批和账号变化仍撤销；宿主重启不持久恢复守卫。
+  作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
+- `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
+  消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。
+  状态只发布生命周期变化（开始、结束、出错、等待权限/回答、排队、取消及归档/恢复/删除），复用宿主规范投影，不含活动摘要、标题标签或工具参数；不发布高频进度和活动变化。
+  花名册变动时建立 topic 索引，禁止每个消息/状态事件扫描全部插件；缓冲补投重查安装版本、批准和 owner。
+  无已批准订阅时生产端同步短路；沿用既有逐事件投递、100 条熄灯队列、单调序号和 `dropped`，不新增合批、折叠或 timer。
+  断线按 `get_chat_history` 游标补拉，旧 `turn` / `session` / `activity` 订阅和既有插件批准保持原行为。
+  作者契约见 [事件订阅](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md)。
 - `agent.targets` 必须与 `agent.tasks: true` 同时声明，独立列出 `agent:targets` 权限并要求 Host receipt 的 `targetCapabilityApproved` 显式批准。
   可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；该接口本身不授予其他任务的历史读取、设置修改或停止权限。
   安装/更新复用既有权限确认；历史 tasks 批准和未知 targets 字段不能自动扩权，缺新批准时只阻止新目标接口，首次调用复用既有宿主确认。
@@ -946,13 +968,24 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 ### 5.4 插件读取与扫描预算
 
-插件市场、实例查找、使用统计和面板请求属于同一类本地读取，必须遵守
-`engineering-conventions.md` §8 的通用预算；本节只补插件特有边界。
+插件市场、实例查找、使用统计、面板请求，以及远程查看端读取插件状态，属于同一类读取，
+必须遵守 `engineering-conventions.md` §8 的通用规则；本节只补插件特有边界。
 
 - Renderer 的市场分页只做 discovery；Main 按 owner／revision 复用同一份安装快照。分页、
-  来源切换和计数复用同一快照，不得每页调用 `readLocalInstallSnapshot` 或重建全量安装列表。
-- 精确实例键走 `findInstalledInstance`；只有无法精确匹配时才回退 `availableGhosts()`。
-  面板、协议 handler、点击／按键复核只读目标实例，不得为每次请求重扫其他插件。
+  来源切换和计数复用同一快照，后续页不得重新做全量安装扫描或重建全量安装列表；这份复用
+  由 `readLocalInstallSnapshot` 负责，调用方不另起扫描。
+- 远程输入框的插件页面待确认提示：对端支持 `management:ui-consent` 时走这个轻量查询，只取
+  待确认项，不读带图标的 `management:snapshot`；旧主机未声明该 action 时按能力协商回退
+  snapshot，但仍按电脑共用、合并读取。协议见
+  [远程输入框的轻量插件授权查询](protocol-compatibility/remote-composer-plugin-grant-query.md)。
+  插件变化通知（`collectionId: "plugins"`）也包括角标变化，收到通知不代表批准状态变了；
+  监听插件变化的组件按 `engineering-conventions.md` §8.6 过滤、合并刷新。
+- 精确实例键走 `findInstalledInstance`。它返回 undefined 也可能只是注册表缓存还答不上来：
+  这时最多回退一次 `list()`，再按同一实例键精确匹配，回退后仍找不到才判不存在；不得改按
+  名字搜索 `availableGhosts()`，也不得转到同名的其他副本（页面工具调用见 #9936）。
+  面板、协议 handler、点击／按键复核只读目标实例，不得为每次请求重扫其他插件；本身要看全部
+  插件才能回答的查询（例如有没有插件待确认），复用已有结果，不为每次请求重新全量扫描；暂时
+  做不到的，在 PR 写明原因和每次请求的扫描次数。
 - 循环内不得调用带默认 `listMarketInstallations()` 参数的
   `installedGhostMatchingMarketPlugin`；先取一次快照并传入。锁内需要复核单项时，用精确实例
   查找，不要重新全量 list。
@@ -960,8 +993,10 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
   执行。统计卡片可见时轮询，隐藏时停止，前一次未完成不叠加。
 - 自定义来源发现必须有超时和部分结果；超时不能阻塞首屏。Library 用量扫描有熔断和条目
   上限，面板投影不得为每条记录重扫全部文件。
-- 验收：翻 10 页 `GhostManager.list()` 1 次；精确实例查找 0 次；连续 summary 3 次写事务
-  0 次；40 次面板点击／按键复核不调用 `list()`。
+- 验收：翻 10 页 `GhostManager.list()` 1 次；精确实例查找在缓存命中时 `list()` 0 次、缓存
+  答不上来时最多 1 次（`ghostWorkdirGate.test.ts`）；连续 summary 3 次写事务
+  0 次；40 次面板点击／按键复核不调用 `list()`；非插件类通知不触发插件状态读取；两个远程
+  输入框在同一合并窗口内收到 45 条插件通知，状态读取共 2 次（含挂载时 1 次）。
 - 例外：安装、卸载、批准、切换账号后必须失效快照；首次打开详情的幂等 ensure 允许一次
   绑定；启动窗口创建前的固定配置读取和一次性 CLI 不受请求预算约束。
 
@@ -1309,11 +1344,20 @@ Brave、Tavily、Mivo 的历史 provider Key 仅在原安装锁内定点迁为�
 ### 插件实时屏幕
 
 `liveScreen: true`（且必须同时声明 `node`）是独立自主能力，也是唯一一条 Host 主动调用
-Node 工作进程的方向：用户从手机经远程桌面打开设备画面时，Main 的
+Node 工作进程的方向：用户从手机或同账号的另一台电脑经远程桌面打开设备画面时，Main 的
 `cindy-brain/liveScreenHost.ts` 只对已装启用、同时声明两者的插件，经
 `GhostNodeRuntimeBroker.handleRequest` 调用固定的 `liveScreen.list/open/input/control/close`，
 沿用 broker 的启用、更新、超时与限流复核；不经 main.js，不出现在 Agent 工具里，也不给插件
-任何手机或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
-`http://127.0.0.1:<端口>`，由 Main 读取，采集页与手机都拿不到地址。旧版插件的权限不变；
+任何手机、电脑或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
+`http://127.0.0.1:<端口>`，由 Main 读取，采集页与查看端（手机、另一台电脑）都拿不到地址。旧版插件的权限不变；
 声明该字段的更新属于能力增加，按 3.1 节处理。接口见 `FORGE_GUIDE` §4.22.1，协议与兼容边界见
 [协议兼容 · 代输入](protocol-compatibility/input-handoff.md)的「插件实时屏幕」。
+
+查看端在电脑上时方向相反：同一能力让插件在**自己的页面**里显示它在本账号另一台电脑上的设备
+（`taskView.remote` + `cindy.liveScreenView()`，`remote-desktop-viewer/pluginViews.ts`），不新增
+权限项。边界由 Main 守住：只答应已装启用且声明 `liveScreen` 的插件；只列出、只打开那台电脑上
+**同一来源同一 id** 的插件的设备（按逻辑身份比对，不信页面传来的插件名）；连接仍是普通的设备
+画面租约，目标由 Main 绑定，插件拿到的只有一个带一次性令牌的本机回环地址（画面流 + 设备输入），
+拿不到远程桌面、整屏画面、其它插件的设备或任何凭证；输入只收触摸、设备按键与打字。插件停用、
+卸载、换账号或本机锁屏时地址立即失效。本机没装该插件时宿主只提示安装，不代为显示设备。
+接口见 `FORGE_GUIDE` §4.22.2。

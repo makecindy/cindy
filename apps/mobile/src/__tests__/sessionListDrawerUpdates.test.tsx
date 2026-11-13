@@ -291,26 +291,59 @@ describe('shared Home drawer host', () => {
     await act(async () => render(true));
     const search = container.querySelector<HTMLInputElement>('[data-testid="home.retainedSearch"]')!;
     search.value = 'kept filter';
-    expect(native.home?.onSelectSession).toBe(columnSelect);
+    const item = { session: { id: 's9' } } as Parameters<NonNullable<MobileHomeProps['onSelectSession']>>[0];
+    const selectedBy = (owner: typeof columnSelect) => {
+      columnSelect.mockClear(); floatingSelect.mockClear();
+      native.home!.onSelectSession!(item);
+      return owner.mock.calls.length === 1 && columnSelect.mock.calls.length + floatingSelect.mock.calls.length === 1;
+    };
+    expect(selectedBy(columnSelect)).toBe(true);
     await act(async () => render(false));
     expect(native.activeEffects).toBe(0);
     await act(async () => render(false, true));
-    expect(native.home?.onSelectSession).toBe(floatingSelect);
+    expect(selectedBy(floatingSelect)).toBe(true);
     // Rotation completes the old overlay handoff without hiding the list.
     props.onClosed.mockClear();
     await act(async () => render(true, false, true));
     expect(props.onClosed).toHaveBeenCalledTimes(1);
     expect(native.home?.newSessionInHeader).toBe(false);
     await act(async () => render(true));
-    expect(native.home?.onSelectSession).toBe(columnSelect);
+    expect(selectedBy(columnSelect)).toBe(true);
     await act(async () => render(false, true, true, 's2'));
     expect(native.home?.currentSessionId).toBe('s2');
-    expect(native.home?.onSelectSession).toBe(floatingSelect);
+    expect(selectedBy(floatingSelect)).toBe(true);
     expect(container.querySelector('[data-testid="home.retainedSearch"]')).toBe(search);
     expect(search.value).toBe('kept filter');
     expect(native.instances).toBe(1);
     expect(native.unmounts).toBe(0);
     expect(container.querySelectorAll('[data-testid="sessionDrawer.retainedHost"]')).toHaveLength(1);
+  });
+  it('renders the retained list for its own changes only, not for outer renders or replaced callbacks', async () => {
+    // Regression 2026-11-12 (pulling the floating list out felt slow on a wide portrait window): the task
+    // layout rebuilt the Home element on each of its renders and the route replaced its callbacks on
+    // opening, so the whole list rendered again before the panel could appear and on every layout render.
+    const owners = [{ select: vi.fn(), run: vi.fn() }, { select: vi.fn(), run: vi.fn() }];
+    const render = (open: boolean, owner = 0) => root.render(
+      <SessionTaskDrawerProvider enabled focused windowHeight={900} topInset={0} floatingWidth={400}
+        column={<SessionListDrawer {...props} persistent={false} open={false} width={0} />}>
+        <SessionFloatingDrawer {...props} aboveSystemBar width={400} retainedHeight={900} open={open} overlayMounted={open}
+          onSelectSession={owners[owner]!.select} runNavigation={owners[owner]!.run} />
+      </SessionTaskDrawerProvider>,
+    );
+    await act(async () => render(false));
+    await act(async () => { vi.runAllTimers(); });
+    const prepared = native.widths.length;
+    expect(prepared).toBeGreaterThan(0);
+    await act(async () => render(false));
+    expect(native.widths.length).toBe(prepared);
+    await act(async () => render(true, 1));
+    // The one render left is Home resuming its own work on becoming visible.
+    expect(native.widths.length).toBe(prepared + 1);
+    const item = { session: { id: 's9' } } as Parameters<NonNullable<MobileHomeProps['onSelectSession']>>[0], action = () => undefined;
+    native.home!.onSelectSession!(item); native.home!.runNavigation!(action);
+    expect(owners[1]!.select).toHaveBeenCalledWith(item); expect(owners[1]!.run).toHaveBeenCalledWith(action);
+    expect(owners[0]!.select).not.toHaveBeenCalled(); expect(owners[0]!.run).not.toHaveBeenCalled();
+    expect(native.instances).toBe(1);
   });
   it.each([true, false])('docks immediately with open=%s, without an exit animation or focus gap', async openAtRotation => {
     native.reduceMotion = false;
@@ -759,8 +792,10 @@ describe('shared Home drawer host', () => {
   });
   it('hosts the complete Home with container width, selection and the navigation coordinator', async () => {
     await act(async () => root.render(<SessionListDrawer {...props} persistent newSessionInSystemBar />));
-    expect(native.home).toMatchObject({ width: 320, currentSessionId: 's1', newSessionInSystemBar: true,
-      onSelectSession: props.onSelectSession, runNavigation: props.runNavigation });
+    expect(native.home).toMatchObject({ width: 320, currentSessionId: 's1', newSessionInSystemBar: true });
+    const item = { session: { id: 's9' } } as Parameters<NonNullable<MobileHomeProps['onSelectSession']>>[0], action = vi.fn();
+    native.home!.onSelectSession!(item); native.home!.runNavigation!(action);
+    expect(props.onSelectSession).toHaveBeenCalledWith(item); expect(props.runNavigation).toHaveBeenCalledWith(action);
     expect(container.querySelector('[data-testid="sessionDrawer.home"]')).toBeNull();
     expect(container.querySelector('[data-testid="sessionDrawer.scrim"]')).toBeNull();
   });

@@ -15,6 +15,8 @@ export default {
     narrow: { about: '320-pixel content width without clipped account controls' },
     'narrow-weight': { about: '320-pixel content width with task limit, weight, assignment and account menu controls' },
     codex: { about: 'Codex accounts and weight strategy' },
+    'codex-no-usage': { about: 'A signed-in second Codex account retains reset controls without usage data' },
+    'codex-no-usage-narrow': { about: 'Second-account reset controls without usage data at 320-pixel content width' },
     error: { about: 'Unavailable status read and inline retry on focus' },
     'provider-auth': { about: 'Codex provider-managed authentication explains the independent-account recovery action' },
     'provider-auth-preview': { about: 'Provider-managed authentication offers a separate account directory at 320px', viewport: { width: 320, height: 600 } },
@@ -57,7 +59,16 @@ export default {
       assert.equal(await page.getByRole('switch').count(), 0);
       return;
     }
-    assert.equal(await page.getByRole('switch').count(), 3);
+    const codex = ui.case.startsWith('codex') || ui.case === 'narrow-weight';
+    if (codex) {
+      const rows = page.getByTestId('subscription-account');
+      for (let index = 0; index < 3; index++) {
+        await rows.nth(index).getByRole('switch', { name: await ui.t('codexResets.autoUse.label'), exact: true }).waitFor();
+        assert.equal(await rows.nth(index).getByRole('switch', { name: await ui.t('codexResets.autoUse.label'), exact: true }).getAttribute('aria-checked'), String(index === 0));
+      }
+      await ui.capture('account-resets');
+    }
+    assert.equal(await page.getByRole('switch').count(), codex ? 6 : 3);
     assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll(elements =>
@@ -66,7 +77,7 @@ export default {
         return `${Math.round(box.left)}-${Math.round(box.right)}`;
       }),
     );
-    assert.equal(bars.length, ui.case === 'codex' || ui.case === 'narrow-weight' ? 6 : 8);
+    assert.equal(bars.length, ui.case.startsWith('codex-no-usage') ? 4 : codex ? 6 : 8);
     assert.deepEqual([...new Set(bars)], [bars[0]]);
     if (['default', 'narrow', 'expiry-past', 'expiry', 'expiry-narrow'].includes(ui.case)) {
       const rows = page.getByTestId('subscription-account');

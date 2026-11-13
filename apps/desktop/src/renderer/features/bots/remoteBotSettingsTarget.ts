@@ -180,6 +180,7 @@ export function remoteBotSettingsPages(ops: ReadonlySet<BotSettingsOp>): Set<str
   if (has('history.search')) pages.add('history');
   if (has('voice.models', 'voice.voices', 'voice.preference', 'voice.setPreference')) pages.add('voice');
   if (has('channels.im.list', 'channels.im.remove')) pages.add('channels');
+  if (has('project.repository', 'project.retryRepository')) pages.add('advanced');
   return pages;
 }
 
@@ -266,6 +267,10 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
       return input.online();
     },
     pages: remoteBotSettingsPages(input.ops),
+    ...(input.ops.has('project.repository') && input.ops.has('project.retryRepository') ? {
+      projectRepository: (botId: string, retry: boolean) => invokeBotSettings<import('../../../shared/botProjectMode').BotProjectRepositoryStatus>(
+        deviceId, retry ? 'project.retryRepository' : 'project.repository', botId),
+    } : {}),
     profile: {
       update: (_id, patch) => profiles.update(patch),
       async chooseAvatar(_id, avatarImageBase64) {

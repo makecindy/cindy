@@ -162,6 +162,7 @@ export function registerListSessionsTool(
             workspaceKind: s.workspaceKind,
             model: s.model,
             status: s.status,
+            ...(s.hiddenAt != null ? { hiddenAt: new Date(s.hiddenAt).toISOString() } : {}),
             source: s.source,
             createdAt: new Date(s.createdAt).toISOString(),
             updatedAt: new Date(s.updatedAt).toISOString(),

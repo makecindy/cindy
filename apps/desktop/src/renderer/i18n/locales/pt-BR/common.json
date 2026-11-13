@@ -1340,7 +1340,24 @@
     "handoffEnded": "Esta entrada manual já terminou, então não há janela para mostrar.",
     "handoffUnavailable": "Este computador não pode mostrar apenas esta janela. Atualize o Cindy nele ou ative a área de trabalho remota.",
     "handoffWindow": "Entrada manual · {{app}}",
-    "idleMinutes_many": "{{count}} minutos"
+    "idleMinutes_many": "{{count}} minutos",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Instale o plugin “{{plugin}}”",
+        "body": "Esta tarefa está com {{device}} aberto em outro computador. Instale o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
+        "action": "Instalar"
+      },
+      "enable": {
+        "title": "Ative o plugin “{{plugin}}”",
+        "body": "Esta tarefa está com {{device}} aberto em outro computador. Ative o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
+        "action": "Ativar"
+      },
+      "update": {
+        "title": "Atualize o plugin “{{plugin}}”",
+        "body": "Esta tarefa está com {{device}} aberto em outro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
+        "action": "Atualizar"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -2623,7 +2640,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "Prosa clássica (padrão)",
+          "prose": "Prosa clássica",
           "tang-poetry": "Poesia Tang",
           "song-ci": "Ci dos Song",
           "yuan-qu": "Qu dos Yuan",
@@ -4356,6 +4373,7 @@
           "ariaLabel": "Permitir que seus outros computadores e as pessoas com quem você compartilha usem este provedor",
           "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente."
         },
+        "ownComputersCanUse": "Disponível para meus outros computadores",
         "moreActionsAria": "Mais ações",
         "runLocation": {
           "label": "Executar em",
@@ -6989,6 +7007,11 @@
       "description": "Dispositivos conectados à mesma conta do Feishu podem se descobrir. Quando \"Permitir controle\" estiver ativado, seus outros dispositivos poderão controlar remotamente o {{appName}} nesta máquina.",
       "allowControl": "Permitir que dispositivos da mesma conta controlem esta máquina",
       "allowControlHint": "Quando ativado, outros dispositivos conectados à mesma conta podem controlar esta máquina sem aprovação por conexão. Um indicador visível é exibido durante o controle, e você pode desconectar a qualquer momento.",
+      "ownModelAccess": {
+        "title": "Permitir que meus outros computadores usem os modelos deste",
+        "hint": "Quando ativado, seus outros computadores podem usar os provedores deste computador. O Agent é executado aqui, com o login e a cota deste computador. Nada é compartilhado com outras pessoas.",
+        "writeFailed": "Não foi possível salvar esta configuração. Tente novamente."
+      },
       "keepAwake": "Manter computador ativo",
       "keepAwakeHint": "Quando ativado, esta máquina não entrará em suspensão, para que Agents em segundo plano e tarefas agendadas continuem em execução (você ainda pode desligar o monitor ou bloquear a tela).",
       "linkStatus": {
@@ -8255,6 +8278,19 @@
         "agentCompanions": "Pode ver os amigos, o status e a conversa recente deles",
         "agentCompanionsDetail": "Pode ver todos os amigos, inclusive os que rodam nos seus outros computadores: nome, descrição, avatar, status (trabalhando, aguardando você, inativo, offline), o tipo de etapa em que cada um está (como pensando ou executando uma ferramenta), as solicitações que aguardam você do jeito que os cartões as mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem as etapas de ferramentas); e abrir a conversa de um amigo na janela principal. Com a permissão de entregar mensagens também, pode repassar as respostas que você der no plugin: responder perguntas, recusar solicitações e comentar planos. Para permitir uma etapa, você ainda clica na confirmação do próprio Cindy. Não pode ler arquivos, etapas de ferramentas nem raciocínios.",
         "agentCompanionsRequest": "Revisar permissão para ver amigos",
+        "hostTools_history": "Histórico de tarefas",
+        "hostTools_historyDetail": "Usar as ferramentas da Cindy para listar tarefas existentes, ler mensagens completas e pesquisar o histórico, incluindo outros computadores acessíveis que você selecionar explicitamente.",
+        "hostTools_control": "Gerenciamento de tarefas",
+        "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes. Operações de alto risco exigem confirmação na Cindy a cada vez.",
+        "hostTools_handoff": "Mensagens para tarefas",
+        "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. Operações que precisam da tarefa atual exigem um destino explícito.",
+        "hostTools_settings": "Configurações do aplicativo",
+        "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são retornados e os dados confidenciais são preenchidos por você.",
+        "hostTools_scheduler": "Gerenciamento de automações",
+        "hostTools_schedulerDetail": "Após a aprovação, o plugin pode criar, consultar, editar, pausar, retomar, excluir e executar tarefas automáticas e consultar o histórico. As tarefas agendadas executadas pelo Agent usam as permissões padrão da tarefa, incluindo Acesso total. As operações de alto risco do sistema anfitrião exigem confirmação a cada vez.",
+        "hostToolsRequest": "Revisar permissão de {{group}}",
+        "hostToolCallTitle": "Permitir operação do plugin",
+        "hostToolCallMessage": "O plugin “{{name}}” quer chamar {{server}} / {{tool}}. Esta autorização se aplica apenas aos parâmetros abaixo.",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
@@ -8283,6 +8319,10 @@
         "resident": "Sempre ativo (inicia ao ser ativado e mantém um processo em segundo plano mesmo quando ocioso)",
         "residentDetail": "Usa uma pequena quantidade de memória enquanto está ocioso; o processo para imediatamente quando o plugin é desativado ou desinstalado.",
         "subscribeTopics": "Observa a atividade da sua sessão (eventos de turnos e sessões, sem conteúdo das mensagens)",
+        "subscribeMessage": "Eventos de conteúdo de mensagens",
+        "subscribeMessageDetail": "Recebe mensagens salvas do usuário e respostas da IA. Os anexos são lidos e transferidos separadamente.",
+        "subscribeTaskState": "Eventos de estado de tarefas",
+        "subscribeTaskStateDetail": "Recebe alterações de execução, espera, conclusão, arquivamento e ocultação de tarefas.",
         "subscribeActivity": "Observa quando a IA está pensando e quando está esperando por você",
         "subscribeActivityDetail": "Vê apenas os momentos: quando o pensamento começa e termina e quando a IA espera sua aprovação ou resposta. Nunca vê o texto do raciocínio, a ação que aguarda aprovação, o comando ou arquivo envolvido, o plano, a pergunta ou sua resposta — e não pode aprovar nada em seu nome.",
         "subscribeHooks": "Pode ler, bloquear ou reescrever as mensagens que você envia",
@@ -8346,8 +8386,8 @@
         "workspaceDetail": "Quando solicitado, você escolhe a pasta ou vê o caminho completo em um cartão de confirmação antes de decidir; ao processar uma chamada iniciada por você, subpastas dentro do diretório de trabalho da sessão atual são usadas diretamente, sem solicitação adicional. Pastas que já têm uma sessão são reutilizadas, e a sessão criada fica vazia — nada começa a ser executado por conta própria.",
         "sessionContext": "Pode descobrir em qual pasta de projeto a sessão atual está trabalhando",
         "sessionContextDetail": "Compartilha apenas informações de localização (ID da sessão e caminho da pasta do projeto) enquanto trabalha para a sessão atual — nenhum conteúdo de arquivo, e nenhum acesso a arquivos é concedido.",
-        "liveScreen": "Ver e controlar telas de dispositivos no celular",
-        "liveScreenDetail": "Pela área de trabalho remota, seu celular pode mostrar as telas de dispositivos que ele oferece (como simuladores) e enviar toques, botões e texto para elas. Só conecta quando você abre pelo celular e não mostra mais nada deste computador.",
+        "liveScreen": "Ver e controlar telas de dispositivos no celular ou em outros computadores",
+        "liveScreenDetail": "Pela área de trabalho remota, seu celular ou seus outros computadores podem mostrar as telas de dispositivos que ele oferece (como simuladores) e enviar toques, botões e texto para elas. Só conecta quando você abre por um desses dispositivos e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de prévia dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Somente os sites listados abaixo podem ser abertos; cada página aberta é atribuída a este plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se conecte ao Cindy",
@@ -10850,6 +10890,15 @@
       "contents": "Contém SOUL.md, USER.md, system_prompt.md, skills/ e memories/. Modelos, permissões e conexões continuam sendo gerenciados pelo Cindy.",
       "open": "Abrir pasta",
       "openFailed": "Não foi possível abrir a pasta do amigo.",
+      "repository": {
+        "ready": "O Git está pronto",
+        "notReadyTitle": "O Git ainda não está pronto",
+        "needsIdentity": "No computador deste Amigo, abra a pasta dele e depois a subpasta workspace. Configure user.name e user.email do Git nessa pasta e tente novamente.",
+        "notReady": "A primeira versão ainda não foi salva. Tente novamente para concluir a configuração do Git.",
+        "unavailable": "Instale o Git no computador deste Amigo e tente novamente.",
+        "failed": "O Git não conseguiu ler ou salvar a primeira versão. Verifique o repositório no computador deste Amigo e tente novamente.",
+        "keepUsing": "Você pode continuar usando seu Amigo. Os arquivos e as configurações do Git existentes são preservados."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Organizar memória",
         "carryover": {
@@ -12171,6 +12220,15 @@
     },
     "starterOptions": "Opções iniciais",
     "channels": {
+      "edit": {
+        "button": "Editar",
+        "title": "Editar conexão do iMessage",
+        "description": "Salve para reconectar. O modelo segue as configurações do seu amigo.",
+        "keepPassword": "Deixe em branco para manter a senha salva",
+        "save": "Salvar e reconectar",
+        "loadFailed": "Não foi possível carregar as configurações da conexão. Tente novamente.",
+        "failed": "Não foi possível salvar a conexão. Verifique as configurações e tente novamente."
+      },
       "title": "Plataformas de mensagens",
       "platform": {
         "telegram": "Telegram",
@@ -15594,8 +15652,9 @@
       "REMOTE_AGENT_BUSY": "Há sessões demais em execução no outro computador. Encerre algumas e tente novamente.",
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou entre na conta dele lá, ou escolha outro Agent.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
+      "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não concedeu a você acesso remoto a este provedor ou ao modelo selecionado. Peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento ou escolha outro modelo.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir que meus outros computadores usem os modelos deste” na conexão remota dele. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tente novamente ou tente outra mensagem.",
       "REMOTE_AGENT_SHARE_PAUSED": "O proprietário pausou este compartilhamento para você, então estes modelos não podem ser usados até que ele seja retomado. Troque para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Este compartilhamento não está mais disponível (o proprietário o removeu ou você saiu). Troque para outro modelo para continuar.",
@@ -17668,6 +17727,7 @@
       "copied": "{{label}} copiado",
       "copyFailed": "Não foi possível copiar {{label}}. Selecione o conteúdo e copie manualmente.",
       "urlUnavailable": "O endereço de recebimento não está disponível agora.",
+      "unsupportedFormat": "Esta versão não oferece suporte ao formato deste remetente.",
       "quotaNotifyTitle": "Limite de recebimentos de Webhook atingido",
       "quotaExhausted": "Os {{limit}} recebimentos de Webhook de hoje acabaram e voltam às {{time}}. Até lá, eventos externos não acionarão tarefas. Execuções agendadas e o uso do modelo não são afetados.",
       "signedOut": "Entre na sua conta Cindy para retomar o recebimento. Suas configurações foram mantidas.",
@@ -20976,6 +21036,10 @@
       "description": "Escolha o que transferir de “{{name}}” para este computador. As configurações que você já mudou neste computador são mantidas.",
       "partial": "Parte do conteúdo daquele computador não pôde ser lida desta vez. Abaixo aparece apenas o que foi lido.",
       "groupCount": "{{selected}} de {{total}} selecionados",
+      "groupCount_one": "{{selected}} de {{total}} selecionado",
+      "groupCount_zero": "{{selected}} de {{total}} selecionados",
+      "groupCount_many": "{{selected}} de {{total}} selecionados",
+      "groupCount_other": "{{selected}} de {{total}} selecionados",
       "present_one": "Mais {{count}} item já é igual aqui",
       "present_other": "Mais {{count}} itens já são iguais aqui",
       "present_many": "Mais {{count}} itens já são iguais aqui",

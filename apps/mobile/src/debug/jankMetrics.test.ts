@@ -5,6 +5,7 @@ import {
   recordInvokeSent,
   recordInvokeTransfer,
   recordLoopLag,
+  recordPresenceUpdate,
   recordPushHandled,
   recordUiThreadLag,
   setJankMetricsEnabled,
@@ -104,6 +105,8 @@ describe("jank metrics", () => {
     recordLoopLag(1500);
     recordUiThreadLag(20);
     recordUiThreadLag(700);
+    recordPresenceUpdate();
+    recordPresenceUpdate();
 
     const line = serializeMobileDebugRecord('debug', 'performance', ['sync work metrics', takeSyncWorkMetrics()]);
     expect(line).not.toContain('[truncated]');
@@ -117,12 +120,14 @@ describe("jank metrics", () => {
       gunzip: { offThread: 1, onThread: 1, onThreadMs: 40, fallbacks: 1 },
       loopLag: { maxMs: 1500, over250: 1, over1000: 1 },
       uiThread: { pings: 2, maxLagMs: 700, over250: 1 },
+      presenceUpdates: 2,
     });
     expect(takeSyncWorkMetrics()).toEqual({
       decodes: [],
       gunzip: { offThread: 0, onThread: 0, onThreadMs: 0, fallbacks: 0 },
       loopLag: { maxMs: 0, over250: 0, over1000: 0 },
       uiThread: { pings: 0, maxLagMs: 0, over250: 0 },
+      presenceUpdates: 0,
     });
   });
 

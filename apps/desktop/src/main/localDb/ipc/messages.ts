@@ -83,6 +83,7 @@ import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS, type HistoryPageShape }
 import { setHistoryWorkPageReader } from '../../device-link/historyViewPush';
 import { encodeHistoryViewDelta } from '../../device-link/historyViewDelta';
 import { isScopedPeer, parseHistoryViewDeltaOptions } from '@cindy/device-link';
+import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { createMessageClearRecovery } from '../messageClearRecovery.js';
 
 export { listMessagesForAgentHandoff } from '../agentHandoffHistory.js';
@@ -913,6 +914,7 @@ export function broadcastMessageRow(
   const message = content === msg.content ? msg : { ...msg, content };
   broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope);
   if (msg.role === 'user' || msg.role === 'assistant') {
+    if (hasTaskChangeListener('message')) publishTaskChange({ kind: 'message', sessionId, message }, ownerStampForBroadcast(ownerScope));
     scheduleBotRemoteResourceChangedForSession(sessionId, ownerScope?.ownerScopeKey);
   }
 }

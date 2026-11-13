@@ -11,6 +11,7 @@
  */
 
 import path from 'node:path';
+import { readBotImConnection } from './shared/botImConnectionStore';
 import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
 import {
@@ -400,6 +401,7 @@ export function createBotIMessageIM(secretKeyPrefix: string, connectionId: strin
   return new BlueBubblesIM(host, {
     secretPrefix: secretKeyPrefix,
     storage: blueBubblesStateStorage(connectionId),
+    contextId: () => readBotImConnection(connectionId)?.botContextId ?? null,
     receiver: (listenHost, port) => {
       const key = `${listenHost}:${port}`;
       let receiver = localImReceivers.get(key);

@@ -376,7 +376,7 @@ describe('TeammatesSection group chats', () => {
     expect(screen.queryByRole('button', { name: 'bots.groupChat.server.join' })).toBeNull();
     fireEvent.keyDown(screen.getByRole('button', { name: 'bots.list.createMenu' }), { key: 'Enter' });
     expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
-      'bots.market.heading', 'bots.list.createTeammate', 'bots.groupChat.create.title', 'bots.list.joinWithLink',
+      'bots.list.createTeammate', 'bots.groupChat.create.title', 'bots.list.joinWithLink',
     ]);
     expect(screen.getAllByRole('separator')).toHaveLength(1);
     fireEvent.click(screen.getByRole('menuitem', { name: 'bots.list.joinWithLink' }));
