@@ -33,6 +33,7 @@
 import type { AttachedFile } from '@/lib/fileTypes';
 import type { BrowserCommentDraftItem } from '@/lib/browserComments';
 import type { ChatQuote } from '@/lib/chatQuotes';
+import type { BotGroupQuoteView } from '../../shared/botGroupChat';
 import {
   appendQuoteToComposerDocument,
   prependLegacyQuotesToComposerDocument,
@@ -79,6 +80,8 @@ export interface ComposerDraft {
   focusAtEnd?: boolean;
   /** @deprecated 旧 renderer 的独立引用数组;saveDraft 会提升为正文节点。 */
   quotes?: ChatQuote[];
+  /** Unsent group reply reference, scoped to the same owner/group as this draft. */
+  botGroupQuote?: BotGroupQuoteView;
   /**
    * 内置浏览器页面评论(browser-comment-chip):待随下一条消息发送的评论列表,
    * composer 渲染为「N 条注释」胶囊,发送时序列化为 `# Browser comments:` 段
@@ -323,6 +326,7 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
   if (!draft) return false;
   if (draft.attachments.length > 0) return true;
   if (draft.quotes && draft.quotes.length > 0) return true;
+  if (draft.botGroupQuote) return true;
   if (draft.browserComments && draft.browserComments.length > 0) return true;
   return tiptapDocHasContent(draft.text);
 }

@@ -52,7 +52,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
-import { discardDraftTree } from '@/lib/composerDraftStore';
+import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
   getDroppedFileItems,
@@ -311,8 +311,19 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const attachmentState = useAttachments(attachmentScope, attachmentScope);
   const [dragOver, setDragOver] = useState(false);
   const dragCounterRef = useRef(0);
+  const quoteDraftScope = useRef(captureDraftRecoveryScope(attachmentScope)).current;
   /** 引用回复 waiting in this group's composer; the page is rebuilt per group. */
-  const [quoteDraft, setQuoteDraft] = useState<BotGroupQuoteView | null>(null);
+  const [quoteDraft, setQuoteDraft] = useState<BotGroupQuoteView | null>(
+    () => quoteDraftScope.get()?.botGroupQuote ?? null,
+  );
+  useEffect(() => {
+    const existing = quoteDraftScope.get();
+    if (!existing && !quoteDraft) return;
+    quoteDraftScope.save({
+      ...existing, text: existing?.text ?? null, attachments: existing?.attachments ?? [],
+      botGroupQuote: quoteDraft ?? undefined,
+    });
+  }, [quoteDraftScope, quoteDraft]);
   const [jumpTarget, setJumpTarget] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** Quoted originals on older pages not re-read since the last push: quotes use their snapshot. */
