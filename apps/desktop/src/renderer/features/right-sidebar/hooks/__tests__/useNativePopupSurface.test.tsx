@@ -25,7 +25,9 @@ const native = {
 };
 const slotRect = new DOMRect(600, 40, 400, 700);
 const viewportRect = new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+const panelRect = new DOMRect(40, 40, window.innerWidth - 80, window.innerHeight - 80);
 const originalHitTest = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
+const originalHitStack = Object.getOwnPropertyDescriptor(document, 'elementsFromPoint');
 
 function NativeTab({ visible = true }: { visible?: boolean }) {
   const slot = useRef<HTMLDivElement>(null);
@@ -35,9 +37,12 @@ function NativeTab({ visible = true }: { visible?: boolean }) {
 
 function Preview({ open, local = false }: { open: boolean; local?: boolean }) {
   return open ? createPortal(
-    <div data-test-preview style={{ position: local ? 'absolute' : 'fixed', inset: 0 }}>
-      <div>File preview</div>
-    </div>, document.body,
+    <>
+      {!local && <div data-preview-scrim style={{ position: 'fixed', inset: 0 }} />}
+      <div data-test-preview style={{ position: local ? 'absolute' : 'fixed', inset: 40 }}>
+        <div>File preview</div>
+      </div>
+    </>, document.body,
   ) : null;
 }
 
@@ -64,16 +69,35 @@ describe('native popup visibility beneath global previews', () => {
     });
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+    const computedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element) => {
+      const style = computedStyle(element);
+      // jsdom does not load Tailwind. Current PreviewScrim's positioning comes
+      // from its classes, while its sibling panel has inline 40px margins.
+      return element.classList.contains('fixed')
+        ? new Proxy(style, { get: (target, key) => key === 'position' ? 'fixed' : Reflect.get(target, key) })
+        : style;
+    });
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-      return this.hasAttribute('data-native-slot') ? slotRect : viewportRect;
+      if (this.hasAttribute('data-native-slot')) return slotRect;
+      const element = this as HTMLElement;
+      if (this.hasAttribute('data-preview-scrim') || element.style.inset === '0px') return viewportRect;
+      return panelRect;
+    });
+    const hitStack = () => {
+      const overlays = [...document.querySelectorAll<HTMLElement>('body > div')]
+        .filter((node) => node.style.position === 'fixed' || node.hasAttribute('data-preview-scrim') || node.hasAttribute('data-test-preview'))
+        .reverse();
+      return [
+        ...overlays.flatMap((node) => node.firstElementChild ? [node.firstElementChild, node] : [node]),
+        document.querySelector('[data-native-slot]')!, document.body,
+      ];
+    };
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true, value: vi.fn(hitStack),
     });
     Object.defineProperty(document, 'elementFromPoint', {
-      configurable: true,
-      value: vi.fn(() => {
-        const overlays = [...document.querySelectorAll<HTMLElement>('body > div')]
-          .filter((node) => node.style.position === 'fixed' || node.hasAttribute('data-test-preview'));
-        return overlays.at(-1)?.firstElementChild ?? document.querySelector('[data-native-slot]');
-      }),
+      configurable: true, value: vi.fn(() => hitStack()[0]),
     });
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
   });
@@ -87,6 +111,8 @@ describe('native popup visibility beneath global previews', () => {
     vi.clearAllMocks();
     if (originalHitTest) Object.defineProperty(document, 'elementFromPoint', originalHitTest);
     else Reflect.deleteProperty(document, 'elementFromPoint');
+    if (originalHitStack) Object.defineProperty(document, 'elementsFromPoint', originalHitStack);
+    else Reflect.deleteProperty(document, 'elementsFromPoint');
   });
 
   it('hides for a real video preview through its closing animation, then restores the same page', async () => {
@@ -121,6 +147,32 @@ describe('native popup visibility beneath global previews', () => {
     await flushFrame();
     expectVisible(false);
     first.unmount();
+    await flushFrame();
+    expectVisible(true);
+  });
+
+  it('finds the sibling scrim beneath an inset panel, and restores after closing', async () => {
+    // PR #10346 review: the slot center hits panel content, whose ancestors do
+    // not include PreviewScrim. Treating every element as viewport-sized hid
+    // this failure; preserve the real 40px panel inset in the layout double.
+    render(<NativeTab />);
+    await flushFrame();
+    const preview = render(<Preview open />);
+    await flushFrame();
+    expect(document.elementFromPoint(800, 390)?.getBoundingClientRect()).toEqual(panelRect);
+    expectVisible(false);
+    preview.unmount();
+    await flushFrame();
+    expectVisible(true);
+  });
+
+  it('ignores a full-window layer behind the native slot in the host hit stack', async () => {
+    render(<NativeTab />);
+    render(<Preview open />);
+    const slot = document.querySelector('[data-native-slot]')!;
+    const scrim = document.querySelector('[data-preview-scrim]')!;
+    vi.mocked(document.elementsFromPoint).mockReturnValue([slot, scrim, document.body]);
+    vi.mocked(document.elementFromPoint).mockReturnValue(slot);
     await flushFrame();
     expectVisible(true);
   });
@@ -170,6 +222,7 @@ describe('native popup visibility beneath global previews', () => {
     canvas.querySelector('button')!.addEventListener('click', () => canvas.body.appendChild(preview));
     close.addEventListener('click', () => preview.remove());
     vi.mocked(document.elementFromPoint).mockReturnValue(guest);
+    vi.mocked(document.elementsFromPoint).mockReturnValue([guest, slot]);
     await flushFrame();
     expectVisible(true);
     const updates = native.setBounds.mock.calls.length;
