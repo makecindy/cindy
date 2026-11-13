@@ -63,6 +63,8 @@ export interface RequestTransform {
 export interface RecoveryRule {
   /** 诊断用稳定 id,进日志(例 'encrypted_content' / 'empty_thinking')。 */
   id: string;
+  /** Defaults to 400/422. A request-owned negotiation can require exactly HTTP 400. */
+  statuses?: readonly number[];
   /** gate: false 时该规则完全跳过(thinking 永远 true;encrypted 跟 silentEncryptedRetry 设置)。 */
   enabled: () => boolean;
   /** 对解压后的 400 错误体文本判定是否命中本规则。

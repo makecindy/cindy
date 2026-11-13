@@ -401,10 +401,6 @@ function toRouting(
   const r: RoutingDescriptor = {
     upstream: baseUrl,
     authStrategy: strategy,
-    ...(agent === "codex" && strategy !== "oauth-passthrough" &&
-    (wireProtocol ?? defaultWireProtocol(agent)) === "openai-responses"
-      ? { supportsResponsesCustomTools: false }
-      : {}),
     ...(agent === "codex" && supportsImageGeneration === true
       ? { supportsImageGeneration: true }
       : {}),

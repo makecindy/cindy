@@ -7,7 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
-import { createResponsesCustomToolFunctionAdapter } from '@cindy/responses-chat-bridge';
+import { chainResponseTransforms } from '@cindy/responses-chat-bridge';
+import { createCodexExecFormatNegotiation } from '../codex-exec-format-negotiation.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
@@ -59,11 +60,13 @@ function responseCreated(id: string): unknown {
   return { type: 'response.created', response: { id } };
 }
 
-function responseCompleted(id: string): unknown {
+function responseCompleted(id: string, output: unknown[]): unknown {
   return {
     type: 'response.completed',
     response: {
       id,
+      status: 'completed',
+      output,
       usage: {
         input_tokens: 0,
         input_tokens_details: null,
@@ -133,6 +136,9 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
     const providerRequests: Array<Record<string, unknown>> = [];
     const codexRequests: Array<Record<string, unknown>> = [];
     const idPrefixViolations: string[] = [];
+    let rawRejections = 0;
+    let rejectAll = false;
+    const rejectedModes: string[] = [];
     let execFunctionName = '';
     const command =
       process.platform === 'win32'
@@ -153,6 +159,16 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
         return;
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+      if (rejectAll) {
+        rejectedModes.push(Array.isArray(body.tools) && body.tools.some(tool => tool.type === 'custom' && tool.name === 'exec') ? 'custom' : 'function');
+        res.writeHead(400, { 'content-type': 'application/json' }).end('{"error":{"message":"rejected"}}');
+        return;
+      }
+      if (Array.isArray(body.tools) && body.tools.some(tool => tool.type === 'custom' && tool.name === 'exec')) {
+        rawRejections++;
+        res.writeHead(400, { 'content-type': 'application/json' }).end('{"error":{"message":"Unsupported custom tool"}}');
+        return;
+      }
       providerRequests.push(body);
 
       const violations = (Array.isArray(body.input) ? body.input : [])
@@ -217,7 +233,7 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
               arguments: args,
             },
           },
-          responseCompleted('response-1'),
+          responseCompleted('response-1', [{ id: 'fc_exec_call_1', type: 'function_call', status: 'completed', call_id: 'exec-call-1', name: execFunctionName, arguments: args }]),
         ]);
       } else if (providerRequests.length === 2) {
         responseBody = sse([
@@ -233,7 +249,7 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
               content: [{ type: 'output_text', text: fixtureContents }],
             },
           },
-          responseCompleted('response-2'),
+          responseCompleted('response-2', [{ id: 'message-1', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fixtureContents }] }]),
         ]);
       } else {
         res.writeHead(500).end('unexpected extra Responses request');
@@ -251,18 +267,16 @@ describe.skipIf(!codexBoundaryAvailable)('Codex custom exec function adapter E2E
       }),
     );
 
-    const adapter = createResponsesCustomToolFunctionAdapter(['exec']);
+    const negotiation = createCodexExecFormatNegotiation();
     const proxy: ProxyHandle = await createAnthropicCompatProxy({
       upstream: providerUrl,
       transformRequest: [(body, ctx) => {
         codexRequests.push(structuredClone(body) as Record<string, unknown>);
-        return adapter.adaptRequest(body, ctx.reqId);
+        return null;
       }],
-      transformResponse: (ctx) =>
-        adapter.createResponseTransform(ctx.reqId, {
-          contentType: ctx.responseHeaders['content-type'] ?? '',
-          contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',
-        }),
+      routingTransform: (_body, ctx) => negotiation.decorate({ upstreamOverride: providerUrl }, ctx,
+        { providerId: 'fixture', revision: 0, ownerScope: 'fixture-owner', authStrategy: 'api-key-header' }, () => true),
+      transformResponse: ctx => chainResponseTransforms(negotiation.restoreResponse(ctx), negotiation.responseTransform(ctx)),
     });
     cleanups.push(() => proxy.dispose());
 
@@ -287,8 +301,6 @@ enabled = true
 name = "Issue 3168 loopback fake Provider"
 base_url = "${proxy.url}/v1"
 wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
 `,
     );
     cleanups.push(() =>
@@ -370,6 +382,7 @@ stream_max_retries = 0
     // its symptoms once the upstream has already rejected the adapted request.
     expect(idPrefixViolations).toEqual([]);
     expect(providerRequests).toHaveLength(2);
+    expect(rawRejections).toBe(1); // The post-tool request uses the accepted cached function format.
     const firstTools = providerRequests[0]?.tools as Array<Record<string, unknown>>;
     expect(execFunctionName).not.toBe('');
     expect(firstTools).toContainEqual(
@@ -403,5 +416,15 @@ stream_max_retries = 0
     expect([...startedItems, ...completedItems].some((item) => item.type === 'webSearch')).toBe(
       false,
     );
+    // The next native turn starts with the accepted cache entry. Two real HTTP
+    // rejections must terminate it without another tool execution or format loop.
+    rejectAll = true;
+    const executions = completedItems.filter(item => item.type === 'commandExecution').length;
+    const rejectedTurnCompleted = new Promise<void>(resolve => { resolveTurnCompleted = resolve; });
+    await host.request(Method.TurnStart, { threadId: thread.thread.id,
+      input: [{ type: 'text', text: 'This fixture rejects both formats.' }] }, { timeoutMs: 20_000 });
+    await withTimeout(rejectedTurnCompleted, 20_000, 'rejected turn/completed');
+    expect(rejectedModes).toEqual(['function', 'custom']);
+    expect(completedItems.filter(item => item.type === 'commandExecution')).toHaveLength(executions);
   }, 45_000);
 });

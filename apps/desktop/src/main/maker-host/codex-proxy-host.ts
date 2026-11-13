@@ -86,6 +86,8 @@ import {
 } from '@cindy/responses-chat-bridge';
 import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
 import { randomUUID } from 'node:crypto';
+import { createCodexExecFormatNegotiation } from './codex-exec-format-negotiation.js';
+import { activeDataOwnerId, ownerGeneration, isOwnerBoundaryPending } from '../ownerContext.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -3297,12 +3299,37 @@ function createTransformRequestChain(
   pricing: XaiRequestPricing = new Map(),
   /** 供应商分享受邀者的 proxy：不走视觉桥(视觉后端是本机用户自己的其它供应商)。 */
   guest = false,
+  onResponsesSettled?: (requestId: number) => void,
 ): RequestTransform[] {
+  // Vendor sanitizers predate unknown-route negotiation and may discard exec.
+  // Preserve its declaration/choice only across those dialect sanitizers; policy
+  // and permission transforms still own their normal earlier/later boundaries.
+  const preserveUnknownExec = (transform: RequestTransform): RequestTransform => {
+    const preserved: RequestTransform = (body, ctx) => {
+      if (!isPlainObject(body) || !Array.isArray(body.tools)) return transform(body, ctx);
+      const exec = body.tools.find(tool => isPlainObject(tool) && tool.type === 'custom' && tool.name === 'exec');
+      const routing = exec && responsesCompatibilityRouting(body, ctx, frozenAuthInjection);
+      if (!exec || !routing || routing.supportsResponsesCustomTools !== undefined
+        || routing.authStrategy === 'oauth-passthrough'
+        || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return transform(body, ctx);
+      const restore = (next: unknown) => {
+        if (!isPlainObject(next)) return next;
+        const tools = Array.isArray(next.tools) ? next.tools : [];
+        if (tools.some(tool => isPlainObject(tool) && tool.type === 'custom' && tool.name === 'exec')) return next;
+        return { ...next, tools: [...tools, exec], ...(body.tool_choice !== undefined ? { tool_choice: body.tool_choice } : {}) };
+      };
+      const next = transform(body, ctx);
+      return next instanceof Promise ? next.then(restore) : restore(next);
+    };
+    preserved.errorMode = transform.errorMode;
+    preserved.onRequestSettled = transform.onRequestSettled;
+    return preserved;
+  };
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
     const { providerId, routing } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
     if ((routing?.wireProtocol ?? 'openai-responses') !== 'openai-responses'
-      || routing?.supportsResponsesCustomTools !== false) return null;
+      || !routing || routing.supportsResponsesCustomTools === true) return null;
     const gatewayEndpoint = providerId === 'xd' ? claudeUpstreamEndpoint().trim() : '';
     const upstreamBase = ctx.upstreamBase ?? (gatewayEndpoint
       ? buildCodexGatewayBaseUrl(gatewayEndpoint)
@@ -3315,8 +3342,10 @@ function createTransformRequestChain(
     const requestModel = String(body.model ?? '');
     const gatewayDialect = providerId === 'xd' && isXdGatewayUpstream(upstreamBase) &&
       (isXdGrokWireModel(requestModel) || /^(?:deepseek\/|bytedance-seed\/|doubao-seed-)/.test(requestModel));
+    if (routing.supportsResponsesCustomTools !== false && !knownEndpoint && !gatewayDialect) return null;
     return execAdapter.adaptRequest(body, ctx.reqId,
-      { harness: 'codex', protocol: 'openai-responses', upstreamBase, model }, knownEndpoint || gatewayDialect);
+      { harness: 'codex', protocol: 'openai-responses', upstreamBase, model }, knownEndpoint || gatewayDialect,
+      routing.supportsResponsesCustomTools === false);
   };
   const providerRequestTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body) || !ctx.upstreamBase) return null;
@@ -3330,6 +3359,7 @@ function createTransformRequestChain(
   execFunctionAdapterTransform.errorMode = 'reject-request';
   execFunctionAdapterTransform.onRequestSettled = (requestId) => {
     execAdapter.releaseResponse(requestId);
+    onResponsesSettled?.(requestId);
   };
   const transforms: RequestTransform[] = [
     createArmedHttpRecoveryStripTransform(),
@@ -3385,10 +3415,10 @@ function createTransformRequestChain(
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
     // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。
     createXaiModelInputSanitizeTransform(),
-    sanitizeDeepSeekV4CustomTools,
-    createXaiResponsesCompatTransform(pricing),
-    createGatewayGrokResponsesCompatTransform(frozenAuthInjection),
-    createByteDanceSeedResponsesCompatTransform(),
+    preserveUnknownExec(sanitizeDeepSeekV4CustomTools),
+    preserveUnknownExec(createXaiResponsesCompatTransform(pricing)),
+    preserveUnknownExec(createGatewayGrokResponsesCompatTransform(frozenAuthInjection)),
+    preserveUnknownExec(createByteDanceSeedResponsesCompatTransform()),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(frozenAuthInjection),
     providerRequestTransform,
@@ -3505,6 +3535,7 @@ async function createCodexProxyHandle(
   guestSessionId?: string,
 ): Promise<ProxyHandle> {
   const execAdapter = createCodexResponsesCompatibilityAdapter();
+  const execNegotiation = createCodexExecFormatNegotiation();
   let alive = true;
   const pricing: XaiRequestPricing = new Map();
   // requestCtx and transformCtx share this request-owned headers object. A weak
@@ -3540,8 +3571,34 @@ async function createCodexProxyHandle(
       // receipt is recorded synchronously before Codex can emit the corresponding usage.
       return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
     };
+    const negotiate = (decision: RoutingDecision | null): RoutingDecision | null => {
+      decision = uncompressed(decision);
+      if (!decision || decision.localHandler || ctx.method !== 'POST' || !isPlainObject(body)) return decision;
+      const customPath = parseCodexCustomProviderPath(ctx.url);
+      const crossProvider = crossProviderRequests.has(ctx.headers);
+      const frozen = !crossProvider && customPath.kind === 'route' && customPath.pathKind === 'responses'
+        ? customProviderRouteSnapshot(customPath.routeId, frozenCustomProviderRoutes) : undefined;
+      if (!frozen && !crossProvider && !['/responses', '/v1/responses'].includes(ctx.url.split('?', 1)[0])) return decision;
+      const effective = frozen
+        ? { providerId: frozen.providerId, routing: frozen.responseRoutingByModel[String(body.model ?? '')] }
+        : responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
+      const { providerId, routing } = effective;
+      if (!providerId || !routing || routing.supportsResponsesCustomTools !== undefined
+        || routing.authStrategy === 'oauth-passthrough'
+        || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return decision;
+      if (!Array.isArray(body.tools) || !body.tools.some(tool => isPlainObject(tool) && tool.type === 'custom' && tool.name === 'exec')) return decision;
+      const revision = getProviderRouteCredentialRevision(providerId);
+      const ownerScope = JSON.stringify([activeDataOwnerId(), ownerGeneration()]);
+      const currentDecision = decision;
+      return execNegotiation.decorate(decision, ctx, { providerId, revision, ownerScope, authStrategy: routing.authStrategy }, () => alive
+        && !isOwnerBoundaryPending()
+        && JSON.stringify([activeDataOwnerId(), ownerGeneration()]) === ownerScope
+        && !isProviderRouteMutationInProgress(providerId)
+        && getProviderRouteCredentialRevision(providerId) === revision
+        && (currentDecision.dispatchGenerationValid?.() ?? true));
+    };
     const decision = route(body, ctx);
-    return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
+    return decision instanceof Promise ? decision.then(negotiate) : negotiate(decision);
   };
   const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
   const fitWebSocketRequest = async (
@@ -3570,7 +3627,8 @@ async function createCodexProxyHandle(
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
+    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined,
+      requestId => execNegotiation.releaseResponse(requestId)).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native
         // fields and model. The dedicated transform below reconciles effort
@@ -3627,7 +3685,9 @@ async function createCodexProxyHandle(
       // as valid ResponseItems (#4251). The adapter keeps its own compressed/MIME rejections.
       return chainResponseTransforms(
         createResponsesNullArrayRepairTransform(response),
+        execNegotiation.restoreResponse(ctx),
         execAdapter.createResponseTransform(ctx.reqId, response),
+        execNegotiation.responseTransform(ctx),
       );
     },
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
@@ -3736,6 +3796,7 @@ async function createCodexProxyHandle(
   const dispose = handle.dispose.bind(handle);
   handle.dispose = async () => {
     alive = false;
+    execNegotiation.dispose();
     await dispose();
   };
   return handle;

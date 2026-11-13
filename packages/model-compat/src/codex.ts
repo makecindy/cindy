@@ -23,7 +23,7 @@ export function createCodexResponsesCompatibilityAdapter() {
   const lowered = makeUpstream(true);
   const selected = new Map<number, { adapter: typeof generic; at: number }>();
   return {
-    adaptRequest(body: unknown, requestId: number, route?: CompatibilityRoute, lowerNamespaces = false): unknown | null {
+    adaptRequest(body: unknown, requestId: number, route?: CompatibilityRoute, lowerNamespaces = false, adaptCustomTools = true): unknown | null {
       // The host supplies namespace support from the effective route, independently of
       // custom-tool support. A familiar model name is not a routing capability.
       codeMode.releaseResponse(requestId);
@@ -40,7 +40,7 @@ export function createCodexResponsesCompatibilityAdapter() {
       const upstream = lowerNamespaces ? lowered : generic;
       selected.set(requestId, { adapter: upstream, at: now });
       try {
-        const code = codeMode.adaptRequest(body, requestId) ?? body;
+        const code = adaptCustomTools ? codeMode.adaptRequest(body, requestId) ?? body : body;
         const profile = route ? resolveProviderCompatibilityProfile(route) : null;
         const overrides = profile ? {
           ...(profile.supportsResponsesCustomTools === false ? { customTools: 'functions' as const } : {}),
@@ -50,7 +50,12 @@ export function createCodexResponsesCompatibilityAdapter() {
             preserveReasoningContentModels: Array.isArray(profile.preserveReasoningContentModels) ? profile.preserveReasoningContentModels.filter((value): value is string => typeof value === 'string') : undefined,
           }, route!.model),
         } : {};
-        const tools = upstream.adaptRequest(code, requestId, overrides) ?? code;
+        const tools = upstream.adaptRequest(code, requestId, {
+          ...overrides,
+          // Namespace lowering is independent of custom-tool capability. Unknown
+          // exec must stay native until a real request is explicitly rejected.
+          ...(!adaptCustomTools ? { customTools: 'native' as const } : {}),
+        }) ?? code;
         return tools === body ? null : tools;
       } catch (error) {
         codeMode.releaseResponse(requestId);

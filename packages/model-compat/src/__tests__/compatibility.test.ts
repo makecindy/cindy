@@ -14,6 +14,32 @@ async function responseText(transform: NodeJS.ReadWriteStream, text: string) {
 }
 
 describe('request-owned Responses compatibility', () => {
+  // Unit regression: unknown exec capability must not disable established namespace
+  // lowering. Previously the combined adapter could only convert both together.
+  // Minimal input: one custom exec and one namespace function on the same request.
+  it('preserves unknown exec while independently round-tripping namespace tools', async () => {
+    const namespace = createCodexResponsesCompatibilityAdapter();
+    const exec = createCodexResponsesCompatibilityAdapter();
+    const input = { tools: [{ type: 'custom', name: 'exec' },
+      { type: 'namespace', name: 'files', tools: [{ type: 'function', name: 'read' }] }] };
+    const raw = namespace.adaptRequest(input, 1, undefined, true, false) as typeof input;
+    expect(raw.tools).toMatchObject([{ type: 'custom', name: 'exec' }, { type: 'function', name: 'files__read' }]);
+    const converted = exec.adaptRequest(raw, 1) as typeof input;
+    expect(converted.tools[0]).toMatchObject({ type: 'function', name: 'exec' });
+    const response = JSON.stringify({ output: [
+      { type: 'function_call', id: 'fc_exec', call_id: 'exec_call', name: 'exec', arguments: '{"input":"text(1)"}' },
+      { type: 'function_call', id: 'fc_read', call_id: 'read_call', name: 'files__read', arguments: '{}' },
+    ] });
+    const info = { contentType: 'application/json', contentEncoding: '' };
+    const restored = await responseText(namespace.createResponseTransform(1, info)!,
+      await responseText(exec.createResponseTransform(1, info)!, response));
+    expect(JSON.parse(restored).output).toMatchObject([
+      { type: 'custom_tool_call', name: 'exec', input: 'text(1)' },
+      { type: 'function_call', namespace: 'files', name: 'read' },
+    ]);
+    expect(input.tools[1].type).toBe('namespace');
+  });
+
   it.each(['application/json', 'text/event-stream'])('restores namespace and Code Mode identities (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     const input = {

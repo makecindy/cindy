@@ -1152,7 +1152,7 @@ function forward(
     // xAI 对不可反序列化 / 解不开的 encrypted_content 可能回 422 invalid-argument, 不能只认 400。
     // 2xx 流式响应 / 其它 4xx5xx / 无适用规则走下面原有的 writeHead + pipe, 零额外延迟。
     const activeRules = (status === 400 || status === 422)
-      ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
+      ? recoveryRules.filter((r) => (!r.statuses || r.statuses.includes(status)) && r.enabled() && (canRetry || r.unrecoverableCode))
       : [];
     const recover413 = status === 413 && canRetry && recoverUpstreamOversized;
     if (activeRules.length > 0 || recover413) {
@@ -2344,7 +2344,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         Buffer.alloc(0),
         res,
         logger,
-        opts.recoveryRules ?? [],
+        decision?.recoveryRules ?? opts.recoveryRules ?? [],
         reqId,
         true,
         route.overrideTarget,
@@ -2746,7 +2746,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       outBody,
       res,
       logger,
-      opts.recoveryRules ?? [],
+      decision?.recoveryRules ?? opts.recoveryRules ?? [],
       reqId,
       true,
       route.overrideTarget,

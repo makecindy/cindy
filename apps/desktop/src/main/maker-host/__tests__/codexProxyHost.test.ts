@@ -8,7 +8,8 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { chainResponseTransforms, translateResponsesRequest } from '@cindy/responses-chat-bridge';
+import { createCodexExecFormatNegotiation } from '../codex-exec-format-negotiation.js';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -413,6 +414,56 @@ describe('withCodexUpstreamRecording', () => {
 });
 
 describe('codex gateway config', () => {
+  // Unit: request-owned public decorator and restored-response path. Existing
+  // loopback tests cover HTTP decisions; this covers bounded cache/racing receipts.
+  // Minimum input: two concurrent rejected raw requests sharing one route identity.
+  it('bounds exec format memory and ignores late successes after rejection, eviction or disposal', async () => {
+    const negotiation = createCodexExecFormatNegotiation();
+    let reqId = 0;
+    const prepare = async (model: string, ownerScope = 'owner-a') => {
+      const ctx = { reqId: ++reqId, method: 'POST', url: '/responses', headers: {}, upstreamBase: 'https://fixture.invalid/v1' };
+      const decision = negotiation.decorate({}, ctx, { providerId: 'fixture', revision: 0, ownerScope, authStrategy: 'none' }, () => true);
+      const raw = Buffer.from(JSON.stringify({ model, tools: [{ type: 'custom', name: 'exec' }] }));
+      const wire = await decision.transformRequestBody!(raw, ctx);
+      const responseCtx = { ...ctx, upstreamBase: ctx.upstreamBase, status: 200, requestHeaders: ctx.headers,
+        responseHeaders: { 'content-type': 'application/json' }, requestBody: wire.body };
+      const finish = async () => {
+        const transform = chainResponseTransforms(negotiation.restoreResponse(responseCtx), negotiation.responseTransform(responseCtx))!;
+        transform.resume();
+        const ended = once(transform, 'end');
+        const functionMode = JSON.parse(wire.body.toString()).tools[0].type === 'function';
+        transform.end(JSON.stringify({ id: 'response', status: 'completed', output: [functionMode
+          ? { type: 'function_call', id: 'fc_1', name: 'exec', call_id: 'call_1', arguments: '{"input":"text(1)"}' }
+          : { type: 'custom_tool_call', id: 'ctc_1', name: 'exec', call_id: 'call_1', input: 'text(1)' }] }));
+        await ended;
+      };
+      const reject = () => {
+        const switched = decision.recoveryRules![0].strip(wire.body);
+        if (switched) wire.body = switched;
+        return switched;
+      };
+      return { wire, reject, finish, fail: () => decision.forwardLifecycle!.onFailure!('request-timeout') };
+    };
+    try {
+      const timedOut = await prepare('timeout'); timedOut.fail();
+      expect(timedOut.reject()).toBeNull();
+      await timedOut.finish();
+      const late = await prepare('race'); late.reject();
+      const newer = await prepare('race'); newer.reject();
+      expect(newer.reject()).toBeNull();
+      await late.finish();
+      expect(JSON.parse((await prepare('race')).wire.body.toString()).tools[0].type).toBe('custom');
+      const cached = await prepare('cached'); cached.reject(); await cached.finish();
+      expect(JSON.parse((await prepare('cached')).wire.body.toString()).tools[0].type).toBe('function');
+      expect(JSON.parse((await prepare('cached', 'owner-b')).wire.body.toString()).tools[0].type).toBe('custom');
+      for (let index = 0; index < 256; index++) await (await prepare(`model-${index}`)).finish();
+      expect(JSON.parse((await prepare('cached')).wire.body.toString()).tools[0].type).toBe('custom');
+      const retiring = await prepare('retiring'); retiring.reject();
+      negotiation.dispose();
+      await retiring.finish();
+    } finally { negotiation.dispose(); }
+  });
+
   it.each(['oauth-bearer', 'env-key', 'provider-oauth'] as const)('summary fallback preserves %s credentials and endpoint', async (mode) => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
@@ -6355,6 +6406,120 @@ describe('codex proxy host', () => {
     expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
   });
 
+  // Unit/loopback regression: unknown Responses must negotiate once on a full 400.
+  // Existing explicit-capability adapter tests never exercise rejection or cache identity.
+  // Minimum failing input: custom exec, HTTP 400, then a valid function response.
+  it('negotiates unknown Responses exec, caches accepted formats, and isolates credentials and paths', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { setCustomProviderKeyReader, beginProviderRouteMutation } = await import('../provider-route.js');
+    let key = 'fixture-key-a';
+    let path = '/responses';
+    let model = 'wire-model';
+    let connection = 'negotiate';
+    let behavior = 'function';
+    const sent: string[] = [];
+    const upstream = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', chunk => chunks.push(chunk));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString());
+        expect(req.headers['accept-encoding']).toBe('identity');
+        const mode = body.tools[0].type;
+        sent.push(mode);
+        if (behavior === 'disconnect') { res.destroy(); return; }
+        if (behavior === 'both-fail' || (behavior === 'function' && mode === 'custom') || (behavior === 'raw' && mode === 'function')) {
+          res.writeHead(400, { 'content-type': 'application/json' }).end('{"error":{"message":"rejected"}}'); return;
+        }
+        if (/^status-/.test(behavior)) { res.writeHead(Number(behavior.slice(7))).end('no'); return; }
+        if (behavior === 'broken-400') {
+          res.writeHead(400, { 'content-type': 'application/json', 'content-length': '1000' });
+          res.flushHeaders(); res.write('{"error":'); res.destroy(); return;
+        }
+        if (behavior === 'invalid') { res.writeHead(200, { 'content-type': 'application/json' }).end('{}'); return; }
+        const call = mode === 'function'
+          ? { type: 'function_call', id: 'fc_fixture', name: 'exec', call_id: 'call_fixture', arguments: '{"input":"text(1)"}' }
+          : { type: 'custom_tool_call', id: 'ctc_fixture', name: 'exec', call_id: 'call_fixture', input: 'text(1)' };
+        const response = { object: 'response', id: 'resp_fixture', status: 'completed', output: [call] };
+        if (behavior === '400-output') { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify(response)); return; }
+        if (body.stream) {
+          res.writeHead(200, { 'content-type': 'text/event-stream' });
+          res.write(`data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item: call })}\n\n`);
+          if (behavior === 'partial') { res.end('data: {"type":"error","message":"failed"}\n\n'); return; }
+          res.end(`data: ${JSON.stringify({ type: 'response.completed', response })}\n\n`);
+        } else res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(response));
+      });
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const baseUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
+    const configure = () => setCustomProviders([buildUserProvider({ id: connection, name: 'Fixture', runtimes: { codex: {
+      baseUrl, wireProtocol: 'openai-chat', models: [{ id: model, name: 'Fixture', route: { baseUrl, wireProtocol: 'openai-responses', requestPath: path } }],
+    } } })]);
+    configure();
+    setCustomProviderKeyReader(() => key);
+    host.registerComposed('session-negotiate', 'thread-negotiate', 'PRODUCT_PROMPT');
+    setSessionProvider('session-negotiate', 'negotiate');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    await host.ensureCodexProxyReady();
+    const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const proxy = await actualProxy.createAnthropicCompatProxy(mockState.createAnthropicCompatProxy.mock.calls[0]![0]);
+    const send = async (stream = false, input: unknown[] = [], incomingPath = '/responses') => {
+      sent.length = 0;
+      const response = await fetch(`${proxy.url}${incomingPath}`, { method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': 'thread-negotiate' },
+        body: JSON.stringify({ model, stream, tools: [{ type: 'custom', name: 'exec', description: 'execute code' }], tool_choice: { type: 'custom', name: 'exec' }, input }),
+      });
+      return { status: response.status, text: await response.text(), modes: [...sent] };
+    };
+    try {
+      const first = await send(true);
+      expect(first.status).toBe(200);
+      expect(first.modes).toEqual(['custom', 'function']);
+      expect(first.text).toContain('custom_tool_call');
+      expect(first.text).toContain('text(1)');
+      const next = await send(false, [
+        { type: 'custom_tool_call', id: 'ctc_fixture', name: 'exec', call_id: 'call_fixture', input: 'text(1)' },
+        { type: 'custom_tool_call_output', call_id: 'call_fixture', output: '1' },
+      ], '/v1/responses');
+      expect(next.modes).toEqual(['function']);
+      expect(JSON.parse(next.text).output[0]).toMatchObject({ type: 'custom_tool_call', input: 'text(1)' });
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 15 * 60_000 + 1);
+      try { expect((await send()).modes).toEqual(['custom', 'function']); }
+      finally { clock.mockRestore(); }
+      key = 'fixture-key-b';
+      expect((await send()).modes).toEqual(['custom', 'function']);
+      model = 'deepseek/deepseek-v4-pro'; configure();
+      expect((await send()).modes).toEqual(['custom', 'function']);
+      connection = 'negotiate-b'; configure(); setSessionProvider('session-negotiate', connection);
+      expect((await send()).modes).toEqual(['custom', 'function']);
+      path = '/deployment/responses'; configure();
+      expect((await send()).modes).toEqual(['custom', 'function']);
+      const mutation = beginProviderRouteMutation(connection); mutation.commit(); mutation();
+      expect((await send()).modes).toEqual(['custom', 'function']);
+      behavior = 'raw';
+      expect((await send()).modes).toEqual(['function', 'custom']);
+      expect((await send()).modes).toEqual(['custom']);
+      behavior = 'both-fail';
+      expect(await send()).toMatchObject({ status: 400, modes: ['custom', 'function'] });
+      behavior = 'raw';
+      expect((await send()).modes).toEqual(['custom']);
+      for (const failure of ['status-401', 'status-403', 'status-422', 'status-429', 'invalid', 'disconnect', 'broken-400', '400-output', 'partial']) {
+        key = `fixture-${failure}`;
+        behavior = failure;
+        expect((await send(failure === 'partial')).modes).toEqual(['custom']);
+        behavior = 'function';
+        expect((await send()).modes).toEqual(['custom', 'function']);
+      }
+      behavior = 'both-fail';
+      expect(await send()).toMatchObject({ status: 400, modes: ['function', 'custom'] });
+    } finally {
+      await proxy.dispose(); host.unregister('session-negotiate'); clearSessionProvider('session-negotiate');
+      setCustomProviders([]); setCustomProviderKeyReader(() => null);
+      upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
   // Regression: a model-level Responses override must select the same adapter as
   // a Responses runtime default; otherwise Kimi rejects the native exec tool.
   it.each(['openai-responses', 'openai-chat'] as const)('round-trips exec with a %s runtime default and an effective Responses model', async (wireProtocol) => {
@@ -6379,7 +6544,7 @@ describe('codex proxy host', () => {
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
     setCustomProviderKeyReader(() => 'fixture-key');
-    setCustomProviders([buildUserProvider({
+    const explicitProvider = buildUserProvider({
       id: 'stealth',
       name: 'Stealth',
       runtimes: {
@@ -6391,7 +6556,9 @@ describe('codex proxy host', () => {
           } }],
         },
       },
-    })]);
+    });
+    explicitProvider.routing.codex!.supportsResponsesCustomTools = false;
+    setCustomProviders([explicitProvider]);
     host.registerComposed('session-stealth-exec', 'thread-stealth-exec', 'PRODUCT_PROMPT');
     setSessionProvider('session-stealth-exec', 'stealth');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({

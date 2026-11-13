@@ -65,6 +65,8 @@ export type LocalRequestHandler = (args: {
  * 与 RequestTransform 职责分离:RequestTransform 改 body,RoutingTransform 只读、决定路由。
  */
 export interface RoutingDecision {
+  /** Request-owned recovery policy; replaces the proxy defaults and shares their single retry budget. */
+  recoveryRules?: readonly RecoveryRule[];
   /** Trusted host-selected, versioned stream behavior (never a request header). */
   compatibilityProfiles?: readonly string[];
   /** 覆盖本次请求的上游 URL(完整 `http(s)://host[:port][/basePath]`);省略 = 用默认 `opts.upstream`。 */

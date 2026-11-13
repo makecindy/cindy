@@ -208,7 +208,7 @@ describe('Codex local auth policy', () => {
 // connections. Explicit capabilities and native subscription routes must survive.
 describe('Codex per-model custom-tool capability', () => {
   it.each([
-    { capability: undefined, authStrategy: 'oauth-token', source: 'user', expected: false },
+    { capability: undefined, authStrategy: 'oauth-token', source: 'user', expected: undefined },
     { capability: true, authStrategy: 'api-key-header', source: 'user', expected: true },
     { capability: false, authStrategy: 'api-key-header', source: 'user', expected: false },
     { capability: undefined, authStrategy: 'oauth-passthrough', source: 'user', expected: undefined },
@@ -2140,9 +2140,10 @@ describe('task interface snapshot', () => {
       const first = sessionModelInterface('task', config.id, 'codex', initial, registry)!;
       expect(first.api).toBe('openai-responses');
       // The connection defaults to Chat, but this selected model dispatches
-      // Responses: exec must still reach the existing function adapter.
+      // Responses: preserve unknown support for the HTTP negotiation boundary.
       expect(providerRoutingForModel(buildUserProvider(config, { modelRegistry: registry }), 'codex', 'k3.1-pro'))
-        .toMatchObject({ wireProtocol: 'openai-responses', supportsResponsesCustomTools: false });
+        .toMatchObject({ wireProtocol: 'openai-responses' });
+      expect(providerRoutingForModel(buildUserProvider(config, { modelRegistry: registry }), 'codex', 'k3.1-pro')?.supportsResponsesCustomTools).toBeUndefined();
       expect(first.defaults).toMatchObject({ contextWindow: 262144, maxOutputTokens: 262144 });
       registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
       const next = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
@@ -2150,7 +2151,8 @@ describe('task interface snapshot', () => {
       expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
       const refreshed = buildUserProvider(config, { modelRegistry: registry });
       expect(sessionProviderRoutingForModel('task', refreshed, 'codex', 'k3.1-pro'))
-        .toMatchObject({ wireProtocol: 'openai-responses', supportsResponsesCustomTools: false });
+        .toMatchObject({ wireProtocol: 'openai-responses' });
+      expect(sessionProviderRoutingForModel('task', refreshed, 'codex', 'k3.1-pro')?.supportsResponsesCustomTools).toBeUndefined();
       expect(sessionProviderRoutingForModel('new-task', refreshed, 'codex', 'k3.1-pro'))
         .toMatchObject({ wireProtocol: 'openai-chat' });
       expect(sessionModelInterface('new-task', config.id, 'codex', next, registry)?.api).toBe('openai-completions');

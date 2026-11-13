@@ -225,12 +225,11 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(p.routing.codex).toEqual({
       upstream: "https://openrouter.ai/api/v1",
       authStrategy: "api-key-header",
-      supportsResponsesCustomTools: false,
     });
     expect(p.routing.codex?.headerOverride).toBeUndefined();
   });
 
-  it("marks only a custom Codex Responses runtime as lacking native custom tools", () => {
+  it("preserves unknown custom-tool capability for Responses negotiation", () => {
     const responses = buildUserProvider(codexOnly);
     const chat = buildUserProvider({
       ...codexOnly,
@@ -239,7 +238,7 @@ describe("buildUserProvider (per-runtime)", () => {
       },
     });
 
-    expect(responses.routing.codex?.supportsResponsesCustomTools).toBe(false);
+    expect(responses.routing.codex?.supportsResponsesCustomTools).toBeUndefined();
     expect(chat.routing.codex?.supportsResponsesCustomTools).toBeUndefined();
   });
 

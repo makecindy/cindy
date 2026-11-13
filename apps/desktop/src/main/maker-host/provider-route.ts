@@ -599,15 +599,8 @@ export function providerRoutingForModel(
   // 协议切换后误继承旧 runtime 的路径，只有模型覆盖显式声明时才带回。
   const inherited = { ...routing };
   delete inherited.requestPath;
-  // A user connection can default to Chat while its selected model uses
-  // Responses. Apply the same custom-tool default as buildUserProvider after
-  // that protocol selection, preserving explicit capabilities and native OAuth.
-  if (agent === 'codex' && provider.source === 'user'
-    && modelRoute?.wireProtocol === 'openai-responses'
-    && routing.authStrategy !== 'oauth-passthrough'
-    && inherited.supportsResponsesCustomTools === undefined) {
-    inherited.supportsResponsesCustomTools = false;
-  }
+  // Unknown custom-tool support stays unknown after model-level protocol selection.
+  // The Codex Responses host negotiates it at the real HTTP rejection boundary.
   return {
     ...inherited,
     ...(model?.selectedInterface ? { modelInterface: model.selectedInterface } : {}),
