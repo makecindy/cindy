@@ -296,6 +296,44 @@ final class Adapter {
       precondition(!FileManager.default.fileExists(atPath: url.path))
       print("PASS: temporary file URL copied inside provider callback")
     }
+    if selected != "provider-owned-url" {
+      // A host may advertise a file URL it never grants read access to while its
+      // file representation still hands over an owned copy inside the callback.
+      let bytes = Data("spreadsheet bytes".utf8)
+      let unavailable = root.appendingPathComponent("closed-container/missing.xlsx")
+      let copy = root.appendingPathComponent("季度报表.xlsx")
+      try! bytes.write(to: copy)
+      let provider = NSItemProvider()
+      provider.suggestedName = "季度报表.xlsx"
+      provider.registerItem(forTypeIdentifier: UTType.fileURL.identifier, loadHandler: { completion, _, _ in
+        completion?(unavailable as NSURL, nil)
+      })
+      provider.registerFileRepresentation(forTypeIdentifier: UTType.fileURL.identifier, fileOptions: [], visibility: .all) { completion in
+        completion(copy, false, nil); return nil
+      }
+      adapter.requireProviderCallback = false
+      guard let payload = await adapter.parse(provider), payload.type == .file,
+            let result = URL(string: payload.value) else { fatalError("Unreadable provider URL was not recovered") }
+      precondition(result.lastPathComponent == "季度报表.xlsx")
+      precondition(try! Data(contentsOf: result) == bytes)
+      print("PASS: unreadable provider file URLs fall back to their file representation")
+    }
+    if selected != "provider-string-path" {
+      // Some hosts export the file URL as a bare path string instead of NSURL.
+      let bytes = Data("path encoded spreadsheet".utf8)
+      let source = root.appendingPathComponent("path-export.xlsx")
+      try! bytes.write(to: source)
+      let provider = NSItemProvider()
+      provider.registerItem(forTypeIdentifier: UTType.fileURL.identifier, loadHandler: { completion, _, _ in
+        completion?(source.path as NSString, nil)
+      })
+      adapter.requireProviderCallback = false
+      guard let payload = await adapter.parse(provider), payload.type == .file,
+            let result = URL(string: payload.value) else { fatalError("String file path was not accepted") }
+      precondition(result.lastPathComponent == "path-export.xlsx")
+      precondition(try! Data(contentsOf: result) == bytes)
+      print("PASS: string file paths keep their original filename and bytes")
+    }
     print("PASS: concrete Markdown/source files and plain text previews")
   }
 }

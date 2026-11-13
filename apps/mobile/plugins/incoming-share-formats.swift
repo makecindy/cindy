@@ -2,6 +2,7 @@
   // Unknown exportable types use their original bytes; new formats normally need
   // no special handler. Add an adapter only when its representation needs decoding.
   private func parseProvider(_ provider: NSItemProvider) async -> SharePayload? {
+    shareDiagnostic("provider", provider)
     if provider.hasItemConformingToTypeIdentifier(UTType.propertyList.identifier),
        let value = await loadShareItem(provider, identifier: UTType.propertyList.identifier) as? [String: Any],
        let page = value[NSExtensionJavaScriptPreprocessingResultsKey] as? [String: Any],
@@ -12,6 +13,11 @@
     }
     if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
       if let file = await loadSharePayload(provider, identifier: UTType.fileURL.identifier) { return file }
+      // Some hosts expose a URL they never grant read access to. A file representation
+      // still hands over an owned copy inside the callback, so retry there before
+      // failing the whole share.
+      if let file = await loadFileRepresentation(provider, identifier: UTType.fileURL.identifier, kind: .file) { return file }
+      shareDiagnostic("file URL unreadable", provider)
     }
     let formats: [(UTType, ShareType)] = [(.movie, .video), (.audio, .audio), (.directory, .file)]
     for (format, kind) in formats where provider.hasItemConformingToTypeIdentifier(format.identifier) {
@@ -61,7 +67,9 @@
       }
     }
     // PDF, Office, archives, vCard, calendar, HTML/RTF, models and custom exports.
-    return await loadShareFile(provider, format: .data, kind: .file)
+    let fallback = await loadShareFile(provider, format: .data, kind: .file)
+    if fallback == nil { shareDiagnostic("no representation accepted", provider) }
+    return fallback
   }
 
   private func loadShareItem(_ provider: NSItemProvider, identifier: String) async -> NSSecureCoding? {
@@ -78,6 +86,37 @@
         continuation.resume(returning: data)
       }
     }
+  }
+
+  private func loadFileRepresentation(_ provider: NSItemProvider, identifier: String, kind: ShareType) async -> SharePayload? {
+    await withCheckedContinuation { continuation in
+      provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, error in
+        if let error { self.shareDiagnostic("file representation failed: \(error.localizedDescription)", provider) }
+        continuation.resume(returning: url.flatMap { self.copyShareFile(url: $0, type: kind) })
+      }
+    }
+  }
+
+  // Provider-owned URLs may omit resource values, so fall back to their bytes.
+  private func copyShareFile(url: URL, type: ShareType) -> SharePayload? {
+    let access = url.isFileURL && url.startAccessingSecurityScopedResource()
+    defer { if access { url.stopAccessingSecurityScopedResource() } }
+    if let file = copyAndProcessFile(url: url, type: type) { return file }
+    guard url.isFileURL, let data = try? Data(contentsOf: url) else { return nil }
+    let name = url.lastPathComponent.isEmpty ? UUID().uuidString : url.lastPathComponent
+    return saveDataToAppGroup(
+      data: data,
+      fileName: name,
+      type: type,
+      mimeType: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+    )
+  }
+
+  // Console/Xcode only: names the representations a host actually exports, so a
+  // rejected share can be diagnosed without guessing at its provider.
+  private func shareDiagnostic(_ message: String, _ provider: NSItemProvider? = nil) {
+    let types = provider?.registeredTypeIdentifiers.joined(separator: ",") ?? "-"
+    print("[CindyShare] \(message) types=\(types) name=\(provider?.suggestedName ?? "-")")
   }
 
   private func loadShareFile(_ provider: NSItemProvider, format: UTType, kind: ShareType, excludePlainText: Bool = false, excludeImages: Bool = false, includeAbstract: Bool = true) async -> SharePayload? {
@@ -100,7 +139,7 @@
       if identifier != UTType.image.identifier {
         file = await withCheckedContinuation { continuation in
           provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, _ in
-            continuation.resume(returning: url.flatMap { self.copyAndProcessFile(url: $0, type: kind) })
+            continuation.resume(returning: url.flatMap { self.copyShareFile(url: $0, type: kind) })
           }
         }
       }
@@ -115,10 +154,16 @@
       // URL lifetime belongs to this callback, including loadItem fallbacks.
       // Only an explicitly advertised file-URL representation grants a data
       // value URL semantics; ordinary file/image bytes are never paths.
-      let encodedURL = identifier == UTType.fileURL.identifier
-        ? (value as? Data).flatMap { String(data: $0, encoding: .utf8) }.flatMap(URL.init(string:)) : nil
-      if let url = (value as? URL) ?? encodedURL {
-        return self.copyAndProcessFile(url: url, type: kind ?? self.fileShareType(url))
+      // Hosts export a file URL as NSURL, Data-encoded UTF-8 or a bare path.
+      var declaredURL: URL?
+      if identifier == UTType.fileURL.identifier {
+        let text = (value as? String) ?? (value as? Data).flatMap { String(data: $0, encoding: .utf8) }
+        if let text, !text.isEmpty {
+          declaredURL = text.hasPrefix("file://") ? URL(string: text) : URL(fileURLWithPath: text)
+        }
+      }
+      if let url = (value as? URL) ?? declaredURL {
+        return self.copyShareFile(url: url, type: kind ?? self.fileShareType(url))
       }
       guard let kind, let data = (value as? Data) ?? (value as? UIImage)?.pngData() else {
         return nil

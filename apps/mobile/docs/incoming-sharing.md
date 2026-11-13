@@ -75,7 +75,12 @@ new sending privileges: normal conversation hydration and authorization still ap
   duplicated in the task section.
 
 Provider temporary URLs are copied **inside** the `loadFileRepresentation` or
-`loadItem` callback. Concrete image subtypes (PNG/JPEG/HEIC etc.) precede source
+`loadItem` callback. A file URL a host never grants read access to falls back to
+that host's file representation, and a bare path string is accepted as a URL, so a
+share is not rejected while an owned copy is still available. Rejections print one
+`[CindyShare]` line per provider naming the exported UTIs, which identifies the
+failing host without a debugger.
+Concrete image subtypes (PNG/JPEG/HEIC etc.) precede source
 URLs; web URLs precede abstract `public.image` previews but follow concrete file exports.
 Security-scoped access is balanced; directories use `NSFileCoordinator.forUploading`.
 Each input owns a unique App Group directory, so equal filenames cannot overwrite.
