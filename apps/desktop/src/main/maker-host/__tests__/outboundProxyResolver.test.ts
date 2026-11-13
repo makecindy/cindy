@@ -470,11 +470,51 @@ describe('probeOutboundPathFor (#9537 连接诊断)', () => {
       'https://official.example.com',
     ]);
     expect(snap).toMatchObject({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
-    // 带 path 的 base 与裸 origin 归并为同一个 origin,去重后只解析两次。
-    expect(electronState.resolveProxy).toHaveBeenCalledTimes(2);
+    // 解析键是「协议归一 + host + path」:三条候选是三个不同的键,各解析一次。
+    expect(electronState.resolveProxy).toHaveBeenCalledTimes(3);
   });
 
   it('空候选 → null', async () => {
     await expect(probeOutboundPathFor([])).resolves.toBe(null);
+  });
+
+  // 测试价值(#9537 review): 诊断要回答的是「这个对端的真实 socket 走不走代理」,
+  // 解析键必须与传输层同一把尺子 —— 协议归一(ws→http / wss→https)+ host + path。
+  // 只送 origin 时,env 代理按协议分槽(HTTPS_PROXY / HTTP_PROXY)会读到另一个槽,
+  // PAC 按 path 的判定也被丢掉,判出来的路径可以与真实 socket 正好相反。
+  it('env 代理按协议分槽:wss 候选读 HTTPS_PROXY,而不是 HTTP_PROXY', async () => {
+    process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:7891';
+    const snap = await probeOutboundPathFor(['wss://relay.example.com/api/device-link/ws']);
+    expect(snap).toMatchObject({ kind: 'proxy', proxy: 'http://127.0.0.1:7891' });
+    // 系统代理解析器根本不该被问到(env 优先)。
+    expect(electronState.resolveProxy).not.toHaveBeenCalled();
+  });
+
+  it('PAC 按 path 判定:带 path 的候选与裸 origin 可以得出不同结论', async () => {
+    electronState.resolveProxy.mockImplementation(async (url: string) =>
+      url.endsWith('/api/device-link/ws') ? 'PROXY 127.0.0.1:7890' : 'DIRECT');
+    const snap = await probeOutboundPathFor(['wss://relay.example.com/api/device-link/ws']);
+    expect(snap).toMatchObject({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+    // 传给系统解析器的是归一后的 key(wss→https)+ path,不是裸 origin。
+    expect(electronState.resolveProxy).toHaveBeenCalledWith(
+      'https://relay.example.com/api/device-link/ws',
+    );
+  });
+
+  // 测试价值(#9537 review): 明文 ws:// 遇到 HTTP 代理时,传输层拒用该代理并直连
+  // (upgrade 握手必须是隧道,见 outbound-fetch createOutboundHttpAgent)。诊断照报
+  // 「经代理」就是谎报;socks5 不受这条限制,照报。
+  it('明文 ws:// + HTTP 代理 → 传输层拒用该代理,诊断不报', async () => {
+    process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
+    await expect(
+      probeOutboundPathFor(['ws://relay.example.com/api/device-link/ws']),
+    ).resolves.toBe(null);
+  });
+
+  it('明文 ws:// + socks5 代理 → 照报(传输层对 socks5 不拒绝)', async () => {
+    process.env.ALL_PROXY = 'socks5://127.0.0.1:1080';
+    const snap = await probeOutboundPathFor(['ws://relay.example.com/api/device-link/ws']);
+    expect(snap).toMatchObject({ kind: 'proxy', proxy: 'socks5://127.0.0.1:1080' });
   });
 });
