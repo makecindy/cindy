@@ -12,7 +12,7 @@
  * host checks into this bootstrap. `assertAccess` runs between bootstrap awaits,
  * so switching accounts during preparation or creation cannot start under a new owner.
  */
-import type { Maker } from '@cindy/maker-core';
+import { AgentStartupStoppedError, type Maker } from '@cindy/maker-core';
 
 import {
   captureDataOwnerBroadcastScope,
@@ -48,6 +48,7 @@ export function captureScheduledOwnerGuard(): () => void {
 
 export function createScheduledSessionBootstrap(
   bootstrapSession: ScheduledSessionStarter,
+  prepareFreshAccount?: (options: CreateOpts, assertCurrent: () => void) => Promise<boolean>,
 ): ScheduledSessionBootstrap {
   return async (createOpts, signal, assertOwner = captureScheduledOwnerGuard()) => {
     const assertCurrent = () => {
@@ -55,8 +56,28 @@ export function createScheduledSessionBootstrap(
       assertOwner();
     };
     assertCurrent();
-    const prepared: CreateOpts = { ...createOpts };
-    const { session } = await bootstrapSession(prepared, assertCurrent);
+    const prepared: CreateOpts = { ...createOpts,
+      preserveStartupStoppedError: !!prepareFreshAccount && !createOpts.resumeSessionId };
+    await prepareFreshAccount?.(prepared, assertCurrent);
+    assertCurrent();
+    let result: Awaited<ReturnType<ScheduledSessionStarter>>;
+    try {
+      result = await bootstrapSession(prepared, assertCurrent);
+    } catch (error) {
+      // A cold first read may learn the account's failure only during startup. Retry once only
+      // after the original process is proven stopped and admission really changes the source.
+      if (!(error instanceof AgentStartupStoppedError) || !prepareFreshAccount) throw error;
+      assertCurrent();
+      if (!await prepareFreshAccount(prepared, assertCurrent)) throw error.cause;
+      assertCurrent();
+      try {
+        result = await bootstrapSession(prepared, assertCurrent);
+      } catch (retryError) {
+        // The exit receipt is internal to this retry; callers retain Maker's original error type.
+        throw retryError instanceof AgentStartupStoppedError ? retryError.cause : retryError;
+      }
+    }
+    const { session } = result;
     // Keep the caller's routing metadata aligned with the group-selected member.
     createOpts.agentDeviceId = prepared.agentDeviceId;
     createOpts.providerId = prepared.providerId;

@@ -40,6 +40,15 @@ export interface SessionRuntimeControlSnapshot {
   visitedRoutes: string[];
 }
 
+/** Startup-only projection; persisted preferences and native-history identity stay on the row. */
+export function getSessionRuntimeStartOverride(sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) {
+  const profile = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
+  if (!profile || profile.agentKind !== agentKind
+    || (profile.agentDeviceId ?? null) !== (agentDeviceId ?? null)) return {};
+  return { model: profile.model, providerId: profile.providerId,
+    effort: profile.effort ?? undefined, fastMode: profile.fastMode };
+}
+
 /** Shared by full session reads and route-change pushes; all axes come from one profile. */
 export function projectSessionRuntimeControl(
   sessionId: string,
@@ -133,6 +142,32 @@ export function recordUserSessionRuntimeMutation(sessionId: string): number {
   state.pendingRouteExplicit = true;
   state.fallbackHop = 0;
   state.visitedRoutes.clear();
+  return state.generation;
+}
+
+/** Account handoff changes only the admitted source, preserving temporary model/axis intent. */
+export function remapSessionRuntimeProvider(params: {
+  sessionId: string;
+  fromProviderId: string;
+  toProviderId: string;
+  expectedOwnerEpoch: string;
+  expectedGeneration: number;
+}): number | null {
+  if (!sessionRuntimeControlOwnerEpochMatches(params.expectedOwnerEpoch)) return null;
+  const existing = states.get(params.sessionId);
+  const generation = existing?.generation ?? 0;
+  if (generation !== params.expectedGeneration) return null;
+  const state = existing ?? stateFor(params.sessionId);
+  const effective = state.effectiveOverride;
+  // The admitted route changed even without an override; fence every old Agent snapshot.
+  state.generation += 1;
+  if (effective?.providerId === params.fromProviderId)
+    state.effectiveOverride = { ...effective, providerId: params.toProviderId };
+  if (state.pending) {
+    state.pending = { ...state.pending, generation: state.generation,
+      profile: effective?.providerId === params.fromProviderId && routeKey(state.pending.profile) === routeKey(effective)
+        ? { ...state.pending.profile, providerId: params.toProviderId } : state.pending.profile };
+  }
   return state.generation;
 }
 
