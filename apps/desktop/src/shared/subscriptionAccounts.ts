@@ -120,6 +120,8 @@ export interface SubscriptionSessionAccountQuery {
    * take it right now (`blocked`); older hosts ignore it.
    */
   model?: string;
+  /** Optional: the executor's old Codex connection id; can stand alone before a native session exists. */
+  legacyProviderId?: string;
 }
 export interface SubscriptionSessionAccount {
   isDefault: boolean;
@@ -139,14 +141,18 @@ export interface SubscriptionSessionAccount {
   /** For a blocked account, whether the executor can actually select another account, including concurrency and route grants. */
   switchAvailable?: boolean;
 }
-export type SubscriptionSessionAccountView =
+export type SubscriptionSessionAccountView = (
   /** No pool, only the CLI default, or a pre-pool task: the provider's original readers apply. */
   | { providerId: SubscriptionProvider; state: 'legacy' }
   /** The pool picks an account on the task's next turn. */
   | { providerId: SubscriptionProvider; state: 'unassigned' }
   /** The bound account was removed or the provider disconnected; nothing else stands in. */
   | { providerId: SubscriptionProvider; state: 'unavailable' }
-  | { providerId: SubscriptionProvider; state: 'bound'; account: SubscriptionSessionAccount };
+  | { providerId: SubscriptionProvider; state: 'bound'; account: SubscriptionSessionAccount }
+) & {
+  /** Explicit executor admission for handing an own-computer legacy task to the merged route. */
+  replacementProviderId?: 'openai';
+};
 
 const SESSION_ACCOUNT_STATUSES: ReadonlySet<unknown> = new Set([
   'ready',
@@ -162,8 +168,10 @@ export function parseSubscriptionSessionAccountView(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const view = raw as Record<string, unknown>;
   if (view.providerId !== providerId) return null;
+  const replacement = providerId === 'openai' && view.replacementProviderId === 'openai'
+    ? { replacementProviderId: 'openai' as const } : {};
   if (view.state === 'legacy' || view.state === 'unassigned' || view.state === 'unavailable')
-    return { providerId, state: view.state };
+    return { providerId, state: view.state, ...replacement };
   if (view.state !== 'bound') return null;
   const account = view.account as Record<string, unknown> | null | undefined;
   if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
@@ -175,6 +183,7 @@ export function parseSubscriptionSessionAccountView(
   return {
     providerId,
     state: 'bound',
+    ...replacement,
     account: {
       isDefault: account.isDefault,
       number: account.number as number,
