@@ -2663,6 +2663,21 @@ describe('Chat Server result delivery and refresh', () => {
     expect(result.ok && result.group.round.speakers).toHaveLength(2);
   });
 
+  // Unit / #10345: remote and queued executions need history anchors without local elapsed starts.
+  it('retains execution enqueue time across queued and remote work status updates', async () => {
+    let status = 'queued';
+    const created_at = '2026-10-02T23:59:00Z';
+    fixture.handle.mockImplementation(route => route.endsWith('/executions')
+      ? { body: [{ ...execution, status, created_at, updated_at: '2026-10-03T01:00:00Z' }] } : response(route));
+    for (status of ['queued', 'running', 'needs_input', 'stopping']) {
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.round.speakers).toMatchObject([{ executionId: execution.id,
+        timelineAt: Date.parse(created_at), executionStatus: status, sessionId: null }]);
+      expect(result.group.round.speakers[0]?.startedAt).toBeUndefined();
+    }
+  });
+
   it.each(['IMAGE_INPUT_UNSUPPORTED', 'RUNTIME_TIMEOUT', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
     const source = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [{ type: 'text', text: 'Question' }], origin: 'user', deleted: false, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };

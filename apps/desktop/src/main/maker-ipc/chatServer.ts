@@ -1924,11 +1924,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const speakers: BotGroupSpeaker[] = [];
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
       const run = running.get(e.id);
-      // created_at is the enqueue time, not the start of work; showing it as elapsed time
-      // made queued executions look like they had already been working.
+      // Enqueue time anchors history across computers and queue transitions; only the
+      // local start is an elapsed-work clock.
+      const timelineAt = e.created_at ? Date.parse(e.created_at) : NaN;
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
-        executionId: e.id, ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
+        executionId: e.id, ...(Number.isFinite(timelineAt) ? { timelineAt } : {}),
+        ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
         activity: e.plan_id ? 'step' : 'reply' };
       speakers.push(speaker);
