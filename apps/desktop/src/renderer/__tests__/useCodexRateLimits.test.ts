@@ -25,13 +25,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// Unit regression: the pool broadcasts after recording a reset read. Its own
-// echo must not spawn another CLI read; a later account change must refresh.
-it('refreshes pooled reset settings on account changes without rereading its own echo', async () => {
+// #10286 review: pool running-count updates must not launch account CLI reads.
+// Only this account's explicit reset invalidation may refresh; its own echo is ignored.
+it('refreshes only the named pooled reset account and ignores running-count updates', async () => {
   const scope = 'openai-account:second';
-  let changed!: (event: { providerId: string }) => void;
+  let changed!: (event: { providerId: string; resetAccountId?: string }) => void;
   const reader = vi.fn(async () => {
-    changed({ providerId: 'openai' });
+    changed({ providerId: 'openai', resetAccountId: 'second' });
     return { ...result, providerId: scope };
   });
   vi.stubGlobal('electronAPI', {
@@ -44,9 +44,13 @@ it('refreshes pooled reset settings on account changes without rereading its own
   await act(async () => changed({ providerId: 'anthropic' }));
   expect(reader).toHaveBeenCalledTimes(1);
   await act(async () => changed({ providerId: 'openai' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'third' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'second' }));
   expect(reader).toHaveBeenCalledTimes(2);
   hook.unmount();
-  await act(async () => changed({ providerId: 'openai' }));
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'second' }));
   expect(reader).toHaveBeenCalledTimes(2);
 });
 

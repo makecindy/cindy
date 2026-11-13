@@ -65,7 +65,7 @@ beforeEach(() => {
 describe('SubscriptionAccountsSection usage', () => {
   // Unit regression: the real second-account row must expose the shared reset UI
   // and send its own scope/key. Previously only the supplied default card had it.
-  it('shows reset preferences for the second OpenAI account and saves to that account', async () => {
+  it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {
     const scope = 'openai-account:cindy-owner-second';
     const autoUse = { accountKey: 'second-account-key', settings: {
       enabled: false, lowQuota: true, minimumDays: 3, expiring: true, expiryMinutes: 60,
@@ -78,10 +78,10 @@ describe('SubscriptionAccountsSection usage', () => {
     } }));
     Object.assign(window.electronAPI, { maker: { usage: { getCodexRateLimits, setCodexResetAutoUse } } });
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, providerId: 'openai', accounts: [
-      view.accounts[0], { ...view.accounts[1], codexResetProviderId: scope, usage: { codex: { credits: null, buckets: {
+      view.accounts[0], { ...view.accounts[1], codexResetProviderId: scope, usage: hasQuota ? { codex: { credits: null, buckets: {
         codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
           secondary: { usedPercent: 20, windowMinutes: 10080, resetsAt } },
-      } } } },
+      } } } : undefined },
     ] });
     render(<SubscriptionAccountsSection providerId="openai" defaultUsage={<div>Default quota</div>} />);
     const toggle = await screen.findByRole('switch', { name: 'codexResets.autoUse.label' });
@@ -89,6 +89,7 @@ describe('SubscriptionAccountsSection usage', () => {
     expect(within(rows[0]).getByText('Default quota')).toBeTruthy();
     expect(within(rows[1]).getByText('codexResets.title')).toBeTruthy();
     expect(getCodexRateLimits).toHaveBeenCalledWith(scope);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
     fireEvent.click(toggle);
     await waitFor(() => expect(setCodexResetAutoUse).toHaveBeenCalledWith({ enabled: true }, 'second-account-key', scope));
   });

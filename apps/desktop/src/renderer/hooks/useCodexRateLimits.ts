@@ -152,7 +152,8 @@ function cachedRateLimits(providerId: string): CachedRateLimits {
   if (usageUnsubscribe) entry.unsubscribe.push(usageUnsubscribe);
   if (providerId.startsWith(CODEX_POOL_RESET_PREFIX)) {
     const poolUnsubscribe = window.electronAPI?.subscriptionAccounts?.onChanged?.(payload => {
-      if (payload.providerId !== 'openai' || entry.pendingReads > 0) return;
+      if (payload.providerId !== 'openai' || !payload.resetAccountId
+        || `${CODEX_POOL_RESET_PREFIX}${payload.resetAccountId}` !== providerId || entry.pendingReads > 0) return;
       if (entry.listeners.size > 0 && isDataOwnerGenerationCurrent(entry.owner)) refreshEntry(entry);
       else clear();
     });

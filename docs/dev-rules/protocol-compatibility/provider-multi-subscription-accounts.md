@@ -12,6 +12,11 @@
 回归入口为 `subscription-accounts/__tests__/runtime.test.ts`、`SubscriptionAccountsSection.test.tsx`
 和 `useCodexRateLimits.test.ts`；没有进行真实双设备互通或上游扣卡验收。
 
+`subscription-accounts:changed` 可选追加 `resetAccountId`：只标记该账号的重置数据已刷新，
+额外账号的重置读取仅响应自身 ID。普通任务运行数通知继续只带供应商 ID，不触发整池 CLI 重读。
+旧控制端忽略此可选字段；新端面对旧通知仍保留挂载与手动刷新，不借用其它账号的数据。
+已登录账号的重置入口独立于用量卡：额度暂时未知时仍可读取重置卡与自动规则。
+
 2026-11-11 旧独立 Codex 连接归并：供应商视图可选追加 `subscriptionPoolAlias: true`，表示本机设置与新来源栏在 OpenAI 内管理此账号；原供应商 ID、执行与鉴权语义保留。旧控制端忽略字段，继续显示独立连接。新版 owner 控制端在模型清单展示层隐藏重复来源，但明确指定的旧任务／自动任务仍保留原 ID 并通过原连接校验。整个 OpenAI 池没有开放远程调用或没有覆盖旧连接全部已开放模型时，远程目录不带旧连接的归并标记，避免移除原已开放入口；跨账号分享一律剥离标记，不让被分享的单账号变成整个池。没有新 channel、能力协商、隧道帧或服务端字段，官方与自建中转均按原协议透传。
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
@@ -45,7 +50,8 @@ Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号�
 `default` 或 `new`，后者始终创建独立目录。沿用原 channel 和 owner 校验；旧客户端的
 `read` / `add` 行为不变。旧宿主拒绝新 action 时显示重试错误，禁止退回含糊的 `add` 而
 静默接入旧账号。官方及自建中转均透传这些 action，无新增服务端字段。
-`subscription-accounts:changed` 仅推送供应商 id，路由到既有 `sessions` topic 后由当前管理页重读。
+`subscription-accounts:changed` 普通变化仅推送供应商 id，重置数据刷新可附加上述 `resetAccountId`，
+路由到既有 `sessions` topic 后由当前管理页重读。
 `read` 的账号视图以 `usage`（该账号自身的 Claude 窗口快照或 Codex 桶及余额）取代未发布的单条 `quota`。
 同账号 `manage-share` 的 `quota-account` 在池内有多个可分配账号时额外返回 `accounts`（匿名数组），
 顶层仍是首个账号：旧组主只读顶层，新组主遇到无 `accounts` 的旧成员按单账号显示。

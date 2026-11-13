@@ -333,14 +333,20 @@ export function SubscriptionAccountsSection({
                 const signIn = () => void run({
                   action: 'login', providerId, accountId: account.id, loginKey: crypto.randomUUID(),
                 });
+                const resetScope = account.codexResetProviderId ?? codexResetScope(account.id);
+                // Reset settings do not depend on a successful usage read. A replaced
+                // identity remounts the reader; ordinary running-count changes do not.
+                const resetNode = providerId === 'openai' && connected ? (
+                  <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
+                ) : null;
                 const usageNode =
                   account.id === 'default' && defaultUsage ? (
                     defaultUsage
                   ) : usage ? (
                     <QuotaHoverCard variant="embedded" hideIdentity account={usage}>
-                      {providerId === 'openai' && connected && <AccountResetCredits scope={account.codexResetProviderId ?? codexResetScope(account.id)} />}
+                      {resetNode}
                     </QuotaHoverCard>
-                  ) : null;
+                  ) : resetNode;
                 return (
                   <div
                     key={account.id}

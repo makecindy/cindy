@@ -111,19 +111,19 @@ interface OwnerRuntime {
   quotaCooling: Map<string, Record<string, number>>;
 }
 let runtime: OwnerRuntime | undefined;
-const listeners = new Set<(providerId: SubscriptionProvider) => void>();
+const listeners = new Set<(providerId: SubscriptionProvider, resetAccountId?: string) => void>();
 export function onSubscriptionAccountsChanged(
-  listener: (providerId: SubscriptionProvider) => void,
+  listener: (providerId: SubscriptionProvider, resetAccountId?: string) => void,
 ) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
-function changed(provider: SubscriptionProvider) {
+function changed(provider: SubscriptionProvider, resetAccountId?: string) {
   for (const listener of listeners) {
     try {
-      listener(provider);
+      listener(provider, resetAccountId);
     } catch {
       /* Views cannot invalidate a completed account operation. */
     }
@@ -263,7 +263,7 @@ export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServi
       assertCurrent();
       await snapshot(state, 'openai', id, true, true);
       assertCurrent();
-      changed('openai');
+      changed('openai', id);
     },
   };
 }

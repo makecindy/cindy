@@ -4307,7 +4307,7 @@ interface ElectronAPI {
     onReshareRequested(cb: () => void): () => void;
   };
   subscriptionAccounts: {
-    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
+    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider; resetAccountId?: string }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
     /** Validate the reply with parseSubscriptionSessionAccountView. */
     sessionAccount?(query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown>;

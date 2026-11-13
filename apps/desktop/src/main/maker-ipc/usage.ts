@@ -369,7 +369,9 @@ export function registerMakerUsageIpc(maker: Maker): void {
   const timer = setInterval(checkEnabled, 60_000);
   timer.unref();
   const unobserve = observeUsageChanges(kind => { if (kind === 'codex') checkEnabled(); });
-  const unobservePool = onSubscriptionAccountsChanged(provider => { if (provider === 'openai') checkEnabled(); });
+  const unobservePool = onSubscriptionAccountsChanged((provider, resetAccountId) => {
+    if (provider === 'openai' && resetAccountId) checkEnabled();
+  });
   powerMonitor.on('resume', checkEnabled);
   app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', checkEnabled); });
   checkEnabled();
