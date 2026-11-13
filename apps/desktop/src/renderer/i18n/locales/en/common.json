@@ -20829,6 +20829,8 @@
       "description": "Choose what to move from “{{name}}” to this computer. Settings you already changed on this computer are kept.",
       "partial": "Some content on that computer couldn't be read this time. Only what was read is listed below.",
       "groupCount": "{{selected}} of {{total}} selected",
+      "groupCount_one": "{{selected}} of {{total}} selected",
+      "groupCount_other": "{{selected}} of {{total}} selected",
       "present_one": "{{count}} more item is already the same here",
       "present_other": "{{count}} more items are already the same here",
       "start_one": "Move {{count}} Item",

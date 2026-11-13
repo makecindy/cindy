@@ -20878,6 +20878,7 @@
       "description": "勾選欲自「{{name}}」遷至此機之內容。此機已改之規制皆保留，不為所覆。",
       "partial": "彼機有部分內容此番未能讀取，下方僅列已讀者。",
       "groupCount": "已選 {{selected}} / {{total}} 項",
+      "groupCount_other": "已選 {{selected}} / {{total}} 項",
       "present_one": "另 {{count}} 項，此機已有",
       "present_other": "另 {{count}} 項，此機已有",
       "start_one": "遷移 {{count}} 項",
