@@ -255,6 +255,18 @@ function claude(ref: string, name: string, config: ObjectMap): LocalSourceEntry 
   }
   return { ref, name, endpoints: [ep] };
 }
+function hasClaudeStaticAuthHeaders(env: ObjectMap): boolean {
+  return str(env.ANTHROPIC_CUSTOM_HEADERS)
+    .split('\n')
+    .filter(Boolean)
+    .some((row) => {
+      const i = row.indexOf(':');
+      if (i < 1) return false;
+      const key = row.slice(0, i).trim();
+      const value = row.slice(i + 1).trim();
+      return /^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(key) && !!value;
+    });
+}
 function codex(config: ObjectMap, key = ''): LocalSourceEntry[] {
   const profiles = Object.values(obj(config.profiles)).map(obj);
   const entries = Object.entries(obj(config.model_providers)).map(([id, raw]) => {
@@ -428,7 +440,7 @@ async function read(
     if (
       !Object.keys(obj(cfg.env)).some((k) =>
         ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].includes(k),
-      )
+      ) && !hasClaudeStaticAuthHeaders(obj(cfg.env))
     ) {
       if (cfg.apiKeyHelper) throw new SourceError('unsupported');
       return [];
@@ -462,7 +474,7 @@ async function read(
     const profiles = [config, ...Object.values(obj(config.profiles)).map(obj)];
     for (const profile of profiles) {
       if (!profile.model_catalog_json) continue;
-      const id = profile.model_provider ?? config.model_provider;
+      const id = profile.model_provider ?? config.model_provider ?? 'openai';
       const target = entries.find((e) => e.ref === id);
       if (!target) continue;
       const path = str(profile.model_catalog_json);

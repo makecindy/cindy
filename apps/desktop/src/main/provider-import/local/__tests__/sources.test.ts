@@ -155,6 +155,17 @@ describe('saved API sources (isolated fake credentials only)', () => {
     expect(result.issue).toBeUndefined();
     expect(result.entries[0].endpoints[0].headers).toEqual({ 'x-api-key': 'FAKE-HEADER-KEY' });
   });
+  it('shows header-only Claude authentication for manual URL completion', async () => {
+    await put('.claude/settings.json', {
+      env: { ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer FAKE-HEADER-TOKEN' },
+    });
+    const result = await readLocalProviderSource('claude-code', context);
+    expect(result.issue).toBeUndefined();
+    expect(result.entries[0].endpoints[0]).toMatchObject({
+      baseUrl: '',
+      headers: { Authorization: 'Bearer FAKE-HEADER-TOKEN' },
+    });
+  });
   it('reads Codex providers/profile models and API key only for its selected provider', async () => {
     await put(
       '.codex/config.toml',
@@ -297,6 +308,16 @@ describe('saved API sources (isolated fake credentials only)', () => {
     const result = await readLocalProviderSource('codex', context);
     expect(result.entries[0].endpoints[0].models).toEqual([
       { id: 'vendor/model', name: 'vendor/model', contextWindow: 12345 },
+    ]);
+  });
+  it('reads the default OpenAI model catalog when Codex omits model_provider', async () => {
+    await put('.codex/config.toml', 'model_catalog_json="models.json"');
+    await put('.codex/auth.json', { OPENAI_API_KEY: 'FAKE-API' });
+    await put('.codex/models.json', { models: [{ slug: 'catalog/model', contextWindow: 12345 }] });
+    const result = await readLocalProviderSource('codex', context);
+    expect(result.entries[0]).toMatchObject({ ref: 'openai' });
+    expect(result.entries[0].endpoints[0].models).toEqual([
+      { id: 'catalog/model', name: 'catalog/model', contextWindow: 12345 },
     ]);
   });
   it('OpenCode only retains API records and resolves custom endpoints from static config', async () => {
