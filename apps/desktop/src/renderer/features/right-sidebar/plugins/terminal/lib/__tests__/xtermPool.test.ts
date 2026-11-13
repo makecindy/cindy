@@ -2,8 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { _resetStore, ensureHydrated, patchTabState, importTabSnapshot, getTabSnapshot, getSingleTabSnapshot, importReturnedTabState, getBucket } from '../../../../store';
-import { finishClosing, markClosing } from '../../../../lib/tabClosingSignal';
+import '../../index';
+import { _resetStore, closeTab, ensureHydrated, patchTabState, importTabSnapshot, getTabSnapshot, getSingleTabSnapshot, importReturnedTabState, getBucket } from '../../../../store';
+import { finishClosing, markClosing, registerClosing } from '../../../../lib/tabClosingSignal';
 import { markAllPtyDetached, markPtyDetached } from '../xtermEntries';
 import { openTerminalExternalLink, getXterm, getXtermExit, setXtermExit, onXtermExit, restartXterm, attachXterm, releaseXtermConnection, detachXterm, getOrCreateXterm, suspendExitedXterm, disposeXterm, __resetPoolForTesting } from '../xtermPool';
 
@@ -12,8 +13,12 @@ const { warn } = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/logger', () => ({
-  createLogger: () => ({ warn }),
+  createLogger: () => ({ warn, error: vi.fn() }),
 }));
+
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
 
 it('marks a real xterm entry registered after closing begins and clears it after rollback', () => {
   markClosing('late-terminal');
@@ -84,6 +89,192 @@ describe('openTerminalExternalLink', () => {
     __resetPoolForTesting();
     _resetStore();
     vi.clearAllMocks();
+  });
+
+  async function closingFixture(snapshot: boolean) {
+    const id = 'close-outcome';
+    const sessionId = 'close-session';
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const close = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const setActive = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      terminal: { dispose }, localDb: { rightSidebarTabs: {
+        list: vi.fn().mockResolvedValue({ tabs: [{ id, kind: 'terminal', state: {} }], activeTabId: id, persistable: true }),
+        close, setActive,
+      } },
+    } });
+    await ensureHydrated(sessionId);
+    const entry = getOrCreateXterm(id);
+    entry.remoteDraft = { contextKey: 'context', connection: { host: 'edited-host' }, submitted: false };
+    entry.ptyAttached = true;
+    if (snapshot) await suspendExitedXterm(id);
+    return { id, sessionId, dispose, close, setActive, retained: getXterm(id)! };
+  }
+
+  // PRRT_kwDOTgdRUs62sDlx / unit: actual store + plugin + pool, unlike hook-only
+  // tests. Native release followed by SQLITE_BUSY used to erase editing intent.
+  it.each([false, true])('retains drafts until database close commits (snapshot=%s)', async snapshot => {
+    const id = 'close-draft';
+    const sessionId = 'close-session';
+    let settle!: () => void;
+    let reject!: (error: Error) => void;
+    const close = vi.fn(() => new Promise<void>((yes, no) => { settle = yes; reject = no; }));
+    const dispose = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      terminal: { dispose }, localDb: { rightSidebarTabs: {
+        list: vi.fn().mockResolvedValue({ tabs: [{ id, kind: 'terminal', state: {} }], activeTabId: id, persistable: true }),
+        close, setActive: vi.fn().mockResolvedValue(undefined),
+      } },
+    } });
+    await ensureHydrated(sessionId);
+    const entry = getOrCreateXterm(id);
+    const draft = { contextKey: 'context', connection: { host: 'edited-host', user: 'alice', port: 2222 }, submitted: false };
+    entry.remoteDraft = draft;
+    entry.ptyAttached = true;
+    if (snapshot) await suspendExitedXterm(id);
+    const retained = getXterm(id)!;
+    const resumed = vi.fn();
+    retained.closeCancelledListeners.add(resumed);
+    const failed = closeTab(sessionId, id);
+    const failure = expect(failed).rejects.toThrow('SQLITE_BUSY');
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    // Settle before asserting so the red regression leaves no pending mutation.
+    const duringClose = getXterm(id);
+    reject(new Error('SQLITE_BUSY'));
+    await failure;
+    expect(duringClose).toBe(retained);
+    expect(getXterm(id)?.remoteDraft).toEqual(draft);
+    expect(getXterm(id)?.ptyAttached).toBe(false);
+    expect(getXterm(id)?.closing).toBe(false);
+    expect(getBucket(sessionId).tabs.map(tab => tab.id)).toEqual([id]);
+    resumed.mockClear();
+    const committed = closeTab(sessionId, id);
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(2));
+    expect(getXterm(id)?.closing).toBe(true);
+    expect(getXterm(id)?.remoteDraft).toEqual(draft);
+    settle();
+    await committed;
+    expect(getXterm(id)).toBeUndefined();
+    expect(getBucket(sessionId).tabs).toEqual([]);
+    expect(resumed).not.toHaveBeenCalled();
+    expect(getOrCreateXterm(id).remoteDraft).toBeUndefined();
+  });
+
+  // Same failure family: native veto must preserve both storage forms; row
+  // absence and active-write failure are already committed, never rollback.
+  it.each([false, true])('keeps drafts and attachment when native disposal vetoes (snapshot=%s)', async snapshot => {
+    const { id, sessionId, dispose, close, retained } = await closingFixture(snapshot);
+    dispose.mockRejectedValueOnce(new Error('PERMISSION_DENIED'));
+    await closeTab(sessionId, id);
+    expect(close).not.toHaveBeenCalled();
+    expect(getBucket(sessionId).tabs.map(tab => tab.id)).toEqual([id]);
+    expect(getXterm(id)).toBe(retained);
+    expect(retained.remoteDraft?.submitted).toBe(false);
+    expect(retained.ptyAttached).toBe(true);
+    expect(retained.closing).toBe(false);
+  });
+
+  it.each([
+    [false, 'missing'], [true, 'missing'], [false, 'active-failed'], [true, 'active-failed'],
+  ] as const)('commits final cleanup for snapshot=%s, outcome=%s', async (snapshot, outcome) => {
+    const { id, sessionId, close, setActive, retained } = await closingFixture(snapshot);
+    if (outcome === 'missing') close.mockRejectedValueOnce(new Error('[NOT_FOUND] missing row'));
+    else setActive.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    const resumed = vi.fn();
+    retained.closeCancelledListeners.add(resumed);
+    await closeTab(sessionId, id);
+    expect(getBucket(sessionId).tabs).toEqual([]);
+    expect(getXterm(id)).toBeUndefined();
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  it('never rolls back a committed row when renderer cleanup throws', async () => {
+    const { id, sessionId } = await closingFixture(false);
+    registerClosing(id, () => undefined, () => { throw new Error('renderer cleanup failed'); });
+    await closeTab(sessionId, id);
+    expect(getBucket(sessionId).tabs).toEqual([]);
+    expect(warn).toHaveBeenCalledWith('committed tab cleanup failed', expect.objectContaining({ tabId: id }));
+  });
+
+  it('invalidates the restored canonical snapshot after native disposal completes', async () => {
+    const { id, sessionId, dispose, close, retained } = await closingFixture(true);
+    let release!: () => void;
+    dispose.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    close.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    const closing = closeTab(sessionId, id);
+    const failed = expect(closing).rejects.toThrow('SQLITE_BUSY');
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+    const restored = getOrCreateXterm(id);
+    await restored.restored;
+    expect(restored).not.toBe(retained);
+    release();
+    await failed;
+    expect(getXterm(id)).toBe(restored);
+    expect(restored.ptyAttached).toBe(false);
+    expect(restored.remoteDraft?.connection?.host).toBe('edited-host');
+    expect(restored.closing).toBe(false);
+  });
+
+  it('ignores late native success on a replacement entry after the original was removed', async () => {
+    const { id, sessionId, dispose, close } = await closingFixture(false);
+    let release!: () => void;
+    dispose.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    close.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    const closing = closeTab(sessionId, id);
+    const failed = expect(closing).rejects.toThrow('SQLITE_BUSY');
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+    disposeXterm(id);
+    const replacement = getOrCreateXterm(id);
+    replacement.ptyAttached = true;
+    replacement.remoteDraft = { contextKey: 'new-lifetime', submitted: false };
+    release();
+    await failed;
+    expect(getXterm(id)).toBe(replacement);
+    expect(replacement.ptyAttached).toBe(true);
+    expect(replacement.remoteDraft.contextKey).toBe('new-lifetime');
+  });
+
+  it('does not resurrect drafts when another native close rejects after committed removal', async () => {
+    const { id, sessionId, dispose, retained } = await closingFixture(true);
+    let reject!: (error: Error) => void;
+    dispose.mockImplementationOnce(() => new Promise<void>((_yes, no) => { reject = no; }));
+    const late = closeTab(sessionId, id);
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+    const resumed = vi.fn();
+    retained.closeCancelledListeners.add(resumed);
+    await closeTab(sessionId, id);
+    expect(getXterm(id)).toBeUndefined();
+    reject(new Error('PERMISSION_DENIED'));
+    await late;
+    expect(getXterm(id)).toBeUndefined();
+    expect(getBucket(sessionId).tabs).toEqual([]);
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  it.each(['rollback-first', 'commit-first'] as const)('settles concurrent closes without reviving committed drafts (%s)', async order => {
+    const { id, sessionId, dispose, close, retained } = await closingFixture(false);
+    const releases: Array<() => void> = [];
+    dispose.mockImplementation(() => new Promise<void>(resolve => { releases.push(resolve); }));
+    if (order === 'rollback-first') close.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    const resumed = vi.fn();
+    retained.closeCancelledListeners.add(resumed);
+    const first = closeTab(sessionId, id);
+    const firstResult = first.catch(error => error);
+    const second = closeTab(sessionId, id);
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(2));
+    releases[0]();
+    await firstResult;
+    if (order === 'rollback-first') {
+      expect(getXterm(id)?.remoteDraft?.submitted).toBe(false);
+      expect(getXterm(id)?.closing).toBe(true);
+    } else expect(getXterm(id)).toBeUndefined();
+    expect(resumed).not.toHaveBeenCalled();
+    releases[1]();
+    await second;
+    expect(getBucket(sessionId).tabs).toEqual([]);
+    expect(getXterm(id)).toBeUndefined();
+    expect(resumed).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(order === 'rollback-first' ? 2 : 1);
   });
 
   // PR8881 PRRT_kwDOTgdRUs62ATV_ / unit: production window handoff and pool

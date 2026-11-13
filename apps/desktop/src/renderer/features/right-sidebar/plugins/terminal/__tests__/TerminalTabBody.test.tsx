@@ -76,19 +76,19 @@ vi.mock('../lib/xtermPool', async (importOriginal) => {
     return entry;
   },
   getXterm: vi.fn(() => entry),
-  disposeXterm: () => { entry.remoteDraft = undefined; },
+  disposeXterm: (id: string) => { if (realPool) actual.disposeXterm(id); else entry.remoteDraft = undefined; },
 };
 });
 
 import { TerminalTabBody, TerminalSessionBody } from '../TerminalTabBody';
-import { _resetStore, ensureHydrated, getTabSnapshot, importTabSnapshot } from '../../../store';
+import { _resetStore, closeTab, ensureHydrated, getTabSnapshot, importTabSnapshot } from '../../../store';
 import { getXterm, detachXterm, getXtermExit, onXtermExit, __resetPoolForTesting, type XtermEntry } from '../lib/xtermPool';
 import { xtermEntries } from '../lib/xtermEntries';
 import { TERMINAL_RENDERER_INSTANCE_ID } from '../index';
 import { toast } from '@/lib/toast';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from '../../../registry';
-import { finishClosing, markClosing, registerClosing, unregisterClosing } from '../../../lib/tabClosingSignal';
+import { commitClosing, finishClosing, markClosing, registerClosing, unregisterClosing } from '../../../lib/tabClosingSignal';
 
 
 class TestResizeObserver {
@@ -188,6 +188,26 @@ async function useRealPool() {
 }
 
 describe('TerminalTabBody sidebar visibility', () => {
+  // PRRT_kwDOTgdRUs62sDlx / unit: hook-only tests missed DB rollback. The real
+  // store/plugin/pool must restore the edited form without reconnecting saved-host.
+  it('restores the edited SSH form after native release succeeds but database close fails', async () => {
+    const actual = await useRealPool();
+    const ctx = makeContext({ remoteHostId: 'ssh-host' });
+    const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    Object.assign(window.electronAPI, { localDb: { rightSidebarTabs: {
+      list: vi.fn().mockResolvedValue({ tabs: [{ id: ctx.tabId, kind: 'terminal', state }], activeTabId: ctx.tabId, persistable: true }),
+      close: vi.fn().mockRejectedValue(new Error('SQLITE_BUSY')),
+    } } });
+    await ensureHydrated(ctx.sessionId);
+    const pooled = actual.getOrCreateXterm(ctx.tabId);
+    pooled.remoteDraft = { contextKey: JSON.stringify([ctx.sessionId, ctx.deviceLinkDeviceId, ctx.remoteHostId]), connection: { host: 'edited-host', user: 'alice', port: 2222 }, submitted: false };
+    vi.mocked(window.electronAPI.terminal.describeRemote).mockResolvedValue({ context: { sessionId: ctx.sessionId }, target: { key: 'target', label: 'Host', cwd: '/remote' }, connection: { host: 'saved-host' }, candidates: [], ticket: 'old-host-ticket' });
+    await expect(closeTab(ctx.sessionId, ctx.tabId)).rejects.toThrow('SQLITE_BUSY');
+    render(<TerminalTabBody state={state} ctx={ctx} active />);
+    expect((await screen.findByLabelText('rightSidebar.terminal.remote.host') as HTMLInputElement).value).toBe('edited-host');
+    expect((screen.getByLabelText('rightSidebar.terminal.remote.user') as HTMLInputElement).value).toBe('alice');
+    expect(window.electronAPI.terminal.create).not.toHaveBeenCalled();
+  });
   // PR8881 r4535640528 / unit: existing tests fix the pool entry identity.
   // Exercise real restart rollback, detach serialization and restoration, then
   // edit and remount: drafts must survive without launching the saved host.
@@ -515,7 +535,7 @@ describe('TerminalTabBody remote ownership', () => {
   // losing scrollback/drafts or blocking retry. Existing tests only cover success.
   // Red: 3 failures / 2.19s wall; green related suite: 144 tests / 2.13s wall (macOS).
   it('vetoes rejected disposal, keeps the terminal draft and restores closing for retry', async () => {
-    registerClosing('terminal-1', closing => { entry.closing = closing; });
+    registerClosing('terminal-1', closing => { entry.closing = closing; }, () => { entry.remoteDraft = undefined; });
     const draft = { contextKey: 'draft', connection: { host: 'example-host' }, submitted: false };
     entry.remoteDraft = draft;
     const dispose = vi.mocked(window.electronAPI.terminal.dispose);
@@ -530,6 +550,9 @@ describe('TerminalTabBody remote ownership', () => {
     expect(toast.error).toHaveBeenCalledWith('rightSidebar.terminal.closeFailed');
     await plugin.onBeforeClose!(plugin.defaultState(), { tabId: 'terminal-1', sessionId: 'session-1' });
     expect(dispose).toHaveBeenCalledTimes(2);
+    expect(entry.remoteDraft).toBe(draft);
+    expect(entry.ptyAttached).toBe(false);
+    commitClosing('terminal-1');
     expect(entry.remoteDraft).toBeUndefined();
   });
 

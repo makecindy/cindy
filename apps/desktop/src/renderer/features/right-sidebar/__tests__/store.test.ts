@@ -618,6 +618,10 @@ describe('RSB store', () => {
     });
 
     it('创建失败时并发的 closeTab 不发 close,不留幽灵 tab', async () => {
+      // PRRT_kwDOTgdRUs62sDlx / unit: orphan cleanup uses the same committed
+      // removal notification, only after its IPC settles (normal-close tests miss it).
+      let finishCleanup!: () => void;
+      ipc.close.mockImplementationOnce(() => new Promise<void>(resolve => { finishCleanup = resolve; }));
       // 创建失败 = DB 里从来没有这行,addTab 已把它从 cache 回滚掉。此时若照样发
       // close 必然 NOT_FOUND,closeTab 的回滚分支会把这个幽灵 tab 写回 cache。
       let rejectUpsert: ((err: Error) => void) | null = null;
@@ -639,7 +643,13 @@ describe('RSB store', () => {
 
       rejectUpsert!(new Error('db down'));
       await expect(pendingAdd).rejects.toThrow('db down');
+      await vi.waitFor(() => expect(ipc.close).toHaveBeenCalledWith({ id: createdId }));
+      const committed = vi.fn();
+      registerClosing(createdId, () => undefined, committed);
+      expect(committed).not.toHaveBeenCalled();
+      finishCleanup();
       await expect(pendingClose).resolves.toBeUndefined();
+      expect(committed).toHaveBeenCalledOnce();
 
       // best-effort close(state 写队列同样走 upsert,可能反倒把行写进 DB);
       // 它必须**吞掉**失败,不能像正常分支那样回滚出一个幽灵 tab。

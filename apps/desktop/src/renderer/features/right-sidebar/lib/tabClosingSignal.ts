@@ -1,9 +1,9 @@
 // Keep the close path independent of the lazily loaded xterm bundle.
-const closingCallbacks = new Map<string, (closing: boolean) => void>();
+const closingCallbacks = new Map<string, { change: (closing: boolean) => void; commit?: () => void }>();
 const closingCounts = new Map<string, number>();
 
-export function registerClosing(tabId: string, callback: (closing: boolean) => void): void {
-  closingCallbacks.set(tabId, callback);
+export function registerClosing(tabId: string, callback: (closing: boolean) => void, onCommitted?: () => void): void {
+  closingCallbacks.set(tabId, { change: callback, commit: onCommitted });
   if (closingCounts.has(tabId)) callback(true);
 }
 
@@ -13,7 +13,14 @@ export function unregisterClosing(tabId: string): void {
 
 export function markClosing(tabId: string): void {
   closingCounts.set(tabId, (closingCounts.get(tabId) ?? 0) + 1);
-  closingCallbacks.get(tabId)?.(true);
+  closingCallbacks.get(tabId)?.change(true);
+}
+
+/** The store confirmed removal; never notify rollback listeners on this path. */
+export function commitClosing(tabId: string): void {
+  const callbacks = closingCallbacks.get(tabId);
+  closingCallbacks.delete(tabId);
+  callbacks?.commit?.();
 }
 
 /** Called when the store finishes or rolls back the close mutation. */
@@ -25,5 +32,5 @@ export function finishClosing(tabId: string): void {
     return;
   }
   closingCounts.delete(tabId);
-  closingCallbacks.get(tabId)?.(false);
+  closingCallbacks.get(tabId)?.change(false);
 }

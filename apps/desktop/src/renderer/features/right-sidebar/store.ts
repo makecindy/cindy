@@ -23,7 +23,7 @@ import { createIpcError } from '../../../shared/ipc-errors';
 import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
-import { finishClosing } from './lib/tabClosingSignal';
+import { commitClosing, finishClosing } from './lib/tabClosingSignal';
 import { exportTerminalDraft, importTerminalDraft } from './plugins/terminal/lib/xtermEntries';
 import { browserWebviewPool } from './lib/browserWebviewPool';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
@@ -1056,6 +1056,10 @@ export function hasTabCloseInterceptor(tabId: string): boolean {
  * close tab-op / guest 自关)都汇聚到 closeTab,标记不会随某条路径泄漏。
  */
 function forgetClosedTab(sessionId: string, tabId: string, kind: TabKindId): void {
+  // Removal is committed. Renderer cleanup must never turn it into a rollback.
+  try { commitClosing(tabId); } catch (err) {
+    log.warn('committed tab cleanup failed', { tabId, err });
+  }
   const key = tabStateWriteKey(sessionId, tabId);
   patchRevisions.delete(key);
   persistedStateBaselines.delete(key);

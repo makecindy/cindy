@@ -107,10 +107,12 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
     if (wasClosing && !closing) {
       registeredEntry.closeCancelledListeners.forEach(listener => listener());
     }
-  });
+  }, () => disposeXterm(tabId));
   const snapshot = snapshots.get(tabId);
   if (snapshot) {
     snapshots.delete(tabId);
+    // Continue the snapshot's close lifetime, including native disposal in flight.
+    entry.closeCancelledListeners = snapshot.closeCancelledListeners;
     entry.remoteContext = snapshot.remoteContext;
     entry.remoteDraft = snapshot.remoteDraft;
     entry.lastSize = snapshot.lastSize;
@@ -290,7 +292,7 @@ export function suspendExitedXterm(tabId: string): Promise<boolean> {
       pool.delete(tabId);
       entry.closeCancelledListeners.clear();
       const snapshot = snapshots.get(tabId)!;
-      registerClosing(tabId, closing => { snapshot.closing = closing; });
+      registerClosing(tabId, closing => { snapshot.closing = closing; }, () => disposeXterm(tabId));
       try { entry.terminal.dispose(); } catch { /* Snapshot remains recoverable. */ }
       resolve(true);
     });
@@ -318,7 +320,7 @@ export function openTerminalExternalLink(_event: MouseEvent, uri: string): void 
     });
 }
 
-/** 仅供 plugin.onBeforeClose 调用：真正销毁实例 + 释放 GPU/DOM 资源。 */
+/** Committed tab removal: discard the draft and release renderer resources. */
 export function disposeXterm(tabId: string): void {
   detachedStreams.get(tabId)?.();
   exits.delete(tabId);

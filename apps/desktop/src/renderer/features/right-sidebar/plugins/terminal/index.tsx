@@ -97,18 +97,24 @@ const plugin: TabKindPlugin<TerminalState> = {
           : DEFAULT_STATE.shellDisplayName,
     };
   },
-  /** 关 tab 时(store.closeTab 调)：先让 main 端 dispose PTY,再清渲染端 xterm。 */
+  /** Release the PTY first; the store owns renderer cleanup after committed removal. */
   onBeforeClose: async (_state, ctx) => {
     markClosing(ctx.tabId);
     try {
-      const { getXterm, disposeXterm } = await import('./lib/xtermPool');
-      const retainedContext = getXterm(ctx.tabId)?.remoteContext;
+      const { getXterm } = await import('./lib/xtermPool');
+      const original = getXterm(ctx.tabId);
+      const retainedContext = original?.remoteContext;
       const deviceId = getSessionDeviceId(ctx.sessionId);
       // Missing mirror metadata does not mean local. Prefer the original launch
       // origin; otherwise let main validate the current owner by terminal ID.
       const context = retainedContext ?? (deviceId ? { sessionId: ctx.sessionId, deviceId } : undefined);
       await window.electronAPI.terminal.dispose(ctx.tabId, context);
-      disposeXterm(ctx.tabId);
+      // Snapshot restoration transfers close-listener ownership to the live
+      // entry. A removed/replaced lifetime must not consume this late release.
+      const retained = getXterm(ctx.tabId);
+      if (original && retained?.closing && retained.closeCancelledListeners === original.closeCancelledListeners) {
+        retained.ptyAttached = false;
+      }
     } catch {
       // store.closeTab ignores thrown errors; only false preserves the tab.
       // The store does not finishClosing when the hook vetoes.
