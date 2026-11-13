@@ -18,7 +18,9 @@
  * - 实测耗时：本机 < 8s（6 用例，含 5MB 输出用例与名额让出等待）。
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { closeSync, openSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -51,10 +53,13 @@ function buildService(
   if (capture.getMockImplementation() === undefined) {
     capture.mockImplementation(async () => ({ clientId: 'c1' }));
   }
+  // 服务实例终身绑定创建时的目录:生产里一个实例就是一个账号的目录,孤儿巡检
+  // 不能随模块级可变变量漂移到别的目录(否则会截掉在其它用例中在册的日志)。
+  const boundLogDir = resolveLogDir ? null : logDir;
   const deps: BackgroundCommandServiceDeps = {
     // 排队桥的最小形状:成功受理即返 clientId。
     enqueueReport: capture,
-    resolveLogDir: resolveLogDir ?? (() => logDir),
+    resolveLogDir: resolveLogDir ?? (boundLogDir ? () => boundLogDir : () => logDir),
     logger: noopLogger,
     ...depsOverride,
   };
@@ -302,3 +307,27 @@ it('dispose(账号边界):释放并发名额、丢弃在途报告、拒绝新启
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(capture).not.toHaveBeenCalled();
 }, 10_000);
+
+it('重启后孤儿日志:巡检把不在册的超限日志截回上限(体量兜底随服务存活)', async () => {
+  // 模拟重启后的孤儿:fd 直写进程不在任何注册表里(与真实孤儿形态一致)。
+  const orphanLog = path.join(logDir, 'bg-orphan-sim.log');
+  const fd = openSync(orphanLog, 'a');
+  const writer = spawn(
+    process.execPath,
+    ['-e', "setInterval(() => process.stdout.write('x'.repeat(512 * 1024)), 50)"],
+    { stdio: ['ignore', fd, fd] },
+  );
+  // 新服务实例 = 重启后的空注册表;孤儿巡检应把越限日志压回上限量级。
+  const capture = vi.fn();
+  buildService(capture);
+  await vi.waitFor(
+    async () => {
+      const { size } = await stat(orphanLog);
+      // 10MB/s 写者 × 1s 巡检:上界 = cap + 一个巡检周期的越冲,不可能写穿。
+      expect(size).toBeLessThan(BACKGROUND_COMMAND_LOG_CAP_BYTES + 15 * 1024 * 1024);
+    },
+    { timeout: 30_000, interval: 500 },
+  );
+  writer.kill();
+  closeSync(fd);
+}, 40_000);

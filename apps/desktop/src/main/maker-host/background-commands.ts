@@ -21,7 +21,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
-import { readdir, stat, unlink } from 'node:fs/promises';
+import { readdir, stat, truncate, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import { killProcessTree } from '../scheduler-host/proc-util.js';
@@ -87,6 +87,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
   // POSIX 组探测）仍在管进程树，树死透或硬顶到点才整体移除。
   const running = new Map<string, {
     startedAt: number;
+    logPath: string;
     timeoutTimer: NodeJS.Timeout;
     groupPoll: NodeJS.Timeout | null;
     killTree: () => void;
@@ -100,6 +101,8 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
   };
   // 切账号时置位:在途报告(含 retry 循环)不再投递——旧账号会话的回注不能落进新账号。
   let disposed = false;
+  // 孤儿日志巡检只随服务起一次(start 可能多次),dispose 收。
+  let orphanPoll: NodeJS.Timeout | null = null;
 
   function pruneOldLogs(): void {
     const logDir = deps.resolveLogDir();
@@ -112,6 +115,33 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           stat(full)
             .then((info) => {
               if (info.mtimeMs < cutoff) return unlink(full);
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+
+  function truncateOrphanLogs(): void {
+    // 孤儿日志兜底(体量上限的「重启后存活」):注册表只在内存,重启后上一版进程
+    // 直写的输出没人限流。把不在册且超上限的日志截回上限——只缩日志、不杀进程
+    // (与「重启不杀」同一口径);在册条目的体量由各自 capPoll 管。fd 是 O_APPEND,
+    // 截断后写入落在新 EOF,文件再增长,下一轮再截——快写者的上界是
+    // 「写入速率 × 巡检间隔」,不写穿磁盘。
+    const logDir = deps.resolveLogDir();
+    const owned = new Set<string>();
+    for (const entry of running.values()) owned.add(entry.logPath);
+    void readdir(logDir)
+      .then((entries) => {
+        for (const entry of entries) {
+          if (!entry.startsWith('bg-') || !entry.endsWith('.log')) continue;
+          const full = path.join(logDir, entry);
+          if (owned.has(full)) continue;
+          stat(full)
+            .then((info) => {
+              if (info.size > BACKGROUND_COMMAND_LOG_CAP_BYTES) {
+                return truncate(full, BACKGROUND_COMMAND_LOG_CAP_BYTES);
+              }
             })
             .catch(() => {});
         }
@@ -264,6 +294,11 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       const logPath = path.join(logDir, `${runId}.log`);
       const startedAt = Date.now();
       pruneOldLogs();
+      // 孤儿日志巡检每秒一轮:快写者的越限窗口 ≤ 写入速率×1s,磁盘有界。
+      if (!orphanPoll) {
+        orphanPoll = setInterval(truncateOrphanLogs, 1000);
+        orphanPoll.unref?.();
+      }
 
       // 日志:子进程直接持有 append fd 写文件,宿主侧没有管道读端 —— 应用退出/
       // 重启不再把在跑命令的输出写断(POSIX SIGPIPE/win32 EPIPE)。体量上限改由
@@ -461,6 +496,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
 
       running.set(runId, {
         startedAt,
+        logPath,
         timeoutTimer,
         groupPoll,
         capPoll,
@@ -493,6 +529,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
      */
     dispose(): void {
       disposed = true;
+      if (orphanPoll) clearInterval(orphanPoll);
       for (const [runId, entry] of running) {
         clearTimeout(entry.timeoutTimer);
         // POSIX 的进程组探测定时器一并清掉：记录已删后 releaseSlot 查不到条目，
