@@ -15,7 +15,7 @@ import JSZip from 'jszip';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DbClient } from '../client/DbClient';
 import { tx } from '../worker/opHandlers/tx';
-import { messages, migrationMeta, orcaTeams, orcaWorkers, sessionPrRefs, sessions } from '../schema';
+import { messages, migrationMeta, orcaTeams, orcaWorkers, sessionImports, sessionPrRefs, sessions } from '../schema';
 import { commitShareImport, inspectShareFile } from '../../session-share/sessionShareImport';
 import { buildPlainFile } from '../../session-share/xdtshareCrypto';
 import {
@@ -49,7 +49,7 @@ vi.mock('../dialogueWorkspace.js', () => ({ ensureDialogueWorkspaceDir: vi.fn() 
 const root = mkdtempSync(path.join(os.tmpdir(), 'share-pr-refs-'));
 const sqlite = new Database(':memory:');
 const db = drizzle(sqlite);
-for (const table of [sessions, messages, sessionPrRefs, migrationMeta, orcaTeams, orcaWorkers] as SQLiteTable[]) {
+for (const table of [sessions, messages, sessionImports, sessionPrRefs, migrationMeta, orcaTeams, orcaWorkers] as SQLiteTable[]) {
   const config = getTableConfig(table);
   sqlite.exec(`CREATE TABLE "${config.name}" (${config.columns.map(c => `"${c.name}" ${c.getSQLType()}${c.primary ? ' PRIMARY KEY' : ''}`).join(', ')})`);
 }

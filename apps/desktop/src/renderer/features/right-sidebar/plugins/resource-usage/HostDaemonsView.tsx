@@ -7,7 +7,7 @@
  * 有 Cindy 归属证据的条目，其余只回一个数量。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ListTodo, RefreshCw } from 'lucide-react';
 
@@ -26,17 +26,22 @@ export function HostDaemonsView() {
   const [failed, setFailed] = useState(false);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [busy, setBusy] = useState(false);
+  // 请求序号：慢扫描返回时丢弃过期结果，避免旧响应覆盖新状态。
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
       const next = await window.electronAPI.hostDaemons.list();
+      if (seq !== loadSeq.current) return;
       setSnapshot(next);
       setFailed(false);
     } catch {
+      if (seq !== loadSeq.current) return;
       setFailed(true);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, []);
 

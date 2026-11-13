@@ -3123,6 +3123,15 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
       expectNumber(rawSession.createdAt, 'session.createdAt'),
       expectNumber(rawSession.updatedAt, 'session.updatedAt'),
     );
+    // 分享导入水印：记录本机导入时刻。归属追溯（host-daemons/toolHistory）用它区分
+    // 「导入的外机旧消息」与「导入后真正在本机执行的新消息」——前者保留原始时间，
+    // 不能当本机执行证据。
+    db.prepare(
+      `INSERT OR IGNORE INTO session_imports
+         (session_id, source, source_session_id, source_fingerprint, source_version,
+          mode, status, issue, original_cwd, request_id, imported_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(sessionId, 'cshare', sessionId, null, null, 'native', 'ready', null, null, null, Date.now(), Date.now());
     for (const rawMessage of rawMessages) {
       const m = asRecord(rawMessage, 'message');
       insertMessage.run(

@@ -7,7 +7,7 @@
  * 查询走 `(created_at, id)` 索引的有界窗口（默认交给调用方传 ±5 分钟），不扫全表。
  */
 
-import { and, asc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { messages, sessions } from '../localDb/schema';
@@ -50,6 +50,12 @@ export async function readToolMessages(
         // 只认能确认在本机执行的记录：SSH 远端会话的工具调用也会落进同一张消息表，
         // 远端消息提到同名任务时会被误当成本机归属证据（进而授权停止/删除无关的本机任务）。
         isNull(sessions.remoteHostId),
+        // 分享/工具导入的会话：导入的旧消息保留外机原始时间，无法证明在本机执行过；
+        // 只认导入时刻之后新产生的消息（导入后真正在本机执行的记录）。
+        sql`NOT EXISTS (
+          SELECT 1 FROM session_imports si
+          WHERE si.session_id = ${sessions.id} AND si.imported_at <= ${messages.createdAt}
+        )`,
       ),
     )
     .orderBy(asc(messages.createdAt))
