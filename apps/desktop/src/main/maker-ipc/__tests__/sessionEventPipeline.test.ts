@@ -2396,7 +2396,7 @@ describe('usage through the production event pipeline', () => {
     async (source, subscription) => {
       const h = harness();
       pricing(subscription);
-      h.emit(event('done', { usage: usage(source) }, { source }));
+      h.emit(event('done', { usage: { ...usage(source), reasoningTokens: 5 } }, { source }));
       await microtasks();
       expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(
@@ -2415,6 +2415,12 @@ describe('usage through the production event pipeline', () => {
       expect(effects.fn('recordTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
       expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
       if (source === 'codex') {
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+          model: `test-model#billing=${subscription ? 'subscription' : 'api'}`,
+          money: expect.objectContaining({ kind: subscription ? 'value-estimate' : 'actual-cost' }),
+          inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+        }));
         expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
           turnUsageDetails: expect.objectContaining({
             providerId: subscription ? 'openai' : 'xd',
@@ -2621,6 +2627,40 @@ describe('usage through the production event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // Replaces the source-text Codex guard in makerEventHotPathOrdering.test.ts.
+  // Unit: a delayed gateway quote must not delay token persistence or count the
+  // same tokens again when cost arrives. Immediate-price coverage misses this.
+  it('persists Codex tokens before a cold price lookup and later writes only money', async () => {
+    const h = harness();
+    pricing(false);
+    const pendingPrice = deferred<unknown>();
+    effects.fn('getGatewayModelPricingForModel').mockReturnValue(pendingPrice.promise);
+    h.emit(event('done', { usage: { ...usage('codex'), reasoningTokens: 5 } }));
+    await microtasks();
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledExactlyOnceWith('task', 130);
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      model: 'test-model#billing=api', money: undefined,
+      inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10, cacheCreateTokensDelta: 0,
+    }));
+    expect(effects.fn('rebroadcastCodexTodayUsage')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+    pendingPrice.resolve({});
+    await microtasks();
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+      model: 'test-model#billing=api', money: expect.objectContaining({ kind: 'actual-cost' }),
+      inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+    }));
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordTurnSpend')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'assistant-row', money: expect.objectContaining({ kind: 'actual-cost' }),
+    }));
+    await h.dispose();
+  });
 
   it.each(['codex', 'pi'] as const)(
     'retains %s token facts when pricing rejects',
