@@ -3095,13 +3095,14 @@ describe('disabled task account recovery before send', () => {
   });
   // Unit: an already-hosted default subscription can predate the first pool configuration.
   // Existing live-handle coverage creates the pool before startup, so it misses the legacy path.
-  it.each(['openai', 'anthropic'] as const)('honors first-time pause on a live unpooled %s task', async provider => {
+  it.each((['openai', 'anthropic'] as const).flatMap(provider => [false, true].map(implicit => ({ provider, implicit }))))(
+    'honors first-time pause on a live unpooled $provider task (implicit=$implicit)', async ({ provider, implicit }) => {
     delete h.pools[provider];
     const send = vi.fn(async () => {});
     const agent = withSubscriptionAccounts({ kind: provider === 'openai' ? 'codex' : 'claude-code',
       startSession: async () => ({ id: 'unpooled-native', send, setModel: async () => {}, close: async () => {} }),
-    } as unknown as BaseAgent);
-    const handle = await agent.startSession({ providerId: provider, sessionId: 'unpooled-task',
+    } as unknown as BaseAgent, { getState: async () => ({ authenticated: true, authSource: 'oauth' }) });
+    const handle = await agent.startSession({ ...(implicit ? {} : { providerId: provider }), sessionId: 'unpooled-task',
       deviceHosted: { workingDir: '/controller' },
     } as StartSessionOptions);
     await handle.send({ type: 'user', content: 'before' });
@@ -3111,6 +3112,22 @@ describe('disabled task account recovery before send', () => {
     await runSubscriptionAccountCommand({ action: 'configure', providerId: provider, accountId: 'default', paused: false });
     await handle.send({ type: 'user', content: 'enabled' });
     expect(send).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+  it.each(['api-key', 'custom-default'] as const)('does not attach a subscription pause to an unpooled %s route', async source => {
+    delete h.pools.openai;
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async () => ({
+      id: 'unpooled-api', send, close: async () => {},
+    }) } as unknown as BaseAgent, {
+      getState: async () => ({ authenticated: true, authSource: source === 'api-key' ? 'api-key' : 'oauth' }),
+      resolveDefaultProvider: async () => source === 'custom-default' ? 'custom-api' : null,
+    });
+    const handle = await agent.startSession({ sessionId: 'unpooled-api' } as StartSessionOptions);
+    expect(h.pools.openai).toBeUndefined();
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: true });
+    await handle.send({ type: 'user', content: 'api' });
+    expect(send).toHaveBeenCalledTimes(1);
     await handle.close();
   });
   it('does not apply a later subscription pause to a handle already switched to an API provider', async () => {

@@ -43,6 +43,7 @@ async function providerFor(
   agent: Pick<BaseAgent, 'kind'>,
   options: SubscriptionRouteOptions,
   auth?: SubscriptionAccountRouting,
+  detectUnpooledDefault = false,
 ): Promise<SubscriptionProvider | null> {
   if (options.remoteHostId) return null;
   const requested = options.providerId?.trim() || null;
@@ -57,7 +58,7 @@ async function providerFor(
     const native = agent.kind === 'claude-code' ? 'anthropic' : 'openai';
     // An implicit route may use the native login or the gateway. Ask the same
     // adapter as startup; a same-name catalog model is not proof of its source.
-    if (readPool(native) && !resolveAgentCredentialMode({ agentKind: agent.kind, model: options.model })) {
+    if ((detectUnpooledDefault || readPool(native)) && !resolveAgentCredentialMode({ agentKind: agent.kind, model: options.model })) {
       const source = agent.kind === 'codex' ? await auth.resolveDefaultProvider?.(options.model) : null;
       if (source && source !== native) return null;
       const state = await auth.getState({ model: options.model });
@@ -287,7 +288,10 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
       if (property === 'startSession')
         return async (options: StartSessionOptions) => {
           const startLegacy = async () => {
-            const provider = await providerFor(target, options, auth);
+            const owner = activeOwnerScopeKey();
+            // A native default login can predate its first account-pool setting.
+            const provider = await providerFor(target, options, auth, true);
+            assertOwnerCurrent(owner);
             const legacyDefaultProvider = provider && !readPool(provider) ? provider : undefined;
             return guardAccountSwitch(await target.startSession(options), target, options, auth, legacyDefaultProvider);
           };
