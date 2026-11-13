@@ -539,7 +539,8 @@ export function buildPiNativeProvidersFromConfigs(
         // Google's Chat endpoint rejects even store:false (#10200). Dynamic
         // models may have no bundled compat; apply this to the final endpoint,
         // without changing the selected API, other compat, or custom proxies.
-        if (modelApi === 'openai-completions' && !m.route?.requestPath && !rt.requestPath &&
+        // A discarded legacy route must not suppress the effective endpoint's compat.
+        if (modelApi === 'openai-completions' && !explicitRoute?.requestPath && !rt.requestPath &&
           isOfficialGoogleChatEndpoint(modelBaseUrl ?? rt.baseUrl)) {
           spec.compat = { ...spec.compat, supportsStore: false };
         }

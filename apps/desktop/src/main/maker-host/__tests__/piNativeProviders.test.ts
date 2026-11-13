@@ -771,6 +771,12 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       { id: 'native-google', piApi: 'google-generative-ai' as const },
       { id: 'custom-path', route: { baseUrl: official, wireProtocol: 'openai-chat' as const, requestPath: '/custom/chat' } },
       { id: 'bundled-chat' },
+      // #10225 review: these saved paths are discarded by the production route
+      // resolver. The effective official Chat endpoint still needs store omitted.
+      { id: 'stale-api-route', api: 'openai-completions' as const,
+        route: { baseUrl: proxy, wireProtocol: 'anthropic-messages' as const, requestPath: '/custom/messages' } },
+      { id: 'stale-pi-api-route', piApi: 'openai-completions' as const,
+        route: { baseUrl: proxy, wireProtocol: 'anthropic-messages' as const, requestPath: '/custom/messages' } },
     ];
     const bundled = new Map([['fixture', new Map([['bundled-chat', {
       id: 'bundled-chat', api: 'openai-completions' as const, baseUrl: official,
@@ -782,6 +788,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       { id: 'official', name: 'Official', runtimes: { pi: { baseUrl: official, wireProtocol: 'openai-chat', models } } },
       { id: 'proxy', name: 'Proxy', runtimes: { pi: { baseUrl: proxy, wireProtocol: 'openai-chat',
         models: [{ id: 'routed-google', route: { baseUrl: official, wireProtocol: 'openai-chat' } }] } } },
+      { id: 'custom-runtime', name: 'Custom runtime', runtimes: { pi: { baseUrl: official,
+        wireProtocol: 'openai-chat', requestPath: '/custom/chat', models: [{ id: 'custom-runtime-chat' }] } } },
     ], () => 'fixture-key', undefined, bundled);
     expect(providers[0].models[0]).toMatchObject({ api: 'openai-completions', compat: { supportsStore: false } });
     expect(providers[0].models[1]).toMatchObject({ baseUrl: proxy });
@@ -791,6 +799,12 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0].models[3].compat?.supportsStore).toBeUndefined();
     expect(providers[0].models[4].compat).toEqual({ supportsDeveloperRole: false, maxTokensField: 'max_tokens', supportsStore: false });
     expect(providers[1].models[0]).toMatchObject({ baseUrl: official, compat: { supportsStore: false } });
+    for (const model of providers[0].models.slice(5)) {
+      expect(model.api ?? providers[0].api).toBe('openai-completions');
+      expect(model.baseUrl ?? providers[0].baseUrl).toBe(official);
+      expect(model.compat?.supportsStore).toBe(false);
+    }
+    expect(providers[2].models[0].compat?.supportsStore).toBeUndefined();
   });
 
   it('strips inherited /v1 only for an Anthropic model without its own route (#7258)', () => {

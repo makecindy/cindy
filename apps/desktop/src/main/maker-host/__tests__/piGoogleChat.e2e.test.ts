@@ -22,7 +22,13 @@ const binary = process.env.CINDY_TEST_PI_BINARY ?? path.resolve('../../apps/pi-b
 const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
 
 describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () => {
-  it.each([200, 400, 401])('settles a strict Google-compatible HTTP %s response', async status => {
+  it.each([
+    { status: 200, staleRoute: false },
+    // #10225: the route resolver drops this legacy path before the request.
+    { status: 200, staleRoute: true },
+    { status: 400, staleRoute: false },
+    { status: 401, staleRoute: false },
+  ])('settles HTTP $status (stale route: $staleRoute)', async ({ status, staleRoute }) => {
     const root = mkdtempSync(path.join(tmpdir(), 'cindy-google-chat-'));
     const agentHome = path.join(root, 'agent');
     const workingDir = path.join(root, 'work');
@@ -57,7 +63,11 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
       const official = 'https://generativelanguage.googleapis.com/v1beta/openai';
       const config = { id: 'google-fixture', name: 'Google', runtimes: { pi: {
         catalogPresetId: 'google-gemini-api', baseUrl: official, wireProtocol: 'openai-chat' as const,
-        models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }],
+        models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', ...(staleRoute ? {
+          api: 'openai-completions' as const,
+          route: { baseUrl: 'https://stale.example/v1', wireProtocol: 'anthropic-messages' as const,
+            requestPath: '/custom/messages' },
+        } : {}) }],
       } } };
       const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, buildUserProvider(config)] };
       const native = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
