@@ -127,6 +127,12 @@ export type UtilityTextCandidate = {
   execute: (prompt: string, opts?: UtilityTextRequestOptions) => Promise<string>;
 };
 
+export type UtilityTextAuditContext = {
+  feature?: string;
+  sessionId?: string | null;
+  [key: string]: unknown;
+};
+
 export type UtilityTextRequestOptions = {
   maxTokens?: number;
   timeoutMs?: number;
@@ -150,6 +156,8 @@ export type UtilityTextRequestOptions = {
   validateResponse?: (text: string) => boolean;
   /** Final ownership/config guard immediately before an explicit HTTP dispatch. */
   beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
+  /** Optional caller audit attribution for billing and diagnostic correlation. */
+  audit?: UtilityTextAuditContext;
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
@@ -445,7 +453,12 @@ function splitAutoReviewPrompt(prompt: string): { systemPrompt?: string; evidenc
 
 export type AutoReviewAuxiliaryFallback = (
   prompt: string,
-  opts: { timeoutMs: number; signal?: AbortSignal; validateResponse: (text: string) => boolean },
+  opts: {
+    timeoutMs: number;
+    signal?: AbortSignal;
+    validateResponse: (text: string) => boolean;
+    audit?: UtilityTextAuditContext;
+  },
 ) => Promise<UtilityTextResult>;
 
 /** Capture explicit routing consent before the dedicated chain starts awaiting. */
@@ -518,6 +531,7 @@ export function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | 
             disableReasoning: true,
             validateResponse: opts.validateResponse,
             beforeDispatch: async () => !signal.aborted && stillCurrent(),
+            audit: opts.audit,
           }),
           opts.timeoutMs,
           opts.signal,
@@ -544,7 +558,7 @@ export function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | 
 export async function requestDedicatedAutoReviewCandidateText(
   prompt: string,
   candidate: DedicatedAutoReviewCandidate,
-  opts: { timeoutMs: number; signal?: AbortSignal },
+  opts: { timeoutMs: number; signal?: AbortSignal; audit?: UtilityTextAuditContext },
 ): Promise<UtilityTextResult> {
   const { systemPrompt, evidence } = splitAutoReviewPrompt(prompt);
   const profile: UtilityModelProfile = {
@@ -600,6 +614,7 @@ export async function requestDedicatedAutoReviewCandidateText(
       maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
+      audit: opts.audit,
     });
   }
 
@@ -629,6 +644,7 @@ export async function requestDedicatedAutoReviewCandidateText(
     timeoutMs: opts.timeoutMs,
     reasoningEffort: candidate.reasoningEffort,
     signal: opts.signal,
+    audit: opts.audit,
   });
 }
 
@@ -1010,6 +1026,7 @@ async function requestExplicitProviderText(
       validateResponse: opts.validateResponse,
       beforeDispatch: opts.beforeDispatch,
       routeStillCurrent,
+      audit: opts.audit,
     });
   }
 
@@ -1208,6 +1225,7 @@ async function requestBuiltinProviderText(
     validateResponse?: (text: string) => boolean;
     beforeDispatch?: (route: UtilityTextDispatchRoute) => Promise<boolean>;
     routeStillCurrent?: () => boolean;
+    audit?: UtilityTextAuditContext;
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -1493,6 +1511,10 @@ async function executeCandidates(
         providerId: candidate.providerId,
         model: candidate.model,
         transport: candidate.transport,
+        ...(opts?.audit ? {
+          feature: opts.audit.feature,
+          sessionId: opts.audit.sessionId ?? null,
+        } : {}),
       });
       return { ok: true, text, providerId: candidate.providerId, model: candidate.model, transport: candidate.transport };
     } catch (error) {
@@ -1506,6 +1528,10 @@ async function executeCandidates(
         wire: error instanceof UtilityTextExecutionError ? error.wire : undefined,
         reason: failure.reason,
         httpStatus: failure.httpStatus,
+        ...(opts?.audit ? {
+          feature: opts.audit.feature,
+          sessionId: opts.audit.sessionId ?? null,
+        } : {}),
       });
     }
   }
