@@ -634,6 +634,7 @@ import {
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
   isTrustedCindyRendererWindow,
   isTrustedTopLevelCindyRendererEvent,
 } from './security/trustedAppRenderer.js';
@@ -668,7 +669,8 @@ import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { sidebarWindowExpansion } from './sidebarWindowExpansion';
 import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
-import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
+import { loadPackagedWindowsShellNative, loadWindowsTaskbarNative } from './windowsTaskbarNative';
+import { createWindowsDeepLinkHandoff, deepLinkRequestData } from './windowsDeepLinkHandoff';
 import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 import {
   issueWritableDirectoryPickerGrant,
@@ -1195,6 +1197,7 @@ import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
+import { refreshHostToolProviderOwner } from './mcp-integrations/hostToolCaller.js';
 import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
@@ -1332,7 +1335,29 @@ function installHostClientMode(): boolean {
   // The host owns the profile's database too; a local open would be a second writer.
   setHostClientMode(true);
   const hostClient = createHostClient(delegation);
-  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain, assertTrusted: assertTrustedAppRendererEvent });
+  const pluginConfirmations = new Map<string, { window: BrowserWindow; channel: string }>();
+  const confirmationWindows = new WeakSet<BrowserWindow>();
+  const cancelWindowConfirmations = (window: BrowserWindow) => {
+    for (const [requestId, pending] of pluginConfirmations) {
+      if (pending.window !== window) continue;
+      pluginConfirmations.delete(requestId);
+      if (isTrustedAppRendererWindow(window)) window.webContents.send(
+        pending.channel === 'ghosts:confirm-request' ? 'ghosts:confirm-dismissed' : 'ghosts:install-consent:dismissed', { requestId });
+      void hostClient.request(pending.channel === 'ghosts:confirm-request' ? '/api/ghosts/confirm/resolve' : '/api/ghosts/install-consent/resolve',
+        { requestId, confirmed: false }).catch(() => {});
+    }
+  };
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain,
+    assertTrusted: assertTrustedAppRendererEvent,
+    authorizePluginApproval: (event, channel, args) => {
+      if (!isTrustedAppRendererEvent(event)) return false;
+      if (channel === 'ghosts:request-task-approval') return true;
+      const requestId = (args[0] as { requestId?: unknown } | null)?.requestId;
+      const pending = typeof requestId === 'string' ? pluginConfirmations.get(requestId) : undefined;
+      return !!pending && !pending.window.isDestroyed() && pending.window.webContents === event.sender
+        && pending.channel === (channel === 'ghosts:confirm:resolve' ? 'ghosts:confirm-request' : 'ghosts:install-consent:request');
+    },
+  });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
@@ -1408,6 +1433,43 @@ function installHostClientMode(): boolean {
     onConnectionState: (state) => {
       hostConnectionState = state;
       sendToAllWindows('host-client:connection', state);
+      if (state.status !== 'connected') {
+        for (const [requestId, pending] of pluginConfirmations) {
+          if (!pending.window.isDestroyed()) pending.window.webContents.send(
+            pending.channel === 'ghosts:confirm-request' ? 'ghosts:confirm-dismissed' : 'ghosts:install-consent:dismissed', { requestId });
+        }
+        pluginConfirmations.clear();
+      }
+    },
+    onPluginPush: (channel, payload) => {
+      if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(channel)) {
+        for (const win of BrowserWindow.getAllWindows())
+          if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
+        return;
+      }
+      const requestId = (payload as { requestId?: unknown } | null)?.requestId;
+      if (typeof requestId !== 'string') return;
+      if (channel === 'ghosts:confirm-dismissed' || channel === 'ghosts:install-consent:dismissed') {
+        const pending = pluginConfirmations.get(requestId); pluginConfirmations.delete(requestId);
+        if (pending && isTrustedAppRendererWindow(pending.window)) pending.window.webContents.send(channel, payload);
+      } else if (channel === 'ghosts:confirm-request' || channel === 'ghosts:install-consent:request') {
+        if (pluginConfirmations.has(requestId)) return;
+        const focused = BrowserWindow.getFocusedWindow();
+        const target = isTrustedAppRendererWindow(focused) ? focused : mainWindowRef;
+        if (target && isTrustedAppRendererWindow(target)) {
+          if (!confirmationWindows.has(target)) {
+            confirmationWindows.add(target);
+            target.once('closed', () => cancelWindowConfirmations(target));
+            target.webContents.on('did-start-navigation', () => cancelWindowConfirmations(target));
+            target.webContents.on('render-process-gone', () => cancelWindowConfirmations(target));
+          }
+          const pending = { window: target, channel }; pluginConfirmations.set(requestId, pending);
+          target.webContents.send(channel, payload);
+        } else {
+          void hostClient.request(channel === 'ghosts:confirm-request' ? '/api/ghosts/confirm/resolve' : '/api/ghosts/install-consent/resolve',
+            { requestId, confirmed: false }).catch(() => {});
+        }
+      }
     },
     onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
     onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
@@ -2991,6 +3053,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
     const outcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
@@ -4207,7 +4270,8 @@ app.on('open-file', (event, filePath) => {
 // ── Single instance lock ─────────────────────────────────────────────────
 // 正常 dev 与 packaged 一律启用。这是把 OS 因深链(cindy://focus 授权返回 /
 // cindy://session 等)/ 右键 "通过 Cindy 打开" 而拉起的第二个进程 redirect 成
-// "聚焦已运行窗口" 的唯一机制——两个独立 Electron 进程之间没有别的通道能交接焦点。
+// "聚焦已运行窗口" 的机制。Windows 普通浏览器不能经 WM_COPYDATA 通知提权实例，
+// 这种权限组合补走同用户、同锁域的有界深链管道，沿用同一解析与 pending 入口。
 //
 // 锁按 flavor 分域(resolveSingleInstanceLockUserDataDir):packaged 锁真实
 // userData(release 之间单实例);dev 锁 `<userData>/dev-single-instance-lock`
@@ -4224,6 +4288,8 @@ app.on('open-file', (event, filePath) => {
 // pending / 超前 / drift 都拒绝启动。passive 自己不迁移/repair schema,并用多
 // reader lease 阻止之后的 primary 抢跑 migration。
 // 隔离数据实例走 `--isolated[=<名字>]`(独立 userData → 独立锁域,见 docs/dev-rules/desktop-development.md)。
+let singleInstanceRejected = false;
+const deepLinkHandoffLog = createLogger('deepLink:handoff');
 if (
   getCindyVersionLockScope() !== null ||
   shouldRequestSingleInstanceLock({
@@ -4241,9 +4307,34 @@ if (
             isPackaged: app.isPackaged,
             userDataDir: realUserDataDir,
           });
+  const startupUrl = process.platform === 'win32' ? findDeepLinkInArgv(process.argv) : null;
+  const startupRequest = startupUrl ? deepLinkRequestData() : undefined;
+  let windowsHandoff: ReturnType<typeof createWindowsDeepLinkHandoff> | undefined;
+  if (process.platform === 'win32' && app.isPackaged) {
+    try {
+      const native = loadPackagedWindowsShellNative();
+      if (native) {
+        windowsHandoff = createWindowsDeepLinkHandoff({
+          lockScopeDir,
+          native,
+          isDeepLink: (url) => findDeepLinkInArgv([url]) !== null,
+          dispatch: (url, source) => {
+            handleIncomingDeepLink(url, source);
+            if (source === 'windows-handoff' && startupWindowCreationAllowed && !focusMainWindow()) {
+              createWindow();
+            }
+          },
+          // Do not log native exceptions or incoming URLs: they may hold secrets.
+          onFailure: (stage) => deepLinkHandoffLog.warn('Windows handoff failed', { stage }),
+        });
+      }
+    } catch {
+      deepLinkHandoffLog.warn('Windows handoff unavailable');
+    }
+  }
   let gotTheLock: boolean;
   if (lockScopeDir === realUserDataDir) {
-    gotTheLock = app.requestSingleInstanceLock();
+    gotTheLock = app.requestSingleInstanceLock(startupRequest);
   } else {
     // Electron 没有自定义锁作用域的 API:锁文件 / socket 按调用时刻的 userData
     // 路径生成。这里在同步窗口内临时切换 userData 再还原——主进程单线程,中间
@@ -4251,12 +4342,20 @@ if (
     fs.mkdirSync(lockScopeDir, { recursive: true });
     app.setPath('userData', lockScopeDir);
     try {
-      gotTheLock = app.requestSingleInstanceLock();
+      gotTheLock = app.requestSingleInstanceLock(startupRequest);
     } finally {
       app.setPath('userData', realUserDataDir);
     }
   }
   if (!gotTheLock) {
+    singleInstanceRejected = true;
+    // Synchronous, bounded send in the losing process, before app.quit(). The
+    // owning process coalesces this with second-instance by the launch ID.
+    if (startupUrl && windowsHandoff) {
+      const queued = windowsHandoff.forward(startupUrl, startupRequest);
+      if (queued) deepLinkHandoffLog.info('queued Windows handoff');
+    }
+    if (startupUrl) redactConsumedDeepLinkInArgv(process.argv, startupUrl);
     markDesktopDevStartupFailed(
       'SINGLE_INSTANCE_OWNED',
       'Another Cindy instance already owns this single-instance lock scope.',
@@ -4264,8 +4363,10 @@ if (
     );
     app.quit();
   } else {
+    windowsHandoff?.start();
+    app.once('will-quit', () => windowsHandoff?.close());
     finishCindyVersionStartup();
-    app.on('second-instance', (_event, argv) => {
+    app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
       // Windows: 用户点 cindy://(或历史 xdt-maker://)链接 / 右键 "通过 Cindy 打开" 时,
       // OS 会再起一个本 app 实例; 单例锁把它 redirect 成 second-instance 事件,
       // URL 或 --open-folder 参数都在 argv 里。macOS 不走这个路径(走 open-url),
@@ -4278,7 +4379,8 @@ if (
       const url = findDeepLinkInArgv(argv);
       if (url) {
         redactConsumedDeepLinkInArgv(argv, url);
-        handleIncomingDeepLink(url, 'second-instance');
+        if (windowsHandoff) windowsHandoff.dispatch(url, additionalData, 'second-instance');
+        else handleIncomingDeepLink(url, 'second-instance');
       } else {
         const openFolder = findOpenFolderInArgv(argv);
         if (openFolder) {
@@ -4321,7 +4423,7 @@ if (
 // 入口 (mac 走 LSItemContentTypes / open-file 事件), 也不会在 mac argv 出现。
 //
 // 同 second-instance:两类入口互斥, 优先 deep link URL。
-if (process.platform !== 'darwin') {
+if (!singleInstanceRejected && process.platform !== 'darwin') {
   const coldStartUrl = findDeepLinkInArgv(process.argv);
   if (coldStartUrl) {
     redactConsumedDeepLinkInArgv(process.argv, coldStartUrl);

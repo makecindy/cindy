@@ -6397,7 +6397,7 @@
         "hook": "Cindy IM 使者"
       },
       "hook": {
-        "description": "将 Slack、Telegram、飞书 / Lark 诸渠道接入同一 Cindy：讯皆派至此台设备，共用此间案之清单与差事；名籍绑定与运行偏好依渠道各自隔离。",
+        "description": "将 Slack、Telegram、飞书 / Lark 诸渠道接入同一 Cindy：讯皆派至此台设备，共用此间案之清单与差事；每案之模型与权限，诸渠道共用一份，名籍绑定依渠道各自隔离。",
         "slackDescription": "绑定 Slack workspace，于 Slack 中 @Cindy 派差事。",
         "slackDisabledHint": "开此开关即发起 Slack 授权，绑定毕即可于 Slack 中派活。",
         "slackBoundHint": "绑定已毕。关此开关将解除绑定，重开须再授权。",
@@ -6416,32 +6416,20 @@
           "error": "连接未成"
         },
         "form": {
-          "workspacesCardTitle": "工作目录对照",
-          "workspacesCardDescription": "别名 → 本地绝对路径；目录清单诸渠道共用，运行偏好依渠道各立。",
-          "workspacesBoundCount_one": "已绑定本地工作目录 {{count}} 个",
-          "workspacesBoundCount_other": "已绑定本地工作目录 {{count}} 个",
+          "workspacesCardTitle": "案与模型",
+          "workspacesCardDescription": "诸官方机器人共用此一份。案出于侧栏，立案、更名、除案皆于侧栏行之；于 IM 中以 /model 更之，此处亦随之而变。",
+          "workspacesBoundCount_one": "案 {{count}} 个",
+          "workspacesBoundCount_other": "案 {{count}} 个",
           "aliasPlaceholder": "别名，如 my-server",
-          "addWorkspace": "增工作目录",
-          "removeWorkspace": "删此工作目录",
-          "changeDir": "点以更换目录(别名与偏好仍留)",
+          "addProject": "增案",
           "defaultWorkspaceChip": "常例：{{name}}",
-          "defaultWorkspaceAria": "择派差事时所用之常例工作目录",
-          "defaultWorkspaceRadioAria": "立「{{name}}」为常例工作目录",
-          "defaultWorkspaceRowHint": "所选目录即常例工作目录：Telegram 私聊、群与话题中，凡未另择案者，差事皆落于此（以 /workspace 另择者，仍从其择）。请留意所选目录此行之权限模式：若设为「完全访问」，任一群中 @ bot，皆将以完全访问之权于此仓库中运行，慎之。",
-          "legacyDefaultsTitle": "旧版「新言谈配置」犹在生效",
-          "legacyDefaultsDescription": "此台设备曾存一份旧版官方 bot 常例设置，凡未另行配置之目录，仍以之为兜底（官方 Telegram 与 X 共用一份）。此等值今已统一于各目录中设置。复常例将一并清除以下全部内容：",
-          "legacyDefaultsRow": {
-            "agentKind": "常例 Agent：{{current}} → {{fallback}}",
-            "permissionMode": "权柄模式：{{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}：{{fields}}",
-          "legacyDefaultsField": {
-            "model": "模型 {{current}} → {{fallback}}",
-            "effort": "思力 {{current}} → {{fallback}}",
-            "source": "模型所出 {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": "，",
-          "legacyDefaultsSourceFollowsGlobal": "从全域设置"
+          "defaultWorkspaceAria": "择派差事时所用之常例案",
+          "defaultWorkspaceRadioAria": "立「{{name}}」为常例案",
+          "defaultWorkspaceRowHint": "所选者即常例案：Telegram、飞书 / Lark 与 X 中，未另择案之私聊与群，差事皆落于此。",
+          "defaultProjectTag": "常例",
+          "defaultProjectFullAccessWarning": "常例案「{{name}}」之权限为完全访问：任一群中 @ 机器人，皆将以完全访问之权于其中运行，慎之。",
+          "sharedSettingsPointer": "案、模型与权限，诸官方机器人共用。",
+          "sharedSettingsPointerAction": "往设之"
         },
         "binding": {
           "copyLink": "录链接",
@@ -6459,7 +6447,8 @@
         "toast": {
           "saveFailed": "存之未成",
           "toggleFailed": "切换未成",
-          "actionFailed": "操作未成"
+          "actionFailed": "操作未成",
+          "addProjectFailed": "增案未成"
         },
         "loginRequired": "须先登录 {{appName}} 名籍，登录后连接将自行恢复。",
         "standbyHint": "此机另一 Cindy 实例方用 Slack 连接。阖之后，重开此开关即可接管。",
@@ -6590,7 +6579,7 @@
             "usageBody": "于 X 上发一则推文 @askmycindy，差事即派至此台设备运行，结论以回帖覆君。",
             "riskLabel": "回帖乃公开",
             "riskPublicBody": "回复乃公开推文，人人可见。宜于公开提问、解决难题；不宜处理私事，免泄隐私。",
-            "riskWorkdirBody": "X 差事皆落于 X 连接设置中之常例工作目录，Agent 能读写其中之卷，而结论将公开回帖 —— 若常例目录指向私密仓库，卷中内容或随之公开，慎之。",
+            "riskWorkdirBody": "X 差事皆落于 X 连接设置中之常例案，Agent 能读写其中之卷，而结论将公开回帖 —— 若常例案指向私密仓库，卷中内容或随之公开，慎之。",
             "withdrawLabel": "欲撤回",
             "withdrawBody": "提问者于欲删之回答下回复「@askmycindy /delete」（或「@askmycindy /删除」），正文中须亲手带上 @askmycindy。仅删公开回帖，本地差事记录仍存。",
             "ackTitle": "X 已关联，请先观用法与风险",
@@ -6670,8 +6659,8 @@
           "botFallback": "Cindy 机器人",
           "bridgeTitle": "飞书机器人",
           "bridgeDescription": "机器人惟转飞书之讯于 Cindy。各飞书名籍之讯，交其工作电脑处理；差事依机器人与飞书名籍各立。",
-          "settingsTitle": "工作目录与模型",
-          "settingsDescription": "属君之 Cindy 名籍与此机，不随机器人或飞书名籍而易：诸飞书机器人共用一份。工作目录清单亦与他渠道共用。",
+          "settingsTitle": "案与模型",
+          "settingsDescription": "属君之 Cindy 名籍与此机，不随机器人或飞书名籍而易：诸飞书机器人共用一份。案即侧栏本机诸案，亦与他渠道共用。",
           "workingDeviceLabel": "工作电脑：{{name}}",
           "workingDeviceThisComputer": "此机",
           "workingDeviceUnknown": "工作电脑尚未同步",
@@ -6694,7 +6683,7 @@
         "sectionTitle": "试行 Agent 网络",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "显连接之图，录近事。两端皆启用且已完成 Agent-Net 配对，方用加密连接；其余设备循旧途。唯施于此机。"
+          "hint": "此为试验之用，暂不宜启。显连接之图，录近事。两端皆启用且已完成 Agent-Net 配对，方用加密连接；其余设备循旧途。唯施于此机。"
         },
         "empty": "尚无他设备。于他机或手机登同一名籍，即现于此。",
         "stats": {
@@ -6885,9 +6874,10 @@
         "offlineLocal": "{{provider}} 暂连不上，变更存于此机；连上后同步至言谈中之模型卡。",
         "requireBinding": "须先完成 {{provider}} 名籍关联，方可修。",
         "serverUnsupported": "服务器版本过旧或暂无应答，无法读取偏好。",
+        "loadFailed": "读案之设未成。",
         "retry": "再试",
         "toast": {
-          "saveFailed": "存目录偏好未成"
+          "saveFailed": "存案之设未成"
         },
         "teamChipAria": "择偏好所属之 Slack workspace"
       }
@@ -6960,7 +6950,11 @@
         "remoteSessionEnded": "远程设备已结此远程差事"
       },
       "control": "控",
-      "standbyHint": "此机另一 Cindy 实例方用远程连接。阖之后，此实例将自行接管。"
+      "standbyHint": "此机另一 Cindy 实例方用远程连接。阖之后，此实例将自行接管。",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -7863,6 +7857,7 @@
         "install": "纳",
         "details": "详",
         "detailsAria": "观 {{name}} 之详情",
+        "loadingDetails": "方载详情…",
         "update": "自坊更新",
         "updateTo": "更新至 v{{version}}",
         "installed": "已纳",
@@ -8149,6 +8144,42 @@
         "agentCompanions": "可观同伴、其状与近谈",
         "agentCompanionsDetail": "可观诸同伴（含行于君他机者）之名、简介、像与其状（方行、待君理、闲、离线），各同伴所行何类之事（如思虑、施器），待君理之请之文（问、将行之令、策，与对谈所见同），及其主对谈之近语（至多五十条，君之言与同伴之复，不含施器之程），并于主窗启同伴之对谈。兼得遣讯之许者，可将君于法器所予之答转致同伴：答问、却请、议策；许其行事，仍须君于 Cindy 自有之确框亲点。不能读卷，亦不见施器之程与思虑之文。",
         "agentCompanionsRequest": "确认观同伴之权柄",
+        "hostTools_history": "任务往录",
+        "hostTools_historyDetail": "得循 Cindy 之器列既有任务、阅消息全文、索往录；明择且有权之他机亦可。",
+        "hostTools_control": "任务治办",
+        "hostTools_controlDetail": "得循 Cindy 之器改、藏、复及治既有任务与项目。涉重险者，每次须于 Cindy 亲允。",
+        "hostTools_handoff": "任务传言",
+        "hostTools_handoffDetail": "得循 Cindy 之器传消息于既有任务。需当前任务之境者，须明指任务。",
+        "hostTools_settings": "应用设置",
+        "hostTools_settingsDetail": "得循 Cindy 之器阅改应用设置；不返密钥，秘文仍由主人亲填。",
+        "hostTools_scheduler": "自动化治办",
+        "hostTools_schedulerDetail": "批准后，法器可建、查、改、停、复、删及执行自动任务，并阅执行记录。由 Agent 执行的定时任务使用任务默认权限，包含完全访问（Full Access）。高风险宿主操作每次确认。",
+        "hostTools_terminal": "终端与命令",
+        "codeDetailFiles": "法器页面仍隔离；所许文件之操作，由 Cindy 于主人亲择目录内行之。",
+        "hostTools_discovery": "察宿主之能",
+        "hostTools_discoveryDetail": "惟得察执行之机所供服务，及本法器所声明、所获准之工具组。不得借此装卸、停用他法器，亦不得夺其所许。",
+        "hostTools_browser": "御浏览器",
+        "hostTools_browserDetail": "得读写 Cindy 所择浏览器之网页。改用“吾之浏览器”、上传文件诸敏行，仍须 Cindy 请主人亲允。",
+        "hostTools_computer": "御本机",
+        "hostTools_computerDetail": "得借 Cindy 之具察窗口、行键鼠。系统之许、密文之护与宿主风险之规皆如故。",
+        "hostTools_ssh": "用 SSH 连接",
+        "hostTools_sshDetail": "得用既设 SSH 连接行命令、理连接；凭证留于 Cindy，不授法器。须允之行，每次亲问。",
+        "hostTools_docs": "读作文书",
+        "hostTools_docsDetail": "得借 Cindy 文书之具，于本法器私有目录读写。制文、转式诸行，须 Cindy 请主人亲允。",
+        "codeDetailHostServices": "法器页面仍隔离；获准之宿主工具，依各项所许，得御浏览器、本机、连接或文书。",
+        "hostTools_storage": "存储与法器互享",
+        "hostTools_storageDetail": "得用本法器之存储、作品库与所许素材。每次互享，Cindy 明列来源、受者法器与副本，请主人亲允；不得窥他法器存储。",
+        "codeDetailStorage": "存储之行止于本法器资料；与他法器互享，每次须主人亲允。",
+        "storageShareTitle": "交副本于他法器",
+        "storageShareMessage": "将法器“{{name}}”之“{{file}}”（{{size}}）复制于法器“{{target}}”。受者得独立副本，原件后改不随之更。既阅或另存者，不可追回。",
+        "hostTools_files": "亲许目录之文件",
+        "hostTools_filesDetail": "得于主人亲择之目录阅、写、列、删文件并察其变。旧择不自授权，停用法器即止其访问。",
+        "filesPickMessage": "法器“{{name}}”将得阅、写、列、删所选目录之文件并察其变。请亲择所许访问之目录。",
+        "codeDetailTerminal": "法器之页于独立沙箱中运行；获准之命令以主人身份行，可取此机文件、应用与网络。",
+        "hostTools_terminalDetail": "得于此机以主人身份启命令及交互终端，阅其输出、输入及止本法器之进程。命令可取主人文件与应用；启用、输入诸改动每次由 Cindy 亲询。",
+        "hostToolsRequest": "确认{{group}}之权柄",
+        "hostToolCallTitle": "允法器行事",
+        "hostToolCallMessage": "法器“{{name}}”欲调 {{server}} / {{tool}}。此允仅施于下列参数。",
         "agentHiddenTasks": "可立不见于差事录之背后差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
         "agentErrand": "可立差事、行事并读结果",
@@ -8177,6 +8208,10 @@
         "resident": "常驻运行(生效即启，不召亦保背后处理程序)",
         "residentDetail": "闲时亦占少许内存；禁用或卸除后，进程即阖。",
         "subscribeTopics": "旁听君之差事动态(每轮往来与差事事件，不含讯之内容)",
+        "subscribeMessage": "讯之内容",
+        "subscribeMessageDetail": "收已存之君讯与 AI 之答；附件另循读取与交接之途。",
+        "subscribeTaskState": "差事状态",
+        "subscribeTaskStateDetail": "收差事运行、候答、完毕、归档及隐显之变。",
         "subscribeActivity": "旁听 AI 何时思之、何时候君",
         "subscribeActivityDetail": "仅知时机：思之始末，及 AI 何时候君批准或作答。不见思之内容、待批之操作、所涉命令与文件、计划正文、所问与君之答，亦不能代君批准。",
         "subscribeHooks": "可读、拦或改写君所遣之讯",
@@ -8192,8 +8227,8 @@
         "badgeDetail": "有新内容时，其可于左侧导览之法器入口及自身卡片上亮一绿点，并附一句摘要；君启其面板即清零。绿点无声、不震，亦不入系统通知中心，与上述系统提示为两项独立之权柄。",
         "confirm": "可弹确认框征君同意",
         "confirmDetail": "其行事前可弹一与 Cindy 同款之确认框问君，所问由其提供，框上标其名；允或罢皆由君亲点，其不能自点。同时至多一框，弹之过频即被拦下。",
-        "fsWrite": "可写文件(立/改)",
-        "fsWriteDetail": "其专属数据目录随时可写；当前差事之工作目录依差事之权柄模式(免批模式直写，逐条确认模式先征君同意)；他目录每次皆须君确认。文件始终由主机代写，法器本身不能直触君之文件系统。",
+        "fsWrite": "可管理自己的私有文件",
+        "fsWriteDetail": "可读写、列举和删除自己的私有数据。当前 Agent 调用期间，也可读取、列举和监听差事的工作目录。写入与删除沿用差事权限；允许写入不代表允许删除。调用结束即停止监听。文件操作均由宿主执行。",
         "deviceSync": "于君诸机间同步法器数据",
         "deviceSyncDetail": "与登门同一 Cindy 名籍之他在线之机上同一法器，加密交换数据。合并与删除由法器处置，不共用凭证或他法器之数据。",
         "libraryPersist": "可用持久作品库(大量文件与数据库)",
@@ -11303,6 +11338,7 @@
         "memberLimit": "群议须 2–6 位同伴",
         "memberUnavailable": "有同伴今不可用，易一位再试",
         "mentionUnavailable": "所点名之成员已不可用，请重择后再遣",
+        "mentionAmbiguous": "名「{{name}}」者非一，请于 @ 列中择之",
         "notFound": "此群议已不存",
         "hostNotReady": "Cindy 尚在准备，请稍后再试",
         "planOpen": "方分工中，毕或止后，方可另筹",
@@ -12462,7 +12498,7 @@
         "expiredCardNotice": "此卡已逾期",
         "slash": {
           "new": "🌱 新局已开，前番言谈尽扫，从头叙来~",
-          "help": "🤖 吾所能者如下：\n\n/new         新开一局（清去当前言谈之脉络）\n/model       易模型\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接掌 desktop 上某工作区（接掌之中再遣，可径易差事）\n/exctr       罢接掌，归于你我之 Discord 私讯\n/help        观吾所能\n\n有事方行而欲止之？径遣 `!stop`，吾即止当前之行，并撤排队之讯；差事仍存，可续。\n\n平日径遣讯即可，吾在此静听~",
+          "help": "🤖 吾所能者如下：\n\n/new         新开一局（清去当前言谈之脉络）\n/model       易模型\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接掌 desktop 上某案（接掌之中再遣，可径易差事）\n/exctr       罢接掌，归于你我之 Discord 私讯\n/help        观吾所能\n\n有事方行而欲止之？径遣 `!stop`，吾即止当前之行，并撤排队之讯；差事仍存，可续。\n\n平日径遣讯即可，吾在此静听~",
           "unknownCommand": "`{{cmd}}` 此令，吾不识也 🤔\n吾所识之令：/new、/model、/permission、/ctr、/exctr、/help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` 不可用于服务器频道——此令将使君桌面上之私人差事 / 案曝于公众。欲用之，请于与吾之私讯中遣之。",
           "detachedBySlash": "🚪 接掌已罢，归于 Discord 私讯。他日欲远程操持 desktop，再遣 /ctr",
@@ -12540,15 +12576,15 @@
             "fullAccessCancelled": "已罢，仍守当前权柄"
           },
           "control": {
-            "title": "🎮 择一工作区登场",
-            "emptyBody": "_尚无可接掌之工作区~ 先于 desktop 端开启或新立一差事，再来_",
-            "hint": "点工作区以进；点 🚪 撤矣 以罢此回",
+            "title": "🎮 择一案登场",
+            "emptyBody": "_尚无可接掌之案~ 先于 desktop 端开启或新立一差事，再来_",
+            "hint": "点案以进；点 🚪 撤矣 以罢此回",
             "attachedSwitchHint": "🎮 方接掌：**{{sessionTitle}}**\n择一新差事即可转乘；点 🚪 撤矣 则仍其旧",
             "btnExit": "🚪 撤矣",
             "resolvedExit": "🚪 去也，他日欲远程操持，再遣 /ctr",
             "sessionPickerTitle": "🎮 {{displayName}} 中之差事",
-            "sessionPickerHint": "择一差事续行 · ➕ 新开 立新局 · ↩️ 退 易工作区 · 🚪 撤矣 罢之",
-            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 尚无活跃之差事~ 何不点 ➕ 新开 立一个？_",
+            "sessionPickerHint": "择一差事续行 · ➕ 新开 立新局 · ↩️ 退 易案 · 🚪 撤矣 罢之",
+            "sessionPickerEmptyBody": "_案 **{{displayName}}** 尚无活跃之差事~ 何不点 ➕ 新开 立一个？_",
             "btnNew": "➕ 新开",
             "btnBack": "↩️ 退",
             "resolvedSessionPick": "🎯 已登场：**{{sessionTitle}}**（{{workspaceName}}）\n此后君所遣之讯，径入此差事；欲撤，随时 `/exctr`",
@@ -12653,7 +12689,7 @@
         "slash": {
           "start": "👋 幸会，吾乃君之私属 Cindy 助手~\n\n私讯径遣讯即可；群中须 @ 吾或回复吾之讯，吾方应之。遣 /help 可览诸令。",
           "new": "🌱 新差事已立 — 已列于差事录，自头始之~",
-          "help": "🤖 吾所能为者如下：\n\n/new         立新差事（旧者仍存；群中依当前群话题而立）\n/project     移至某案之目录行事（于 bot 此端运行，不接掌桌面端）\n/session     列桌面端近日差事，择其一即接掌续谈\n/model       换一模型登场\n/permission  调权柄之式（auto / bypass / ask 等）\n/settings    览今之案、Agent、模型、思之深浅、权柄\n/ctr         远程接掌桌面端之某工作区（接掌中再遣，可径换差事）\n/exctr       罢接掌，归 Telegram 言谈\n/help        览吾所能\n\n有事方行而欲止之？遣 /stop（或 `!stop`），吾即止当前所行，并撤排队之讯；差事仍存，可续为之。\n\n私讯径遣讯即可；群中须 @ 吾或回复吾之讯，吾方应之。群中近日之讯，吾亦记之以为上下文~",
+          "help": "🤖 吾所能为者如下：\n\n/new         立新差事（旧者仍存；群中依当前群话题而立）\n/project     移至某案之目录行事（于 bot 此端运行，不接掌桌面端）\n/session     列桌面端近日差事，择其一即接掌续谈\n/model       换一模型登场\n/permission  调权柄之式（auto / bypass / ask 等）\n/settings    览今之案、Agent、模型、思之深浅、权柄\n/ctr         远程接掌桌面端之某案（接掌中再遣，可径换差事）\n/exctr       罢接掌，归 Telegram 言谈\n/help        览吾所能\n\n有事方行而欲止之？遣 /stop（或 `!stop`），吾即止当前所行，并撤排队之讯；差事仍存，可续为之。\n\n私讯径遣讯即可；群中须 @ 吾或回复吾之讯，吾方应之。群中近日之讯，吾亦记之以为上下文~",
           "unknownCommand": "`{{cmd}}` 此令，吾未识也 🤔\n吾所能解者：/new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help",
           "settings": "⚙️ 今之所设\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深浅：{{effort}}\n权柄：{{permission}}\n\n欲改则遣 /project、/model、/permission～",
           "settingsCompanion": "⚙️ 今之所设（同僚）\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深浅：{{effort}}\n权柄：{{permission}}\n\n模型、权柄与工作目录皆从同僚之设，请于 Cindy 之同僚规制中修之。",
@@ -12754,15 +12790,15 @@
             "dialogueName": "言谈（托管目录）"
           },
           "control": {
-            "title": "🎮 择一工作区登场",
-            "emptyBody": "_暂无可接掌之工作区~ 请于桌面端启或立一差事再来_",
-            "hint": "点工作区以进；点 🚪 退出 以罢此番",
+            "title": "🎮 择一案登场",
+            "emptyBody": "_暂无可接掌之案~ 请于桌面端启或立一差事再来_",
+            "hint": "点案以进；点 🚪 退出 以罢此番",
             "attachedSwitchHint": "🎮 方接掌：**{{title}}**\n择一新差事即可转乘；点 🚪 退出则一仍其旧",
             "btnExit": "🚪 退出",
             "resolvedExit": "🚪 去矣，他日欲远程操持再遣 /ctr",
             "sessionPickerTitle": "🎮 {{name}} 中之差事",
-            "sessionPickerHint": "择一差事以续 · ➕ 新立 开新差事 · ↩️ 返 换工作区 · 🚪 退出 以罢",
-            "sessionPickerEmptyBody": "_工作区 **{{name}}** 尚无活跃之差事~ 何不点 ➕ 新立 开其一？_",
+            "sessionPickerHint": "择一差事以续 · ➕ 新立 开新差事 · ↩️ 返 换案 · 🚪 退出 以罢",
+            "sessionPickerEmptyBody": "_案 **{{name}}** 尚无活跃之差事~ 何不点 ➕ 新立 开其一？_",
             "btnNew": "➕ 新立",
             "btnBack": "↩️ 返",
             "resolvedSessionPick": "🎯 已登场：**{{title}}**（{{workspace}}）\n此后君所遣之讯，吾径送入此差事；欲退，随时 `/exctr`",
@@ -12771,7 +12807,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ 彼差事尚在行——下方已为君换新卡，请重择之",
             "recentSessions": {
               "title": "🕑 近日差事",
-              "hint": "点其一即接掌续谈（诸工作区依时序列）· 欲依工作区择之用 /ctr · 🚪 退出以罢",
+              "hint": "点其一即接掌续谈（诸案依时序列）· 欲依案择之用 /ctr · 🚪 退出以罢",
               "emptyBody": "_桌面端尚无活跃之差事~ 请先于桌面端开其一再来_"
             },
             "sessionBusyPrompts": {
@@ -12925,18 +12961,18 @@
           "permissionTimeout": "候授权逾时，已拒此权柄之请"
         },
         "run": {
-          "routeReselectHint": "。请于 规制 → IM 机器人 为此渠道之工作目录重择模型。",
+          "routeReselectHint": "。请于 规制 → IM 机器人 为此渠道之案重择模型。",
           "awaitingPermission": "候授权 · 待君确认",
           "awaitingAnswer": "候答 · 待君择之",
           "awaitingPlan": "候审 · 待君确认其谋",
           "awaitingFallback": "候君确认",
           "cancelledBeforeRun": "差事已为用者喝止，此讯未行。",
-          "liveSessionDirUnmapped": "此差事方行于一已不在工作目录对照之目录，此讯未行。请将该目录加入 规制 → 远程连接 → 工作目录对照，或于桌面端阖此差事后重发。",
+          "liveSessionDirUnmapped": "此差事所在之目录已不属任何一案，此讯未行。请于侧栏将该目录增为一案，或于桌面端阖此差事后重发。",
           "interactionExpired": "差事已毕，此番交互已失效",
           "telegramOfficialBot": "Telegram 官方 bot"
         },
         "dispatch": {
-          "dirUnmapped": "此差事所在之目录已不在工作目录对照中，此讯未行。请将其目录加入 规制 → 远程连接 → 工作目录对照，再遣一次。"
+          "dirUnmapped": "此差事所在之目录已不属任何一案，此讯未行。请于侧栏将其目录增为一案，再遣一次。"
         }
       },
       "wecom": {
@@ -13020,9 +13056,9 @@
             "fullAccessCancelled": "已罢，仍旧权柄"
           },
           "control": {
-            "title": "🎮 择工作区",
-            "emptyBody": "_今无可接管之工作区，请先于 desktop 立差事。_",
-            "hint": "择工作区以续，或罢此举。",
+            "title": "🎮 择案",
+            "emptyBody": "_今无可接管之案，请先于 desktop 立差事。_",
+            "hint": "择案以续，或罢此举。",
             "attachedSwitchHint": "今方接管：**{{sessionTitle}}**",
             "btnExit": "🚪 退",
             "resolvedExit": "🚪 已退接管",
@@ -13084,7 +13120,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 另开新局，前番言谈已拭，重头说来~",
-          "help": "🤖 吾能为君效劳者如下：\n\n/new         另开新局（清今言谈之上下文）\n/model       易模型出阵\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接掌桌面端之某工作区（接掌中再发，可径换差事）\n/exctr       罢接掌，归于私聊\n/help        览吾所能\n\n有事方行而欲止之？径发 `!stop`，吾即止今之所行，并撤待列之讯；差事仍存，可续。\n\n平日径发讯即可，吾在此恭听~",
+          "help": "🤖 吾能为君效劳者如下：\n\n/new         另开新局（清今言谈之上下文）\n/project     移至某案之目录行事（于 bot 此端运行，不接掌桌面端）\n/model       易模型出阵\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接掌桌面端之某案（接掌中再发，可径换差事）\n/exctr       罢接掌，归于私聊\n/help        览吾所能\n\n有事方行而欲止之？径发 `!stop`，吾即止今之所行，并撤待列之讯；差事仍存，可续。\n\n平日径发讯即可，吾在此恭听~",
           "unknownCommand": "`{{cmd}}` 之令，吾未识也 🤔\n吾所识者：/new、/model、/permission、/ctr、/exctr、/help",
           "detachedBySlash": "🚪 接掌已罢，归于私聊。他日欲远程操持桌面端，再发 /ctr 可也",
           "detachedByRevoke": "⚠️ 君已于桌面端收回接掌，此后之讯归于私聊。",
@@ -13181,16 +13217,29 @@
             "resolved": "✅ 已切至「自审」— 归群续发讯可也~",
             "failed": "❌ 未能切换：{{reason}}。可发 /permission auto 自行切换"
           },
+          "project": {
+            "title": "📂 移案之目录",
+            "hint": "**当前**：{{name}}\n择一案，其后之讯即于彼目录行事（上下文重开，模型与权柄之设仍存）",
+            "emptyBody": "_桌面端尚无活跃之案工作区~ 请先于桌面端启一案再来_",
+            "btnDialogue": "💬 归言谈",
+            "btnCancel": "🚪 罢",
+            "resolvedPick": "📂 已移至 **{{name}}** —— 新上下文已备，径遣令即行。欲归寻常言谈，遣 /project 择「归言谈」",
+            "resolvedDialogue": "💬 已归言谈目录，上下文重始~",
+            "resolvedCancel": "🚪 未移，一仍其旧",
+            "switchFailed": "❌ 未能移：{{reason}}（目录或已迁移或删除）",
+            "attachedUnsupported": "🎮 君方以 /ctr 接掌桌面端之差事——接掌之际，讯径入彼差事，无须 /project。欲移案，先以 `/exctr` 罢接掌",
+            "dialogueName": "言谈（托管目录）"
+          },
           "control": {
-            "title": "🎮 择一工作区登场",
-            "emptyBody": "_尚无可接掌之工作区~ 请先于桌面端开或立一差事，再来_",
-            "hint": "点工作区以续；点 🚪 退 则罢",
+            "title": "🎮 择一案登场",
+            "emptyBody": "_尚无可接掌之案~ 请先于桌面端开或立一差事，再来_",
+            "hint": "点案以续；点 🚪 退 则罢",
             "attachedSwitchHint": "🎮 今接掌：**{{title}}**\n择新差事即换；点 🚪 退 则仍旧",
             "btnExit": "🚪 退",
             "resolvedExit": "🚪 去矣，他日欲远程操持，再发 /ctr",
             "sessionPickerTitle": "🎮 {{workspace}} 之差事",
-            "sessionPickerHint": "择一差事续行 · ➕ 新立 开新局 · ↩️ 归 换工作区 · 🚪 退 罢之",
-            "sessionPickerEmptyBody": "_工作区 **{{workspace}}** 尚无活跃之差事~ 何不点 ➕ 新立 开一局？_",
+            "sessionPickerHint": "择一差事续行 · ➕ 新立 开新局 · ↩️ 归 换案 · 🚪 退 罢之",
+            "sessionPickerEmptyBody": "_案 **{{workspace}}** 尚无活跃之差事~ 何不点 ➕ 新立 开一局？_",
             "btnNew": "➕ 新立",
             "btnBack": "↩️ 归",
             "resolvedSessionPick": "🎯 已登场：**{{title}}**（{{workspace}}）\n此后君之讯径入此差事；欲退，随时 `/exctr`",
@@ -13234,7 +13283,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 新档已开 — 前番言谈尽清，自头再叙~",
-          "help": "🤖 吾所能为者如下：\n\n/new         新开一档（清当前言谈之上下文）\n/model       易模型\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上之某工作区（接管中再发，可径换差事）\n/exctr       罢接管，复归微信私聊\n/help        观吾所能\n\n有事方行而欲止之？径发 `!stop`，吾即止当前之行，并撤候列之讯；差事仍存，可续。\n\n平日径发讯即可，吾在听~",
+          "help": "🤖 吾所能为者如下：\n\n/new         新开一档（清当前言谈之上下文）\n/model       易模型\n/permission  调权柄之式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上之某案（接管中再发，可径换差事）\n/exctr       罢接管，复归微信私聊\n/help        观吾所能\n\n有事方行而欲止之？径发 `!stop`，吾即止当前之行，并撤候列之讯；差事仍存，可续。\n\n平日径发讯即可，吾在听~",
           "unknownCommand": "`{{cmd}}` 此令，吾未识也 🤔\n吾所能解者：/new、/model、/permission、/ctr、/exctr、/help",
           "detachedBySlash": "🚪 接管已毕，复归微信私聊。他日欲远程操持 desktop，再发 /ctr",
           "detachedByRevoke": "⚠️ 君已于 desktop 收回接管，此后之讯复归微信私聊。",
@@ -13317,15 +13366,15 @@
             "fullAccessCancelled": "已罢，仍守旧权"
           },
           "control": {
-            "title": "🎮 择一工作区上阵",
-            "emptyBody": "_暂无可接管之工作区~ 且于 desktop 开／立一差事再来_",
-            "hint": "点工作区以进；点 🚪 退 则罢此番",
+            "title": "🎮 择一案上阵",
+            "emptyBody": "_暂无可接管之案~ 且于 desktop 开／立一差事再来_",
+            "hint": "点案以进；点 🚪 退 则罢此番",
             "attachedSwitchHint": "🎮 方接管：**{{sessionTitle}}**\n择新差事即可换乘；点 🚪 退 则一仍其旧",
             "btnExit": "🚪 退",
             "resolvedExit": "🚪 去矣，他日欲远程操持，再 /ctr",
             "sessionPickerTitle": "🎮 {{displayName}} 之差事",
-            "sessionPickerHint": "择一差事续之 · ➕ 新开 立新差事 · ↩️ 归 易工作区 · 🚪 退 罢之",
-            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 尚无活跃差事~ 何不点 ➕ 新开 立其一？_",
+            "sessionPickerHint": "择一差事续之 · ➕ 新开 立新差事 · ↩️ 归 易案 · 🚪 退 罢之",
+            "sessionPickerEmptyBody": "_案 **{{displayName}}** 尚无活跃差事~ 何不点 ➕ 新开 立其一？_",
             "btnNew": "➕ 新开",
             "btnBack": "↩️ 归",
             "resolvedSessionPick": "🎯 已上阵：**{{sessionTitle}}**（{{workspaceName}}）\n此后君之讯，径入此差事；欲退，随时 `/exctr`",
@@ -15456,6 +15505,7 @@
       "REMOTE_AGENT_NOT_FOUND": "此差事于行 Agent 之机上已终。请再遣。",
       "REMOTE_AGENT_BUSY": "彼机同时方行之差事过多。请先终其若干，再试。",
       "REMOTE_AGENT_UNSUPPORTED": "此 Agent 于彼机不可用。请于彼机安装或登门后再试，或易一 Agent。",
+      "REMOTE_AGENT_RESUME_UNAVAILABLE": "此机不能复差事旧态。请选择他机或供方之模型，交接上下文以续行；旧讯皆存。",
       "REMOTE_AGENT_INVALID": "与行 Agent 之机通信有谬。请再试；若屡现，请将两机之 Cindy 皆更新至最新版。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型之电脑无法续此差事。请由差事列表新建差事，复制所需内容以续。原差事及待发之讯皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达分享者所设之模型占比上限。请择他可用之模型续之。",
@@ -17837,6 +17887,7 @@
       "descriptionSaveDir": "下列目录在今差事之工作目录外。许之，此法器可将取下之卷存入其中(不覆既有之卷)。",
       "descriptionRevealPath": "此路径唯于君许之后返予今之 Agent，并入言谈录；配对之设备或同步此录。此举不授法器读卷之权柄。",
       "descriptionFsWrite": "此法器请于今差事之工作目录写入下列之卷。许之，则本差事内其写同一目录不复询问。",
+      "descriptionFsDelete": "此法器请求删除当前差事工作目录中的以下文件或文件夹。删除文件夹也会删除其中的内容。本次允许只对这一次删除生效。",
       "descriptionWorkspace": "此卷匣在今差事之工作目录外。许之，Cindy 将以之为工作目录，于侧栏立一空差事(已有差事则径复用)，不读其中之卷。",
       "descriptionForgeSource": "下列目录在今差事之工作目录外。许之，Forge 将于此目录打包或生法器源码(将写入 .cindy 产物或骨架之卷)。",
       "descriptionForgeScaffold": "下列目录在今差事之工作目录外。许之，Forge 将于此目录生法器源码骨架。",
@@ -18866,6 +18917,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "权柄模式",
       "noAvailableModels": "无可用之 {{agent}} 模型，请于规制中察供方之相通与凭证。",
+      "savedModelUnavailable": "前选模型或其来源今不可用。",
+      "reselectModel": "重选模型",
       "effortLabel": "思之深浅",
       "initialTaskLabel": "首件差事",
       "initialTaskPlaceholder": "书其首事以付之；留空则待命，由 Lead 分派",
@@ -20878,6 +20931,7 @@
       "description": "勾选欲自「{{name}}」迁至此机之内容。此机已改之规制皆保留，不为所覆。",
       "partial": "彼机有部分内容此番未能读取，下方仅列已读者。",
       "groupCount": "已选 {{selected}} / {{total}} 项",
+      "groupCount_other": "已选 {{selected}} / {{total}} 项",
       "present_one": "另 {{count}} 项，此机已有",
       "present_other": "另 {{count}} 项，此机已有",
       "start_one": "迁移 {{count}} 项",
@@ -21323,8 +21377,8 @@
   "modelGroups": {
     "title": "模型组",
     "description": "合模型供方已有之数源为一项。择模型时于「模型组」取之，此番用何源，由 Cindy 定夺。",
-    "routes": "路线",
-    "routesDescription": "一路线纳数源，新差事起时，依择法取其一。",
+    "routes": "模式",
+    "routesDescription": "一模式纳数源，新差事起时，依择法取其一。",
     "sourceCount_other": "{{count}} 源",
     "strategy": {
       "expiring": {
@@ -21345,8 +21399,10 @@
       }
     },
     "picker": {
-      "empty": "尚无模型组。于设定合数源为一路线，即可于此择之。",
-      "manage": "理模型组"
+      "empty": "尚无模型组。于设定合数源为一模式，即可于此择之。",
+      "manage": "理模型组",
+      "switched": "「{{name}}」已将此差事易为 {{model}}",
+      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
@@ -21358,7 +21414,7 @@
       "soonestUntil": "诸源限额皆尽，彼最先复（{{reset}}）",
       "standby": "此番未及",
       "standbyQuota": "限额尚余 {{left}}%，{{reset}} 方重设，姑留之",
-      "off": "已于此路线停用",
+      "off": "已于此模式停用",
       "unavailable": "未连线，或此模型今不可择",
       "limited": "限额已尽",
       "limitedUntil": "限额已尽，{{reset}} 复",
@@ -21372,10 +21428,10 @@
       "separator": "；"
     },
     "settings": {
-      "newRoute": "立路线",
-      "newRouteName": "新路线",
-      "routesEmpty": "尚无路线。立其一，纳数源于中。",
-      "scopeNote": "模型组用于此机所起之新差事：起时定一源，差事行中不易。",
+      "newRoute": "立模式",
+      "newRouteName": "新模式",
+      "routesEmpty": "尚无模式。立其一，纳数源于中。",
+      "scopeNote": "模型组用于此机之差事：起新差事时定一源；于行中之差事择之，即时易一次，此后不自易。",
       "back": "归模型组",
       "name": "名",
       "nameHint": "择模型时显此名。",
@@ -21387,14 +21443,14 @@
       "sources": "可用之源",
       "sourcesHint": "可纳不同模型；实用何者，书于差事之中。",
       "sourcesEmpty": "尚无源。于下增已连线之模型。",
-      "sourcesFull": "一路线至多 {{count}} 源。",
+      "sourcesFull": "一模式至多 {{count}} 源。",
       "addSource": "增源",
       "chooseModel": "择一模型",
       "notConnected": "未连线",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "逐出此路线",
-      "useSource": "令此路线用 {{name}}",
+      "remove": "逐出此模式",
+      "useSource": "令此模式用 {{name}}",
       "try": {
         "title": "试之",
         "hint": "观今起新差事将用何者。不遣讯，不耗限额。",
@@ -21402,11 +21458,11 @@
         "picked": "用之",
         "standby": "备用",
         "skipped": "略过",
-        "unavailable": "此路线今无可用之源，新差事将用君原择之模型。"
+        "unavailable": "此模式今无可用之源，新差事将用君原择之模型。"
       },
-      "deleteRoute": "删此路线",
+      "deleteRoute": "删此模式",
       "deleteRouteConfirmTitle": "删「{{name}}」？",
-      "deleteRouteConfirmDescription": "他路线中改行此路之时段例外将一并删除。已起之差事不受影响。",
+      "deleteRouteConfirmDescription": "他模式中改行此式之时段例外将一并删除。已起之差事不受影响。",
       "delete": "删除",
       "cancel": "罢",
       "saveFailed": "未能存之，请再试。",
@@ -21427,17 +21483,17 @@
         "addHours": "增",
         "sameHour": "起讫不可同时。",
         "full": "至多 {{count}} 条例外。",
-        "needOtherRoute": "再立一路线，方可依时段改行之。"
+        "needOtherRoute": "再立一模式，方可依时段改行之。"
       }
     },
     "overview": {
       "mapTitle": "今如何行",
-      "mapDescription": "自左而右：行何路线，终落何源。点路线可修之。",
+      "mapDescription": "自左而右：行何模式，终落何源。点模式可修之。",
       "columnSources": "源",
       "columnEmpty": "尚无",
-      "openRoute": "启路线「{{name}}」",
+      "openRoute": "启模式「{{name}}」",
       "recentTitle": "近日所择",
-      "recentEmpty": "尚无差事用过路线。",
+      "recentEmpty": "尚无差事用过模式。",
       "keptOriginal": "其中今无可用之模型，仍用原择之模型。",
       "keptOriginalShort": "仍用原模型",
       "latest": "近一差事所行之路"

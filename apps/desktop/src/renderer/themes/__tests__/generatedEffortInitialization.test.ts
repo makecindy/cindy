@@ -15,7 +15,7 @@ describe('generated effort inputs initialize without DOM or circular imports', (
       await import('../effortTierColors');
       expect(colorRegistry.getColors()).toEqual(first);
       // Governance §4: keep the legacy shadow-chip-raised ID in both import orders.
-      expect(first.length).toBe(584);
+      expect(first.length).toBe(585);
       expect(first[0].id).toBe('surface');
       expect(effort.effortTierColor('high')).toBe('#3B82F6');
       expect(effort.effortTierColor('unknown')).toBe('#14B8A6');

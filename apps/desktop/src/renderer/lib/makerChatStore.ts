@@ -1034,7 +1034,7 @@ export interface PendingGhostGrantConfirm {
    * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
   lane:
-    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
+    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'fs_delete' | 'workspace' | 'forge_source' | 'outside_workdir';
   sourceTool?: string;
   operation?: 'read' | 'write';
   items: Array<{
@@ -18069,6 +18069,7 @@ function parseGhostGrantConfirmRequest(request: {
     lane !== 'save_dir' &&
     lane !== 'reveal_path' &&
     lane !== 'fs_write' &&
+    lane !== 'fs_delete' &&
     lane !== 'workspace' &&
     lane !== 'forge_source' &&
     lane !== 'outside_workdir'

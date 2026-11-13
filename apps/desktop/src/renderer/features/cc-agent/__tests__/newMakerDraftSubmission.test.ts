@@ -22,6 +22,7 @@ import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../draftDirectoryRecovery';
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
+import { chatEligibleSourcesForModel } from '@cindy/model-providers';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
@@ -218,7 +219,7 @@ async function submit(options: {
     proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
   }));
   const environment = {
-    deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
+    deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, deviceProvidersUnsupported: false, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
     activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
@@ -563,6 +564,20 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(kept.ipcCreate).not.toHaveBeenCalled();
     if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
     else expect(String(kept.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');
+  });
+  // #10084 / unit：输入框为模型组、插件模型让出了「原模型没有已连接来源」的检查；选路沿用原模型时，
+  // 发送与新建目标都要补上它：不建任务、提示先连接，输入保留。选路选到别处时不受原模型来源影响。
+  // PR #10193 review：新建目标一开始漏了这道检查。Tier: unit。
+  describe.each(['send', 'goal'] as const)('%s', (entry) => {
+    it.each([
+      ['model group', { modelGroupRoute: { outcome: 'unavailable', groupName: 'G', trace: [] } as ModelGroupResolveResult }],
+      ['plugin model', { pluginRoute: async () => ({ outcome: 'kept', pluginName: 'Router', why: 'no-opinion', modelName: modelId }) as GhostStartTaskRouteResult }],
+    ] as const)('stops a %s that keeps a draft model without a connected source', async (_name, router) => {
+      const kept = await submit({ entry, ...router, providers: [] });
+      expect(kept.ipcCreate).not.toHaveBeenCalled();
+      if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.noProvider.description');
+      else expect(String(kept.errors.at(-1))).toContain('newChat.noProvider.description');
+    });
   });
   // PR #8460 / unit: a source reachable only through task computer B must keep B in
   // the readiness catalog key. Existing fixtures always allowed readiness regardless

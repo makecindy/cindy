@@ -8,6 +8,7 @@ import { PluginWriteAccessGate } from '../pluginWriteAccessGate.js';
 import { withSessionPermissionChange } from '../sessionPermissionChange.js';
 import { changeSessionPermissionMode } from '../../im/shared/permissionModeControl.js';
 import type { PermissionMode } from '@cindy/maker-core';
+import { forgetCredentialGrants, watchCredentialGrantRevocation } from '../../remote-agent/executor/credentialGrants.js';
 const ownership = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => ownership.current }));
 
@@ -17,9 +18,10 @@ const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').
 const branch = source.slice(source.indexOf("      case 'requestWriteAccess': {"), source.indexOf("      case 'startTeam': {"));
 const js = ts.transpileModule(`return async function(pluginId, request, explicitWriteAccess = false, assertCallerCurrent = () => {}) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const settingSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE,'), source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'));
+const permissionCommitSource = source.slice(source.indexOf('  async function commitSessionPermissionMode('), source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE,'));
 const planSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'), source.indexOf('  ipcMain.handle(MAKER_INVOKE.EXPORT_SESSION_HTML,'));
 const planJs = ts.transpileModule(planSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const settingJs = ts.transpileModule(settingSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const settingJs = ts.transpileModule(permissionCommitSource + settingSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function fixture() {
  let identity = 'owner-epoch-install';
  let usesDefaults = true;
@@ -63,6 +65,34 @@ function fixture() {
  return {hideCard: () => { usesDefaults = false; }, setPlan:(enabled:boolean)=>setPlan({},'task',enabled),planPersist,forgetGrants,runtimePlan:()=>runtimePlan,nativePlan:(enabled:boolean|null)=>{runtimePlan=enabled;},setImMode, setMode:(mode:string)=>setMode({},'task',mode), persistedResults, remote:()=>{remote=true;}, cold:()=>{cold=true;}, runtimeMode:()=>runtimeMode, changeOwner:()=>{ownership.current={};}, run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), queue, gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
 describe('shared-provider credential grants on permission changes', () => {
+ // guard: native self rewind can close its runtime before a real UI permission
+ // change. Execute the existing IPC branches and the same revocation Set so an
+ // ABA change remains observable without inventing a second authority source.
+ it.each(['permission', 'plan'] as const)('revokes a cold task on a real %s ABA change and releases its observer', async kind => {
+  const f=fixture();f.cold();f.forgetGrants.mockImplementation(forgetCredentialGrants);
+  const revoked=vi.fn();const unwatch=watchCredentialGrantRevocation('task',revoked);
+  const change=kind==='permission' ? ()=>f.setMode('ask') : ()=>f.setPlan(true);
+  const restore=kind==='permission' ? ()=>f.setMode('plan') : ()=>f.setPlan(false);
+  try {
+   await change();await restore();
+   expect(revoked).toHaveBeenCalledTimes(2);
+   await restore();expect(revoked).toHaveBeenCalledTimes(2);
+   unwatch();await change();expect(revoked).toHaveBeenCalledTimes(2);
+  } finally {unwatch();forgetCredentialGrants('task');}
+ });
+ it.each(['permission', 'plan'] as const)('does not revoke a cold task when %s persistence fails or the owner changes', async kind => {
+  const f=fixture();f.cold();f.forgetGrants.mockImplementation(forgetCredentialGrants);
+  const revoked=vi.fn();const unwatch=watchCredentialGrantRevocation('task',revoked);
+  const change=kind==='permission' ? ()=>f.setMode('ask') : ()=>f.setPlan(true);
+  try {
+   if(kind==='permission') f.epoch.client.tx.mockRejectedValueOnce(new Error('write failed'));
+   else f.planPersist.mockRejectedValueOnce(new Error('write failed'));
+   await expect(change()).rejects.toThrow('write failed');
+   expect(revoked).not.toHaveBeenCalled();
+   f.changeOwner();await expect(change()).rejects.toThrow();
+   expect(revoked).not.toHaveBeenCalled();
+  } finally {unwatch();forgetCredentialGrants('task');}
+ });
  it('clears the task grant only when permission or Plan mode really changes, even without a running agent', async () => {
   const f=fixture();f.cold();
   await f.setMode('ask');

@@ -18,6 +18,14 @@ vi.mock('../managed-skills.js', () => ({
 vi.mock('../model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
 }));
+// Native provider specifications do not dispatch accounts. Keep migration
+// admission fail-closed without booting share/credential services during collection.
+// Real account permissions are exercised by subscription-accounts/runtime.test.ts.
+vi.mock('../../subscription-accounts/legacyAccountAccess.js', () => ({
+  legacyCodexAccountCanRun: () => false,
+  openAiRouteAllowsModel: () => false,
+  setLegacyCodexAccountPaused: () => { throw new Error('Account mutation is outside this provider fixture'); },
+}));
 
 vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => true,
@@ -3305,6 +3313,27 @@ it('keeps mixed OpenCode protocols and image inputs in the native Pi launch', ()
   expect(providers[0]?.models[3]).toMatchObject({ input: ['text', 'image'] });
 });
 
+// #10269, unit: OAuth Carbon needs both a per-model Chat API and IDE headers.
+// The existing Astra launch test uses an API key and never covers this failure.
+it('launches ID-only Copilot Carbon with the shared IDE Chat configuration', () => {
+  const { providers } = buildPiNativeProvidersFromConfigs([{
+    id: 'copilot-carbon', name: 'Copilot', auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! }, runtimes: { pi: {
+      baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'anthropic-messages',
+      catalogPresetId: 'github-copilot', models: [{ id: 'gemini-4-carbon', name: 'Carbon' }],
+    } },
+  }], () => null, undefined, undefined, undefined, 'http://127.0.0.1:12345');
+  expect(providers).toHaveLength(1);
+  expect(providers[0].api).toBe('anthropic-messages');
+  expect(providers[0].models[0]).toMatchObject({
+    id: 'gemini-4-carbon', api: 'openai-completions',
+    headers: { 'Copilot-Integration-Id': 'vscode-chat', 'Editor-Version': expect.any(String),
+      'Editor-Plugin-Version': expect.any(String), 'User-Agent': expect.any(String) },
+    compat: { supportsStrictMode: true, supportsStore: false,
+      supportsDeveloperRole: false, supportsReasoningEffort: false },
+  });
+  expect(providers[0].adapterProvider).toBe('github-copilot');
+});
+
 // #9863, unit: ID-only Copilot Astra must reach the actual native launch descriptor
 // as Responses. The generic catalog audit below supplies an API and mirrors the source.
 it('launches Copilot Astra with Responses while preserving other model APIs', () => {
@@ -3342,8 +3371,10 @@ it('carries every unambiguous portable catalog model into the Pi descriptor', ()
       }], () => 'test-key');
       expect(providers[0]?.models[0], `${row.upstream} ${row.id}`).toMatchObject({
         api, input: (row.modalities?.input ?? ['text']).filter(value => value === 'text' || value === 'image'),
-        contextWindow: row.contextWindow, maxTokens: row.maxOutput,
+        contextWindow: row.contextWindow,
       });
+      // Sparse transport-only records omit the optional output limit entirely.
+      expect(providers[0]?.models[0].maxTokens).toBe(row.maxOutput);
       checked++;
     }
   }

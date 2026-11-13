@@ -1,3 +1,4 @@
+import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
@@ -826,7 +827,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }, [group?.serverBacked, threadRootId, closeThread, shareScope]);
 
   const settingsLabel = t('bots.groupChat.settings.open');
-  const headerStatus = headerGroup ? botGroupHeaderStatus(headerGroup, displayName, t) : null;
+  const mainHeaderSpeakers = headerGroup?.round?.speakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
+  const headerStatus = headerGroup ? botGroupHeaderStatus(mainHeaderSpeakers ? { ...headerGroup,
+    speakingBotIds: mainHeaderSpeakers.map(speaker => speaker.botId),
+    round: { ...headerGroup.round!, speakers: mainHeaderSpeakers },
+  } : headerGroup, displayName, t) : null;
   const personalMask = useGroupMask(groupId);
   const readLocatedMention = useReadLocatedMention(groupId);
   const header = useMemo(() => {
@@ -875,6 +880,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.dissolvedAt, headerGroup?.archived, members, headerStatus, openSettings, separator, settingsLabel, t]);
   useRegisterContentHeader(header);
 
+  // Group-level stopping remains available even when all visible work belongs to topics.
   const running = group?.round.status === 'running';
   // Several Bots think at once in a broadcast round's first circle; the key follows the set.
   const speakingKey = running && group ? group.round.speakers.map((speaker) => (speaker.executionId ?? `${speaker.botId}:${speaker.activity}`)).join(',') : '';
@@ -1233,13 +1239,15 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const openPlan = group ? openBotGroupPlan({ openPlan: group.openPlan, plans }) : null;
   const runningStep = runningBotGroupPlanStep(openPlan);
   const workTargets = useBotGroupWorkTargets(group);
-  const speakers = useMemo<BotGroupLiveSpeaker[]>(() => (running && group
+  const allSpeakers = useMemo<BotGroupLiveSpeaker[]>(() => (group?.round.status === 'running'
     ? group.round.speakers.flatMap((speaker) => {
         const member = memberById.get(speaker.botId);
         const target = speaker.executionId ? workTargets.get(speaker.executionId) : undefined;
         return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
       })
-    : []), [running, group, memberById, workTargets]);
+    : []), [group, memberById, workTargets]);
+  const speakers = allSpeakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
+  const stopSpeaker = interleaveBotGroupWork([], speakers.filter(speaker => speaker.activity !== 'planning')).at(-1)?.value;
   const stepSpeaker = runningStep
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === runningStep.step.botId)
     : undefined;
@@ -1417,7 +1425,23 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               </p>
             </div>
           ) : null}
-          {rows.map((message) => {
+          {interleaveBotGroupWork(rows, !sharing && !group.archived ? speakers : []).map((entry, timelineIndex, timeline) => {
+            if (entry.kind === 'work') {
+              const speaker = entry.value;
+              const step = runningStep && speaker === stepSpeaker ? {
+                ...runningStep, member: speaker.member, displayName: speaker.displayName,
+              } : null;
+              return <Fragment key={`work:${speaker.executionId ?? `${speaker.member.botId}:${speaker.activity}`}`}>
+                {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
+                  <BotGroupProgressStrip step={step} speakers={[speaker]} onStop={scope => void stopRound(scope)}
+                    canStop={group.round.canStop} canStopAll={!!group.canStopAll && !!group.round.othersActive} stopping={stopping}
+                    showStop={speaker === stopSpeaker}
+                    stopPending={stopping || speakers.filter(item => item.activity !== 'planning').every(item => item.stopping || item.executionStatus === 'stopping')} />
+                  <BotGroupSpeakerInteraction speaker={speaker} />
+                </>}
+              </Fragment>;
+            }
+            const message = entry.value;
             const rowLayout = layout.get(message.id);
             const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
             const isPlanCard = message.kind === 'plan';
@@ -1437,7 +1461,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                 <BotGroupTimelineItem
                   pluginUi={pluginUi}
                   message={message}
-                  continued={rowLayout?.continued ?? false}
+                  continued={timeline[timelineIndex - 1]?.kind !== 'work' && (rowLayout?.continued ?? false)}
                   authorName={authorName}
                   avatar={identity ? avatarById.get(identity.botId) : undefined}
                   ownerOf={owned || undefined}
@@ -1492,26 +1516,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               />
             </div>
           ) : null}
-          {speakers.map(speaker => speaker.activity === 'planning'
-            ? <BotGroupSpeakingLine key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />
-            : <BotGroupSpeakerInteraction key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />)}
-      {running && (runningStep || speakers.length > 0) && !sharing && !group.archived ? (
-        <BotGroupProgressStrip
-          key={runningStep ? `step:${runningStep.plan.id}:${runningStep.step.position}` : speakingKey}
-          step={runningStep ? {
-            ...runningStep,
-            member: memberById.get(runningStep.step.botId),
-            displayName: (() => {
-              const member = memberById.get(runningStep.step.botId);
-              return member ? botGroupMemberDisplayName(member) : runningStep.step.botName;
-            })(),
-          } : null}
-          speakers={speakers}
-          onStop={scope => void stopRound(scope)}
-          canStopAll={!!group.canStopAll && !!group.round.othersActive}
-          stopping={stopping}
-        />
-      ) : null}
 
         </div>
       </div>
@@ -1555,7 +1559,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
             members={group.members}
-            running={running}
+            running={running} canStop={group.round.canStop}
             planState={botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}
@@ -1580,7 +1584,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         />
       ) : null}
     </BotGroupChatMain>
-    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} quoteSources={quoteSources}
+    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} speakers={allSpeakers.filter(speaker => speaker.threadRootId === threadRootId)} onStop={scope => void stopRound(scope)} stopping={stopping} canStopAll={!!group.canStopAll && !!group.round.othersActive} quoteSources={quoteSources}
       focus={threadFocus} sharedReplies={sharedReplies} onPostPending={beginPendingShare} onRevealShare={revealMainMessage} onClose={closeThread} resize={threadResize} />}
     </div>
   );

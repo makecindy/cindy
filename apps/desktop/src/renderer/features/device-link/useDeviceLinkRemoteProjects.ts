@@ -36,6 +36,7 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
 import { useEffect, useRef } from 'react';
 import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
 import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { historyTurnEnded } from '@cindy/maker-shared/message-window';
 import { PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
 import { useAuth } from '@/contexts/AuthContext';
@@ -373,9 +374,10 @@ export function resolveIneligibleRemoteProjectAction(input: {
   online: boolean;
   remoteControlEnabled: boolean;
   disabledControl: boolean;
+  app?: string;
 }): IneligibleRemoteProjectAction {
   if (!input.wasEligible && !input.hasCachedShard) return 'ignore';
-  if (input.isSelf || input.disabledControl) return 'remove';
+  if (input.isSelf || input.disabledControl || !isCindyApp(input.app)) return 'remove';
   // Offline rows can report remoteControlEnabled=false even when the peer did not explicitly disable
   // remote control. Treat that as a transient disconnect; only an online false bit is authoritative.
   if (!input.online) return 'disconnect';
@@ -734,8 +736,10 @@ export function useDeviceLinkRemoteProjects(
       online: boolean;
       remoteControlEnabled: boolean;
       isSelf: boolean;
+      app?: string;
     }): void => {
       const ok =
+        isCindyApp(d.app) &&
         !d.isSelf &&
         d.online &&
         d.remoteControlEnabled &&
@@ -769,6 +773,7 @@ export function useDeviceLinkRemoteProjects(
           online: d.online,
           remoteControlEnabled: d.remoteControlEnabled,
           disabledControl: disabledControlDeviceIds.has(d.deviceId),
+          app: d.app,
         });
         if (action === 'ignore') return;
         cancelDeviceReseeds(d.deviceId);
@@ -808,6 +813,7 @@ export function useDeviceLinkRemoteProjects(
               online: d.online,
               remoteControlEnabled: d.remoteControlEnabled,
               isSelf: d.isSelf,
+              app: d.app,
             });
           }
           // 权威列表里**根本没有**的分片必须在这里收掉:applyDevice 只对返回的设备跑,
@@ -1024,6 +1030,7 @@ export function useDeviceLinkRemoteProjects(
         online: snap.online,
         remoteControlEnabled: snap.remoteControlEnabled,
         isSelf: snap.deviceId === selfDeviceId,
+        app: snap.app,
       });
     });
 

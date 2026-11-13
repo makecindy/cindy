@@ -6440,7 +6440,7 @@
         "hook": "Cindy IM bots"
       },
       "hook": {
-        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
+        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; every project’s model and permissions are shared by all channels, while each channel keeps its own account link.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
@@ -6459,32 +6459,20 @@
           "error": "Connection failed"
         },
         "form": {
-          "workspacesCardTitle": "Working directory mappings",
-          "workspacesCardDescription": "Alias → local absolute path; the directory list is shared across channels while run preferences stay per channel.",
-          "workspacesBoundCount_one": "{{count}} local working directory bound",
-          "workspacesBoundCount_other": "{{count}} local working directories bound",
+          "workspacesCardTitle": "Projects and models",
+          "workspacesCardDescription": "Shared by every official bot. Projects come from your sidebar — create, rename, or remove them there. Changes made with /model in a chat show up here too.",
+          "workspacesBoundCount_one": "{{count}} project",
+          "workspacesBoundCount_other": "{{count}} projects",
           "aliasPlaceholder": "Alias, e.g. my-server",
-          "addWorkspace": "Add working directory",
-          "removeWorkspace": "Remove this working directory",
-          "changeDir": "Click to change directory (alias and preferences kept)",
+          "addProject": "Add project",
           "defaultWorkspaceChip": "Default: {{name}}",
-          "defaultWorkspaceAria": "Choose the default working directory for dispatched tasks",
-          "defaultWorkspaceRadioAria": "Set “{{name}}” as the default working directory",
-          "defaultWorkspaceRowHint": "The selected directory is the default working directory: any Telegram DM, group or topic conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /workspace keep theirs). Mind the permission mode on the selected directory’s row — set to Full access, an @mention from any group runs with full access inside that repository.",
-          "legacyDefaultsTitle": "Legacy “new conversation” defaults are still in effect",
-          "legacyDefaultsDescription": "This device saved older official-bot defaults that still act as the fallback for directories without their own settings (official Telegram and X share one copy). These values are now set per directory. Restoring defaults clears all of the following:",
-          "legacyDefaultsRow": {
-            "agentKind": "Default agent: {{current}} → {{fallback}}",
-            "permissionMode": "Permission mode: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "model {{current}} → {{fallback}}",
-            "effort": "reasoning effort {{current}} → {{fallback}}",
-            "source": "model source {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "follows global settings"
+          "defaultWorkspaceAria": "Choose the default project for dispatched tasks",
+          "defaultWorkspaceRadioAria": "Set “{{name}}” as the default project",
+          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark and X conversations that have not picked a project run their tasks there.",
+          "defaultProjectTag": "Default",
+          "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
+          "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
+          "sharedSettingsPointerAction": "Open settings"
         },
         "binding": {
           "copyLink": "Copy link",
@@ -6502,7 +6490,8 @@
         "toast": {
           "saveFailed": "Failed to save",
           "toggleFailed": "Failed to toggle",
-          "actionFailed": "Operation failed"
+          "actionFailed": "Operation failed",
+          "addProjectFailed": "Failed to add project"
         },
         "loginRequired": "Sign in to your {{appName}} account first; the connection resumes automatically after login.",
         "standbyHint": "Another Cindy instance on this computer is using the Slack connection. Close it, then turn this switch back on to take over.",
@@ -6633,7 +6622,7 @@
             "usageBody": "Post on X mentioning @askmycindy and the task is dispatched to this device to run here; the result comes back as a reply.",
             "riskLabel": "Replies Are Public",
             "riskPublicBody": "Replies are public and visible to anyone. Use this for public questions and problems, not for private matters that could expose personal information.",
-            "riskWorkdirBody": "Every X task runs in the default working directory set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that directory points at a private repository, file contents may become public with it.",
+            "riskWorkdirBody": "Every X task runs in the default project set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that project points at a private repository, file contents may become public with it.",
             "withdrawLabel": "To Withdraw a Reply",
             "withdrawBody": "The person who asked can delete the answer by replying “@askmycindy /delete” to it. Include @askmycindy in the reply text. Only the public reply is deleted; the local task record is kept.",
             "ackTitle": "X Is Linked — How It Works and What to Watch For",
@@ -6713,8 +6702,8 @@
           "botFallback": "Cindy bot",
           "bridgeTitle": "Feishu / Lark Bots",
           "bridgeDescription": "Bots only pass your Feishu / Lark messages to Cindy. Each linked account’s messages go to its working computer, and sessions stay separate for each bot and account.",
-          "settingsTitle": "Working Directories and Models",
-          "settingsDescription": "These belong to your Cindy account on this computer, not to a bot or a Feishu / Lark account, so every Feishu / Lark bot uses the same ones. The directory list is also shared with other channels.",
+          "settingsTitle": "Projects and Models",
+          "settingsDescription": "These belong to your Cindy account on this computer, not to a bot or a Feishu / Lark account, so every Feishu / Lark bot uses the same ones. The projects are the local projects in the sidebar and are also shared with other channels.",
           "workingDeviceLabel": "Working computer: {{name}}",
           "workingDeviceThisComputer": "This computer",
           "workingDeviceUnknown": "Working computer not yet synced",
@@ -6737,7 +6726,7 @@
         "sectionTitle": "Experimental Agent network",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Shows the connection topology and recent activity. Connections are encrypted when both devices enable Agent-Net and have paired through Agent-Net. Other devices use the existing connection. Applies only to this computer."
+          "hint": "Experimental feature. Not recommended for use at this time. Shows the connection topology and recent activity. Connections are encrypted when both devices enable Agent-Net and have paired through Agent-Net. Other devices use the existing connection. Applies only to this computer."
         },
         "empty": "No other devices yet. Sign in to the same account on another computer or phone and it will appear here.",
         "stats": {
@@ -6928,9 +6917,10 @@
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
+        "loadFailed": "Could not load project settings.",
         "retry": "Retry",
         "toast": {
-          "saveFailed": "Failed to save directory preferences"
+          "saveFailed": "Failed to save project settings"
         },
         "teamChipAria": "Choose which Slack workspace these preferences belong to"
       }
@@ -7003,7 +6993,11 @@
         "remoteSessionEnded": "The remote device ended this session"
       },
       "control": "Control",
-      "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically."
+      "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -7906,6 +7900,7 @@
         "install": "Install",
         "details": "Details",
         "detailsAria": "View details for {{name}}",
+        "loadingDetails": "Loading details…",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
@@ -8206,6 +8201,42 @@
         "agentCompanions": "Can view your buddies, their status and recent conversation",
         "agentCompanionsDetail": "Can view all your buddies, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the recent conversation in each buddy’s main chat (up to 50 of your messages and their replies, without tool steps); and open a buddy’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read files, tool steps or thinking.",
         "agentCompanionsRequest": "Review buddy viewing permission",
+        "hostTools_history": "Task History",
+        "hostTools_historyDetail": "Use Cindy’s task tools to list existing tasks, read complete messages and search history, including your other computers when explicitly selected and accessible.",
+        "hostTools_control": "Task Management",
+        "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects. High-risk operations require confirmation in Cindy each time.",
+        "hostTools_handoff": "Task Messaging",
+        "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
+        "hostTools_settings": "App Settings",
+        "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
+        "hostTools_scheduler": "Automation Management",
+        "hostTools_schedulerDetail": "After approval, the plugin can create, list, edit, pause, resume, delete and run automated tasks, and read run history. Agent-run scheduled tasks use the task’s default permissions, including Full Access. High-risk host operations require confirmation each time.",
+        "hostTools_terminal": "Terminal and Commands",
+        "codeDetailFiles": "The plugin page stays isolated. Cindy performs approved file operations within the directories you select.",
+        "hostTools_discovery": "View Host Capabilities",
+        "hostTools_discoveryDetail": "Read the services provided by the execution computer and this plugin’s declared and approved tool groups. Cannot install, disable or revoke other plugins.",
+        "hostTools_browser": "Browser Control",
+        "hostTools_browserDetail": "Read and operate pages in Cindy’s selected browser. Switching to My Browser, uploading files and other sensitive actions keep Cindy’s confirmations.",
+        "hostTools_computer": "Computer Control",
+        "hostTools_computerDetail": "View windows and use keyboard and mouse actions through Cindy’s computer tools. System permissions, sensitive input protection and Host risk rules still apply.",
+        "hostTools_ssh": "SSH Connections",
+        "hostTools_sshDetail": "Run commands and manage your configured SSH connections. Credentials stay with Cindy. Actions requiring confirmation are confirmed each time.",
+        "hostTools_docs": "Read and Create Documents",
+        "hostTools_docsDetail": "Use Cindy’s document tools within this plugin’s private directory. Creating and converting documents requires Cindy’s confirmation.",
+        "codeDetailHostServices": "Plugin pages stay isolated. Approved Host tools can operate browsers, computers, connections or documents as described in each permission.",
+        "hostTools_storage": "Storage and Sharing Between Plugins",
+        "hostTools_storageDetail": "Use this plugin’s storage, Library and authorized media. Cindy confirms the source, recipient plugin and exact copy for every share. Other plugins’ storage cannot be read.",
+        "codeDetailStorage": "Storage operations stay within this plugin’s data. You confirm every share with another plugin.",
+        "storageShareTitle": "Give a Copy to Another Plugin",
+        "storageShareMessage": "Copy “{{file}}” ({{size}}) from plugin “{{name}}” to plugin “{{target}}”. The recipient gets an independent copy; source updates are not synchronized. Content already read or saved by the recipient cannot be recalled.",
+        "hostTools_files": "Files in Selected Directories",
+        "hostTools_filesDetail": "Read, write, list, delete files and watch changes in directories you explicitly select. Previous selections do not grant access. Disabling the plugin stops access.",
+        "filesPickMessage": "Plugin “{{name}}” will be able to read, write, list and delete files in the selected directory and watch changes. Select a directory you allow it to access.",
+        "codeDetailTerminal": "Plugin pages run in an isolated sandbox. Approved commands run as your user and can access local files, apps and networks.",
+        "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps. Starting, entering input and other changes require confirmation in Cindy each time.",
+        "hostToolsRequest": "Review {{group}} Permission",
+        "hostToolCallTitle": "Allow Plugin Operation",
+        "hostToolCallMessage": "The plugin “{{name}}” wants to call {{server}} / {{tool}}. This approval applies only to the parameters below.",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -8234,6 +8265,10 @@
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
         "residentDetail": "Uses a small amount of memory while idle; the process stops immediately when it is disabled or uninstalled.",
         "subscribeTopics": "Observes your session activity (turn and session events, no message content)",
+        "subscribeMessage": "Message content events",
+        "subscribeMessageDetail": "Receives saved user messages and AI replies. Attachments use separate reading and handoff.",
+        "subscribeTaskState": "Task state events",
+        "subscribeTaskStateDetail": "Receives changes to running, waiting, completion, archive and hidden task states.",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
         "subscribeActivityDetail": "Sees only the timing: when thinking starts and ends, and when the AI is waiting for your approval or your answer. It never sees the reasoning text, the action awaiting approval, the command or file involved, the plan, the question, or your answer — and it cannot approve anything on your behalf.",
         "subscribeHooks": "Can read, block, or rewrite the messages you send",
@@ -8265,8 +8300,8 @@
         "badgeDetail": "When it has something new, it can show a green dot on the Plugins entry in the left navigation and on its own card, with a one-line summary. Opening its panel clears the dot. The dot makes no sound, does not vibrate, never reaches your system notification center, and is a permission separate from system tips.",
         "confirm": "Can ask for your confirmation in a dialog",
         "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
-        "fsWrite": "Can write files (create / modify)",
-        "fsWriteDetail": "Its own private data folder is always writable. Writes into the current session's working directory follow the session's permission mode (auto-approve modes write directly; per-action modes ask you first). Any other folder always requires your confirmation. Files are always written by the host — the plugin itself never touches your file system.",
+        "fsWrite": "Can manage its private files",
+        "fsWriteDetail": "Can read, write, list and delete its own private data. During an Agent call, it can also read, list and watch the task's working directory. Writes and deletions follow the task's permissions; approving a write does not approve deletion. Watching stops when the call ends. All file operations run in the host.",
         "deviceSync": "Sync plugin data between your computers",
         "deviceSyncDetail": "Exchanges this plugin’s data with the same plugin on your other online computers signed in to the same Cindy account. Transfers are encrypted. The plugin controls merging and deletions; no credentials or other plugins’ data are shared.",
         "libraryPersist": "Can use a durable library (large files and databases)",
@@ -11348,6 +11383,7 @@
         "memberLimit": "A group chat needs 2–6 buddies",
         "memberUnavailable": "One of these buddies is unavailable. Choose another and try again.",
         "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
+        "mentionAmbiguous": "More than one member is named “{{name}}”. Pick who you mean from the @ list.",
         "notFound": "This group chat no longer exists",
         "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
         "planOpen": "A work split is underway. Finish or stop it before starting another.",
@@ -12508,7 +12544,7 @@
         "expiredCardNotice": "This card has expired",
         "slash": {
           "new": "🌱 Fresh start — I’ve cleared our previous conversation. Let’s take it from the top.",
-          "help": "🤖 Here’s what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a workspace on the desktop (send it again during control to switch sessions)\n/exctr       End remote control and return to our Discord DM\n/help        See what I can do\n\nNeed to stop something that’s running? Just send `!stop` — I’ll abort the current run right away and drop queued messages too. The session is kept, so you can continue later.\n\nOtherwise, just send me a message. I’m listening.",
+          "help": "🤖 Here’s what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a project on the desktop (send it again during control to switch sessions)\n/exctr       End remote control and return to our Discord DM\n/help        See what I can do\n\nNeed to stop something that’s running? Just send `!stop` — I’ll abort the current run right away and drop queued messages too. The session is kept, so you can continue later.\n\nOtherwise, just send me a message. I’m listening.",
           "unknownCommand": "I don’t recognize the command `{{cmd}}` 🤔\nCommands I know: /new, /model, /permission, /ctr, /exctr, /help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` isn’t available in server channels — it would expose the private sessions / projects on your desktop in public. To use it, send it to me in a DM.",
           "detachedBySlash": "🚪 Remote control ended — we’re back in our Discord DM. Send /ctr whenever you want to control the desktop again.",
@@ -12587,15 +12623,15 @@
             "fullAccessCancelled": "Cancelled — keeping current permissions"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to control yet. Open or create a session on the desktop, then come back._",
-            "hint": "Choose a workspace to continue; 🚪 Exit cancels.",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to control yet. Open or create a session on the desktop, then come back._",
+            "hint": "Choose a project to continue; 🚪 Exit cancels.",
             "attachedSwitchHint": "🎮 Currently controlling: **{{sessionTitle}}**\nPick a new session to switch to it; 🚪 Exit keeps things as they are.",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Left. Send /ctr whenever you want remote control again.",
             "sessionPickerTitle": "🎮 Sessions in {{displayName}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New starts a fresh one · ↩️ Back changes workspace · 🚪 Exit cancels",
-            "sessionPickerEmptyBody": "_No active sessions in workspace **{{displayName}}** yet. Why not start one with ➕ New?_",
+            "sessionPickerHint": "Pick a session to continue · ➕ New starts a fresh one · ↩️ Back changes project · 🚪 Exit cancels",
+            "sessionPickerEmptyBody": "_No active sessions in project **{{displayName}}** yet. Why not start one with ➕ New?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
             "resolvedSessionPick": "🎯 You’re in: **{{sessionTitle}}** ({{workspaceName}})\nYour messages now go straight to this session. Send `/exctr` anytime to leave.",
@@ -12705,7 +12741,7 @@
         "slash": {
           "start": "👋 Hi, I'm your personal Cindy assistant!\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages. Send /help to see all commands.",
           "new": "🌱 New session created — it's in your session list now. Let's start fresh!",
-          "help": "🤖 Here's what I can do:\n\n/new         Create a new session (old ones are kept; in groups, it's created for the current group topic)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/session     List recent desktop sessions; tap one to take it over and keep chatting\n/model       Bring in a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/settings    See the current project, Agent, model, effort, and permissions\n/ctr         Remotely take over a workspace on desktop (send it again during a takeover to switch sessions)\n/exctr       End the takeover and go back to the Telegram chat\n/help        See what I can do\n\nSomething running that you want to stop? Send /stop (or `!stop`) — I'll halt the current run right away and drop any queued messages. The session is kept so you can continue.\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages — and I remember recent group messages for context.",
+          "help": "🤖 Here's what I can do:\n\n/new         Create a new session (old ones are kept; in groups, it's created for the current group topic)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/session     List recent desktop sessions; tap one to take it over and keep chatting\n/model       Bring in a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/settings    See the current project, Agent, model, effort, and permissions\n/ctr         Remotely take over a project on desktop (send it again during a takeover to switch sessions)\n/exctr       End the takeover and go back to the Telegram chat\n/help        See what I can do\n\nSomething running that you want to stop? Send /stop (or `!stop`) — I'll halt the current run right away and drop any queued messages. The session is kept so you can continue.\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages — and I remember recent group messages for context.",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Current settings\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nTo change them, send /project, /model, or /permission.",
           "settingsCompanion": "⚙️ Current settings (teammate)\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nModel, permissions, and working directory follow the teammate's settings. Change them in the teammate settings in Cindy.",
@@ -12807,15 +12843,15 @@
             "dialogueName": "Chat (managed folder)"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to take over yet. Open or create a session in desktop, then come back._",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to take over yet. Open or create a session in desktop, then come back._",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently controlling: **{{title}}**\nPick another session to switch right over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 I'm out. Send /ctr next time you want remote control",
             "sessionPickerTitle": "🎮 Sessions in {{name}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New for a new session · ↩️ Back to change workspace · 🚪 Exit to cancel",
-            "sessionPickerEmptyBody": "_No active sessions in workspace **{{name}}** yet. Why not tap ➕ New to start one?_",
+            "sessionPickerHint": "Pick a session to continue · ➕ New for a new session · ↩️ Back to change project · 🚪 Exit to cancel",
+            "sessionPickerEmptyBody": "_No active sessions in project **{{name}}** yet. Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
             "resolvedSessionPick": "🎯 You're in: **{{title}}** ({{workspace}})\nYour messages now go straight into this session; send `/exctr` anytime to leave",
@@ -12824,7 +12860,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ That session is still running — here's a fresh card below, pick again",
             "recentSessions": {
               "title": "🕑 Recent sessions",
-              "hint": "Tap one to take over and keep chatting (sorted by time across workspaces) · Use /ctr to pick by workspace · 🚪 Exit to cancel",
+              "hint": "Tap one to take over and keep chatting (sorted by time across projects) · Use /ctr to pick by project · 🚪 Exit to cancel",
               "emptyBody": "_No active sessions on desktop yet. Start one in desktop first, then come back._"
             },
             "sessionBusyPrompts": {
@@ -12978,18 +13014,18 @@
           "permissionTimeout": "Timed out waiting for approval. The permission request was denied."
         },
         "run": {
-          "routeReselectHint": ". Choose a model again for this channel's working directory in Settings → IM bots.",
+          "routeReselectHint": ". Choose a model again for this channel's project in Settings → IM bots.",
           "awaitingPermission": "Waiting for approval · needs your confirmation",
           "awaitingAnswer": "Waiting for an answer · needs your choice",
           "awaitingPlan": "Waiting for review · needs you to confirm the plan",
           "awaitingFallback": "Waiting for your confirmation",
           "cancelledBeforeRun": "The task was stopped by the user, so this message was not run.",
-          "liveSessionDirUnmapped": "This task is running in a directory that's no longer in the working directory mappings, so this message was not run. Add that directory under Settings → Remote Connection → Working directory mappings, or close this task in the desktop app and resend.",
+          "liveSessionDirUnmapped": "This task is running in a directory that no longer belongs to any project, so this message was not run. Add that directory as a project in the sidebar, or close this task in the desktop app and resend.",
           "interactionExpired": "The task has ended, so this interaction is no longer valid.",
           "telegramOfficialBot": "Telegram official bot"
         },
         "dispatch": {
-          "dirUnmapped": "This task's directory is no longer in the working directory mappings, so this message was not run. Add its directory under Settings → Remote Connection → Working directory mappings, then send it again."
+          "dirUnmapped": "This task's directory no longer belongs to any project, so this message was not run. Add its directory as a project in the sidebar, then send it again."
         }
       },
       "wecom": {
@@ -13074,9 +13110,9 @@
             "fullAccessCancelled": "Cancelled. Current permissions kept"
           },
           "control": {
-            "title": "🎮 Choose a workspace",
-            "emptyBody": "_No workspaces are available to take over yet. Create a task in Cindy Desktop first._",
-            "hint": "Choose a workspace to continue, or exit.",
+            "title": "🎮 Choose a project",
+            "emptyBody": "_No projects are available to take over yet. Create a task in Cindy Desktop first._",
+            "hint": "Choose a project to continue, or exit.",
             "attachedSwitchHint": "Currently controlling: **{{sessionTitle}}**",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited takeover",
@@ -13138,7 +13174,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 Fresh start — I've cleared our previous conversation. Let's begin again!",
-          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a workspace in the desktop app (send it again while controlling to switch sessions)\n/exctr       End remote control and return to our DM\n/help        See what I can do\n\nNeed to stop something that's running? Just send `!stop` — I'll halt the current run right away and drop any queued messages. The session is kept, so you can pick it up again.\n\nOtherwise, just send me a message — I'm listening~",
+          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/model       Switch to a different model\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a project in the desktop app (send it again while controlling to switch sessions)\n/exctr       End remote control and return to our DM\n/help        See what I can do\n\nNeed to stop something that's running? Just send `!stop` — I'll halt the current run right away and drop any queued messages. The session is kept, so you can pick it up again.\n\nOtherwise, just send me a message — I'm listening~",
           "unknownCommand": "I don't recognize the `{{cmd}}` command 🤔\nCommands I understand: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Remote control ended — we're back in our DM. Send /ctr whenever you want to control the desktop app again",
           "detachedByRevoke": "⚠️ You ended remote control from the desktop app. New messages will go to our DM again.",
@@ -13235,15 +13271,28 @@
             "resolved": "✅ Switched to “Auto-review” — head back to the group and keep going~",
             "failed": "❌ Couldn't switch: {{reason}}. You can send /permission auto to switch manually"
           },
+          "project": {
+            "title": "📂 Switch project folder",
+            "hint": "**Current**: {{name}}\nPick a project and the next messages will work in that folder (context restarts; model and permission settings are kept)",
+            "emptyBody": "_No active project workspaces on desktop yet. Open a project in desktop first, then come back._",
+            "btnDialogue": "💬 Back to chat",
+            "btnCancel": "🚪 Never mind",
+            "resolvedPick": "📂 Switched to **{{name}}** — fresh context is ready, send an instruction to get started. To go back to a regular chat, send /project and pick “Back to chat”",
+            "resolvedDialogue": "💬 Back in the chat folder — context starts fresh.",
+            "resolvedCancel": "🚪 No switch — keeping things as they are",
+            "switchFailed": "❌ Couldn't switch: {{reason}} (the folder may have been moved or deleted)",
+            "attachedUnsupported": "🎮 You're taking over a desktop session via /ctr — during a takeover, messages go straight into that session, so /project isn't needed. To switch projects, send `/exctr` to end the takeover first",
+            "dialogueName": "Chat (managed folder)"
+          },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to control yet~ Open or create a session in the desktop app, then come back_",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to control yet~ Open or create a session in the desktop app, then come back_",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently controlling: **{{title}}**\nPick another session to switch over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited. Send /ctr next time you want remote control",
             "sessionPickerTitle": "🎮 Sessions in {{workspace}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New to start one · ↩️ Back to change workspace · 🚪 Exit to cancel",
+            "sessionPickerHint": "Pick a session to continue · ➕ New to start one · ↩️ Back to change project · 🚪 Exit to cancel",
             "sessionPickerEmptyBody": "_No active sessions in **{{workspace}}** yet~ Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
@@ -13288,7 +13337,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 Fresh start — I've cleared the previous conversation. Let's begin again~",
-          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch models\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely take over a workspace in the desktop app (send it again while in control to switch sessions)\n/exctr       End the takeover and return to our WeChat DM\n/help        See what I can do\n\nNeed to stop something that's in progress? Just send `!stop` — I'll halt the current run right away and drop queued messages. The session stays, so you can continue later.\n\nOtherwise, just message me. I'm listening~",
+          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch models\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely take over a project in the desktop app (send it again while in control to switch sessions)\n/exctr       End the takeover and return to our WeChat DM\n/help        See what I can do\n\nNeed to stop something that's in progress? Just send `!stop` — I'll halt the current run right away and drop queued messages. The session stays, so you can continue later.\n\nOtherwise, just message me. I'm listening~",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Takeover ended — we're back in our WeChat DM. Send /ctr next time you want to control the desktop app remotely",
           "detachedByRevoke": "⚠️ You took back control in the desktop app. New messages will go to our WeChat DM again.",
@@ -13371,14 +13420,14 @@
             "fullAccessCancelled": "Canceled. Current permissions kept"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to take over yet~ Open or create a session in the desktop app, then come back_",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to take over yet~ Open or create a session in the desktop app, then come back_",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently in control: **{{sessionTitle}}**\nPick a new session to switch over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited. Send /ctr whenever you want remote control again",
             "sessionPickerTitle": "🎮 Sessions in {{displayName}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New for a fresh one · ↩️ Back to change workspace · 🚪 Exit to cancel",
+            "sessionPickerHint": "Pick a session to continue · ➕ New for a fresh one · ↩️ Back to change project · 🚪 Exit to cancel",
             "sessionPickerEmptyBody": "_No active sessions in **{{displayName}}** yet~ Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
@@ -15530,6 +15579,7 @@
       "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
       "REMOTE_AGENT_BUSY": "Too many sessions are running on the other computer. End some of them and try again.",
       "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
+      "REMOTE_AGENT_RESUME_UNAVAILABLE": "This computer cannot resume the task’s previous runtime state. Select a model from another computer or provider to continue with a context handoff. Existing messages are kept.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
       "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
@@ -17912,6 +17962,7 @@
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
+      "descriptionFsDelete": "This plugin requests to delete the files or folders below from the current task's working directory. Deleting a folder also deletes its contents. This approval applies to this deletion only.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "descriptionForgeSource": "The directory below is outside this session's working directory. If you allow, Forge will pack or scaffold the plugin there (it writes a .cindy artifact or skeleton files).",
       "descriptionForgeScaffold": "The directory below is outside this session's working directory. If you allow, Forge will create plugin source files there.",
@@ -18941,6 +18992,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
+      "savedModelUnavailable": "The saved model or its source is unavailable.",
+      "reselectModel": "Choose a model",
       "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",
       "initialTaskPlaceholder": "Write the first thing to hand it, or leave blank and let the Lead assign work",
@@ -20829,6 +20882,8 @@
       "description": "Choose what to move from “{{name}}” to this computer. Settings you already changed on this computer are kept.",
       "partial": "Some content on that computer couldn't be read this time. Only what was read is listed below.",
       "groupCount": "{{selected}} of {{total}} selected",
+      "groupCount_one": "{{selected}} of {{total}} selected",
+      "groupCount_other": "{{selected}} of {{total}} selected",
       "present_one": "{{count}} more item is already the same here",
       "present_other": "{{count}} more items are already the same here",
       "start_one": "Move {{count}} Item",
@@ -21403,8 +21458,8 @@
   "modelGroups": {
     "title": "Model groups",
     "description": "Combine sources you already have under Model providers into one choice. Pick it under Model groups in the model picker and Cindy decides which source to use.",
-    "routes": "Routes",
-    "routesDescription": "A route holds several sources. Each new task picks one by the route's rule.",
+    "routes": "Modes",
+    "routesDescription": "A mode holds several sources. Each new task picks one by the mode's rule.",
     "sourceCount_one": "{{count}} source",
     "sourceCount_other": "{{count}} sources",
     "strategy": {
@@ -21426,8 +21481,10 @@
       }
     },
     "picker": {
-      "empty": "No model groups yet. Combine a few sources into a route in Settings to pick it here.",
-      "manage": "Manage model groups"
+      "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
+      "manage": "Manage model groups",
+      "switched": "“{{name}}” switched this task to {{model}}",
+      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
@@ -21439,7 +21496,7 @@
       "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
       "standby": "Not picked this time",
       "standbyQuota": "{{left}}% of its quota is left and does not reset until {{reset}}, so it is kept for later",
-      "off": "Off in this route",
+      "off": "Off in this mode",
       "unavailable": "Not connected, or this model cannot be selected now",
       "limited": "Out of quota",
       "limitedUntil": "Out of quota until {{reset}}",
@@ -21453,10 +21510,10 @@
       "separator": "; "
     },
     "settings": {
-      "newRoute": "New route",
-      "newRouteName": "New route",
-      "routesEmpty": "No routes yet. Create one and add a few sources.",
-      "scopeNote": "Model groups apply to new tasks started on this computer. A source is chosen when the task starts and does not change during the task.",
+      "newRoute": "New mode",
+      "newRouteName": "New mode",
+      "routesEmpty": "No modes yet. Create one and add a few sources.",
+      "scopeNote": "Model groups apply to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
       "back": "Back to model groups",
       "name": "Name",
       "nameHint": "Shown in the model picker.",
@@ -21468,14 +21525,14 @@
       "sources": "Sources it can use",
       "sourcesHint": "Different models can sit together. The task shows which one was used.",
       "sourcesEmpty": "No sources yet. Add a connected model below.",
-      "sourcesFull": "A route can hold up to {{count}} sources.",
+      "sourcesFull": "A mode can hold up to {{count}} sources.",
       "addSource": "Add source",
       "chooseModel": "Choose a model",
       "notConnected": "Not connected",
       "moveUp": "Move up",
       "moveDown": "Move down",
-      "remove": "Remove from this route",
-      "useSource": "Let this route use {{name}}",
+      "remove": "Remove from this mode",
+      "useSource": "Let this mode use {{name}}",
       "try": {
         "title": "Try it",
         "hint": "See which source a new task would use right now. Nothing is sent and no quota is used.",
@@ -21483,11 +21540,11 @@
         "picked": "Use this",
         "standby": "Standby",
         "skipped": "Skipped",
-        "unavailable": "No source in this route can be used right now. A new task will use the model you had selected."
+        "unavailable": "No source in this mode can be used right now. A new task will use the model you had selected."
       },
-      "deleteRoute": "Delete this route",
+      "deleteRoute": "Delete this mode",
       "deleteRouteConfirmTitle": "Delete “{{name}}”?",
-      "deleteRouteConfirmDescription": "Time-of-day exceptions in other routes that switch to it are removed too. Tasks already started are not affected.",
+      "deleteRouteConfirmDescription": "Time-of-day exceptions in other modes that switch to it are removed too. Tasks already started are not affected.",
       "delete": "Delete",
       "cancel": "Cancel",
       "saveFailed": "Could not save. Try again.",
@@ -21508,17 +21565,17 @@
         "addHours": "Add",
         "sameHour": "Start and end cannot be the same time.",
         "full": "Up to {{count}} exceptions.",
-        "needOtherRoute": "Create another route to switch to it by time of day."
+        "needOtherRoute": "Create another mode to switch to it by time of day."
       }
     },
     "overview": {
       "mapTitle": "How new tasks pick a model",
-      "mapDescription": "Left to right: the route a new task takes and the source it lands on. Click a route to change it.",
+      "mapDescription": "Left to right: the mode a new task takes and the source it lands on. Click a mode to change it.",
       "columnSources": "Sources",
       "columnEmpty": "None yet",
-      "openRoute": "Open route “{{name}}”",
+      "openRoute": "Open mode “{{name}}”",
       "recentTitle": "Recent choices",
-      "recentEmpty": "No task has used a route yet.",
+      "recentEmpty": "No task has used a mode yet.",
       "keptOriginal": "Nothing in it was available, so the task kept the model you had chosen.",
       "keptOriginalShort": "Kept your model",
       "latest": "The path the latest task took"
