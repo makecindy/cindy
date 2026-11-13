@@ -136,11 +136,11 @@ export interface HookConnectionConfig {
   createdAt: number;
 }
 
-const MAX_WORKSPACES = 64;
 /**
- * 旧名称表只防坏文件撑爆内存, 不是业务上限: 丢掉一条旧名称, 它就可能被分给别的项目
- * (见 projectWorkspaces.ts), 所以正常数据永远不该碰到这个数。
+ * 清单与旧名称表的条数上限只防坏文件撑爆内存, 不是业务上限: 清单就是全部侧栏项目;
+ * 丢掉一条旧名称, 它就可能被分给别的项目(见 projectWorkspaces.ts)。正常数据到不了这个数。
  */
+const MAX_WORKSPACES = 4096;
 const MAX_RETIRED_WORKSPACES = 4096;
 const OBJECT_META_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const ACCOUNT_FINGERPRINT_RE = /^[A-Za-z0-9_-]{8,64}$/;

@@ -89,6 +89,18 @@ describe('/ctr control project/session picker', () => {
       (await listProjectsForControl({ projectsOnly: true })).map((row) => row.displayName),
     ).toEqual(['empty', '主仓库']);
 
+    // PR #10291 review(第五轮): 侧栏里起了同一个名字的两个项目, 卡片上不能是两个一样的按钮。
+    setControlProjectCatalogSource(async () => ({
+      projects: [
+        { path: '/work/a/api', name: '后端', lastUsedAtMs: 2 },
+        { path: '/work/b/server', name: '后端', lastUsedAtMs: 1 },
+      ],
+      isRemoved: () => false,
+    }));
+    expect(
+      (await listProjectsForControl({ projectsOnly: true })).map((row) => row.displayName),
+    ).toEqual(['后端 · api', '后端 · server']);
+
     // PR #10291 review: 上限只用于卡片展示; 按按钮标记找回项目时要能查到全部。
     setControlProjectCatalogSource(async () => ({
       projects: Array.from({ length: 25 }, (_, index) => ({

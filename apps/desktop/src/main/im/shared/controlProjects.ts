@@ -195,8 +195,47 @@ export async function listProjectsForControl(
     };
   });
 
+  disambiguateDisplayNames(projects);
   projects.sort((a, b) => b.latestActivityMs - a.latestActivityMs);
   return options.all ? projects : projects.slice(0, MAX_PROJECTS);
+}
+
+/** 卡片按钮的 label 上限(cardBuilders 按它截断)。 */
+const BUTTON_LABEL_MAX = 30;
+
+/**
+ * 显示名相同的项目(侧栏里起了同一个名字的两个项目)补上能区分的后缀: 目录名, 仍相同再加
+ * 上级目录, 最后用序号。卡片按钮上只有显示名, 两个一模一样的按钮背后是不同目录, 用户会
+ * 在不知情的情况下切进错的项目。后缀保证落在按钮 label 的截断长度之内。
+ */
+function disambiguateDisplayNames(projects: ControlProject[]): void {
+  const groups = new Map<string, ControlProject[]>();
+  for (const project of projects) {
+    const group = groups.get(project.displayName) ?? [];
+    group.push(project);
+    groups.set(project.displayName, group);
+  }
+  const used = new Set(projects.map((project) => project.displayName));
+  const withSuffix = (name: string, suffix: string): string =>
+    `${Array.from(name).slice(0, Math.max(1, BUTTON_LABEL_MAX - Array.from(suffix).length)).join('')}${suffix}`;
+  for (const [name, group] of groups) {
+    if (group.length < 2) continue;
+    used.delete(name);
+    group.forEach((project, index) => {
+      const segs = project.workingDir.split('/').filter(Boolean);
+      const candidates = [
+        withSuffix(name, ` · ${Array.from(segs[segs.length - 1] ?? '').slice(0, 12).join('')}`),
+        withSuffix(name, ` · ${Array.from(segs.slice(-2).join('/')).slice(-16).join('')}`),
+      ];
+      let label = candidates.find((candidate) => !used.has(candidate));
+      for (let n = index + 1; label === undefined; n += 1) {
+        const numbered = withSuffix(name, ` #${n}`);
+        if (!used.has(numbered)) label = numbered;
+      }
+      used.add(label);
+      project.displayName = label;
+    });
+  }
 }
 
 /**

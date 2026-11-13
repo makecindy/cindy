@@ -119,20 +119,18 @@ describe('planProjectWorkspaces', () => {
     expect(back.retired).toEqual({ main: '/a/app' });
   });
 
-  // PR #10291 review(第四轮): 名称归属只看清单里的前 64 个项目, 项目一掉出窗口, 它的名称就
-  // 分给了同名的别的项目; 旧名称表按 64 条截断同理。最小失败输入: 65 个项目, 第 65 个叫 app,
-  // 窗口里新来一个也叫 app 的项目; 以及一个项目攒了 70 个旧名称。
-  it('掉出清单窗口的项目仍占着自己的名称, 回到窗口时原样拿回; 旧名称不按条数丢弃', () => {
+  // PR #10291 review(第四、五轮): 清单按「最近的前 64 个」截取时, 项目随使用顺序进出清单,
+  // 名称会被同名项目拿走、默认项目被清掉、按名称存的权限档对不上; 旧名称表按条数截断同理。
+  // 现在清单是全部项目, 旧名称不按条数丢弃。最小失败输入: 65 个项目且最后一个与新来的同名;
+  // 一个项目攒了 70 个旧名称。
+  it('项目再多也全部进清单, 名称不随使用顺序易主; 旧名称不按条数丢弃', () => {
     const filler = Array.from({ length: 64 }, (_, index) => ({ path: `/f/p${index}`, name: `p${index}` }));
     const old = { path: '/a/app', name: 'app' };
-    const first = plan({ app: '/a/app' }, [{ path: '/b/app', name: 'app' }, ...filler.slice(1), old]);
-    expect(first.workspaces.app).toBeUndefined();
-    expect(first.workspaces['b/app']).toBe('/b/app');
-    expect(first.retired.app).toBe('/a/app');
-
-    const back = plan(first.workspaces, [old, ...filler.slice(2), { path: '/b/app', name: 'app' }], first.retired);
-    expect(back.workspaces.app).toBe('/a/app');
-    expect(back.workspaces['b/app']).toBe('/b/app');
+    const result = plan({ app: '/a/app' }, [{ path: '/b/app', name: 'app' }, ...filler, old]);
+    expect(Object.keys(result.workspaces)).toHaveLength(66);
+    expect(result.workspaces.app).toBe('/a/app');
+    expect(result.workspaces['b/app']).toBe('/b/app');
+    expect(result.retired).toEqual({});
 
     const many = Object.fromEntries(Array.from({ length: 70 }, (_, index) => [`old${index}`, '/a/app']));
     const kept = plan({ app: '/a/app' }, [old, { path: '/c/x', name: 'old0' }], many);
