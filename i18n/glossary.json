@@ -3315,6 +3315,12 @@
       },
       "checkCase": false,
       "alsoAllowed": {
+        "fr": [
+          {
+            "text": "En cours d'exécution",
+            "when": "标题或状态标签使用大写首字母；句中仍使用小写首字母。"
+          }
+        ],
         "zh-CN": [
           {
             "text": "正在运行",
