@@ -2,12 +2,12 @@
 // builds the single Desktop instance; its port resolves Electron when called, never when this
 // module loads.
 import { createWorktreeRuntimeLeases } from './runtimeLeasesCore.js';
-import { app } from 'electron';
+import { getUserDataDir, getAppDataDir } from '../userDataPath.js';
 export { managedWorktreeRoot } from './managedResourcePath.js';
 export type { WorktreeRuntimeLease } from './runtimeLeasesCore.js';
 
 const desktopLeases = createWorktreeRuntimeLeases({
-  app: { getPath: (name) => app.getPath(name) },
+  app: { getPath: (name) => name === 'userData' ? getUserDataDir() : getAppDataDir() },
 });
 type Instance = typeof desktopLeases;
 

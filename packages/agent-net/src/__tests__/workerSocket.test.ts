@@ -5,11 +5,20 @@
  * 现有覆盖缺口：socket.integration.test.ts 的工厂是同步的，从不在建连途中关闭。
  * 最小失败输入：worker 发出 ws-open → 工厂未返回时 terminate() → 工厂返回 CONNECTING ws。
  * tier：unit，内联最小 worker 与本机回环 TCP（只接受连接不回握手，保证停在 CONNECTING）。
+ *
+ * 中继连接保活（同一生产入口，ws 由 Main 建立后开始 ping）：
+ * Bug：2026-11-13 一台 Mac 到 Agent-Net 中继的连接「能收不能发」，device-link 心跳在 worker 内
+ * 就地应答、从不经过中继，察觉不到；对端互判离线 9 / 15 分钟，重连后 1 秒内恢复。
+ * 可观察结果：中继不回 pong 时 Main 断开这条 ws（中继侧看到关闭，交由 worker 既有重连）并记一条
+ * 警告；中继正常回 pong 时，超过超时时长也不断开。
+ * 现有覆盖缺口：此前 Main 侧没有任何中继连接活性判断，相邻用例只覆盖建连途中关闭。
+ * 最小失败输入：本机中继 autoPong=false，连接打开后保持沉默超过 timeoutMs。
+ * tier：unit，本机回环真实 WebSocket，间隔压到毫秒级（整文件约 1 秒内）。
  */
 import { afterEach, expect, it } from 'vitest';
 import { once } from 'node:events';
 import net from 'node:net';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 import type { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { AgentNetWorkerSocket } from '../workerSocket.js';
 
@@ -57,4 +66,38 @@ it('discards a still-CONNECTING network socket without an uncaught error when cl
   // Only a 'close' listener: events.once() would add an 'error' listener and mask the bug.
   await new Promise<void>((resolve) => { ws.on('close', () => resolve()); });
   expect(ws.readyState).toBe(WebSocket.CLOSED);
+});
+
+async function openAgainstRelay(options: { autoPong: boolean }) {
+  const relay = new WebSocketServer({ host: '127.0.0.1', port: 0, autoPong: options.autoPong });
+  await once(relay, 'listening');
+  const accepted = once(relay, 'connection') as Promise<[WebSocket]>;
+  const base = `http://127.0.0.1:${(relay.address() as net.AddressInfo).port}`;
+  const client = {
+    base, path: (value: string) => value, delegation: undefined, rootPublicKey: 'root',
+    identity: { deviceId: 'unit-device' }, certificate: { subject: 'unit-user' },
+    transport: { ownerPinnedHttp: false, createWebSocket: (url: string, opts: WebSocket.ClientOptions) => new WebSocket(url, opts) },
+  } as unknown as AgentNetClient;
+  const warnings: string[] = [];
+  const socket = await AgentNetWorkerSocket.open({
+    workerFile: fakeWorker, client, userId: 'unit-user', log: { info: () => {}, warn: (line: string) => { warnings.push(line); } },
+    uplinkKeepalive: { intervalMs: 10, timeoutMs: 50 },
+  } as Parameters<typeof AgentNetWorkerSocket.open>[0]);
+  cleanup.push(() => { socket.terminate(); for (const peer of relay.clients) peer.terminate(); relay.close(); });
+  const [server] = await accepted;
+  return { server, warnings };
+}
+
+it('drops a relay connection whose pings are never answered, so the worker reconnects it (2026-11-13)', async () => {
+  const { server, warnings } = await openAgainstRelay({ autoPong: false });
+  await new Promise<void>((resolve) => { server.on('close', () => resolve()); });
+  expect(warnings).toEqual([expect.stringMatching(/^agent-net relay connection is not answering \(no pong for \d+ms, \d+ bytes waiting to be sent\); reconnecting$/)]);
+});
+
+it('keeps a relay connection that answers pings past the silence budget', async () => {
+  const { server, warnings } = await openAgainstRelay({ autoPong: true });
+  // Eight answered pings span ~80ms, longer than the 50ms budget.
+  await new Promise<void>((resolve) => { let pings = 0; server.on('ping', () => { if (++pings === 8) resolve(); }); });
+  expect(server.readyState).toBe(WebSocket.OPEN);
+  expect(warnings).toEqual([]);
 });

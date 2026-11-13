@@ -3,8 +3,8 @@ import type { ChatAssistantSessionRecord } from './chatServerWorkspaces.js';
 import type { GroupProjectFolders, GroupProjectRoom, GroupWorkFolder } from './groupProjectFolder.js';
 
 /**
- * The group's Cindy on this computer (bot-group-chat.md §9): one ordinary visible task per group,
- * titled with the group's name, under the group's project folder when this computer has it and
+ * The group's Cindy on this computer (bot-group-chat.md §9): one ordinary visible task per
+ * conversation (main group or Thread), titled with the group's name, under the group's project folder when this computer has it and
  * under 「对话」 otherwise. Requests the owner makes to Cindy in the group arrive in it as ordinary
  * messages, so anything that blocks (a permission, a sign-in, a question) is handled right there.
  *
@@ -19,8 +19,10 @@ export interface GroupAssistantTask {
   pending?: GroupWorkFolder['pending'];
 }
 
-/** Threads whose delivered position a task remembers, besides the main group. */
-const THREADS_KEPT = 20;
+/** Keep the legacy room key for the main group. Threads never inherit its mixed history. */
+function taskKey(roomId: string, threadRootId?: string): string {
+  return threadRootId ? `${roomId}:thread:${threadRootId}` : roomId;
+}
 
 export function createGroupAssistantTasks(deps: {
   current: () => boolean;
@@ -30,47 +32,46 @@ export function createGroupAssistantTasks(deps: {
   ensureSession?: (input: { sessionId?: string; title: string; projectDir: string | null }) =>
     Promise<{ ok: true; sessionId: string } | { ok: false; errorCode: string; message: string }>;
 }) {
-  // One lookup per group at a time, so two requests arriving together share the same task.
+  // One lookup per conversation at a time, so two requests arriving together share the same task.
   const lookups = new Map<string, Promise<GroupAssistantTask>>();
 
-  async function find(room: GroupProjectRoom & { name: string }, isCurrent: () => boolean): Promise<GroupAssistantTask> {
+  async function find(room: GroupProjectRoom & { name: string }, isCurrent: () => boolean, threadRootId?: string): Promise<GroupAssistantTask> {
     if (!deps.ensureSession) throw new Error('MEMBER_UNAVAILABLE');
     // The requester is at this computer: Cindy may open its GitHub sign-in to fetch the repository.
     const folder = await deps.folders.forWork(room, { signIn: true, isCurrent: () => deps.current() && isCurrent() });
-    const saved = deps.store().read()[room.id];
+    const key = taskKey(room.id, threadRootId);
+    const saved = deps.store().read()[key];
     const ensured = await deps.ensureSession({ ...(saved?.projectDir === folder.dir ? { sessionId: saved.sessionId } : {}),
       title: room.name, projectDir: folder.dir });
     if (!ensured.ok) throw new Error(botGroupRuntimeFailureCode({ code: ensured.errorCode, message: ensured.message }));
     if (!deps.current()) throw new Error('OWNER_CHANGED');
     const all = deps.store().read();
-    const record = all[room.id]?.sessionId === ensured.sessionId ? all[room.id]! : { sessionId: ensured.sessionId, projectDir: folder.dir };
-    all[room.id] = record;
+    const record = all[key]?.sessionId === ensured.sessionId ? all[key]! : { sessionId: ensured.sessionId, projectDir: folder.dir };
+    all[key] = record;
     deps.store().save(all);
     return { sessionId: record.sessionId, delivered: record.deliveredSeq ?? {}, ...(folder.pending ? { pending: folder.pending } : {}) };
   }
 
   return {
     /** The group's task for a request made now. `isCurrent`: the request is still wanted. */
-    forRequest(room: GroupProjectRoom & { name: string }, isCurrent: () => boolean): Promise<GroupAssistantTask> {
-      const lookup = (lookups.get(room.id) ?? Promise.resolve()).catch(() => undefined).then(() => find(room, isCurrent));
-      lookups.set(room.id, lookup);
-      void lookup.catch(() => undefined).finally(() => { if (lookups.get(room.id) === lookup) lookups.delete(room.id); });
+    forRequest(room: GroupProjectRoom & { name: string }, isCurrent: () => boolean, threadRootId?: string): Promise<GroupAssistantTask> {
+      const key = taskKey(room.id, threadRootId);
+      const lookup = (lookups.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => find(room, isCurrent, threadRootId));
+      lookups.set(key, lookup);
+      void lookup.catch(() => undefined).finally(() => { if (lookups.get(key) === lookup) lookups.delete(key); });
       return lookup;
     },
     /** The task has the conversation's messages up to `seq`; the next request carries only newer ones. */
     noteDelivered(roomId: string, sessionId: string, scope: string, seq: string) {
       if (!deps.current()) return;
       const all = deps.store().read();
-      const record = all[roomId];
+      const key = taskKey(roomId, scope === 'main' ? undefined : scope);
+      const record = all[key];
       if (record?.sessionId !== sessionId) return;
       const delivered = { ...record.deliveredSeq };
       if (delivered[scope] !== undefined && BigInt(delivered[scope]!) >= BigInt(seq)) return;
-      // Re-inserted last: the main group and the latest Threads stay, an older Thread starts over.
-      delete delivered[scope];
       delivered[scope] = seq;
-      const threads = Object.keys(delivered).filter(key => key !== 'main');
-      for (const key of threads.slice(0, Math.max(0, threads.length - THREADS_KEPT))) delete delivered[key];
-      all[roomId] = { ...record, deliveredSeq: delivered };
+      all[key] = { ...record, deliveredSeq: delivered };
       deps.store().save(all);
     },
   };
