@@ -16,7 +16,7 @@ export function EmptyState({ menu, selectionOptions }: { menu: TabCreationMenu; 
         <span className="text-11 font-semibold uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
           {t('rightSidebar.tabs.empty.eyebrow')}
         </span>
-        <span className="text-20 font-semibold leading-tight text-[var(--text-primary)]">
+        <span className="text-20 font-medium leading-tight text-[var(--text-primary)]">
           {t('rightSidebar.tabs.empty.title')}
         </span>
         <span className="text-13 leading-relaxed text-[var(--text-tertiary)]">

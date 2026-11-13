@@ -103,7 +103,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
+          <p className="text-15 font-medium leading-tight text-[var(--chat-input-text)]">
             {t(
               pending.lane === 'reveal_path'
                 ? 'ghostGrant.confirm.titleRevealPath'

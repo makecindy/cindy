@@ -273,7 +273,7 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
                 <ShieldAlert size={22} className="text-[var(--error-fg-strong)]" />
               </div>
             )}
-            <Dialog.Title className="text-base font-semibold text-[var(--msg-assistant-text)]">
+            <Dialog.Title className="text-base font-medium text-[var(--msg-assistant-text)]">
               {title}
             </Dialog.Title>
             <p className="text-center text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]">

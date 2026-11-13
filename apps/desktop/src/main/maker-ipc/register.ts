@@ -21193,6 +21193,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertPendingOwner();
       setSessionEffort(sessionId, finalEffort);
       setSessionFastMode(sessionId, finalFastMode);
+      if (finalModel) {
+        agentInputCoordinatorHolder?.refreshQueuedRoute(sessionId, {
+          model: finalModel,
+          providerId: route.providerId,
+          effort: finalEffort ?? undefined,
+          fastMode: finalFastMode,
+        });
+      }
       broadcastSessionPatched(sessionId, patch);
     },
     logger: log,
@@ -24751,6 +24759,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 currentFastMode: getSessionFastMode(sessionId),
               })
             : undefined;
+        if (result.status !== 'deferred') {
+          agentInputCoordinatorHolder?.refreshQueuedRoute(sessionId, {
+            model,
+            providerId: getSessionProvider(sessionId),
+            effort: getSessionEffort(sessionId) ?? undefined,
+            fastMode: getSessionFastMode(sessionId),
+          });
+          wakeSessionInputAfterCredentialSwitch(sessionId);
+        }
         await broadcastSessionRuntimeProjection(sessionId, userBaselineOverride).catch((error) => {
           log.debug('session runtime projection broadcast failed', {
             sessionId,

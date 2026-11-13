@@ -18,7 +18,8 @@ import type { WorkerProjectInfo } from '../../shared/orca-worker-project';
  *   - 是 git 目录 → 采用,source='telemetry'(可信);
  *   - 该目录已不存在(worktree 删了)→ **不往回翻**(避免翻出更早的主 checkout
  *     冒充),直接落到 fallback,让 PR 分支兜底。
- * 拿不到遥测候选时回退 app 托管 worktree(live 路径)→ session.working_dir(低信任)。
+ * 会话当前选择的 linked worktree / app 托管 worktree 优先于旧工具记录；普通项目
+ * 目录仍可从遥测推断 agent 后续进入的 worktree。
  *
  * 纯函数 extractDirCandidate 不碰 IO,便于单测;IO 编排走注入依赖 / live 包装。
  */
@@ -81,6 +82,7 @@ export function extractLeadingCdDir(
   const dir = match?.[1] ?? match?.[2] ?? match?.[3];
   const remaining = match ? command.slice(match[0].length) : '';
   const hasLaterDirectorySwitch = /(?:^|[\s;&|()'"])(?:cd|pushd|popd)(?=[\s;&|()'"]|$)/.test(remaining);
+  // eslint-disable-next-line no-control-regex -- Reject control bytes in shell-derived directories.
   if (dir && !hasLaterDirectorySwitch && !/[\x00-\x1f$`\\*?{}]/.test(dir) && path.isAbsolute(dir)) {
     return posixDriveToWin32(dir, pathPlatform);
   }
@@ -148,6 +150,8 @@ export interface ResolveSessionGitDirDeps {
   recentToolUseContents: (sessionId: string) => Promise<string[]>;
   /** 读目录 HEAD(= readGitHead);非 git 目录 / 不存在返回 null。 */
   probeGitDir: (dir: string) => Promise<GitHeadInfo | null>;
+  /** Whether the session's selected directory belongs to a linked worktree. */
+  isLinkedWorktree?: (dir: string) => Promise<boolean>;
 }
 
 export interface FindLiveLinkedWorktreeDeps {
@@ -330,14 +334,14 @@ export async function findLiveLinkedWorktree(
   return null;
 }
 
-/**
- * 编排解析逻辑(纯依赖注入,可单测)。优先级:遥测 → app worktree → working_dir。
- */
+/** Resolve the current worktree binding before historical tool-use telemetry. */
 export async function resolveSessionGitDir(
   input: {
     sessionId: string;
     fallbackWorktreePath: string | null;
     fallbackWorkingDir: string | null;
+    /** Worker inheritance follows the Agent's latest tool directory. */
+    preferSelectedWorktree?: boolean;
   },
   deps: ResolveSessionGitDirDeps,
 ): Promise<SessionGitDirResult> {
@@ -351,6 +355,32 @@ export async function resolveSessionGitDir(
       break;
     }
   }
+  const preferSelectedWorktree = input.preferSelectedWorktree !== false;
+  // A persisted worktree path can outlive its checkout. readGitHead alone may
+  // resolve an ancestor repository, so verify the linked worktree first.
+  const liveWorktreePath = input.fallbackWorktreePath &&
+    (!deps.isLinkedWorktree || await deps.isLinkedWorktree(input.fallbackWorktreePath).catch(() => false))
+    ? input.fallbackWorktreePath : null;
+  // The selected linked worktree is authoritative when tool history has no
+  // directory or still points to another checkout. Matching telemetry already
+  // provides a trusted branch, so it does not need another worktree probe.
+  if (preferSelectedWorktree && input.fallbackWorkingDir &&
+      (!candidate || path.resolve(candidate) !== path.resolve(input.fallbackWorkingDir)) && deps.isLinkedWorktree &&
+      await deps.isLinkedWorktree(input.fallbackWorkingDir).catch(() => false)) {
+    const head = await deps.probeGitDir(input.fallbackWorkingDir);
+    if (head !== null) {
+      return { workdir: path.resolve(input.fallbackWorkingDir), head, source: 'worktree' };
+    }
+  }
+
+  // An app-managed worktree is likewise a live binding, not a telemetry fallback.
+  if (preferSelectedWorktree && liveWorktreePath) {
+    const head = await deps.probeGitDir(liveWorktreePath);
+    if (head !== null) {
+      return { workdir: path.resolve(liveWorktreePath), head, source: 'worktree' };
+    }
+  }
+
   if (candidate) {
     const head = await deps.probeGitDir(candidate);
     if (head !== null) {
@@ -359,15 +389,12 @@ export async function resolveSessionGitDir(
     // 最近的工作目录已不存在(worktree 删了)→ 不往回翻更早候选,落 fallback。
   }
 
-  // 2) app 托管 worktree 的 live 路径。
-  if (input.fallbackWorktreePath) {
-    const head = await deps.probeGitDir(input.fallbackWorktreePath);
-    if (head !== null) {
-      return { workdir: path.resolve(input.fallbackWorktreePath), head, source: 'worktree' };
-    }
+  if (!preferSelectedWorktree && liveWorktreePath) {
+    const head = await deps.probeGitDir(liveWorktreePath);
+    if (head !== null) return { workdir: path.resolve(liveWorktreePath), head, source: 'worktree' };
   }
 
-  // 3) 兜底 session.working_dir(低信任,徽标优先让位 PR 分支)。
+  // Ordinary project directory: tool-use can still identify a checkout entered via cd.
   if (input.fallbackWorkingDir) {
     const head = await deps.probeGitDir(input.fallbackWorkingDir);
     if (head !== null) {
@@ -474,6 +501,7 @@ export async function resolveSessionGitDirLive(input: {
   sessionId: string;
   fallbackWorktreePath: string | null;
   fallbackWorkingDir: string | null;
+  preferSelectedWorktree?: boolean;
 }): Promise<SessionGitDirResult> {
   return resolveSessionGitDir(input, {
     recentToolUseContents: async (sid) => {
@@ -488,6 +516,14 @@ export async function resolveSessionGitDirLive(input: {
       }
     },
     probeGitDir: (dir) => readGitHead(dir),
+    isLinkedWorktree: async (dir) => {
+      try {
+        const result = await detectCwd(dir);
+        return result.isGitRepo && result.isInsideWorktree;
+      } catch {
+        return false;
+      }
+    },
   });
 }
 
@@ -546,6 +582,7 @@ export async function resolveWorkerInheritedDirectory(
       sessionId: lead.id,
       fallbackWorkingDir: lead.workingDir,
       fallbackWorktreePath: lead.worktreePath ?? null,
+      preferSelectedWorktree: false,
     });
   } catch {
     return recorded;
