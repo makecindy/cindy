@@ -2602,7 +2602,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "Classical prose (default)",
+          "prose": "Classical prose",
           "tang-poetry": "Tang poetry",
           "song-ci": "Song ci",
           "yuan-qu": "Yuan qu",
@@ -10789,6 +10789,15 @@
       "contents": "Contains SOUL.md, USER.md, system_prompt.md, skills/, and memories/. Models, permissions, and connections remain managed by Cindy.",
       "open": "Open folder",
       "openFailed": "The buddy folder could not be opened.",
+      "repository": {
+        "ready": "Git is ready",
+        "notReadyTitle": "Git is not ready",
+        "needsIdentity": "On this buddy’s computer, open its folder and then the workspace subfolder. Set Git’s user.name and user.email there, then retry.",
+        "notReady": "The first version has not been saved. Retry to finish setting up Git.",
+        "unavailable": "Install Git on this buddy’s computer, then retry.",
+        "failed": "Git could not read or save the first version. Check the repository on this buddy’s computer, then retry.",
+        "keepUsing": "You can keep using your buddy. Existing files and Git settings are kept."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Review memory",
         "carryover": {
@@ -15522,6 +15531,7 @@
       "REMOTE_AGENT_BUSY": "Too many sessions are running on the other computer. End some of them and try again.",
       "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
+      "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Let my other computers use this computer’s models” in its Remote Connection settings; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
       "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
@@ -17535,6 +17545,7 @@
       "copied": "{{label}} copied",
       "copyFailed": "Could not copy {{label}}. Select it and copy it manually.",
       "urlUnavailable": "The receiving address is unavailable right now.",
+      "unsupportedFormat": "This version doesn't support this sender's format.",
       "quotaNotifyTitle": "Webhook delivery limit reached",
       "quotaExhausted": "Today's {{limit}} Webhook deliveries are used up and resume at {{time}}. Until then, outside events won't trigger tasks. Scheduled runs and model usage aren't affected.",
       "signedOut": "Sign in to your Cindy account to resume receiving. Your settings are kept.",
@@ -20818,6 +20829,8 @@
       "description": "Choose what to move from “{{name}}” to this computer. Settings you already changed on this computer are kept.",
       "partial": "Some content on that computer couldn't be read this time. Only what was read is listed below.",
       "groupCount": "{{selected}} of {{total}} selected",
+      "groupCount_one": "{{selected}} of {{total}} selected",
+      "groupCount_other": "{{selected}} of {{total}} selected",
       "present_one": "{{count}} more item is already the same here",
       "present_other": "{{count}} more items are already the same here",
       "start_one": "Move {{count}} Item",
