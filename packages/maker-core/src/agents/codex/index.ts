@@ -10996,6 +10996,7 @@ assertRouteCurrent();
       const compactRateLimit = isTerminalRateLimitRetryExhaustion(text, signals.errorStatus, error?.codexErrorInfo);
       const tag = codexErrorInfoTag(error?.codexErrorInfo);
       if (tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded' || tag === 'unauthorized' || tag === 'cyberPolicy') return false;
+      if (/\bcontent_policy_violation\b/i.test(text)) return false;
       // A terminal turn alone does not prove an upstream compact request failed:
       // transport loss/timeouts can leave its result unknown. Accept explicit
       // endpoint rejection/failure responses (including the observed 502/503),
@@ -11017,7 +11018,7 @@ assertRouteCurrent();
       // LiteLLM can carry the rejection only in its provider code or JSON code
       // field. Keep explicit HTTP/auth/rate-limit statuses authoritative.
       // A missing model cannot be repaired by summarizing with that same model.
-      if (/\binvalid model name\b/i.test(text)) return false;
+      if (/\b(?:invalid model name|model_not_found)\b/i.test(text)) return false;
       const liteLlmBadRequest = /\bcode\s*:\s*provider_invalid_request\s*\/\s*400\b|"code"\s*:\s*"400"/i.test(text);
       const textStatus = explicitStatuses[0] ?? signals.errorStatus ?? contextualStatuses[0] ?? (liteLlmBadRequest ? 400 : undefined);
       // All HTTP-bearing wire variants carry the authoritative status, as in
@@ -11049,6 +11050,10 @@ assertRouteCurrent();
       const unexhaustedRateLimit = !compactRateLimit && /\brate_limit_error\b/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
         || /\bconnection_error\b/i.test(text)
+        || parseReconnectAttemptMessage(text) !== null
+        // Only the shared classifier's transport markers apply here; explicit
+        // 502/503 responses remain eligible for the existing summary fallback.
+        || /\b(?:EPIPE|AggregateError)\b|upstream unreachable|fetch failed|socket hang up|stream ended before a terminal|Connection error|upstream stream error|Gateway Time-?out/i.test(text)
         || responseStatuses.some(status => status === 408 || status === 504)
         // Preserve the provider classifier's network/timeout code contract.
         || /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ETIMEDOUT|ABORT_ERR|TimeoutError|AbortError)\b/i.test(text)
