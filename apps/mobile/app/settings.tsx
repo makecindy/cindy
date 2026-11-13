@@ -82,6 +82,7 @@ import {
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
+import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { isGooglePlayInstallation } from '@/update/androidInstallSource';
 import {
@@ -938,6 +939,8 @@ export default function SettingsScreen() {
             testID="settings.sharedTasks.row"
           />
         </SettingsGroup>
+
+        <PromptRecommendationSettings />
 
         {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup title={t('settings.appearance.title')}>

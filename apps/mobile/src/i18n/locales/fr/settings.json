@@ -47,6 +47,12 @@
     "footer": "Les journaux restent sur ce téléphone jusqu'à 7 jours ou 8 Mo et ne sont jamais envoyés automatiquement. Les journaux exportés excluent le texte des conversations et les identifiants ; les envois ne transmettent que des enregistrements d'exécution filtrés et des informations de version."
   },
   "title": "Paramètres",
+  "promptRecommendation": {
+    "label": "Suggestions de saisie",
+    "description": "Suggérer quoi écrire après une réponse. Uniquement sur ce téléphone.",
+    "saveFailed": "Le réglage est actif pour le moment, mais n’a pas pu être enregistré.",
+    "reset": "Rétablir le réglage par défaut"
+  },
   "appearance": {
     "title": "Apparence",
     "modeLabel": "Mode d'apparence",

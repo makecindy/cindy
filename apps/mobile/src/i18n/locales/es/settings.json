@@ -47,6 +47,12 @@
     "footer": "Los registros permanecen en este teléfono hasta por 7 días u 8 MB y nunca se cargan automáticamente. Los registros exportados excluyen el texto de la conversación y las credenciales; las cargas envían solo registros de ejecución filtrados e información de versión."
   },
   "title": "Configuración",
+  "promptRecommendation": {
+    "label": "Sugerencias de entrada",
+    "description": "Sugerir qué escribir después de una respuesta. Solo se aplica a este teléfono.",
+    "saveFailed": "El ajuste se aplica por ahora, pero no se pudo guardar.",
+    "reset": "Restablecer valor predeterminado"
+  },
   "appearance": {
     "title": "Apariencia",
     "modeLabel": "Modo de apariencia",
