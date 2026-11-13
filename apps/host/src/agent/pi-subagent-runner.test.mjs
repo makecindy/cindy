@@ -19,6 +19,39 @@ import { build } from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
+function fixtureRunnerEnv(root) {
+  const env = { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home') };
+  if (process.platform === 'win32') {
+    // Production passes Pi's full spawnEnv as durableSpawnEnv. Windows system
+    // programs therefore have these directories; isolate them outside HOME here.
+    for (const [key, dir] of [['TEMP', 'temp'], ['TMP', 'temp'], ['APPDATA', 'app-data'], ['LOCALAPPDATA', 'local-app-data']]) {
+      env[key] = path.join(root, dir);
+      fs.mkdirSync(env[key], { recursive: true });
+    }
+    for (const key of ['SystemRoot', 'windir']) if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  return env;
+}
+
+function directoryEntries(root, dir = root) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const file = path.join(dir, entry.name);
+    const stat = fs.lstatSync(file);
+    const type = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : stat.isSymbolicLink() ? 'symlink' : 'other';
+    const row = { path: path.relative(root, file), type, ...(stat.isFile() ? { bytes: stat.size } : {}) };
+    return [row, ...(stat.isDirectory() ? directoryEntries(root, file) : [])];
+  });
+}
+
+function diagnoseRunnerDirectories(t, root) {
+  if (process.platform !== 'win32') return;
+  for (const dir of ['temp', 'app-data', 'local-app-data']) {
+    const directory = path.join(root, dir);
+    t.diagnostic(JSON.stringify({ directory, entries: directoryEntries(directory) }));
+  }
+}
+
 function stageRun(root, runId) {
   const runDir = path.join(root, 'runs', runId);
   fs.mkdirSync(runDir, { recursive: true });
@@ -35,7 +68,7 @@ setInterval(() => {}, 1000);
   fs.writeFileSync(path.join(runDir, 'config.json'), '{}');
   return { runDir, status, request: {
     runId, runDir, runnerFile: path.join(runDir, 'runner.cjs'), configFile: path.join(runDir, 'config.json'),
-    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home') },
+    cwd: root, env: fixtureRunnerEnv(root),
   } };
 }
 
@@ -48,7 +81,7 @@ const waitFor = async (predicate, ms = 10_000) => {
 };
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-test('the runner is ready once, loses its IPC channel before loading, and stops through its handle', async () => {
+test('the runner is ready once, loses its IPC channel before loading, and stops through its handle', async t => {
   let runner;
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-runner-')));
   fs.mkdirSync(path.join(root, 'home'));
@@ -81,11 +114,13 @@ test('the runner is ready once, loses its IPC channel before loading, and stops 
       ? { code: 1, signal: null } : { code: null, signal: 'SIGTERM' });
     assert.equal(runner.killed, true);
     assert.equal(alive(pid), false);
-    assert.deepEqual(fs.readdirSync(path.join(root, 'home')), []);
+    const home = path.join(root, 'home');
+    assert.deepEqual(fs.readdirSync(home), [], JSON.stringify({ home, entries: directoryEntries(home) }));
   } finally {
     // A failed assertion above must not leave the fixture runner behind: stop it through its handle.
     if (runner && !runner.killed) runner.kill('SIGKILL');
     delete process.env.CINDY_TEST_PARENT_ONLY;
+    diagnoseRunnerDirectories(t, root);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -142,7 +177,7 @@ setInterval(() => {}, 1000);
   }));
   return { piPids, request: {
     runId, runDir, runnerFile: path.join(runDir, 'runner.cjs'), configFile: path.join(runDir, 'config.json'),
-    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home') },
+    cwd: root, env: fixtureRunnerEnv(root),
   } };
 }
 const readPids = file => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number) : []);
