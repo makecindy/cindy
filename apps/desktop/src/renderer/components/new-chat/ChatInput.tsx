@@ -5446,6 +5446,10 @@ export function ChatInput({
         selectedItem.relPath,
         // An agent's filename (`reviewer.md`) is one of its exact names too.
         ...(selectedItem.type === 'agent' ? [selectedItem.relPath.split('/').pop() ?? ''] : []),
+        // A tab is also found by its URL and a window by its app name; both are exact names.
+        ...((selectedItem.type === 'browser-tab' || selectedItem.type === 'desktop-window') && selectedItem.description
+          ? [selectedItem.description]
+          : []),
       ], !directoryQuery);
       if (!range) return;
       const { from, to } = range;

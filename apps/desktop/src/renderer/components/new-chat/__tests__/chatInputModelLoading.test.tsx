@@ -194,10 +194,13 @@ it.each([
   { input: '@issu|es rest', name: 'issues', remaining: '$issues rest', plugin: 'Issues' },
   { input: '@git|hub rest', name: 'github', remaining: '$github rest', plugin: 'Git' },
   { input: '@git|hub rest', name: 'git', remaining: '$git rest', plugin: 'GitHub' },
+  // Tabs and windows are also found by URL and app name; those exact names complete too.
+  { input: '@https://exa|mple.com/docs rest', name: 'Docs', relPath: 'cindy://browser-tab/1?url=https%3A%2F%2Fexample.com%2Fdocs', remaining: ' rest', context: { type: 'browser-tab' as const, description: 'https://example.com/docs' } },
+  { input: '@Chro|me rest', name: 'Docs', relPath: 'cindy://desktop-window/42/7?app=Chrome', remaining: ' rest', context: { type: 'desktop-window' as const, description: 'Chrome' } },
   { input: '@|word rest', name: null, remaining: 'word rest' },
   // An action consumes the rest of its own typed label, but nothing unrelated.
   { input: '@Col|laboration rest', name: null, label: 'Collaboration', remaining: 'rest' },
-])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, relPath, label, remaining, directory, plugin, agent }) => {
+])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, relPath, label, remaining, directory, plugin, agent, context }) => {
   const run = vi.fn();
   const ghost: GhostComposerEntry = { manifest: { id: name ?? 'unused', name: plugin ?? 'unused', command: name ?? undefined }, enabled: true };
   if (plugin) h.composerGhosts = [ghost];
@@ -205,7 +208,9 @@ it.each([
     ? { kind: 'action', action: { id: 'attach-files', label: label ?? 'Attach files', run } }
     : plugin
       ? { kind: 'resource', item: { type: 'plugin-command', name: ghost.manifest.name, relPath: name, pluginId: installedGhostStoragePart(ghost) } }
-      : { kind: 'resource', item: { type: directory ? 'dir' : agent ? 'agent' : 'file', name, relPath: relPath ?? name } };
+      : context
+        ? { kind: 'resource', item: { type: context.type, name, relPath: relPath ?? name, description: context.description } }
+        : { kind: 'resource', item: { type: directory ? 'dir' : agent ? 'agent' : 'file', name, relPath: relPath ?? name } };
   try {
     render(<ChatInput {...props} sessionId={undefined} onSend={vi.fn()} />);
     await waitFor(() => expect(h.editor).not.toBeNull());
