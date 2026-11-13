@@ -6268,7 +6268,8 @@ describe("Pi provider-aware model routing", () => {
   it.each([
     { input: ["text", "image"] as Array<"text" | "image">, supported: true },
     { input: ["text"] as Array<"text" | "image">, supported: false },
-    { input: undefined, supported: true },
+    // #9478: a native model that never declares input is text-only, not vision.
+    { input: undefined, supported: false },
   ].flatMap((row) => [true, false].map((inheritModels) => ({ ...row, inheritModels }))))("uses the native image snapshot for models.json, send and steer: $input, inherit=$inheritModels", async ({ input, supported, inheritModels }) => {
     const modelId = "chatgpt/gpt-5.6-sol";
     const agent = new PiAgent(byomDeps(async () => ({
@@ -6293,7 +6294,7 @@ describe("Pi provider-aware model routing", () => {
       ));
       expect(config.providers["openai-codex"].models).toEqual([
         expect.objectContaining({
-          id: "gpt-5.6-sol", api: "openai-codex-responses", input: input ?? ["text", "image"],
+          id: "gpt-5.6-sol", api: "openai-codex-responses", input: input ?? ["text"],
         }),
       ]);
       const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
