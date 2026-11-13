@@ -26,6 +26,18 @@ import { decodeOpenPayload, decodeStartOptions, encodeStartOptions, decodeSendOp
 
 let root: string;
 
+// Project memory uses a locator rather than the full index. Both wire endpoints must keep it;
+// older senders omit it and retain their existing memory behavior (unit, real codec roundtrip).
+it('roundtrips the project memory locator without requiring it from older senders', () => {
+  const input = { model: 'm', workingDir: '/project', makerMemoryEnabled: true,
+    makerMemoryProjectDir: '/project/.cindy/memory', makerMemoryIndexSnapshot: '' };
+  expect(decodeStartOptions(encodeStartOptions(input))).toMatchObject({
+    makerMemoryProjectDir: input.makerMemoryProjectDir, makerMemoryIndexSnapshot: '',
+  });
+  expect(decodeStartOptions({ model: 'm' }).makerMemoryProjectDir).toBeUndefined();
+  expect(decodeStartOptions({ model: 'm', makerMemoryProjectDir: 7 }).makerMemoryProjectDir).toBeUndefined();
+});
+
 it('encodes only application isolation, never its private URL, token, path or target', () => {
   const encoded = encodeStartOptions({ sessionId: 'client', workingDir: '/workspace', model: 'm', [LOCAL_AGENT_CLIENT]: {
     url: 'http://127.0.0.1:12345/private', token: 'private-token', storageDirectory: '/private-history', agentDeviceId: 'share:private', mcpName: 'hhh', hostToolsOnly: true,

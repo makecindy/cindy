@@ -97,11 +97,3 @@ export function readModelGroupSessionBinding(sessionId: string): ModelGroupSessi
   if (!file || !validSessionId(sessionId)) return null;
   return readFrom(file).get(sessionId) ?? null;
 }
-
-export function clearModelGroupSessionBinding(sessionId: string): void {
-  const file = filePath();
-  if (!file || !validSessionId(sessionId)) return;
-  const bindings = readFrom(file);
-  if (!bindings.delete(sessionId)) return;
-  writeTo(file, bindings);
-}
