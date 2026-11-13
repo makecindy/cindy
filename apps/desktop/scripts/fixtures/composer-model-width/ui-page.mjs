@@ -24,6 +24,8 @@ export default {
   cases: {
     default: { about: 'Long English model fits without premature truncation', data: { showRuntimeControls: true, modelName: 'GPT-6 Astra Extended Context' } },
     chinese: { about: 'Chinese model name and a narrow composer', viewport: { width: 420, height: 400 }, data: { showRuntimeControls: true, modelName: '复杂任务长名称模型' } },
+    'long-ultra': { about: 'A very long model name leaves room for icon-only controls', viewport: { width: 400, height: 400 }, data: { showRuntimeControls: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
+    'long-dense': { about: 'A very long model name leaves room for the permission label', viewport: { width: 600, height: 400 }, data: { showRuntimeControls: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
     tight: { about: 'All controls remain reachable in an extremely narrow composer', viewport: { width: 300, height: 400 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra Extended Context' } },
     recording: { about: 'Expanded recording controls do not hide neighbouring actions', viewport: { width: 360, height: 400 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra Extended Context' } },
     resize: { about: 'The model menu closes when the composer is resized without resizing the window', data: { showRuntimeControls: true, modelName: 'GPT-6 Astra Extended Context' } },

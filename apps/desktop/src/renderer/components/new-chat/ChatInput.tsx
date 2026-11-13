@@ -9895,13 +9895,13 @@ export function ChatInput({
               <div
                 className={cn(
                   useNarrowToolbar
-                    ? 'flex min-w-0 shrink items-center gap-1'
+                    ? 'flex min-w-min shrink items-center gap-1'
                     : effectiveCompactToolbar
                       ? isCreateAgentVariant
-                        ? 'flex min-w-0 shrink items-center gap-2'
-                        : 'flex min-w-0 shrink items-center gap-1'
-                      : 'flex min-w-0 shrink items-center gap-2',
-                  // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
+                        ? 'flex min-w-min shrink items-center gap-2'
+                        : 'flex min-w-min shrink items-center gap-1'
+                      : 'flex min-w-min shrink items-center gap-2',
+                  // 子控件可以收缩文字，但左组不能小于它们的最小宽度之和，否则会与右组重叠。
                 )}
               >
                 {localAttachmentPickerEnabled && (
