@@ -170,6 +170,22 @@ describe('resolveSessionGitDir', () => {
     });
   });
 
+  it('trusts the selected linked worktree before any tool reports a directory', async () => {
+    const res = await resolveSessionGitDir(
+      { sessionId: 's', fallbackWorktreePath: null, fallbackWorkingDir: '/Users/x/wt-b' },
+      deps({
+        contents: [toolUse('Bash', { command: 'git status' })],
+        gitDirs: { '/Users/x/wt-b': 'fix/new' },
+        linkedWorktrees: ['/Users/x/wt-b'],
+      }),
+    );
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/wt-b'),
+      head: branchHead('fix/new'),
+      source: 'worktree',
+    });
+  });
+
   it('keeps the app-managed worktree binding when earlier tool-use still points to another checkout', async () => {
     const res = await resolveSessionGitDir(
       { sessionId: 's', fallbackWorktreePath: '/Users/x/app-wt', fallbackWorkingDir: '/Users/x/main' },

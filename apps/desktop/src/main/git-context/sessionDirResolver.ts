@@ -361,11 +361,11 @@ export async function resolveSessionGitDir(
   const liveWorktreePath = input.fallbackWorktreePath &&
     (!deps.isLinkedWorktree || await deps.isLinkedWorktree(input.fallbackWorktreePath).catch(() => false))
     ? input.fallbackWorktreePath : null;
-  // A selected linked worktree is an explicit session setting. Old tool-use rows
-  // can still point at another *valid* checkout after the task is moved. Mark it
-  // as a trusted worktree source so an associated PR cannot override its branch.
-  if (preferSelectedWorktree && candidate && input.fallbackWorkingDir &&
-      path.resolve(candidate) !== path.resolve(input.fallbackWorkingDir) && deps.isLinkedWorktree &&
+  // The selected linked worktree is authoritative when tool history has no
+  // directory or still points to another checkout. Matching telemetry already
+  // provides a trusted branch, so it does not need another worktree probe.
+  if (preferSelectedWorktree && input.fallbackWorkingDir &&
+      (!candidate || path.resolve(candidate) !== path.resolve(input.fallbackWorkingDir)) && deps.isLinkedWorktree &&
       await deps.isLinkedWorktree(input.fallbackWorkingDir).catch(() => false)) {
     const head = await deps.probeGitDir(input.fallbackWorkingDir);
     if (head !== null) {
