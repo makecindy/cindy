@@ -189,6 +189,34 @@ export function readAccountBinding(key: string, provider: SubscriptionProvider) 
   const binding = bindings[`${provider}:${key}`] ?? bindings[key];
   return binding?.providerId === provider ? binding : undefined;
 }
+let boundAccountIndex: { bindings: PoolFile['bindings']; providers: Map<string, ReadonlySet<string>>;
+  kinds: Map<SubscriptionProvider, Set<string>> } | undefined;
+function boundAccounts() {
+  const bindings = store.read().bindings;
+  if (boundAccountIndex?.bindings !== bindings) {
+    const providers = new Map<string, Set<string>>();
+    const kinds = new Map<SubscriptionProvider, Set<string>>();
+    for (const binding of Object.values(bindings)) {
+      const all = kinds.get(binding.providerId) ?? new Set<string>();
+      all.add(binding.accountId);
+      kinds.set(binding.providerId, all);
+      const key = `${binding.providerId}:${binding.via ?? binding.providerId}`;
+      const accounts = providers.get(key) ?? new Set<string>();
+      accounts.add(binding.accountId);
+      providers.set(key, accounts);
+    }
+    boundAccountIndex = { bindings, providers, kinds };
+  }
+  return boundAccountIndex;
+}
+/** Accounts whose persisted history was created through this source; never used for new routing. */
+export function readProviderBoundAccountIds(provider: SubscriptionProvider, providerId: string): ReadonlySet<string> {
+  return boundAccounts().providers.get(`${provider}:${providerId}`) ?? new Set();
+}
+/** Read-only discovery may retain model metadata for paused accounts with existing history. */
+export function readBoundSubscriptionAccountIds(provider: SubscriptionProvider): ReadonlySet<string> {
+  return boundAccounts().kinds.get(provider) ?? new Set();
+}
 /** Read-only history lookup: only additional profiles override the legacy/default search. */
 export function readBoundClaudeConfigDir(sdkSessionId: string): string | undefined {
   const binding = readAccountBinding(`native:${sdkSessionId}`, 'anthropic');

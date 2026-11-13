@@ -226,6 +226,7 @@ export async function createSubscriptionProvider(
   accountId: string,
   name: string,
   createId: () => string,
+  prepare?: (providerId: string) => void,
 ): Promise<string> {
   if (accountId === 'default' || !accountIdValid(accountId)) throw new Error('Account cannot be moved');
   const owner = activeOwnerScopeKey();
@@ -235,10 +236,22 @@ export async function createSubscriptionProvider(
     const providers = { ...(value.providers ?? {}) };
     do providerId = `${kind}-sub-${createId()}`; while (providers[providerId]);
     if (!CREATED_PROVIDER_ID.test(providerId)) throw new Error('Invalid subscription provider id');
+    prepare?.(providerId);
     providers[providerId] = { kind, name: name.trim().slice(0, MAX_PROVIDER_NAME) || kind, account: accountId };
     return { providers, accounts: { ...value.accounts, [keyOf(kind, accountId)]: providerId } };
   });
   return providerId;
+}
+
+/** Roll back a new account whose first login failed; existing task bindings never use this path. */
+export async function discardUnusedSubscriptionAccountPlacement(kind: SubscriptionProvider, accountId: string): Promise<void> {
+  const owner = activeOwnerScopeKey();
+  await file.updateAtomic(({ value }) => {
+    assertOwner(owner);
+    const accounts = { ...value.accounts };
+    delete accounts[keyOf(kind, accountId)];
+    return { accounts };
+  });
 }
 
 export function readProviderStrategy(providerId: string): ProviderGroupStrategy | undefined {

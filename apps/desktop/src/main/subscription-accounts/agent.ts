@@ -92,6 +92,24 @@ function engineProviderId(providerId: string | null | undefined, accountId: stri
   if (!ref.created && ref.ownAccount === accountId) return providerId;
   return ref.kind;
 }
+
+/** Validate the shared identity before translating this call to the native engine's route.
+ * The outer session/grant remains on the original provider; only the engine-facing copy changes,
+ * with exactly the same model allowlist, route token and selected account capability.
+ */
+function engineOptions<T extends Pick<StartSessionOptions, 'providerId' | 'deviceHosted'>>(
+  options: T, accountId: string,
+): T {
+  const requested = options.providerId?.trim();
+  if (!requested) return options;
+  const guest = options.deviceHosted?.guest ? options.deviceHosted.guestProvider : undefined;
+  if (guest && guest.providerId !== requested)
+    throw new AgentStartupStoppedError(new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] this provider is not allowed for remote use on this computer'));
+  const providerId = engineProviderId(requested, accountId)!;
+  return { ...options, providerId,
+    ...(guest && providerId !== requested ? { deviceHosted: { ...options.deviceHosted!,
+      guestProvider: { ...guest, providerId } } } : {}) };
+}
 function assertOwnerCurrent(owner: string) {
   if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
     throw new Error('Subscription account owner changed');
@@ -146,14 +164,21 @@ async function historicalCodexAccount(
 function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string): string | undefined {
   const ref = resolveSubscriptionPoolProviderRef(providerId);
   if (!ref?.ownAccount) return;
-  const account = readMergedProviderAccount(ref.providerId);
-  if (!account) return;
+  if (!readPool(ref.kind)?.accounts.some(entry => entry.id === ref.ownAccount)
+    && keys.some(key => readAccountBinding(key, ref.kind)?.accountId === ref.ownAccount))
+    throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
+  const fallback = readMergedProviderAccount(ref.providerId);
+  if (!fallback) return;
+  const bindings = keys.map(key => readAccountBinding(key, ref.kind)).filter(Boolean);
+  const binding = bindings[0];
+  if (bindings.some(entry => entry?.accountId !== binding?.accountId)
+    || (binding && binding.accountId !== fallback && binding.via !== ref.providerId))
+    throw new Error('The task subscription account changed');
+  // A merged provider may previously have hosted several accounts. Recorded history keeps its
+  // actual account; only an old route without any binding falls back to the provider's first one.
+  const account = binding?.accountId ?? fallback;
   if (!readPool(ref.kind)?.accounts.some(entry => entry.id === account))
     throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
-  if (keys.some(key => {
-    const binding = readAccountBinding(key, ref.kind);
-    return binding && binding.accountId !== account;
-  })) throw new Error('The task subscription account changed');
   return account;
 }
 function wrapHandle(
@@ -402,8 +427,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               const sessionProvider = options.providerId?.trim() || poolProvider;
               const engineId = engineProviderId(sessionProvider, current.accountId);
               handle = await target.startSession({
-                ...options,
-                ...(options.providerId?.trim() ? { providerId: engineId } : {}),
+                ...engineOptions(options, current.accountId),
                 [NATIVE_SUBSCRIPTION_ACCOUNT]: current.account,
               });
               await current.bind([...keys, `native:${handle.id}`]);
@@ -461,9 +485,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           if (!lease) return target.forkSdkSession(options);
           try {
             const result = await target.forkSdkSession({
-              ...options,
-              ...(options.providerId?.trim()
-                ? { providerId: engineProviderId(options.providerId.trim(), lease.accountId) } : {}),
+              ...engineOptions(options, lease.accountId),
               [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account,
             });
             await lease.bind([key, `native:${result.newSdkSessionId}`]);

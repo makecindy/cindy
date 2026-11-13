@@ -110,6 +110,8 @@ export interface ProviderView extends Provider {
    * only so saved routes and old tasks resolve; its accounts are managed by that other provider.
    */
   subscriptionPoolAlias?: true;
+  /** Current owner-only destination of a merged provider. Older hosts imply only `openai`. */
+  subscriptionPoolTarget?: string;
   /**
    * 2026-11-13: this host manages the provider's subscription accounts in its account pool of this
    * kind (built-in subscriptions with a pool, providers Cindy created, registered legacy Codex

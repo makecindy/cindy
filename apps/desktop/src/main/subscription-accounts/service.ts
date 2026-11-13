@@ -24,7 +24,8 @@ import { placeSubscriptionAccount, resolveSubscriptionPoolProvider } from './pla
  * account that still belongs to itself (subscription-account-pools.md 合并与拿出由用户决定). Only
  * metadata changes: its login, directory, permissions and old tasks stay as they are.
  */
-async function registerLegacyCodexConnection(providerId: string | null): Promise<void> {
+async function registerLegacyCodexConnection(providerId: string | null, assertCurrent: () => void): Promise<void> {
+  assertCurrent();
   if (!providerId || resolveSubscriptionPoolProvider(providerId)) return;
   const connection = getActiveCatalog().providers.find((provider) =>
     provider.id === providerId && provider.source === 'user' && provider.auth.native === 'codex');
@@ -34,19 +35,24 @@ async function registerLegacyCodexConnection(providerId: string | null): Promise
     [{ providerId, paused: isProviderDisabled(readModelDisableOverrides(), providerId) }],
     { preserveDefault: nativeDefault, legacyDefault: nativeDefault && !isNativeProviderAuthSharedSystemCredential('openai') },
   );
+  assertCurrent();
   const accountId = readLegacyCodexAccountId(providerId);
   if (!accountId) throw new Error('Too many subscription accounts');
   await placeSubscriptionAccount('openai', accountId, providerId);
+  assertCurrent();
 }
 
 /** Shared by the owner UI and helper, after their ordinary authorization checks. */
 export async function executeSubscriptionAccountCommand(command: SubscriptionAccountCommand) {
   const owner = activeOwnerScopeKey();
+  const assertCurrent = () => {
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Subscription accounts changed');
+  };
   // Adding a new account into a legacy connection (the add wizard offers connected ones) registers
   // that connection the same way first; otherwise it is not yet a provider of the pool.
   if (command.action === 'merge' || command.action === 'place' || command.action === 'add') {
-    await registerLegacyCodexConnection(command.action === 'place' ? null : command.providerId);
-    if (command.action !== 'add') await registerLegacyCodexConnection(command.target);
+    await registerLegacyCodexConnection(command.action === 'place' ? null : command.providerId, assertCurrent);
+    if (command.action !== 'add') await registerLegacyCodexConnection(command.target, assertCurrent);
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       throw new Error('Subscription accounts changed');
   }

@@ -44,6 +44,10 @@ const h = vi.hoisted(() => ({
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
   poolModels: null as import('@cindy/model-providers').CatalogModel[] | null,
+  poolModelsByProvider: {} as Record<string, import('@cindy/model-providers').CatalogModel[]>,
+  boundPoolModelsByProvider: {} as Record<string, import('@cindy/model-providers').CatalogModel[]>,
+  boundAccountIdsByProvider: {} as Record<string, string[]>,
+  poolConnectionByProvider: {} as Record<string, { serving: boolean; bound: boolean }>,
   disabledModels: {} as Record<string, true>,
   migrateLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
 }));
@@ -53,6 +57,7 @@ vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
     ...actual,
     readPool: (id: string) => id === 'openai' ? h.pool : null,
     readLegacyCodexAccountId: (id: string) => h.pool?.legacyCodexAccounts?.[id],
+    readProviderBoundAccountIds: (_kind: string, id: string) => new Set(h.boundAccountIdsByProvider[id] ?? []),
   };
 });
 vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
@@ -60,8 +65,9 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
   const owner = (kind: string, accountId: string) => h.placement[`${kind}:${accountId}`] ?? kind;
   // A legacy connection is merged while its account belongs to another provider (no created ones here).
   const merged = (providerId: string) => {
-    const accountId = h.pool?.legacyCodexAccounts?.[providerId];
-    return accountId && owner('openai', accountId) !== providerId ? accountId : undefined;
+    const accountId = h.pool?.legacyCodexAccounts?.[providerId] ?? h.created[providerId]?.account;
+    return accountId && owner('openai', accountId) !== providerId
+      && !h.pool?.accounts.some(account => owner('openai', account.id) === providerId) ? accountId : undefined;
   };
   return {
     ...actual,
@@ -77,14 +83,19 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
   return {
     ...actual,
     // A created provider is connected once its own accounts were read (the built-ins follow the pool).
-    hasConnectedSubscriptionPool: (id: string) => (h.created[id] ? h.refreshed.has(id) : Boolean(h.pool && !h.pool.disconnected)),
+    hasConnectedSubscriptionPool: (id: string, options?: { includeBoundAccounts?: boolean }) => h.poolConnectionByProvider[id]
+      ? h.poolConnectionByProvider[id][options?.includeBoundAccounts ? 'bound' : 'serving']
+      : (h.created[id] || h.pool?.legacyCodexAccounts?.[id]
+        ? h.refreshed.has(id) || h.legacyLoggedIn.has(id) : Boolean(h.pool && !h.pool.disconnected)),
     // No real CLI homes here: a read only records which provider was read.
     refreshSubscriptionPool: async (id: string) => {
       h.refreshed.add(id);
       return { providerId: id, configured: true, strategy: 'least' as const, accounts: [] };
     },
     refreshSubscriptionPoolCodexModels: async () => undefined,
-    readSubscriptionPoolCodexModels: () => h.poolModels,
+    readSubscriptionPoolCodexModels: (providerId = 'openai', options?: { includeBoundAccounts?: boolean }) =>
+      (options?.includeBoundAccounts ? h.boundPoolModelsByProvider[providerId] : undefined)
+      ?? h.poolModelsByProvider[providerId] ?? h.poolModels,
   };
 });
 vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
@@ -280,6 +291,7 @@ import {
   setActiveCatalogChangedListener,
   setCustomProviderConfigs,
   setCustomProviders,
+  setSubscriptionPoolProviders,
   setDiscoveredCodexModels,
 } from '../active-catalog.js';
 import {
@@ -318,6 +330,179 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // #10405, unit: merging A(a1,a2) into B must not remove a2-only m2 from a saved
+  // schedule's strict route resolver. Picker/guest membership still cannot borrow B's m3.
+  it.each(['healthy', 'origin-signed-out', 'bound-paused', 'builtin-signed-out', 'builtin-disconnected'] as const)(
+    'keeps a merged provider historical account model available only to full routing (%s)', async state => {
+    const previous = getActiveCatalog();
+    const builtin = state === 'builtin-signed-out' || state === 'builtin-disconnected';
+    const original = builtin ? 'openai' : 'openai-sub-a';
+    const target = 'openai-sub-b';
+    const model = (id: string): import('@cindy/model-providers').CatalogModel => ({
+      id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
+    });
+    h.pool = { strategy: 'least', disconnected: state === 'builtin-disconnected',
+      accounts: [builtin ? 'default' : 'a1', 'a2', 'b', 'imported'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
+      legacyCodexAccounts: { 'legacy-imported': 'imported' } };
+    h.created = { ...(!builtin ? { [original]: { kind: 'openai' as const, name: 'A', account: 'a1' } } : {}),
+      [target]: { kind: 'openai', name: 'B', account: 'b' } };
+    h.placement = { ...(!builtin ? { 'openai:a1': target } : {}), 'openai:a2': target, 'openai:b': target, 'openai:imported': target };
+    h.poolModelsByProvider = { openai: [], [original]: builtin ? [] : [model('m1')], [target]: [model('m1'), model('m2'), model('m3')] };
+    h.boundPoolModelsByProvider = { [original]: builtin ? [model('m2')] : [model('m1'), model('m2')] };
+    h.boundAccountIdsByProvider = { [original]: ['a2', 'imported'] };
+    if (state === 'origin-signed-out' || builtin) h.poolConnectionByProvider[original] = { serving: false, bound: true };
+    if (state === 'bound-paused') for (const account of h.pool.accounts) {
+      if (account.id === 'a2' || account.id === 'imported') account.paused = true;
+    }
+    h.legacyLoggedIn.add('legacy-imported');
+    h.refreshed.add(original);
+    h.refreshed.add(target);
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      h.customProviderRead.mockResolvedValue([{ id: 'legacy-imported', name: 'Legacy',
+        auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+          baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'm-imported', name: 'Imported model' }],
+        } } }]);
+      await refreshCustomProvidersIntoCatalog();
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      const selection = { agentKind: 'codex' as const, model: 'm2', providerId: original, effort: null, fastMode: false };
+      const routing = await service.listProviders({ catalog: getActiveCatalog(), snapshotOnly: true });
+      expect(resolveScheduledModelSelection(selection, routing)).toMatchObject({ providerId: original, model: 'm2' });
+      expect(resolveScheduledModelSelection({ ...selection, model: 'm-imported' }, routing))
+        .toMatchObject({ providerId: original, model: 'm-imported' });
+      expect(() => resolveScheduledModelSelection({ ...selection, model: 'm3' }, routing))
+        .toThrow('MODEL_SELECTION_UNAVAILABLE');
+      const selectable = await service.listProviders({ snapshotOnly: true });
+      expect(selectable.find(provider => provider.id === original)?.connected).toBe(state !== 'origin-signed-out' && !builtin);
+      expect(guestProviderModelIds(selectable, original, 'codex')).toEqual(builtin ? [] : ['m1']);
+    } finally {
+      h.pool = null;
+      h.created = {};
+      h.placement = {};
+      h.poolModelsByProvider = {};
+      h.boundPoolModelsByProvider = {};
+      h.boundAccountIdsByProvider = {};
+      h.poolConnectionByProvider = {};
+      h.legacyLoggedIn.delete('legacy-imported');
+      h.refreshed.clear();
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
+  // #10405, unit: provider-list models must come from that provider's accounts. The
+  // previous fixtures had just one pool, so copying the global OpenAI union looked correct.
+  it('keeps discovered models inside the created or legacy provider that owns the account', async () => {
+    const previous = getActiveCatalog();
+    const model = (id: string): import('@cindy/model-providers').CatalogModel => ({
+      id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
+    });
+    h.pool = { strategy: 'least', accounts: ['a', 'b', 'legacy', 'imported'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
+      legacyCodexAccounts: { 'legacy-target': 'imported' } };
+    h.created = {
+      'openai-sub-a': { kind: 'openai', name: 'Account A', account: 'a' },
+      'openai-sub-b': { kind: 'openai', name: 'Account B', account: 'b' },
+    };
+    h.placement = { 'openai:a': 'openai-sub-a', 'openai:b': 'openai-sub-b',
+      'openai:legacy': 'legacy-target', 'openai:imported': 'legacy-target' };
+    h.poolModelsByProvider = { openai: [], 'openai-sub-a': [model('model-a')],
+      'openai-sub-b': [model('model-b')], 'legacy-target': [model('model-legacy')] };
+    h.legacyLoggedIn.add('legacy-target');
+    const legacy: CustomProviderConfig = { id: 'legacy-target', name: 'Old OpenAI',
+      auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+        baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'legacy-native', name: 'Legacy model' }],
+      } } };
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      h.customProviderRead.mockResolvedValue([legacy]);
+      await refreshCustomProvidersIntoCatalog();
+      const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true });
+      const models = (id: string) => views.find(provider => provider.id === id)?.models.codex?.map(model => model.id);
+      expect(models('openai')).toEqual([]);
+      expect(models('openai-sub-a')).toEqual(['model-a']);
+      expect(models('openai-sub-b')).toEqual(['model-b']);
+      expect(models('legacy-target')).toEqual(['legacy-native', 'model-legacy']);
+      for (const state of ['signed-out', 'paused']) {
+        const imported = h.pool.accounts.find(account => account.id === 'imported')!;
+        if (state === 'signed-out') h.legacyLoggedIn.delete('legacy-target');
+        else imported.paused = true;
+        const selectable = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true });
+        expect(selectable.find(provider => provider.id === 'legacy-target')?.models.codex?.map(model => model.id))
+          .toEqual(['model-legacy']);
+        const routing = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true, getCatalog: getActiveCatalog });
+        expect(routing.find(provider => provider.id === 'legacy-target')?.models.codex?.map(model => model.id))
+          .toEqual(['legacy-native', 'model-legacy']);
+        h.legacyLoggedIn.add('legacy-target');
+        imported.paused = false;
+      }
+      h.placement['openai:imported'] = 'openai-sub-b';
+      const moved = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true });
+      expect(moved.find(provider => provider.id === 'legacy-target')?.models.codex?.map(model => model.id))
+        .toEqual(['model-legacy']);
+      expect(moved.find(provider => provider.id === 'openai-sub-b')?.models.codex?.map(model => model.id))
+        .toEqual(['model-b', 'legacy-native']);
+      h.placement['openai:legacy'] = 'openai-sub-b';
+      const merged = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true });
+      expect(merged.find(provider => provider.id === 'legacy-target')).toMatchObject({
+        subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai-sub-b',
+      });
+    } finally {
+      h.pool = null;
+      h.created = {};
+      h.placement = {};
+      h.poolModelsByProvider = {};
+      h.legacyLoggedIn.delete('legacy-target');
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
+  // #10405, unit: a legacy connection whose original login is signed out can still
+  // run with a healthy account merged into it. Listing must refresh that target pool.
+  it('refreshes legacy target pools and uses their aggregate connection state', async () => {
+    const previous = getActiveCatalog();
+    h.pool = { strategy: 'least', accounts: ['imported', 'second'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
+      legacyCodexAccounts: { 'legacy-target': 'imported' } };
+    h.placement = { 'openai:imported': 'legacy-target', 'openai:second': 'legacy-target' };
+    const legacy: CustomProviderConfig = { id: 'legacy-target', name: 'Old OpenAI',
+      auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+        baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-fixture', name: 'Fixture model' }],
+      } } };
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      h.customProviderRead.mockResolvedValue([legacy]);
+      await refreshCustomProvidersIntoCatalog();
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      const target = async (snapshotOnly: boolean) =>
+        (await service.listProviders({ snapshotOnly })).find(provider => provider.id === legacy.id);
+      expect((await target(true))?.connected).toBe(false);
+      expect((await target(false))?.connected).toBe(true);
+      expect(h.refreshed.has(legacy.id)).toBe(true);
+    } finally {
+      h.pool = null;
+      h.placement = {};
+      h.refreshed.clear();
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
+
+  // #10405, unit: owner reset and a failed next-owner DB read must remove account-derived
+  // provider names too. Previous owner-reset coverage only injected custom configurations.
+  it.each(['owner-reset', 'read-failure'] as const)('clears created subscription providers on %s', async reason => {
+    const previous = getActiveCatalog();
+    setSubscriptionPoolProviders([{ id: 'owner-a-sub', kind: 'openai', name: 'Owner A account' }]);
+    expect(getActiveCatalog().providers.some(provider => provider.id === 'owner-a-sub')).toBe(true);
+    try {
+      if (reason === 'owner-reset') setCustomProviders([]);
+      else {
+        h.customProviderRead.mockRejectedValueOnce(new Error('Owner B database unavailable'));
+        await refreshCustomProvidersIntoCatalog();
+      }
+      expect(getActiveCatalog().providers.some(provider => provider.id === 'owner-a-sub')).toBe(false);
+    } finally {
+      setSubscriptionPoolProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
   // Review regression (2026-11-13, subscription-account-pools.md 合并与拿出由用户决定): a created
   // provider counts as connected from reading its own accounts, but listing providers read only the
   // built-in pool, so a created GPT provider stayed out of the new-task picker until its settings

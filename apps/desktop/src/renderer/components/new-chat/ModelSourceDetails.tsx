@@ -95,7 +95,7 @@ export function ModelSourceUsageProvider({
       (provider) =>
         // Built-in subscriptions and providers Cindy created for subscription accounts
         // (2026-11-13): each shows the quota of its own accounts.
-        (provider.id === 'anthropic' || provider.id === 'openai' || !!provider.subscriptionPool) &&
+        (provider.id === 'anthropic' || provider.id === 'openai' || !!provider.subscriptionPool || !!provider.subscriptionAccountPool) &&
         provider.auth?.method === 'oauth' &&
         !provider.subscriptionAccount?.reconnectRequired,
     )

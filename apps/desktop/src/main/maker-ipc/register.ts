@@ -1,6 +1,6 @@
 import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
-import { readMergedLegacyCodexAccountId } from '../subscription-accounts/placement.js';
+import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
@@ -12034,7 +12034,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const device = selection.agentDeviceId === undefined ? current?.agentDeviceId : selection.agentDeviceId;
     // Repeated fires and baseline restoration must not re-pin the former account after handoff.
     // Check the original model grant as well as the canonical destination's ordinary admission.
-    if (current?.providerId !== 'openai' || !selection.providerId || selection.providerId === 'openai'
+    if (!current?.providerId || !selection.providerId || selection.providerId === current.providerId
       || current.remoteHostId || dbToMakerAgentKind(current.agentKind) !== selection.agentKind
       || (device ?? null) !== (current.agentDeviceId ?? null) || isProviderShareAgentDeviceId(device)) return selection;
     let admittedAlias: boolean;
@@ -12042,13 +12042,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const providers = await readDeviceProviderViews(remoteBackgroundInvoke, device, { live: true });
       const alias = providers.find(view => view.id === selection.providerId && view.subscriptionPoolAlias === true);
       const model = findCatalogModel(alias, selection.model, selection.agentKind, { exact: true });
-      admittedAlias = !!alias && !!model && isModelSelectableForNewRoute(model, { userProvider: alias.source === 'user' });
+      // Old hosts could only merge into OpenAI. A newer named destination must be
+      // explicitly echoed by the executor; alias=true alone cannot authorize it.
+      admittedAlias = !!alias && (alias.subscriptionPoolTarget ?? 'openai') === current.providerId
+        && !!model && isModelSelectableForNewRoute(model, { userProvider: alias.source === 'user' });
     } else {
       // A connection restored to its own account is an ordinary provider again: the saved choice runs there.
-      admittedAlias = !!readMergedLegacyCodexAccountId(selection.providerId)
+      const account = readMergedProviderAccount(selection.providerId);
+      const ref = resolveSubscriptionPoolProviderRef(selection.providerId);
+      admittedAlias = !!account && !!ref && accountProviderId(ref.kind, account) === current.providerId
         && legacyCodexAccountCanRun(selection.providerId, selection.model, { remote: false, newRoute: false, modelSwitch: true });
     }
-    return admittedAlias ? { ...selection, providerId: 'openai' } : selection;
+    return admittedAlias ? { ...selection, providerId: current.providerId } : selection;
   };
   const applyScheduledProfile = async (
     sessionId: string, selection: ScheduledModelSelection, signal?: AbortSignal,
@@ -12315,10 +12320,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (recovered && resolvedSelection) {
         const row = await getSessionRowSnapshotStrict(sessionId);
         if (!row) throw new Error('The task route changed');
-        if (row.providerId === 'openai' && resolvedSelection.providerId !== 'openai'
+        if (row.providerId && resolvedSelection.providerId !== row.providerId
           && row.model === resolvedSelection.model && dbToMakerAgentKind(row.agentKind) === resolvedSelection.agentKind
           && (row.agentDeviceId ?? null) === (resolvedSelection.agentDeviceId ?? null))
-          resolvedSelection = { ...resolvedSelection, providerId: 'openai' };
+          resolvedSelection = { ...resolvedSelection, providerId: row.providerId };
       }
       // The caller retains the lease through runtime refresh and Session.send.
       stage = 'direct-send:caller-dispatch';

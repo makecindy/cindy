@@ -2044,15 +2044,17 @@ export function getActiveCatalog(): Catalog {
   return merged;
 }
 
-let pooledCodexProjection: { revision: number; models: readonly CatalogModel[]; catalog: Catalog } | undefined;
+let pooledCodexProjection: { revision: number; catalogs: WeakMap<readonly CatalogModel[], Catalog> } | undefined;
 
 /** Reuse the normal metadata/bridge/override pipeline without mutating default-account discovery. */
 export function getActiveCatalogWithCodexModels(models: readonly CatalogModel[]): Catalog {
-  if (pooledCodexProjection?.revision === revision && pooledCodexProjection.models === models)
-    return pooledCodexProjection.catalog;
+  if (pooledCodexProjection?.revision !== revision)
+    pooledCodexProjection = { revision, catalogs: new WeakMap() };
+  const cached = pooledCodexProjection.catalogs.get(models);
+  if (cached) return cached;
   const catalog = computeMerged(models);
   const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
-  pooledCodexProjection = { revision, models, catalog: projected };
+  pooledCodexProjection.catalogs.set(models, projected);
   return projected;
 }
 
@@ -2236,6 +2238,9 @@ export function setManagedProviders(providers: Provider[]): void {
 export function setCustomProviders(providers: Provider[]): void {
   customConfigs = null;
   custom = [...providers];
+  // The empty snapshot is also the owner-boundary/reset entry. Account-derived
+  // provider names belong to that same owner and must not survive a failed reload.
+  if (providers.length === 0) subscriptionPoolProviders = [];
   markChanged();
 }
 

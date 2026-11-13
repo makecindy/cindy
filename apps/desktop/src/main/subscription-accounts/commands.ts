@@ -27,11 +27,14 @@ export function parseSubscriptionSessionAccountQuery(
   const sessionId = id('sessionId');
   const nativeSessionId = id('nativeSessionId');
   const legacyProviderId = value.legacyProviderId;
+  const routeProviderId = value.routeProviderId;
+  if (routeProviderId !== undefined && (!isSubscriptionPoolProviderIdShape(routeProviderId) || legacyProviderId !== undefined))
+    throwIpcError('INVALID_PARAMS', 'Invalid subscription route');
   if (legacyProviderId !== undefined
     && (value.providerId !== 'openai' || typeof legacyProviderId !== 'string'
       || !legacyProviderId.trim() || legacyProviderId.length > 256))
     throwIpcError('INVALID_PARAMS', 'Invalid legacy subscription provider');
-  if (!sessionId && !nativeSessionId && !legacyProviderId)
+  if (!sessionId && !nativeSessionId && !legacyProviderId && !routeProviderId)
     throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
   const model = value.model;
   if (model !== undefined && model !== null
@@ -44,6 +47,7 @@ export function parseSubscriptionSessionAccountQuery(
     ...(nativeSessionId ? { nativeSessionId } : {}),
     ...(typeof model === 'string' ? { model } : {}),
     ...(typeof legacyProviderId === 'string' ? { legacyProviderId } : {}),
+    ...(typeof routeProviderId === 'string' ? { routeProviderId } : {}),
   };
 }
 

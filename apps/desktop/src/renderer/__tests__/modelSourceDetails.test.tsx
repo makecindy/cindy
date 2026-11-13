@@ -182,8 +182,8 @@ describe('model source second line', () => {
   // Isolated-sandbox finding (2026-11-13, subscription-account-pools.md 合并与拿出由用户决定): a
   // provider Cindy created for one account showed no account or quota in the picker, because only
   // the built-in ids were read. It reads its own accounts (there is no CLI default to preview).
-  it('shows the own account of a provider created for subscription accounts', async () => {
-    const created = { ...provider('openai-sub-fixture', 'codex'), subscriptionPool: 'openai' as const };
+  it.each(['subscriptionPool', 'subscriptionAccountPool'] as const)('shows the own account of a provider marked by %s', async (marker) => {
+    const created = { ...provider('openai-sub-fixture', 'codex'), [marker]: 'openai' as const };
     const command = vi.fn(async () => ({
       providerId: 'openai-sub-fixture', kind: 'openai', configured: true, strategy: 'least',
       accounts: [{ id: 'cindy-x', identity: 'two@example.test', plan: 'pro', paused: false, status: 'ready',
