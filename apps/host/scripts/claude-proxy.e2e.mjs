@@ -60,6 +60,11 @@ const upstream = createServer(async (req, res) => {
     res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":{"message":"No optional endpoint in fixture"}}');
     return;
   }
+  // The gateway accepts only its current key (custom providers have their own path).
+  if (req.url.startsWith('/v1/messages') && req.headers['x-api-key'] !== gatewayKey) {
+    res.writeHead(401, { 'content-type': 'application/json' }).end('{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}');
+    return;
+  }
   if (body?.stream) {
     res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
     res.end(sse(body.model));
@@ -103,7 +108,7 @@ initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 
 const profile = path.join(root, 'profile');
 const ownerId = 'claude-proxy-fixture';
-const gatewayKey = 'synthetic-gateway-key';
+let gatewayKey = 'synthetic-gateway-key';
 let database, config, modelAccess, mcp, proxy, graph, codexRuntime;
 const handles = [];
 try {
@@ -191,6 +196,72 @@ try {
   }
   console.log(`PASS gateway lane: ${gatewayRequests.length} message request(s) with the gateway key`);
 
+  // 1b. The gateway key changes while a Claude process is running. The process keeps what it was
+  // started with; its next request reaches the gateway with the new key, without a restart.
+  const childPids = async () => {
+    const { execFile } = await import('node:child_process');
+    let ps;
+    const out = await new Promise((resolve, reject) => {
+      ps = execFile('ps', ['-A', '-o', 'pid=,ppid='], (error, stdout) => error ? reject(error) : resolve(stdout));
+    });
+    return out.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number))
+      .filter(([pid, ppid]) => ppid === process.pid && pid !== ps.pid).map(([pid]) => pid).sort((a, b) => a - b);
+  };
+  setSessionProvider('claude-gateway-rotation', 'xd');
+  const live = await graph.agent.startSession({ sessionId: 'claude-gateway-rotation', providerId: 'xd', model: 'claude-sonnet-4-5', workingDir: root });
+  handles.push(live);
+  const liveEvents = live.events()[Symbol.asyncIterator]();
+  const liveTurn = async () => {
+    const terminal = (async () => {
+      for (;;) {
+        const { value, done } = await liveEvents.next();
+        if (done) throw new Error('Claude event stream ended without completion');
+        if (value.type === 'done' || value.type === 'error') return value;
+      }
+    })();
+    void terminal.catch(() => {});
+    let timer;
+    try {
+      await live.send({ type: 'user', content: 'return synthetic complete' });
+      return await Promise.race([terminal, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Claude turn timed out (claude-gateway-rotation)')), 60_000); })]);
+    } finally { clearTimeout(timer); }
+  };
+  const messageRequests = from => requests.slice(from).filter(r => r.url.startsWith('/v1/messages') && !r.url.includes('count_tokens'));
+  const firstKey = gatewayKey;
+  before = requests.length;
+  const beforeChange = await liveTurn();
+  assert.equal(beforeChange.type, 'done', JSON.stringify(beforeChange));
+  assert.ok(messageRequests(before).length > 0);
+  assert.ok(messageRequests(before).every(r => r.apiKey === firstKey));
+  const pidsBefore = await childPids();
+  assert.ok(pidsBefore.length > 0, 'the Claude process is running');
+  gatewayKey = 'synthetic-gateway-key-rotated';
+  // Requests that arrive while the key changes: the proxy admits each one (there is a key
+  // throughout), whichever key it then carries upstream.
+  const during = Array.from({ length: 6 }, () => fetch(new URL('/v1/messages', proxy.endpoint()), { method: 'POST',
+    headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': proxy.gatewayInboundSecret() },
+    body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] }) })
+    .then(async res => ({ status: res.status, body: await res.text() })));
+  await modelAccess.sync.sync();
+  for (const res of await Promise.all(during)) assert.ok(!res.body.includes('inbound_credentials_required'), JSON.stringify(res));
+  assert.equal(modelAccess.gateway.credential, gatewayKey);
+  const stale = await fetch(new URL('/v1/messages', endpoint), { method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': firstKey }, body: '{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[]}' });
+  assert.equal(stale.status, 401);
+  await stale.text();
+  before = requests.length;
+  const afterChange = await liveTurn();
+  assert.equal(afterChange.type, 'done', JSON.stringify(afterChange));
+  const rotatedRequests = messageRequests(before);
+  assert.ok(rotatedRequests.length > 0);
+  for (const request of rotatedRequests) assert.equal(request.apiKey, gatewayKey);
+  assert.deepEqual(await childPids(), pidsBefore, 'the same Claude process answered both turns');
+  const hostSecrets = [proxy.inboundSecret(), proxy.gatewayInboundSecret()];
+  assert.ok(requests.every(r => hostSecrets.every(secret => r.apiKey !== secret && !String(r.authorization ?? '').includes(secret))));
+  await live.close().catch(() => {});
+  clearSessionProvider('claude-gateway-rotation');
+  console.log(`PASS key change mid-run: the running Claude process (pid ${pidsBefore.join(',')}) sent ${rotatedRequests.length} request(s) with the new key; the old key was refused by the gateway fixture; the Host secrets never left the Host`);
+
   // 2. Custom provider: the CLI holds only the proxy runtime secret; the proxy routes with the provider's key.
   before = requests.length;
   const custom = await runTurn({ sessionId: 'claude-custom', providerId: 'cprov-claude', model: 'fixture-claude-model' });
@@ -239,6 +310,13 @@ try {
   assert.equal(requests.slice(before).filter(r => r.url.includes('/v1/messages') && !r.url.includes('count_tokens')).length, 0);
   console.log(`PASS revoked login: marker ${marker.reason}, auth.json removed, the next request got ${next.status} and sent nothing upstream`);
 
+  // 4b. A one-shot request without a Claude Code login: the gateway secret with the loopback
+  // address (getOneShotAuth); the gateway receives the current key.
+  before = requests.length;
+  assert.equal(await graph.maker.oneShot('claude-code', 'return synthetic complete', { model: 'claude-sonnet-4-5', timeoutMs: 30_000 }), 'synthetic complete');
+  assert.deepEqual(requests.slice(before).map(r => [r.url, r.apiKey]), [['/v1/messages', gatewayKey]]);
+  console.log('PASS one-shot without a Claude Code login: through the loopback proxy, the gateway received the current key');
+
   // 5. A Claude Code login is connected (synthetic status and binding): the Host's own one-shot
   // request uses the gateway key on the gateway endpoint, as the desktop's getOneShotAuth, and
   // never the subscription.
@@ -253,6 +331,19 @@ try {
   assert.deepEqual(oneShotRequests.map(r => [r.url, r.apiKey, r.authorization]), [['/v1/messages', gatewayKey, undefined]]);
   assert.equal(connects.length, connectsBefore);
   console.log('PASS one-shot with a Claude Code login: one request to the gateway with the gateway key, none elsewhere');
+
+  // Neither proxy secret is written anywhere: logs, the CLI's home and config, the profile.
+  const secrets = [proxy.inboundSecret(), proxy.gatewayInboundSecret()];
+  let scanned = 0;
+  for (const entry of await fs.readdir(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const file = path.join(entry.parentPath ?? entry.path, entry.name);
+    const text = await fs.readFile(file, 'latin1');
+    scanned += 1;
+    assert.ok(secrets.every(secret => !text.includes(secret)), `a proxy secret is in ${path.relative(root, file)}`);
+  }
+  assert.ok(requests.every(r => secrets.every(secret => r.apiKey !== secret && !String(r.authorization ?? '').includes(secret))));
+  console.log(`PASS the proxy secrets are in none of the ${scanned} files under the run's root (logs, CLI home, profile) and in no upstream request`);
 } catch (error) {
   process.exitCode = 1;
   throw error;

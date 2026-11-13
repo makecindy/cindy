@@ -20,7 +20,7 @@ import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-a
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
 import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
-import { isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
+import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
 import { createPiNativeCompatOverridesStore } from '../../../desktop/src/main/maker-host/piNativeCompatOverridesStoreCore.js';
 import { createMainI18n } from '../../../desktop/src/main/i18n.js';
@@ -181,7 +181,7 @@ export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undef
 }
 
 /** The loopback proxy facts the Claude adapter reads (claude-proxy-runtime.ts). */
-type ClaudeProxyAuthView = Pick<ReturnType<typeof createHostClaudeProxyRuntime>, 'isReady' | 'inboundSecret'>;
+type ClaudeProxyAuthView = Pick<ReturnType<typeof createHostClaudeProxyRuntime>, 'isReady' | 'endpoint' | 'inboundSecret' | 'gatewayInboundSecret'>;
 /** SuperGrok connection state, read for subscription accounts (desktop subscriptionAccountState). */
 type GrokLoginView = Pick<HostProviderConfig['grok'], 'hasGrokOAuthLogin' | 'grokAccountIdentity'>;
 
@@ -199,6 +199,15 @@ type GrokLoginView = Pick<HostProviderConfig['grok'], 'hasGrokOAuthLogin' | 'gro
 function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: ReturnType<typeof createClaudeSubscriptionAuth>,
   proxy: ClaudeProxyAuthView, cli?: HostProviderConfig['claudeNative'], grok?: GrokLoginView) {
   const gatewayKey = () => gateway?.credential || null;
+  // A proxy secret travels only with the loopback address it was read with, so it can never be
+  // sent to the upstream. While the proxy is not ready (getClaudeEndpoint falls back to the
+  // upstream) the CLI carries what the desktop CLI carries.
+  const viaProxy = (secret: string): Record<string, string> | null =>
+    (proxy.isReady() ? { ANTHROPIC_API_KEY: secret, ANTHROPIC_BASE_URL: proxy.endpoint() } : null);
+  // Gateway sessions: the proxy swaps the secret for the key current when each request arrives.
+  const gatewayEnv = () => viaProxy(proxy.gatewayInboundSecret()) ?? { ANTHROPIC_API_KEY: gatewayKey()! };
+  // Explicit sources: the proxy routes the secret as the desktop routes the provider placeholder.
+  const providerEnv = () => viaProxy(proxy.inboundSecret()) ?? { ANTHROPIC_API_KEY: CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY };
   // The desktop's claudeNativeLoginState (CLAUDE_CLI_STATUS_MAX_AGE_MS = 60 s).
   const nativeLoginState = async (): Promise<AuthState> => {
     const login = cli && isNativeProviderAuthBound('anthropic') ? await cli.readClaudeCliLoginStatus({ maxAgeMs: 60_000 }) : null;
@@ -243,10 +252,14 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
     // the Host's own one-shot requests use the gateway key on the gateway endpoint, never the
     // subscription and not through the loopback proxy's routing.
     async getOneShotAuth(): Promise<{ apiKey: string; baseURL?: string } | null> {
-      if (!hasClaudeNativeLogin()) return null;
       const apiKey = gatewayKey();
       if (!apiKey) return null;
-      return { apiKey, baseURL: claudeUpstreamEndpoint() };
+      if (hasClaudeNativeLogin()) return { apiKey, baseURL: claudeUpstreamEndpoint() };
+      // Without a login the desktop's one-shot request takes the gateway key from getAuthEnv and
+      // the engine endpoint (the proxy). Here the secret and its address come as one pair; while
+      // the proxy is not ready, null leaves the desktop's own fallback (the key, the upstream).
+      const route = viaProxy(proxy.gatewayInboundSecret());
+      return route ? { apiKey: route.ANTHROPIC_API_KEY, baseURL: route.ANTHROPIC_BASE_URL } : null;
     },
     async getAuthEnv(opts?: AuthAdapterOptions): Promise<Record<string, string>> {
       if (opts?.nativeSubscriptionAccount) {
@@ -258,18 +271,16 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
       if (opts?.providerId && subscriptionAccountKind(opts.providerId) === 'claude') {
         // A retired independent Claude account carries no credential.
       } else if (opts?.credentialMode === 'gateway-key') {
-        const apiKey = gatewayKey();
-        if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+        if (gatewayKey()) Object.assign(env, gatewayEnv());
       } else if (opts?.credentialMode === 'provider-oauth') {
-        env.ANTHROPIC_API_KEY = proxy.inboundSecret();
+        Object.assign(env, providerEnv());
       } else if (opts?.credentialMode === 'oauth-bearer') {
         Object.assign(env, await networkEnv());
       } else {
-        const apiKey = gatewayKey();
-        if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+        if (gatewayKey()) Object.assign(env, gatewayEnv());
         else if (hasClaudeNativeLogin()) {
           if (servesModel(opts?.model)) Object.assign(env, await networkEnv());
-          else env.ANTHROPIC_API_KEY = proxy.inboundSecret();
+          else Object.assign(env, providerEnv());
         }
       }
       return env;

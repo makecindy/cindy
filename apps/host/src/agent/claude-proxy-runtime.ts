@@ -61,8 +61,12 @@ export function createHostClaudeProxyRuntime(options: {
   const current = () => !closed && owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
   const getUserDataDir = () => { if (!current()) throw new Error('CLAUDE_PROXY_OWNER_CHANGED'); return options.profileDir; };
   const subscriptions = options.subscriptions ?? null;
-  // 32 random bytes, kept only in memory and handed to the CLI through its environment.
+  // 32 random bytes each, kept only in memory and handed to the CLI through its environment. One
+  // stands for the provider placeholder, the other for the gateway key: the proxy routes each
+  // request as the desktop routes the credential it replaces, and a gateway request always carries
+  // the current key, so a running task survives a key change.
   const runtimeSecret = randomBytes(32).toString('base64url');
+  const gatewaySecret = randomBytes(32).toString('base64url');
   const served = new Set<string>();
   const piRegistrations = new Set<() => void>();
 
@@ -84,6 +88,12 @@ export function createHostClaudeProxyRuntime(options: {
       return null;
     }
     const gatewayKey = options.gateway()?.credential;
+    if (sameSecret(key, gatewaySecret)) {
+      // Routed as the desktop routes a CLI that holds the gateway key, with the key current now.
+      if (!gatewayKey) return rejection;
+      ctx.headers['x-api-key'] = gatewayKey;
+      return null;
+    }
     return gatewayKey && sameSecret(key, gatewayKey) ? null : rejection;
   };
 
@@ -138,6 +148,8 @@ export function createHostClaudeProxyRuntime(options: {
     piGatewayRequestAgent: proxy.piGatewayRequestAgent,
     /** What this runtime's Claude Code processes send instead of the provider placeholder. */
     inboundSecret: () => runtimeSecret,
+    /** What this runtime's Claude Code processes send instead of the gateway key. */
+    gatewayInboundSecret: () => gatewaySecret,
     registerPiProxySession: ((...args: Parameters<typeof registerPiProxySession>) => {
       if (!current()) throw new Error('CLAUDE_PROXY_OWNER_CHANGED');
       served.add(args[0]);

@@ -356,7 +356,7 @@ test('with the loopback proxy, Claude and Pi use its endpoint and Pi registers i
   t.after(() => mcp.close());
   let endpoint = 'https://gateway.test/v1';
   const registerPiProxySession = () => () => {};
-  const claudeProxy = { endpoint: () => endpoint, isReady: () => true, inboundSecret: () => 'secret', registerPiProxySession, closeSession() {} };
+  const claudeProxy = { endpoint: () => endpoint, isReady: () => true, inboundSecret: () => 'secret', gatewayInboundSecret: () => 'gateway-secret', registerPiProxySession, closeSession() {} };
   const graph = createHostAgentGraph({
     userDataDir: profile, harnessRoot: fixtureHarnessRoot(profile), claudeProxy,
     gateway: { endpoint: 'https://gateway.test/v1', credential: 'fixture-key' },
