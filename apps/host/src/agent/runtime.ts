@@ -80,6 +80,8 @@ export interface HostAgentGraphOptions {
   mcpProviders?: NonNullable<AgentDeps['mcpProviders']>;
   onSessionClose?: (id: string) => unknown;
   isSessionInTurn?: (id: string) => boolean;
+  /** The window's MCP duplicate choices for Claude (mcp-duplicate-choices.ts), as the desktop constructor. */
+  resolveLocalMcpDuplicateChoices?: AgentDeps['resolveLocalMcpDuplicateChoices'];
   wakeSession?: (id: string, reason: string) => void;
   /** Applies the account's provider models to the active catalog before a task starts. */
   ensureProviderCatalog?: () => Promise<unknown>;
@@ -552,6 +554,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     logger: LOGGER,
   });
   const agent = options.binaryPath ? new ClaudeCodeAgent({
+    ...(options.resolveLocalMcpDuplicateChoices ? { resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices } : {}),
     claudeHooks,
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok),
     runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint),

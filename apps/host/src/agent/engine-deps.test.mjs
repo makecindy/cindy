@@ -146,3 +146,16 @@ test('the three Host lines are the desktop constructor lines', { timeout: TEST_T
   assert.ok(core.includes('createClaudeSubagentUsageResponseObserver(),'));
   assert.ok(core.includes('createClaudeSubagentUsageRequestTransform(),'));
 });
+
+test('Claude gets the MCP duplicate choices main.ts builds from the plugin gateway reads', { timeout: TEST_TIMEOUT_MS }, t => {
+  const resolveLocalMcpDuplicateChoices = async () => ({ skipHostServers: [], denyNativeServers: [] });
+  const graph = buildGraph(t, 'engine-deps-mcp-duplicates', { resolveLocalMcpDuplicateChoices });
+  assert.equal(graph.agent.deps.resolveLocalMcpDuplicateChoices, resolveLocalMcpDuplicateChoices);
+  assert.equal(buildGraph(t, 'engine-deps-mcp-duplicates-absent').agent.deps.resolveLocalMcpDuplicateChoices, undefined);
+  const main = fs.readFileSync(path.join(agentDir, '..', 'main.ts'), 'utf8');
+  assert.ok(main.includes('resolveLocalMcpDuplicateChoices: createHostMcpDuplicateChoices(pluginGateway.customMcp).resolveLocalMcpDuplicateChoices,'));
+  // The desktop Claude constructor takes the same function from the same module family.
+  const desktop = fs.readFileSync(desktopIndex, 'utf8');
+  assert.ok(desktop.includes("import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';"));
+  assert.ok(desktop.includes('    const claudeAgent = new ClaudeCodeAgent({\n      resolveLocalMcpDuplicateChoices,\n'));
+});

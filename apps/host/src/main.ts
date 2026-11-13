@@ -96,6 +96,7 @@ import { initializeHostPluginRemoteAuthorization } from './plugins/remote-author
 import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
+import { createHostMcpDuplicateChoices } from './agent/mcp-duplicate-choices.js';
 import { toolAutoReviewAction } from '@cindy/maker-core';
 import { GhostGrantConfirmBridge } from '../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
 import { getGhostCard, listGhostCardsBySession } from '../../desktop/src/main/cindy-brain/cardStoreDb.js';
@@ -706,6 +707,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       // A task restored at startup waits for the account's models, as on the desktop.
       ensureProviderCatalog: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
       getGhostRosterPrompt: pluginGateway.rosterPrompt,
+      // The MCP duplicate choices made in the window, read from the same owner file.
+      resolveLocalMcpDuplicateChoices: createHostMcpDuplicateChoices(pluginGateway.customMcp).resolveLocalMcpDuplicateChoices,
       // Built-in and approved plugin Skills, as the desktop gives all three engines
       // (listCindyManagedSkills). Codex's Skill projection is release table row 25.
       getManagedSkills: pluginGateway.managedSkills,
