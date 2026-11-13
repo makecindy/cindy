@@ -1,4 +1,6 @@
-import { isModelContextLimitCustomized } from './model-context-limit-store.js';
+import { createXaiProviderTokenReader } from './xaiProviderToken.js';
+import { createCatalogCache } from './catalogCache.js';
+import { isModelContextLimitCustomized, readModelContextLimits } from './model-context-limit-store.js';
 import { requestCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { readModelPriceOverrideView } from '../usage/modelPriceOverrideStore.js';
 import { readProviderPresentation } from './provider-presentation-store.js';
@@ -24,12 +26,13 @@ import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptio
  */
 
 import { app, net } from 'electron';
-import { createHash, randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { hasConnectedSubscriptionPool, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
-import { readPool } from '../subscription-accounts/store.js';
+import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
+  refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
+  resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
+import { readPool, migrateLegacyCodexAccounts, readLegacyCodexAccountId } from '../subscription-accounts/store.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -49,7 +52,7 @@ import {
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
-import { codexAccountState } from './codex-account-auth.js';
+import { codexAccountState } from './codex-account-auth.desktop.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -65,6 +68,7 @@ import {
   commitActiveCatalogSnapshot,
   clearDiscoveredProviderModels,
   getActiveCatalog,
+  getActiveCatalogWithCodexModels,
   getXdGatewayModels,
   getModelPlaneWarnings,
   setActiveCatalog,
@@ -107,9 +111,9 @@ import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provi
 import {
   configureGenericOAuth,
   hasGenericOAuthLogin,
-  readCachedGenericOAuthAccessToken,
+  readGenericOAuthAccessToken,
   resetGenericOAuthMemoryCache,
-} from './generic-oauth.js';
+} from './generic-oauth.desktop.js';
 import {
   genericOAuthSecretIo,
   addProviderSecretsClearedListener,
@@ -122,28 +126,30 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { hasClaudeNativeLogin, hasClaudeNativeLoginUnbound } from './claude-native-auth.js';
 import { readClaudeNativeLogin } from './claude-native-connection.js';
-import { readClaudeCliLoginStatus } from './claude-native-cli.js';
+import { readClaudeCliLoginStatus } from './claude-native-cli.desktop.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
   grokAccountIdentity,
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
-} from './grok-oauth-login.js';
+} from './grok-oauth-login.desktop.js';
 import {
   notifyOpenAiMediaCredentialChanged,
   refreshOpenAiMediaModels,
 } from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
+import { organizationProviderLogoKind } from '../organizationProviderLogo.js';
 import { getAuthState } from '../authManager.js';
 import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import { getActiveAppSession, activeOwnerScopeKey } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   claimDetectedNativeProviderAuth,
   getNativeProviderAuthSource,
   isNativeProviderAuthBound,
+  isNativeProviderAuthSharedSystemCredential,
   isNativeProviderAuthRevoked,
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
@@ -204,157 +210,7 @@ function fetchText(url: string, timeoutMs: number): Promise<string> {
   });
 }
 
-const CATALOG_LKG_VERSION = 2;
-
-interface CatalogLkgEnvelope {
-  version: typeof CATALOG_LKG_VERSION;
-  scopeHash: string;
-  catalog: string;
-}
-
-interface CatalogLkgFileIo {
-  rename(from: string, to: string): Promise<void>;
-  rm(target: string, options: { force: boolean }): Promise<void>;
-}
-
-const catalogLkgWriteTails = new Map<string, Promise<void>>();
-
-function catalogScopeHash(scope: string): string {
-  return createHash('sha256').update(scope).digest('hex');
-}
-
-function catalogLkgPath(scope: string): string {
-  return path.join(
-    app.getPath('userData'),
-    'cache',
-    'model-catalog',
-    `${catalogScopeHash(scope).slice(0, 24)}.json`,
-  );
-}
-
-function catalogLkgEnvelope(scope: string, catalog: string): CatalogLkgEnvelope {
-  return {
-    version: CATALOG_LKG_VERSION,
-    scopeHash: catalogScopeHash(scope),
-    catalog,
-  };
-}
-
-async function readCatalogLkg(scope: string): Promise<string | null> {
-  const file = catalogLkgPath(scope);
-  for (const candidate of [file, `${file}.bak`]) {
-    try {
-      const envelope = JSON.parse(
-        await fsp.readFile(candidate, 'utf8'),
-      ) as Partial<CatalogLkgEnvelope>;
-      return envelope.version === CATALOG_LKG_VERSION &&
-        envelope.scopeHash === catalogScopeHash(scope) &&
-        typeof envelope.catalog === 'string'
-        ? envelope.catalog
-        : null;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw err;
-    }
-  }
-  return null;
-}
-
-/**
- * Replace an existing LKG without depending on POSIX rename-overwrite semantics. Windows may
- * reject that operation while the destination exists, so preserve the prior snapshot until the
- * new file is in place and restore it if the second rename fails.
- */
-async function replaceCatalogLkgFile(
-  temporary: string,
-  file: string,
-  fileIo: CatalogLkgFileIo = fsp,
-): Promise<void> {
-  try {
-    await fileIo.rename(temporary, file);
-    await fileIo.rm(`${file}.bak`, { force: true }).catch(() => undefined);
-    return;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'EEXIST') throw err;
-  }
-
-  const backup = `${file}.bak`;
-  await fileIo.rm(backup, { force: true }).catch(() => undefined);
-  let preservedExisting = false;
-  try {
-    await fileIo.rename(file, backup);
-    preservedExisting = true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
-  try {
-    await fileIo.rename(temporary, file);
-  } catch (err) {
-    if (preservedExisting) {
-      await fileIo.rename(backup, file).catch(() => undefined);
-    }
-    throw err;
-  }
-  if (preservedExisting) {
-    await fileIo.rm(backup, { force: true }).catch(() => undefined);
-  }
-}
-
-function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
-  return `${file}.${process.pid}.${nonce}.tmp`;
-}
-
-/** Serialize the complete replace transaction per scope while leaving different scopes parallel. */
-async function serializeCatalogLkgWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
-  const previous = catalogLkgWriteTails.get(file) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(write);
-  const tail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  catalogLkgWriteTails.set(file, tail);
-  try {
-    return await current;
-  } finally {
-    if (catalogLkgWriteTails.get(file) === tail) catalogLkgWriteTails.delete(file);
-  }
-}
-
-function selectCatalogLkgSnapshot(incoming: string, current: string | null): string {
-  if (current === null) return incoming;
-  try {
-    const incomingRegistry = parseCatalog(incoming).modelRegistry;
-    const currentRegistry = parseCatalog(current).modelRegistry;
-    const decision = decideModelRegistrySnapshot(incomingRegistry, currentRegistry);
-    if (decision !== 'accept-incoming') {
-      // Registry 缺失、revision 回退或同 revision 异内容都不能覆盖磁盘 LKG；否则
-      // 下一次启动已经失去可对照的 last-good，source 层的守卫也无法再救回旧快照。
-      return current;
-    }
-  } catch {
-    // An invalid current envelope payload is not an LKG; replace it with the already-validated input.
-  }
-  return incoming;
-}
-
-async function writeCatalogLkg(scope: string, catalog: string): Promise<string> {
-  const file = catalogLkgPath(scope);
-  return serializeCatalogLkgWrite(file, async () => {
-    const selected = selectCatalogLkgSnapshot(catalog, await readCatalogLkg(scope));
-    if (selected !== catalog) return selected;
-    const temporary = catalogLkgTemporaryPath(file);
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    const envelope = catalogLkgEnvelope(scope, selected);
-    await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
-    try {
-      await replaceCatalogLkgFile(temporary, file);
-    } finally {
-      await fsp.rm(temporary, { force: true }).catch(() => undefined);
-    }
-    return selected;
-  });
-}
+const { catalogLkgEnvelope, catalogLkgPath, catalogLkgTemporaryPath, readCatalogLkg, replaceCatalogLkgFile, selectCatalogLkgSnapshot, serializeCatalogLkgWrite, writeCatalogLkg } = createCatalogCache(() => app.getPath('userData'));
 
 /** 桌面端 CatalogIO —— net + fs + 按端点隔离的 last-known-good 快照。 */
 const io: CatalogIO = {
@@ -432,25 +288,10 @@ let endpointReloadInflight: {
   promise: Promise<Catalog>;
 } | null = null;
 
-async function readXaiProviderOAuthToken(
-  options?: ProviderOAuthTokenReadOptions,
-  providerId = 'xai',
-): Promise<string | null> {
-  if (!options?.forceRefresh) return getGrokAccessToken(providerId);
-
-  // A forced retry must stay bound to the exact bearer rejected upstream. Without that
-  // baseline we cannot safely decide which account generation to refresh.
-  const staleToken = options.staleToken;
-  if (!staleToken) return null;
-
-  const outcome = await recoverGrokAuthAfterRejection(staleToken, providerId);
-  if (outcome !== 'refreshed' && outcome !== 'superseded') return null;
-
-  // `superseded` means another request/login already replaced the rejected credential.
-  // Return that newer token, but never replay the bearer which caused the 401/403.
-  const token = await getGrokAccessToken(providerId);
-  return token !== staleToken ? token : null;
-}
+const readXaiProviderOAuthToken = createXaiProviderTokenReader({
+  getGrokAccessToken: (...args) => getGrokAccessToken(...args),
+  recoverGrokAuthAfterRejection: (...args) => recoverGrokAuthAfterRejection(...args),
+});
 
 /** Set 用稳定函数引用去重，ensureActiveCatalogLoaded 的幂等调用不会重复注册清理副作用。 */
 function handleProviderSecretsCleared(): void {
@@ -482,7 +323,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 测试连接探测与路由同源读 key（同 setter 模式，见 provider-diagnostics.ts）。
   setDiagnosticsKeyReader(readCustomProviderKey);
   // 通用 OAuth Runner 接线（idempotent）：safeStorage blob IO + 系统浏览器拉起;
-  // 路由热路径的同步 token 读取（描述符现查目录,临期后台单飞刷新,不阻塞路由）。
+  // 路由与连接测试共用异步 reader，必要时先完成刷新。
   configureGenericOAuth({
     storage: genericOAuthSecretIo,
     openExternal: async (url) => {
@@ -493,11 +334,11 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 账号切换清空本机密钥后,同步失效 generic-oauth 的内存缓存——
   // 不失效的话磁盘 blob 已删但缓存还热,B 账号会继续用 A 的 token 路由(串号)。
   addProviderSecretsClearedListener(handleProviderSecretsCleared);
-  const readOAuthToken = (providerId: string): string | null => {
+  const readOAuthToken = (providerId: string): Promise<string | null> => {
     const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
     const storageProviderId =
       provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
-    return readCachedGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
+    return readGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
   };
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
@@ -519,7 +360,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     return Promise.resolve(activeCatalog);
   }
   if (!activeInflight) {
-    const source = buildSource();
+    const source = { ...buildSource(), remoteBudgetMs: 2_500 };
     const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
@@ -778,6 +619,8 @@ export async function refreshDiscoveredCodexModels(
   authenticated = true,
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
+  if (!shouldApply()) return;
+  resetDefaultSubscriptionCodexDiscovery(authenticated);
   if (!authenticated) {
     if (shouldApply()) setDiscoveredCodexModels([]);
     return;
@@ -808,8 +651,9 @@ export async function refreshCustomProvidersIntoCatalog(
     return;
   }
   const generation = ++customProviderCatalogRefreshGeneration;
+  const owner = activeOwnerScopeKey();
   const isCurrent = (): boolean =>
-    generation === customProviderCatalogRefreshGeneration && shouldApply();
+    generation === customProviderCatalogRefreshGeneration && owner === activeOwnerScopeKey() && shouldApply();
   try {
     const configs = await listCustomProvidersWithSecureHeaders();
     if (!isCurrent()) {
@@ -855,6 +699,20 @@ export async function refreshCustomProvidersIntoCatalog(
       return;
     }
     setCustomProviderConfigs(next);
+    // Publish old routes first: imported accounts retain these IDs for history and revocation.
+    const access = readModelDisableOverrides();
+    const nativeDefault = isNativeProviderAuthBound('openai');
+    try {
+      await migrateLegacyCodexAccounts(
+        next.filter(config => config.auth?.method === 'oauth' && config.auth.native === 'codex')
+          .map(config => ({ providerId: config.id, paused: isProviderDisabled(access, config.id) })),
+        { preserveDefault: nativeDefault, legacyDefault: nativeDefault && !isNativeProviderAuthSharedSystemCredential('openai'), isCurrent },
+      );
+    } catch {
+      // Failed metadata writes leave every original connection available for the next refresh.
+      log.warn('legacy Codex account migration did not complete');
+    }
+    if (!isCurrent()) return;
     requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
@@ -989,9 +847,41 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+  return filterLegacyGptContextProfiles(projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog()));
+}
+
+function getDesktopSelectableBaseCatalog(): Catalog {
+  return filterProviderCatalogForAccount(getActiveCatalog(), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
+}
+
+/** Apply account membership to both selectable and full routing snapshots. */
+function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
+  const pooledModels = readSubscriptionPoolCodexModels();
+  if (pooledModels !== null) {
+    const openai = getActiveCatalogWithCodexModels(pooledModels).providers.find(provider => provider.id === 'openai');
+    if (openai) catalog = { ...catalog, providers: catalog.providers.map(provider => provider.id === 'openai' ? openai : provider) };
+  }
+  const pool = readPool('openai');
+  const aliases = pool?.legacyCodexAccounts;
+  if (!aliases || pool.disconnected) return catalog;
+  const accounts = new Set(pool.accounts.filter(account => !account.paused).map(account => account.id));
+  const imported = catalog.providers.filter(provider => provider.auth.native === 'codex'
+    && Object.hasOwn(aliases, provider.id) && accounts.has(aliases[provider.id])
+    && codexAccountState(provider.id).authenticated);
+  if (!imported.length) return catalog;
+  // Reuse these accounts' existing membership; do not discover an unrelated default CLI login.
+  return { ...catalog, providers: catalog.providers.map(provider => {
+    if (provider.id !== 'openai') return provider;
+    const models = Object.fromEntries(provider.agents.map(agent => {
+      const models = new Map((provider.models[agent] ?? []).map(model => [model.id, model]));
+      for (const source of imported) for (const model of source.models[agent] ?? [])
+        if (!models.has(model.id)) models.set(model.id, model);
+      return [agent, [...models.values()]];
+    }));
+    return { ...provider, models };
+  }) };
 }
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
@@ -1015,7 +905,17 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   }
   if (singleton) return singleton;
   singleton = createProviderService({
-    projectProvider: projectSubscriptionFastPolicy,
+    getModelContextLimits: readModelContextLimits,
+    projectProvider: provider => {
+      const projected = projectSubscriptionFastPolicy(provider);
+      return readLegacyCodexAccountId(provider.id)
+        ? { ...projected, subscriptionPoolAlias: true }
+        : projected;
+    },
+    getOrganizationProviderLogoKind: (provider) => {
+      const state = getAuthState();
+      return organizationProviderLogoKind(provider, state.mode === 'cloud' ? state.user : null);
+    },
     getProviderPresentation: (providerId) => {
       const presentation = readProviderPresentation(providerId);
       if (providerId !== 'xd') return presentation;
@@ -1026,7 +926,11 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
         logoKind: getCindyAiProviderLogoKind(),
       };
     },
-    getCatalog: getDesktopSelectableCatalog,
+    getCatalog: getDesktopSelectableBaseCatalog,
+    projectCatalog: (catalog, routingCatalog) => {
+      const projected = projectSubscriptionPoolCatalog(catalog);
+      return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
+    },
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
@@ -1069,7 +973,10 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
       openai: async ({ allowSideEffects, snapshotOnly }) => {
         if (readPool('openai')) {
-          if (!snapshotOnly) await refreshSubscriptionPool('openai');
+          if (!snapshotOnly) {
+            await refreshSubscriptionPool('openai');
+            await refreshSubscriptionPoolCodexModels();
+          }
           return hasConnectedSubscriptionPool('openai');
         }
         return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();
@@ -1083,6 +990,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     codexAccountConnected: (providerId) => codexAccountState(providerId).authenticated,
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionReadUnavailable: (providerId) => (providerId === 'openai' || providerId === 'anthropic')
+      && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {
         const login = await readClaudeNativeLogin();

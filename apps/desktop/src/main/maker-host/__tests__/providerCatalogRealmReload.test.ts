@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { providerShareGuestPeer } from '@cindy/device-link';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -34,6 +35,33 @@ const h = vi.hoisted(() => ({
   warn: vi.fn(),
   request: vi.fn(),
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
+  pool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
+  legacyLoggedIn: new Set<string>(),
+  poolModels: null as import('@cindy/model-providers').CatalogModel[] | null,
+  disabledModels: {} as Record<string, true>,
+  migrateLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
+}));
+vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../subscription-accounts/store.js')>();
+  return {
+    ...actual,
+    readPool: (id: string) => id === 'openai' ? h.pool : null,
+    readLegacyCodexAccountId: (id: string) => h.pool?.legacyCodexAccounts?.[id],
+    migrateLegacyCodexAccounts: h.migrateLegacy,
+  };
+});
+vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../subscription-accounts/runtime.js')>();
+  return { ...actual, hasConnectedSubscriptionPool: () => Boolean(h.pool && !h.pool.disconnected),
+    readSubscriptionPoolCodexModels: () => h.poolModels };
+});
+vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../codex-account-auth.desktop.js')>();
+  return { ...actual, codexAccountState: (id: string) => ({ authenticated: h.legacyLoggedIn.has(id) }) };
+});
+vi.mock('../model-disable-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../model-disable-store.js')>(),
+  readModelDisableOverrides: () => ({ disabledModels: h.disabledModels, disabledProviders: {} }),
 }));
 
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
@@ -133,8 +161,8 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLoginUnbound: () => false,
 }));
 vi.mock('../claude-native-connection.js', () => ({ readClaudeNativeLogin: async () => null }));
-vi.mock('../claude-native-cli.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../claude-native-cli.desktop.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: h.getGrokAccessToken,
   peekGrokAccessToken: () => null,
   hasGrokOAuthLogin: () => false,
@@ -142,10 +170,11 @@ vi.mock('../grok-oauth-login.js', () => ({
   recoverGrokAuthAfterRejection: h.recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache: () => undefined,
 }));
-vi.mock('../generic-oauth.js', () => ({
+vi.mock('../generic-oauth.desktop.js', () => ({
   configureGenericOAuth: () => undefined,
   hasGenericOAuthLogin: () => false,
   readCachedGenericOAuthAccessToken: () => null,
+  readGenericOAuthAccessToken: async () => null,
   resetGenericOAuthMemoryCache: () => undefined,
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
@@ -159,7 +188,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   setProviderSecretsClearedListener: () => undefined,
   addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
 }));
-vi.mock('../outbound-fetch.js', () => ({
+vi.mock('../outbound-fetch.desktop.js', () => ({
   outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
 }));
 vi.mock('../provider-route.js', () => ({
@@ -208,6 +237,7 @@ import {
   type CustomProviderConfig,
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
+import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import {
@@ -217,6 +247,7 @@ import {
   setActiveCatalogChangedListener,
   setCustomProviderConfigs,
   setCustomProviders,
+  setDiscoveredCodexModels,
 } from '../active-catalog.js';
 import {
   __testing,
@@ -227,7 +258,9 @@ import {
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
   syncLocalCatalogOverridesIntoActiveCatalog,
+  refreshDiscoveredCodexModels,
 } from '../createDesktopProviderService.js';
+import { createGuestProviderRouteBinder, guestProviderModelIds } from '../../remote-agent/host/providerAccess.js';
 import {
   buildCodexCustomProviderArgs,
   deriveCodexCustomProviderRoutes,
@@ -252,6 +285,119 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Unit regression: a revoked default login cleared the supplier catalog even
+  // after the pool selected a healthy second account. Existing coverage only
+  // projected legacy connection aliases, not ordinary pool accounts.
+  it('keeps healthy pooled membership at the guest startup entry after default auth invalidation', async () => {
+    const previous = getActiveCatalog();
+    const model = (id: string): import('@cindy/model-providers').CatalogModel => ({
+      id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
+    });
+    h.pool = { strategy: 'least', accounts: ['default', 'second'].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
+    h.poolModels = [model('healthy-model')];
+    try {
+      setDiscoveredCodexModels([model('default-only')]);
+      await refreshDiscoveredCodexModels(false);
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      for (const options of [{}, { catalog: getActiveCatalog() }, { getCatalog: getActiveCatalog }]) {
+        const views = await service.listProviders({ ...options, snapshotOnly: true });
+        expect(guestProviderModelIds(views, 'openai', 'codex')).toContain('healthy-model');
+        expect(guestProviderModelIds(views, 'openai', 'codex')).not.toContain('default-only');
+      }
+      h.poolModels = ['healthy-model', 'unshared-model', 'disabled-model', 'other-group-model'].map(model);
+      h.disabledModels = { 'openai:disabled-model': true };
+      const binder = createGuestProviderRouteBinder({
+        readProviders: () => service.listProviders({ snapshotOnly: true }),
+        guestAccess: () => ({ providerId: 'openai', memberId: 'member' }),
+        ownerAllowed: () => true, providerAllowed: () => true,
+        modelAccess: {
+          allows: (_provider, id) => id !== 'unshared-model',
+          read: () => ({ models: ['healthy-model', 'disabled-model', 'other-group-model'], providerModels: null }),
+        },
+      });
+      const route = await binder({ kind: 'codex', hostSessionId: 'pool-guest', sessionId: 'pool-task', providerId: 'openai',
+        controller: providerShareGuestPeer('share', 'member', 'device'), isCurrent: () => true,
+        relayModelAccess: { models: ['healthy-model', 'unshared-model', 'disabled-model'], allows: async () => true } });
+      try { expect(route?.modelIds).toEqual(['healthy-model']); }
+      finally { route?.release(); }
+      h.poolModels = [model('recovered-default'), model('healthy-model')];
+      expect(getDesktopSelectableCatalog().providers.find(p => p.id === 'openai')?.models.codex?.map(m => m.id))
+        .toEqual(['recovered-default', 'healthy-model']);
+      h.poolModels = [model('healthy-model'), model('gpt-history[1m]')];
+      expect(guestProviderModelIds(await service.listProviders({ snapshotOnly: true }), 'openai', 'codex'))
+        .toEqual(['healthy-model']);
+      expect(guestProviderModelIds(await service.listProviders({ snapshotOnly: true, getCatalog: getActiveCatalog }), 'openai', 'codex'))
+        .toEqual(['healthy-model', 'gpt-history[1m]']);
+      h.poolModels = [];
+      expect(guestProviderModelIds(await service.listProviders({ snapshotOnly: true }), 'openai', 'codex')).toEqual([]);
+    } finally {
+      h.pool = null;
+      h.poolModels = null;
+      h.disabledModels = {};
+      setDiscoveredCodexModels([]);
+      setActiveCatalog(previous);
+    }
+  });
+  // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
+  // Codex connections and keep their model membership under the canonical supplier.
+  // Regression: the picker was covered but explicit/lazy full-catalog reads used by
+  // scheduled admission dropped imported-only models and rejected the saved route.
+  it('projects imported model membership under OpenAI while retaining compatibility routes', async () => {
+    const previous = getActiveCatalog();
+    h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
+      legacyCodexAccounts: { 'legacy-imported': 'imported' } };
+    h.legacyLoggedIn.add('legacy-imported');
+    const legacy: CustomProviderConfig = { id: 'legacy-imported', name: 'Old OpenAI',
+      auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+        baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-migration-fixture', name: 'Fixture model' }],
+      } } };
+    const api: CustomProviderConfig = { id: 'migration-api', name: 'API stays separate', runtimes: { codex: {
+      baseUrl: 'https://fixture.example/v1', models: [{ id: 'api-fixture', name: 'API fixture' }],
+    } } };
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      h.customProviderRead.mockResolvedValue([legacy, api]);
+      h.migrateLegacy.mockClear();
+      await refreshCustomProvidersIntoCatalog();
+      expect(h.migrateLegacy.mock.calls[0][0]).toEqual([{ providerId: 'legacy-imported', paused: false }]);
+      const catalog = getDesktopSelectableCatalog();
+      expect(catalog.providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === 'gpt-migration-fixture')).toBe(true);
+      expect(catalog.providers.some(provider => provider.id === 'legacy-imported')).toBe(true);
+      expect(catalog.providers.some(provider => provider.id === 'migration-api')).toBe(true);
+      const selection = { agentKind: 'codex' as const, providerId: 'openai',
+        model: 'gpt-migration-fixture', effort: null, fastMode: false };
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      const readRoutes = () => Promise.all([
+        service.listProviders({ snapshotOnly: true }),
+        service.listProviders({ snapshotOnly: true, catalog: getActiveCatalog() }),
+        service.listProviders({ snapshotOnly: true, getCatalog: getActiveCatalog }),
+      ]);
+      for (const views of await readRoutes()) {
+        expect(resolveScheduledModelSelection(selection, views)).toMatchObject({
+          model: selection.model, providerId: 'openai', agentKind: 'codex',
+        });
+        expect(() => resolveScheduledModelSelection({ ...selection, model: 'api-fixture' }, views))
+          .toThrow('MODEL_SELECTION_UNAVAILABLE');
+      }
+      // Projection must not mutate the raw catalog or retain membership after pause/sign-out.
+      expect(getActiveCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === selection.model)).not.toBe(true);
+      for (const unavailable of ['paused', 'signed-out', 'disconnected'] as const) {
+        h.pool.accounts[0].paused = unavailable === 'paused';
+        h.pool.disconnected = unavailable === 'disconnected';
+        if (unavailable === 'signed-out') h.legacyLoggedIn.clear();
+        else h.legacyLoggedIn.add('legacy-imported');
+        expect(getDesktopSelectableCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === selection.model)).not.toBe(true);
+        for (const views of await readRoutes()) {
+          expect(() => resolveScheduledModelSelection(selection, views)).toThrow('MODEL_SELECTION_UNAVAILABLE');
+        }
+      }
+    } finally {
+      h.pool = null;
+      h.legacyLoggedIn.clear();
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
   // #6768 unit regression: a hidden TTS route needs channel readiness in the
   // actual provider-list wiring before its management switch can be used.
   // Renderer tests inject that snapshot and could not catch missing Main wiring.

@@ -307,24 +307,25 @@ describe('sendToSession ordering', () => {
       'agentInputCoordinatorHolder = inputCoordinator;',
     );
 
-    expect(orcaInterAgentDispatcherSource).toContain('interface QueuedOrcaInterAgentAcceptedCallback');
-    expect(orcaInterAgentDispatcherSource).toMatch(
-      /const queuedOrcaInterAgentAcceptedCallbacks = new Map<\s*string,\s*QueuedOrcaInterAgentAcceptedCallback\s*>\(\);/,
-    );
+    // Callback lifetime is exercised by acceptedCallbackRunner.test.ts; this
+    // guard only verifies that Orca and the coordinator use that shared service.
+    expect(orcaInterAgentDispatcherSource).toContain('const queuedAccepted = createQueuedAcceptedCallbacks(log);');
+    for (const [name, method] of [
+      ['register', 'register'], ['rollback', 'rollback'], ['settle', 'settle'],
+      ['run', 'run'], ['discard', 'discard'],
+    ]) {
+      expect(orcaInterAgentDispatcherSource).toContain(
+        `const ${name}QueuedOrcaInterAgentAcceptedCallback = queuedAccepted.${method};`,
+      );
+    }
     expect(dispatchBlock).toMatch(
       /registerQueuedOrcaInterAgentAcceptedCallback\(\s*clientId,\s*params\.onAccepted,\s*params\.onAcceptedRollback,\s*params\.onAcceptedCommit,?\s*\);/,
     );
-    expect(orcaInterAgentDispatcherSource).toContain('rollback,');
-    expect(orcaInterAgentDispatcherSource).toContain('commit,');
-    expect(orcaInterAgentDispatcherSource).toContain('didRun: false,');
     expect(coordinatorBlock).toContain('await orcaInterAgentDispatcher.settleQueuedOrcaInterAgentAcceptedCallback(');
     expectOrder(coordinatorBlock, 'sessionId,', 'sendOpts,');
     expectOrder(coordinatorBlock, 'sendOpts,', 'result.outcome');
     expect(coordinatorBlock).toContain('await orcaInterAgentDispatcher.rollbackQueuedOrcaInterAgentAcceptedCallback(');
-    expect(orcaInterAgentDispatcherSource).toContain('callback.didRun = true;');
-    expect(orcaInterAgentDispatcherSource).toContain('return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);');
     expect(coordinatorBlock).toContain('orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);');
-    expectOrder(orcaInterAgentDispatcherSource, 'callback.didRun = true;', 'return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);');
   });
 
   it('keeps queued Orca lead/worker items structured-cloneable', () => {
@@ -366,7 +367,7 @@ describe('sendToSession ordering', () => {
     );
     expectOrder(
       block,
-      'prepareUnhealthySession(targetSessionId)',
+      'prepareUnhealthySessionForSend(targetSessionId)',
       'live = maker.getSession(targetSessionId);',
     );
     const liveBranch = extractBetween(
@@ -499,7 +500,7 @@ describe('sendToSession ordering', () => {
     expect(createBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {');
     expect(createBranch).toContain('planMode: false,');
     expectOrder(createBranch, 'onAccepted: async () => {', 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {');
-    expectOrder(createBranch, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await createDbMessage(session.id, {');
+    expectOrder(createBranch, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await persistUserTurnMessage(session.id, {');
     expect(createBranch).toContain('content: persistedContent ?? message,');
     expect(createBranch).not.toContain('persist user message failed (non-fatal)');
     expect(createBranch).toContain('if (isSessionRunningError(err))');
@@ -531,11 +532,11 @@ describe('sendToSession ordering', () => {
       createBranch.indexOf(sendCallEndNeedle) + sendCallEndNeedle.length,
     );
 
-    expect(acceptedBlock).toContain('await createDbMessage(session.id, {');
+    expect(acceptedBlock).toContain('await persistUserTurnMessage(session.id, {');
     expect(acceptedBlock).toContain('notifyAgentIslandUserPrompt(session, persistedContent ?? message, {');
     expect(acceptedBlock).toContain('broadcastSessionCreated(session.id);');
-    expectOrder(acceptedBlock, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await createDbMessage(session.id, {');
-    expectOrder(acceptedBlock, 'await createDbMessage(session.id, {', 'broadcastSessionCreated(session.id);');
+    expectOrder(acceptedBlock, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await persistUserTurnMessage(session.id, {');
+    expectOrder(acceptedBlock, 'await persistUserTurnMessage(session.id, {', 'broadcastSessionCreated(session.id);');
     expect(afterSendResolves).not.toContain('broadcastSessionCreated(session.id);');
     expect(countOccurrences(sendCall, 'broadcastSessionCreated(session.id);')).toBe(1);
   });
@@ -664,7 +665,7 @@ describe('sendToSession ordering', () => {
       ['reconcileBotModelRoute', 'reconcileBotModelRoute'],
       ['applyPendingAgentSwitchIfIdle', 'applyPendingAgentSwitchIfIdle'],
       ['applyScheduledModelSelection', 'applyScheduledProfile'],
-      ['prepareUnhealthySession', 'prepareUnhealthySession'],
+      ['prepareUnhealthySession', 'prepareUnhealthySessionForSend'],
     ]) {
       expectOrder(directSendSwitchBlock, `stage = 'direct-send:${operation}'`, `${call}(`);
     }
@@ -737,8 +738,8 @@ describe('sendToSession ordering', () => {
     const block = extractSendToSessionSource();
     // 同 sendPersistedUserMessageToSession 的顺序硬约束(Codex review P2):
     // prompt preview 可先发,但 accepted 副作用仍必须等落库成功后才执行。
-    expectOrder(block, 'notifyAgentIslandUserPrompt(previewSessionMeta', 'await createDbMessage(targetSessionId, {');
-    expectOrder(block, 'await createDbMessage(targetSessionId, {', 'await runAcceptedCallback(onAccepted, targetSessionId, clientId);');
+    expectOrder(block, 'notifyAgentIslandUserPrompt(previewSessionMeta', 'await persistUserTurnMessage(targetSessionId, {');
+    expectOrder(block, 'await persistUserTurnMessage(targetSessionId, {', 'await runAcceptedCallback(onAccepted, targetSessionId, clientId);');
     const liveBranch = extractBetween(
       block,
       'live = maker.getSession(targetSessionId);',

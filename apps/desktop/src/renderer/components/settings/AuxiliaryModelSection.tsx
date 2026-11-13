@@ -4,8 +4,7 @@ import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown } from 'lucide-react';
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 import { OneshotModelPinPicker } from '@/cindy-brain/OneshotModelPinPicker';
@@ -182,72 +181,22 @@ export function AuxiliaryModelSection() {
                   }}
                 />
               ) : null}
-              <Select.Root
+              <Select data-setting-id={personalizationDetailsSettings.auxiliaryModelsTitle.id}
+                label={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
                 value={mode}
+                options={(['automatic', 'custom'] as const).map((option) => ({
+                  value: option,
+                  label: t(
+                    option === 'automatic'
+                      ? 'settings.auxiliaryModels.automatic'
+                      : 'settings.auxiliaryModels.customize',
+                  ),
+                }))}
                 onValueChange={(value) => selectMode(value as AuxiliaryModelMode)}
                 disabled={pending}
-              >
-                <Select.Trigger data-setting-id={personalizationDetailsSettings.auxiliaryModelsTitle.id}
-                  aria-label={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
-                  className={cn(
-                    'flex h-9 w-[220px] max-w-full min-w-0 shrink items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
-                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                    'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                    'disabled:cursor-not-allowed disabled:opacity-55',
-                  )}
-                >
-                  <span className="min-w-0 truncate text-left">
-                    <Select.Value />
-                  </span>
-                  <Select.Icon asChild>
-                    <ChevronDown
-                      size={14}
-                      className="shrink-0 text-[var(--settings-eye-icon)]"
-                      aria-hidden="true"
-                    />
-                  </Select.Icon>
-                </Select.Trigger>
-                <Select.Portal>
-                  <Select.Content
-                    position="popper"
-                    side="bottom"
-                    align="start"
-                    sideOffset={6}
-                    className={cn(
-                      'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl p-2',
-                      'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-                    )}
-                  >
-                    <Select.Viewport className="flex flex-col gap-[2px]">
-                      {(['automatic', 'custom'] as const).map((option) => (
-                        <Select.Item
-                          key={option}
-                          value={option}
-                          className={cn(
-                            'flex h-9 w-full cursor-pointer select-none items-center justify-between gap-3 rounded-[8px] px-3 text-left text-13 outline-none transition-colors',
-                            'text-[var(--settings-input-text)]',
-                            'data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
-                          )}
-                        >
-                          <Select.ItemText className="min-w-0 flex-1 whitespace-nowrap">
-                            {t(
-                              option === 'automatic'
-                                ? 'settings.auxiliaryModels.automatic'
-                                : 'settings.auxiliaryModels.customize',
-                            )}
-                          </Select.ItemText>
-                          <Select.ItemIndicator>
-                            <Check
-                              size={16}
-                              className="shrink-0 text-[var(--settings-theme-icon-active)]"
-                            />
-                          </Select.ItemIndicator>
-                        </Select.Item>
-                      ))}
-                    </Select.Viewport>
-                  </Select.Content>
-                </Select.Portal>
-              </Select.Root>
+                width="sm"
+                className="shrink"
+              />
             </div>
           }
         />

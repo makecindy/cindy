@@ -23,6 +23,7 @@ import {
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
+  resolveModelMaxOutputTokens,
   resolveModelContextProviderId,
 } from '../catalog-to-descriptors.js';
 import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
@@ -810,8 +811,8 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
             baseUrl: 'https://example.invalid/v1',
             models: [
               {
-                id: 'gpt-5.6-sol',
-                name: 'gpt-5.6-sol',
+                id: 'private-context-fixture',
+                name: 'private-context-fixture',
                 ...(solContextWindow !== undefined ? { contextWindow: solContextWindow } : {}),
               },
               { id: 'gpt-5.4-mini', name: 'gpt-5.4-mini' },
@@ -826,13 +827,13 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
   it('用户显式填写的窗口返回该值', () => {
     const catalog = catalogWithCustom(1_050_000);
     expect(
-      resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
+      resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'private-context-fixture'),
     ).toBe(1_050_000);
   });
 
   it('applies the displayed default for custom models without a saved override', () => {
     const catalog = catalogWithCustom();
-    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(200_000);
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'private-context-fixture')).toBe(500_000);
   });
 
   it('applies Gateway and subscription defaults independently for the same model id', () => {
@@ -843,17 +844,46 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
       provider.models.codex = [{ ...model, contextWindow: window }];
       expect(resolveModelDefaultContextWindow(catalog, 'codex', id, model.id)).toBe(window);
     }
-    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(500_000);
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'private-context-fixture')).toBe(500_000);
     expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'missing')).toBeNull();
     catalog.providers.find(p => p.id === 'xd')!.routing.codex!.disabled = true;
-    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol')).toBeNull();
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'private-context-fixture')).toBeNull();
   });
 
   it('没有 providerId 不注入', () => {
     const catalog = catalogWithCustom(1_050_000);
     expect(
-      resolveModelDefaultContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
+      resolveModelDefaultContextWindow(catalog, 'codex', null, 'private-context-fixture'),
     ).toBeNull();
+  });
+});
+
+// Regression: the CC runtime must use this connection's maxOutput, not the
+// first same-ID descriptor. Existing projections only tested display metadata.
+describe('resolveModelMaxOutputTokens', () => {
+  it('uses the selected connection and harness, including user overrides', () => {
+    const catalog = injectedCatalog();
+    for (const [id, maxOutput] of [['output-a', 48_000], ['output-b', 96_000]] as const) {
+      catalog.providers.push(buildUserProvider({
+        id, name: id, runtimes: {
+          'claude-code': { baseUrl: 'https://example.invalid', models: [{ id: 'shared', name: 'shared', maxOutputTokens: maxOutput }] },
+          codex: { baseUrl: 'https://example.invalid', models: [{ id: 'shared', name: 'shared', maxOutputTokens: 16_000 }] },
+        },
+      }));
+      expect(resolveModelMaxOutputTokens(catalog, 'claude-code', id, 'shared')).toBe(maxOutput);
+      expect(resolveModelMaxOutputTokens(catalog, 'codex', id, 'shared')).toBe(16_000);
+    }
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', null, 'shared')).toBeNull();
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'missing', 'shared')).toBeNull();
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'missing')).toBeNull();
+    const provider = catalog.providers.find(p => p.id === 'output-a')!;
+    for (const invalid of [undefined, 0, -1, Number.NaN, 1.5]) {
+      provider.models['claude-code']![0]!.maxOutput = invalid;
+      expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'shared')).toBeNull();
+    }
+    provider.models['claude-code']![0]!.maxOutput = 48_000;
+    provider.routing['claude-code']!.disabled = true;
+    expect(resolveModelMaxOutputTokens(catalog, 'claude-code', 'output-a', 'shared')).toBeNull();
   });
 });
 

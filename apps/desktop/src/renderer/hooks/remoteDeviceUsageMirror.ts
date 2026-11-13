@@ -24,7 +24,11 @@ export interface RemoteDeviceUsageMirror<T> {
 export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   invokeChannel: string | null;
   /** Optional reader for an existing channel with a legacy fallback. */
-  read?: (deviceId: string, providerId?: string) => Promise<unknown>;
+  read?: (
+    deviceId: string,
+    providerId?: string,
+    scheduling?: { background?: boolean },
+  ) => Promise<unknown>;
   /** Only visible, mounted consumers poll; all consumers still share the entry. */
   refreshIntervalMs?: number;
   /** Native group quota owns one recovery observer per shared account entry. */
@@ -114,7 +118,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     entry.pending = true;
     entry.requestedAt = Date.now();
     const reading = cfg.read
-      ? cfg.read(deviceId, providerId ?? cfg.defaultProviderId)
+      ? cfg.read(deviceId, providerId ?? cfg.defaultProviderId, scheduling)
       : scheduling
         ? window.electronAPI.deviceLink.invoke(deviceId, cfg.invokeChannel!, args, scheduling)
         : window.electronAPI.deviceLink.invoke(deviceId, cfg.invokeChannel!, args);

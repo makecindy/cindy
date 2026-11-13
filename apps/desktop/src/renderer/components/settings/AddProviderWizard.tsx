@@ -1,3 +1,4 @@
+import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
 import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
@@ -308,8 +309,15 @@ export function AddProviderWizard({
   const { t, i18n } = useTranslation();
   const dialog = useDialogExit();
   const panelRef = useRef<HTMLDivElement>(null);
-  const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
-  const onDone = useCallback((id?: string) => dialog.close(() => notifyDone(id)), [dialog.close, notifyDone]);
+  const { complete: completeGuideConnection, cancel: cancelGuideConnection } = useFirstRunGuideConnectionDialog();
+  const onClose = useCallback(() => dialog.close(() => {
+    cancelGuideConnection();
+    notifyClosed();
+  }), [cancelGuideConnection, dialog.close, notifyClosed]);
+  const onDone = useCallback((id?: string) => dialog.close(() => {
+    completeGuideConnection();
+    notifyDone(id);
+  }), [completeGuideConnection, dialog.close, notifyDone]);
   const onOpenCustomForm = useCallback(() => dialog.close(openCustomForm), [dialog.close, openCustomForm]);
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
@@ -762,8 +770,13 @@ export function AddProviderWizard({
       toast.success(t('settings.providers.wizard.authorizedToast', { name: sel?.kind === 'oauth' ? sel.provider.name : providerId }));
       onDone(providerId);
     } catch (error) {
-      if (localLoginRef.current === login && !String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED'))
-        toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (localLoginRef.current === login && code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(
+          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+            ? 'subscriptionAccounts.providerManagedAuth'
+            : 'subscriptionAccounts.failed',
+        ));
     } finally {
       if (localLoginRef.current === login) {
         localLoginRef.current = null;
@@ -1634,7 +1647,8 @@ export function AddProviderWizard({
         >
           {step === 1 && (
             <>
-              <div className="px-4 pb-3">
+              {/* Keep the input's outer focus ring inside the clipped body. */}
+              <div className="px-4 pb-3 pt-1">
                 <div className="relative">
                   <SettingsTextInput
                     surface="ivory"

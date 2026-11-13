@@ -54,7 +54,7 @@ export function DownloadToast({ items }: { items: readonly FileTransferToast[] }
                   className="flex items-center gap-3 border-b border-[var(--border-default)] px-2 py-3 last:border-b-0"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="break-words text-13 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">
+                    <div className="break-words text-13 font-medium leading-[1.54] text-[var(--text-primary)] [overflow-wrap:anywhere]">
                       {item.name}
                     </div>
                     <div className="mt-1 text-12 leading-normal tabular-nums text-[var(--text-secondary)] [overflow-wrap:anywhere]">

@@ -84,6 +84,8 @@ import {
 } from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
 import { backfillPersonalFeishuSessions } from './feishu/legacySessionBackfill';
+import { setControlProjectCatalogSource } from './shared/controlProjects';
+import { loadImProjectCatalog } from '../hook-control/projectCatalog';
 import { wireDiscordOrchestrator } from './discord';
 import { wireTelegramOrchestrator } from './telegram';
 import { listTelegramKnownGroups } from './telegram/groupWindow';
@@ -254,6 +256,8 @@ export function startImOrchestrators(): void {
   wechatCompatibilityPolicy.start();
   if (wired) return;
   wired = true;
+  // /ctr 与 /project 列的项目就是侧栏的本机项目(与官方机器人同一份)。
+  setControlProjectCatalogSource(loadImProjectCatalog);
   // Production bootstrap wires handlers before login/DbClient readiness.
   // Keep the synchronous ingress gate closed until startImConnection reaches
   // the authenticated account's initialized DB boundary.
@@ -339,7 +343,13 @@ export function startImOrchestrators(): void {
         });
         return { kind: 'dingtalk', im, orchestrator };
       }
-      const im = createBotDiscordIM(prefix);
+      // 服务器频道白名单按连接各一份、每次使用时现读连接记录：撤销 / 删除连接即时生效，
+      // 不同连接（不同 connectionId）互不串；存量记录没有该字段 = 不开放任何频道。
+      const im = createBotDiscordIM(prefix, {
+        channelAccess: {
+          read: () => readBotImConnection(record.id)?.discordChannelAccess ?? { channels: [] },
+        },
+      });
       const orchestrator = wireDiscordOrchestrator(im, DISCORD_CONFIG, {
         instanceKey: `discord#${record.id}`,
         companionBotId: record.botId,
@@ -469,7 +479,7 @@ export function startImOrchestrators(): void {
   ipcMain.handle('wechatBot:set-companion', (event, botId: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (botId !== null && (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId))) {
-      throwIpcError('INVALID_ARGUMENT', 'Invalid teammate');
+      throwIpcError('INVALID_ARGUMENT', 'Invalid buddy');
     }
     return setWechatCompanion(botId as string | null);
   });
@@ -680,6 +690,15 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
         .where(eq(sessions.source, 'feishu'));
       for (const row of rows) {
         if (!row.botContextId) continue;
+        // 同 Telegram: /project 切到项目目录是用户显式选择, 重连不得覆盖回托管目录 ——
+        // 本归一只服务跨 owner 命名空间迁移的旧托管路径(完整尾段判定)。
+        // 两种分隔符都认: Windows 上库里的目录可能是正斜杠形态, 也可能是反斜杠。
+        if (
+          row.workingDir &&
+          !row.workingDir.replace(/\\/g, '/').endsWith(`/im-working-dir/${row.botContextId}`)
+        ) {
+          continue;
+        }
         const scoped = feishuAdapter.sessions.ensureWorkingDir(row.botContextId);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
@@ -692,12 +711,14 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
           id: sessions.id,
           workingDir: sessions.workingDir,
           botContextId: sessions.imBotContextId,
+          imUserId: sessions.imUserId,
         })
         .from(sessions)
         .where(eq(sessions.source, 'discord'));
       for (const row of rows) {
         if (!row.botContextId) continue;
-        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId);
+        // 服务器频道 lane 各有独立托管目录, 按 lane id 重算, 不能被改写回私聊目录。
+        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId, row.imUserId ?? undefined);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
       }

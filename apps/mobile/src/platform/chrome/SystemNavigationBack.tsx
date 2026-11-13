@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { Platform } from 'react-native';
 import { useAdaptiveWindow } from '../AdaptiveWindowContext';
 import { useTheme } from '@/theme';
+import { useNavigationCallback } from './useNavigationCallback';
 
 export function useSystemNavigationBack() {
   const window = useAdaptiveWindow();
@@ -17,6 +18,9 @@ export function SystemNavigationBack({ onPress, label, disabled = false, close =
 }) {
   const enabled = useSystemNavigationBack();
   const { colors } = useTheme();
+  const pressBack = useNavigationCallback(onPress);
+  const pressNewTask = useNavigationCallback(newTask?.onPress);
+  const newTaskLabel = newTask?.label;
   // expo-router applies screen options in a layout effect. Keep this object
   // stable across unrelated store updates, otherwise setOptions can feed a
   // rerender back into this route indefinitely.
@@ -28,14 +32,16 @@ export function SystemNavigationBack({ onPress, label, disabled = false, close =
     headerTitle: '',
     headerTintColor: colors.textPrimary,
   }), [available, colors.textPrimary, enabled]);
+  // Toolbar children also participate in the composition registry's layout
+  // effect. Memoizing only Stack.Screen options leaves that feedback loop open.
+  const backButton = useMemo(() => <Stack.Toolbar.Button icon={close ? 'xmark' : 'chevron.backward'}
+    accessibilityLabel={label} disabled={disabled} onPress={pressBack} />,
+  [close, label, disabled, pressBack]);
+  const newTaskButton = useMemo(() => <Stack.Toolbar.Button icon="square.and.pencil"
+    accessibilityLabel={newTaskLabel} onPress={pressNewTask} />, [newTaskLabel, pressNewTask]);
   return <>
     <Stack.Screen options={screenOptions} />
-    {enabled && available ? <Stack.Toolbar placement="left">
-      <Stack.Toolbar.Button icon={close ? 'xmark' : 'chevron.backward'}
-        accessibilityLabel={label} disabled={disabled} onPress={onPress} />
-    </Stack.Toolbar> : null}
-    {enabled && available && newTask ? <Stack.Toolbar placement="right">
-      <Stack.Toolbar.Button icon="square.and.pencil" accessibilityLabel={newTask.label} onPress={newTask.onPress} />
-    </Stack.Toolbar> : null}
+    {enabled && available ? <Stack.Toolbar placement="left">{backButton}</Stack.Toolbar> : null}
+    {enabled && available && newTask ? <Stack.Toolbar placement="right">{newTaskButton}</Stack.Toolbar> : null}
   </>;
 }

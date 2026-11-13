@@ -408,12 +408,11 @@ function resolveXdPiGatewayServerModelApi(
   )
     return null;
   const nativeApi = nativeApiForRoute('xd', model.id);
-  // Global Gemini Gateway exposes Responses even though Gemini's native API is Google.
-  // Honor that explicit execution route before native metadata selects an unavailable /v1beta
-  // entry point (#9288). Keep the native identity for presentation, and retain CN/dev, direct
-  // Google providers, and Gateway routes without this declaration on their existing policy.
+  // Gemini Gateway can expose Responses even though Gemini's native API is Google.
+  // Honor that explicit execution route in every region before native metadata selects an
+  // unavailable /v1beta entry point (#9288). Keep the native identity for presentation;
+  // direct Google providers and Gateway routes without this declaration retain their policy.
   if (
-    CURRENT_CINDY_REGION === 'global' &&
     nativeApi === 'google-generative-ai' &&
     model.perAgent?.pi?.wireProtocol === 'openai-responses'
   ) return 'openai-responses';
@@ -459,7 +458,7 @@ function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi |
 }
 
 function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | null {
-  // Except for the explicit Global Gemini Responses route handled above, retain source authority:
+  // Except for the explicit Gemini Responses route handled above, retain source authority:
   // Cindy Server downloaded Catalog > version-matched local Pi table > Cindy AI Gateway hint.
   const catalogApi = resolveXdPiGatewayServerModelApi(model);
   if (catalogApi !== undefined) return catalogApi;
@@ -1205,7 +1204,7 @@ function projectXdGatewayMediaModels(
   };
 }
 
-function computeMerged(): Catalog {
+function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex): Catalog {
   const source = base ?? BUNDLED_CATALOG;
   const b =
     baseCapabilityEvidence === 'current'
@@ -1253,7 +1252,7 @@ function computeMerged(): Catalog {
 
   // Codex root 消费其发现快照；Pi 后续独立补新型号，不继承 Codex 专属能力。
   const withCodexDiscovery = providers.map((p) =>
-    p.id === 'openai' ? augmentModels(p, 'codex', discoveredCodex, true) : p,
+    p.id === 'openai' ? augmentModels(p, 'codex', [...codexModels], true) : p,
   );
   if (withCodexDiscovery.some((p, index) => p !== providers[index])) {
     providers = withCodexDiscovery;
@@ -1332,7 +1331,7 @@ function computeMerged(): Catalog {
       const discoveredAccountCodex = discoveredByProvider.get(p.id)?.codex ?? [];
       const accountCodex =
         p.id === 'openai'
-          ? discoveredCodex
+          ? codexModels
           : discoveredAccountCodex.length > 0 || p.auth.native !== 'codex'
             ? discoveredAccountCodex
             : (p.models.codex ?? []);
@@ -1944,8 +1943,11 @@ function computeMerged(): Catalog {
           : undefined;
         const contextWindow = Math.min(model.contextWindow, declaredWindow ?? 272_000);
         if (contextWindow === model.contextWindow) return model;
+        // A working fallback is not evidence of physical capacity. Preserve a
+        // declared maximum, or retain the original window only when verified.
         return { ...model, contextWindow,
-          contextWindowMax: model.contextWindowMax ?? model.contextWindow };
+          ...(model.contextWindowMax === undefined && model.contextWindowVerified === true
+            ? { contextWindowMax: model.contextWindow } : {}) };
       }),
     ])),
   }));
@@ -2021,6 +2023,18 @@ export function getActiveCatalog(): Catalog {
     merged = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
   }
   return merged;
+}
+
+let pooledCodexProjection: { revision: number; models: readonly CatalogModel[]; catalog: Catalog } | undefined;
+
+/** Reuse the normal metadata/bridge/override pipeline without mutating default-account discovery. */
+export function getActiveCatalogWithCodexModels(models: readonly CatalogModel[]): Catalog {
+  if (pooledCodexProjection?.revision === revision && pooledCodexProjection.models === models)
+    return pooledCodexProjection.catalog;
+  const catalog = computeMerged(models);
+  const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  pooledCodexProjection = { revision, models, catalog: projected };
+  return projected;
 }
 
 /**

@@ -49,8 +49,12 @@ export function registerPluginUsageIpc(deps: {
           throwIpcError('PRECONDITION_FAILED', 'Plugin usage owner changed');
         const identity = deps.identity(id);
         if (!identity) throwIpcError('NOT_FOUND', 'Plugin usage identity unavailable');
-        await current.bind(identity);
-        const handle = current.capture(identity);
+        // Polling reads only; bind once when this installed revision has no handle yet.
+        let handle = current.captureBound(identity.ghostId, identity.revision);
+        if (!handle || handle.identity.stableKey !== identity.stableKey) {
+          await current.bind(identity);
+          handle = current.captureBound(identity.ghostId, identity.revision);
+        }
         if (!handle) throwIpcError('PRECONDITION_FAILED', 'Plugin usage unavailable');
         return current.summary(handle.subjectId);
       });

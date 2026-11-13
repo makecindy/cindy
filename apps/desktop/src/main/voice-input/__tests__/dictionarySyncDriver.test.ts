@@ -112,6 +112,12 @@ describe('设备平台判定', () => {
 describe('对端准入判定', () => {
   const desktop = { online: true, platform: 'darwin', revoked: false };
 
+  // Agent-Net App routing: existing tests only excluded mobile platforms. Unit:
+  // the production predicate shared by online, incoming and broadcast paths.
+  it.each([undefined, 'cindy', 'cindy-friend', 'other-app'])('only exchanges dictionary state with Cindy (app=%s)', app => {
+    expect(shouldExchangeDictionaryWith({ ...desktop, app })).toBe(app === undefined || app === 'cindy');
+  });
+
   it('在线的未撤销电脑才交换词典', () => {
     expect(shouldExchangeDictionaryWith(desktop)).toBe(true);
   });

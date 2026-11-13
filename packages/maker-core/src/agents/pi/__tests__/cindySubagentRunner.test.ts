@@ -376,6 +376,7 @@ const path = require('node:path');
 if (!process.env.PI_CODING_AGENT_DIR || !fs.existsSync(path.join(process.env.PI_CODING_AGENT_DIR, 'models.json'))) {
   process.exit(9);
 }
+if (process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE) process.exit(14);
 if (Object.keys(process.env).some((key) => key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_'))) {
   process.exit(10);
 }
@@ -570,6 +571,7 @@ process.stdin.on('end', () => {
       CINDY_TEST_PI_TOKENS: tokensFile,
       CINDY_PI_SESSION_TOKEN: 'parent-session-token-must-not-reach-direct-child',
       CINDY_PI_REMOTE_MCP_SECRET_FIXTURE: 'must-not-reach-child',
+      CINDY_PI_TASK_SYSTEM_PROMPT_FILE: path.join(root, 'parent-task-system-prompt.md'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -660,6 +662,34 @@ describe('Cindy durable PI Subagent runner', () => {
       undefined, 'the independent process inventory to confirm the completed runner exited');
     expect(await Promise.all(files.map(file => readFile(path.join(fixture.runDir, file)))))
       .toEqual(before);
+  });
+
+  // Unlike the SIGTERM receipt case below, this also exercises Windows: a
+  // completed receipt cannot hide a later process using the same native session.
+  it('keeps a real terminal receipt in scope while its native session is still running', async () => {
+    const fixture = await makeFixture();
+    await waitForClose(fixture.child, fixture.stderr);
+    const config = JSON.parse(await readFile(path.join(fixture.runDir, 'config.json'), 'utf8'));
+    await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
+    const child = spawn(process.execPath, [
+      '-e', 'process.stdin.resume(); process.stdout.write("ready");',
+      '--', '--session-id', config.tasks[0].sessionId,
+    ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', data => { stderr += data.toString(); });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.stdout.once('data', () => resolve());
+        child.once('error', reject);
+        child.once('exit', () => reject(new Error('session fixture exited before ready: ' + stderr)));
+      });
+      await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(false);
+    } finally {
+      const closed = waitForClose(child, () => stderr);
+      child.stdin.end();
+      await closed;
+    }
+    await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('refuses a real signal receipt until the orphan child has exited', async () => {

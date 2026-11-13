@@ -141,11 +141,11 @@ function StepIcon({ status }: { status: CrossAgentStepStatus }) {
     case 'running':
       return <Spinner size={16} className="text-[var(--confirm-title)]" />;
     case 'success':
-      return <Check className="h-4 w-4 shrink-0 text-emerald-500" />;
+      return <Check className="h-4 w-4 shrink-0 text-[var(--status-success)]" />;
     case 'skipped':
       return <CircleSlash className="h-4 w-4 shrink-0 text-[var(--confirm-desc)]" />;
     case 'failed':
-      return <X className="h-4 w-4 shrink-0 text-red-500" />;
+      return <X className="h-4 w-4 shrink-0 text-[var(--error-fg)]" />;
     default:
       return null;
   }

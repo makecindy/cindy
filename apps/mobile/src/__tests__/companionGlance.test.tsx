@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 /**
  * 测试价值
- * - 生产入口与可观察结果：手机伙伴近况的两份数据——「输出内容」列哪些文件（companionGlanceOutputs），
- *   「待办」能否读到宿主第一页（25 条）之后的条目（useCompanionGlanceTodos）。
+ * - 生产入口与可观察结果：手机伙伴近况的「输出内容」列哪些文件（companionGlanceOutputs）与任务列表。
  * - Bug／规则依据：docs/product-rules/cindy-bots-runtime.md「伙伴近况」；桌面同一入口在 #6681 review 中
  *   被指出只读一页时第 26 条之后看不到、引用不了、删不掉；模拟器目检发现 Hermes 没有 Intl.RelativeTimeFormat，
  *   今天到期的待办让近况整块渲染报错。
@@ -13,9 +12,8 @@
 import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { todoDateLabel, todoDueSoon, todoLocalDate, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 
-const h = vi.hoisted(() => ({ items: [] as unknown[], reads: [] as Array<Record<string, unknown>>,
+const h = vi.hoisted(() => ({ copies: [] as any[], offline: new Set<string>(), items: [] as unknown[], reads: [] as Array<Record<string, unknown>>,
   pageGate: null as Promise<void> | null, dailyCheck: false, liveQuery: false, sessions: [] as any[], queried: [] as any[], delegations: [] as any[], prs: new Map(), activity: new Map(), closed: null as (() => void) | null, openURL: vi.fn(),
 }));
 vi.mock('react-native', () => ({
@@ -41,23 +39,18 @@ vi.mock('@/chat/useCloudCompanion', () => ({ useCloudCompanionHome: () => ({ act
 vi.mock('@/session/remoteSessionStore', () => ({ useRemoteHomeSessions: () => h.sessions,
   remoteSessionStore: { getHomeSessions: () => h.sessions, subscribeHomeStatus: () => () => undefined, getSessionLiveActivity: (id: string) => h.activity.get(id) } }));
 vi.mock('@/session/HomeSessionInfoMeta', () => ({ useHomeSessionPr: (_device: string, id: string) => h.prs.get(id) ?? null }));
-vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [], remoteResourceConnectionState: () => 'online' }));
+vi.mock('@/device-link/remoteResourceAvailability', async importOriginal => ({
+  ...await importOriginal<typeof import('@/device-link/remoteResourceAvailability')>(), readRemoteCollectionCache: () => h.copies,
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => undefined } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u' }, accountGeneration: 1 }) }));
 // Stable like the real context: new functions per render would re-run the read effect forever.
-const link = vi.hoisted(() => ({ status: 'online', connectionEpoch: 1, getPresenceAvailability: () => true, invoke: vi.fn(), openLink: async () => undefined, onRemoteResourceChanged: vi.fn((_callback: any) => () => undefined) }));
+const link = vi.hoisted(() => ({ status: 'online', connectionEpoch: 1, getPresenceAvailability: (id: string) => !h.offline.has(id), invoke: vi.fn(), openLink: async () => undefined, onRemoteResourceChanged: vi.fn((_callback: any) => () => undefined) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => link, subscribeRemoteBotChanges: () => () => undefined }));
 vi.mock('@/device-link/remoteResources', () => ({
   invokeRemoteResourceAction: vi.fn(),
-  getRemoteResource: async (_invoke: unknown, _target: unknown, _ref: unknown, _locale: unknown, _primitives: unknown, query: string) => {
-    const q = JSON.parse(query) as { view: string; offset: number; limit: number };
-    h.reads.push(q);
-    const matching = h.items.filter(item => (item as { status: string }).status === (q.view === 'done' ? 'done' : 'open'));
-    const data = { items: matching.slice(q.offset, q.offset + q.limit), total: matching.length, dailyCheck: h.dailyCheck };
-    if (h.pageGate) await h.pageGate;
-    return { blocks: [{ primitive: 'teammate-todos', data }] };
-  },
+  getRemoteResource: vi.fn(),
 }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: () => void) => useEffect(fn, [fn]) }; });
 vi.mock('@/session/useRemoteCompanionQuery', async importOriginal => {
@@ -68,15 +61,12 @@ vi.mock('@/session/useRemoteCompanionQuery', async importOriginal => {
 });
 vi.mock('@/session/readTeammateTasks', () => ({ readTeammateTasks: async ({ sessions }: any) => sessions }));
 
-const { useCompanionGlanceTodos } = await import('@/session/useCompanionGlanceTodos');
 const { companionGlanceOutputs } = await import('@/session/companionProfileData');
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
-beforeEach(() => { h.pageGate = null; h.dailyCheck = false; h.liveQuery = false; h.items = []; h.reads = []; h.sessions = []; h.queried = []; h.delegations = []; h.prs.clear(); h.activity.clear(); h.openURL.mockResolvedValue(undefined); root = createRoot(document.createElement('div')); });
+beforeEach(() => { h.copies = []; h.offline.clear(); h.pageGate = null; h.dailyCheck = false; h.liveQuery = false; h.items = []; h.reads = []; h.sessions = []; h.queried = []; h.delegations = []; h.prs.clear(); h.activity.clear(); h.openURL.mockResolvedValue(undefined); root = createRoot(document.createElement('div')); });
 afterEach(() => { act(() => root.unmount()); vi.useRealTimers(); });
-
-const todo = (id: string, status = 'open') => ({ id, status, title: id, revision: 1, sources: [], history: [] }) as unknown as TeammateTodo;
 
 it('pauses retained query reads without discarding layout data, then refreshes on activation', async () => {
   vi.useFakeTimers(); h.liveQuery = true;
@@ -140,30 +130,6 @@ it('publishes only changed companion data while keeping refresh errors and remov
   expect(changed).toHaveBeenCalledTimes(3);
 });
 
-it('reads every page of open todos, not just the host first page of 25', async () => {
-  h.items = Array.from({ length: 30 }, (_, index) => todo(`o${index}`));
-  let latest: ReturnType<typeof useCompanionGlanceTodos> | null = null;
-  function Probe() { latest = useCompanionGlanceTodos({ deviceId: 'pc', deviceName: 'PC', botId: 'bot', enabled: true }); return null; }
-  await act(async () => root.render(createElement(Probe)));
-  await act(async () => { await Promise.resolve(); });
-  expect(latest!.todos.open).toHaveLength(30);
-  expect(latest!.todos.openTotal).toBe(30);
-  expect(h.reads.filter(read => read.view === 'open').map(read => read.offset)).toEqual([0, 25]);
-});
-
-it('keeps the newest completed todos past the 200 cap', async () => {
-  h.items = Array.from({ length: 230 }, (_, index) => todo(`d${String(index).padStart(3, '0')}`, 'done'));
-  let latest: ReturnType<typeof useCompanionGlanceTodos> | null = null;
-  function Probe() { latest = useCompanionGlanceTodos({ deviceId: 'pc', deviceName: 'PC', botId: 'bot', enabled: true }); return null; }
-  await act(async () => root.render(createElement(Probe)));
-  await act(async () => { await Promise.resolve(); });
-  const done = latest!.todos.done;
-  expect(done).toHaveLength(200);
-  expect(done[0].id).toBe('d229');
-  expect(done.some(item => item.id === 'd029')).toBe(false);
-  expect(latest!.todos.doneTotal).toBe(230);
-});
-
 it("lists only this teammate's finished deliverables, newest first, each opening its source task", () => {
   const outputs = companionGlanceOutputs({
     ok: true,
@@ -181,25 +147,11 @@ it("lists only this teammate's finished deliverables, newest first, each opening
   expect(outputs.map(file => [file.name, file.childSessionId])).toEqual([['deck.pptx', 'c2'], ['report.docx', 'c1']]);
 });
 
-it('labels a todo due today with its date where the engine has no relative-time formatting (Hermes)', () => {
-  const original = Intl.RelativeTimeFormat;
-  const today = todoLocalDate(new Date(), 'UTC');
-  const due = { ...todo('t'), sourceDeadline: { kind: 'date', date: today, timeZone: 'UTC' }, deadlineOverride: null } as unknown as TeammateTodo;
-  try {
-    (Intl as { RelativeTimeFormat?: unknown }).RelativeTimeFormat = undefined;
-    expect(todoDateLabel(due, 'zh-CN')).toBe(new Intl.DateTimeFormat('zh-CN', { timeZone: 'UTC', month: 'numeric', day: 'numeric' })
-      .format(new Date(`${today}T12:00:00Z`)));
-  } finally {
-    (Intl as { RelativeTimeFormat?: unknown }).RelativeTimeFormat = original;
-  }
-});
-
-
 // Real sheet rendering covers the new empty state and cross-device task/PR projection;
 // the existing hook-only cases cannot catch incorrect labels or navigation targets.
 import { CompanionGlanceSheet } from '@/session/CompanionGlanceSheet';
 
-it('hides empty todos and opens attributed tasks on their own host, with existing unread and true PR titles', async () => {
+it('opens attributed tasks on their own host, with existing unread and true PR titles', async () => {
   const host = document.createElement('div');
   await act(async () => root.unmount()); root = createRoot(host);
   const onOpenTask = vi.fn();
@@ -214,13 +166,8 @@ it('hides empty todos and opens attributed tasks on their own host, with existin
   for (const id of ['local', 'remote']) h.prs.set(id, { ref: { owner: 'example', repo: 'app', prNumber: 7, sessionId: id, lastSeenAt: 1 },
     status: { ok: true, status: 'merged', title: 'Real PR title' } });
   await act(async () => root.render(<CompanionGlanceSheet visible onClose={() => {}} name="Cindy" avatar={undefined} botId="cindy-default"
-    deviceId="pc" deviceName="PC" sessionId="chat" online cloudHome={false} onQuoteTodo={() => {}} onOpenTask={onOpenTask}
-    onOpenCindy={() => {}} onSwitchHome={() => {}}
-    todos={{ loaded: true, failed: false, todos: {
-      open: Array.from({ length: 51 }, (_, index) => todo(`old idea ${index}`)),
-      done: [todo('completed', 'done')], openTotal: 51, doneTotal: 1, dailyCheck: true,
-    } } as any} />));
-  expect(host.textContent).not.toContain('devices.glance.todos');
+    deviceId="pc" deviceName="PC" sessionId="chat" online cloudHome={false} onOpenTask={onOpenTask}
+    onOpenCindy={() => {}} onSwitchHome={() => {}} />));
   expect(host.textContent).not.toContain('Unrelated task');
   expect(host.querySelectorAll('[aria-label="devices.glance.unread"]')).toHaveLength(1);
   expect(host.querySelectorAll('[data-testid="companion.glance.pr"]')).toHaveLength(1);
@@ -231,21 +178,6 @@ it('hides empty todos and opens attributed tasks on their own host, with existin
   expect(onOpenTask).not.toHaveBeenCalled();
   await act(async () => h.closed?.());
   expect(onOpenTask).toHaveBeenCalledWith('remote', 'other-pc');
-});
-
-it('shows only approaching deadlines in the real mobile sheet', async () => {
-  const host = document.createElement('div');
-  await act(async () => root.unmount()); root = createRoot(host);
-  const due = { ...todo('Due today'), sourceDeadline: { kind: 'date', date: todoLocalDate(new Date(), 'UTC'), timeZone: 'UTC' } };
-  const far = { ...todo('Next month'), sourceDeadline: { kind: 'date', date: todoLocalDate(new Date(Date.now() + 30 * 86_400_000), 'UTC'), timeZone: 'UTC' } };
-  await act(async () => root.render(<CompanionGlanceSheet visible onClose={() => {}} name="Cindy" avatar={undefined} botId="cindy-default"
-    deviceId="pc" deviceName="PC" sessionId="chat" online cloudHome={false} onQuoteTodo={() => {}} onOpenTask={() => {}}
-    onOpenCindy={() => {}} onSwitchHome={() => {}}
-    todos={{ loaded: true, failed: false, todos: { open: [due, far, todo('Old idea')], done: [], openTotal: 3, doneTotal: 0, dailyCheck: false } } as any} />));
-  expect(host.querySelectorAll('[data-testid="companion.glance.todo"]')).toHaveLength(1);
-  expect(host.textContent).toContain('Due today');
-  expect(host.textContent).not.toContain('Old idea');
-  expect(host.textContent).not.toContain('Next month');
 });
 
 // Regression: mixed output types must share the same preview budget and expand/collapse action.
@@ -259,9 +191,8 @@ it('mixes PRs and files by time and expands all outputs together', async () => {
     title: 'Task', childSessionId: 'task', completedAt: at, updatedAt: at,
     artifacts: [{ path: `file-${at}.pdf`, status: 'added' }] }));
   await act(async () => root.render(<CompanionGlanceSheet visible onClose={() => {}} name="Cindy" avatar={undefined} botId="cindy-default"
-    deviceId="pc" deviceName="PC" sessionId="chat" online cloudHome={false} onQuoteTodo={() => {}} onOpenTask={() => {}}
-    onOpenCindy={() => {}} onSwitchHome={() => {}}
-    todos={{ loaded: true, failed: false, todos: { open: [], done: [], openTotal: 0, doneTotal: 0, dailyCheck: false } } as any} />));
+    deviceId="pc" deviceName="PC" sessionId="chat" online cloudHome={false} onOpenTask={() => {}}
+    onOpenCindy={() => {}} onSwitchHome={() => {}} />));
   const rows = () => [...host.querySelectorAll('[data-testid="companion.glance.pr"], [data-testid="companion.glance.output"]')]
     .map(row => row.querySelector('span')?.textContent);
   expect(rows()).toEqual(['PR title 4', 'file-3.pdf', 'PR title 2']);
@@ -284,9 +215,8 @@ it('refreshes tasks in an open sheet and stops querying after closing it', async
   h.queried = [task('old', 'Original task')];
   link.invoke.mockImplementation(async (_device, channel) => channel === 'local-db:sessions:list' ? h.queried : { ok: true, delegations: [] });
   const render = (visible: boolean) => <CompanionGlanceSheet visible={visible} onClose={() => {}} name="Cindy" avatar={undefined} botId="cindy-default"
-    deviceId="pc" deviceName="PC" sessionId="chat" online cloudHome={false} onQuoteTodo={() => {}} onOpenTask={() => {}}
-    onOpenCindy={() => {}} onSwitchHome={() => {}}
-    todos={{ loaded: true, failed: false, todos: { open: [], done: [], openTotal: 0, doneTotal: 0, dailyCheck: false } } as any} />;
+    deviceId="pc" deviceName="PC" sessionId="chat" online cloudHome={false} onOpenTask={() => {}}
+    onOpenCindy={() => {}} onSwitchHome={() => {}} />;
   await act(async () => root.render(render(true)));
   expect(host.textContent).toContain('Original task');
   h.queried = [task('old', 'Renamed task'), task('new', 'New task')];
@@ -303,68 +233,42 @@ it('refreshes tasks in an open sheet and stops querying after closing it', async
   expect(link.invoke.mock.calls).toHaveLength(reads);
 });
 
-// The production demo must contain a due row so its existing actions remain reachable.
-it('keeps the demo todo visible and preserves its empty and restore states', async () => {
-  const { teammateVisualFixture } = await import('@/debug/teammateVisualFixture');
-  const { REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_INVOKE_CHANNEL } = await import('@cindy/device-link');
-  const read = (view = 'open') => teammateVisualFixture(REMOTE_RESOURCE_GET_CHANNEL, [{ ref: { id: 'todos:cindy-default' }, query: JSON.stringify({ view }) }]) as any;
-  const data = () => read().blocks[0].data;
-  expect(data().items).toHaveLength(1);
-  expect(todoDueSoon(data().items[0])).toBe(true);
-  expect(data().dailyCheck).toBe(true);
-  expect(read('done').blocks[0].data.items).toHaveLength(0);
-  const update = (operation: string) => teammateVisualFixture(REMOTE_RESOURCE_INVOKE_CHANNEL, [{ resourceRef: { id: 'todos:cindy-default' }, actionId: 'todo-update', input: { operation } }]);
-  update('delete');
-  expect(data().items).toHaveLength(0);
-  update('restore');
-  expect(todoDueSoon(data().items[0])).toBe(true);
-});
-
-// Behavior: a retained, blurred chat keeps its content but performs no remote reads.
-it('pauses background todo reads, retains content, and refreshes on return', async () => {
-  h.items = [todo('cached')];
-  let latest!: ReturnType<typeof useCompanionGlanceTodos>;
-  function Probe({ active }: { active: boolean }) {
-    latest = useCompanionGlanceTodos({ deviceId: 'pc', deviceName: 'PC', botId: 'bot', enabled: true, active });
-    return null;
-  }
-  await act(async () => root.render(createElement(Probe, { active: true })));
-  const changed = link.onRemoteResourceChanged.mock.calls.at(-1)![0];
-  const cached = latest.todos;
-  await act(async () => root.render(createElement(Probe, { active: false })));
-  h.reads = [];
-  for (let i = 0; i < 10; i++) await act(async () => changed('pc', { collectionId: 'teammates' }));
-  expect(h.reads).toHaveLength(0);
-  expect(latest.todos).toBe(cached);
-  h.items = [todo('updated')];
-  await act(async () => root.render(createElement(Probe, { active: true })));
-  expect(latest.todos.open.map(item => item.id)).toEqual(['updated']);
-  expect(h.reads).toHaveLength(2);
-});
-
-// Behavior: late routine replies and in-flight pagination must not update a blurred/replaced chat.
-it('ignores late todo and daily-check replies after blur, and clears when the companion changes', async () => {
-  h.items = [todo('cached')];
-  let latest!: ReturnType<typeof useCompanionGlanceTodos>;
-  function Probe({ active, botId = 'bot' }: { active: boolean; botId?: string }) {
-    latest = useCompanionGlanceTodos({ deviceId: 'pc', deviceName: 'PC', botId, enabled: true, active });
-    return null;
-  }
-  await act(async () => root.render(createElement(Probe, { active: true })));
-  const cached = latest.todos;
-  let finish!: () => void;
-  h.pageGate = new Promise<void>(resolve => { finish = resolve; });
-  h.items = Array.from({ length: 30 }, (_, i) => todo(String(i)));
-  h.dailyCheck = true;
-  const changed = link.onRemoteResourceChanged.mock.calls.at(-1)![0];
-  await act(async () => changed('pc', { collectionId: 'teammates' }));
-  await act(async () => changed('pc', { collectionId: 'routines' }));
-  await act(async () => root.render(createElement(Probe, { active: false })));
-  h.reads = [];
-  await act(async () => finish());
-  expect(latest.todos).toBe(cached);
-  expect(h.reads).toHaveLength(0);
-  await act(async () => root.render(createElement(Probe, { active: false, botId: 'other' })));
-  expect(latest.loaded).toBe(false);
-  expect(latest.todos.open).toEqual([]);
+// Six computers previously occupied six rows before tasks. Exercise the real sheet's fold,
+// online navigation and offline rows, including reopening; no layout/source-string assertions.
+it('keeps six computers compact, expands all copies and switches only after closing', async () => {
+  const host = document.createElement('div');
+  await act(async () => root.unmount()); root = createRoot(host);
+  h.copies = Array.from({ length: 5 }, (_, i) => ({ key: `copy-${i}`,
+    host: { deviceId: `pc-${i}`, deviceName: `Computer ${i}` },
+    item: { ref: { kind: 'bot', id: 'cindy-default' } },
+  }));
+  h.offline.add('pc-4');
+  h.queried = [{ id: 'task', title: 'Recent task stays available', status: 'active', taskTeammate: { id: 'cindy-default' } }];
+  const onClose = vi.fn(), onOpenCindy = vi.fn();
+  const render = (visible: boolean) => act(async () => root.render(<CompanionGlanceSheet visible={visible} onClose={onClose}
+    name="Cindy" avatar={undefined} botId="cindy-default" deviceId="pc" deviceName="Current computer" sessionId="chat"
+    online cloudHome={false} onOpenTask={() => {}} onOpenCindy={onOpenCindy} onSwitchHome={() => {}} />));
+  const more = () => host.querySelector('[data-testid="companion.glance.computer.more"]') as HTMLButtonElement;
+  await render(true);
+  expect(host.textContent).toContain('Current computer');
+  expect(host.textContent).toContain('Recent task stays available');
+  expect(host.textContent).not.toContain('Computer 0');
+  expect(more().textContent).toContain('(5)');
+  await act(async () => more().click());
+  for (let i = 0; i < 5; i++) expect(host.textContent).toContain(`Computer ${i}`);
+  expect(host.querySelector('[data-testid="companion.glance.computer.pc-4"]')).toBeNull();
+  await act(async () => more().click());
+  expect(host.textContent).not.toContain('Computer 0');
+  await act(async () => more().click());
+  await act(async () => (host.querySelector('[data-testid="companion.glance.computer.pc-2"]') as HTMLButtonElement).click());
+  expect(onClose).toHaveBeenCalledOnce();
+  expect(onOpenCindy).not.toHaveBeenCalled();
+  await render(false);
+  // The native sheet retains its children during exit: keep expanded rows until onClosed.
+  expect(host.textContent).toContain('Computer 0');
+  await act(async () => h.closed?.());
+  expect(onOpenCindy).toHaveBeenCalledWith(h.copies[2]);
+  await render(true);
+  expect(host.textContent).not.toContain('Computer 0');
+  expect(host.textContent).toContain('Recent task stays available');
 });

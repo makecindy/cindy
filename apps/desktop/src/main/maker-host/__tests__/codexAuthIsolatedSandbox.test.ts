@@ -50,6 +50,13 @@ vi.mock('../managed-skills.js', () => ({
   listCindyManagedSkills: async () => [],
   cindyManagedSkillRoots: async () => [],
 }));
+// Subscription discovery is outside this local auth-file ownership fixture.
+vi.mock('../model-discovery/xai.js', () => ({ discardXaiModelsDiskCache: vi.fn(async () => {}) }));
+// This file exercises local auth ownership, not remote share revocation. Do not
+// initialize the authenticated server transport (and the full app) to read files.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: vi.fn(async () => { throw new Error('Unexpected share revocation in auth fixture'); }),
+}));
 vi.mock('@cindy/maker-core', () => ({}));
 
 vi.mock('../../agent-binaries/index.js', () => ({
@@ -87,6 +94,12 @@ function fixture(): {
   const home = path.join(root, 'home');
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
   vi.spyOn(os, 'homedir').mockReturnValue(home);
+  // The Codex CLI home honours `CODEX_HOME` (#8258). An ambient absolute value
+  // would bypass the mocked home and point the reconcile flow at the developer's
+  // real `~/.codex/auth.json` — the refresh write in the local-reconnect case
+  // would overwrite that live credential with a test token. Neutralise it here;
+  // the CODEX_HOME cases below override it.
+  vi.stubEnv('CODEX_HOME', '');
   const systemAuth = path.join(home, '.codex', 'auth.json');
   fs.writeFileSync(
     systemAuth,
@@ -304,6 +317,45 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(true);
   });
 
+  // 测试价值（unit）：Release 凭证上挂着升级前 profile 留下的残留硬链(nlink>1)时,只读
+  // Dev 的 mode:'local' 重连也不能去清 —— 清残留硬链 = 换掉 Release 的 inode(写操作),
+  // 违背「Release 凭证的字节与 inode 都不变」的边界(上面的契约用例);本地 Codex 消费的
+  // 是快照副本,Release 那份的 nlink 与这个进程无关(#9316 review 第十二轮)。现有覆盖只
+  // 验证了「Release 文件上没有残留硬链」的场景。最小失败输入:Release auth.json 带一条
+  // 残留硬链 + 只读 Dev 的 mode:'local' 重连。
+  it('只读 Dev 的本地重连不清 Release 凭证上的残留硬链', async () => {
+    const { localAuth, releaseAuth, systemAuth } = fixture();
+    fs.rmSync(systemAuth);
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({
+        account: { email: 'release@example.test' },
+        tokens: { access_token: 'release-token', account_id: 'acct-release' },
+      }),
+    );
+    // 升级前的 profile 留下的残留硬链:Codex 0.165+ 拒绝写 nlink>1,可读 Dev 也不该管。
+    const residualLink = path.join(path.dirname(releaseAuth), 'auth.json.legacy-hardlink');
+    fs.linkSync(releaseAuth, residualLink);
+    bindReleaseOpenAi(releaseAuth);
+    const releaseBytes = fs.readFileSync(releaseAuth);
+    const releaseStat = fs.statSync(releaseAuth);
+    h.dataOwnerId = 'owner-a';
+    const adapter = new DesktopCodexAuthAdapter();
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+
+    await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+    });
+
+    // Release 凭证的字节与 inode 都不变;本地拿到的是独立快照副本。
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+    expect(fs.statSync(localAuth).ino).not.toBe(releaseStat.ino);
+    fs.rmSync(residualLink);
+  });
+
   // 测试价值（unit）：2026-10-23 实例反复复制已过期的 Release 授权，重新检测持续 401。
   // 现有覆盖只区分文件缺失、owner 和失效标记，没有过期 Release + 有效本机授权的输入。
   // 通过真实 getState/getAccessToken 验证选中的授权及落盘结果；下方矩阵保护共享目录与账号边界。
@@ -392,33 +444,83 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(useCli ? systemAuth : releaseAuth);
   });
 
-  it('共享 Dev 直接使用 Release 登录态，不重链接或改 binding', async () => {
-    const { releaseAuth, systemAuth } = fixture();
-    h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
-    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
-    fs.writeFileSync(
-      releaseAuth,
-      JSON.stringify({
-        account: { email: 'release@example.test' },
-        tokens: { access_token: 'release-token', account_id: 'acct-release' },
-      }),
-    );
-    const releaseBinding = bindReleaseOpenAi(releaseAuth);
-    const releaseStat = fs.statSync(releaseAuth);
-    const releaseBindingBytes = fs.readFileSync(releaseBinding);
-    h.dataOwnerId = 'owner-a';
-    const adapter = new DesktopCodexAuthAdapter();
+  // #8258 / unit: 本机 Codex CLI 凭证发现必须跟随用户设置的 CODEX_HOME。
+  // 依据:提报者把 codex login 放在 CODEX_HOME=E:\CodexHome / NixOS 自定义目录,
+  // 发现路径写死 ~/.codex 导致「使用本机 Codex 账号」找不到登录态;现有覆盖只测
+  // ~/.codex 常规位置。最小失败输入:packaged + CODEX_HOME=自定义绝对目录。
+  describe('本机 Codex CLI 凭证发现跟随 CODEX_HOME (#8258)', () => {
+    it('packaged 下 CODEX_HOME 为绝对路径时使用该目录的 auth.json', () => {
+      const { systemAuth } = fixture();
+      const customHome = path.join(path.dirname(systemAuth), 'custom-codex-home');
+      fs.mkdirSync(customHome, { recursive: true });
+      h.isPackaged = true;
+      vi.stubEnv('CODEX_HOME', customHome);
 
-    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
-      authenticated: true,
-      credentialScope: 'system-shared',
-      oauthWritesBlocked: true,
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(
+        path.join(customHome, 'auth.json'),
+      );
     });
-    await expect(adapter.getAccessToken()).resolves.toBe('release-token');
-    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
-    expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
-    expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
+
+    it('不继承环境里的 CODEX_HOME:凭证路径始终落在 fixture 的临时目录里', () => {
+      // 开发者的环境里若带着绝对路径 CODEX_HOME,凭证发现就会指到真实目录 ——
+      // 之后的 reconcile 写入会覆盖开发者真正的 auth.json。
+      const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-ambient-codex-home-'));
+      dirs.push(decoy);
+      vi.stubEnv('CODEX_HOME', decoy);
+      const { systemAuth } = fixture();
+      h.isPackaged = true;
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+    });
+
+    it('相对路径与空值不生效,回退 ~/.codex(不按 cwd 解析)', () => {
+      const { systemAuth } = fixture();
+      h.isPackaged = true;
+      vi.stubEnv('CODEX_HOME', 'relative-codex-home');
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+
+      vi.stubEnv('CODEX_HOME', '');
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+    });
   });
+
+  // #9316 / unit: a junction to the Release profile must preserve the same-entry
+  // read-only exception; making a snapshot there would replace Release auth itself.
+  it.each([false, true])(
+    '共享 Dev 直接使用 Release 登录态，不重链接或改 binding (alias=%s)',
+    async (alias) => {
+      const { releaseAuth, systemAuth } = fixture();
+      fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+      if (alias) {
+        fs.symlinkSync(path.dirname(releaseAuth), path.join(h.userDataDir, 'codex-home'), 'junction');
+      } else {
+        h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
+      }
+      fs.writeFileSync(
+        releaseAuth,
+        JSON.stringify({
+          account: { email: 'release@example.test' },
+          tokens: { access_token: 'release-token', account_id: 'acct-release' },
+        }),
+      );
+      const releaseBinding = bindReleaseOpenAi(releaseAuth);
+      if (alias)
+        fs.copyFileSync(releaseBinding, path.join(h.userDataDir, 'native-provider-auth.json'));
+      const releaseStat = fs.statSync(releaseAuth);
+      const releaseBindingBytes = fs.readFileSync(releaseBinding);
+      h.dataOwnerId = 'owner-a';
+      const adapter = new DesktopCodexAuthAdapter();
+
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'system-shared',
+        oauthWritesBlocked: true,
+      });
+      await expect(adapter.getAccessToken()).resolves.toBe('release-token');
+      expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+      expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
+      expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
+    },
+  );
 
   it('共享 Dev 遇到未绑定的 Release 残留时不覆盖或回落', async () => {
     const { releaseAuth, systemAuth } = fixture();
@@ -432,7 +534,8 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       }),
     );
     const releaseBytes = fs.readFileSync(releaseAuth);
-    const releaseStat = fs.statSync(releaseAuth);
+    // NTFS file IDs can exceed Number.MAX_SAFE_INTEGER; compare exact identities.
+    const releaseStat = fs.statSync(releaseAuth, { bigint: true });
     const releaseBinding = path.join(h.userDataDir, 'native-provider-auth.json');
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -443,8 +546,10 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     });
     await expect(adapter.getAccessToken()).resolves.toBeNull();
     expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
-    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
-    expect(fs.statSync(releaseAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.statSync(releaseAuth, { bigint: true }).ino).toBe(releaseStat.ino);
+    expect(fs.statSync(releaseAuth, { bigint: true }).ino).not.toBe(
+      fs.statSync(systemAuth, { bigint: true }).ino,
+    );
     expect(fs.existsSync(releaseBinding)).toBe(false);
   });
 
@@ -917,11 +1022,13 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.renameSync(replacement, systemAuth);
     const renewedSystemBytes = fs.readFileSync(systemAuth);
     const renewedSystemStat = fs.statSync(systemAuth);
-    if (process.platform === 'win32') {
+    // 「系统文件被整体替换」后本地看到什么，取决于共享方式：文件软链跟随系统
+    // 路径（#9277 起 Windows 与 POSIX 都是软链），只有独立副本才留在旧代。
+    if (fs.lstatSync(localAuth).isSymbolicLink()) {
+      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
+    } else {
       expect(fs.readFileSync(localAuth)).toEqual(oldLocalBytes);
       expect(fs.readFileSync(localAuth)).not.toEqual(renewedSystemBytes);
-    } else {
-      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
     }
 
     const chmod = vi.spyOn(fs.promises, 'chmod');

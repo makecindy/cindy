@@ -867,6 +867,7 @@ describe("ChatInput 的入口门控与调用路由", () => {
     if (!relocationGuard) throw new Error('Remote-agent relocation guard was not found');
     const hidden = new Function('sessionOrcaRole', 'sessionOrcaRemoteWorker', 'deviceLinkDeviceId',
       'hostSupportsOrcaAgentRelocation = false', 'remoteHostId = null', 'agentLocationAware = true',
+      'hostSupportsOrcaRemoteWorkerAgentRelocation = false',
       `const sessionId = 's1', sessionEngineFilter = {};
        return !!(${relocationGuard});`);
     // 本机的 Lead / Worker 与普通任务一样可换 Agent 所在电脑。
@@ -881,15 +882,18 @@ describe("ChatInput 的入口门控与调用路由", () => {
     // 被控端声明后，被控电脑上的 Lead / 本机 Worker 与普通任务一样开放。
     expect(hidden('lead', false, 'host', true)).toBe(false);
     expect(hidden('worker', false, 'host', true)).toBe(false);
-    // 声明后仍不开放：运行设备 Worker、角色未加载、SSH 任务、位置不由本机呈现(共享任务访客等)。
-    expect(hidden('worker', true, 'host', true)).toBe(true);
+    // 声明后仍不开放：角色未加载、SSH 任务、位置不由本机呈现(共享任务访客等)。
     expect(hidden(undefined, false, 'host', true)).toBe(true);
     expect(hidden('lead', false, 'host', true, 'ssh-host')).toBe(true);
     expect(hidden('lead', false, 'host', true, null, false)).toBe(true);
-    for (const role of [null, 'lead', 'worker', undefined]) {
-      expect(hidden(role, true, null)).toBe(true);
-    }
     expect(hidden(undefined, false, null)).toBe(true);
+    // 运行设备 Worker(2026-11-12)：在它所在的电脑本机打开时与普通任务一样开放；远程查看时
+    // 要那台声明 supportsOrcaRemoteWorkerAgentRelocation(更早的版本会拒绝)。
+    expect(hidden(null, true, null)).toBe(false);
+    expect(hidden(null, true, 'host', true)).toBe(true);
+    expect(hidden(null, true, 'host', true, null, true, true)).toBe(false);
+    expect(hidden(null, true, 'host', true, 'ssh-host', true, true)).toBe(true);
+    expect(hidden(undefined, true, null)).toBe(true);
   });
 
   it.each(['lead', 'worker'])('Desktop Orca %s routes same-Agent model and provider picks through the switch intent', async sessionOrcaRole => {
@@ -990,8 +994,8 @@ describe('resolveManualCompactChannel(#1927 压缩通道判定,行为测试)', (
     ).toBe('claude-input');
   });
 
-  it('声明 manualCompact.supported(当前仅 pi)→ compact-session(capability-aware 通道)', () => {
-    expect(resolveManualCompactChannel('pi', { manualCompact: { supported: true } })).toBe(
+  it.each(['pi', 'codex'] as const)('声明 manualCompact.supported 的 %s 使用 compact-session 通道', (agent) => {
+    expect(resolveManualCompactChannel(agent, { manualCompact: { supported: true } })).toBe(
       'compact-session',
     );
   });

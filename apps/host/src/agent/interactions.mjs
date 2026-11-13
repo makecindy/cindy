@@ -1,97 +1,115 @@
-/**
- * Interaction broker for the browser/desktop clients.
- *
- * Permission prompts and questions arrive as a request that must be answered
- * before the turn can continue. The desktop main process owns that handshake
- * today; the host takes it over for clients: it publishes the request on the
- * event stream and resolves it from an HTTP response, denying on abort.
- */
+import { installDesktopInteractionHandler, requestHostInteraction, allowHostPagePermission } from '../../../desktop/src/main/maker-ipc/interactionRouter.ts';
 
-/**
- * @param {{hub: {publish: (event: unknown) => void}}} deps
- */
+/** Client presentation for the shared Session interaction router. Routing,
+ * aborts and unattended-turn policy remain the same as Desktop and IM. */
 export function createInteractionBroker(deps) {
-  /** @type {Map<string, Map<string, {request: unknown, resolve: (decision: unknown) => void}>>} */
   const pending = new Map();
-  const attached = new WeakSet();
+  const bindings = new Map();
 
-  function bucket(sessionId) {
-    let entries = pending.get(sessionId);
-    if (!entries) {
-      entries = new Map();
-      pending.set(sessionId, entries);
+  /** @returns {import('@cindy/maker-core').InteractionDecision} */
+  const fallback = (request, reason) => request.kind === 'ask_user_question'
+    ? { kind: request.kind, answers: {}, dismissed: true }
+    : { kind: request.kind, behavior: 'deny', reason, dismissed: true };
+
+  function settle(entry, decision, reason) {
+    if (pending.get(entry.request.requestId) !== entry) return false;
+    pending.delete(entry.request.requestId);
+    const { binding, request, persistId } = entry;
+    if (binding.isCurrent()) {
+      if (request.kind === 'ask_user_question' || request.kind === 'plan_review') {
+        binding.history?.onInteractionResolved(binding.sessionId, persistId, request.kind, request, decision);
+      }
+      deps.hub.publish({ type: 'interaction_dismissed', sessionId: binding.sessionId,
+        requestId: request.requestId, reason, decision });
     }
-    return entries;
+    entry.resolve(decision);
+    return true;
   }
 
-  return {
-    /** Install the resolver once per live session. */
-    attach(session, sessionId) {
+  function detach(sessionId, reason = 'session_closed') {
+    const binding = bindings.get(sessionId);
+    if (!binding) return;
+    bindings.delete(sessionId);
+    for (const entry of pending.values()) {
+      if (entry.binding === binding) settle(entry, fallback(entry.request, reason), reason);
+    }
+  }
+
+  const api = {
+    attach(session, sessionId, options = {}) {
       if (!session || typeof session.setInteractionListener !== 'function') return;
-      if (attached.has(session)) return;
-      attached.add(session);
-
-      session.setInteractionListener(async (request, signal) => {
-        const requestId = String(request?.requestId ?? '');
-        if (!requestId) return { kind: 'permission', behavior: 'deny', reason: 'missing request id' };
-
-        return new Promise((resolve) => {
-          const entries = bucket(sessionId);
-          if (entries.has(requestId)) {
-            resolve({ kind: 'permission', behavior: 'deny', reason: 'duplicate request id' });
-            return;
-          }
-          let settled = false;
-          const finish = (decision, reason) => {
-            if (settled) return;
-            settled = true;
-            signal?.removeEventListener('abort', onAbort);
-            entries.delete(requestId);
-            if (entries.size === 0) pending.delete(sessionId);
-            deps.hub.publish({ type: 'interaction_dismissed', sessionId, requestId, reason });
-            resolve(decision);
-          };
-          const onAbort = () => finish({ kind: 'permission', behavior: 'deny', reason: 'aborted' }, 'aborted');
-          entries.set(requestId, { request, resolve: decision => finish(decision, 'resolved') });
-          if (signal?.aborted) { onAbort(); return; }
-          signal?.addEventListener('abort', onAbort, { once: true });
-          deps.hub.publish({ type: 'interaction_request', sessionId, request });
+      if (bindings.get(sessionId)?.session === session) return;
+      detach(sessionId, 'session_replaced');
+      const binding = { session, sessionId, history: options.history,
+        isCurrent: options.isCurrent ?? (() => true), isPaused: options.isPaused ?? (() => false) };
+      bindings.set(sessionId, binding);
+      installDesktopInteractionHandler(session, request => {
+        if (!binding.isCurrent() || bindings.get(sessionId) !== binding) {
+          return Promise.resolve(fallback(request, 'owner_changed'));
+        }
+        if (!request.requestId || pending.has(request.requestId)) {
+          return Promise.resolve(fallback(request, 'duplicate_request_id'));
+        }
+        return new Promise(resolve => {
+          binding.history?.flushAssistantBlock(sessionId);
+          const persistId = binding.history?.onInteractionMessage(sessionId, request);
+          pending.set(request.requestId, { binding, request, persistId, resolve });
+          deps.hub.publish({ type: 'interaction_request', sessionId,
+            request: { ...request, ...(persistId ? { persistId } : {}) } });
         });
+      }, (requestId, decision) => {
+        const entry = pending.get(requestId);
+        if (entry?.binding === binding) settle(entry, decision, 'aborted');
+      }, (requestId, decision) => {
+        const entry = pending.get(requestId);
+        if (entry?.binding === binding) settle(entry, decision, 'resolved');
       });
     },
 
+    requestHost(sessionId, request, signal, options) {
+      signal.throwIfAborted();
+      if (!options.isCurrent()) return Promise.resolve(fallback(request, 'owner_changed'));
+      // Historical cards have no running Agent. The interaction-only object is
+      // the same surface used by Desktop; it cannot execute a task or grant FS.
+      const session = options.session ?? bindings.get(sessionId)?.session
+        ?? { id: sessionId, setInteractionListener() {} };
+      api.attach(session, sessionId, { isCurrent: options.isCurrent });
+      return requestHostInteraction(session, request, signal);
+    },
+
+    allowHostPage(sessionId, requestId) {
+      const binding = bindings.get(sessionId);
+      if (binding?.isCurrent()) allowHostPagePermission(binding.session, requestId);
+    },
+
     pending(sessionId) {
-      const entries = pending.get(sessionId);
-      if (!entries) return [];
-      return [...entries.entries()].map(([requestId, entry]) => ({
-        requestId,
-        request: entry.request,
-      }));
+      return [...pending.values()].filter(entry => entry.binding.sessionId === sessionId && entry.binding.isCurrent())
+        .map(({ request, persistId }) => ({ requestId: request.requestId,
+          request: { ...request, ...(persistId ? { persistId } : {}) } }));
     },
 
     respond(sessionId, requestId, decision) {
-      const rid = String(requestId ?? '');
-      if (!rid) return false;
-      const fallbackDecision = decision ?? { kind: 'permission', behavior: 'deny', reason: 'dismissed' };
-      if (sessionId) {
-        const entries = pending.get(sessionId);
-        const entry = entries?.get(rid);
-        if (entry) {
-          entries.delete(rid);
-          entry.resolve(fallbackDecision);
-          return true;
-        }
+      const entry = pending.get(String(requestId ?? ''));
+      if (!entry || (sessionId && entry.binding.sessionId !== sessionId)) return false;
+      if (!entry.binding.isCurrent() || bindings.get(entry.binding.sessionId) !== entry.binding) {
+        settle(entry, fallback(entry.request, 'owner_changed'), 'owner_changed');
         return false;
       }
-      for (const entries of pending.values()) {
-        const entry = entries.get(rid);
-        if (entry) {
-          entries.delete(rid);
-          entry.resolve(fallbackDecision);
-          return true;
-        }
-      }
-      return false;
+      if (entry.binding.isPaused()) return false;
+      const kind = entry.request.kind;
+      if (!decision || typeof decision !== 'object' || Array.isArray(decision)
+        || (decision.kind !== undefined && decision.kind !== kind)) return false;
+      if (kind === 'ask_user_question') {
+        // An editing acknowledgement must not resume the harness as an answer.
+        if (decision.inProgress === true) return entry.request.isBlocking === false;
+        if (!decision.answers || typeof decision.answers !== 'object' || Array.isArray(decision.answers)
+          || Object.values(decision.answers).some(answer => typeof answer !== 'string')) return false;
+      } else if (decision.behavior !== 'allow' && decision.behavior !== 'deny') return false;
+      return settle(entry, { ...decision, kind }, 'resolved');
     },
+
+    detach,
+    dispose() { for (const id of bindings.keys()) detach(id); },
   };
+  return api;
 }

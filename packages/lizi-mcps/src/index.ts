@@ -9,6 +9,10 @@
 export const VERSION = '0.0.0';
 
 export * from './types.js';
+export * from './host-tool-runtime.js';
+export type { HostToolCaller } from './tool-call-authority.js';
+export { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
+export { registerReadSessionAttachmentTool, type ReadSessionAttachmentArgs } from './xdt-helper/read_session_attachment.js';
 export * from './providers.js';
 export type { ToolCallAuthorization, ToolCallAuthorizer } from './tool-call-authority.js';
 
@@ -50,9 +54,6 @@ export * from './computer/index.js';
 
 
 export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState, type TeammateCapabilityKind } from './xdt-helper/bot_capabilities.js';
-export {
-  TEAMMATE_SYSTEM_SKILL_IDS, TEAMMATE_SYSTEM_SKILLS, TEAMMATE_SYSTEM_SKILL_TOOLS, TEAMMATE_CORE_TOPICS,
-  teammateDeniedTools, teammateSystemSkillsOff, type TeammateSystemSkillId,
-} from './xdt-helper/teammate_skills.js';
+export { TEAMMATE_CORE_TOPICS } from './xdt-helper/teammate_skills.js';
 
 export type { AppModelsRequest } from './xdt-helper/app_models.js';

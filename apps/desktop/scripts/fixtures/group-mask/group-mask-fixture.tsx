@@ -7,6 +7,7 @@ import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupCh
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupStore';
 import { GroupMaskContext, type GroupMaskSettings, type GroupMaskStatus, type GroupMaskPresentation, type GroupMaskMention } from '../../../src/renderer/features/bots/groupMaskPresentation';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 
 const groupId = 'mask-preview-group';
 const self = { id: 'self', name: 'Alex', avatar: '', avatarUrl: ctx.data.selfAvatar ? 'https://avatar.example.test/self.jpg' : undefined, avatarColor: 'gray' };
@@ -47,6 +48,15 @@ let counter = 10;
 void mountPage({
   route: `/bots/groups/${groupId}`,
   host: () => ({
+    voiceInput: {
+      getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), fastActivationEnabled: false }, history: [] }),
+      onDataChanged: subscription('voiceDataChanged'),
+      onEvent: subscription('voiceEvent'),
+      onGlobalShortcutTrigger: subscription('voiceShortcut'),
+      setGlobalShortcut: async () => ({ ok: true }),
+      prewarm: async () => ({ ok: true }),
+      start: forbid('voiceInput.start'),
+    },
     maker: {
       resolveCompanionAvatar: async () => ctx.data.selfAvatar ?? null,
       listBotGroups: async () => ({ ok: true, groups: [group] }),

@@ -2,11 +2,12 @@ import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
+import { usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -332,6 +333,8 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
+import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorMessageCard } from './ErrorMessageCard';
@@ -428,7 +431,6 @@ const NO_UNREAD_KEYS: ReadonlySet<string> = new Set();
 import {
   collectBotMessageTimeGroups,
   findFirstUnreadBotReplyClientId,
-  formatBotMessageGroupTime,
 } from '@/features/bots/botConversationTimeline';
 import { NAVIGATION_KEYS, useNavigationKeyListener } from './useNavigationKeyListener';
 export function isScrollNavigationKey(key: string): boolean {
@@ -442,7 +444,7 @@ import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../sh
 
 interface MessageStreamProps {
   pendingMessages?: readonly ChatMessage[];
-  renderPendingMessage?: (message: ChatMessage) => ReactNode;
+  renderPendingMessage?: (message: ChatMessage, pluginUi: PluginUiMessageCandidates) => ReactNode;
   /** Content before history, sharing its scrolling and measured content height. */
   header?: ReactNode;
   /** Host forms share the measured scroll area, outside message virtualization. */
@@ -1893,6 +1895,12 @@ export function buildRenderItems(
     }
 
     const slice = originalTurnSlice(lo, hi);
+    if (opts?.botSessionId) {
+      const startedTasks = collectBotStartedTasks(slice);
+      if (startedTasks.length > 0) {
+        items.push({ type: 'bot_started_tasks', key: `started-tasks-${messages[lo].clientId}`, tasks: startedTasks });
+      }
+    }
     const generatedByPath = new Map<string, GeneratedFileRef>();
     if (opts?.botSessionId) {
       for (const changeSet of changeSets) {
@@ -1980,11 +1988,9 @@ export function buildRenderItems(
       turnStartIdx = i;
     }
 
-    // ask_user: pending lives in the bottom input overlay; expired/unanswered
-    // questions have no user selection to show. Only the answered state surfaces
-    // in the stream — rendered by AskUserQuestionBubble so the choice the user
-    // made stays visible after the agent moves on.
-    if (msg.role === 'ask_user' && msg.askUserStatus !== 'answered') {
+    // Pending questions live in the input overlay. Settled questions preserve
+    // their prompt and answer, withdrawal reason, or unanswered status in history.
+    if (msg.role === 'ask_user' && msg.askUserStatus !== 'answered' && msg.askUserStatus !== 'expired') {
       i++;
       continue;
     }
@@ -2760,12 +2766,14 @@ function ShareableToolMedia({
   items,
   sessionId,
   selectionActive,
+  replyColumnSpacer,
 }: {
   shareId: string;
   renderItemKey?: string;
   items: ToolMediaItem[];
   sessionId?: string;
   selectionActive: boolean;
+  replyColumnSpacer?: ReactNode;
 }) {
   const shareable = Boolean(sessionId) && isShareableToolMedia(items);
   return (
@@ -2777,7 +2785,11 @@ function ShareableToolMedia({
       className={cn('flex flex-col gap-2', shareable && 'relative')}
     >
       {shareable && selectionActive ? <ShareMessageCheckbox clientId={shareId} /> : null}
-      <ToolMediaList items={items} sessionId={sessionId} />
+      {replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, (
+        <div className="flex flex-col gap-2">
+          <ToolMediaList items={items} sessionId={sessionId} />
+        </div>
+      )) : <ToolMediaList items={items} sessionId={sessionId} />}
     </div>
   );
 }
@@ -2785,6 +2797,7 @@ function ShareableToolMedia({
 function renderWorkGroupChild(
   item: Exclude<WorkChildItem, ToolSegmentRenderItem>,
   props: {
+    pluginUi: PluginUiMessageCandidates;
     workingDir: string;
     sessionId?: string;
     sessionTitle?: string | null;
@@ -2833,6 +2846,7 @@ function renderWorkGroupChild(
   return (
     <div data-message-client-id={item.message.clientId}>
       <MessageItem
+        pluginUi={props.pluginUi}
         message={item.message}
         toolResult={props.singleResultMap.get(item.message.clientId)}
         workingDir={props.workingDir}
@@ -2876,12 +2890,14 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   context,
   compact,
   companionAvatar,
+  startsUnread = false,
 }: {
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
   compact: boolean;
-  /** 伙伴聊天：过程区与最终回复各显示一个头像，正文保持同列。 */
+  /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
+  startsUnread?: boolean;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
   // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
@@ -2919,6 +2935,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   const childItems = item.children.map(toWorkGroupChild);
   const block = (
     <WorkGroupBlock
+      pluginUi={context.pluginUi}
       // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
       // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
       blockId={`work:${item.key.slice('work-'.length)}`}
@@ -2947,6 +2964,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       className="scroll-mt-20"
       data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
     >
+      {startsUnread ? <BotMessageTimelineHeader startsUnread /> : null}
       {companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}
     </div>
   );
@@ -3000,6 +3018,7 @@ export function MessageStream({
   onInlinePlanVisibilityChange,
 }: MessageStreamProps) {
   const { i18n, t } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates(sessionId);
   const historyView = sessionId ? getRemoteHistoryView(sessionId) : undefined;
   const fullHistorySnapshot = useSyncExternalStore(
     historyView?.subscribe ?? (() => () => undefined),
@@ -3369,7 +3388,7 @@ export function MessageStream({
     );
     return appendPendingQueueItems(
       simplifiedBotConversation
-        ? botProcessItems(grouped, isSessionStreaming, botTailReplyIds)
+        ? attachBotStartedTasks(botProcessItems(grouped, isSessionStreaming, botTailReplyIds))
         : grouped,
       pendingMessages ?? [],
       messages,
@@ -3387,6 +3406,10 @@ export function MessageStream({
     botTailReplyIds,
   ]);
   const renderMetadataItems = renderMetadataProjection(allRenderItems);
+  const botContinuationKeys = useMemo(
+    () => simplifiedBotConversation ? botTurnContinuations(allRenderItems) : new Set<string>(),
+    [allRenderItems, simplifiedBotConversation],
+  );
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -3494,6 +3517,13 @@ export function MessageStream({
     anchoredForwardItems,
   ]);
 
+  // Resolve the owner inside the stable render window, not the viewport-mounted
+  // subset. A cropped process falls back to its reply instead of losing NEW;
+  // scrolling within the same window must not move the boundary.
+  const botUnreadBoundaryKey = useMemo(
+    () => botUnreadBoundaryItemKey(visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys),
+    [visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys],
+  );
   const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
 
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
@@ -3521,7 +3551,10 @@ export function MessageStream({
     const items = itemsRef.current;
     if (!container || !items) return null;
     const cTop = container.getBoundingClientRect().top;
-    const children = items.children;
+    const indexedRow = messageViewportRef.current?.getViewportTopRow();
+    // The viewport connects during mount; retain the DOM fallback until its
+    // index is available. Normal scrolling reads only the indexed visible row.
+    const children = indexedRow ? [indexedRow] : items.children;
     for (let i = 0; i < children.length; i++) {
       const itemElement = children[i] as HTMLElement;
       const rect = itemElement.getBoundingClientRect();
@@ -6325,13 +6358,11 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 成果与回复正文同列，只占头像宽度；过程区单独显示伙伴头像。
+  // 后续正文及成果沿用头像列宽，不再挂载一个隐藏头像。
   const botReplyColumnSpacer = useMemo(
     () =>
       simplifiedBotConversation && assistantAvatar ? (
-        <span aria-hidden="true" className="invisible">
-          {assistantAvatar}
-        </span>
+        <span aria-hidden="true" className="block w-7" />
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
   );
@@ -6345,6 +6376,7 @@ export function MessageStream({
   );
   const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
     () => ({
+      pluginUi,
       workingDir,
       sessionId,
       sessionTitle,
@@ -6366,6 +6398,7 @@ export function MessageStream({
       userTurnUsageDetailsByAssistantId,
     }),
     [
+      pluginUi,
       workingDir,
       sessionId,
       sessionTitle,
@@ -6578,14 +6611,16 @@ export function MessageStream({
                           data-render-item-key={item.key}
                           data-inline-plan-key={item.key}
                         >
-                          <InlinePlanCard
-                            todos={item.todos}
-                            animated={
-                              isSessionStreaming &&
-                              latestInlinePlanBelongsToActiveTurn &&
-                              item.key === latestInlinePlanKey
-                            }
-                          />
+                          {withAssistantAvatar(botReplyColumnSpacer, (
+                            <InlinePlanCard
+                              todos={item.todos}
+                              animated={
+                                isSessionStreaming &&
+                                latestInlinePlanBelongsToActiveTurn &&
+                                item.key === latestInlinePlanKey
+                              }
+                            />
+                          ))}
                         </div>
                       );
                     }
@@ -6600,6 +6635,13 @@ export function MessageStream({
                           changeSet={item.changeSet}
                         />
                       );
+                    }
+
+                    if (item.type === 'bot_started_tasks') {
+                      const tasks = <BotStartedTasks tasks={item.tasks} hostSessionId={sessionId} />;
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, tasks, item.key)
+                        : <div key={item.key} data-render-item-key={item.key}>{tasks}</div>;
                     }
 
                     if (item.type === 'generated_files') {
@@ -6623,6 +6665,7 @@ export function MessageStream({
                     if (item.type === 'tool_segment') {
                       return (
                         <AgentActionsBlock
+                          pluginUi={pluginUi}
                           key={item.key}
                           renderItemKey={item.key}
                           toolCalls={item.toolCalls}
@@ -6634,10 +6677,10 @@ export function MessageStream({
                     }
 
                     if (item.type === 'agent_task') {
-                      return (
+                      const card = (
                         <AgentTaskCard
                           key={item.key}
-                          renderItemKey={item.key}
+                          renderItemKey={botReplyColumnSpacer ? undefined : item.key}
                           toolCall={item.toolCall}
                           update={item.update}
                           result={item.result}
@@ -6652,6 +6695,9 @@ export function MessageStream({
                           }
                         />
                       );
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, card, item.key)
+                        : card;
                     }
 
                     if (item.type === 'work_group') {
@@ -6660,10 +6706,13 @@ export function MessageStream({
                           key={item.key}
                           item={item}
                           context={workGroupRenderContext}
+                          startsUnread={botUnreadBoundaryKey === item.key}
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
-                          companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}
+                          companionAvatar={simplifiedBotConversation
+                            ? botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar
+                            : undefined}
                         />
                       );
                     }
@@ -6726,6 +6775,7 @@ export function MessageStream({
                           items={item.items}
                           sessionId={sessionId}
                           selectionActive={shareSelectionActive}
+                          replyColumnSpacer={botReplyColumnSpacer}
                         />
                       );
                     }
@@ -6756,8 +6806,9 @@ export function MessageStream({
                     // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
                     const pending = item.pending === true;
                     const shareable = !pending && Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
-                    const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg) : (
+                    const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg, pluginUi) : (
                       <MessageItem
+                        pluginUi={pluginUi}
                         message={msg}
                         toolResult={singleResultMap.get(msg.clientId)}
                         workingDir={workingDir}
@@ -6783,7 +6834,7 @@ export function MessageStream({
                         isLastMessage={msg.clientId === lastMessageClientId}
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
-                        assistantAvatar={assistantAvatar}
+                        assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
                         starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
@@ -6806,7 +6857,7 @@ export function MessageStream({
                         msg.systemCardType === 'voice-call'
                           ? undefined
                           : botMessageTimeGroups.get(msg.clientId);
-                      const startsUnread = botUnreadBoundaryClientId === msg.clientId;
+                      const startsUnread = botUnreadBoundaryKey === item.key;
                       return (
                         <div
                           key={item.key}
@@ -6814,35 +6865,16 @@ export function MessageStream({
                           data-message-client-id={msg.clientId}
                           className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
                         >
-                          {startsUnread ? (
-                            <div
-                              className="mb-3 flex items-center gap-3"
-                              role="separator"
-                              aria-label={t('bots.chat.newMessagesBoundary')}
-                            >
-                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
-                              <span className="shrink-0 text-11 font-medium tracking-[0.08em] text-[var(--bot-unread-bg)]">
-                                {t('bots.chat.newMessagesBoundary')}
-                              </span>
-                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
-                            </div>
-                          ) : null}
-                          {groupTimestamp !== undefined ? (
-                            <time
-                              dateTime={new Date(groupTimestamp).toISOString()}
-                              className="mb-3 block text-center text-11 text-[var(--text-tertiary)]"
-                            >
-                              {formatBotMessageGroupTime(
-                                groupTimestamp,
-                                i18n.resolvedLanguage ?? i18n.language,
-                              )}
-                            </time>
+                          {startsUnread || groupTimestamp !== undefined ? (
+                            <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
                           ) : null}
                           <div {...shareAttributes} className={cn(shareable && 'relative')}>
                             {shareable && shareSelectionActive ? (
                               <ShareMessageCheckbox clientId={msg.clientId} />
                             ) : null}
-                            {messageNode}
+                            {msg.role === 'assistant' && msg.systemCardType === 'mcp-app'
+                              ? withAssistantAvatar(botReplyColumnSpacer, messageNode)
+                              : messageNode}
                           </div>
                         </div>
                       );
@@ -6971,6 +7003,7 @@ export function withAssistantAvatar(
 }
 
 const MessageItem = memo(function MessageItem({
+  pluginUi,
   message,
   toolResult,
   workingDir,
@@ -6996,6 +7029,7 @@ const MessageItem = memo(function MessageItem({
   sessionSource,
   onDiagnoseError,
 }: {
+  pluginUi: PluginUiMessageCandidates;
   message: ChatMessage;
   toolResult?: string;
   workingDir: string;
@@ -7084,6 +7118,7 @@ const MessageItem = memo(function MessageItem({
       return (
         <>
           <UserMessage
+            pluginUi={pluginUi}
             sharedAuthorName={message.sharedAuthorName}
             sharedAuthorMemberId={message.sharedAuthorMemberId}
             workingDir={workingDir}
@@ -7159,6 +7194,7 @@ const MessageItem = memo(function MessageItem({
         <>
           <MessageSourceLabels sourceGroup={message.sourceGroup} align="start" />
           <AssistantMessage
+            pluginUi={pluginUi}
             workingDir={workingDir}
             localFileRefs={localFileRefs}
             currentSessionId={sessionId}
@@ -7191,6 +7227,7 @@ const MessageItem = memo(function MessageItem({
             botStarterOptions={message.botStarterOptions}
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
+            botStartedTasks={message.botStartedTasks}
           />
         </>,
       );

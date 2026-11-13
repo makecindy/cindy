@@ -11,8 +11,6 @@ import { sendVoiceCallCommand, useVoiceCallSummary } from '../bots/voice/voiceCa
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { useMessageReadAloud } from '../bots/voice/useMessageReadAloud';
 import { MessageReadAloudContext } from '@/components/chat/MessageReadAloudContext';
-import { RemoteBotFollowUpInvitation } from '@/features/bots/RemoteBotFollowUpInvitation';
-import { BotFollowUpInvitation } from '@/features/bots/BotFollowUpInvitation';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
@@ -92,7 +90,15 @@ import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
-import { ChatInput } from '@/components/new-chat/ChatInput';
+import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
+import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import {
+  SessionSubscriptionAccountProvider,
+  sessionSubscriptionPoolProvider,
+} from '@/components/new-chat/SessionSubscriptionAccount';
+import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import { beginAgentSwitchOperation, hasPendingAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
   getCindyMakeTestRecovery,
@@ -154,7 +160,7 @@ import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedSchedu
 import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
 import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
-import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
+import { countWorkingBashTasks, useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
 import { useRemoteSessionBackgroundTasks } from '@/hooks/useRemoteSessionBackgroundTasks';
 import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
@@ -171,7 +177,7 @@ import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
-import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import { RunningTokenCount } from './RunningTokenCount';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
@@ -868,6 +874,7 @@ function CCAgentSessionContent({
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
+  const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
@@ -1091,8 +1098,6 @@ function CCAgentSessionContent({
     search.set('settingsPage', 'voice');
     navigate(`${location.pathname}?${search.toString()}`);
   }, [location.pathname, location.search, navigate]);
-  const [followUpInvitationSession, setFollowUpInvitationSession] = useState<string | null>(null);
-  useEffect(() => setFollowUpInvitationSession(null), [sessionId]);
   const showCenteredControlledBanner = hasControlledBanner && !controlledBannerCollapsed;
   // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
   // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
@@ -1447,7 +1452,7 @@ function CCAgentSessionContent({
     }
   }, [session?.status, sessionId, navigate, ownsWindowRoute]);
   const vendorAuthGate = useVendorAuthGate();
-  const { confirmWithCheckbox } = useConfirmDialog();
+  const { confirm: confirmRebalance } = useConfirmDialog();
   const [workerRouteChecked, setWorkerRouteChecked] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1904,6 +1909,8 @@ function CCAgentSessionContent({
     pendingPermission,
     respondToPermission,
     pendingAskUser,
+    pendingAskUserQueue,
+    selectAskUserQuestion,
     answerUserQuestion,
     pendingPluginSetup,
     pluginSetupViewerState,
@@ -2195,7 +2202,7 @@ function CCAgentSessionContent({
   const realAgentKind = dbToMakerAgentKind(session?.agentKind);
   const isCodex = displayAgentKind === 'codex';
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
-  // 其余 agent 声明 manualCompact.supported(当前仅 pi)→ maker:compact-session;其余无入口。
+  // 其余 agent 声明 manualCompact.supported(Pi / Codex)→ maker:compact-session;其余无入口。
   // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
   // 用它判定会与 realAgentKind 分流不一致);remoteDeviceId 让远程 pi 取被控端能力。
   const { capabilities: realSessionCaps } = useAgentCapabilities(realAgentKind, remoteDeviceId);
@@ -2382,6 +2389,22 @@ function CCAgentSessionContent({
       session?.remoteHostId,
     ],
   );
+  // 账号池：任务固定在执行电脑上的某个账号，模型列表与底部用量都按它显示，读的是与用量 chip
+  // 同一台电脑(读不到那份账号时不读)。
+  const taskAccountProviderId =
+    usageAccount.kind === 'unreadable'
+      ? null
+      : sessionSubscriptionPoolProvider(
+          normalizeDbAgentKind(displayAgentKind),
+          usageChipProviderId,
+          session?.remoteHostId,
+        );
+  const taskAccountDeviceId =
+    usageAccount.kind === 'device'
+      ? usageAccount.deviceId
+      : usageAccount.kind === 'task'
+        ? (remoteDeviceId ?? null)
+        : null;
   const catalogDeviceId = modelCatalogKey(
     controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId, controlledModelRoute.catalogHostDeviceId,
   );
@@ -2580,6 +2603,79 @@ function CCAgentSessionContent({
       && !isStreaming && !agentStatus.isRunning && !errorIsRecoverable
       && !syntheticContinuationPending && !usageLimitWait,
   });
+  // 模型组(model-groups.md §6.1)：经路线建的本机任务撞了配额，横幅多给一个「换到下一个来源继续」。
+  // 只在撞配额的横幅挂着时问一次；点了走输入框里选择器同一条换模型路径，换成了再走横幅原有的重试。
+  const sessionModelPickRef = useRef<SessionModelPick | null>(null);
+  const modelGroupSwitchOffer = useModelGroupSwitchOffer(
+    sessionId,
+    !readOnly && !botChatIdentity && !!error && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
+      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true),
+    errorPersistId ?? error,
+    // 用户自己换过模型或来源后，旧提议作废，按现在的任务重新问。
+    `${session?.agentKind ?? ''}\u0000${session?.providerId ?? ''}\u0000${session?.model ?? ''}`,
+  );
+  const modelGroupSwitch = useMemo(() => {
+    if (!modelGroupSwitchOffer || !sessionId) return null;
+    const offer = modelGroupSwitchOffer;
+    return {
+      label: t('modelGroups.switchOffer.action', { model: `${offer.modelName} · ${offer.sourceName}` }),
+      onSwitch: async () => {
+        const pick = sessionModelPickRef.current;
+        if (!pick || !await isModelGroupSwitchOfferCurrent(sessionId, offer)) return false;
+        const applied = await pick({ agent: dbToMakerAgentKind(offer.agentKind), providerId: offer.providerId, modelId: offer.model });
+        // 记下现在用的是这一个：之后再撞配额，接着提议路线里的下一个。
+        if (applied) bindModelGroupSession(sessionId, offer.selection, offer);
+        return applied;
+      },
+    };
+  }, [modelGroupSwitchOffer, sessionId, t]);
+  // 进行中的任务里选模式(model-groups.md §5)：只在任务所在的运行位置里按规则当场挑一个，走选择器同一条换模型路径
+  // 换过去；之后不会自己再换。远程控制别的电脑、SSH 与伙伴对话不提供，条件与撞配额的换来源提议相同。
+  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && !remoteDeviceId && !session?.remoteHostId;
+  // 任务视图挂着但看不见(聊天栏收起)时不读配置，重新看得见时再读。
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask && viewVisible);
+  // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
+  const taskLocation = agentSwitchIntent && agentSwitchIntent.agentDeviceId !== undefined
+    ? agentSwitchIntent.agentDeviceId ?? null
+    : session?.agentDeviceId ?? null;
+  const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
+    if (!sessionId) return;
+    // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
+    // 这时点发送会等换完，而不是先用旧模型发出去。
+    if (hasPendingAgentSendDispatch(sessionId)) return;
+    const finishSwitch = beginAgentSwitchOperation(sessionId);
+    try {
+      // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
+      const navigationVersion = sessionNavigationVersionRef.current;
+      const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+      if (sessionNavigationVersionRef.current !== navigationVersion) return;
+      if (!result || result.outcome !== 'routed') {
+        if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
+        return;
+      }
+      const pick = sessionModelPickRef.current;
+      if (!pick) return;
+      const applied = await pick({
+        agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
+        // 模式指定了推理强度且选中的模型支持时一起换(选路时已按目录核对过)。
+        ...(result.route.effort ? { effort: result.route.effort as Effort } : {}),
+      });
+      if (!applied) return;
+      // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
+      bindModelGroupSession(sessionId, selection, result);
+      toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
+    } finally {
+      finishSwitch();
+    }
+  }, [sessionId, taskLocation, t]);
+  const taskModelGroups = useMemo(() => (modelGroupsInTask
+    ? {
+        config: modelGroupsConfig,
+        active: null,
+        onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
+        onManage: () => navigate('/settings?tab=model-groups'),
+      }
+    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate]);
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -4066,7 +4162,6 @@ function CCAgentSessionContent({
       if (cindyMakeInputLocked) return false;
       invalidateHistoryRecoveryNavigation();
       const deliveryMode = opts?.deliveryMode ?? 'queue';
-      const sendOwner = getDataOwnerGeneration();
       const originalMessage = message;
       const navigationRequestVersion =
         !opts?.literalText && deliveryMode !== 'steer' && matchNavigationCommandName(message)
@@ -4210,15 +4305,26 @@ function CCAgentSessionContent({
         session.runtimeBaselineRecoveryPending === true && !session.runtimePending && !agentSwitchIntent &&
         model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
         (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
-      if (!remoteDeviceId && !recoveringBaseline) {
-        const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
-        const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-          // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
-          // PR #744 review 第十七轮)。
-          existingSessionRoute: true,
-        });
-        if (!proceed) return false;
+      const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
+      const passesVendorAuthGate = async () => (await vendorAuthGate.checkAndConfirm(authVendor, {
+        // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
+        // PR #744 review 第十七轮)。
+        existingSessionRoute: true,
+        // SSH 任务在远端主机运行;只有此时才带上主机,其余调用保持原参数。
+        ...(session?.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
+      })).proceed;
+      // 输入框在点击时就已清空。普通发送把这项检查交给 store 的 beforeEnqueue:
+      // 气泡先上屏,和清空同一帧出现,不再等这次主进程往返;不通过时 store 按
+      // clientId 撤回气泡、返回 false,输入框原样恢复草稿。还没选目录(走目录选择
+      // 续发)、本地插话和内置技能分派不经过 store 的乐观插入,仍在这里先查。
+      // 归档任务也先查,避免认证拒绝后仍留下自动取消归档的副作用。
+      const deferVendorAuthGate = Boolean(session?.workingDir) && !opts?.builtInSkillIntent &&
+        deliveryMode !== 'steer' && session?.status !== 'archived';
+      if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {
+        if (!(await passesVendorAuthGate())) return false;
       }
+      const vendorAuthBeforeEnqueue =
+        !remoteDeviceId && !recoveringBaseline && deferVendorAuthGate ? passesVendorAuthGate : undefined;
 
       if (opts?.beforeEnqueue && !(await opts.beforeEnqueue())) return false;
       // Popover open → prevent re-entry
@@ -4315,7 +4421,7 @@ function CCAgentSessionContent({
         recordRebalance = await offerSessionRebalance({
           sessionId,
           ...(remoteDeviceId ? { hostDeviceId: remoteDeviceId } : {}),
-          confirmWithCheckbox,
+          confirm: confirmRebalance,
           t,
         });
       }
@@ -4324,13 +4430,16 @@ function CCAgentSessionContent({
       let rebalanceClientId: string | undefined;
       // 伙伴私聊引用回复:点发送时的待发引用随这条消息一起落库,送出后从输入框上方撤下。
       const replyQuote = botChatIdentity && !opts?.independent ? getPendingBotReplyQuote(sessionId) : null;
+      const callerBeforeEnqueue = opts?.beforeEnqueue;
       const sendOptions = {
         ...(replyQuote ? { replyQuote } : {}),
-        beforeEnqueue: recordRebalance ? async () => {
-          if (await opts?.beforeEnqueue?.() === false) return false;
-          if (rebalanceClientId) await recordRebalance(rebalanceClientId);
+        // 顺序:供应商检查 → 调用方钩子 → 记录换号选择(只有确定发出才记)。
+        beforeEnqueue: vendorAuthBeforeEnqueue || recordRebalance ? async () => {
+          if (vendorAuthBeforeEnqueue && !(await vendorAuthBeforeEnqueue())) return false;
+          if (callerBeforeEnqueue && !(await callerBeforeEnqueue())) return false;
+          if (recordRebalance && rebalanceClientId) await recordRebalance(rebalanceClientId);
           return true;
-        } : opts?.beforeEnqueue,
+        } : callerBeforeEnqueue,
         onInputCreated: recordRebalance ? (clientId: string) => {
           rebalanceClientId = clientId;
           opts?.onInputCreated?.(clientId);
@@ -4366,9 +4475,6 @@ function CCAgentSessionContent({
         );
         if (accepted && sessionId && replyQuote) clearSentBotReplyQuote(sessionId, replyQuote);
         if (accepted && sessionId) {
-          if (isDataOwnerGenerationCurrent(sendOwner) && currentSessionIdRef.current === sessionId) {
-            setFollowUpInvitationSession(sessionId);
-          }
           void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
             log.error('recover deferred Worker assignment after user message failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -4390,9 +4496,6 @@ function CCAgentSessionContent({
       );
       if (accepted && sessionId && replyQuote) clearSentBotReplyQuote(sessionId, replyQuote);
       if (accepted && sessionId) {
-        if (isDataOwnerGenerationCurrent(sendOwner) && currentSessionIdRef.current === sessionId) {
-          setFollowUpInvitationSession(sessionId);
-        }
         void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
           log.error('recover deferred Worker assignment after user message failed', err);
           toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -4421,7 +4524,7 @@ function CCAgentSessionContent({
       vendorAuthGate,
       displayAgentKind,
       agentSwitchIntent,
-      confirmWithCheckbox,
+      confirmRebalance,
       remoteDeviceId,
       sessionHandoffPreparing,
       cindyMakeInputLocked,
@@ -4607,13 +4710,17 @@ function CCAgentSessionContent({
             toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
           } else if (result) {
             toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+          } else {
+            // Older device-link hosts may still return null for an unavailable handle.
+            toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
           }
-          // null:会话无 live 进程 / 不支持(入口已按 gate 隐藏,极少走到)。静默即可。
         } catch (err) {
           if (!compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
           // 失败给可理解提示,不泄漏裸 IPC 错误。
           log.warn('context ring compact-session failed', err);
-          toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+          toast.warning(t(extractIpcError(err)?.code === 'NOT_FOUND'
+            ? 'ccAgent.sidebar.sessionMenu.compactResumeFirst'
+            : 'ccAgent.sidebar.sessionMenu.compactFailed'));
         }
         return;
       }
@@ -5349,10 +5456,10 @@ function CCAgentSessionContent({
     if (sessionId) requestChatTaskFocus(sessionId, clientId);
   }, [sessionId]);
   const pendingMessages = useMemo(() => pendingQueue.map((entry) => entry.chatMessage), [pendingQueue]);
-  const renderPendingMessage = (message: ChatMessage) => {
+  const renderPendingMessage = (message: ChatMessage, pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates) => {
     const index = pendingQueue.findIndex((entry) => entry.clientId === message.clientId);
     const entry = pendingQueue[index];
-    return entry ? <PendingQueueBubble entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
+    return entry ? <PendingQueueBubble pluginUi={pluginUi} entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
       editingClientId={activeQueueComposerEdit?.clientId ?? null}
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}
@@ -5497,6 +5604,7 @@ function CCAgentSessionContent({
                 usageLimitWait={usageLimitWait}
                 onCancelUsageLimitWait={cancelUsageLimitWait}
                 usageLimitRecovery={usageLimitRecovery}
+                modelGroupSwitch={modelGroupSwitch}
                 onCancel={handleDismissError}
                 agentKind={session?.agentKind}
                 remoteHostId={session?.remoteHostId ?? undefined}
@@ -5684,6 +5792,7 @@ function CCAgentSessionContent({
       )}
       <section
         className="relative flex h-full w-full flex-col bg-content-area"
+        data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
           if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
@@ -5830,6 +5939,7 @@ function CCAgentSessionContent({
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
         <div
           className="wallpaper-message-viewport relative min-h-0 flex-1"
+          data-plugin-ui-element="messages"
           style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
         >
           {/* perf/session-switch 探针纯诊断:仅 DEV 用 Profiler 量 MessageStream commit,
@@ -5890,6 +6000,10 @@ function CCAgentSessionContent({
                   // (关子进程止损,bash 任务随之终止,无需再逐个停)。
                   backgroundBashOnlyCount={
                     backgroundModelActive ? 0 : backgroundBashTasks.length
+                  }
+                  // 其中仍在工作(会自己结束)的命令数;只剩长驻服务时换成静态的服务文案。
+                  backgroundBashWorkCount={
+                    backgroundModelActive ? 0 : countWorkingBashTasks(backgroundBashTasks)
                   }
                   backgroundStopping={
                     backgroundActivity.stopping ||
@@ -6006,14 +6120,7 @@ function CCAgentSessionContent({
                  InteractionPromptHost: 普通模式下行为不变(直接 inline 渲染)。
                  当外部 (workdir-browse 等窄 rail 场景) 挂了 InteractionPromptSlot
                  时,卡片会被 portal 出去,这里就显占位。 */}
-              {!readOnly && botChatIdentity?.canonicalChat && botChatIdentity.id === 'cindy-default' && !isStreaming && !agentStatus.isRunning && !shareSelectionBlocked
-                && !pendingPlanReview && !pendingPermission && !pendingAskUser && !pendingPluginSetup
-                && !pendingIssueConfirm && !pendingRenameSessionsConfirm && !pendingGhostGrantConfirm
-                && !pendingRemoteDesktopConfirmation && !pendingInputHandoff && followUpInvitationSession === sessionId && (
-                remoteDeviceId
-                  ? <RemoteBotFollowUpInvitation key={`${remoteDeviceId}:${sessionId}`} deviceId={remoteDeviceId} botId={botChatIdentity.id} />
-                  : <BotFollowUpInvitation key={`follow-up-invitation:${sessionId}`} botId={botChatIdentity.id} engaged />
-              )}
+              <div className="contents" data-plugin-ui-keep-visible>
               <InteractionPromptHost
                 hasInteraction={
                   !!(
@@ -6073,6 +6180,8 @@ function CCAgentSessionContent({
                     workingDir={session?.workingDir ?? ''}
                     remoteHostId={session?.remoteHostId}
                     pending={pendingAskUser}
+                    pendingQuestions={pendingAskUserQueue}
+                    onSelectQuestion={selectAskUserQuestion}
                     onAnswer={answerUserQuestion}
                     viewerState={askUserViewerState}
                     onViewerStateChange={setAskUserViewerState}
@@ -6121,6 +6230,7 @@ function CCAgentSessionContent({
                   />
                 ) : null}
               </InteractionPromptHost>
+              </div>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && <GoalIndicator sessionId={sessionId} />}
               {/* Only the compact bar reserves composer space; its transcript is a
@@ -6185,6 +6295,8 @@ function CCAgentSessionContent({
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
                 <ChatInput
+                  sessionModelPickRef={sessionModelPickRef}
+                  {...(taskModelGroups ? { modelGroups: taskModelGroups } : {})}
                   modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
                   onModelPickerRequestConsumed={sharedTaskRecovery.consumeModelPickerRequest}
                   topSlot={cindyMakeRecoveryId && session ? (
@@ -6365,7 +6477,7 @@ function CCAgentSessionContent({
                 <div
                   className={cn(
                     'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
-                    !session?.workingDir && !worktreeCreation && 'invisible',
+                    !session?.workingDir && !worktreeCreation && !hasPluginStatusbar && 'invisible',
                   )}
                 >
                   {/* Left: workingDir — 点击在系统文件管理器中打开;
@@ -6386,9 +6498,9 @@ function CCAgentSessionContent({
                       <div className="flex min-w-0 items-center gap-1.5">
                         <AlertCircle
                           size={12}
-                          className="shrink-0 text-red-500 dark:text-red-400"
+                          className="shrink-0 text-[var(--error-fg)]"
                         />
-                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-red-500 dark:text-red-400">
+                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--error-fg)]">
                           {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
                           {' — '}
                           {worktreeCreation.error}
@@ -6402,7 +6514,7 @@ function CCAgentSessionContent({
                           className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
                           aria-label={t('common.dismiss', 'Dismiss')}
                         >
-                          <X size={10} className="text-red-500/70 dark:text-red-400/70" />
+                          <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />
                         </button>
                       </div>
                     </Tip>
@@ -6430,8 +6542,16 @@ function CCAgentSessionContent({
                     </WorkingDirectoryTip>
                   )}
 
-                  {/* Right: Context capacity indicator */}
-                  <div className="flex shrink-0 items-center gap-3">
+                  {hasPluginStatusbar && (
+                    <div className="min-w-0 flex-1 overflow-x-auto">
+                      <div className="w-max">
+                        <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Right: quota segments may wrap before the context indicator. */}
+                  <div className="flex min-w-0 max-w-full items-center gap-3">
                     {session?.usedProjectContext && (
                       <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
                         <Brain
@@ -6477,8 +6597,8 @@ function CCAgentSessionContent({
                       deviceId={remoteDeviceId}
                       onCompact={
                         // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
-                        // 其余声明 manualCompact.supported(当前仅 pi)走 compact-session 通道;
-                        // codex 无手动 compact(上游自动压缩)保持纯展示。pi 的 SSH 远程会话
+                        // 其余声明 manualCompact.supported(Pi / Codex)走 compact-session 通道;
+                        // SSH 远程会话
                         // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
                         // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
                         // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
@@ -6486,7 +6606,7 @@ function CCAgentSessionContent({
                         // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
                         !readOnly &&
                         compactChannel !== null &&
-                        !(realAgentKind === 'pi' && !!session?.remoteHostId) &&
+                        !(compactChannel === 'compact-session' && !!session?.remoteHostId) &&
                         session != null &&
                         agentStatus.contextTokens > 0 &&
                         !(compactChannel === 'compact-session' && agentStatus.isRunning)
@@ -6496,7 +6616,9 @@ function CCAgentSessionContent({
                     />
                   </div>
                 </div>
-              ) : null}
+              ) : (
+                <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+              )}
             </div>
           </div>
         </div>
@@ -6542,7 +6664,16 @@ function CCAgentSessionContent({
         }
       >
         <ChatDisplaySnapshotProvider value={chatDisplaySnapshot}>
-          <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
+          {/* 模型列表与底部用量共用：任务实际在用的订阅账号。 */}
+          <SessionSubscriptionAccountProvider
+            providerId={taskAccountProviderId}
+            deviceId={taskAccountDeviceId}
+            sessionId={sessionId}
+            nativeSessionId={session?.sdkSessionId}
+            refreshKey={agentStatus.isRunning}
+          >
+            <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
+          </SessionSubscriptionAccountProvider>
         </ChatDisplaySnapshotProvider>
       </SessionNavigationModeProvider>
       <CreateWorkerPopover
@@ -6551,6 +6682,7 @@ function CCAgentSessionContent({
         onClose={() => setCreateWorkerOpen(false)}
         onCreate={requestEnableCollab}
         title={t('orca.createWorker.enableCollabTitle')}
+        description={t('orca.createWorker.enableCollabDescription')}
         submitLabel={t('orca.createWorker.enableCollabSubmit')}
         requireWorkerPermissionModeSupport
         deviceId={remoteDeviceId}
@@ -6675,6 +6807,7 @@ function RunningStatusBar({
   backgroundTasksRunning = false,
   workflowStatus,
   backgroundBashOnlyCount = 0,
+  backgroundBashWorkCount = backgroundBashOnlyCount,
   backgroundStopping = false,
   onStopBackgroundTasks,
   rightLeadingSlot = null,
@@ -6716,6 +6849,12 @@ function RunningStatusBar({
    * (不关常驻子进程)。0 = 维持原「仍在调模型」文案与止损语义。
    */
   backgroundBashOnlyCount?: number;
+  /**
+   * backgroundBashOnlyCount 里仍在工作的命令数(跑测试、构建等会自己结束的命令)。>0 用
+   * 「正在后台工作」文案并保留呼吸;为 0 说明只剩长驻服务(本地预览服务等),任务已做完,
+   * 换成静态的「后台服务运行中」。缺省 = 全部按工作算。
+   */
+  backgroundBashWorkCount?: number;
   /** 全停请求在飞(按钮禁用,防连点)。 */
   backgroundStopping?: boolean;
   /** 「全部停止」入口(关闭常驻 CC 子进程,会话可续)。 */
@@ -6788,9 +6927,14 @@ function RunningStatusBar({
     workflowStatus ??
     (backgroundTasksRunning
       ? backgroundBashOnlyCount > 0
-        ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
+        ? backgroundBashWorkCount > 0
+          ? t('chat.backgroundActivity.bashWorkStatus', { count: backgroundBashWorkCount })
+          : t('chat.backgroundActivity.bashServiceStatus', { count: backgroundBashOnlyCount })
         : t('chat.backgroundActivity.status')
       : localizeAgentStatus(status, t));
+  // 只剩长驻服务:任务已经做完,不再呼吸,免得看起来还在干活。
+  const backgroundServiceOnly =
+    backgroundTasksRunning && backgroundBashOnlyCount > 0 && backgroundBashWorkCount === 0;
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but
@@ -6846,17 +6990,20 @@ function RunningStatusBar({
     generationDurationMs,
   ]);
 
-  // Animate the token counter so live mid-turn updates feel like a smoothly-
-  // incrementing number. Rate does not use this: locally ticking the
-  // denominator would make a paused model look like decaying speed.
-  const animatedTokens = useAnimatedNumber(tokenUsage, 400);
-  const tokenCountText = t('chat.runningStatus.tokenCount', {
-    tokens: formatRunningTokenCount(animatedTokens),
-  });
   // Host speed counts and times generation itself; usage counters stay the fallback.
   const rateOutputTokens = tokenSpeed?.tokens ?? outputTokens;
   const rateDurationMs = tokenSpeed?.elapsedMs ?? generationDurationMs;
   const rateReliable = tokenSpeed ? true : generationReliable;
+  const displayTokens = tokenUsage > 0
+    ? tokenUsage
+    : tokenSpeed?.streaming && rateOutputTokens > 0
+      ? rateOutputTokens
+      : 0;
+  // Keep authoritative text for the accessible popover label. Interpolation
+  // belongs to the displayed counter leaf, so rate-only/hidden rows do no RAF work.
+  const tokenCountText = t('chat.runningStatus.tokenCount', {
+    tokens: formatRunningTokenCount(displayTokens),
+  });
   const rateHistory = useRunningTokenRateHistory({
     sessionKey,
     startedAt,
@@ -6875,7 +7022,7 @@ function RunningStatusBar({
     outputTokens: rateOutputTokens,
     generationDurationMs: rateDurationMs,
     generationReliable: rateReliable,
-    tokenUsage,
+    tokenUsage: Math.max(tokenUsage, displayTokens),
     latestRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
@@ -6938,7 +7085,13 @@ function RunningStatusBar({
           // - done 是 0.4s 一次性 pop(keyframe 已去掉 opacity、只动 transform)，turn
           //   结束那一刻(isDone 必伴随 !visible)要弹一下，故保持 !isHidden gate;
           //   不动 opacity 所以不会盖 fade。
-          isHidden ? '' : isDone ? 'status-bar-done' : visible && !reconnecting ? 'status-bar-shimmer' : '',
+          isHidden
+            ? ''
+            : isDone
+              ? 'status-bar-done'
+              : visible && !reconnecting && !backgroundServiceOnly
+                ? 'status-bar-shimmer'
+                : '',
         )}
         style={fadeStyle}
         aria-hidden={isHidden}
@@ -6988,11 +7141,13 @@ function RunningStatusBar({
                   backgroundTasksRunning ||
                   (tokenSpeed && !tokenSpeed.streaming)
                     ? null
-                    : usageMeta.kind === 'tokens'
-                      ? tokenCountText
-                      : rateText
+                    : rateText ?? (displayTokens > 0 ? tokenCountText : null)
                 }
-                isTokenCount={usageMeta.kind === 'tokens'}
+                isTokenCount={
+                  usageMeta.kind === 'tokens' ||
+                  (usageMeta.kind === 'rate' && rateText === null && displayTokens > 0)
+                }
+                tokenUsage={displayTokens}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
                 outputTokens={rateOutputTokens}
                 history={rateHistory}
@@ -7034,7 +7189,7 @@ function RunningStatusBar({
                     </span>
                     <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                      {tokenCountText}
+                      <RunningTokenCount tokenUsage={tokenUsage} />
                     </span>
                   </>
                 )}

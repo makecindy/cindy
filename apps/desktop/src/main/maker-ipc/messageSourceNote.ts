@@ -63,13 +63,16 @@ export function buildWireMessageSourceNote(
   opts: { visibleText?: string; autoResume?: boolean } = {},
 ): string | null {
   if (!fields || opts.autoResume) return null;
-  const clause = !fields.sourcePlugin && !fields.sharedTaskAuthor
+  const sender = messageSourceSenderFromMeta(fields);
+  // A request to the group's Cindy already says it is the owner's own request (its receipt only
+  // carries the owner's words for review); a second clause would repeat it.
+  const clause = !fields.sourcePlugin && !fields.sharedTaskAuthor && !(sender?.kind === 'session' && sender.groupRequest)
     ? forwardedRequestClause(fields.autoReviewUserText) : null;
   // Peer inputs are hidden from the timeline, but their owner evidence must
   // still reach the model. Other synthetic triggers remain unannotated.
   if (!clause && opts.visibleText !== undefined && isSyntheticTriggerText(opts.visibleText.trimStart()))
     return null;
-  const note = buildMessageSourceNote(messageSourceSenderFromMeta(fields));
+  const note = buildMessageSourceNote(sender);
   return clause ? `${note ?? '[消息来源] '}${clause}` : note;
 }
 

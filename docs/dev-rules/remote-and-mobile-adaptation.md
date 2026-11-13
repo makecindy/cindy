@@ -128,7 +128,7 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
 产品规则见 [`../product-rules/input-handoff.md`](../product-rules/input-handoff.md)。三种形态的落点：
 
 - **SSH 远程工作区**：不支持。目标窗口必须在执行代输入的这台电脑上；带 `remoteHostId` 的任务里
-  `ask_owner` 不列出 fill／scan，直接调用（含旧名 `request_input_handoff`）返回 `CAPABILITY_NOT_AVAILABLE`，
+  `request_input_handoff` 不提供远程窗口交接，调用返回 `CAPABILITY_NOT_AVAILABLE`，
   由 Agent 改为直接告诉主人需要什么。
 - **设备互联远程控制**：卡片快照随既有交互推送（`kind: "input_handoff"`）到所有控制端；交还、取消、
   停留、刷新、接手、看画面等**不带值**的决定走既有 `resolveInteraction`；**带值**的提交与截图只走插件
@@ -139,7 +139,7 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
   推送深链回到所属任务。
 - 单窗口实时画面复用远程桌面通道：控制端只在 `start` 里带 `handoff: requestId`，由被控端按请求选窗口；
   被控端以 `handoffWindow` 能力位声明支持，旧被控端不声明时控制端不展示入口。协议细节见
-  [`protocol-compatibility.md`](protocol-compatibility.md)「代输入」。
+  [`protocol-compatibility/input-handoff.md`](protocol-compatibility/input-handoff.md)「代输入」。
 
 ## 恢复动作先回答故障半径（device-link 共享链路）
 
@@ -199,6 +199,58 @@ Desktop 远控输入推荐使用任务执行电脑 B 的完成轮次；控制电
 `promptRecommendationStore.test.ts` 覆盖时钟差和乱序推送，输入框 DOM 回归覆盖忙碌投影恢复后
 显示与 Tab 采用。响应兼容说明见 [`protocol-compatibility.md`](protocol-compatibility.md)
 「远程输入推荐的完成轮次与重试」。
+
+### Agent-Net 中继连接保活
+
+2026-11-13：开启 Agent-Net 后，device-link 的 ping 由 worker 就地应答、不经过中继，察觉不到
+「还能收、发不出去」的中继连接（实测一台电脑到中继的上行重传约 20%，对端互判离线 9 分钟和
+15 分钟，重连后 1 秒内恢复）。Desktop Main 在实际持有的中继 WebSocket 上每 15 秒发一次标准
+WebSocket ping，45 秒收不到 pong 就关闭这条连接，交给 worker 既有的中继重连（0.5 秒起，最长
+15 秒）。计时器本身迟到（Main 繁忙、系统唤醒）时重新计时，不算作 pong 丢失。
+
+故障半径三问：① 证据是本机到中继这一条连接的往返失败（pong 由中继直接回，不经任何对端），
+单个对端静默或休眠不会触发；② 只重建本机这一条中继连接，已建立的对端通道（直连和经中继的
+加密连接）保留，device-link 链路不复位、不重放；在持续丢包的线路上最坏约每分钟重连一次，不会
+形成紧循环；③ `packages/agent-net/src/__tests__/workerSocket.test.ts` 用本机真实 WebSocket
+中继验证：不回 pong 时断开，正常回 pong 时超过时限也不断开。用的是标准控制帧，官方中继和自建
+中继（同一 V2 内核，默认自动回 pong）都无需改动。手机端（React Native 的 WebSocket 没有 ping
+接口）仍是同一盲区，尚未处理。
+
+### Agent-Net 中继发送排队上限
+
+2026-11-13 17:23–17:35：一台对端的中继路径变慢，中继 WebSocket（TCP）只排队、不丢包。发往它的
+确认从 1 秒涨到 156 秒，device-link 队列只有 16 条约 7 KB，消息卡在下层；同一条消息被重发到第
+5 次，结果迟到几分钟才送达，读请求在发出 95 秒后才执行。原来唯一的限制是 1 MiB 字节上限，
+流量小时 1 MiB 就是几分钟的数据。
+
+经中继转发的是传输核心的数据报，本来就允许丢，丢了由核心重发。两个方向共用
+`packages/agent-net-relay/src/datagramQueue.ts`：记录每条连接上还没交给系统的写入，最早一笔等待
+超过 1 秒时，不再写入新的数据报，直到队列重新流动；控制消息（在线状态、名册）照常写入，原有
+1 MiB 上限保留。排队超过几个往返只增加延迟、不增加吞吐，丢包让核心按丢包处理，不会再看到越来
+越长的往返。开始丢和恢复时各记一条日志，同一连接 30 秒内最多记一次开始。
+
+- **本机 → 中继**：Desktop Main 实际持有的中继 WebSocket（`packages/agent-net/src/workerSocket.ts`）。
+- **中继 → 设备**：中继内核按目标设备的会话转发（`packages/agent-net-relay/src/server.ts`），自建中转
+  与「这台电脑当中转」直接使用；中继日志不带设备号。官方服务端仓库有独立的内核副本，需同步同一
+  改动后才在官方中继生效。
+
+自建服务器的 V1、V2 程序共用部署版本标记 `packages/device-link-relay/src/version.ts`，本次随
+V2 内核修复递增到 `0.5.1`，让已部署 `0.5.0` 的主人能看到升级入口；不改变 V1 协议。
+`selfHostedRelayRuntime.test.ts` 经状态 IPC 验证旧版出现升级提示、升级完成后提示消失。
+
+故障半径三问：① 证据是这一条连接上的写入本身停在进程里超过 1 秒（本机方向是本机到中继，中继
+方向是中继到这一台设备），与其它连接无关；② 只对这条连接上新的数据报不写入，不关闭连接、不
+复位对端、不清 device-link 队列，核心照常重发；中继上一台设备变慢不影响发往其它设备的数据；
+进程长时间卡顿后可能多丢几个数据报，代价是一次重发；在仍有吞吐的慢线路上，丢弃只发生在队列
+已经积压超过 1 秒的时段，排队数据比原来少，不会更多；③ `packages/agent-net/src/__tests__/workerSocket.test.ts`
+用本机真实 WebSocket 中继验证本机方向，`packages/agent-net-relay/src/__tests__/relay.integration.test.ts`
+用真实中继和两台设备验证中继方向：接收方停止读取后新数据报不再写入（去掉修复时测试失败），
+恢复后继续转发且这台设备不被断开，停顿前正常写入的数据报一个不少。不改协议，新旧客户端与新旧
+中继任意组合都兼容。
+
+未处理：手机端发往中继的方向（React Native 拿不到写入完成回调；`DatagramSendQueue` 也不能用于
+Desktop worker 里的代理 socket，那里没有完成回调）、device-link 在 Agent-Net 上的重复可靠层
+（每次重发都把整条消息再写进本来就可靠的加密流，见 `agent-net-plan.md` 第 2 阶段）。
 
 ### 共享连接静默与请求隔离
 
@@ -286,7 +338,7 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   deviceId 发起 offer，失败按 5–60 秒退避；单次协商 15 秒。桌面共享数据进程预算 64，
   同账号设备与分享各预留 8；手机维持 16。满额继续 relay、释放后按公平队列补建；
   候选、等待 offer、失败重试与压力下空闲回收的边界见
-  [`protocol-compatibility.md`](protocol-compatibility.md#device-link-局域网优先直连)。
+  [`protocol-compatibility/device-link-lan-first-direct.md`](protocol-compatibility/device-link-lan-first-direct.md)。
   两端均支持并启用保留、已完成认证与可靠握手且数据通道健康时，才可跨信令断线维持原有路径。
   新版 Mobile 仅在前台保留，退后台释放；未支持或未启用保留的旧端沿用原有断线复位。
   仅保留 RPC 数据通道，不承诺独立文件或远程桌面通道存活。
@@ -306,6 +358,21 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   Main/preload/隔离 renderer 的真实 IPC、WebRTC 与中继回退；账号和 userData 均为独立 fixture。
 
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
+
+控制端载荷交付（2026-11-10）：512KiB 上传块经 base64 后约 683KiB，慢中转链路收齐分片可能超过
+单次 invoke 的 30 秒期限；大内联 JSON 也有相同问题。`RemoteAgentRunClient.payload` 按 UTF-8 字节
+控制内联大小，超过 64KiB 先 gzip，普通载荷以 64KiB 压缩数据为一块顺序上传。每块确认后再发下一块，
+让同链路的其它请求能在块间推进；不延长通道超时、不自动重放上传、`open` 或 `call`。
+为保留原容量，大载荷会增大块大小以符合旧接收端最多 128 块、每块 512KiB、总共 64MiB 的合同；
+这些数值仍是接收上限，不能因发送偏好变小而拒收旧端的大块。既有取消检查继续覆盖压缩与各块之间。
+`abort` / `requestGracefulStop` 还会使此前尚在准备或上传的 `send` / `steer` 失效；
+压缩后、块间及最终调用前检查同一发送代次，以 `AbortError` 收口，不让停止之后再启动旧消息。
+停止请求不排在上传之后，也不关闭连接；停止之后的新消息仍可正常发送。
+Session 准备期柔性停止的 `SendOptions.signal` 由本机代理传到同一守卫，不序列化进协议；
+已经发出的业务调用保留原结果语义，不能把远端已接收的消息事后改报为未发送。
+故障半径：仅改变当前载荷的编码与分块，不重建 link、不重连共享 relay、不改授权或其它 peer 的状态。
+回归为 `runClientReply.test.ts` 的有界慢链路完整交付，以及 `roundtrip.test.ts` 的上传中取消。
+协议兼容与中转边界见 [远程 Agent 协议](protocol-compatibility/remote-agent.md)。
 
 供应商进程重启（2026-10-29）：已打开的 run 收到 `missing`、`provider-restarting` 或旧端的
 `aborted` 时只释放这条远程连接，保留本机执行器和 MCP 身份。空闲任务下次发送再接回；进行中的
@@ -348,7 +415,7 @@ M 仍保存但已撤权的 run 明确收尾为 `access-revoked`，不以 `missin
 preparing，本机 Session 可正常关闭，下一条显式消息按原生会话 ID 重建；不依赖离线电脑确认才能
 解除队列占用。回归同时覆盖远程通知失败与本机清理失败，不能把两者混为一谈。
 
-协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「远程 Agent」。恢复策略按故障半径三问：
+协议见 [`protocol-compatibility/remote-agent.md`](protocol-compatibility/remote-agent.md)「远程 Agent」。恢复策略按故障半径三问：
 
 1. **故障层级**：只处理同一台被控端的事件拉取。`poll` 遇到 peer reset、超时、背压或链路暂断时，
    用同样的游标重拉(0.5s 起指数退避，上限 5s；另一个在途 poll 成功即提前恢复)；连续 2 分钟拉不到
@@ -388,7 +455,7 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 本机与 SSH PI 的账号边界保护不变。实现见 `remote-agent/controller/{proxyHandle,startRemote}.ts`，
 不改变 wire、授权检查或跨端版本要求（#6921）。
 
-**控制端连接池的让出与连回**(2026-10-17，协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「控制端连接池」)：
+**控制端连接池的让出与连回**(2026-10-17，协议见 [`protocol-compatibility/remote-agent.md`](protocol-compatibility/remote-agent.md)「控制端连接池」)：
 
 1. **故障层级**：B 的单设备名额(`caps.maxRuns`)快满或已满，或 B 以名额类 `REMOTE_AGENT_BUSY` 拒绝一次 open；只涉及这台 A 在
    这台 B 上的连接。
@@ -466,7 +533,7 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 
 ## 协同远端 Worker 的轮询与恢复
 
-协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「协同远端 Worker」，实现见
+协议见 [`protocol-compatibility/orca-remote-worker.md`](protocol-compatibility/orca-remote-worker.md)「协同远端 Worker」，实现见
 `apps/desktop/src/main/maker-ipc/orcaRemoteWorkerRuntime.ts`。按故障半径三问：
 
 1. **故障层级**：单台运行设备的单个请求。轮询或派活失败只把这台设备标为「暂时无法获取状态」，
@@ -993,6 +1060,18 @@ WebSocket 写入成功）与 `afterFirstWriteMs`（首次写入到结束）；�
 在途期间只保留最新一次补读；失效立即推进已有代次，旧结果不提交。整组读取结束
 （包括失败后的其它成员）才释放刷新位置。账号切换或远程断连后的新代次独立刷新，
 不等待旧请求超时；已经取消的补读不重新打开连接。该合并不引入结果缓存或定时重试。
+同账号桌面远控的目录刷新须同时处理 `maker:provider:changed`、`maker:agents:changed`
+和 `provider-group:changed`：Main 对三者都会作废目标的在途元数据读取，Renderer 若漏接
+其中一种，迟到的 `Metadata scope changed` 就可能让模型选择器停在失败状态。收到这些
+事件时沿用上述合并刷新，只推进对应设备的代次；剩余信任时间为零的通知仍只清除目录，
+不发起补读。保护账号／撤权边界的 Main 校验不变，也不重建共享链路或 relay。
+回归见 Desktop `deviceLinkRemoteRecovery.test.tsx` 与 `remoteCatalogSnapshot.test.ts`。
+宿主的只读元数据入口也区分来源刷新与权限代次：请求返回前来源刷新使旧结果作废时，
+仅在原账号、区域、权限代次及准入条件仍有效时补读一次，第二次仍作废则正常报错。
+这样没有 Renderer 订阅的读取也能恢复；不把普通 scope 错误归类为网络瞬态，
+不跨撤权、断连、账号切换或零预算退休通知补读，不复活旧快照。
+回归见 Desktop `providerMetadataContinuity.test.ts`。
+
 
 ## PR 门禁
 

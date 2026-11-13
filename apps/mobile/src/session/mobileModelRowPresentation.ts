@@ -122,9 +122,9 @@ export function quotaCountdown(reset: number, now: number, unitLabel: (unit: Quo
 }
 
 /** The host's connection name and public identity, never the controller's account. */
-export function mobileProviderAccountTitle(provider: ProviderView): string {
+export function mobileProviderAccountTitle(provider: ProviderView, accountIdentity?: string): string {
   const name = provider.name || provider.id;
-  const identity = provider.openAiAccount?.identity?.trim() || provider.subscriptionAccount?.identity?.trim();
+  const identity = accountIdentity ?? (provider.openAiAccount?.identity?.trim() || provider.subscriptionAccount?.identity?.trim());
   if (!identity || name === identity) return name;
   const base = name.replace(/ \(\d+\)$/, '');
   if (base.endsWith(` · ${identity}`)) return name;

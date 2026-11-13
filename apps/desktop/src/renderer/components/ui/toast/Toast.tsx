@@ -15,7 +15,8 @@ interface VariantMeta {
 }
 
 export const VARIANT_MAP: Record<ToastVariant, VariantMeta> = {
-  // E5D 定稿 2026-07-17(Toast 豁免解除):info/success/warning/error 四色定稿,跨主题一致
+  // E5D 定稿 2026-07-17:info/success/warning/error 四色与全局状态色同值;2026-11-11 维护者裁决
+  // (A-15)改走对应 token,调整状态色时 Toast 自动同步,不再写死 hex。
   loading: {
     icon: LoaderCircle,
     color: 'var(--text-secondary)',
@@ -24,25 +25,25 @@ export const VARIANT_MAP: Record<ToastVariant, VariantMeta> = {
   },
   info: {
     icon: Info,
-    color: '#417CDD',
+    color: 'var(--focus-ring)',
     role: 'status',
     ariaLive: 'polite',
   },
   success: {
     icon: CircleCheck,
-    color: '#2AAE5B',
+    color: 'var(--card-status-done)',
     role: 'status',
     ariaLive: 'polite',
   },
   warning: {
     icon: TriangleAlert,
-    color: '#F3A115',
+    color: 'var(--warning-fg)',
     role: 'status',
     ariaLive: 'polite',
   },
   error: {
     icon: CircleX,
-    color: '#D91F37',
+    color: 'var(--card-status-error)',
     role: 'alert',
     ariaLive: 'assertive',
   },
@@ -180,7 +181,7 @@ export function Toast({ item, message }: ToastProps) {
 
       {item.dismissLabel && (
         <button type="button" aria-label={item.dismissLabel} title={item.dismissLabel}
-          className="absolute right-1 top-1 flex size-8 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--button-secondary-hover)] focus-visible:outline focus-visible:outline-2"
+          className="absolute right-1 top-1 flex size-8 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--button-secondary-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           onClick={() => toast.dismiss(item.id)}><X size={14} aria-hidden /></button>
       )}
       <div className={item.title ? 'flex w-full flex-wrap justify-end items-center gap-2' : 'contents'}>

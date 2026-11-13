@@ -1,0 +1,20 @@
+/* Respond to pane width, not window width, when a topic is open. */
+.chat-bubble-layout {
+  container: chat-bubble-layout / inline-size;
+}
+
+@container chat-bubble-layout (max-width: 480px) {
+  .chat-bubble-column {
+    --chat-bubble-gutter: 0px;
+  }
+
+  /* Avoid reserving a side gutter for actions in narrow panes. */
+  .chat-bubble-toolbar {
+    position: relative;
+    inset: auto;
+    margin: 8px 0 0 auto;
+    max-width: 100%;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}

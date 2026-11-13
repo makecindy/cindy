@@ -18,7 +18,7 @@ import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { createLogger } from '../logger.js';
 import { getCurrentDataOwnerId } from '../authManager';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { wireSessionToIpc } from '../maker-ipc/register.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getDbClient } from '../localDb/client/current';

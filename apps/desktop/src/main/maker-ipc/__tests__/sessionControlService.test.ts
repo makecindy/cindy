@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
-import { admitTaskAction } from '../taskActionAuthorization.js';
+import { admitPluginTaskAction, admitTaskAction } from '../taskActionAuthorization.js';
 import {
   authorizeSessionQueueReorder,
   createSessionControlService,
@@ -71,7 +71,11 @@ function setup(opts?: {
   };
   const live = {
     agentKind: 'codex' as const,
-    capabilities: { sameTurnSteer: { supported: opts?.steerSupported ?? true } },
+    capabilities: {
+      sameTurnSteer: { supported: opts?.steerSupported ?? true },
+      permissionModes: [{ id: 'ask' as const }, { id: 'auto' as const }, { id: 'bypassPermissions' as const }],
+      setPermissionModeMidSession: { supported: true },
+    },
     isTurnRunning: vi.fn(() => opts?.running ?? true),
     getTurnGeneration: vi.fn(() => 3),
     requestGracefulStop: vi.fn(async () => ({
@@ -94,6 +98,7 @@ function setup(opts?: {
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
     getSessionActivitySnapshot: vi.fn(async () => activity),
+    setSessionPermissionMode: vi.fn(async ({ beforeMutation }: { sessionId: string; mode: string; beforeMutation?: () => Promise<void> }) => { await beforeMutation?.(); return true; }),
     getSessionRuntimeDetails: vi.fn(async () => ({
       ...activity,
       runtimeGeneration: 0,
@@ -135,10 +140,10 @@ function setup(opts?: {
         message,
       }: {
         queuedMessageId: string;
-        callerSessionId: string;
+        callerSessionId?: string;
         message: string;
       }) => ({
-        ...item({ kind: 'session', senderSessionId: callerSessionId, displayText: message }),
+        ...item(callerSessionId ? { kind: 'session', senderSessionId: callerSessionId, displayText: message } : undefined),
         clientId: queuedMessageId,
         chatMessage: { clientId: queuedMessageId, role: 'user' as const, content: message },
       }),
@@ -258,7 +263,7 @@ describe('session control domain service', () => {
     expect(own({ kind: 'orca', senderLabel: 'reviewer', displayText: 'r' })).toBe(true);
     expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' })).toBe(true);
     expect(own(undefined)).toBe(false);
-    expect(own({ kind: 'session', senderSessionId: 'other', senderBotId: 'bot-1', displayText: 'r' })).toBe(false);
+    expect(own({ kind: 'session', senderSessionId: 'other', senderBotId: 'bot-1', displayText: 'r' })).toBe(true);
     expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' }, {
       sourcePlugin: { pluginId: 'plugin-1', name: 'Plugin' },
     } as Partial<AgentInputQueuedMessage>)).toBe(false);
@@ -379,6 +384,96 @@ describe('session control domain service', () => {
       files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
       slashCommandRanges: [],
     });
+  });
+
+  // Unit parity #16: permission-only changes must use the UI commit service, preserving
+  // the model profile/pending mutation; previous runtime tests only exercised model axes.
+  it.each([0, 99])('changes permission without replacing the model profile (generation=%s)', async generation => {
+    const { deps, service } = setup();
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: generation, patch: { permissionMode: 'bypassPermissions' } });
+    expect(result).toMatchObject(generation === 0 ? { ok: true, permissionMode: 'bypassPermissions', generation: 0 } : { ok: false, errorCode: 'CONFLICT' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledTimes(generation === 0 ? 1 : 0);
+  });
+
+  // Unit, #9801 / 4537184245: an admitted caller's own permission generation is
+  // part of its authority. Existing permission cases had no admission. Reject a
+  // permission-only or mixed patch before either runtime or permission is written.
+  it.each([false, true])('rejects admitted self permission changes without partial writes (mixed=%s)', async mixed => {
+    const { deps, service } = setup();
+    const patch = { permissionMode: 'bypassPermissions' as const, ...(mixed ? { model: 'next' } : {}) };
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'target', tool: 'set_session_runtime', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch })))
+      .resolves.toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each(['other-task', 'plugin'] as const)('preserves permission changes from an admitted %s caller', async caller => {
+    const { deps, service } = setup();
+    const call = { server: 'cindy_helper' as const, tool: 'set_session_runtime', args: {} };
+    const decision = caller === 'plugin'
+      ? admitPluginTaskAction({ ...call, sessionId: undefined, caller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } }, () => {})
+      : await admitTaskAction({ ...call, sessionId: 'caller' },
+        { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} });
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch: { permissionMode: 'auto' } })))
+      .resolves.toMatchObject({ ok: true, permissionMode: 'auto' });
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  // Unit #9801/uKm_: the real service previously wrote a model before a Codex
+  // permission rejection. Existing cases only checked permission-only or self admission.
+  it.each(['mode', 'mid-session'] as const)('rejects unsupported permission %s before a mixed model write', async unsupported => {
+    const { deps, live, service } = setup();
+    if (unsupported === 'mid-session') live.capabilities.setPermissionModeMidSession.supported = false;
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: unsupported === 'mode' ? 'acceptEdits' : 'auto' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each(['applied', 'deferred'] as const)('reports the actual %s model result when the later permission commit fails', async status => {
+    const { deps, service } = setup();
+    const runtime = { ...await deps.setSessionRuntime(), status, generation: 7 };
+    deps.setSessionRuntime.mockClear().mockResolvedValueOnce(runtime as Awaited<ReturnType<typeof deps.setSessionRuntime>>);
+    deps.setSessionPermissionMode.mockRejectedValueOnce(Object.assign(new Error('permission persistence failed'), { code: 'WRITE_FAILED' }));
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: 'auto' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL', data: {
+      runtime: { status, generation: 7, fields: ['model'] },
+      failed: 'permission_mode', original_error: { code: 'WRITE_FAILED', message: 'permission persistence failed' },
+    } });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a supported model and permission change in one successful call', async () => {
+    const { deps, service } = setup();
+    await expect(service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: 'auto' } }))
+      .resolves.toMatchObject({ ok: true, status: 'applied', generation: 1, permissionMode: 'auto',
+        effectiveProfile: { model: 'next' } });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  it('preserves model-only changes by an admitted caller to itself', async () => {
+    const { deps, service } = setup();
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'target', tool: 'set_session_runtime', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch: { model: 'next' } })))
+      .resolves.toMatchObject({ ok: true, generation: 1 });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
   });
 
   it('steers only a live supported turn and never falls back after a terminal race', async () => {

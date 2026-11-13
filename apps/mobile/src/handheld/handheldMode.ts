@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useSyncExternalStore } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { cindyHandheld, type HandheldVoiceKeyPhase } from '../../modules/cindy-handheld/src';
 
@@ -9,8 +9,8 @@ import { cindyHandheld, type HandheldVoiceKeyPhase } from '../../modules/cindy-h
  * 掌机模式(Android 游戏掌机 / 寨机):本机偏好 + 手柄语音键的页面分发。
  *
  * 偏好属于这台设备而不是账号,存一份 AsyncStorage;原生侧(cindy-handheld)负责按键拦截、
- * 焦点框、摇杆滚动与换屏,这里只决定开关、语音键和是否放到副屏,并把语音键的
- * start / end 分发给当前聚焦的页面。
+ * 焦点框、滚动与换屏,这里只决定开关、语音键和是否放到副屏,并把语音键及任务页
+ * Start 回执分发给当前聚焦的页面。
  */
 
 const STORAGE_KEY = 'cindy.mobile.handheld.v1';
@@ -237,6 +237,70 @@ export function useHandheldVoiceKey(handlers: HandheldVoiceKeyHandler, enabled =
   }, [enabled]));
 }
 
+// Each focus has its own receipt: an event queued on the native/JS bridge must
+// never submit a different page's draft after navigation or an in-place switch.
+let sessionControlSequence = 0;
+let sessionControlOwner: string | null = null;
+
+export function registerHandheldSessionControls(sendTarget: string, onSend: () => void): () => void {
+  if (!cindyHandheld?.setSessionControls) return () => undefined;
+  let scope = `${sendTarget}:${++sessionControlSequence}`;
+  let active = AppState.currentState === 'active';
+  sessionControlOwner = scope;
+  const subscription = cindyHandheld.addListener('onSessionSend', (event) => {
+    const { enabled, voiceKeyCode } = snapshot.settings;
+    if (!active || sessionControlOwner !== scope || event.scope !== scope || !enabled
+      || voiceKeyCode === HANDHELD_KEY_CODES.START || AppState.currentState !== 'active') return;
+    onSend();
+  });
+  const syncNative = () => {
+    void cindyHandheld!.setSessionControls!(active ? { scope, sendTarget } : null).catch(() => undefined);
+  };
+  const setActive = (next: boolean) => {
+    if (sessionControlOwner !== scope) return;
+    active = next;
+    // Also invalidate bridge events queued before a system dialog or background.
+    scope = `${sendTarget}:${++sessionControlSequence}`;
+    sessionControlOwner = scope;
+    syncNative();
+  };
+  const appSubscription = AppState.addEventListener('change', (state) => setActive(state === 'active'));
+  const blurSubscription = AppState.addEventListener('blur', () => setActive(false));
+  const focusSubscription = AppState.addEventListener('focus', () => setActive(AppState.currentState === 'active'));
+  syncNative();
+  return () => {
+    subscription.remove();
+    appSubscription.remove();
+    blurSubscription.remove();
+    focusSubscription.remove();
+    if (sessionControlOwner !== scope) return;
+    sessionControlOwner = null;
+    void cindyHandheld?.setSessionControls?.(null).catch(() => undefined);
+  };
+}
+
+/** Start shares the real send button's guards; native also checks its visible hit target. */
+export function useHandheldSessionControls(sessionId: string, onSend: () => void, unobstructed = true): string {
+  const targetRef = useRef<string | null>(null);
+  targetRef.current ??= `handheld-send-${++sessionControlSequence}`;
+  const handlerRef = useRef(onSend);
+  handlerRef.current = onSend;
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const unobstructedRef = useRef(unobstructed);
+  unobstructedRef.current = unobstructed;
+  const { settings } = useHandheldSettings();
+  useFocusEffect(useCallback(() => {
+    if (!settings.enabled || !isHandheldModeSupported()) return undefined;
+    // Keep Start consumed on the task while a sheet/drawer is open, but give
+    // native no send target and invalidate receipts from before the obstruction.
+    return registerHandheldSessionControls(unobstructed ? targetRef.current! : '', () => {
+      if (sessionIdRef.current === sessionId && unobstructedRef.current) handlerRef.current();
+    });
+  }, [sessionId, settings.enabled, unobstructed]));
+  return targetRef.current;
+}
+
 /** 测试用:清空分发状态。 */
 export function resetHandheldVoiceKeyForTests(): void {
   voiceHandlers.length = 0;
@@ -246,4 +310,5 @@ export function resetHandheldVoiceKeyForTests(): void {
   overrides = {};
   hydration = null;
   settingsWriteQueue = Promise.resolve();
+  sessionControlOwner = null;
 }

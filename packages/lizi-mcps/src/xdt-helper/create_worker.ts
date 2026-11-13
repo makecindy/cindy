@@ -31,6 +31,7 @@ type CreateWorkerErrorCode =
   | 'REMOTE_AGENT_SHARE_PAUSED'
   | 'REMOTE_AGENT_SHARE_REMOVED'
   | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+  | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED'
   | 'UNSUPPORTED_CAPABILITY';
 
 /** agent_device_id 里表示「这台电脑」(任务所在电脑)的取值。 */
@@ -167,7 +168,7 @@ export const createWorkerSpecSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe('可选, 创建后立即派给 worker 的第一条消息'),
+    .describe('可选, 创建后立即派给 worker 的第一条消息。正文要自包含：目标、背景、边界与交付要求直接写在这里，文件只作补充并给绝对路径——新建 worktree 的 worker 目录里没有你未提交的文件，另一台电脑上的 worker 读不到这台电脑的任何文件'),
   images: imagesListSchema
     .optional()
     .describe('可选, 随 initial_task 发给 worker 的图片(png/jpeg/gif/webp, 最多 8 张); 必须是扁平字符串数组, 每张图一个字符串, 如 ["cindy-media://...png"]; 仅本机 worker 支持, SSH 远端 worker 会拒绝; 不传 initial_task 时忽略。地址两类: (a) 用户在对话里贴的图 — 把上下文 <cindy-host-image-references> 里的 uri 原样传入; (b) Lead 自己落盘的本机绝对路径'),
@@ -216,13 +217,15 @@ const DESCRIPTION = [
   '- new_worktree: 可选对象，为 Worker 新建自有 worktree；source_branch 可省略，与 Lead 同一仓库时默认目标目录当前分支或提交，其他仓库优先使用该仓库的新任务源分支记忆，再回退当前分支或提交。仅本机有提交的 Git 项目可用；SSH / execution_device_id 不支持，对话 Lead 需显式指定其他项目。返回 working_dir 为实际启动目录，worktree 包含自有检出目录和新分支；worktree_source 返回实际源分支与记忆失效/读取失败时的回退原因。归档按普通任务规则回收，未提交改动先快照。',
   '- execution_device_id: 可选，运行设备(同账号另一台电脑)的 device_id，只能取 get_workspace_info 的 execution_devices 里 supported=true 的值；指定后 Worker 的任务、目录、命令与文件都在那台电脑，结果仍自动回报给你。用户没有要求放到别的电脑时不要传。',
   '- agent_device_id: 可选，Agent 使用哪台电脑的远程供应商；"local" 为 Worker 工作电脑。指定 execution_device_id 时先用同参数的 list_available_models 查 model / provider_id / locations；省略位置优先使用适用的手工组合，否则按原策略跟 Lead（运行设备使用工作电脑默认）。',
+  '- initial_task 的正文要自包含：目标、背景、边界与交付要求写进正文，文件只作补充并给绝对路径。返回的 file_access 说明这个 worker 能看到什么：lead_working_directory = 与你同一目录；own_worktree / explicit_directory = 同一台电脑的另一个目录（没有你未提交的文件，代码用提交或分支交接）；other_computer = 另一台电脑，读不到这台电脑的任何文件。',
+  '- 返回的 initial_task_state 说明首条任务的真实状态：delivered = 已送达并开始处理；queued = 已排队、尚未开始；not_delivered = worker 已创建但任务没送到；none = 没有附任务。创建成功不等于任务已完成，向用户汇报时按这个状态如实说。',
   "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
   "- images: 可选, 随 initial_task 发的图片(最多 8 张, 仅本机 worker)。用户在对话里贴的图, 把上下文 <cindy-host-image-references> 里的 uri 原样传入; Lead 自己落盘的文件传本机绝对路径。",
   '',
   '【硬边界】',
   '- worker 数量达软上限 → 创建仍成功, payload.warning = WORKER_LIMIT_SOFT_EXCEEDED',
   '- worker 数量达硬上限 → 返 WORKER_LIMIT_HARD_EXCEEDED (拒绝创建)',
-  '- label 在同 workflow 内重复 → 返 DUPLICATE_LABEL',
+  '- label 与团队里现有的 worker 重复 → 返 DUPLICATE_LABEL（已归档 worker 的名字可以直接重新使用）',
   '- 同 label 的另一个 Worker 正在创建 → 返 WORKER_CREATION_IN_PROGRESS',
   '- 当前 lead session 不存在或没有 active team → 返 NOT_FOUND',
   '- role / label / model 等参数不合法 → 返 INVALID_PARAMS',
@@ -283,6 +286,7 @@ export function registerCreateWorkerTool(
         ...(result.worktree ? { worktree: result.worktree } : {}),
         role,
         ...workerCreationRoutePayload(result, agent),
+        ...workerHandoffPayload({ initial_task, working_dir }, result),
         label,
         ...(result.dispatched !== undefined ? { dispatched: result.dispatched } : {}),
         ...(result.dispatchOutcome ? { dispatch_outcome: result.dispatchOutcome } : {}),
@@ -292,6 +296,61 @@ export function registerCreateWorkerTool(
       });
     },
   });
+}
+
+/** 首条任务的真实状态；创建成功不等于任务已经在跑，更不等于完成。 */
+export type InitialTaskState = 'none' | 'delivered' | 'queued' | 'not_delivered';
+
+export function initialTaskState(
+  hasInitialTask: boolean,
+  result: Pick<CreateWorkerSuccessData, 'dispatched' | 'dispatchOutcome' | 'queuedMessageId'>,
+): InitialTaskState {
+  if (!hasInitialTask) return 'none';
+  const outcome = result.dispatchOutcome;
+  const sessionDispatched = outcome?.kind === 'session-dispatch' && outcome.dispatched;
+  if (result.queuedMessageId || (sessionDispatched && outcome.wakeKind === 'queued')) return 'queued';
+  if (result.dispatched === true || sessionDispatched) return 'delivered';
+  return 'not_delivered';
+}
+
+/** Worker 能看到 Lead 的哪些文件；按创建参数与实际落点判定，不猜。 */
+export type WorkerFileAccess =
+  | 'lead_working_directory'
+  | 'own_worktree'
+  | 'explicit_directory'
+  | 'other_computer';
+
+const HANDOFF_HINTS: Record<Exclude<WorkerFileAccess, 'lead_working_directory'>, string> = {
+  own_worktree:
+    'This worker has its own worktree on the same computer: files you have not committed are not in it. ' +
+    'Give absolute paths for files it should read, and hand code over through commits or branches.',
+  explicit_directory:
+    'This worker runs in another directory on the same computer: give absolute paths for files outside it.',
+  other_computer:
+    'This worker runs on another computer and cannot read any file on this one: put what it needs in the message ' +
+    'text, and hand code over through a pushed branch.',
+};
+
+/**
+ * 交接事实：首条任务的状态，以及这个 Worker 与 Lead 的文件关系。2026-11-10 现场：五个 Worker
+ * 创建成功即被说成「在跑」，随后全部因读不到任务说明文件而受阻。
+ */
+export function workerHandoffPayload(
+  spec: { initial_task?: string; working_dir?: string },
+  result: CreateWorkerSuccessData,
+): { initial_task_state: InitialTaskState; file_access: WorkerFileAccess; handoff_hint?: string } {
+  const fileAccess: WorkerFileAccess = result.executionDeviceId
+    ? 'other_computer'
+    : result.worktree
+      ? 'own_worktree'
+      : spec.working_dir !== undefined
+        ? 'explicit_directory'
+        : 'lead_working_directory';
+  return {
+    initial_task_state: initialTaskState(spec.initial_task !== undefined, result),
+    file_access: fileAccess,
+    ...(fileAccess === 'lead_working_directory' ? {} : { handoff_hint: HANDOFF_HINTS[fileAccess] }),
+  };
 }
 
 /** Both tools expose the host's actual route, never echo a guessed model or Agent. */

@@ -25,7 +25,10 @@ export default {
   name: 'group-chat',
   // Voice capture is outside this fixture.
   stubs: {
-    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice input is not covered by this fixture"); };',
+    // Rich component bodies read account context, but sign-in is not under test.
+    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
+    // The group voice hook resolves its URL on render; capture is not exercised.
+    'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return ""; }',
     // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
     'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
   },
@@ -33,8 +36,19 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'reply-composer': {
+      about: 'Real thread reply composer with microphone and editable draft at narrow width',
+      viewport: { width: 420, height: 600 },
+      data: { ...base, sidebar: false, replyComposer: true },
+    },
+    'public-cindy': { about: 'Public Cindy work remains visible to a peer without private process or stop access',
+      data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, workState: 'unknown', canStop: false } },
+
+    'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
+    'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
+    'plan-read-missing': { about: '#9398: a confirmed missing plan has a neutral visible fallback', data: { ...base, sidebar: false, messages: 1, planRead: 'missing' } },
     'share-pending': {
       about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
       data: { ...base, bubbles: true, threadPanel: true, sharePending: true },
@@ -53,6 +67,7 @@ export default {
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
     'process-empty': { about: 'Final-only reply explains the empty process', data: { ...base, sidebar: false, processRecord: true, processEmpty: true, workRemote: true } },
     'process-unavailable': { about: 'Unavailable process shows a retry action', data: { ...base, sidebar: false, processRecord: true, processUnavailable: true, workRemote: true } },
+    'process-late': { about: 'Thinking persisted after the final seal remains inspectable', data: { ...base, sidebar: false, processRecord: true, processVariant: 'late', workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
@@ -129,6 +144,9 @@ export default {
       about: 'Server read state: unread thread entries (with @you), the in-chat 话题 hint above the composer and its list of this group\'s Threads',
       data: { ...base, bubbles: true, threadUnread: true },
     },
+    'thread-work': { about: 'Concurrent topic work stays in its own thread', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true } },
+    'thread-work-no-stop': { about: 'Source topic retains public progress without unauthorized stop controls', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, canStop: false } },
+    'thread-work-overflow': { about: 'Long topic work scrolls while reply composer stays visible', viewport: { width: 1280, height: 600 }, data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, threadWorkTall: true } },
     'thread-follow': {
       about: 'The Thread panel\'s 关注 switch, off by default; switched on it reads 已关注',
       data: { ...base, bubbles: true, threadUnread: true, threadPanel: true },
@@ -175,11 +193,71 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'public-cindy') {
+      await page.getByTestId('bot-group-work').waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), 1);
+      assert.ok((await page.getByTestId('bot-group-work').innerText()).includes('Cindy'));
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true }).count(), 0);
+      await ui.capture('public-work');
+      return;
+    }
+
+    if (definition.data.planRead) {
+      const missing = page.getByText(await ui.t('bots.groupChat.plan.missing'), { exact: true });
+      const organizer = page.getByText(await ui.t('bots.groupChat.organizer'), { exact: true });
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-hold')));
+      await ui.emit('botGroupChanged', { groupId: 'fixture-group', change: 'messages', historyRevision: 'fixture-live', messages: [
+        { id: 'p1-card', sequence: 2, kind: 'plan', planId: 'p1', authorKind: 'user', authorBotId: null,
+          authorName: 'You', content: '', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+        { id: 'ordinary-delta', sequence: 10, kind: 'message', planId: null, authorKind: 'bot', authorBotId: 'a',
+          authorName: 'Aster', content: '普通消息无需等待安排详情。', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+      ] });
+      await page.getByText('普通消息无需等待安排详情。', { exact: true }).waitFor();
+      await ui.capture('details-pending');
+      assert.equal(await missing.count(), 0);
+      assert.equal(await organizer.count(), 0);
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-ready')));
+      if (definition.data.planRead === 'missing') {
+        await missing.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await missing.locator('xpath=ancestor::article').count(), 0);
+      } else if (definition.data.planRead === 'talk') {
+        const card = page.getByTestId('bot-group-arrangement');
+        await card.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await card.locator('xpath=ancestor::article').count(), 0);
+      } else {
+        await organizer.waitFor();
+        assert.match(await organizer.locator('..').innerText(), /Nova/);
+      }
+      if (definition.data.planRead !== 'missing') assert.equal(await missing.count(), 0);
+      await ui.capture('details-settled');
+      return;
+    }
     if (definition.data.processRecord) {
       const journal = page.locator('[data-teammate-process]');
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
       if (definition.data.processOtherOwner) { assert.equal(await journal.count(), 0); return; }
       await journal.waitFor();
+      // 2026-11-09: one group-message identity precedes its process and reply.
+      // Use the real group row; private-chat MessageStream is outside this scenario.
+      const assertReplyOwnership = async () => {
+        const row = page.locator('[data-bot-group-message-id="process-answer"]');
+        const portrait = row.locator('article > div').first();
+        const reply = row.getByTestId('bot-group-bubble');
+        const author = row.locator('article > div').nth(1).locator(':scope > span').first();
+        const [recordBox, portraitBox, authorBox, replyBox] = await Promise.all([journal.boundingBox(), portrait.boundingBox(), author.boundingBox(), reply.boundingBox()]);
+        assert.ok(portraitBox.y <= recordBox.y + 0.5, 'The shared avatar precedes the process, never below it');
+        assert.ok(authorBox.y + authorBox.height <= recordBox.y + 0.5, 'The author header precedes the process');
+        assert.ok(recordBox.y + recordBox.height <= replyBox.y + 0.5, 'The process precedes the reply body');
+        assert.ok(Math.abs(recordBox.x - replyBox.x) <= 0.5, 'The group record and reply share the same content column');
+        assert.equal(await row.locator('article [data-teammate-process]').count(), 1, 'Process and reply belong to the same message article');
+        assert.equal(await portrait.locator(':scope > span').count(), 1, 'Only the shared message identity owns an avatar');
+        assert.equal(await row.locator('article').count(), 1, 'The record stays owned by one reply row');
+      };
+      await assertReplyOwnership();
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
@@ -191,8 +269,18 @@ export default {
         assert.equal(await heading.getAttribute('aria-expanded'), 'false');
         await ui.capture('process-collapsed');
         return;
+      } else if (definition.data.processVariant === 'late') {
+        await journal.getByText(await ui.t('chat.teammateProcess.thought'), { exact: true }).waitFor();
+        assert.equal(await journal.getByText('Hidden reasoning').count(), 0);
+        await ui.capture('late-work-expanded');
+        await heading.click();
+        await heading.click();
+        await journal.getByText(await ui.t('chat.teammateProcess.thought'), { exact: true }).waitFor();
+        await ui.capture('late-work-reopened');
+        return;
       }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
+      await assertReplyOwnership();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {
         const rail = root.querySelector('[data-process-guide]').getBoundingClientRect();
@@ -201,6 +289,7 @@ export default {
       });
       assert.ok(endError <= 0.5, `Group guide footer alignment error: ${endError}`);
       await heading.click();
+      await assertReplyOwnership();
       await ui.capture('history-collapsed');
       return;
     }
@@ -277,6 +366,14 @@ export default {
         startedAtMs: definition.data.workNoStart ? null : Date.now() - 83_000, lastActivityAtMs: Date.now(), attention: false,
         gracefulStopState: state === 'stopping' ? 'requested' : 'none', source: 'live' }]);
       await page.getByTestId('bot-group-progress').first().waitFor();
+      const avatars = page.locator('[data-testid="bot-group-work"] > div:first-child > span');
+      assert.ok(await avatars.count(), 'running work shows its teammate avatar');
+      for (const avatar of await avatars.all()) {
+        const box = await avatar.boundingBox();
+        assert.ok(box, 'work avatar is visible');
+        assert.equal(box.width, 28, 'work avatar matches the final reply avatar width');
+        assert.equal(box.height, 28, 'work avatar matches the final reply avatar height');
+      }
       if (definition.data.workQueuedStep) {
         const header = await page.getByTestId('bot-group-content-header').innerText();
         const sidebar = await page.getByTestId('bot-group-running').innerText();
@@ -318,13 +415,17 @@ export default {
       assert.ok(!(await timeline.innerText()).includes('"op":"create"'));
       const text = await timeline.innerText();
       assert.ok(text.includes('图片说明保留') && text.includes('图片标题保留'));
-      assert.ok(text.includes('🖼'), 'an undescribed image has a neutral placeholder');
-      assert.ok(!text.includes('cindy-media://') && !text.includes('/private/tmp/fixture-image.png'));
-      for (const kind of ['image', 'video', 'audio']) {
-        const url = `https://example.test/public-${kind}`;
-        const link = timeline.getByRole('link', { name: url, exact: true });
-        assert.equal(await link.count(), 1, 'public media keep an actionable web link');
-        assert.equal(await link.getAttribute('href'), url);
+      assert.equal(await timeline.getByText(await ui.t('richAnswer.invalidImageReference'), { exact: true }).count(), 1, 'invalid managed image references have an explicit recovery state');
+      assert.equal(await timeline.locator('a[href^="cindy-media:"], a[href^="/private/"], img[src^="/private/"]').count(), 0, 'unavailable references must not become privileged links or file requests');
+      // Group replies now render rich media instead of the former text-only projection.
+      // Serve checked-in assets from the fixture origin; never relax its network CSP.
+      const picture = timeline.locator('img[alt="public-image"]');
+      await picture.waitFor();
+      assert.equal(await picture.evaluate(img => img.complete && img.naturalWidth > 0), true);
+      for (const kind of ['video', 'audio']) {
+        const media = timeline.locator(kind);
+        assert.equal(await media.count(), 1, `${kind} keeps a native media control`);
+        assert.ok((await media.getAttribute('src'))?.startsWith('http://cindy-ui.test/assets/'));
       }
       return;
     }
@@ -495,6 +596,13 @@ export default {
       return;
     }
     const input = page.locator('textarea');
+    if (ui.case === 'reply-composer') {
+      assert.equal(await page.locator('button[aria-pressed="false"]').count(), 1, 'microphone entry is visible');
+      await input.fill('A reply draft ready for dictation');
+      assert.equal(await input.inputValue(), 'A reply draft ready for dictation');
+      await ui.capture('reply-draft');
+      return;
+    }
     const chip = page.locator('[data-controlled-banner-chip]');
     const collapsedDot = page.locator('[data-controlled-banner="collapsed"]');
     const scroller = page.getByTestId('bot-group-timeline');
@@ -565,6 +673,55 @@ export default {
       assert.ok(ui.case === 'arrangement' ? placeholder.includes('正在说') : !placeholder.includes('改改'), placeholder);
       return;
     }
+    if (['thread-work', 'thread-work-overflow', 'thread-work-no-stop'].includes(ui.case)) {
+      assert.equal(await page.getByTestId('bot-group-work').count(), 0, 'topic work must not appear in main');
+      const mainStop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
+      if (ui.case === 'thread-work-no-stop') assert.equal(await mainStop.count(), 0);
+      else await mainStop.waitFor();
+      await page.locator('[data-thread-preview="a1"]').first().click();
+      await page.getByTestId('bot-group-work').first().waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), ui.case === 'thread-work-overflow' ? 19 : 1, 'only the selected topic work');
+      if (ui.case === 'thread-work-no-stop') {
+        assert.equal(await page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0, 'topic respects group stop capability');
+      }
+      if (ui.case === 'thread-work') {
+        const order = await page.locator('aside.thread-panel').evaluate(panel => {
+          const first = panel.querySelector('[data-bot-group-message-id="r1"]');
+          const second = panel.querySelector('[data-bot-group-message-id="r2"]');
+          const work = panel.querySelector('[data-testid="bot-group-work"]');
+          return !!first && !!second && !!work && !!(first.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING)
+            && !!(work.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+        });
+        assert.ok(order, 'topic work retains its original timestamp between replies');
+        const stop = page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
+        await stop.click();
+        await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopMine'), exact: true }).click();
+        assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'mine');
+        await stop.click();
+        await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopAll') }).click();
+        assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'all');
+      }
+      if (ui.case === 'thread-work-overflow') {
+        const panel = page.locator('aside.thread-panel');
+        const composer = panel.locator('textarea');
+        const geometry = await composer.evaluate(element => {
+          const panel = element.closest('aside');
+          const work = panel.querySelector('[data-testid="bot-group-work"]');
+          let scroller = work.parentElement;
+          while (scroller && getComputedStyle(scroller).overflowY !== 'auto') scroller = scroller.parentElement;
+          const bounds = panel.getBoundingClientRect(), input = element.getBoundingClientRect();
+          return { visible: input.top >= bounds.top && input.bottom <= bounds.bottom,
+            scrollable: !!scroller && scroller.scrollHeight > scroller.clientHeight };
+        });
+        assert.ok(geometry.visible, 'reply composer stays inside the fixed panel');
+        assert.ok(geometry.scrollable, 'long work has a reachable scroll range');
+        await panel.getByTestId('bot-group-work').last().scrollIntoViewIfNeeded();
+        await composer.fill('回复仍可输入');
+        assert.equal(await composer.inputValue(), '回复仍可输入');
+      }
+      await ui.capture('topic-work');
+      return;
+    }
     if (ui.case === 'thread-unread') {
       await page.getByText('Android 更新卡那个 PR', { exact: false }).waitFor();
       // Unread replies replace the last-reply time on the entry; an @you is named there too.
@@ -628,9 +785,12 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right };
+        const narrow = document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480;
+        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right, narrow,
+          below: bar.top > bubble.top && bar.left >= bubble.left && bar.right <= bubble.right };
       }, row);
-      assert.ok(geometry.gap >= 0 && geometry.gap <= 32, `toolbar sits beside the bubble (gap ${geometry.gap}px)`);
+      assert.ok(geometry.narrow ? geometry.below : geometry.gap >= 0 && geometry.gap <= 32,
+        `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
       // Reactions wider than a short message's text stay over its own bubble and inside the timeline.
@@ -642,12 +802,14 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
         return { id, left: corner.left - bubble.left, right: corner.right - bubble.right, inside: corner.left >= timeline.left && corner.right <= timeline.right,
+          narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
           toolbarTop: bar.top - bubble.top, wrapped: corner.height > reactions.firstElementChild.getBoundingClientRect().height };
       }));
       for (const c of corners) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
         assert.ok(c.left >= -12 && c.right <= 12, `${c.id} reactions stay over the bubble (${c.left}, ${c.right})`);
-        assert.ok(Math.abs(c.toolbarTop) <= 1, `${c.id} toolbar aligns with bubble top (${c.toolbarTop}px)`);
+        assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
+          `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
         if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
       }
       // r4324819612: the opposite of the long-root case — the entry is wider
@@ -742,11 +904,16 @@ export default {
         await action();
         assert.ok((await bottomGap()) < 1, `${step} keeps the thread pinned to the bottom`);
       }
-      const before = await scroller.evaluate((el) => {
-        el.scrollTop = 180;
-        el.dispatchEvent(new Event('scroll', { bubbles: true }));
-        return el.scrollTop;
+      // Use the reader's upward wheel gesture. A synthetic scroll after a
+      // banner resize can legitimately remain in automatic-follow mode.
+      const top = await scroller.evaluate((el) => el.scrollTop);
+      await scroller.hover();
+      await page.mouse.wheel(0, 180 - top);
+      await page.waitForFunction(() => {
+        const el = document.querySelector('[data-testid="bot-group-timeline"]');
+        return el && Math.abs(el.scrollTop - 180) < 1;
       });
+      const before = await scroller.evaluate((el) => el.scrollTop);
       for (const [step, action] of [
         ['connection', () => connect()],
         ['collapse', collapse],

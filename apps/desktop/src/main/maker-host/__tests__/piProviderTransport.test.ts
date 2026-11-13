@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
+import { SseTranslator } from '@cindy/anthropic-responses-bridge';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
 import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
 
@@ -13,6 +14,115 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  // #10269, unit: the ID-only model on a Messages connection must carry its
+  // Chat identity through the installed serializer, including a tool result.
+  // Descriptor-only tests cannot catch SDK compatibility/header regressions.
+  it.each(['claude-code', 'codex', 'pi'] as const)('round-trips Copilot Carbon text and tools for %s', async agent => {
+    const upstream = 'https://api.individual.githubcopilot.com';
+    const provider = buildUserProvider({ id: 'copilot-carbon', name: 'Copilot', runtimes: {
+      [agent]: { baseUrl: upstream, wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot',
+        models: [{ id: 'gemini-4-carbon', name: 'Carbon' }] },
+    } }, { presets: BUNDLED_CATALOG.presets });
+    const model = provider.models[agent]![0];
+    const row = invocationModelRecord(model, upstream)!;
+    const frames = [
+      { choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'carbon-call',
+        type: 'function', function: { name: 'lookup', arguments: '{"key":"fixture"}' } }] } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+    ].map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('') + 'data: [DONE]\n\n';
+    const requests: Record<string, any>[] = [];
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-copilot-token',
+      fetchImpl: async (url, init) => {
+        expect(String(url)).toBe(`${upstream}/chat/completions`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get('authorization')).toBe('Bearer fixture-copilot-token');
+        expect(headers.get('copilot-integration-id')).toBe('vscode-chat');
+        expect(headers.get('editor-version')).toBe(row.execution.pi.headers!['Editor-Version']);
+        expect(headers.get('editor-plugin-version')).toBe(row.execution.pi.headers!['Editor-Plugin-Version']);
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        expect(body).toMatchObject({ model: 'gemini-4-carbon', stream: true });
+        expect(body).not.toHaveProperty('store');
+        expect(body).not.toHaveProperty('reasoning_effort');
+        expect(body.messages.some((message: { role: string }) => message.role === 'developer')).toBe(false);
+        return new Response(requests.length === 1 ? frames : reply, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    const input = [{ role: 'user', content: 'Look up fixture' }];
+    const options = { model: model.id, instructions: 'Use lookup', stream: true, store: true,
+      reasoning: { effort: 'high' }, tools: [{ type: 'function', name: 'lookup', strict: true,
+        parameters: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } }] };
+    const first = await (await send('https://unused.invalid', { body: JSON.stringify({ ...options, input }) })).text();
+    const events = first.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+    const call = events.find(event => event.type === 'response.completed')?.response.output
+      .find((item: { type: string }) => item.type === 'function_call');
+    expect(call).toMatchObject({ type: 'function_call', call_id: 'carbon-call', name: 'lookup', arguments: '{"key":"fixture"}' });
+    // Pi tools are non-strict; supportsStrictMode permits the SDK's explicit
+    // false rather than forcing strict validation on arbitrary agent tools.
+    expect(requests[0].tools[0].function.strict).toBe(false);
+    const second = await (await send('https://unused.invalid', { body: JSON.stringify({ ...options,
+      input: [...input, call, { type: 'function_call_output', call_id: call.call_id, output: 'fixture result' }],
+    }) })).text();
+    expect(requests).toHaveLength(2);
+    expect(requests[1].messages).toContainEqual(expect.objectContaining({ role: 'tool', tool_call_id: 'carbon-call', content: 'fixture result' }));
+    expect(second).toContain('response.completed');
+    expect(second).toContain('Hello');
+    expect(second).not.toContain('response.failed');
+  });
+
+  // Native bridge regression: create_worker is a prefix of create_workers, so
+  // ChatSseTranslator defers its item until finish(). A reasoning-history item
+  // must not reuse that reserved output_index or Anthropic loses the tool call.
+  // Unit: real native adapter -> Responses SSE -> Anthropic SSE, fake fetch only;
+  // previous tests checked response.completed without consuming the second bridge.
+  it.each([
+    [true, false], [true, true], [false, false],
+  ])('preserves deferred native tool calls (prefix=%s, text=%s)', async (prefix, text) => {
+    const name = 'mcp__cindy_orca__create_worker';
+    const row = PROVIDER_MODEL_CATALOG.providers['opencode-go'].find(model => model.id === 'deepseek-v4.1-flash')!;
+    const upstream = [
+      { choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'Plan' } }] },
+      ...(text ? [{ choices: [{ index: 0, delta: { content: 'Starting.' } }] }] : []),
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'fixture-call', type: 'function',
+        function: { name, arguments: '{"label":"fixture"}' } }] } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 5 } },
+    ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
+    const send = createPiProviderFetch({ row, providerId: 'opencode-go', apiKey: 'fixture-key',
+      fetchImpl: async () => new Response(upstream, { headers: { 'content-type': 'text/event-stream' } }) });
+    const response = await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, stream: true,
+      input: 'fixture', tools: [name, ...(prefix ? [`${name}s`] : [])].map(tool => ({ type: 'function', name: tool,
+        parameters: { type: 'object', properties: { label: { type: 'string' } } } })),
+    }) });
+    const events = (await response.text()).split('\n').filter(line => line.startsWith('data: '))
+      .map(line => JSON.parse(line.slice(6)));
+    const translator = new SseTranslator(row.id);
+    const anthropic = events.flatMap(event => translator.push(event));
+    anthropic.push(...translator.finish());
+    const calls = anthropic.filter(event => event.event === 'content_block_start'
+      && (event.data.content_block as { type?: string })?.type === 'tool_use');
+    expect(calls.map(event => event.data.content_block)).toEqual([
+      expect.objectContaining({ type: 'tool_use', name, id: 'fixture-call' }),
+    ]);
+    const argumentsJson = anthropic.filter(event => event.event === 'content_block_delta'
+      && event.data.index === calls[0].data.index)
+      .map(event => (event.data.delta as { partial_json?: string })?.partial_json ?? '').join('');
+    expect(JSON.parse(argumentsJson)).toEqual({ label: 'fixture' });
+    expect(anthropic.find(event => event.event === 'message_delta')?.data.delta)
+      .toMatchObject({ stop_reason: 'tool_use' });
+    const indices = events.filter(event => event.type === 'response.output_item.added').map(event => event.output_index);
+    expect(new Set(indices).size).toBe(indices.length);
+  });
+
+  // #9630 review, unit: a retained preset ID must not reintroduce the same
+  // Messages extension through Claude/Codex's native bridge descriptor.
+  it('keeps message-scoped effort out of an edited Anthropic preset bridge', () => {
+    const row = invocationModelRecord({ id: 'claude-opus-5', name: 'Opus', group: 'custom',
+      contextWindow: 200_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium',
+      catalogPresetId: 'anthropic-api', api: 'anthropic-messages' }, 'https://relay.example')!;
+    expect(row.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+    expect(row.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+  });
+
   // #9101, unit: preset import + installed Chat SDK serialization protects all
   // harnesses from assuming Messages/Responses based on their names. Existing
   // cases use other suppliers/protocols; the minimum input is the Hinoki seed.
@@ -443,8 +553,8 @@ describe('imported Gemini native image capability', () => {
     pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: imported },
   } }, { presets: [preset] });
   it.each([undefined, true, false])('keeps imported Gemini image input consistent for supportsImageInput=%s', async supportsImageInput => {
-    expect(provider.models.pi![0].supportsImageInput).toBeUndefined();
-    expect(provider.models.pi![0].modalities).toBeUndefined();
+    expect(provider.models.pi![0].supportsImageInput).toBe(true);
+    expect(provider.models.pi![0].modalities?.input).toContain('image');
     // Compare the same imported model with no declaration and explicit on/off values.
     const model = { ...provider.models.pi![0], supportsImageInput };
     const row = invocationModelRecord(model, model.route?.baseUrl ?? provider.routing.pi!.upstream!)!;

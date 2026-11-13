@@ -5,7 +5,7 @@ import { encodeEnvironment, decodeEnvironment } from './environmentJson.js';
 import { visitSnapshotJson } from './snapshotJson.js';
 import { CompanionImportError, type ImportFile, type ImportItem, type ImportSnapshot } from './types.js';
 
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
+export const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_ITEM_BYTES = 128 * 1024 * 1024;
 export const MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024;
 
@@ -16,12 +16,29 @@ export function createImportBudget(limit = MAX_SNAPSHOT_BYTES) {
     if (!Number.isSafeInteger(size) || size < 0 || size > remaining) throw new CompanionImportError('SOURCE_SNAPSHOT_TOO_LARGE');
     remaining -= size;
   };
-  return { reserve, reserveFile(size: number) {
+  return { reserve, release(size: number) {
+    if (!Number.isSafeInteger(size) || size < 0 || remaining + size > limit) throw new Error('Invalid import budget release');
+    remaining += size;
+  }, reserveFile(size: number) {
     // Even empty files retain a Buffer, metadata and checkpoint representation.
     reserve(size + 256);
   } };
 }
 export type ImportReadBudget = ReturnType<typeof createImportBudget>;
+
+/** A rejected read returns no files. Release only its own reservations, including
+ * nested reads, without resetting reservations made by other readers. */
+export async function captureImportReads<T>(budget: ImportReadBudget | undefined, read: (scoped?: ImportReadBudget) => Promise<T>): Promise<T> {
+  if (!budget) return read();
+  let charged = 0;
+  const scoped: ImportReadBudget = {
+    reserve(size) { budget.reserve(size); charged += size; },
+    reserveFile(size) { scoped.reserve(size + 256); },
+    release(size) { budget.release(size); charged -= size; },
+  };
+  try { return await read(scoped); }
+  catch (error) { budget.release(charged); throw error; }
+}
 
 export function fingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -53,7 +70,7 @@ function mapItemBytes(items: ImportItem[], encode: (bytes: Buffer) => unknown) {
   }));
 }
 
-export async function reserveSnapshotItems(items: ImportItem[], budget: ImportReadBudget, assertOwner: () => void = () => {}): Promise<void> {
+export async function reserveSnapshotItems(items: ImportItem[], budget: Pick<ImportReadBudget, 'reserve' | 'reserveFile'>, assertOwner: () => void = () => {}): Promise<void> {
   await visitSnapshotJson(items, bytes => { budget.reserveFile(bytes.length); return null; },
     text => budget.reserve(Buffer.byteLength(text)), assertOwner);
 }
@@ -116,7 +133,11 @@ export function inside(root: string, candidate: string): boolean {
 }
 
 /** Refuse symlink escapes and special files before reading any bytes. */
-export async function readImportFile(root: string, file: string, budget?: ImportReadBudget, sharedDocumentRoots: readonly string[] = []): Promise<ImportFile> {
+export async function readImportFile(root: string, file: string, budget?: ImportReadBudget, sharedDocumentRoots: readonly string[] = [], maxBytes = MAX_FILE_BYTES): Promise<ImportFile> {
+  return captureImportReads(budget, scoped => captureImportFile(root, file, scoped, sharedDocumentRoots, maxBytes));
+}
+
+async function captureImportFile(root: string, file: string, budget: ImportReadBudget | undefined, sharedDocumentRoots: readonly string[], maxBytes: number): Promise<ImportFile> {
   const realRoot = await fs.realpath(root);
   const realFile = await fs.realpath(file);
   if (!inside(realRoot, realFile)) {
@@ -131,11 +152,11 @@ export async function readImportFile(root: string, file: string, budget?: Import
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) throw new CompanionImportError('SOURCE_NOT_REGULAR_FILE');
-    if (stat.size > MAX_FILE_BYTES) throw new CompanionImportError('SOURCE_FILE_TOO_LARGE');
+    if (stat.size > maxBytes) throw new CompanionImportError('SOURCE_FILE_TOO_LARGE');
     budget?.reserveFile(stat.size);
     budget?.reserve(Buffer.byteLength(path.relative(root, file)));
     // A bounded read also handles files growing after fstat.
-    const bytes = Buffer.alloc(Math.min(stat.size + 1, MAX_FILE_BYTES + 1));
+    const bytes = Buffer.alloc(Math.min(stat.size + 1, maxBytes + 1));
     let size = 0;
     while (size < bytes.length) {
       const read = await handle.read(bytes, size, bytes.length - size, size);
@@ -156,7 +177,14 @@ export async function optionalText(root: string, file: string, budget?: ImportRe
 }
 
 /** Only traverses the selected skill/document subtree; never copies a whole Agent home. */
-export async function readImportTree(root: string, include: (name: string) => boolean = () => true, budget?: ImportReadBudget, onError?: (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => void, directory = root, sharedDocumentRoots: readonly string[] = []): Promise<ImportFile[]> {
+export async function readImportTree(root: string, include: (name: string) => boolean = () => true, budget?: ImportReadBudget, onError?: (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => void, directory = root, sharedDocumentRoots: readonly string[] = [], fileLimit: (name: string) => number = () => MAX_FILE_BYTES): Promise<ImportFile[]> {
+  // Error callbacks retain records outside this function. Their traversal
+  // reservations must survive even if a later error discards the file array.
+  if (onError) return captureImportTree(root, include, budget, onError, directory, sharedDocumentRoots, fileLimit);
+  return captureImportReads(budget, scoped => captureImportTree(root, include, scoped, onError, directory, sharedDocumentRoots, fileLimit));
+}
+
+async function captureImportTree(root: string, include: (name: string) => boolean, budget: ImportReadBudget | undefined, onError: ((name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => void) | undefined, directory: string, sharedDocumentRoots: readonly string[], fileLimit: (name: string) => number): Promise<ImportFile[]> {
   const result: ImportFile[] = [];
   const visited = new Set<string>();
   let size = 0;
@@ -181,7 +209,7 @@ export async function readImportTree(root: string, include: (name: string) => bo
           kind = target.isDirectory() ? 'directory' : 'file';
           if (target.isDirectory()) await visit(file);
           else if (include(name)) {
-            const item = await readImportFile(root, file, budget, sharedDocumentRoots);
+            const item = await readImportFile(root, file, budget, sharedDocumentRoots, fileLimit(name));
             size += item.bytes.length;
             if (size > MAX_ITEM_BYTES) throw new CompanionImportError('SOURCE_ITEM_TOO_LARGE');
             result.push(item);

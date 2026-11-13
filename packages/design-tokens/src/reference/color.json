@@ -698,7 +698,7 @@
             "components": [
               60,
               2,
-              17
+              23
             ]
           },
           "$extensions": {
@@ -1152,7 +1152,7 @@
             "components": [
               0,
               0,
-              9
+              15
             ]
           },
           "$extensions": {
@@ -1445,7 +1445,7 @@
             "components": [
               0,
               0,
-              45
+              64
             ]
           },
           "$extensions": {
@@ -2095,6 +2095,44 @@
               0.203922,
               0.827451,
               0.6
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "remote-agent-net-accent": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.486275,
+              0.360784,
+              1
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.662745,
+              0.576471,
+              1
             ]
           },
           "$extensions": {

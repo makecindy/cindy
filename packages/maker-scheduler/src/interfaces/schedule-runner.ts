@@ -10,6 +10,8 @@ export interface ChildRunInput {
 export interface FireContext {
   runId: string;
   firedAt: number;
+  /** Host-owned validity check captured when this fire starts. */
+  assertFireContext?: () => void;
   /** Continue the interrupted conversation, without replaying the initial prompt or precheck. */
   resumeSessionId?: string;
   /** Host caller owns deferred retries; never schedule a cron replay for this attempt. */

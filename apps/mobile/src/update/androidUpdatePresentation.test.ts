@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { androidUpdateSheetFrameWidth } from './androidUpdateSheetLayout';
 import { indeterminateSweepRange, presentAndroidUpdate } from './androidUpdatePresentation';
 
 describe('Android update card presentation', () => {
@@ -21,6 +22,10 @@ describe('Android update card presentation', () => {
     });
     expect(presentAndroidUpdate('downloading', null).progress).toEqual({ value: null, label: 'downloading' });
     expect(presentAndroidUpdate('installing', 1)).toMatchObject({ progress: { value: 1, label: 'installing' }, primary: null });
+  });
+  it('sizes the card from the measured native pane instead of its content width', () => {
+    expect(androidUpdateSheetFrameWidth(true, 360)).toBe(360);
+    expect(androidUpdateSheetFrameWidth(false, 360)).toBe('100%');
   });
   it('keeps the unknown-size segment visible inside the track when motion is reduced', () => {
     expect(indeterminateSweepRange(false, 36, 100)).toEqual([0, 0]);

@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mountPage, subscription, ctx } from '../../ui-page/harness';
 import { BotModelChainEditor } from '../../../src/renderer/features/bots/BotModelChainEditor';
-import { BotTaskModelEditor } from '../../../src/renderer/features/bots/BotTaskModelEditor';
 import type { BotModelRoute } from '../../../src/shared/botModelChain';
 import { beginProvidersRefresh, commitProvidersSnapshot } from '../../../src/renderer/lib/providersSnapshotStore';
 import { getDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { agentDeviceFavoriteSource } from '@cindy/device-link';
+import { addModelFavorite } from '../../../src/renderer/state/modelFavorites';
 
 const model = { id: 'available-model', name: 'Gemini with a very long model display name',
   contextWindow: 200000, efforts: ['low', 'medium', 'high'], defaultEffort: 'high' };
@@ -24,18 +25,16 @@ const isSharedCase = ctx.case.startsWith('shared-');
 function Fixture() {
   const { t } = useTranslation();
   const primary = isSharedCase ? { ...unknown, agentDeviceId: 'share:fixture', effort: 'high' }
-    : ctx.case === 'available' ? { ...unknown, model: model.id, effort: 'high' } : unknown;
+    : ctx.case === 'available' || ctx.case.startsWith('loading') ? { ...unknown, model: model.id, effort: 'high' } : unknown;
   const [routes, setRoutes] = useState<BotModelRoute[]>([primary,
     ...Array.from({ length: ctx.case === 'four-backups' ? 4 : 1 }, (_, i) => ({ ...(isSharedCase ? primary : unknown),
       model: isSharedCase ? sharedModels[1]!.id
         : i ? `vendor/very-long-unbroken-model-identifier-${i}-abcdefghijklmnopqrstuvwxyz` : 'google/gemini-4-argon-backup' }))]);
-  const [task, setTask] = useState<BotModelRoute | null>(ctx.case === 'inherited' ? null : { ...(isSharedCase ? primary : unknown), harness: 'pi' });
   return <main className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">
     <div className="mx-auto w-full max-w-[448px]" data-model-settings-fixture>
       <BotModelChainEditor value={routes} onChange={setRoutes} label={t('bots.model.primary')}
         layout={ctx.case === 'global-settings' ? 'settings' : 'inline'}
         settingsRows={{ primaryLabel: t('bots.model.primary'), primaryHint: t('bots.modelChain.description') }} />
-      <BotTaskModelEditor value={task} inheritedRoute={routes[0]} onChange={setTask} />
     </div>
   </main>;
 }
@@ -45,8 +44,14 @@ void mountPage({
     const owner = getDataOwnerGeneration();
     const localProvider = ctx.case === 'shared-same-id' ? { ...provider,
       models: { codex: sharedModels.map(entry => ({ ...entry, name: `Local ${entry.name}`, efforts: ['low'], defaultEffort: 'low' })) } } : provider;
-    commitProvidersSnapshot(beginProvidersRefresh(), { dataOwnerId: owner.dataOwnerId,
+    const commitCatalog = () => commitProvidersSnapshot(beginProvidersRefresh(), { dataOwnerId: owner.dataOwnerId,
       ownerGeneration: owner.generation, providers: [localProvider], providerOrder: ['openai'] });
+    if (ctx.case.startsWith('loading')) window.addEventListener('fixture:catalog-ready', commitCatalog, { once: true });
+    else commitCatalog();
+    if (ctx.case === 'loading-remote-favorite') addModelFavorite({
+      providerId: agentDeviceFavoriteSource({ deviceId: 'fixture-device', providerId: 'openai' }),
+      modelId: sharedModels[0]!.id, agent: 'codex', effort: 'high',
+    });
     const capabilities = (shared: boolean) => ({
       hasFastMode: false,
       availableModels: (shared ? sharedModels : [model]).map(entry => ({ ...entry, displayName: entry.name })),

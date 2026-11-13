@@ -120,6 +120,7 @@ import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-bucket
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { installHiddenAnimationGate } from '@/lib/hiddenAnimationGate';
 import { createCodexRateLimitResetService } from '../../../../main/usage/codexRateLimitReset';
+import { readLegacySubscriptionQuota } from '../../../../main/subscription-accounts/legacyQuota';
 
 function provider(id: string, auth: Record<string, unknown>): ProviderView {
   return { id, name: id, source: 'user', connected: true, auth } as unknown as ProviderView;
@@ -210,6 +211,37 @@ function openCodeLiveFixture(deviceId: string | null) {
 }
 
 describe('useDeviceProviderSubscriptionCard', () => {
+  // Unit regression: the live group card's native Codex query omitted the
+  // default-account scope, so the real legacy handler returned the usable pool
+  // account's quota. Existing mocks returned identical data for scoped and pool
+  // reads. Also check Claude's equivalent path against the same pool boundary.
+  it.each(['openai', 'anthropic'] as const)('keeps the exhausted %s default account separate from usable pool quota', async providerId => {
+    mocks.realRemoteSubscription = true;
+    const now = Date.now();
+    const defaultClaude = { ...snapshot(100), sevenDay: { utilization: 100, resetsAt: null }, updatedAt: now };
+    const poolClaude = { ...snapshot(3), sevenDay: { utilization: 3, resetsAt: null }, updatedAt: now };
+    mocks.invoke.mockImplementation(async (_device, channel, args) => {
+      const pooled = await readLegacySubscriptionQuota(async () => ({
+        claudeUsage: poolClaude,
+        codexUsage: {
+          appServerBuckets: { codex: {
+            limitId: 'codex', limitName: null, updatedAt: now,
+            primary: { usedPercent: 3, windowMinutes: 10_080, resetsAt: null }, secondary: null,
+          } }, webSnapshot: null,
+        },
+      }), channel, args);
+      if (pooled !== undefined) return pooled;
+      if (channel === 'maker:usage:claude-subscription') return defaultClaude;
+      if (channel === 'maker:usage:codex-rate-limits') return liveQuota(100);
+      return { providerId: 'openai', accountId: 'default-account', secondary: { usedPercent: 100, windowMinutes: 10_080 }, updatedAt: now };
+    });
+    const source = provider(providerId, { method: 'oauth', native: providerId === 'openai' ? 'codex' : 'claude' });
+    const { result } = renderHook(() => useDeviceProviderSubscriptionCard(source, 'mini', { live: true }));
+    await act(async () => {});
+    expect(result.current?.windows.length).toBeGreaterThan(0);
+    expect(result.current?.windows.every(item => item.window.utilization === 100)).toBe(true);
+  });
+
   // Unit / upstream 94b7271fc9 + provider-settings §4: Kimi's new quota source
   // shares this entry with live group cards. Existing OAuth cases cannot detect
   // the old catch-all xAI refresh. A remote Kimi card must render its own result
@@ -888,10 +920,13 @@ describe('useDeviceProviderSubscriptionCard', () => {
   // immediately without waiting for any of those reads to finish.
   // r4421913789 adds Kimi's separate reader: twelve slow accounts would fill
   // foreground capacity. Keep the same visible-result/admission regression.
-  it.each(['codex', 'kimi', 'opencode-go'] as const)('keeps periodic quota reads in background slots for %s so another account opens', async source => {
+  // Custom account-scoped readers must also preserve background scheduling;
+  // Claude has one read per account and previously escaped this coverage.
+  it.each(['codex', 'claude', 'kimi', 'opencode-go'] as const)('keeps periodic quota reads in background slots for %s so another account opens', async source => {
+    mocks.realRemoteSubscription = true;
     const scheduler = new InvokeScheduler();
-    const makeProvider = (id: string) => source === 'codex'
-      ? provider(id, { method: 'oauth', native: 'codex' })
+    const makeProvider = (id: string) => source === 'codex' || source === 'claude'
+      ? provider(id, { method: 'oauth', native: source })
       : Object.assign(provider(id, { method: 'apiKey' }), {
         routing: { codex: { upstream: source === 'kimi' ? 'https://api.kimi.com/coding/v1' : 'https://opencode.ai/zen/go/v1' } },
       });
@@ -908,6 +943,9 @@ describe('useDeviceProviderSubscriptionCard', () => {
           started++;
           await new Promise<void>(resolve => releases.push(resolve));
         }
+        if (channel === 'maker:usage:claude-subscription') return {
+          providerId, fiveHour: { utilization: 91, resetsAt: null }, updatedAt: Date.now(),
+        };
         if ((channel === 'maker:usage:kimi-coding' || channel === 'maker:usage:opencode-go')) return {
           status: 'ready', stale: false, snapshot: {
             kind: source === 'kimi' ? 'kimi-coding-quota' : 'opencode-go-quota', fetchedAt: Date.now(),
@@ -928,7 +966,7 @@ describe('useDeviceProviderSubscriptionCard', () => {
     const opened = renderHook(() => useDeviceProviderSubscriptionCard(
       makeProvider('account-opened'), 'mini', { live: true }));
     await act(async () => {});
-    expect(remaining(opened.result.current)).toEqual([[source === 'codex' ? 'primary' : source === 'kimi' ? 'limit_7d' : 'weekly', 91]]);
+    expect(remaining(opened.result.current)).toEqual([[source === 'codex' ? 'primary' : source === 'claude' ? 'five-hour' : source === 'kimi' ? 'limit_7d' : 'weekly', 91]]);
     polling = false;
     await act(async () => { releases.forEach(resolve => resolve()); });
   });
