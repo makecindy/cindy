@@ -801,6 +801,10 @@ export interface ComputerDriverPermissionState {
 
 export interface ComputerMcpCallContext {
   sessionId?: string;
+  /** Another attested Host caller; this is not an Agent task identity. */
+  hostCaller?: Extract<import('./tool-call-authority.js').HostToolCaller, { kind: 'plugin' }>;
+  /** Recheck the Host invocation before driver dispatch, including queued input. */
+  assertCurrent?: () => void;
   /** Host-only observation origin; automatic reads must not authorize resumed input. */
   observationPurpose?: 'recovery';
   /** Request cancellation stays on the host side; never serialized to the driver. */
@@ -811,6 +815,8 @@ export interface ComputerMcpCallContext {
 
 export interface ComputerMcpDeps {
   getStatus(): Promise<ComputerDriverStatus>;
+  /** Release the native connection owned by this Host caller. */
+  closeContext?(context?: ComputerMcpCallContext): Promise<void>;
   callTool(
     name: ComputerMcpToolName,
     args: Record<string, unknown>,
