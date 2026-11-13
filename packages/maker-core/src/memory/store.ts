@@ -261,7 +261,10 @@ export class MakerMemoryStore {
     this.assertScopeOk();
     await this.init();
     // 防呆: 不允许把 target 写到正要被删的 source 里 (否则会自删)
-    const targetFilename = buildFilename(opts.target.type, opts.target.name);
+    const targetFilename = await this.storage.resolveFilename(
+      opts.target.type,
+      opts.target.name,
+    );
     const sourcesToDelete = opts.sources.filter((s) => s !== targetFilename);
 
     // 写新的 (撞名时走 update)

@@ -4056,7 +4056,12 @@ class CindyMcpGateway {
             query: { type: 'string', description: 'Required for search.' },
             type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'] },
             limit: { type: 'integer', minimum: 1, maximum: 50 },
-            name: { type: 'string', pattern: '^[a-z0-9_-]{1,64}$', description: 'Filename slug required for write.' },
+            name: {
+              type: 'string',
+              pattern: '^[a-z0-9_-]{1,80}(\\.md)?$',
+              description:
+                'Slug or a MEMORY.md index filename (may end with .md) required for write; both name the same record.',
+            },
             title: { type: 'string', description: 'Required for write.' },
             description: { type: 'string', description: 'One-line index hook required for write.' },
             body: { type: 'string', description: 'Memory content required for write.' },

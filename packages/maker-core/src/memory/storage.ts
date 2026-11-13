@@ -176,19 +176,32 @@ export function memoryScopeDirName(scopeKey: string): string {
   return `ssh-${sanitizeWorkdir(hostSegment).slice(0, 24)}-${digest}`;
 }
 
-/** filename = `<type>_<slug>.md`; slug 误带 `<type>_` 前缀会被拒绝 (见 validateNoTypePrefix) */
+/** 调用方的 name 允许直接粘贴 MEMORY.md 索引里的文件名 */
+function normalizeShardName(raw: string): string {
+  return raw.trim().replace(/\.md$/i, '');
+}
+
+/**
+ * 逻辑地址: MEMORY.md 文件名 / 带 type 前缀的 slug / 纯 slug 归一成同一个 key。
+ * 存量双前缀分片 (`feedback_feedback_foo.md`) 的 slug 是 `feedback_foo`, 三种写法
+ * 必须落到它 — 只按正则猜一个 slug 会定位到不存在的文件。
+ */
+function addressKey(type: MemoryType, raw: string): string {
+  return normalizeShardName(raw).replace(new RegExp(`^(?:${type}[_-])+`), '');
+}
+
+/** filename = `<type>_<slug>.md`; slug 误带 `<type>_` / `<type>-` 前缀会被拒绝 (见 validateNoTypePrefix) */
 export function buildFilename(type: MemoryType, slug: string): string {
   validateNoTypePrefix(type, slug);
   return `${type}_${slug}${SHARD_EXT}`;
 }
 
 /**
- * 拒绝 slug 上误带的 `<type>_` 前缀 — memory_write 的调用方 (LLM) 常把 type
- * 写进 name, 造成 `feedback_feedback_foo.md` 双前缀分片 (#1652 附带 bug, #205 审计亦命中)。
- * **只报错不剥离**: 剥离会让存量双前缀分片在 update/append/consolidate 时定位错位 —
- * parseFilename 把 `feedback_feedback_foo.md` 的 slug 解析为 `feedback_foo`, 剥离后
- * 定位到 `feedback_foo.md`, 造成 not-found 或静默修改错误分片。报错让调用方传纯 slug,
- * 存量双前缀分片由一次性改名/去重迁移清理 (另行处理)。
+ * 拒绝新建分片时 slug 上误带的 `<type>_` / `<type>-` 前缀 — memory_write 的调用方
+ * (LLM) 常把 type 写进 name, 造成 `feedback_feedback_foo.md` 双前缀分片 (#1652 附带
+ * bug, #205 审计亦命中)。
+ * **存量分片先按逻辑地址解析 (见 resolveFilename)**: 命中已有分片就写到它, 不剥离、
+ * 也不新建; 只有没有存量分片时才拒绝, 避免再增生双前缀。
  */
 function validateNoTypePrefix(type: MemoryType, slug: string): void {
   if (slug === type) {
@@ -197,22 +210,14 @@ function validateNoTypePrefix(type: MemoryType, slug: string): void {
       `slug 不能等于 type 名 "${type}", 请传纯 slug (如 "${type}-brief")`,
     );
   }
-  if (slug.startsWith(`${type}_`)) {
+  if (slug.startsWith(`${type}_`) || slug.startsWith(`${type}-`)) {
     throw new MemoryError(
       'invalid-slug',
-      `slug "${slug}" 已带 type 前缀 "${type}_", 请传纯 slug (如 "${stripAllTypePrefixes(type, slug) || type + '-brief'}")`,
+      `slug "${slug}" 已带 type 前缀 "${type}${slug[type.length]}", 请传纯 slug (如 "${addressKey(type, slug) || type + '-brief'}")`,
     );
   }
 }
 
-/** 剥掉 slug 上所有重复的 `<type>_` 前缀 — 错误信息示例必须本身可通过校验 */
-function stripAllTypePrefixes(type: MemoryType, slug: string): string {
-  let out = slug;
-  while (out.startsWith(`${type}_`)) {
-    out = out.slice(type.length + 1);
-  }
-  return out;
-}
 /** 解析 filename 反推 type + slug, 不匹配返 null */
 export function parseFilename(filename: string): { type: MemoryType; slug: string } | null {
   if (!filename.endsWith(SHARD_EXT)) return null;
@@ -347,8 +352,44 @@ export class MemoryStorage {
    * 调用方据此判断超了多少再决定不动 / 微剪 / consolidate。
    */
   async write(opts: WriteOptions): Promise<WriteResult> {
-    this.validateOpts(opts);
-    return this.mutate(() => this.writeFile(opts, buildFilename(opts.type, opts.name)));
+    const normalized: WriteOptions = { ...opts, name: normalizeShardName(opts.name) };
+    this.validateOpts(normalized);
+    return this.mutate(async () => {
+      const filename = await this.resolveFilename(normalized.type, opts.name);
+      return this.writeFile(normalized, filename);
+    });
+  }
+
+  /**
+   * 把调用方的 name 解析成落盘文件名, 三种写法指向同一分片:
+   *  - `project-x` / `project_x` / `project_x.md` (索引原样) 都命中 `project_project-x.md`
+   *  - 没有同 key 的存量分片时才按规范文件名新建 (并拒绝带 type 前缀的新 slug)
+   * 同 key 命中多个存量分片时报 ambiguous-address, 不猜; 传完整文件名可指定其中一个。
+   */
+  async resolveFilename(type: MemoryType, rawName: string): Promise<string> {
+    if (!isMemoryType(type)) {
+      throw new MemoryError('invalid-type', `type 必须是 user/feedback/project/reference, 收到 "${type}"`);
+    }
+    const name = normalizeShardName(rawName);
+    const key = addressKey(type, name);
+    const matches = (await this.list()).filter(
+      (record) => record.frontmatter.type === type && addressKey(type, record.filename) === key,
+    );
+    if (matches.length > 1) {
+      // 完整文件名 (含 .md) 按字面命中, 否则同 key 无解
+      if (/\.md$/i.test(rawName.trim())) {
+        const exact = `${name}.md`;
+        const hit = matches.find((record) => record.filename === exact);
+        if (hit) return hit.filename;
+      }
+      throw new MemoryError(
+        'ambiguous-address',
+        `多个分片都指向 "${key}": ${matches.map((r) => r.filename).join(', ')}; ` +
+          '请传完整文件名（含 .md），或先重命名其中一个',
+      );
+    }
+    if (matches.length === 1) return matches[0].filename;
+    return buildFilename(type, name);
   }
 
   /** Edit a known file in place, including legacy names rejected for new shards. */
@@ -615,7 +656,8 @@ export class MemoryStorage {
     if (!isMemoryType(opts.type)) {
       throw new MemoryError('invalid-type', `type 必须是 user/feedback/project/reference, 收到 "${opts.type}"`);
     }
-    validateSlug(opts.name, this.config.maxSlugLen);
+    // name 可以是索引里的完整文件名, 长度与字符集按逻辑 slug 校验
+    validateSlug(addressKey(opts.type, opts.name), this.config.maxSlugLen);
     if (!opts.title || opts.title.length === 0) {
       throw new MemoryError('invalid-frontmatter', 'title 必填');
     }
