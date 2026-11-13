@@ -90,6 +90,8 @@ function normalizeWorkingDir(raw: string | null | undefined): string | null {
 /**
  * 列出项目(见文件头), 按最近活跃时间倒序; 上限 MAX_PROJECTS。
  * `projectsOnly`: 只要侧栏项目(`/project` 用), 不带项目之外的任务目录。
+ * `all`: 不截断 —— 上限只为卡片排版; 按按钮上的标记找回项目时要查完整清单, 否则发卡之后
+ * 别的项目变活跃, 卡上原本可选的项目会被挤出前 N 个而找不到。
  *
  * displayName:
  *   - 侧栏项目用侧栏的名字; 名字就是目录名且与别的目录撞名时升到 `parent/basename`
@@ -97,7 +99,7 @@ function normalizeWorkingDir(raw: string | null | undefined): string | null {
  *     按钮 label 容量有限)
  */
 export async function listProjectsForControl(
-  options: { projectsOnly?: boolean } = {},
+  options: { projectsOnly?: boolean; all?: boolean } = {},
 ): Promise<ControlProject[]> {
   const db = getDbClient().drizzle;
   const [catalog, rows] = await Promise.all([
@@ -194,7 +196,7 @@ export async function listProjectsForControl(
   });
 
   projects.sort((a, b) => b.latestActivityMs - a.latestActivityMs);
-  return projects.slice(0, MAX_PROJECTS);
+  return options.all ? projects : projects.slice(0, MAX_PROJECTS);
 }
 
 /**

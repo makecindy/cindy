@@ -89,6 +89,20 @@ describe('/ctr control project/session picker', () => {
       (await listProjectsForControl({ projectsOnly: true })).map((row) => row.displayName),
     ).toEqual(['empty', '主仓库']);
 
+    // PR #10291 review: 上限只用于卡片展示; 按按钮标记找回项目时要能查到全部。
+    setControlProjectCatalogSource(async () => ({
+      projects: Array.from({ length: 25 }, (_, index) => ({
+        path: `/code/p${index}`,
+        name: `p${index}`,
+        lastUsedAtMs: 100 - index,
+      })),
+      isRemoved: () => false,
+    }));
+    expect(await listProjectsForControl({ projectsOnly: true })).toHaveLength(19);
+    expect(
+      (await listProjectsForControl({ projectsOnly: true, all: true })).map((row) => row.displayName),
+    ).toContain('p24');
+
     // 侧栏项目读不到时退回按活跃任务的目录分组(原行为)。
     setControlProjectCatalogSource(async () => null);
     expect((await listProjectsForControl()).map((row) => row.workingDir)).toContain('/code/removed');

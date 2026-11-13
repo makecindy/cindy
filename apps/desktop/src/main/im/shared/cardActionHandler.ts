@@ -1344,7 +1344,7 @@ export function createCardActionHandler(
       // 升级前发出的旧卡片按钮里还带着目录本身, 照旧认。
       const token = String(event.payload.projectToken ?? '');
       const picked = token
-        ? (await listProjectsForControl({ projectsOnly: true })).find(
+        ? (await listProjectsForControl({ projectsOnly: true, all: true })).find(
             (project) => projectToken(project.workingDir) === token,
           )
         : undefined;
