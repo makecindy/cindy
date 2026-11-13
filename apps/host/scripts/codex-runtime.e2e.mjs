@@ -22,6 +22,9 @@ const oauthCalls = [];
 const connects = [];
 // When set, the fixture first answers with an `exec` tool call that runs `env`, then captures its output.
 let toolScenario = null;
+// When set, the fixture first answers with an `exec` tool call that writes a memory through the
+// Host's cindy_memory MCP server, then captures the tool result.
+let memoryScenario = null;
 const responsesStream = events => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 const upstream = createServer(async (req, res) => {
   let raw = '';
@@ -29,6 +32,22 @@ const upstream = createServer(async (req, res) => {
   if (req.url?.startsWith('/oauth/')) {
     oauthCalls.push(req.url);
     res.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid_grant"}');
+    return;
+  }
+  if (memoryScenario && req.url?.endsWith('/responses')) {
+    const body = JSON.parse(raw);
+    requests.push({ url: req.url, authorization: req.headers.authorization, body });
+    memoryScenario.requests.push(body);
+    const output = (body.input ?? []).find(item => item?.call_id === 'call-memory' && /_output$/.test(item.type ?? ''));
+    const id = `fixture-memory-${requests.length}`;
+    const item = output
+      ? { type: 'message', role: 'assistant', id: `msg-${id}`, content: [{ type: 'output_text', text: 'synthetic complete' }] }
+      : { type: 'function_call', id: `fc-${id}`, call_id: 'call-memory', name: 'exec',
+          arguments: JSON.stringify({ input: "const r = await tools.mcp__cindy_memory__call_tool({ name: 'memory_write', args: { type: 'project', name: 'host-e2e-memory', title: 'Host e2e memory', description: 'written by a Codex task through the Host MCP bridge', body: 'synthetic memory body' } });\ntext(typeof r === 'string' ? r : JSON.stringify(r));" }) };
+    if (output) memoryScenario.output = typeof output.output === 'string' ? output.output : JSON.stringify(output.output);
+    res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
+    res.end(responsesStream([{ type: 'response.created', response: { id } }, { type: 'response.output_item.done', item },
+      { type: 'response.completed', response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }]));
     return;
   }
   if (toolScenario && req.url?.endsWith('/responses')) {
@@ -103,10 +122,11 @@ const { createHostAttachments } = await import('../src/attachments.ts');
 const { createEventHub } = await import('../src/events.mjs');
 const { createHostMessageStore } = await import('../src/message-store.ts');
 const { createChatHandler } = await import('../src/chat.mjs');
+const { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } = await import('../src/agent/memory.mjs');
 initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 const profile = path.join(root, 'profile');
 const ownerId = 'native-runtime-fixture';
-let database, config, modelAccess, mcp, runtime, graph, queue, chatServer;
+let database, config, modelAccess, mcp, runtime, graph, queue, chatServer, memory;
 let releaseBlockedResponse;
 let stripProxyToken = false;
 const handles = [];
@@ -134,6 +154,9 @@ try {
       models: [{ id: 'fixture-model', name: 'Fixture', contextWindow: 8192, maxOutput: 1024 }] } } });
   credentials.write(`owner_${dataOwnerStorageKey(ownerId)}_${customProviderSecretStorageKey('cprov-fixture', 'codex')}`, 'synthetic-custom-key');
   await config.list();
+  // Maker Memory as main.ts builds it: the flag before the agents, native memory off after.
+  memory = createHostMemoryManager({ userDataDir: profile, ownerId });
+  if (memory.isEnabled()) await memory.enable({ skipAgentSync: true });
   mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: config.remoteBridgeToken });
   runtime = createHostCodexRuntime({ profileDir: profile, binaryPath: binary, config, modelAccess, mcp,
     availabilityPolicy: createAvailabilityPolicy(async () => { throw new Error('Unexpected share mutation'); }), publish: () => {},
@@ -153,9 +176,12 @@ try {
     return { ...value, extraArgs, extraEnv };
   };
   graph = createHostAgentGraph({ userDataDir: profile, providerConfig: config, gateway: modelAccess.gateway,
-    codexBinaryPath: binary, codexRuntime: runtime, mcpRuntime: mcp, mcpProviders: [],
+    codexBinaryPath: binary, codexRuntime: runtime, mcpRuntime: mcp, makerMemory: memory,
+    mcpProviders: createHostMemoryMcpProviders(memory),
     storage: new OwnerSessionStorage({ db: () => database }),
   });
+  attachAgentsToMakerMemory(memory, graph.instances);
+  if (memory.isEnabled()) await memory.enable();
   for (const [index, providerId] of ['xd', 'cprov-fixture', 'xd'].entries()) {
     const sessionId = `native-${providerId}-${index}`;
     const expectedKey = providerId === 'xd' ? gatewayKey : 'synthetic-custom-key';
@@ -309,9 +335,9 @@ try {
     while (Date.now() < deadline) { if (await predicate()) return true; await new Promise(resolve => setTimeout(resolve, 250)); }
     return false;
   };
-  const startNative = async (sessionId, providerId, model) => {
+  const startNative = async (sessionId, providerId, model, extra = {}) => {
     setSessionProvider(sessionId, providerId);
-    const handle = await graph.codex.startSession({ sessionId, providerId, model, workingDir: root });
+    const handle = await graph.codex.startSession({ sessionId, providerId, model, workingDir: root, ...extra });
     handles.push(handle);
     const events = [];
     const ended = (async () => {
@@ -337,6 +363,29 @@ try {
   const visible = toolScenario.output.includes(CODEX_PROXY_TOKEN_ENV);
   toolScenario = null;
   console.log(`PASS a Codex tool command ran inside the task; it ${visible ? 'can' : 'cannot'} read ${CODEX_PROXY_TOKEN_ENV}, which only this runtime's loopback proxies accept`);
+
+  // Maker Memory reaches a Codex task through the Host's MCP bridge (release table row 11).
+  //    Full access, so the call needs no approval; this checks the bridge, not the approval path.
+  memoryScenario = { output: null, requests: [] };
+  const memoryTurn = await startNative('native-memory-tool', 'xd', 'fixture-model',
+    { makerMemoryEnabled: true, permissionMode: 'bypassPermissions' });
+  const memoryEnd = await bounded(memoryTurn.ended, 60_000);
+  await memoryTurn.close();
+  assert.equal(memoryEnd?.type, 'done', JSON.stringify(memoryEnd ?? memoryTurn.events.at(-1)));
+  const memoryTools = JSON.stringify(memoryScenario.requests[0]?.tools ?? []);
+  assert.ok(memoryTools.includes('mcp__cindy_memory__call_tool') && memoryTools.includes('mcp__cindy_memory__list_tools'),
+    'the Codex request lists the cindy_memory tools');
+  assert.match(memoryScenario.output ?? '', /project_host-e2e-memory\.md/, 'the memory tool answered with the written shard');
+  const memoryRoot = path.join(profile, 'owners', dataOwnerStorageKey(ownerId), 'maker-memory');
+  const shards = [];
+  for (const scope of await fs.readdir(memoryRoot)) {
+    const file = path.join(memoryRoot, scope, 'project_host-e2e-memory.md');
+    if (await fs.stat(file).then(() => true, () => false)) shards.push(await fs.readFile(file, 'utf8'));
+  }
+  assert.equal(shards.length, 1, 'the shard is in the Host profile\'s owner memory store');
+  assert.match(shards[0], /synthetic memory body/);
+  memoryScenario = null;
+  console.log('PASS a Codex task reaches the Host memory manager through the MCP bridge: its request lists cindy_memory, and a memory_write stored the shard in the Host profile');
 
   // 2. A review through a Codex profile in the customized auxiliary chain (release table row 4):
   //    maker.oneShot('codex') reuses the local Codex host, so the request crosses this runtime's
@@ -420,6 +469,7 @@ try {
   await graph?.maker.shutdown();
   await runtime?.close();
   await mcp?.close();
+  memory?.dispose();
   modelAccess?.close();
   await config?.close();
   if (database) { clearCurrentDbClient(database); await database.dispose(); }

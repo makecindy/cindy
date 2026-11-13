@@ -67,7 +67,7 @@ export function createHostMemoryManager({ userDataDir, ownerId }) {
   });
 }
 
-/** The cindy_memory MCP server for Claude turns; Codex needs the desktop bridge (TODO). */
+/** The cindy_memory MCP server; Codex reaches it through the Host MCP bridge (mcp-runtime codexDeps), checked by codex-runtime.e2e.mjs. */
 export function createHostMemoryMcpProviders(manager) {
   return createLiziMcpProviders({
     enabled: ['cindy_memory'],
