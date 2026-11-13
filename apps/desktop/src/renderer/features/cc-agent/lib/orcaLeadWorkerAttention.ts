@@ -255,8 +255,20 @@ export function findOrcaWorkerReportQuestion(workerSessionId: string): string | 
 export function shouldNotifyOrcaWorkerEvent(
   kind: 'done' | 'error' | 'needs-reply',
   worker: { deviceLinkDeviceId?: string | null },
+  latestReportState?: string | null,
 ): boolean {
+  // dropped 结论 = 本轮无需用户行动：迟到的 error 事件不再单独响铃，完成语义同 done。
+  if (kind !== 'done' && latestReportState === 'dropped') return false;
   return kind !== 'done' && !worker.deviceLinkDeviceId;
+}
+
+/** Worker 投影上最新回报的 state；找不到投影时返回 null。 */
+export function findOrcaWorkerLatestReportState(workerSessionId: string): string | null {
+  for (const [, snapshot] of listRetainedWorkerProjections()) {
+    const worker = snapshot.workers.find((item) => item.sessionId === workerSessionId);
+    if (worker) return worker.latestReport?.state ?? null;
+  }
+  return null;
 }
 
 /** Worker 通知标题:「Lead 标题 · Worker 标题」;找不到 Lead 时退回 Worker 标题。 */

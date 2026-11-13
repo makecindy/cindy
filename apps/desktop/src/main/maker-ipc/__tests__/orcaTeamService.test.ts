@@ -906,8 +906,9 @@ describe('OrcaTeamService', () => {
     expect(reserveWorkerMessage).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['reserve-head', 'request-stop', 'after-stop-request']);
     expect(deps.updateWorkerStatus).toHaveBeenCalledTimes(2);
-    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(1, 'worker-1', 'running', null);
-    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(2, 'worker-1', 'running', null);
+    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(1, 'worker-1', 'running');
+    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(2, 'worker-1', 'running');
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', null);
     expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledTimes(2);
   });
 
@@ -1898,6 +1899,25 @@ describe('OrcaTeamService', () => {
     expect(progressWrites).toEqual([]);
   });
 
+  // 结论已入档（send_to_lead 被接受）后，迟到的 progress 不得覆盖结论：
+  // 否则终端回合按 progress 跳过结算，已判定的结论语义退化回 raw 状态。
+  it('ignores a late progress report after a settling report was accepted', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '长任务' });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'ready', summary: '已完成' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ state: 'ready' });
+
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '迟到进度' });
+
+    expect(getWorker().latestReport).toMatchObject({ state: 'ready' });
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1', expect.objectContaining({ summary: '迟到进度' }),
+    );
+  });
+
   // 直连 Worker 轮的 progress：捕获时无派活（captured=undefined），await 期间新派活装上
   // 新 identity 并清空 latest_report —— 旧进度必须被拒，无条件身份复核。
   it('rejects a no-assignment progress report when a dispatch lands mid-await', async () => {
@@ -2027,8 +2047,13 @@ describe('OrcaTeamService', () => {
     });
     expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'dropped' }));
 
-    await service.handleWorkerTurnStarted('worker-session-1');
-    expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'running', null);
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '第二轮',
+    });
+    // 新派活（新一轮的开始）清回报走 setWorkerLatestReport(null)：旧 dropped 不再挡住新轮的完成判定。
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', null);
   });
 
   it('persists the latest report so the panel never shows a stale question', async () => {

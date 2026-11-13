@@ -446,7 +446,7 @@ Lead 的消息流与历史记录。只放进回执等于没送——Worker 可�
 `idle` 状态已经表达了它们，重复标注只占注意力预算。标记是行内 chip，问题放在它的 `title` 里，
 不另占一行。
 
-映射的时序：终态先到时由终态侧映射；**终态先到、回报后到**（在途回执晚于 turn 终止事件）时由回报侧在同一 worker transition 内补映射，否则晚到的 `waiting` / `blocked` 会永久停在 `done`。每份新回报都覆盖 `latest_report`，面板与通知不读旧问题。
+映射的时序：终态先到时由终态侧映射；**终态先到、回报后到**（在途回执晚于 turn 终止事件）时由回报侧在同一 worker transition 内补映射，否则晚到的 `waiting` / `blocked` 会永久停在 `done`。每份新回报都覆盖 `latest_report`，面板与通知不读旧问题；settling 终段回报入档后迟到的 `progress` 不再覆盖（遥测不得洗掉已结算的结论）。
 
 `worker status` 枚举保持 `idle/running/done/error` 不变——结构化状态属于回报层，不是新的 worker 状态轴（质量裁决与验收仍由 Lead 侧承担）。需人工处理的回报不另开一条 Worker 通知：任务的通知 owner 仍是 Lead（Worker 完成不单独通知的既有裁决），问题随正文到达 Lead 后由那一轮以 Lead 名义统一通知。远端 Worker（运行设备/SSH）第一期维持历史回读 + 文本回报，`latest_report` 由本机回报路径写入。
 

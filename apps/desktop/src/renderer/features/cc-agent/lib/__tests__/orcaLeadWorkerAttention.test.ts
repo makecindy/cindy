@@ -382,6 +382,13 @@ describe('Worker 通知', () => {
     expect(shouldNotifyOrcaWorkerEvent('error', { deviceLinkDeviceId: 'host' })).toBe(false);
   });
 
+  // dropped 结论=本轮无需用户行动：迟到的 error 事件不再单独响铃，完成语义同 done。
+  it('suppressed error/needs-reply notifications when the latest report is dropped', () => {
+    expect(shouldNotifyOrcaWorkerEvent('error', {}, 'dropped')).toBe(false);
+    expect(shouldNotifyOrcaWorkerEvent('needs-reply', {}, 'dropped')).toBe(false);
+    expect(shouldNotifyOrcaWorkerEvent('error', {}, 'ready')).toBe(true);
+  });
+
   it('标题为「Lead 标题 · Worker 标题」,找不到 Lead 时退回 Worker 标题', () => {
     expect(formatOrcaWorkerNotificationTitle('Worker · developer', '重构登录')).toBe(
       '重构登录 · Worker · developer',

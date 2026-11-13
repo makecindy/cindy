@@ -2306,6 +2306,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         // 若新派活恰好装上了新的 identity，旧进度同样不得写进它。
         const current = autoBridge.get(sessionId);
         if (current !== captured) return;
+        // 终段回报已被 send_to_lead 接受入档后，迟到的 progress 是遥测：不得覆盖结论，
+        // 否则终端回合会按 progress 跳过结算，把已判定的结论语义退化回 raw 状态。
+        if (current?.structuredReport && current.structuredReport.state !== 'progress') return;
         if (current) {
           current.structuredReport = report;
           // progress 不入队，没有可被队列编辑触碰的来源。

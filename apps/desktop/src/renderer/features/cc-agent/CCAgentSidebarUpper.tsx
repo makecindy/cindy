@@ -125,6 +125,7 @@ import {
 } from '@/lib/sessionAttentionStore';
 import {
   findOrcaLeadSessionIdForWorker,
+  findOrcaWorkerLatestReportState,
   findOrcaWorkerReportQuestion,
   formatOrcaWorkerNotificationTitle,
   mergeOrcaLeadNotifications,
@@ -1256,7 +1257,7 @@ function ExpandedView({
       // 名义统一推一条。出错与需要确认要用户本人处理,单独通知,标题带上所属 Lead;
       // 点击按 Worker id 走 resolveSessionRoute,落到 Lead 并打开该 Worker。
       if (session && isOrcaWorkerSession(session)) {
-        if (!shouldNotifyOrcaWorkerEvent(kind, session)) return;
+        if (!shouldNotifyOrcaWorkerEvent(kind, session, findOrcaWorkerLatestReportState(sessionId))) return;
         const leadSessionId = findOrcaLeadSessionIdForWorker(sessionId);
         const leadSession = leadSessionId
           ? findSessionNotificationSession(leadSessionId, [
