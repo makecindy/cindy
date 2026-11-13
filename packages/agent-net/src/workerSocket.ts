@@ -130,8 +130,12 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       if (message.url !== expected || this.network.size >= 4 || this.network.has(message.id)) { this.dispose(1006); return; }
       const factory = this.client.transport.createWebSocket ?? ((url: string, options: WebSocket.ClientOptions) => new WebSocket(url, options));
       void Promise.resolve(factory(message.url, { headers: message.headers, maxPayload: MAX_CONTROL_BYTES })).then((ws) => {
-        try { this.options.assertCurrent?.(); } catch { ws.terminate(); this.dispose(1006); return; }
-        if (this.closed) { ws.terminate(); return; }
+        // The factory is async, so this socket may already be closed (e.g. device-link discarding it
+        // on system resume). The new ws is still CONNECTING: terminate() then emits 'error' on the
+        // next tick, and without a listener EventEmitter throws it as Main's uncaughtException.
+        const discard = () => { ws.on('error', () => {}); ws.terminate(); };
+        try { this.options.assertCurrent?.(); } catch { discard(); this.dispose(1006); return; }
+        if (this.closed) { discard(); return; }
         this.network.set(message.id, ws);
         const relay = (event: string, value?: unknown, binary?: boolean) => { if (!this.closed) this.worker.postMessage({ type: 'ws-event', id: message.id, event, value, binary }); };
         ws.on('open', () => relay('open'));

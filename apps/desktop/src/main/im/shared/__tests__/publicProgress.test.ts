@@ -9,7 +9,8 @@
  * - 最小失败输入: 一轮里同时有 Bash 命令、思考增量和重试提示 —— 公开视图只能出现后者。
  * - tier: unit（纯函数，无 IO）。
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 import { renderPublicStage } from '../publicProgress';
 import {
@@ -19,6 +20,9 @@ import {
   pushToolStep,
   setActivityNotice,
 } from '../turnActivity';
+
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('public progress stage', () => {
   it('shows coarse progress but never tool names, arguments or thinking text', () => {
@@ -33,8 +37,8 @@ describe('public progress stage', () => {
     setActivityNotice(activity, '上游过载，正在自动重试（1/3）');
 
     const stage = renderPublicStage(activity, 12_000);
-    expect(stage).toContain('正在处理');
-    expect(stage).toContain('已进行 2 步');
+    expect(stage).toContain('工作中');
+    expect(stage).toContain('2 项');
     expect(stage).toContain('正在整理回答');
     expect(stage).toContain('正在自动重试');
     expect(stage).toContain('12s');
@@ -43,10 +47,15 @@ describe('public progress stage', () => {
     expect(stage).not.toContain('rm -rf');
     expect(stage).not.toContain('内部推理');
     expect(stage).not.toContain('密钥');
+    setMainLocale('en');
+    const english = renderPublicStage(activity, 12_000);
+    expect(english).toContain('Working');
+    expect(english).toContain('Preparing the answer');
+    expect(english).not.toContain('Bash');
   });
 
   it('stays a single public line even before any progress', () => {
     const stage = renderPublicStage(createTurnActivity(0), 3_000);
-    expect(stage).toBe('⚙️ 正在处理 · 3s');
+    expect(stage).toBe('⚙️ 工作中 · 3s');
   });
 });

@@ -11,6 +11,8 @@
  */
 import path from "node:path";
 
+import { tt } from "../transportText.js";
+
 import type {
   ImDeliveryState,
   ImFinalAttachmentStep,
@@ -140,20 +142,20 @@ export async function prepareWecomFinal(
 
   const notices = [
     omitted > 0
-      ? `⚠️ 另有 ${omitted} 个附件未发送（企业微信单次最多发送 ${MAX_TERMINAL_ATTACHMENTS} 个）。`
+      ? tt("imBot.text.transport.wecom.attachmentsOmitted", "⚠️ 另有 {{count}} 个附件未发送（企业微信单次最多发送 {{max}} 个）。", { count: omitted, max: MAX_TERMINAL_ATTACHMENTS })
       : "",
     rejectedFiles > 0
-      ? `⚠️ 有 ${rejectedFiles} 个文件附件未发送（不在当前工作目录内或无法验证）。`
+      ? tt("imBot.text.transport.wecom.filesRejected", "⚠️ 有 {{count}} 个文件附件未发送（不在当前工作目录内或无法验证）。", { count: rejectedFiles })
       : "",
     unresolvedImages > 0
-      ? `⚠️ 有 ${unresolvedImages} 张图片未发送（图片已不存在或无法读取）。`
+      ? tt("imBot.text.transport.wecom.imagesUnresolved", "⚠️ 有 {{count}} 张图片未发送（图片已不存在或无法读取）。", { count: unresolvedImages })
       : "",
   ].filter(Boolean);
 
   const visible =
     [stripXdtFileLinks(stripXdtImageLinks(output.text)).trim(), ...notices]
       .filter((part) => part.length > 0)
-      .join("\n\n") || (attachments.length > 0 ? ATTACHMENTS_ONLY_TEXT : "");
+      .join("\n\n") || (attachments.length > 0 ? tt("imBot.text.transport.wecom.attachmentsBelow", ATTACHMENTS_ONLY_TEXT) : "");
 
   const chunks = chunkWecomMarkdown(visible);
   const steps: ImFinalStep[] = [];

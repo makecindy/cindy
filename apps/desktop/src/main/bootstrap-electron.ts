@@ -587,7 +587,7 @@ import {
 } from '@cindy/maker-core/pi-subagent-runs';
 
 import { onQuit, installQuitHandler } from './lifecycle';
-import { initStartupDiagnostics } from './startup-diagnostics';
+import { initStartupDiagnostics, noteSystemResume, noteSystemSuspend } from './startup-diagnostics';
 import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createStartupGateStallReporter } from './startupGateStallReport';
 import { STARTUP_GATE_STALL_CHANNEL } from '../shared/startupGateStall';
@@ -887,7 +887,10 @@ import {
   setGoalStopObserver,
   setGoalAskAnswerObserver,
   withSendToSessionLock,
+  pendingRequestForAlert,
 } from './maker-ipc/register.js';
+import { buildPermissionAlert, buildQuestionAlert } from './device-link/mobileNotify.js';
+import { getPermissionAlertQuestion } from './sessionNotificationCopy.js';
 import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
 import {
   createLocalProjectFromTaskHandlers,
@@ -1192,6 +1195,7 @@ import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
+import { refreshHostToolProviderOwner } from './mcp-integrations/hostToolCaller.js';
 import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
@@ -1236,6 +1240,7 @@ import {
   resolveGhostControlPointPlugin,
   diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
+  pluginLiveScreenViews,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -2796,15 +2801,17 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
-const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
-  isResourceUsageOpenSender({
-    sender,
-    mainWindow: mainWindowRef,
-    senderWindow: BrowserWindow.fromWebContents(sender),
-    isSecondaryAppWindow,
-  }),
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(
+  (sender) =>
+    isResourceUsageOpenSender({
+      sender,
+      mainWindow: mainWindowRef,
+      senderWindow: BrowserWindow.fromWebContents(sender),
+      isSecondaryAppWindow,
+    }),
+  (sender) => !!mainWindowRef && !mainWindowRef.isDestroyed() && mainWindowRef.webContents === sender,
 );
-remoteDesktopViewerWindows.register();
+remoteDesktopViewerWindows.register(pluginLiveScreenViews);
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
 registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);
@@ -2985,6 +2992,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
     const outcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
@@ -5042,6 +5050,13 @@ const registerIpcHandlers = () => {
   initNotificationService({
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
     shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
+    pendingInteractionAlert: (sessionId) => {
+      const request = pendingRequestForAlert(sessionId);
+      if (!request) return undefined;
+      const permission = buildPermissionAlert(request, getPermissionAlertQuestion);
+      const question = permission ? undefined : buildQuestionAlert(request);
+      return permission || question ? { ...(permission ? { permission } : {}), ...(question ? { question } : {}) } : undefined;
+    },
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
@@ -10574,6 +10589,10 @@ app.on('ready', async () => {
   // 睡醒白屏取证:suspend/resume/lock/unlock 全部落日志,给 renderer 侧
   // render-watchdog 的漂移/无帧日志提供时间锚点。
   installPowerEventDiagnostics({ powerMonitor });
+  // 睡眠状态写进 run marker:睡眠中被系统重启(如 Windows 更新)结束的进程,下次启动不报
+  // 「上次意外退出」(issue #10071)。
+  powerMonitor.on('suspend', noteSystemSuspend);
+  powerMonitor.on('resume', noteSystemResume);
 
   // 挂起/锁屏时通知 renderer 释放语音输入的保活麦克风(用户已离开,再占着采集
   // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。

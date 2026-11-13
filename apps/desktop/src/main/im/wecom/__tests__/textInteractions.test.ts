@@ -1,9 +1,14 @@
 import type { InteractionRequest } from '@cindy/maker-core';
 import type { IMMessageEvent, IMStatus, WecomIM } from '@cindy/im';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { formatWecomInteractionPrompt, WecomTextInteractions } from '../textInteractions';
 import { createSharedPermission } from '../../../maker-ipc/sharedPermission';
+import { setMainLocale } from '../../../i18n.desktop';
+
+// 断言中文控制文案:显式锁定界面语言,结束后还原默认。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 function permissionRequest(
   input: Record<string, unknown>,
@@ -307,6 +312,25 @@ describe('wecom template card confirmation', () => {
     expect(consume({ senderId: 'owner', text: '拒绝' } as IMMessageEvent)).toBe(true);
     await result;
   });
+
+  // Merge regression: cards must keep the reply words shown before a language switch, like text replies.
+  it.each([['en', 'Stop task'], ['de', 'Aufgabe stoppen']] as const)(
+    'keeps a %s confirmation card actionable after a language switch',
+    async (locale, stopLabel) => {
+      const { im, sentCards, click } = cardIm();
+      const interactions = new WecomTextInteractions(im);
+      setMainLocale(locale);
+      const result = interactions.handle('owner', permissionRequest({ command: 'ls' }), {
+        onStop: vi.fn(async () => ({ stopped: true, droppedQueued: 0 })),
+      });
+      await vi.waitFor(() => expect(sentCards).toHaveLength(1));
+      const spec = sentCards[0]!.spec as { buttons: Array<{ id: string; label: string; payload: unknown }> };
+      expect(spec.buttons.find(button => button.id === 'stop')?.label).toBe(stopLabel);
+      setMainLocale('zh-CN');
+      click({ senderId: 'owner', messageId: 'card-1', payload: spec.buttons.find(button => button.id === 'allow')!.payload });
+      await expect(result).resolves.toMatchObject({ kind: 'permission', behavior: 'allow' });
+    },
+  );
 
   it('submits the button choice to the shared permission without waiting for a model', async () => {
     const { im, sentCards, click } = cardIm();
@@ -693,4 +717,27 @@ describe('wecom template card confirmation', () => {
     });
     expect(sharedPermission.decision).toMatchObject({ behavior: 'deny' });
   });
+});
+
+it.each([
+  ['permission', 'erlauben', 'allow'], ['permission', 'ablehnen', 'deny'],
+  ['plan_review', 'genehmigen', 'allow'], ['plan_review', 'ablehnen', 'deny'],
+] as const)('keeps pending %s reply %s valid after a language change', async (kind, reply, behavior) => {
+  let intercept!: (event: IMMessageEvent) => boolean;
+  const im = {
+    onTextMessageIntercept: (handler: typeof intercept) => { intercept = handler; },
+    onStatusChange: vi.fn(),
+    sendMarkdownText: vi.fn(async (_user: string, prompt: string) => { expect(prompt).toContain(reply); }),
+    sendText: vi.fn(async () => ({})),
+  } as unknown as WecomIM;
+  const interactions = new WecomTextInteractions(im);
+  setMainLocale('de');
+  const request: InteractionRequest = kind === 'permission' ? permissionRequest({})
+    : { kind, requestId: 'switch', plan: 'Plan' };
+  const result = interactions.handle('user', request);
+  setMainLocale('en');
+  expect(intercept({ senderId: 'user', text: 'unrelated' } as IMMessageEvent)).toBe(false);
+  expect(im.sendText).not.toHaveBeenCalled();
+  intercept({ senderId: 'user', text: reply } as IMMessageEvent);
+  await expect(result).resolves.toMatchObject({ kind, behavior });
 });

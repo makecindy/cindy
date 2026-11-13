@@ -95,8 +95,11 @@ function NativeChatHeader({ identity, back, actions, actionCount }: {
   const { colors } = useTheme();
   const window = useAdaptiveWindow();
   const insets = window.insets;
-  const width = Math.max(0, Math.min(240, window.width - insets.left - insets.right
-    - (navigationChrome.target * Math.max(1, actionCount) + spacing.lg * 2 + spacing.md) * 2));
+  // The identity is left aligned: reserve Back once and the trailing controls once.
+  // Mirroring the trailing width on both sides truncates even short names with two actions.
+  const trailingWidth = actionCount * navigationChrome.target + Math.max(0, actionCount - 1) * spacing.md;
+  const width = Math.max(0, Math.min(240, window.width - insets.left - insets.right - spacing.lg * 2
+    - (back ? navigationChrome.target + spacing.md : 0) - (actionCount ? trailingWidth + spacing.md : 0)));
   const options = useMemo(() => ({ headerShown: true, headerTransparent: true, headerShadowVisible: false,
     headerBackVisible: false, headerTintColor: colors.textPrimary,
     headerStyle: { backgroundColor: 'transparent' }, headerTitle: '',

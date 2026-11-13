@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 const V2_ON = { 'remoteConnection.v2': 'on' };
 
 export default {
@@ -21,6 +22,8 @@ export default {
     many: { about: 'Twenty other devices: dense rows, split direct group, folded offline', storage: V2_ON },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
+    'model-access-off': { about: '「让我的其他电脑用本机模型」 under the master switch, off by default; turning it on' },
+    'model-access-on': { about: 'Already turned on by the user' },
     'remote-switch': {
       about: 'Prototype: switch another computer between Device Link and Agent-Net from its topology card (switching, reverted, outdated, phone, control off, already Agent-Net)',
       storage: V2_ON,
@@ -40,6 +43,19 @@ export default {
   },
   async check(page, ui) {
     await page.getByRole('switch', { name: await ui.t('settings.remoteControl.v2.switch.title') }).waitFor();
+    if (ui.case === 'model-access-off' || ui.case === 'model-access-on') {
+      const card = page.getByTestId('own-computer-model-access');
+      await card.waitFor();
+      const toggle = card.getByRole('switch');
+      assert.equal(await toggle.getAttribute('aria-checked'), ui.case === 'model-access-on' ? 'true' : 'false');
+      await ui.capture('card');
+      if (ui.case === 'model-access-off') {
+        await toggle.click();
+        await page.waitForFunction(() => document.querySelector('[data-testid="own-computer-model-access"] [role="switch"]')?.getAttribute('aria-checked') === 'true');
+        await ui.capture('turned-on');
+      }
+      return;
+    }
     if (ui.case === 'switched-here') {
       await page.getByText('MacBook Pro', { exact: false }).first().waitFor();
       return;
@@ -147,9 +163,10 @@ export default {
       await page.getByRole('dialog').waitFor();
       await ui.capture('popover');
       await page.keyboard.press('Escape');
-      // 这台电脑的卡:与中转的连接和「管理设备…」(定位到本机卡片)。
+      // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。
       await page.getByRole('button', { name: 'Studio Mac', exact: true }).click();
-      await page.getByRole('button', { name: await ui.t('settings.remoteControl.v2.popover.manage') }).waitFor();
+      const hubCard = page.getByRole('dialog');
+      await hubCard.getByText(await ui.t('settings.devices.linkStatus.online')).waitFor();
       await ui.capture('hub-card');
       await page.keyboard.press('Escape');
       // 要处理的设备:点开卡片,「状态」用红字写原因(没有单独的「需要处理」卡片)。

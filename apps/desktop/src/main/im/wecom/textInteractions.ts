@@ -8,14 +8,17 @@ import {
 
 import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import { isStopCommand } from '../shared/controlCommands';
+import { imText } from '../shared/imText';
+import { localizedReplyWords, matchesReplyWord, type ReplyWords } from '../shared/replyWords';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
-import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '../shared/permissionPresentation';
+import { interactionChoiceReceivedText, permissionOutcomeText } from '../shared/permissionPresentation';
 import { createLogger } from '../../logger';
 
 const log = createLogger('im:wecom-interaction');
 
 interface PendingInteraction {
   request: InteractionRequest;
+  words: ReplyWords;
   resolve: (decision: InteractionDecision) => void;
   timer: ReturnType<typeof setTimeout>;
   /** 已发出的确认卡(模板卡片); 点击按 messageId 对回本请求。 */
@@ -51,6 +54,8 @@ const INTERACTION_TIMEOUT_MS = 10 * 60_000;
 /** 这些 reason 表示请求没被真正作答(超时/取消/被替换/发不出去), 而不是用户拒绝。 */
 const EXPIRED_INTERACTION_REASON =
   /timeout|cancelled|replaced_by_new_request|send_failed|disconnected|session_disposed|session_aborted|session_closed|interaction_route_released|turn_terminal/;
+
+const K = 'imBot.text.wecom.interaction';
 
 /**
  * 企业微信的文字 + 模板卡片确认。
@@ -92,6 +97,7 @@ export class WecomTextInteractions {
     const settle = (decision: InteractionDecision) => shared ? shared.decide(decision) : resolvePending(decision);
     const entry: PendingInteraction = {
       request,
+      words: localizedReplyWords(),
       resolve: settle,
       timer: undefined as unknown as ReturnType<typeof setTimeout>,
       settled: false,
@@ -177,7 +183,7 @@ export class WecomTextInteractions {
     request: InteractionRequest,
     entry: PendingInteraction,
   ): Promise<void> {
-    const prompt = formatWecomInteractionPrompt(request);
+    const prompt = formatWecomInteractionPrompt(request, entry.words);
     // 无论长短都先发完整提示。
     await this.im.sendMarkdownText(userId, prompt);
     // 提示发送期间请求可能已经被桌面/手机/超时/stop/新请求收口: 不再发可批准卡。
@@ -190,7 +196,7 @@ export class WecomTextInteractions {
     try {
       const sent = await this.cardApi.sendInteractiveCard!(
         userId,
-        buildWecomConfirmCard(request, Boolean(entry.onStop)),
+        buildWecomConfirmCard(request, Boolean(entry.onStop), entry.words),
         {
           // 传输层在发 IO 之前登记活卡并回报确定身份: 平台可能先把卡展示给主人,
           // 点击帧先于 SDK 回执到达。绑定必须发生在点击之前, 否则唯一一次有效
@@ -227,18 +233,18 @@ export class WecomTextInteractions {
     void this.expireCard(entry);
     try {
       const stopping = entry.onStop();
-      void this.im.sendText(userId, '⏹ 已收到，正在终止当前任务。').catch(() => undefined);
+      void this.im.sendText(userId, imText(`${K}.stopRequested`)).catch(() => undefined);
       entry.resolve(defaultDecision(entry.request, 'wecom_interaction_cancelled_by_stop'));
       const result = await stopping;
       await this.im.sendText(userId, result.stopped
         ? result.droppedQueued > 0
-          ? `⏹ 已终止当前任务，并移除 ${result.droppedQueued} 条排队消息。`
-          : '⏹ 已终止当前任务。'
-        : '这条任务已结束，无需再终止。');
+          ? imText('imBot.text.wecom.agent.stopDoneDropped', { count: result.droppedQueued })
+          : imText('imBot.text.wecom.agent.stopDone')
+        : imText('imBot.text.wecom.agent.stopIdle'));
     } catch {
       entry.resolve(defaultDecision(entry.request, 'wecom_interaction_cancelled_by_stop'));
       log.warn('wecom stop request failed');
-      await this.im.sendText(userId, '未能确认任务已终止，请发送 !stop 再次请求终止。').catch(() => undefined);
+      await this.im.sendText(userId, imText(`${K}.stopFailed`)).catch(() => undefined);
     }
   }
 
@@ -263,13 +269,13 @@ export class WecomTextInteractions {
       void this.stopEntry(event.senderId, pending);
       return;
     }
-    const decision = value ? parseReply(pending.request, value) : null;
+    const decision = value ? parseReply(pending.request, value, pending.words) : null;
     if (!decision) return;
     // 只提交一次: 收口后重复/迟到点击不会再调用 decide。
     if (!this.settleEntry(event.senderId, pending, decision)) return;
     if (pending.paused) {
       void this.im
-        .sendText(event.senderId, INTERACTION_CHOICE_RECEIVED_TEXT)
+        .sendText(event.senderId, interactionChoiceReceivedText())
         .catch(() => undefined);
     }
   }
@@ -298,10 +304,10 @@ export class WecomTextInteractions {
       const reason = decision.kind === 'plan_review' ? decision.reason : undefined;
       text =
         behavior === 'allow'
-          ? '✅ 已批准计划'
+          ? imText(`${K}.planApproved`)
           : EXPIRED_INTERACTION_REASON.test(reason ?? '')
-            ? '⌛ 本次计划确认已失效'
-            : '❌ 已拒绝计划';
+            ? imText(`${K}.planExpired`)
+            : imText(`${K}.planRejected`);
     } else {
       return;
     }
@@ -332,7 +338,7 @@ export class WecomTextInteractions {
     try {
       // 空 buttons = 传输层的本地失效入口; 不会触发平台更新。
       await update.call(this.cardApi, entry.cardId, {
-        body: '这个确认已失效，无需再处理。',
+        body: imText('imBot.text.shared.permission.expired'),
         buttons: [],
       });
     } catch {
@@ -353,13 +359,13 @@ export class WecomTextInteractions {
     }
     // 命令必须交还共享路由; 非审批回答按新消息排队, 不能当格式错误吞掉。
     if (event.text.trim().startsWith('/')) return false;
-    const decision = parseReply(pending.request, event.text);
+    const decision = parseReply(pending.request, event.text, pending.words);
     if (!decision) return false;
     this.settleEntry(event.senderId, pending, decision);
     // 仅共享路径回"已收到"(宿主可能还暂停着); 非共享由最终结果说明覆盖, 不双发。
     if (pending.paused) {
       void this.im
-        .sendText(event.senderId, INTERACTION_CHOICE_RECEIVED_TEXT)
+        .sendText(event.senderId, interactionChoiceReceivedText())
         .catch(() => undefined);
     }
     return true;
@@ -370,70 +376,74 @@ export class WecomTextInteractions {
  * 确认卡内容。按钮只带**语义值**, token 由传输层每次随机生成 —— 卡片上的按钮
  * 不是静态的 allow/deny id, 猜中 key 也无法代替主人作答。
  */
-export function buildWecomConfirmCard(request: InteractionRequest, canStop = false): InteractiveCardSpec {
+export function buildWecomConfirmCard(
+  request: InteractionRequest,
+  canStop = false,
+  words = localizedReplyWords(),
+): InteractiveCardSpec {
   const stopButtons: InteractiveCardSpec['buttons'] = canStop
-    ? [{ id: 'stop', label: '终止任务', type: 'danger', payload: { value: '__stop_turn' } }]
+    ? [{ id: 'stop', label: imText(`${K}.stopLabel`), type: 'danger', payload: { value: '__stop_turn' } }]
     : [];
-  const stopHint = canStop ? '终止会停止当前任务，并清空本对话的排队消息。' : '';
+  const body = (prompt: string) => [canStop ? imText(`${K}.stopHint`) : '', prompt].filter(Boolean).join('\n');
   if (request.kind === 'ask_user_question') {
-    return { title: '等待你的回答', body: `请回复上一条问题。${stopHint}`, buttons: stopButtons };
+    return { title: imText(`${K}.askIntro`), body: body(imText(`${K}.askFooter`)), buttons: stopButtons };
   }
   if (request.kind === 'plan_review') {
     return {
-      title: '计划待批准',
-      body: `任务已暂停，等待你决定是否执行计划。${stopHint}`,
+      title: imText('imBot.text.wecom.cards.plan.title'),
+      body: body(imText(`${K}.planFooter`, { approve: words.approve, deny: words.deny })),
       buttons: [
-        { id: 'approve', label: '批准计划', type: 'primary', payload: { value: '批准' } },
-        { id: 'reject', label: '拒绝计划', type: 'danger', payload: { value: '拒绝' } },
+        { id: 'approve', label: imText('imBot.text.wecom.cards.plan.btnApprove'), type: 'primary', payload: { value: words.approve } },
+        { id: 'reject', label: imText('imBot.text.wecom.cards.plan.btnReject'), type: 'danger', payload: { value: words.deny } },
         ...stopButtons,
       ],
     };
   }
   const toolName = (request.kind === 'permission' ? request.displayName ?? request.toolName : '').slice(0, 40);
   return {
-    title: '需要确认操作',
-    body: `${toolName ? `任务已暂停，等待确认工具「${toolName}」的操作。` : '任务已暂停，等待你确认操作。'}${stopHint}`,
+    title: imText(`${K}.permissionTitle`, { toolName }),
+    body: body(imText(`${K}.permissionFooter`, { allow: words.allow, deny: words.deny })),
     buttons: [
-      { id: 'allow', label: '允许本次操作', type: 'primary', payload: { value: '允许' } },
-      { id: 'deny', label: '拒绝本次操作', type: 'danger', payload: { value: '拒绝' } },
+      { id: 'allow', label: imText('imBot.text.wecom.cards.permission.btnAllowOnce'), type: 'primary', payload: { value: words.allow } },
+      { id: 'deny', label: imText('imBot.text.wecom.cards.permission.btnDeny'), type: 'danger', payload: { value: words.deny } },
       ...stopButtons,
     ],
   };
 }
 
-export function formatWecomInteractionPrompt(request: InteractionRequest): string {
+export function formatWecomInteractionPrompt(request: InteractionRequest, words = localizedReplyWords()): string {
   if (request.kind === 'permission') {
     const toolName = escapeWecomMarkdown(request.displayName ?? request.toolName);
     const unavailable = autoReviewUnavailablePromptLine(request);
-    return `需要确认工具“${toolName}”。
+    return `${imText(`${K}.permissionTitle`, { toolName })}
 ${permissionPromptDescription(request) ?? ''}
 ${unavailable ? `\n${unavailable}\n` : ''}
-${permissionOperationPreview(request) ? `操作：
+${permissionOperationPreview(request) ? `${imText(`${K}.operationLabel`)}
 \`\`\`
 ${permissionOperationPreview(request)}
 \`\`\`
 ` : ''}
 
-回复“允许”执行一次，或回复“拒绝”取消本次操作。企业微信内不支持永久授权。需要终止整个任务并清空排队消息，可点击“终止任务”或发送 !stop。`;
+${imText(`${K}.permissionFooter`, { allow: words.allow, deny: words.deny })}\n\n${imText(`${K}.stopHint`)}`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;
-    return `Agent 提交了一份执行计划：
+    return `${imText(`${K}.planIntro`)}
 
 ${plan}
 
-回复“批准”继续，或回复“拒绝”取消本次计划。需要终止任务并清空排队消息，请发送 !stop。`;
+${imText(`${K}.planFooter`, { approve: words.approve, deny: words.deny })}\n\n${imText(`${K}.stopHint`)}`;
   }
   const question = request.questions[0];
-  if (!question) return 'Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。';
+  if (!question) return imText(`${K}.askNoQuestion`);
   const options = (question.options ?? [])
     .slice(0, 9)
     .map((option, index) => `${index + 1}. ${escapeWecomMarkdown(option.label)}`)
     .join('\n');
-  return `Agent 需要你的回答：
+  return `${imText(`${K}.askIntro`)}
 ${escapeWecomMarkdown(question.question)}
 ${options ? `\n${options}\n` : ''}
-请回复选项序号，或直接输入你的回答。需要终止任务并清空排队消息，请发送 !stop。`;
+${imText(`${K}.askFooter`)}\n\n${imText(`${K}.stopHint`)}`;
 }
 
 function defaultDecision(request: InteractionRequest, reason: string): InteractionDecision {
@@ -446,24 +456,25 @@ function defaultDecision(request: InteractionRequest, reason: string): Interacti
   return { kind: 'permission', behavior: 'deny', reason };
 }
 
-function parseReply(request: InteractionRequest, rawText: string): InteractionDecision | null {
+function parseReply(request: InteractionRequest, rawText: string, words: ReplyWords): InteractionDecision | null {
   const text = rawText.trim();
   if (!text) return null;
   const normalized = text.toLowerCase();
+  const is = (fixed: string[], localized: string) => matchesReplyWord(normalized, fixed, localized);
   if (request.kind === 'permission') {
-    if (['允许', '同意', '确认', 'allow', 'yes', 'y'].includes(normalized)) {
+    if (is(['允许', '同意', '确认', 'allow', 'yes', 'y'], words.allow)) {
       return { kind: 'permission', behavior: 'allow' };
     }
-    if (['拒绝', '不允许', '取消', 'deny', 'no', 'n'].includes(normalized)) {
+    if (is(['拒绝', '不允许', '取消', 'deny', 'no', 'n'], words.deny)) {
       return { kind: 'permission', behavior: 'deny', reason: 'wecom_user_denied' };
     }
     return null;
   }
   if (request.kind === 'plan_review') {
-    if (['批准', '同意', '确认', '继续', 'approve', 'allow', 'yes', 'y'].includes(normalized)) {
+    if (is(['批准', '同意', '确认', '继续', 'approve', 'allow', 'yes', 'y'], words.approve)) {
       return { kind: 'plan_review', behavior: 'allow' };
     }
-    if (['拒绝', '取消', 'deny', 'no', 'n'].includes(normalized)) {
+    if (is(['拒绝', '取消', 'deny', 'no', 'n'], words.deny)) {
       return { kind: 'plan_review', behavior: 'deny', reason: 'wecom_user_denied' };
     }
     return null;

@@ -39,6 +39,7 @@ export function useTeammateSearchMatches(
   const bots = useMemo(() => withoutShadowedBots(allBots, cloud), [allBots, cloud]);
   const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [rosterRemoteBots, cloud]);
   const { groups } = useBotGroupList();
+  const { t } = useTranslation();
   return useMemo(() => {
     const query = rawQuery.trim().toLocaleLowerCase();
     if (!query || lockedSessionGroupName !== null) return [];
@@ -72,12 +73,12 @@ export function useTeammateSearchMatches(
         kind: 'group',
         name: group.name,
         archived: Boolean(group.archived),
-        detail: group.members.map((member) => member.name).join('、'),
+        detail: group.members.map((member) => member.name).join(t('commonUi.listSeparator')),
         route: `/bots/groups/${encodeURIComponent(group.id)}`,
         avatar: group.members[0] ?? null,
       }));
     return [...local, ...remote, ...groupMatches];
-  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName]);
+  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName, t]);
 }
 
 /** 与会话结果行同几何(rounded-lg、px-3 py-2.5、20px 标记、13 号标题、类型小标签)。 */

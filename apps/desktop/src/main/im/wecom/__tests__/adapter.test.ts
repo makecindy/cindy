@@ -20,6 +20,7 @@ vi.mock('../../../localDb/client/current', () => ({
 }));
 
 import { buildWecomAdapter } from '../adapter';
+import { setMainLocale } from '../../../i18n.desktop';
 import { buildImChannelNote } from '../../shared/channelNote';
 import type { WecomTextInteractions } from '../textInteractions';
 import { WECOM_PERSONAL_GROUP_WINDOW } from '../../shared/channelGroupWindow';
@@ -31,6 +32,7 @@ const CONFIG = {
   effortOverrides: { 'claude-opus-4-7': 'xhigh' as const },
 };
 const interactions = {} as unknown as WecomTextInteractions;
+afterEach(() => setMainLocale('en'));
 
 describe('wecom teammate-owned connection', () => {
   it('maps the TOFU owner DM, other DMs and group chats to companion lanes', () => {
@@ -185,11 +187,12 @@ describe('wecom group window', () => {
 });
 
 // Regression: new messages need an immediate receipt without closing the reply reserved for execution.
-it('uses an active queue receipt instead of silent queueing or consuming the callback', async () => {
+it.each([['zh-CN', '第 2 位'], ['en', '#2 in the queue']] as const)('uses an active %s queue receipt without consuming the callback', async (locale, positionText) => {
+  setMainLocale(locale);
   const sendMarkdownText = vi.fn(async () => ({ messageId: 'queue-receipt' }));
   const im = { getOwnerUserId: () => 'owner', sendMarkdownText } as unknown as WecomIM;
   const adapter = buildWecomAdapter(im, interactions, CONFIG);
   expect(adapter.silentQueue).not.toBe(true);
   await adapter.notifyQueued!('owner', 2);
-  expect(sendMarkdownText).toHaveBeenCalledWith('owner', expect.stringContaining('第 2 位'), { usePendingFrame: false });
+  expect(sendMarkdownText).toHaveBeenCalledWith('owner', expect.stringContaining(positionText), { usePendingFrame: false });
 });

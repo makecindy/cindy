@@ -17,6 +17,7 @@
  */
 import type { ImProgressHandle, ImProgressView } from '../channelIM.js';
 import { DELIVERY_FAILURE } from '../safeLog.js';
+import { tt } from '../transportText.js';
 
 /** 过程帧最小间隔。企业微信没有公开的流式频率上限, 与飞书/Telegram 卡片的节流同量级。 */
 export const WECOM_PROGRESS_INTERVAL_MS = 1_500;
@@ -101,7 +102,7 @@ export function createWecomProgress(deps: WecomProgressDeps): ImProgressHandle {
 
   const windowExpired = () => Boolean(deps.sendStatus) && now() - streamStartedAt >= WECOM_STREAM_PROGRESS_WINDOW_MS;
   const visibleContent = (view: ImProgressView) => statusMode
-    ? truncateUtf8(`${view.stage.trim() || '任务仍在处理中。'}\n\n任务仍在继续，完成后会发送结果。可发送 !stop 终止任务。`, 2_000)
+    ? truncateUtf8(`${view.stage.trim() || tt('imBot.text.transport.wecom.progressWorking', '任务仍在处理中。')}\n\n${tt('imBot.text.transport.wecom.progressContinuing', '任务仍在继续，完成后会发送结果。可发送 !stop 终止任务。')}`, 2_000)
     : composeWecomProgressContent(view);
 
   function schedule(): void {
@@ -149,7 +150,7 @@ export function createWecomProgress(deps: WecomProgressDeps): ImProgressHandle {
       lastContent = '';
       failedContent = '';
       try {
-        await deps.finishStream?.(deps.streamId, truncateUtf8(`${composeWecomProgressContent(view)}\n\n任务仍在继续，后续进度将以新消息发送。`, WECOM_STREAM_MAX_BYTES));
+        await deps.finishStream?.(deps.streamId, truncateUtf8(`${composeWecomProgressContent(view)}\n\n${tt('imBot.text.transport.wecom.progressHandoff', '任务仍在继续，后续进度将以新消息发送。')}`, WECOM_STREAM_MAX_BYTES));
       } catch {
         // 窗口可能已经过期; 不再尝试这个 stream, 主动状态仍然继续。
       }

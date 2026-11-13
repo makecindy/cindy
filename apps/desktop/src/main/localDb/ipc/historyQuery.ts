@@ -3,11 +3,13 @@ import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
 import {
   XdtHelperToolRegistry,
   registerListSessionsTool,
+  registerListTeammatesTool,
   registerSearchChatHistoryTool,
   historyPayload,
   type XdtHelperHistoryDeps,
 } from '@cindy/mcps';
 import { listSessionsForHistory } from '../chatHistoryReader.js';
+import { readTeammateDirectory } from '../teammateDirectory.js';
 import { searchChatHistoryHybrid } from '../chatHistorySearch.js';
 import { capReferenceMessageRows } from './history.js';
 import { getDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
@@ -15,7 +17,7 @@ import { requireObject, throwIpcError } from '../../utils/ipcValidate.js';
 
 /** Reuse MCP's strict input validation and the exact same readers/formatters on the source host. */
 export function createHistoryQueryHandler(
-  deps: Pick<XdtHelperHistoryDeps, 'listSessions' | 'searchChatHistory'>,
+  deps: Pick<XdtHelperHistoryDeps, 'listSessions' | 'searchChatHistory' | 'listTeammates'>,
 ) {
   const registry = new XdtHelperToolRegistry();
   const unsupported = async () => ({
@@ -29,10 +31,11 @@ export function createHistoryQueryHandler(
     getMessages: unsupported,
   };
   registerListSessionsTool(registry, { history });
+  registerListTeammatesTool(registry, { history });
   registerSearchChatHistoryTool(registry, { history });
   return async (value: unknown) => {
     const request = requireObject(value, 'request');
-    if (request.tool !== 'list_sessions' && request.tool !== 'search_chat_history') {
+    if (request.tool !== 'list_sessions' && request.tool !== 'search_chat_history' && request.tool !== 'list_teammates') {
       throwIpcError('INVALID_PARAMS', 'Unsupported history query');
     }
     const args = requireObject(request.args, 'args');
@@ -56,6 +59,7 @@ export function createHistoryQueryHandler(
 
 export function registerHistoryQueryIpc(): void {
   const execute = createHistoryQueryHandler({
+    listTeammates: async args => ({ ok: true, page: await readTeammateDirectory({ ...args, remoteVisibleOnly: true }) }),
     listSessions: async (args) => ({
       ok: true,
       page: await listSessionsForHistory({ ...args, remoteVisibleOnly: true }),

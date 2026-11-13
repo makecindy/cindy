@@ -14,6 +14,7 @@
  * 任何自由文本(思考增量、工具输入、命令输出)都不进这里。
  */
 import type { TurnActivityState } from './turnActivity.js';
+import { imText } from './imText';
 
 function formatElapsed(ms: number): string {
   const sec = Math.max(0, Math.round(ms / 1000));
@@ -28,9 +29,10 @@ function formatElapsed(ms: number): string {
  */
 export function renderPublicStage(activity: TurnActivityState, now: number): string {
   const elapsed = formatElapsed(now - activity.startedAt);
-  const steps = activity.totalSteps > 0 ? ` · 已进行 ${activity.totalSteps} 步` : '';
-  const lines = [`⚙️ 正在处理${steps} · ${elapsed}`];
-  if (activity.writing) lines.push('✍️ 正在整理回答…');
+  const lines = [activity.totalSteps > 0
+    ? imText('imBot.text.shared.activity.workingSteps', { count: activity.totalSteps, elapsed, rate: '' })
+    : imText('imBot.text.shared.activity.working', { elapsed, rate: '' })];
+  if (activity.writing) lines.push(imText('imBot.text.shared.activity.drafting'));
   // 这两行在别处已经过本地化, 是给用户看的状态, 不是内部实现细节。
   if (activity.notice) lines.push(`⏳ ${activity.notice}`);
   if (activity.interactionNotice) lines.push(`⏳ ${activity.interactionNotice}`);
