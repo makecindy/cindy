@@ -57,6 +57,7 @@ vi.mock('../transport.js', async (importOriginal) => {
         const result = { content: [{ type: 'text', text: 'fixture build complete' }] };
         let rpcLost = false;
         let eofOnAbort = false;
+        let retryEndOnAbort = false;
         let loseNextPrompt = false;
         const finish = (omit) => {
           if (omit !== 'tool_execution_end') output({ type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash', result });
@@ -88,6 +89,7 @@ vi.mock('../transport.js', async (importOriginal) => {
           }
           if (cmd.type === 'fixture_eof_tail') return endOutput(JSON.stringify(cmd.frame));
           if (cmd.type === 'fixture_eof_on_abort') { eofOnAbort = true; return; }
+          if (cmd.type === 'fixture_retry_end_on_abort') { retryEndOnAbort = true; return; }
           if (cmd.type === 'fixture_retry_exhausted_eof') {
             output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
             return endOutput();
@@ -132,6 +134,7 @@ vi.mock('../transport.js', async (importOriginal) => {
           }
           if (cmd.type === 'abort') {
             if (eofOnAbort) endOutput();
+            else if (retryEndOnAbort) output({ type: 'auto_retry_end', success: false });
             else output({ type: 'agent_settled' });
           }
         });
@@ -683,20 +686,30 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     expect(session!.isTurnRunning()).toBe(false);
   });
 
-  it('keeps the failed turn tail on its generation when the user immediately sends again', async () => {
+  it.each([
+    ['failed', 'done'], ['cancelled', 'done'], ['cancelled', 'status'],
+  ] as const)('keeps the %s turn tail on its generation when the user immediately sends again at %s', async (outcome, boundary) => {
     const { events, transport } = await start();
     let nextSend: ReturnType<Session['send']> | undefined;
     session!.onEvent(event => {
-      // Session deliberately drains the paired terminal before reopening
-      // admission. Start at that boundary, while the old idle status is queued.
-      if (event.type === 'done' && (event.data as { status?: string }).status === 'failed' && !nextSend) {
+      // Exercise reentrant admission at both boundaries of Stop's terminal
+      // batch; a failure deliberately holds admission until the paired done.
+      const atBoundary = boundary === 'done'
+        ? event.type === 'done' && (event.data as { status?: string }).status === outcome
+        : event.type === 'status' && (event.data as { isRunning?: boolean }).isRunning === false;
+      if (atBoundary && !nextSend) {
         nextSend = session!.send('Continue after restoring quota');
         void nextSend.catch(() => {}); // Assert dispatch below, without an unhandled rejection.
       }
     });
-    await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
-      { type: 'auto_retry_end', success: false, finalError: '429 预算超额' },
-    ] }));
+    if (outcome === 'cancelled') {
+      await transport.writeLine(JSON.stringify({ type: 'fixture_retry_end_on_abort' }));
+      await session!.abort();
+    } else {
+      await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+        { type: 'auto_retry_end', success: false, finalError: '429 预算超额' },
+      ] }));
+    }
     await vi.waitFor(() => expect(nextSend).toBeDefined());
     await nextSend;
     const generation = session!.getTurnGeneration();

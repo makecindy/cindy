@@ -1338,12 +1338,13 @@ export function translatePiEvent(
       if (hostAbortRequested) {
         ctx.pendingAssistantError = null;
         clearPiHostAbortRequests(ctx);
+        // Leave no idle tail behind the terminal that admits the next send.
+        pushStatus(queue, ctx, 'Done', false);
         queue.push({
           type: 'done',
           data: { type: 'pi/auto_retry_end', status: 'cancelled', usage: piTurnUsageOf(ctx) },
           source: 'pi',
         });
-        pushStatus(queue, ctx, 'Done', false);
         return;
       }
       const rawFinalError = typeof event.finalError === 'string' && event.finalError.trim()
