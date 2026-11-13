@@ -216,16 +216,18 @@ function disambiguateDisplayNames(projects: ControlProject[]): void {
     groups.set(project.displayName, group);
   }
   const used = new Set(projects.map((project) => project.displayName));
+  // 长度按 UTF-16 单元算, 与 cardBuilders 截断按钮文字用的 `.length` 同一种算法 ——
+  // 按字符数预留的话, 表情这类占两个单元的字符会让后缀被截掉。
   const withSuffix = (name: string, suffix: string): string =>
-    `${Array.from(name).slice(0, Math.max(1, BUTTON_LABEL_MAX - Array.from(suffix).length)).join('')}${suffix}`;
+    `${name.slice(0, Math.max(1, BUTTON_LABEL_MAX - suffix.length))}${suffix}`;
   for (const [name, group] of groups) {
     if (group.length < 2) continue;
     used.delete(name);
     group.forEach((project, index) => {
       const segs = project.workingDir.split('/').filter(Boolean);
       const candidates = [
-        withSuffix(name, ` · ${Array.from(segs[segs.length - 1] ?? '').slice(0, 12).join('')}`),
-        withSuffix(name, ` · ${Array.from(segs.slice(-2).join('/')).slice(-16).join('')}`),
+        withSuffix(name, ` · ${(segs[segs.length - 1] ?? '').slice(0, 12)}`),
+        withSuffix(name, ` · ${segs.slice(-2).join('/').slice(-16)}`),
       ];
       let label = candidates.find((candidate) => !used.has(candidate));
       for (let n = index + 1; label === undefined; n += 1) {

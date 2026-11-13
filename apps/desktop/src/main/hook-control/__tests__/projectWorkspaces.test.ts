@@ -139,6 +139,16 @@ describe('planProjectWorkspaces', () => {
   });
 
   // PR #10291 review: 纯数字的旧名称(如 2025)原先被排除在查找之外, 服务端按它派发就被拒。
+  // PR #10291 review(第六轮): 纯数字的键在对象里恒排最前, 会打乱清单的最近使用顺序。
+  it('纯数字的项目名不当现用名称, 清单顺序不被打乱', () => {
+    const result = plan({ '123': '/work/123' }, [
+      { path: '/code/recent', name: 'recent' },
+      { path: '/work/123', name: '123' },
+    ]);
+    expect(Object.keys(result.workspaces)).toEqual(['recent', 'work/123']);
+    expect(result.retired).toEqual({ '123': '/work/123' });
+  });
+
   it('纯数字的旧名称照样能找到目录', () => {
     const result = plan({ '2025': '/code/reports' }, [{ path: '/code/reports', name: 'reports' }]);
     expect(lookupWorkspaces(result.workspaces, result.retired)).toEqual({

@@ -692,11 +692,10 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
         if (!row.botContextId) continue;
         // 同 Telegram: /project 切到项目目录是用户显式选择, 重连不得覆盖回托管目录 ——
         // 本归一只服务跨 owner 命名空间迁移的旧托管路径(完整尾段判定)。
-        const managedTail = path.join('im-working-dir', row.botContextId);
+        // 两种分隔符都认: Windows 上库里的目录可能是正斜杠形态, 也可能是反斜杠。
         if (
           row.workingDir &&
-          !row.workingDir.endsWith(`${path.sep}${managedTail}`) &&
-          !row.workingDir.endsWith(`/${managedTail}`)
+          !row.workingDir.replace(/\\/g, '/').endsWith(`/im-working-dir/${row.botContextId}`)
         ) {
           continue;
         }

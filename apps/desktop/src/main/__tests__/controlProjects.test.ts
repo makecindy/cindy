@@ -100,6 +100,18 @@ describe('/ctr control project/session picker', () => {
     expect(
       (await listProjectsForControl({ projectsOnly: true })).map((row) => row.displayName),
     ).toEqual(['后端 · api', '后端 · server']);
+    // 表情占两个 UTF-16 单元: 后缀要落在按钮文字的 30 单元截断之内, 否则两个按钮仍然一样。
+    const emoji = '😀'.repeat(20);
+    setControlProjectCatalogSource(async () => ({
+      projects: [
+        { path: '/work/a/api', name: emoji, lastUsedAtMs: 2 },
+        { path: '/work/b/server', name: emoji, lastUsedAtMs: 1 },
+      ],
+      isRemoved: () => false,
+    }));
+    const labels = (await listProjectsForControl({ projectsOnly: true })).map((row) => row.displayName);
+    expect(labels.every((label) => label.length <= 30)).toBe(true);
+    expect(new Set(labels).size).toBe(2);
 
     // PR #10291 review: 上限只用于卡片展示; 按按钮标记找回项目时要能查到全部。
     setControlProjectCatalogSource(async () => ({

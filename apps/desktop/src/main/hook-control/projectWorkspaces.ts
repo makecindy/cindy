@@ -83,6 +83,15 @@ function isUsableName(name: string): boolean {
   return HOOK_WORKSPACE_ALIAS_RE.test(name) && !RESERVED_NAMES.has(name);
 }
 
+/**
+ * 纯数字的名称(如 `123`)不当现用名称: 清单是按插入顺序排的对象, 而这类键在对象里恒排最前,
+ * 会打乱「最近使用在前」的顺序, 把别的项目挤出服务端只列前若干个的选择卡。这种项目退到
+ * `上级目录/123` 或 `123 2`; 升级前手填的纯数字别名照样留作查找。
+ */
+function isIndexKey(name: string): boolean {
+  return /^(0|[1-9]\d*)$/.test(name);
+}
+
 function withParent(project: ProjectCatalogEntry, base: string): string | null {
   const parent = parentSegment(project.path);
   if (!parent) return null;
@@ -109,7 +118,7 @@ function pickName(
   base: string,
   isFree: (name: string) => boolean,
 ): string {
-  if (isUsableName(base) && isFree(base)) return base;
+  if (isUsableName(base) && !isIndexKey(base) && isFree(base)) return base;
   const parent = withParent(project, base);
   if (parent !== null && isFree(parent)) return parent;
   for (let index = 2; ; index += 1) {
@@ -177,6 +186,7 @@ export function planProjectWorkspaces(input: {
     if (
       existing !== undefined &&
       isUsableName(existing) &&
+      !isIndexKey(existing) &&
       !taken.has(existing) &&
       stillFits(existing, project, bases[index]!)
     ) {
