@@ -71,7 +71,7 @@ export async function readTeammateTasks(input: {
     if (!current()) return [];
     const response = await listRemoteCollection(invoke, { deviceId, deviceName: input.deviceName }, 'teammates');
     if (!current()) return [];
-    if (response.collectionId !== 'teammates' || !Array.isArray(response.items)) throw new Error('Invalid teammates');
+    if (response.collectionId !== 'teammates' || !Array.isArray(response.items)) throw new Error('Invalid buddies');
     const items = normalizeRemoteCollectionItems(response, 'teammates').filter(item => item.ref.kind === 'bot');
     rosterRead = true;
     for (const item of items) {

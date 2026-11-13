@@ -39,7 +39,7 @@ async function reconcileAppearance(released?: string): Promise<void> {
     const settings = readAppearanceSettings();
     const sources = [customWallpaperStore.read().pluginSource, settings.uiFontResource?.source,
       settings.codeFontResource?.source, settings.bodyFontResource?.source];
-    if (sources.some(source => source && (!released || source.instanceId === released)))
+    if (sources.some(source => source && 'instanceId' in source && (!released || source.instanceId === released)))
       await (await getPluginAppearanceService()).reconcile(released);
   }
 }

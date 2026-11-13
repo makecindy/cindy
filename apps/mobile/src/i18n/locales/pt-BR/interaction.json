@@ -134,7 +134,7 @@
       "label": "Plano"
     },
     "issue_confirm": {
-      "title": "O problema precisa de confirmação",
+      "title": "A Issue precisa de confirmação",
       "label": "Issue"
     },
     "rename_sessions_confirm": {
@@ -154,8 +154,8 @@
       "label": "Solicitação"
     },
     "input_handoff": {
-      "title": "Transferência de controle de entrada necessária",
-      "label": "Transferência de controle de entrada"
+      "title": "Entrada manual necessária",
+      "label": "Entrada manual"
     }
   },
   "rewind": {
@@ -233,7 +233,7 @@
     "photoNotReadable": "Não é possível ler esta foto agora (talvez o download do iCloud ainda não tenha terminado). Tente novamente mais tarde."
   },
   "pluginSetup": {
-    "remoteDesktop": "Abrir aplicativo de computador",
+    "remoteDesktop": "Abrir área de trabalho remota",
     "completeOnDesktop": "Use a área de trabalho remota para concluir a configuração no computador. O login, a autorização e as credenciais permanecem nesse computador; este cartão é atualizado automaticamente.",
     "chooseOne": "Escolha um método de configuração",
     "progress": "{{satisfied}}/{{total}} concluídos",
@@ -290,17 +290,17 @@
     },
     "terminal": {
       "succeeded": "Controle devolvido ao Agent.",
-      "cancelled": "Transferência de controle de entrada cancelada.",
-      "failed": "Transferência de controle de entrada encerrada.",
-      "expired": "Transferência de controle de entrada encerrada por tempo de espera excedido."
+      "cancelled": "Entrada manual cancelada.",
+      "failed": "Entrada manual encerrada.",
+      "expired": "Entrada manual encerrada por tempo de espera excedido."
     },
     "failure": {
       "permission": "O Cindy não consegue ler a tela deste computador. Permita o acesso do Cindy em Acessibilidade nas Configurações do Sistema.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler esta tela. Você pode concluir esta etapa no computador host e devolver o controle ao Agent.",
       "action_failed": "Essa ação não teve efeito. Verifique a tela e tente novamente.",
-      "timeout": "Transferência de controle de entrada encerrada por tempo de espera excedido.",
-      "unsupported": "Este computador ainda não oferece transferência de entrada.",
+      "timeout": "Entrada manual encerrada por tempo de espera excedido.",
+      "unsupported": "Este computador ainda não oferece entrada manual.",
       "origin_changed": "A página mudou antes que Cindy pudesse preenchê-la, então nada foi inserido. Verifique a página atual e tente novamente.",
       "picture_unavailable": "Não foi possível mostrar esta etapa como imagem. Permita que Cindy grave a tela nas Configurações do Sistema e verifique se a janela não está minimizada.",
       "screen_locked": "A tela deste computador está bloqueada (a suspensão da tela também a bloqueia). Ative e desbloqueie a tela e peça ao Agent para tentar novamente.",
@@ -347,11 +347,11 @@
       "donePhone_other": "O proprietário concluiu {{count}} etapas de entrada em um celular",
       "doneElsewhere_one": "O proprietário concluiu {{count}} etapa de entrada em outro dispositivo",
       "doneElsewhere_other": "O proprietário concluiu {{count}} etapas de entrada em outro dispositivo",
-      "done": "Transferência de entrada concluída",
+      "done": "Entrada manual concluída",
       "nothingToFill": "Nada para digitar; controle devolvido ao Agent",
-      "cancelled": "Transferência de entrada cancelada",
-      "expired": "O tempo da transferência de entrada esgotou",
-      "failed": "A transferência de entrada não foi concluída",
+      "cancelled": "Entrada manual cancelada",
+      "expired": "O tempo da entrada manual esgotou",
+      "failed": "A entrada manual não foi concluída",
       "doneOn_many": "O proprietário concluiu {{count}} etapas de entrada em {{device}}",
       "doneHost_many": "O proprietário concluiu {{count}} etapas de entrada no computador host",
       "donePhone_many": "O proprietário concluiu {{count}} etapas de entrada em um celular",
@@ -431,7 +431,7 @@
       "singleSelect": "Selecione uma resposta ou insira outra resposta.",
       "emptyTitle": "Nenhuma pergunta específica",
       "emptyDetail": "Você pode enviar uma resposta vazia para que o computador continue.",
-      "waiting": "Agent está aguardando confirmação"
+      "waiting": "O Agent está aguardando confirmação"
     },
     "plan": {
       "outlineCount": "{{count}} seções",

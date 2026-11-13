@@ -301,6 +301,12 @@ function createDb(): void {
       list_preview_role TEXT,
       list_message_count INTEGER
     );
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+      state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
+    );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       client_id TEXT NOT NULL,
@@ -434,7 +440,14 @@ describe('local-db:sessions:update handler wiring', () => {
     Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
     h.sqlite!.prepare("UPDATE sessions SET parent_session_id = 'cc-local', source = 'side-chat' WHERE id = 'codex-local'").run();
     h.sqlite!.prepare("UPDATE sessions SET parent_session_id = 'cc-local' WHERE id = 'pi-local'").run();
+    // The real terminal transaction also owns private state; include its schema
+    // instead of masking missing-table failures as worktree errors.
+    for (const id of ['cc-local', 'codex-local', 'pi-local']) {
+      h.sqlite!.prepare("INSERT INTO messages (id,client_id,session_id,role,content,created_at) VALUES (?,?,?,'assistant','{}',1)").run(id, id, id);
+      h.sqlite!.prepare("INSERT INTO mcp_app_view_states VALUES (?,?, 'fixture','revision',NULL,'{}',2)").run(id, id);
+    }
     await update('cc-local', { status: 'deleted' });
+    expect(h.sqlite!.prepare('SELECT session_id FROM mcp_app_view_states').all()).toEqual([{ session_id: 'pi-local' }]);
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'deleted' });
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('pi-local')).toEqual({ status: 'active' });
     expect(h.runtimeCleanup).toHaveBeenCalledWith('codex-local');

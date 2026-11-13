@@ -700,9 +700,9 @@ export interface AgentDeps {
   auth: AuthAdapter;
   runtimeConfig: AgentRuntimeConfig;
   /**
-   * Agent CLI 二进制绝对路径。host 在构造 agent 前必须已经把二进制 provisioned 好
-   * (splash 阶段下载/解压); maker-core 自己不下载、不解析 manifest, 拿到就用。
-   * 缺省 / 空串 → BaseAgent 构造期立即抛错, 不让 session 进半就绪状态。
+   * Agent CLI 的绝对路径，由 host 准备，maker-core 不下载或解析 manifest。
+   * 可由 getter 延迟解析，使缺少运行环境时仍能构造本地服务；getter 必须在
+   * 实际使用时返回已准备好的路径或抛错。普通空值仍在构造期拒绝。
    */
   binaryPath: string;
   logger: Logger;
@@ -807,6 +807,10 @@ export interface AgentDeps {
    * interaction surfaces, so maker-core never hard-codes one UI language.
    */
   getPiExtensionUiStrings?: () => PiExtensionUiStrings;
+  /** Localized recovery hint for a confirmed dataless context-file candidate.
+   * The supplied path is already redacted and escaped for display, not execution.
+   */
+  formatPiStartupCloudFileHint?: (displayPath: string) => string;
 
   /**
    * Pi-only: start a durable Subagent runner through a host-supported Node
@@ -1955,6 +1959,8 @@ export interface LocalAgentClient {
 }
 
 export const TASK_SYSTEM_PROMPT = Symbol('cindy.task-system-prompt');
+export interface HostSessionSkill { name: string; description: string; path: string; filePath: string; pluginRoot: string }
+
 export interface StartSessionOptions {
   /** Host-owned task instructions, appended after the native fixed prompt. */
   readonly [TASK_SYSTEM_PROMPT]?: string;
@@ -2071,6 +2077,13 @@ export interface StartSessionOptions {
    * it must never be converted into natural-language capability claims.
    */
   botRuntimeProfile?: BotRuntimeProfile;
+  /**
+   * Host-owned Skills mounted for this session only, such as Cindy's 「群协作」 Skill for the task of a
+   * group's Cindy. Each is a versioned directory Cindy manages (`path` holds `SKILL.md`, `pluginRoot`
+   * is its Claude Code local plugin). Never written to user or project discovery directories; local,
+   * non-Review sessions only.
+   */
+  hostSkills?: HostSessionSkill[];
   /**
    * 是否启用 Maker Memory (本次 session 内). 跟 userPrompt 同模式 — renderer 启 session
    * 时透传当前 memoryMode='maker' → true, 'native' / 'off' → false。main 不持久化。
@@ -2804,7 +2817,9 @@ export abstract class BaseAgent {
   protected memoryOverride: boolean | undefined;
 
   constructor(protected deps: AgentDeps) {
-    if (!deps.binaryPath) {
+    // Hosts may supply a live getter: local browsing must work before an
+    // optional runtime is installed. The getter validates on actual use.
+    if (!Object.getOwnPropertyDescriptor(deps, 'binaryPath')?.get && !deps.binaryPath) {
       throw new Error(
         `${this.constructor.name}: binaryPath is required at construction (host must provision binary before instantiating agent)`,
       );

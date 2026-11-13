@@ -78,6 +78,7 @@ import {
   validateVoiceInputCustomAsrWebsocketUrl,
 } from '../../../shared/voiceInputCustomAsr';
 import type { VoiceInputConnectionTestFailureReason } from '../../../shared/voiceInputConnectionTest';
+import appI18n from 'i18next';
 
 const log = createLogger('VoiceInputSection');
 // Recognition-language availability is independent of UI localization.
@@ -190,7 +191,7 @@ function formatHistoryTime(createdAt: number, locale: string): string {
       minute: '2-digit',
     }).format(new Date(createdAt));
   } catch {
-    return new Date(createdAt).toLocaleString();
+    return new Date(createdAt).toLocaleString(appI18n.language);
   }
 }
 
@@ -801,7 +802,7 @@ function VoiceInputPermissionBadge({
   const children = granted ? (
     <>
       <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-section-title)]">
-        <Check size={10} strokeWidth={2.4} className="text-emerald-600 dark:text-emerald-300" />
+        <Check size={10} strokeWidth={2.4} className="text-[var(--status-success)]" />
       </span>
       {labelText}
     </>

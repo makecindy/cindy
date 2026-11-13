@@ -76,6 +76,18 @@ describe('settings-store 多实例 mtime 失效', () => {
     expect(readDeviceLinkSettings()).toMatchObject({ agentNetEnabled: true, agentNetOnlyEncrypted: true });
   });
 
+  // #10095 discussion_r4546229095：恢复中的记录需经过真实设置存储保留，否则重启后会接受已取消的确认。
+  // 原测试没有待确认记录的写盘/重载；最小输入为 restoring:true 的 pending。tier:unit，复用现有临时目录。
+  it('保留远程切换恢复中的标记，写盘和外部重载都不丢失', async () => {
+    const pending = { switchId: 'switch-recover', controllerId: 'controller', previous: false,
+      deadlineAt: Date.now() + 60_000, pid: 123, restoring: true };
+    await writeDeviceLinkSetting('agentNetPendingSwitch', pending);
+    expect(readDeviceLinkSettings().agentNetPendingSwitch).toEqual(pending);
+    const saved = JSON.parse(fs.readFileSync(path.join(userDataDir, FILE), 'utf8')) as Record<string, unknown>;
+    externalWrite(saved, 3_500);
+    expect(readDeviceLinkSettings().agentNetPendingSwitch).toEqual(pending);
+  });
+
   it('外部改动后本实例写入:以盘上最新内容为基线合并,不丢外部字段', async () => {
     externalWrite({ remoteControlEnabled: true, revokedControllers: ['dev-y'] }, 4_000);
     await writeDeviceLinkSetting('disabledControlDeviceIds', ['dev-z']);

@@ -22,7 +22,7 @@ export interface FilePeerHostApi {
   register(): Promise<void>;
   onCommand(fn: (id: string, command: FilePeerCommand) => void): () => void;
   reply(id: string, ok: boolean, value?: string): Promise<void>;
-  read(connection: string, ticket: string, offset: number): Promise<string>;
+  read(connection: string, ticket: string, offset: number, maxBytes?: number): Promise<string>;
   write(sink: string, offset: number, base64: string): Promise<void>;
   invoke(connection: string, payload: string, body?: Uint8Array): Promise<string>;
 }

@@ -50,7 +50,8 @@ import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
 import { bindHostedSessionProvider, hasHostedSessionModelAccess } from '../../maker-host/session-provider-store.js';
 import { hostedProviderOffersModel } from '../../maker-host/guest-provider-route-store.js';
-import { isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
+import { isOwnComputerModelUseEnabled, isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
+import { ownComputersMayUseProvider } from '../../maker-host/own-computer-provider-access.js';
 import { createGuestProviderRouteBinder, guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from './providerAccess';
 import { createRemoteAgentHost, type GroupRelayLoad, type HostedStartInput, type RemoteAgentHost, type RunUsageRecord } from './runHost';
 import { reshareKeyForGuest } from './groupRelay.js';
@@ -144,6 +145,13 @@ function guestAccessForTask(controller: string, sessionId?: string) {
   return delegatedProviderShareGuestAccess(controller)
     ? sessionId ? delegatedProviderShareTaskAccess(controller, sessionId) : null
     : providerShareGuestAccess(controller);
+}
+
+/** 这个控制端能否用本机的供应商：受邀者看「允许被远程调用」；自己的其他电脑见 {@link ownComputersMayUseProvider}。 */
+function providerOpenTo(controller: string, providerId: string): boolean {
+  return isProviderSharePeer(controller)
+    ? isRemoteProviderInvocationAllowed(providerId)
+    : ownComputersMayUseProvider(providerId);
 }
 
 /** 受邀者能用的供应商：分享的那一个，且本机仍开放「允许被远程调用」。 */
@@ -907,7 +915,7 @@ export function installRemoteAgentHost(options: {
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
         if (isProviderSharePeer(controller) && access?.providerId !== providerId) return [];
         return guestProviderModelIds(views, providerId, kind)
-          .filter(model => isControllerAuthorized(controller) && isRemoteProviderInvocationAllowed(providerId)
+          .filter(model => isControllerAuthorized(controller) && providerOpenTo(controller, providerId)
             && shareTaskModelAllowed(controller, model, sessionId)
             && remoteModelAccess.allows(providerId, model, access?.memberId));
       },
@@ -924,7 +932,7 @@ export function installRemoteAgentHost(options: {
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
         const memberId = access?.memberId;
         const allowed = (id: string) => {
-          if (!isRemoteProviderInvocationAllowed(id) || !shareTaskModelAllowed(controller, model, sessionId) || !remoteModelAccess.allows(id, model, memberId)) return false;
+          if (!providerOpenTo(controller, id) || !shareTaskModelAllowed(controller, model, sessionId) || !remoteModelAccess.allows(id, model, memberId)) return false;
           assertMemberBudget(id, model, memberId);
           return true;
         };
@@ -946,7 +954,7 @@ export function installRemoteAgentHost(options: {
       },
       isAllowed: (providerId, controller, model, sessionId) => {
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
-        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId, sessionId) : isRemoteProviderInvocationAllowed(providerId))
+        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId, sessionId) : ownComputersMayUseProvider(providerId))
           && shareTaskModelAllowed(controller, model ?? '', sessionId)
           && remoteModelAccess.allows(providerId, model ?? '', access?.memberId)
           && (assertMemberBudget(providerId, model ?? '', access?.memberId), true);
@@ -1502,6 +1510,7 @@ export function installRemoteAgentHost(options: {
     limitUsage: () => current.limitUsage(),
     turnRunningControllers: () => current.turnRunningControllers(),
     sharedGroupStatus: (providerId, guestController) => groupRelay.sharedStatus(providerId, guestController),
+    ownComputerModelUseEnabled: isOwnComputerModelUseEnabled,
   });
 }
 

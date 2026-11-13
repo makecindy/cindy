@@ -4,6 +4,9 @@ import { GhostPluginCard, MarketPluginCard } from '../../../src/renderer/feature
 import { PluginDetailHeader } from '../../../src/renderer/features/plugin/GhostPluginDetailView';
 import { MarketPluginDetailView } from '../../../src/renderer/features/plugin/MarketPluginDetailView';
 import type { PluginMarketItem } from '../../../src/shared/pluginMarket';
+import taptapIcon from './assets/taptap-cli.png?url';
+import notionIcon from './assets/notion.png?url';
+import simulatorIcon from './assets/simulator.png?url';
 
 const noop = () => {};
 const official: PluginMarketItem = {
@@ -31,8 +34,27 @@ const recommendations = [official,
     name: 'Google Drive with an intentionally long plugin name',
     description: 'Find and organize your files.', downloadStatistics: { requestCount: '10934' } }];
 
+const previewRecommendations: PluginMarketItem[] = [
+  { ...official, pluginId: 'fixture-taptap', ghostId: 'taptap-cli', name: 'TapTap CLI',
+    description: 'TapTap 开发者业务插件：调用本机已安装的官方 taptap-cli，处理登录、身份与开发者业务。',
+    downloadStatistics: { requestCount: '4041' }, icon: {
+      url: taptapIcon, mimeType: 'image/png', sha256: '1'.repeat(64), sizeBytes: 9030, expiresAt: '2099-01-01T00:00:00.000Z',
+    } },
+  { ...official, pluginId: 'fixture-notion', ghostId: 'cindy-notion', name: 'Notion',
+    description: '连接你的 Notion 工作区，搜索和读取页面、查询 data source，并创建或更新页面内容。',
+    downloadStatistics: { requestCount: '573' }, icon: {
+      url: notionIcon, mimeType: 'image/png', sha256: '2'.repeat(64), sizeBytes: 76525, expiresAt: '2099-01-01T00:00:00.000Z',
+    } },
+  { ...official, pluginId: 'fixture-simulator', ghostId: 'baguette-simulator', name: '设备模拟器',
+    description: '在统一设备列表和任务侧栏中查看、操作 iPhone、iPad、Apple TV、Vision Pro 等设备。',
+    downloadStatistics: { requestCount: '5255' }, icon: {
+      url: simulatorIcon, mimeType: 'image/png', sha256: '3'.repeat(64), sizeBytes: 15074, expiresAt: '2099-01-01T00:00:00.000Z',
+    } },
+];
+
 function PluginIdentityFixture({ mode }: { mode: string }) {
   const { t } = useTranslation();
+  const recommended = mode === 'preview' ? previewRecommendations : recommendations;
   return mode === 'market-detail'
     ? <MarketPluginDetailView detail={{ ...community, manifest: {
       schemaVersion: 3, id: 'ntfy', name: 'ntfy', version: '1.0.0', kind: 'chip', entry: 'main.js',
@@ -45,17 +67,17 @@ function PluginIdentityFixture({ mode }: { mode: string }) {
         <section>
           <h2 className="mb-4 text-20 font-medium text-[var(--text-primary)]">{t('settings.ghosts.page.todayRecommendations')}</h2>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,220px),1fr))] gap-3">
-            {recommendations.map(item => <MarketPluginCard compact key={item.pluginId} item={item}
+            {recommended.map(item => <MarketPluginCard compact key={item.pluginId} item={item}
               busy={false} onSelect={noop} onInstall={noop} onIconLoadError={noop} />)}
           </div>
         </section>
         <section className="mt-6">
           <h2 className="mb-4 text-20 font-medium text-[var(--text-primary)]">{t('settings.ghosts.page.marketSection')}</h2>
           <div className="grid grid-cols-1 gap-3 min-[640px]:grid-cols-2">
-            {[official, community, team, custom].map(item => <MarketPluginCard key={item.pluginId}
+            {(mode === 'preview' ? previewRecommendations : [official, community, team, custom]).map(item => <MarketPluginCard key={item.pluginId}
               item={item} busy={false} onSelect={noop} onInstall={noop} onIconLoadError={noop} />)}
-            <GhostPluginCard item={{ id: 'local-report', name: 'Weekly report', description: 'A plugin developed on this computer.', origin: 'local' }}
-              onPrimary={noop} onManage={noop} />
+            {mode !== 'preview' ? <GhostPluginCard item={{ id: 'local-report', name: 'Weekly report', description: 'A plugin developed on this computer.', origin: 'local' }}
+              onPrimary={noop} onManage={noop} /> : null}
           </div>
         </section>
       </main>;

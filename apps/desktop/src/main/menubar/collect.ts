@@ -22,6 +22,7 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
@@ -76,6 +77,8 @@ export interface MenubarSessionRow {
 export interface MenubarCollectDeps {
   nowMs: number;
   listProviders(): Promise<ProviderView[]>;
+  /** Null means the provider still uses the original single-account reader. */
+  readSubscriptionPool?(providerId: SubscriptionProvider): Promise<SubscriptionPoolView | null>;
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
@@ -123,8 +126,27 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
   const modelNames = modelDisplayNames(providers);
   const sources: MenubarSourceInput[] = [];
   if (balance) sources.push(balanceSource(balance));
-  const subscriptionReads = providers.map(async (provider): Promise<MenubarSourceInput | null> => {
+  const subscriptionReads = providers.map(async (provider): Promise<MenubarSourceInput | MenubarSourceInput[] | null> => {
     if (!provider.connected || provider.suspended || provider.removed) return null;
+    // Migrated routes remain addressable for old tasks, but are now displayed by the pool.
+    if (provider.subscriptionPoolAlias && deps.readSubscriptionPool) return null;
+    if (isSubscriptionProvider(provider.id) && deps.readSubscriptionPool) {
+      const providerId = provider.id;
+      const pool = await safe<SubscriptionPoolView | null | false>(`pool:${providerId}`, () => deps.readSubscriptionPool!(providerId), false);
+      // A failed pool read must not substitute the CLI default's identity or quota.
+      if (pool === false) {
+        const source = provider.id === 'openai' ? codexSource(provider, null, deps.nowMs) : claudeSource(provider, null, deps.nowMs);
+        return { ...source, account: null, accountKeys: [], pooled: true };
+      }
+      if (pool?.configured) {
+        const accounts = subscriptionPoolSources(provider, pool, deps.nowMs);
+        const defaultAccount = accounts.find((source) => source.id === provider.id && source.windows.length > 0);
+        if (provider.id === 'openai' && defaultAccount) {
+          defaultAccount.resetCredits = await safe(`codex-resets:${provider.id}`, async () => (await deps.readCodexResets?.(provider.id)) ?? null, null);
+        }
+        return accounts;
+      }
+    }
     const kind = providerWeeklyQuotaSource(provider);
     // A Codex account waiting to be reconnected stays in the list without numbers instead
     // of falling into the hidden pay-as-you-go group.
@@ -154,10 +176,9 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     }
     return paygSource(provider);
   });
-  for (const source of await Promise.all(subscriptionReads)) {
+  for (const source of (await Promise.all(subscriptionReads)).flat()) {
     if (source) sources.push(source);
   }
-  sources.push(...distinctRemoteSubscriptions(sources, remote));
 
   const today = (allUsage ?? localUsage)?.todayKey ?? localDayKey(deps.nowMs);
   const days = dayKeysEndingAt(today, MENUBAR_USAGE_DAYS);
@@ -172,8 +193,10 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
   const tasks = await collectTasks(deps, localUsage, today, safe);
   const consuming = consumingSourceIds(tasks, providers);
   for (const source of sources) {
-    if (consuming.has(source.id)) source.consuming = true;
+    if (consuming.has(source.id) && !(source.kind === 'subscription' && source.pooled)) source.consuming = true;
   }
+  const distinct = distinctLocalSubscriptions(sources);
+  sources.splice(0, sources.length, ...distinct, ...distinctRemoteSubscriptions(distinct, remote));
 
   let updatedAtMs: number | null = null;
   for (const source of sources) {
@@ -258,8 +281,27 @@ export function sameSubscriptionAccount(a: MenubarSubscriptionInput, b: MenubarS
     valuesByKind.set(kind, (valuesByKind.get(kind) ?? new Set()).add(key));
   }
   if (left.some((key) => valuesByKind.has(keyKind(key)) && !valuesByKind.get(keyKind(key))!.has(key))) return false;
+  // One email can belong to several ChatGPT workspaces. Pool DTOs from older
+  // hosts have no workspace ID, so keep those entries separate rather than
+  // hiding a quota or assigning one workspace's running marker to another.
+  if (a.family === 'codex' && (a.pooled || b.pooled) &&
+      !left.some(key => key.startsWith('codex:id:') && right.includes(key))) return false;
   if (left.some((key) => right.includes(key))) return true;
+  // Pool entries are known distinct accounts; similar windows alone cannot identify them.
+  if (a.pooled || b.pooled) return false;
   return sameWindows(a, b);
+}
+
+function distinctLocalSubscriptions(sources: MenubarSourceInput[]): MenubarSourceInput[] {
+  const kept: MenubarSourceInput[] = [];
+  for (const source of sources) {
+    const duplicate = source.kind === 'subscription' && kept.find((other): other is MenubarSubscriptionInput =>
+      other.kind === 'subscription' && !!source.accountKeys?.some(key => other.accountKeys?.includes(key)) &&
+      sameSubscriptionAccount(source, other));
+    if (!duplicate) kept.push(source);
+    else if (source.consuming) duplicate.consuming = true;
+  }
+  return kept;
 }
 
 /**
@@ -371,6 +413,43 @@ export function codexSource(
     prepaidUsd: null,
     updatedAtMs: bucket?.updatedAt ?? full?.updatedAt ?? null,
     accountKeys: identityKeys('codex', provider, ['id', (full as { accountId?: unknown } | null)?.accountId]),
+  };
+}
+
+/** One account owns the entire displayed snapshot. This projection is shared with peer reads. */
+export function subscriptionPoolSources(provider: ProviderView, pool: SubscriptionPoolView, nowMs: number): MenubarSubscriptionInput[] {
+  if (pool.providerId !== provider.id) throw new Error('Subscription pool provider mismatch');
+  return pool.accounts.filter(account => !account.paused && !isUnusedDefaultAccount(account)).map(account => {
+    const signedIn = account.status === 'ready' || account.status === 'limited';
+    const usage = signedIn ? account.usage : undefined;
+    const view = { ...provider, openAiAccount: undefined, subscriptionAccount: undefined };
+    const source = provider.id === 'openai'
+      ? codexSource(view, codexPoolPayload(usage?.codex), nowMs)
+      : claudeSource(view, usage?.claude ?? null, nowMs);
+    const identity = account.identity?.trim() || null;
+    return {
+      ...source,
+      id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
+      account: identity,
+      plan: planLabel(account.plan) ?? source.plan,
+      accountKeys: [...(source.accountKeys ?? []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
+      pooled: true,
+      consuming: account.running > 0,
+      resetCredits: null,
+    };
+  });
+}
+
+function codexPoolPayload(usage: SubscriptionAccountUsage['codex']): CodexAccountUsagePayload | null {
+  if (!usage) return null;
+  const window = (value: NonNullable<SubscriptionAccountUsage['codex']>['buckets'][string]['primary']): RateLimitWindow | null =>
+    value && typeof value.usedPercent === 'number' && Number.isFinite(value.usedPercent)
+      ? { ...value, usedPercent: value.usedPercent } : null;
+  return {
+    appServerBuckets: Object.fromEntries(Object.entries(usage.buckets).map(([id, bucket]) => [id, {
+      ...bucket, primary: window(bucket.primary), secondary: window(bucket.secondary),
+    }])),
+    credits: usage.credits,
   };
 }
 

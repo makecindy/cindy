@@ -70,6 +70,46 @@ export function mockAppHtml() {
   return htmlPromise;
 }
 
+/** Browser integration fixture: official SDK parses initialization before the first render. */
+export async function viewStateAppHtml() {
+  const bundle = await build({
+    bundle: true,
+    write: false,
+    format: 'iife',
+    minify: true,
+    stdin: {
+      resolveDir: path.dirname(fileURLToPath(import.meta.url)),
+      contents: `
+      import { App } from '@modelcontextprotocol/ext-apps/app-with-deps';
+      import { EmptyResultSchema } from '@modelcontextprotocol/sdk/types.js';
+      const app = new App({name:'View state browser fixture',version:'1.0.0'},{});
+      const output = document.querySelector('output');
+      const renders = [];
+      const render = state => { output.textContent=JSON.stringify(state);renders.push(output.textContent); };
+      app.onteardown = async () => ({});
+      window.stateProbe = {
+        renders,
+        ready: (async () => {
+          await app.connect();
+          const context=app.getHostContext();
+          const capabilities=app.getHostCapabilities();
+          const saved=context?.['cindy/view-state'];
+          render(saved?.version===1?saved:{version:1,page:1,filter:''});
+          return {context,capabilities};
+        })(),
+        save: async state => {
+          const result=await app.request({method:'cindy/view-state/set',params:{state}},EmptyResultSchema);
+          render(state);
+          return result;
+        },
+      };
+      `,
+    },
+  });
+  return '<!doctype html><html><body><output></output><script>' +
+    bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script') + '</script></body></html>';
+}
+
 export function createMockAppServer({ instructions } = {}) {
   const server = new McpServer({ name: 'cindy-mcp-apps-mock', version: '1.0.0' }, { instructions });
   let count = 0;
@@ -217,4 +257,64 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.once(signal, () => {
       void instance.close().then(() => process.exit(0));
     });
+}
+
+/** E2E: page-authored React instance, actual built-in modules and official SDK. */
+export async function viewStateHelperHtml(kind) {
+  const react = kind === 'react';
+  const bundle = await build({ bundle: true, write: false, format: 'esm', minify: true,
+    external: ['@modelcontextprotocol/ext-apps', '@cindy/ext-apps', '@cindy/ext-apps/react'],
+    stdin: { resolveDir: path.dirname(fileURLToPath(import.meta.url)), contents: `
+      import { App } from '@modelcontextprotocol/ext-apps';
+      ${react ? "import * as React from 'react'; import {createRoot} from 'react-dom/client';" : ''}
+      const app = new App({name:'State helper fixture',version:'1'}, {}, {autoResize:false});
+      const initial = {version:1,page:1,filter:''};
+      const renders=[];
+      let set, flush, save, dispose=()=>{};
+      const probe=window.stateProbe={renders};
+      probe.ready=(async()=>{
+        await app.connect();
+        const core=await import('@cindy/ext-apps').catch(()=>null);
+        ${react ? `
+          const module=await import('@cindy/ext-apps/react').catch(()=>null);
+          const useViewState=module ? module.createViewStateHooks(React).useViewState : (_app,initial)=>React.useState(initial);
+          let mounted;
+          const mountReady=new Promise(resolve=>{mounted=resolve;});
+          flush=()=>core ? core.flushViewState(app) : Promise.reject(new Error('VIEW_STATE_UNSUPPORTED'));
+          function Editor(){
+            const [value,update]=useViewState(app,initial);
+            renders.push(JSON.stringify(value)); set=update;
+            React.useEffect(()=>{mounted();},[]);
+            return React.createElement('div',null,
+              React.createElement('output',null,JSON.stringify(value)),
+              React.createElement('button',{id:'save-state',onClick:async()=>{
+                const action=probe.action;
+                if(action.state)update(action.state);
+                else {update(v=>({...v,page:v.page+1}));update(v=>({...v,page:v.page+1}));}
+                try {await flush();action.resolve({});} catch(error){action.reject(error);}
+              }},'Edit and save'));
+          }
+          const root=createRoot(document.querySelector('#root'));
+          root.render(React.createElement(React.StrictMode,null,React.createElement(Editor)));
+          await mountReady;
+          save=state=>new Promise((resolve,reject)=>{
+            probe.action={state,resolve,reject};document.querySelector('#save-state').click();
+          });
+          probe.sameEvent=()=>save();
+          dispose=()=>root.unmount();
+        ` : `
+          let local=initial;
+          const state=core ? core.createViewState(app,initial) : {get:()=>local,set:next=>{local=next;},flush:()=>Promise.reject(new Error('VIEW_STATE_UNSUPPORTED')),dispose(){}};
+          const render=()=>{const text=JSON.stringify(state.get());document.querySelector('output').textContent=text;renders.push(text);};
+          set=next=>{state.set(next);render();}; flush=()=>state.flush();dispose=()=>state.dispose();render();
+          save=async next=>{set(next);await flush();return {};};
+        `}
+        return {context:app.getHostContext(),capabilities:app.getHostCapabilities(),loaded:!!core};
+      })();
+      probe.local=state=>{set(state);};
+      probe.save=state=>save(state);
+      app.onteardown=async()=>{dispose();return {};};
+    ` } });
+  return '<!doctype html><html><body><div id="root"><output></output></div><script type="module">' +
+    bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script') + '</script></body></html>';
 }

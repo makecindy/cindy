@@ -42,6 +42,11 @@ export interface MobileAgentCapabilities {
    * 不列其他电脑与分享(v0.1.104–v0.1.110 的 host 会拒绝)。
    */
   supportsOrcaAgentRelocation?: boolean;
+  /**
+   * host 是否接受给它上面的运行设备 Worker(Lead 在另一台电脑)换 Agent 所在电脑；旧 host 缺省 false：
+   * 这类 Worker 不列其他电脑与分享(旧 host 会拒绝)。
+   */
+  supportsOrcaRemoteWorkerAgentRelocation?: boolean;
   /** host 是否支持定时任务保存模型的运行位置(`modelAgentDeviceId`)；旧 host 缺省 false，会静默丢掉该字段。 */
   supportsScheduleAgentDeviceSelection?: boolean;
   /** host 是否在 set-model 内执行强制模型窗口保护；旧 host 缺省 false。 */
@@ -180,6 +185,7 @@ export function normalizeMobileAgentCapabilities(value: unknown): MobileAgentCap
     supportsOrcaWorkerUpdate: value.supportsOrcaWorkerUpdate === true,
     supportsOrcaWorkerAgentDevice: value.supportsOrcaWorkerAgentDevice === true,
     supportsOrcaAgentRelocation: value.supportsOrcaAgentRelocation === true,
+    supportsOrcaRemoteWorkerAgentRelocation: value.supportsOrcaRemoteWorkerAgentRelocation === true,
     supportsScheduleAgentDeviceSelection: value.supportsScheduleAgentDeviceSelection === true,
   };
 }

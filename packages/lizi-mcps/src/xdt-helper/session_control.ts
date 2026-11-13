@@ -130,7 +130,7 @@ export interface SessionControlDeps {
         permissionMode?: PermissionMode;
       },
       'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'
-    >
+    > & { data?: Record<string, unknown> }
   >;
 }
 
@@ -138,11 +138,11 @@ function requireCallerSession(deps: SessionControlDeps): string | null {
   return deps.getSessionContext().sessionId ?? null;
 }
 
-function mapControlFailure(result: { ok: false; errorCode: string; message: string }) {
+function mapControlFailure(result: { ok: false; errorCode: string; message: string; data?: Record<string, unknown> }) {
   if (result.errorCode === 'HOST_NOT_READY') {
     return errorPayload('HOST_NOT_READY', `${BRAND_NAME} 主进程会话服务尚未就绪，请稍后重试。`);
   }
-  return errorPayload(result.errorCode, result.message);
+  return errorPayload(result.errorCode, result.message, result.data);
 }
 
 export function registerUpdateSessionQueuedMessageTool(

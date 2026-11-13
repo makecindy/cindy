@@ -25,9 +25,10 @@ import { SidebarTabWindowLayout } from './components/layout/SidebarTabWindowLayo
 import { isSidebarTabWindow } from './lib/sidebarTabWindow';
 import { AuthProvider } from './contexts/AuthContext';
 import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
-import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
+import { applyFontSettings, getInitialAppearanceSettings } from './hooks/useFontSettings';
+import { installAppearancePresenter, presentAppearance } from './appearance/AppearancePresenter';
 import { LocaleProvider, bootstrapInitialLocale } from './hooks/useLocale';
-import { followLocalThemeChanges, getInitialThemeVariant } from './hooks/useTheme';
+import { followLocalThemeChanges, followThemeSelectionChanges, getInitialThemeVariant } from './hooks/useTheme';
 import { WallpaperSettingsProvider } from './hooks/useWallpaperSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
@@ -38,8 +39,17 @@ document.documentElement.dataset.platform = window.electronAPI.platform;
 installHiddenAnimationGate();
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
-followLocalThemeChanges();
-applyFontSettings(getInitialFontSettings());
+const disposeLocalThemeChanges = followLocalThemeChanges();
+const disposeThemeSelectionChanges = followThemeSelectionChanges();
+import.meta.hot?.dispose(() => {
+  disposeLocalThemeChanges();
+  disposeThemeSelectionChanges();
+});
+const initialAppearance = getInitialAppearanceSettings();
+applyFontSettings(initialAppearance);
+// WallpaperSettingsProvider already follows this window's appearance snapshots.
+const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings, false, initialAppearance);
+import.meta.hot?.dispose(disposeAppearancePresenter);
 bootstrapInitialLocale();
 
 const rootElement = document.getElementById('root');
@@ -50,7 +60,7 @@ createRoot(rootElement).render(
     <LocaleProvider>
       <ConfirmDialogProvider>
         <AuthProvider enableSessionExpiredPrompt={false}>
-          <WallpaperSettingsProvider desktopBackground={false}>
+          <WallpaperSettingsProvider desktopBackground={false} onAppearanceChange={presentAppearance}>
             {isSidebarTabWindow() ? <SidebarTabWindowLayout /> : <SidebarWindowLayout />}
             <PluginModelPickerHost bootstrapCatalog />
           </WallpaperSettingsProvider>

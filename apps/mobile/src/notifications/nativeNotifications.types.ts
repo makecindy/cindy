@@ -9,6 +9,11 @@
 export type NativeNotificationsApi = Pick<
   typeof import('expo-notifications'),
   | 'setNotificationHandler'
+  | 'addNotificationReceivedListener'
+  | 'setBadgeCountAsync'
+  | 'dismissAllNotificationsAsync'
+  | 'getPresentedNotificationsAsync'
+  | 'dismissNotificationAsync'
   | 'getPermissionsAsync'
   | 'requestPermissionsAsync'
   | 'getDevicePushTokenAsync'
@@ -16,4 +21,6 @@ export type NativeNotificationsApi = Pick<
   | 'addNotificationResponseReceivedListener'
   | 'getLastNotificationResponseAsync'
   | 'clearLastNotificationResponseAsync'
+  | 'setNotificationCategoryAsync'
+  | 'scheduleNotificationAsync'
 >;

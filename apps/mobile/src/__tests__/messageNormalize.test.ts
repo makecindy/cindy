@@ -1778,3 +1778,13 @@ it('projects forwarded machine history without rewriting human text or persisted
   expect(rows[1].body).toBe(content);
   expect(rows[1].draftBody).toBeUndefined();
 });
+
+
+it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s only for process-only tool views', toolName => {
+  const rows = [message({ id: 'call', role: 'tool_use', content: { toolName, input: { note: 'Question or plan detail' }, toolUseId: 'tool-id' }, toolUseId: 'tool-id' }),
+    message({ id: 'result', role: 'tool_result', content: 'Confirmed interaction', toolUseId: 'tool-id' })];
+  expect(normalizeRemoteMessages(rows)).toEqual([]);
+  expect(normalizeRemoteMessages(rows, { includeInteractionTools: true })).toMatchObject([
+    { kind: 'tool', label: toolName, secondaryBody: 'Confirmed interaction', toolSettled: true },
+  ]);
+});

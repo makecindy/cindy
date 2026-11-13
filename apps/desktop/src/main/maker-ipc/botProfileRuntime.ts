@@ -60,6 +60,9 @@ interface BotToolsetCatalogItem {
   version?: string;
 }
 
+/** An owner-access group lane or its Thread lane (not a 分工, queue, AI reply or digest lane). */
+const OWNER_GROUP_LANE = /^group:[^:]+:access:owner:[1-9][0-9]*(?::thread:[^:]+)?$/;
+
 export interface BotProfileRuntimeSnapshot {
   snapshotId: string;
   botId: string;
@@ -98,6 +101,7 @@ export interface BotMemoryRuntimeRef {
 export type BotRuntimeFailureStage = 'prepare' | 'agent-start' | 'storage';
 
 export interface BotProfileRuntimeDeps {
+  getUserName?: () => string | null | undefined;
   listSkills?: (input: {
     agentKind: MakerSessionCreateOpts['agentKind'];
     workingDir: string;
@@ -299,8 +303,8 @@ export function buildBotProfileContextPrompt(displayName: string): string {
   const name = displayName.trim() || 'Cindy Bot';
   return [
     `Active Cindy Bot profile: ${name}.`,
-    'Your name is the active profile name; your personality, role, and relationship with the user come from the current SOUL and user profile. Keep them consistent across replies, context compaction, restarts, and model changes. Do not reverse who is the boss or invent a relationship from habitual forms of address. Correct earlier replies that conflict with the current profile instead of treating them as identity facts.',
-    'The user is talking to this named teammate inside Cindy. Pi, Claude Code, and Codex are execution engines, not your personal identity or the user-facing application. Their native coding instructions describe how to use tools; they do not replace your profile. If asked about the engine or model, distinguish it from your identity and only state runtime facts you can verify.',
+    'Your name is the active profile name; your personality, role, and relationship with the user come from the current SOUL and user profile. Keep them consistent across replies, context compaction, restarts, and model changes. Correct earlier replies that conflict with the current profile instead of treating them as identity facts.',
+    'The user is talking to this named buddy inside Cindy. Pi, Claude Code, and Codex are execution engines, not your personal identity or the user-facing application. Their native coding instructions describe how to use tools; they do not replace your profile. If asked about the engine or model, distinguish it from your identity and only state runtime facts you can verify.',
     businessOwnershipPrompt.trim(),
     'Use available host tools for model changes and verify their results before claiming a change. Connecting a new model or signing in to a provider is managed in Cindy settings. Do not present terminal-only slash commands such as /login or /model as commands available in this chat or assume the user is in a Pi terminal. When the exact Cindy entry is unknown, say so rather than inventing steps. When the user asks about a native CLI, explain which instructions belong to that terminal. This distinction does not restrict native tools, Pi package management, extensions, or self-repair.',
   ].join('\n');
@@ -611,8 +615,14 @@ export async function hydrateBotProfileRuntime(
   // Only the owner's own chats run as an ordinary project task. IM lanes (other people, groups,
   // topics) and group lanes keep the existing channel isolation: they never load the owner's
   // personal instructions, settings, Skills or native memories, only the teammate's project memory.
-  const projectContext = !!workspaceDir && readBotProjectMode(config) && ownerChat
-    && path.resolve(opts.workingDir) === workspaceDir;
+  // A V2 teammate answering its owner in a group whose project folder is on this computer works
+  // there like an ordinary task in that folder (bot-group-chat.md §7.5). Other members' requests
+  // keep the isolated lane in Home.
+  const ownerGroupProjectLane = row.role === 'group' && OWNER_GROUP_LANE.test(row.routeKey ?? '')
+    && !!workspaceDir && path.resolve(opts.workingDir) !== workspaceDir
+    && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);
+  const projectContext = !!workspaceDir && readBotProjectMode(config)
+    && (ownerChat ? path.resolve(opts.workingDir) === workspaceDir : ownerGroupProjectLane);
   const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
@@ -655,7 +665,11 @@ export async function hydrateBotProfileRuntime(
   const userContextSource = typeof config.userContextSource === 'string'
     ? config.userContextSource
     : '';
-  opts.botUserProfilePrompt = buildBotUserProfilePrompt(userContextSource);
+  const userName = ownerChat ? deps.getUserName?.()?.trim() : '';
+  opts.botUserProfilePrompt = [
+    userName ? `User: ${JSON.stringify(userName)}` : '',
+    buildBotUserProfilePrompt(userContextSource),
+  ].filter(Boolean).join('\n\n');
   const memoryRefs: BotMemoryRuntimeRef[] = !memoryActive
     ? []
     : [

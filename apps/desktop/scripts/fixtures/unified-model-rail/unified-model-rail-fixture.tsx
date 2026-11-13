@@ -72,6 +72,17 @@ const providers = [
   },
 ] as unknown as ProviderView[];
 
+const customProviders = [{
+  id: 'custom-identity', name: 'Example API', source: 'user',
+  agents: ['codex'], auth: { method: 'apiKey' }, routing: { codex: {} }, connected: true,
+  models: { codex: [
+    { id: 'deepseek-current', name: 'DeepSeek-V4.1-Flash' },
+    { id: 'deepseek-compat', name: 'DeepSeek V4.1 Flash' },
+    { id: `example/${'long-model-identifier-'.repeat(8)}current`, name: 'Same display name' },
+    { id: `example/${'long-model-identifier-'.repeat(8)}compat`, name: 'Same display name' },
+  ].map(model => ({ ...model, contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' })) },
+}] as ProviderView[];
+
 // 「最近」与 ★ 在组件挂载前落库:这些正是 PR 语义所在的三态 Fast 载体
 // (`true` / `'ultrafast'` 必须原样保留,不能都折成 true)。
 recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex', effort: 'high', fast: 'ultrafast' }, Date.now() - 60_000);
@@ -85,7 +96,8 @@ function Fixture({ scenario }: { scenario: string }) {
   const accountName = cindyAiAccountName(scenario === 'cindy-personal'
     ? { membershipKind: 'personal', orgSlug: null, orgName: null }
     : { membershipKind: 'org', orgSlug: scenario === 'cindy-xd' ? 'xd' : 'example', orgName: 'Example International Game Studio' }, t);
-  const sourceProviders = gateway ? [...providers, {
+  const custom = scenario.startsWith('custom-ids');
+  const sourceProviders = custom ? customProviders : gateway ? [...providers, {
     ...providers[1], id: 'xd', name: accountName, auth: { method: 'managed' },
     logoKind: scenario === 'cindy-xd' ? 'xd' : 'cindy',
     models: { codex: [{ id: 'auto', name: 'Auto', group: 'gpt', contextWindow: 272000, efforts: [] }] },
@@ -94,11 +106,16 @@ function Fixture({ scenario }: { scenario: string }) {
     <main className="mx-auto w-full max-w-[720px] p-4">
       <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-primary)] p-3">
         <ModelSelectorContent
+          {...(custom ? {
+            vendorKey: 'codex' as const,
+            unifiedPanel: scenario !== 'custom-ids-legacy',
+            onProviderChange: () => {},
+          } : {})}
           providersOverride={sourceProviders}
           providersOverrideState={{ status: 'ready', refresh: () => {} }}
           modelId="claude-opus-5"
           effort="medium"
-          currentProviderId="anthropic"
+          currentProviderId={custom ? 'custom-identity' : 'anthropic'}
           onModelChange={() => {}}
           onEffortChange={() => {}}
           onFastModeChange={() => {}}

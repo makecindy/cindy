@@ -3,6 +3,7 @@
   "authApiBaseUrl": "https://auth.cindy.com.cn",
   "chatApiBaseUrl": "https://chat.cindy.app",
   "deviceLinkApiBaseUrl": "https://device-link.cindy.com.cn",
+  "agentNetApiBaseUrl": "https://agent-net.cindy.com.cn",
   "oauthBrokerApiBaseUrl": "https://oauth-broker.cindy.com.cn",
   "ossApiBaseUrl": "https://oss.cindy.com.cn",
   "heartbeatUrl": "https://heartbeat.cindy.com.cn",

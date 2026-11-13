@@ -247,7 +247,7 @@ function consumeUtf8(budget: JsonByteBudget, value: string, jsonQuoted: boolean)
   return jsonQuoted ? consumeAscii(budget, 1) : false;
 }
 
-function formatFullToolInput(input: unknown): string {
+export function formatFullToolInput(input: unknown): string {
   if (typeof input === 'string') return input;
   try {
     return JSON.stringify(input, null, 2) ?? '';

@@ -1,3 +1,4 @@
+import { imText } from './imText';
 import { describePermissionAction } from '@cindy/maker-shared/interaction';
 import {
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -6,12 +7,10 @@ import {
   type InteractionRequest,
 } from '@cindy/maker-core';
 
-/**
- * 文本通道确认提示里的故障说明。硬编码中文，与 Desktop zh-CN 确认卡同句，
- * 不进 renderer locale（见 engineering-conventions.md §5）。
- */
-export const IM_AUTO_REVIEW_UNAVAILABLE_PROMPT =
-  '自动审批没完成，请确认要不要允许这次操作。';
+/** 文本通道确认提示里的故障说明，跟随界面语言，发送时现取。 */
+export function imAutoReviewUnavailablePrompt(): string {
+  return imText('imBot.text.shared.permission.autoReviewUnavailable');
+}
 
 /**
  * 确认提示里「为什么问你」的一行：审阅器故障的固定说明，或审阅器判定 ask 时给出的原因。
@@ -21,14 +20,14 @@ export function autoReviewUnavailablePromptLine(
   request: InteractionRequest,
 ): string | null {
   if (request.kind !== 'permission') return null;
-  if (isAutoReviewUnavailableMetadata(request.metadata)) return IM_AUTO_REVIEW_UNAVAILABLE_PROMPT;
+  if (isAutoReviewUnavailableMetadata(request.metadata)) return imAutoReviewUnavailablePrompt();
   const reason = autoReviewReasonFromMetadata(request.metadata);
-  return reason ? `自动审批需要你决定：${reason}` : null;
+  return reason ? imText('imBot.text.shared.permission.autoReviewReason', { reason }) : null;
 }
 
 /**
  * 故障降级时 description 末尾是英文兜底句（interactionRouter 可能在前面加上来源），
- * 渠道已用中文说明代替，去掉英文句避免中英重复。
+ * 渠道已用本地化说明代替，去掉英文兜底句避免重复。
  */
 export function permissionPromptDescription(request: InteractionRequest): string | undefined {
   if (request.kind !== 'permission' || !request.description) return undefined;
@@ -51,10 +50,10 @@ export function permissionOperationPreview(request: InteractionRequest): string 
     const action = describePermissionAction(request.toolName, request.input ?? {});
     text = action.kind === 'tool' ? JSON.stringify(request.input ?? {}, null, 2) : action.preview;
   } catch {
-    return '<无法序列化>';
+    return imText('imBot.text.shared.permission.previewUnserializable');
   }
   if (!text) return '';
   const clipped = text.length > TEXT_PERMISSION_PREVIEW_MAX
-    ? `${text.slice(0, TEXT_PERMISSION_PREVIEW_MAX)}\n…（已截断）` : text;
+    ? `${text.slice(0, TEXT_PERMISSION_PREVIEW_MAX)}\n${imText('imBot.text.shared.permission.previewTruncated')}` : text;
   return clipped.replaceAll('`', '\\u0060');
 }

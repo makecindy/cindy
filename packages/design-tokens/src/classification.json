@@ -4,9 +4,9 @@
   "snapshotCount": 584,
   "categories": {
     "literal": 291,
-    "alias": 246,
+    "alias": 247,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 41
+    "runtime-derived-or-protected": 40
   },
   "entries": [
     {
@@ -1748,10 +1748,14 @@
     },
     {
       "id": "chat-input-placeholder-subtle",
-      "category": "runtime-derived-or-protected",
-      "destination": "register-only",
-      "lightKind": "color-mix",
-      "darkKind": "color-mix",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "chat-input-placeholder",
+        "dark": "chat-input-placeholder"
+      },
       "modeledAsSemantic": false
     },
     {
@@ -2721,8 +2725,8 @@
       "lightKind": "alias",
       "darkKind": "alias",
       "aliasOf": {
-        "light": "text-tertiary",
-        "dark": "text-tertiary"
+        "light": "text-placeholder",
+        "dark": "text-placeholder"
       },
       "modeledAsSemantic": false
     },

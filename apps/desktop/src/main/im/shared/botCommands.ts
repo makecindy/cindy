@@ -21,6 +21,7 @@
  *     `botCommands.test.ts` 的内联清单守住。
  */
 
+import { imText } from './imText';
 import type { TelegramCommandMenu } from '@cindy/slack-hook-protocol';
 import type { SupportedLocale } from '../../../shared/locale';
 
@@ -314,8 +315,9 @@ const COMPANION_MANAGED_COMMANDS: ReadonlySet<string> = new Set(['project', 'mod
  * 渠道文案包没提供 `slash.companionManagedCommand` 时的兜底(与 Telegram / 飞书同文):
  * 拦截不能依赖文案包是否定义了这条提示, 否则没定义的渠道会把 /permission 等直接作用到伙伴任务上。
  */
-export const COMPANION_MANAGED_COMMAND_FALLBACK =
-  '🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。';
+export function companionManagedCommandFallback(): string {
+  return imText('imBot.text.shared.slash.companionManaged');
+}
 
 /** `cmd` 可带或不带开头的斜杠。 */
 export function isCompanionManagedCommand(cmd: string): boolean {

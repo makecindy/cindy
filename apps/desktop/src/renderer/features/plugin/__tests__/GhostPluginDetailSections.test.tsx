@@ -55,7 +55,12 @@ vi.mock('../PluginReadmeSection', () => ({
   usePluginReadme: () => null,
 }));
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async () => {
+  const { createInstance } = await import('i18next');
+  const { default: common } = await import('../../../i18n/locales/en/common.json');
+  const localized = createInstance();
+  await localized.init({ lng: 'en', interpolation: { escapeValue: false }, resources: { en: { translation: common } } });
+  return ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
       const labels: Record<string, string> = {
@@ -97,11 +102,13 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
-      return labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
+      return key.startsWith('settings.ghosts.perm.hostUi.') ? localized.t(key, options) :
+        labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
     },
     i18n: { language: 'en' },
   }),
-}));
+  });
+});
 
 import type { GhostPermissionItem } from '../../../../shared/ghost';
 import {
@@ -199,6 +206,14 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  // Unit: the real permission summary previously interpolated raw Host subjects.
+  it('renders readable host capability details in the plugin permission summary', () => {
+    const view = render(<PermissionSummary items={[{ key: 'ui:host:capability:draft', kind: 'panel',
+      labelKey: 'uiHost', detailKey: 'uiHostAccess', detailArgs: { subject: 'capability:draft', access: 'draft' } }]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Permissions: settings.ghosts.perm.uiHost/ }));
+    expect(screen.getByText('Read and edit the message draft')).toBeTruthy();
+    expect(view.container.textContent).not.toContain('capability:draft');
+  });
   it('shows target shared counts without reading local personal usage for a remote installation', () => {
     vi.stubGlobal(
       'ResizeObserver',

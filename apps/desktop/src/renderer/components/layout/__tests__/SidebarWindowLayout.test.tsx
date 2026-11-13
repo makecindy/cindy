@@ -13,6 +13,11 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('@/features/right-sidebar/RightSidebarShell', () => ({ RightSidebarShell: (props: { onActiveTabChange?: typeof h.selection }) => {
   h.selection = props.onActiveTabChange; return <div>Plugin page</div>;
 } }));
+vi.mock('@/features/right-sidebar/globalTabs', () => ({ getGlobalTabs: () => [
+  { id: 'legacy-panel', kind: 'plugin-view', state: { instanceId: 'legacy', view: 'panel' } },
+  { id: 'legacy-main', kind: 'plugin-view', state: { instanceId: 'legacy', view: 'main' } },
+  { id: 'g_plugin_view_board', kind: 'plugin-view', state: { instanceId: 'board', resourceViewId: 'board' } },
+] }));
 vi.mock('@/features/device-link/useDeviceLinkRemoteProjects', () => ({ useDeviceLinkRemoteProjects() {} }));
 vi.mock('@/cindy-brain/ghostPanels', () => ({ ensureGhostPanelsRegistered() {}, useGhostPanelsSync() {} }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { initGlobalListeners() {} } }));
@@ -36,6 +41,11 @@ it('shows a global page without a task and retains the hidden-window placeholder
   render(<SidebarWindowLayout />);
   await act(async () => { h.visibility?.({ visible: true }); });
   expect(screen.queryByText('rightSidebar.window.followPlaceholder')).not.toBeNull();
+  // #9496 must not exempt legacy main/panel pages from the original no-task overlay.
+  for (const id of ['legacy-main', 'legacy-panel']) {
+    await act(async () => { h.selection?.(id); });
+    expect(screen.queryByText('rightSidebar.window.followPlaceholder')).not.toBeNull();
+  }
   await act(async () => { h.selection?.('g_plugin_view_board'); });
   expect(screen.queryByText('rightSidebar.window.followPlaceholder')).toBeNull();
   await act(async () => { h.visibility?.({ visible: false }); });

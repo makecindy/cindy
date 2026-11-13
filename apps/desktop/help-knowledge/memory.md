@@ -1,7 +1,7 @@
 ---
 id: memory
 title: Memory across conversations
-summary: Settings > Personalization > Memory — the "Cindy" switch (on by default) turns on shared memory per working directory; when it's off, Claude Code and Codex use their own native memory. Teammates such as Cindy keep their own memory, viewable in the teammate's settings.
+summary: Settings > Personalization > Memory — the "Cindy" switch (on by default) turns on shared memory per working directory; when it's off, Claude Code and Codex use their own native memory. Buddies such as Cindy keep their own memory, viewable in the buddy's settings.
 tab: personalization
 ---
 Memory lets the agents carry context across your conversations — facts about you, your projects, and how you like to work. There are two kinds, and one master switch chooses between them.
@@ -28,9 +28,9 @@ Memory lets the agents carry context across your conversations — facts about y
 - When you've changed the switches, a **Custom** badge and a **Restore default** button appear next to the Memory title; it restores the switches (not the memories).
 - Resets ask for confirmation and can't be undone.
 
-**Teammates (such as Cindy) have their own memory:**
+**Buddies (such as Cindy) have their own memory:**
 
-- A teammate keeps its own memory, separate from the task memory above. To see or edit it, open the teammate's chat, click its name / avatar at the top to open its settings, and choose **Memory**. There you can search memories, open one to read or edit it, delete it, or turn **Use memory** off.
+- A buddy keeps its own memory, separate from the task memory above. To see or edit it, open the buddy's chat, click its name / avatar at the top to open its settings, and choose **Memory**. There you can search memories, open one to read or edit it, delete it, or turn **Use memory** off.
 
 **What memory is, what it isn't:**
 

@@ -30,6 +30,17 @@
       "description": "标点规则的豁免 key（格式同 term.exempt）。术语规则的 exempt 挂在术语条目上，标点规则不属于任何术语，需要独立清单。唯一正当用途：整条文案不是给人读的中文正文，而是机器可读的结构化文本——例如 GitHub issue 正文模板里的 `locale: {{locale}}` 元数据行，冒号是 key-value 分隔符、必须半角。这类形态与正文里的「无效 JSON: {{snippet}}」外形完全相同，静态扫描区分不了，只能按 key 声明。每条都应说明理由。",
       "items": { "type": "string", "pattern": "^(desktop|mobile/[a-zA-Z]+):.+$" }
     },
+    "englishCopyExempt": {
+      "type": "object",
+      "description": "英文写法规则（scripts/shared/glossary-rules.mjs 的 findEnglishCopyIssues）的豁免，按规则名分组，每条是精确 key（不接受以 . 结尾的子树前缀）。唯一正当用途：整条文案必须原样展示格式字面量，例如插件市场说明里的 JSON 示例 `{\"source\": \"local\", \"path\": \"…\"}`、文件名非法字符清单、终端命令示例——换成弯引号示例就失效，静态扫描又分不出它与正文引号。豁免的 key 不再命中时根门禁会报失效。",
+      "additionalProperties": false,
+      "properties": {
+        "en-please": { "type": "array", "items": { "type": "string", "pattern": "^(desktop|mobile/[a-zA-Z]+):.*[^.]$" } },
+        "en-successfully": { "type": "array", "items": { "type": "string", "pattern": "^(desktop|mobile/[a-zA-Z]+):.*[^.]$" } },
+        "en-straight-quote": { "type": "array", "items": { "type": "string", "pattern": "^(desktop|mobile/[a-zA-Z]+):.*[^.]$" } },
+        "en-bare-action": { "type": "array", "items": { "type": "string", "pattern": "^(desktop|mobile/[a-zA-Z]+):.*[^.]$" } }
+      }
+    },
     "terms": {
       "type": "array",
       "description": "术语条目。minItems 为 1 是防塌陷保险：terms 被误清空时，所有「遍历 terms」的完整性单测都会变成空循环而全绿，baseline 也是空的，于是整套禁用词与大小写检查静默消失、CI 一路通过。这类失效必须在加载阶段就炸掉。",

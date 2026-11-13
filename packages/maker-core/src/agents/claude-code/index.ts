@@ -1507,7 +1507,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 必须早于下面的 configuredWindows （窗口表在 buildQuery 之前就要用它，
     // 否则会撞 TDZ）。
     let mutableContextWindowBudget: number | null = opts.contextWindowBudget ?? null;
-    const binaryPath = this.deps.binaryPath;
+    const binaryPath = opts.remoteHostId ? undefined : this.deps.binaryPath;
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
     );
@@ -4504,6 +4504,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(managedPlugins?.roots ?? []),
           ...(controllerManagedSkills?.claudePluginRoots ?? []),
           ...(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots ?? []),
+          // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local runtime only.
+          ...(opts.remoteHostId ? [] : (opts.hostSkills ?? []).map((skill) => skill.pluginRoot)),
         ])];
       // Bind the native request id before the first HTTP request, not after SDK init.
       // A fork keeps its resume source but must publish a new destination id.

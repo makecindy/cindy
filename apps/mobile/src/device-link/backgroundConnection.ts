@@ -4,7 +4,9 @@ export interface BackgroundConnectionDiagnostic {
   phase: "background" | "release-settled" | "grace-fired" | "stop" | "active";
   generation: number;
   elapsedMs: number;
-  reason?: "grace" | "suspended";
+  reason?: "grace" | "suspended" | "hold-released";
+  /** Background work the person asked for is keeping the connection. */
+  held?: boolean;
   releases?: number;
   transitions?: number;
   failed?: number;
@@ -16,7 +18,13 @@ interface BackgroundConnectionOptions {
   releaseTopics(): Promise<void>[];
   pendingTransitions?(): Promise<void>[];
   stop(): void;
-  connect(): void;
+  /** `hold`: a notification action needs the connection while the app stays in the background. */
+  connect(reason: "active" | "hold"): void;
+  /**
+   * Background work the person asked for (answering from a notification) currently
+   * needs the connection. Owned by the caller so that it outlives a replaced client.
+   */
+  isHeld?(): boolean;
   graceMs: number;
   releaseWaitMs: number;
   suspendMs: number;
@@ -92,7 +100,10 @@ export function createBackgroundConnection(
         void Promise.race([releases, boundedWait]).then((result) => {
           if (generation !== captured) return;
           clearTimers();
-          if (options.isBackground()) {
+          if (options.isBackground() && options.isHeld?.()) {
+            // The last hold stops the connection when it is released.
+            report("grace-fired", { held: true });
+          } else if (options.isBackground()) {
             report("stop", {
               reason: "grace",
               releaseOutcome: Array.isArray(result) ? "settled" : "timed-out",
@@ -127,7 +138,26 @@ export function createBackgroundConnection(
         });
         options.stop();
       }
-      options.connect();
+      options.connect("active");
+    },
+    /**
+     * A hold began: bounded background work the person asked for needs the
+     * connection. One the grace period already stopped is started again;
+     * nothing is resubscribed.
+     */
+    held() {
+      if (options.isBackground()) options.connect("hold");
+    },
+    /**
+     * The last hold ended. Still in the background, the connection stops as the
+     * grace period would have stopped it; a pending grace or unsubscribe tail
+     * keeps the stop for itself.
+     */
+    unheld() {
+      if (stopTimer !== null || releaseTimer !== null) return;
+      if (!options.isBackground() || options.isHeld?.()) return;
+      report("stop", { reason: "hold-released" });
+      options.stop();
     },
     dispose() {
       generation += 1;

@@ -188,6 +188,16 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
     ) === 'unknown'
     ```
 
+## 跨插件副本与统一存储 seam
+
+`storageService.ts` 的 `HostStorageProvider` 统一路由已有 KV、fs:data、Library、handoff 和媒体，
+`storageProviders.ts` 只做适配；Library 的 binding、SQL、原子写、迁移和卸载不删语义保持。
+插件经独立批准的 `storage` 组调用 helper `storage_request`，不能代报调用方或直接读另一个实例。
+分享原子内容快照时，宿主确认双方与实际大小，复核源摘要后调用原 handoff.import；
+目标必须同账号本机、namespace 已确认且同组织范围。个人 root/local 属个人范围。
+接收方拿到自己的 handoff 引用，不获得源 Library 根或后续读取权。确认期间不持安装迁移锁，
+最终写入短暂复用 handoff hold，IO 失败保留结果未知语义及原 owner 根补偿。作者参数见 §4.10.4。
+
 ## Review 清单
 
 1. 路径/SQL 是否仍只经白名单与相对键？有没有新的绝对路径出口？（saveAs 成功 path 必须是库内相对键，不得把用户另存目标送进沙箱；extraDirs 握手/回执/probe 同禁）

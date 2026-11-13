@@ -65,6 +65,9 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
+- [插件授权目录与文件操作](protocol-compatibility/plugin-authorized-files.md)
+- [插件宿主工具的平台服务](protocol-compatibility/plugin-host-tools-platform.md)
+
 - `ghost.json` 的跨消费者字段、v2 兼容映射与枚举属于 Ghost manifest 协议，客户端正本位于
   `packages/plugin-protocol/src/manifest.ts`；Desktop 在
   `apps/desktop/src/shared/ghost.ts` 维护运行时 validator。除明确登记的 Desktop-only
@@ -82,7 +85,7 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   只有改变既有字段结构或安全语义时才需要协调协议升级。
 - 插件必须检测接口并处理不支持响应，局部降级或提示升级。`minCindyVersion` 不能替代
   这些处理：手动导入、旧版或其它安装渠道仍可能将包交给不适配客户端。
-- `agent.hostTools: string[]` 增量声明宿主工具组，当前识别 history/control/handoff/settings/scheduler。
+- `agent.hostTools: string[]` 增量声明宿主工具组，当前识别 history/control/handoff/settings/scheduler/terminal/files/storage/browser/computer/ssh/docs/discovery。
   未知字符串保留但不授权；receipt 增量可选 `approvedHostToolGroups` 不改变版本，旧记录可继续读取，缺少批准只影响新接口。
   UI 管子新增 `host-tool-request`，Node 私有通道使用同类型加 `reqId`，共用宿主校验及 Agent 工具处理器；返回原始 MCP 结果。
   旧宿主可保留清单但不支持接口，插件须检测 `cindy.host?.call` 并处理不支持响应。无 Session 的插件调用方不会改变原任务调用方协议或身份；不涉及 device-link wire 变更。

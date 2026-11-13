@@ -60,6 +60,52 @@ function input(sources: MenubarSourceInput[], options: { locale?: SupportedLocal
 }
 
 describe('buildMenubarView', () => {
+  // #10110, unit: two accounts on one peer must have distinct labels in both panel and
+  // widget. Provider-only fixtures could not catch identical device labels or a task
+  // action falsely promising to pick the displayed pool account.
+  it('names pooled peer accounts individually and keeps new-task actions at provider scope', () => {
+    const peer = { id: 'peer', name: 'Same computer' };
+    const sources = [codex('alpha', 80, { pooled: true, device: peer }), codex('beta', 20, { pooled: true, device: peer }),
+      codex('local', 40, { pooled: true, providerId: 'openai' })];
+    const view = buildMenubarView(input(sources, { settings: { privacy: false } }));
+    expect(view.sources.map(source => source.name)).toEqual(expect.arrayContaining(['alpha', 'beta', 'local']));
+    expect(view.details.local.action).toEqual({ kind: 'new-task', providerId: 'openai' });
+    expect(view.details.local.actionLabel).not.toContain('local');
+    expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'en'))?.sources.map(source => source.name))
+      .toEqual(expect.arrayContaining(['alpha', 'beta', 'local']));
+    const privateView = buildMenubarView(input(sources, { settings: { privacy: true } }));
+    expect(JSON.stringify(privateView)).not.toContain('alpha@example.com');
+    expect(privateView.sources.find(source => source.id === 'alpha')?.name).toBe('a•••a');
+  });
+
+  // #10204 review / #10110, unit: different handles were covered above, but two
+  // workspaces with the same email produced an ambiguous recommendation and widget.
+  // Exercise the real panel/widget projections, including privacy and missing plans.
+  it.each([false, true])('distinguishes pooled workspaces by plan in every short label (privacy=%s)', privacy => {
+    const sources = [codex('personal', 80, { pooled: true, account: 'same@example.com', plan: 'Plus' }),
+      codex('work', 20, { pooled: true, account: 'same@example.com', plan: 'Team' })];
+    const view = buildMenubarView(input(sources, { settings: { privacy } }));
+    const handle = privacy ? 's•••e' : 'same';
+    const names = [`Plus · ${handle}`, `Team · ${handle}`];
+    expect(view.sources.map(source => source.name)).toEqual(names);
+    expect(view.headlinePrimary).toBe(`${names[1]} has the most left.`);
+    expect(view.manage.map(source => source.title)).toEqual(names);
+    expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'en'))?.sources.map(source => source.name)).toEqual(names);
+    if (privacy) expect(JSON.stringify(view)).not.toContain('same@example.com');
+  });
+
+  it.each(['Team', null])('keeps same-name pool labels distinct and stable when plans match (%s)', plan => {
+    const sources = [codex('pool-a', 80, { pooled: true, account: 'same@example.com', plan }),
+      codex('pool-b', 20, { pooled: true, account: 'same@example.com', plan })];
+    const namesById = (view: ReturnType<typeof buildMenubarView>) => Object.fromEntries(view.sources.map(source => [source.id, source.name]));
+    const view = buildMenubarView(input(sources));
+    const prefix = plan ? `${plan} ` : '';
+    expect(namesById(view)).toEqual({ 'pool-a': `${prefix}1 · same`, 'pool-b': `${prefix}2 · same` });
+    const reordered = buildMenubarView(input([...sources].reverse(), { settings: { order: ['pool-b', 'pool-a'] } }));
+    expect(namesById(reordered)).toEqual(namesById(view));
+    expect(reordered.headlinePrimary).toBe(`${prefix}2 · same has the most left.`);
+  });
+
   it('recommends the source with the most room and outlines its tube', () => {
     const view = buildMenubarView(input([codex('alpha', 80), codex('beta', 20)]));
     expect(view.headlinePrimary).toBe('beta has the most left.');

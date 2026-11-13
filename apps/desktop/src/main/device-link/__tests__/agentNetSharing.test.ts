@@ -40,11 +40,15 @@ vi.mock('../selfHostedRelayConfig.js', () => ({ secureStorageAvailable: () => tr
   relayDataPath: () => '/unit-only-vault/' + state.key + '/sharing.enc' }));
 vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => state.relay }));
 vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.agentNetEnabled }) }));
-vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.api, isAgentNetActive: () => true,
+// Production accessors refuse a pending account boundary; only the outgoing
+// variants used by the handover close still resolve the old owner's client.
+vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.pending ? null : state.api, isAgentNetActive: () => true,
+  outgoingAgentNetClient: () => state.api, outgoingAgentNetClientForRelay: () => { throw new Error('AGENT_NET_IDENTITY_MISMATCH'); },
   agentNetAllowsLegacy: () => false, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
   openScopedAgentNetAppSocket: vi.fn() }));
 import { selectedAgentNetSharingRoute, rememberAgentNetSharingService, requestAgentNetSharing,
-  joinAgentNetSharedTask, agentNetSharingRoute, stopAgentNetSharing, captureAgentNetSharingBoundaryClose, bindAgentNetSharing } from '../agentNetSharing.js';
+  joinAgentNetSharedTask, agentNetSharingRoute, stopAgentNetSharing, captureAgentNetSharingBoundaryClose, bindAgentNetSharing,
+  rememberAgentNetSharingHost } from '../agentNetSharing.js';
 import { resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
 beforeEach(() => {
   state.key = 'owner-a'; state.pending = false; state.files.clear(); state.writes = [];
@@ -245,6 +249,36 @@ it('discards a late join after an account boundary without writing into the next
     .rejects.toThrow('OWNER_CHANGED');
   expect(state.writes.every(file => file.startsWith('/unit-only-vault/owner-a/'))).toBe(true);
   expect([...state.files.keys()].some(file => file.includes('owner-b'))).toBe(false);
+});
+it('closes an already-hosted task through the old owner authority while the account boundary is pending', async () => {
+  // Bug #10092: teardown always runs with the boundary pending. Capture went
+  // through owner() and threw, aborting every switch after its services were
+  // torn down; resolving the host authority with the ordinary accessors would
+  // instead capture no member and silently leave the Agent-Net share open.
+  const route = selectedAgentNetSharingRoute('shared-task')!;
+  rememberAgentNetSharingHost('shared-task', 'hosted-task', route);
+  state.pending = true;
+  const close = captureAgentNetSharingBoundaryClose('unit-outgoing-access', 'https://auth.example.test');
+  state.http.mockResolvedValueOnce(Response.json({ sharedTaskId: 'hosted-task', status: 'closed' }));
+  await expect(close('hosted-task')).resolves.toMatchObject({ status: 'closed' });
+  expect(state.http.mock.calls.at(-1)?.[0]).toBe(route.server + '/api/agent-net/sharing/shared-tasks/hosted-task/close');
+  expect(state.card.mock.calls.at(-1)?.[1]).toMatchObject({ token: 'unit-outgoing-access', skipAutoRefresh: true });
+  // The vault on disk is still the outgoing owner's after the session stops.
+  stopAgentNetSharing();
+  state.http.mockResolvedValueOnce(Response.json({ sharedTaskId: 'hosted-task', status: 'closed' }));
+  await expect(captureAgentNetSharingBoundaryClose('unit-outgoing-access', 'https://auth.example.test')('hosted-task'))
+    .resolves.toMatchObject({ status: 'closed' });
+  expect(state.writes.every(file => file.startsWith('/unit-only-vault/owner-a/'))).toBe(true);
+  // Cold vault holding a self-hosted LAN (non-loopback http) host route: its
+  // validation must use the outgoing authority too, or the whole vault is
+  // rejected and the share is skipped.
+  const lan = { ...route, server: 'http://192.168.1.20:3348', resourceId: 'lan-task' };
+  state.files.set('/unit-only-vault/owner-a/sharing.enc', Buffer.from('unit-vault:' + JSON.stringify(
+    { version: 2, seed: randomBytes(32).toString('base64url'), routes: [lan] })).toString('base64'));
+  state.http.mockResolvedValueOnce(Response.json({ sharedTaskId: 'lan-task', status: 'closed' }));
+  await expect(captureAgentNetSharingBoundaryClose('unit-outgoing-access', 'https://auth.example.test')('lan-task'))
+    .resolves.toMatchObject({ status: 'closed' });
+  expect(state.http.mock.calls.at(-1)?.[0]).toBe(state.api.base + '/api/agent-net/sharing/shared-tasks/lan-task/close');
 });
 it('observes an outgoing committed create and closes it with captured credentials after the account changes', async () => {
   const route = selectedAgentNetSharingRoute('shared-task')!; rememberAgentNetSharingService(route);

@@ -58,16 +58,21 @@ export function ensureGhostPanelsRegistered(): void {
  * 订阅装/卸广播:同步全局页签 + 返回版本号(依赖"已装清单"的 effect 把版本号
  * 放进 deps 才能感知变化)。
  */
-export function useGhostPanelsSync(): number {
+export function useGhostPanelsSync(onGhostsChanged?: (ghosts: InstalledGhost[]) => void): number {
   const [version, bump] = useState(0);
   useEffect(() => {
     const api = window.electronAPI?.ghosts;
     if (!api) return;
-    return api.onChanged(({ ghosts }) => {
+    const stop = api.onChanged(({ ghosts }) => {
       syncGhostPanelRegistrations(ghosts);
+      onGhostsChanged?.(ghosts);
       bump((v) => v + 1);
     });
-  }, []);
+    // Cover changes between the window's initial snapshot and this existing
+    // listener mounting. The shared roster is already loaded; no IPC is added.
+    onGhostsChanged?.(readInstalledGhostsSnapshot());
+    return stop;
+  }, [onGhostsChanged]);
   return version;
 }
 

@@ -8,10 +8,12 @@ export const webhookSourceSchema = z
     preset: z.string().min(1).max(32),
     signed: z.boolean().optional(),
     format: z.record(z.string(), z.unknown()).optional(),
+    repositories: z.array(z.string().min(1).max(140)).min(1).max(50).optional(),
   })
   .optional()
   .describe(
-    '发送方。preset：github（默认）/ gitea / bitbucket / linear / gitlab / gitlab-token / standard-webhooks / stripe；'
+    '发送方。preset=github-app 使用已连接的 Cindy GitHub App，repositories 必填仓库名列表（owner/repository），无需单独配置地址或密钥；'
+      + '普通 Webhook 的 preset：github（默认）/ gitea / bitbucket / linear / gitlab / gitlab-token / standard-webhooks / stripe；'
       + 'signed=false 关闭签名（拿到地址的人都能触发）；preset=custom 时用 format 给出格式描述。省略 = 不修改',
   );
 

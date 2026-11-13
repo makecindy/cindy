@@ -5,17 +5,18 @@ import type { ViewInstance } from 'react-native';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ComponentProps } from 'react';
 import { AccessibilityInfo, BackHandler, findNodeHandle, Modal, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
-  cancelAnimation, Easing, runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue,
+  cancelAnimation, Easing, runOnJS, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, type SharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Gesture, GestureDetector, GestureHandlerRootView } from '@/platform/gestureHandler';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing } from '@/theme/tokens';
 import type { RemoteSessionListItem } from './sessionList';
 import { MobileHome } from './HomeSurface';
-import { SessionPaneDivider } from './SessionPaneDivider';
+import { PaneEdgeInsetProvider, usePaneEdgeInset, useSessionPaneDivider } from './SessionPaneDivider';
 import { NativeHistoryHost, NativeHistorySlot, NativeTaskDrawerHost, taskDrawerHandoffAvailable } from './NativeResidentHistory';
 import { HomePresentationFocus } from './HomePresentationFocus';
 import { LocalHomeList } from './ResidentHomeList';
@@ -56,15 +57,15 @@ export function useSessionListDrawerMotion(initialProgress = 0): SessionListDraw
 
 /** A rightward swipe on the task pulls the floating list out under the finger.
  * onOpen mounts it at once; releasing short of a third settles it back via onCancel.
- * onSettle follows either outcome. Keep `enabled` true until then: disabling a
- * running gesture cancels it. */
+ * onSettle reports whether the release committed the opening. Keep `enabled`
+ * true until then: disabling a running gesture cancels it. */
 export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen, onCancel, onSettle }: {
   motion: SessionListDrawerMotion;
   enabled: boolean;
   width: number;
   onOpen(): void;
   onCancel(): void;
-  onSettle(): void;
+  onSettle(opened: boolean): void;
 }) {
   const insets = useSafeAreaInsets();
   const panelWidth = Math.max(1, width + insets.left);
@@ -97,7 +98,8 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
         // The release can carry the last movement before onUpdate delivered it.
         const released = Math.max(0, Math.min(1, event.translationX / panelWidth));
         progress.value = released;
-        if (released > DRAWER_OPEN_DISTANCE_RATIO || event.velocityX > DRAWER_OPEN_VELOCITY) {
+        const opened = released > DRAWER_OPEN_DISTANCE_RATIO || event.velocityX > DRAWER_OPEN_VELOCITY;
+        if (opened) {
           settling.value = reduceMotion === false && released < 1;
           progress.value = settling.value
             ? withTiming(1, { duration: motionDuration.enter * (1 - released), easing: Easing.bezier(...motionEasing.out) }, () => {
@@ -107,14 +109,14 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
         } else {
           runOnJS(onCancel)();
         }
-        runOnJS(onSettle)();
+        runOnJS(onSettle)(opened);
       })
       .onFinalize(() => {
         'worklet';
         if (!tracking.value) return;
         tracking.value = false;
         runOnJS(onCancel)();
-        runOnJS(onSettle)();
+        runOnJS(onSettle)(false);
       });
   }, [enabled, motion, onCancel, onOpen, onSettle, panelWidth, reduceMotion]);
 }
@@ -165,6 +167,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   motion?: SessionListDrawerMotion;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const window = useAdaptiveWindow();
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -363,9 +366,28 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   const settleStretch = useCallback(() => {
     stretch.value = withTiming(0, { duration: motionDuration.base, easing: Easing.bezier(...motionEasing.out) });
   }, [stretch]);
+  // One live coordinate for the visible panel and both gesture boundaries.
+  // Reading it at touch-down also covers interrupted opening/closing rebounds.
+  // Subscribe directly to the shared values. Reanimated does not discover
+  // mapper inputs hidden inside a captured callback's closure.
+  const panelOffset = useDerivedValue(() => persistent ? 0 : Math.max(-panelWidth,
+    Math.min(0, (progress.value - 1) * panelWidth + dragX.value)));
+  const getEdgeLeft = useCallback(() => {
+    'worklet';
+    return panelWidth + panelOffset.value;
+  }, [panelOffset, panelWidth]);
+  // The floating drawer's right edge resizes it without a visible grip. Its
+  // gesture sits on the overlay, above both the panel and the dimmed area, so
+  // taps near the edge still reach list rows and close the drawer.
+  const edge = useSessionPaneDivider({
+    enabled: !persistent && open && !!resize, width, bounds: resize?.bounds ?? null,
+    left: panelWidth, getLeft: getEdgeLeft, top: topInset ?? insets.top, bottom: insets.bottom,
+    onResize: resize?.onResize ?? ignoreResize, elastic: { onStretch: stretchTo, onSettle: settleStretch },
+  });
   // Where a rightward drag on the dimmed area becomes Home, and whether it has.
   const homeAt = useSharedValue(DRAWER_HOME_TRAVEL);
   const homeEntered = useSharedValue(false);
+  const edgeInset = edge.rowInset;
   const gestures = useMemo(() => {
     // A leftward drag slides the panel; released past a third (or flicked) it closes,
     // otherwise it returns from where the finger left it.
@@ -385,7 +407,10 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
       dragX.value = 0;
       progress.value = withTiming(1, { duration: motionDuration.fast * (1 - effective), easing: Easing.bezier(...motionEasing.move) });
     };
+    // Both leave the edge's drag band to resizing: on a coarse move all three
+    // can activate at once, and the deeper panel/dimmed area would win.
     const panel = Gesture.Pan().enabled(!persistent)
+      .hitSlop({ right: -edgeInset })
       // 与内部 SectionList 纵向滚动的协调全靠激活窗口收窄:
       // - 只认「向左」(关闭方向)为激活条件,向右 16pt 直接判失败——右拖不该抢任何手势;
       // - 纵向 16pt 先到即失败,滚动优先;斜向手势必须横向分量先赢才归抽屉。
@@ -410,6 +435,11 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
     // The dimmed area takes both directions: left slides the panel away like the
     // panel itself; right stretches the list and, a short way on, becomes Home.
     const scrim = Gesture.Pan().enabled(!persistent)
+      .onTouchesDown((event, manager) => {
+        'worklet';
+        const touch = event.allTouches[0];
+        if (edgeInset && touch && touch.x < getEdgeLeft() + edgeInset) manager.fail();
+      })
       .activeOffsetX([-16, 16])
       .failOffsetY([-16, 16])
       .onStart((event) => {
@@ -445,7 +475,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
         settleSlide(event.translationX, event.velocityX);
       });
     return { panel, scrim };
-  }, [closeFromGesture, dragX, enterHome, home, homeAt, homeEntered, panelWidth, persistent, progress, stretch]);
+  }, [closeFromGesture, dragX, edgeInset, enterHome, getEdgeLeft, home, homeAt, homeEntered, panelWidth, persistent, progress, stretch]);
 
   const scrimStyle = useAnimatedStyle(() => ({
     opacity: Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth)),
@@ -453,20 +483,31 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   const panelStyle = useAnimatedStyle(() => ({
     transform: [
       {
-        translateX: persistent ? 0 : Math.max(
-          -panelWidth,
-          Math.min(0, (progress.value - 1) * panelWidth + dragX.value),
-        ),
+        translateX: panelOffset.value,
       },
     ],
   }));
 
 
+  // A docked column sits beside the side-by-side edge, which publishes its own inset.
+  const residentEdgeInset = usePaneEdgeInset();
+  // A handoff shell can render beside the live overlay; it needs its own detector gesture.
+  const idleEdgeGesture = useMemo(() => Gesture.Pan().enabled(false), []);
+
+  // Home reads both callbacks when a row is used, so their identity is not list
+  // content. Keep the element stable: opening, closing or an outer layout render
+  // must not render every row again just before the panel has to appear.
+  const homeHost = useRef({ onSelectSession, runNavigation });
+  homeHost.current = { onSelectSession, runNavigation };
+  const selectHomeSession = useCallback((item: RemoteSessionListItem) => homeHost.current.onSelectSession?.(item), []);
+  const runHomeNavigation = useCallback((action: () => void) => homeHost.current.runNavigation(action), []);
+  const selectsSession = !!onSelectSession;
+  const homeContent = useMemo(() => <PaneEdgeInsetProvider value={persistent ? residentEdgeInset : edge.rowInset}><MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
+    newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
+    onSelectSession={selectsSession ? selectHomeSession : undefined} runNavigation={runHomeNavigation} /></PaneEdgeInsetProvider>,
+  [newSessionActionRef, shownWidth, currentSessionId, newSessionInSystemBar, persistent, residentEdgeInset, edge.rowInset, selectsSession, selectHomeSession, runHomeNavigation]);
   // Remove a collapsed column in this render, before Home receives width=0.
   // The layout effect still settles motion and suppresses modal-close callbacks.
-  const homeContent = <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
-    newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
-    onSelectSession={onSelectSession} runNavigation={runNavigation} />;
   // The existing native host keeps Fabric ownership while its plain content
   // container docks into the Modal. A local focus boundary pauses background
   // work without hiding/recreating every native view on the next reveal.
@@ -494,7 +535,8 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
         </View>
 
       </Animated.View>;
-  const overlay = (handoffShell = false) => <View accessibilityViewIsModal={mounted && !persistent} pointerEvents={handoffShell ? "none" : "auto"}
+  const overlay = (handoffShell = false) => <GestureDetector gesture={handoffShell ? idleEdgeGesture : edge.gesture}>
+  <View accessibilityViewIsModal={mounted && !persistent} pointerEvents={handoffShell ? "none" : "auto"}
     style={[styles.overlay, persistent && { width: panelWidth }]} testID="sessionDrawer.overlay">
     {!persistent ? <GestureDetector gesture={gestures.scrim}>
       <Animated.View style={[styles.scrim, scrimStyle]}>
@@ -504,26 +546,28 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
     </GestureDetector> : null}
     {persistent && retainHome && NativeTaskDrawerHost && !handoffShell ? panel(false)
       : <GestureDetector gesture={gestures.panel}>{panel(handoffShell)}</GestureDetector>}
-    {/* A sibling of the panel, so an edge drag never reaches the close gesture.
-        It rides the panel's slide and stops taking touches once closing. */}
-    {!persistent && resize ? <Animated.View pointerEvents={open ? 'box-none' : 'none'}
-      style={[styles.edge, panelStyle]}>
-      <SessionPaneDivider grip={false} nativeGesture={aboveSystemBar} width={width} bounds={resize.bounds} onResize={resize.onResize}
-        left={panelWidth} top={topInset ?? insets.top} bottom={insets.bottom}
-        elastic={{ onStretch: stretchTo, onSettle: settleStretch }} />
+    {/* The edge's accessibility element rides the panel's slide. */}
+    {edge.edge && !handoffShell ? <Animated.View pointerEvents="box-none" style={[styles.edge, panelStyle]}>
+      {edge.edge}
     </Animated.View> : null}
-  </View>;
+  </View>
+  </GestureDetector>;
   // Stable sibling keys preserve the old Modal and its slot while the column
   // mounts alongside it. Its transparent shell cannot cover the newly docked list.
   return <>{retainedHome}
     {(!persistent && aboveSystemBar) || handoff ? <Modal key="floating" animationType="none" transparent visible onRequestClose={onClose}
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
-      <GestureHandlerRootView style={styles.window}>{overlay(!!handoff)}</GestureHandlerRootView>
+      {/* Modal's first Fabric layout can still carry the pre-unfold window
+          size. Use the same live geometry as the task, without waiting for the
+          modal controller's bounds callback or shrinking to that stale parent. */}
+      <GestureHandlerRootView style={[styles.window, { width: window.width, height: window.height }]}>{overlay(!!handoff)}</GestureHandlerRootView>
     </Modal> : null}
     {persistent || !aboveSystemBar ? <View key="column" pointerEvents="box-none" style={StyleSheet.absoluteFill}>{overlay()}</View> : null}
   </>;
 
 }
+
+function ignoreResize() {}
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFill, zIndex: 40 },
@@ -533,5 +577,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     position: 'absolute', top: 0, bottom: 0, left: 0 },
   content: { flex: 1, minHeight: 0 },
   edge: { ...StyleSheet.absoluteFill },
-  window: { flex: 1 },
+  window: { flexGrow: 0, flexShrink: 0 },
 });

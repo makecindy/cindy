@@ -2,16 +2,18 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { app, BrowserWindow, ipcMain } from 'electron';
-import { and, eq, like, ne, or } from 'drizzle-orm';
+import { and, eq, ne, or, sql } from 'drizzle-orm';
 import type { Maker } from '@cindy/maker-core';
 
 import type {
   BotLifecycleActionRequest,
   BotLifecycleActionResult,
 } from '../../shared/botLifecycle.js';
+import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { deleteBotProfileAndDetachSessionsInDb } from '../localDb/ipc/sessions.js';
 import { removeRecentWorkdir } from '../localDb/ipc/recentWorkdirsCore.js';
+import { escapeLikePattern } from '../localDb/workingDirHistoryFilter.js';
 import {
   botLifecycleEvents,
   botProfiles,
@@ -334,13 +336,30 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     // Its project goes with it (2026-11-10): automation runs and tasks the teammate opened in its own
     // project follow the same keep-or-delete choice, and the project leaves the project list.
     const projectDir = teammateWorkspaceDir(ownerRootAtEntry, request.botId);
+    const storedProjectDir = normalizeWorkingDirForStorage(projectDir)!;
+    const windows = process.platform === 'win32';
+    // SQLite LIKE folds only ASCII. On Windows narrow by the owner-relative Bot subtree, then
+    // check the full path below so Unicode casing, UNC and long-path spellings cannot be missed.
+    const candidatePattern = windows
+      ? `%/${escapeLikePattern(path.win32.relative(ownerRootAtEntry, projectDir).replace(/\\/g, '/'))}%`
+      : `${escapeLikePattern(storedProjectDir)}%`;
+    const candidatePaths = [sessions.projectDir, sessions.workingDir].map((column) => {
+      const storedPath = windows ? sql`replace(${column}, ${'\\'}, '/')` : column;
+      return sql`${storedPath} LIKE ${candidatePattern} ESCAPE '!'`;
+    });
     const projectSessionIds = (await db
       .select({ id: sessions.id, projectDir: sessions.projectDir, workingDir: sessions.workingDir })
       .from(sessions)
-      .where(and(ne(sessions.status, 'deleted'),
-        or(eq(sessions.projectDir, projectDir), like(sessions.workingDir, `${projectDir}%`)))))
-      .filter((row) => !sessionIds.includes(row.id) && (row.projectDir === projectDir
-        || row.workingDir === projectDir || (row.workingDir ?? '').startsWith(`${projectDir}${path.sep}`)))
+      .where(and(ne(sessions.status, 'deleted'), or(...candidatePaths))))
+      .filter((row) => {
+        const workingDir = normalizeWorkingDirForStorage(row.workingDir);
+        return !sessionIds.includes(row.id) && (
+          workingDirEquals(row.projectDir, storedProjectDir)
+          || workingDirEquals(workingDir, storedProjectDir)
+          || (workingDir?.[storedProjectDir.length] === '/'
+            && workingDirEquals(workingDir.slice(0, storedProjectDir.length), storedProjectDir))
+        );
+      })
       .map((row) => row.id);
     const closed = await closeBotSessions(request.botId);
     const projectClosed = await Promise.allSettled(projectSessionIds.map((sessionId) => deps.maker.closeSession(sessionId)));

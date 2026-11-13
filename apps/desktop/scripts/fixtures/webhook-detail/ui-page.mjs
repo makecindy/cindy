@@ -12,15 +12,34 @@ export default {
     'src/renderer/lib/errorDiagnosisPrompt': 'export const buildErrorDiagnosisPrompt = () => ""; export const prefillErrorDiagnosisDraft = () => {};',
   },
   cases: {
+    'app-source': { about: 'GitHub App 仓库和事件选择：无需独立地址或密钥', data: {} },
+    'app-connected': { about: 'GitHub App 已连接的自动任务', data: {} },
+    'app-disconnected': { about: 'GitHub App 尚未连接的操作提示', data: {} },
     default: { about: '已收到事件：默认简洁摘要，最近运行在首屏', data: {} },
     initial: { about: '首次缺少密钥：自动展开必要配置', data: {} },
     released: { about: '已释放：状态和重新连接始终可见', data: {} },
     offline: { about: '连接中断：异常提示不会藏进设置', data: {} },
+    unsupported: { about: '发送方格式不支持：说清是版本不认这个格式，不是暂时不可用', data: {} },
   },
   async ready(page) {
-    await page.getByRole('status').first().waitFor();
+    await page.locator('[role="status"], textarea').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'app-source') {
+      const repositories = page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.repositoriesLabel'), exact: true });
+      await repositories.fill('https://github.com/example/project');
+      await page.getByText(await ui.t('scheduler.editor.webhook.repositoriesInvalid'), { exact: true }).waitFor();
+      await ui.capture('invalid-repository');
+      await repositories.fill('makecindy/cindy\nexample/project');
+      await page.getByText(await ui.t('scheduler.editor.webhook.repositoriesInvalid'), { exact: true }).waitFor({ state: 'detached' });
+      await ui.capture('repositories-and-events');
+      return;
+    }
+    if (ui.case.startsWith('app-')) {
+      await page.getByText('GitHub App', { exact: true }).waitFor();
+      if (await page.getByText('https://webhook.example.test/hooks/fixture', { exact: true }).count()) throw new Error('Managed App must not show a task Webhook URL');
+      return;
+    }
     const toggle = page.getByRole('button', { name: await ui.t('scheduler.webhook.manageConnection'), exact: true });
     if (ui.case === 'initial') {
       if (await toggle.getAttribute('aria-expanded') !== 'true') throw new Error('First setup should open once');
@@ -36,6 +55,11 @@ export default {
       await page.getByRole('status').first().waitFor();
       if (await toggle.getAttribute('aria-expanded') !== 'false') throw new Error('Leaving settings open must not persist the expanded state');
       await ui.capture('revisited-setup');
+      return;
+    }
+    if (ui.case === 'unsupported') {
+      await page.getByText(await ui.t('scheduler.webhook.unsupportedFormat'), { exact: true }).waitFor();
+      await ui.capture('unsupported-format');
       return;
     }
     if (ui.case !== 'default') return;

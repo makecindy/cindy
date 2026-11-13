@@ -12,6 +12,7 @@ function harness(trusted = true, lockId?: (id: string) => string) {
     clear: vi.fn(async () => {}),
     bind: vi.fn(),
     capture: vi.fn(),
+    captureBound: vi.fn(),
   } as unknown as PluginUsageService;
   const warn = vi.fn();
   const identity = vi.fn<() => PluginUsageIdentity | null>(() => null);
@@ -28,6 +29,44 @@ function harness(trusted = true, lockId?: (id: string) => string) {
   });
   return { handlers, service, warn, identity, current };
 }
+it('reads summary without rebinding when the installed revision is already bound', async () => {
+  const { handlers, service, identity } = harness();
+  const current: PluginUsageIdentity = {
+    ghostId: 'readonly-plugin',
+    revision: 'rev-1',
+    stableKey: 'stable-1',
+  } as PluginUsageIdentity;
+  identity.mockReturnValue(current);
+  const handle = { subjectId: 'subject-1', identity: current } as never;
+  vi.mocked(service.captureBound).mockReturnValue(handle);
+  const summary = handlers.get('ghosts:usage-summary')!;
+  for (let index = 0; index < 3; index += 1) {
+    await summary({} as IpcMainInvokeEvent, 'readonly-plugin');
+  }
+  expect(service.bind).not.toHaveBeenCalled();
+  expect(service.captureBound).toHaveBeenCalledTimes(3);
+  expect(service.summary).toHaveBeenCalledTimes(3);
+});
+
+it('binds once when the installed revision has no handle, then keeps polling read-only', async () => {
+  const { handlers, service, identity } = harness();
+  const current: PluginUsageIdentity = {
+    ghostId: 'first-bind-plugin',
+    revision: 'rev-1',
+    stableKey: 'stable-1',
+  } as PluginUsageIdentity;
+  identity.mockReturnValue(current);
+  vi.mocked(service.captureBound)
+    .mockReturnValueOnce(null)
+    .mockReturnValue({ subjectId: 'subject-1', identity: current } as never);
+  vi.mocked(service.bind).mockResolvedValue(undefined);
+  const summary = handlers.get('ghosts:usage-summary')!;
+  await summary({} as IpcMainInvokeEvent, 'first-bind-plugin');
+  await summary({} as IpcMainInvokeEvent, 'first-bind-plugin');
+  expect(service.bind).toHaveBeenCalledTimes(1);
+  expect(service.captureBound).toHaveBeenCalledTimes(3);
+});
+
 it('checks trusted top-level app sender on every usage endpoint before reading or clearing', async () => {
   const { handlers, service } = harness(false);
   for (const handler of handlers.values())

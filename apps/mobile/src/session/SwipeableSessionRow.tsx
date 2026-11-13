@@ -21,7 +21,7 @@ import { useWindowWidth } from '@/platform/windowDimension';
  *  - 全滑判定在 onSwipeableWillOpen 同步读取松手位移;不在手指按住时移除行,
  *    避免拆手势树。读取失败时才回退到 Animated listener 的最近值。
  */
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import {
   ClassicSwipeable as Swipeable,
@@ -34,6 +34,7 @@ import type { RemoteSession } from '@/session/types';
 import { useDisclosurePrepare } from '@/session/listDisclosureTransition';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
+import { usePaneEdgeInset } from './SessionPaneDivider';
 
 /** 圆形按钮直径(静置态是正圆,拖长后变胶囊;78 高的行内上下各留 11)。 */
 const BUTTON_SIZE = 56;
@@ -102,6 +103,9 @@ function SwipeableSessionRowInner({
   const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
 
   const methodsRef = useRef<ClassicSwipeableMethods | null>(null);
+  // Leave the pane edge's drag band to resizing (see usePaneEdgeInset).
+  const edgeInset = usePaneEdgeInset();
+  const hitSlop = useMemo(() => ({ right: -edgeInset }), [edgeInset]);
   // 经典 Swipeable 在调用 WillOpen 前会把松手位移写入 transX 的 JS Animated 图。
   // 保留该节点可同步读取真正的松手位置;listener 最近值只作 RN 内部读值不可用时的兜底。
   const translationRef = useRef<ReadableSwipeTranslation | null>(null);
@@ -300,6 +304,7 @@ function SwipeableSessionRowInner({
   return (
     <Swipeable
       ref={methodsRef}
+      hitSlop={hitSlop}
       childrenContainerStyle={{ backgroundColor: colors.surface }}
       containerStyle={{ backgroundColor: colors.surface }}
       onSwipeableClose={handleClose}

@@ -85,6 +85,7 @@ export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./machineStatus.js";
+export * from "./agentNetSwitch.js";
 export * from "./pluginPages.js";
 
 export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from './stallDiagnostics.js';

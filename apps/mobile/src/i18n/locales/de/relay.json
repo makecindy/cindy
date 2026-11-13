@@ -53,8 +53,8 @@
     "invalidLink": "Dieser Freigabelink ist ungültig oder abgelaufen. Erstelle einen neuen auf deinem Computer.",
     "cancelled": "Der Beitritt wurde abgebrochen. Erstelle auf deinem Computer einen neuen Freigabelink, um diesem Relay beizutreten.",
     "accountRequesting": "„{{device}}“ wird um Freigabe gebeten…",
-    "accountWaiting": "Wird beigetreten, wartet auf „{{device}}“…",
-    "openOnComputer": "Dieses Relay wurde von einem anderen Konto geteilt. Öffne den Link auf deinem Computer, um beizutreten. Danach siehst du es auf diesem Handy unter Einstellungen > Relay und kannst mit einem Tipp beitreten."
+    "accountWaiting": "Beitritt läuft – Warten auf „{{device}}“…",
+    "openOnComputer": "Dieses Relay wurde von einem anderen Konto geteilt. Öffne den Link auf deinem Computer, um beizutreten. Danach siehst du es auf diesem Handy unter Einstellungen → Relay-Dienst und kannst mit einem Tipp beitreten."
   },
   "errors": {
     "unreachable": "Dieses Relay ist nicht erreichbar. Stelle sicher, dass dein Handy und Computer im selben Netzwerk sind oder dass dein Handy diese Adresse öffnen kann.",

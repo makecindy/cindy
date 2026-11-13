@@ -1214,6 +1214,7 @@ export async function commitContextRebuild(
     sourceModel?: string | null;
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
+    expectedSdkSessionId?: string;
     replacementRoute?: ContextRebuildArgs['replacementRoute'];
   },
 ): Promise<{ updatedAt: number }> {
@@ -1227,8 +1228,8 @@ export async function commitContextRebuild(
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,
-      ...(meta.replacementRoute
-        ? { sourceSdkSessionId: meta.replacementRoute.expectedSdkSessionId }
+      ...(meta.replacementRoute || meta.expectedSdkSessionId
+        ? { sourceSdkSessionId: meta.replacementRoute?.expectedSdkSessionId ?? meta.expectedSdkSessionId }
         : {}),
       ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
       ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
@@ -1238,6 +1239,7 @@ export async function commitContextRebuild(
     updatedAt: now,
     expectedClearedAt: meta.expectedClearedAt ?? null,
     ...(meta.replacementRoute ? { replacementRoute: meta.replacementRoute } : {}),
+    ...(meta.expectedSdkSessionId !== undefined ? { expectedSdkSessionId: meta.expectedSdkSessionId } : {}),
   });
   return { updatedAt: now };
 }

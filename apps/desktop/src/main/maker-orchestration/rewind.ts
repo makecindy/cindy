@@ -27,7 +27,7 @@ import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../localDb/client/current';
-import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, runTaskActionRewindBoundary } from '../maker-ipc/taskActionAuthorization.js';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { listMessagesForAgentHandoff, type MessageDeletedPayload } from '../localDb/ipc/messages.js';
@@ -831,8 +831,9 @@ async function buildNativeContextReset(
 }
 
 /** 与消息删除同口径：关闭期间抑制 onClose 副作用(worktree 收尾等)，任务本身仍在继续。 */
-async function closeSessionForNativeRestart(sessionId: string): Promise<undefined> {
-  await withRehydrateCloseSuppressed(sessionId, () => getMaker().closeSession(sessionId));
+async function closeSessionForNativeRestart(sessionId: string, clientId: string): Promise<undefined> {
+  await runTaskActionRewindBoundary(sessionId, clientId, 'native-close', () =>
+    withRehydrateCloseSuppressed(sessionId, () => getMaker().closeSession(sessionId)));
   return undefined;
 }
 
@@ -847,7 +848,7 @@ export async function commitRewindAtMessage(
   clientId: string,
   opts?: RewindCommitOptions,
 ): Promise<Session> {
-  await assertTaskActionCurrent();
+  await assertTaskActionCurrent(sessionId, clientId);
   const dbClient = getDbClient();
   const ownerScope = opts?.ownerScope ?? captureDataOwnerBroadcastScope();
   const ctx = await loadRewindContext(sessionId, clientId, opts);
@@ -942,7 +943,7 @@ export async function commitRewindAtMessage(
     const priorAssistantUuid = ctx.assistantUuid;
     const commitConversationRewind = async () => {
       await assertTaskActionCurrent();
-      return priorAssistantUuid ? makerSession.commitRewindFiles('', priorAssistantUuid) : closeSessionForNativeRestart(sessionId);
+      return priorAssistantUuid ? makerSession.commitRewindFiles('', priorAssistantUuid) : closeSessionForNativeRestart(sessionId, clientId);
     };
     if (opts?.allowFileRestore === false) {
       rewindResult = await commitConversationRewind();
@@ -978,7 +979,7 @@ export async function commitRewindAtMessage(
     if (ctx.userUuid && opts?.allowFileRestore !== false) {
       await makerSession.commitRewindFiles(ctx.userUuid, '', { rewindsToNativeThreadStart: true });
     }
-    await closeSessionForNativeRestart(sessionId);
+    await closeSessionForNativeRestart(sessionId, clientId);
   } else {
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);

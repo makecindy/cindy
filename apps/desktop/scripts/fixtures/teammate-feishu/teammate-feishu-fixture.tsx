@@ -4,9 +4,23 @@ import { forbid, mountPage, subscription } from '../../ui-page/harness';
 
 mountPage({
   route: '/bots/fixture-cindy?settings=1&settingsPage=channels',
-  host: {
+  host: (ctx) => {
+    let saved = false;
+    const connections = ctx.data.imessage ? [{ id: 'aabbccddeeff', botId: 'fixture-cindy', channel: 'imessage',
+      createdAt: 1, status: { kind: 'connected', appId: 'fixture' }, identity: { username: null, ownerUserId: null },
+      ...(ctx.data.groupEdit ? { botContextId: 'fixture' } : {}) }] : [];
+    return {
     botImConnection: {
-      list: async () => ({ connections: [] }),
+      list: async () => ({ connections }),
+      getIMessageConfig: async () => ({ serverUrl: 'http://192.168.1.20:1234', ownerAddress: 'owner@example.test',
+        chatGuids: ['any;-;owner@example.test', ...(ctx.data.groupEdit === 'replace' ? ['any;+;old-group'] : [])], listenHost: '192.168.1.10', listenPort: 18747 }),
+      updateIMessageConfig: ctx.data.groupEdit ? async () => { saved = true; return { connections }; } : forbid('botImConnection.updateIMessageConfig'),
+      ...(ctx.data.groupEdit ? {
+        listGroups: async () => ({ connectionId: 'aabbccddeeff', groups: saved
+          ? [{ chatId: 'any;+;new-group', chatName: 'New group', activation: 'mention' }]
+          : ctx.data.groupEdit === 'replace' ? [{ chatId: 'any;+;old-group', chatName: 'Old group', activation: 'mention' }] : [] }),
+        setGroupActivation: forbid('botImConnection.setGroupActivation'),
+      } : {}),
       listAdoptable: async () => ({ bots: [] }),
       onChanged: subscription('connections'),
       add: forbid('botImConnection.add'),
@@ -23,6 +37,7 @@ mountPage({
       onStateChange: subscription('wechatState'),
       onChannelSettingsChange: subscription('wechatSettings'),
     },
+    };
   },
   render: () => <div className="mx-auto max-w-xl p-4">
     <BotChannelsPage bot={{ id: 'fixture-cindy', name: 'Cindy', status: 'active' } as BotProfile} />

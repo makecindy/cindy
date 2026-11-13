@@ -3,6 +3,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
+import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
+import type { UnifiedCommand } from '@/lib/slashCommands';
 import type { ProviderView } from '@cindy/model-providers';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
@@ -30,7 +34,11 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   sshCodex: undefined as undefined | { status: string; refresh: () => void },
   platform: 'darwin',
   processing: null as 'submitting' | 'refining' | null,
+  ghosts: [] as InstalledGhost[],
+  showPluginChoices: false,
+  providerCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ updates: [] })),
 }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: h.confirm }) }));
@@ -69,8 +77,11 @@ vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: () => null }));
 vi.mock('../PermissionSelector', () => ({ PermissionSelector: () => <span data-testid="permission-selector" /> }));
 vi.mock('../NewGoalDialog', () => ({ NewGoalDialog: () => null }));
 vi.mock('../FolderPickerPopover', () => ({ FolderPickerPopover: () => null, addRecentFolder: vi.fn() }));
-vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: () => null }));
-vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: () => null }));
+vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: ({ entries, onSelect }: { entries: ComposerSuggestionEntry[]; onSelect(entry: ComposerSuggestionEntry): void }) => h.showPluginChoices
+  ? <>{entries.filter(entry => entry.kind === 'action' && entry.action.id.startsWith('plugin-completion:')).map(entry =>
+    <button key={entry.kind === 'action' ? entry.action.id : ''} onClick={() => onSelect(entry)}>Reference</button>)}</> : null }));
+vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ additionalCommands, onSelect }: { additionalCommands?: UnifiedCommand[]; onSelect(command: UnifiedCommand): void }) => h.showPluginChoices
+  ? <>{additionalCommands?.map(command => <button key={command.name} onClick={() => onSelect(command)}>Reference</button>)}</> : null }));
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
@@ -95,6 +106,7 @@ const noOp = () => {};
 // External host services are inert; the editor, composer state, and send dispatch run unchanged.
 const api: typeof window.electronAPI = new Proxy({} as typeof window.electronAPI, { get: (_obj, key) => {
   if (key === 'setModel') return h.setModel;
+  if (key === 'mcpApps') return h.providerCall;
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
   if (key === 'setGlobalShortcut') return () => Promise.resolve({ ok: true });
@@ -111,13 +123,39 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
 beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.cancel.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
-afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); h.ghosts = []; h.showPluginChoices = false; h.providerCall.mockReset(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
   sessionId: 'loading-test', initialWorkingDir: '/workspace', runtimeAgentKind: 'codex' as const,
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+// New completion contract through the real editor/selection entry. The panel is
+// replaced only to select a returned candidate. Existing parser/bridge tests do
+// not prove text insertion or that receiving a result leaves the draft untouched.
+// #9987, unit: a caret inside @ab|suffix must preserve suffix after completion;
+// the end-of-query cases did not exercise the built-in whole-word deletion path.
+it.each([['@', ''], ['/', ''], ['@', 'suffix'], ['/', 'suffix']] as const)('inserts %s provider text only after choosing it, preserving suffix "%s"', async (trigger, suffix) => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  h.showPluginChoices = true;
+  const ghost: InstalledGhost = { enabled: true, uiCapabilityApproved: true, dir: '/fixture',
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'complete', name: 'Complete', kind: 'chip',
+      version: '1', entry: 'main.js', tools: [{ name: 'lookup', description: 'Lookup' }], mcpApps: {
+        ui: { resources: [], tools: { lookup: { visibility: ['app'] } } },
+        host: { contributions: [{ id: 'lookup', title: 'Reference', position: 'composer.completion', tool: 'lookup', trigger }] },
+      } } };
+  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); h.ghosts = [ghost];
+  h.providerCall.mockResolvedValue({ structuredContent: { items: [{ id: 'one', label: 'Reference', insertText: '<b>plain</b>' }] } });
+  render(<PluginUiProvider><ChatInput {...props} sessionId={`completion-${trigger}`} deviceLinkDeviceId={null} onSend={vi.fn()} /></PluginUiProvider>);
+  await act(async () => { h.editor!.commands.setContent(`<p>${trigger}ab${suffix}</p>`); h.editor!.commands.setTextSelection(4); });
+  await act(() => vi.advanceTimersByTimeAsync(201));
+  expect(h.providerCall).toHaveBeenCalledWith(`completion-${trigger}`, expect.objectContaining({ op: 'plugin-action', input: { trigger, query: 'ab' } }));
+  expect(h.editor!.getText()).toBe(`${trigger}ab${suffix}`);
+  fireEvent.click(screen.getByRole('button', { name: 'Reference' }));
+  expect(h.editor!.getText()).toBe(`<b>plain</b>${suffix}`);
+  expect(h.editor!.getHTML()).not.toContain('<b>plain</b>');
+});
 
 // #8232, unit: the real composer Escape listener must not cancel a covered
 // voice draft. Existing voice cases cover sending, not foreground previews.
@@ -404,8 +442,11 @@ it('sends a remote-only Codex model when the controller has no connected provide
   h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
   const onSend = vi.fn().mockResolvedValue(true);
   const view = render(<ChatInput {...props} sessionId="ssh-send" deviceLinkDeviceId={null} remoteHostId="builder"
-    initialModel="remote-only" initialProviderId="openai" initialEffort="low" onSend={onSend} />);
-  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+    initialModel="remote-only" initialProviderId="openai" initialEffort="low" placeholder="Message" onSend={onSend} />);
+  // Unit, Windows real-device regression: the composer was a nameless Group,
+  // so UIA could not write it. Use the real editable's accessible role/name in
+  // this existing send test; native ValuePattern is verified on the device.
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy());
   await act(async () => { h.editor!.commands.setContent('<p>Hello remote</p>'); });
   const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
   expect(send.disabled).toBe(false);

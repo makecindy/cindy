@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError } from '@cindy/device-link';
 
 import {
@@ -8,6 +8,7 @@ import {
   listRemoteCollection,
   loadRemoteResourceManifest,
   discoverRemoteHomeCollections,
+  remoteResourceDiscoveryKey,
   remoteResourceDiscoveryTargets,
   isRemoteResourcesUnsupported,
   mergeRemoteCollectionHostShards,
@@ -23,6 +24,84 @@ const targets = [
 ];
 
 describe('remote resource discovery', () => {
+  afterEach(() => vi.useRealTimers());
+
+  // PR #10117: a transient manifest failure must recover without presence polling.
+  // Existing unit coverage only exercised one-shot discovery. These inputs cover
+  // partial failure, bounded retries, permanent denial and cancellation/late replies
+  // through the production discovery entry, observing requests and published entries.
+  it('publishes healthy hosts immediately and retries only the failed host until recovery', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let failures = 0;
+    const invoke = vi.fn(async (deviceId: string) => {
+      if (deviceId === 'mac-2' && failures++ < 2) throw new DeviceLinkError('INVOKE_TIMEOUT', 'timed out');
+      return { protocolVersion: 1, collections: [{ id: 'teammates', resourceKind: 'bot', placement: 'home-scope', title: 'Buddies' }] };
+    });
+    const progress = vi.fn();
+    const result = discoverRemoteHomeCollections(invoke as RemoteInvoke, targets, 'en', [], progress, controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(progress).toHaveBeenLastCalledWith([expect.objectContaining({ targets: [targets[0]] })]);
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(invoke).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(14999);
+    expect(invoke).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toEqual([expect.objectContaining({ targets })]);
+    expect(invoke.mock.calls.map(([id]) => id)).toEqual(['mac-1', 'mac-2', 'mac-2', 'mac-2']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('stops after three delayed retries when all manifest reads keep timing out', async () => {
+    vi.useFakeTimers();
+    const invoke = vi.fn(async () => { throw new DeviceLinkError('INVOKE_TIMEOUT', 'timed out'); });
+    const result = discoverRemoteHomeCollections(invoke as RemoteInvoke, [targets[0]], 'en', [], undefined, new AbortController().signal);
+    const rejected = expect(result).rejects.toThrow('timed out');
+    await vi.advanceTimersByTimeAsync(0);
+    for (const delay of [5000, 15000, 60000]) {
+      const calls = invoke.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(invoke).toHaveBeenCalledTimes(calls);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(invoke).toHaveBeenCalledTimes(calls + 1);
+    }
+    await rejected;
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['CHANNEL_NOT_ALLOWED', 'ACCESS_REVOKED', 'REMOTE_DISABLED'])('does not retry %s', async (code) => {
+    vi.useFakeTimers();
+    const invoke = vi.fn(async () => { throw new DeviceLinkError(code as 'CHANNEL_NOT_ALLOWED', code); });
+    await discoverRemoteHomeCollections(invoke as RemoteInvoke, [targets[0]], 'en', [], undefined, new AbortController().signal).catch(() => undefined);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['before-start', 'waiting', 'in-flight'] as const)('cancels %s recovery without publishing stale entries', async (phase) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let finish!: (value: unknown) => void;
+    const invoke = vi.fn(async () => {
+      if (phase === 'waiting') throw new DeviceLinkError('INVOKE_TIMEOUT', 'timed out');
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const progress = vi.fn();
+    if (phase === 'before-start') controller.abort();
+    const result = discoverRemoteHomeCollections(invoke as RemoteInvoke, [targets[0]], 'en', [], progress, controller.signal).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    if (phase === 'waiting') expect(vi.getTimerCount()).toBe(1);
+    controller.abort();
+    if (phase === 'in-flight') finish({ protocolVersion: 1, collections: [{ id: 'teammates', resourceKind: 'bot', placement: 'home-scope', title: 'Stale' }] });
+    await result;
+    await vi.advanceTimersByTimeAsync(100000);
+    expect(invoke).toHaveBeenCalledTimes(phase === 'before-start' ? 0 : 1);
+    expect(progress).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   // plugin-security-and-authoring §1.1: preserve Host capability declarations so mobile never guesses support.
   // Existing discovery tests omitted collection actions. Minimal regression: one plugins management action (unit).
   it('retains bounded collection capability actions from the Host manifest', async () => {
@@ -60,7 +139,7 @@ describe('remote resource discovery', () => {
   });
 
   it('keeps a discovered offline host while excluding revoked and disabled hosts', async () => {
-    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
+    const previous = [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', targets }];
     const selected = remoteResourceDiscoveryTargets([
       { deviceId: 'mac-1', name: 'Studio', canOpen: false, state: 'offline' },
       { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'access_revoked' },
@@ -74,7 +153,7 @@ describe('remote resource discovery', () => {
   });
 
   it('refreshes an offline cached host when it comes online and removes an empty manifest', async () => {
-    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
+    const previous = [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', targets }];
     const selected = remoteResourceDiscoveryTargets([
       { deviceId: 'mac-1', name: 'Studio', canOpen: true, state: 'online' },
       { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'offline' },
@@ -84,6 +163,25 @@ describe('remote resource discovery', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('mac-1', 'maker:remote-resources:manifest', expect.any(Array));
     expect(collections).toEqual([{ ...previous[0], iconName: undefined, targets: [targets[1]] }]);
+  });
+
+  it('asks the same computers again only when the discovery targets can differ', () => {
+    // Regression 2026-11-12 (hot phone, about ten manifest requests a second in the debug log): Home
+    // reran discovery for every presence message, although busy state and last-seen time select nothing.
+    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
+    const ready = [
+      { deviceId: 'mac-1', name: 'Studio', canOpen: true, state: 'ready', statusDetail: 'now' },
+      { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'offline', statusDetail: '1 min' },
+    ];
+    const busyLater = [{ ...ready[0]!, state: 'busy', statusDetail: 'working' }, { ...ready[1]!, statusDetail: '2 min' }];
+    expect(remoteResourceDiscoveryKey(busyLater)).toBe(remoteResourceDiscoveryKey(ready));
+    expect(remoteResourceDiscoveryTargets(busyLater, previous)).toEqual(remoteResourceDiscoveryTargets(ready, previous));
+    for (const changed of [
+      [{ ...ready[0]!, canOpen: false, state: 'offline' }, ready[1]!],
+      [ready[0]!, { ...ready[1]!, canOpen: true, state: 'ready' }],
+      [{ ...ready[0]!, name: 'Renamed' }, ready[1]!],
+      [ready[0]!],
+    ]) expect(remoteResourceDiscoveryKey(changed)).not.toBe(remoteResourceDiscoveryKey(ready));
   });
 
   it('advertises only primitives implemented by the current mobile shell', () => {
@@ -98,7 +196,7 @@ describe('remote resource discovery', () => {
         resourceKind: 'bot',
         placement: 'home-scope',
         title: {
-          fallback: 'Teammates',
+          fallback: "Buddies",
           translations: { 'zh-CN': '所有伙伴' },
         },
         futureField: deviceId,
@@ -129,7 +227,7 @@ describe('remote resource discovery', () => {
       if (deviceId === 'mac-2') throw new Error('temporarily offline');
       return { protocolVersion: 1, collections: [] };
     }) as RemoteInvoke;
-    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets: [targets[0]] }];
+    const previous = [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', targets: [targets[0]] }];
     const progress = vi.fn();
     await expect(discoverRemoteHomeCollections(invoke, targets, 'en', previous, progress)).resolves.toEqual([]);
     expect(progress).toHaveBeenLastCalledWith([]);
@@ -175,7 +273,7 @@ describe('remote resource discovery', () => {
     }) as RemoteInvoke;
     const previous = [{
       id: 'teammates',
-      title: 'Teammates',
+      title: "Buddies",
       resourceKind: 'bot',
       placement: 'home-scope',
       targets: [targets[0]],

@@ -36,7 +36,7 @@ export const remoteControlSettings = defineSettings({
     targetId: 'settings-search-target-remote-v2',
     titleKey: 'settings.remoteControl.v2.switch.title',
     descriptionKey: 'settings.remoteControl.v2.switch.hint',
-    sectionKey: 'settings.sections.remoteControl',
+    sectionKey: 'settings.remoteControl.v2.sectionTitle',
     aliases: ['Agent-Net', 'agent net', 'device-link', 'topology', 'new connection', '拓扑', '新版连接', '连接拓扑'],
   },
   onlyEncrypted: {
@@ -47,8 +47,20 @@ export const remoteControlSettings = defineSettings({
     fallbackTargetId: 'settings-search-target-remote-v2',
     titleKey: 'settings.remoteControl.v2.onlyEncrypted',
     descriptionKey: 'settings.remoteControl.v2.onlyEncryptedHint',
-    sectionKey: 'settings.sections.remoteControl',
+    sectionKey: 'settings.remoteControl.v2.sectionTitle',
     aliases: ['Agent-Net only', 'encrypted connections', '仅使用 Agent-Net', '加密连接'],
+  },
+  ownModelAccess: {
+    id: 'remoteControl.ownModelAccess',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-own-model-access',
+    // 只在允许同账号设备控制本机后出现；没出现时落到「我的设备」。
+    fallbackTargetId: 'settings-search-target-remote-devices',
+    titleKey: 'settings.devices.ownModelAccess.title',
+    descriptionKey: 'settings.devices.ownModelAccess.hint',
+    sectionKey: 'settings.sections.remoteControl',
+    aliases: ['use models from my other computers', 'borrow models', 'other computers', '本机模型', '借用模型', '其他电脑用模型', '用本机模型'],
   },
   ssh: {
     id: 'remoteControl.ssh',

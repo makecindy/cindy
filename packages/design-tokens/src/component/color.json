@@ -1924,10 +1924,10 @@
       "chat-placeholder-text": {
         "light": {
           "$type": "color",
-          "$value": "{semantic.defaults.text-tertiary.light}",
+          "$value": "{semantic.defaults.text-placeholder.light}",
           "$extensions": {
             "com.cindy.desktop": {
-              "cssAlias": "text-tertiary",
+              "cssAlias": "text-placeholder",
               "wrapper": "var",
               "mode": "light"
             }
@@ -1935,10 +1935,10 @@
         },
         "dark": {
           "$type": "color",
-          "$value": "{semantic.defaults.text-tertiary.dark}",
+          "$value": "{semantic.defaults.text-placeholder.dark}",
           "$extensions": {
             "com.cindy.desktop": {
-              "cssAlias": "text-tertiary",
+              "cssAlias": "text-placeholder",
               "wrapper": "var",
               "mode": "dark"
             }

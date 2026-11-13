@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { WebhookAccountManager } from './WebhookAccountManager';
 import { webhookEventOptions } from '../lib/webhookEventOptions';
+import appI18n from 'i18next';
 
 type WebhookStatus = Awaited<ReturnType<typeof window.electronAPI.maker.schedule.webhookStatus>>;
 
@@ -77,6 +78,7 @@ function statusHint(status: NonNullable<WebhookStatus>): string | null {
   if (status.problem === 'suspended') return 'scheduler.webhook.suspended';
   if (status.problem === 'quota') return 'scheduler.webhook.quotaExhausted';
   if (status.problem === 'limit') return 'scheduler.webhook.endpointLimit';
+  if (status.problem === 'unsupported') return 'scheduler.webhook.unsupportedFormat';
   if (status.problem === 'failed') return 'scheduler.webhook.urlUnavailable';
   if (!status.url) return 'scheduler.webhook.preparing';
   if (!status.connected) return 'scheduler.webhook.offline';
@@ -221,7 +223,7 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   const receivedText = status
     ? status.lastReceivedAt
       ? t('scheduler.webhook.lastReceived', {
-          time: new Date(status.lastReceivedAt).toLocaleString(),
+          time: new Date(status.lastReceivedAt).toLocaleString(appI18n.language),
         })
       : t(
           !hint && status.connected && !needsSecret && schedule.status === 'active'
@@ -232,7 +234,7 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   const summary = hint
     ? t(hint, {
         limit: status?.quotaLimit,
-        time: status?.quotaResetAt ? new Date(status.quotaResetAt).toLocaleString() : '',
+        time: status?.quotaResetAt ? new Date(status.quotaResetAt).toLocaleString(appI18n.language) : '',
       })
     : needsSecret
       ? t(
@@ -253,6 +255,21 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
       ),
     ),
   );
+
+  if (source?.preset === 'github-app') {
+    const state = !status ? 'common.loading'
+      : schedule.status !== 'active' ? 'scheduler.editor.webhook.githubAppPaused'
+      : status.receiver === 'signed-out' ? 'scheduler.webhook.signedOut'
+      : status.connected ? 'scheduler.webhook.waitingEvent' : 'scheduler.editor.webhook.githubAppHint';
+    return <section className="mt-4 space-y-2 border-y border-[var(--border-default)] py-4 text-12 leading-relaxed text-[var(--text-secondary)]">
+      <h3 className="text-13 font-medium text-[var(--text-primary)]">GitHub App</h3>
+      <p role="status">{t(state)}</p>
+      <p className="break-words">{source.repositories.join(', ')}</p>
+      <p>{schedule.webhookTrigger?.events?.map(event => eventLabels.get(event) ?? event).join(', ')
+        || t('scheduler.editor.webhook.eventPicker.all')}</p>
+      {status?.lastReceivedAt ? <p>{t('scheduler.webhook.lastReceived', { time: new Date(status.lastReceivedAt).toLocaleString() })}</p> : null}
+    </section>;
+  }
 
   return (
     <section className="mt-4 border-y border-[var(--border-default)] py-4 text-12 leading-relaxed text-[var(--text-secondary)]">

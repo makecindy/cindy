@@ -111,7 +111,8 @@ export function buildTelegramAdapter(
     output: { kind: 'rich-card', im: telegramIm },
     config,
     ui,
-    interactionExpiredNotice: telegramUiText.expiredCardNotice,
+    // getter: 用到时按当前界面语言取文案, 不在建 adapter 时冻结。
+    get interactionExpiredNotice() { return telegramUiText.expiredCardNotice; },
     sessions: {
       source: 'telegram',
       sessionIdFor: (botId, userId) => `telegram_${botId}_${sessionSafeUserId(userId)}`,

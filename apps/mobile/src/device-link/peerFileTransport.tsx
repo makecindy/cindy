@@ -10,6 +10,7 @@ import {
   FILE_PEER_RECEIVE_TIMEOUT_MS,
   FILE_PEER_PROGRESS_SAMPLE_MS,
   type FileTransferPath,
+  type FilePeerRange,
   canUsePeerInvoke,
   uploadPeerAttachment,
   canSendPeerAttachment,
@@ -223,6 +224,7 @@ export function PeerFileTransport() {
       attachments: boolean;
       /** 电脑端直连附件不设固定上限;旧版电脑会拒收超过 OSS 上限的附件。 */
       largeAttachments: boolean;
+      rangeReads: boolean;
       path: FileTransferPath;
       reuseMs: number | null;
     } | null = null;
@@ -267,6 +269,7 @@ export function PeerFileTransport() {
       signal?: AbortSignal,
       readTrace?: number,
       onProgress?: (loaded: number, total: number) => void,
+      range?: FilePeerRange,
     ): Promise<LocalMedia | null> => {
       const current = captureDevice(device);
       // Keep a device close from turning into an upload fallback or reopening its link.
@@ -334,6 +337,7 @@ export function PeerFileTransport() {
             streaming?: boolean;
             attachments?: boolean;
             largeAttachments?: boolean;
+            rangeReads?: boolean;
             idleMs?: number;
             sessionBound?: boolean;
           };
@@ -348,6 +352,7 @@ export function PeerFileTransport() {
             });
             return null;
           }
+          if (range && caps.rangeReads !== true) return null;
           step = "ice-config";
           const servers = await resolveDesktopIceServers(
             () =>
@@ -398,6 +403,7 @@ export function PeerFileTransport() {
             rpc: caps.streaming === true,
             attachments: caps.attachments === true,
             largeAttachments: caps.largeAttachments === true,
+            rangeReads: caps.rangeReads === true,
             path: 'unknown',
             reuseMs: filePeerReuseMs(caps.idleMs, caps.sessionBound),
           };
@@ -414,11 +420,18 @@ export function PeerFileTransport() {
           cooldown.current.success(device);
           return null;
         }
+        if (range && !connection?.rangeReads) { complete = true; return null; }
         step = "open";
-        const file = parseFilePeerFile(
-          await invoke({ action: "open", connection: remote, url }),
-        );
+        const request = { action: "open", connection: remote, url, ...(range ? { range } : {}) };
+        // Negotiated range opens stay on this file connection too. Do not retry
+        // uncertain ticket allocations over the shared control connection.
+        const reply = range ? JSON.parse(String(await command('invoke', [id,
+          JSON.stringify({ channel: FILE_PEER_CHANNEL, args: [request] })]))) as InvokeResultPayload : null;
+        if (range && !reply?.ok) throw new Error('FILE_PEER_OPEN');
+        const file = parseFilePeerFile(reply?.ok ? reply.result : await invoke(request));
         if (!current() || signal?.aborted) throw new Error("FILE_PEER_CLOSED");
+        if (range && (file.version !== range.version || file.size !== range.end - range.start + 1))
+          throw new Error('FILE_PEER_CHANGED');
         if (!canStagePeerMedia(file.size, Paths.availableDiskSpace)) {
           mobileDebugLog("debug", "files", "direct transfer skipped", {
             trace,
@@ -578,7 +591,7 @@ export function PeerFileTransport() {
     };
     const queueRead = createFileReadQueue();
     const unregister = installPeerFileDownload(
-      (device, url, signal, readTrace, metadata, onProgress) => {
+      (device, url, signal, readTrace, metadata, onProgress, range) => {
         const active = captureDevice(device);
         return queueRead(
           "connection",
@@ -590,6 +603,11 @@ export function PeerFileTransport() {
               throw new Error("FILE_PEER_CANCELLED");
             };
             check();
+            if (range) {
+              const result = await transfer(device, url, signal, readTrace, undefined, range);
+              check(result);
+              return result;
+            }
             const cache = await fileCache;
             if (metadata?.skipCache) await cache?.invalidate(device, url).catch(() => undefined);
             const cached = metadata?.skipCache ? null : await cache?.read(device, url, metadata, () => active() && !signal?.aborted).catch(() => null);

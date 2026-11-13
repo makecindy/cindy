@@ -344,6 +344,9 @@ describe('market Ghost session boundary', () => {
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
     expect(helperBody).toContain('...deliveryNamespaceFields(previousGhost)');
+    expect(helperBody).toContain('expectedInstalledInstanceId: instanceId,');
+    expect(helperBody.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost)'))
+      .toBeGreaterThan(helperBody.indexOf('manager.update(cindyFilePath,'));
     expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).not.toContain('marketInstallSubject');
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
@@ -396,6 +399,10 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
     );
     expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
+    expect(body).toContain('...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),');
+    const confirmNamespace = body.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost,');
+    expect(confirmNamespace).toBeGreaterThan(body.indexOf('await expected.afterCommitInLock?.(result.ghost, commitEvidence)'));
+    expect(confirmNamespace).toBeLessThan(body.indexOf('spawnIfResident(result.ghost)'));
     expect(body).not.toContain(
       'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
     );

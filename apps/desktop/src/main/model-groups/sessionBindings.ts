@@ -1,7 +1,7 @@
 /**
  * 哪个任务是经哪条路线建的：<userData>/owners/<账号>/model-group-session-bindings.json，
  * `{ bindings: { [任务 id]: { selection, pickedKey, at } } }`，最多保留最新的 MODEL_GROUP_SESSION_BINDINGS_MAX 条。
- * 只记组的 id 与选中的候选(引擎 + 供应商连接 ID + 模型)，不记消息、任务标题、账号或凭证。
+ * 只记组的 id 与选中的候选(引擎 + 供应商连接 ID + 模型，以及不在本机时的运行位置)，不记消息、任务标题、账号或凭证。
  * 账号作用域未提交时不读不写；文件坏了按没有记录处理，下次写入覆盖。旧版经模式建的记录读取时丢弃。
  * 用途：任务撞上配额时，提示「换到同一条路线里的下一个来源继续」(model-groups.md §6.1)。
  */
@@ -19,8 +19,8 @@ const log = createLogger('model-group-session-bindings');
 const FILE_NAME = 'model-group-session-bindings.json';
 export const MODEL_GROUP_SESSION_BINDINGS_MAX = 2000;
 const SESSION_ID_MAX = 256;
-/** 候选键 = 引擎、供应商连接 ID、模型三段，各段上限与配置相同。 */
-const PICKED_KEY_MAX = MODEL_GROUP_LIMITS.field * 2 + 16;
+/** 候选键 = 引擎、供应商连接 ID、模型，另一台电脑或分享来的再加运行位置；各段上限与配置相同。 */
+const PICKED_KEY_MAX = MODEL_GROUP_LIMITS.field * 3 + 16;
 
 export interface ModelGroupSessionBinding {
   selection: ModelGroupSelection;

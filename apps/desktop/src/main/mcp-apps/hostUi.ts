@@ -11,6 +11,7 @@ import { isRsbWindowWebContentsId } from '../right-sidebar-window/registry.js';
 import { readPluginUiRegions, setPluginUiRegions } from './visibility.js';
 import { configurePluginAppearanceApply, editPluginAppearance, getPluginAppearanceService } from './appearance.js';
 import { onPagePermissionSessionChanged } from './pagePermissions.js';
+import { manageAppSettings } from '../app-settings/sections.js';
 
 type Reply = { caller: string; finish(value: unknown, error?: string): void };
 const replies = new Map<string, Reply>();
@@ -111,6 +112,9 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   const assertOperation = async () => { assertCurrent(); await assertScope?.(); assertCurrent(); };
   let draft: Record<string, unknown> | null = null;
   const tools: Tool[] = [tool('open', 'Open another approved view of this plugin.', { viewId: { type: 'string' }, input: { type: 'object' } }, ['viewId'])];
+  if (entry.host.settings?.length) tools.push(tool('settings', 'Read, update or reset this plugin’s registered settings.', {
+    operation: { enum: ['get', 'update', 'reset'] }, patch: { type: 'object' },
+  }, ['operation']));
   if (capabilities.includes('draft') && sessionId !== null) tools.push(tool('draft',
     'Read or edit the bound task draft. Read returns a JSON document chunk and nextOffset; subsequent chunks require revision. Replacing requires revision; never sends a message.', {
       mode: { enum: ['read', 'append', 'replace', 'replace-selection'] }, text: { type: 'string', maxLength: 128000 }, revision: { type: 'string' },
@@ -163,6 +167,10 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
       await assertOperation(); signal.throwIfAborted();
       if (!tools.some(tool => tool.name === name)) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
       switch (name) {
+        case 'cindy.ui.settings':
+          if (!['get', 'update', 'reset'].includes(String(args.operation))) throw new Error('MCP_APP_INVALID_REQUEST');
+          return result(await manageAppSettings({ operation: args.operation as 'get' | 'update' | 'reset',
+            section: `plugins.${instance}`, patch: args.patch as Record<string, unknown> | undefined }, assertOperation));
         case 'cindy.ui.open': {
           if (args.input !== undefined && (!args.input || typeof args.input !== 'object' || Array.isArray(args.input))) throw new Error('MCP_APP_INVALID_REQUEST');
           const target = entry.host.views?.find(view => view.id === args.viewId);

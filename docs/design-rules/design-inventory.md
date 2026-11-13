@@ -174,6 +174,7 @@
 | apps/mobile/app/group-execution-preview.tsx | MOBILE_VISUAL_MOCK_ENABLED group execution fixture; not production UI |
 | apps/mobile/app/listperf.tsx | __DEV__ list performance harness; not production UI |
 | apps/mobile/app/plugin-management-preview.tsx | gated plugin settings visual fixture; not production UI |
+| apps/mobile/app/plugin-preview-regression.tsx | MOBILE_VISUAL_MOCK_ENABLED card preview fixture; not production UI |
 | apps/mobile/app/splash-preview.tsx | MOBILE_VISUAL_MOCK_ENABLED preview; not production UI |
 
 Mobile 静态图跟随本地 import/reexport 与平台 TSX；根布局仅登记可见反馈，不把布局自身或资源实例另算 surface。服务端动态内容、运行期 import 拼接、原生系统呈现及未显式导入的消费者需人工复核；不宣称完整递归渲染图。

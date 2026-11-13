@@ -90,6 +90,7 @@ vi.mock('@/cindy-brain/ghostPanelBody', () => ({
 vi.mock('@/cindy-brain/installErrorKey', () => ({ ghostInstallErrorKey: () => 'error' }));
 vi.mock('@/cindy-brain/runtimeStates', () => ({ useGhostRuntimeState: () => 'running' }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
+  readInstalledGhostsSnapshot: () => [],
   useInstalledGhosts: () => [
     {
       enabled: true,
@@ -121,7 +122,8 @@ vi.mock('@/lib/logger', () => ({
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 vi.mock('@/components/ui/toast', () => ({ ToastContainer: () => null }));
 vi.mock('@/utils/ipcError', () => ({ extractIpcError: () => null }));
-vi.mock('lucide-react', () => ({
+vi.mock('lucide-react', async importOriginal => ({
+  ...await importOriginal<typeof import('lucide-react')>(),
   PanelRight: () => null,
   Minus: () => null,
   PictureInPicture2: () => null,

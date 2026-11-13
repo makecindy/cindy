@@ -13,6 +13,11 @@ import { MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RosterEntry, type Tra
 
 interface Peer { deviceId: string; key: string; channel: PeerChannel; outbound: boolean; info?: PresenceSnapshot; }
 
+/** Node timers can release the event loop; React Native timers are numeric ids. */
+function unrefTimer(timer: number | { unref?: () => void }): void {
+  if (typeof timer !== 'number') timer.unref?.();
+}
+
 /** A bounded length-prefixed stream parser. A malformed peer closes only its own channel. */
 class Frames {
   private chunks: Uint8Array[] = [];
@@ -115,7 +120,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         socket.lan.start();
       }
       socket.directoryRefresh = setInterval(() => { void socket.refreshDirectory().catch(() => undefined); }, 6 * 60 * 60_000);
-      socket.directoryRefresh.unref?.();
+      unrefTimer(socket.directoryRefresh);
       setTimeout(() => { if (!socket.closed) socket.emit('open'); }, 0);
       return socket;
     } catch (error) { socket.close(); throw error; }
@@ -304,7 +309,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       this.reconnect = null;
       void this.connectRelay().catch(() => this.scheduleReconnect());
     }, this.retryMs);
-    this.reconnect.unref?.(); this.retryMs = Math.min(15_000, this.retryMs * 2);
+    unrefTimer(this.reconnect); this.retryMs = Math.min(15_000, this.retryMs * 2);
   }
   send(text: string): void {
     if (this.closed) throw new Error('AGENT_NET_SOCKET_CLOSED');

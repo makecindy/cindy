@@ -634,10 +634,18 @@ function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
   return {
     liveScreens: {
       list: () => liveScreenSource().list(),
-      open: async (plugin, id, ended) => {
-        const source = liveScreenSource();
+      open: async (plugin, id, ended, identity) => {
+        const provider = liveScreenSource();
+        // Keep the expected logical source on every operation, including reconnect/cleanup.
+        const source = identity === undefined ? provider : {
+          list: () => provider.list(),
+          open: (p: string, key: string) => provider.open(p, key, identity),
+          input: (p: string, key: string, events: Parameters<typeof provider.input>[2]) => provider.input(p, key, events, identity),
+          control: (p: string, key: string, options: Parameters<typeof provider.control>[2]) => provider.control(p, key, options, identity),
+          close: (p: string, key: string) => provider.close(p, key, identity),
+        };
         const listed = (await source.list()).find(
-          (item) => item.plugin === plugin && item.id === id,
+          (item) => item.plugin === plugin && item.id === id && (identity === undefined || item.pluginIdentity === identity),
         );
         if (!listed) throw new Error('DESKTOP_SCREEN_NOT_FOUND');
         if (listed.state !== 'running') throw new Error('DESKTOP_SCREEN_NOT_RUNNING');
@@ -647,7 +655,7 @@ function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
         await liveRetirement.settled();
         const opened = await source.open(plugin, id);
         const { width, height, ...descriptor } = opened.screen;
-        const screen = { plugin, id, name: listed.name, ...descriptor };
+        const screen = { plugin, id, ...(identity === undefined ? {} : {pluginIdentity:identity}), name: listed.name, ...descriptor };
         const session = new LiveScreenSession(
           plugin,
           id,
@@ -1346,9 +1354,11 @@ export function registerRemoteDesktopIpc(
     assertTrustedAppRendererEvent(event);
     if (checkWindowsSupport !== undefined && typeof checkWindowsSupport !== 'boolean')
       throwIpcError('INVALID_PARAMS', 'Invalid Windows support status request');
+    const active = remoteDesktop.state;
     return {
       enabled: readDeviceLinkSettings().remoteDesktopEnabled,
-      active: remoteDesktop.state,
+      // Like the desktop overlay, the fallback notice excludes plugin-only screens.
+      active: liveSession ? null : active,
       overlay: controlledOverlay.visible,
       permissionGuide: permissions.guideOpen,
       ...(checkWindowsSupport === true

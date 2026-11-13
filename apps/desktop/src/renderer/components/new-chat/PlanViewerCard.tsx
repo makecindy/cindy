@@ -302,7 +302,7 @@ export function PlanViewerCard({
               'flex-1 resize-none overflow-y-auto px-[28px] py-[20px]',
               'whitespace-pre-wrap break-words bg-transparent outline-none',
               'font-mono text-13 leading-[1.7]',
-              'text-[var(--plan-edit-body)] caret-[var(--plan-edit-body)]',
+              'text-[var(--plan-edit-body)]',
             )}
             aria-label={t('newChat.planReview.toolbar.edit')}
           />
@@ -311,7 +311,7 @@ export function PlanViewerCard({
               className={cn(
                 'shrink-0 border-t px-[28px] py-[8px] text-12',
                 'border-[var(--plan-header-divider)]',
-                'bg-[var(--plan-content-bg)] text-red-500',
+                'bg-[var(--plan-content-bg)] text-[var(--error-fg)]',
               )}
               role="status"
             >

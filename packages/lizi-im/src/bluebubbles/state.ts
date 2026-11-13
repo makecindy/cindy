@@ -2,6 +2,8 @@
 export interface BlueBubblesState {
   version: 1;
   activatedAt: number;
+  /** Chats enabled after the connection was created; absent in older journals. */
+  chatActivatedAt?: Record<string, number>;
   cursors: Record<string, number>;
   inbox: Record<string, { receivedAt: number; state: 'pending' | 'dispatching' | 'accepted' | 'ignored';
     stop?: { chatId: string; sentAt: number; before: string[] } }>;
@@ -44,6 +46,7 @@ export class BlueBubblesReceipts {
     if (saved && (saved.version !== 1 || !Number.isFinite(saved.activatedAt)
       || !saved.cursors || !saved.inbox || !saved.outbox)) throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
     this.state = saved ?? { version: 1, activatedAt: now, cursors: {}, inbox: {}, outbox: {} };
+    if (this.state.chatActivatedAt && Object.values(this.state.chatActivatedAt).some(value => !Number.isFinite(value))) throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
     if (!saved) storage.write(this.state);
     for (const [id, value] of Object.entries(this.state.inbox)) {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'inbox', id, value });
@@ -67,6 +70,16 @@ export class BlueBubblesReceipts {
     return { uncertainInputs, uncertainSends };
   }
   get activatedAt(): number { return this.state.activatedAt; }
+  activatedAtFor(chat: string): number { return Math.max(this.state.activatedAt, this.state.chatActivatedAt?.[chat] ?? this.state.activatedAt); }
+  /** One checkpoint per settings edit, retaining every existing receipt and cursor. */
+  activateChats(chats: string[], at: number): void {
+    if (!chats.length) return;
+    const next = this.snapshot();
+    next.chatActivatedAt = { ...next.chatActivatedAt };
+    for (const chat of chats) next.chatActivatedAt[chat] = at;
+    this.storage.write(next);
+    this.state = next;
+  }
   isPending(guid: string): boolean { return this.state.inbox[guid]?.state === 'pending'; }
   /** Stable first observation order, independent of recovery's pending sort. */
   receivedBefore(earlier: string, later: string): boolean {

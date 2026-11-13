@@ -35,6 +35,7 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { PluginPublishDialog, type PluginPublishDialogRequest, type PluginSubmitOptions } from './PluginPublishDialog';
 export type { PluginSubmitOptions } from './PluginPublishDialog';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
+import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 
 const copy = 'settings.ghosts.contribution';
 const releaseKey = (release: ContributionReleaseView) =>
@@ -484,7 +485,7 @@ export function MyPluginsPage({
                   {t(`settings.ghosts.perm.${permission.labelKey}`, permission.labelArgs)}
                   {permission.detailKey ? (
                     <p className="text-13 text-[var(--text-secondary)]">
-                      {t(`settings.ghosts.perm.${permission.detailKey}`, permission.detailArgs)}
+                      {permissionItemDetail(permission, t)}
                     </p>
                   ) : null}
                   {permission.detail ? (

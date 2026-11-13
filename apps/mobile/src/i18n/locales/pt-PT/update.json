@@ -13,7 +13,7 @@
   "upToDateBody": "Já tem o pacote mais recente da aplicação.",
   "checkFailedTitle": "Falha na verificação",
   "checkFailedBody": "Não foi possível contactar o servidor de atualizações. Tente mais tarde.",
-  "latestRequestFailed": "o último pedido falhou: HTTP {{status}}",
+  "latestRequestFailed": "falha no pedido da versão mais recente: HTTP {{status}}",
   "android": {
     "versionChange": "{{current}} → {{version}}",
     "version": "Versão {{version}}",
@@ -25,7 +25,7 @@
     "deniedTitle": "A instalação ainda não é permitida",
     "deniedBody": "Volte a permitir ou transfira através do navegador.",
     "grantAgain": "Permitir instalação novamente",
-    "downloading": "A descarregar…",
+    "downloading": "A transferir…",
     "percent": "{{percent}}%",
     "installing": "A abrir instalador…",
     "ready": "Transferência concluída e pronta a instalar",

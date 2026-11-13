@@ -84,11 +84,22 @@ export default {
     }
     if (ui.data.hiddenBackground) {
       const label = ui.data.hiddenBackground === 'none' ? 'desktopBlurLabel' : 'blurLabel';
-      const slider = panel.getByRole('slider', { name: await ui.t(`settings.appearance.wallpaper.${label}`) });
-      await slider.scrollIntoViewIfNeeded();
-      assert.equal(await slider.getAttribute('aria-valuenow'), '12');
-      assert.equal(await slider.locator('xpath=ancestor::*[contains(@class,"cindy-slider")][1]').getAttribute('data-disabled'), '');
-      assert.equal(await slider.evaluate(el => getComputedStyle(el.closest('.cindy-slider')).opacity), '0.5');
+      const name = await ui.t(`settings.appearance.wallpaper.${label}`);
+      // Windows desktop blur uses Acrylic's on/off switch; artwork and the
+      // other platforms retain the strength slider. Both suspend at visibility 0.
+      if (ui.platform === 'win32' && ui.data.hiddenBackground === 'none') {
+        const toggle = panel.getByRole('switch', { name });
+        await toggle.scrollIntoViewIfNeeded();
+        assert.equal(await toggle.isDisabled(), true);
+        assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+        assert.equal(await panel.getByRole('slider', { name }).count(), 0);
+      } else {
+        const slider = panel.getByRole('slider', { name });
+        await slider.scrollIntoViewIfNeeded();
+        assert.equal(await slider.getAttribute('aria-valuenow'), '12');
+        assert.equal(await slider.locator('xpath=ancestor::*[contains(@class,"cindy-slider")][1]').getAttribute('data-disabled'), '');
+        assert.equal(await slider.evaluate(el => getComputedStyle(el.closest('.cindy-slider')).opacity), '0.5');
+      }
       await ui.capture('blur-suspended');
     }
     // Caller annotations must survive custom components, including the two

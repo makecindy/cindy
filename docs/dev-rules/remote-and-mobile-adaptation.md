@@ -1014,6 +1014,11 @@ WebSocket 写入成功）与 `afterFirstWriteMs`（首次写入到结束）；�
 事件时沿用上述合并刷新，只推进对应设备的代次；剩余信任时间为零的通知仍只清除目录，
 不发起补读。保护账号／撤权边界的 Main 校验不变，也不重建共享链路或 relay。
 回归见 Desktop `deviceLinkRemoteRecovery.test.tsx` 与 `remoteCatalogSnapshot.test.ts`。
+宿主的只读元数据入口也区分来源刷新与权限代次：请求返回前来源刷新使旧结果作废时，
+仅在原账号、区域、权限代次及准入条件仍有效时补读一次，第二次仍作废则正常报错。
+这样没有 Renderer 订阅的读取也能恢复；不把普通 scope 错误归类为网络瞬态，
+不跨撤权、断连、账号切换或零预算退休通知补读，不复活旧快照。
+回归见 Desktop `providerMetadataContinuity.test.ts`。
 
 
 ## PR 门禁

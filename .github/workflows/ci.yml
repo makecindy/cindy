@@ -190,17 +190,23 @@ jobs:
         run: pnpm install:ripgrep
 
       - name: Install Linux user-installer test tools
+        timeout-minutes: 5
         run: |
-          # Ubuntu's archive hostnames have repeatedly failed DNS on runners.
-          # Use the Kernel Archives' Ubuntu mirror without changing Ubuntu's
-          # archive signing keys or the image's security fallback.
+          # Keep Ubuntu's package signature checks and use official mirrors that
+          # respond when mirrors.kernel.org stalls during TLS negotiation.
           if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i -e '/azure\.archive\.ubuntu\.com/d' \
-              -e 's|https://archive\.ubuntu\.com/ubuntu/|https://mirrors.kernel.org/ubuntu/|' \
-              /etc/apt/apt-mirrors.txt
+            printf '%s\n' \
+              'https://security.ubuntu.com/ubuntu/' \
+              'https://archive.ubuntu.com/ubuntu/' |
+              sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           fi
-          sudo apt-get update
-          sudo apt-get install --yes libarchive-tools binutils desktop-file-utils xdg-utils
+          apt_options=(
+            -o Acquire::Retries=2
+            -o Acquire::http::Timeout=20
+            -o Acquire::https::Timeout=20
+          )
+          sudo apt-get "${apt_options[@]}" update
+          sudo apt-get "${apt_options[@]}" install --yes libarchive-tools binutils desktop-file-utils xdg-utils
 
       - name: Run client and package unit test shard
         # package script 会传递 npm_execpath，让子进程复用当前 pnpm 入口。

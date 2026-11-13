@@ -124,6 +124,8 @@ export function createGhostKvStore(options: {
   /** 存储根目录(生产 = path.join(app.getPath('userData'), 'ghost-kv'));惰性求值。 */
   getRootDir: () => string;
   log?: GhostKvLogger;
+  validate?(instanceKey: string, value: Record<string, unknown>): boolean;
+  onWrite?(instanceKey: string): void;
 }): GhostKvStore {
   const { getRootDir, log } = options;
 
@@ -174,11 +176,13 @@ export function createGhostKvStore(options: {
     write(instanceKey, value) {
       const file = fileFor(instanceKey); // 非法 id 抛 INVALID_GHOST_ID
       const text = serializeGhostKvValue(value);
+      if (options.validate && !options.validate(instanceKey, value)) throw new GhostKvError('INVALID_VALUE', 'Invalid registered setting');
       fs.mkdirSync(path.dirname(file), { recursive: true });
       // tmp + rename 原子写(override-settings-file 同款;Windows rename 覆盖已有文件 OK)。
       const tmp = `${file}.tmp`;
       fs.writeFileSync(tmp, text, 'utf8');
       fs.renameSync(tmp, file);
+      options.onWrite?.(instanceKey);
     },
 
     remove(instanceKey) {

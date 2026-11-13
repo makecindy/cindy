@@ -33,6 +33,7 @@ import {
   CircleHelp,
   CircleMinus,
   Settings,
+  Copy,
   X,
 } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
@@ -41,6 +42,7 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { Tooltip } from '@/components/ui/tooltip';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { sessionPrUrl } from '@cindy/maker-shared';
@@ -515,6 +517,22 @@ function PrChip({
                   </span>
                 )}
               </a>
+              <ChromeIconButton
+                aria-label={t('sharing.copyLink')}
+                className="-mt-1.5 shrink-0"
+                onClick={async () => {
+                  try {
+                    // PR/MR URLs are rendered locally, like the task/link copy actions;
+                    // the native IPC only accepts text previously issued by Main.
+                    await navigator.clipboard.writeText(sessionPrUrl(prRef));
+                    toast.success(t('ccAgent.sidebar.deepLink.copied'));
+                  } catch {
+                    toast.error(t('ccAgent.sidebar.deepLink.copyFailed'));
+                  }
+                }}
+              >
+                <Copy size={14} />
+              </ChromeIconButton>
               {canManage && (prCard?.settingsLabel && kind !== 'merged' && kind !== 'closed' ? (
                 <DropdownMenu onOpenChange={(open) => {
                   cardHold.current.menu = open;

@@ -2,8 +2,9 @@ import { pluginAppearanceRevision as revision } from './pluginAppearanceRevision
 import { parsePluginAppearancePatch, PLUGIN_APPEARANCE_FIELDS, type PluginAppearancePatch, type PluginAppearanceField, type PluginAppearanceResult, type PluginAppearanceSnapshot } from '@cindy/plugin-protocol/appearance';
 import type { GhostHostUi } from '@cindy/plugin-protocol';
 const pluginUiRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-import { DEFAULT_APPEARANCE_SETTINGS, type AppearanceSettings, type AppearanceOverrides } from '../../shared/appearanceSettings.js';
-import type { PluginAppearanceSource, PluginFontResource } from '../../shared/pluginAppearance.js';
+import { type AppearanceSettings, type AppearanceOverrides } from '../../shared/appearanceSettings.js';
+import { isPluginFontResource, type PluginAppearanceSource, type PluginFontResource } from '../../shared/pluginAppearance.js';
+import { appearanceDefinitionToOverrides, appearanceResetPatch } from '../appearance/definition.js';
 import type { PluginFileAccess } from '../mcp-apps/pluginFiles.js';
 import { loadPluginAppearanceResource } from './pluginAppearanceResources.js';
 
@@ -13,7 +14,7 @@ interface Dependencies {
   current(id: string): Instance | null;
   files: PluginFileAccess;
   read(): AppearanceSettings;
-  update(updater: (current: AppearanceSettings) => AppearanceOverrides): Promise<AppearanceSettings>;
+  update(updater: (current: AppearanceSettings, overrides: AppearanceOverrides) => AppearanceOverrides): Promise<AppearanceSettings>;
   saveWallpaper(bytes: Buffer, options: { fallback?: Buffer; pluginSource: PluginAppearanceSource; assertCurrent(): void;
     commit(publish: () => void): Promise<void> }): Promise<{ url: string; fallbackUrl?: string }>;
   revokeWallpaper(isCurrent: (source: PluginAppearanceSource) => boolean): Promise<boolean>;
@@ -43,12 +44,12 @@ export class PluginAppearanceService {
     for (const field of fields) {
       if (field === 'uiFont' || field === 'codeFont') {
         const resource = s[field === 'uiFont' ? 'uiFontResource' : 'codeFontResource'];
-        values[field] = { ...(resource?.source.instanceId === id ? { resource: resource.reference } : { family: s[field === 'uiFont' ? 'uiFamily' : 'codeFamily'] }), size: s[field === 'uiFont' ? 'uiSize' : 'codeSize'],
+        values[field] = { ...(resource && isPluginFontResource(resource) && resource.source.instanceId === id ? { resource: resource.reference } : { family: s[field === 'uiFont' ? 'uiFamily' : 'codeFamily'] }), size: s[field === 'uiFont' ? 'uiSize' : 'codeSize'],
           ...s[field === 'uiFont' ? 'uiFontTraits' : 'codeFontTraits'],
         };
-      } else if (field === 'bodyFont' && (s.bodyFont || s.bodyFontResource?.source.instanceId === id)) {
+      } else if (field === 'bodyFont' && (s.bodyFont || s.bodyFontResource && isPluginFontResource(s.bodyFontResource) && s.bodyFontResource.source.instanceId === id)) {
         const { family, ...traits } = s.bodyFont ?? {};
-        values.bodyFont = s.bodyFontResource?.source.instanceId === id ? { ...traits, resource: s.bodyFontResource.reference } : { ...traits, ...(family ? { family } : {}) };
+        values.bodyFont = s.bodyFontResource && isPluginFontResource(s.bodyFontResource) && s.bodyFontResource.source.instanceId === id ? { ...traits, resource: s.bodyFontResource.reference } : { ...traits, ...(family ? { family } : {}) };
       }
       else if (field === 'wallpaper') values.wallpaper = { visibility: s.wallpaperVisibility ?? undefined,
         blur: s.wallpaperBlur ?? undefined, motion: s.wallpaperMotion };
@@ -102,37 +103,10 @@ export class PluginAppearanceService {
     if (patch.wallpaper?.fallbackResource) fallback = (await loadPluginAppearanceResource(resourceSource, patch.wallpaper.fallbackResource, 'image')).bytes;
     assertCurrent(); this.assertRevision(expected);
     let settings!: AppearanceSettings;
-    const commit = async (publishWallpaper?: () => void) => { settings = await this.deps.update(current => {
+    const commit = async (publishWallpaper?: () => void) => { settings = await this.deps.update((_current, overrides) => {
       assertCurrent();
       this.assertRevision(expected);
-      const next: AppearanceOverrides = {};
-      for (const role of fontRoles) {
-        const font = patch[role]; if (!font) continue;
-        const { resource: _reference, ...traits } = font; void _reference;
-        const asset = assets[role];
-        if (role === 'bodyFont') {
-          next.bodyFont = { ...current.bodyFont, ...traits, ...(asset ? { family: asset.family } : {}) };
-          if (asset || font.family !== undefined) next.bodyFontResource = asset;
-        } else {
-          const familyKey = role === 'uiFont' ? 'uiFamily' : 'codeFamily', sizeKey = role === 'uiFont' ? 'uiSize' : 'codeSize';
-          const resourceKey = role === 'uiFont' ? 'uiFontResource' : 'codeFontResource', traitsKey = role === 'uiFont' ? 'uiFontTraits' : 'codeFontTraits';
-          if (asset || font.family !== undefined) { next[familyKey] = asset?.family ?? font.family!; next[resourceKey] = asset; }
-          if (font.size !== undefined) next[sizeKey] = font.size;
-          if (font.weight !== undefined || font.style !== undefined) next[traitsKey] = { ...current[traitsKey],
-            ...(font.weight !== undefined ? { weight: font.weight } : {}), ...(font.style ? { style: font.style } : {}) };
-        }
-      }
-      if (patch.theme) next.themeColors = { ...current.themeColors,
-        ...(patch.theme.light ? { light: { ...current.themeColors?.light, ...patch.theme.light } } : {}),
-        ...(patch.theme.dark ? { dark: { ...current.themeColors?.dark, ...patch.theme.dark } } : {}) };
-      if (patch.reading) next.reading = { ...current.reading, ...patch.reading };
-      if (patch.contentStyle) next.contentStyle = { ...current.contentStyle, ...patch.contentStyle };
-      if (patch.wallpaper) {
-        if (wallpaper) next.wallpaperId = 'custom';
-        if (patch.wallpaper.visibility !== undefined) next.wallpaperVisibility = patch.wallpaper.visibility;
-        if (patch.wallpaper.blur !== undefined) next.wallpaperBlur = patch.wallpaper.blur;
-        if (patch.wallpaper.motion !== undefined) next.wallpaperMotion = patch.wallpaper.motion;
-      }
+      const next = appearanceDefinitionToOverrides(overrides, patch, assets);
       publishWallpaper?.();
       return next;
     }); };
@@ -153,18 +127,7 @@ export class PluginAppearanceService {
     if (raw.some(field => !fields.includes(field))) throw new Error('FIELD_NOT_DECLARED');
     const settings = await this.deps.update(current => {
       assertCurrent(); this.assertRevision(expected);
-      const next: AppearanceOverrides = {};
-      for (const field of raw as PluginAppearanceField[]) {
-        if (field === 'uiFont') Object.assign(next, { uiFamily: '', uiSize: DEFAULT_APPEARANCE_SETTINGS.uiSize, uiFontResource: undefined, uiFontTraits: undefined });
-        else if (field === 'codeFont') Object.assign(next, { codeFamily: '', codeSize: DEFAULT_APPEARANCE_SETTINGS.codeSize, codeFontResource: undefined, codeFontTraits: undefined });
-        else if (field === 'bodyFont') Object.assign(next, { bodyFont: undefined, bodyFontResource: undefined });
-        else if (field === 'wallpaper') Object.assign(next, { wallpaperId: 'none', wallpaperMotion: 'static', wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
-          wallpaperVisibility: undefined, wallpaperBlur: undefined });
-        else if (field === 'theme') next.themeColors = undefined;
-        else if (field === 'reading') next.reading = undefined;
-        else next.contentStyle = undefined;
-      }
-      return next;
+      return appearanceResetPatch(raw as PluginAppearanceField[]);
     });
     return this.finish(id, settings, assertCurrent);
   }
@@ -184,7 +147,7 @@ export class PluginAppearanceService {
   async font(role: string): Promise<{ family: string; bytes: ArrayBuffer }> {
     if (!fontRoles.includes(role as typeof fontRoles[number])) throw new Error('INVALID_PARAMS');
     const resource = this.deps.read()[`${role}Resource` as 'uiFontResource'];
-    if (!resource) throw new Error('RESOURCE_UNAVAILABLE');
+    if (!resource || !isPluginFontResource(resource)) throw new Error('RESOURCE_UNAVAILABLE');
     const { instance, fields, assertCurrent } = this.access(resource.source.instanceId);
     if (!fields.includes(role as PluginAppearanceField) || instance.key !== resource.source.key) throw new Error('RESOURCE_UNAVAILABLE');
     const loaded = await loadPluginAppearanceResource({ instanceId: instance.id, ghost: instance, files: this.deps.files, assertCurrent }, resource.reference, 'font');
@@ -197,19 +160,19 @@ export class PluginAppearanceService {
     const isCurrent = (source: PluginAppearanceSource) => !this.deps.ready() || source.instanceId !== released && this.deps.current(source.instanceId)?.key === source.key;
     const before = this.deps.read();
     const stale = fontRoles.filter(role => {
-      const resource = before[`${role}Resource` as 'uiFontResource']; return resource && !isCurrent(resource.source);
+      const resource = before[`${role}Resource` as 'uiFontResource']; return resource && isPluginFontResource(resource) && !isCurrent(resource.source);
     });
     const wallpaperRemoved = await this.deps.revokeWallpaper(isCurrent);
-    const settings = !stale.length && !wallpaperRemoved ? this.deps.read() : await this.deps.update(current => {
+    const settings = !stale.length && !wallpaperRemoved ? this.deps.read() : await this.deps.update((current, overrides) => {
       if (!this.deps.ready()) return {};
       const patch: AppearanceOverrides = {};
       for (const role of stale) {
         const key = `${role}Resource` as 'uiFontResource', resource = current[key];
-        if (!resource || isCurrent(resource.source)) continue;
+        if (!resource || !isPluginFontResource(resource) || isCurrent(resource.source)) continue;
         patch[key] = undefined;
         if (role === 'bodyFont') {
-          if (current.bodyFont?.family === resource.family) { const { family: _family, ...font } = current.bodyFont; void _family; patch.bodyFont = Object.keys(font).length ? font : undefined; }
-        } else { const family = role === 'uiFont' ? 'uiFamily' : 'codeFamily'; if (current[family] === resource.family) patch[family] = ''; }
+          if (overrides.bodyFont?.family === resource.family) { const { family: _family, ...font } = overrides.bodyFont; void _family; patch.bodyFont = Object.keys(font).length ? font : undefined; }
+        } else { const family = role === 'uiFont' ? 'uiFamily' : 'codeFamily'; if (current[family] === resource.family) patch[family] = undefined; }
       }
       if (wallpaperRemoved && current.wallpaperId === 'custom' && !this.deps.read().customWallpaperUrl) patch.wallpaperId = 'none';
       return patch;

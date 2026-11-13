@@ -35,6 +35,8 @@ export function createHostFrameDecoder(deliver: (frame: Record<string, unknown>)
 }
 
 export function startHostEventStream(input: {
+  /** Opt in to transient, controller-bound owner dialogs; old clients receive none. */
+  confirmations?: boolean;
   open: (query: string, signal: AbortSignal) => Promise<Pick<Response, 'ok' | 'status' | 'headers' | 'body'>>;
   beforeEvents?: (signal: AbortSignal) => Promise<void>;
   onEvent: (event: Record<string, any>) => void;
@@ -80,6 +82,7 @@ export function startHostEventStream(input: {
     armWatchdog();
     try {
       const query = new URLSearchParams({ protocol: '2' });
+      if (input.confirmations) query.set('confirmations', '1');
       if (seq !== null) query.set('since', String(seq));
       if (runtime !== null) query.set('runtime', runtime);
       const response = await input.open(`?${query}`, abort.signal);
@@ -121,6 +124,16 @@ export function startHostEventStream(input: {
           return;
         }
         if (versioned && !started) throw new Error('Host event before stream start');
+        if (frame.type === 'host_prompt') {
+          if (!input.confirmations || !versioned || !ready
+            || !['ghosts:confirm-request', 'ghosts:confirm-dismissed', 'ghosts:install-consent:request', 'ghosts:install-consent:dismissed'].includes(String(frame.channel))
+            || !frame.payload || typeof frame.payload !== 'object'
+            || typeof (frame.payload as { requestId?: unknown }).requestId !== 'string') throw new Error('Invalid Host confirmation frame');
+          // A live dialog has no replay sequence. It neither advances nor fills
+          // a gap in the durable task stream, and disconnect cancels its answer.
+          input.onEvent({ type: 'plugin_push', channel: frame.channel, payload: frame.payload });
+          return;
+        }
         const nextSeq = frame.seq;
         if (!Number.isSafeInteger(nextSeq) || Number(nextSeq) < 1) throw new Error('Invalid Host event cursor');
         if (versioned && seq !== null && Number(nextSeq) <= seq) return;

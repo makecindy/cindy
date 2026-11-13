@@ -390,7 +390,7 @@ function GuildRows(props: {
           title={t('settings.discordBot.channels.members.label')}
           trailing={
             <Switch
-              data-settings-search-action="Allow members of a whole Discord server to use the teammate"
+              data-settings-search-action="Allow members of a whole Discord server to use the buddy"
               checked={state.allowMembers}
               onCheckedChange={props.onGuildMembers}
               aria-label={t('settings.discordBot.channels.members.guildAria', {
@@ -443,7 +443,7 @@ function GuildRows(props: {
                       title={t('settings.discordBot.channels.members.label')}
                       trailing={
                         <Switch
-                          data-settings-search-action="Allow members of one Discord channel to use the teammate"
+                          data-settings-search-action="Allow members of one Discord channel to use the buddy"
                           checked={props.channelMembers(channel.id)}
                           onCheckedChange={(next) => props.onChannelMembers(channel.id, next)}
                           aria-label={t('settings.discordBot.channels.members.aria', {

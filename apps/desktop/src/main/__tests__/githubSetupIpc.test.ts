@@ -3,9 +3,12 @@ vi.mock('../secrets/providerSecretStore', () => ({ readGhostSecret: vi.fn() }));
 vi.mock('../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../appSessionState', () => ({ activeOwnerScopeKey: () => 'test-owner', getActiveAppSession: () => ({ dataOwnerId: 'test-owner' }) }));
 const mocks = vi.hoisted(() => ({
-  handlers: new Map<string, (...args: any[]) => unknown>(),
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
   guard: vi.fn(),
   start: vi.fn(),
+  connectGithub: vi.fn(),
+  githubStatus: vi.fn(),
+  openExternal: vi.fn(),
   invalidate: vi.fn(),
   send: vi.fn(),
   readToken: vi.fn(),
@@ -17,10 +20,14 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../deepLink', () => ({ getDeepLinkMainWindow: () => mocks.main }));
 vi.mock('../secondary-windows', () => ({ isSecondaryAppWindow: (win: unknown) => win === mocks.secondary }));
+vi.mock('../scheduler-host/webhook/runtime.js', () => ({ getScheduleWebhookHost: () => ({
+  connectGithub: mocks.connectGithub, githubStatus: mocks.githubStatus,
+}) }));
 vi.mock('electron', () => ({
+  shell: { openExternal: mocks.openExternal },
   app: { getPath: () => '/test/userData', once: (_event: string, dispose: () => void) => mocks.disposers.push(dispose) },
   ipcMain: {
-    handle: (name: string, fn: (...args: any[]) => unknown) => mocks.handlers.set(name, fn),
+    handle: (name: string, fn: (...args: unknown[]) => unknown) => mocks.handlers.set(name, fn),
   },
   BrowserWindow: {
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.send } }],
@@ -88,6 +95,20 @@ describe('GitHub setup IPC boundary', () => {
     expect(mocks.start).not.toHaveBeenCalled();
     start({});
     expect(mocks.start).toHaveBeenCalledOnce();
+  });
+  it('opens only fixed GitHub authorization and installation paths for trusted callers', async () => {
+    registerGithubSetupIpc(vi.fn());
+    const connect = mocks.handlers.get('git-context:github-app:connect')!;
+    mocks.connectGithub.mockResolvedValue('https://github.com/login/oauth/authorize?state=synthetic');
+    await connect({});
+    expect(mocks.openExternal).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=synthetic');
+    mocks.openExternal.mockClear();
+    mocks.connectGithub.mockResolvedValue('https://attacker.test/login/oauth/authorize');
+    await expect(connect({})).rejects.toThrow();
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+    expect(() => connect({}, { url: 'https://github.com' })).toThrow();
+    mocks.guard.mockImplementationOnce(() => { throw new Error('untrusted'); });
+    expect(() => connect({})).toThrow('untrusted');
   });
   // Star is a local fixed-target action: arbitrary payloads and untrusted frames cannot write.
   it('guards the Star endpoints and uses the existing GitHub credential source', async () => {

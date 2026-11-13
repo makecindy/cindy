@@ -10,9 +10,23 @@
  * IM 侧即时收到「有确认卡在桌面等你」。best-effort:提示失败绝不影响确认流程
  * (fire-and-forget,桥不等待、不感知失败)。
  *
- * 本文件只放纯逻辑(零 electron / db 依赖,单测直接引);生产接线在
+ * 本文件只放纯逻辑(零 db 依赖,electron 仅经界面语言模块间接引入且单测有桩,单测直接引);生产接线在
  * desktopConfirmNoticeWiring.ts(按 architecture-invariants §2 顶层静态 import)。
+ *
+ * 提示文案跟随主人的 Cindy 界面语言(`imBot.text.shared.desktopConfirm.*`),发送时现取。
  */
+
+import { imText } from './shared/imText';
+
+const K = 'imBot.text.shared.desktopConfirm';
+
+/** 桌面专属确认卡的种类;`desktopConfirmSubject` 给出当前语言下的卡片称呼。 */
+export type DesktopConfirmSubject = 'githubIssue' | 'renameSessions' | 'pluginFileGrant';
+
+/** 「「提交 GitHub issue」的确认卡」这类称呼,作 `buildDesktopConfirmNoticeText` 的 `what`。 */
+export function desktopConfirmSubject(subject: DesktopConfirmSubject): string {
+  return imText(`${K}.subject.${subject}`);
+}
 
 export interface DesktopConfirmNoticeDeps {
   /** 会话绑定的飞书 openId;非飞书会话返回 null(桌面本来就是唯一交互面)。 */
@@ -50,7 +64,7 @@ export async function resolveFeishuNoticeTarget(
 
 /** 提示文案(纯函数,便于单测锚定)。 */
 export function buildDesktopConfirmNoticeText(what: string): string {
-  return `🔔 ${what}正在桌面端 Cindy 等待你的确认;超时将自动取消,如需继续请到桌面端操作。`;
+  return imText(`${K}.notice`, { what });
 }
 
 /**
@@ -58,7 +72,7 @@ export function buildDesktopConfirmNoticeText(what: string): string {
  * 任务名是原样数据,模板只做拼接。
  */
 export function buildInputHandoffNoticeText(taskTitle: string): string {
-  return `🔐 需要你帮忙输入:${taskTitle} · 在 Cindy 中打开`;
+  return imText(`${K}.inputHandoff`, { taskTitle });
 }
 
 /**

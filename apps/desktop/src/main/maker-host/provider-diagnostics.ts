@@ -40,7 +40,7 @@ import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
 import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { buildRouteDecision, providerRoutingForModel } from './provider-route.js';
+import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress, buildRouteDecision, providerRoutingForModel } from './provider-route.js';
 
 import type { ProviderConnectionTestInput, ProviderConnectionTestResult } from '../../shared/providerConnectionTest.js';
 import { probeProviderProtocols } from './provider-protocol-probe.js';
@@ -452,7 +452,7 @@ async function runProviderProbeUnlogged(
  * 解析 saved 入参 → 探测 spec。仅支持自定义(user)供应商 —— 内置 OAuth / 网关来源的连接态
  * 由各自鉴权通道保证，不在此探测。解析失败抛 Error（handler 映射 INVALID_PARAMS）。
  */
-export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): ProviderProbeSpec {
+export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Promise<ProviderProbeSpec> {
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) throw new Error(`provider '${providerId}' not found`);
   if (provider.source !== 'user')
@@ -510,7 +510,19 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // `x-api-key: <token>`,而真实 oauth-token 路由明确删除 x-api-key;优先按 x-api-key
   // 鉴权的端点会把 access_token 当 API key 校验得到 401,探测结论就与真实会话相反了。
   if (routing.authStrategy === 'oauth-token') {
-    const oauthToken = oauthProbeTokenReader(providerId);
+    const revision = getProviderRouteCredentialRevision(providerId);
+    const connectionSignature = JSON.stringify({ auth: provider.auth, routing, route: model.route, api: modelApi });
+    const oauthToken = await oauthProbeTokenReader(providerId);
+    const currentProvider = getActiveCatalog().providers.find(p => p.id === providerId);
+    const currentModel = currentProvider?.models[agent]?.find(m => m.id === model.id);
+    const currentSignature = currentProvider && currentModel
+      ? JSON.stringify({ auth: currentProvider.auth, routing: currentProvider.routing[agent], route: currentModel.route, api: currentModel.api ?? currentModel.piApi })
+      : null;
+    if (isProviderRouteMutationInProgress(providerId)
+      || getProviderRouteCredentialRevision(providerId) !== revision
+      || currentProvider?.source !== 'user' || currentSignature !== connectionSignature) {
+      throw new Error('provider_oauth_login_changed');
+    }
     return {
       agent,
       baseUrl: buildRouteDecision(modelRouting, null, agent, null, oauthToken)?.upstreamOverride ?? baseUrl,
@@ -560,11 +572,11 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   };
 }
 
-// OAuth 探测 token 读取器（注入，同 keyReader 模式；生产 = readCachedGenericOAuthAccessToken）。
-type OAuthProbeTokenReader = (providerId: string) => string | null;
+// OAuth 探测 token 读取器（注入，同 keyReader 模式；生产 = readGenericOAuthAccessToken）。
+type OAuthProbeTokenReader = (providerId: string) => string | null | Promise<string | null>;
 let oauthProbeTokenReader: OAuthProbeTokenReader = () => null;
 
-/** host 启动期接通 generic-oauth 的同步 token 缓存读取（探测用）。 */
+/** host 启动期接通 generic-oauth 的异步 token 读取（探测也等待必要刷新）。 */
 export function setDiagnosticsOAuthTokenReader(reader: OAuthProbeTokenReader): void {
   oauthProbeTokenReader = reader;
 }
@@ -575,8 +587,16 @@ export async function testProviderConnection(
   fetchImpl: typeof fetch = outboundFetch,
   signal?: AbortSignal,
 ): Promise<ProviderTestResult> {
-  const spec =
-    input.kind === 'saved' ? resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
+  const started = Date.now();
+  let spec: ProviderProbeSpec;
+  try {
+    spec = input.kind === 'saved' ? await resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
+  } catch (error) {
+    if (error instanceof Error && ['provider_oauth_refresh_failed', 'provider_oauth_login_changed'].includes(error.message)) {
+      return { ok: false, code: 'AUTH_INVALID', latencyMs: Date.now() - started };
+    }
+    throw error;
+  }
   const portable = !spec.api || ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(spec.api);
   // Keep preset/saved SDK-specific authentication and legacy callers on their existing path.
   if (input.kind === 'adhoc' && input.requestId && spec.agent === 'pi' && portable && !spec.catalogPresetId) {

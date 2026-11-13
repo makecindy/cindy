@@ -396,6 +396,15 @@ it('serves the executor SDK and importmap without widening CSP', async () => {
   const asset = await request('__cindy/sdk/ext-apps/app.js');
   expect(asset.headers.get('Content-Type')).toContain('text/javascript');
   expect(await asset.text()).toBe(sdk.source);
+  for (const [path, bytes] of [
+    ['__cindy/sdk/cindy/view-state.js', sdk.addons['cindy/view-state'].source],
+    ['__cindy/sdk/cindy/view-state-react.js', sdk.addons['cindy/view-state'].reactSource],
+  ]) {
+    expect(await (await request(path)).text()).toBe(bytes);
+    expect((await request(path + '?invalid=1')).status).toBe(404);
+    expect((await handler(new Request('cindy-mcp-app://' + id + '-view/' + path, { method: 'POST' }))).status).toBe(404);
+    expect((await handler(new Request('cindy-mcp-app://' + legacyId + '-view/' + path))).status).toBe(404);
+  }
   expect((await request('__cindy/sdk/ext-apps/app.js?version=1')).status).toBe(404);
   expect((await handler(new Request('cindy-mcp-app://' + id + '/__cindy/sdk/ext-apps/app.js'))).status).toBe(404);
   unmountRemoteAppDocument(id, 'renderer:1');

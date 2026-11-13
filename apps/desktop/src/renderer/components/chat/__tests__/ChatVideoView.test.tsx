@@ -267,3 +267,14 @@ it('audio previews play once and stop when the preview unmounts', () => {
   view.unmount();
   expect(pause.mock.contexts).toContain(audio);
 });
+
+// Tier 1: Chromium's native download cannot save custom media URLs. The inline
+// action must use the same host save operation as the viewer, without opening it.
+it('saves the inline media through the host without opening the viewer', async () => {
+  const saveMediaAs = vi.fn().mockResolvedValue({ canceled: false, savedPath: '/clip.mp4' });
+  vi.stubGlobal('electronAPI', { saveMediaAs });
+  const view = render(<ChatVideoView {...props} />, { wrapper: Tooltip.Provider });
+  fireEvent.click(view.getByRole('button', { name: 'chat.media.saveAs' }));
+  await vi.waitFor(() => expect(saveMediaAs).toHaveBeenCalledWith({ url: props.src }));
+  expect(view.container.querySelectorAll('video')).toHaveLength(1);
+});

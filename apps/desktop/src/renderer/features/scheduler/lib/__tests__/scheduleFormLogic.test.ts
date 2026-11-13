@@ -356,6 +356,7 @@ describe('buildScheduleInput webhook trigger', () => {
   // A sender this build does not know came from a newer version; submitting it as GitHub
   // would switch the server's format and reject every delivery.
   it.each([
+    [{ webhookPreset: 'github-app', webhookRepositories: 'Example/Project\nother/repo, example/project' }, { preset: 'github-app', repositories: ['example/project', 'other/repo'] }],
     [{ webhookPreset: 'stripe', webhookSigned: false }, { preset: 'stripe', signed: false }],
     [{ webhookPreset: 'linear', webhookSigned: true }, { preset: 'linear' }],
     [{ webhookPreset: 'from-a-newer-version' }, undefined],

@@ -285,8 +285,12 @@ export async function getChatgptBridgeAuth(providerId = 'openai', account?: Nati
   throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   if (account) {
     account.assertCurrent();
-    if (providerId !== 'openai' || !account.readCodexTokens || !(await account.readState()).authenticated)
-      throw new Error('The selected OpenAI subscription account requires login');
+    // Migrated connections retain their provider id while using a selected pool
+    // account. Resolve the same native source as the request router, not its name.
+    if (!isOpenAiSubscriptionProviderId(providerId) || !account.readCodexTokens)
+      throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+    if (!(await account.readState()).authenticated)
+      throw new Error('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login');
     let tokens = await account.readCodexTokens();
     if (isExpired(tokens.accessToken)) tokens = await account.readCodexTokens(true);
     account.assertCurrent();
@@ -990,7 +994,11 @@ export function getPiNativeSubscriptionHandler(
         requestPath: ctx.url,
         detail,
       });
-      res.writeHead(502, {
+      // A host-side login rejection is not an upstream outage. Keep its stable
+      // code at the start so account/group recovery and existing error UI agree.
+      const accountError = err instanceof Error && /^\[SUBSCRIPTION_ACCOUNT_(?:LOGIN_REQUIRED|UNAVAILABLE)\]/.test(err.message)
+        ? err.message : null;
+      res.writeHead(accountError?.startsWith('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED]') ? 401 : 502, {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
       });
@@ -999,7 +1007,7 @@ export function getPiNativeSubscriptionHandler(
           type: 'upstream_error',
           provider: providerId,
           endpoint: upstream.url,
-          message: `${providerLabel} upstream request failed: ${err instanceof Error ? err.message : String(err)}`,
+          message: accountError ?? `${providerLabel} upstream request failed: ${err instanceof Error ? err.message : String(err)}`,
         },
       }));
     } finally {

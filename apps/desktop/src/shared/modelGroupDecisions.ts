@@ -24,6 +24,8 @@ export interface ModelGroupDecision {
   agentKind?: ModelGroupAgentKind;
   providerId?: string;
   model?: string;
+  /** 选中的来源在另一台电脑或是分享来的：它的运行位置。本机省略。 */
+  agentDeviceId?: string;
   modelName?: string;
   sourceName?: string;
   effort?: string;

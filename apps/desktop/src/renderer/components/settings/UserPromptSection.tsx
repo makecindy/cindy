@@ -2,13 +2,14 @@ import { personalizationDetailsSettings } from './PersonalizationDetails.setting
 import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
 import { SettingsCard, SettingsField } from '@/components/ui/settings-rows';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { useUserPrompt } from '@/hooks/useUserPrompt';
 import { USER_PROMPT_MAX_LENGTH } from '@/lib/userPrompt.constants';
 import { toast } from '@/lib/toast';
+import appI18n from 'i18next';
 
 export function UserPromptSection() {
   const { value, setValue } = useUserPrompt();
@@ -34,10 +35,7 @@ export function UserPromptSection() {
     toast.success(t('settings.personalization.toast.saved'));
   }, [canSave, draft, setValue, t]);
 
-  const counter = useMemo(
-    () => `${length.toLocaleString()} / ${USER_PROMPT_MAX_LENGTH.toLocaleString()}`,
-    [length],
-  );
+  const counter = `${length.toLocaleString(appI18n.language)} / ${USER_PROMPT_MAX_LENGTH.toLocaleString(appI18n.language)}`;
 
   return (
     <SettingsCard>

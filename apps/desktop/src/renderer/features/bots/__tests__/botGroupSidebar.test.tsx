@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readTeammatesViewMode } from '../teammatesSectionPrefs';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -375,7 +376,7 @@ describe('TeammatesSection group chats', () => {
     expect(screen.queryByRole('button', { name: 'bots.groupChat.server.join' })).toBeNull();
     fireEvent.keyDown(screen.getByRole('button', { name: 'bots.list.createMenu' }), { key: 'Enter' });
     expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
-      'bots.market.heading', 'bots.list.createTeammate', 'bots.groupChat.create.title', 'bots.list.joinWithLink',
+      'bots.list.createTeammate', 'bots.groupChat.create.title', 'bots.list.joinWithLink',
     ]);
     expect(screen.getAllByRole('separator')).toHaveLength(1);
     fireEvent.click(screen.getByRole('menuitem', { name: 'bots.list.joinWithLink' }));
@@ -560,9 +561,14 @@ it.each([false, true])('shows the executing teammate rather than a queued teamma
   expect(row.textContent).not.toContain('bots.groupChat.header.queued');
 });
 
-describe('collapsed avatar strip mentions', () => {
+describe('icon strip mentions', () => {
   const mentionLabel = 'bots.groupChat.server.thread.hintMentioned';
-  const collapse = () => fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+  // Icon/list is independent of collapse; preserve the existing status/overflow coverage.
+  const switchView = () => {
+    const wasIcons = readTeammatesViewMode('owner') === 'icons';
+    fireEvent.keyDown(screen.getByRole('button', { name: 'ccAgent.sidebar.viewStyle' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: wasIcons ? 'ccAgent.sidebar.viewStyleListWide' : 'bots.list.viewIcons' }));
+  };
   afterEach(() => window.localStorage.clear());
 
   it('keeps one orange running point for mentions without an @ glyph', async () => {
@@ -572,14 +578,14 @@ describe('collapsed avatar strip mentions', () => {
     ];
     mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'running' }]]);
     const view = await renderSidebar();
-    collapse();
+    switchView();
     // The running point itself carries the @: one indicator, status color kept.
     const marked = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.running · ${mentionLabel}` });
     expect(marked.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
     const point = marked.querySelector<HTMLElement>('[data-teammate-mention]');
     expect(point?.getAttribute('data-teammate-status')).toBe('running');
     expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--warning-accent)');
-    // Ordinary group unread uses blue while collapsed.
+    // Ordinary group unread uses blue in icon mode.
     const plain = screen.getByRole('button', { name: /^读书会 · / });
     expect(plain.getAttribute('aria-label')).not.toContain(mentionLabel);
     expect(plain.querySelector<HTMLElement>('[data-teammate-status] > span')?.style.backgroundColor).toBe('var(--bot-unread-bg)');
@@ -600,11 +606,11 @@ describe('collapsed avatar strip mentions', () => {
     view.rerender(<TeammatesSection />);
     expect(row.querySelector('[data-teammate-unread-count]')).toBeNull();
     expect(screen.getByTestId('bot-group-running')).toBeTruthy();
-    collapse();
+    switchView();
     expect(view.container.querySelector<HTMLElement>('[data-teammate-status="running"] > span')?.style.backgroundColor).toBe('var(--warning-accent)');
   });
 
-  it.each(['completed', 'idle'] as const)('uses a blue count for expanded group mentions and a blue point when collapsed (%s)', async phase => {
+  it.each(['completed', 'idle'] as const)('uses a blue count for list group mentions and a blue point in icon mode (%s)', async phase => {
     mocks.profiles = [];
     mocks.groups = [group({ teammateActivity: { phase }, serverUnread: { count: 12, mentioned: true } })];
     const view = await renderSidebar();
@@ -616,22 +622,22 @@ describe('collapsed avatar strip mentions', () => {
       `${translate('sidebar.teammateUnreadCount', { count: 12 })} · ${translate('bots.groupChat.server.thread.hintMentioned')}`,
     );
     expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
-    collapse();
+    switchView();
     const point = screen.getByRole('button', { name: /^周末出游 ·/ }).querySelector<HTMLElement>('[data-teammate-mention]');
     expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--bot-unread-bg)');
     expect(screen.getByRole('button', { name: /^周末出游 ·/ }).querySelector('[data-teammate-unread-count]')).toBeNull();
     mocks.groups = [group({ teammateActivity: { phase }, serverUnread: { count: 0, mentioned: false } })];
     view.rerender(<TeammatesSection />);
-    collapse();
+    switchView();
     expect(view.container.querySelector('[data-teammate-unread-count]')).toBeNull();
     expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
   });
 
-  it('shows ordinary group unread as an expanded count and collapsed blue point, clearing on read', async () => {
+  it('shows ordinary group unread as an list count and icon blue point, clearing on read', async () => {
     mocks.groups = [group({ teammateActivity: { phase: 'idle' }, serverUnread: { count: 12, mentioned: false } })];
     const view = await renderSidebar();
     expect(view.container.querySelector('[data-teammate-unread-count]')?.textContent).toBe('12');
-    collapse();
+    switchView();
     const avatar = screen.getByRole('button', { name: /^周末出游 · / });
     expect(avatar.querySelector<HTMLElement>('[data-teammate-status] > span')?.style.backgroundColor).toBe('var(--bot-unread-bg)');
     expect(avatar.textContent).not.toContain('12');
@@ -649,14 +655,14 @@ describe('collapsed avatar strip mentions', () => {
     expect(status.querySelector('[data-teammate-unread-count]')).toBeNull();
     expect(status.querySelector<HTMLElement>('[data-teammate-status="done"] > span')?.style.backgroundColor).toBe('var(--card-status-done)');
     expect(row.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
-    collapse();
+    switchView();
     const avatar = screen.getByRole('button', { name: /^周末出游 · / });
     expect(avatar.querySelector<HTMLElement>('[data-teammate-status="done"] > span')?.style.backgroundColor).toBe('var(--card-status-done)');
     expect(avatar.querySelector('[data-teammate-unread-count]')).toBeNull();
     mocks.groups = [group({ teammateActivity: { phase: 'completed' }, serverUnread: { count: 0, mentioned: false } })];
     view.rerender(<TeammatesSection />);
     expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
-    collapse();
+    switchView();
     expect(view.container.querySelector('[data-teammate-unread-count]')).toBeNull();
   });
 
@@ -671,7 +677,7 @@ describe('collapsed avatar strip mentions', () => {
     try {
       mocks.groups = [group({ teammateActivity: { phase }, serverUnread: { count: 3, mentioned: false } })];
       const view = await renderSidebar();
-      collapse();
+      switchView();
       const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +3' });
       expect(more.querySelector<HTMLElement>(`[data-teammate-status="${status}"] > span`)?.style.backgroundColor).toBe(color);
       mocks.groups = [group({ teammateActivity: { phase }, serverUnread: { count: 0, mentioned: false } })];
@@ -685,7 +691,7 @@ describe('collapsed avatar strip mentions', () => {
   it('drops the mark once the mention is no longer unread', async () => {
     mocks.groups = [group({ serverUnread: { count: 0, mentioned: true } })];
     const view = await renderSidebar();
-    collapse();
+    switchView();
     expect(screen.getByRole('button', { name: '周末出游' })).toBeTruthy();
     expect(view.container.querySelector('[data-teammate-mention]')).toBeNull();
   });
@@ -702,13 +708,13 @@ describe('collapsed avatar strip mentions', () => {
     try {
       mocks.groups = [group({ serverUnread: { count: 1, mentioned: true } })];
       await renderSidebar();
-      collapse();
+      switchView();
       const more = screen.getByRole('button', { name: `bots.list.sectionExpand · +3 · ${mentionLabel}` });
       expect(more.querySelector('[data-teammate-mention]')).not.toBeNull();
       // Mouse users read the same words as the accessible name.
       fireEvent.pointerEnter(more);
       fireEvent.pointerMove(more, { pointerType: 'mouse' });
-      expect((await screen.findByRole('tooltip')).textContent).toBe(`bots.list.sectionExpand · +3 · ${mentionLabel}`);
+      expect(await screen.findByRole('tooltip', { name: `bots.list.sectionExpand · +3 · ${mentionLabel}` })).toBeTruthy();
     } finally {
       globalThis.ResizeObserver = original;
     }

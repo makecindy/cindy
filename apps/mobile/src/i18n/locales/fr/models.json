@@ -110,7 +110,7 @@
     "groupBadge_other": "Groupe de fournisseurs · {{count}} ordinateurs",
     "harness": "Harness",
     "restoreRecommended": "Rétablir les paramètres recommandés",
-    "saveFailed": "Impossible d'enregistrer. Veuillez réessayer.",
+    "saveFailed": "Impossible d'enregistrer. Réessayez.",
     "configure": "Configurer",
     "syncFailed": "Impossible de synchroniser les favoris. Rouvrez le sélecteur pour réessayer ; l'ordinateur distant a peut-être besoin d'une mise à jour.",
     "timeUnit": {
@@ -120,11 +120,11 @@
       "second": "s"
     },
     "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs",
-    "quotaAverage": "Restant moyen {{percent}} %",
+    "quotaAverage": "Moyenne restante : {{percent}} %",
     "quotaUpdating": "Quota en attente de mise à jour",
     "quotaResetSoon": "Réinitialisation proche",
     "quotaResetIn": "Réinitialisation dans {{duration}}",
     "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
-    "quotaResetHint": "Au rythme actuel, du quota pourrait rester à la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
+    "quotaResetHint": "Au rythme actuel, il pourrait rester du quota au moment de la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
   }
 }

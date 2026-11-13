@@ -21,6 +21,8 @@
  */
 
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
@@ -29,7 +31,7 @@ import { assertGhostPrefsWritable, relocateGhostPreferenceMaps } from './ghostPr
 const log = desktopMakerLogger.child('pick-grants-store');
 
 export async function relocateGhostPickedDirs(from: string, to: string): Promise<void> {
-  await relocateGhostPreferenceMaps('ghost-pick-grants.json', ['grants'], from, to, () => {
+  await relocateGhostPreferenceMaps('ghost-pick-grants.json', ['grants', 'roots'], from, to, () => {
     store = createStore();
   });
 }
@@ -41,7 +43,10 @@ const MAX_DIR_LEN = 1024;
 
 interface GhostPickGrants {
   grants: Record<string, string[]>;
+  roots?: Record<string, PickedDirectory[]>;
 }
+
+export interface PickedDirectory { ref: string; path: string; dev: string; ino: string }
 
 const DEFAULTS: GhostPickGrants = { grants: {} };
 
@@ -62,7 +67,16 @@ function normalize(raw: unknown): GhostPickGrants {
       if (list.length > 0) grants[ghostId] = list;
     }
   }
-  return { grants };
+  const roots: Record<string, PickedDirectory[]> = {};
+  const rawRoots = (raw as GhostPickGrants).roots;
+  if (rawRoots && typeof rawRoots === 'object') for (const [id, entries] of Object.entries(rawRoots)) {
+    if (!Array.isArray(entries)) continue;
+    const valid = entries.filter(entry => entry && typeof entry.ref === 'string' && /^[a-f0-9-]{36}$/.test(entry.ref) &&
+      typeof entry.path === 'string' && grants[id]?.includes(normalizeWorkingDirForStorage(entry.path) ?? '') &&
+      typeof entry.dev === 'string' && /^\d+$/.test(entry.dev) && typeof entry.ino === 'string' && /^\d+$/.test(entry.ino));
+    if (valid.length) roots[id] = valid.slice(0, GRANTS_PER_GHOST);
+  }
+  return { grants, ...(Object.keys(roots).length ? { roots } : {}) };
 }
 
 function createStore() {
@@ -100,6 +114,30 @@ export function isGhostPickedDir(ghostId: string, dirAbs: string): boolean {
   if (!dir) return false;
   store.invalidateIfChanged();
   return (store.read().grants[ghostId] ?? []).includes(dir);
+}
+
+/** A fresh, explicitly described native selection is the only minting path.
+ * Legacy path-only picks deliberately have no filesystem reference. */
+export async function issueGhostPickedDirectory(ghostId: string, dirAbs: string, assertCurrent: () => void): Promise<string> {
+  const directory = await fs.realpath(dirAbs);
+  const stat = await fs.lstat(directory, { bigint: true });
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('DIRECTORY_UNAVAILABLE');
+  assertCurrent();
+  recordGhostPickedDir(ghostId, directory);
+  store.invalidateIfChanged();
+  const current = store.read();
+  const ref = randomUUID();
+  const entries = [{ ref, path: directory, dev: stat.dev.toString(), ino: stat.ino.toString() },
+    ...(current.roots?.[ghostId] ?? []).filter(entry => entry.path !== directory && current.grants[ghostId]?.includes(normalizeWorkingDirForStorage(entry.path) ?? ''))].slice(0, GRANTS_PER_GHOST);
+  assertCurrent();
+  store.writePatch({ roots: { ...current.roots, [ghostId]: entries } });
+  return ref;
+}
+
+export function getGhostPickedDirectory(ghostId: string, ref: string): PickedDirectory | null {
+  store.invalidateIfChanged();
+  const current = store.read();
+  return current.roots?.[ghostId]?.find(entry => entry.ref === ref && current.grants[ghostId]?.includes(normalizeWorkingDirForStorage(entry.path) ?? '')) ?? null;
 }
 
 export const __testing = { normalize };

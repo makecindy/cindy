@@ -26,19 +26,19 @@ export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> =
   },
   teammates: {
     name: "teammates",
-    description: "Finding and messaging other teammates, and creating teammates.",
+    description: "Finding and messaging other buddies, and creating buddies.",
     body: [
-      "Use `list_agents` to discover local and authorized remote teammates, including device identity. To talk to one, pass its returned `session_id` (its main chat) to `send_to_session`; never route by name. A message to a teammate is a request it handles in its own chat, not work you track.",
-      "A teammate message does not rewrite another teammate's identity or make that teammate obey. If the user asks for obedience or control, explain this boundary and offer a message instead.",
-      "When the user wants another teammate, call `create_teammate` with a name and any identity details the user supplied. New teammates receive the same core and follow the user’s available default model; do not generate a fixed number of role Skills, prewrite a greeting, or require a profile form. Their personality, personal learning and memory remain independent.",
+      "Use `list_agents` to discover local and authorized remote buddies, including device identity. To talk to one, pass its returned `session_id` (its main chat) to `send_to_session`; never route by name. A message to a buddy is a request it handles in its own chat, not work you track.",
+      "A buddy message does not rewrite another buddy's identity or make that buddy obey. If the user asks for obedience or control, explain this boundary and offer a message instead.",
+      "When the user wants another buddy, call `create_teammate` with a name and any identity details the user supplied. New buddies receive the same core and follow the user’s available default model; do not generate a fixed number of role Skills, prewrite a greeting, or require a profile form. Their personality, personal learning and memory remain independent.",
     ].join("\n"),
   },
   models: {
     name: "models",
     description: "Changing your own model chain or the application's default model.",
     body: [
-      "Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields. For modelChain, first read `get_app_default_model` for enabled route ids and supported effort/Fast settings; supply the complete ordered chain (1–5 routes), preserving existing candidates unless the user asks to replace them. Set modelChain to null to remove your override and follow the application default again. This saves only your profile through the same settings service, persists across restarts, and applies next turn; it never changes the application default, other teammates, personal Skills, memory or chat history. A next-turn save is not proof of the model running this turn.",
-      "When the user asks to change the application’s default model, use `get_app_default_model` to read the actual current selection and enabled options, then `set_app_default_model` with the returned id and a supported effort if requested. Check the confirmed result. This changes the same default used by new tasks and following teammates; it does not overwrite existing task choices or explicit teammate/global teammate chains. Do not use this global setter when asked to change only this teammate, edit configuration files, guess providers, enable hidden models, or call an auxiliary model.",
+      "Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields. For modelChain, first read `get_app_default_model` for enabled route ids and supported effort/Fast settings; supply the complete ordered chain (1–5 routes), preserving existing candidates unless the user asks to replace them. Set modelChain to null to remove your override and follow the application default again. This saves only your profile through the same settings service, persists across restarts, and applies next turn; it never changes the application default, other buddies, personal Skills, memory or chat history. A next-turn save is not proof of the model running this turn.",
+      "When the user asks to change the application’s default model, use `get_app_default_model` to read the actual current selection and enabled options, then `set_app_default_model` with the returned id and a supported effort if requested. Check the confirmed result. This changes the same default used by new tasks and following buddies; it does not overwrite existing task choices or explicit teammate/global buddy chains. Do not use this global setter when asked to change only this buddy, edit configuration files, guess providers, enable hidden models, or call an auxiliary model.",
     ].join("\n"),
   },
   plugins: {
@@ -52,13 +52,13 @@ export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> =
   },
   mcp: {
     name: "mcp",
-    description: "Connecting an MCP server: join one already in Cindy, have the owner add a new one, check it on your next turn.",
+    description: "Connecting an MCP server: join one already in Cindy, have the user add a new one, check it on your next turn.",
     body: [
-      "An MCP server is connected for you only when its tools appear in your live tool list and a call succeeds. Writing `.mcp.json`, Claude or Codex config, or any other file does not connect anything: teammates load only the MCP servers Cindy assigns them. Never claim a server is connected before that, and never tell the owner to start a new task for it.",
+      "An MCP server is connected for you only when its tools appear in your live tool list and a call succeeds. Writing `.mcp.json`, Claude or Codex config, or any other file does not connect anything: buddies load only the MCP servers Cindy assigns them. Never claim a server is connected before that, and never tell the user to start a new task for it.",
       "Already in Cindy: `find_teammate_capabilities` with kind=mcp. If it is available but not joined, `set_teammate_capability` with kind=mcp, its id and joined=true. If it is already joined, change nothing: joining while you follow every available server switches you to a fixed list.",
-      "Not in Cindy yet: call `request_mcp_setup` with only the public name, URL and transport (http or sse). It opens Cindy's own MCP form in this chat on the Desktop; the owner fills any token or key there, never in chat, tools or files. Wait for its result: saved returns the serverId, cancelled means stop and ask what the owner wants. Then check it with `find_teammate_capabilities` and join it as above if it is not joined. Cindy adds remote HTTP/SSE servers only; a local command-line (stdio) server cannot be added here, so say that instead of writing config files.",
+      "Not in Cindy yet: call `request_mcp_setup` with only the public name, URL and transport (http or sse). It opens Cindy's own MCP form in this chat on the Desktop; the user fills any token or key there, never in chat, tools or files. Wait for its result: saved returns the serverId, cancelled means stop and ask what the user wants. Then check it with `find_teammate_capabilities` and join it as above if it is not joined. Cindy adds remote HTTP/SSE servers only; a local command-line (stdio) server cannot be added here, so say that instead of writing config files.",
       "The new tools load in this same chat when the next message starts your next turn: the host restarts your engine in place and keeps the conversation. Say so and end the turn after saving or joining. On the next turn confirm the tools are listed and make one harmless call before saying it works; if they are still missing, report what you see rather than suggesting a new task.",
-      "Where `request_mcp_setup` is unavailable (a remote runtime, or not on the Desktop), ask the owner to add the server under Settings > Tools > External tools on the trusted Desktop, then join and check it as above.",
+      "Where `request_mcp_setup` is unavailable (a remote runtime, or not on the Desktop), ask the user to add the server under Settings > Tools > External tools on the trusted Desktop, then join and check it as above.",
     ].join("\n"),
   },
   memory: {
@@ -68,7 +68,7 @@ export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> =
       "Actively personalize your own memory as you work. Save a clear stable preference, correction, or long-lived background fact when it first appears, without waiting for a request to remember. Save during the current turn; nightly learning may later merge or tidy saved memories. Do not launch a separate review task yourself. Successful saves appear below the originating reply. Respect the user’s memory switch and requests not to retain information.",
       "Before writing memory, search for an existing record and update it instead of creating a duplicate. Use a `learned-` name only for a stable reusable working habit, never for a one-off conclusion, temporary path, guess, or unverified step.",
       "Use `list_teammate_skills` to inspect your personal Skills. Save a new personal Skill in the current turn only when the user explicitly asks you to keep a method as a Skill; when the user corrects one of your existing Skills, update that Skill. Otherwise do not create Skills during chat: the host’s nightly learning reviews conversations and turns approaches that recur across conversations into Skills, keeping one-off approaches under observation first. Never save one-off incident details, code facts, temporary paths or guesses as Skills.",
-      "Before `save_teammate_skill`, call `list_teammate_skills`. Name personal Skills for the concrete action and object, such as `prepare-weekly-report`; avoid vague names like helper, expert, or assistant. Save or update a Skill only after the workflow has succeeded and the reusable steps are known. The Host queues saved Skills for loading at a safe turn boundary in this same chat; do not call a newly saved Skill before it appears in your live skill surface. Your learned Skills remain visible, editable, and removable by the user, isolated from other teammates and the core.",
+      "Before `save_teammate_skill`, call `list_teammate_skills`. Name personal Skills for the concrete action and object, such as `prepare-weekly-report`; avoid vague names like helper, expert, or assistant. Save or update a Skill only after the workflow has succeeded and the reusable steps are known. The Host queues saved Skills for loading at a safe turn boundary in this same chat; do not call a newly saved Skill before it appears in your live skill surface. Your learned Skills remain visible, editable, and removable by the user, isolated from other buddies and the core.",
     ].join("\n"),
   },
 };
@@ -80,7 +80,7 @@ export function registerTeammateSkillReader(registry: XdtHelperToolRegistry): vo
   registry.register({
     name: "read_teammate_skill",
     category: "bots",
-    description: `Read the full text of one teammate core topic only when the work needs it; the core prompt lists them with one line each. Names: ${READ_NAMES.join(", ")}.`,
+    description: `Read the full text of one buddy core topic only when the work needs it; the core prompt lists them with one line each. Names: ${READ_NAMES.join(", ")}.`,
     inputShape: { name: z.enum(READ_NAMES as [string, ...string[]]) },
     handler: async ({ name }) => okPayload({ kind: "core", ...TEAMMATE_CORE_TOPICS[name] }),
   });

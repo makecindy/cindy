@@ -74,7 +74,7 @@ import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
 import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.desktop.js';
-import { observeSubscriptionAccountUsage } from '../subscription-accounts/runtime.js';
+import { observeSubscriptionAccountUsage, pooledCodexResetTarget, onSubscriptionAccountsChanged } from '../subscription-accounts/runtime.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
@@ -216,6 +216,10 @@ function normalizeCodexUsageProvider(providerId?: string): string | undefined {
   if (!isOpenAiSubscriptionProviderId(providerId)) throw new Error('Unknown OpenAI account provider');
   return providerId;
 }
+function normalizeCodexResetProvider(providerId?: string): string | undefined {
+  if (providerId && pooledCodexResetTarget(providerId)) return providerId;
+  return normalizeCodexUsageProvider(providerId);
+}
 let codexReadersOwner = '';
 const codexUsageReaders = new Map<string, ReturnType<typeof createCodexAccountUsageSnapshotReader>>();
 export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?: string, options?: { fresh?: boolean }) {
@@ -278,7 +282,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
   const resetServices = new Map<string, ReturnType<typeof createCodexRateLimitResetService>>();
   let resetServicesOwner = '';
   function getResetService(providerId?: string) {
-    providerId = normalizeCodexUsageProvider(providerId);
+    providerId = normalizeCodexResetProvider(providerId);
     const scope = activeOwnerScopeKey();
     if (scope !== resetServicesOwner) { resetServices.clear(); resetServicesOwner = scope; }
     const key = providerId ?? 'openai';
@@ -287,7 +291,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
     const assertScope = () => {
       if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
     };
-  const service = createCodexRateLimitResetService({
+  const service = createCodexRateLimitResetService(pooledCodexResetTarget(key) ?? {
     readRateLimits: async () => { assertScope(); const result = await maker.readAgentAccountRateLimits('codex', providerId); assertScope(); return result; },
     consumeResetCredit: async (params) => { assertScope(); const result = await maker.consumeAgentAccountRateLimitResetCredit('codex', params, providerId); assertScope(); return result; },
     readAccountIdentity: async () => {
@@ -310,7 +314,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
 
   async function accountKeyFor(providerId?: string): Promise<string> {
     const scope = activeOwnerScopeKey();
-    const id = normalizeCodexUsageProvider(providerId);
+    const id = normalizeCodexResetProvider(providerId);
+    const pooled = id && pooledCodexResetTarget(id);
+    if (pooled) {
+      const identity = await pooled.readAccountIdentity();
+      return codexResetAccountKey(identity.email, identity.accountId);
+    }
     const state = await desktopCodexAuthAdapter.getState({ providerId: id });
     const accountId = state.authSource === 'oauth' ? await desktopCodexAuthAdapter.getAccountId(id) : null;
     if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
@@ -342,7 +351,11 @@ export function registerMakerUsageIpc(maker: Maker): void {
     },
     consume: (providerId, key, authorized) => getResetService(providerId).consume(key, authorized),
     record: (providerId, snapshot, at) => codexResetAutoUseStore.record(providerId, snapshot.autoUse!.accountKey, at),
-    refreshWeb: async (providerId) => { await readCodexAccountUsageSnapshotWithWebRefresh(providerId, { fresh: true }); },
+    refreshWeb: async (providerId) => {
+      const pooled = pooledCodexResetTarget(providerId);
+      if (pooled) await pooled.refresh();
+      else await readCodexAccountUsageSnapshotWithWebRefresh(providerId, { fresh: true });
+    },
     restored: async (providerId) => {
       for (const listener of resetRestoredListeners) await listener(providerId);
     },
@@ -356,8 +369,11 @@ export function registerMakerUsageIpc(maker: Maker): void {
   const timer = setInterval(checkEnabled, 60_000);
   timer.unref();
   const unobserve = observeUsageChanges(kind => { if (kind === 'codex') checkEnabled(); });
+  const unobservePool = onSubscriptionAccountsChanged((provider, resetAccountId) => {
+    if (provider === 'openai' && resetAccountId) checkEnabled();
+  });
   powerMonitor.on('resume', checkEnabled);
-  app.once('will-quit', () => { clearInterval(timer); unobserve(); powerMonitor.removeListener('resume', checkEnabled); });
+  app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', checkEnabled); });
   checkEnabled();
 
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
@@ -381,6 +397,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
       const result = await getResetService(providerId).consume(key);
       if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       if (accountKey !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+      if (providerId && (result.outcome === 'reset' || result.outcome === 'alreadyRedeemed')) {
+        await pooledCodexResetTarget(providerId)?.refresh().catch(() => {
+          log.warn('Codex account quota refresh after reset could not complete');
+        });
+      }
+      if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       return { ...result, providerId: providerId ?? 'openai',
         rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai',
           autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) } : null };

@@ -14,6 +14,7 @@ import type { WorktreeMeta } from '../worktree/types';
 
 const state = vi.hoisted(() => ({ root: '', refs: [] as unknown[], registry: new Map<string, WorktreeMeta>() }));
 const managerMocks = vi.hoisted(() => ({ copy: vi.fn(), create: vi.fn() }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.root, getAppDataDir: () => state.root }));
 vi.mock('../worktree/WorktreeManager', () => ({
   copyClaudeSiviDirs: managerMocks.copy,
   createWorktree: managerMocks.create,

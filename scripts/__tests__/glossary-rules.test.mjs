@@ -14,10 +14,14 @@ import {
   ELLIPSIS_LOCALES,
   HALFWIDTH_PUNCT_LOCALES,
   FULL_WIDTH_PUNCT,
+  auditEnglishCopy,
   findCaseMismatch,
+  findEnglishCopyIssues,
   findHalfWidthPunct,
   hasAsciiEllipsis,
+  makeEnglishCopyExemptChecker,
   makeExemptChecker,
+  textDigest,
   occursIn,
   stripNonProse,
   normalizeForPunctuation,
@@ -183,6 +187,54 @@ test('标点规则的 locale 适用范围有数据依据', () => {
 test('hasAsciiEllipsis: 识别三点省略号', () => {
   assert.equal(hasAsciiEllipsis('加载中...'), true);
   assert.equal(hasAsciiEllipsis('加载中…'), false);
+});
+
+// DESIGN.md §11 B-14(2026-11-11):英文写法守卫只拦正文里的违规。插值名、URL 与带宾语
+// 的按钮若被误报,存量 baseline 之外的新文案就无从下手,门禁会被绕开。
+test('findEnglishCopyIssues: 命中正文违规,不误伤插值、近形词与带宾语的按钮', () => {
+  const rules = (text) => findEnglishCopyIssues(text).map((issue) => issue.rule);
+  assert.deepEqual(rules('Operation failed. Please try again later.'), ['en-please']);
+  assert.deepEqual(rules('Pushed successfully'), ['en-successfully']);
+  assert.deepEqual(rules('Installed "{{name}}"'), ['en-straight-quote']);
+  assert.deepEqual(rules('OK'), ['en-bare-action']);
+  assert.deepEqual(rules('{{please}} pleased https://x.test/?q="a" Installed “{{name}}”'), []);
+  assert.deepEqual(rules('Submit issue'), []);
+});
+
+// review(PR #10026):必须原样展示的 JSON 示例改了说明文字也不能变成「新增违规」,豁免只能
+// 按规则、按精确 key 生效,不能顺带放过同一 key 的其他规则或整段子树。
+test('makeEnglishCopyExemptChecker: 只豁免登记的规则与精确 key', () => {
+  const key = 'desktop:settings.ghosts.market.sources.guide.manifestBody';
+  const isExempt = makeEnglishCopyExemptChecker({ 'en-straight-quote': [key] });
+  assert.equal(isExempt('en-straight-quote', key), true);
+  assert.equal(isExempt('en-please', key), false);
+  assert.equal(isExempt('en-straight-quote', `${key}Extra`), false);
+  assert.throws(() => makeEnglishCopyExemptChecker({ 'en-straight-quote': ['desktop:settings.'] }), /精确 key/);
+  assert.throws(() => makeEnglishCopyExemptChecker({ 'en-straight-qoute': [key] }), /规则名未知/);
+});
+
+// review(PR #10026):手写 catalog 不走根门禁,既有问题单独冻结,新增与已修好未摘都要报出来。
+// 冻结指纹必须带命中次数与文案摘要:只按 key + rule 冻结时,给已冻结的
+// `mobile/loginMessages:invalidEmail` 再追加一句 Please,please×1 → ×2 也会被当存量放行。
+test('auditEnglishCopy: 冻结按次数与摘要,已冻结文案再加同类违规也报新增', () => {
+  const key = 'mobile/loginMessages:invalidEmail';
+  const frozen = 'Please enter a valid email address';
+  const known = [`${key}\ten-please\tplease×1\t${textDigest(frozen)}`];
+
+  assert.deepEqual(auditEnglishCopy([{ key, value: frozen }], { known }), { added: [], stale: [] });
+
+  const grown = auditEnglishCopy([{ key, value: `${frozen}. Please check your account.` }], { known });
+  assert.deepEqual(grown.added.map((line) => line.split(': ')[1].split('—')[0]), ['en-please(please×2)']);
+  assert.deepEqual(grown.stale, known);
+
+  const exempted = auditEnglishCopy(
+    [
+      { key: 'desktop:b', value: 'Use {"source": "local"}' },
+      { key: 'desktop:c', value: 'Pushed successfully' },
+    ],
+    { isExempt: makeEnglishCopyExemptChecker({ 'en-straight-quote': ['desktop:b'] }) },
+  );
+  assert.deepEqual(exempted.added.map((line) => line.split(': ')[0]), ['desktop:c']);
 });
 
 // ---------------------------------------------------------------------------
@@ -740,6 +792,15 @@ test('findHalfWidthPunct: 半角标点后有空格再接中文同样算违规', 
   // 空白不影响排除纯 ASCII 的本意
   assert.equal(findHalfWidthPunct('a=1, b=2 的形式'), null);
   assert.equal(findHalfWidthPunct('GPT-4, Claude 两者'), null);
+});
+
+test('glossary.json: englishCopyExempt 可加载且不滥用', () => {
+  const exempt = glossary.englishCopyExempt ?? {};
+  // 规则名或前缀写错时这里直接抛错,不让豁免静默失效
+  makeEnglishCopyExemptChecker(exempt);
+  const total = Object.values(exempt).reduce((sum, keys) => sum + keys.length, 0);
+  // 正当用途只有必须原样展示的格式字面量,数量失控说明在拿豁免绕规则
+  assert.ok(total <= 12, `英文写法豁免已达 ${total} 条,请复核是否在用豁免绕过规则`);
 });
 
 test('glossary.json: punctuationExempt 格式合法且不滥用', () => {

@@ -7,9 +7,10 @@ import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { motionDuration } from '@/theme/tokens';
+import { GestureDetector } from '@/platform/gestureHandler';
 import { RemoteSessionStoreSubscriptionGate } from './remoteSessionStore';
 import { sessionPaneLayout } from './sessionPaneLayout';
-import { SessionPaneDivider } from './SessionPaneDivider';
+import { PaneEdgeInsetProvider, useSessionPaneDivider } from './SessionPaneDivider';
 
 const PaneLayoutContext = createContext<ReturnType<typeof sessionPaneLayout> | null>(null);
 type SidebarWidthPreference = { width: number | null; setWidth(width: number): void };
@@ -95,8 +96,16 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
   useLayoutEffect(() => {
     mounted.current = !!entry;
   }, [entry]);
+  // The root holds both panes, so the edge's drag band can let taps through to
+  // either side. Keep the detector mounted: toggling it would remount the app.
+  const divider = useSessionPaneDivider({
+    enabled: visible && !homeRoute, width: paneLayout.sidebarWidth, bounds: paneLayout.resizeBounds ?? null,
+    left: paneLayout.detail.x, top: geometry.insets.top, bottom: geometry.insets.bottom, onResize: setSidebarWidth,
+  });
   return <SidebarWidthContext.Provider value={widthPreference}>
     <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
+    <PaneEdgeInsetProvider value={divider.rowInset}>
+    <GestureDetector gesture={divider.gesture}>
     <View ref={host} collapsable={false} style={styles.root}>
       {children}
       {entry ? <Animated.View collapsable={false} pointerEvents={visible ? 'box-none' : 'none'}
@@ -113,12 +122,10 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
           <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
         </AnimationVisibilityProvider>
       </Animated.View> : null}
-      {visible && !homeRoute && paneLayout.resizeBounds ? <SessionPaneDivider
-        width={paneLayout.sidebarWidth} bounds={paneLayout.resizeBounds}
-        left={paneLayout.detail.x} top={geometry.insets.top} bottom={geometry.insets.bottom}
-        onResize={setSidebarWidth}
-      /> : null}
+      {divider.edge}
     </View>
+    </GestureDetector>
+    </PaneEdgeInsetProvider>
   </Context.Provider></PaneLayoutContext.Provider>
   </SidebarWidthContext.Provider>;
 }

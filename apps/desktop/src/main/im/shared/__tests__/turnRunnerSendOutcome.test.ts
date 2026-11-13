@@ -536,6 +536,11 @@ function expectSafeSendOutcomeLog(expected: { source: string; reason: string }):
   expect(loggedPayload).not.toContain('file body');
 }
 
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
+
 describe('turnRunner send outcome policy (feishu adapter characterization)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -2316,7 +2321,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.sendText).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
       'ou_user',
-      expect.stringContaining('启动 agent 失败'),
+      expect.stringContaining('启动 Agent 失败'),
       // thread = session 模型加的末位可选参数 — feishu 无 scope, 恒 undefined
       { threadTs: undefined },
     );
@@ -2350,7 +2355,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
       'ou_user',
-      expect.stringContaining('启动 agent 失败'),
+      expect.stringContaining('启动 Agent 失败'),
       expect.objectContaining({ fallbackOpenerId: 'om_deferred' }),
     );
   });

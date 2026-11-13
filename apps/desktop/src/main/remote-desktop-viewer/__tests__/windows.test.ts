@@ -15,7 +15,7 @@ vi.mock('electron', () => ({
   powerMonitor: new EventEmitter(),
   screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
   clipboard: { readText: () => '', writeText: vi.fn() },
-  ipcMain: { handle: (name: string, fn: Function) => fixture.handlers.set(name, fn) },
+  ipcMain: { on: vi.fn(), handle: (name: string, fn: Function) => fixture.handlers.set(name, fn) },
 }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: fixture.debug }),
@@ -116,6 +116,8 @@ vi.mock('../../resource-usage-window/window', () => ({
 }));
 import { RemoteDesktopViewerWindows } from '../windows';
 import { REMOTE_VIEWER } from '../../../shared/remoteDesktopViewer';
+import { PluginLiveScreenViews } from '../pluginViews';
+import { LIVE_SCREEN_RELAY } from '../../../shared/liveScreenView';
 import { remoteInvoke } from '../../device-link/index';
 let manager: RemoteDesktopViewerWindows;
 afterEach(() => {
@@ -501,3 +503,101 @@ it.each(['lock-screen', 'suspend'])('ends the remote desktop on local %s without
   powerMonitor.emit('unlock-screen');
   expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
 });
+
+// Unit integration: power/account boundaries must cancel opens before an embedded
+// connection exists. Real PluginLiveScreenViews, deferred remote list, no timer sleeps.
+it.each(['lock-screen', 'suspend', 'reset'])(
+  'revokes pending plugin opens on %s before a late list arrives',
+  async (signal) => {
+    const views = new PluginLiveScreenViews({ available: () => true, identity: () => 'sim' });
+    manager = new RemoteDesktopViewerWindows(() => true);
+    manager.register(views);
+    let finish!: (value: unknown) => void;
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    views.connect({
+      selfDeviceId: () => 'local',
+      invoke: async (_device, request) => {
+        if (request.op === 'capabilities') return { version: 1, enabled: true, liveScreens: true };
+        began();
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+    });
+    const send = vi.fn();
+    const host = Object.assign(new EventEmitter(), { isDestroyed: () => false, send });
+    views.setHost(host as never);
+    const opening = views.handle('sim', { op: 'open', deviceId: 'remote', id: 'phone' });
+    await started;
+    if (signal === 'reset') manager.reset();
+    else powerMonitor.emit(signal);
+    finish({
+      screens: [
+        {
+          plugin: 'sim',
+        pluginIdentity: 'sim',
+          pluginName: 'Simulator',
+          id: 'phone',
+          name: 'Phone',
+          platform: 'ios',
+          state: 'running',
+          taskIds: [],
+        },
+      ],
+    });
+    expect(await opening).toMatchObject({ ok: false });
+    expect(send.mock.calls.some(([channel]) => channel === LIVE_SCREEN_RELAY.START)).toBe(false);
+    views.endAll();
+  },
+);
+
+// Regression #9950/r4550280442: HOST IPC previously let any trusted secondary
+// replace the relay. Existing boundary tests called setHost directly and missed
+// window registration. Unit integration: real service + two app-window senders;
+// main keeps both pending and live opens when a secondary registers/closes.
+it.each(['pending', 'live'] as const)(
+  'keeps the designated relay host when a secondary registers during %s open',
+  async (phase) => {
+    const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn() });
+    const secondary = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn() });
+    const views = new PluginLiveScreenViews({ available: () => true, identity: () => 'sim' });
+    manager = new RemoteDesktopViewerWindows(() => true, (sender) => sender === (main as never));
+    manager.register(views);
+    const register = (sender: unknown) => fixture.handlers.get(LIVE_SCREEN_RELAY.HOST)!({ sender });
+    const open = () => views.handle('sim', { op: 'open', deviceId: 'remote', id: 'phone' });
+    let finish!: (value: unknown) => void;
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => { began = resolve; });
+    views.connect({
+      selfDeviceId: () => 'local',
+      invoke: async (_device, request) => {
+        if (request.op === 'capabilities') return { version: 1, enabled: true, liveScreens: true };
+        began();
+        return new Promise((resolve) => { finish = resolve; });
+      },
+    });
+    try {
+      register(secondary);
+      register(main);
+      const opening = open();
+      await started;
+      if (phase === 'pending') register(secondary);
+      finish({ screens: [{ plugin: 'sim', pluginIdentity: 'sim', pluginName: 'Simulator',
+        id: 'phone', name: 'Phone', platform: 'ios', state: 'running', taskIds: [] }] });
+      const opened = await opening;
+      expect(opened).toMatchObject({ ok: true });
+      if (phase === 'live') register(secondary);
+      secondary.emit('destroyed');
+      expect(await open()).toEqual(opened);
+      expect(main.send.mock.calls.filter(([channel]) => channel === LIVE_SCREEN_RELAY.START)).toHaveLength(1);
+      expect(secondary.send).not.toHaveBeenCalled();
+      main.emit('did-start-navigation', {}, 'about:blank', false, true);
+      expect(await open()).toEqual({ ok: false, errorCode: 'HOST_NOT_READY' });
+      register(main);
+      expect(await open()).toMatchObject({ ok: true });
+    } finally { views.endAll(); }
+  },
+);

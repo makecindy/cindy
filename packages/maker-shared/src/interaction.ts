@@ -1056,6 +1056,18 @@ function browserStep(args: Record<string, unknown>): string {
 }
 
 /**
+ * The line of a phone alert that says exactly what would be allowed. The computer writes it into
+ * the alert and the phone rebuilds it from the request it reads back before allowing anything, so
+ * it must name everything that tells one request from another: for a plugin call that includes
+ * the plugin, since two plugins can offer the same tool with the same arguments.
+ */
+export function permissionAlertOperation(action: PermissionActionSummary): string {
+  const operation = action.preview.trim();
+  if (!operation) return '';
+  return action.kind === 'plugin' ? `${action.subject ?? ''} \u00b7 ${operation}` : operation;
+}
+
+/**
  * Classify a permission request so every surface can say in plain words what is
  * being confirmed. Unknown tools keep their name and compact JSON arguments.
  */

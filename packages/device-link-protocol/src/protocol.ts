@@ -157,6 +157,38 @@ export interface NotifySender {
   avatar?: { kind: 'jpeg' | 'symbol' | 'preset'; value: string };
 }
 
+/** What the recipient may do from the alert itself, without opening the app. */
+export type NotifyActionKind = 'permission' | 'reply' | 'question';
+export const NOTIFY_ACTION_REQUEST_ID_MAX_LENGTH = 128;
+/** A question's options offered as buttons; more than this is answered in the app or by text. */
+export const NOTIFY_ACTION_MAX_OPTIONS = 8;
+export const NOTIFY_ACTION_OPTION_MAX_LENGTH = 80;
+export const NOTIFY_ACTION_DETAIL_MAX_LENGTH = 160;
+export const NOTIFY_ACTION_QUESTION_MAX_LENGTH = 600;
+
+/**
+ * Optional buttons on the alert.
+ *  - `permission`: one tool permission request is waiting and the alert body
+ *    describes it; `requestId` is that request, and an answer applies to it alone.
+ *  - `question`: the agent asked one question and waits; `requestId` is that
+ *    request. `options` are its choices in order (the alert body numbers them the
+ *    same way), `details` their optional explanations by the same index, and
+ *    `question` the whole text when the body had to be shortened.
+ *  - `reply`: the task accepts a text message.
+ * The answer itself travels as an ordinary invoke from the recipient's app to
+ * the device named in `deepLink`; this field only tells the recipient which
+ * buttons to offer and what they stand for.
+ */
+export interface NotifyAction {
+  kind: NotifyActionKind;
+  /** Required for `permission` and `question`, absent for `reply`. */
+  requestId?: string;
+  /** `question` only. */
+  options?: string[];
+  details?: string[];
+  question?: string;
+}
+
 /**
  * notify 帧 payload(client→server;server 消费,不转发)。
  * server 查本账号已注册的推送 token(排除发送方自己),经 APNs/FCM 下发系统推送。
@@ -165,6 +197,10 @@ export interface NotifySender {
  * fire-and-forget:成功无响应;失败回 relay-error(RATE_LIMITED / BAD_REQUEST / INTERNAL)。
  */
 export interface NotifyPayload {
+  /** Exact alert identity; older relays may omit it. */
+  notificationId?: string;
+  /** Encrypted Agent-Net recipient binding; official relays derive this from authentication. */
+  recipientId?: string;
   category: NotifyCategory;
   /** 通知标题(建议:会话标题) */
   title: string;
@@ -182,6 +218,11 @@ export interface NotifyPayload {
   targetDeviceId?: string;
   /** Incoming teammate reply only. Older relays ignore this optional enrichment. */
   sender?: NotifySender;
+  /**
+   * Older relays drop this optional field and deliver the alert without buttons.
+   * A malformed value is dropped the same way; it never rejects the frame.
+   */
+  action?: NotifyAction;
 }
 
 /** 设备识别用的轻量硬件 / 系统信息。所有字段 best-effort,可缺省。 */

@@ -98,7 +98,9 @@ vi.mock('../../logger.js', () => ({
 }));
 
 import { buildPiAgent } from '../pi-host.js';
-import type { AgentRuntimeConfig } from '@cindy/maker-core';
+import type { AgentDeps, AgentRuntimeConfig } from '@cindy/maker-core';
+import { getResolvedMainLocale, setMainLocale } from '../../i18n.desktop.js';
+import { SUPPORTED_LOCALES } from '../../../shared/locale.js';
 
 const logger = {
   trace: vi.fn(),
@@ -134,6 +136,24 @@ describe('Desktop Pi auto-compact wiring', () => {
     const runtimeConfig = (agent as unknown as { deps: { runtimeConfig: AgentRuntimeConfig } })
       .deps.runtimeConfig;
     expect(runtimeConfig.autoCompactThresholdPct).toBeUndefined();
+  });
+
+  // #9855, unit: real Desktop Pi assembly must pass a localized recovery hint
+  // through AgentDeps, including the actionable path. Core tests use fallback
+  // copy and cannot catch a missing locale key or lost interpolation here.
+  it('wires cloud-file recovery copy for every supported Desktop locale', () => {
+    const locale = getResolvedMainLocale();
+    try {
+      const agent = buildPiAgent({ logger });
+      const deps = (agent as unknown as { deps: AgentDeps }).deps;
+      for (const language of SUPPORTED_LOCALES) {
+        setMainLocale(language);
+        const hint = deps.formatPiStartupCloudFileHint?.('~/Desktop/AGENTS.md');
+        expect(hint).toContain('~/Desktop/AGENTS.md');
+        expect(hint).not.toContain('logic.errors.');
+        expect(hint).not.toContain('{{');
+      }
+    } finally { setMainLocale(locale); }
   });
 
   it('connects resource settings to Pi behavior flags and leaves remote machines alone', () => {

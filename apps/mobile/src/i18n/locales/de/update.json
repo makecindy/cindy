@@ -13,7 +13,7 @@
   "upToDateBody": "Du hast bereits das neueste App-Paket.",
   "checkFailedTitle": "Prüfung fehlgeschlagen",
   "checkFailedBody": "Der Update-Server ist nicht erreichbar. Versuch es später erneut.",
-  "latestRequestFailed": "Letzte Anfrage fehlgeschlagen: HTTP {{status}}",
+  "latestRequestFailed": "Abfrage der neuesten Version fehlgeschlagen: HTTP {{status}}",
   "android": {
     "versionChange": "{{current}} → {{version}}",
     "version": "Version {{version}}",

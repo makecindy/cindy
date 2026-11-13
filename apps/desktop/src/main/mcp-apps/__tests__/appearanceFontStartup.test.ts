@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { PluginFontResource } from '../../../shared/pluginAppearance.js';
+import { normalizeAppearanceSettings } from '../../../shared/appearanceSettings.js';
 
 const h = vi.hoisted(() => ({
   settings: { wallpaperId: 'none' } as Record<string, unknown>,
@@ -8,8 +9,9 @@ const h = vi.hoisted(() => ({
 vi.mock('../../custom-wallpaper-settings.js', () => ({ customWallpaperStore: { read: () => ({}) } }));
 vi.mock('../../appearance-settings-store.js', () => ({
   readAppearanceSettings: () => ({ ...h.settings }),
-  updateAppearanceSettingsAtomic: async (updater: (current: unknown) => object) => {
-    h.settings = { ...h.settings, ...updater(h.settings) }; return { ...h.settings };
+  updateAppearanceSettingsAtomic: async (updater: (current: unknown, overrides: unknown) => object) => {
+    h.settings = { ...normalizeAppearanceSettings({ ...h.settings, ...updater(normalizeAppearanceSettings(h.settings), h.settings) }) };
+    return { ...h.settings };
   },
 }));
 vi.mock('../../appearance-settings-ipc.js', () => ({ publishAppearanceFromOwner: h.publish }));

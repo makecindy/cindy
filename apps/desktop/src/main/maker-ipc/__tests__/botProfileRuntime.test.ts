@@ -90,7 +90,7 @@ describe('Bot Profile runtime prompt', () => {
     // MCP (Chris 2026-11-01): config files are not a connection and a new task is never the fix;
     // registering uses Cindy's own form and an already-joined server is left alone.
     expect(prompt).toContain('writing config files such as `.mcp.json` connects nothing');
-    expect(prompt).toContain('never tell the owner to start a new task');
+    expect(prompt).toContain('never tell the user to start a new task');
     expect(TEAMMATE_CORE_TOPICS.mcp.body).toContain('`request_mcp_setup`');
     expect(TEAMMATE_CORE_TOPICS.mcp.body).toContain('If it is already joined, change nothing');
     // Tools of removed teammate features stay out of the core.
@@ -119,7 +119,7 @@ describe('Bot Profile runtime prompt', () => {
 
   it('keeps learned Skills deliberate instead of writing a diary of every turn', () => {
     const prompt = buildBotCapabilityContextPrompt();
-    expect(prompt).toContain('Save a personal Skill only when the owner asks');
+    expect(prompt).toContain('Save a personal Skill only when the user asks');
     expect(prompt).toContain('Respect the memory switch');
     const memory = TEAMMATE_CORE_TOPICS.memory.body;
     expect(memory).toContain('Use a `learned-` name only for a stable reusable working habit');

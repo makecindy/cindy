@@ -4,7 +4,7 @@ title: Finding and organizing sessions
 summary: Browse, group, sort, filter, search, tag, and pin sessions or projects in the left sidebar, and find and restore archived sessions.
 ---
 
-The left sidebar lists your sessions. It's the main way to navigate and organize. The top of the sidebar has navigation rows (**New** — ⌘N / Ctrl+N starts a new session — then **Automations**, **Plugins**, **Search**; use **More → Customize** to show, hide, or reorder them). **Teammates** have their own section above **Pinned** (see the Teammates topic). Below them is the main session list.
+The left sidebar lists your sessions. It's the main way to navigate and organize. The top of the sidebar has navigation rows (**New** — ⌘N / Ctrl+N starts a new session — then **Automations**, **Plugins**, **Search**; use **More → Customize** to show, hide, or reorder them). **Buddies** have their own section above **Pinned** (see the Buddies topic). Below them is the main session list.
 
 **Finding and restoring an archived session:**
 

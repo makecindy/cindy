@@ -43,7 +43,7 @@ it('updates recent and rolling usage while the detail remains mounted', async ()
   await act(async () => {});
   const recent = view.container.querySelector('dd')!.textContent;
   expect(screen.getByText('7')).toBeTruthy();
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(15_000));
   expect(screen.getByText('8')).toBeTruthy();
   expect(view.container.querySelector('dd')!.textContent).not.toBe(recent);
   expect(load).toHaveBeenCalledTimes(2);
@@ -90,7 +90,7 @@ it('holds automatic reads during clear confirmation and ignores a pre-clear resp
     .mockResolvedValue({ ...summary, lastUsedAt: null, callsLast7Days: 0 }));
   render(<PluginUsageCard ghostId="plugin" confirmClear={() => new Promise(resolve => { confirm = resolve; })} />);
   await act(async () => {});
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(15_000));
   fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.usage.clear' }));
   await act(async () => vi.advanceTimersByTimeAsync(10_000));
   expect(load).toHaveBeenCalledTimes(2);
@@ -243,8 +243,31 @@ it('shows download-only list metadata inside a card without nesting a button', (
       <PluginSharedUsage detail={shared} variant="list" />
     </button>,
   );
-  expect(screen.getByText('12 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+  expect(screen.getByText('12')).toBeTruthy();
   expect(view.container.textContent).not.toContain('usesValue');
   expect(view.container.querySelectorAll('button')).toHaveLength(1);
   expect(view.container.querySelector('[tabindex]')).toBeNull();
+});
+
+it.each([
+  ['0', '0'],
+  ['999', '999'],
+  ['1000', '1k'],
+  ['12480', '12.4k'],
+  ['999999', '999.9k'],
+  ['1000000', '1M'],
+  ['1280000', '1.2M'],
+  ['9007199254740993', '9007199254.7M'],
+])('shortens list downloads %s to %s while retaining the exact count', (count, expected) => {
+  render(<PluginSharedUsage detail={{ ...shared, downloadStatistics: { requestCount: count } }} variant="list" />);
+  const metric = screen.getByRole('group', {
+    name: `${BigInt(count).toLocaleString('en')} settings.ghosts.usage.downloadsValue`,
+  });
+  expect(metric.textContent).toBe(expected);
+});
+
+it('shows the exact download count on hover', async () => {
+  render(<PluginSharedUsage detail={{ ...shared, downloadStatistics: { requestCount: '12480' } }} variant="list" />);
+  fireEvent.pointerMove(screen.getByRole('group'), { pointerType: 'mouse' });
+  expect((await screen.findByRole('tooltip')).textContent).toBe('12,480 settings.ghosts.usage.downloadsValue');
 });

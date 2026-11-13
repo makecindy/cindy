@@ -93,6 +93,22 @@ beforeEach(() => {
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
 });
 afterEach(cleanup);
+// #10112, unit tier: the former-home route must show the local failure rather
+// than spin forever; automatic recovery follows the completed home projection.
+it.each([true, false])('keeps rejected local source editing open until recovery (demoted: %s)', async demoted => {
+  h.listed = false;
+  const failure = { field: 'identitySource' as const, maxLength: 12000 };
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: demoted ? ['writer'] : [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'desk', profileFailure: failure }] };
+  const view = render(<RemoteBotSessionView />);
+  await screen.findByText('cloud-offline-view');
+  expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ botId: 'writer', profileFailure: failure }));
+  expect(h.view).not.toHaveBeenCalled();
+  expect(h.navigate).not.toHaveBeenCalled();
+  h.cloud = { ...h.cloud, demotedBotIds: [], actors: h.cloud.actors.map(({ profileFailure: _, ...actor }) => actor) };
+  view.rerender(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith({ to: '/bots/writer', replace: true });
+});
 // Unit regression: an exact notification link must retain its task, host and anchor
 // when the canonical link changed, its host is offline, or the companion lookup fails.
 it.each(['changed', 'offline', 'failed'] as const)('preserves the original task when the companion is %s', async (reason) => {

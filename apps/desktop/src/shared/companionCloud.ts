@@ -1,3 +1,5 @@
+import type { BotProfileSourceFailure } from './botProfileSources.js';
+
 /** Cloud companions (docs/product-rules/cloud-companions.md): which computer runs each companion. */
 export interface CompanionCloudHomeDevice {
   deviceId: string;
@@ -25,6 +27,8 @@ export interface CompanionCloudActor {
   homeDevice?: CompanionCloudHomeDevice | null;
   /** Only in the renderer view: shown once after the companion arrived here, then dismissed. */
   arrivalNotices?: CompanionArrivalNoticeKind[];
+  /** This computer could not restore the source. No user content; absent on older hosts. */
+  profileFailure?: BotProfileSourceFailure;
 }
 
 export interface CompanionCloudSnapshot {
@@ -60,7 +64,18 @@ export type CompanionCloudActionResult =
   | { ok: true }
   | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
       /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
-      conflictingBotId?: string; conflictingDeviceId?: string | null };
+      conflictingBotId?: string; conflictingDeviceId?: string | null;
+      /** Optional detail of FAILED; older clients retain the existing generic failure. */
+      profileFailure?: BotProfileSourceFailure;
+      /** Only on the local recovery editor response; no source text in broadcasts. */
+      profileRepairError?: 'changed' | 'invalid' | 'backup' };
+
+export interface CompanionProfileRepairField extends BotProfileSourceFailure { source: string }
+export interface CompanionProfileRepairDraft { token: string; fields: CompanionProfileRepairField[] }
+export type CompanionProfileRepairRequest = { action: 'read' }
+  | { action: 'save'; token: string; values: Partial<Record<BotProfileSourceFailure['field'], string>> };
+export type CompanionProfileRepairResult = { ok: true; draft?: CompanionProfileRepairDraft }
+  | Extract<CompanionCloudActionResult, { ok: false }>;
 
 /**
  * What a move does while the companion is still working (a turn running or queued in any of

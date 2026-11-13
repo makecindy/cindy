@@ -35,6 +35,20 @@ export function getSessionExternalNotificationText(title: string, kind: SessionE
   return t(EXTERNAL_KEY_BY_KIND[kind]).replaceAll('{{title}}', () => title);
 }
 
+const PERMISSION_QUESTION_KEY = {
+  command: 'newChat.permissionPrompt.titleCommand',
+  'file-read': 'newChat.permissionPrompt.titleFileRead',
+  'file-write': 'newChat.permissionPrompt.titleFileWrite',
+  browser: 'newChat.permissionPrompt.titleBrowser',
+  plugin: 'newChat.permissionPrompt.titlePlugin',
+} as const;
+
+/** First line of a permission alert on the phone: the permission card's own title. */
+export function getPermissionAlertQuestion(kind: keyof typeof PERMISSION_QUESTION_KEY, plugin?: string): string {
+  // The plugin id is data: a function replacement keeps `$&` and friends literal.
+  return t(PERMISSION_QUESTION_KEY[kind]).replaceAll('{{plugin}}', () => plugin ?? '');
+}
+
 /** 代输入 push body: fixed copy, never the screen or the agent's purpose text. */
 export function getInputHandoffNotificationBody(): string {
   return t('settings.notifications.sessionEvent.inputHandoff');

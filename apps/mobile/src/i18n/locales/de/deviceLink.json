@@ -24,7 +24,7 @@
   },
   "connectStep1": "Installiere und öffne {{appName}} auf deinem Computer",
   "connectStep2": "Melde dich mit demselben Konto wie auf deinem Smartphone an",
-  "connectStep3": "Aktiviere unter Einstellungen → Fernverbindung die Option „Geräten mit demselben Konto erlauben, diesen Computer zu steuern“",
+  "connectStep3": "Aktiviere unter Einstellungen → Remote-Verbindung die Option „Geräten mit demselben Konto die Steuerung dieses Computers erlauben“",
   "brandEyebrow": "Cindy Mobile",
   "cloudTeaserTitle": "{{appName}} in der Cloud – demnächst verfügbar",
   "cloudTeaserCopy": "Nach dem Start funktioniert die mobile App eigenständig, ganz ohne Computer.",

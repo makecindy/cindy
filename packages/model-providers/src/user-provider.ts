@@ -55,7 +55,7 @@ import {
 } from "./effortResolution.js";
 
 /** 自定义模型缺省上下文窗口（用户不填元数据时的保守默认，仅用于展示）。 */
-export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
+export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 500_000;
 
 /**
  * Older releases allowed a user provider to occupy `xai`, which is now the built-in SuperGrok

@@ -188,7 +188,7 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
   setOAuthTokenReader(id => {
     check();
     const provider = getActiveCatalog().providers.find(p => p.id === id);
-    return oauth.readCachedGenericOAuthAccessToken(provider?.source === 'user' ? storedCustomProviderId(id) : id, provider?.auth.oauth);
+    return oauth.readGenericOAuthAccessToken(provider?.source === 'user' ? storedCustomProviderId(id) : id, provider?.auth.oauth);
   });
   const readXaiToken = createXaiProviderTokenReader(grok);
   setProviderOAuthTokenReader(async (id, _agent, request) => {

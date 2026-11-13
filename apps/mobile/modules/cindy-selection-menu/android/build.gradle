@@ -6,6 +6,10 @@ plugins {
 group = 'expo.modules.cindyselectionmenu'
 version = '0.1.0'
 
+dependencies {
+  implementation 'com.facebook.react:react-android'
+}
+
 android {
   namespace "expo.modules.cindyselectionmenu"
   defaultConfig {

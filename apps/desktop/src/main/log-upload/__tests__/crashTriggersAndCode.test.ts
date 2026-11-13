@@ -67,6 +67,7 @@ describe('shouldBackfillForReportKind', () => {
     ['crash-exit', false, '经过 lifecycle，崩溃当时已写过标记，重复补会上报两遍'],
     ['shutdown-incomplete', false, '同上'],
     ['clean', false, '正常退出'],
+    ['ended-asleep', false, '睡眠中被系统重启结束，不是崩溃'],
     ['still-running', false, '并存实例'],
   ])('%s → %s（%s）', (kind, expected) => {
     expect(shouldBackfillForReportKind(kind)).toBe(expected);

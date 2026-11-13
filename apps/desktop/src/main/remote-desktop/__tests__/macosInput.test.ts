@@ -53,6 +53,7 @@ it.skipIf(process.platform !== 'darwin')(
       for (const args of [
         [],
         ['--check'],
+        ['--handoff-qr'],
         ['--privacy-input'],
         ['--away-guard'],
         ['--lock-screen'],
@@ -149,6 +150,63 @@ print("authenticated")
   },
   260_000,
 );
+
+// Regression after #9396: image-only handoffs must not require an unlocked
+// desktop. Existing Vision tests bypassed the CLI admission that rejected them.
+// Guard/native tier: compile the real authenticated entrypoint, replacing only
+// OS lock/AX availability, without locking the user's Mac or posting input.
+it.skipIf(process.platform !== 'darwin')('decodes supplied QR images while locked but refuses window access', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'cindy-handoff-qr-'));
+  try {
+    const source = await readFile(path.resolve(import.meta.dirname, '../../../../native/remote-desktop/macos-input.swift'), 'utf8');
+    const caller = (await readFile(callerPath, 'utf8')).replace(
+      '"DESKTOP_INPUT_DEVELOPMENT_EXECUTABLE"',
+      JSON.stringify(Buffer.from(process.execPath).toString('base64')),
+    );
+    const main = path.join(directory, 'main.swift');
+    const binary = path.join(directory, 'input');
+    await writeFile(main, `${caller}
+func CGSessionCopyCurrentDictionary() -> CFDictionary? {
+  return ["CGSSessionScreenIsLocked": true] as CFDictionary
+}
+func AXIsProcessTrusted() -> Bool { true }
+${source}
+`);
+    await exec('swiftc', ['-D', 'DESKTOP_INPUT_DEVELOPMENT', main, '-o', binary], { timeout: 120_000 });
+    // Generate a non-secret fixture with the system QR encoder, separately from
+    // the decoder under test. No live screen, account or stored credential.
+    const generator = path.join(directory, 'fixture.swift');
+    await writeFile(generator, `import AppKit
+let filter = CIFilter(name: "CIQRCodeGenerator")!
+filter.setValue(Data("https://example.com/handoff-test".utf8), forKey: "inputMessage")
+let bitmap = NSBitmapImageRep(ciImage: filter.outputImage!.transformed(by: CGAffineTransform(scaleX: 8, y: 8)))
+FileHandle.standardOutput.write(bitmap.representation(using: .png, properties: [:])!)
+`);
+    const { stdout: png } = await exec('swift', [generator], { encoding: 'buffer', timeout: 30_000 });
+    const invoke = (args: string[], payload: Buffer | string) => new Promise<Record<string, unknown>>((resolve, reject) => {
+      const child = spawn(binary, args, { stdio: 'pipe', timeout: 5000 });
+      let output = '';
+      child.stdout.setEncoding('utf8').on('data', (chunk) => { output += chunk; });
+      child.stderr.resume();
+      child.stdin.on('error', () => undefined);
+      child.once('error', reject);
+      child.once('close', (code) => {
+        try {
+          if (code !== 0) throw new Error(`native helper exited ${code}`);
+          resolve(JSON.parse(output));
+        } catch (error) { reject(error); }
+      });
+      // Authentication checks all pipe peers; keep stdin open until exit.
+      child.stdin.write(payload);
+    });
+    const result = await invoke(['--handoff-qr'], Buffer.concat([Buffer.from(`${png.length}\n`), png]));
+    expect(result).toMatchObject({ codes: [{ text: 'https://example.com/handoff-test' }] });
+    expect(await invoke(['--handoff'], '{"op":"windows"}\n')).toEqual({ error: 'locked' });
+    expect(await invoke(['--handoff-qr'], '0\n')).toEqual({ error: 'invalid' });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 160_000);
 
 it('keeps production authentication and hardened Electron fuses in packaged builds', async () => {
   const forge = await readFile(

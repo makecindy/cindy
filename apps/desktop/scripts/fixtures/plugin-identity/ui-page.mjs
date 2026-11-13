@@ -8,6 +8,7 @@ export default {
     'src/renderer/contexts/AuthContext': `export const useAuth = () => ({ mode: 'cloud', dataOwnerId: 'fixture', dataOwnerGeneration: 1, isAuthenticated: true, user: { id: 'fixture-user', membershipKind: 'personal' } }); export const useOptionalAuthUser = () => null; export const useOptionalAuthDeviceId = () => 'fixture'; export const useOptionalDataOwnerGeneration = () => ({ dataOwnerId: 'fixture', generation: 1 });`,
   },
   cases: {
+    preview: { about: 'Chinese recommendations with package icons, alongside the same marketplace cards.' },
     default: { about: 'Five source identities and three recommendations with download counts.' },
     narrow: { about: 'Long names retain identity and download labels at 320px.', viewport: { width: 320, height: 1400 } },
     'market-detail': { about: 'Community detail explains its identity without publishing an author.' },

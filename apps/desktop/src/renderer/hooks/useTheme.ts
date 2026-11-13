@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from 'react';
 import { createElement, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 
 import {
   DEFAULT_FAMILY_ID,
@@ -8,16 +9,19 @@ import {
   tryGetFamily,
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
-import { themeService } from '../themes/theme-service';
+import { prepareThemeSelection, presentTheme } from '../appearance/AppearancePresenter';
+import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
 import type { ThemeType } from '../themes/types';
 
 export type Theme = 'system' | 'light' | 'dark';
+type ThemeChoice = { theme?: Theme; familyId?: string };
 
 interface ThemeContextValue {
   theme: Theme;
   setTheme: (theme: Theme) => void;
   familyId: string;
   setFamily: (familyId: string) => void;
+  setSelection: (choice: ThemeChoice, current?: () => boolean) => void | Promise<boolean>;
   /**
    * 当前家族在请求 type 下没变体, 已 fallback 到另一个 type 时, 这里
    * 返回 "请求的 type" (供 UI 显示 "无浅色 / 无深色" 提示)。否则 null。
@@ -127,7 +131,7 @@ function disableTransitionsTemporarily(): void {
   });
 }
 
-export function applyThemeClass(theme: Theme, force = false): void {
+export function applyThemeClass(theme: Theme, force = false, prepare = true): void {
   const root = document.documentElement;
   const wasDark = root.classList.contains('dark');
   // 首启亮色门激活期间(pre-login 会话)一律按亮色解析——ThemeProvider 挂载
@@ -143,12 +147,33 @@ export function applyThemeClass(theme: Theme, force = false): void {
     disableTransitionsTemporarily();
   }
 
-  themeService.applyTheme(nextTheme);
+  presentTheme(nextTheme, true, prepare);
 }
 
 /** 无 ThemeProvider 的窗口用。 */
 export function followLocalThemeChanges(): () => void {
   return onLocalThemesChange(() => applyThemeClass(getStoredTheme(), true));
+}
+
+/** Share browser selection synchronization with lightweight windows, without a Provider. */
+export function followThemeSelectionChanges(onChange?: (choice: ThemeChoice) => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === STORAGE_KEY) {
+      const next = e.newValue;
+      if (next === 'light' || next === 'dark' || next === 'system') {
+        onChange?.({ theme: next });
+        applyThemeClass(next);
+      }
+    } else if (e.key === FAMILY_KEY) {
+      const next = e.newValue;
+      if (next && tryGetFamily(next)) {
+        onChange?.({ familyId: next });
+        applyThemeClass(getStoredTheme());
+      }
+    }
+  };
+  window.addEventListener('storage', onStorage);
+  return () => window.removeEventListener('storage', onStorage);
 }
 
 /** index.tsx bootstrap 用 —— 不依赖 React context。首启亮色门在此生效:
@@ -281,30 +306,29 @@ export function ThemeProvider({
     applyThemeClass(getStoredTheme(), true);
   }), []);
 
-  const setTheme = useCallback((next: Theme) => {
-    setThemeState(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // localStorage may be unavailable
-    }
-    applyThemeClass(next);
-  }, []);
-
-  const setFamily = useCallback(
-    (next: string) => {
-      if (!tryGetFamily(next)) return;
-      setFamilyIdState(next);
-      try {
-        localStorage.setItem(FAMILY_KEY, next);
-      } catch {
-        // localStorage may be unavailable
+  const setSelection = useCallback((choice: ThemeChoice, current?: () => boolean) => {
+    if (choice.familyId !== undefined && !tryGetFamily(choice.familyId)) return;
+    const commit = (prepare = true) => {
+      if (choice.theme !== undefined) {
+        setThemeState(choice.theme);
+        try { localStorage.setItem(STORAGE_KEY, choice.theme); } catch { /* localStorage may be unavailable */ }
+        applyThemeClass(choice.theme, false, prepare);
       }
-      // 本地主题可在 ID 不变时刷新配置，必须重新 apply 才会更新 CSS 与品牌素材订阅者。
-      applyThemeClass(theme, true);
-    },
-    [theme],
-  );
+      if (choice.familyId !== undefined) {
+        setFamilyIdState(choice.familyId);
+        try { localStorage.setItem(FAMILY_KEY, choice.familyId); } catch { /* localStorage may be unavailable */ }
+        // A local theme can change without changing its ID; always reapply it.
+        applyThemeClass(choice.theme ?? theme, true, prepare);
+      }
+    };
+    const mode = firstLaunchLightSession === true ? 'light' : choice.theme ?? theme;
+    const variant = resolveFamilyVariant(choice.familyId ?? getStoredFamilyId(), resolveIsDark(mode) ? 'dark' : 'light').theme;
+    const pending = prepareThemeSelection(variant, () => flushSync(() => commit(false)), current);
+    if (pending) return pending;
+    commit();
+  }, [theme]);
+  const setTheme = useCallback((next: Theme) => setSelection({ theme: next }), [setSelection]);
+  const setFamily = useCallback((next: string) => setSelection({ familyId: next }), [setSelection]);
 
   // setFamily / setTheme 各自已经调过 applyThemeClass; 这个 effect 只处理
   // 初始挂载和 mode 变化 (setTheme 内部 set state 之后这里再跑一次也无害, 因为
@@ -339,25 +363,10 @@ export function ThemeProvider({
   // 跨窗口主题同步:其他窗口切 theme/familyId 时(localStorage storage 事件,
   // 本窗口 setItem 不触发 storage)刷新本窗口 state + 重应用主题,否则已打开的
   // sidebar-window/副窗在主窗切 CINDY/亮暗时不跟随(B 实证 bug,计划 D2-3)。
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) {
-        const next = e.newValue;
-        if (next === 'light' || next === 'dark' || next === 'system') {
-          setThemeState(next);
-          applyThemeClass(next);
-        }
-      } else if (e.key === FAMILY_KEY) {
-        const next = e.newValue;
-        if (next && tryGetFamily(next)) {
-          setFamilyIdState(next);
-          applyThemeClass(getStoredTheme());
-        }
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
+  useEffect(() => followThemeSelectionChanges(choice => {
+    if (choice.theme !== undefined) setThemeState(choice.theme);
+    if (choice.familyId !== undefined) setFamilyIdState(choice.familyId);
+  }), []);
 
   // E4D 毛玻璃(R1 audit,用户裁决透壁纸 2026-07-17):family/theme 变化或 mount 时
   // 通知 main 开关 macOS vibrancy(仅 CINDY family 启用,其他恢复不透明)。覆盖
@@ -399,18 +408,36 @@ export function ThemeProvider({
     return family[requestedType] === null ? requestedType : null;
   }, [familyId, theme, systemPrefersDark, localThemeRev]);
 
+  const packageActive = useMemo(() => {
+    void localThemeRev;
+    const active = resolveSessionActiveTheme(theme).theme;
+    return !!(active.packageSha256 && active.appearance);
+  }, [familyId, theme, systemPrefersDark, localThemeRev]);
+  const [appearanceReduced, setAppearanceReduced] = useState(false);
+  useEffect(() => {
+    if (!packageActive) { setAppearanceReduced(false); return; }
+    const bridge = window.electronAPI?.appearanceSettings;
+    setAppearanceReduced(bridge?.getSync?.()?.motion === 0);
+    return bridge?.onChanged?.(settings => setAppearanceReduced(settings.motion === 0));
+  }, [packageActive]);
+
   return createElement(
-    ThemeContext.Provider,
-    {
-      value: {
-        theme,
-        setTheme,
-        familyId,
-        setFamily,
-        fallbackFromType,
+    AppearanceMotionContext.Provider,
+    { value: appearanceReduced },
+    createElement(
+      ThemeContext.Provider,
+      {
+        value: {
+          theme,
+          setTheme,
+          familyId,
+          setFamily,
+          setSelection,
+          fallbackFromType,
+        },
       },
-    },
-    children,
+      children,
+    ),
   );
 }
 

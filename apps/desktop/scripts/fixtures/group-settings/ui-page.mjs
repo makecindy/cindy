@@ -25,6 +25,8 @@ export default {
     archived: { about: 'Archived group seen by its owner', data: { role: 'owner', archived: true } },
     dissolved: { about: 'Dissolved group: no invite, no personal sections', data: { role: 'member', dissolved: true } },
     'many-teammates': { about: '邀请伙伴 with 30 spare teammates: search and scrolling', data: { role: 'owner', spare: 30 } },
+    'group-cindy': { about: 'Server with the group Cindy, on: its switch, 「Cindy 回答」, organizer under 分工, Cindy in 成员 without a menu', data: { role: 'owner', assistant: 'on' } },
+    'group-cindy-off': { about: 'The group Cindy switched off: 没有 @ 人的时候 reads as before', data: { role: 'owner', assistant: 'off' } },
   },
   async ready(page) { await page.getByRole('dialog').waitFor(); },
   async check(page, ui) {
@@ -123,6 +125,26 @@ export default {
       await manage.click();
       await (await row(page, await t('unarchive'))).waitFor();
       await ui.capture('archived-manage');
+      return;
+    }
+    if (ui.case === 'group-cindy' || ui.case === 'group-cindy-off') {
+      const on = ui.case === 'group-cindy';
+      await manage.click();
+      const toggle = dialog.getByTestId('bot-group-assistant');
+      await toggle.waitFor();
+      assert.equal(await toggle.getAttribute('aria-checked'), String(on));
+      const replyHint = on ? await t('replyModeAssistantNote') : await ui.t('bots.groupChat.settings.replyModeNote');
+      await dialog.getByText(replyHint, { exact: true }).waitFor();
+      // The organizer stays under 分工; the project section holds only the repository and the folder.
+      const organizer = dialog.getByRole('combobox', { name: await ui.t('bots.groupChat.organizer') });
+      assert.equal(await organizer.evaluate(el => el.closest('section')?.querySelector('h2, h3')?.textContent), await t('work'));
+      await ui.capture('manage-group-cindy');
+      await dialog.getByRole('button', { name: await t('back'), exact: true }).click();
+      await dialog.getByRole('tab', { name: new RegExp(escape(await ui.t('bots.groupChat.settings.members'))) }).click();
+      const members = page.getByTestId('chat-group-members');
+      await members.getByText('Cindy', { exact: true }).waitFor();
+      assert.equal(await members.getByRole('button', { name: 'Cindy', exact: true }).count(), 0, 'the group Cindy has no member menu');
+      await ui.capture('members-group-cindy');
       return;
     }
     if (ui.case === 'member-no-about') {

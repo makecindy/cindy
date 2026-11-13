@@ -8,12 +8,10 @@ import { agentOptionOf } from '@/components/new-chat/agentOptions';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { ProviderView } from '@cindy/model-providers';
 
 import { ProviderMark } from '@/components/new-chat/ModelSelector';
 import { SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
-import { modelGroupWhyText } from '@/features/model-groups/modelGroupsClient';
-import { useProviders } from '@/hooks/useProviders';
+import { modelGroupWhyText, useModelGroupCandidateNames } from '@/features/model-groups/modelGroupsClient';
 import { createLogger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
 
@@ -29,19 +27,14 @@ const RECENT_ROWS = 10;
 /** 余量到这一档以下按「快见底」着色（DESIGN.md §2 语义色）。 */
 const LOW_LEFT_PERCENT = 15;
 
-type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'>;
+type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
+type CandidateNames = ReturnType<typeof useModelGroupCandidateNames>;
 
-function useCandidateNames(providers: readonly ProviderView[]) {
-  return useCallback((candidate: CandidateRef) => {
-    const agent = candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind;
-    const provider = providers.find((item) => item.id === candidate.providerId);
-    const model = provider?.models[agent]?.find((item) => item.id === candidate.model);
-    return {
-      provider,
-      modelName: model?.name ?? candidate.model,
-      sourceName: provider?.name ?? candidate.providerId,
-    };
-  }, [providers]);
+/** 「最近的选择」里一条记录选中的来源；不是选中(沿用原来的)或记录不全时为 null。 */
+function decisionCandidate(item: ModelGroupDecision): CandidateRef | null {
+  return item.outcome === 'routed' && item.agentKind && item.providerId && item.model
+    ? { agentKind: item.agentKind, providerId: item.providerId, model: item.model, ...(item.agentDeviceId ? { agentDeviceId: item.agentDeviceId } : {}) }
+    : null;
 }
 
 type NodeKind = 'route' | 'source';
@@ -86,8 +79,10 @@ function relatedNodes(id: string, edges: readonly MapEdge[]): Set<string> {
 /** 最近一次选中这个来源时记下的余量；读不到额度或已过重置时刻时为 null。 */
 function remainingFor(candidate: CandidateRef, decisions: readonly ModelGroupDecision[], now: number): number | null {
   const key = modelGroupCandidateKey(candidate);
-  const last = decisions.find((item) => item.outcome === 'routed' && item.agentKind && item.providerId && item.model
-    && modelGroupCandidateKey({ agentKind: item.agentKind, providerId: item.providerId, model: item.model }) === key);
+  const last = decisions.find((item) => {
+    const picked = decisionCandidate(item);
+    return !!picked && modelGroupCandidateKey(picked) === key;
+  });
   const quota = last?.quota;
   if (!quota || (quota.resetAtMs !== null && quota.resetAtMs <= now)) return null;
   return Math.max(0, Math.min(100, Math.round(100 - quota.usedPercent)));
@@ -110,7 +105,7 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   enterDelayMs: number;
   onHover(id: string | null): void;
   register(id: string, element: HTMLButtonElement | null): void;
-  providers: ReturnType<typeof useCandidateNames>;
+  providers: CandidateNames;
 }) {
   const names = node.candidate ? providers(node.candidate) : null;
   const icon = node.kind === 'route'
@@ -153,14 +148,13 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   );
 }
 
-function RelationMap({ config, decisions, onOpenRoute }: {
+function RelationMap({ config, decisions, onOpenRoute, namesOf }: {
   config: ModelGroupsConfig;
   decisions: readonly ModelGroupDecision[];
   onOpenRoute(id: string): void;
+  namesOf: CandidateNames;
 }) {
   const { t } = useTranslation();
-  const { providers } = useProviders();
-  const namesOf = useCandidateNames(providers);
 
   const { columns, edges } = useMemo(() => {
     const now = Date.now();
@@ -171,7 +165,7 @@ function RelationMap({ config, decisions, onOpenRoute }: {
       const id = nodeId('source', key);
       if (!sources.has(key)) {
         const names = namesOf(candidate);
-        sources.set(key, { id, kind: 'source', name: `${names.modelName} · ${names.sourceName}`, candidate, left: remainingFor(candidate, decisions, now) });
+        sources.set(key, { id, kind: 'source', name: `${names.modelName} · ${names.sourceLabel}`, candidate, left: remainingFor(candidate, decisions, now) });
       }
       return id;
     };
@@ -222,10 +216,11 @@ function RelationMap({ config, decisions, onOpenRoute }: {
   const related = useMemo(() => (hovered ? relatedNodes(hovered, edges) : null), [hovered, edges]);
   // 最近一次任务实际走的路：选的路线和最后落到的来源。时段例外改走了别的路线时，选的路线连不到那个来源，不标。
   const latest = useMemo(() => {
-    const last = decisions.find((item) => item.outcome === 'routed' && item.agentKind && item.providerId && item.model);
+    const last = decisions.find((item) => !!decisionCandidate(item));
+    const picked = last ? decisionCandidate(last) : null;
     const out = new Set<string>();
-    if (!last?.agentKind || !last.providerId || !last.model) return out;
-    const sourceKey = modelGroupCandidateKey({ agentKind: last.agentKind, providerId: last.providerId, model: last.model });
+    if (!last || !picked) return out;
+    const sourceKey = modelGroupCandidateKey(picked);
     const group = nodeId(last.groupType, last.groupId);
     const end = nodeId('source', sourceKey);
     if (edges.some((edge) => edge.from === group && edge.to === end)) {
@@ -302,10 +297,9 @@ function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-function RecentDecisions({ decisions }: { decisions: readonly ModelGroupDecision[] }) {
+function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGroupDecision[]; namesOf: CandidateNames }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
-  const { providers } = useProviders();
   const formatTime = useMemo(() => {
     const time = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' });
     const dated = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -319,12 +313,16 @@ function RecentDecisions({ decisions }: { decisions: readonly ModelGroupDecision
     <SettingsCard data-testid="model-groups-recent">
       {decisions.slice(0, RECENT_ROWS).map((item) => {
         const routed = item.outcome === 'routed';
-        const provider = routed ? providers.find((entry) => entry.id === item.providerId) : undefined;
+        const picked = decisionCandidate(item);
+        // 运行位置的名字按现在的写，与路线里那一行一致；读不到目录时用记录里当时的名字。
+        const names = picked ? namesOf(picked, { modelName: item.modelName, sourceName: item.sourceName }) : null;
+        const provider = names?.provider;
         const reason = routed
           ? item.why ? modelGroupWhyText({ why: item.why, quota: item.quota ?? null, limitedUntilMs: item.limitedUntilMs }, t, locale) : ''
           : t('modelGroups.overview.keptOriginal');
         const effort = item.effort ? t(`effortLevels.${item.effort}`, { defaultValue: item.effort }) : '';
-        const detail = [item.sourceName, effort].filter(Boolean).join(' · ');
+        // 本机的照旧写记录时的来源名；别的电脑或分享来的连同位置一起写。
+        const detail = [item.agentDeviceId ? names?.sourceLabel : item.sourceName, effort].filter(Boolean).join(' · ');
         return (
           <SettingsBlock
             key={`${item.at}:${item.groupType}:${item.groupId}`}
@@ -341,7 +339,7 @@ function RecentDecisions({ decisions }: { decisions: readonly ModelGroupDecision
                   <ProviderMark providerId={item.providerId} name={provider?.name} routing={provider?.routing} logoKind={provider?.logoKind}
                     colorClass="text-[var(--text-primary)]" withMargin={false} dense />
                   <div className="flex min-w-0 flex-col">
-                    <span className="truncate text-13 leading-[1.5] text-[var(--text-primary)]" title={item.modelName}>{item.modelName ?? item.model}</span>
+                    <span className="truncate text-13 leading-[1.5] text-[var(--text-primary)]" title={item.modelName}>{item.modelName ?? names?.modelName ?? item.model}</span>
                     {detail && <span className="truncate text-12 leading-[1.4] text-[var(--text-tertiary)]" title={detail}>{detail}</span>}
                   </div>
                 </>
@@ -374,6 +372,12 @@ export function ModelGroupsOverview({ config, onOpenRoute }: {
 }) {
   const { t } = useTranslation();
   const [decisions, setDecisions] = useState<ModelGroupDecision[] | null>(null);
+  // 关系图与「最近的选择」共用一份名字：本机看本机目录，别的电脑或分享来的看那里的目录并写上位置。
+  const candidates = useMemo(() => [
+    ...config.routes.flatMap((route) => route.candidates),
+    ...(decisions ?? []).flatMap((item) => decisionCandidate(item) ?? []),
+  ], [config, decisions]);
+  const namesOf = useModelGroupCandidateNames(candidates);
 
   useEffect(() => {
     let cancelled = false;
@@ -391,7 +395,7 @@ export function ModelGroupsOverview({ config, onOpenRoute }: {
     <>
       <SettingsSection title={t('modelGroups.overview.mapTitle')} description={t('modelGroups.overview.mapDescription')}>
         <SettingsCard>
-          <RelationMap config={config} decisions={decisions ?? []} onOpenRoute={onOpenRoute} />
+          <RelationMap config={config} decisions={decisions ?? []} onOpenRoute={onOpenRoute} namesOf={namesOf} />
           {(decisions ?? []).some((item) => item.outcome === 'routed') && (
             <div className="flex items-center gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-2.5 text-12 leading-[1.33] text-[var(--text-tertiary)]">
               <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--text-secondary)]" />
@@ -402,7 +406,7 @@ export function ModelGroupsOverview({ config, onOpenRoute }: {
       </SettingsSection>
       {decisions && (
         <SettingsSection title={t('modelGroups.overview.recentTitle')}>
-          <RecentDecisions decisions={decisions} />
+          <RecentDecisions decisions={decisions} namesOf={namesOf} />
         </SettingsSection>
       )}
     </>

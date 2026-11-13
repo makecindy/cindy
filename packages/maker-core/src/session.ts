@@ -12,6 +12,8 @@ import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-s
  */
 
 import { appendAutoReviewUserIntent, type AutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
+import { bindSessionSendOwner, readSessionSendTerminalOwner } from './session-send-terminal.js';
+export { markSessionSendTerminal, readSessionSendTerminalStatus } from './session-send-terminal.js';
 import { randomUUID } from 'node:crypto';
 import { ToolLoopGuard } from './agents/shared/loop-guard.js';
 import { AsyncUserQuestions } from './agents/shared/async-user-questions.js';
@@ -1143,11 +1145,15 @@ export class Session {
         const loopIntent = appendAutoReviewUserIntent(previousLoopIntent, autoReviewSourceContent, handleOpts);
         try {
           this.toolLoopUserIntent = loopIntent;
-          await this.handle.send(msg, {
+          await this.handle.send(msg, bindSessionSendOwner({
             ...handleOpts,
             [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
             signal: reservation.abortController.signal,
-          });
+          }, reservedTurnGeneration, () => {
+            if (reservedTurnGeneration !== this.turnGeneration) return undefined;
+            return this.terminalEventObservedGeneration === reservedTurnGeneration
+              && this.unsolicitedTurnGeneration !== reservedTurnGeneration ? 'settled' : 'unsettled';
+          }));
         } catch (error) {
           if (this.toolLoopUserIntent === loopIntent) this.toolLoopUserIntent = previousLoopIntent;
           throw error;
@@ -3726,6 +3732,13 @@ export class Session {
           // held while the send is pending. In-flight start-failure errors still
           // belong to this send.
           observedGeneration = this.turnGeneration;
+        }
+        // Adapter-owned transport terminals name the actual send, even when
+        // next() was waiting on an older turn. Provider fields cannot mint this.
+        const terminalOwner = readSessionSendTerminalOwner(event);
+        if (terminalOwner === this.turnGeneration) {
+          event.sessionTurnGeneration = terminalOwner;
+          observedGeneration = terminalOwner;
         }
         if (this.terminationStarted) continue;
         // 宿主整机拆除已开始时,空闲会话收到的子进程死亡终态错误不属于任何轮次;

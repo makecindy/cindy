@@ -356,6 +356,18 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
       let preparedUpdateFallback: { version: string; binaryPath: string } | undefined;
       try {
         const binaryName = deriveBinaryName();
+        if (opts?.localOnly) {
+          const local = await findUsableLocalBinary(opts.signal);
+          const cached = getCachedManifest();
+          const asset = cached && getVendorAsset(cached, config.manifestField);
+          if (!asset || !hasPreparedBinaryDownload(config.vendorKey, asset)) {
+            if (!local) return { ready: false, binaryPath: '', error: 'runtime_not_installed' };
+            emit({ status: 'ready', installedVersion: local.version, binaryPath: local.binaryPath }, onProgress);
+            return { ready: true, binaryPath: local.binaryPath };
+          }
+          // Reuse the existing verifier/installer, but never download on a miss.
+          opts = { ...opts, allowDownload: false, checkForUpdates: false };
+        }
         // 1. 拉 manifest（不带 dev fallback —— dev mode 归属在 Boss 2 包壳层）
         let manifest = getCachedManifest();
         if (!manifest) manifest = await fetchManifest(undefined, opts?.signal);

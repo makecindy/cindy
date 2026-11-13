@@ -55,13 +55,15 @@ const directoryReader = new MetadataContinuityReader({
 });
 let generation = 0;
 const TARGET_GENERATION_CAP = 1024;
-const targetGenerations = new Map<string, number>();
-function ensureTargetGeneration(target: string): number | undefined {
+interface TargetGeneration { permission: number; source: number }
+const targetGenerations = new Map<string, TargetGeneration>();
+function ensureTargetGeneration(target: string): TargetGeneration | undefined {
   const existing = targetGenerations.get(target);
   if (existing !== undefined) return existing;
   if (targetGenerations.size >= TARGET_GENERATION_CAP) return undefined;
-  targetGenerations.set(target, 0);
-  return 0;
+  const initial = { permission: 0, source: 0 };
+  targetGenerations.set(target, initial);
+  return initial;
 }
 /** Directory mutations are independent of provider/group snapshots. */
 let directoryGeneration = 0;
@@ -99,7 +101,16 @@ export function handleProviderMetadataSourcePush(env: Envelope): boolean {
   if (env.kind !== 'push' || !env.src) return false;
   const payload = env.payload as { channel?: unknown } | undefined;
   if (!payload || typeof payload.channel !== 'string' || !PROVIDER_METADATA_SOURCE_CHANGE_CHANNELS.has(payload.channel)) return false;
-  invalidateProviderMetadataContinuity(env.src);
+  if (readProviderMetadataContinuity((env.payload as { payload?: unknown }).payload)?.remainingMs === 0) {
+    invalidateProviderMetadataContinuity(env.src);
+    return true;
+  }
+  // A source refresh retires old results, but is not itself a permission change.
+  // Keep the distinction so a read without a renderer subscription can recover.
+  invalidateLiveFences(env.src);
+  const current = targetGenerations.get(env.src);
+  if (current) targetGenerations.set(env.src, { ...current, source: current.source + 1 });
+  clearTargetDenials(env.src);
   return true;
 }
 
@@ -282,7 +293,7 @@ function clearTargetDenials(target: string): void {
 function fenceTarget(target: string): void {
   invalidateLiveFences(target);
   const current = targetGenerations.get(target);
-  if (current !== undefined) targetGenerations.set(target, current + 1);
+  if (current !== undefined) targetGenerations.set(target, { permission: current.permission + 1, source: current.source });
 }
 
 function isDeniedError(error: unknown): boolean {
@@ -339,7 +350,7 @@ export function invalidateProviderMetadataContinuity(
 function scope(
   allowed: () => boolean = () => true,
   target?: string,
-  options?: { liveFallback?: boolean },
+  options?: { liveFallback?: boolean; ignoreSourceChanges?: boolean },
 ): LiveOnlyScope {
   const owner = activeOwnerScopeKey();
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
@@ -348,7 +359,7 @@ function scope(
     && activeOwnerScopeKey() === owner
     && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint && generation === epoch
     && targetCurrent && allowed();
-  const targetEpoch = target === undefined ? 0 : ensureTargetGeneration(target);
+  const targetEpoch = target === undefined ? undefined : ensureTargetGeneration(target);
   if (target !== undefined && targetEpoch === undefined) {
     // The bounded target registry is full. A live read may still use the real
     // authority, but must not mint a cache entry or claim a continuity budget.
@@ -365,7 +376,8 @@ function scope(
   return {
     key: JSON.stringify([owner, endpoint, epoch, target, targetEpoch]),
     current: () => scopeCurrent(target === undefined
-      || (targetGenerations.has(target) && targetGenerations.get(target) === targetEpoch)),
+      || (targetGenerations.get(target)?.permission === targetEpoch?.permission
+        && (options?.ignoreSourceChanges || targetGenerations.get(target)?.source === targetEpoch?.source))),
     // Live direct RPCs should refresh metadata even when cloud signaling is down.
     signalingAvailable: () => true,
   };
@@ -408,6 +420,23 @@ export async function invokeProviderMetadataContinuity(
   const groupView = channel === PROVIDER_GROUP_REMOTE_CHANNEL && args.length === 1
     && !!args[0] && typeof args[0] === 'object' && (args[0] as { action?: unknown }).action === 'view';
   if (!READ_CHANNELS.has(channel) && !groupView) return request();
+  const permissionScope = scope(allowed, target, { ignoreSourceChanges: true });
+  const originalSource = targetGenerations.get(target)?.source;
+  try {
+    return await readProviderMetadataOnce(target, channel, args, request, allowed);
+  } catch (error) {
+    // Retry only an obsolete successful read, once, within the original authority.
+    // Never classify arbitrary scope/denial errors as transient or reuse its result.
+    if (!(error instanceof Error) || error.message !== 'Metadata scope changed'
+      || !permissionScope.current() || originalSource === targetGenerations.get(target)?.source) throw error;
+    return readProviderMetadataOnce(target, channel, args, request, allowed);
+  }
+}
+
+async function readProviderMetadataOnce(
+  target: string, channel: string, args: unknown[], request: () => Promise<InvokeResultPayload>,
+  allowed: () => boolean,
+): Promise<InvokeResultPayload> {
   const resource = createHash('sha256').update(JSON.stringify([target, channel, args])).digest('hex');
   const capturedScope = scope(allowed, target, { liveFallback: true });
   if (capturedScope.liveOnly) {

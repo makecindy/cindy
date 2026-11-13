@@ -1041,18 +1041,19 @@ export async function handleSubscribe(
   // unsubscribe 先跑见不到 ref → no-op,subscribe 回来后才记下一个**永不被释放的 phantom ref**
   // (后续其它窗口对同 (deviceId, topic) 的 unsubscribe 因计数非零而不向 relay 转发 → 被控端
   // 持续推送 → 推送泄漏,直到窗口销毁)。
-  recordSubscribe(windowId, normalizedDeviceId, topicList);
+  const registration = Symbol();
+  recordSubscribe(windowId, normalizedDeviceId, topicList, registration);
   let result: InvokeResultPayload;
   try {
     result = await deps.subscribe(normalizedDeviceId, topicList);
   } catch (err) {
-    // 订阅失败 → 撤掉刚记的本窗口 ref(满足「失败不留 ref」);并发 unsubscribe 已移除则为幂等
-    // no-op。失败时本就没订上,忽略 recordUnsubscribe 的降零返回(不向 relay 转发 unsubscribe)。
-    recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+    // 失败只撤掉本次登记；并发退订或更新的 subscribe 已替换它时不动当前 ref。
+    // 失败时本就没订上,忽略降零返回(不向 relay 转发 unsubscribe)。
+    recordUnsubscribe(windowId, normalizedDeviceId, topicList, registration);
     rethrowDeviceLinkError(err);
   }
   // 错误结果(非异常,如 ACCESS_REVOKED / REMOTE_DISABLED / CHANNEL_NOT_ALLOWED)同样视作未订上 → 撤 ref。
-  if (!result.ok) recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+  if (!result.ok) recordUnsubscribe(windowId, normalizedDeviceId, topicList, registration);
   return unwrapSubscribeResult(result);
 }
 

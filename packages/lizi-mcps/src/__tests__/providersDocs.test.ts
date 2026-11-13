@@ -96,6 +96,10 @@ describe('createLiziMcpProviders — cindy_docs', () => {
     // accessor 返回 undefined = 无法确认归属 → fail closed
     expect(body.errorCode).toBe('NO_SESSION_CONTEXT');
     expect(getSessionContext).toHaveBeenCalled();
+    const hostTools = provider.toHostTools!({ ...ctx, getSessionContext });
+    const hostResult = await hostTools.call('read_sheet', { path: 'a.csv' });
+    expect(JSON.parse(hostResult.content[0].type === 'text' ? hostResult.content[0].text : '{}').errorCode).toBe('NO_SESSION_CONTEXT');
+    await hostTools.close();
   });
 
   it('render_pdf / inspect_pdf 的注册取决于 host 是否注入了对应回调', async () => {

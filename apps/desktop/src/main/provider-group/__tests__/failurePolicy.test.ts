@@ -45,6 +45,61 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
   });
 });
 
+/**
+ * 任务绑定账号不可用：按宿主给出的稳定码判，不按给用户看的文案。
+ * 2026-11-12 实测回归：旧文案「requires login or quota reset」里的 quota 让「读不到账号状态」
+ * 被当成用量上限，整台电脑冷却 30 分钟；组里只有本机时无处可换，重启后所有新任务被拒。
+ * 改成结构化码后又反过来漏判了真正的额度耗尽与登录失效。冷却口径：provider-groups.md §6.1
+ * 「记不记进组的状态」——只有账号的问题记进组，其余只在这一轮不再试。
+ * 失效后果：用户可见文案一旦改词就重新决定要不要把整台电脑封半小时。
+ * 最小失败输入：LIMITED / LOGIN_REQUIRED 的真实错误串(修前落到 failed、cool:false)。tier：默认 unit。
+ */
+describe('decideProviderGroupFailure — the task’s bound subscription account', () => {
+  it.each<[string, InterruptedTurnErrorSignals, ReturnType<typeof switchTo>]>([
+    ['usage window exhausted', {
+      message: '[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset',
+    }, switchTo('usage-limit')],
+    ['usage window exhausted, with its reset time', {
+      message: '[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset\nresetAtMs=1900000000000',
+    }, switchTo('usage-limit')],
+    ['login required', {
+      message: '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login',
+    }, switchTo('auth')],
+    ['host send wrapper', {
+      message: 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset',
+    }, switchTo('usage-limit')],
+    // 一次读取抖动 / 正在登录不是账号故障：换下一台，但不能把整台电脑记进冷却。
+    ['account state unreadable', {
+      message: '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable',
+    }, switchTo('failed')],
+    ['unrelated login wording is not the known executor rejection', {
+      message: 'Another service requires login',
+    }, switchTo('failed')],
+    ['account cannot serve this request', {
+      message: '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account cannot be used for this request',
+    }, switchTo('failed')],
+    ['signing in there', {
+      message: '[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in',
+    }, switchTo('failed')],
+    // 并发上限满不是账号故障，也不得因为文案里有 limit 就被当成用量上限。
+    ['every account at its concurrency limit', {
+      message: '[SUBSCRIPTION_ACCOUNTS_FULL] every available subscription account has reached its concurrency limit',
+    }, switchTo('failed')],
+  ])('%s', (_name, signals, expected) => {
+    for (const phase of PHASES) expect(decideProviderGroupFailure(signals, phase)).toEqual(expected);
+  });
+});
+
+// The old bridge used the same message for a provider-id mismatch, a missing
+// reader and a signed-out account. The log alone must not cool a healthy member.
+it.each([
+  'The selected OpenAI subscription account requires login',
+  'OpenAI/ChatGPT upstream request failed: The selected OpenAI subscription account requires login',
+])('keeps an ambiguous old Pi rejection out of auth cooling: %s', message => {
+  for (const phase of PHASES)
+    expect(decideProviderGroupFailure({ message, sdkError: message }, phase)).toEqual(switchTo('failed'));
+});
+
 describe('decideProviderGroupFailure — that computer cannot be reached or cannot take the task', () => {
   it.each<[string, InterruptedTurnErrorSignals, ReturnType<typeof switchTo>]>([
     // 只是连接断了：先等它恢复，现读第一次就连得上算恢复。

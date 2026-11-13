@@ -137,7 +137,7 @@ function readThreadRows(dbPath: string): SqlRow[] {
   }
 }
 
-/** 没有状态库行的 rollout：从 session_meta 与前若干行补出摘要。 */
+/** 从 session_meta 与前若干行补出摘要，也用于补齐状态库缺失的元数据。 */
 async function summaryFromRollout(file: string, mtimeMs: number): Promise<{
   threadId: string; cwd: string; createdAt: number; title: string; internal: boolean; conversation: boolean; cindy: boolean;
 } | null> {
@@ -229,7 +229,7 @@ async function list(): Promise<SourceListResult> {
         archived: thread.archived,
         sizeBytes: file.size,
         locator: JSON.stringify(locator),
-        dialogue: thread.workspaceKind === 'dialogue',
+        dialogue: thread.workspaceKind === 'dialogue' || !thread.cwd,
         ...(ranByCindy ? { ranByCindy: true } : {}),
       });
     };
@@ -248,17 +248,27 @@ async function list(): Promise<SourceListResult> {
         unreadableCount += 1;
         continue;
       }
-      // 状态库里没有任何提问的线程（例如只开过语音）：确认记录里也没有对话再跳过。
-      if (!str(row.first_user_message).trim() && !str(row.title).trim()) {
-        const summary = await summaryFromRollout(file.file, Date.now()).catch(() => null);
-        if (summary && !summary.conversation) continue;
+      const rowCwd = str(row.cwd);
+      const needsConversationCheck = !str(row.first_user_message).trim() && !str(row.title).trim();
+      // 旧库／回填行可能只记了 vscode 入口，遗漏真实 cwd 与子 Agent 来源。
+      // 只在缺字段时读一次有界摘要；不要把共享 normalizeThreadRow 的主目录兜底用于导入。
+      const rollout = !rowCwd.trim() || !str(row.thread_source).trim() || needsConversationCheck
+        ? await summaryFromRollout(file.file, Date.now()).catch(() => null)
+        : null;
+      const summary = rollout?.threadId === id ? rollout : null;
+      if (summary?.internal) {
+        if (!internalIds.has(id)) { internalIds.add(id); internalCount += 1; }
+        continue;
       }
+      // 状态库里没有任何提问的线程（例如只开过语音）：确认记录里也没有对话再跳过。
+      if (needsConversationCheck && summary && !summary.conversation) continue;
+      const cwd = rowCwd.trim() ? rowCwd : str(summary?.cwd).trim();
       const firstMessage = str(row.first_user_message);
       const ranByCindy = hasCindyInjection(firstMessage) || hasCindyInjection(str(row.title));
       const title = ranByCindy
         ? makeTitle(firstNonEmpty(thread.title.startsWith('[UI language]') ? '' : stripCindyInjection(thread.title), stripCindyInjection(firstMessage)), 'Codex Session')
         : thread.title;
-      add({ ...thread, title }, file, ranByCindy);
+      add({ ...thread, cwd, title }, file, ranByCindy);
     }
     // 没有状态库行的 rollout（旧版 Codex、或状态库丢失）。
     for (const [id, list] of byThread) {

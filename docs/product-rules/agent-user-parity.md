@@ -91,6 +91,9 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |
 | 机器     | 看账号下的电脑与 SSH 主机及实时资源（`list_machines`，[规则](cindy-machines.md)） | 有（含 SSH 普通任务） | 有（2026-11-02） |
+| 终端与后台进程 | `terminal_start/list/read/write/resize/stop/forget`，复用界面 PTY 与宿主作业注册表，当前调用方归属及独立游标 | 有（仅执行电脑本机；SSH 工作区明确拒绝本机代跑） | 尚无独立指定另一台电脑的参数；重连执行电脑后可续读同一作业 |
+| 授权目录文件操作 | `file_request`，复用文件浏览器与 FsSlot；普通任务使用真实工作目录，插件使用亲选引用 | 有（仅执行电脑本机；SSH 目录不在控制端代操作） | 原生选择器授权插件目录；手机、远程页与 Node Host 当前不能建立新引用，watcher 以执行宿主实际装配为准 |
+| 宿主服务发现 | `host_services`，Agent 与插件共用当前 provider 目录；插件另有本实例的声明与批准事实 | 有（discovery 组；只读，不管理其他插件） | 仅查询执行宿主本机；未接入或已关闭的服务明确不可用，不代查其他电脑 |
 | 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
@@ -118,6 +121,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 项目     | 列出、登记、改名、移除；工作目录列表                       | 有   | 无               |
 | 项目     | 查询远程已有项目（`list_projects(device)`，复用目标项目目录与可见性） | 有 | 有（2026-11-11） |
 | 项目     | 查询新项目存放位置（`list_projects.projects_root`，含来源） | 有（只读；修改该设置暂无 Agent 工具，按 #8259 维护者初审意见保留为缺口） | 无 |
+| 外观     | 导入 `.cindy` 主题包并刷新列表；选择主题家族／明暗模式与回读 | 有（`appearance.themes` → `import_theme_package`，选择沿用 `preferences`；同 ID 更新，仅数据主题，额外外观插件仍走插件安装） | 无（在目标电脑的本机任务执行；手机可继续该任务） |
 | 任务导入 | 扫描其他 AI 编程工具的任务、开始导入、查进度与结果（与设置 → 任务导入同一实现） | 有（2026-10-30） | 无 |
 | 伙伴     | 发现伙伴（普通任务与伙伴任务均可用 `list_agents`，返回各伙伴主对话 `session_id`，另一台电脑上为 `deviceId::sessionId`），用 `send_to_session` 给它发消息；V1 的 `send_to_agent` / `check_agent_message` 已于 2026-11-08 移除 | 有   | 有               |
 | 伙伴     | 自身关联项目：列出、添加与移除（原有文件工具按需读资料） | 有 | 无（远程设置界面可管理） |
@@ -307,3 +311,11 @@ Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；P
 本机确认框，用户直接点击开启，不必另找设置。工具发现为 `devices.remote-consent`，
 精确目标来自 `list_machines`。此入口只请求确认，不能远程改开关；原任务收到 enabled 后
 继续工作。未授权消息通道与普通远控命令分离，详情见 [机器能力](cindy-machines.md)。
+
+### GitHub App 自动任务（2026-11-11，测试）
+
+Desktop 来源选择与 `schedule_create/update` 共用 `source={preset:"github-app",repositories:["owner/repository"]}`
+和事件筛选；Agent 可按既有 `device` 选择运行电脑。连接账号仍在目标电脑的 GitHub 插件完成，工具不接收
+OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` 返回接收状态，不伪造专属地址。
+旧执行端明确拒绝未知来源；旧控制端省略来源的编辑保持既有配置。手机当前保留／读取该配置，新增来源
+表单只在 Desktop；不把控制端本机的登录状态冒充运行电脑的连接状态。

@@ -136,3 +136,18 @@ describe('shared task terminal recovery', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.sharedTaskRecovery.cancel })); });
   });
 });
+
+// #10187, unit: raw guest-ownership rejection must reach the existing dialog
+// and model picker. Cancelling cannot trigger an automatic replay or route change.
+it.each([true, false])('offers shared resume recovery and respects acceptance=%s', async accepted => {
+  const h = await setup(false);
+  h.rerender({ ...h.initialProps, active: true,
+    error: 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer' });
+  await screen.findByText(en.sharedTaskRecovery.title);
+  expect(screen.getByText(text => text.includes(en.sharedTaskRecovery.reason.history))).toBeTruthy();
+  expect(h.result.current.modelPickerRequest).toBe(0);
+  await act(async () => { fireEvent.click(screen.getByRole('button', {
+    name: accepted ? en.sharedTaskRecovery.choose : en.sharedTaskRecovery.cancel,
+  })); });
+  expect(h.result.current.modelPickerRequest).toBe(accepted ? 1 : 0);
+});

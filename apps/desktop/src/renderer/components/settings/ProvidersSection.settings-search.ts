@@ -91,6 +91,7 @@ export const providersSettings = defineSettings({
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
     sectionKey: 'settings.sections.providers',
+    keywordKeys: ['settings.providers.remote.modelsTitle'],
   },
   videoApi: {
     id: 'providers.videoApi',

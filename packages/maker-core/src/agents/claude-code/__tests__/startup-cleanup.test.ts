@@ -36,6 +36,28 @@ describe('Claude startup exit evidence', () => {
     };
   }
 
+  // Unit: offline construction must expose local capabilities, while missing
+  // runtime failure on actual dispatch still proves no process owns the workdir.
+  it('defers the live runtime getter until use and observes a later installation', async () => {
+    let installed = false;
+    const readPath = vi.fn(() => {
+      if (!installed) throw new Error('runtime not installed');
+      return process.execPath;
+    });
+    const dependencies = deps();
+    Object.defineProperty(dependencies, 'binaryPath', { get: readPath });
+    const agent = new ClaudeCodeAgent(dependencies);
+    expect(readPath).not.toHaveBeenCalled();
+    await expect(agent.startSession({ sessionId: 'offline', workingDir, model: 'claude-sonnet-4-6' }))
+      .rejects.toBeInstanceOf(AgentStartupStoppedError);
+    expect(sdk.query).not.toHaveBeenCalled();
+    installed = true;
+    sdk.query.mockImplementationOnce(() => { throw new Error('dispatch reached'); });
+    await expect(agent.startSession({ sessionId: 'installed', workingDir, model: 'claude-sonnet-4-6' }))
+      .rejects.toThrow('dispatch reached');
+    expect(sdk.query).toHaveBeenCalledOnce();
+  });
+
   it.each(['getState', 'getAuthEnv'] as const)('proves %s failures happened before any SDK dispatch', async (hook) => {
     const dependencies = deps();
     const error = new TypeError('preparation failed');
@@ -64,6 +86,8 @@ describe('Claude startup exit evidence', () => {
 
   it('retains protection when the remote factory rejects without proving exit', async () => {
     const dependencies = deps();
+    // Remote execution must not read an unavailable local runtime getter.
+    Object.defineProperty(dependencies, 'binaryPath', { get: () => { throw new Error('local runtime missing'); } });
     const error = new Error('remote startup reply lost');
     dependencies.remoteCcQueryFactory = vi.fn().mockRejectedValueOnce(error);
     await expect(new ClaudeCodeAgent(dependencies).startSession({

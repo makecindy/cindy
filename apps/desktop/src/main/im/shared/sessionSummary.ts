@@ -14,6 +14,7 @@
  * 这里取到的是最后一个文本块)。
  */
 
+import { imText } from './imText';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 
 import { getDbClient } from '../../localDb/client/current';
@@ -86,7 +87,7 @@ export async function generateTakeoverSummary(sessionId: string): Promise<string
       `summary done session=...${sessionId.slice(-8)} chars=${text.length} ` +
         `elapsed=${Date.now() - t0}ms`,
     );
-    return `最后一条处理的消息为:${text}`;
+    return imText('imBot.text.shared.takeover.lastMessage', { text });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(

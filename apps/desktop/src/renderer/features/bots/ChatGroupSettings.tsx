@@ -78,7 +78,8 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const profiles = useBotProfiles();
   const mask = useGroupMask(group.id);
   const openMask = useOpenGroupMask();
-  const companions = group.members.filter(member => member.actorKind === 'bot');
+  // Teammates someone owns; the group's own Cindy is set by its switch in group management.
+  const companions = group.members.filter(member => member.actorKind === 'bot' && member.assistant !== true);
   const ownBots = companions.filter(member => member.isOwned === true && !!member.actorId);
   const membership = chatGroupMembership(group);
   const { self: me } = membership;
@@ -181,14 +182,14 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       refreshBotGroups();
     },
   }), [group.id, me?.actorId, me?.name, me?.groupAvatar, me?.defaultAvatarUrl, t]);
-  async function updateWorkSettings(input: { organizerBotId?: string; projectDir?: string | null; autoContinue?: boolean }) {
+  async function updateWorkSettings(input: { organizerBotId?: string; projectDir?: string | null; githubRepo?: string | null; autoContinue?: boolean }) {
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true); setError('');
     const generation = getDataOwnerGeneration();
     try {
       const result = await window.electronAPI.maker.updateBotGroup({ groupId: group.id, ...input });
       if (!isDataOwnerGenerationCurrent(generation)) return;
-      if (!result.ok) setError(t('autoContinue' in input ? 'bots.groupChat.settings.autoContinueSaveFailed' : 'bots.groupChat.settings.projectDirSaveFailed'));
+      if (!result.ok) setError(t('autoContinue' in input ? 'bots.groupChat.settings.autoContinueSaveFailed' : 'githubRepo' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
       else refreshBotGroups();
     } catch { if (isDataOwnerGenerationCurrent(generation)) setError(t(chatErrorKey('REQUEST_FAILED'))); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
@@ -240,14 +241,24 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   let footer: ReactNode = null;
   if (page?.kind === 'manage') {
     const activeCompanions = companions.filter(member => member.status === 'active');
+    // The group's own Cindy (servers with groupAssistant) answers messages that @ nobody when anyone may
+    // reply (bot-group-chat.md「群里的 Cindy」); turned off, or on older servers, the rows read as before.
+    const assistantAnswers = group.supportsGroupAssistant === true && group.assistantEnabled === true;
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
-          <SettingsRow wrap title={t(shared('replyMode'))} hint={t(replyMode === 'all' ? shared('replyModeNote') : key('replyModeMentionedNote'))}
+          {group.supportsGroupAssistant && <SettingsRow wrap title={t(key('assistant'))} hint={t(key('assistantHint'))}
+            trailing={<Switch data-testid="bot-group-assistant" aria-label={t(key('assistant'))} checked={group.assistantEnabled === true}
+              disabled={busy || group.revision === undefined} onCheckedChange={assistant => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, assistant });
+              }} />} />}
+          <SettingsRow wrap title={t(shared('replyMode'))}
+            hint={t(replyMode === 'mentioned' ? key('replyModeMentionedNote') : assistantAnswers ? key('replyModeAssistantNote') : shared('replyModeNote'))}
             trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact" className="max-w-[220px]"
-              options={(['mentioned', 'all'] as const).map(value => ({ value, label: t(REPLY_MODE_LABELS[value]) }))}
+              options={(['mentioned', 'all'] as const).map(value => ({ value,
+                label: t(value === 'all' && assistantAnswers ? key('replyModeAssistant') : REPLY_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
           {group.supportsMentionAudiences && owner && <SettingsRow wrap title={t(shared('allowMentionAllBots'))} hint={t(shared('allowMentionAllBotsHint'))}
             trailing={<Switch aria-label={t(shared('allowMentionAllBots'))} checked={group.allowMentionAllBots === true}
@@ -262,15 +273,22 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
               onValueChange={value => void saveRules({ speakingMode: value as typeof speakingMode })} />} />}
         </SettingsCard>
       </SettingsSection>
-      {/* The organizer arranges a 分工 whose steps are not written out; a 分工 works in the project folder. */}
+      {/* The group's project: a shared repository and this computer's folder. Replies and 分工 work in it (§7.5). */}
+      <SettingsSection title={t(key('project'))} caption={t(key('projectCaption'))}>
+        <SettingsCard>
+          {group.supportsGroupProject && <SettingsRow wrap title={t(key('githubRepo'))} hint={t(key('githubRepoHint'))}
+            trailing={<GithubRepoField repo={group.project?.repo ?? ''} busy={busy} onSave={githubRepo => void updateWorkSettings({ githubRepo })} />} />}
+          <SettingsRow wrap title={t(key('projectFolder'))} hint={t(key(group.projectDirAuto ? 'projectDirAutoHint' : 'projectDirHint'))}
+            trailing={<ProjectFolder dir={group.projectDir} auto={group.projectDirAuto === true} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
+        </SettingsCard>
+      </SettingsSection>
+      {/* The organizer arranges a 分工 whose steps are not written out (§7.1). */}
       <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
         <SettingsCard>
           {companions.length > 0 && <SettingsRow wrap title={t('bots.groupChat.organizer')} hint={t(key('organizerHint'))}
             trailing={<Select label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''} disabled={busy} size="compact" className="max-w-[220px]" truncateOptions
               options={activeCompanions.map(member => ({ value: member.botId, label: member.name }))}
               onValueChange={organizerBotId => void updateWorkSettings({ organizerBotId })} />} />}
-          <SettingsRow wrap title={t(shared('projectDir'))} hint={t(key('projectDirHint'))}
-            trailing={<ProjectFolder dir={group.projectDir} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
           {/* Kept on this computer like the project folder; only 分工 you start follow it (§7.4). */}
           {group.autoContinue !== undefined && <SettingsRow title={t('bots.groupChat.plan.autoContinue')} hint={t(key('autoContinueHint'))}
             trailing={<Switch data-testid="bot-group-auto-continue" checked={group.autoContinue === true} disabled={busy}
@@ -455,8 +473,32 @@ function About({ topic, description, canEdit, onEdit }: { topic: string; descrip
   </SettingsSection>;
 }
 
-/** The project folder as a pill: its name with the full path, 更换 and 清除 behind it. */
-function ProjectFolder({ dir, busy, onChoose, onClear }: { dir: string | null; busy: boolean; onChoose: () => void; onClear: () => void }) {
+/** `owner/name`, saved when you leave the field or press Enter; empty clears it. */
+function GithubRepoField({ repo, busy, onSave }: { repo: string; busy: boolean; onSave: (repo: string | null) => void }) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(repo);
+  const focused = useRef(false);
+  useEffect(() => { if (!focused.current) setDraft(repo); }, [repo]);
+  const value = draft.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/\/$/, '');
+  const invalid = !!value && !GITHUB_REPO.test(value);
+  const save = () => {
+    focused.current = false;
+    if (invalid) return;
+    if (value !== repo) onSave(value || null);
+    setDraft(value);
+  };
+  return <Input size="md" className="w-[220px] max-w-full" mono value={draft} disabled={busy} error={invalid}
+    placeholder="owner/name" aria-label={t(key('githubRepo'))} spellCheck={false} autoComplete="off"
+    onFocus={() => { focused.current = true; }} onChange={setDraft} onBlur={save}
+    onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); (event.target as HTMLInputElement).blur(); } }} />;
+}
+const GITHUB_REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+
+/**
+ * The project folder as a pill: its name with the full path, 更换 and 清除 behind it. A folder found
+ * from the group's repository (`auto`) has nothing to clear: you may only choose another one.
+ */
+function ProjectFolder({ dir, auto = false, busy, onChoose, onClear }: { dir: string | null; auto?: boolean; busy: boolean; onChoose: () => void; onClear: () => void }) {
   const { t } = useTranslation();
   const face = (label: string, muted: boolean) => <>
     <Folder size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
@@ -473,12 +515,12 @@ function ProjectFolder({ dir, busy, onChoose, onClear }: { dir: string | null; b
     <DropdownMenuContent align="end" className="w-64">
       <DropdownMenuLabel className="break-all font-normal">{dir}</DropdownMenuLabel>
       <DropdownMenuItem onSelect={onChoose}>{t(shared('projectDirChange'))}</DropdownMenuItem>
-      <DropdownMenuItem className="items-start" onSelect={onClear}>
+      {!auto && <DropdownMenuItem className="items-start" onSelect={onClear}>
         <span className="flex min-w-0 flex-col">
           <span>{t(shared('projectDirClear'))}</span>
           <span className="text-12 font-normal leading-[1.42] text-[var(--text-secondary)]">{t(key('projectDirClearHint'))}</span>
         </span>
-      </DropdownMenuItem>
+      </DropdownMenuItem>}
     </DropdownMenuContent>
   </DropdownMenu>;
 }

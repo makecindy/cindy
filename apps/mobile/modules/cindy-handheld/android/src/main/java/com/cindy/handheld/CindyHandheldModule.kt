@@ -15,7 +15,6 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Choreographer
 import android.view.Display
-import android.view.HapticFeedbackConstants
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -80,7 +79,6 @@ class CindyHandheldModule : Module() {
   private val holdRunnable = Runnable {
     if (!voiceDown || voiceActive) return@Runnable
     voiceActive = true
-    appContext.currentActivity?.window?.decorView?.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     sendEvent("onVoiceKey", mapOf("phase" to "start"))
   }
 

@@ -6,6 +6,7 @@
  */
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
+import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
 import { createAutomaticContinueEligibility, type CompanionFailoverSnapshot } from '../../maker-ipc/automaticContinueEligibility';
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
@@ -163,7 +164,7 @@ function harness(options: {
     hasLiveSession: vi.fn((_id: string) => true),
     continueSession: vi.fn(async () => 'resumed' as const),
     fallback: vi.fn(),
-    readResetAt: vi.fn(() => null),
+    readResetAt: vi.fn<ProviderGroupServiceDeps['readResetAt']>(() => null),
     readAutoRebalance: vi.fn((id: string) => autoRebalance.has(id)),
     readRebalanceDisabled: vi.fn((id: string) => disabledRebalance.has(id)),
     writeRebalanceEnabled: vi.fn(async (id: string, enabled: boolean) => {
@@ -540,6 +541,46 @@ describe('assignBeforeStart', () => {
 });
 
 describe('nextAfterStartFailure', () => {
+  // Unit, PR #10223: stable subscription-limit errors must retain their reset
+  // across startup and both handoff paths. Existing cases only used generic
+  // startup failures, so dropping resetAt silently imposed the 30-minute fallback.
+  // Minimum: a member reports resetAtMs five minutes away; the real router must
+  // select it again at that time. Use the production error parser, not a stubbed date.
+  it.each(['start', 'before-send-target', 'running-target'] as const)(
+    'expires subscription cooling at the reported reset after %s failure', async phase => {
+      const h = harness({ members: phase === 'start' ? [LOCAL] : [LOCAL, MINI, STUDIO] });
+      const now = Date.parse('2026-11-12T13:00:00Z');
+      h.advance(now - h.deps.now());
+      h.deps.readResetAt.mockImplementation(signals => readTurnUsageResetAt(signals, now, { localTimeZoneTrusted: false }));
+      const resetAt = now + 5 * 60_000;
+      const error = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset'
+        + `\nresetAtMs=${resetAt}`);
+      const failedMember = phase === 'start' ? LOCAL : MINI;
+      if (phase === 'start') {
+        const context = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
+        expect(await h.service.nextAfterStartFailure(context!, error)).toBeNull();
+      } else {
+        h.bindings.set('s1', { providerId: 'anthropic', memberKey: LOCAL.key, at: now });
+        h.deps.switchAgentLocation.mockRejectedValueOnce(error);
+        if (phase === 'before-send-target') {
+          h.router.markCooling('anthropic', LOCAL.key, now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, MODEL);
+          await h.service.beforeSend('s1');
+        } else {
+          await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+        }
+        expect(h.bindings.get('s1')?.memberKey).toBe(STUDIO.key);
+      }
+      expect(h.router.coolingUntil('anthropic', failedMember.key, MODEL)).toBe(resetAt);
+      expect(h.router.coolingUntil('anthropic', failedMember.key, 'claude-sonnet-5')).toBeNull();
+      h.advance(resetAt - now);
+      const retry = await h.router.pick({
+        providerId: 'anthropic',
+        agentKind: 'claude-code', model: MODEL, exclude: new Set(),
+      });
+      expect(retry.kind === 'member' && retry.member.key).toBe(failedMember.key);
+    },
+  );
+
   it('moves to the next computer when the assigned one could not start the agent', async () => {
     const h = harness({ offline: ['local'] });
     const context = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });

@@ -169,7 +169,7 @@ export function registerScheduleCreateTool(
         })
         .nullable()
         .optional()
-        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情设置，工具拿不到。支持已登录且有接收服务的目标电脑。'),
+        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。GitHub App 用 source={preset:"github-app",repositories:["owner/repository"]}，复用目标电脑在 GitHub 插件中的账号连接与仓库授权，无需任务地址或密钥。其他发送方创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情设置，工具拿不到。支持已登录且有接收服务的目标电脑。'),
       preRunHook: z
         .object({
           command: z

@@ -574,6 +574,12 @@ export interface GhostTaskViewDecl {
   title?: string;
   /** 任务页入口（安装目录内安全相对路径）。 */
   html: string;
+  /**
+   * 任务在本账号的另一台电脑上时也显示这个任务页（只接受字面量 true，且需同时声明
+   * `liveScreen`）。页面此时多一个查询参数 `device`（那台电脑的设备 ID），逻辑页经
+   * `cindy.liveScreenView()` 查看并操作那台电脑上同一插件的设备画面。
+   */
+  remote?: true;
 }
 
 /**
@@ -2280,6 +2286,7 @@ export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | und
     contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
     commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
     capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
+    ...(host.settings ? { settings: host.settings.filter(field => has('setting', field.id)) } : {}),
     ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
       fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
       resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
@@ -2836,6 +2843,10 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   // - 默认:纯沙箱、无文件无网络。
   let codeDetailKey: string;
   if (manifest.node) codeDetailKey = 'codeDetailWithNode';
+  else if (declaredGhostHostToolGroups(manifest).includes('terminal')) codeDetailKey = 'codeDetailTerminal';
+  else if (declaredGhostHostToolGroups(manifest).includes('files')) codeDetailKey = 'codeDetailFiles';
+  else if (declaredGhostHostToolGroups(manifest).includes('storage')) codeDetailKey = 'codeDetailStorage';
+  else if (declaredGhostHostToolGroups(manifest).some(group => ['browser', 'computer', 'ssh', 'docs'].includes(group))) codeDetailKey = 'codeDetailHostServices';
   else if (manifest.network) codeDetailKey = 'codeDetailNetwork';
   else codeDetailKey = 'codeDetail';
   items.push({
@@ -4799,10 +4810,14 @@ function validateGhostManifestInput(
     if (!isPortableGhostRelativePath(raw.taskView.html)) {
       return { ok: false, reason: 'taskView.html 必填，且必须是安装目录内的安全相对路径' };
     }
+    if (raw.taskView.remote !== undefined && raw.taskView.remote !== true) {
+      return { ok: false, reason: 'taskView.remote 只接受 true' };
+    }
     taskView = {
-      ...unknownDeclarationFields(raw.taskView, ['html', 'title']),
+      ...unknownDeclarationFields(raw.taskView, ['html', 'title', 'remote']),
       ...(raw.taskView.title !== undefined ? { title: raw.taskView.title } : {}),
       html: raw.taskView.html,
+      ...(raw.taskView.remote === true ? { remote: true as const } : {}),
     };
   }
 
@@ -4876,6 +4891,9 @@ function validateGhostManifestInput(
   }
   if (slots.includes('task-view') && taskView === undefined) {
     return { ok: false, reason: 'slots 声明了 "task-view" 但缺少 taskView(html 必填)' };
+  }
+  if (taskView?.remote === true && !slots.includes('live-screen')) {
+    return { ok: false, reason: 'taskView.remote 需要同时声明 liveScreen: true' };
   }
 
   // card 槽详单:有详单必有槽;有槽无详单 = 纯渲染卡片(默认行为,向后兼容)。
@@ -7503,6 +7521,8 @@ export interface GhostPipePickRequest {
   mobilePageId?: string;
   /** 文件模式可选；旧的目录选择行为保持不变。 */
   mode: 'directory' | 'file';
+  /** Freshly select an autonomous filesystem root; requires the approved files group. */
+  access?: 'files';
   accept?: string[];
   multiple?: boolean;
   into?: 'media' | 'library';
@@ -7524,6 +7544,8 @@ export type GhostPipePickResult =
       ok: true;
       /** 所选目录名(展示用,不含上级路径)。 */
       name: string;
+      /** Host-owned reference, scoped to this plugin and execution computer. */
+      directoryRef?: string;
       /** 绝对路径:仅 node 槽插件可见(Node 侧本就有用户级本机权限)。 */
       path?: string;
       /** 目录过户票据(同 ghost_call dir 通道;上传等主机代办凭票取件)。 */
@@ -9436,17 +9458,18 @@ export const GHOST_FETCH_FILE_NAME_MAX_CHARS = 128;
 /* ── 主机文件操作(2026-07-14):字节由主机代办,沙箱仍零 fs ──────────
  * 意识 cindy.send({type:'fs-request', op, root, …}) → 按执行上下文与 root
  * 分档守门 → 主机代写/代读 → 结构化 GhostPipeFsResult。
- * 三个 root:
+ * 四个 root:
  * - 'data'    插件自主私有数据目录(userData/ghost-fs/<ghostId>);要求 fs:true,
- *             全 op,免确认,配额封顶,卸载随包回收。
- * - 'workdir' 当前会话工作目录;仅 write,须带 callId(反查 session),当前
+ *             write/read/list/delete,免确认,配额封顶,卸载随包回收。
+ * - 'workdir' 当前任务工作目录;读写/列举/删除/监听均须带 callId(反查 session),当前
  *             Agent 调用无需 fs:true,并跟随会话 permission 模式;远程工作区拒。
  * - 'save'    主 agent 过户的 save 票据目录;仅 write,复用 saveDeposit
  *             的 TTL/次数/字节预算与文件名消毒;票据自身就是授权,无需 fs:true。
+ * - 'picked'  用户新亲选且批准 files 组的目录引用；自主读写、列举、删除和监听。
  */
-export const GHOST_FS_ROOTS = ['data', 'workdir', 'save'] as const;
+export const GHOST_FS_ROOTS = ['data', 'workdir', 'save', 'picked'] as const;
 export type GhostFsRoot = (typeof GHOST_FS_ROOTS)[number];
-export const GHOST_FS_OPS = ['write', 'read', 'list', 'delete'] as const;
+export const GHOST_FS_OPS = ['write', 'read', 'list', 'delete', 'watch', 'changes', 'unwatch'] as const;
 export type GhostFsOp = (typeof GHOST_FS_OPS)[number];
 
 /** fs 相对路径总长上限(字符;分段规则同 isSafeGhostRelativePath)。 */
@@ -9465,10 +9488,12 @@ export const GHOST_FS_LIST_MAX_ENTRIES = 2000;
 /** 上行:主机文件操作请求。 */
 export interface GhostPipeFsRequest {
   type: 'fs-request';
-  /** 操作:write=创建/覆盖,read/list/delete 仅 root:'data'。 */
+  /** data 支持 write/read/list/delete；workdir/picked 另支持有界 watch/changes/unwatch。 */
   op: GhostFsOp;
   /** 目的地档位(见上方注释)。 */
   root: GhostFsRoot;
+  /** root:picked only; issued by a fresh pick({mode:'directory',access:'files'}). */
+  directoryRef?: string;
   /**
    * 相对路径(`a/b/c.ext` 形态,规则同 isSafeGhostRelativePath:正斜杠分段、
    * 无 `.`/`..`、段首不许点——写不了 .git 等隐藏目录是刻意的)。write/read/
@@ -9484,11 +9509,16 @@ export interface GhostPipeFsRequest {
   token?: string;
   /** 归因号(root:'workdir' 必填:主机凭它反查严格在途 Agent 调用、session 与权限;其余可选)。 */
   callId?: string;
+  /** Host-issued, call-bound watcher; changes are metadata only. */
+  watchId?: string;
+  cursor?: number;
 }
 
 /** fs 槽 list 的单条目(路径相对本意识私有目录根)。 */
 export interface GhostFsListEntry {
   path: string;
+  /** Workdir listings include directories; older private listings contain files only. */
+  type?: 'file' | 'directory';
   bytes: number;
   /** 最后修改时间(unix ms)。 */
   mtime: number;
@@ -9512,6 +9542,9 @@ export type GhostPipeFsResult =
     }
   | { ok: true; op: 'list'; entries: GhostFsListEntry[]; truncated?: boolean }
   | { ok: true; op: 'delete'; path: string; /** false = 本来就不存在(幂等)。 */ existed: boolean }
+  | { ok: true; op: 'watch'; watchId: string; cursor: number }
+  | { ok: true; op: 'changes'; watchId: string; cursor: number; events: Array<{ sequence: number; path: string; type: 'create' | 'update' | 'delete' }>; resetRequired: boolean }
+  | { ok: true; op: 'unwatch'; watchId: string }
   | { ok: false; message: string; errorCode?: 'NOT_FOUND' };
 
 /* ── library 能力:持久作品库(2026-08-20;详见 docs/dev-rules/plugin-library-storage.md)── */

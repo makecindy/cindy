@@ -86,6 +86,10 @@ instructions belong to Desktop tool discovery and receipts. This focused prompt
 sync does not add Desktop settings tools to Headless or advance the broader
 upstream baseline.
 
+The host prompt also carries one paragraph asking for tappable options on
+questions to the user (2026-11-12). All three frozen prompts and their profile
+digests include it; no Headless tool or runtime behavior changes.
+
 | Cindy capability | Claude Code | Codex | Pi | Headless evidence |
 |---|---:|---:|---:|---|
 | Multi-turn Maker session | Yes | Yes | Yes | `run --turns-file`, structured terminal events |

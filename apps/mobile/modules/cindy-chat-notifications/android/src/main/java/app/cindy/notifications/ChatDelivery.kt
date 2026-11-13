@@ -54,6 +54,9 @@ object ChatDelivery {
       display["tag"] = body.optString("collapseId")
       display["body"] = body.toString()
     }
+    body.optJSONObject("taskActivity")?.let { TaskBadgeDelivery.apply(context, it) }
+    // Badge-only FCM is consumed natively even when JS is suspended. No empty alert.
+    if (body.optString("category") == "task-badge") return
     if (body.optString("category") == "chat-message") {
       val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
       val actor = prefs.getString("actor", "") ?: ""
@@ -81,6 +84,12 @@ object ChatDelivery {
         next.put(id); prefs.edit().putString("ids", next.toString()).apply()
       }
     }
+    // FCM, the direct connection and decrypted Agent-Net alerts must all use the
+    // event ID. A task-wide tag can be replaced between enumeration and cleanup.
+    body.optString("notificationId").takeIf { it.matches(Regex("[a-fA-F0-9-]{36}")) }?.let { display["tag"] = it }
+    // The version-aware native writer owns this number. Expo must not apply an
+    // older notification's numeric value after a newer badge-only message.
+    if (body.has("taskActivity")) { display.remove("badge"); display.remove("notification_count") }
     if (!context.getSharedPreferences("cindy-chat-background", Context.MODE_PRIVATE).getBoolean("preview", true)) {
       body.remove("sender"); body.remove("senderName"); body.remove("body")
       display["body"] = body.toString(); display["message"] = ""
@@ -100,6 +109,7 @@ class ChatNotificationsService : NotificationsService() {
       val original = super.createNotification(notification, notificationBehavior)
       val content = notification.notificationRequest.content
       val data = content.body ?: return original
+      if (data.has("taskActivity")) TaskBadgeDelivery.currentCount(context)?.let { original.number = it }
       val chat = data.optString("category") == "chat-message"
       val sender = data.optJSONObject("sender")
       if (!chat && (data.optString("category") !in listOf("session-done", "session-error", "session-needs-reply") || sender == null)) return original

@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   allowed: new Set<string>(['anthropic']),
   owned: [] as ProviderShareOwned[],
   ownedError: false,
+  ownedIncomplete: false,
   remoteOwned: [] as ProviderShareOwned[],
   received: [] as ProviderShareReceived[],
   receivedError: false,
@@ -48,7 +49,7 @@ vi.mock('../providerShareApi.js', () => ({
   providerShareApi: {
     listOwned: async () => {
       if (state.ownedError) throw new Error('offline');
-      return state.owned;
+      return state.ownedIncomplete ? Object.assign([...state.owned], { authorityIncomplete: true }) : state.owned;
     },
     listReceived: async () => {
       if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
@@ -84,6 +85,8 @@ import {
   applyLocalMemberChange,
   clearProviderShareRequestQuiet,
   forgetWatchedProviderShareRequest,
+  getProviderShareHostCompleteSnapshot,
+  getProviderShareHostLoadedSnapshot,
   getProviderShareHostSnapshot,
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
@@ -148,6 +151,7 @@ beforeEach(() => {
   state.allowed = new Set(['anthropic']);
   state.owned = [];
   state.ownedError = false;
+  state.ownedIncomplete = false;
   state.remoteOwned = [];
   readWatchedShares.mockReset().mockImplementation(async (hostDeviceId) =>
     state.remoteOwned.filter((item) => item.hostDeviceId === hostDeviceId));
@@ -465,6 +469,20 @@ describe('provider share host snapshot', () => {
     state.remoteControl = true;
     state.scope = 'cloud:other:2';
     expect(providerShareGuestDenial(guest('m1'))).toBe('host-scope-stale');
+  });
+
+  // PR #10150 review: the one-time revert of the 11-10 default must not run on a partial read,
+  // or providers shared during that window would stay closed after the service recovers.
+  it('offers the complete snapshot only after every share service was read', async () => {
+    state.owned = [share([member('m1')])];
+    state.ownedIncomplete = true;
+    startProviderShareHost(events());
+    await refreshProviderShareHost('partial');
+    expect(getProviderShareHostLoadedSnapshot()).toHaveLength(1);
+    expect(getProviderShareHostCompleteSnapshot()).toBeNull();
+    state.ownedIncomplete = false;
+    await refreshProviderShareHost('recovered');
+    expect(getProviderShareHostCompleteSnapshot()?.map((item) => item.providerId)).toEqual([share([]).providerId]);
   });
 
   it('announces pending requests once and reconciles stale guests on the first snapshot', async () => {

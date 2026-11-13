@@ -112,7 +112,7 @@ import { buildMermaidPayload, type MessagePayload } from './messagePayload';
 import { RichContentContext } from './richContentContext';
 import { RichContentRuntime } from './richContentRuntime';
 import { BotGroupMentionIdentity } from './BotGroupMentionIdentity';
-import { botGroupMentionDisplayName, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
+import { LEGACY_BOT_GROUP_ALL_BOTS_LABELS, botGroupMentionDisplayName, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 import { i18n as appI18n, SUPPORTED_LOCALES } from '@/i18n';
 import { BotGroupQuote } from './BotGroupQuote';
 import {
@@ -900,7 +900,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
-        running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
+        canStop={group.round.canStop} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
       {Platform.OS === 'ios' ? <DockKeyboardBottomSpacer restingBottom={insets.bottom}
@@ -1020,7 +1020,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   // Message text retains the sender's language after another member changes UI locale.
   const broadcastLabels = useMemo(() => ({
     all: [allLabel, ...SUPPORTED_LOCALES.map(lng => appI18n.t('groupChat.mention.all', { lng }))],
-    bots: [allBotsLabel, ...SUPPORTED_LOCALES.map(lng => appI18n.t('groupChat.mention.allBots', { lng }))],
+    bots: [...LEGACY_BOT_GROUP_ALL_BOTS_LABELS, allBotsLabel, ...SUPPORTED_LOCALES.map(lng => appI18n.t('groupChat.mention.allBots', { lng }))],
   }), [allLabel, allBotsLabel]);
   const mentionLabels = useMemo(() => [...broadcastLabels.all, ...broadcastLabels.bots, ...group.members.flatMap(member =>
     [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name])], [broadcastLabels, group.members]);

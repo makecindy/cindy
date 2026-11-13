@@ -148,19 +148,31 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 服务按执行电脑上报的完整快照汇总并发送 APNs，手机挂起时也可以接收系统更新。
 旧服务端返回 404/405、旧原生包或自建中转时，保留 Home 与 host live-activity 的本地同步。
 `cindy-agent-activity` 用 ActivityKit 维护一个聚合活动；等待操作的任务优先，其次未读完成／错误
-结果，最后是运行中；标题、角色状态与展开后的任务链接使用同一优先级。排除缓存种子、未确认新建、归档
+结果，最后是运行中；标题、角色状态与锁屏任务链接使用同一优先级。排除缓存种子、未确认新建、归档
 和离线电脑的任务，结果已读后移除。
 内容只包含截断标题、本地化状态、任务数和带电脑 ID 的任务深链，不放工具参数或消息正文；
 锁屏标题使用系统 `privacySensitive()`。退出账号／切换账号会结束旧活动。
 
 WidgetKit 的收起、最小、展开与锁屏视图在 `plugins/usage-widgets/CindyAgentActivityWidget.swift`，
 复用已有扩展；ActivityAttributes 从原生模块复制到扩展编译，避免两份 schema 漂移。
-收起／最小灵动岛点击固定进入首页，不因未读计数或最近一次推送的任务而改变。展开后点击
-任务标题／状态区域进入显示的任务，角色与计数区域仍回首页；锁屏／横幅展示具体任务，
-点击进入该任务。系统标记内容过期后，所有入口回首页，不再沿用旧任务目标。
+收起／最小／展开灵动岛点击只唤回 App，保留退到后台前的页面；不设置 `widgetURL` 或
+任务 `Link`，由 iOS 默认启动行为处理，不因计数、最近一次推送或内容过期而跳首页／任务页。
+App 已被系统终止时沿用正常冷启动行为，不额外承诺恢复已销毁的页面状态。
+锁屏／横幅展示具体任务，点击进入该任务；内容过期后该入口回首页，不再沿用旧任务目标。
+灵动岛点击行为位于原生 WidgetKit 扩展，必须随新 iOS 安装包交付，旧包不会通过 OTA 获得此修复；
+建议随下一次 iOS 原生版本发布。验收应从任务页及设置页分别退到后台，点击收起／最小／展开
+灵动岛并检查页面与导航栈未改变，再检查锁屏任务跳转及冷启动。
 首页 URL 使用扩展的 `CindyURLScheme`，保持 Global／CN／beta 安装身份；任务深链继续
 使用既有 payload 的 `url`，本地同步与服务端 APNs 更新共用这套呈现逻辑，无须更改推送协议。
 现有实时活动 payload 不含消息 ID，因此任务链接进入对应任务，不承诺精确定位某条消息。
+iOS 18 起同一活动另外声明 `.small` 尺寸，配对的 Apple Watch（watchOS 11+）在智能叠放里显示角色、
+任务标题、一行状态与计数；不声明时手表只拿到收起灵动岛的角色与计数，看不到是哪个任务。小尺寸只有
+两行：内容过期后第二行改为上次更新时间，不再显示旧状态；背景由系统提供，文字用系统前景样式，
+状态色沿用灵动岛色板。内容与隐私口径不变（截断标题、状态、计数，标题 `privacySensitive()`），
+不新增推送字段，手机收到的本地同步与 APNs 更新由系统转给手表。手表上点开只能看大图或回到 iPhone
+打开，不能直接操作任务。`.small` 的声明是 iOS 18 才有的配置修饰符，而组件包的 `body` 不能按系统版本
+分支，所以扩展入口 `CindyUsageWidgetsEntry` 按版本选择组件包：iOS 18+ 注册带小尺寸的
+`CindyAgentActivityGlanceWidget`，iOS 17 注册原 `CindyAgentActivityWidget`，两者共用同一份呈现代码。
 美术直接复用桌面角色目录中的 Cindy（手机版选定角色）：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
 调用桌面 helper 的 `--export-mascots`，导出含眼睛和姿态的三张静帧，并从桌面实时活动导出
 运行中橙／待处理青／完成绿的颜色目录；手机计数使用「待关注 · 运行中」，待关注包含等待操作和
@@ -214,6 +226,8 @@ PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成
 改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
 安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 须按冷更边界写明原因、影响与发版节奏。
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
+手表智能叠放需另用配对的 Apple Watch 真机（或已安装 watchOS runtime 的配对模拟器）检查运行中、
+待处理、完成与过期四种状态；只编译通过或只看 iPhone 锁屏不算手表验收。
 TypeScript 测试不能替代这些原生验收。`node apps/mobile/scripts/test-agent-activity-native.mjs`
 直接编译并执行生产 Codable 数据模型，验证旧 payload 解码、混合任务有效期和时间戳往返；
 测试仅替换 macOS 不可用的 ActivityKit 标记协议，不替代真实 iOS ActivityKit／界面验收。
@@ -629,6 +643,84 @@ Xcode 自动签名会以 entitlement 无法写入 profile 拒绝构建。
 Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
 服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
 这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
+
+### 通知按钮与后台作答
+
+规则与边界见[通知上的按钮](../product-rules/notification-actions.md)。按钮类别在 JS 里向系统登记
+（`registerNotificationActionCategories`，随界面语言重新登记），推送里的 `aps.category` 由服务端给出。
+用户点击后系统把响应交给后台的 App：`handleNotificationActionResponse` 先认领（同一次点击只执行一次，系统会向
+晚注册的监听和回前台时重放；认领键是「通知标识＋送达时间＋按了什么」，因为系统给同一任务的通知用同一个
+标识），再申请后台时间、等连接层就绪、为这一次操作保持连接。保持的计数放在 `DeviceLinkProvider` 上而不是
+某一个连接对象上：点击可能早于登录恢复出连接，连接也可能在操作途中被替换。
+
+连接恢复的故障半径三问：① 触发证据只有用户点了通知按钮且 App 不在前台；② 动作只是把本机自己的中转连接
+拉起并保持到这一次操作结束（上限 25 秒，系统给的时间更短则更短），不恢复任何订阅、不重置任何 peer，
+其它电脑与在途请求不受影响，释放时仍在后台就按原宽限逻辑断开；③ `mobilePushRecovery.test.ts` 覆盖宽限期内、
+宽限后已断开、多次重叠与回到前台四种情况，`notificationActions.test.ts` 覆盖连接未就绪时的有界等待。
+未做真机断网与弱网演练。
+
+`modules/cindy-background-work` 只包了 `UIApplication` 的后台任务：`begin` 返回系统剩余时间，到期回调
+自行归还。旧原生包没有这个模块时按 8 秒短预算执行，不申请后台时间。新原生模块、通知类别与凭证档位都要
+新 iOS 包；共享的指纹输入也会改变 Android 指纹，需随计划内双端原生发版交付。
+
+提问的选项按钮在展开通知时按 `action.options` 生成，类别名见 `notificationActionIds.ts`：
+
+- `plugins/with-notification-content.js` 生成 `CindyNotificationContent` 通知内容扩展（类别 `cindy.question.card`）：
+  长按展开时显示任务名、完整问题与选项说明（没有说明时不列选项），并把选项设为带编号图标的系统按钮；点击
+  转发给 App。扩展拿不到 App 的主题代码，字号行高与中性色照 `src/theme/tokens.ts` 和 Mobile 设计指南 §3 抄了
+  一份在 `NotificationViewController.swift` 里，改 token 时要同步。扩展只采用协议、不引用
+  框架符号，必须显式链接 `UserNotificationsUI`，否则启动即退出、展开后是一块空白。它的 Swift 源码目录登记在
+  `fingerprint.config.cjs`，不登记的话改了源码不会触发重新编译。新增的扩展 target 需要各构建线自己的签名。
+
+模拟器验证：`xcrun simctl push` 的测试推送**不经过通知服务扩展**（头像、分组等改写在模拟器里看不到）；
+通知内容扩展和按钮点击后的后台处理可以在模拟器里走通（mock 模式下电脑上没有这道题，预期收到「这条请求已被
+处理或已过期」；测试负载的深链不带 `deviceId` 时收到的是「没有送到电脑」）。展开通知要在主屏幕长按横幅；锁屏通知列表里的长按在模拟器的触摸
+注入下不触发展开。iOS 27.3 测试版运行时在横幅出现后画面不再刷新（界面树里按钮已出现、截图抓不到），
+截图用 27.0 运行时。27.0 运行时里任何带按钮的通知展开时都会先弹出系统键盘（「允许一次／拒绝」这种没有输入框的
+类别也一样，重启模拟器不消失），卡片的按钮就位后收起；这与按钮顺序、是否含「回复」无关，真机上是否出现未验证。
+内容扩展安装后第一次展开要冷启动约一秒半，期间卡片是空白、按钮只有「回复／打开任务」，之后的展开在一秒内。
+
+真机验收（单元测试不能代替）：锁屏长按通知出现按钮；提问通知出现选项按钮并能点选；Apple Watch 上出现按钮；App 挂起超过 1 小时后在
+锁屏点「拒绝」能送达；杀掉 App 且锁屏时点按钮得到「没有送到」提示、之后打开 App 登录状态完好；
+关闭内容预览后没有允许／拒绝；回复只发一次。
+
+### 应用图标角标
+
+角标数字为账号汇总中「等待回答／授权 + 已完成／出错但未读」的任务数，运行中不计入。
+同一电脑的同一任务只计一次，归档、待本地创建、缓存占位和已读结果不计入。它不是消息条数，
+也不按收到的推送次数累加。已有的任务内容展示与已读回执推进任务状态后，角标随之减少；
+只进入页面或划掉系统通知不会直接把任务判成已读。
+
+`TaskBadgeBridge` 在 iOS 和 Android 独立于 ActivityKit 运行。与灵动岛共用服务端账号汇总，
+不从手机 Home 分页、筛选、选中的电脑或缓存列表推算总数。等待 2、未读结果 4、运行 3 时，
+角标为 6，灵动岛可显示「6 · 3」。群聊消息数不混入任务口径。
+
+登录、进入前台或通知偏好变化时，从当前账号区域的 `deviceLinkApiBaseUrl` 请求一次
+`GET /api/device-link/task-activity`，使用现有账号 Bearer；并发刷新共用在途请求，无轮询或
+定时重试。返回 `{schemaVersion:1,accountId,version,waitingCount,unreadCount,runningCount,
+badgeCount,complete}`，`accountId` 为已验签 membershipId，`version` 是账号内持久单调的
+十进制整数字符串，不转成 JS Number。推送携带同形 `taskActivity`。仅完整汇总允许写入
+绝对数字（包括 0），新版本不完整数据只推进版本水位，保留已有角标；乱序、其它账号、
+无效数字和退出后的响应被丢弃。接口 404/405 后本生命周期停止请求；离线保留原值，
+自建中转不调用官方汇总接口。旧服务端不会降级为从部分列表猜总数。
+
+普通推送注册仅向 device-link 附带可选 `taskBadgeVersion:1`：iOS 支持系统 `aps.badge`，
+Android 须检测到 `CindyChatNotifications` 新原生方法才声明。服务端仅向声明支持的安装
+发送 badge-only，旧 Android 包保持原通知，避免空白提醒。普通通知开关与 ActivityKit
+独立令牌互不注销。退出账号、关闭通知时清理角标；不把划掉通知当成任务已读。
+
+iOS 后台由系统应用无声 APNs `aps.badge`，不需要 JS 运行；前台按汇总版本核对。
+APNs 可能延迟、丢弃或乱序，不能承诺后台绝对即时一致，重新进入前台会请求校正。
+Android 的 `TaskBadgeDelivery` 在已有 FCM receiver 中消费 data-only `task-badge`，不展示
+空通知；复用 ShortcutBadger，按持久账号／版本拒绝旧值，JS 前台写入也经过同一原生入口。
+只保存账号标识、版本和数字，不落盘令牌或任务内容；0 值不顺带清除群聊通知。
+启动器及系统权限决定显示数字、圆点或不支持；FCM 不可用的设备仍只能在前台核对。
+
+Android 原生接收器修改需要新安装包，旧包不能靠 OTA 获得后台处理能力；此 PR 必须按
+冷更规则确认，并与配套服务端部署协调。实现与上线分开核验：需真实 APNs／FCM、杀进程、
+跨电脑已读和关闭通知测试。纯 Kotlin 回归入口 `scripts/test-task-badge-android.mjs`
+通过 `CINDY_BADGE_TEST_KOTLINC`、`CINDY_BADGE_TEST_JDK_HOME`、`CINDY_BADGE_TEST_JSON_JAR`
+指定本机工具链，验证真实生产接收器的账号、版本、不完整数据、零值与退出行为。
 
 ### iOS 桌面与锁屏小组件
 

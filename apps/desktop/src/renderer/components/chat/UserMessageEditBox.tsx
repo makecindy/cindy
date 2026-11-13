@@ -340,7 +340,7 @@ export function UserMessageEditBox({
         spellCheck={false}
         rows={1}
         className={cn(
-          'block w-full resize-none outline-none border-none bg-transparent p-0',
+          'chat-content-text block w-full resize-none outline-none border-none bg-transparent p-0',
           'max-h-[40vh] overflow-y-auto',
           'text-15 font-normal leading-[1.6] text-[var(--msg-user-text)]',
           'disabled:opacity-60',

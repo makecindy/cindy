@@ -75,6 +75,20 @@ const gitlab = [
 ];
 
 const byPreset: Record<string, WebhookEventGroup[]> = {
+  'github-app': [
+    issues,
+    pullRequests('synchronize'),
+    comments,
+    actions('reviews', 'pull_request_review', [['submitted', 'submitted']]),
+    actions('reviewComments', 'pull_request_review_comment', [['created', 'created'], ['edited', 'edited']]),
+    group('reviewThreads', [['pull_request_review_thread', 'all']]),
+    actions('checkRuns', 'check_run', [['completed', 'completed']]),
+    actions('checks', 'check_suite', [['completed', 'completed']]),
+    group('commitStatus', [['status', 'all']]),
+    actions('workflows', 'workflow_run', [['completed', 'completed']]),
+    repository,
+    actions('releases', 'release', [['published', 'published']]),
+  ],
   github: [
     issues,
     pullRequests('synchronize'),

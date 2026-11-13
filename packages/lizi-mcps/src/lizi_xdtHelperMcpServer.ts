@@ -1,8 +1,13 @@
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
+import { registerTerminalTools, type TerminalToolCallbacks } from './xdt-helper/terminal.js';
+import { registerFileTools, type FileToolCallbacks } from './xdt-helper/files.js';
+import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/storage.js';
+import { registerHostServiceTools, type HostServicesToolCallbacks } from './xdt-helper/host_services.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
+import { registerThemePackageTool, type ThemePackageCallbacks } from './xdt-helper/theme_packages.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
 import { registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
@@ -169,7 +174,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings', 'terminal', 'files', 'storage', 'discovery'] as const;
 
 /**
  * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
@@ -222,6 +227,10 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     '搜索还能查到主力电脑离线的伙伴的云端对话；',
     '其余本机。',
   ].join(''),
+  terminal: '启动、列举、输入、续读和停止当前调用方的宿主终端与后台作业。仅执行电脑本机，作业独立于读取连接；SSH 工作区不在本机代跑远程命令。',
+  files: '通过同一宿主文件服务访问真实任务工作目录或用户亲选的插件目录；读、写、列举、删除与有界监听。',
+  storage: '插件自身 KV、私有文件、作品库、媒体与交接文件的统一调用接口；跨插件快照分享每次经宿主确认，仅同账号本机和同一组织范围。',
+  discovery: '只读发现执行宿主实际提供的服务与本插件的批准事实；仅本机，不安装、启停或撤销其他插件。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
     '给已有任务发消息或新建任务。',
@@ -416,7 +425,7 @@ function registerBotMessagingEntries(
   if (!deps.botMessaging) return;
   if (deps.botMessaging.sendToUser) registry.register({
     name: 'send_to_user', category: 'bots',
-    description: 'From a group, send a private message to your owner in this same teammate’s main chat. Use when your owner explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',
+    description: 'From a group, send a private message to the account user in this same buddy’s main chat. Use when that user explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',
     inputShape: { message: z.string().trim().min(1).max(16000), idempotency_key: z.string().regex(/^[\w-]{8,100}$/) },
     handler: async ({ message, idempotency_key }) => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -428,7 +437,7 @@ function registerBotMessagingEntries(
   });
   if (deps.botMessaging.listAgents) registry.register({
     name: 'list_agents', category: 'bots',
-    description: 'Discover teammates on this device and other authorized devices. To talk to one, pass its session_id (its main chat; deviceId::sessionId on another computer) to send_to_session. Device names distinguish namesakes; unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
+    description: 'Discover buddies on this device and other authorized devices. To talk to one, pass its session_id (its main chat; deviceId::sessionId on another computer) to send_to_session. Device names distinguish namesakes; unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
     inputShape: {},
     handler: async () => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -468,6 +477,10 @@ export type ControlDispatchOutcome =
 // ── Factory ────────────────────────────────────────────────────────────────
 
 export interface XdtHelperMcpDeps {
+  terminal?: TerminalToolCallbacks;
+  files?: FileToolCallbacks;
+  storage?: StorageToolCallbacks;
+  hostServices?: HostServicesToolCallbacks;
   github?: GithubToolCallbacks;
   getSessionProject?: import('./xdt-helper/get_current_session_id.js').GetCurrentSessionIdDeps['getSessionProject'];
   logger?: LiziMcpLogger;
@@ -540,6 +553,7 @@ export interface XdtHelperMcpDeps {
   /** The calling teammate's linked projects; the host resolves the teammate from the caller Session. */
   teammateProjects?: TeammateProjectsCallback;
   appSettings?: AppSettingsCallbacks;
+  themePackages?: ThemePackageCallbacks;
   piRuntime?: PiRuntimeCallbacks;
   modelSettings?: AppModelsCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
@@ -635,6 +649,10 @@ export function createXdtHelperMcpServer(
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
   };
 
+  if (deps.terminal) registerTerminalTools(registry, deps.terminal, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.files) registerFileTools(registry, deps.files, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.storage) registerStorageTools(registry, deps.storage, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.hostServices) registerHostServiceTools(registry, deps.hostServices, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.github) registerGithubTools(registry, deps.github, () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
@@ -825,6 +843,7 @@ export function createXdtHelperMcpServer(
   if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.themePackages) registerThemePackageTool(registry, deps.themePackages, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appModels && !sessionCtx.remoteHostId) registerAppDefaultModelTools(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     callbacks: deps.appModels, category: 'settings',
@@ -998,6 +1017,7 @@ export function createXdtHelperMcpServer(
     });
   }
   return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
     describe(name: string) {
       const tool = registry.get(name);
       return tool ? { name: tool.name, category: tool.category } : undefined;

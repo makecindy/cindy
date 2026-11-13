@@ -92,10 +92,10 @@ async function commitAfterPersistBarrier(
     let committed = false;
     try {
       assertRewindOwner(opts.ownerScope);
-      await assertTaskActionCurrent();
+      await assertTaskActionCurrent(sessionId, clientId);
       await prepareSessionForHistoryAction(sessionId, 'rewind');
       assertRewindOwner(opts.ownerScope);
-      await assertTaskActionCurrent();
+      await assertTaskActionCurrent(sessionId, clientId);
       const result = await commitRewindAtMessage(sessionId, clientId, opts);
       committed = true;
       advanceSessionRewindGeneration(sessionId);
@@ -151,9 +151,9 @@ export function registerMakerRewindIpc(): void {
 /** Shared UI/Agent entry: preserve stop, persist barrier, send lock and observation cleanup. */
 export async function commitTaskRewind(sessionId: unknown, clientId: unknown, opts?: unknown) {
   const ownerScope = captureDataOwnerBroadcastScope();
-  await assertTaskActionCurrent();
   const sid = requireString(sessionId, 'sessionId');
   const cid = requireString(clientId, 'clientId');
+  await assertTaskActionCurrent(sid, cid);
   // edit-last-message 专用可选项:要求 target 必须是会话最新 user 消息,
   // 在 main 侧权威校验(renderer 的切片判定有 TOCTOU 窗口)。普通 Rewind
   // 不传 → 保持"可回到任意历史消息"的既有语义。

@@ -43,6 +43,15 @@ const SUPPORTED_TEXT_EXTS = new Set([
   '.srt', '.vtt',
   '.po', '.pot',
   '.sln', '.csproj', '.vbproj', '.fsproj', '.gemspec', '.podspec', '.cabal',
+  // .NET project/configuration sources and related schema formats (text only).
+  '.vbhtml', '.vb', '.csx', '.cake', '.linq', '.props',
+  '.targets', '.slnx', '.slnf', '.config', '.resx', '.settings',
+  '.manifest', '.nuspec', '.runsettings', '.globalconfig', '.http', '.rest',
+  '.xaml', '.axaml', '.resw', '.rdlc', '.rdl', '.pubxml',
+  '.ruleset', '.dotsettings', '.testsettings', '.filters', '.gql', '.graphqls',
+  '.psd1', '.ps1xml', '.psql', '.bicep', '.fbs', '.thrift',
+  '.capnp', '.avsc', '.csproj.user', '.fsproj.user', '.vbproj.user',
+  '.razor', '.cshtml',
   '.sql', '.graphql', '.proto', '.dockerfile',
   '.rss', '.atom',
   '.gitignore', '.gitattributes', '.gitconfig', '.gitmodules', '.gitkeep',
@@ -76,7 +85,7 @@ const SUPPORTED_TEXT_EXTS = new Set([
  */
 const HTML_PREVIEW_EXTS = new Set(['.html', '.htm']);
 
-const COMPOUND_EXTS = ['.env.example', '.env.local', '.env.development', '.env.production'];
+const COMPOUND_EXTS = ['.env.example', '.env.local', '.env.development', '.env.production', '.csproj.user', '.fsproj.user', '.vbproj.user'];
 const KNOWN_TEXT_FILENAMES = new Set([
   'dockerfile',
   'makefile',
