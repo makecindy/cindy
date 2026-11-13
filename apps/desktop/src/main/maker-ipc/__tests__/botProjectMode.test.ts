@@ -115,6 +115,7 @@ describe('ensureBotProjectAutomations', () => {
   // host-attested owner text; attachments serialize it as {text,images,files}. Exercise the
   // production-generated hook process, not a copy of its predicate (unit, synthetic SQLite).
   it.each([
+    ['silent-stop continuation', '继续', { autoResume: true }, 2],
     ['human group text', '[UI_ACTION_TRIGGER]group request', { autoReviewUserText: 'Please review this' }, 0],
     ['human JSON string', JSON.stringify('[UI_ACTION_TRIGGER]group request'), { autoReviewUserText: 'Please review this' }, 0],
     ['human group attachments', JSON.stringify({ text: '[UI_ACTION_TRIGGER]group request', images: [], files: [{ path: 'sample.txt' }] }), { autoReviewUserText: 'Please review this' }, 0],

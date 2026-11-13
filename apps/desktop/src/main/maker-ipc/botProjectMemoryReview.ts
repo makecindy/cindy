@@ -37,7 +37,7 @@ try {
   function humanInput(row) {
     let meta;
     try { meta = JSON.parse(row.agent_meta || '{}'); } catch { return false; }
-    if (meta?.sourcePlugin) return false;
+    if (meta?.sourcePlugin || meta?.autoResume === true) return false;
     const origin = meta?.origin;
     // Host-attested owner group messages retain the hidden dispatch prefix. Count the
     // actual owner text before rejecting synthetic envelopes (including attachments).
@@ -80,11 +80,13 @@ process.stdout.write('', () => process.exit(process.exitCode || 0));
     // On another computer the supplied script needs that computer's database location. Only
     // refresh our untouched script; never replace a check the owner has edited.
     const oldCheck = old.slice(old.indexOf('\n') + 1);
-    // Exact previous bundled body from 788b938c; owner-edited checks stay untouched.
+    // Exact prior bundled bodies; owner-edited checks stay untouched.
     const previousBundled = createHash('sha256').update(oldCheck).digest('hex')
       === '32dd10c0fb4c51e5fde92f0e57b80d6a4391c35d7fc134f847ac6496c76ef47c'
       || createHash('sha256').update(oldCheck).digest('hex')
-        === '4765ed7d8092d3c2a594e965966db40a88336ddb0b858309b4b19febba64097f';
+        === '4765ed7d8092d3c2a594e965966db40a88336ddb0b858309b4b19febba64097f'
+      || createHash('sha256').update(oldCheck).digest('hex')
+        === '8d85213bf0d533c2cf1bf9376a21f5994aa2fe73a1257f9e49096fa1fb8418cb';
     if (oldCheck !== check && !previousBundled && input.previousCommand) {
       return { command: input.previousCommand, timeoutMs: 10_000 };
     }
