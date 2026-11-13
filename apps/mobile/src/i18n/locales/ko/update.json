@@ -1,6 +1,6 @@
 {
   "installHintTitle": "설치 안내",
-  "installHintBody": "시스템 대화상자에서 '설치'를 누른 뒤 홈 화면으로 돌아가 설치 진행 상황을 확인하세요. 다운로드가 완료되면 현재 버전이 자동으로 교체됩니다.",
+  "installHintBody": "시스템 대화상자에서 “설치”를 누른 뒤 홈 화면으로 돌아가 다운로드 진행 상황을 확인하세요. 다운로드가 완료되면 현재 버전이 자동으로 교체됩니다.",
   "openInstallFailedTitle": "설치 링크를 열 수 없습니다",
   "openInstallFailedBody": "설치 주소를 직접 복사해 Safari에서 여세요.",
   "bundleAvailableBody": "새 버전이 있습니다. 전체 패키지를 다운로드하고 설치해 업데이트하세요.",
@@ -19,7 +19,7 @@
     "version": "버전 {{version}}",
     "notesLabel": "업데이트 내용",
     "updateNow": "지금 업데이트",
-    "permissionTitle": "Cindy의 앱 설치 허용 필요",
+    "permissionTitle": "Cindy가 앱을 설치하도록 허용",
     "permissionBody": "시스템 설정에서 허용한 뒤 돌아오면 업데이트가 자동으로 이어집니다.",
     "grantAndUpdate": "허용하고 업데이트",
     "deniedTitle": "아직 설치가 허용되지 않았습니다",

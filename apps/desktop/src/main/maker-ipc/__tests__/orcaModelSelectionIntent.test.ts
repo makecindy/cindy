@@ -5,8 +5,10 @@ import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, isUser
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock';
 import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessions';
-import { effectiveSourceIdForModel, findCatalogModel, type ProviderView } from '@cindy/model-providers';
-import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl';
+import { effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
+import { resolveSessionRuntimeAxes, acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch,
+  sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider,
+  clearSessionRuntimeControlState } from '../sessionRuntimeControl';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
 import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
 
@@ -19,23 +21,48 @@ const confirmationChecks: string[] = [];
 let applySelectionAdapter = '';
 let piWindowOverride = '';
 let directSendAdapter = '';
+let scheduledAccountPreparation = '';
+let scheduledExecutionSelection = '';
+let subscriptionRuntimeRead = '';
+let subscriptionRouteMove = '';
+let bootstrapRuntimeOverride = '';
 let directSendEntry = '';
 let archivedAdmission = '';
 let terminalGuard = '';
 let stageAxisAdapter = '';
 let scheduledAxisAdapter = '';
 function visit(node: ts.Node) {
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'readSubscriptionRuntimeSession') {
+    subscriptionRuntimeRead = node.getText(source);
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'subscriptionAccountRecoveryDeps') {
+    const expression = ts.isSatisfiesExpression(node.initializer!) ? node.initializer.expression : node.initializer;
+    if (expression && ts.isObjectLiteralExpression(expression)) {
+      const move = expression.properties.find(prop => ts.isPropertyAssignment(prop) && prop.name.getText(source) === 'moveRoute');
+      if (move && ts.isPropertyAssignment(move)) subscriptionRouteMove = move.initializer.getText(source);
+    }
+  }
+  if (ts.isIfStatement(node) && node.expression.getText(source) === 'runtimeOverride && runtimeOverride.agentKind === o.agentKind') {
+    bootstrapRuntimeOverride = node.getText(source);
+  }
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'acquirePendingAgentSwitchForDirectSend' && node.body) {
     directSendEntry = node.getText(source).replace(/^export /, '');
   }
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'updateSavedScheduledAxis') {
     scheduledAxisAdapter = node.initializer!.getText(source);
   }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'resolveScheduledExecutionSelection') {
+    scheduledExecutionSelection = node.initializer!.getText(source);
+  }
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'stagePendingUserRuntimeAxis') {
     stageAxisAdapter = node.initializer!.getText(source);
   }
   if (ts.isBinaryExpression(node) && node.left.getText(source) === 'pendingAgentSwitchApplyHolder') {
     directSendAdapter = node.right.getText(source);
+  }
+  if (ts.isBinaryExpression(node) && node.left.getText(source) === 'scheduledSessionBootstrapHolder'
+    && ts.isCallExpression(node.right)) {
+    scheduledAccountPreparation = node.right.arguments[1]!.getText(source);
   }
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'canStageArchivedSelection') {
     archivedAdmission = node.initializer!.getText(source);
@@ -68,7 +95,8 @@ const orcaIdentities = [
 
 function compile(expression: string, bindings: Record<string, unknown>) {
   const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(...Object.keys(bindings), js)(...Object.values(bindings));
+  const context = { getSessionRowSnapshotStrict: async () => null, ...bindings };
+  return new Function(...Object.keys(context), js)(...Object.values(context));
 }
 
 function axisCatalogBindings(row: object = {}) {
@@ -169,6 +197,157 @@ describe('pending target axis admission', () => {
 // Renderer persistence. Exercise the real queue/lease and recovery boundary;
 // Renderer-to-IPC persistence is covered in the existing cross-file guard suite.
 describe('complete selection commit boundaries', () => {
+  // Unit #10271: run the actual account reader, route-move adapter and bootstrap
+  // override block. The old reader checked the saved model, while a stale Agent
+  // override then re-pinned startup; a different saved provider must survive.
+  it.each(['saved-alias', 'temporary-alias'] as const)('hands off the effective route and preserves preferences (%s)', async mode => {
+    const id = 'runtime-account-' + mode;
+    const saved = { status: 'active', agentKind: 'codex', model: 'saved-model',
+      providerId: mode === 'saved-alias' ? 'openai-old' : 'saved-provider', agentDeviceId: null };
+    const profile = { agentKind: 'codex' as const, providerId: 'openai-old', model: 'effective-model',
+      effort: 'max' as const, fastMode: 'ultrafast' as const, agentDeviceId: null };
+    acceptSessionRuntimeMutation({ sessionId: id, source: 'agent', profile, deferred: false });
+    const persist = vi.fn(async (_id: string, patch: object) => Object.assign(saved, patch));
+    const setProvider = vi.fn();
+    const bindings = { getSessionRowSnapshotStrict: async () => ({ ...saved }), dbToMakerAgentKind: (kind: string) => kind,
+      captureSessionRuntimeControlOwnerEpoch, sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot,
+      remapSessionRuntimeProvider, persistSessionFields: persist, setSessionProvider: setProvider };
+    try {
+      const read = compile(subscriptionRuntimeRead, bindings);
+      expect(await read(id)).toMatchObject({ providerId: 'openai-old', model: 'effective-model' });
+      const move = compile(subscriptionRouteMove, bindings);
+      await move(id, 'openai', vi.fn(), 'openai-old');
+      expect(saved).toMatchObject({ model: 'saved-model', providerId: mode === 'saved-alias' ? 'openai' : 'saved-provider' });
+      expect(persist).toHaveBeenCalledTimes(mode === 'saved-alias' ? 1 : 0);
+      expect(setProvider).toHaveBeenCalledWith(id, 'openai');
+      const bootstrap = compile('(o, runtimeOverride) => { const providerGroupStart = null; ' + bootstrapRuntimeOverride + '; return o; }', {});
+      expect(bootstrap({ ...saved }, getSessionRuntimeControlSnapshot(id).effectiveOverride))
+        .toMatchObject({ ...profile, providerId: 'openai' });
+      expect(await read(id)).toMatchObject({ model: 'effective-model', providerId: 'openai' });
+    } finally { clearSessionRuntimeControlState(id); }
+  });
+
+  // Unit #10271: after the first fire migrates the task to account B, the saved
+  // alias still pins account A. Exercise two real lease acquisitions and prove
+  // the second fire never reapplies the alias, locally or on the same remote host.
+  it.each([null, 'executor'] as const)('retains an already migrated task on the next fire (%s)', async device => {
+    const saved = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old',
+      effort: 'high', fastMode: false, agentDeviceId: device } as ScheduledModelSelection;
+    let row = { ...saved };
+    const applied: string[] = [];
+    const resolveExecution = compile(scheduledExecutionSelection, {
+      getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
+      isProviderShareAgentDeviceId: () => false, readLegacyCodexAccountId: () => 'account-a',
+      legacyCodexAccountCanRun: () => true, findCatalogModel, isModelSelectableForNewRoute,
+      readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: true,
+        models: { codex: [{ id: 'gpt-5', mode: 'chat' }] } }], remoteBackgroundInvoke: vi.fn(),
+    });
+    const applyProfile = async (_id: string, choice: ScheduledModelSelection) => {
+      const resolved = await resolveExecution(_id, choice);
+      applied.push(resolved.providerId!); row = { ...resolved }; return resolved;
+    };
+    let baseline: string | null = null;
+    const scope = createScheduledModelScope({ createId: () => 'owner-baseline', isBusy: () => false,
+      read: async () => ({ profile: row, baseline }),
+      write: async (_id, next, _revision, _expected, restored) => {
+        baseline = next ? JSON.stringify(next) : null;
+        if (restored) row = { ...restored };
+      }, apply: applyProfile,
+    });
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock, agentSwitchPending: new Map(),
+      isUserPendingAgentSwitchIntent, scheduledModelScope: scope,
+      reconcileBotModelRoute: vi.fn(), applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(),
+      getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
+      applyScheduledProfile: applyProfile,
+      prepareUnhealthySessionForSend: async () => {
+        if (applied.length !== 1) return false;
+        row = { ...row, providerId: 'openai' }; return true;
+      },
+    });
+    for (let fire = 0; fire < 2; fire++) {
+      const lease = await adapter('scheduled-repeat', undefined, saved);
+      try { expect(lease.selection.providerId).toBe('openai'); }
+      finally { lease.release(); }
+    }
+    expect(applied).toEqual(['openai-old', 'openai']);
+    await scope.restore('scheduled-repeat');
+    expect(baseline).toBeNull();
+    expect(row).toMatchObject({ ...saved, providerId: 'openai' });
+    expect(applied).toEqual(['openai-old', 'openai', 'openai']);
+    expect(saved.providerId).toBe('openai-old');
+  });
+
+  it.each(['local-model-disabled', 'remote-model-revoked', 'remote-not-alias'] as const)(
+    'retains original admission when a saved alias cannot follow the migrated task (%s)', async mode => {
+      const device = mode === 'local-model-disabled' ? null : 'executor';
+      const selection = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old', agentDeviceId: device };
+      const resolve = compile(scheduledExecutionSelection, {
+        getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai' }),
+        dbToMakerAgentKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
+        readLegacyCodexAccountId: () => 'account-a', legacyCodexAccountCanRun: () => false,
+        readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: mode !== 'remote-not-alias',
+          models: { codex: mode === 'remote-model-revoked' ? [] : [{ id: 'gpt-5', mode: 'chat' }] } }],
+        remoteBackgroundInvoke: vi.fn(), findCatalogModel, isModelSelectableForNewRoute,
+      });
+      expect(await resolve('migrated', selection)).toBe(selection);
+    });
+
+  // Unit #10271: execute the actual bootstrap preparation adapter, with no DB row
+  // for a new per-fire task. Existing tests covered only already-saved task sends.
+  it.each(['fresh-blocked', 'fresh-healthy', 'existing-blocked'] as const)(
+    'prepares only the current scheduled startup source (%s)', async mode => {
+      const saved = { id: 'new-fire-id', agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old' };
+      const options = { ...saved };
+      let row = mode === 'existing-blocked' ? { ...saved } : null;
+      const assertCurrent = vi.fn();
+      const failover = vi.fn(async (id: string, deps: { readSession(id: string): Promise<Record<string, unknown>>;
+        moveRoute(id: string, provider: string, assert: () => void): Promise<void> }) => {
+        expect(id).toBe(saved.id);
+        expect(await deps.readSession(id)).toMatchObject({ providerId: 'openai-old', sdkSessionId: null });
+        if (mode === 'fresh-healthy') return false;
+        await deps.moveRoute(id, 'openai', assertCurrent);
+        return true;
+      });
+      const prepareSaved = vi.fn(async () => { row = { ...saved, providerId: 'openai' }; return true; });
+      const prepare = compile(scheduledAccountPreparation, {
+        maker: { getSession: () => null }, getSessionRowSnapshotStrict: async () => row,
+        prepareUnhealthySessionForSend: prepareSaved, remoteBackgroundInvoke: vi.fn(),
+        prepareSubscriptionAccountForSend: vi.fn(async () => false), prepareSubscriptionAccountFailover: failover,
+      });
+      expect(await prepare(options, assertCurrent)).toBe(mode !== 'fresh-healthy');
+      expect(options.providerId).toBe(mode === 'fresh-healthy' ? 'openai-old' : 'openai');
+      expect(saved.providerId).toBe('openai-old');
+      expect(prepareSaved).toHaveBeenCalledTimes(mode === 'existing-blocked' ? 1 : 0);
+      expect(failover).toHaveBeenCalledTimes(mode === 'existing-blocked' ? 0 : 1);
+    });
+
+  // Unit regression: the real direct-send lease used to return the saved legacy
+  // source after account recovery had moved the task. Scheduler startup then
+  // overwrote the recovered row with that stale source. Existing cases returned
+  // false from recovery and could not observe this route mismatch.
+  it.each([false, true])('returns the admitted automation route without changing its saved selection (recovered: %s)', async recovered => {
+    const saved: ScheduledModelSelection = { agentKind: 'codex', model: 'gpt-5',
+      providerId: 'openai-old', effort: 'high', fastMode: false, agentDeviceId: 'executor' };
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock,
+      agentSwitchPending: new Map(), isUserPendingAgentSwitchIntent,
+      scheduledModelScope: { begin: vi.fn() }, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(),
+      applyScheduledProfile: vi.fn(async (_id, selection) => selection),
+      prepareUnhealthySessionForSend: vi.fn(async () => recovered),
+      getSessionRowSnapshotStrict: vi.fn(async () => ({ ...saved, providerId: 'openai' })),
+      dbToMakerAgentKind: (kind: string) => kind,
+    });
+    const lease = await adapter('scheduled-legacy', undefined, saved);
+    try {
+      expect(lease.selection).toEqual({ ...saved, providerId: recovered ? 'openai' : 'openai-old' });
+      expect(saved.providerId).toBe('openai-old');
+    } finally { lease.release(); }
+  });
+
   // 2026-10-23: the real direct-send adapter restored the owner's smaller
   // window before applying the next automation. Existing tests covered picker
   // intents only. Unit tier: preserve native history across repeated automation
@@ -205,7 +384,7 @@ describe('complete selection commit boundaries', () => {
       isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
       applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
       recoverRenamedSessionModelOnSend,
-      applyScheduledProfile: apply, contextOverflowRolloverHolder: null,
+      applyScheduledProfile: apply, prepareUnhealthySessionForSend: vi.fn(async () => false),
       // 发送边界的预算对账（register.ts）：本用例只关心路由选择，注入 no-op。
       reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
@@ -249,7 +428,7 @@ describe('complete selection commit boundaries', () => {
       restoreArchivedSessionForSend: async () => { status = 'active'; },
       reconcileBotModelRoute: vi.fn(), applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent,
       recoverRenamedSessionModelOnSend: vi.fn(async () => {}),
-      agentSwitchDeps: deps, contextOverflowRolloverHolder: null,
+      agentSwitchDeps: deps, prepareUnhealthySessionForSend: vi.fn(async () => false),
       reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       appliedContextWindowBudgets: new Map<string, number | null>(),
@@ -351,7 +530,7 @@ describe('Orca model-only picker intent admission', () => {
       scheduledModelScope: { restore: vi.fn(async () => {}) },
       agentSwitchPending: pending, restoreArchivedSessionForSend: restore,
       acquireSendToSessionLock: acquire, reconcileBotModelRoute: vi.fn(),
-      applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent, agentSwitchDeps: deps, contextOverflowRolloverHolder: null,
+      applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent, agentSwitchDeps: deps, prepareUnhealthySessionForSend: vi.fn(async () => false),
       recoverRenamedSessionModelOnSend: vi.fn(async () => {}),
       reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),

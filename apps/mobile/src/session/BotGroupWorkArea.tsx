@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { ChevronDown, ChevronUp } from 'lucide-react-native';
+import { useCallback, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -9,31 +8,25 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { BOT_GROUP_CLIENT_PRIMITIVES, botGroupChatDataFromResource, botGroupResourceRef } from './botGroupRemote';
+import { BotGroupMenu } from './BotGroupMenu';
 import { BotGroupSpeakerRow } from './BotGroupSpeakerRow';
 import type { BotGroupIdentity } from './BotGroupAvatars';
 import { Text } from '@/components/AppText';
-import { iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { useThemedStyles, type ThemeColors } from '@/theme';
+import { lineHeight, spacing, typeScale } from '@/theme/tokens';
 
 /** Live work is separate from messages. Only an owned companion's computer can
  * resolve its execution to a task; another member's private task is never queried. */
 export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError }: {
   group: BotGroupRemoteChatData; deviceId: string; online: boolean;
   identityFor(botId: string, name: string): BotGroupIdentity;
-  onStop?(): Promise<void>;
+  onStop?(scope?: 'all'): Promise<void>;
   stopping?: boolean;
   onError(message: string | null): void;
 }) {
   const { accountGeneration } = useAuth();
   const { t, i18n } = useTranslation();
-  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const disclosureScope = JSON.stringify([accountGeneration, group.id, deviceId]);
-  const [expandedScope, setExpandedScope] = useState<string | null>(null);
-  const expanded = expandedScope === disclosureScope;
-  useEffect(() => {
-    setExpandedScope(null);
-  }, [disclosureScope, group.round.status]);
   const { invoke, openLink, connectionEpoch, presenceVersion, getPresenceAvailability, subscribe, unsubscribe, onRemoteResourceChanged } = useDeviceLink();
   const candidates = group.round.speakers.flatMap(speaker => {
     const member = group.members.find(member => member.botId === speaker.botId);
@@ -57,6 +50,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
         if (getPresenceAvailability(host) === false) return;
         try {
           await openLink(host);
+          if (cancelled) return;
           const resource = await getRemoteResource(invoke, { deviceId: host, deviceName: '' }, botGroupResourceRef(group.id), i18n.language, BOT_GROUP_CLIENT_PRIMITIVES);
           const remote = botGroupChatDataFromResource(resource);
           if (remote?.id !== group.id) return;
@@ -79,65 +73,50 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
   if (group.round.status !== 'running' || !group.round.speakers.length) return null;
-  // Count teammates, not executions; a teammate with active work and a queued
-  // follow-up belongs to the active count only.
-  const activityByBot = new Map<string, boolean>();
-  for (const speaker of group.round.speakers) {
-    if (!group.members.some(member => member.botId === speaker.botId)) continue;
-    activityByBot.set(speaker.botId, activityByBot.get(speaker.botId) === true || speaker.executionStatus !== 'queued');
-  }
-  if (!activityByBot.size) return null;
   const speakers = group.round.speakers.filter(speaker => group.members.some(member => member.botId === speaker.botId));
+  if (!speakers.length) return null;
   const stopPending = stopping || speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
-  const active = [...activityByBot.values()].filter(Boolean).length;
-  const queued = activityByBot.size - active;
-  const summary = [queued ? t('groupChat.work.queued', { count: queued }) : '', active ? t('groupChat.work.active', { count: active }) : ''].filter(Boolean).join(' · ');
-  const disclosure = t(expanded ? 'groupChat.work.collapse' : 'groupChat.work.expand');
-  const Chevron = expanded ? ChevronUp : ChevronDown;
+  const stopButton = (onPress: (() => void) | undefined) => <Pressable testID="botGroup.work.stop" accessibilityRole="button"
+    accessibilityLabel={t('groupChat.composer.stop')} accessibilityState={{ disabled: stopPending, busy: stopPending }}
+    disabled={stopPending} style={styles.stop} onPress={onPress}>
+    <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
+  </Pressable>;
+  const stopControl = online && onStop ? group.supportsScopedStop && group.canStopAll && group.round.othersActive
+      ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}
+          disabled={stopPending} testID="botGroup.work.stopMenu" sections={[{ id: 'scope', options: [
+            { id: 'mine', title: t('groupChat.progress.stopMine') },
+            { id: 'all', title: t('groupChat.progress.stopAll'), subtitle: t('groupChat.progress.stopAllHint'), destructive: true },
+          ] }]} onSelect={id => { void onStop(id === 'all' ? 'all' : undefined); }}>
+          {stopButton}
+        </BotGroupMenu>
+      : stopButton(() => { void onStop(); }) : null;
   return <View testID="botGroup.work" style={styles.container}>
-    <View style={styles.summaryRow}>
-      <Pressable testID="botGroup.work.toggle" accessibilityRole="button" accessibilityState={{ expanded }}
-        accessibilityLabel={`${summary}, ${disclosure}`} onPress={() => setExpandedScope(expanded ? null : disclosureScope)}
-        style={({ pressed }) => [styles.summary, pressed && styles.pressed]}>
-        <Text numberOfLines={1} style={styles.summaryText}>{summary}</Text>
-        <Chevron size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />
-      </Pressable>
-      {!expanded && online && onStop ? <Pressable testID="botGroup.work.stop" accessibilityRole="button"
-        accessibilityLabel={t('groupChat.composer.stop')} disabled={stopPending} style={styles.stop}
-        onPress={() => { void onStop(); }}>
-        <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
-      </Pressable> : null}
-    </View>
-    {/* Keep rows mounted while collapsed: their existing subscriptions discover
-        prompts raised after the last group snapshot, and reveal those inline. */}
-    <ScrollView testID="botGroup.work.details" style={styles.details} contentContainerStyle={styles.rows} keyboardShouldPersistTaps="handled">
       {speakers.map((speaker, index) => {
         const member = group.members.find(member => member.botId === speaker.botId);
         if (!member) return null;
         const target = speaker.executionId && resolved?.scope === scope ? resolved.targets.get(speaker.executionId) : undefined;
         const host = target?.deviceId ?? deviceId;
-        return <BotGroupSpeakerRow key={speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}
+        const plan = speaker.activity === 'step' ? group.plans?.find(plan => plan.status === 'running' && plan.kind !== 'talk'
+          && plan.steps.some(step => step.position === plan.currentStep && step.status === 'running' && step.botId === speaker.botId
+            && (step.executionId ? step.executionId === speaker.executionId : speakers.filter(candidate => candidate.activity === 'step'
+              && candidate.botId === step.botId && !candidate.stopping && candidate.executionStatus !== 'queued'
+              && candidate.executionStatus !== 'stopping').length === 1))
+          && !speaker.stopping && speaker.executionStatus !== 'queued' && speaker.executionStatus !== 'stopping') : undefined;
+        const step = plan?.steps.find(step => step.position === plan.currentStep);
+        return <BotGroupSpeakerRow key={`${accountGeneration}:${group.id}:${deviceId}:${speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}`}
           deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
-          identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={speaker.sessionId ?? target?.sessionId ?? null}
+          identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
           executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
-          onStop={expanded && index === speakers.length - 1 && online ? onStop : undefined} stopPending={stopPending}
-          collapsed={!expanded} revealWaiting={member.isOwned !== false}
+          workStep={plan && step ? { position: step.position + 1, total: plan.steps.length, task: step.task } : undefined}
+          revealWaiting={member.isOwned !== false} footer={index === speakers.length - 1 ? stopControl : undefined}
           activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
       })}
-    </ScrollView>
   </View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  container: { flexShrink: 0 },
-  summaryRow: { flexDirection: 'row', alignItems: 'center' },
-  stop: { minHeight: 44, minWidth: 48, paddingHorizontal: spacing.sm, justifyContent: 'center', alignItems: 'center' },
-  stopText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  summary: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    marginHorizontal: spacing.md, paddingHorizontal: spacing.sm, borderRadius: radius.pill },
-  pressed: { backgroundColor: colors.surfaceChip },
-  summaryText: { flex: 1, minWidth: 0, color: colors.textSecondary, fontSize: typeScale.footnote,
-    lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
-  details: { maxHeight: 220, flexGrow: 0 },
-  rows: { paddingHorizontal: spacing.md },
+  container: { flexShrink: 0, gap: spacing.sm },
+  stop: { alignSelf: 'flex-start', minHeight: 44, minWidth: 48,
+    paddingHorizontal: spacing.sm, justifyContent: 'center', alignItems: 'center' },
+  stopText: { color: colors.destructive, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

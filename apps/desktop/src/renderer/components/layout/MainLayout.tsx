@@ -1,8 +1,8 @@
+import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { usePluginUiVisibilityOwner } from '@/cindy-brain/usePluginUiVisibility';
-import { initPluginTabViewHost } from '@/features/right-sidebar/pluginTabViews';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { usePluginUiWindowCandidates, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -35,17 +35,23 @@ import { BuiltinPanelBridgeProvider } from '@/panels/BuiltinPanelBridge';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { UpdateNoticeDialog } from '@/components/UpdateNoticeDialog';
 import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictDialogHost';
-import { InterruptedTasksResumeDialog } from '@/features/cc-agent/InterruptedTasksResumeDialog';
+import { StartupRecoveryDialogs } from '@/components/log-support/StartupRecoveryDialogs';
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { TaskRemoteDesktopButton } from '@/features/remote-desktop/TaskRemoteDesktopButton';
+import {
+  TASK_LIVE_SCREEN_LIMIT,
+  TaskLiveScreenButtons,
+  useAutoOpenTaskLiveScreens,
+} from '@/features/remote-desktop/TaskLiveScreenButtons';
+import { useTaskLiveScreens } from '@/features/remote-desktop/useTaskLiveScreens';
+import { installLiveScreenRelay } from '@/features/remote-desktop/liveScreenRelay';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { useAgentIslandRemoteSessionsSync } from '@/features/device-link/agentIslandRemoteSessions';
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { ScheduleSessionIndexOwner } from '@/features/scheduler/components/ScheduleSessionIndexOwner';
-import { AppBadgeAttentionSync } from '@/components/layout/AppBadgeAttentionSync';
 import { usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -77,7 +83,7 @@ import { TabDragController } from '@/features/right-sidebar/TabDragController';
 import {
   markAllPtyDetached,
   markPtyDetached,
-} from '@/features/right-sidebar/plugins/terminal/lib/xtermPool';
+} from '@/features/right-sidebar/plugins/terminal/lib/xtermEntries';
 import {
   bootstrapRsbWindowState,
   getRsbWindowUiState,
@@ -123,6 +129,7 @@ import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
+import { FloatingUpdateBanner } from '@/components/sidebar/UpdateBanner';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
@@ -143,6 +150,7 @@ import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryL
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
 import { requestProviderShareJoin } from '@/features/provider-share/joinIntent';
 import { ProviderShareGlobalHost } from '@/features/provider-share/ProviderShareGlobalHost';
+import { RelayShareGlobalHost } from '@/features/relay-share/RelayShareGlobalHost';
 import { applyScreenshotComposeRequest } from '@/features/region-screenshot/screenshotTaskHandoff';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -256,14 +264,13 @@ function SidebarPinSpacer({ width }: { width: number }) {
   return (
     <div
       aria-hidden
-      className="h-full shrink-0 transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0"
+      className="h-full shrink-0 transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0"
       style={{ width: animatedWidth }}
     />
   );
 }
 
 export function MainLayout() {
-  const pluginVisibility = usePluginUiVisibilityOwner();
   useRememberMainEntry();
   // 未处理报错的恢复与已处置收敛不依赖当前路由或侧栏是否挂载。
   usePendingAlertAttention();
@@ -407,9 +414,25 @@ export function MainLayout() {
     !isSharedTaskPeer(rightSidebarWorkdirInfo.deviceLinkDeviceId)
       ? rightSidebarWorkdirInfo.deviceLinkDeviceId
       : null;
-  // Windows 内容区右上的右栏唤起 chip:仅面板收起或分离时在场。
+  // 那台电脑的插件为当前任务开着的设备（例如模拟器）：画面和操作都在该插件自己的任务页里，
+  // 所以本机装着同一个插件时，设备出现就在右侧栏自动打开它的任务页（与任务在本机时同一个
+  // 页面）；没装时提示去安装。远程桌面入口旁另给一个找回入口。旧版电脑或读不到时都没有。
+  // 主窗口替插件页面持有到那台电脑的画面连接并转交画面；自己不画任何东西。
+  useEffect(() => installLiveScreenRelay(), []);
+  const taskLiveScreens = useTaskLiveScreens(remoteDesktopDeviceId, rightSidebarSessionId);
+  const liveScreenEntries = useAutoOpenTaskLiveScreens(
+    remoteDesktopDeviceId ? rightSidebarSessionId : null,
+    taskLiveScreens,
+  );
+  const taskLiveScreenEntries =
+    remoteDesktopDeviceId && rightSidebarSessionId ? liveScreenEntries : [];
+  // Windows chip 栈按入口个数让位：远程桌面 1 个 + 设备画面若干，每个 28px + 4px 间距。
+  const remoteTaskEntriesWidth = remoteDesktopDeviceId
+    ? (1 + Math.min(taskLiveScreenEntries.length, TASK_LIVE_SCREEN_LIMIT)) * 32
+    : 0;
+  // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
   const showWindowsRightSidebarTrigger =
-    pluginVisibility.tools && rightSidebarAvailable && rsbWindow.loaded && (rsbDetached || isRightSidebarCollapsed);
+    rightSidebarAvailable && rsbWindow.loaded;
   const rowRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   // B1a(去方位化):左侧占位块(pinning spacer + Sidebar)的 wrapper。
@@ -474,7 +497,6 @@ export function MainLayout() {
   // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
   // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
   const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
-  useEffect(() => { initPluginTabViewHost(); }, [dataOwnerId, dataOwnerRecoveryEpoch]);
   const browseHistory = useSessionBrowseHistory({
     ownerKey: `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`,
   });
@@ -740,14 +762,14 @@ export function MainLayout() {
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
-        | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -769,7 +791,7 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'shared-task-join') {
-        setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
+        setSharedTaskInvitation({ link: payload.link ?? buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
         return;
       }
       if (payload.type === 'local-plugin-share') {
@@ -828,7 +850,9 @@ export function MainLayout() {
             ? `&connect=${encodeURIComponent(payload.connect)}`
             : '';
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}`);
+        // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
+        const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
       }
     },
     [navigate, navigateToSession, openShareImport],
@@ -898,7 +922,7 @@ export function MainLayout() {
   }, []);
 
   // RightSidebar 的命令式句柄。toggle 按钮 onClick 时主动调 requestAnimateNextChange()
-  // 告诉 RightSidebar "这次 prop 变化走 250ms 动画"。其它任何 isCollapsed 变化路径
+  // 告诉 RightSidebar "这次 prop 变化走 200ms 动画"。其它任何 isCollapsed 变化路径
   // (sessionId 切换 / 草稿切换 / init)都不调,RightSidebar 默认走"直接同步"无动画。
   const rightSidebarRef = useRef<RightSidebarHandle>(null);
 
@@ -958,7 +982,7 @@ export function MainLayout() {
 
   // 关掉右侧栏最后一个 tab 时自动收起(由 RightSidebarShell 在 tab 数 >0→0 时回调)。
   // detached 子窗口形态不在此处理(那时主窗根本不渲染内嵌 Shell,也收不到此回调)。
-  // 走 requestAnimateNextChange 让收起有 250ms 动画,与用户手动折叠观感一致(规则 7)。
+  // 走 requestAnimateNextChange 让收起有 200ms 动画,与用户手动折叠观感一致(规则 7)。
   // sessionId 用 ref 取最新值,避免回调闭包捕获旧 session。
   const handleRightSidebarEmptied = useCallback(() => {
     if (rsbDetached) return;
@@ -1154,7 +1178,7 @@ export function MainLayout() {
   useEffect(() => {
     if (isSecondaryWindow()) return;
     return window.electronAPI.rightSidebarWindow.onCommand((command) => {
-      if (command.sessionId !== rightSidebarSessionIdRef.current) return;
+      if (command.type !== 'open-plugin-view' && command.sessionId !== rightSidebarSessionIdRef.current) return;
       void executeSidebarCommand(command).catch((err) => {
         applicationMenuLog.warn('execute attached sidebar command failed', err);
       });
@@ -1696,16 +1720,19 @@ export function MainLayout() {
 
   // Session/tool-pane declarations update Shell state during navigation. Keep
   // unrelated updates from invalidating the entire routed conversation again.
+  const { settings: pluginSettings, sidebarSections: pluginSidebarSections,
+    titlebarEntries: pluginTitlebarEntries, onGhostsChanged: handleInstalledGhostsChange } = usePluginUiWindowCandidates();
   const outletContext = useMemo(() => ({
     sidebarWidth,
-    rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed || !pluginVisibility.tools,
+    pluginSettings,
+    rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
     onToggleRightSidebar: handleOpenRightSidebar,
     rightSidebarSide,
     setRightSidebarAvailable,
     setRightSidebarSessionId: declareRightSidebarSessionId,
     setRightSidebarWorkdir,
   }), [
-    sidebarWidth, rsbDetached, isRightSidebarCollapsed, pluginVisibility.tools, handleOpenRightSidebar,
+    sidebarWidth, pluginSettings, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
     rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir,
   ]);
 
@@ -1729,9 +1756,9 @@ export function MainLayout() {
     <FeatureSidebarSlotProvider
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
+      <FirstRunGuide />
       <ScheduleSessionIndexOwner />
       {!isSecondaryWindow() && <PerformanceTrace statusContainer={performanceTraceStatusHost} />}
-      {!isSecondaryWindow() && <AppBadgeAttentionSync />}
       <div
         ref={rowRef}
         data-plugin-ui-element="workspace"
@@ -1745,12 +1772,14 @@ export function MainLayout() {
             flex + shrink-0 与 aside 原有的 flex child 行为一致,不改变布局;
             peek 期 aside 变 fixed 出流,wrapper 宽度自然等于流内 spacer 宽。 */}
         {!isSettingsRoute && (
-          <div ref={sidebarBlockRef} data-plugin-ui-element="sidebar" className="flex shrink-0">
+          <div ref={sidebarBlockRef} className="flex shrink-0" data-plugin-ui-element="sidebar">
             {/* pinning 冻结期的流内占位:抽屉保持 fixed 不动,由本 spacer 跑 0→W 的
-                250ms 宽度动画把主区推开;动画结束(peekState 回 idle)后同一帧内
+                200ms 宽度动画把主区推开;动画结束(peekState 回 idle)后同一帧内
                 spacer 卸载、aside 摘掉 fixed 落回流内 —— 两者矩形一致,交换无跳变。 */}
             {sidebarPeek.peekState === 'pinning' && <SidebarPinSpacer width={sidebarWidth} />}
             <Sidebar
+              pluginSections={pluginSidebarSections}
+              pluginSessionId={rightSidebarSessionId}
               isCollapsed={isSidebarCollapsed}
               // peek 抽屉恒以展开态呈现(预览完整列表),rail 视觉在 peek 期强制关闭。
               isRail={sidebarPeek.isPeekVisible ? false : isRailMode}
@@ -1771,14 +1800,12 @@ export function MainLayout() {
             之上，钉死窗口左上角红绿灯旁,不随侧栏折叠/展开/peek 移动
             （见 ChromeActions.tsx）。设置页隐藏（侧栏本身不显示，无折叠语义）。 */}
         {!isSettingsRoute && (
-          <div className="contents" data-plugin-ui-element="sidebar">
-            <ChromeActions
-              isSidebarCollapsed={isSidebarCollapsed}
-              onToggleSidebar={handleToggleSidebar}
-              browseHistory={browseHistory}
-              peekTriggerProps={sidebarPeek.triggerProps}
-            />
-          </div>
+          <ChromeActions
+            isSidebarCollapsed={isSidebarCollapsed}
+            onToggleSidebar={handleToggleSidebar}
+            browseHistory={browseHistory}
+            peekTriggerProps={sidebarPeek.triggerProps}
+          />
         )}
         {/* 布局树引擎:聊天主区与工具面板的**顺序与在场**改由
             布局树(userData/layout.v1.json)驱动,渲染链 LayoutRoot → 面板注册表
@@ -1801,18 +1828,18 @@ export function MainLayout() {
                   'relative flex flex-1 flex-col overflow-hidden bg-content-area',
                   isSettingsRoute ? 'min-w-0' : 'min-w-[400px]',
                   // RSB Maximize(Phase 6):主区彻底 display:none,把整个非左栏空间让给 RSB。
-                  isRightSidebarMaximized && pluginVisibility.tools && pluginVisibility.workspace && 'hidden',
+                  isRightSidebarMaximized && 'hidden',
                 )}
                 // Windows 浮动入口每个占 28px + 4px 间距；分屏工具条使用同一占位，
                 // 避免远程桌面 / 面板入口盖住关闭分屏等操作。mac 与左侧入口无需右端让位。
                 style={{
                   ['--content-top-left-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'left'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                   ['--content-top-right-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'right'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                 }}
               >
@@ -1824,9 +1851,9 @@ export function MainLayout() {
                     headerContent 路由下 ContentHeader 会因 sidebarVisible=true 提前 return null,
                     我们为 rail 浮动 chrome 预留的 spacer 不渲染、按钮悬空。 */}
                 <ContentHeaderSlot
-                  sidebarVisible={pluginVisibility.sidebar && !isSettingsRoute && !isSidebarCollapsed && !isRailMode}
-                  showCollapsedActions={pluginVisibility.sidebar && !isSettingsRoute && (isSidebarCollapsed || isRailMode)}
-                  isSidebarRail={pluginVisibility.sidebar && hasRailChromeActions && !rightSidebarOwnsRailChromeActions}
+                  sidebarVisible={!isSettingsRoute && !isSidebarCollapsed && !isRailMode}
+                  showCollapsedActions={!isSettingsRoute && (isSidebarCollapsed || isRailMode)}
+                  isSidebarRail={hasRailChromeActions && !rightSidebarOwnsRailChromeActions}
                   // 展开态侧栏可拖到 180(比按钮簇右缘 202 窄):那一段的按钮悬在 header
                   // 拖拽区上,由 ContentHeader 按侧栏宽补挖 no-drag。
                   sidebarWidth={sidebarWidth}
@@ -1836,12 +1863,32 @@ export function MainLayout() {
                   // mac:远程桌面入口落在顶栏右端,紧挨窗口右上角的右栏开关(右栏展开时
                   // 仍在聊天区顶栏右端)。Windows 走下方内容区 chip 栈。
                   trailing={
-                    isMac && remoteDesktopDeviceId ? (
-                      <TaskRemoteDesktopButton
-                        key={remoteDesktopDeviceId}
-                        deviceId={remoteDesktopDeviceId}
-                        className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
-                      />
+                    pluginTitlebarEntries.length > 0 || (isMac && remoteDesktopDeviceId) ? (
+                      <>
+                        {pluginTitlebarEntries.length > 0 && (
+                          <PluginUiSlotControls
+                            entries={pluginTitlebarEntries}
+                            sessionId={rightSidebarSessionId}
+                            appearance="titlebar"
+                          />
+                        )}
+                        {isMac && remoteDesktopDeviceId && (
+                          <>
+                            {rightSidebarSessionId && (
+                              <TaskLiveScreenButtons
+                                sessionId={rightSidebarSessionId}
+                                entries={taskLiveScreenEntries}
+                                className="mr-1"
+                              />
+                            )}
+                            <TaskRemoteDesktopButton
+                              key={remoteDesktopDeviceId}
+                              deviceId={remoteDesktopDeviceId}
+                              className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
+                            />
+                          </>
+                        )}
+                      </>
                     ) : undefined
                   }
                 >
@@ -1857,8 +1904,7 @@ export function MainLayout() {
                       FadeSwitcher 之外 —— 它是全局状态提示,不参与路由切换动画。 */}
                   <CredentialStoreBanner />
                   {!isSecondaryWindow() && <div ref={setPerformanceTraceStatusHost} className="shrink-0" />}
-                  {/* Windows chip 栈:远程桌面入口贴着右栏唤起 chip(唤起 chip 在面板一侧);
-                      右栏展开时唤起 chip 不在,远程桌面入口留在同一角。 */}
+                  {/* Windows 的显示侧栏和远程桌面入口始终留在聊天区同一角。 */}
                   {!isMac && (showWindowsRightSidebarTrigger || remoteDesktopDeviceId) && (
                     <div
                       data-testid="right-sidebar-fixed-trigger"
@@ -1874,16 +1920,24 @@ export function MainLayout() {
                       }
                     >
                       {remoteDesktopDeviceId && (
-                        <TaskRemoteDesktopButton
-                          key={remoteDesktopDeviceId}
-                          deviceId={remoteDesktopDeviceId}
-                        />
+                        <>
+                          {rightSidebarSessionId && (
+                            <TaskLiveScreenButtons
+                              sessionId={rightSidebarSessionId}
+                              entries={taskLiveScreenEntries}
+                            />
+                          )}
+                          <TaskRemoteDesktopButton
+                            key={remoteDesktopDeviceId}
+                            deviceId={remoteDesktopDeviceId}
+                          />
+                        </>
                       )}
                       {showWindowsRightSidebarTrigger && (
                         <RightSidebarToggle
-                          action="show"
-                          collapsed
-                          onToggle={handleOpenRightSidebar}
+                          action="toggle"
+                          collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
+                          onToggle={handleToggleRightSidebar}
                           side={rightSidebarSide}
                         />
                       )}
@@ -1894,6 +1948,21 @@ export function MainLayout() {
                     <Outlet context={outletContext} />
                   </FadeSwitcher>
                 </ContentHeaderSlot>
+                {/* 开关属于聊天区；窗口向右扩宽时留在原地，再次点击收起侧栏。 */}
+                {isMac && rightSidebarAvailable && rsbWindow.loaded && (
+                  <div
+                    data-testid="right-sidebar-fixed-trigger"
+                    className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+                    style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                  >
+                    <RightSidebarToggle
+                      action="toggle"
+                      collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
+                      onToggle={handleToggleRightSidebar}
+                      side={rightSidebarSide}
+                    />
+                  </div>
+                )}
               </main>
             ),
             // 右侧边栏 —— 工具面板。首次在场沿用原语义:路由声明 rightSidebarAvailable
@@ -1905,17 +1974,16 @@ export function MainLayout() {
                   ref={rightSidebarRef}
                   // 路由不声明右栏时仅派生强制折叠，不写入 isRightSidebarCollapsed，
                   // 也不落按会话记忆的折叠偏好。
-                  isCollapsed={isRightSidebarCollapsed || rightSidebarForceCollapsed || !pluginVisibility.tools}
+                  isCollapsed={isRightSidebarCollapsed || rightSidebarForceCollapsed}
                   // width 只在非 maximize 受控,且只是兜底 —— RSB 优先消费
                   // 引擎 PaneWidthContext 的实时值;maximize 时 RightSidebar 内部走
                   // flex-1 自己撑满(2026-07-01 bug 修)。拖宽把手 = 引擎分割线。
                   width={rightSidebarWidth}
                   isMac={isMac}
-                  // Windows 展开态的折叠入口归属工具面板自身,放回 TabBar 右端;
-                  // 收起后聊天区角上才显示展开入口。mac 仍走窗口右上浮层。
+                  // 关闭按钮属于工具面板；显示入口始终留在聊天区。
                   onCloseSidebar={handleCloseRightSidebar}
                   onMaximize={handleMaximizeRightSidebar}
-                  isMaximized={isRightSidebarMaximized && pluginVisibility.tools}
+                  isMaximized={isRightSidebarMaximized}
                   reserveLeftChromeActions={shouldReserveLeftChromeActions({
                     isSidebarCollapsed,
                     rightSidebarSide,
@@ -1928,8 +1996,7 @@ export function MainLayout() {
                   deviceLinkDeviceId={rightSidebarWorkdirInfo.deviceLinkDeviceId}
                   subagentsAvailable={rightSidebarSubagentsAvailable}
                   onDetachTab={isSecondaryWindow() ? undefined : handleDetachRightSidebarTab}
-                  // M2:面板贴左时 detach / maximize 由 Shell 顶栏右端自渲染
-                  // (面板自属控件跟面板走);折叠 toggle 恒在窗口右上浮层,不下沉。
+                  // 面板自属的分离、最大化和关闭按钮随面板停靠位置移动。
                   panelSide={rightSidebarSide}
                   onAllTabsClosed={handleRightSidebarEmptied}
                 />
@@ -1940,9 +2007,11 @@ export function MainLayout() {
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
           <TabGroupHostProvider value={tabGroupHost}>
             <LayoutRoot
+              onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
+              sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={
-                !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed || !pluginVisibility.tools
+                !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }
             />
           </TabGroupHostProvider>
@@ -1981,45 +2050,21 @@ export function MainLayout() {
             右上角（系统按钮下一行），与截图中的原位置一致。 */}
         {!isMac && (
           <div
-            data-plugin-ui-element="windowControls"
             className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             <WindowControls />
           </div>
         )}
-        {/* mac 右栏折叠按钮 —— 同样 hoist 到顶层浮层，钉窗口右上角（right-0 top-0）、
-            浮在右栏之上，与左栏折叠按钮（ChromeActions，钉左上角）左右对称。
-            右栏打开时落在右栏顶部 toolbar 横贯条的右端、关闭时落在 main 的
-            ContentHeader 右端 —— 无论开/关都「始终在窗口最右」（用户 2026-06-15
-            诉求）。仅全屏聊天视图在场时渲染（rightSidebarAvailable）；mac 那侧本就
-            没有窗口控制按钮，这个位置空着正好。no-drag 保证可点，ContentHeader /
-            右栏 toolbar 条已为它留出等宽占位。 */}
-        {/* M2(mac 交换态适配,2026-07-09 Lizi 口径修订):浮层只要面板在场就渲染,
-            折叠 toggle **永远钉窗口右上角**(即当前最右侧 pane 顶栏的右上角),与
-            左上角的左栏折叠按钮(ChromeActions)对称、不跟面板跑;detach/maximize
-            是面板自属控件,贴右(或 maximize 撑满)时在浮层里(视觉落在面板顶栏
-            右端),贴左时跟面板走进 Shell 顶栏右端(见 RightSidebarShell)。 */}
-        {isMac &&
-          pluginVisibility.tools &&
-          rightSidebarAvailable &&
-          rsbWindow.loaded &&
-          (rsbDetached || isRightSidebarCollapsed) && (
-            <div
-              className="absolute right-0 top-0 z-50 flex h-[46px] items-center gap-1 pr-2"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            >
-              {/* 固定唤起入口只负责显示 / 聚焦。detach / maximize / 收起属于面板自身，
-                在 RightSidebarShell 的顶栏内渲染，不再与本入口混用。 */}
-              <RightSidebarToggle
-                action="show"
-                collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
-                onToggle={handleOpenRightSidebar}
-                side={rightSidebarSide}
-              />
-            </div>
-          )}
+
       </div>
+      {/* 手动检查的结果在设置页、隐藏侧栏和窄轨模式也必须可见；复用原横幅及重启确认。 */}
+      <FloatingUpdateBanner
+        enabled={isSettingsRoute || isSidebarCollapsed || isRailMode}
+        ownsPrerequisiteDialogs={isSettingsRoute}
+        onOpenVersionNotice={openVersionNotice}
+      />
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (
         <UpdateNoticeDialog
@@ -2031,14 +2076,16 @@ export function MainLayout() {
           onDismiss={dismissNotice}
         />
       )}
-      {/* 意外退出后重启:列出被中断的任务供一键继续;更新说明弹窗关闭后再出现。 */}
+      {/* 重启提示按更新说明、中断任务恢复、意外退出诊断的顺序出现。 */}
       {!isSecondaryWindow() && (
-        <InterruptedTasksResumeDialog suspended={Boolean(releaseNotes && noticeOpen)} />
+        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen)} />
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
       {/* 副窗支持管理页手动审批；自动提醒与受邀申请仍只由主窗口处理。 */}
       <ProviderShareGlobalHost manualOnly={isSecondaryWindow()} />
+      {/* 中转加入申请:同样主窗口自动弹,副窗口只显示中转页手动打开的那条。 */}
+      <RelayShareGlobalHost manualOnly={isSecondaryWindow()} />
       {!isSecondaryWindow() && <ChatInviteHost />}
       {/* 通话属于应用而不是任务页:切任务、换页面都不卸载;副窗只显示并转发操作。 */}
       {isSecondaryWindow() ? <RemoteVoiceCallSurface /> : <GlobalVoiceCallHost />}

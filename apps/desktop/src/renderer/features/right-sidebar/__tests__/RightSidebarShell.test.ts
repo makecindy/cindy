@@ -70,10 +70,6 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 });
 
 import { RightSidebarShell } from '../RightSidebarShell';
-import { tabGroupPanelComponent } from '../TabGroupPanel';
-import { TabGroupHostProvider } from '../tabGroupHost';
-import { openPluginTabView } from '../lib/openPluginTabView';
-import { __resetPanelRegistryForTest, registerPanelKind, setPanelKindParked } from '@/panels/registry';
 import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
 import type { WebBrowserState } from '../plugins/web-browser';
@@ -97,11 +93,10 @@ import {
 import {
   __resetGlobalTabsForTest,
   addGlobalPluginTab,
-  addGlobalPluginTabView,
   getActiveGlobalTabId,
   requestRevealSessionTab,
 } from '../globalTabs';
-import { __resetTabGroupsForTest, getTabGroup, setTabGroup } from '../tabGroups';
+import { __resetTabGroupsForTest, getTabGroup } from '../tabGroups';
 import { toast } from '@/lib/toast';
 import { writePanelCollapsed } from '@/layout/collapsePrefs';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
@@ -298,16 +293,6 @@ function dispatchShortcut(
 describe('RightSidebarShell empty state', () => {
   let tabsIpc: RightSidebarTabsIpcStub;
 
-  function registerNamedView(scope: 'session' | 'global', TabBody: (props: TabKindBodyProps) => ReturnType<typeof createElement>) {
-    installedGhostsMock.list = [{ manifest: { id: 'alpha', name: 'Alpha', ui: { version: 1,
-      tabViews: [{ id: 'log', title: 'Log', scope, page: 'views/log.html' }] } }, enabled: true }];
-    registerTabKind({ kind: 'plugin-tab-view',
-      menu: { kind: 'plugin-tab-view', labelKey: 'Log', icon: Globe, order: 90, enabled: true, hiddenFromMenu: true },
-      TabPillTitle: () => createElement('span', null, 'Log'), TabBody,
-      defaultState: () => ({ instanceId: 'alpha', id: 'log', scope }),
-    });
-  }
-
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
@@ -339,55 +324,6 @@ describe('RightSidebarShell empty state', () => {
     window.localStorage.clear();
     installedGhostsMock.list = [];
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
-  });
-
-  // PR #8909: real Shell reconciliation can select the optimistic first tab
-  // before its create IPC completes. That same-tab update must still reveal it.
-  it('reveals the first named view after the collapsed shell reconciles its active tab', async () => {
-    registerNamedView('session', () => createElement('div', null, 'Named view'));
-    let finish!: () => void;
-    tabsIpc.upsert.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
-    const reveal = vi.fn();
-    const off = onRequestRightSidebarVisibility(reveal);
-    try {
-      render(createElement(RightSidebarShell, { sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null,
-        isMac: true, shellVisible: false, subagentsAvailable: false }));
-      await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
-      let pending!: Promise<string>;
-      act(() => { pending = openPluginTabView('alpha', 'log', 's1'); });
-      await waitFor(() => expect(tabsIpc.upsert).toHaveBeenCalledOnce());
-      await waitFor(() => expect(getBucket('s1').activeTabId).toBe(getBucket('s1').tabs[0].id));
-      await act(async () => { finish(); await pending; });
-      expect(reveal).toHaveBeenCalledWith('open', { sessionId: 's1' });
-    } finally { off(); cleanup(); unregisterTabKind('plugin-tab-view'); }
-  });
-
-  // PR #8909: exercise the real pane -> Shell -> TabBody visibility path.
-  // A parked group must keep its body and report hidden through the same bridge.
-  it.each(['left', 'top', 'bottom'] as const)('updates %s named-view visibility while preserving its body', async group => {
-    const mounted = vi.fn(), unmounted = vi.fn();
-    function Body(props: TabKindBodyProps) {
-      useEffect(() => { mounted(); return () => { unmounted(); }; }, []);
-      return createElement('div', { 'data-testid': 'named-view-body', 'data-visible': String(props.shellVisible) });
-    }
-    registerNamedView('global', Body);
-    const tab = addGlobalPluginTabView('alpha', 'log')!;
-    setTabGroup(tab.id, group);
-    const Panel = tabGroupPanelComponent(group), kind = `tab-group:${group}` as const;
-    registerPanelKind({ kind, Component: Panel, collapseMemory: 'none' });
-    try {
-      render(createElement(TabGroupHostProvider, { value: { sessionId: null, workdir: '/tmp/repo', remoteHostId: null,
-        isMac: true, sidebarCollapsed: false, hasRailChromeActions: false, subagentsAvailable: false } },
-        createElement(Panel, { paneId: `pane-${group}` })));
-      const body = await screen.findByTestId('named-view-body');
-      expect(body.dataset.visible).toBe('true');
-      act(() => setPanelKindParked(kind, true));
-      expect(body.dataset.visible).toBe('false');
-      act(() => setPanelKindParked(kind, false));
-      expect(screen.getByTestId('named-view-body')).toBe(body);
-      expect(body.dataset.visible).toBe('true');
-      expect(mounted).toHaveBeenCalledOnce(); expect(unmounted).not.toHaveBeenCalled();
-    } finally { cleanup(); unregisterTabKind('plugin-tab-view'); __resetPanelRegistryForTest(); }
   });
 
   // 测试价值
@@ -961,6 +897,32 @@ describe('RightSidebarShell empty state', () => {
     expect(tabsIpc.close).not.toHaveBeenCalled();
     expect(getBucket('s1').tabs.map(tab => tab.id)).toEqual(['old-simulator']);
     view.unmount();
+  });
+
+  // Merge regression: resource-backed task UI needs no classic taskView, but
+  // taskView.remote must never make the resource body run for a remote task.
+  it('mounts approved resource task UI only for a confirmed local task', async () => {
+    const ui = await import('@/cindy-brain/PluginUiView');
+    const resource = vi.spyOn(ui, 'PluginUiView').mockImplementation(() => createElement('div', { 'data-testid': 'resource-task-body' }));
+    try {
+      const { ghostHostUiApprovalTokens } = await import('../../../../shared/ghost');
+      const ghost = { enabled: true, dir: '/fixture/planner', uiCapabilityApproved: true,
+        approval: { state: 'approved', revision: 'one' }, manifest: { id: 'planner', name: 'Planner', mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'task' }] },
+        } }, approvedHostUi: [] as string[] };
+      ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest as never);
+      installedGhostsMock.list = [ghost];
+      tabsIpc.list.mockResolvedValueOnce({ tabs: [{ id: 'resource', kind: 'plugin-task', state: { instanceId: 'planner', resourceViewId: 'board' } }], activeTabId: 'resource' });
+      const props = { sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, deviceLinkDeviceId: null as string | null, isMac: true };
+      const view = render(createElement(RightSidebarShell, props));
+      await waitFor(() => expect(screen.getByTestId('resource-task-body')).toBeTruthy());
+      expect(document.querySelector('webview')).toBeNull();
+      Object.assign(ghost.manifest, { taskView: { html: 'task.html', remote: true } });
+      view.rerender(createElement(RightSidebarShell, { ...props, deviceLinkDeviceId: 'other-device' }));
+      await waitFor(() => expect(screen.queryByTestId('resource-task-body')).toBeNull());
+      expect(document.querySelector('webview')).toBeNull();
+    } finally { resource.mockRestore(); }
   });
 
   // #6861:冷启动归属未知不能收起插件任务页或改写恢复的选择;正文只在确认本机后加载。
@@ -1543,7 +1505,7 @@ describe('RightSidebarShell empty state', () => {
     expect(onDetachTab).toHaveBeenCalledWith('tab-pop');
     screen.getByRole('button', { name: 'rightSidebar.tabs.controls.maximizeAria' }).click();
     expect(onMaximize).toHaveBeenCalledOnce();
-    screen.getByRole('button', { name: 'contentHeader.collapsePanel' }).click();
+    screen.getByRole('button', { name: 'rightSidebar.tabs.controls.closeAria' }).click();
     expect(onCloseSidebar).toHaveBeenCalledOnce();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
     unmount();
@@ -1590,7 +1552,7 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
     expect(screen.getByTestId('right-sidebar-topbar-actions')).toBeTruthy();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
-    expect(screen.getByRole('button', { name: 'contentHeader.collapsePanel' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'rightSidebar.tabs.controls.closeAria' })).toBeTruthy();
   });
 
   it('keeps the existing 36px TabBar host on Windows', async () => {

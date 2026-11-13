@@ -126,6 +126,23 @@ describe('bot group remote resources', () => {
 
   afterEach(() => h.sqlite?.close());
 
+  // Unit: real resource handler must not silently discard all scope (group chat §4.0).
+  // Previous coverage only checked visibility rejection; one server group is sufficient.
+  it('advertises scoped stop only for upgraded server groups and forwards explicit all', async () => {
+    expect(botGroupRemoteChatData(detail()).supportsScopedStop).toBe(false);
+    const group = detail({ serverBacked: true, singleSpeaker: true, canStopAll: true });
+    expect(botGroupRemoteChatData(group).supportsScopedStop).toBe(true);
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'stop', resourceRef: ref('g1'), input: { scope: 'all' } });
+    expect(service.stopRound).toHaveBeenCalledWith('g1', 'all');
+    service.stopRound.mockClear();
+    service.getGroup.mockResolvedValue({ ok: true, group: { ...group, canStopAll: false } });
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'stop', resourceRef: ref('g1'), input: { scope: 'all' } })).rejects.toMatchObject({ code: 'INVALID_PARAMS', message: 'ROLE_REQUIRED' });
+    expect(service.stopRound).not.toHaveBeenCalled();
+  });
+
   it('omits archived groups from phone lists while keeping authorized history readable', async () => {
     const archived = detail({ serverBacked: true, archived: true });
     service.listGroups.mockResolvedValue({ ok: true, groups: [archived, summary({ id: 'active' })] });
@@ -308,12 +325,14 @@ describe('bot group remote resources', () => {
     expect(plain.blocks?.[0]?.fallbackMarkdown).toContain('**阿布**: 写好了');
   });
 
-  it('projects current failures for existing phones without putting notices into the message cache', () => {
+  it.each(['AUTH_REQUIRED', 'RUNTIME_TIMEOUT'] as const)('projects current failures for existing phones without putting notices into the message cache (%s)', code => {
     const group = detail();
     const source = group.messages[0]!;
     group.executionFailures = [{ executionId: 'run', epoch: 1, sourceMessageId: source.id,
-      botId: 'abu', botName: '阿布', code: 'AUTH_REQUIRED', planId: null }];
-    expect(botGroupRemoteChatData(group).messages).toContainEqual(expect.objectContaining({ id: 'execution-failure:run:1', runtimeFailureCode: 'AUTH_REQUIRED' }));
+      botId: 'abu', botName: '阿布', code, reason: 'unclaimed_timeout', planId: null }];
+    const notice = botGroupRemoteChatData(group).messages.find(message => message.id === 'execution-failure:run:1')!;
+    expect(notice.runtimeFailureCode).toBe(code);
+    expect(notice.runtimeFailureReason).toBe(code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(group.messages).not.toContainEqual(expect.objectContaining({ kind: 'notice' }));
     expect(botGroupRemoteChatData({ ...group, executionFailures: [] }).messages).toEqual(group.messages);
   });
@@ -402,6 +421,40 @@ describe('bot group remote resources', () => {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'plan-start', resourceRef: ref('g1'),
       input: { planId: 'p1' },
     })).rejects.toMatchObject({ code: 'INVALID_PARAMS', message: 'PLAN_CLOSED' });
+  });
+
+  // Unit: the authenticated production provider changes the originating computer's
+  // local setting, not shared server configuration. Previously no remote write
+  // existed. The minimal valid input needs one manageable open local work plan.
+  it('projects and changes the computer handoff preference only for its manageable open work plan', async () => {
+    const group = detail({ serverBacked: true, singleSpeaker: true,
+      openPlan: { id: 'p1', kind: 'work', status: 'proposed', currentStep: null, stepCount: 1, currentBotName: null, currentStepStatus: null } });
+    group.plans[0] = { ...group.plans[0]!, kind: 'work', status: 'proposed', canManage: true, autoContinue: false, revision: 7 };
+    expect(botGroupRemoteChatData(group).plans[0]!.canSetAutoContinue).toBe(true);
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    for (const autoContinue of [true, false]) {
+      await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+        resourceRef: ref('g1'), actionId: 'plan-auto-continue', input: { planId: 'p1', autoContinue, expectedPlanRevision: 7 } });
+      expect(service.updateGroup).toHaveBeenLastCalledWith({ groupId: 'g1', autoContinue });
+    }
+    service.updateGroup.mockClear();
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      resourceRef: ref('g1'), actionId: 'plan-auto-continue', input: { planId: 'p1', autoContinue: true, expectedPlanRevision: 6 } })).rejects.toMatchObject({ message: 'PRECONDITION_FAILED' });
+    expect(service.updateGroup).not.toHaveBeenCalled();
+  });
+
+  it.each(['talk', 'closed', 'not-originating-here', 'denied', 'archived', 'other-plan', 'invalid-value'] as const)('refuses handoff changes for %s before writing a local preference', async scenario => {
+    const group = detail({ serverBacked: true, singleSpeaker: true,
+      openPlan: { id: 'p1', kind: 'work', status: 'running', currentStep: 0, stepCount: 1, currentBotName: '阿布', currentStepStatus: 'running' } });
+    group.plans[0] = { ...group.plans[0]!, kind: scenario === 'talk' ? 'talk' : 'work', status: scenario === 'closed' ? 'done' : 'running',
+      canManage: scenario !== 'denied', ...(scenario === 'not-originating-here' ? {} : { autoContinue: false }) };
+    if (scenario === 'archived') group.archived = true;
+    if (scenario === 'other-plan') group.openPlan = null;
+    if (scenario !== 'invalid-value') expect(botGroupRemoteChatData(group).plans[0]!.canSetAutoContinue).toBe(false);
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      resourceRef: ref('g1'), actionId: 'plan-auto-continue', input: { planId: 'p1', autoContinue: scenario === 'invalid-value' ? 'true' : true } })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(service.updateGroup).not.toHaveBeenCalled();
   });
 
   it('never lets a phone set a folder or reach a hidden teammate', async () => {

@@ -61,31 +61,15 @@ export async function importCustomWallpaper(parent: BrowserWindow): Promise<bool
   } catch {
     throwIpcError('INVALID_PARAMS', 'Choose a local image up to 20 MB or MP4 video up to 100 MB');
   }
-  await setCustomWallpaperBytes(bytes);
-  return true;
-}
-
-/** Bytes only: the caller already resolved a native selection or an owned resource. */
-export async function setCustomWallpaperBytes(bytes: Buffer, options: {
-  fallback?: Buffer; pluginSource?: PluginAppearanceSource; assertCurrent?: () => void;
-} = {}): Promise<{ url: string; fallbackUrl?: string }> {
-  if (!bytes.length || bytes.length > MAX_VIDEO_BYTES) throwIpcError('INVALID_PARAMS', 'Wallpaper exceeds size limit');
-  options.assertCurrent?.();
   const isVideo = sniffMediaMime(bytes) === 'video/mp4';
   const buffer = isVideo ? bytes : await prepareWallpaperImage(bytes);
-  const fallback = options.fallback ? await prepareWallpaperImage(options.fallback) : undefined;
   return withClientWallpaperLock(async () => {
-    options.assertCurrent?.();
     const media = await ingestClientWallpaper({
       buffer,
       mimeType: isVideo ? 'video/mp4' : 'image/webp',
     });
-    const still = fallback ? await ingestClientWallpaper({ buffer: fallback, mimeType: 'image/webp' }) : undefined;
     try {
-      const patch = { url: media.url, fallbackUrl: still?.url, pluginSource: options.pluginSource };
-      if (options.assertCurrent) {
-        await customWallpaperStore.updateAtomic(() => { options.assertCurrent!(); return patch; });
-      } else await customWallpaperStore.writePatchAtomic(patch);
+      await customWallpaperStore.writePatchAtomic({ url: media.url, fallbackUrl: undefined, pluginSource: undefined });
     } catch (error) {
       // A reported failure may follow publication: re-read durable references.
       // Unreadable references defer cleanup rather than risking the current media.
@@ -93,23 +77,7 @@ export async function setCustomWallpaperBytes(bytes: Buffer, options: {
       throw error;
     }
     await recycleUnusedWallpapers();
-    return { url: media.url, ...(still ? { fallbackUrl: still.url } : {}) };
-  });
-}
-
-/** Revocation never removes a wallpaper that has since been replaced by the user. */
-export async function revokePluginWallpaper(isCurrent: (source: PluginAppearanceSource) => boolean): Promise<boolean> {
-  const source = customWallpaperStore.read().pluginSource;
-  if (!source || isCurrent(source)) return false;
-  return withClientWallpaperLock(async () => {
-    let removed = false;
-    await customWallpaperStore.updateAtomic(current => {
-      if (!current.value.pluginSource || isCurrent(current.value.pluginSource)) return {};
-      removed = true;
-      return { url: '', fallbackUrl: undefined, pluginSource: undefined };
-    });
-    if (removed) await recycleUnusedWallpapers();
-    return removed;
+    return true;
   });
 }
 
@@ -117,6 +85,52 @@ export async function removeCustomWallpaper(): Promise<void> {
   return withClientWallpaperLock(async () => {
     await customWallpaperStore.resetAtomic();
     await recycleUnusedWallpapers();
+  });
+}
+
+/** Resource bytes have already passed the plugin ownership and media guards. */
+export async function savePluginWallpaper(bytes: Buffer, options: {
+  fallback?: Buffer; pluginSource: PluginAppearanceSource; assertCurrent(): void;
+  commit(publish: () => void): Promise<void>;
+}): Promise<{ url: string; fallbackUrl?: string }> {
+  return withClientWallpaperLock(async () => {
+    options.assertCurrent();
+    const media = await ingestClientWallpaper({ buffer: bytes, mimeType: sniffMediaMime(bytes) === 'video/mp4' ? 'video/mp4' : 'image/webp' });
+    const previous = customWallpaperStore.read();
+    let published = false;
+    try {
+      const fallback = options.fallback ? await ingestClientWallpaper({ buffer: options.fallback, mimeType: 'image/webp' }) : undefined;
+      options.assertCurrent();
+      // The existing media lock serializes wallpaper writers. Publish synchronously
+      // inside the appearance owner's CAS, then recycle only after both files commit.
+      await options.commit(() => {
+        options.assertCurrent();
+        published = true;
+        customWallpaperStore.writePatch({ url: media.url, fallbackUrl: fallback?.url, pluginSource: options.pluginSource });
+      });
+      await recycleUnusedWallpapers();
+      return { url: media.url, ...(fallback ? { fallbackUrl: fallback.url } : {}) };
+    } catch (failure) {
+      if (published) {
+        try {
+          customWallpaperStore.writePatch({ ...previous, fallbackUrl: previous.fallbackUrl, pluginSource: previous.pluginSource });
+        } catch {
+          log.warn('Plugin wallpaper rollback failed; media cleanup deferred');
+          throw failure;
+        }
+      }
+      await recycleUnusedWallpapers(); throw failure;
+    }
+  });
+}
+
+export async function revokePluginWallpaper(isCurrent: (source: PluginAppearanceSource) => boolean): Promise<boolean> {
+  return withClientWallpaperLock(async () => {
+    const source = customWallpaperStore.read().pluginSource;
+    if (!source || isCurrent(source)) return false;
+    await customWallpaperStore.resetAtomic();
+    await recycleUnusedWallpapers();
+    return true;
   });
 }
 
@@ -128,4 +142,10 @@ async function recycleUnusedWallpapers(): Promise<void> {
   } catch {
     log.warn('Unused client wallpaper cleanup deferred');
   }
+}
+
+/** Appearance changes release theme references through the same media owner. */
+export async function recycleAppearanceWallpapers(): Promise<void> {
+  try { await withClientWallpaperLock(recycleUnusedWallpapers); }
+  catch { log.warn('Unused client wallpaper cleanup deferred'); }
 }

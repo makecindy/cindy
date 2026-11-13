@@ -118,13 +118,6 @@ describe('Shared create project picker', () => {
     expect(scheduleChipsSource).toContain("getProjectPickerEmptyLabelKey('generic')");
   });
 
-  it('keeps folder picker wheel scrolling inside the shared menu', () => {
-    expect(folderPickerPopoverSource).toContain('handleFolderPickerWheel');
-    expect(folderPickerPopoverSource).toContain('onWheel={handleFolderPickerWheel}');
-    expect(folderPickerPopoverSource).toContain('data-folder-picker-scroll="true"');
-    expect(folderPickerPopoverSource).toContain('scrollRoot.scrollTop += normalizeWheelDeltaY(e)');
-  });
-
   it('waits for async folder selection before closing the controlled popover', () => {
     const start = folderPickerPopoverSource.indexOf('const handleSelectPath = async');
     const end = folderPickerPopoverSource.indexOf('const handleRemoveProject', start);
@@ -250,7 +243,8 @@ describe('Shared create project picker', () => {
       'getWorkspacePromptFromRouteState(location.state)',
     );
     expect(newMakerDraftRouteSource).not.toContain("setWorkspacePrompt('dialogue')");
-    expect(newMakerDraftRouteSource).not.toContain("workspacePrompt === 'generic'");
+    // Generic route state may prefill a local default, but does not own picker labels.
+    expect(newMakerDraftRouteSource).toContain('getDefaultNewTaskWorkingDir(dataOwnerId)');
     expect(newMakerDraftRouteSource).not.toContain(
       '[location.key, location.state, routeWorkspacePrompt]',
     );
@@ -617,7 +611,7 @@ describe('Shared create project picker', () => {
     // 留着会让用户以为项目跟过来了、发送时才在被控端 path guard 上失败。
     expect(newMakerDraftRouteSource).toContain('const handleDeviceChange = useCallback(');
     expect(newMakerDraftRouteSource).toContain(
-      'applyDraftTarget({ deviceId, deviceName, workingDir: null });',
+      'applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });',
     );
   });
 
@@ -1268,15 +1262,16 @@ describe('Shared create project picker', () => {
    * 变红,#807 的 review 里约十轮都在补格子(切设备漏 worktree 三态、同机换项目误重置运行配置、
    * 指向设备前忘了作废快照、回落路径两样清理都漏、picker 换项目不作废 worktree……)。
    *
-   * 收敛之后只需要锁两件事:① 四条路径都**只声明目标**,不自己做副作用;② 每处连带状态绑对了
-   * 它真正依赖的那一半(设备 / 项目)。第五条路径出现时,①会直接失败,而②保证它自动是对的。
+   * 收敛之后只需要锁两件事:① 各条路径都**只声明目标**,不自己做副作用;② 每处连带状态绑对了
+   * 它真正依赖的那一半(设备 / 项目)。新增路径时,①会直接失败,而②保证它自动是对的。
    */
   it('routes every draft-target transition through the single action', () => {
-    // 五条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
-    // “对话”分组导航请求。声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
+    // 七条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
+    // “对话”分组导航请求，以及通用入口在导航请求后或直接挂载时预填默认目录。
+    // 声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
     // (远程 Agent 由模型选择器选择、只在本机任务出现,不再经设备菜单转移草稿目标。)
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
-    expect(calls.length).toBe(5);
+    expect(calls.length).toBe(7);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
     // patchDraft 仍可出现(入场清 extraDirs、发送后复位),但不得再带设备字段。
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: deviceId,');

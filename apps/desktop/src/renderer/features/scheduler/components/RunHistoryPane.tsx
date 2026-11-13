@@ -31,10 +31,13 @@ import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
 import { useRuns } from '../hooks/useRuns';
 import { useSessionReferences } from '../hooks/useSessionReferences';
 import { cronToConfig, summarizeConfig } from '../lib/cronCodexPreset';
-import { basenameOf, describeDestination, humanizeAgentKind } from '../lib/formatters';
+import { describeDestination, humanizeAgentKind } from '../lib/formatters';
+import { useProjectLabel } from '../hooks/useProjectLabel';
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
 
 import { RunHistoryCard } from './RunHistoryCard';
+import { WebhookTriggerPanel } from './WebhookTriggerPanel';
+import appI18n from 'i18next';
 
 const PERSISTENT_SESSION_PREVIEW_LIMIT = 3;
 
@@ -61,6 +64,7 @@ export function RunHistoryPane({
   runNowBusy = false,
 }: Props) {
   const { t } = useTranslation();
+  const projectLabel = useProjectLabel();
   // 展示策略（避免切任务闪烁）：
   // - hasLoaded=false（应用启动后第一次都没拉过）→ 整块 run 区域不挂载
   // - hasLoaded=true 但 runsScheduleId !== s.id → 切任务过渡期，runs 还是上一个
@@ -208,9 +212,12 @@ export function RunHistoryPane({
   // 用 summarizeConfig 复用创建对话框那套语义化摘要（"Daily at 09:00" / "Hourly" / "Weekly on Mon, Wed at 14:30" ...），
   // 跟 chip 文案 100% 对齐；不再用 cronToHuman 的 "At 09:00" 风格。
   // manual schedule 不参与 cron，cron 字段是占位 → header 显示 "Manual trigger"。
-  const cronText = s.manual
+  const timingText = s.manual
     ? t('scheduler.detail.manualTrigger')
     : summarizeConfig(cronToConfig(s.cronExpr), t);
+  const cronText = s.webhookTrigger
+    ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
+    : timingText;
   const agentText = humanizeAgentKind(s.agentKind);
   const dest = describeDestination(s, t);
   // title 兜底显示完整路径，悬浮即可看到 — basename 视觉简洁，hover/title 看全量
@@ -237,7 +244,7 @@ export function RunHistoryPane({
           </h2>
           {s.expireAt != null && (
             <p className="text-xs text-[var(--text-secondary)]">
-              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString(appI18n.language)} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
               {isExpired && s.expireAt <= Date.now() && <> · {t('scheduler.deadline.expired')}</>}
             </p>
           )}
@@ -254,7 +261,7 @@ export function RunHistoryPane({
                 )}
               >
                 {dest.prefix}
-                {basenameOf(dest.workingDir)}
+                {dest.workingDir ? projectLabel(dest.workingDir) : null}
               </button>
             ) : (
               dest.prefix
@@ -302,21 +309,24 @@ export function RunHistoryPane({
         </div>
       </header>
 
-      {/* Recent runs label —— 跟下面的列表区一起挂载/卸载，避免数字 0→N 跳变。
-          count 与逐 run 卡片数量一致；持续会话也不再按 sessionId 折叠。 */}
-      {hasLoaded && (
-        <div className="px-6 pb-2 pt-4 text-10 font-medium tracking-[0.6px] text-[var(--cmd-palette-item-meta)]">
-          {t('scheduler.detail.recentRuns', { count: runs.length })}
-        </div>
-      )}
+      {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} />}
+
+        {hasLoaded && (
+          <div className="pb-3 pt-5 text-13 font-medium text-[var(--text-primary)]">
+            {t('scheduler.detail.recentRuns', { count: runs.length })}
+          </div>
+        )}
 
       {/* Run list 容器：始终挂载占位（保持滚动区高度），内容仅在 hasLoaded 后渲染 */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
         {hasLoaded &&
           (isCurrent && error ? (
             <p className="text-xs text-[var(--cmd-palette-item-meta)]">
               {t('scheduler.detail.runsLoadFailed', { error })}
             </p>
+          ) : isCurrent && runs.length === 0 && s.webhookTrigger ? (
+            <p className="pb-4 text-12 leading-relaxed text-[var(--text-secondary)]">{t('scheduler.webhook.noRunsHint')}</p>
           ) : isCurrent && runs.length === 0 ? (
             <div className="flex h-full items-center justify-center">
               <div className="flex flex-col items-center gap-2 py-12 text-center">

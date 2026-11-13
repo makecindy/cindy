@@ -18,7 +18,7 @@ import {
   type TabGroupId,
 } from '../../../shared/layoutTree';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { usePluginUiVisibilityValues } from '@/cindy-brain/usePluginUiVisibility';
+import { usePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 import { createLogger } from '@/lib/logger';
 import { useSidebarTabWindowsState } from '@/lib/sidebarTabWindowState';
 import {
@@ -92,7 +92,6 @@ function ensurePaneInTree(groupId: EdgeTabGroupId): void {
  * 边组 pane 的注册与树里的在场。
  */
 export function useTabGroupPanes(input: TabGroupPanesInput): void {
-  const { tools: toolsVisible } = usePluginUiVisibilityValues();
   const {
     sessionId,
     enabled,
@@ -153,6 +152,7 @@ export function useTabGroupPanes(input: TabGroupPanesInput): void {
 
   // 在聊天页出现过、此后一直有可见页签的组:离开聊天页时只停放这些组。
   const mountedOnChatRef = useRef(new Set<EdgeTabGroupId>());
+  const regions = usePluginUiRegions();
 
   useEffect(() => {
     const mountedOnChat = mountedOnChatRef.current;
@@ -171,11 +171,11 @@ export function useTabGroupPanes(input: TabGroupPanesInput): void {
           collapseMemory: 'none',
         });
       }
-      setPanelKindParked(kind, !onChatRoute || !toolsVisible);
+      setPanelKindParked(kind, !onChatRoute || !regions.workspace || !regions.tools);
       ensurePaneInTree(groupId);
     }
     // presentKey 是 present 的稳定字符串化;layoutRevision 触发树重检。
-  }, [present, presentKey, onChatRoute, layoutRevision, toolsVisible]);
+  }, [present, presentKey, onChatRoute, layoutRevision, regions.workspace, regions.tools]);
 
   useEffect(() => {
     const mountedOnChat = mountedOnChatRef.current;

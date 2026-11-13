@@ -75,6 +75,10 @@ export function managedBrowserGuardIdentity(input: {
 }
 
 export interface ManagedBrowserConfigOptions {
+  /** Trusted assembly override for isolated/browserless validation. UI stays headed. */
+  headless?: boolean;
+  /** Credential-free test assembly only; never applied to daily browser profiles. */
+  useMockKeychain?: boolean;
   /** Credential-free launch proxy URL. Credentials stay in the host auth coordinator. */
   proxyServer?: string;
   /** Public DNS patterns allowed for page navigation through the explicit proxy. */
@@ -230,12 +234,13 @@ export function buildManagedConfig(options: ManagedBrowserConfigOptions = {}): B
     browser: {
       enabled: true,
       defaultProfile,
-      headless: false, // headed so the user can see + log into sites
+      headless: options.headless ?? false, // Desktop stays headed for login and observation
       ...(executablePath ? { executablePath } : {}),
       // A persistent directory alone does not restore session cookies after a
       // clean exit. Apply Chrome's native session restore to both profiles and
       // routes; silent headed startup still keeps automation unobtrusive.
       extraArgs: [
+        ...(options.useMockKeychain ? ['--use-mock-keychain'] : []),
         '--restore-last-session',
         // Website cookies are copied without Chrome OAuth identity. Disable
         // DICE before startup so it cannot turn that mismatch into a logout.

@@ -97,8 +97,9 @@ import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { PluginUiRendererView } from '@/cindy-brain/PluginUiRendererView';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import { renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
+import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -106,7 +107,7 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
@@ -736,6 +737,7 @@ function buildDiffPayload(
 }
 
 export interface AgentActionRowProps {
+  pluginUi: PluginUiMessageCandidates;
   message: ChatMessage;
   toolResult?: string;
   /** 工作过程展开 / live preview 使用：仅无法识别的命令另显原文兜底。 */
@@ -785,6 +787,7 @@ function isImagePath(filePath: string): boolean {
 }
 
 export function AgentActionRow({
+  pluginUi,
   message,
   toolResult,
   showRawCommand = false,
@@ -1196,7 +1199,10 @@ export function AgentActionRow({
           v11 (2026-04-20):背景色 + 边框对齐"用户输入气泡"
           (`--msg-user-bg` + `--msg-user-border`),与 hover 嵌入式 inline-code
           灰区分开,把就地展开视觉上提升为一个独立"卡片"。 */}
-      {isInlineExpand && expanded && (
+      {renderPluginUiBody(pluginUi.toolBody ? { position: 'tool.body', sessionId: fileCtx.sessionId, tool: toolName,
+        disabled: isRemoteFileOrigin(fileCtx.origin), plugin: message.sourcePlugin?.pluginId,
+        context: () => ({ tool: { clientId: message.clientId, name: toolName, input: message.toolInput, result: toolResult, status } }) } : undefined,
+      isInlineExpand && expanded && (
         <div
           // 行按钮本身是 select-none,这里必须显式 select-text,让用户能复制
           // grep pattern、bash command 这种关键文本。
@@ -1205,13 +1211,10 @@ export function AgentActionRow({
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]',
-            'text-[var(--foreground)]',
+            'text-foreground',
             'select-text cursor-text',
           )}
         >
-          <PluginUiRendererView sessionId={fileCtx.sessionId ?? ''} point="tool.body"
-            target={{ kind: 'tool', id: message.toolUseId ?? '' }}
-            active={Boolean(fileCtx.localConfirmed && fileCtx.sessionId && message.toolUseId && !onActivateOverride)}>
           {inlineInputText && (
             <pre className="whitespace-pre-wrap break-words m-0">{inlineInputText}</pre>
           )}
@@ -1230,10 +1233,8 @@ export function AgentActionRow({
               {t('chat.agentActionRow.noContent')}
             </span>
           )}
-          </PluginUiRendererView>
         </div>
-      )}
-
+      ))}
       {/*
         tool 返回 JSON 里若带 xdt_image_url(单张) / xdt_image_urls(多张)的图片,
         不在这里渲染——MessageStream Pass 2 会把它们提取出来作为独立的
@@ -1254,8 +1255,6 @@ export function AgentActionRow({
       {lightbox.kind === 'payload' && (
         <ToolPayloadLightbox
           payload={lightbox.payload}
-          renderer={fileCtx.localConfirmed && fileCtx.sessionId && message.toolUseId && !onActivateOverride
-            ? { sessionId: fileCtx.sessionId, toolUseId: message.toolUseId } : undefined}
           triggerRef={triggerRef}
           onClose={closeLightbox}
         />

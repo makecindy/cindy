@@ -156,8 +156,12 @@ named 与 namespace wrapper、短等待、常量内层等待和参数／fixture 
 
 - 按历史耗时分配分片（自定义 Vitest sequencer），拉平哈希均分造成的不均衡。
 - 把 Windows checkout 与临时目录放到 Dev Drive（ReFS），降低大量小文件 IO 的开销。
-- 基线中逐用例重置最多的 `newMakerDraft.test.ts`（54 处）、`modelVisibilityPrefs.test.ts`（18 处）、
-  `pi-package-store-security.test.ts`（17 处）按 `codexProxyHost` 的方式改；真实 I/O 重的
+- 基线中逐用例重置最多的 `modelVisibilityPrefs.test.ts`（18 处）、
+  `pi-package-store-security.test.ts`（余 `beforeEach` 1 处，其余 16 处是写明理由的重启边界；去掉它需要
+  生产侧的 reset 接口）按 `codexProxyHost` 的方式改。`newMakerDraft.test.ts`
+  （54 处）已于 2026-11-11 改完：模块只加载一次，每例和「app 重启」都用 `__reloadForTest()` 从
+  localStorage 复位，双窗口用例用文件开始时加载一次的第二个模块实例；同机 106/106、29 秒 → 3.2 秒
+  （测试体 27 秒 → 0.9 秒），7 种生产代码变异下新旧文件失败的用例完全相同。真实 I/O 重的
   `llamaCppService`、`proxy-auth`、`updateService` 评估是否迁到专用 tier。
 - PR 阶段只跑受影响的 workspace、合并队列跑全量：需要先修改上面「PR 门禁完整覆盖」的规则，由维护者决定。
 
@@ -295,3 +299,20 @@ Desktop 测试按成本拆成默认层与显式层：
 
 因此分池相对单池 8 workers 的额外 8.1% 收益不足以抵消资源与维护成本，正式配置不采用
 分池，保留单池最多 8 workers。
+
+## 2026-11-09 fork 首例 setup 超时复查
+
+PR #9386 的 client-ci [run 42468165931](https://github.com/makecindy/cindy/actions/runs/42468165931)
+在 attempts 1、2、3 均于 `fork.test.ts:172` 的首个 `beforeEach` 超过 10 秒；
+失败用例均为 `disabled Cindy Make fork boundaries` 下的第一个 orchestration fork。
+此前以 main 的失败状态推断基线故障不成立：main runs 42470248978、42467677622
+的失败步骤是 `Install bundled ripgrep`，不是同一测试签名。
+
+该 hook 把一次性的 `maker-orchestration/fork` 动态导入也计入首例准备时间。
+本地临时计时显示首例 mkdtemp 约 0.37ms、首次导入约 634ms，100 例均通过；
+CI 没有细分计时，不能据此宣称已证明其 10 秒全耗在导入，也不能宣称 main
+已复现同一故障。处理是按测试生命周期把一次性加载移到 collection，放在 mock
+状态初始化之后，保留每例目录隔离、100 个用例、全部断言和原有 hook timeout。
+这不降低总加载成本，但避免把测试框架冷加载算作首个业务用例的 setup。
+修改后单文件本地 100 例通过，墙钟 3.22s，测试体 252ms；搜索相关测试与 fork
+一起运行 142 例通过（5.23s）。CI 是否恢复必须以新提交的检查为准。

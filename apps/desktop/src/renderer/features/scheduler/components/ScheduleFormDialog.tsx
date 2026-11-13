@@ -2,10 +2,16 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
-import { CalendarClock, Check, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
+import { CalendarClock, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import {
+  DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+  resolveScheduleWebhookFormat,
+  scheduleWebhookPreset,
+  type ScheduleWebhookPresetId,
+} from '@cindy/maker-scheduler/webhook-formats';
 import { PreRunPluginFields } from './PreRunPluginFields';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -14,6 +20,9 @@ import { extractIpcError } from '@/utils/ipcError';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { FormField } from '@/components/ui/form-field';
+import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
@@ -30,10 +39,10 @@ import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotificationSettings';
 import type { Schedule, CreateScheduleInput, ScheduleTemplate, UpdateScheduleInput } from '@cindy/maker-scheduler';
 import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
-import { FormField } from '@/components/ui/form-field';
-import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
+import { WebhookSourceFields } from './WebhookSourceFields';
+import { WebhookAccountManager } from './WebhookAccountManager';
 
 import {
   getScheduleDefaultRoute,
@@ -144,6 +153,16 @@ export function ScheduleFormDialog({
 }: Props) {
   const { t, i18n } = useTranslation();
   const formApi = useScheduleForm(initial);
+  // 能否接收 Webhook 由任务所在电脑决定：没有 Cindy 账号时不显示开关。
+  const [webhookReceiverReady, setWebhookReceiverReady] = useState(false);
+  useEffect(() => {
+    let current = true;
+    window.electronAPI.maker.schedule.webhookReceiver().then(
+      (receiver) => { if (current) setWebhookReceiverReady(receiver === 'cloud' || receiver === 'local'); },
+      () => { if (current) setWebhookReceiverReady(false); },
+    );
+    return () => { current = false; };
+  }, []);
   const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
@@ -176,6 +195,29 @@ export function ScheduleFormDialog({
   const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
   const [activeTab, setActiveTab] = useState<'content' | 'options'>('content');
+  const formScrollRef = useRef<HTMLDivElement>(null);
+  const formContentRef = useRef<HTMLDivElement>(null);
+
+  const preserveTriggerScrollPosition = () => {
+    const viewport = formScrollRef.current;
+    const content = formContentRef.current;
+    // Removing the Webhook fields must not clamp scrollTop and pull the control
+    // away from the pointer. Reserve only the currently visible scroll extent.
+    if (viewport && content && viewport.scrollTop > 0) {
+      content.style.minHeight = `${viewport.scrollTop + viewport.clientHeight}px`;
+    }
+  };
+
+  const releaseUnusedScrollSpace = () => {
+    const viewport = formScrollRef.current;
+    const content = formContentRef.current;
+    if (!viewport || !content?.style.minHeight) return;
+    // Returning upwards releases the space without moving the visible content.
+    // The keyed viewport also discards it on tab changes or closing the dialog.
+    content.style.minHeight = viewport.scrollTop > 0
+      ? `${Math.min(parseFloat(content.style.minHeight), viewport.scrollTop + viewport.clientHeight)}px`
+      : '';
+  };
   const tabsId = useId();
   useEffect(() => {
     if (open) setActiveTab('content');
@@ -255,6 +297,9 @@ export function ScheduleFormDialog({
   const submitLabel = isEdit
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
+  // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
+  const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
   const initialId = initial?.id;
   useEffect(() => {
@@ -777,12 +822,13 @@ export function ScheduleFormDialog({
           )}
 
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
-            <div className="h-[546px] min-h-0 overflow-y-auto px-6 pt-[18px] pb-[22px]">
+            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]">
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
           ) : (
-            <div key={activeTab} className="min-h-0 flex-1 overflow-y-auto px-6 py-3">
-              <div className="flex flex-col gap-3">
+            <div key={activeTab} ref={formScrollRef} onScroll={releaseUnusedScrollSpace}
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+              <div ref={formContentRef} className="flex flex-col gap-3 px-6 py-3">
                 {modelUnavailable && (
                   <ErrorNotice
                     message={t('scheduler.editor.validation.modelUnavailable', {
@@ -1028,32 +1074,34 @@ export function ScheduleFormDialog({
                       )}
                     </section>
                     <section
-                      aria-label={t('scheduler.editor.fields.schedule')}
+                      aria-label={t('scheduler.editor.trigger.label')}
                       className="flex shrink-0 flex-col gap-3 border-t border-[var(--border-default)] pt-4"
                     >
                       <div className="flex flex-wrap items-center gap-2.5">
                         <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
-                          {t('scheduler.editor.fields.schedule')}
+                          {t('scheduler.editor.trigger.label')}
                         </span>
-                        {/* 自动/手动 pill：把原先"勾一次才出现 Manually"的隐藏路径显式化。
-                  自动 → manual=false,显示 cron chip + Once;手动 → manual=true,cron 保留占位值不参与调度。 */}
                         <SegmentedControl
-                          aria-label={t('scheduler.editor.fields.schedule')}
-                          value={form.manual ? 'manually' : 'automatic'}
+                          aria-label={t('scheduler.editor.trigger.label')}
+                          value={triggerMode}
                           height={34}
                           onValueChange={(mode) => {
-                            const isManual = mode === 'manually';
-                            if (form.manual === isManual) return;
-                            setField('manual', isManual);
-                            setField('recurring', !isManual);
+                            if (mode === triggerMode) return;
+                            preserveTriggerScrollPosition();
+                            setField('webhookEnabled', mode === 'webhook');
+                            setField('manual', mode !== 'automatic');
+                            setField('recurring', mode !== 'manually');
                           }}
-                          options={(['automatic', 'manually'] as const).map((mode) => ({
-                            value: mode,
-                            label: t(`scheduler.editor.fields.${mode}`),
-                          }))}
+                          options={[
+                            { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
+                            { value: 'manually', label: t('scheduler.editor.fields.manually') },
+                            ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
+                              ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
+                              : []),
+                          ]}
                         />
                         {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
-                        {!form.manual && (
+                        {triggerMode === 'automatic' && (
                           <>
                             <ScheduleChip
                               cronExpr={form.cronExpr}
@@ -1063,41 +1111,21 @@ export function ScheduleFormDialog({
                                 setField('intervalMs', value.intervalMs);
                               }}
                             />
-                            <button
-                              type="button"
-                              role="checkbox"
-                              aria-checked={!form.recurring}
-                              onClick={() => setField('recurring', !form.recurring)}
-                              className={cn(
-                                'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
-                                'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                                'transition-colors hover:bg-[var(--surface-hover)]',
-                                'focus:outline-none',
-                              )}
-                            >
-                              <span
+                            {!form.webhookEnabled && (
+                              <label
                                 className={cn(
-                                  'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                  !form.recurring
-                                    ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                    : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
+                                  'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
+                                  'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                                  'transition-colors hover:bg-[var(--surface-hover)]',
                                 )}
-                                aria-hidden
                               >
-                                {!form.recurring && (
-                                  <svg
-                                    viewBox="0 0 16 16"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth={2.5}
-                                    className="h-[10px] w-[10px]"
-                                  >
-                                    <path d="M3 8l3.5 3.5L13 5" />
-                                  </svg>
-                                )}
-                              </span>
-                              {t('scheduler.editor.fields.once')}
-                            </button>
+                                <Checkbox
+                                  checked={!form.recurring}
+                                  onChange={() => setField('recurring', !form.recurring)}
+                                />
+                                {t('scheduler.editor.fields.once')}
+                              </label>
+                            )}
                           </>
                         )}
                         {(!form.manual || form.deadline) && (
@@ -1156,6 +1184,34 @@ export function ScheduleFormDialog({
                           </Popover>
                         )}
                       </div>
+                      {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
+                      {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
+                      {webhookSettingsVisible && (
+                          <WebhookSourceFields
+                            preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            signed={form.webhookSigned !== false}
+                            formatText={form.webhookFormat ?? ''}
+                            events={form.webhookEvents ?? ''}
+                            repositories={form.webhookRepositories ?? ''}
+                            onRepositoriesChange={(value) => setField('webhookRepositories', value)}
+                            onEventsChange={(value) => setField('webhookEvents', value)}
+                            onPresetChange={(value) => {
+                              // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
+                              if (value === 'custom' && !form.webhookFormat?.trim()) {
+                                const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
+                                const format = resolveScheduleWebhookFormat(
+                                  scheduleWebhookPreset(current)
+                                    ? { preset: current as ScheduleWebhookPresetId, signed: form.webhookSigned !== false }
+                                    : undefined,
+                                );
+                                setField('webhookFormat', JSON.stringify(format, null, 2));
+                              }
+                              setField('webhookPreset', value);
+                            }}
+                            onSignedChange={(value) => setField('webhookSigned', value)}
+                            onFormatChange={(value) => setField('webhookFormat', value)}
+                          />
+                      )}
                     </section>
                   </div>
                 )}
@@ -1222,33 +1278,19 @@ export function ScheduleFormDialog({
                     <ScheduleFormSection title={t('scheduler.editor.layout.notifications')}>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                         <div className="inline-flex h-[34px] items-center gap-1.5">
-                          <button
-                            type="button"
-                            role="checkbox"
-                            aria-checked={form.silentWhenIdle}
-                            onClick={() => setField('silentWhenIdle', !form.silentWhenIdle)}
+                          <label
                             className={cn(
-                              'inline-flex h-full items-center gap-2 rounded-full px-1.5',
+                              'inline-flex h-full cursor-pointer items-center gap-2 rounded-full px-1.5',
                               'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                               'transition-colors hover:bg-[var(--surface-hover)]',
-                              'focus:outline-none',
                             )}
                           >
-                            <span
-                              className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                form.silentWhenIdle
-                                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                              )}
-                              aria-hidden
-                            >
-                              {form.silentWhenIdle && (
-                                <Check size={10} strokeWidth={3} aria-hidden />
-                              )}
-                            </span>
+                            <Checkbox
+                              checked={form.silentWhenIdle}
+                              onChange={() => setField('silentWhenIdle', !form.silentWhenIdle)}
+                            />
                             {t('scheduler.editor.fields.silentRun')}
-                          </button>
+                          </label>
                           <Tip
                             text={t('scheduler.editor.fields.silentRunTooltip')}
                             side="top"
@@ -1269,41 +1311,19 @@ export function ScheduleFormDialog({
                           </Tip>
                         </div>
                         {feishuBotReady ? (
-                          <button
-                            type="button"
-                            role="checkbox"
-                            aria-checked={form.notifyFeishu}
-                            onClick={() => setField('notifyFeishu', !form.notifyFeishu)}
+                          <label
                             className={cn(
-                              'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
+                              'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
                               'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                               'transition-colors hover:bg-[var(--surface-hover)]',
-                              'focus:outline-none',
                             )}
                           >
-                            <span
-                              className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                form.notifyFeishu
-                                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                              )}
-                              aria-hidden
-                            >
-                              {form.notifyFeishu && (
-                                <svg
-                                  viewBox="0 0 16 16"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth={2.5}
-                                  className="h-[10px] w-[10px]"
-                                >
-                                  <path d="M3 8l3.5 3.5L13 5" />
-                                </svg>
-                              )}
-                            </span>
+                            <Checkbox
+                              checked={form.notifyFeishu}
+                              onChange={() => setField('notifyFeishu', !form.notifyFeishu)}
+                            />
                             {t('scheduler.editor.fields.finishSendToFeishu')}
-                          </button>
+                          </label>
                         ) : (
                           <button
                             type="button"
@@ -1319,34 +1339,21 @@ export function ScheduleFormDialog({
                           </button>
                         )}
                         {wecomGroupReady ? (
-                          <button
-                            type="button"
-                            role="checkbox"
-                            aria-checked={form.notifyWecomGroup === true}
-                            onClick={() =>
-                              setField('notifyWecomGroup', form.notifyWecomGroup !== true)
-                            }
+                          <label
                             className={cn(
-                              'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
+                              'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
                               'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)] focus:outline-none',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
                             )}
                           >
-                            <span
-                              className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                form.notifyWecomGroup
-                                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                              )}
-                              aria-hidden
-                            >
-                              {form.notifyWecomGroup && (
-                                <Check size={10} strokeWidth={3} aria-hidden />
-                              )}
-                            </span>
+                            <Checkbox
+                              checked={form.notifyWecomGroup === true}
+                              onChange={() =>
+                                setField('notifyWecomGroup', form.notifyWecomGroup !== true)
+                              }
+                            />
                             {t('scheduler.editor.fields.finishSendToWecomGroup')}
-                          </button>
+                          </label>
                         ) : (
                           <button
                             type="button"
@@ -1370,36 +1377,22 @@ export function ScheduleFormDialog({
                       {!isScriptMode && (
                         <div className="flex flex-col gap-2">
                           <div className="flex flex-wrap items-center gap-2.5">
-                            <button
-                              type="button"
-                              role="checkbox"
-                              aria-checked={form.preRunHookEnabled}
-                              onClick={() => {
-                                setHookTestResult(null);
-                                setField('preRunHookEnabled', !form.preRunHookEnabled);
-                              }}
+                            <label
                               className={cn(
-                                'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
+                                'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
                                 'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                                 'transition-colors hover:bg-[var(--surface-hover)]',
-                                'focus:outline-none',
                               )}
                             >
-                              <span
-                                className={cn(
-                                  'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                  form.preRunHookEnabled
-                                    ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                    : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                                )}
-                                aria-hidden
-                              >
-                                {form.preRunHookEnabled && (
-                                  <Check size={10} strokeWidth={3} aria-hidden />
-                                )}
-                              </span>
+                              <Checkbox
+                                checked={form.preRunHookEnabled}
+                                onChange={() => {
+                                  setHookTestResult(null);
+                                  setField('preRunHookEnabled', !form.preRunHookEnabled);
+                                }}
+                              />
                               {t('scheduler.editor.preRunHook.enable')}
-                            </button>
+                            </label>
                             <Tip
                               text={t(
                                 usePluginSource

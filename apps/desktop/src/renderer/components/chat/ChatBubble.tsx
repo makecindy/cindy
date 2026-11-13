@@ -1,16 +1,17 @@
 import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 import { CHAT_BODY_CLASS } from './chatChrome';
+import './ChatBubble.css';
 
 /** Shared by group messages and the private task runtime, including their thread replies. */
-export const CHAT_BUBBLE_COLUMN_CLASS = 'max-w-[min(720px,calc(100%-var(--chat-bubble-gutter,120px)))]';
+export const CHAT_BUBBLE_COLUMN_CLASS = 'chat-bubble-column max-w-[min(720px,calc(100%-var(--chat-bubble-gutter,120px)))]';
 
 export function ChatBubble({ speaker = 'assistant', bare = false, className, ...props }: ComponentProps<'div'> & {
   speaker?: 'assistant' | 'user';
   /** Ordinary task replies and an empty stream have no bubble surface. */
   bare?: boolean;
 }) {
-  return <div {...props} data-plugin-appearance-region="message" data-plugin-appearance-speaker={speaker} className={cn(
+  return <div {...props} className={cn(
     CHAT_BODY_CLASS,
     bare ? 'w-full min-w-0' : 'relative min-w-0 max-w-full rounded-xl border',
     speaker === 'user'

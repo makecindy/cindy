@@ -17,8 +17,6 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
   __resetGlobalTabsForTest,
   addGlobalPluginTab,
-  addGlobalPluginTabView,
-  findGlobalTabByInstance,
   defaultGroupForGhost,
   effectivePluginView,
   getActiveGlobalTabId,
@@ -37,6 +35,27 @@ import {
 } from '../globalTabs';
 import { __resetTabGroupsForTest, getTabGroup, setTabGroup } from '../tabGroups';
 
+// 新具名页面必须保留启动参数、同一页面再次打开仅更新参数；旧存档测试未覆盖具名资源。
+it('keeps named resource input across reopening and persisted projection', () => {
+  const first = addGlobalPluginTab('planner', { resourceViewId: 'board', resourceInput: { filter: 'one' } })!;
+  const next = addGlobalPluginTab('planner', { resourceViewId: 'board', resourceInput: { filter: 'two' } })!;
+  addGlobalPluginTab('planner', { resourceViewId: 'settings' });
+  expect(next.id).toBe(first.id);
+  expect(getGlobalTabs()).toHaveLength(2);
+  expect(sanitizeGlobalTabsSnapshot(getGlobalTabsSnapshot()).tabs[0].state).toMatchObject({ resourceInput: { filter: 'two' } });
+});
+
+// #9496 discussion_r4533414901：省略 input 重开应清空旧参数；已有用例只覆盖显式更新。
+// unit：经真实页签入口验证复用身份与持久化；最小输入为 { filter: 'one' } 后不传 input。
+it('clears omitted input when reopening a named global page', () => {
+  const first = addGlobalPluginTab('planner', { resourceViewId: 'board', resourceInput: { filter: 'one' } })!;
+  const reopened = addGlobalPluginTab('planner', { resourceViewId: 'board' })!;
+  expect(reopened.id).toBe(first.id);
+  expect(getGlobalTabs()).toHaveLength(1);
+  __resetGlobalTabsForTest();
+  expect(getGlobalTabs()[0].state).toEqual({ instanceId: 'planner', resourceViewId: 'board', resourceInput: {} });
+});
+
 beforeEach(() => {
   window.localStorage.clear();
   __resetGlobalTabsForTest();
@@ -51,25 +70,6 @@ afterEach(() => {
 });
 
 describe('globalTabs', () => {
-  // 4.2: two named views must coexist without becoming the legacy main/panel.
-  // Unit: production add/hydration/close and old lookup; no webview needed.
-  it('keeps named tabs separate and preserves native placement when reopened', () => {
-    const a = addGlobalPluginTabView('alpha', 'log')!;
-    const b = addGlobalPluginTabView('alpha', 'preview')!;
-    const c = addGlobalPluginTabView('org_alpha', 'log')!;
-    expect(new Set([a.id, b.id, c.id]).size).toBe(3);
-    expect(findGlobalTabByInstance('alpha')).toBeNull();
-    const legacy = addGlobalPluginTab('alpha')!;
-    expect(findGlobalTabByInstance('alpha')).toEqual(legacy);
-    expect(addGlobalPluginTabView('alpha', 'log')).toEqual(a);
-    setTabGroup(a.id, 'bottom');
-    removeGlobalTab(a.id);
-    expect(getGlobalTabsSnapshot().dismissedInstanceIds).toEqual([]);
-    expect(addGlobalPluginTabView('alpha', 'log')).toEqual(a);
-    expect(getTabGroup(a.id)).toBe('bottom');
-    const raw = JSON.parse(localStorage.getItem('xdt:rightSidebarGlobalTabs:v1:owner-a')!);
-    expect(sanitizeGlobalTabsSnapshot(raw).tabs).toEqual(getGlobalTabs());
-  });
   it('adds one tab per plugin instance, persists per data owner and remembers dismissals', () => {
     const tab = addGlobalPluginTab('alpha')!;
     expect(addGlobalPluginTab('alpha')).toEqual(tab);

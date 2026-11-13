@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest as validateProtocolManifest } from '@cindy/plugin-protocol';
-import { validateInstalledGhostManifest } from '../ghost';
+import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
 
 import {
   GHOST_CARD_ACTION_ID_RE,
@@ -14,6 +13,9 @@ import {
   ghostAppContextLocale,
   ghostAppContextLanguages,
   ghostContentKeys,
+  getApprovedGhostHostUi,
+  ghostHostUiApprovalTokens,
+  ghostHostUiNeedsApproval,
   ghostRequiresCindyAccount,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
@@ -45,10 +47,70 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateInstalledGhostManifest,
+  validateStoredGhostManifest,
   validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
+  type InstalledGhost,
 } from '../ghost';
+
+// Real receipt projection: new resources/fields never inherit an older capability grant.
+describe('host appearance approval', () => {
+  // Unit, #9987 compatibility: exercise the real installed-reader and receipt,
+  // which the protocol-only tests cannot cover. Invalid new fields stay inert.
+  it('retains approved legacy entries and tokens beside invalid historical extensions', () => {
+    const host: GhostHostUi = { contributions: [{ id: 'old', title: 'Toolbar', position: 'composer.toolbar', tool: 'help' }],
+      commands: [{ id: 'open', title: 'Command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
+    const manifest: GhostManifest = { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'example', name: 'Example',
+      version: '1', kind: 'chip', entry: 'main.js', tools: [{ name: 'help', description: 'Help' }], mcpApps: { host } };
+    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    const stored = validateInstalledGhostManifest({ ...manifest, mcpApps: { host: { ...host, settings: { vendor: true },
+      contributions: [...host.contributions!, { id: 'future', title: 'Future', position: 'composer.completion', tool: 'help' }] } } });
+    if (!stored.ok) throw new Error(stored.reason);
+    const ghost = { manifest: stored.manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject(host);
+    expect(getApprovedGhostHostUi(ghost)?.contributions).toHaveLength(1);
+    expect(getApprovedGhostHostUi(ghost)?.settings).toBeUndefined();
+    expect(ghostHostUiApprovalTokens(stored.manifest)).toEqual(approvedHostUi);
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
+  });
+  it('requires approval for each new field and resource while preserving existing views', () => {
+    const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] },
+      views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] };
+    const manifest: GhostManifest = { schemaVersion: 3, id: 'appearance-example', name: 'Appearance',
+      version: '1', kind: 'chip', entry: 'main.js', mcpApps: {
+        ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+        host,
+      } };
+    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    host.appearance = { fields: ['bodyFont', 'future-field'],
+      resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] };
+    const ghost = { manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject({ capabilities: ['appearance'],
+      views: [{ id: 'board' }], appearance: { fields: [], resources: [] } });
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    expect(getApprovedGhostHostUi(ghost)?.appearance).toEqual({ fields: ['bodyFont'],
+      resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] });
+    host.appearance.resources![0].path = 'assets/replacement.woff2';
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.resources).toEqual([]);
+  });
+  // Removing the field declaration requests the public default (all fields),
+  // never an implicit expansion of the existing receipt's uiFont approval.
+  it('requires the remaining default fields to be approved after removing a restricted declaration', () => {
+    const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] } };
+    const manifest = { schemaVersion: 3, id: 'example', name: 'Example', version: '1', kind: 'chip',
+      entry: 'main.js', mcpApps: { host } } as GhostManifest;
+    const ghost = { manifest, approvedHostUi: ghostHostUiApprovalTokens(manifest),
+      approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    delete host.appearance;
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(true);
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toEqual(['uiFont']);
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toContain('wallpaper');
+  });
+});
 
 /** 一份全绿的清单基底(意识唯一形态:芯片,2026-07-12 单形态定案),单点破坏它来测各字段规则。 */
 function goodManifest(): Record<string, unknown> {
@@ -96,93 +158,6 @@ function goodChipManifest(): Record<string, unknown> {
     panel: { title: 'Hello 芯片', html: 'panel.html', minWidth: 240 },
   };
 }
-
-describe('ghost · native UI declarations and permission projection', () => {
-  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'native-ui', name: 'Native UI', version: '1', entry: 'main.js' };
-  // 4.1: the same named-tab declaration must drive package validation, the
-  // existing install summary and the WebView attach allowlist. Tier: unit.
-  it('includes each declared tab entry in the existing permission and page projections', () => {
-    const raw = { ...base, ui: { version: 1, tabViews: [
-      { id: 'log', title: 'Log', scope: 'session', page: 'views/log.html' },
-      { id: 'preview', title: 'Preview', scope: 'global', page: 'views/preview.html' },
-    ] } };
-    const parsed = validateGhostManifest(raw);
-    expect(parsed.ok).toBe(validateProtocolManifest(raw).ok);
-    if (!parsed.ok) throw new Error('invalid tab declaration');
-    expect(ghostWebviewEntryPaths(parsed.manifest)).toEqual(['/views/log.html', '/views/preview.html']);
-    expect(ghostPermissionItems(parsed.manifest).map(item => item.key))
-      .toEqual(['ui:tab-view:log', 'ui:tab-view:preview', 'code']);
-  });
-  it.each([
-    { version: 1 },
-    { version: 1, contributions: [{ id: 'format', point: 'composer.tools', scope: 'session' }] },
-    { version: 1, contributions: [{ id: 'future', point: 'future.point', scope: 'session' }] },
-    { version: 2, contributions: 'future' },
-    { version: 1, contributions: [{ id: 'duplicate', point: 'composer.tools', scope: 'session' },
-      { id: 'duplicate', point: 'composer.tools', scope: 'session' }] },
-    { version: 1, contributions: [{ id: 'missing', point: 'composer.tools' }] },
-  ])('matches the shared package validator for %j', (ui) => {
-    expect(validateGhostManifest({ ...base, ui }).ok).toBe(validateProtocolManifest({ ...base, ui }).ok);
-  });
-  it('projects only supported point/scope declarations and compares update permissions', () => {
-    const parsed = validateGhostManifest({ ...base, ui: { version: 1, contributions: [
-      { id: 'valid', point: 'composer.tools', scope: 'session' },
-      { id: 'future', point: 'future.point', scope: 'session' },
-      { id: 'wrong', point: 'composer.tools', scope: 'message' },
-    ] } });
-    const previous = validateGhostManifest(base);
-    if (!parsed.ok || !previous.ok) throw new Error('invalid test manifest');
-    // Every plugin already has the code permission; native UI must retain it.
-    expect(ghostPermissionItems(parsed.manifest).map(p => p.key)).toEqual(['ui:native:valid', 'code']);
-    expect(diffGhostPermissionItems(previous.manifest, parsed.manifest).added.map(p => p.key)).toEqual(['ui:native:valid']);
-    expect(diffGhostPermissionItems(parsed.manifest, parsed.manifest).added).toEqual([]);
-  });
-  it('keeps historical unknown declarations without granting malformed UI access', () => {
-    const ui = { version: 1, contributions: 'old unknown data' };
-    const parsed = validateInstalledGhostManifest({ ...base, ui });
-    expect(parsed).toMatchObject({ ok: true, manifest: { ui } });
-    if (parsed.ok) expect(ghostPermissionItems(parsed.manifest).map(p => p.key)).toEqual(['code']);
-    expect(validateGhostManifest({ ...base, ui }).ok).toBe(false);
-  });
-  it('shows added context and draft operations in the existing permission difference', () => {
-    const manifest = (context: string[], editor: string[]) => {
-      const parsed = validateGhostManifest({ ...base, ui: { version: 1, contributions: [
-        { id: 'context', point: 'composer.tools', scope: 'session', context, editor },
-      ] } });
-      if (!parsed.ok) throw new Error('invalid test manifest');
-      return parsed.manifest;
-    };
-    const old = manifest([], []), next = manifest(['session.summary', 'selection'], ['append']);
-    expect(diffGhostPermissionItems(old, next).added).toEqual([expect.objectContaining({
-      key: 'ui:native:context', detail: 'composer.tools (session); context: selection, session.summary; editor: append',
-    })]);
-    expect(diffGhostPermissionItems(next, manifest(['selection', 'session.summary'], ['append'])).added).toEqual([]);
-  });
-  it('includes command context and editing access in the existing permission summary', () => {
-    const parsed = validateGhostManifest({ ...base, ui: { version: 1, commands: [
-      { id: 'format', title: 'Format', scope: 'session', points: ['composer.tools'], context: ['selection'], editor: ['append'] },
-    ] } });
-    if (!parsed.ok) throw new Error('invalid test manifest');
-    expect(ghostPermissionItems(parsed.manifest)).toContainEqual(expect.objectContaining({
-      key: 'ui:command:format', detail: 'composer.tools (session); context: selection; editor: append',
-    }));
-  });
-  it('includes renderer matching and tool data in permission changes', () => {
-    const manifest = (match: unknown, context: string[]) => {
-      const parsed = validateGhostManifest({ ...base, ui: { version: 1, contributions: [
-        { id: 'body', point: 'tool.body', scope: 'tool', match, context },
-      ] } });
-      if (!parsed.ok) throw new Error('invalid test manifest');
-      return parsed.manifest;
-    };
-    const self = manifest({ kind: 'self', name: 'format' }, []);
-    const other = manifest({ kind: 'plugin', instanceId: '_ns__other__writer', name: 'format' }, ['tool.input', 'tool.result']);
-    expect(diffGhostPermissionItems(self, other).added).toEqual([expect.objectContaining({
-      key: 'ui:native:body', detail: expect.stringContaining('tool.input, tool.result'),
-    })]);
-    expect(ghostPermissionItems(other).find(item => item.key === 'ui:native:body')?.detail).toContain('_ns__other__writer');
-  });
-});
 
 describe('ghost · ghost_call 工具名匹配(Claude / Codex 双形态)', () => {
   it('认 Claude Code 形态 mcp__<server>__ghost_call(含旧 server 名)', () => {
@@ -1122,6 +1097,47 @@ describe('ghost · 清单校验', () => {
     for (const icon of ['../evil.png', '/abs.png', 'a\\b.png', 'icon.svg', 'icon.js', 'icon', 42]) {
       expect(validateGhostManifest({ ...goodManifest(), icon }).ok, String(icon)).toBe(false);
     }
+  });
+
+  it('tools[].parameters 新包按 UTF-8 字节限 16KB,已装快照保留旧口径', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const utf8Bytes = (parameters: Record<string, unknown>) =>
+      new TextEncoder().encode(JSON.stringify(parameters)).length;
+    const withParameters = (parameters: Record<string, unknown>) => ({
+      ...goodManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'do_thing', description: '做点事', parameters }],
+    });
+    const atLimit = schema('a'.repeat(16_384 - utf8Bytes(schema(''))));
+    const chineseDescription = '汉'.repeat(5_000);
+    const overLimit = schema(
+      `${chineseDescription}${'a'.repeat(16_385 - utf8Bytes(schema(chineseDescription)))}`,
+    );
+
+    expect(utf8Bytes(atLimit)).toBe(16_384);
+    expect(validateGhostManifest(withParameters(atLimit)).ok).toBe(true);
+
+    expect(JSON.stringify(overLimit).length).toBeLessThan(16_384);
+    expect(utf8Bytes(overLimit)).toBe(16_385);
+    expect(validateGhostManifest(withParameters(overLimit))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
+    // 升级前按 UTF-16 长度装入的多字节 schema,读取安装快照时不能因口径收紧失效。
+    expect(validateInstalledGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    // #7408: stored releases get only parameter-size compatibility, not relaxed agent declarations.
+    expect(validateStoredGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    expect(validateStoredGhostManifest({
+      ...withParameters(overLimit), agent: { tasks: 'historical' },
+    }).ok).toBe(false);
+    expect(validateStoredGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
+    expect(validateInstalledGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
   });
 });
 
@@ -5233,6 +5249,18 @@ describe('liveScreen declaration', () => {
     );
     const alone = validateGhostManifest({ ...base, liveScreen: true });
     expect(alone.ok).toBe(false);
+  });
+  // 任务在另一台电脑上时也显示任务页：只有提供设备画面的插件能声明，且只接受字面量 true。
+  it('lets a task page opt into tasks on another computer only together with liveScreen', () => {
+    const taskView = { html: 'task.html', remote: true };
+    const declared = validateGhostManifest({ ...base, node, liveScreen: true, taskView });
+    expect(declared.ok && declared.manifest.taskView).toEqual({ html: 'task.html', remote: true });
+    expect(validateGhostManifest({ ...base, taskView }).ok).toBe(false);
+    expect(
+      validateGhostManifest({ ...base, node, liveScreen: true, taskView: { ...taskView, remote: 'yes' } }).ok,
+    ).toBe(false);
+    const local = validateGhostManifest({ ...base, node, liveScreen: true, taskView: { html: 'task.html' } });
+    expect(local.ok && local.manifest.taskView?.remote).toBeUndefined();
   });
 });
 

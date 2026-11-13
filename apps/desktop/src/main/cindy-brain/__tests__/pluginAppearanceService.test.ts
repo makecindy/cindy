@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import sharp from 'sharp';
 import { PluginAppearanceService } from '../pluginAppearanceService.js';
 import * as appearanceResources from '../pluginAppearanceResources.js';
 import { DEFAULT_APPEARANCE_SETTINGS, normalizeAppearanceSettings, type AppearanceSettings } from '../../../shared/appearanceSettings.js';
@@ -9,30 +8,51 @@ import { DEFAULT_APPEARANCE_SETTINGS, normalizeAppearanceSettings, type Appearan
  * Minimal input: one field or a source change at publication. Tier: unit. */
 function fixture(fields = ['uiFont', 'reading', 'theme']) {
   let settings = normalizeAppearanceSettings({ uiFamily: 'Inter' });
-  let instance: { id: string; token: string; key: string; dir: string; ui: unknown } | null =
-    { id: 'example', token: 'runtime', key: 'a'.repeat(64), dir: '/unused', ui: { version: 1, appearance: { fields } } };
+  let instance: { id: string; token: string; key: string; dir: string; appearance: {fields: string[]} } | null =
+    { id: 'example', token: 'runtime', key: 'a'.repeat(64), dir: '/unused', appearance: { fields } };
   let beforeUpdate = () => {};
-  let iconBytes: Buffer | null = null;
-  let ready = true;
-  const nativeIcons: Array<Buffer | null> = [];
-  const saveWallpaper = vi.fn<ConstructorParameters<typeof PluginAppearanceService>[0]['saveWallpaper']>(async () => ({ url: '' }));
+  const saveWallpaper = vi.fn<ConstructorParameters<typeof PluginAppearanceService>[0]['saveWallpaper']>(async (_bytes, options) => {
+    await options.commit(() => {}); return { url: '' };
+  });
   const rendererApply = vi.fn(() => apply());
   let apply: () => Promise<{ status: 'applied' | 'saved' | 'failed'; reason?: string }> = async () => ({ status: 'saved', reason: 'NO_VIEWING_WINDOW' });
-  const createService = () => new PluginAppearanceService({ ready: () => ready, current: id => instance?.id === id ? instance : null,
-    files: { describe: async () => iconBytes ? { size: iconBytes.length, mimeType: 'image/png' } : null,
-      read: async () => iconBytes ? new Response(new Uint8Array(iconBytes)) : new Response(null, { status: 404 }) },
-    read: () => settings, update: async updater => { beforeUpdate(); settings = normalizeAppearanceSettings({ ...settings, ...updater(settings) }); return settings; },
+  const createService = () => new PluginAppearanceService({ ready: () => true, current: id => instance?.id === id ? instance : null,
+    files: { describe: async () => null, read: async () => new Response(null, { status: 404 }) },
+    read: () => settings, update: async updater => { beforeUpdate(); settings = normalizeAppearanceSettings({ ...settings, ...updater(settings, settings) }); return settings; },
     saveWallpaper, revokeWallpaper: async () => false,
-    publish: () => {}, apply: rendererApply, applyAppIcon: bytes => { nativeIcons.push(bytes); },
+    publish: () => {}, apply: rendererApply,
   });
   const service = createService();
   return { service, get: () => settings, replace: (next: Partial<AppearanceSettings>) => { settings = normalizeAppearanceSettings({ ...settings, ...next }); },
     beforeUpdate: (fn: () => void) => { beforeUpdate = fn; }, setApply: (fn: typeof apply) => { apply = fn; }, revoke: () => { instance = null; },
-    icon: (bytes: Buffer) => { iconBytes = bytes; }, nativeIcons, rendererApply, restart: createService,
-    ready: (value: boolean) => { ready = value; }, saveWallpaper,
-    replaceInstance: (id: string, key: string) => { instance = { id, key, token: 'replacement', dir: '/unused', ui: { version: 1, appearance: { fields } } }; } };
+    rendererApply, saveWallpaper };
 }
 describe('plugin appearance calls', () => {
+  // Opus F2：内部字体 IPC 应交接二进制，避免编码膨胀和 Renderer 逐字符解码。
+  // 真实 service，仅替换资源读取边界；已有用例未覆盖 font() 返回值。tier: unit。
+  it('returns the selected font bytes without base64 encoding', async () => {
+    const h = fixture(), hash = 'b'.repeat(64), family = `CindyPlugin_${hash}`;
+    const bytes = Buffer.from([0, 1, 127, 255]);
+    h.replace({ uiFontResource: { family, hash, reference: 'asset:font', source: { instanceId: 'example', key: 'a'.repeat(64) } } });
+    const read = vi.spyOn(appearanceResources, 'loadPluginAppearanceResource').mockResolvedValueOnce({
+      kind: 'font', bytes, mimeType: 'font/woff2', hash,
+    });
+    try { expect(await h.service.font('uiFont')).toEqual({ family, bytes: new Uint8Array(bytes).buffer }); }
+    finally { read.mockRestore(); }
+  });
+  it('rejects application icon changes through the appearance tool', async () => {
+    const h = fixture();
+    expect(await h.service.handle('example', { kind: 'set', patch: { appIcon: { resource: 'asset:icon' } } }))
+      .toMatchObject({ ok: false, error: { code: 'INVALID_PARAMS' } });
+    expect(h.rendererApply).not.toHaveBeenCalled();
+  });
+  it('persists body typography, reading layout and message appearance in the existing settings model', async () => {
+    const h = fixture(['bodyFont', 'reading', 'contentStyle', 'theme']);
+    const patch = { bodyFont: { family: 'Inter', size: 18 }, reading: { bodyLineHeight: 1.8, maxWidth: 720 },
+      contentStyle: { messagePadding: 12, messageGap: 16 }, theme: { light: { text: '#222222' }, dark: { text: '#eeeeee' } } };
+    expect(await h.service.handle('example', { kind: 'set', patch })).toMatchObject({ ok: true, data: { values: patch } });
+    expect(h.get()).toMatchObject({ bodyFont: patch.bodyFont, reading: patch.reading, contentStyle: patch.contentStyle, themeColors: patch.theme });
+  });
   // PR #8909: a user's wallpaper choice while a plugin is acquiring the
   // existing wallpaper lock must survive an older compare-and-set request.
   it('checks the expected revision before publishing a prepared wallpaper', async () => {
@@ -49,7 +69,7 @@ describe('plugin appearance calls', () => {
     h.saveWallpaper.mockImplementation(async (_bytes, options) => {
       entered(); await lock;
       options.assertCurrent();
-      h.replace({ customWallpaperUrl: url('c') });
+      await options.commit(() => h.replace({ customWallpaperUrl: url('c') }));
       return { url: url('c') };
     });
     const pending = h.service.handle('example', { kind: 'set', ifRevision: expected,
@@ -61,51 +81,23 @@ describe('plugin appearance calls', () => {
     expect(result).toMatchObject({ ok: false, error: { code: 'APPEARANCE_CHANGED' } });
     expect(h.get().customWallpaperUrl).toBe(url('b'));
   });
-  it('applies and resets a runtime app icon without waiting for a viewing page', async () => {
-    const h = fixture(['appIcon']);
-    h.icon(await sharp({ create: { width: 16, height: 16, channels: 4, background: '#123456' } }).png().toBuffer());
-    expect(await h.service.handle('example', { kind: 'set', patch: { appIcon: { resource: 'library:icon.png' } } }))
-      .toMatchObject({ ok: true, data: { values: { appIcon: { resource: 'library:icon.png' } }, application: { status: 'applied' } } });
-    expect(h.nativeIcons[0]).toBeInstanceOf(Buffer);
-    expect(h.rendererApply).not.toHaveBeenCalled();
-    expect(h.get().appIconResource).toMatchObject({ reference: 'library:icon.png', source: { instanceId: 'example' } });
-    expect(await h.service.handle('example', { kind: 'reset', fields: ['appIcon'] })).toMatchObject({ ok: true, data: { application: { status: 'applied' } } });
-    expect(h.nativeIcons.at(-1)).toBeNull(); expect(h.get().appIconResource).toBeUndefined();
-    expect(h.get().uiFamily).toBe('Inter');
-  });
-  it('preserves the current app icon when a resource is invalid or undeclared', async () => {
-    const undeclared = fixture(['uiFont']);
-    expect(await undeclared.service.handle('example', { kind: 'set', patch: { appIcon: { resource: 'library:icon.png' } } }))
-      .toMatchObject({ ok: false, error: { code: 'FIELD_NOT_DECLARED' } });
-    const h = fixture(['appIcon']); h.icon(Buffer.from('not an image'));
-    expect(await h.service.handle('example', { kind: 'set', patch: { appIcon: { resource: 'library:icon.png' } } }))
-      .toMatchObject({ ok: false, error: { code: 'RESOURCE_TYPE' } });
-    expect(h.get().appIconResource).toBeUndefined(); expect(h.nativeIcons).toEqual([]);
-  });
-  it('restores an approved app icon after restart and releases it on revocation', async () => {
-    const h = fixture(['appIcon']);
-    h.icon(await sharp({ create: { width: 16, height: 16, channels: 4, background: '#abcdef' } }).png().toBuffer());
-    await h.service.handle('example', { kind: 'set', patch: { appIcon: { resource: 'library:icon.png' } } });
-    h.nativeIcons.length = 0;
-    await h.restart().restoreAppIcon(); expect(h.nativeIcons[0]).toBeInstanceOf(Buffer);
-    h.ready(false); await h.service.reconcile();
-    expect(h.nativeIcons.at(-1)).toBeNull(); expect(h.get().appIconResource).toBeDefined();
-    h.ready(true); h.revoke(); await h.service.reconcile();
-    expect(h.get().appIconResource).toBeUndefined(); expect(h.nativeIcons.at(-1)).toBeNull();
-  });
-  it('does not erase a replacement plugin app icon during stale-source cleanup', async () => {
-    const h = fixture(['appIcon']);
-    h.icon(await sharp({ create: { width: 16, height: 16, channels: 4, background: '#abcdef' } }).png().toBuffer());
-    await h.service.handle('example', { kind: 'set', patch: { appIcon: { resource: 'library:icon.png' } } });
-    const resource = h.get().appIconResource!;
-    h.revoke();
-    h.beforeUpdate(() => {
-      h.replaceInstance('replacement', 'b'.repeat(64));
-      h.replace({ appIconResource: { ...resource, source: { instanceId: 'replacement', key: 'b'.repeat(64) } } });
+  it('rejects a newer appearance value before the prepared wallpaper reference is published', async () => {
+    const h = fixture(['wallpaper']);
+    const oldUrl = `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`;
+    h.replace({ wallpaperId: 'custom', customWallpaperUrl: oldUrl });
+    const expected = h.service.read('example').revision, publish = vi.fn();
+    vi.spyOn(appearanceResources, 'loadPluginAppearanceResource').mockResolvedValueOnce({
+      kind: 'image', bytes: Buffer.from('prepared'), mimeType: 'image/webp', hash: 'd'.repeat(64),
     });
-    await h.service.reconcile();
-    expect(h.get().appIconResource?.source.instanceId).toBe('replacement');
-    expect(h.nativeIcons.at(-1)).toBeInstanceOf(Buffer);
+    h.beforeUpdate(() => h.replace({ uiSize: 20 }));
+    h.saveWallpaper.mockImplementation(async (_bytes, options) => {
+      await options.commit(publish); return { url: oldUrl };
+    });
+    try {
+      expect(await h.service.handle('example', { kind: 'set', ifRevision: expected,
+        patch: { wallpaper: { resource: 'library:background.webp' } } })).toMatchObject({ ok: false, error: { code: 'APPEARANCE_CHANGED' } });
+      expect(publish).not.toHaveBeenCalled(); expect(h.get()).toMatchObject({ uiSize: 20, customWallpaperUrl: oldUrl });
+    } finally { vi.mocked(appearanceResources.loadPluginAppearanceResource).mockRestore(); }
   });
   it('does not apply a page write after the page binding has expired', async () => {
     const h = fixture(); let current = true;
@@ -119,11 +111,13 @@ describe('plugin appearance calls', () => {
     const h = fixture(), completions: Array<() => void> = [];
     h.setApply(() => new Promise(resolve => { completions.push(() => resolve({ status: 'applied' })); }));
     const first = h.service.handle('example', { kind: 'set', patch: { uiFont: { size: 16 } } });
+    // Keep both receipts in flight; an already superseded write need not reach a renderer.
+    await vi.waitFor(() => expect(completions).toHaveLength(1));
     const second = h.service.handle('example', { kind: 'set', patch: { reading: { maxWidth: 720 } } });
     expect(await h.service.handle('example', { kind: 'set', patch: { uiFont: { size: 22 } } }))
       .toMatchObject({ ok: false, error: { code: 'APPEARANCE_BUSY' } });
     expect(await h.service.handle('example', { kind: 'read' })).toMatchObject({ ok: true });
-    expect(completions).toHaveLength(2); completions.forEach(complete => complete());
+    await vi.waitFor(() => expect(completions).toHaveLength(2)); completions.forEach(complete => complete());
     await Promise.all([first, second]); expect(h.get().uiSize).toBe(16);
   });
   it('exposes only declared fields and rejects private or undeclared writes', async () => {

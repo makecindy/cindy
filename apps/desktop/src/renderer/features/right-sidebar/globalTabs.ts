@@ -25,13 +25,11 @@ import { useSyncExternalStore } from 'react';
 import { ghostPanelKind, type InstalledGhost } from '../../../shared/ghost';
 import { paneEdgeRelativeToChat, type Layout } from '../../../shared/layoutTree';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
-import { parsePluginTabViewState, type PluginTabViewState } from '../../../shared/pluginUi';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import { isSidebarTabWindow } from '@/lib/sidebarTabWindow';
 import { isTabPoppedOut } from '@/lib/sidebarTabWindowState';
 import { clearTabGroup, getTabGroupAssignments, setTabGroup, type TabGroupId } from './tabGroups';
-import { clearPluginTabViewPosition } from './pluginTabViewPositions';
 import type { TabState } from './types';
 
 const log = createLogger('rightSidebar.globalTabs');
@@ -49,6 +47,8 @@ export type PluginViewKind = 'panel' | 'main';
 export interface PluginViewTabState {
   /** 插件物理实例 id(storage part)。 */
   instanceId: string;
+  resourceViewId?: string;
+  resourceInput?: Record<string, unknown>;
   /**
    * 承载的页面。缺省(旧数据)按插件声明推导:有停靠面板 → panel,否则 main——
    * 与升级前「panel 优先」的行为一致。
@@ -78,6 +78,7 @@ export function tabShowsMainView(
   state: PluginViewTabState | null | undefined,
   ghost: InstalledGhost,
 ): boolean {
+  if (state?.resourceViewId) return false;
   const view = effectivePluginView(state, ghost);
   if (view === 'main') return true;
   const panelHtml = ghost.manifest.panel?.html;
@@ -129,14 +130,6 @@ export function sanitizeGlobalTabsSnapshot(raw: unknown): GlobalTabsSnapshot {
     for (const entry of raw.tabs) {
       if (!isPlainObject(entry)) continue;
       if (typeof entry.id !== 'string' || !entry.id || seen.has(entry.id)) continue;
-      if (entry.kind === 'plugin-tab-view') {
-        const state = parsePluginTabViewState(entry.state);
-        if (!state || state.scope !== 'global') continue;
-        seen.add(entry.id);
-        tabs.push({ id: entry.id, kind: 'plugin-tab-view', state });
-        if (tabs.length >= MAX_GLOBAL_TABS) break;
-        continue;
-      }
       if (entry.kind !== 'plugin-view') continue;
       if (!isPlainObject(entry.state) || typeof entry.state.instanceId !== 'string') continue;
       seen.add(entry.id);
@@ -145,6 +138,8 @@ export function sanitizeGlobalTabsSnapshot(raw: unknown): GlobalTabsSnapshot {
         kind: 'plugin-view',
         state: {
           instanceId: entry.state.instanceId,
+          ...(typeof entry.state.resourceViewId === 'string' ? { resourceViewId: entry.state.resourceViewId } : {}),
+          ...(isPlainObject(entry.state.resourceInput) ? { resourceInput: entry.state.resourceInput } : {}),
           ...(entry.state.view === 'panel' || entry.state.view === 'main'
             ? { view: entry.state.view }
             : {}),
@@ -180,10 +175,7 @@ function ensureStorageListener(): void {
   storageListenerWired = true;
   window.addEventListener('storage', (event) => {
     if (event.key !== null && event.key !== cacheOwnerKey) return;
-    const previous = cache;
     cache = null;
-    const currentIds = new Set(getGlobalTabsSnapshot().tabs.map(tab => tab.id));
-    for (const tab of previous?.tabs ?? []) if (tab.kind === 'plugin-tab-view' && !currentIds.has(tab.id)) clearPluginTabViewPosition(tab.id);
     notify();
   });
 }
@@ -222,8 +214,6 @@ export function findGlobalTab(tabId: string): TabState | null {
 
 function persist(next: GlobalTabsSnapshot): void {
   const key = ownerKey();
-  const currentIds = new Set(next.tabs.map(tab => tab.id));
-  for (const tab of cache?.tabs ?? []) if (tab.kind === 'plugin-tab-view' && !currentIds.has(tab.id)) clearPluginTabViewPosition(tab.id);
   cache = next;
   cacheOwnerKey = key;
   try {
@@ -272,11 +262,12 @@ export function defaultGroupForGhost(ghost: InstalledGhost, view?: PluginViewKin
  */
 export function addGlobalPluginTab(
   instanceId: string,
-  opts?: { groupId?: TabGroupId; ghost?: InstalledGhost; view?: PluginViewKind },
+  opts?: { groupId?: TabGroupId; ghost?: InstalledGhost; view?: PluginViewKind; resourceViewId?: string; resourceInput?: Record<string, unknown> },
 ): TabState | null {
   const current = freshSnapshot();
   const existing = current.tabs.find(
-    (tab) => tab.kind === 'plugin-view' && (tab.state as PluginViewTabState | null)?.instanceId === instanceId,
+    (tab) => (tab.state as PluginViewTabState | null)?.instanceId === instanceId &&
+      (tab.state as PluginViewTabState).resourceViewId === opts?.resourceViewId,
   );
   const dismissed = current.dismissedInstanceIds.filter((id) => id !== instanceId);
   if (existing) {
@@ -286,13 +277,15 @@ export function addGlobalPluginTab(
     const wantedView = opts?.view;
     const switched =
       wantedView !== undefined && effectivePluginView(existingState, opts?.ghost) !== wantedView;
-    const next = switched
-      ? { ...existing, state: { ...existingState, view: wantedView } as PluginViewTabState }
+    const changedInput = Boolean(opts?.resourceViewId);
+    const next = switched || changedInput
+      ? { ...existing, state: { ...existingState, ...(switched ? { view: wantedView } : {}),
+          ...(changedInput ? { resourceInput: opts?.resourceInput ?? {} } : {}) } as PluginViewTabState }
       : existing;
-    if (switched || dismissed.length !== current.dismissedInstanceIds.length) {
+    if (switched || changedInput || dismissed.length !== current.dismissedInstanceIds.length) {
       persist({
         ...current,
-        tabs: switched ? current.tabs.map((tab) => (tab === existing ? next : tab)) : current.tabs,
+        tabs: switched || changedInput ? current.tabs.map((tab) => (tab === existing ? next : tab)) : current.tabs,
         dismissedInstanceIds: dismissed,
       });
     }
@@ -305,9 +298,10 @@ export function addGlobalPluginTab(
   const view: PluginViewKind | undefined =
     opts?.view ?? (opts?.ghost ? effectivePluginView(undefined, opts.ghost) : undefined);
   const tab: TabState = {
-    id: globalTabIdForInstance(instanceId),
+    id: opts?.resourceViewId ? `${globalTabIdForInstance(instanceId)}_view_${opts.resourceViewId}` : globalTabIdForInstance(instanceId),
     kind: 'plugin-view',
-    state: { instanceId, ...(view ? { view } : {}) } satisfies PluginViewTabState,
+    state: { instanceId, ...(view ? { view } : {}), ...(opts?.resourceViewId ? { resourceViewId: opts.resourceViewId } : {}),
+      ...(opts?.resourceInput ? { resourceInput: opts.resourceInput } : {}) } satisfies PluginViewTabState,
   };
   let placed = current.placedInstanceIds;
   // 组归属先于页签出现落定,首帧就在目标组里。
@@ -326,27 +320,13 @@ export function addGlobalPluginTab(
   return tab;
 }
 
-/** Named pages share native groups, while retaining a distinct tab identity. */
-export function addGlobalPluginTabView(instanceId: string, id: string): TabState | null {
-  const current = freshSnapshot();
-  const tabId = `gv:${encodeURIComponent(instanceId)}:${encodeURIComponent(id)}`;
-  const existing = current.tabs.find(tab => tab.id === tabId);
-  if (existing) return existing;
-  if (current.tabs.length >= MAX_GLOBAL_TABS) return null;
-  const tab: TabState<PluginTabViewState> = { id: tabId, kind: 'plugin-tab-view',
-    state: { instanceId, id, scope: 'global' } };
-  persist({ ...current, tabs: [...current.tabs, tab] });
-  return tab;
-}
-
 /** 用户关闭全局页签:全局动作,同时记 dismissed,插件不再自动加回。 */
 export function removeGlobalTab(tabId: string): void {
   const current = freshSnapshot();
   const tab = current.tabs.find((candidate) => candidate.id === tabId);
   if (!tab) return;
-  if (tab.kind === 'plugin-tab-view') clearPluginTabViewPosition(tabId);
   const instanceId = (tab.state as PluginViewTabState).instanceId;
-  const dismissed = tab.kind !== 'plugin-view' || current.dismissedInstanceIds.includes(instanceId)
+  const dismissed = current.dismissedInstanceIds.includes(instanceId)
     ? current.dismissedInstanceIds
     : [...current.dismissedInstanceIds, instanceId];
   if (activeGlobalTabId === tabId) activeGlobalTabId = null;
@@ -447,7 +427,7 @@ export function globalTabTitleForGhost(ghost: InstalledGhost, view?: PluginViewK
 export function findGlobalTabByInstance(instanceId: string): TabState | null {
   return (
     getGlobalTabs().find(
-      (tab) => tab.kind === 'plugin-view' && (tab.state as PluginViewTabState | null)?.instanceId === instanceId,
+      (tab) => (tab.state as PluginViewTabState | null)?.instanceId === instanceId && !(tab.state as PluginViewTabState).resourceViewId,
     ) ?? null
   );
 }
@@ -515,7 +495,7 @@ export function reconcileGlobalPluginTabs(ghosts: readonly InstalledGhost[]): vo
   let dismissed = current.dismissedInstanceIds.filter((id) => installed.has(id));
   let placed = current.placedInstanceIds.filter((id) => installed.has(id));
   const windowed = current.windowInstanceIds.filter((id) => installed.has(id));
-  const present = new Set(tabs.filter(tab => tab.kind === 'plugin-view').map((tab) => (tab.state as PluginViewTabState).instanceId));
+  const present = new Set(tabs.map((tab) => (tab.state as PluginViewTabState).instanceId));
   let legacyMinimized: Set<string> | undefined;
   for (const [instanceId, ghost] of installed) {
     if (!isAutoGlobalPanelGhost(ghost)) continue;

@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { isSafeSessionPathSegment } from '../sessionIds.js';
 import { isLibraryExtraDirSlot } from './extraDirsValidator.js';
 
 import type { AgentKind, CreateSessionOptions, WorkspaceKind } from '@cindy/maker-core';
@@ -11,11 +11,6 @@ import { requireObject, requireString, throwIpcError } from '../utils/ipcValidat
  * basename so a remote `maker:create-session` caller can't use `..` / path separators /
  * absolute paths in `id` to escape that root and bypass the remote working-directory guard.
  */
-function isSafePathSegment(value: string): boolean {
-  if (value === '.' || value === '..') return false;
-  if (value.includes('/') || value.includes('\\') || value.includes('\0')) return false;
-  return path.basename(value) === value;
-}
 
 export interface MakerSessionCreateOpts extends CreateSessionOptions {
   orcaRole?: 'lead' | 'worker' | null;
@@ -99,7 +94,7 @@ function readDialogueSessionId(value: unknown, createSessionId: (() => string) |
   if (typeof value !== 'string' || value.trim() === '') {
     throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
   }
-  if (!isSafePathSegment(value)) {
+  if (!isSafeSessionPathSegment(value)) {
     throwIpcError('INVALID_PARAMS', 'id must be a safe path segment (no separators or ..)');
   }
   return value;
@@ -132,7 +127,7 @@ export function readCreateSessionOpts(
   // 外部(含 device-link)可控的 session id 会被下游拼进磁盘路径(如 Pi 权限档
   // perm-<id>.json)。未校验的 `../../..` 之类 id 经 path.join 逃出 runtimeDir,writeFile
   // 可覆盖任意可写文件(codex review)。在边界统一限制为安全单段值;缺省(自动生成)放行。
-  if (typeof id === 'string' && id.length > 0 && !isSafePathSegment(id)) {
+  if (typeof id === 'string' && id.length > 0 && !isSafeSessionPathSegment(id)) {
     throwIpcError('INVALID_PARAMS', 'session id must be a safe path segment');
   }
   const workingDir = needsDialogueWorkspace
@@ -176,4 +171,22 @@ export function withCreateSessionStderr(
     ...opts,
     vendorOptions: { ...vendorOptions, onStderrLine },
   };
+}
+
+export function createSessionStderrOptions(log: { warn(message: string): void }) {
+  return function buildCreateOptsWithStderr(o: MakerSessionCreateOpts) {
+    // 把 vendor 子进程 stderr 引到主进程日志,否则 "process exited with code 1" 之类
+    // 的失败信息会被默默丢掉。renderer 仍可以通过 vendorOptions 自定义,这里只在缺省时兜底。
+    return withCreateSessionStderr(o, (agentKind, line) =>
+      log.warn(`[${agentKind}/stderr] ${line}`),
+    );
+  };
+}
+
+export function isSessionRunningError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  if (code === 'SESSION_RUNNING') return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
 }

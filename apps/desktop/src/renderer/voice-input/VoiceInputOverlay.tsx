@@ -16,6 +16,7 @@ import type {
   DictationRefinementContext,
   VoiceInputErrorCode,
   VoiceInputState,
+  VoiceInputRendererEvent,
 } from '@cindy/voice-input-core';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -43,8 +44,10 @@ import {
   type VoiceInputUsageOutcome,
 } from '@/hooks/useVoiceInputUsageStats';
 import {
+  createStartCueGate,
   playVoiceInputEndCue,
   playVoiceInputStartCue,
+  type StartCueGate,
 } from './startCue';
 import {
   VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
@@ -78,7 +81,7 @@ import {
 } from './readinessRecovery';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { useVoiceProcessingIndicator } from './useVoiceProcessingIndicator';
-import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { dispatchVoiceInputEvent } from './eventScope';
 import { VoiceInputStatusErrorIcon, VoiceInputStatusNotice } from './VoiceInputStatusNotice';
 import { useVoiceInputOverlayDrag } from './useVoiceInputOverlayDrag';
 import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
@@ -249,6 +252,7 @@ export function VoiceInputOverlay() {
   const settingsRef = useRef(getVoiceInputSettings());
   const startupTimelineRef = useRef<VoiceInputStartupTimeline | null>(null);
   const engineRef = useRef<WebMicAudioEngine | null>(null);
+  const startCueGateRef = useRef<StartCueGate | null>(null);
   const runIdRef = useRef<string | null>(null);
   const stateRef = useRef<VoiceInputState>('idle');
   const stopInFlightRef = useRef(false);
@@ -256,6 +260,7 @@ export function VoiceInputOverlay() {
   const draftTextRef = useRef('');
   const finalTextRef = useRef('');
   const rawTranscriptTextRef = useRef('');
+  const useOriginalTextRef = useRef<string | null>(null);
   const pendingPasteTextRef = useRef('');
   const historyEntryIdRef = useRef<string | null>(null);
   const sentAudioMsRef = useRef(0);
@@ -334,6 +339,7 @@ export function VoiceInputOverlay() {
     draftTextRef.current = '';
     finalTextRef.current = '';
     rawTranscriptTextRef.current = '';
+    useOriginalTextRef.current = null;
     pendingPasteTextRef.current = '';
     historyEntryIdRef.current = null;
     terminalOutcomeRef.current = 'success';
@@ -420,6 +426,8 @@ export function VoiceInputOverlay() {
   }, []);
 
   const stopEngine = useCallback(async () => {
+    // The attempt is ending: nothing is left for the start cue to wait for.
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     engineRef.current = null;
     if (engine) await engine.stop();
@@ -441,6 +449,7 @@ export function VoiceInputOverlay() {
   }, []);
 
   const drainAndStopEngine = useCallback(async () => {
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     if (!engine) return;
     // Keep submit semantics lossless: the worklet can hold a sub-chunk that has
@@ -813,6 +822,7 @@ export function VoiceInputOverlay() {
     draftTextRef.current = '';
     finalTextRef.current = '';
     rawTranscriptTextRef.current = '';
+    useOriginalTextRef.current = null;
     pendingPasteTextRef.current = '';
     historyEntryIdRef.current = null;
     sentAudioMsRef.current = 0;
@@ -824,6 +834,11 @@ export function VoiceInputOverlay() {
     setVoiceState('listening');
 
     log.debug('global voice input bootstrap requested');
+
+    // The start cue and system mute both touch the speakers; hold them until the
+    // microphone is open so capture does not queue behind that (see createStartCueGate).
+    const cueGate = createStartCueGate();
+    startCueGateRef.current = cueGate;
 
     const capturePromise = startVoiceInputCaptureSession({
       label: 'global',
@@ -837,6 +852,7 @@ export function VoiceInputOverlay() {
       isCurrentEngine: (engine) => startAttemptIdRef.current === attemptId && engineRef.current === engine,
       timeline,
       appendAudioChunk,
+      onCaptureReady: () => cueGate.release(),
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
       onInterrupted: (message) => {
         if (isActiveStartAttempt(attemptId)) void failRecording(message);
@@ -850,12 +866,18 @@ export function VoiceInputOverlay() {
       elapsedMs,
     });
 
-    // Start capture first; feedback runs independently without awaiting the
-    // microphone. Only system mute waits for playback to avoid cutting it off.
-    const feedback = Promise.resolve().then(() => {
+    // Start capture first; the cue follows the open microphone (bounded by the
+    // gate's cap) and never waits for service checks or the cloud. Only system
+    // mute waits for playback to avoid cutting it off.
+    const feedback = cueGate.released.then((play) => {
+      if (!play || !settings.playInteractionSound) return;
       if (!isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
-      return settings.playInteractionSound ? playVoiceInputStartCue() : undefined;
+      timeline.mark('start_cue_released');
+      return playVoiceInputStartCue();
     });
+    // A capture that never becomes ready (denied, unavailable, cancelled) has no
+    // cue to wait for; do not leave system mute waiting for the cap.
+    void capturePromise.then((capture) => { if (!capture.ok) cueGate.abandon(); });
     if (settings.muteSystemAudio && supportsSystemAudioMute()) {
       void muteSystemAudioForRecording(feedback).then(() => timeline.mark('mute_finished'));
     } else {
@@ -1189,6 +1211,23 @@ export function VoiceInputOverlay() {
       });
   }, [resetHiddenOverlaySession, showPasteFailure]);
 
+  const useOriginalAndPaste = useCallback(() => {
+    const runId = ownedRunIdRef.current;
+    const text = rawTranscriptTextRef.current.trim();
+    if (stateRef.current !== 'refining' || !runId || !text || cancelRequestedRef.current) return;
+
+    // Keep the existing stop/paste handoff as the only paste owner. Detach this
+    // run before releasing it so late refinement events cannot replace the
+    // explicitly chosen original, even if cancelling the provider is slow.
+    useOriginalTextRef.current = text;
+    ownedRunIdRef.current = null;
+    stateRef.current = 'done';
+    resolveDoneWaiters();
+    void window.electronAPI.voiceInput.cancel({ runId }).catch((cancelError) => {
+      log.warn('could not cancel refinement after choosing original text', cancelError);
+    });
+  }, [resolveDoneWaiters]);
+
   const stopAndPaste = useCallback(async () => {
     if (closingRef.current) return;
     closingRef.current = true;
@@ -1281,7 +1320,7 @@ export function VoiceInputOverlay() {
       return;
     }
 
-    const text = (finalTextRef.current || draftTextRef.current).trim();
+    const text = (useOriginalTextRef.current ?? (finalTextRef.current || draftTextRef.current)).trim();
     if (!text) {
       stateRef.current = 'done';
       commitUsageStats();
@@ -1344,12 +1383,16 @@ export function VoiceInputOverlay() {
   }, []);
 
   useEffect(() => {
-    return window.electronAPI.voiceInput.onEvent((event) => {
-      if (!shouldHandleVoiceInputEvent(
-        ownedRunIdRef.current,
-        event.runId,
-        isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = window.electronAPI.voiceInput.onEvent((event) => {
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? ownedRunIdRef.current : null,
+        startReadyRef.current?.promise,
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       switch (event.type) {
         case 'auth-required':
           codexSessionPromptActiveRef.current = requestCodexSessionExpiredPrompt(event.reason);
@@ -1482,7 +1525,11 @@ export function VoiceInputOverlay() {
           }
           break;
       }
-    });
+    }
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
   }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState, showSpeakerFiltered]);
 
   useEffect(() => {
@@ -1618,7 +1665,7 @@ export function VoiceInputOverlay() {
       onPointerMove={actionTipsDisabled ? enableActionTips : undefined}
     >
       <div
-        className="w-full rounded-[14px] border border-[var(--cmd-palette-border)] px-4 py-3 shadow-[var(--shadow-menu)] backdrop-blur"
+        className="w-full rounded-xl border border-[var(--cmd-palette-border)] px-4 py-3 shadow-[shadow:var(--shadow-menu)] backdrop-blur"
         style={{ backgroundColor: 'color-mix(in srgb, var(--cmd-palette-bg) 95%, transparent)' }}
         {...dragHandlers}
       >
@@ -1641,7 +1688,22 @@ export function VoiceInputOverlay() {
             <span className="min-w-0 truncate text-12">{t('voiceInputOverlay.speakerFiltered')}</span>
           )}
           <div className="ml-auto flex items-center gap-1">
-            {!hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
+            {state === 'refining' && !hasBlockingError && !hasPasteError && !hasPermissionPrompt ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                tabIndex={-1}
+                onFocus={preventOverlayButtonFocus}
+                onPointerDown={(event) => {
+                  beginOverlayButtonAction(event);
+                  useOriginalAndPaste();
+                }}
+                onClick={suppressOverlayButtonClick}
+              >
+                {t('voiceInputOverlay.useOriginal')}
+              </Button>
+            ) : !hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
               <Tip text={submitTooltip} side="bottom" delay={150} disabled={actionTipsDisabled}>
                 <button
                   type="button"
@@ -1746,7 +1808,7 @@ export function VoiceInputOverlay() {
                   void cancelAndClose();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 {t('commonUi.confirmDialog.cancel')}
               </Button>
@@ -1761,7 +1823,7 @@ export function VoiceInputOverlay() {
                   openPermissionPromptSettings();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 <Settings className="h-3.5 w-3.5" />
                 {t('voiceInputOverlay.openPermissionSettings')}
@@ -1785,7 +1847,7 @@ export function VoiceInputOverlay() {
                 void openReadinessSettings();
               }}
               onClick={suppressOverlayButtonClick}
-              className="shrink-0 shadow-sm"
+              className="shrink-0"
             >
               <Settings className="h-3.5 w-3.5" />
               {t('voiceInputOverlay.openSettings')}
@@ -1810,7 +1872,7 @@ export function VoiceInputOverlay() {
                     void openAccessibilitySettings();
                   }}
                   onClick={suppressOverlayButtonClick}
-                  className="shrink-0 shadow-sm"
+                  className="shrink-0"
                 >
                   <Settings className="h-3.5 w-3.5" />
                   {t('voiceInputOverlay.openPermissionSettings')}
@@ -1827,7 +1889,7 @@ export function VoiceInputOverlay() {
                   void copyPendingText();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 <Copy className="h-3.5 w-3.5" />
                 {t('voiceInputOverlay.copy')}

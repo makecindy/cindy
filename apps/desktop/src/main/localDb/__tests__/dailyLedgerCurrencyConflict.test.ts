@@ -11,6 +11,16 @@ vi.mock('../../logger', () => ({
   }),
 }));
 
+// 历史汇总使用下方注入的只读依赖，不加载账号报价缓存及其外部服务。
+vi.mock('../../usage/modelPricing', () => ({
+  getGatewayModelPricing: vi.fn(),
+  isModelPricingRefreshInFlight: vi.fn(),
+}));
+vi.mock('../../usage/referenceModelPricing', () => ({
+  getReferenceModelPricing: vi.fn(),
+  readModelPriceOverridesSnapshot: vi.fn(),
+}));
+
 import * as schema from '../schema';
 import type { DbClient } from '../client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
@@ -22,6 +32,8 @@ import {
   localDayKey,
 } from '../dailySpend';
 import { incrementDailyModelUsage } from '../dailyModelUsage';
+import { readUsageHistoryWith } from '../../usage/usageHistory';
+import { USD_TO_CNY_FIXED_RATE } from '../../../shared/regionalMoney';
 import {
   __resetActiveLedgerCurrencyForTesting,
   setActiveLedgerCurrency,
@@ -131,25 +143,42 @@ describe('daily ledger multi-currency rows', () => {
     }
   });
 
-  it('reads back the row matching the active ledger currency', async () => {
+  // 单测（内存 SQLite）：同一天切换结算币种后，今日金额和历史汇总必须一致。
+  // 既有覆盖只检查各币种独立写入，未比较今日读取、写入回执与真实历史聚合入口。
+  // 最小输入：USD 4 + CNY 10；读取不得改库，后续增量也只写入原币种行。
+  it.each(['CNY', 'USD'] as const)('aligns today reads and write receipts with history for a %s ledger without converting stored rows', async (currency) => {
     const harness = createHarness();
     try {
-      setActiveLedgerCurrency('CNY');
-      await incrementDailySpend(cny(149.13));
       setActiveLedgerCurrency('USD');
-      await incrementDailySpend(usd(15.44));
-
-      // 展示侧仍是单币种:不跨币种求和(汇率是估算,混加会把两笔精确账单变成谁也对不上
-      // 的数),按当前账本币种挑那一行。
-      await expect(getTodaySpend()).resolves.toMatchObject({
-        amount: 15.44,
-        currency: 'USD',
-      });
+      await incrementDailySpend(usd(4));
       setActiveLedgerCurrency('CNY');
-      await expect(getTodaySpend()).resolves.toMatchObject({
-        amount: 149.13,
-        currency: 'CNY',
+      await incrementDailySpend(cny(10));
+      setActiveLedgerCurrency(currency);
+
+      const rawRows = () => harness.sqlite.prepare('SELECT * FROM daily_spend ORDER BY cost_currency').all();
+      const beforeRead = rawRows();
+      const readHistory = () => readUsageHistoryWith({
+        getAllSpendDays,
+        getModelUsageSince: async () => [],
+        getGatewayModelPricing: async () => null,
+        getReferenceModelPricing: () => ({}),
+        getModelPriceOverridesSnapshot: () => ({}),
+        isModelPricingRefreshInFlight: () => false,
+        todayKey: () => localDayKey(),
       });
+      const expected = currency === 'CNY' ? 4 * USD_TO_CNY_FIXED_RATE + 10 : 4;
+      const today = await getTodaySpend();
+      expect(today).toMatchObject({ amount: expected, currency, approximate: false });
+      expect(today).toEqual((await readHistory()).totals.today);
+      expect(rawRows()).toEqual(beforeRead);
+
+      const receipt = await incrementDailySpend(currency === 'CNY' ? cny(2) : usd(2));
+      expect(receipt).toEqual({ day: localDayKey(), money: (await readHistory()).totals.today });
+      expect(receipt.money.amount).toBeCloseTo(expected + 2);
+      expect(rawRows()).toEqual([
+        expect.objectContaining({ cost_currency: 'CNY', cost_amount: currency === 'CNY' ? 12 : 10, cost_usd: 0, cost_is_approximate: 0 }),
+        expect.objectContaining({ cost_currency: 'USD', cost_amount: currency === 'USD' ? 6 : 4, cost_usd: 0, cost_is_approximate: 0 }),
+      ]);
     } finally {
       harness.close();
     }

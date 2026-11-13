@@ -61,9 +61,9 @@ describe('Attachment thumbnail — non-image file card (attachment-file-card)', 
     expect(block).toMatch(/liveByteSize !== null \? shownSize >= 0 : shownSize > 0/);
     // 显示的大小优先用复核回来的当前值,file.size 只是拖入那一刻的快照。
     expect(block).toMatch(/const shownSize = liveByteSize \?\? file\.size/);
-    // formatBytes 走 TextLightbox 的具名导出,不要在这里重造一份。
+    // formatBytes 复用 TextLightbox 同一份实现(独立模块,不连带按需加载的弹窗),不要在这里重造一份。
     expect(chatInput).toMatch(
-      /import\s+\{\s*formatBytes,\s*TextLightbox\s*\}\s+from\s+'@\/components\/chat\/TextLightbox'/,
+      /import\s+\{\s*formatBytes\s*\}\s+from\s+'@\/components\/chat\/formatBytes'/,
     );
   });
 

@@ -53,6 +53,7 @@ const captured = vi.hoisted(() => ({
   failSetModel: false,
   rejectSetModel: false,
   failPrompt: false,
+  failSwitchSession: false,
   failSteer: false,
   failNextGetState: false,
   commandCatalog: null as null | Array<Record<string, unknown>>,
@@ -144,6 +145,7 @@ vi.mock('../rpc-client.js', () => ({
         return { success: true, data: { contextWindow: 200_000 } };
       }
       if (cmd.type === 'switch_session') {
+        if (captured.failSwitchSession) return { success: false, error: 'history unavailable' };
         captured.runtimeProvider = captured.launchProvider;
         captured.runtimeModel = captured.launchModel;
         return { success: true, data: {} };
@@ -3721,6 +3723,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
+  // Unit regression at the real Pi startup entry. Missing/switch-failed native
+  // history previously cleared the persisted id and silently created an empty task.
+  it.each(['missing', 'switch-failed'])('strict history resume preserves the binding on %s', async (failure) => {
+    const agent = new PiAgent(buildDeps());
+    const resumeFile = path.join(agentHome, 'strict-history.jsonl');
+    if (failure === 'switch-failed') writeFileSync(resumeFile, '{}\n');
+    captured.failSwitchSession = failure === 'switch-failed';
+    const invalidResume = vi.fn(async () => true);
+    try {
+      await expect(agent.startSession({ sessionId: 'strict-history', workingDir: cwd,
+        model: 'm', providerId: 'openai', resumeSessionId: resumeFile,
+        onInvalidResumeSession: invalidResume,
+        vendorOptions: { _cindyRequireNativeResume: true },
+      })).rejects.toThrow('Native Pi history');
+      expect(invalidResume).not.toHaveBeenCalled();
+      expect(captured.closed).toBe(true);
+    } finally { captured.failSwitchSession = false; }
+  });
+
   it('resume 模型同时缺少公开与 retained 描述符时不会在来源初始化前访问 resolver', async () => {
     const deps = buildDeps();
     deps.resolvePiRuntimeModelDescriptor = vi.fn(() => null);
@@ -3845,6 +3866,45 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(referenceDir, { recursive: true, force: true });
     rmSync(writableDir, { recursive: true, force: true });
     rmSync(replacementWritableDir, { recursive: true, force: true });
+  });
+
+  it('sends extra dir full paths in the startup append and per-turn prefix, refreshing after mid-session additions (#8812)', async () => {
+    const referenceDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-reference-'));
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const addedDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-added-'));
+    try {
+      const handle = await start('bypassPermissions', undefined, false, undefined, {
+        extraDirs: [referenceDir],
+        writableDirs: [writableDir],
+      });
+      // 会话启动的 --append-system-prompt 段即带完整路径。
+      const appended = readAppendedSystemPrompt();
+      expect(appended).toContain(`- ${referenceDir}`);
+      expect(appended).toContain(`- ${writableDir}`);
+
+      const lastPromptMessage = () =>
+        String(captured.requests.findLast((r) => r.type === 'prompt')?.message ?? '');
+      await handle.send({ type: 'user', content: 'hello' });
+      expect(lastPromptMessage()).toContain(`- ${referenceDir}`);
+      expect(lastPromptMessage()).toContain(`- ${writableDir}`);
+
+      // 运行中追加目录:下一轮用户轮前缀即带新路径,无需重建会话。
+      await handle.setExtraDirs!([referenceDir, addedDir]);
+      await handle.send({ type: 'user', content: 'again' });
+      expect(lastPromptMessage()).toContain(`- ${addedDir}`);
+
+      // steer 前缀与 send 同一 compose 口径。
+      captured.onEvent?.({ type: 'agent_start' });
+      await handle.steer({ type: 'user', content: 'steer' });
+      expect(String(captured.requests.findLast((r) => r.type === 'steer')?.message ?? ''))
+        .toContain(`- ${addedDir}`);
+
+      await handle.close();
+    } finally {
+      rmSync(referenceDir, { recursive: true, force: true });
+      rmSync(writableDir, { recursive: true, force: true });
+      rmSync(addedDir, { recursive: true, force: true });
+    }
   });
 
   it('forces an explicit decision for agent-home writes even under Full Access', async () => {

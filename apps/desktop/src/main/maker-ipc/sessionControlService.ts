@@ -1,4 +1,4 @@
-import { DelegationNotAuthorizedError, formatForwardedRequest, type CapturedAgentRequest } from './forwardedRequest.js';
+import { formatForwardedRequest, type CapturedAgentRequest } from './forwardedRequest.js';
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type {
   AgentKind,
@@ -35,12 +35,11 @@ export type SessionQueuedMessageControlResult =
       | 'MESSAGE_CONSUMING'
       | 'NOT_AUTHORIZED'
       | 'INVALID_ARGS'
-      | 'DELEGATION_NOT_AUTHORIZED'
     >;
 
 export type SessionSteerResult =
   | { ok: true; queuedMessageId: string }
-  | Failure<'NOT_FOUND' | 'NO_ACTIVE_TURN' | 'UNSUPPORTED_CAPABILITY' | 'DELIVERY_FAILED' | 'DELEGATION_NOT_AUTHORIZED'>;
+  | Failure<'NOT_FOUND' | 'NO_ACTIVE_TURN' | 'UNSUPPORTED_CAPABILITY' | 'DELIVERY_FAILED'>;
 
 export type SessionStopResult =
   | {
@@ -99,6 +98,7 @@ export interface SessionControlServiceDeps {
     beforeMutation?: () => Promise<void>;
     patch: {
       harness?: AgentKind;
+      agentDeviceId?: string | null;
       model?: string;
       providerId?: string | null;
       effort?: Effort | null;
@@ -164,7 +164,6 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       if (missing) return missing;
       const captured = await deps.captureRequest?.(params.callerSessionId, params.message,
         { sessionId: params.targetSessionId });
-      if (captured?.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: captured.blocked };
       return queueControl.update({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
@@ -273,17 +272,10 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       }
       const turnGeneration = live.getTurnGeneration();
       const queuedMessageId = params.queuedMessageId ?? deps.createId();
-      let item: AgentInputQueuedMessage;
-      try {
-        item = await deps.createQueuedMessage({
-          ...params,
-          queuedMessageId,
-        });
-      } catch (error) {
-        if (error instanceof DelegationNotAuthorizedError)
-          return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: error.message };
-        throw error;
-      }
+      const item: AgentInputQueuedMessage = await deps.createQueuedMessage({
+        ...params,
+        queuedMessageId,
+      });
       await beforeMutation?.();
       const current = deps.getLiveSession(params.targetSessionId);
       if (
@@ -365,6 +357,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       beforeMutation?: () => Promise<void>;
       patch: {
         harness?: AgentKind;
+        agentDeviceId?: string | null;
         model?: string;
         providerId?: string | null;
         effort?: Effort | null;
@@ -402,7 +395,7 @@ export function authorizeSessionQueueReorder(
   const plainMachineMessage =
     !item.sourcePlugin &&
     (item.origin?.kind === 'orca' ||
-      (item.origin?.kind === 'session' && !item.origin.senderBotId));
+      item.origin?.kind === 'session');
   const owned =
     authorizeSessionQueueItem(item, callerSessionId).ok || callerSessionId === targetSessionId;
   return plainMachineMessage && owned

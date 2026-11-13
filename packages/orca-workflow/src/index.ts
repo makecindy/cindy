@@ -13,6 +13,11 @@ export {
   type OrcaSteerFallbackReason,
   type OrcaTeamStore,
   type OrcaWorkerLink,
+  type OrcaWorkerQueuedReport,
+  type OrcaWorkerReportQueueBridge,
+  type OrcaWorkerReportQueueIdentity,
+  type OrcaWorkerReportReceipt,
+  type OrcaWorkerReportQueueStatus,
   type OrcaWorkerStatus,
   type OrcaWorkerVendorOptions,
 } from './orca-bridge-mcp.js';

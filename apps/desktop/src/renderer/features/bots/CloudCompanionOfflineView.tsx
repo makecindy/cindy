@@ -9,17 +9,21 @@ import { useTranslation } from 'react-i18next';
 import { CHAT_BODY_CLASS } from '@/components/chat/chatChrome';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { toast } from '@/lib/toast';
 import type { CompanionTranscriptMessage, CompanionTranscriptPage } from '../../../shared/companionCloud';
 import type { BotGroupAttachment } from '../../../shared/botGroupChat';
+import type { BotProfileSourceFailure } from '../../../shared/botProfileSources';
+import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotSessionContentHeaderRegistration, type BotChatIdentity } from './BotSessionContentHeader';
 import { ensureBotProfilesLoaded } from './botStore';
 import { companionCloudApi, refreshCompanionCloud } from './companionCloudStore';
+import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
 
 export interface CloudCompanionOfflineViewProps {
   botId: string;
@@ -31,12 +35,14 @@ export interface CloudCompanionOfflineViewProps {
   deviceName: string;
   /** The home is online but has not opened remote control; otherwise it is simply not reachable. */
   controlOff?: boolean;
+  profileFailure?: BotProfileSourceFailure;
 }
 
 type TakeOverState =
   | { kind: 'idle' }
   | { kind: 'running' }
   | { kind: 'conflict'; device: string }
+  | { kind: 'profile'; failure: BotProfileSourceFailure }
   | { kind: 'error'; key: string };
 
 let transcriptOwner = getDataOwnerGeneration();
@@ -46,9 +52,10 @@ export function CloudCompanionOfflineView(props: CloudCompanionOfflineViewProps)
   if (!owner.dataOwnerId || !isDataOwnerGenerationCurrent(transcriptOwner)) { transcriptOwner = owner; transcriptPages.clear(); }
   return <CloudCompanionOfflineContent key={JSON.stringify([owner, props.botId, props.deviceId])} {...props} />;
 }
-function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false }: CloudCompanionOfflineViewProps) {
+function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false, profileFailure }: CloudCompanionOfflineViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const conflict = useCompanionCindyConflictAction();
   const devices = useDeviceLinkDeviceList();
   const device = deviceName.trim() || t('bots.cloud.unknownDevice');
   const identity = useMemo<BotChatIdentity>(() => ({ id: botId, deviceId, deviceName: device, name, avatar, avatarColor, sessionId: null }),
@@ -58,6 +65,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [state, setState] = useState<TakeOverState>({ kind: 'idle' });
+  const [repairOpen, setRepairOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const stickToBottom = useRef(true);
@@ -135,6 +143,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
     const api = companionCloudApi();
     if (!api || state.kind === 'running') return;
     setState({ kind: 'running' });
+    conflict.clear();
     const owner = getDataOwnerGeneration();
     try {
       const result = await api.takeOverCompanion(botId);
@@ -146,6 +155,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         return;
       }
       refreshCompanionCloud();
+      conflict.report(result);
       if (result.code === 'HOME_CONFLICT') {
         const winner = devices?.find((candidate) => candidate.deviceId === result.homeDeviceId)?.name?.trim() || t('bots.cloud.unknownDevice');
         if (result.homeDeviceId && result.homeDeviceId !== deviceId) {
@@ -154,32 +164,51 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
           setState({ kind: 'idle' });
           navigate(`/bots/remote/${encodeURIComponent(result.homeDeviceId)}/${encodeURIComponent(botId)}`);
         } else setState({ kind: 'conflict', device: winner });
-      } else setState({ kind: 'error', key: result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline'
-        : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled' : 'bots.cloud.takeOverFailed' });
+      } else if (result.profileFailure) setState({ kind: 'profile', failure: result.profileFailure });
+      else setState({ kind: 'error', key: result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline'
+        : result.code === 'NOT_ENABLED' ? 'bots.cloud.notEnabled' : result.code === 'LOCAL_CINDY_CONFLICT'
+          ? 'bots.cloud.localCindyConflict' : 'bots.cloud.takeOverFailed' });
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) setState({ kind: 'error', key: 'bots.cloud.takeOverFailed' });
     }
   };
 
+  const sourceFailure = state.kind === 'profile' ? state.failure : profileFailure;
   return (
     <main className="flex h-full min-h-0 flex-col bg-[var(--surface)]" data-testid="cloud-companion-offline">
       <BotSessionContentHeaderRegistration bot={identity} />
-      <section
+      <CompanionProfileRepairDialog botId={botId} open={repairOpen} onOpenChange={setRepairOpen} />
+      {sourceFailure ? <ErrorNotice
+        role="alert"
+        className="mx-4 mt-3"
+        message={t('bots.cloud.takeOverFailed', { name })}
+        description={state.kind === 'running' ? t('bots.cloud.takingOver', { name })
+          : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
+          : state.kind === 'error' ? t(state.key, { name })
+            : t(sourceFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: sourceFailure.maxLength })}
+        details={`INVALID_PARAMS: ${sourceFailure.field} > ${sourceFailure.maxLength}`}
+        actions={<><CompanionCindyConflictAction action={conflict.action} />
+          {typeof companionCloudApi()?.repairCompanionProfile === 'function' && <Button variant="primary" size="md" disabled={state.kind === 'running'} onClick={() => setRepairOpen(true)}>{t('bots.cloud.repair.action')}</Button>}
+          <Button variant="secondary" size="md" loading={state.kind === 'running'} disabled={state.kind === 'running'} onClick={() => void takeOver()}>{t('bots.retry')}</Button></>}
+      /> : <section
         role="status"
         className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
       >
-        <BotAvatar bot={identity} size="sm" />
-        <div className="min-w-0 flex-1">
-          <p className="text-14 font-medium text-[var(--text-primary)]">
-            {t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
-          </p>
-          <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
-            {state.kind === 'running' ? t('bots.cloud.takingOver', { name })
-              : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
-                : state.kind === 'error' ? t(state.key, { name })
-                  : t('bots.cloud.takeOverHint', { name })}
-          </p>
+        <div className={`flex min-w-0 flex-1 items-center gap-3${conflict.action ? ' basis-full' : ''}`}>
+          <BotAvatar bot={identity} size="sm" />
+          <div className="min-w-0 flex-1">
+            <p className="text-14 font-medium text-[var(--text-primary)]">
+              {t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
+            </p>
+            <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
+              {state.kind === 'running' ? t('bots.cloud.takingOver', { name })
+                : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
+                  : state.kind === 'error' ? t(state.key, { name })
+                    : t('bots.cloud.takeOverHint', { name })}
+            </p>
+          </div>
         </div>
+        <CompanionCindyConflictAction action={conflict.action} />
         <Button
           variant="primary"
           size="md"
@@ -190,7 +219,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         >
           {t('bots.cloud.continueHere')}
         </Button>
-      </section>
+      </section>}
       <div
         ref={scroller}
         className="min-h-0 flex-1 overflow-y-auto px-6 py-4"

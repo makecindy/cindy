@@ -26,7 +26,12 @@ import {
   type LocalePreference,
   type SupportedLocale,
 } from '@/i18n';
-import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import {
+  classicalReplyStyleContextOf,
+  defaultClassicalReplyStyleFor,
+  type ClassicalReplyStyleContext,
+  type ClassicalReplyStyleId,
+} from '@cindy/maker-shared/classical-reply';
 import {
   readStoredClassicalStyle,
   readStoredLocale,
@@ -43,7 +48,7 @@ interface LocaleContextValue {
   effectiveLocale: SupportedLocale;
   /** 设置偏好 —— 持久化到 localStorage、刷 i18next、刷 <html lang>。 */
   setLocale: (next: LocalePreference) => void;
-  /** 古典界面（文言）下 AI 作答的输出风格。 */
+  /** AI 作答文风（文言、唐诗……）；现代中文界面下也可选，默认照常作答。 */
   classicalStyle: ClassicalReplyStyleId;
   setClassicalStyle: (next: ClassicalReplyStyleId) => void;
 }
@@ -65,7 +70,7 @@ function syncClassicalStyle(style: ClassicalReplyStyleId): void {
 }
 
 function applyLocale(loc: SupportedLocale): void {
-  // i18next 自带 isInitialized 检查；同步资源 + 同步 init 下永远是 true。
+  // 目标语言包已加载时立即切换；否则先按需加载，加载完成才切换并触发重渲染。
   void i18n.changeLanguage(loc);
   if (typeof document !== 'undefined') {
     document.documentElement.lang = loc;
@@ -76,9 +81,10 @@ function applyLocale(loc: SupportedLocale): void {
 /**
  * Apply the persisted locale before the first React render.
  *
- * Lightweight windows render their error boundary outside the provider tree;
- * initializing i18next synchronously here keeps even an early render failure
- * in the user's selected language.
+ * Lightweight windows render their error boundary outside the provider tree.
+ * The renderer dispatcher (index.tsx) waits for `i18nReady` before loading any
+ * window, so the selected language is already loaded here and applying it is
+ * synchronous; even an early render failure stays in the user's language.
  */
 export function bootstrapInitialLocale(): SupportedLocale {
   const effectiveLocale = getEffectiveLocale();
@@ -89,12 +95,22 @@ export function bootstrapInitialLocale(): SupportedLocale {
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(getEffectiveLocale);
-  const [classicalStyle, setClassicalStyleState] = useState<ClassicalReplyStyleId>(readStoredClassicalStyle);
+  // 文言界面与简体 / 繁體中文界面的文风分开记忆:在文言界面选的唐诗不带进现代中文界面，
+  // 每个语境各自从未选状态起步(默认见 defaultClassicalReplyStyleFor)。
+  const [storedStyles, setStoredStyles] = useState<Record<ClassicalReplyStyleContext, ClassicalReplyStyleId | null>>(() => ({
+    classical: readStoredClassicalStyle('classical'),
+    modern: readStoredClassicalStyle('modern'),
+  }));
+  const styleContext = classicalReplyStyleContextOf(effectiveLocale);
+  const classicalStyle = storedStyles[styleContext] ?? defaultClassicalReplyStyleFor(effectiveLocale);
 
-  const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
-    setClassicalStyleState(next);
-    writeStoredClassicalStyle(next);
-  }, []);
+  const setClassicalStyle = useCallback(
+    (next: ClassicalReplyStyleId) => {
+      setStoredStyles((prev) => ({ ...prev, [styleContext]: next }));
+      writeStoredClassicalStyle(styleContext, next);
+    },
+    [styleContext],
+  );
 
   // Main builds each turn's reply note, so it keeps the current style too.
   useEffect(() => {

@@ -1,4 +1,4 @@
-import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleRunTrigger } from '../types.js';
+import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleWebhookEvent, ScheduleRunTrigger } from '../types.js';
 
 export interface ChildRunInput {
   sessionId?: string;
@@ -10,12 +10,16 @@ export interface ChildRunInput {
 export interface FireContext {
   runId: string;
   firedAt: number;
+  /** Host-owned validity check captured when this fire starts. */
+  assertFireContext?: () => void;
   /** Continue the interrupted conversation, without replaying the initial prompt or precheck. */
   resumeSessionId?: string;
   /** Host caller owns deferred retries; never schedule a cron replay for this attempt. */
   deferToCaller?: boolean;
   /** Internal caller validity, checked at the accepted -> vendor-dispatch boundary. Never persisted. */
   canDispatch?: () => boolean;
+  /** Events that woke this run. Untrusted external data; never persisted with the run. */
+  webhook?: { events: ScheduleWebhookEvent[]; omitted: number };
   /** Bound pre-run hooks must execute in the directory shown in the approval card. */
   expectedPreRunWorkingDir?: string;
   /**

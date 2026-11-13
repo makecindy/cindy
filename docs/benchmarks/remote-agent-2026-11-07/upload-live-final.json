@@ -1,0 +1,1123 @@
+{
+  "date": "2026-11-07T04:25:57.442Z",
+  "baseline": "4538b647a6af841aed5c49f00fa96f581538f7b8",
+  "sourceHashes": {
+    "serial": "b829fea8d9723e715af2cd22242f1c103d081bfd460ed4335c617baeb5e8eac6",
+    "candidate": "5b44a15f4786e8d03e0a091ef6d0ae4999dbd6cad318e0d55d9e4419a7906ef4"
+  },
+  "invokeScheduling": "channel default, same as production remoteBackgroundInvoke",
+  "probeSchedule": "one caps/close pair at a time, every 50ms while uploads are in flight; final pair may finish after upload",
+  "source": {
+    "platform": "darwin",
+    "version": "0.0.0"
+  },
+  "target": {
+    "platform": "darwin",
+    "version": "0.1.124"
+  },
+  "directBefore": true,
+  "directAfter": true,
+  "idleControl": {
+    "medianMs": 7.71,
+    "p95Ms": 11.88,
+    "n": 10
+  },
+  "summary": [
+    {
+      "sourceBytes": 4194327,
+      "kind": "serial",
+      "upload": {
+        "medianMs": 897.67,
+        "p95Ms": 1137.82,
+        "n": 5
+      },
+      "control": {
+        "medianMs": 96.06,
+        "p95Ms": 467.3,
+        "n": 34
+      },
+      "directEverySample": true,
+      "allValidated": true
+    },
+    {
+      "sourceBytes": 4194327,
+      "kind": "candidate",
+      "upload": {
+        "medianMs": 682.4,
+        "p95Ms": 1205.51,
+        "n": 5
+      },
+      "control": {
+        "medianMs": 126.84,
+        "p95Ms": 251.5,
+        "n": 20
+      },
+      "directEverySample": true,
+      "allValidated": true
+    },
+    {
+      "sourceBytes": 11184835,
+      "kind": "serial",
+      "upload": {
+        "medianMs": 1962.82,
+        "p95Ms": 2613.81,
+        "n": 5
+      },
+      "control": {
+        "medianMs": 97.57,
+        "p95Ms": 155.97,
+        "n": 84
+      },
+      "directEverySample": true,
+      "allValidated": true
+    },
+    {
+      "sourceBytes": 11184835,
+      "kind": "candidate",
+      "upload": {
+        "medianMs": 1451.58,
+        "p95Ms": 1703.93,
+        "n": 5
+      },
+      "control": {
+        "medianMs": 117.84,
+        "p95Ms": 255.57,
+        "n": 48
+      },
+      "directEverySample": true,
+      "allValidated": true
+    }
+  ],
+  "records": [
+    {
+      "kind": "candidate",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 682.5022909999998,
+      "peakUploadRequests": 2,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 98.29979200000025
+        },
+        {
+          "op": "close",
+          "ms": 251.50091599999996
+        },
+        {
+          "op": "caps",
+          "ms": 198.15004199999976
+        },
+        {
+          "op": "close",
+          "ms": 14.209082999999737
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 829.7177919999999,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 54.63233300000002
+        },
+        {
+          "op": "close",
+          "ms": 158.08979200000022
+        },
+        {
+          "op": "caps",
+          "ms": 89.14249999999993
+        },
+        {
+          "op": "close",
+          "ms": 116.31812500000024
+        },
+        {
+          "op": "caps",
+          "ms": 61.68920900000012
+        },
+        {
+          "op": "close",
+          "ms": 129.1104580000001
+        },
+        {
+          "op": "caps",
+          "ms": 6.313083000000006
+        },
+        {
+          "op": "close",
+          "ms": 12.191417000000001
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 1126.3319999999999,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 63.10029099999974
+        },
+        {
+          "op": "close",
+          "ms": 104.64625000000024
+        },
+        {
+          "op": "caps",
+          "ms": 63.00545800000009
+        },
+        {
+          "op": "close",
+          "ms": 87.00620900000013
+        },
+        {
+          "op": "caps",
+          "ms": 178.81874999999945
+        },
+        {
+          "op": "close",
+          "ms": 467.3000000000002
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 682.4002499999997,
+      "peakUploadRequests": 2,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 201.39258400000017
+        },
+        {
+          "op": "close",
+          "ms": 198.47258299999976
+        },
+        {
+          "op": "caps",
+          "ms": 154.93483300000025
+        },
+        {
+          "op": "close",
+          "ms": 14.27258299999994
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 466.04620799999975,
+      "peakUploadRequests": 2,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 94.57441700000072
+        },
+        {
+          "op": "close",
+          "ms": 126.84141700000055
+        },
+        {
+          "op": "caps",
+          "ms": 81.97495799999979
+        },
+        {
+          "op": "close",
+          "ms": 208.28770799999984
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 1137.824708,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 38.17895800000042
+        },
+        {
+          "op": "close",
+          "ms": 80.68920799999978
+        },
+        {
+          "op": "caps",
+          "ms": 47.4668329999995
+        },
+        {
+          "op": "close",
+          "ms": 157.9223750000001
+        },
+        {
+          "op": "caps",
+          "ms": 116.64529099999982
+        },
+        {
+          "op": "close",
+          "ms": 477.39337499999965
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 3,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 728.8958330000005,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 75.51283299999977
+        },
+        {
+          "op": "close",
+          "ms": 117.75404199999957
+        },
+        {
+          "op": "caps",
+          "ms": 97.64225000000079
+        },
+        {
+          "op": "close",
+          "ms": 99.28262499999983
+        },
+        {
+          "op": "caps",
+          "ms": 103.07891699999982
+        },
+        {
+          "op": "close",
+          "ms": 89.17050000000017
+        },
+        {
+          "op": "caps",
+          "ms": 4.225040999999692
+        },
+        {
+          "op": "close",
+          "ms": 6.617707999999766
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 3,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 483.2310409999991,
+      "peakUploadRequests": 2,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 98.93791699999929
+        },
+        {
+          "op": "close",
+          "ms": 129.9910830000008
+        },
+        {
+          "op": "caps",
+          "ms": 104.23125000000073
+        },
+        {
+          "op": "close",
+          "ms": 13.710625000001528
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 4,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 1205.505916,
+      "peakUploadRequests": 2,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 79.4152920000015
+        },
+        {
+          "op": "close",
+          "ms": 158.84279099999912
+        },
+        {
+          "op": "caps",
+          "ms": 830.6229590000003
+        },
+        {
+          "op": "close",
+          "ms": 13.790084000000206
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 4,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159113,
+      "chunks": 7,
+      "uploadMs": 897.6687920000004,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 140.734375
+        },
+        {
+          "op": "close",
+          "ms": 167.76391700000022
+        },
+        {
+          "op": "caps",
+          "ms": 93.92849999999999
+        },
+        {
+          "op": "close",
+          "ms": 114.11079199999949
+        },
+        {
+          "op": "caps",
+          "ms": 58.35016699999869
+        },
+        {
+          "op": "close",
+          "ms": 96.06020800000078
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 0,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 1194.2929999999997,
+      "peakUploadRequests": 2,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 90.20933399999922
+        },
+        {
+          "op": "close",
+          "ms": 124.03091700000004
+        },
+        {
+          "op": "caps",
+          "ms": 102.41645800000151
+        },
+        {
+          "op": "close",
+          "ms": 121.29754199999843
+        },
+        {
+          "op": "caps",
+          "ms": 97.82150000000001
+        },
+        {
+          "op": "close",
+          "ms": 112.49129200000061
+        },
+        {
+          "op": "caps",
+          "ms": 95.06829099999959
+        },
+        {
+          "op": "close",
+          "ms": 104.00587499999892
+        },
+        {
+          "op": "caps",
+          "ms": 14.21191700000054
+        },
+        {
+          "op": "close",
+          "ms": 6.826208000000406
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 0,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 1962.8199160000004,
+      "peakUploadRequests": 1,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 139.8093749999989
+        },
+        {
+          "op": "close",
+          "ms": 117.55729200000133
+        },
+        {
+          "op": "caps",
+          "ms": 111.93895800000246
+        },
+        {
+          "op": "close",
+          "ms": 144.79812500000116
+        },
+        {
+          "op": "caps",
+          "ms": 77.69329199999993
+        },
+        {
+          "op": "close",
+          "ms": 121.40866599999936
+        },
+        {
+          "op": "caps",
+          "ms": 108.63562499999898
+        },
+        {
+          "op": "close",
+          "ms": 96.93941700000141
+        },
+        {
+          "op": "caps",
+          "ms": 54.624415999998746
+        },
+        {
+          "op": "close",
+          "ms": 97.57354100000157
+        },
+        {
+          "op": "caps",
+          "ms": 45.27362500000163
+        },
+        {
+          "op": "close",
+          "ms": 87.92324999999983
+        },
+        {
+          "op": "caps",
+          "ms": 69.41699999999764
+        },
+        {
+          "op": "close",
+          "ms": 90.21287499999744
+        },
+        {
+          "op": "caps",
+          "ms": 37.81208300000071
+        },
+        {
+          "op": "close",
+          "ms": 73.85154200000034
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 1,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 1918.8908330000013,
+      "peakUploadRequests": 1,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 98.45658299999923
+        },
+        {
+          "op": "close",
+          "ms": 137.92733300000327
+        },
+        {
+          "op": "caps",
+          "ms": 106.47175000000061
+        },
+        {
+          "op": "close",
+          "ms": 112.93354099999851
+        },
+        {
+          "op": "caps",
+          "ms": 70.4589589999996
+        },
+        {
+          "op": "close",
+          "ms": 154.00179099999878
+        },
+        {
+          "op": "caps",
+          "ms": 98.60912499999904
+        },
+        {
+          "op": "close",
+          "ms": 114.61687499999971
+        },
+        {
+          "op": "caps",
+          "ms": 61.36162499999773
+        },
+        {
+          "op": "close",
+          "ms": 100.10412499999802
+        },
+        {
+          "op": "caps",
+          "ms": 50.023041999997076
+        },
+        {
+          "op": "close",
+          "ms": 84.6728329999969
+        },
+        {
+          "op": "caps",
+          "ms": 73.9841669999987
+        },
+        {
+          "op": "close",
+          "ms": 85.07016700000167
+        },
+        {
+          "op": "caps",
+          "ms": 39.97045799999978
+        },
+        {
+          "op": "close",
+          "ms": 76.99945899999875
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 1,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 1703.930083000003,
+      "peakUploadRequests": 2,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 207.11491600000227
+        },
+        {
+          "op": "close",
+          "ms": 250.3682919999992
+        },
+        {
+          "op": "caps",
+          "ms": 206.40099999999802
+        },
+        {
+          "op": "close",
+          "ms": 168.26045800000065
+        },
+        {
+          "op": "caps",
+          "ms": 136.94541599999866
+        },
+        {
+          "op": "close",
+          "ms": 162.99629099999947
+        },
+        {
+          "op": "caps",
+          "ms": 151.671709000002
+        },
+        {
+          "op": "close",
+          "ms": 150.25183299999844
+        },
+        {
+          "op": "caps",
+          "ms": 18.169291999998677
+        },
+        {
+          "op": "close",
+          "ms": 4.203875000002881
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 2,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 1264.624208000001,
+      "peakUploadRequests": 2,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 85.77058300000135
+        },
+        {
+          "op": "close",
+          "ms": 117.11470899999767
+        },
+        {
+          "op": "caps",
+          "ms": 58.40899999999965
+        },
+        {
+          "op": "close",
+          "ms": 109.37195799999972
+        },
+        {
+          "op": "caps",
+          "ms": 69.01158399999986
+        },
+        {
+          "op": "close",
+          "ms": 265.9966670000031
+        },
+        {
+          "op": "caps",
+          "ms": 101.4499160000014
+        },
+        {
+          "op": "close",
+          "ms": 117.83858399999735
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 2,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 1950.5262909999983,
+      "peakUploadRequests": 1,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 171.85008300000118
+        },
+        {
+          "op": "close",
+          "ms": 170.9794159999983
+        },
+        {
+          "op": "caps",
+          "ms": 126.53745799999888
+        },
+        {
+          "op": "close",
+          "ms": 144.5131250000013
+        },
+        {
+          "op": "caps",
+          "ms": 73.29312500000015
+        },
+        {
+          "op": "close",
+          "ms": 100.32191700000112
+        },
+        {
+          "op": "caps",
+          "ms": 72.78858300000138
+        },
+        {
+          "op": "close",
+          "ms": 99.31045900000026
+        },
+        {
+          "op": "caps",
+          "ms": 63.01983300000211
+        },
+        {
+          "op": "close",
+          "ms": 93.91345799999908
+        },
+        {
+          "op": "caps",
+          "ms": 41.09962499999892
+        },
+        {
+          "op": "close",
+          "ms": 82.81795899999997
+        },
+        {
+          "op": "caps",
+          "ms": 50.16004199999952
+        },
+        {
+          "op": "close",
+          "ms": 80.60791700000118
+        },
+        {
+          "op": "caps",
+          "ms": 63.372292000000016
+        },
+        {
+          "op": "close",
+          "ms": 80.898333000001
+        },
+        {
+          "op": "caps",
+          "ms": 7.884375000001455
+        },
+        {
+          "op": "close",
+          "ms": 21.202666000001045
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 3,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 2613.8074579999993,
+      "peakUploadRequests": 1,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 140.05766700000095
+        },
+        {
+          "op": "close",
+          "ms": 144.37720799999806
+        },
+        {
+          "op": "caps",
+          "ms": 102.73033299999952
+        },
+        {
+          "op": "close",
+          "ms": 155.97270800000115
+        },
+        {
+          "op": "caps",
+          "ms": 90.49033300000156
+        },
+        {
+          "op": "close",
+          "ms": 121.85966600000029
+        },
+        {
+          "op": "caps",
+          "ms": 65.1162919999988
+        },
+        {
+          "op": "close",
+          "ms": 105.08066699999836
+        },
+        {
+          "op": "caps",
+          "ms": 58.81345800000054
+        },
+        {
+          "op": "close",
+          "ms": 91.08591700000034
+        },
+        {
+          "op": "caps",
+          "ms": 124.11970799999835
+        },
+        {
+          "op": "close",
+          "ms": 117.58741700000246
+        },
+        {
+          "op": "caps",
+          "ms": 93.49062500000218
+        },
+        {
+          "op": "close",
+          "ms": 506.3324169999978
+        },
+        {
+          "op": "caps",
+          "ms": 139.8912919999966
+        },
+        {
+          "op": "close",
+          "ms": 155.30687500000204
+        },
+        {
+          "op": "caps",
+          "ms": 9.908667000003334
+        },
+        {
+          "op": "close",
+          "ms": 7.42412499999773
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 3,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 1451.576291999998,
+      "peakUploadRequests": 2,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 173.97550000000047
+        },
+        {
+          "op": "close",
+          "ms": 196.9864579999994
+        },
+        {
+          "op": "caps",
+          "ms": 118.68904100000145
+        },
+        {
+          "op": "close",
+          "ms": 138.75666600000113
+        },
+        {
+          "op": "caps",
+          "ms": 87.73366600000008
+        },
+        {
+          "op": "close",
+          "ms": 136.8639579999981
+        },
+        {
+          "op": "caps",
+          "ms": 99.60929100000067
+        },
+        {
+          "op": "close",
+          "ms": 139.4957080000022
+        },
+        {
+          "op": "caps",
+          "ms": 155.2210840000007
+        },
+        {
+          "op": "close",
+          "ms": 410.98483300000225
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "candidate",
+      "round": 4,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 1486.6706660000018,
+      "peakUploadRequests": 2,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 255.57145799999853
+        },
+        {
+          "op": "close",
+          "ms": 202.80045800000153
+        },
+        {
+          "op": "caps",
+          "ms": 111.08412499999758
+        },
+        {
+          "op": "close",
+          "ms": 143.26162499999919
+        },
+        {
+          "op": "caps",
+          "ms": 84.20837500000198
+        },
+        {
+          "op": "close",
+          "ms": 134.34104200000002
+        },
+        {
+          "op": "caps",
+          "ms": 79.07312500000262
+        },
+        {
+          "op": "close",
+          "ms": 106.61516699999993
+        },
+        {
+          "op": "caps",
+          "ms": 7.126374999999825
+        },
+        {
+          "op": "close",
+          "ms": 5.499958000000333
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 4,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424209,
+      "chunks": 17,
+      "uploadMs": 2066.6810419999965,
+      "peakUploadRequests": 1,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 35.23620799999844
+        },
+        {
+          "op": "close",
+          "ms": 158.20887500000026
+        },
+        {
+          "op": "caps",
+          "ms": 129.34358299999803
+        },
+        {
+          "op": "close",
+          "ms": 133.48937500000102
+        },
+        {
+          "op": "caps",
+          "ms": 76.45879200000127
+        },
+        {
+          "op": "close",
+          "ms": 106.08941699999923
+        },
+        {
+          "op": "caps",
+          "ms": 84.19333299999926
+        },
+        {
+          "op": "close",
+          "ms": 147.6574580000015
+        },
+        {
+          "op": "caps",
+          "ms": 90.39870900000096
+        },
+        {
+          "op": "close",
+          "ms": 115.14262500000041
+        },
+        {
+          "op": "caps",
+          "ms": 68.88845800000126
+        },
+        {
+          "op": "close",
+          "ms": 112.52045899999939
+        },
+        {
+          "op": "caps",
+          "ms": 84.06695800000307
+        },
+        {
+          "op": "close",
+          "ms": 108.34533299999748
+        },
+        {
+          "op": "caps",
+          "ms": 101.92170800000167
+        },
+        {
+          "op": "close",
+          "ms": 111.73833300000115
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    }
+  ],
+  "limitations": [
+    "Actual Cindy-to-Cindy authenticated Device Link. CDP is a local invocation adapter, identical across variants.",
+    "Receiver unchanged; invalid-open sentinel exercises reassembly, gzip verification/JSON parsing and cleanup without model/task creation.",
+    "Control probes are caps and no-op close, not user-message rendering or interruption of a running model.",
+    "No forced relay/network impairment; no restart/update of installed apps."
+  ]
+}

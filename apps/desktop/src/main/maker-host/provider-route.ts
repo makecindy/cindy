@@ -136,14 +136,13 @@ export function isProviderRouteMutationInProgress(providerId: string): boolean {
 /**
  * 通用 OAuth 供应商的 access_token 读取器（注入，同 key reader 模式）。
  *
- * **必须同步**（路由热路径，规则 10）：读 generic-oauth 的内存 blob 缓存；临期刷新由
- * generic-oauth 侧在读取时后台单飞触发，不阻塞本次路由。返回 null = 未登录 / 无 token
+ * 请求等待 generic-oauth 必要刷新完成。返回 null = 未登录 / 无 token
  * → 路由仍指向该供应商上游但置哑 token（上游预期 401；绝不回落默认路由防凭证泄漏）。
  */
-type OAuthTokenReader = (providerId: string) => string | null;
+type OAuthTokenReader = (providerId: string) => string | null | Promise<string | null>;
 let oauthTokenReader: OAuthTokenReader = () => null;
 
-/** host 启动期接通 generic-oauth 的同步 token 缓存读取。 */
+/** host 启动期接通等待必要刷新的 token reader。 */
 export function setOAuthTokenReader(reader: OAuthTokenReader): void {
   oauthTokenReader = reader;
 }
@@ -194,13 +193,15 @@ export function readProviderOAuthToken(
 const MISSING_PROVIDER_OAUTH_TOKEN = 'xdt-missing-provider-oauth-token';
 
 /**
- * Codex 子进程(ChatGPT OAuth spawn)随请求携带的 OpenAI 账号/会话元数据头。
- * 发往第三方上游前必须整组抹掉:既是隐私(账号 id 泄漏给别家),也防上游把不认识的
- * OpenAI 头当非法请求拒掉。内置 xai 走目录条目的 headerDelete 声明同一组;自定义
- * OAuth 供应商的目录条目(buildUserProvider)不带 headerDelete,由 oauth-token 分支
- * 在代码层兜底(非 ChatGPT spawn 下这些头不存在,删除为 no-op,无副作用)。
+ * Codex 子进程可能携带的 OpenAI 账号/会话元数据头及客户端标识。
+ * originator 在 API Key 模式下也存在，并不只来自 ChatGPT OAuth spawn。
+ * 发往第三方上游默认整组抹掉，避免账号信息泄漏和上游拒绝不认识的头；内置 xai
+ * 由目录 headerDelete 声明，自定义供应商由代码兜底。企业下发的 BYOK API Key 路由
+ * 仅在转发路径固定发送 originator: cindy，让下发 endpoint 的网关能按 Cindy 客户端放行。
+ * 恢复的线程可能保留外部客户端的 originator，不能直接放行原值；其余三项仍删除。
  */
 const CODEX_ACCOUNT_HEADERS = ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'];
+const CINDY_CODEX_ORIGINATOR = 'cindy';
 /** 无鉴权上游永远不能收到 agent 子进程自带的订阅凭证。 */
 const CLIENT_AUTH_HEADERS = ['authorization', 'x-api-key'];
 /** 缺少自定义供应商 key 时覆盖 CLI 凭证的哑值：目标上游应 401，但绝不收到订阅 token。 */
@@ -283,6 +284,19 @@ function pendingProviderSwitchRouteDecision(providerId: string | null): RoutingD
         'retry-after': '1',
       });
       res.end(payload);
+    },
+  };
+}
+
+/** 本次刷新失败只终止本次请求，不能落回默认上游或重放用户输入。 */
+export function oauthRefreshFailedDecision(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ type: 'error', error: {
+        type: 'authentication_error', code: 'provider_oauth_refresh_failed',
+        message: 'Provider authentication refresh failed.',
+      } }));
     },
   };
 }
@@ -409,10 +423,10 @@ function buildRouteDecisionBase(
       if (routing.upstream && oauthToken) {
         decision.upstreamOverride = resolveCopilotAccountUrl(routing.upstream, oauthToken);
       }
-      // cc 子进程可能带 x-api-key（gateway-spawn 的网关 key）——发往 OAuth 上游必须抹掉，
-      // 防泄漏 + 防按 x-api-key 优先鉴权的端点拿错钥匙。合并描述符自带的 headerDelete。
+      // Anthropic 协议客户端会带 x-api-key（CC 网关 key / Pi 占位 key）。OAuth 路由
+      // 必须删除它，避免上游优先校验错误的 key 而忽略有效 Bearer。保留描述符的删除项。
       const del = new Set(routing.headerDelete ?? []);
-      if (agent === 'claude-code') del.add('x-api-key');
+      if (agent === 'claude-code' || agent === 'pi') del.add('x-api-key');
       // codex 子进程带 OpenAI 账号元数据头——oauth-token 上游一定是第三方,整组抹掉(见常量注释)。
       if (agent === 'codex') for (const h of CODEX_ACCOUNT_HEADERS) del.add(h);
       if (del.size > 0) decision.headerDelete = [...del];
@@ -485,11 +499,16 @@ function buildRouteDecisionBase(
           headerOverride['x-api-key'] = MISSING_CUSTOM_PROVIDER_API_KEY;
         }
       }
+      const forceCindyOriginator = agent === 'codex' && routing.forceCindyCodexOriginator === true;
+      if (forceCindyOriginator) headerOverride.originator = CINDY_CODEX_ORIGINATOR;
       const decision: RoutingDecision = {};
       if (Object.keys(headerOverride).length > 0) decision.headerOverride = headerOverride;
       if (routing.upstream) decision.upstreamOverride = routing.upstream;
       const headerDelete = new Set(routing.headerDelete ?? []);
-      if (agent === 'codex') for (const name of CODEX_ACCOUNT_HEADERS) headerDelete.add(name);
+      if (agent === 'codex') for (const name of CODEX_ACCOUNT_HEADERS) {
+        if (name === 'originator' && forceCindyOriginator) continue;
+        headerDelete.add(name);
+      }
       if (headerDelete.size > 0) decision.headerDelete = [...headerDelete];
       // 自定义供应商必有 upstream → 实际总返回 decision；全空时 passthrough。
       return decision.headerOverride || decision.upstreamOverride || decision.headerDelete
@@ -740,7 +759,12 @@ export async function resolveProviderRouteById(
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
   const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
+  const revision = getProviderRouteCredentialRevision(providerId);
   const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  if (isProviderRouteMutationInProgress(providerId)
+    || getProviderRouteCredentialRevision(providerId) !== revision) {
+    throw new Error('provider_oauth_login_changed');
+  }
   return {
     providerId,
     providerSource: provider.source,
@@ -765,8 +789,14 @@ export async function resolveSessionRoute(
   const provider = getActiveCatalog().providers.find(p => p.id === providerId);
   const routing = provider ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
-  return { providerId, providerSource: provider.source, routing,
-    ...await readProviderRouteCredentials(provider, routing, agent) };
+  const revision = getProviderRouteCredentialRevision(providerId);
+  const credentials = await readProviderRouteCredentials(provider, routing, agent);
+  if (isProviderRouteMutationInProgress(providerId)
+    || getProviderRouteCredentialRevision(providerId) !== revision
+    || getSessionProvider(sessionId) !== providerId) {
+    throw new Error('provider_oauth_login_changed');
+  }
+  return { providerId, providerSource: provider.source, routing, ...credentials };
 }
 
 /** Build outbound headers for an already resolved local protocol handler. */
@@ -836,7 +866,7 @@ async function readProviderRouteCredentials(
     isCustomRoutedProvider(provider) ? customProviderKeyReader(credentialProviderId, agent) : null;
   let oauthToken: string | null = null;
   if (routing.authStrategy === 'oauth-token') {
-    oauthToken = oauthTokenReader(credentialProviderId);
+    oauthToken = await oauthTokenReader(credentialProviderId);
   } else if (routing.authStrategy === 'provider-oauth-header') {
     try {
       oauthToken = await providerOAuthTokenReader(provider.id, agent);
@@ -869,7 +899,17 @@ export async function resolveProviderRouteDecision(
   const provider = getActiveCatalog().providers.find((p) => p.id === id);
   const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : providerRoutingForModel(provider, agent, wireModel)) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
-  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  const revision = getProviderRouteCredentialRevision(id);
+  let credentials: { apiKey: string | null; oauthToken: string | null };
+  try {
+    credentials = await readProviderRouteCredentials(provider, routing, agent);
+  } catch {
+    return { providerId: id, routing, decision: oauthRefreshFailedDecision() };
+  }
+  if (isProviderRouteMutationInProgress(id) || getProviderRouteCredentialRevision(id) !== revision) {
+    return { providerId: id, routing, decision: updatingProviderRouteDecision(id) };
+  }
+  const { apiKey, oauthToken } = credentials;
   const decision = buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken);
   return {
     providerId: id,
@@ -900,7 +940,13 @@ export async function resolveFrozenProviderRouteDecision(
   if (!provider || !isCustomRoutedProvider(provider) || !provider.agents.includes(agent)) return null;
   if (!routingServesWireModel(routing, wireModel)) return null;
   if (routing.modelInterface && wireModel) assertModelInterfaceAvailable(routing.modelInterface, wireModel, getActiveCatalog().modelRegistry);
-  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  let credentials: { apiKey: string | null; oauthToken: string | null };
+  try {
+    credentials = await readProviderRouteCredentials(provider, routing, agent);
+  } catch {
+    return { providerId: id, routing, decision: oauthRefreshFailedDecision() };
+  }
+  const { apiKey, oauthToken } = credentials;
   // Header overrides are user-owned configuration. Organization routes use only the trusted
   // directory descriptor and managed credential, even if stale local data shares an id.
   const customHeaders = provider.source === 'user'
@@ -961,18 +1007,16 @@ export function resolveSessionRouteDecision(
     decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
       : decision;
-  // 通用 OAuth 供应商（oauth-token）：从 generic-oauth 内存缓存**同步**读 access_token
-  // （临期刷新在后台单飞，不阻塞路由热路径，规则 10）。
   if (routing.authStrategy === 'oauth-token') {
-    return withRequestPath(
-      buildRouteDecision(
-        routing,
-        gatewayKey,
-        agent,
-        apiKey,
-        oauthTokenReader(credentialProviderId),
-      ),
-    );
+    const revision = getProviderRouteCredentialRevision(providerId);
+    const stillCurrent = () => !isProviderRouteMutationInProgress(providerId)
+      && getProviderRouteCredentialRevision(providerId) === revision
+      && getSessionProvider(sessionId) === providerId;
+    return Promise.resolve().then(() => oauthTokenReader(credentialProviderId)).then(token => {
+      if (!stillCurrent()) return updatingProviderRouteDecision(providerId);
+      const decision = withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey, token));
+      return decision ? { ...decision, dispatchGenerationValid: stillCurrent } : decision;
+    }).catch(() => oauthRefreshFailedDecision());
   }
   if (routing.authStrategy !== 'provider-oauth-header') {
     return withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey));
@@ -1018,6 +1062,16 @@ async function connectedDefaultProviderForModel(
   const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
   const provider = eligible.find((candidate) => candidate.id === defaultId);
   return provider ? { kind: 'provider', provider } : { kind: 'none' };
+}
+
+/** Account bootstrap and the implicit bridge must resolve the same connected source. */
+export async function resolveConnectedDefaultProviderIdForModel(
+  modelId: string,
+  agent: AgentKind,
+): Promise<string | null> {
+  const source = await connectedDefaultProviderForModel(modelId.replace(/\[1m\]$/, ''), agent);
+  if (source.kind === 'ambiguous') throw new Error('Model source is ambiguous; select a provider');
+  return source.kind === 'provider' ? source.provider.id : null;
 }
 
 /**

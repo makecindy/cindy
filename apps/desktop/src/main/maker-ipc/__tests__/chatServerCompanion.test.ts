@@ -51,7 +51,7 @@ vi.mock('ws', async () => {
   } };
 });
 import { withChatServer } from '../chatServer.js';
-import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
+import { signalBotProfilesChanged } from '../botProfilesChangedSignal.js';
 import { createCompanionHomeRegistry } from '../../companion-cloud/homes.js';
 import { createCompanionCloudState } from '../../companion-cloud/state.js';
 import { activeCompanionCloud, type CompanionCloudHost } from '../../companion-cloud/runtime.js';
@@ -299,12 +299,16 @@ describe('Chat Server cloud companions', () => {
 
   it.each(['handover', 'create', 'members', 'organizer'] as const)('lets explicit %s wait for shared renewal and finish registration', async action => {
     home = 'desk-1'; claimed = true;
+    // A hand-over requires the real, complete profile snapshot after renewal, not an empty fixture.
+    const profile = { key: 'companion.profile.v1', value: { name: 'Mia', description: '', soul: '', user: '', systemPrompt: '' } };
+    if (action === 'handover') host.readValues = async () => [profile];
     host.listDevices = async () => [{ deviceId: 'laptop', name: 'Laptop', platform: 'darwin', appVersion: '1', lastSeenAt: null,
       online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false }];
     let expired = false, finish!: (value: boolean) => void;
     fixture.refresh.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     fixture.handle.mockImplementation((route, method, body) => {
       if (expired && (route === '/me' || route === '/executions/claim')) return { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } };
+      if (action === 'handover' && route === '/preferences' && method === 'GET') return { body: [{ ...profile, revision: 1 }] };
       if (route === '/conversations' && method === 'POST') return { body: { id: roomId } };
       if (action !== 'handover' && route === `/conversations/${roomId}/snapshot`) return { body: {
         room: { id: roomId, kind: 'group', name: 'Group', revision: 1, state: 'joined', response_mode: 'all', speaking_mode: 'auto', archived: false },
@@ -323,7 +327,7 @@ describe('Chat Server cloud companions', () => {
       changes: [{ type: 'work.available', data: { work: [{ botId: botActor, conversationId: roomId }] } }] }));
     await vi.advanceTimersByTimeAsync(250);
     expect(fixture.refresh).toHaveBeenCalledOnce();
-    if (action !== 'handover') signalBotAutonomyBotsChanged();
+    if (action !== 'handover') signalBotProfilesChanged();
     let settled = false;
     const pending = action === 'handover' ? activeCompanionCloud()!.transfer('local-bot', 'laptop')
       : action === 'create' ? service.createGroup({ name: 'New group', botIds: ['local-bot'] })
@@ -352,7 +356,7 @@ describe('Chat Server cloud companions', () => {
       if (route === '/conversations' && method === 'POST') return { body: { id: roomId } };
       return respond(route, method, body);
     });
-    signalBotAutonomyBotsChanged(); await vi.advanceTimersByTimeAsync(2000);
+    signalBotProfilesChanged(); await vi.advanceTimersByTimeAsync(2000);
     expect(held).toBe(true);
     socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '9',
       changes: [{ type: 'work.available', data: { work: [{ botId: botActor, conversationId: roomId }] } }] }));

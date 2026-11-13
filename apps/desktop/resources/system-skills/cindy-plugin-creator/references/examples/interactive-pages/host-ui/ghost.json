@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 3,
+  "id": "host-ui-example",
+  "name": "插件界面示例",
+  "version": "1.2.0",
+  "minCindyVersion": "0.1.122-beta",
+  "entry": "main.js",
+  "icon": "assets/cat.png",
+  "tools": [
+    { "name": "refresh", "description": "刷新示例状态", "parameters": { "type": "object", "properties": {}, "additionalProperties": false } },
+    { "name": "complete", "description": "提供本地示例引用", "approval": "auto", "parameters": { "type": "object", "properties": { "trigger": { "type": "string", "enum": ["@", "/"] }, "query": { "type": "string" } }, "required": ["trigger", "query"], "additionalProperties": false } },
+    { "name": "prepare_attachment", "description": "为新添加的文本附件加上 prepared- 文件名前缀，保留真实文件内容并将文件说明写入草稿。", "parameters": { "type": "object", "properties": { "attachment": { "type": "object" }, "cindy_handoff_files": { "type": "array" } }, "additionalProperties": false } }
+  ],
+  "mcpApps": {
+    "ui": {
+      "resources": [{ "uri": "ui://host-ui/example", "file": "ui/page.html", "prefersBorder": true }],
+      "tools": { "refresh": { "visibility": ["app"] }, "complete": { "visibility": ["app"] }, "prepare_attachment": { "visibility": ["app"] } }
+    },
+    "host": {
+      "views": [
+        { "id": "board", "title": "示例工作台", "resourceUri": "ui://host-ui/example", "scope": "global" },
+        { "id": "task-board", "title": "当前任务", "resourceUri": "ui://host-ui/example", "scope": "task" }
+      ],
+      "contributions": [
+        { "id": "navigation", "title": "示例工作台", "position": "sidebar.navigation", "view": "board", "icon": "puzzle" },
+        { "id": "task-menu", "title": "打开任务工作台", "position": "session.menu", "view": "task-board" },
+        { "id": "settings-page", "title": "高级配置", "position": "settings.section", "view": "board" },
+        { "id": "completion", "title": "示例引用", "position": "composer.completion", "tool": "complete", "trigger": "@" },
+        { "id": "attachment", "title": "整理文本附件", "position": "composer.attachment", "tool": "prepare_attachment", "accept": { "extensions": [".txt", ".md"] } },
+        { "id": "summary", "title": "示例摘要", "position": "sidebar.section", "view": "board" },
+        { "id": "titlebar", "title": "打开示例工作台", "position": "window.titlebar", "view": "board", "icon": "puzzle" },
+        { "id": "compose", "title": "打开任务页面", "position": "composer.toolbar", "view": "task-board" },
+        { "id": "quick", "title": "快捷面板", "position": "composer.toolbar", "view": "task-board", "presentation": "popover" },
+        { "id": "header", "title": "打开工作台", "position": "session.header", "view": "board" },
+        { "id": "progress", "title": "示例已就绪", "position": "statusbar", "kind": "button", "view": "task-board" },
+        { "id": "message", "title": "打开任务页面", "position": "message.actions", "view": "task-board" },
+        { "id": "message-menu", "title": "打开任务页面", "position": "message.menu", "view": "task-board" },
+        { "id": "footer", "title": "刷新示例", "position": "turn.footer", "tool": "refresh" },
+        { "id": "message-body", "title": "示例页面", "position": "message.body", "view": "task-board", "match": { "roles": ["assistant"] } },
+        { "id": "tool-body", "title": "示例页面", "position": "tool.body", "view": "task-board", "match": { "tools": ["refresh"] } }
+      ],
+      "commands": [{ "id": "open-board", "title": "打开示例工作台", "view": "board", "arguments": { "filter": "all" }, "shortcut": "Mod+Alt+Shift+Y" }],
+      "capabilities": ["context", "draft", "appearance", "visibility"],
+      "settings": [
+        { "id": "enabled", "title": "启用示例", "description": "示例的普通偏好，和私有 KV 共存。", "type": "boolean", "default": true },
+        { "id": "limit", "title": "显示条数", "type": "number", "default": 8, "min": 1, "max": 20 },
+        { "id": "style", "title": "显示风格", "type": "string", "default": "brief", "options": [{ "label": "简洁", "value": "brief" }, { "label": "详细", "value": "full" }] }
+      ],
+      "appearance": {
+        "fields": ["uiFont", "codeFont", "bodyFont", "wallpaper", "theme", "reading", "contentStyle"],
+        "resources": [
+          { "id": "mono", "kind": "font", "path": "assets/JetBrainsMono-Regular.ttf" },
+          { "id": "art", "kind": "image", "path": "assets/cat.png" }
+        ]
+      }
+    }
+  }
+}

@@ -113,6 +113,8 @@ function keyboardEvent(
   return {
     duration,
     easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
     endCoordinates: { screenX: 0, screenY, width: 390, height },
   };
 }
@@ -189,6 +191,30 @@ describe('pending question input visibility', () => {
     act(() => root.render(<QuestionHarness requestId="q2" />));
     controls.onFocus(event);
     expect(offset).toBe(600);
+  });
+
+  // 2026-11-12: a free-text question opened the keyboard and scrolled to the
+  // end, leaving only an empty answer box on screen. Unit: the production hook
+  // must stop at the answer box, and fall back to the end once the card stops
+  // reporting what trails it (a card with options). No prior case passed sizes.
+  it('keeps a free-text question readable by stopping at the answer box', () => {
+    act(() => root.render(<QuestionHarness requestId="q1" />));
+    let offset = -1;
+    controls.scrollRef.current = {
+      scrollTo: ({ y }: { y: number }) => { offset = y; },
+      scrollToEnd: () => { offset = 126; },
+    } as unknown as NonNullable<typeof controls.scrollRef.current>;
+    controls.onLayout({ nativeEvent: { layout: { height: 244 } } } as Parameters<typeof controls.onLayout>[0]);
+    controls.onContentSizeChange(390, 370);
+    expect(offset).toBe(-1);
+    controls.setTrailingInset(72);
+    controls.onFocus({ target: { isFocused: () => true } } as unknown as Parameters<typeof controls.onFocus>[0]);
+    expect(offset).toBe(54);
+    // A short question fits above the keyboard: nothing is scrolled away.
+    controls.onContentSizeChange(390, 300);
+    expect(offset).toBe(0);
+    controls.setTrailingInset(0);
+    expect(offset).toBe(126);
   });
 });
 
@@ -297,8 +323,8 @@ describe('composer keyboard geometry and motion', () => {
   it('does not move the whole page for a narrow floating iPad keyboard', () => {
     native.platform.isPad = true;
     render();
-    const floating = keyboardEvent();
-    floating.endCoordinates.width = 250;
+    const event = keyboardEvent();
+    const floating = { ...event, endCoordinates: { ...event.endCoordinates, width: 250 } };
     emit('keyboardWillShow', floating);
     expect(height()).toBe(0);
   });
@@ -312,6 +338,8 @@ describe('composer keyboard geometry and motion', () => {
     const corner: KeyboardEvent = {
       duration: 383,
       easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
       endCoordinates: { screenX: 192, screenY: 500, width: 274, height: 178 },
     };
     const frame = (screenY: number, height: number): KeyboardEvent => ({
@@ -387,6 +415,8 @@ describe('composer keyboard geometry and motion', () => {
     emit('keyboardWillShow', {
       duration: 383,
       easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
       endCoordinates: { screenX: 192, screenY: 500, width: 274, height: 178 },
     });
     expect(height()).toBe(342);

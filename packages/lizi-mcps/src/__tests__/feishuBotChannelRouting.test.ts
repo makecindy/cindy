@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createFeishuBotMcpServer,
+  FEISHU_HOOK_SESSION_CHANNEL_NOTE,
   SLACK_HOOK_SESSION_CHANNEL_NOTE,
   TELEGRAM_HOOK_SESSION_CHANNEL_NOTE,
   X_HOOK_SESSION_CHANNEL_NOTE,
@@ -100,6 +101,8 @@ describe('cindy_feishu_bot channel routing note', () => {
     ['telegram', TELEGRAM_HOOK_SESSION_CHANNEL_NOTE],
     ['wecom', WECOM_SESSION_CHANNEL_NOTE],
     ['x', X_HOOK_SESSION_CHANNEL_NOTE],
+    // 官方飞书 hook 会话: 不得像个人飞书会话那样不带提示(否则「发给我」会被路由到个人 bot)。
+    ['feishu-hook', FEISHU_HOOK_SESSION_CHANNEL_NOTE],
   ] as const)(
     '%s description === base description + fixed note, for every tool',
     async (source, note) => {
@@ -131,6 +134,7 @@ describe('cindy_feishu_bot channel routing note', () => {
         expect(description).not.toContain(TELEGRAM_HOOK_SESSION_CHANNEL_NOTE.trim());
         expect(description).not.toContain(WECOM_SESSION_CHANNEL_NOTE.trim());
         expect(description).not.toContain(X_HOOK_SESSION_CHANNEL_NOTE.trim());
+        expect(description).not.toContain(FEISHU_HOOK_SESSION_CHANNEL_NOTE.trim());
       }
     } finally {
       await feishu.cleanup();

@@ -30,6 +30,7 @@ import {
   type MakeUpstreamDecision,
   type MakeUpstreamItem,
 } from '../../../shared/cindyMakeDoctor';
+import appI18n from 'i18next';
 
 export function CindyMakeDoctorCard({
   data,
@@ -731,7 +732,7 @@ export function MakeDoctorReportCard({
               </Button>
               <Button
                 variant="primary"
-                className="[--button-face-border:var(--border-default)] enabled:hover:[--button-face-border:var(--button-primary-hover)] enabled:active:[--button-face-border:var(--button-primary-pressed)]"
+                className="[--button-face-border:var(--border-default)]"
                 disabled={!onChoose || startingCode}
                 loading={startingCode}
                 onClick={() => onChoose?.('personal')}
@@ -906,7 +907,7 @@ function MakeUpstreamResult({ item }: { item: MakeUpstreamItem }) {
             {t(`cindyMake.upstream.state.${item.state}`)}
             {item.author ? ` · ${t('cindyMake.upstream.author', { author: item.author })}` : ''}
             {item.updatedAt
-              ? ` · ${t('cindyMake.upstream.updated', { date: new Date(item.updatedAt).toLocaleDateString() })}`
+              ? ` · ${t('cindyMake.upstream.updated', { date: new Date(item.updatedAt).toLocaleDateString(appI18n.language) })}`
               : ''}
           </p>
           {item.summary && (

@@ -77,6 +77,9 @@ class FakeBridge {
     this.started = true;
     this.listeningPort = 18810;
   }
+  pauseForUpdate() {
+    return { settled: Promise.resolve(), release: () => undefined };
+  }
   async close() {
     this.closed = true;
   }
@@ -281,6 +284,72 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     await settle();
     expect(bridges).toHaveLength(1);
     expect(slot.getPageControl()?.ghostId).toBe('other-browser');
+  });
+});
+
+// Regression 2026-11-07: receipt commits before market provenance. The transient source
+// must not overwrite pairings; completion must restore the selected provider (unit).
+describe('browserExtensionSlot · 更新来源收敛', () => {
+  it('preserves pairings across unavailable provenance and restores control on completion', async () => {
+    const ghosts = [extGhost({ nativeHost: false })];
+    ghosts[0].publishingSource = { kind: 'public-market', pluginId: 'market-browser' };
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    await h.slot.activate('_root__my-browser');
+    const clients = [{ id: 'paired-browser', origin: 'chrome-extension://' + CHROME_ID, extensionId: CHROME_ID, publicKey: 'saved-key' }];
+    await h.slot.handleRequest('_root__my-browser', { kind: 'setTrustedClients', clients });
+    const cache = path.join(h.dir, '_root__my-browser.json');
+    const before = await fs.readFile(cache, 'utf8');
+    const complete = await h.slot.prepareUpdate('_root__my-browser');
+    ghosts[0] = { ...ghosts[0], manifest: { ...ghosts[0].manifest, version: '2.0.0' },
+      publishingSource: { kind: 'unavailable' } };
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.bridges).toHaveLength(1);
+    expect(h.slot.getPageControlUnavailableReason()).toBe('plugin-updating');
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(await h.slot.activate('_root__my-browser')).toBe(false);
+    expect(await fs.readFile(cache, 'utf8')).toBe(before);
+    ghosts[0] = { ...ghosts[0], publishingSource: { kind: 'public-market', pluginId: 'market-browser' } };
+    complete();
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__my-browser');
+    expect(h.bridges.at(-1)?.calls).toContainEqual(['setTrustedClients', [clients]]);
+    await h.slot.dispose();
+  });
+
+  it('keeps the legacy official control end paused during its update instead of falling back to another plugin', async () => {
+    const ghosts = [extGhost({ nativeHost: false }), extGhost({ id: 'other-browser', nativeHost: false })];
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.ghostId).toBe('my-browser');
+    const complete = await h.slot.prepareUpdate('_root__my-browser');
+    expect(h.slot.getPageControl()).toBeNull();
+    complete();
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.ghostId).toBe('my-browser');
+    await h.slot.dispose();
+  });
+
+  it('does not reuse control or pairings when only the source changes', async () => {
+    const ghosts = [extGhost({ nativeHost: false })];
+    ghosts[0].publishingSource = { kind: 'public-market', pluginId: 'market-browser' };
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    await h.slot.activate('_root__my-browser');
+    ghosts[0] = { ...ghosts[0], publishingSource: { kind: 'local', source: 'manual' } };
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(h.bridges[0].closed).toBe(true);
+    expect(await h.slot.activate('_root__my-browser')).toBe(true);
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__my-browser');
+    await h.slot.dispose();
   });
 });
 
@@ -780,4 +849,109 @@ describe('browserExtensionSlot · 转交扩展请求', () => {
     ]);
     expect(deps.sendToGhost).toHaveBeenCalled();
   });
+});
+
+// Host delivery is asynchronous. An old owner or uncertain transport result must
+// not turn the shared slot's offline wake into a duplicate/cross-account request.
+describe('browserExtensionSlot · asynchronous host delivery', () => {
+  it('waits for a known offline result before waking and delivering once', async () => {
+    let answer!: (online: boolean) => void;
+    const wake = vi.fn(async () => true);
+    let calls = 0;
+    const sendToGhost = vi.fn(async (_id: string, payload: unknown) => {
+      if ((payload as { name: string }).name !== 'browser-extension-relay') return true;
+      if (++calls === 1) return new Promise<boolean>(resolve => { answer = resolve; });
+      return true;
+    });
+    const { slot, ghosts, bridges } = await makeSlot({ sendToGhost, wake });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'async-1', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      expect(wake).not.toHaveBeenCalled();
+      answer(false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(calls).toBe(2);
+      expect(bridges[0].calls.filter(([name]) => name === 'relayResult')).toEqual([]);
+    } finally { await slot.dispose(); }
+  });
+
+  it('does not wake or replay a delivery after its owner changes', async () => {
+    let owner = 'owner-a';
+    let answer!: (online: boolean) => void;
+    const wake = vi.fn(async () => true);
+    const sendToGhost = vi.fn(async (_id: string, payload: unknown) =>
+      (payload as { name: string }).name === 'browser-extension-relay'
+        ? new Promise<boolean>(resolve => { answer = resolve; }) : true);
+    const { slot, ghosts, bridges } = await makeSlot({ ownerScopeKey: () => owner, sendToGhost, wake });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'old-owner', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      owner = 'owner-b';
+      answer(false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).not.toHaveBeenCalled();
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['old-owner', { ok: false, error: 'BRIDGE_STOPPED' }]]);
+    } finally { await slot.dispose(); }
+  });
+
+  it('keeps a failed wake unavailable and logged without a second delivery', async () => {
+    const warn = vi.fn();
+    const wake = vi.fn(async () => { throw Error('wake failed'); });
+    const sendToGhost = vi.fn(async (_id, payload) => (payload as { name: string }).name !== 'browser-extension-relay');
+    const { slot, ghosts, bridges } = await makeSlot({ wake, sendToGhost, log: { info: vi.fn(), warn } });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'wake-failed', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(sendToGhost.mock.calls.filter(([, p]) => (p as { name: string }).name === 'browser-extension-relay')).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith('browser extension relay wake failed', expect.objectContaining({ error: 'wake failed' }));
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['wake-failed', { ok: false, error: 'PLUGIN_UNAVAILABLE' }]]);
+    } finally { await slot.dispose(); }
+  });
+
+  it.each([1, 2])('reports uncertain delivery on send %s without replaying a possible side effect', async failAt => {
+    const wake = vi.fn(async () => true);
+    let sends = 0;
+    const { slot, ghosts, bridges } = await makeSlot({ wake, sendToGhost: async (_id, payload) => {
+      if ((payload as { name: string }).name === 'browser-extension-relay') {
+        if (++sends === failAt) throw new Error('transport closed after send');
+        return false;
+      }
+      return true;
+    } });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'uncertain', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(failAt - 1);
+      expect(sends).toBe(failAt);
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['uncertain', { ok: false, error: 'PLUGIN_DELIVERY_UNKNOWN' }]]);
+    } finally { await slot.dispose(); }
+  });
+});
+
+// Regression: reconcile removes the entry before its asynchronous transport
+// close completes. Host shutdown must still drain that retired entry.
+it('dispose waits for a transport already being retired by reconcile', async () => {
+  const f = await makeSlot();
+  f.slot.reconcile(f.ghosts);
+  await f.slot.handleRequest('_root__my-browser', { type: 'browser-extension-request', action: 'status' });
+  let release!: () => void;
+  const closed = new Promise<void>(resolve => { release = resolve; });
+  f.bridges[0].close = async () => { await closed; f.bridges[0].closed = true; };
+  f.slot.reconcile([]);
+  let disposed = false;
+  const disposing = f.slot.dispose().then(() => { disposed = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(disposed).toBe(false);
+  release();
+  await disposing;
+  expect(f.bridges[0].closed).toBe(true);
+  expect(f.natives[0].close).toHaveBeenCalledOnce();
 });

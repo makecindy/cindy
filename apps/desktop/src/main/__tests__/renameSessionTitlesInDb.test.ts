@@ -86,7 +86,7 @@ vi.mock('../device-link/broadcast-tap', () => ({
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => h.agentIslandService,
 }));
-vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
+vi.mock('../imageCacheStore.desktop', () => ({ removeSession: vi.fn() }));
 
 import { renameSessionTitlesInDb } from '../localDb/ipc/sessions.js';
 import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';

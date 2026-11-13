@@ -35,7 +35,7 @@ const extractChatFolder = vi.hoisted(() => vi.fn());
 vi.mock('../file-browser/chat-folder-transfer.js', () => ({ extractChatFolder }));
 const removeFile = vi.hoisted(() => vi.fn(async () => {}));
 const resolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../imageCacheStore.js', () => ({
+vi.mock('../imageCacheStore.desktop.js', () => ({
   copyFromPath,
   removeFile,
   resolveSafe,
@@ -52,7 +52,7 @@ const deleteZeroRefBlobRecord = vi.hoisted(() => vi.fn(async () => false));
 vi.mock('../cindy-media/ledger.js', () => ({ removeRefById, deleteZeroRefBlobRecord }));
 const blobResolveSafe = vi.hoisted(() => vi.fn());
 const deleteBlobFile = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../cindy-media/blobStore.js', () => ({
+vi.mock('../cindy-media/blobStore.desktop.js', () => ({
   deleteBlobFile,
   resolveSafe: blobResolveSafe,
   mimeForExt: (ext: string) =>
@@ -73,7 +73,7 @@ const downloadToFile = vi.hoisted(() => vi.fn(async () => {}));
 const copyPeerAttachment = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../device-link/peerAttachmentStore', () => ({ copyPeerAttachment }));
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../device-link/mediaTransfer.js', () => ({ downloadToFile, removeRemote }));
+vi.mock('../device-link/mediaTransfer.desktop.js', () => ({ downloadToFile, removeRemote }));
 
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -84,7 +84,7 @@ import {
   normalizeUserMessage,
   materializeQueuedOssAttachmentsDeferred,
   collectQueuedAttachmentRefs,
-} from '../maker-ipc/normalizeAttachments';
+} from '../maker-ipc/normalizeAttachments.desktop';
 import { QueuedAttachmentOwnershipRegistry } from '../maker-ipc/queuedAttachmentOwnership';
 import { buildAttachmentOssRef } from '../../shared/attachmentOssRef';
 import { buildPeerAttachmentRef } from '@cindy/device-link';

@@ -1,3 +1,5 @@
+import { detectCwd } from './detectCwd.js';
+export { detectCwd } from './detectCwd.js';
 /**
  * worktree-parallel-sessions M1: 主入口。
  *
@@ -12,7 +14,6 @@
 
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { currentOperationBudget, operationWait } from '../utils/operationBudget';
 import fs from 'node:fs/promises';
 
 import {
@@ -26,7 +27,6 @@ import {
   validateWorktreeName,
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
-import { createCwdProbeScheduler } from './cwdProbeScheduler';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import {
   gitExec,
@@ -46,7 +46,7 @@ import {
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import { withWorktreeRestoreMutation } from './restoreLock';
 import { recycleManagedWorktree } from './managedRecycle';
-import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
+import { withWorktreeResourceLock } from './resourceLock';
 import {
   acquireWorktreeRuntimeLease,
   recordWorktreeRuntimeLeaseChild,
@@ -56,7 +56,6 @@ import {
 import * as store from './worktreeStore';
 import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from './precreatedCancellation';
 import { createLogger } from '../logger';
-import { realpathWorkingDirectory } from '../workdir-probe-host/index';
 import { getDbClient } from '../localDb/client/current';
 import {
   getManagedWorktreeBasePath,
@@ -68,7 +67,6 @@ const log = createLogger('WorktreeManager');
 import type {
   CreateWorktreeReq,
   CreateWorktreeResp,
-  DetectCwdResp,
   ListBranchesResp,
   WorktreeMeta,
 } from './types';
@@ -408,144 +406,6 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 /**
  * 探测 cwd 状态: 是否 git repo / 是否在 worktree 内 / git 是否可用 / 当前分支 / repo root
  */
-const scheduledDetectCwd = createCwdProbeScheduler(detectCwdOnce);
-export function detectCwd(cwd: string): Promise<DetectCwdResp> {
-  // Automatic snapshots own cancellation. Never lend their abortable probe to
-  // an unrelated UI request (or borrow an unabortable pending UI probe).
-  return currentOperationBudget() ? operationWait(detectCwdOnce(cwd)) : scheduledDetectCwd(cwd);
-}
-
-// Share the work budget across realpath and every Git query. Git's additional
-// 3s process-tree cleanup still leaves response headroom under Mobile's 15s wait.
-const CWD_PROBE_TIMEOUT_MS = 10_000;
-
-async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
-  const deadline = performance.now() + CWD_PROBE_TIMEOUT_MS;
-  const probeGit = async (args: readonly string[], dir?: string) => {
-    currentOperationBudget()?.check();
-    const timeoutMs = Math.ceil(deadline - performance.now());
-    if (timeoutMs <= 0) {
-      throw new GitExecError({
-        args, exitCode: null, stdout: '', stderr: 'directory probe deadline exceeded', timedOut: true,
-      });
-    }
-    return gitExec(args, dir, { timeoutMs, deadlineAtMs: deadline });
-  };
-  // Git resolves relative metadata paths from the physical process cwd. A
-  // symlink spelling can otherwise make an ordinary repo look like a linked
-  // worktree. Keep Git's existing error handling if the directory is unavailable.
-  cwd = await realpathWorkingDirectory(cwd).catch((err) => {
-    // Keep timeout/pool exhaustion unknown; falling back to a symlink spelling
-    // could recreate the false linked-worktree result we are trying to avoid.
-    if (err?.code === 'WORKDIR_PROBE_TIMEOUT' || err?.code === 'WORKDIR_PROBE_UNAVAILABLE') throw err;
-    return cwd;
-  });
-  // One Git process returns the same snapshot that previously needed five.
-  // Unborn HEADs, older Git versions and newline-containing paths retain the
-  // individual-query fallback below rather than changing the IPC contract.
-  try {
-    const { stdout } = await probeGit(
-      ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
-      cwd,
-    );
-    const lines = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
-    if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
-      const [root, branch, gitDir, commonDir] = lines;
-      return {
-        isGitRepo: true,
-        isInsideWorktree: path.resolve(cwd, gitDir) !== path.resolve(cwd, commonDir),
-        gitInstalled: true,
-        supportsRecoveryKeyDiscard: true,
-        repoRoot: path.resolve(root),
-        ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
-      };
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // Preserve the existing partial results and error classification.
-  }
-  const out: DetectCwdResp = {
-    isGitRepo: false,
-    isInsideWorktree: false,
-    gitInstalled: true,
-    supportsRecoveryKeyDiscard: true,
-  };
-  // 1. git --version 探测安装
-  try {
-    await probeGit(['--version']);
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    if (err instanceof GitExecError && err.cause?.code === 'ENOENT') {
-      out.gitInstalled = false;
-      return out;
-    }
-    // 其他失败也视为不可用(极罕见)
-    out.gitInstalled = false;
-    return out;
-  }
-
-  // 2. rev-parse --show-toplevel: 拿 repo 根
-  try {
-    const { stdout } = await probeGit(['rev-parse', '--show-toplevel'], cwd);
-    const toplevel = gitPathOutput(stdout);
-    if (toplevel) {
-      out.isGitRepo = true;
-      out.repoRoot = path.resolve(toplevel);
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    out.isGitRepo = false;
-  }
-
-  if (!out.isGitRepo) return out;
-
-  // 3. 当前分支
-  try {
-    const { stdout } = await probeGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
-    const branch = stdout.trim();
-    if (branch && branch !== 'HEAD') out.currentBranch = branch;
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // ignore — 分支信息不影响主流程
-  }
-
-  // 4. 是否在 linked worktree 内
-  // 权威判定: `git rev-parse --git-dir` 在 linked worktree 里指向 `.git/worktrees/<name>`,
-  // 而 `--git-common-dir` 始终指向主仓库的 `.git`。两者解析后的绝对路径不一致 → linked worktree。
-  // 这种判断是 git 自己用来区分主/linked worktree 的方式, 不依赖目录命名约定 ——
-  // 任何工具(CC Desktop / 手工 git worktree add 等) 创建的 worktree 都能被检出。
-  try {
-    // 任一命令失败后仍等另一条完成清理，不能提前释放目录探测槽位。
-    const results = await Promise.allSettled([
-      probeGit(['rev-parse', '--git-dir'], cwd),
-      probeGit(['rev-parse', '--git-common-dir'], cwd),
-    ]);
-    for (const result of results) {
-      if (result.status === 'rejected' && result.reason instanceof GitExecError && result.reason.timedOut) {
-        throw result.reason;
-      }
-    }
-    const [gitDirResult, commonDirResult] = results;
-    if (gitDirResult.status === 'rejected') throw gitDirResult.reason;
-    if (commonDirResult.status === 'rejected') throw commonDirResult.reason;
-    const gitDirRaw = gitDirResult.value.stdout;
-    const gitCommonDirRaw = commonDirResult.value.stdout;
-    const gitDir = path.resolve(cwd, gitPathOutput(gitDirRaw));
-    const gitCommonDir = path.resolve(cwd, gitPathOutput(gitCommonDirRaw));
-    if (gitDir && gitCommonDir && gitDir !== gitCommonDir) {
-      out.isInsideWorktree = true;
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // 解析失败 → 兜底走托管目录名启发式, 至少识别出 Cindy 自己创建的 worktree
-    const normalizedRepoRoot = out.repoRoot?.replace(/\\/g, '/');
-    if (normalizedRepoRoot && getManagedWorktreeBasePath(normalizedRepoRoot) != null) {
-      out.isInsideWorktree = true;
-    }
-  }
-
-  return out;
-}
 
 /**
  * 列出 baseRepo 的所有本地分支 + 当前分支。
@@ -649,102 +509,6 @@ export async function resolveAvailableWorktreeName(
 
 export function getForSession(sessionId: string): WorktreeMeta | null {
   return store.get(sessionId);
-}
-
-/** Caller holds the session/resource locks. Unknown DB outcomes retain the intent. */
-async function reconcileSessionTransferLocked(meta: WorktreeMeta, beforeMutation?: () => Promise<void>): Promise<void> {
-  const transfer = meta.pendingSessionTransfer;
-  if (!transfer) return;
-  if (!transfer.sessionId || transfer.sessionId === meta.sessionId
-    || !transfer.delegationId || !transfer.requestingBotId) {
-    throw new Error('Invalid worktree transfer intent preserved');
-  }
-  const row = await getDbClient().queryOne<{
-    childSessionId: string; requestingBotId: string; worktreePath: string | null; persistedSessionId: string | null;
-    targetExists: number;
-  }>(`SELECT d.child_session_id AS childSessionId, d.requesting_bot_id AS requestingBotId,
-      s.worktree_path AS worktreePath, s.id AS persistedSessionId,
-      EXISTS(SELECT 1 FROM sessions WHERE id = ?) AS targetExists
-    FROM bot_delegations d LEFT JOIN sessions s ON s.id = d.child_session_id WHERE d.id = ?`,
-  [transfer.sessionId, transfer.delegationId]);
-  if (!row || !row.persistedSessionId || row.requestingBotId !== transfer.requestingBotId
-    // The previous registry is authoritative if its historical display snapshot
-    // is absent. A committed target must have the snapshot from the same DB tx.
-    || (row.childSessionId === transfer.sessionId && !row.worktreePath)
-    || (row.worktreePath && await physicalWorktreeKey(row.worktreePath) !== await physicalWorktreeKey(meta.path))
-    || (row.childSessionId !== transfer.sessionId
-      && (row.childSessionId !== meta.sessionId || row.targetExists))) {
-    throw new Error('Worktree ownership changed; pending transfer preserved for reconciliation');
-  }
-  const key = await physicalWorktreeKey(meta.path);
-  for (const other of store.getAll()) {
-    if (other.sessionId !== meta.sessionId && await physicalWorktreeKey(other.path) === key) {
-      throw new Error('Worktree ownership changed; another session owns this resource');
-    }
-  }
-  const next = { ...meta, sessionId: row.childSessionId };
-  delete next.pendingSessionTransfer;
-  await store.replace(meta.sessionId, next.sessionId, next, meta, beforeMutation);
-}
-
-/** Startup/dispatch/retry reconciliation, scoped to the affected execution only. */
-export async function reconcileSessionTransfer(sessionId: string, beforeMutation?: () => Promise<void>): Promise<void> {
-  const pending = store.getAll().find(meta => meta.pendingSessionTransfer
-    && (meta.sessionId === sessionId || meta.pendingSessionTransfer.sessionId === sessionId));
-  if (!pending?.pendingSessionTransfer) return;
-  if (pending.pendingSessionTransfer.sessionId === pending.sessionId) throw new Error('Invalid worktree transfer intent preserved');
-  await withWorktreeRestoreMutation(pending.sessionId, () =>
-    withWorktreeRestoreMutation(pending.pendingSessionTransfer!.sessionId, () =>
-      withWorktreeResourceLock(pending.path, async () => {
-        const current = store.get(pending.sessionId);
-        if (current?.pendingSessionTransfer) await reconcileSessionTransferLocked(current, beforeMutation);
-      })));
-}
-
-/** Journal before the DB transaction; move registration only after authoritative readback. */
-export async function withTransferredSession<T extends { reopened: boolean }>(
-  previousSessionId: string,
-  sessionId: string,
-  worktreePath: string,
-  commit: () => Promise<T>,
-  identity: { delegationId: string; requestingBotId: string },
-): Promise<T> {
-  if (previousSessionId === sessionId) throw new Error('Worktree transfer requires a new session');
-  return withWorktreeRestoreMutation(previousSessionId, () =>
-    withWorktreeRestoreMutation(sessionId, () =>
-      withWorktreeResourceLock(worktreePath, async () => {
-        const previous = store.get(previousSessionId);
-        if (!previous || previous.pendingSessionTransfer || path.resolve(previous.path) !== path.resolve(worktreePath)
-          || store.get(sessionId)) {
-          throw new Error('Worktree ownership changed; restore the previous task before continuing');
-        }
-        const key = await physicalWorktreeKey(worktreePath);
-        for (const other of store.getAll()) {
-          if (other.sessionId !== previousSessionId && await physicalWorktreeKey(other.path) === key) {
-            throw new Error('Worktree ownership changed; another session owns this resource');
-          }
-        }
-        const pending = { ...previous, pendingSessionTransfer: { ...identity, sessionId } };
-        await store.replace(previousSessionId, previousSessionId, pending, previous);
-        try {
-          const result = await commit();
-          await reconcileSessionTransferLocked(pending);
-          return result;
-        } catch (error) {
-          // A rejected worker receipt is not proof of rollback. Never reverse a
-          // committed transfer; failed readback leaves durable retry evidence.
-          const current = store.get(previousSessionId);
-          if (JSON.stringify(current) === JSON.stringify(pending)) {
-            await reconcileSessionTransferLocked(pending).catch(reconcileError => {
-              log.warn('Worktree transfer reconciliation deferred', { sessionId: previousSessionId,
-                error: reconcileError instanceof Error ? reconcileError.message : String(reconcileError) });
-            });
-          }
-          throw error;
-        }
-      }),
-    ),
-  );
 }
 
 export function listAll(): WorktreeMeta[] {

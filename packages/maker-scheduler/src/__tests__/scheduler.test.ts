@@ -338,6 +338,38 @@ it.each(['automatic', 'manual', 'recovery'] as const)(
   },
 );
 
+it('keeps the original fire context while claiming an interrupted run', async () => {
+  const storage = new InMemoryStorage();
+  let owner = 'a';
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const h = makeHarness({ storage, captureFireContext: () => {
+    const captured = owner;
+    return () => { if (owner !== captured) throw new Error('owner changed'); };
+  } });
+  const schedule = await h.scheduler.create(baseInput);
+  const oldRun: ScheduleRun = { id: 'old-run', scheduleId: schedule.id,
+    sessionId: 'original-task', firedAt: h.clock.now() - 5000, status: 'interrupted' };
+  await storage.insertRun(oldRun);
+  storage.claimInterruptedRun = vi.fn(async () => {
+    entered();
+    await gate;
+    return storage.updateRun(oldRun.id, { status: 'running' });
+  });
+  await h.scheduler.start();
+  const resume = h.scheduler.resumeInterruptedRun('original-task');
+  await started;
+  owner = 'b';
+  release();
+  const result = await resume;
+  await expect(result!.completion).rejects.toThrow('owner changed');
+  expect(h.fireCalls).toHaveLength(0);
+  expect(storage.runs.get(oldRun.id)?.status).toBe('interrupted');
+  await h.scheduler.stop();
+});
+
 // discussion_r4419242692: a claimed continuation must remain reclaimable if
 // loading fails, while a rejection after completion must not replay settled work.
 // Unit: public resume entry, one original row and a one-shot storage failure.
@@ -589,7 +621,9 @@ interface Harness {
 
 function makeHarness(opts?: {
   runnerImpl?: (s: Schedule, ctx: FireContext) => Promise<FireResult>;
+  captureFireContext?: () => () => void;
   isManagedWorkspaceDir?: (dir: string) => boolean;
+  validateModelSelection?: (schedule: Schedule, previous?: Schedule) => Promise<void>;
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
@@ -623,11 +657,13 @@ function makeHarness(opts?: {
   const scheduler = new Scheduler({
     storage,
     runner,
+    captureFireContext: opts?.captureFireContext,
     clock,
     generateId: opts?.generateId ?? makeIdGen(),
     tickIntervalMs: 60_000_000, // effectively disabled; tests call tick() manually
     isManagedWorkspaceDir: opts?.isManagedWorkspaceDir,
     validateTargetSession: opts?.validateTargetSession,
+    validateModelSelection: opts?.validateModelSelection,
     passive: opts?.passive,
     maxConcurrentRuns: opts?.maxConcurrentRuns,
     runStallMs: opts?.runStallMs,
@@ -823,6 +859,71 @@ describe('Scheduler', () => {
     const blankDir = await h.scheduler.create({ ...baseInput, workingDir: '  ' });
     expect(blankDir.workspaceKind).toBe('dialogue');
   });
+
+  // Unit: model admission must fail before persistence, not at the first timer fire.
+  // Previous target validation covered Harness changes, not model/location tuples.
+  it('keeps storage unchanged when model admission rejects create or update', async () => {
+    const validateModelSelection = vi.fn(async (candidate: Schedule, previous?: Schedule) => {
+      if (candidate.model === 'unavailable') throw new Error('invalid model location');
+      if (previous) expect(previous.model).toBe('available');
+    });
+    const h = makeHarness({ validateModelSelection });
+    await expect(h.scheduler.create({ ...baseInput, model: 'unavailable' }))
+      .rejects.toThrow('invalid model location');
+    expect(h.storage.schedules.size).toBe(0);
+    const saved = await h.scheduler.create({ ...baseInput, model: 'available' });
+    await expect(h.scheduler.update(saved.id, { model: 'unavailable' }))
+      .rejects.toThrow('invalid model location');
+    expect(await h.storage.get(saved.id)).toEqual(saved);
+    await h.scheduler.update(saved.id, { name: 'renamed' });
+    expect(validateModelSelection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'renamed', model: 'available' }), saved);
+    expect(h.fireCalls).toHaveLength(0);
+  });
+
+  it.each(['manual', 'automatic'] as const)(
+    'keeps the original fire context while target validation waits (%s)',
+    async (mode) => {
+      let owner = 'a';
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const local = makeHarness({
+        captureFireContext: () => {
+          const captured = owner;
+          return () => { if (owner !== captured) throw new Error('owner changed'); };
+        },
+        validateTargetSession: async (_id, op) => {
+          if (op === 'fire') { entered(); await gate; }
+        },
+      });
+      const schedule = await local.scheduler.create({ ...baseInput, targetSessionId: 'bound' });
+      if (mode === 'automatic') local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+      const fire = mode === 'manual' ? local.scheduler.runNow(schedule.id) : local.scheduler.tick();
+      await started;
+      owner = 'b';
+      release();
+      await fire;
+      expect(local.fireCalls).toHaveLength(0);
+      expect([...local.storage.runs.values()].at(-1)).toMatchObject({ status: 'failed', errorMsg: 'owner changed' });
+    },
+  );
+
+  it.each(['manual', 'automatic'] as const)(
+    'keeps script fires independent of the agent owner guard (%s)',
+    async (mode) => {
+      const local = makeHarness({ captureFireContext: () => () => { throw new Error('owner changed'); } });
+      const schedule = await local.scheduler.create({ ...baseInput, executionMode: 'script', workspaceKind: 'project', workingDir: '/repo', scriptConfig: { command: 'echo ok', capabilities: [] } });
+      if (mode === 'automatic') {
+        local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+        await local.scheduler.tick();
+      } else {
+        await local.scheduler.runNow(schedule.id);
+      }
+      expect(local.fireCalls).toHaveLength(1);
+    },
+  );
 
   it('passes the complete candidate Harness to host validation before saving and firing', async () => {
     let allowedAgent = 'codex';
@@ -1497,6 +1598,150 @@ describe('Scheduler', () => {
     h.clock.setTo(Date.UTC(2026, 0, 1, 0, 6, 5));
     await h.scheduler.tick();
     expect(h.runner.fire).toHaveBeenCalledTimes(1);
+  });
+
+  // Bug: resume armed the placeholder cron of a manual schedule, so a webhook-only task
+  // started firing on a timer after pause + resume. Public resume entry; unit.
+  it('resume keeps a manual schedule off the timer', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true });
+    await h.scheduler.pause(sch.id);
+    await h.scheduler.resume(sch.id);
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    h.clock.setTo(Date.UTC(2026, 0, 2));
+    await h.scheduler.tick();
+    expect(h.runner.fire).not.toHaveBeenCalled();
+  });
+
+  // Rule: docs/product-rules/schedule-webhook-trigger.md. The route must survive edits, or
+  // every forwarder configured with the old address silently stops delivering.
+  it('generates the webhook route itself and keeps it across edits', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: { endpointId: 'caller-chosen', events: ['issues'] } });
+    const endpointId = sch.webhookTrigger!.endpointId;
+    expect(endpointId).not.toBe('caller-chosen');
+    const edited = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['pull_request.closed'] } });
+    expect(edited.webhookTrigger).toEqual({ endpointId, events: ['pull_request.closed'] });
+    const cleared = await h.scheduler.update(sch.id, { webhookTrigger: null });
+    expect(cleared.webhookTrigger).toBeUndefined();
+    const reopened = await h.scheduler.update(sch.id, { webhookTrigger: {} });
+    expect(reopened.webhookTrigger?.endpointId).not.toBe(endpointId);
+  });
+
+  it('rejects a webhook on a timed one-shot, which the first event would use up', async () => {
+    await expect(h.scheduler.create({ ...baseInput, recurring: false, webhookTrigger: {} })).rejects.toThrow('recurring');
+    const manual = await h.scheduler.create({ ...baseInput, recurring: false, manual: true, webhookTrigger: {} });
+    expect(manual.webhookTrigger).toBeDefined();
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
+    await expect(h.scheduler.update(sch.id, { recurring: false })).rejects.toThrow('recurring');
+  });
+
+  // The managed source is configured through the same Scheduler entry as UI, MCP and remote edits.
+  it('preserves GitHub App subscriptions and invalidates queued scope when repositories change', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true,
+      webhookTrigger: { source: { preset: 'github-app', repositories: ['Example/Project', 'example/project'] }, events: ['issue_comment.created'] } });
+    expect(sch.webhookTrigger?.source).toEqual({ preset: 'github-app', repositories: ['example/project'] });
+    const retained = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['issue_comment.created'] } });
+    expect(retained.webhookTrigger?.endpointId).toBe(sch.webhookTrigger?.endpointId);
+    const changed = await h.scheduler.update(sch.id, { webhookTrigger: {
+      source: { preset: 'github-app', repositories: ['other/project'] }, events: ['issue_comment.created'] } });
+    expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { events: ['invoice.paid'] } })).rejects.toThrow('unsupported GitHub App');
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'github-app', repositories: ['https://github.com/owner/repo'] } } })).rejects.toThrow('repository');
+  });
+
+  // PR #9378: UI deselect/reselect changes array order, not the subscription.
+  // Real Scheduler updates, unit tier: preserve the route for equivalent sets.
+  it('keeps GitHub App queue identity for equivalent repository and event sets', async () => {
+    const source = { preset: 'github-app' as const, repositories: ['example/project', 'other/project'] };
+    const events = ['issues.opened', 'release.published'];
+    const sch = await h.scheduler.create({ ...baseInput, manual: true, webhookTrigger: { source, events } });
+    for (const trigger of [
+      { source, events: [...events].reverse() },
+      { source: { ...source, repositories: [...source.repositories].reverse() }, events },
+      { source: { ...source, repositories: ['Other/Project', 'Example/Project', 'example/project'] }, events: [...events, events[0]!] },
+    ]) {
+      const updated = await h.scheduler.update(sch.id, { webhookTrigger: trigger });
+      expect(updated.webhookTrigger?.endpointId).toBe(sch.webhookTrigger?.endpointId);
+    }
+    const changed = await h.scheduler.update(sch.id, { webhookTrigger: { source, events: ['issues.opened'] } });
+    expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
+  });
+
+  it('rejects malformed webhook event filters', async () => {
+    await expect(h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['a b'] } })).rejects.toThrow('filter');
+  });
+
+  // Rule: an edit that omits the sender, such as one from a client that predates senders,
+  // must not reset it; resetting would switch the server back to GitHub and reject every delivery.
+  it('keeps the webhook sender when an edit omits it, and rejects unknown senders', async () => {
+    const source = { preset: 'stripe' as const, signed: false };
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['invoice.paid'], source } });
+    const edited = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['pullrequest:created'] } });
+    expect(edited.webhookTrigger).toMatchObject({ events: ['pullrequest:created'], source });
+    await expect(
+      h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'unknown' } as never } }),
+    ).rejects.toThrow('invalid webhook source');
+    await expect(
+      h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'custom', format: { version: 1 } } as never } }),
+    ).rejects.toThrow('invalid webhook format');
+  });
+
+  // Rule: the event reaches this fire only; a deferred attempt leaves no run and no cron replay.
+  it('passes webhook events to the runner, marks the run, and leaves retries to the caller', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    const onRunCreated = vi.fn(async () => {
+      expect((await h.storage.listRuns(sch.id))[0]).toMatchObject({ status: 'running', triggerSource: 'webhook' });
+      expect(h.runner.fire).not.toHaveBeenCalled();
+    });
+    await h.scheduler.runNow(sch.id, { deferToCaller: true, webhook, onRunCreated });
+    expect(onRunCreated).toHaveBeenCalledOnce();
+    expect(h.runner.fire.mock.calls[0]![1].webhook).toEqual(webhook);
+    expect((await h.storage.listRuns(sch.id))[0]?.triggerSource).toBe('webhook');
+
+    const before = (await h.storage.get(sch.id))?.nextFireAt;
+    h.runner.fire.mockResolvedValueOnce({ sessionId: '', deferred: true, deferRetryMs: 1 });
+    const result = await h.scheduler.runNow(sch.id, { deferToCaller: true, webhook });
+    expect(result.deferred).toBe(true);
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBe(before);
+    expect(await h.storage.listRuns(sch.id)).toHaveLength(1);
+  });
+
+  // PR #8470: a durable-queue handoff failure must prevent runner effects. Unit:
+  // insertRun failure never hands off; handoff failure removes the unused run.
+  it.each(['insert', 'handoff'] as const)('does not dispatch a webhook after %s fails', async (phase) => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    const onRunCreated = vi.fn(async () => { throw new Error('handoff failed'); });
+    if (phase === 'insert') vi.spyOn(h.storage, 'insertRun').mockRejectedValueOnce(new Error('insert failed'));
+    await expect(h.scheduler.runNow(sch.id, { webhook, onRunCreated })).rejects.toThrow(`${phase} failed`);
+    expect(onRunCreated).toHaveBeenCalledTimes(phase === 'insert' ? 0 : 1);
+    expect(h.runner.fire).not.toHaveBeenCalled();
+    expect(await h.storage.listRuns(sch.id)).toHaveLength(0);
+    await h.scheduler.runNow(sch.id, { webhook });
+    expect(h.runner.fire).toHaveBeenCalledOnce();
+  });
+
+  // PR #8470: automatic Webhook calls used manual admission. Unit: one occupied
+  // slot, then two simultaneous Webhook calls; only explicit manual calls bypass.
+  it('gates webhook runs with the shared slots before the first storage await', async () => {
+    const gated = makeHarness({ maxConcurrentRuns: 1 });
+    const a = await gated.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const b = await gated.scheduler.create({ ...baseInput, manual: true, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    let finish!: () => void;
+    gated.runner.fire.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ sessionId: '' }); }));
+    const running = gated.scheduler.runNow(a.id, { webhook, deferToCaller: true });
+    const blocked = await gated.scheduler.runNow(b.id, { webhook, deferToCaller: true });
+    expect(blocked.deferred).toBe(true);
+    expect(await gated.storage.listRuns(b.id)).toHaveLength(0);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await gated.scheduler.runNow(b.id);
+    expect(gated.runner.fire).toHaveBeenCalledTimes(2);
+    finish();
+    await running;
+    await gated.scheduler.runNow(b.id, { webhook, deferToCaller: true });
+    expect(gated.runner.fire).toHaveBeenCalledTimes(3);
+    await gated.scheduler.stop();
   });
 
   it('rechecks an approved resume inside the serialized schedule mutation', async () => {
@@ -3169,10 +3414,11 @@ describe('Scheduler cross-instance dedupe', () => {
       manual: false,
       persistentSession: false,
       silentWhenIdle: false,
-      // CreateScheduleInput.preRunHook / scriptConfig 允许 null(JSON 边界),Schedule 只有两态
+      // CreateScheduleInput.preRunHook / scriptConfig / webhookTrigger 允许 null(JSON 边界),Schedule 只有两态
       preRunHook: undefined,
       preRunPlugin: undefined,
       scriptConfig: undefined,
+      webhookTrigger: undefined,
       workspaceKind: 'dialogue',
       status: 'active',
       createdAt: now,

@@ -6,6 +6,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatRelative } from '@/hooks/useRelativeTime';
+import appI18n from 'i18next';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -32,7 +33,7 @@ export function useShareTimeFormat(): ShareTimeFormat {
           day: 'numeric',
         }).format(value);
       } catch {
-        return value.toLocaleDateString();
+        return value.toLocaleDateString(appI18n.language);
       }
     },
     [language],

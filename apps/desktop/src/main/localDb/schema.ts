@@ -109,6 +109,7 @@ const SESSION_SOURCES = [
   'wechat',
   'dingtalk',
   'wecom',
+  'imessage',
   'scheduler',
   'learn',
   'review',
@@ -965,6 +966,16 @@ export const messages = sqliteTable(
   }),
 );
 
+export const mcpAppViewStates = sqliteTable('mcp_app_view_states', {
+  messageId: text('message_id').primaryKey().references(() => messages.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  serverId: text('server_id').notNull(),
+  serverRevision: text('server_revision').notNull(),
+  pluginInstance: text('plugin_instance'),
+  stateJson: text('state_json').notNull(),
+  byteLength: integer('byte_length').notNull(),
+}, t => ({ bySession: index('idx_mcp_app_view_states_session').on(t.sessionId) }));
+
 /**
  * messages_fts 的稳定整数行号映射。
  *
@@ -1471,6 +1482,8 @@ export const schedules = sqliteTable(
       .notNull()
       .default('agent'),
     scriptConfig: text('script_config'),
+    /** JSON ScheduleWebhookTrigger；NULL = 未开启。签名密钥不进数据库。 */
+    webhookTrigger: text('webhook_trigger'),
     source: text('source').default('user'),
     projectConfigId: text('project_config_id'),
     /**
@@ -1736,6 +1749,8 @@ export const scheduleRuns = sqliteTable(
     resultText: text('result_text'),
     /** 前置检查一次执行的结构化 JSON 结果；NULL 表示本轮未配置/未执行检查。 */
     preRunHookResult: text('pre_run_hook_result'),
+    /** 本轮触发来源；NULL = 定时或手动。 */
+    triggerSource: text('trigger_source'),
     readAt: integer('read_at'),
     /**
      * In-flight 心跳时间戳（毫秒）——跨实例的"仍有活实例在跑"租约信号。

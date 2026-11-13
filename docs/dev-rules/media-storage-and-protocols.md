@@ -81,7 +81,7 @@
   自动清理只接受该命名空间独占且仍为 `isCache` 的字节；扫描和条件删除都检查其他
   引用与 pin，不能清理聊天附件或其他集成的共享字节。其他媒体清理维持原手动流程。
   普通 HTML 等非媒体仍走 `remote-file-cache`。完整身份、复验与平台清理策略见
-  [`protocol-compatibility.md`](protocol-compatibility.md)「远程文件连接复用与版本缓存」。
+  [`protocol-compatibility/image-delivery-and-missing-source.md`](protocol-compatibility/image-delivery-and-missing-source.md#远程文件连接复用与版本缓存)「远程文件连接复用与版本缓存」。
 - 桌面聊天的不可变远程图片通过 `device-link/remoteMediaPersistentCache.ts` 复用媒体总仓，
   `remote-media` 索引包含账号、来源设备和原始地址。先查内存、再查磁盘，缓存命中不取件；
   重启和断连不清理，不增加自动到期或容量淘汰。设置中的「远程图片缓存」复用账本扫描和
@@ -238,12 +238,36 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 - 删除或清理历史目录必须走已有的显式名单、复验和用户确认流程；不得新增任意
   `cc-agent` 子目录删除能力。
 
+## 媒体调用说明与执行绑定
+
+- 图片、视频的新调用说明统一从 Server 读取。Guide 只描述请求、参数、响应与轮询协议；
+  provider、实际地址、Key、连接摘要、模型可见性和额度归连接与执行上下文。
+- 客户端按完整 `modelId` 及连接已有的接口格式读取公开资料，不发送账号 token、Key、
+  base URL 或连接摘要。协议说明不可用时不在本地生成 Guide，也不发出付费请求。
+  客户端根据本地来源绑定现有图片适配器、视频执行器或网关，不按 Server 的 `guideId` 分派。
+- `prepare` 在既有 `guide_json` 中保存选定 operation 及独立的 `binding`；`revision` 表示
+  Server 协议版本，视频 `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
+  变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
+- 升级时只解码旧快照的 `connection` 和旧视频 revision，不请求时重写历史记录，不改数据库
+  物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。Server 须先支持公开协议读取，
+  已发布客户端继续使用旧接口投影。
+- 存量插件的 `cindy-request` 图片、视频接口保留原参数与返回格式。Host 完成原有权限、配额、
+  参考图归属与账号校验后，把旧参数转换为 Server operation 的输入，直接调用已有
+  `callCindyMedia` 的 `prepare/request/poll`，不另起 Agent 或媒体执行链，也不按 Guide ID 筛选。
+  Core 统一生成并入仓，兼容入口只给同一媒体挂插件引用；旧 `jobId/query_job` 只投影调用结果。
+
+实现与回归证据见 [`invocationService.ts`](../../apps/desktop/src/main/cindy-media/invocationService.ts)、
+[`mediaInvocation.ts`](../../apps/desktop/src/shared/mediaInvocation.ts) 和
+[`mediaInvocationStore.test.ts`](../../apps/desktop/src/main/cindy-media/__tests__/mediaInvocationStore.test.ts)。
+
 ## 已授权生成任务的结果下载
 
 - 下载是生成流程内部的一步，不新增“领取”状态、列表或用户操作。上游返回后，客户端
   下载并通过 `ingestMedia` 返回受管媒体；需要确认时暂停同一次操作，批准后自动继续。
-- Guide 的 `allowedUrlHosts` 保留为已确认来源名单。名单内正常目标自动下载；名单外
-  来源、HTTP、特殊端口、地址内登录信息、受限网络等权限要求通过
+- Guide 的 `allowedUrlHosts` 保留为已确认来源名单。使用 `openai-videos` 的自定义视频连接还将
+  绑定中转站的域名及其子域名视作已确认结果来源（排除 IP、无点域名和 `.local`）。
+  名单内的正常结果 URL 自动通过隔离下载读取，仅允许 GET，不携带生成接口凭证；
+  名单外来源、HTTP、特殊端口、地址内登录信息、受限网络等权限要求通过
   Cindy 普通 `permission` 交互确认。卡片只说明实际地址、原因和本次范围，不出现
   Guide、“模型说明”等内部概念，不使用仅限本机的 `ghost_grant_confirm`。
 - 用户拒绝后结束本次下载，不自动重试或再次审批。网络失败由客户端最多自动尝试
@@ -320,7 +344,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   不另建透明生图流程，也不在通用透传层替上游追加背景或格式默认。
 - `size` 表示生成像素尺寸，`resolution` 表示供应商的分辨率档，`quality` 是原生质量。
   不把不同来源的枚举互相套用，不强制 `medium` 或 `1k`。明确参数优先，省略时由上游决定。
-  已知 GPT Image 尺寸约束在付费提交前检查；不合法时保留 prepared 调用供更正。
+  Gateway/Guide 驱动的图像调用以服务端 Guide 和实际模型为准，客户端不再按型号代际预检
+  `size`/`quality`；不合法参数由上游拒绝，调用按已提交失败处理，不保留 prepared 供更正。
+  直连供应商通道仍由 `imageParameters.ts` 在付费提交前校验其已知约束，不合法时保留 prepared。
   目标成品尺寸不满足模型约束时，由 Agent 选择合法生成尺寸并单独完成成品缩放，不能谎报
   请求尺寸就是实际输出尺寸。没有自动缩放或偷偷裁切。
 - Codex SSE 的 partial image 仅为预览，不能在失败、未完成或只有预览的断流中当成成品。

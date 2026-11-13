@@ -38,8 +38,7 @@ import {
   importCustomWallpaper,
   removeCustomWallpaper,
   prepareWallpaperImage,
-  setCustomWallpaperBytes,
-  revokePluginWallpaper,
+  savePluginWallpaper,
 } from '../custom-wallpaper';
 import {
   customWallpaperStore,
@@ -51,7 +50,7 @@ import {
   readFile,
   readClientWallpaperFile,
   listBlobFiles,
-} from '../cindy-media/blobStore';
+} from '../cindy-media/blobStore.desktop';
 import * as recycler from '../cindy-media/recycler';
 
 beforeEach(() => {
@@ -80,21 +79,18 @@ async function selectImage(color = 'blue') {
 const parent = {} as never;
 
 describe('client-owned custom wallpaper lifecycle', () => {
-  // C11: a plugin video owns both media references; replacing it manually
-  // clears plugin provenance, so disabling the plugin cannot remove user media.
-  it('keeps a plugin video fallback and protects a subsequent native selection', async () => {
-    const png = await selectImage();
-    const video = Buffer.from('000000186674797069736f6d0000000069736f6d6d703432', 'hex');
-    const resource = await setCustomWallpaperBytes(video, { fallback: png,
-      pluginSource: { instanceId: 'example', key: 'a'.repeat(64) }, assertCurrent: () => {} });
-    expect(readReferencedClientWallpaperUrls()).toEqual(expect.arrayContaining([resource.url, resource.fallbackUrl]));
-    await expect(readClientWallpaperFile(resource.fallbackUrl!)).resolves.toBeDefined();
-    await selectImage('red');
-    await importCustomWallpaper(parent);
-    const manualUrl = readCustomWallpaperUrl();
-    expect(customWallpaperStore.read().fallbackUrl).toBeUndefined();
-    expect(await revokePluginWallpaper(() => false)).toBe(false);
-    expect(readCustomWallpaperUrl()).toBe(manualUrl);
+  // PR #9496: media publication preceded the appearance CAS. Use real stores,
+  // media and recycler; failed commits must retain the original reference/bytes. tier: unit.
+  it.each([false, true])('retains the old wallpaper when the combined appearance commit fails (published=%s)', async published => {
+    await selectImage('blue'); await importCustomWallpaper(parent);
+    const oldUrl = readCustomWallpaperUrl();
+    const replacement = await prepareWallpaperImage(await selectImage('red'));
+    await expect(savePluginWallpaper(replacement, {
+      pluginSource: { instanceId: 'example', key: 'a'.repeat(64) }, assertCurrent() {},
+      async commit(publish) { if (published) publish(); throw new Error('APPEARANCE_CHANGED'); },
+    })).rejects.toThrow('APPEARANCE_CHANGED');
+    expect(readCustomWallpaperUrl()).toBe(oldUrl);
+    await expect(readClientWallpaperFile(oldUrl)).resolves.toBeDefined();
   });
   it('rejects a 20–100 MB image after only the header, even with an MP4 filename', async () => {
     const png = await selectImage();

@@ -73,7 +73,12 @@ describe('AskUserQuestionPrompt action labels', () => {
     })));
     const link = await view.findByRole('link', { name: 'notes.txt' });
     link.focus();
-    fireEvent.click(link);
+    // PR #9754 CI: the real editor's cold import can exceed the DOM wait's
+    // 1s budget on Windows. Finish loading before checking keyboard behavior.
+    await act(async () => {
+      fireEvent.click(link);
+      await import('../components/chat/TextLightbox');
+    });
     await waitFor(() => expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull());
     await view.findByRole('tooltip');
     vi.useFakeTimers();
@@ -234,7 +239,7 @@ describe('AskUserQuestionPrompt action labels', () => {
     });
   });
 
-  it('provides localized prompt copy in every supported locale', () => {
+  it('provides localized prompt copy in every supported locale', async () => {
     const expected = {
       en: ['Next', 'Submit'],
       'zh-CN': ['下一题', '提交'],
@@ -242,6 +247,8 @@ describe('AskUserQuestionPrompt action labels', () => {
       ja: ['次へ', '送信'],
       ko: ['다음', '제출'],
     } as const;
+    // 非英文语言包按需加载；t(key, { lng }) 只读已加载的语言。
+    await i18n.loadLanguages(Object.keys(expected));
 
     for (const [locale, labels] of Object.entries(expected)) {
       expect(i18n.t('chat.askUserQuestion.next', { lng: locale })).toBe(labels[0]);
