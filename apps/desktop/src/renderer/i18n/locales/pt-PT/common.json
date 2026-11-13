@@ -15647,6 +15647,7 @@
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarde um momento e tente novamente. Não envie a mesma mensagem duas vezes.",
       "REMOTE_AGENT_UNAVAILABLE": "A ligação ao computador que executa o Agent foi interrompida. Tente novamente. Se continuar a acontecer, certifique-se de que esse computador está online e permite o controlo remoto.",
       "REMOTE_AGENT_PEER_TOO_OLD": "A versão do Cindy no outro computador é demasiado antiga para esta ação. Atualize primeiro o Cindy nesse computador.",
+      "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este computador não consegue restaurar o estado anterior da sessão. Escolhe um modelo de outro computador ou fornecedor para continuar com uma passagem de contexto. As mensagens existentes são mantidas.",
       "REMOTE_AGENT_EXPIRED": "Esta sessão já terminou no computador que executa o Agent. Envie a sua mensagem novamente.",
       "REMOTE_AGENT_NOT_FOUND": "Esta sessão já terminou no computador que executa o Agent. Envie a sua mensagem novamente.",
       "REMOTE_AGENT_BUSY": "Estão em execução demasiadas sessões no outro computador. Termine algumas e tente novamente.",
