@@ -34,6 +34,21 @@ export default {
       assert.ok(Math.abs(leftSpacing - (rightSpacing - 4)) < 0.5, `Button spacing: left=${leftSpacing}, right=${rightSpacing}`);
     }
     await ui.capture('collapsed');
+    if (ui.case !== 'new-task') {
+      // Regression: the permission icon used a soft fill without the + button's border.
+      // Compare actual painted styles after each real hover, in both themes.
+      const paint = (element) => {
+        const style = getComputedStyle(element);
+        return [style.backgroundColor, style.borderTopColor, style.color];
+      };
+      const plusButton = page.locator('[data-composer-suggestion-trigger]');
+      await plusButton.hover();
+      await ui.capture('plus-hover');
+      const plusPaint = await plusButton.evaluate(paint);
+      await button.hover();
+      await ui.capture('permission-hover');
+      assert.deepEqual(await button.evaluate(paint), plusPaint, 'Permission and + hover paint must match');
+    }
     await button.click();
     await page.getByRole('listbox').waitFor();
     assert.equal(await page.getByRole('option').count(), 4);
