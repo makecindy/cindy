@@ -33,6 +33,12 @@ export type HookPrefsChannel = 'slack' | 'telegram' | 'x' | 'feishu';
  */
 export const SHARED_PREFS_CHANNEL = 'shared';
 export type HookPrefsStoreChannel = HookPrefsChannel | typeof SHARED_PREFS_CHANNEL;
+/**
+ * 共用那一份里某个项目的配置归谁: 某个渠道(升级时从它原样并入, 之后没人改过),
+ * 或 `edited`(用户在设置页 / IM 里改过或清空过 —— 还有渠道没并入时记着, 免得它晚到时把旧值带回来)。
+ */
+export const SHARED_PREF_EDITED = 'edited';
+export type SharedPrefOrigin = HookPrefsChannel | typeof SHARED_PREF_EDITED;
 
 export interface WorkspacePrefsEntry {
   channel: HookPrefsStoreChannel;
@@ -68,7 +74,7 @@ interface StoreFile {
    * 共用那一份里, 某个项目的配置(偏好行与模型来源)是升级时从哪个渠道原样并入的、之后没人改过。
    * 排在它前面的渠道稍后才并入时凭它按固定顺序顶替; 用户或 IM 里一改就去掉。
    */
-  sharedOrigin?: Record<string, HookPrefsChannel>;
+  sharedOrigin?: Record<string, SharedPrefOrigin>;
   entries: WorkspacePrefsEntry[];
 }
 
@@ -185,8 +191,7 @@ function readStore(fp: string): StoreFile {
       for (const [workspace, channel] of Object.entries(r.sharedOrigin as Record<string, unknown>)) {
         if (
           HOOK_WORKSPACE_ALIAS_RE.test(workspace) &&
-          isChannel(channel) &&
-          channel !== SHARED_PREFS_CHANNEL &&
+          (channel === SHARED_PREF_EDITED || (isChannel(channel) && channel !== SHARED_PREFS_CHANNEL)) &&
           Object.keys(sharedOrigin).length < SHARED_ORIGIN_MAX
         ) {
           sharedOrigin[workspace] = channel;
@@ -292,23 +297,42 @@ export function markWorkspacePrefsMigrated(channel: HookPrefsChannel): void {
   writeStore(fp, { ...store, migrated: { ...store.migrated, [channel]: true } });
 }
 
-/** 共用那一份里某个项目的配置是从哪个渠道原样并入的(改过或没记过则为 null)。 */
-export function getSharedPrefOrigin(workspace: string): HookPrefsChannel | null {
+/** 共用那一份里某个项目的配置归谁(见 SharedPrefOrigin; 没记过为 null)。 */
+export function getSharedPrefOrigin(workspace: string): SharedPrefOrigin | null {
   return readStore(filePath()).sharedOrigin?.[workspace] ?? null;
 }
 
-/** 记下 / 去掉(channel = null)共用那一份里某个项目「从哪个渠道原样并入」的标记。 */
-export function setSharedPrefOrigin(workspace: string, channel: HookPrefsChannel | null): void {
+/** 记下 / 去掉(origin = null)共用那一份里某个项目的归属标记。 */
+export function setSharedPrefOrigin(workspace: string, origin: SharedPrefOrigin | null): void {
   const fp = filePath();
   const store = readStore(fp);
-  if ((store.sharedOrigin?.[workspace] ?? null) === channel) return;
-  writeStore(fp, withSharedOrigin(store, workspace, channel));
+  if ((store.sharedOrigin?.[workspace] ?? null) === origin) return;
+  writeStore(fp, withSharedOrigin(store, workspace, origin));
 }
 
-function withSharedOrigin(store: StoreFile, workspace: string, channel: HookPrefsChannel | null): StoreFile {
+/**
+ * 用户(设置页或 IM 里)动过共用那一份里这个项目的配置, 包括清空与只换模型来源。
+ * 还有渠道没并入时记成 `edited`; 都并入之后这个标记再没有用处, 直接去掉。
+ */
+export function noteSharedPrefEdited(workspace: string): void {
+  const fp = filePath();
+  const store = readStore(fp);
+  const origin = editedOrigin(store);
+  if ((store.sharedOrigin?.[workspace] ?? null) === origin) return;
+  writeStore(fp, withSharedOrigin(store, workspace, origin));
+}
+
+function editedOrigin(store: StoreFile): SharedPrefOrigin | null {
+  const pending = (['slack', 'telegram', 'x', 'feishu'] as const).some(
+    (channel) => store.sharedAdopted?.[channel] !== true,
+  );
+  return pending ? SHARED_PREF_EDITED : null;
+}
+
+function withSharedOrigin(store: StoreFile, workspace: string, origin: SharedPrefOrigin | null): StoreFile {
   const sharedOrigin = { ...store.sharedOrigin };
-  if (channel === null) delete sharedOrigin[workspace];
-  else sharedOrigin[workspace] = channel;
+  if (origin === null) delete sharedOrigin[workspace];
+  else sharedOrigin[workspace] = origin;
   const next: StoreFile = { ...store, sharedOrigin };
   if (Object.keys(sharedOrigin).length === 0) delete next.sharedOrigin;
   return next;
@@ -407,7 +431,8 @@ export function setWorkspacePref(
     throw new Error('too many workspace prefs entries');
   }
   // 共用那一份被写过(设置页或 IM 里改的)就不再算「原样并入」。
-  const nextStore = channel === SHARED_PREFS_CHANNEL ? withSharedOrigin(store, workspace, null) : store;
+  const nextStore =
+    channel === SHARED_PREFS_CHANNEL ? withSharedOrigin(store, workspace, editedOrigin(store)) : store;
   writeStore(fp, { ...nextStore, entries });
   return {
     prefs: entries.filter((e) => e.channel === channel).map(toHookPrefs),

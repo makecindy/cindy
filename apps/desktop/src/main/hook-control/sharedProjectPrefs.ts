@@ -22,6 +22,7 @@
 import type { HookPrefsPatch, HookWorkspacePrefs } from '../../shared/hookControlIpc.js';
 import {
   SHARED_PREFS_CHANNEL,
+  SHARED_PREF_EDITED,
   getSharedPrefOrigin,
   getWorkspacePref,
   isSharedPrefsAdopted,
@@ -91,11 +92,13 @@ function channelRank(channel: HookPrefsChannel): number {
  * 改过 -> 谁也不能顶替(-1); 否则是原样并入它的那个渠道的顺位。
  */
 function sharedOwnerRank(workspace: string): number {
+  const origin = getSharedPrefOrigin(workspace);
+  // 用户动过(哪怕是清空, 此时共享那份里已经没有这个项目的行): 谁也不能把旧值带回来。
+  if (origin === SHARED_PREF_EDITED) return -1;
   const configured =
     !isBlank(getSharedProjectPref(workspace)) ||
     getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, workspace) !== null;
   if (!configured) return Number.POSITIVE_INFINITY;
-  const origin = getSharedPrefOrigin(workspace);
   return origin === null ? -1 : channelRank(origin);
 }
 
@@ -163,7 +166,7 @@ function tightenSharedPermission(workspace: string, permissionMode: string | nul
   if (next === shared.permissionMode) return;
   const origin = getSharedPrefOrigin(workspace);
   setSharedProjectPref(workspace, { permissionMode: next });
-  if (origin !== null) setSharedPrefOrigin(workspace, origin);
+  setSharedPrefOrigin(workspace, origin);
 }
 
 /**

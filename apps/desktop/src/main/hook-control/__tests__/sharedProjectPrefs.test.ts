@@ -174,6 +174,23 @@ describe('sharedProjectPrefs', () => {
     expect(getSharedProjectPref('edited').model).toBe('picked-by-user');
   });
 
+  // 时序(评审指出): 用户把一个项目的配置清回默认之后, 晚到的渠道不得把它升级前的旧值带回来。
+  // 最小失败输入: Telegram 并入 -> 用户清空 -> 飞书才第一次并入, 且飞书对这个项目有旧配置。
+  it('用户清空过的项目, 晚并入的渠道不会把旧值带回来', () => {
+    setWorkspacePref('telegram', null, 'repo', { model: 'tg-model' });
+    markWorkspacePrefsMigrated('telegram');
+    adoptReadyChannels();
+    setSharedProjectPref('repo', { model: null });
+    expect(listSharedProjectPrefs()).toEqual([]);
+
+    setWorkspacePref('feishu', null, 'repo', { model: 'feishu-model', permissionMode: 'ask' });
+    markWorkspacePrefsMigrated('feishu');
+    adoptReadyChannels();
+
+    // 模型保持「跟随默认」; 权限档仍按「只严不宽」收紧。
+    expect(getSharedProjectPref('repo')).toMatchObject({ model: null, permissionMode: 'ask' });
+  });
+
   // 持久化(评审指出): 设置页可以只换来源不填别的, 这样的项目没有偏好行, 并入时不得丢。
   it('只选过来源、没有偏好行的项目, 来源也并入共用那份', () => {
     setWorkspaceProviderSource('telegram', null, 'source-only', 'tg-provider', 'device-1');

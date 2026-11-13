@@ -57,7 +57,7 @@ import {
   markWorkspacePrefsMigrated,
   isSharedPrefsAdopted,
   moveWorkspacePrefsToRenamed,
-  setSharedPrefOrigin,
+  noteSharedPrefEdited,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
@@ -1379,7 +1379,7 @@ export function registerHookControlIpc(): void {
       try {
         entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId, agentDeviceId);
         // 用户在设置页亲手换了共用那份的来源: 这个项目的配置不再算「升级时原样并入」。
-        if (channel === 'shared') setSharedPrefOrigin(workspace, null);
+        if (channel === 'shared') noteSharedPrefEdited(workspace);
       } catch (err) {
         log.warn(
           `workspace provider source write failed: ${err instanceof Error ? err.message : String(err)}`,
