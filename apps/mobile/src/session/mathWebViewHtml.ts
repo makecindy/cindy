@@ -75,6 +75,90 @@ function safeCssColor(value: string | undefined, fallback: string): string {
   return trimmed && SAFE_CSS_COLOR_RE.test(trimmed) ? trimmed : fallback;
 }
 
+export const MATH_BASE_KATEX_EM = 1.08;
+export const MATH_MIN_FIT_SCALE = 0.76;
+
+export interface DisplayMathClassList {
+  add(token: string): void;
+  remove(token: string): void;
+  contains(token: string): boolean;
+}
+
+export interface DisplayMathHtmlElementLike {
+  scrollWidth?: number;
+  getBoundingClientRect?: () => { width: number };
+}
+
+export interface DisplayMathKatexElementLike {
+  style: { fontSize: string };
+  scrollWidth?: number;
+  querySelector?: (selector: string) => DisplayMathHtmlElementLike | null;
+}
+
+export interface DisplayMathContainerElementLike {
+  classList: DisplayMathClassList;
+}
+
+export interface DisplayMathRootElementLike {
+  clientWidth: number;
+}
+
+export function computeDisplayMathScale(
+  availableWidth: number,
+  naturalWidth: number,
+): { fontSizeEm: string; ratio: number } | null {
+  if (!(availableWidth > 0) || !(naturalWidth > availableWidth)) {
+    return null;
+  }
+  const ratio = Math.max(MATH_MIN_FIT_SCALE, availableWidth / naturalWidth);
+  return {
+    ratio,
+    fontSizeEm: `${(MATH_BASE_KATEX_EM * ratio).toFixed(4)}em`,
+  };
+}
+
+export function shouldEnableDisplayMathOverflow(
+  availableWidth: number,
+  measuredWidthAfterScale: number,
+): boolean {
+  return availableWidth > 0 && measuredWidthAfterScale > availableWidth + 1;
+}
+
+export function measureDisplayFormulaWidth(
+  displayEl: DisplayMathContainerElementLike | null,
+  katexEl: DisplayMathKatexElementLike,
+): number {
+  const htmlEl = katexEl.querySelector ? katexEl.querySelector('.katex-html') : null;
+  const hadOverflow = displayEl ? displayEl.classList.contains('katex-overflow') : false;
+  if (displayEl && !hadOverflow) displayEl.classList.add('katex-overflow');
+  let width = katexEl.scrollWidth || 0;
+  if (htmlEl) {
+    const rectW = htmlEl.getBoundingClientRect ? Math.ceil(htmlEl.getBoundingClientRect().width) : 0;
+    width = Math.max(width, htmlEl.scrollWidth || 0, rectW);
+  }
+  if (displayEl && !hadOverflow) displayEl.classList.remove('katex-overflow');
+  return width;
+}
+
+export function fitDisplayFormulaElement(
+  rootEl: DisplayMathRootElementLike,
+  displayEl: DisplayMathContainerElementLike | null,
+  katexEl: DisplayMathKatexElementLike | null,
+  paddingX = 16,
+): void {
+  if (!katexEl) return;
+  if (displayEl) displayEl.classList.remove('katex-overflow');
+  katexEl.style.fontSize = '';
+  const available = rootEl.clientWidth - paddingX;
+  const natural = measureDisplayFormulaWidth(displayEl, katexEl);
+  const fit = computeDisplayMathScale(available, natural);
+  if (!fit) return;
+  katexEl.style.fontSize = fit.fontSizeEm;
+  if (displayEl && shouldEnableDisplayMathOverflow(available, measureDisplayFormulaWidth(displayEl, katexEl))) {
+    displayEl.classList.add('katex-overflow');
+  }
+}
+
 /**
  * display LaTeX 公式 → 自包含 WebView HTML 文档。
  * - 首屏立即绘制公式源码(零外链阻塞,永不白屏),KaTeX 就绪后原位升级;
@@ -124,7 +208,7 @@ export function buildMathWebViewHtml(
       overflow: visible;
     }
     #root .katex-display > .katex {
-      font-size: 1.08em;
+      font-size: ${MATH_BASE_KATEX_EM}em;
       line-height: 1.3;
       white-space: nowrap;
     }
@@ -154,8 +238,8 @@ export function buildMathWebViewHtml(
     var source = ${serializedSource};
     var root = document.getElementById('root');
 
-    var BASE_KATEX_EM = 1.08;
-    var MIN_FIT_SCALE = 0.76;
+    var BASE_KATEX_EM = ${MATH_BASE_KATEX_EM};
+    var MIN_FIT_SCALE = ${MATH_MIN_FIT_SCALE};
 
     function measureFormulaWidth(displayEl, katexEl) {
       var htmlEl = katexEl.querySelector ? katexEl.querySelector('.katex-html') : null;

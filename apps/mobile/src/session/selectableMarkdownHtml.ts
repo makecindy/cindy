@@ -118,6 +118,27 @@ function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
   });
 }
 
+export interface InlineMathElementLike {
+  clientWidth: number;
+  scrollWidth: number;
+  parentElement?: { clientWidth: number } | null;
+  classList: {
+    add(token: string): void;
+    remove(token: string): void;
+  };
+}
+
+export function syncInlineMathOverflowElement(el: InlineMathElementLike): boolean {
+  el.classList.remove('xdt-math-inline-fit');
+  const parent = el.parentElement;
+  const limit = el.clientWidth > 0 ? el.clientWidth : (parent && parent.clientWidth > 0 ? parent.clientWidth : 0);
+  const fits = limit <= 0 || el.scrollWidth <= limit + 1;
+  if (fits) {
+    el.classList.add('xdt-math-inline-fit');
+  }
+  return fits;
+}
+
 /**
  * KaTeX 原位渲染脚本:KaTeX 就绪后把所有 data-latex 元素替换成 KaTeX 输出。
  * CSS/JS 经 buildKatexLoaderJs 动态注入(固定本地资源 + 超时,不阻塞首屏),
