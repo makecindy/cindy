@@ -2602,7 +2602,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "Klassische Prosa (Standard)",
+          "prose": "Klassische Prosa",
           "tang-poetry": "Tang-Lyrik",
           "song-ci": "Song-Ci",
           "yuan-qu": "Yuan-Qu",
@@ -10789,6 +10789,15 @@
       "contents": "Enthält SOUL.md, USER.md, system_prompt.md, skills/ und memories/. Modelle, Berechtigungen und Verbindungen werden weiterhin von Cindy verwaltet.",
       "open": "Ordner öffnen",
       "openFailed": "Der Ordner des Freundes konnte nicht geöffnet werden.",
+      "repository": {
+        "ready": "Git ist bereit",
+        "notReadyTitle": "Git ist noch nicht bereit",
+        "needsIdentity": "Öffne auf dem Computer dieses Freundes seinen Ordner und dann den Unterordner workspace. Richte dort user.name und user.email für Git ein und versuche es erneut.",
+        "notReady": "Die erste Version wurde noch nicht gespeichert. Versuche es erneut, um Git fertig einzurichten.",
+        "unavailable": "Installiere Git auf dem Computer dieses Freundes und versuche es erneut.",
+        "failed": "Git konnte die erste Version nicht lesen oder speichern. Prüfe das Repository auf dem Computer dieses Freundes und versuche es erneut.",
+        "keepUsing": "Du kannst deinen Freund weiter nutzen. Vorhandene Dateien und Git-Einstellungen bleiben erhalten."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Erinnerungen ordnen",
         "carryover": {
@@ -17535,6 +17544,7 @@
       "copied": "{{label}} kopiert",
       "copyFailed": "{{label}} konnte nicht kopiert werden. Manuell auswählen und kopieren.",
       "urlUnavailable": "Die Empfangsadresse ist derzeit nicht verfügbar.",
+      "unsupportedFormat": "Diese Version unterstützt das Format dieses Absenders nicht.",
       "quotaNotifyTitle": "Webhook-Empfangslimit erreicht",
       "quotaExhausted": "Die heutigen {{limit}} Webhook-Empfänge sind aufgebraucht. Fortsetzung um {{time}}. Bis dahin lösen externe Ereignisse keine Aufgaben aus. Geplante Ausführungen und die Modellnutzung sind nicht betroffen.",
       "signedOut": "Melde dich bei deinem Cindy-Konto an, um den Empfang fortzusetzen. Deine Einstellungen bleiben erhalten.",

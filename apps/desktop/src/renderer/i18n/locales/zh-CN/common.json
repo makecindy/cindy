@@ -2572,7 +2572,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "文言（默认）",
+          "prose": "雅正文言",
           "tang-poetry": "唐诗",
           "song-ci": "宋词",
           "yuan-qu": "元曲",
@@ -10744,6 +10744,15 @@
       "contents": "包含 SOUL.md、USER.md、system_prompt.md、skills/ 和 memories/。模型、权限和连接仍由 Cindy 管理。",
       "open": "打开文件夹",
       "openFailed": "无法打开伙伴文件夹。",
+      "repository": {
+        "ready": "Git 已就绪",
+        "notReadyTitle": "Git 尚未就绪",
+        "needsIdentity": "请在这位伙伴所在电脑上打开其文件夹，进入 workspace 子目录，配置 Git 的 user.name 和 user.email 后重试。",
+        "notReady": "首次版本尚未保存。请重试以完成 Git 初始化。",
+        "unavailable": "请在这位伙伴所在电脑上安装 Git 后重试。",
+        "failed": "Git 未能读取或保存首次版本。请在这位伙伴所在电脑上检查仓库后重试。",
+        "keepUsing": "你可以继续使用伙伴。现有文件和 Git 配置会保留。"
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · 整理记忆",
         "carryover": {
@@ -17461,6 +17470,7 @@
       "copied": "{{label}}已复制",
       "copyFailed": "未能复制{{label}}，请手动选择并复制。",
       "urlUnavailable": "接收地址暂时不可用。",
+      "unsupportedFormat": "当前版本不支持这个发送方的格式。",
       "quotaNotifyTitle": "Webhook 接收次数已用完",
       "quotaExhausted": "今天的 {{limit}} 次 Webhook 接收次数已用完，{{time}} 恢复。在此之前外部事件不会触发任务；定时运行和模型用量不受影响。",
       "signedOut": "登录 Cindy 账号后恢复接收，配置已保留。",

@@ -10744,6 +10744,15 @@
       "contents": "内有 SOUL.md、USER.md、system_prompt.md，及 Skill 与记忆之卷匣。模型、权柄与连接仍由 Cindy 掌之。",
       "open": "启卷匣",
       "openFailed": "不能启同伴之卷匣。",
+      "repository": {
+        "ready": "Git 已备",
+        "notReadyTitle": "Git 尚未备",
+        "needsIdentity": "请于同伴所在电脑启其资料夹，入 workspace 子目录，设 Git 之 user.name 与 user.email 后再试。",
+        "notReady": "首版尚未存。请再试以完成 Git 初设。",
+        "unavailable": "请于同伴所在电脑安装 Git 后再试。",
+        "failed": "Git 未能读取或储存首版。请于同伴所在电脑检查储存库后再试。",
+        "keepUsing": "同伴仍可用。既有档案与 Git 设定皆留存。"
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · 理记",
         "carryover": {
@@ -17461,6 +17470,7 @@
       "copied": "{{label}}已录",
       "copyFailed": "未能录{{label}}，请自选而复制。",
       "urlUnavailable": "受信之址暂不可用。",
+      "unsupportedFormat": "此版不纳此发信方之格式。",
       "quotaNotifyTitle": "Webhook 受信之数已尽",
       "quotaExhausted": "今日 Webhook 受信之数 {{limit}} 次已尽，{{time}} 乃复。未复之时，外事不触差事；定时之行与模型耗用皆不受影响。",
       "signedOut": "登录 Cindy 名籍，则复受信；所设皆存。",
