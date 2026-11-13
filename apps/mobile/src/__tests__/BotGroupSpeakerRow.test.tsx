@@ -330,20 +330,7 @@ it('keeps my own companion read-only when someone else requested its work', asyn
   expect(h.subscribe).not.toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
 });
 
-// Legacy steps without execution identity remain ambiguous across visual anchors.
-it('does not borrow a step description when matching work is in another anchor', async () => {
-  const group = workGroup();
-  group.plans = [{ id: 'p', kind: 'work', status: 'running', currentStep: 0, steps: [
-    { position: 0, status: 'running', botId: 'abu', task: 'Unresolved step identity' },
-  ] }] as any;
-  group.round.speakers = ['old', 'current'].map(executionId => ({ botId: 'abu', activity: 'step', executionId, executionStatus: 'running', sessionId: null }));
-  await act(async () => root.render(el('div', null, group.round.speakers.map(speaker => el(BotGroupWorkArea, {
-    key: speaker.executionId, group, speakers: [speaker], deviceId: 'mac', online: false,
-    identityFor: (botId, name) => ({ botId, name }), onError: vi.fn(),
-  })))));
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
-  expect(node.textContent).not.toContain('Unresolved step identity');
-});
+
 
 // Unit regression: hide only the unauthorized control, never the public execution rows.
 it('keeps all work visible without offering an unauthorized stop', async () => {
@@ -352,4 +339,19 @@ it('keeps all work visible without offering an unauthorized stop', async () => {
   await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
   expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
   expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});
+
+// Without enqueue time, receipt/source order still selects the latest own stop row.
+it('places the stop on the latest own source when execution receipts arrive reversed', async () => {
+  const group = workGroup();
+  group.messages = [{ id: 'early', createdAt: 10 }, { id: 'later', createdAt: 30 }] as any;
+  group.round.speakers = [
+    { botId: 'abu', activity: 'reply', sessionId: null, executionId: 'later-work', sourceMessageId: 'later', isSelfRequested: true, executionStatus: 'queued' },
+    { botId: 'abu', activity: 'reply', sessionId: null, executionId: 'early-work', sourceMessageId: 'early', isSelfRequested: true, executionStatus: 'running' },
+  ];
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  const rows = node.querySelectorAll('[data-testid="botGroup.speaking"]');
+  expect(rows[0]?.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+  expect(rows[1]?.textContent).toContain(i18n.t('groupChat.speaking.queued'));
+  expect(rows[1]?.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
 });

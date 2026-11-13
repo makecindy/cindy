@@ -532,12 +532,12 @@ export interface BotGroupSpeaker {
   botId: string;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
-  /** Enqueue time positions this execution in chat; never use it as work elapsed. */
-  requestedAt?: number;
+  /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
+  timelineAt?: number;
   sourceMessageId?: string;
   /** Authenticated projection of requester identity; absence on old hosts grants no control. */
   isSelfRequested?: boolean;
-  /** Public requester name for the group's Cindy, matching its completed-message attribution. */
+  /** Public requester name for this execution of the group's Cindy. */
   requesterName?: string;
   startedAt?: number;
   stopping?: boolean;

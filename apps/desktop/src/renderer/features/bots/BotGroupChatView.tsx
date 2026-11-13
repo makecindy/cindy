@@ -1,4 +1,4 @@
-import { botGroupWorkAnchors } from '@cindy/maker-shared/botTimeline';
+import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
@@ -1243,27 +1243,16 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         return member ? [{ ...speaker, isSelfRequested: speaker.isSelfRequested ?? (!group.serverBacked && !speaker.executionId), member, displayName, sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
       })
     : []), [running, group, memberById, workTargets, t]);
+  const liveEntries = interleaveBotGroupWork(rows.map(row => row.outbox?.messageId
+    ? { ...row, serverMessageId: row.outbox.messageId } : row), !sharing && !group?.archived && !group?.dissolvedAt ? speakers : []);
+  const orderedSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
+  const stopSpeaker = [...orderedSpeakers].reverse().find(speaker => speaker.isSelfRequested)
+    ?? (group?.canStopAll ? orderedSpeakers.at(-1) : undefined);
   const stepSpeaker = runningStep
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === runningStep.step.botId)
     : undefined;
   const stepLive = useAgentIslandActivity(stepSpeaker?.sessionId ?? '');
   const planRunningSince = runningStep ? stepLive?.startedAtMs ?? runningStep.plan.updatedAt : null;
-
-  const controlSpeaker = [...speakers].reverse().find(speaker => speaker.isSelfRequested) ?? (group?.canStopAll ? speakers.at(-1) : undefined);
-  const workAnchors = botGroupWorkAnchors(rows.map(row => row.outbox?.messageId
-    ? { ...row, serverMessageId: row.outbox.messageId } : row), speakers);
-  const renderWork = (anchor: string | null) => sharing || group?.archived || group?.dissolvedAt ? null : (workAnchors.get(anchor) ?? []).map(speaker => (
-    <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
-      {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
-        <BotGroupProgressStrip step={speaker === stepSpeaker && runningStep ? {
-          ...runningStep, member: speaker.member, displayName: speaker.displayName,
-        } : null} speakers={[speaker]} onStop={scope => void stopRound(scope)}
-          canStop={group?.round.canStop !== false && speakers.some(candidate => candidate.isSelfRequested)} showStop={speaker === controlSpeaker} stopPending={stopping || !speakers.some(candidate => (candidate.isSelfRequested || group?.canStopAll) && !candidate.stopping && candidate.executionStatus !== 'stopping')}
-          canStopAll={!!group?.canStopAll && !!group.round.othersActive && speaker === controlSpeaker} stopping={stopping} />
-        <BotGroupSpeakerInteraction speaker={speaker} />
-      </>}
-    </Fragment>
-  ));
 
   const resetDrag = () => {
     dragCounterRef.current = 0;
@@ -1436,8 +1425,23 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               </p>
             </div>
           ) : null}
-          {renderWork(null)}
-          {rows.map((message) => {
+          {liveEntries.map((entry, timelineIndex, timeline) => {
+            if (entry.kind === 'work') {
+              const speaker = entry.value;
+              const step = runningStep && speaker === stepSpeaker ? {
+                ...runningStep, member: speaker.member, displayName: speaker.displayName,
+              } : null;
+              return <Fragment key={`work:${speaker.executionId ?? `${speaker.member.botId}:${speaker.activity}`}`}>
+                {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
+                  <BotGroupProgressStrip step={step} speakers={[speaker]} onStop={scope => void stopRound(scope)}
+                    canStop={group.round.canStop !== false && speakers.some(speaker => speaker.isSelfRequested)} canStopAll={!!group.canStopAll && !!group.round.othersActive} stopping={stopping}
+                    showStop={speaker === stopSpeaker}
+                    stopPending={stopping || speakers.filter(item => item.activity !== 'planning' && (item.isSelfRequested || group.canStopAll)).every(item => item.stopping || item.executionStatus === 'stopping')} />
+                  <BotGroupSpeakerInteraction speaker={speaker} />
+                </>}
+              </Fragment>;
+            }
+            const message = entry.value;
             const rowLayout = layout.get(message.id);
             const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
             const isPlanCard = message.kind === 'plan';
@@ -1457,7 +1461,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                 <BotGroupTimelineItem
                   pluginUi={pluginUi}
                   message={message}
-                  continued={rowLayout?.continued ?? false}
+                  continued={timeline[timelineIndex - 1]?.kind !== 'work' && (rowLayout?.continued ?? false)}
                   authorName={authorName}
                   avatar={identity ? avatarById.get(identity.botId) : undefined}
                   ownerOf={owned || undefined}
@@ -1495,7 +1499,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   onPlanAutoContinue={isOpenPlanCard && plan?.autoContinue !== undefined && !group.archived && !group.dissolvedAt
                     ? onPlanAutoContinue : undefined}
                 />
-                {renderWork(message.id)}
               </Fragment>
             );
           })}
@@ -1513,6 +1516,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               />
             </div>
           ) : null}
+
         </div>
       </div>
       <div className="relative shrink-0">

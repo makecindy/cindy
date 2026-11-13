@@ -447,7 +447,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     return { botId: row.bot_id, sessionId: null, executionId: row.id,
     sourceMessageId: row.source_message_id, isSelfRequested: row.requester_id === selfId,
     ...(bot?.kind === 'bot' && bot.assistant === true && requester ? { requesterName: memberName(requester, ownerMembers) } : {}),
-    ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { requestedAt: Date.parse(row.created_at) } : {}),
+    ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { timelineAt: Date.parse(row.created_at) } : {}),
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
     activity: row.plan_id ? 'step' as const : 'reply' as const };
   });

@@ -52,8 +52,8 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
       messages: [{ id: 'qa-request-ann', sequence: 1, kind: 'message', authorKind: 'user', isSelf: false, authorName: 'Ann', content: '@Cindy 请检查我的请求。', createdAt: NOW - 40_000 },
         { id: 'qa-request-nana', sequence: 2, kind: 'message', authorKind: 'user', isSelf: true, authorName: 'nana', content: '@Cindy 我也有一项请求。', createdAt: NOW - 20_000 }],
       round: { status: 'running', canContinue: false, speakers: [
-        { botId: members[0].botId, sessionId: null, activity: 'reply', executionId: 'qa-ann', requesterName: 'Ann', isSelfRequested: false, requestedAt: NOW - 30_000, executionStatus: 'running' },
-        { botId: members[0].botId, sessionId: null, activity: 'reply', executionId: 'qa-nana', requesterName: 'nana', isSelfRequested: true, requestedAt: NOW - 10_000, executionStatus: 'queued' },
+        { botId: members[0].botId, sessionId: null, activity: 'reply', executionId: 'qa-ann', requesterName: 'Ann', isSelfRequested: false, timelineAt: NOW - 30_000, executionStatus: 'running' },
+        { botId: members[0].botId, sessionId: null, activity: 'reply', executionId: 'qa-nana', requesterName: 'nana', isSelfRequested: true, timelineAt: NOW - 10_000, executionStatus: 'queued' },
       ] },
     } }] };
 
@@ -76,7 +76,7 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
           { id: 'qa-done', sequence: 2, kind: 'message', planId: plan.id, authorKind: 'bot', authorBotId: members[0].botId,
           authorName: members[0].name, content: '调研结果已整理好，可以继续核对。', createdAt: NOW - 25_000 }],
         round: { status: talk ? 'idle' : 'running', canContinue: false, speakers: talk ? [] : [
-          { botId: members[1].botId, sessionId: 'qa-work', activity: 'step', executionId: 'qa-e2-work', isSelfRequested: true, requestedAt: NOW - 20_000, executionStatus: 'running', startedAt: NOW - 20_000 },
+          { botId: members[1].botId, sessionId: 'qa-work', activity: 'step', executionId: 'qa-e2-work', isSelfRequested: true, timelineAt: NOW - 20_000, executionStatus: 'running', startedAt: NOW - 20_000 },
         ] },
       } }] };
   }
@@ -90,12 +90,12 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
           content: '我也有一项需要一起核对。', createdAt: NOW - 25_000 }],
       round: { status: running || othersRunning ? 'running' : 'idle', canContinue: false, othersActive: othersRunning, speakers: [
         ...(othersRunning ? [
-        { botId: 'qa-research', sessionId: 'qa-research', activity: 'reply', executionId: 'qa-e1', isSelfRequested: false, requestedAt: NOW - 30_000, executionStatus: 'running', startedAt: NOW - 30_000 },
+        { botId: 'qa-research', sessionId: 'qa-research', activity: 'reply', executionId: 'qa-e1', isSelfRequested: false, timelineAt: NOW - 30_000, executionStatus: 'running', startedAt: NOW - 30_000 },
         ] : []),
         ...(running ? [
-        { botId: 'qa-design', sessionId: 'qa-permission', activity: 'reply', executionId: 'qa-e2', isSelfRequested: true, requestedAt: NOW - 20_000, executionStatus: 'needs_input', startedAt: NOW - 20_000 },
-        { botId: 'qa-check', sessionId: 'qa-question', activity: 'reply', executionId: 'qa-e3', isSelfRequested: true, requestedAt: NOW - 10_000, executionStatus: 'needs_input', startedAt: NOW - 10_000 },
-        { botId: 'qa-research', sessionId: null, activity: 'reply', executionId: 'qa-e4', isSelfRequested: true, requestedAt: NOW - 5_000, executionStatus: 'queued' },
+        { botId: 'qa-design', sessionId: 'qa-permission', activity: 'reply', executionId: 'qa-e2', isSelfRequested: true, timelineAt: NOW - 20_000, executionStatus: 'needs_input', startedAt: NOW - 20_000 },
+        { botId: 'qa-check', sessionId: 'qa-question', activity: 'reply', executionId: 'qa-e3', isSelfRequested: true, timelineAt: NOW - 10_000, executionStatus: 'needs_input', startedAt: NOW - 10_000 },
+        { botId: 'qa-research', sessionId: null, activity: 'reply', executionId: 'qa-e4', isSelfRequested: true, timelineAt: NOW - 5_000, executionStatus: 'queued' },
         ] : []),
       ] },
     } }] };

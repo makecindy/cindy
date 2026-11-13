@@ -494,7 +494,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   let profiles: Array<typeof botProfiles.$inferSelect> = [];
   const workspaces = () => chatServerWorkspaces(config.baseUrl, selfId, current);
-  const planning = new Map<string, { botId: string; controller: AbortController; sourceMessageId: string; requestedAt: number }>();
+  const planning = new Map<string, { botId: string; controller: AbortController; sourceMessageId: string; timelineAt: number }>();
   // Invalidate even a send still preparing/uploading its attachments. Its delayed
   // receipt must not start an arrangement after a newer message or control action.
   let nextIntentVersion = 0;
@@ -1926,13 +1926,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     };
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
       const run = running.get(e.id);
-      // created_at is the enqueue time, not the start of work; showing it as elapsed time
-      // made queued executions look like they had already been working.
+      // Enqueue time anchors history across computers and queue transitions; only the
+      // local start is an elapsed-work clock.
+      const timelineAt = e.created_at ? Date.parse(e.created_at) : NaN;
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
         executionId: e.id, sourceMessageId: e.source_message_id, isSelfRequested: e.requester_id === selfId,
         ...speakerRequesterName(e.bot_id, e.requester_id),
-        ...(e.created_at && Number.isFinite(Date.parse(e.created_at)) ? { requestedAt: Date.parse(e.created_at) } : {}), ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
+        ...(Number.isFinite(timelineAt) ? { timelineAt } : {}), ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
         activity: e.plan_id ? 'step' : 'reply' };
       speakers.push(speaker);
@@ -1940,7 +1941,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The organizer is visibly 「正在看」 while this device decides whether to arrange (§7.2),
     // as the local service showed it. It works on the auxiliary model, not in a lane session.
     const deciding = planning.get(roomId);
-    if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning', isSelfRequested: true, sourceMessageId: deciding.sourceMessageId, requestedAt: deciding.requestedAt, ...speakerRequesterName(deciding.botId, selfId) });
+    if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning', isSelfRequested: true, sourceMessageId: deciding.sourceMessageId, timelineAt: deciding.timelineAt, ...speakerRequesterName(deciding.botId, selfId) });
     // Sidebar refresh must not download every attachment in every group's history.
     const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
     const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;
@@ -2104,7 +2105,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     planning.get(s.room.id)?.controller.abort();
     const controller = new AbortController();
-    const pending = { botId: localBot(organizer.id)?.id ?? organizer.id, controller, sourceMessageId: sourceId, requestedAt: Date.now() };
+    const pending = { botId: localBot(organizer.id)?.id ?? organizer.id, controller, sourceMessageId: sourceId, timelineAt: Date.now() };
     planning.set(s.room.id, pending); changed(s.room.id);
     let explicit = forced;
     try {

@@ -1,4 +1,5 @@
-import { botGroupWorkAnchors } from '@cindy/maker-shared/botTimeline';
+import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
+import type { BotGroupWorkRow } from './BotGroupWorkArea';
 import { ComposerPullThroughScrollView, useComposerPullThroughBridge } from './composerPullThrough';
 import { DockKeyboardBottomSpacer } from './ComposerDockKeyboardFollow';
 import type { ScrollViewInstance } from 'react-native';
@@ -25,7 +26,7 @@ import type { DurableOutboxRecord } from './durableOutbox';
  * 每次电脑推送变化就重读，不在本地拼时间线。分工的安排卡、交接文件、「下一步 · 继续」
  * 「没做完 · 重试」见 BotGroupPlan.tsx；正在发言的伙伴与它待确认的操作见 BotGroupSpeakerRow。
  */
-import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -129,7 +130,7 @@ import {
 } from './BotGroupPlan';
 import { BotGroupSettingsSheet } from './BotGroupSettingsSheet';
 import { MessageScrollToBottomButton } from './MessageScrollToBottomButton';
-import { BotGroupWorkArea, useBotGroupWorkTargets } from './BotGroupWorkArea';
+import { BotGroupWorkArea } from './BotGroupWorkArea';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { keyboardAvoidingBehaviorForPlatform } from './mobileNativeShellLayout';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
@@ -688,10 +689,6 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     }
   };
 
-  const stopRef = useRef(stop);
-  stopRef.current = stop;
-  const workArea = useMemo(() => ({ onStop: (scope?: 'all') => stopRef.current(scope), stopping, onError: (message: string | null) => { if (message) Alert.alert(message); } }), [stopping]);
-
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const atTail = contentSize.height - contentOffset.y - layoutMeasurement.height <= 1;
@@ -831,7 +828,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
               event.nativeEvent.layout.y - (floatingHeader ? headerHeight + spacing.md : spacing.md));
           }} />
         <SessionQuickSendProvider value={!imageSelectionActive && !group.archived && !group.dissolvedAt && (chat.online || chat.canQueue) ? sendRichAnswer : null}>
-        <BotGroupTimeline workArea={!imageSelectionActive && !threadRootId ? workArea : undefined} onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        <BotGroupWorkArea enabled={!imageSelectionActive && !threadRootId} onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+          onError={message => { if (message) Alert.alert(message); }}>
+        {workRows => <BotGroupTimeline workRows={imageSelectionActive || threadRootId ? undefined : workRows} onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onRetrySource={chat.reload}
           onOpenTopic={!deviceId && chat.server ? openTopic : undefined} onRevealShare={revealShare}
           onShare={chat.shareToMain ? shareToMain : undefined}
@@ -848,9 +847,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onContinue={continueRound}
           onPlanAction={runPlanAction}
           onEditStep={editPlanStep}
-          />
+          />}
+        </BotGroupWorkArea>
         </SessionQuickSendProvider>
-
       {processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight, marginTop: -spacing.sm }} />}
       </ComposerPullThroughScrollView>
       </MessageListVisibilityContext.Provider>
@@ -963,12 +962,12 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
 const EMPTY_PENDING: readonly DurableOutboxRecord[] = [];
 
 export const BotGroupTimeline = memo(function BotGroupTimeline({
-  group, deviceId, online, identityFor, resolveMedia, resolveServerMedia, loadOlder, loadingOlder, continuing, planPending, onContinue, onPlanAction, onEditStep,
+  group, workRows = [], deviceId, online, identityFor, resolveMedia, resolveServerMedia, loadOlder, loadingOlder, continuing, planPending, onContinue, onPlanAction, onEditStep,
   onMessageLayout, onLocateMessage, highlightId, onReply, onOpenThread, threadRootId, pending = EMPTY_PENDING, onPendingAction, onOpenDiagram, active = true,
-  onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy, workArea,
+  onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy,
 }: {
   group: BotGroupRemoteChatData;
-  workArea?: { onStop(scope?: 'all'): Promise<void>; stopping: boolean; onError(message: string | null): void };
+  workRows?: BotGroupWorkRow[];
   pending?: readonly DurableOutboxRecord[];
   onPendingAction?: (id: string, action: 'retry' | 'cancel' | 'dismiss-share') => void;
   deviceId: string;
@@ -1038,13 +1037,6 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   const running = !threadRootId && group.round.status === 'running';
   const memberById = useMemo(() => new Map(group.members.map((member) => [member.botId, member])), [group.members]);
   const pendingFor = (planId: string | null) => planId && planPending?.planId === planId ? planPending.action : null;
-  const workTargets = useBotGroupWorkTargets(group, deviceId, online && !!workArea && !group.archived && !group.dissolvedAt);
-  const workAnchors = botGroupWorkAnchors(messages.map(message => {
-    const receipt = pendingById.get(message.id)?.chat?.messageId;
-    return receipt ? { ...message, serverMessageId: receipt } : message;
-  }), group.round.speakers);
-  const renderWork = (anchor: string | null) => workArea && workAnchors.has(anchor) && !group.archived && !group.dissolvedAt
-    ? <BotGroupWorkArea {...workArea} targets={workTargets} group={group} deviceId={deviceId} online={online} identityFor={identityFor} speakers={workAnchors.get(anchor)} /> : null;
   const firstNew = readBefore === undefined ? undefined : messages.findIndex(message => message.threadRootId === threadRootId && message.isSelf === false
     && message.kind === 'message' && BigInt(message.serverSequence ?? String(message.sequence)) > BigInt(readBefore));
   const firstReply = messages.findIndex(message => message.threadRootId === threadRootId);
@@ -1064,8 +1056,13 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
     {!threadRootId && group.hasMoreBefore && loadOlder ? <MainWindowActionButton action={{ label: t('groupChat.server.loadOlder'), busy: loadingOlder, onPress: loadOlder, testID: 'botGroup.loadOlder' }} /> : !threadRootId && group.hasMoreBefore ? <Text style={styles.olderNote} testID="botGroup.olderOnComputer">{t('groupChat.timeline.olderOnComputer')}</Text> : null}
     {!threadRootId && messages.length === 0 && !running ? <MainWindowEmptyState centered testID="botGroup.empty"
       title={t('groupChat.timeline.emptyTitle')} copy={t('groupChat.timeline.emptyDescription')} /> : null}
-    {renderWork(null)}
-    {messages.map((message, index) => {
+    {interleaveBotGroupWork(messages.map(message => {
+      const receipt = pendingById.get(message.id)?.chat?.messageId;
+      return receipt ? { ...message, serverMessageId: receipt } : message;
+    }), workRows).map((entry, timelineIndex, timeline) => {
+      if (entry.kind === 'work') return <View key={`work:${entry.value.key}`} testID="botGroup.work">{entry.value.node}</View>;
+      const message = entry.value;
+      const index = entry.index;
       const isRoot = message.id === threadRootId;
       const longRoot = isRoot && message.content.length > 600;
       const displayMessage = longRoot && !expandedRoot ? { ...message, content: `${message.content.slice(0, 600)}…` } : message;
@@ -1080,7 +1077,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
       const groupTime = timeGroups.get(message.id);
       const previous = index > 0 ? messages[index - 1] : undefined;
       // G2: the same teammate speaking again inside one time group keeps its avatar and name once.
-      const continued = previous?.id !== threadRootId && groupTime === undefined && message.kind === 'message' && message.authorKind === 'bot'
+      const continued = timeline[timelineIndex - 1]?.kind !== 'work' && previous?.id !== threadRootId && groupTime === undefined && message.kind === 'message' && message.authorKind === 'bot'
         && previous?.kind === 'message' && previous.authorKind === 'bot' && previous.authorBotId === message.authorBotId;
       const posted = pending.find(row => row.chat?.messageId === message.id && row.chat.shareToMain?.state === 'sent')?.chat?.shareToMain;
       const shared = posted ? { messageId: posted.messageId ?? null, bySelf: true } : sharedReplies?.[message.id];
@@ -1135,7 +1132,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
         {longRoot ? <MainWindowActionButton density="compact" action={{ label: t(expandedRoot ? 'groupChat.thread.collapseRoot' : 'groupChat.thread.expandRoot'), onPress: () => setExpandedRoot(value => !value), testID: 'botGroup.thread.expandRoot' }} /> : null}
         {isRoot ? threadBoundary : null}
       </>;
-      return <Fragment key={key}><View testID={`botGroup.row.${message.id}`} style={[styles.item, highlightId === message.id && styles.locatedMessage]}
+      return <View key={key} testID={`botGroup.row.${message.id}`} style={[styles.item, highlightId === message.id && styles.locatedMessage]}
         onLayout={event => onMessageLayout?.(message.id, event.nativeEvent.layout.y, event.nativeEvent.layout.height)}>
         {selectable ? <ShareMessageCheckbox clientId={message.id} disabled={imageShareBusy} fill>
           <View style={styles.flex}>{messageRow}</View>
@@ -1146,9 +1143,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
           {!queued.enqueueStarted && queued.state !== 'sending' ? <MainWindowActionButton density="compact" action={{ label: t('message.queue.cancelSend'), onPress: () => onPendingAction?.(queued.item.clientId, 'cancel') }} /> : null}
         </View> : null}
 
-      </View>
-      {renderWork(message.id)}
-      </Fragment>;
+      </View>;
     })}
     <BotGroupMentionIdentity member={mentionedMember} anchor={mentioned?.anchor ?? null} deviceId={deviceId} onClose={() => setMentioned(null)} />
     {!threadRootId && !group.archived && !group.dissolvedAt && openPlan && openPlan.canManage !== false && followUp ? <View style={styles.indented}>
