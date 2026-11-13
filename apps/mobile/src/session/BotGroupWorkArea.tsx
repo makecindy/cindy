@@ -16,6 +16,7 @@ import { useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, spacing, typeScale } from '@/theme/tokens';
 
 export interface BotGroupWorkRow { key: string; startedAt?: number; timelineAt?: number; node: ReactNode }
+const EMPTY_WORK_ROWS: BotGroupWorkRow[] = [];
 
 /** Live work is inserted into messages by its original timestamp. Only an owned companion's computer can
  * resolve its execution to a task; another member's private task is never queried. */
@@ -76,19 +77,20 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     void read();
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
-  if (!enabled || group.round.status !== 'running' || !group.round.speakers.length) return children?.([]) ?? null;
+  if (!enabled || group.round.status !== 'running' || !group.round.speakers.length) return children?.(EMPTY_WORK_ROWS) ?? null;
   const speakers = group.round.speakers.filter(speaker => group.members.some(member => member.botId === speaker.botId));
-  if (!speakers.length) return children?.([]) ?? null;
+  if (!speakers.length) return children?.(EMPTY_WORK_ROWS) ?? null;
   const stopPending = stopping || speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
   const stopButton = (onPress: (() => void) | undefined) => <Pressable testID="botGroup.work.stop" accessibilityRole="button"
     accessibilityLabel={t('groupChat.composer.stop')} accessibilityState={{ disabled: stopPending, busy: stopPending }}
     disabled={stopPending} style={styles.stop} onPress={onPress}>
     <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
   </Pressable>;
-  const stopControl = online && onStop ? group.supportsScopedStop && group.canStopAll && group.round.othersActive
+  const canStopAll = group.supportsScopedStop && group.canStopAll && group.round.othersActive;
+  const stopControl = online && onStop && (group.round.canStop !== false || canStopAll) ? canStopAll
       ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}
           disabled={stopPending} testID="botGroup.work.stopMenu" sections={[{ id: 'scope', options: [
-            { id: 'mine', title: t('groupChat.progress.stopMine') },
+            ...(group.round.canStop !== false ? [{ id: 'mine', title: t('groupChat.progress.stopMine') }] : []),
             { id: 'all', title: t('groupChat.progress.stopAll'), subtitle: t('groupChat.progress.stopAllHint'), destructive: true },
           ] }]} onSelect={id => { void onStop(id === 'all' ? 'all' : undefined); }}>
           {stopButton}

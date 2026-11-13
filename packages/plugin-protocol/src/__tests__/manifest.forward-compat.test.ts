@@ -8,6 +8,15 @@ const base = {
 const extension = { mode: 'future', options: [1, null, { enabled: true }] };
 
 describe('declaration forward compatibility is not Host authorization', () => {
+  // §1.2: group names are forward-compatible data, but the known field must be a string array.
+  it('preserves host tool groups and rejects malformed declarations', () => {
+    const agent = { hostTools: ['history', 'scheduler', 'future-group'] };
+    expect(validateGhostManifest({ ...base, agent })).toMatchObject({ ok: true, manifest: { agent } });
+    for (const hostTools of ['history', [3], [null], {}]) {
+      expect(validateGhostManifest({ ...base, agent: { hostTools } }).ok).toBe(false);
+    }
+  });
+
   it.each([
     ['mobile', { channels: ['practice-ui'], panel: 'mobile/panel.html' }],
     ['mainView', { html: 'view.html' }],

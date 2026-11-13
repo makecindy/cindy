@@ -1427,7 +1427,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               return <Fragment key={`work:${speaker.executionId ?? `${speaker.member.botId}:${speaker.activity}`}`}>
                 {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
                   <BotGroupProgressStrip step={step} speakers={[speaker]} onStop={scope => void stopRound(scope)}
-                    canStopAll={!!group.canStopAll && !!group.round.othersActive} stopping={stopping}
+                    canStop={group.round.canStop} canStopAll={!!group.canStopAll && !!group.round.othersActive} stopping={stopping}
                     showStop={speaker === speakers.filter(item => item.activity !== 'planning').at(-1)}
                     stopPending={stopping || speakers.filter(item => item.activity !== 'planning').every(item => item.stopping || item.executionStatus === 'stopping')} />
                   <BotGroupSpeakerInteraction speaker={speaker} />
@@ -1552,7 +1552,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
             members={group.members}
-            running={running}
+            running={running} canStop={group.round.canStop}
             planState={botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}

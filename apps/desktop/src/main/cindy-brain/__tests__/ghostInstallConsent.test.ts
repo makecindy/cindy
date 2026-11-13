@@ -14,6 +14,8 @@ import {
   assertGhostInstallConsent,
   confirmedControlPoints,
   confirmedAutoTools,
+  confirmedHostToolGroups,
+  confirmedEventTopics,
   confirmedTaskCapability,
   confirmedUiCapability,
   confirmedHostUiPermissions,
@@ -456,6 +458,32 @@ it('records observe consent only when that capability was shown', async () => {
   expect(confirmedTaskCapability(decision, before, next, 'observe')).toBe(true);
   expect(confirmedTaskCapability(decision, before, next, 'targets')).toBeUndefined();
   expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'observe')).toBeUndefined();
+});
+
+// Old hosts may have preserved the declarations. Only receipt facts form the update baseline.
+it('confirms individual host groups, including groups preserved by an older host', async () => {
+  const previous = { ...manifest(['api.weather.test']), agent: { hostTools: ['history', 'future-group'] } };
+  const before = installed(previous);
+  const next = { ...previous, agent: { hostTools: ['history', 'control', 'future-group'] } };
+  const prompt = userPrompt(true);
+  const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'market' }, before, next, reviewedDigest);
+  expect(confirmedHostToolGroups(decision, before, next)).toEqual(['history', 'control']);
+  expect(confirmedHostToolGroups({ mode: 'unprompted' }, before, next)).toEqual([]);
+  expect(confirmedHostToolGroups(decision, { ...before, approvedHostToolGroups: ['history'] }, next)).toEqual(['control']);
+});
+
+// §5 compatibility, unit: an old Host preserved an unknown topic. Its receipt has no content consent.
+it('requires independent content/state consent while retaining existing metadata subscriptions', async () => {
+  const next: GhostManifest = { ...manifest(['api.weather.test']), subscribe: { topics: ['turn', 'message', 'task-state', 'future' as never] } };
+  const before = installed(next);
+  const prompt = userPrompt(true);
+  const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'market' }, before, next, reviewedDigest);
+  expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({
+    added: expect.arrayContaining([expect.objectContaining({ key: 'subscribe:topics:message' }), expect.objectContaining({ key: 'subscribe:topics:task-state' })]),
+  }) }));
+  expect(confirmedEventTopics(decision, before, next)).toEqual(['message', 'task-state']);
+  expect(confirmedEventTopics({ mode: 'unprompted' }, before, next)).toEqual([]);
+  expect(confirmedEventTopics(decision, { ...before, approvedEventTopics: ['message'] }, next)).toEqual(['task-state']);
 });
 
 it('explains that local OIDC declarations do not receive enterprise identity', async () => {
