@@ -2640,7 +2640,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "Prose classique (par défaut)",
+          "prose": "Prose classique",
           "tang-poetry": "Poésie Tang",
           "song-ci": "Ci des Song",
           "yuan-qu": "Qu des Yuan",
@@ -10873,6 +10873,15 @@
       "contents": "Contient SOUL.md, USER.md, system_prompt.md, skills/ et memories/. Les modèles, les autorisations et les connexions restent gérés par Cindy.",
       "open": "Ouvrir le dossier",
       "openFailed": "Impossible d'ouvrir le dossier de l’ami.",
+      "repository": {
+        "ready": "Git est prêt",
+        "notReadyTitle": "Git n’est pas encore prêt",
+        "needsIdentity": "Sur l’ordinateur de cet Ami, ouvre son dossier, puis le sous-dossier workspace. Configure user.name et user.email de Git à cet endroit, puis réessaie.",
+        "notReady": "La première version n’a pas été enregistrée. Réessaie pour terminer la configuration de Git.",
+        "unavailable": "Installe Git sur l’ordinateur de cet Ami, puis réessaie.",
+        "failed": "Git n’a pas pu lire ou enregistrer la première version. Vérifie le dépôt sur l’ordinateur de cet Ami, puis réessaie.",
+        "keepUsing": "Tu peux continuer à utiliser ton Ami. Les fichiers et réglages Git existants sont conservés."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Ranger la mémoire",
         "carryover": {
@@ -12194,6 +12203,15 @@
     },
     "starterOptions": "Options de démarrage",
     "channels": {
+      "edit": {
+        "button": "Modifier",
+        "title": "Modifier la connexion iMessage",
+        "description": "Enregistrez pour vous reconnecter. Le modèle suit les paramètres de votre ami.",
+        "keepPassword": "Laissez vide pour conserver le mot de passe enregistré",
+        "save": "Enregistrer et reconnecter",
+        "loadFailed": "Impossible de charger les paramètres de connexion. Réessayez.",
+        "failed": "Impossible d’enregistrer la connexion. Vérifiez les paramètres et réessayez."
+      },
       "title": "Plateformes de messagerie",
       "platform": {
         "telegram": "Telegram",
@@ -15617,6 +15635,7 @@
       "REMOTE_AGENT_BUSY": "Trop de sessions sont en cours d'exécution sur l'autre ordinateur. Terminez-en quelques-unes et réessayez.",
       "REMOTE_AGENT_UNSUPPORTED": "Cet Agent n'est pas disponible sur l'autre ordinateur. Installez-le ou connectez-vous-y sur cet ordinateur, ou choisissez un autre Agent.",
       "REMOTE_AGENT_INVALID": "Un problème est survenu lors de la communication avec l'ordinateur qui exécute l'Agent. Réessayez ; si le problème persiste, mettez à jour Cindy sur les deux ordinateurs.",
+      "REMOTE_AGENT_RESUME_REJECTED": "L’ordinateur qui exécute le modèle ne peut pas reprendre cette session. Créez une nouvelle session depuis la liste des sessions et copiez le contenu nécessaire pour continuer. La session d’origine et les messages en attente sont conservés.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Ce modèle a atteint la limite de partage de modèle définie par son propriétaire. Choisissez un autre modèle disponible pour continuer.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser mes autres ordinateurs à utiliser les modèles de celui-ci » dans sa connexion à distance. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",
       "REMOTE_AGENT_FORK_FAILED": "L'ordinateur qui exécute l'Agent n'a pas pu démarrer une nouvelle session à partir d'ici. Réessayez, ou essayez avec un autre message.",
@@ -17691,6 +17710,7 @@
       "copied": "Copié : {{label}}",
       "copyFailed": "Impossible de copier : {{label}}. Sélectionnez le contenu et copiez-le manuellement.",
       "urlUnavailable": "L'adresse de réception n'est pas disponible pour le moment.",
+      "unsupportedFormat": "Cette version ne prend pas en charge le format de cet expéditeur.",
       "quotaNotifyTitle": "Limite de réceptions Webhook atteinte",
       "quotaExhausted": "Les {{limit}} réceptions Webhook du jour sont épuisées. Reprise à {{time}}. D'ici là, les événements externes ne déclencheront pas de tâches. Les exécutions planifiées et la consommation des modèles ne sont pas affectées.",
       "signedOut": "Connectez-vous à votre compte Cindy pour reprendre la réception. Vos réglages sont conservés.",
@@ -20999,6 +21019,9 @@
       "description": "Choisissez ce que vous transférez de « {{name}} » vers cet ordinateur. Les réglages déjà modifiés sur cet ordinateur sont conservés.",
       "partial": "Une partie du contenu de cet ordinateur-là n'a pas pu être lue cette fois. Seul ce qui a été lu est listé ci-dessous.",
       "groupCount": "{{selected}} sur {{total}} sélectionnés",
+      "groupCount_one": "{{selected}} sur {{total}} sélectionné",
+      "groupCount_many": "{{selected}} sur {{total}} sélectionnés",
+      "groupCount_other": "{{selected}} sur {{total}} sélectionnés",
       "present_one": "{{count}} autre élément est déjà identique ici",
       "present_other": "{{count}} autres éléments sont déjà identiques ici",
       "present_many": "{{count}} autres éléments sont déjà identiques ici",

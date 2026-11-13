@@ -36,6 +36,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import type {
   BotImAdoptablePersonalBot,
   BotImChannel,
+  BotIMessageConfig,
   BotImConnectionAddInput,
   BotImConnectionGroup,
   BotImConnectionLane,
@@ -131,6 +132,16 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
   const { payload, loading, apply } = useBotImConnections(im, target);
   const { confirm } = useConfirmDialog();
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; config: BotIMessageConfig } | null>(null);
+  const [groupVersions, setGroupVersions] = useState<Record<string, number>>({});
+  const [loadingEdit, setLoadingEdit] = useState<string | null>(null);
+  const edit = async (id: string) => {
+    if (!im?.getIMessageConfig || loadingEdit) return;
+    setLoadingEdit(id);
+    try { setEditing({ id, config: await im.getIMessageConfig({ id }) }); }
+    catch { toast.error(t('bots.channels.edit.loadFailed')); }
+    finally { setLoadingEdit(null); }
+  };
   const [wechatExpanded, setWechatExpanded] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
@@ -221,6 +232,11 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                     </span>
                   </p>
                 </div>
+                {view.channel === 'imessage' && target.channels.canEnterCredentials && im?.getIMessageConfig && im.updateIMessageConfig ? (
+                  <Button type="button" variant="secondary" tone="quiet" size="sm" compact
+                    loading={loadingEdit === view.id} disabled={loadingEdit !== null || removingId !== null}
+                    onClick={() => void edit(view.id)}>{t('bots.channels.edit.button')}</Button>
+                ) : null}
                 <Button
                   type="button"
                   variant="secondary"
@@ -241,7 +257,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   })}</p>
                 ) : null}
                 {(view.channel === 'telegram' || view.channel === 'imessage') && view.botContextId && botImConnectionGroupsSupported(im) ? (
-                  <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
+                  <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} refreshVersion={groupVersions[view.id] ?? 0} />
                 ) : null}
                 {view.channel === 'discord' && im && botImConnectionDiscordChannelsSupported(im) ? (
                   <ConnectionDiscordChannels api={im} connectionId={view.id} botName={bot.name} deviceId={target.deviceId} />
@@ -279,6 +295,13 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
       <p className="px-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.sharedMemoryNote', { name: bot.name })}
       </p>
+      {editing ? (
+        <BotChannelAddDialog bot={bot} api={im} editing={editing} onApplied={(next) => {
+          apply(next);
+          setGroupVersions((versions) => ({ ...versions, [editing.id]: (versions[editing.id] ?? 0) + 1 }));
+        }}
+          onOpenChange={(open) => { if (!open) setEditing(null); }} />
+      ) : null}
       {adding ? (
         <BotChannelAddDialog bot={bot} api={im} remoteName={target.channels.canEnterCredentials ? undefined : target.deviceName} onApplied={apply} onOpenChange={setAdding} />
       ) : null}
@@ -290,7 +313,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
  * 一条 Telegram 连接的「群聊」小节: 机器人进过的群 + 每群参与模式(仅 @ / 全响应)。
  * 与 设置 → IM 机器人 的同名设置各管各的 bot; 乐观更新, 保存失败回读正本并提示。
  */
-function ConnectionGroups({ api, connectionId, botName }: { api: BotImConnectionApi | null; connectionId: string; botName: string }) {
+function ConnectionGroups({ api, connectionId, botName, refreshVersion }: { api: BotImConnectionApi | null; connectionId: string; botName: string; refreshVersion: number }) {
   const { t } = useBotTranslation();
   const [groups, setGroups] = useState<BotImConnectionGroup[] | null>(null);
   const [error, setError] = useState<'load' | 'save' | null>(null);
@@ -312,7 +335,7 @@ function ConnectionGroups({ api, connectionId, botName }: { api: BotImConnection
     return () => {
       cancelled = true;
     };
-  }, [connectionId, reloadToken]);
+  }, [connectionId, reloadToken, refreshVersion]);
 
   const setMode = useCallback(
     (chatId: string, mode: BotImGroupActivationMode) => {
@@ -722,6 +745,7 @@ function BotChannelAddDialog({
   bot,
   api,
   remoteName,
+  editing,
   onApplied,
   onOpenChange,
 }: {
@@ -729,11 +753,12 @@ function BotChannelAddDialog({
   api: BotImConnectionApi | null;
   /** Set for a teammate on another computer: credentials are typed and stored on that computer only. */
   remoteName?: string;
+  editing?: { id: string; config: BotIMessageConfig };
   onApplied: (next: BotImConnectionListPayload) => void;
   onOpenChange: (open: boolean) => void;
 }) {
   const { t } = useBotTranslation();
-  const [channel, setChannel] = useState<BotImChannel>('telegram');
+  const [channel, setChannel] = useState<BotImChannel>(editing ? 'imessage' : 'telegram');
   const [token, setToken] = useState('');
   const [ownerUserId, setOwnerUserId] = useState('');
   const [service, setService] = useState<BotImFeishuService>('feishu');
@@ -748,7 +773,7 @@ function BotChannelAddDialog({
   const [dingtalkAppSecret, setDingtalkAppSecret] = useState('');
   const [discordToken, setDiscordToken] = useState('');
   const [discordOwnerUserId, setDiscordOwnerUserId] = useState('');
-  const [imessage, setIMessage] = useState({ serverUrl: '', password: '', ownerAddress: '', chatGuids: '', listenHost: '', listenPort: '18747' });
+  const [imessage, setIMessage] = useState({ serverUrl: editing?.config.serverUrl ?? '', password: '', ownerAddress: editing?.config.ownerAddress ?? '', chatGuids: editing?.config.chatGuids.join(', ') ?? '', listenHost: editing?.config.listenHost ?? '', listenPort: String(editing?.config.listenPort ?? 18747) });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -769,7 +794,7 @@ function BotChannelAddDialog({
       .then((next) => setAdoptable(next.bots))
       .catch(() => setAdoptable([]));
   }, []);
-  useEffect(refreshAdoptable, [refreshAdoptable]);
+  useEffect(() => { if (!editing) refreshAdoptable(); }, [refreshAdoptable, editing]);
 
   useEffect(() => {
     setError(null);
@@ -782,7 +807,7 @@ function BotChannelAddDialog({
     : !credentialsHere
       ? false
       : channel === 'imessage'
-      ? filled(...Object.values(imessage))
+      ? filled(imessage.serverUrl, imessage.ownerAddress, imessage.chatGuids, imessage.listenHost, imessage.listenPort) && (!!editing || filled(imessage.password))
       : channel === 'telegram'
       ? filled(token, ownerUserId)
       : channel === 'feishu'
@@ -845,13 +870,17 @@ function BotChannelAddDialog({
     setBusy(true);
     setError(null);
     try {
-      const next = input ? await addBotImConnection(apiRef.current, input) : await adoptPersonalBot(apiRef.current, { botId: bot.id, channel });
+      const next = editing && input?.channel === 'imessage'
+        ? await apiRef.current!.updateIMessageConfig!({ id: editing.id, config: input })
+        : input ? await addBotImConnection(apiRef.current, input) : await adoptPersonalBot(apiRef.current, { botId: bot.id, channel });
       onApplied(next);
       onOpenChange(false);
     } catch (failure) {
       const ipc = extractIpcError(failure);
       const message = ipc?.message ?? '';
-      if (message.includes('PERSONAL_BOT_NOT_CONFIGURED')) {
+      if (editing) {
+        setError(t('bots.channels.edit.failed'));
+      } else if (message.includes('PERSONAL_BOT_NOT_CONFIGURED')) {
         // 个人 bot 在别处被清掉了: 刷新后这个平台回到填写凭证。
         refreshAdoptable();
         setError(t('bots.channels.add.errors.personalBotGone'));
@@ -890,15 +919,15 @@ function BotChannelAddDialog({
         >
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
-              {t('bots.channels.add.title', { name: bot.name })}
+              {editing ? t('bots.channels.edit.title') : t('bots.channels.add.title', { name: bot.name })}
             </Dialog.Title>
             <Dialog.Description className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-              {manualFeishu
+              {editing ? t('bots.channels.edit.description') : manualFeishu
                 ? t('bots.channels.add.feishu.description', { service: serviceName, name: bot.name })
                 : t('bots.channels.add.description')}
             </Dialog.Description>
 
-            <div
+            {!editing ? <div
               role="radiogroup"
               aria-label={t('bots.channels.add.platformLabel')}
               className="mt-4 grid grid-cols-2 gap-2 min-[400px]:grid-cols-3"
@@ -928,7 +957,7 @@ function BotChannelAddDialog({
                   </button>
                 );
               })}
-            </div>
+            </div> : null}
 
             {/* 两字段 + 两行提示的高度；切换平台时对话框不随提示行数上下跳。 */}
             <div className="mt-4 flex min-h-48 flex-col gap-3 overflow-y-auto">
@@ -971,7 +1000,7 @@ function BotChannelAddDialog({
                     <FormField key={key} label={t(`bots.channels.add.imessage.${key}Label`)}>
                       {control => <Input {...control} mono secret={key === 'password'} value={imessage[key]}
                         onChange={value => setIMessage(previous => ({ ...previous, [key]: value }))}
-                        placeholder={t(`bots.channels.add.imessage.${key}Placeholder`)} autoComplete="off"
+                        placeholder={editing && key === 'password' ? t('bots.channels.edit.keepPassword') : t(`bots.channels.add.imessage.${key}Placeholder`)} autoComplete="off"
                         spellCheck={false} disabled={busy} secretTipContentClassName="z-[10001]" />}
                     </FormField>
                   ))}
@@ -1229,7 +1258,7 @@ function BotChannelAddDialog({
               >
                 {busy
                   ? t('bots.channels.add.connecting')
-                  : manualFeishu
+                  : editing ? t('bots.channels.edit.save') : manualFeishu
                     ? t('bots.channels.add.feishu.confirm', { service: serviceName })
                     : t('bots.channels.add.confirm')}
               </Button>

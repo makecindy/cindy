@@ -2572,7 +2572,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "文言（默认）",
+          "prose": "雅正文言",
           "tang-poetry": "唐诗",
           "song-ci": "宋词",
           "yuan-qu": "元曲",
@@ -10744,6 +10744,15 @@
       "contents": "包含 SOUL.md、USER.md、system_prompt.md、skills/ 和 memories/。模型、权限和连接仍由 Cindy 管理。",
       "open": "打开文件夹",
       "openFailed": "无法打开伙伴文件夹。",
+      "repository": {
+        "ready": "Git 已就绪",
+        "notReadyTitle": "Git 尚未就绪",
+        "needsIdentity": "请在这位伙伴所在电脑上打开其文件夹，进入 workspace 子目录，配置 Git 的 user.name 和 user.email 后重试。",
+        "notReady": "首次版本尚未保存。请重试以完成 Git 初始化。",
+        "unavailable": "请在这位伙伴所在电脑上安装 Git 后重试。",
+        "failed": "Git 未能读取或保存首次版本。请在这位伙伴所在电脑上检查仓库后重试。",
+        "keepUsing": "你可以继续使用伙伴。现有文件和 Git 配置会保留。"
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · 整理记忆",
         "carryover": {
@@ -12227,6 +12236,15 @@
         "unbound": "可将官方 @askmycindy 收到的你的提问交给 {{name}}。",
         "managed": "X 提问由伙伴处理。可在该伙伴的消息平台设置中更改绑定。",
         "riskBody": "X 提问会使用伙伴的共享记忆、能力和工作目录，回答会公开。请勿通过 X 处理私人信息。专线不会直接使用伙伴的私聊记录。"
+      },
+      "edit": {
+        "button": "编辑",
+        "title": "编辑 iMessage 连接",
+        "description": "保存后重新连接，模型跟随伙伴设置。",
+        "keepPassword": "留空保留原密码",
+        "save": "保存并重连",
+        "loadFailed": "读取连接设置失败，请重试。",
+        "failed": "保存连接失败，请检查参数后重试。"
       }
     },
     "voiceMode": {
@@ -15448,6 +15466,7 @@
       "REMOTE_AGENT_BUSY": "那台电脑上同时运行的任务太多。先结束一些任务后再试。",
       "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
       "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+      "REMOTE_AGENT_RESUME_REJECTED": "运行模型的电脑无法恢复这个任务。请从任务列表新建任务，将需要继续的内容复制过去。原任务和排队消息会保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑的「远程连接」里打开「让我的其他电脑用本机模型」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
       "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
@@ -17452,6 +17471,7 @@
       "copied": "{{label}}已复制",
       "copyFailed": "未能复制{{label}}，请手动选择并复制。",
       "urlUnavailable": "接收地址暂时不可用。",
+      "unsupportedFormat": "当前版本不支持这个发送方的格式。",
       "quotaNotifyTitle": "Webhook 接收次数已用完",
       "quotaExhausted": "今天的 {{limit}} 次 Webhook 接收次数已用完，{{time}} 恢复。在此之前外部事件不会触发任务；定时运行和模型用量不受影响。",
       "signedOut": "登录 Cindy 账号后恢复接收，配置已保留。",
@@ -20729,6 +20749,7 @@
       "description": "勾选要从「{{name}}」迁移到这台电脑的内容。这台电脑上已经改过的设置会保留，不会被覆盖。",
       "partial": "那台电脑上有部分内容这次没能读取，下面只列出读到的内容。",
       "groupCount": "已选 {{selected}} / {{total}}",
+      "groupCount_other": "已选 {{selected}} / {{total}}",
       "present_one": "另有 {{count}} 项与这台电脑相同，无需迁移",
       "present_other": "另有 {{count}} 项与这台电脑相同，无需迁移",
       "start_one": "迁移 {{count}} 项",

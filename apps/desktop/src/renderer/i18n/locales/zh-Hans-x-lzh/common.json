@@ -10744,6 +10744,15 @@
       "contents": "内有 SOUL.md、USER.md、system_prompt.md，及 Skill 与记忆之卷匣。模型、权柄与连接仍由 Cindy 掌之。",
       "open": "启卷匣",
       "openFailed": "不能启同伴之卷匣。",
+      "repository": {
+        "ready": "Git 已备",
+        "notReadyTitle": "Git 尚未备",
+        "needsIdentity": "请于同伴所在电脑启其资料夹，入 workspace 子目录，设 Git 之 user.name 与 user.email 后再试。",
+        "notReady": "首版尚未存。请再试以完成 Git 初设。",
+        "unavailable": "请于同伴所在电脑安装 Git 后再试。",
+        "failed": "Git 未能读取或储存首版。请于同伴所在电脑检查储存库后再试。",
+        "keepUsing": "同伴仍可用。既有档案与 Git 设定皆留存。"
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · 理记",
         "carryover": {
@@ -12050,6 +12059,15 @@
     },
     "starterOptions": "起手之选",
     "channels": {
+      "edit": {
+        "button": "编辑",
+        "title": "编辑 iMessage 连线",
+        "description": "存之则重连，模型从同伴之设定。",
+        "keepPassword": "留空则仍用原密钥",
+        "save": "储存并重连",
+        "loadFailed": "连线设定未能读取，请重试。",
+        "failed": "连线未能储存，请核其设定而重试。"
+      },
       "title": "传讯之所",
       "platform": {
         "telegram": "Telegram",
@@ -15439,6 +15457,7 @@
       "REMOTE_AGENT_BUSY": "彼机同时方行之差事过多。请先终其若干，再试。",
       "REMOTE_AGENT_UNSUPPORTED": "此 Agent 于彼机不可用。请于彼机安装或登门后再试，或易一 Agent。",
       "REMOTE_AGENT_INVALID": "与行 Agent 之机通信有谬。请再试；若屡现，请将两机之 Cindy 皆更新至最新版。",
+      "REMOTE_AGENT_RESUME_REJECTED": "运行模型之电脑无法续此差事。请由差事列表新建差事，复制所需内容以续。原差事及待发之讯皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达分享者所设之模型占比上限。请择他可用之模型续之。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼机未向君开放此供方或所择模型。若为君之他机，于彼机「远程连接」中开「许吾他机用此机之模」；若为他人所分享，请令机主于「远程与分享」中调其开放之范围。亦可易一模型。",
       "REMOTE_AGENT_FORK_FAILED": "行 Agent 之机未能自此开新差事。请再试，或易一讯再试。",
@@ -17452,6 +17471,7 @@
       "copied": "{{label}}已录",
       "copyFailed": "未能录{{label}}，请自选而复制。",
       "urlUnavailable": "受信之址暂不可用。",
+      "unsupportedFormat": "此版不纳此发信方之格式。",
       "quotaNotifyTitle": "Webhook 受信之数已尽",
       "quotaExhausted": "今日 Webhook 受信之数 {{limit}} 次已尽，{{time}} 乃复。未复之时，外事不触差事；定时之行与模型耗用皆不受影响。",
       "signedOut": "登录 Cindy 名籍，则复受信；所设皆存。",
@@ -20858,6 +20878,7 @@
       "description": "勾选欲自「{{name}}」迁至此机之内容。此机已改之规制皆保留，不为所覆。",
       "partial": "彼机有部分内容此番未能读取，下方仅列已读者。",
       "groupCount": "已选 {{selected}} / {{total}} 项",
+      "groupCount_other": "已选 {{selected}} / {{total}} 项",
       "present_one": "另 {{count}} 项，此机已有",
       "present_other": "另 {{count}} 项，此机已有",
       "start_one": "迁移 {{count}} 项",

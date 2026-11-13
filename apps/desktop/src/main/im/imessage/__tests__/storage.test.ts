@@ -16,6 +16,7 @@ it('preserves 11002 existing receipts, new confirmations and uncertain sends acr
   const storage = blueBubblesStateStorage('0123456789ab');
   const initial: BlueBubblesState = { version: 1, activatedAt: 1, cursors: { owner: 500 }, inbox: {}, outbox: {} };
   for (let i = 0; i < 11002; i++) initial.inbox[`msg-${i}`] = { receivedAt: i + 1, state: 'accepted' };
+  initial.chatActivatedAt = { 'any;-;new@example.test': 12000 };
   storage.write(initial);
   storage.update!({ kind: 'inbox', id: 'new', value: { receivedAt: 12000, state: 'dispatching' } });
   const stop = { receivedAt: 12001, state: 'accepted' as const,
@@ -32,6 +33,7 @@ it('preserves 11002 existing receipts, new confirmations and uncertain sends acr
   expect(restored.inbox.stop).toEqual(stop);
   expect(restored.outbox.outgoing.state).toBe('unknown');
   expect(restored.cursors).toEqual({ owner: 500 });
+  expect(restored.chatActivatedAt).toEqual(initial.chatActivatedAt);
   reopened.update!({ kind: 'inbox', id: 'new', value: { receivedAt: 12000, state: 'accepted' } });
   expect(blueBubblesStateStorage('0123456789ab').read()!.inbox.new.state).toBe('accepted');
 });

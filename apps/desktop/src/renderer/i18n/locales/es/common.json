@@ -2640,7 +2640,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "Prosa clásica (predeterminado)",
+          "prose": "Prosa clásica",
           "tang-poetry": "Poesía Tang",
           "song-ci": "Ci de los Song",
           "yuan-qu": "Qu de los Yuan",
@@ -10873,6 +10873,15 @@
       "contents": "Contiene SOUL.md, USER.md, system_prompt.md, skills/ y memories/. Cindy sigue administrando los modelos, permisos y conexiones.",
       "open": "Abrir carpeta",
       "openFailed": "No se pudo abrir la carpeta del amigo.",
+      "repository": {
+        "ready": "Git está listo",
+        "notReadyTitle": "Git aún no está listo",
+        "needsIdentity": "En el equipo de este Amigo, abre su carpeta y después la subcarpeta workspace. Configura user.name y user.email de Git allí y vuelve a intentarlo.",
+        "notReady": "No se ha guardado la primera versión. Vuelve a intentarlo para terminar de configurar Git.",
+        "unavailable": "Instala Git en el equipo de este Amigo y vuelve a intentarlo.",
+        "failed": "Git no pudo leer o guardar la primera versión. Revisa el repositorio en el equipo de este Amigo y vuelve a intentarlo.",
+        "keepUsing": "Puedes seguir usando tu Amigo. Se conservan los archivos y la configuración de Git existentes."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Ordenar memoria",
         "carryover": {
@@ -12194,6 +12203,15 @@
     },
     "starterOptions": "Opciones iniciales",
     "channels": {
+      "edit": {
+        "button": "Editar",
+        "title": "Editar conexión de iMessage",
+        "description": "Guarda para volver a conectar. El modelo sigue la configuración de tu amigo.",
+        "keepPassword": "Déjalo en blanco para conservar la contraseña guardada",
+        "save": "Guardar y volver a conectar",
+        "loadFailed": "No se pudo cargar la configuración de la conexión. Inténtalo de nuevo.",
+        "failed": "No se pudo guardar la conexión. Comprueba la configuración e inténtalo de nuevo."
+      },
       "title": "Plataformas de mensajería",
       "platform": {
         "telegram": "Telegram",
@@ -15617,6 +15635,7 @@
       "REMOTE_AGENT_BUSY": "Se están ejecutando demasiadas sesiones en la otra computadora. Termina algunas y vuelve a intentarlo.",
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
       "REMOTE_AGENT_INVALID": "Se produjo un error al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue ocurriendo, actualiza Cindy en ambas computadoras.",
+      "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir que mis otras computadoras usen los modelos de esta» en su conexión remota. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "La computadora que ejecuta el Agent no pudo iniciar una nueva sesión desde aquí. Inténtalo de nuevo o prueba con un mensaje diferente.",
@@ -17691,6 +17710,7 @@
       "copied": "{{label}} copiado",
       "copyFailed": "No se pudo copiar {{label}}. Selecciona el contenido y cópialo manualmente.",
       "urlUnavailable": "La dirección de recepción no está disponible ahora.",
+      "unsupportedFormat": "Esta versión no admite el formato de este remitente.",
       "quotaNotifyTitle": "Se alcanzó el límite de entregas de Webhook",
       "quotaExhausted": "Se agotaron las {{limit}} entregas de Webhook de hoy. Se reanudan a las {{time}}. Hasta entonces, los eventos externos no activarán tareas. Las ejecuciones programadas y el uso del modelo no se ven afectados.",
       "signedOut": "Inicia sesión en tu cuenta de Cindy para reanudar la recepción. Tu configuración se conserva.",
@@ -20999,6 +21019,9 @@
       "description": "Elige qué transferir de «{{name}}» a esta computadora. Se conservan los ajustes que ya cambiaste en esta computadora.",
       "partial": "Esta vez no se pudo leer parte del contenido de esa computadora. Abajo solo aparece lo que se leyó.",
       "groupCount": "{{selected}} de {{total}} seleccionados",
+      "groupCount_one": "{{selected}} de {{total}} seleccionado",
+      "groupCount_many": "{{selected}} de {{total}} seleccionados",
+      "groupCount_other": "{{selected}} de {{total}} seleccionados",
       "present_one": "{{count}} elemento más ya es igual aquí",
       "present_other": "{{count}} elementos más ya son iguales aquí",
       "present_many": "{{count}} elementos más ya son iguales aquí",
