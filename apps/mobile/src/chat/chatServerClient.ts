@@ -845,7 +845,10 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         let source = sourceMessages.get(execution.source_message_id);
         if (!sourceMessages.has(execution.source_message_id)) {
           try { source = await this.message(room, execution.source_message_id); }
-          catch (error) { if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error; }
+          catch (error) {
+            // Source-level denial leaves this execution unresolved, not the readable room.
+            if (![403, 404, 410].includes((error as { status?: number })?.status ?? 0)) throw error;
+          }
           sourceMessages.set(execution.source_message_id, source);
         }
         if (source) execution.threadRootId = source.threadRootId ?? null;
