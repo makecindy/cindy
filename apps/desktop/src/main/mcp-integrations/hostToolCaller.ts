@@ -14,6 +14,8 @@ export interface PluginHostToolCaller {
   scheduleGuard?: ScheduleMutationGuard;
   /** Revalidates owner, installed revision, group and per-call confirmation. */
   assertCurrent(): void;
+  /** Accepted queued delivery checks the same installation without retaining its source runtime. */
+  assertDeliveryCurrent?(): void;
 }
 
 const callerScope = new AsyncLocalStorage<PluginHostToolCaller>();
@@ -62,7 +64,7 @@ export const authorizePluginHostToolCall: ToolCallAuthorizer = async call => {
     call.tool !== current.tool || JSON.stringify(call.args) !== current.argsJson) {
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Plugin invocation has no current Host approval.' };
   }
-  const admission = admitPluginTaskAction(call, current.assertCurrent);
+  const admission = admitPluginTaskAction(call, current.assertCurrent, current.assertDeliveryCurrent);
   return admission.ok ? { ok: true, run: operation =>
     runPluginHostToolCall(current, () => admission.run!(operation)) } : admission;
 };
