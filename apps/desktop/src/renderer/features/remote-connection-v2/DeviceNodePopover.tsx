@@ -73,7 +73,7 @@ function PathRow({ node, relayName, reconnecting }: { node: TopologyNode; relayN
   return (
     <Row label={label} value={text}>
       <span className="inline-flex max-w-full items-baseline justify-end gap-1">
-        <ProtocolMark kind={kind} label={protocol} className="self-center" />
+        <ProtocolMark kind={kind} label={protocol} className="shrink-0 self-center" />
         <span className="min-w-0 truncate">· {path}</span>
       </span>
     </Row>
