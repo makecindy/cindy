@@ -26,7 +26,7 @@ import {
   type SessionQueueSteerResult,
 } from './sessionQueueControl.js';
 
-type Failure<Code extends string> = { ok: false; errorCode: Code; message: string };
+type Failure<Code extends string> = { ok: false; errorCode: Code; message: string; data?: Record<string, unknown> };
 
 export type SessionQueuedMessageControlResult =
   | { ok: true; queuedMessageId: string }
@@ -73,11 +73,15 @@ export type SessionRuntimeSetResult =
       pendingMutation: PendingSessionRuntimeMutation | null;
       permissionMode?: PermissionMode;
     }
-  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'>;
+  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY' | 'INTERNAL'>;
 
 export interface SessionControlLiveSession {
   agentKind: AgentKind;
-  capabilities: { sameTurnSteer: { supported: boolean } };
+  capabilities: {
+    sameTurnSteer: { supported: boolean };
+    permissionModes?: readonly { id: PermissionMode }[];
+    setPermissionModeMidSession?: { supported: boolean };
+  };
   isTurnRunning(): boolean;
   getTurnGeneration(): number;
   requestGracefulStop(): Promise<SessionGracefulStopResult>;
@@ -381,8 +385,15 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         if (!deps.setSessionPermissionMode) return { ok: false, errorCode: 'INVALID_ARGS', message: 'Permission control is unavailable.' };
         const beforeMutation = combineInputGuards(params.beforeMutation, assertTaskActionCurrent);
         const { permissionMode, ...runtimePatch } = params.patch;
+        const hasRuntimePatch = Object.keys(runtimePatch).length > 0;
         let result: SessionRuntimeSetResult;
-        if (Object.keys(runtimePatch).length) {
+        if (hasRuntimePatch) {
+          const live = deps.getLiveSession(params.targetSessionId);
+          if (live && (!live.capabilities.permissionModes?.some(mode => mode.id === permissionMode) ||
+            live.capabilities.setPermissionModeMidSession?.supported !== true)) {
+            return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+              message: `The live ${live.agentKind} session does not support permission mode '${permissionMode}'. Runtime settings were not changed.` };
+          }
           result = await deps.setSessionRuntime({ ...params, patch: runtimePatch, beforeMutation });
         } else {
           const details = await deps.getSessionRuntimeDetails(params.targetSessionId);
@@ -393,8 +404,21 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
             effectiveProfile: details.effectiveProfile, pendingMutation: details.pendingMutation };
         }
         if (!result.ok) return result;
-        await beforeMutation?.();
-        await deps.setSessionPermissionMode({ sessionId: params.targetSessionId, mode: permissionMode, beforeMutation });
+        try {
+          await beforeMutation?.();
+          await deps.setSessionPermissionMode({ sessionId: params.targetSessionId, mode: permissionMode, beforeMutation });
+        } catch (error) {
+          if (!hasRuntimePatch) throw error;
+          return { ok: false, errorCode: 'INTERNAL',
+            message: `Runtime settings were ${result.status}, but permission_mode failed. Read get_session_runtime before retrying.`,
+            data: { runtime: { status: result.status, generation: result.generation, fields: Object.keys(runtimePatch),
+              ...(result.effectiveBoundary ? { effective_boundary: result.effectiveBoundary } : {}) },
+              failed: 'permission_mode', original_error: {
+                code: typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : null,
+                message: error instanceof Error ? error.message : String(error),
+              } },
+          };
+        }
         return { ...result, permissionMode };
       }
       return deps.setSessionRuntime({ ...params,

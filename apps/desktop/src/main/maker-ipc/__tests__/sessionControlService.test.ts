@@ -71,7 +71,11 @@ function setup(opts?: {
   };
   const live = {
     agentKind: 'codex' as const,
-    capabilities: { sameTurnSteer: { supported: opts?.steerSupported ?? true } },
+    capabilities: {
+      sameTurnSteer: { supported: opts?.steerSupported ?? true },
+      permissionModes: [{ id: 'ask' as const }, { id: 'auto' as const }, { id: 'bypassPermissions' as const }],
+      setPermissionModeMidSession: { supported: true },
+    },
     isTurnRunning: vi.fn(() => opts?.running ?? true),
     getTurnGeneration: vi.fn(() => 3),
     requestGracefulStop: vi.fn(async () => ({
@@ -417,8 +421,45 @@ describe('session control domain service', () => {
       : await admitTaskAction({ ...call, sessionId: 'caller' },
         { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} });
     if (!decision.ok || !decision.run) throw new Error('missing action scope');
-    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch: { permissionMode: 'default' } })))
-      .resolves.toMatchObject({ ok: true, permissionMode: 'default' });
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch: { permissionMode: 'auto' } })))
+      .resolves.toMatchObject({ ok: true, permissionMode: 'auto' });
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  // Unit #9801/uKm_: the real service previously wrote a model before a Codex
+  // permission rejection. Existing cases only checked permission-only or self admission.
+  it.each(['mode', 'mid-session'] as const)('rejects unsupported permission %s before a mixed model write', async unsupported => {
+    const { deps, live, service } = setup();
+    if (unsupported === 'mid-session') live.capabilities.setPermissionModeMidSession.supported = false;
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: unsupported === 'mode' ? 'acceptEdits' : 'auto' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each(['applied', 'deferred'] as const)('reports the actual %s model result when the later permission commit fails', async status => {
+    const { deps, service } = setup();
+    const runtime = { ...await deps.setSessionRuntime(), status, generation: 7 };
+    deps.setSessionRuntime.mockClear().mockResolvedValueOnce(runtime as Awaited<ReturnType<typeof deps.setSessionRuntime>>);
+    deps.setSessionPermissionMode.mockRejectedValueOnce(Object.assign(new Error('permission persistence failed'), { code: 'WRITE_FAILED' }));
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: 'auto' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL', data: {
+      runtime: { status, generation: 7, fields: ['model'] },
+      failed: 'permission_mode', original_error: { code: 'WRITE_FAILED', message: 'permission persistence failed' },
+    } });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a supported model and permission change in one successful call', async () => {
+    const { deps, service } = setup();
+    await expect(service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: 'auto' } }))
+      .resolves.toMatchObject({ ok: true, status: 'applied', generation: 1, permissionMode: 'auto',
+        effectiveProfile: { model: 'next' } });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
     expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
   });
 

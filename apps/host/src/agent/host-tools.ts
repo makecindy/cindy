@@ -73,9 +73,12 @@ export function createHostToolService(options: Options) {
     } };
   };
   const services = new HostServiceCatalog();
+  // Desktop's process-local approval cannot be reconstructed from forwarded
+  // caller metadata. Agent providers remain unchanged; plugins fail before setup.
+  const supportsPluginServer = (server: string) => server !== 'cindy_computer';
   const providers = createLiziMcpProviders({
     xdtHelper: { authorizeCall,
-      hostServices: createHostServiceToolExecutor(services, { pluginCall: getPluginHostToolCaller, getGhost: options.getGhost }),
+      hostServices: createHostServiceToolExecutor(services, { pluginCall: getPluginHostToolCaller, getGhost: options.getGhost, supportsPluginServer }),
       resolveSurface: async ({ sessionId }) => {
         const db = current() ? tryGetDbClient() : null;
         return db ? resolveHelperSurface(db, sessionId) : 'restricted';
@@ -110,7 +113,7 @@ export function createHostToolService(options: Options) {
     request(id: string, payload: unknown, pageCurrent: () => boolean) {
       return handlePluginHostToolRequest(id, payload, () => current() && pageCurrent(), {
         owner: options.owner, getGhost: options.getGhost,
-        createRuntime: (server, caller) => createProviderHostToolRuntime(providers, server, caller),
+        createRuntime: (server, caller) => supportsPluginServer(server) ? createProviderHostToolRuntime(providers, server, caller) : null,
         unavailableRuntimeError: { errorCode: 'UNSUPPORTED_CAPABILITY',
           message: 'This execution environment does not support the requested Host service.' },
         approveGroup,

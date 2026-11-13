@@ -107,8 +107,8 @@ const document = await cindy.host.call('cindy_docs', 'make_docx', {
 为本插件私有文件目录；文档不能用路径参数越界。需要读取产物字节时另声明 `fs:true`，
 通过 `cindy.fs({op:'read',root:'data',path:'documents/report.docx'})` 读取；不能从宿主内部路径获取其他数据。
 SSH 使用当前账号已配置的连接池，沿用原连接管理和风险确认，私钥或认证值不进入插件。
-每个执行 Host 必须已提供对应服务；Node Host 复用已有 browser/computer 平台 provider，
-其连接、开关和输入门禁保持生效；未装配的 scheduler、SSH 和文档服务返回
+每个执行 Host 必须已提供对应服务；Node Host 插件复用已有 browser 平台 provider。
+Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服务返回
 `UNSUPPORTED_CAPABILITY`，不会因 manifest 声明自行安装或启动第二套实现。
 
 媒体生成继续使用已有 `cindy.media` / 模型目录接口；当前没有独立媒体 MCP server，
@@ -157,12 +157,19 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 变更使用界面同一提交队列、运行时更新、持久化与失败回滚；不会由插件直接写权限设置。
 单独改权限保留模型和待生效路线；同时修改时先应用运行设置，成功后提交权限。`generation` 保护运行设置，权限仍按原队列提交，
 模型可能等到下一次发送生效；权限档字段不替代独立的 Plan 开关。
+合法的模型与权限组合仍可一次提交；目标运行实例不支持的权限档会在模型写入前拒绝。
+若模型已应用或已延后、之后权限提交失败，结果仍为 `isError:true`，文本 JSON 的 `data.runtime`
+说明 `status`、已得 `generation` 与 `fields`，`data.failed` 为 `permission_mode`，`data.original_error`
+保留权限错误。该失败不表示模型未变；先用 `get_session_runtime` 核对后再决定重试，不自动回滚已成功的模型设置。
 持有任务操作授权（admission）的调用任务不能修改自身 `permission_mode`，包括同时修改模型的混合请求：写入任何字段前返回 `UNSUPPORTED_CAPABILITY`。插件没有任务身份，不受此自身限制；无 admission 的任务、修改其他任务及仅改模型的路径保持原行为。
 
 插件用 `send_to_session` 继续明确任务、或用 `steer_session({session_id,message})` 在本机插话时，宿主记录插件来源，
 不会借用任务身份，也不会继承别的任务权限档。收件任务继续使用它当前的权限与 Plan 状态，界面标签和模型来源说明同源。
 `send_to_session` 支持 `deviceId::sessionId`；派发前协商 `pluginCaller:1`，旧电脑缺少该能力时返回 `REMOTE_UNSUPPORTED`，不发送正文。
 来源标识为 `deviceId::pluginId`，仅用于来源展示；排队执行仍由既有一次性派发回执复核账号、安装、批准与原参数。
+消息已成功排队后，关闭逻辑页或 Node 正常空闲回收不取消该消息；执行、准入及返回仍要求来源有效。
+实际投递继续复核账号、安装目录与批准版本、启用状态、工具组批准以及目标和原消息；停用、卸载、更新重批或账号变化仍使它失效。
+宿主进程重启后沿用现有无内存守卫失效规则，不提供持久重放或恢复。
 
 ## 命令、终端和后台作业
 
@@ -171,6 +178,8 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 命令以用户身份在执行电脑上运行，能访问其本机文件和应用；这项能力不是文件沙箱。
 宿主只传筛选后的系统路径、语言与用户配置目录环境，不继承宿主 API key、token 或 Node
 启动注入变量，也不自动传任何 `node.secretBindings` 的凭证。
+Agent 使用这套托管作业时，作业归属于当次真实 Session；该实例关闭即终止并回收其进程，
+普通轮次结束或客户端断开不触发回收。插件自主作业仍归属安装实例，不受其他任务关闭影响。
 
 ```js
 const unpack = result => {
@@ -227,8 +236,10 @@ Cindy 客户端在宿主对话框中回答；未连接支持确认的客户端�
 当前 Node Host 未装配生产调度器，`cindy_scheduler` 调用返回 MCP 错误
 `UNSUPPORTED_CAPABILITY`，说明当前执行环境不支持此宿主服务；不会创建另一套调度任务。
 `history` 的本机查询与 `terminal` 已接通，其他组须以执行 Host 的工具目录和实际回执为准。
-Node Host 已提供的 `browser/computer` 平台 provider 同时接入 Agent 与插件入口，不另建浏览器或电脑实现。
-浏览器后端和电脑执行仍取决于原平台端口、已连接的客户端及开关；缺少桌面输入协调器时不能执行原生输入。
+Node Host 已提供的 `browser` 平台 provider 同时接入 Agent 与插件入口，不另建浏览器实现。
+Node Host 插件的 `computer` 在创建观察 runtime、确认或驱动执行之前返回 `UNSUPPORTED_CAPABILITY`，
+`host_services` 同样报告不可用：Desktop 的逐次批准身份不能从跨进程 caller 元数据重建。
+不新增跨进程授权证明；Node Agent 与 Desktop 插件的电脑调用保留原路径、快照生命周期和门禁。
 需要定时任务时使用已提供调度器的执行宿主，不循环重试不支持结果。
 
 ## 完整历史与附件

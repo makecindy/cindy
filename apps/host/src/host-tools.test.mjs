@@ -7,6 +7,9 @@ import { createHostServer } from './server.mjs';
 import { createWebAuth } from './web-auth.mjs';
 import { createEventHub } from './events.mjs';
 import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
+import { createLiziMcpProviders } from '@cindy/mcps';
+import { handlePluginHostToolRequest } from '../../desktop/src/main/cindy-brain/hostToolSlot.ts';
+import { createHostToolRuntime, setHostToolProviders } from '../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
 
 // Unit: an installed plugin has no task to attach approval to. Reuse the Host's
 // window-bound confirmation bridge; a different paired controller, disconnection
@@ -172,6 +175,52 @@ test('Node reports an unavailable scheduler as unsupported by the execution envi
     ghost.enabled = false;
     assert.equal(body(await call()).errorCode, 'PERMISSION_DENIED');
   } finally { service.close(); confirmations.close(); }
+});
+
+// #9825 A/B, unit: use the production Node gateway and discovery executor, not
+// forwarded caller metadata. Computer cannot attest approvals across processes;
+// no Node observation runtime may be constructed, while Desktop retains its path.
+test('Node plugins cannot create computer snapshots or execute, while Desktop plugins retain the provider', async () => {
+  const database = { drizzle: {} };
+  setCurrentDbClient(database, 'owner');
+  const owner = { dataOwnerId: 'owner', ownerGeneration: 1 };
+  const ghost = { enabled: true, dir: '/fixture/computer', approvedHostToolGroups: ['computer', 'discovery'],
+    approval: { state: 'approved', revision: 'r1' }, manifest: { id: 'computer', name: 'Computer',
+      agent: { hostTools: ['computer', 'discovery'] } } };
+  let executions = 0, runtimes = 0, prompts = 0;
+  const provider = createLiziMcpProviders({ enabled: ['computer'], computer: {
+    getStatus: async () => ({}), callTool: async () => { executions++; return { windows: [] }; },
+  } }).find(p => p.name === 'cindy_computer');
+  const factory = provider.toHostTools;
+  provider.toHostTools = context => { runtimes++; return factory(context); };
+  const confirmations = createHostConfirmations({ current: () => true });
+  const disconnect = confirmations.connect('web:owner', () => { prompts++; return false; });
+  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => true,
+    owner: () => owner, getGhost: () => ghost, getSession: () => undefined, manager: {}, confirmations, t: key => key });
+  service.providers.push(provider); service.services.replace(service.providers);
+  const request = { type: 'host-tool-request', server: 'cindy_computer', tool: 'list_windows', args: {} };
+  const body = value => JSON.parse(value.content.find(item => item.type === 'text').text);
+  try {
+    for (let i = 0; i < 2; i++) assert.equal(body(await service.request('computer', request, () => true)).errorCode, 'UNSUPPORTED_CAPABILITY');
+    assert.equal(runtimes, 0); assert.equal(prompts, 0); assert.equal(executions, 0);
+    const discovery = body(await service.request('computer', { ...request, server: 'cindy_helper', tool: 'host_services' }, () => true));
+    assert.equal(discovery.ok, true, JSON.stringify(discovery));
+    assert.deepEqual(discovery.services.find(s => s.group === 'computer'), {
+      group: 'computer', server: 'cindy_computer', tools: [], available: false, reason: 'unsupported', declared: true, approved: true,
+    });
+    assert.equal(service.services.list({ agentKind: 'codex', workingDir: '' }).find(s => s.group === 'computer').available, true);
+    const agent = provider.toHostTools({ agentKind: 'codex', workingDir: '', sessionId: 'task' });
+    try { assert.notEqual((await agent.call('list_windows', {})).isError, true); }
+    finally { await agent.close(); }
+    assert.equal(executions, 1);
+    setHostToolProviders([provider], owner);
+    const desktop = await handlePluginHostToolRequest('computer', request, () => true, {
+      owner: () => owner, getGhost: () => ghost,
+      createRuntime: (server, caller) => createHostToolRuntime(server, caller, '', 'r1'),
+      approveGroup: async () => true, policy: () => 'auto-approve', confirm: async () => true,
+    });
+    assert.notEqual(desktop.isError, true); assert.equal(executions, 2);
+  } finally { service.close(); disconnect(); confirmations.close(); setHostToolProviders([], { ...owner, ownerGeneration: 2 }); clearCurrentDbClient(database); }
 });
 
 test('negotiated HTTP event streams deliver one live owner dialog without putting it in replay history', async t => {

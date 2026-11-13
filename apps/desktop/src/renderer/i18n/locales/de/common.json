@@ -1322,7 +1322,24 @@
     "credentialRequired": "Schließe die Überprüfung des Mac-Passworts ab. Falls sie nicht verfügbar ist, aktualisiere Cindy auf beiden Computern.",
     "handoffEnded": "Diese Eingabeübergabe ist bereits abgeschlossen. Es gibt kein Fenster mehr zum Anzeigen.",
     "handoffUnavailable": "Dieser Computer kann nicht nur dieses Fenster anzeigen. Aktualisiere Cindy darauf oder aktiviere dort den Remotedesktop.",
-    "handoffWindow": "Eingabeübergabe · {{app}}"
+    "handoffWindow": "Eingabeübergabe · {{app}}",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Plugin „{{plugin}}“ installieren",
+        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Installiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
+        "action": "Installieren"
+      },
+      "enable": {
+        "title": "Plugin „{{plugin}}“ aktivieren",
+        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktiviere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
+        "action": "Aktivieren"
+      },
+      "update": {
+        "title": "Plugin „{{plugin}}“ aktualisieren",
+        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktualisiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
+        "action": "Aktualisieren"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -4300,6 +4317,7 @@
           "ariaLabel": "Deinen anderen Computern und den Personen, mit denen du teilst, die Nutzung dieses Anbieters erlauben",
           "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut."
         },
+        "ownComputersCanUse": "Für meine anderen Computer verfügbar",
         "moreActionsAria": "Weitere Aktionen",
         "runLocation": {
           "label": "Ausführen auf",
@@ -6922,6 +6940,11 @@
       "description": "Geräte, die mit demselben Feishu-Konto angemeldet sind, können einander finden. Sobald „Steuerung erlauben“ aktiviert ist, können deine anderen Geräte {{appName}} auf diesem Computer fernsteuern.",
       "allowControl": "Geräten mit demselben Konto die Steuerung dieses Computers erlauben",
       "allowControlHint": "Wenn aktiviert, können andere Geräte mit demselben Konto diesen Computer ohne Freigabe jeder einzelnen Verbindung steuern. Während der Fernsteuerung wird ein sichtbarer Hinweis angezeigt, und du kannst die Verbindung jederzeit trennen.",
+      "ownModelAccess": {
+        "title": "Meine anderen Computer die Modelle dieses Computers nutzen lassen",
+        "hint": "Wenn aktiviert, können deine anderen Computer die Anbieter auf diesem Computer nutzen. Der Agent läuft hier, mit der Anmeldung und dem Kontingent dieses Computers. Es wird nichts mit anderen Personen geteilt.",
+        "writeFailed": "Die Einstellung konnte nicht gespeichert werden. Bitte versuche es erneut."
+      },
       "keepAwake": "Computer wach halten",
       "keepAwakeHint": "Wenn aktiviert, wechselt dieser Computer nicht in den Ruhezustand, sodass Agents im Hintergrund und geplante Aufgaben weiterlaufen (du kannst weiterhin das Display ausschalten oder den Bildschirm sperren).",
       "linkStatus": {
@@ -8314,8 +8337,8 @@
         "workspaceDetail": "Bei einer Anfrage wählst du entweder selbst den Ordner aus oder siehst vor deiner Entscheidung den vollständigen Pfad auf einer Bestätigungskarte. Während es einen von dir gestarteten Aufruf bearbeitet, werden Unterordner im Arbeitsverzeichnis der aktuellen Sitzung direkt ohne zusätzliche Rückfrage verwendet. Ordner, die bereits eine Sitzung haben, werden wiederverwendet. Erstellt wird eine leere Sitzung – nichts startet von selbst.",
         "sessionContext": "Kann erfahren, in welchem Projektordner die aktuelle Sitzung arbeitet",
         "sessionContextDetail": "Teilt nur Angaben zum Speicherort (Sitzungs-ID und Projektordnerpfad), während es für die aktuelle Sitzung arbeitet – keine Dateiinhalte, und es wird kein Dateizugriff gewährt.",
-        "liveScreen": "Geräte-Bildschirme auf dem Telefon ansehen und bedienen",
-        "liveScreenDetail": "Über den Remote-Desktop kann dein Telefon die Geräte-Bildschirme anzeigen, die das Plugin bereitstellt (zum Beispiel Simulatoren), und Berührungen, Tasten und Text an sie senden. Die Verbindung besteht nur, wenn du sie vom Telefon aus öffnest, und es wird nichts anderes von diesem Computer angezeigt.",
+        "liveScreen": "Geräte-Bildschirme auf dem Telefon oder anderen Computern ansehen und bedienen",
+        "liveScreenDetail": "Über den Remote-Desktop können Ihr Telefon oder Ihre anderen Computer die Geräte-Bildschirme anzeigen, die es bereitstellt (zum Beispiel Simulatoren), und Berührungen, Tasten und Text an sie senden. Die Verbindung besteht nur, wenn Sie sie von einem dieser Geräte aus öffnen, und es wird nichts anderes von diesem Computer angezeigt.",
         "preview": "Kann Vorschauseiten der folgenden Websites im Seitenleistenbrowser öffnen",
         "previewDetail": "Nur die unten aufgeführten Websites können geöffnet werden. Jede geöffnete Seite wird diesem Plugin zugeordnet.",
         "browserExtension": "Erlaubt seiner mitgelieferten Browsererweiterung, sich mit Cindy zu verbinden",
@@ -12112,6 +12135,15 @@
     },
     "starterOptions": "Einstiegsoptionen",
     "channels": {
+      "edit": {
+        "button": "Bearbeiten",
+        "title": "iMessage-Verbindung bearbeiten",
+        "description": "Zum erneuten Verbinden speichern. Das Modell folgt den Einstellungen deines Freundes.",
+        "keepPassword": "Leer lassen, um das gespeicherte Passwort beizubehalten",
+        "save": "Speichern und neu verbinden",
+        "loadFailed": "Die Verbindungseinstellungen konnten nicht geladen werden. Versuche es erneut.",
+        "failed": "Die Verbindung konnte nicht gespeichert werden. Prüfe die Einstellungen und versuche es erneut."
+      },
       "title": "Messaging-Plattformen",
       "platform": {
         "telegram": "Telegram",
@@ -15494,7 +15526,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Dieser Agent ist auf dem anderen Computer nicht verfügbar. Installiere ihn dort oder melde dich dort an, oder wähle einen anderen Agent.",
       "REMOTE_AGENT_INVALID": "Bei der Kommunikation mit dem Computer, auf dem der Agent läuft, ist etwas schiefgelaufen. Versuch es erneut. Falls das Problem weiterhin besteht, aktualisiere Cindy auf beiden Computern.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Dieses Modell hat das vom Eigentümer festgelegte Limit für die Modellfreigabe erreicht. Wähle ein anderes verfügbares Modell, um fortzufahren.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer hat dir keinen Remote-Zugriff auf diesen Anbieter oder das gewählte Modell gewährt. Bitte den Eigentümer, den Zugriff unter „Remote & Freigabe“ anzupassen, oder wähle ein anderes Modell.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer gibt dir keinen Zugriff auf diesen Anbieter oder das gewählte Modell. Ist es dein eigener Computer, aktiviere dort unter Remote-Verbindungen „Meine anderen Computer die Modelle dieses Computers nutzen lassen“. Wurde er mit dir geteilt, bitte den Eigentümer, den Zugriff unter „Remote & Freigabe“ anzupassen. Oder wähle ein anderes Modell.",
       "REMOTE_AGENT_FORK_FAILED": "Der Computer, auf dem der Agent läuft, konnte von hier aus keine neue Sitzung starten. Versuch es erneut oder wähle eine andere Nachricht.",
       "REMOTE_AGENT_SHARE_PAUSED": "Der Eigentümer hat diese Freigabe für dich pausiert. Diese Modelle können erst wieder genutzt werden, wenn sie fortgesetzt wird. Wechsle zu einem anderen Modell, um fortzufahren.",
       "REMOTE_AGENT_SHARE_REMOVED": "Diese Freigabe ist nicht mehr verfügbar (der Eigentümer hat sie entfernt oder du hast sie verlassen). Wechsle zu einem anderen Modell, um fortzufahren.",

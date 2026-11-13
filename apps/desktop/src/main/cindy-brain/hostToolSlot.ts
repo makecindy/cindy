@@ -37,13 +37,15 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
   const argsJson = JSON.stringify(args);
   const owner = ports.owner();
   const ghost = ports.getGhost(id);
+  const installDir = ghost?.dir;
   const revision = ghostInstallApprovalToken(ghost?.approval);
-  const current = () => {
+  const installationCurrent = () => {
     const latest = ports.getGhost(id), activeOwner = ports.owner();
-    return pageCurrent() && latest?.enabled === true && latest.approval.state === 'approved' &&
-      latest.dir === ghost?.dir && ghostInstallApprovalToken(latest.approval) === revision &&
+    return latest?.enabled === true && latest.approval.state === 'approved' &&
+      latest.dir === installDir && ghostInstallApprovalToken(latest.approval) === revision &&
       activeOwner.dataOwnerId === owner.dataOwnerId && activeOwner.ownerGeneration === owner.ownerGeneration;
   };
+  const current = () => pageCurrent() && installationCurrent();
   if (!ghost || !current()) return fail('PERMISSION_DENIED');
   const serviceGroup = SERVICE_GROUPS[server];
   if (serviceGroup && !declaredGhostHostToolGroups(ghost.manifest).includes(serviceGroup)) return fail('PERMISSION_DENIED');
@@ -63,7 +65,11 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
       return fail('PERMISSION_DENIED');
     if (!authorized()) return fail('PERMISSION_DENIED');
     const assertCurrent = () => { if (!authorized()) throw new Error('PERMISSION_DENIED'); };
-    const result = await runPluginHostToolCall({ caller, server, tool: definition.name, argsJson, assertCurrent }, () => runtime.call(definition.name, args));
+    const assertDeliveryCurrent = () => {
+      if (!installationCurrent() || !hasPluginHostToolGroupApproval(ports.getGhost(id), group))
+        throw new Error('PERMISSION_DENIED');
+    };
+    const result = await runPluginHostToolCall({ caller, server, tool: definition.name, argsJson, assertCurrent, assertDeliveryCurrent }, () => runtime.call(definition.name, args));
     closeStarted = true;
     await runtime.close();
     // Cleanup is an async boundary too; old-owner data must not escape it.

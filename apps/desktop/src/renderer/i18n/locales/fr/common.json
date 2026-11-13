@@ -1340,7 +1340,24 @@
     "handoffEnded": "Ce transfert de saisie est déjà terminé ; il n'y a donc aucune fenêtre à afficher.",
     "handoffUnavailable": "Cet ordinateur ne peut pas afficher uniquement cette fenêtre. Mettez-y Cindy à jour, ou activez-y le bureau à distance.",
     "handoffWindow": "Transfert de saisie · {{app}}",
-    "idleMinutes_many": "{{count}} minutes"
+    "idleMinutes_many": "{{count}} minutes",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Installer le plugin « {{plugin}} »",
+        "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Installez le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
+        "action": "Installer"
+      },
+      "enable": {
+        "title": "Activer le plugin « {{plugin}} »",
+        "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Activez le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
+        "action": "Activer"
+      },
+      "update": {
+        "title": "Mettre à jour le plugin « {{plugin}} »",
+        "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Mettez à jour le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
+        "action": "Mettre à jour"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -4356,6 +4373,7 @@
           "ariaLabel": "Autoriser vos autres ordinateurs et les personnes avec qui vous partagez à utiliser ce fournisseur",
           "writeFailed": "Impossible d'enregistrer le paramètre d'accès à distance. Veuillez réessayer."
         },
+        "ownComputersCanUse": "Disponible pour mes autres ordinateurs",
         "moreActionsAria": "Plus d'actions",
         "runLocation": {
           "label": "Exécuter sur",
@@ -6989,6 +7007,11 @@
       "description": "Les appareils connectés avec le même compte Feishu peuvent se détecter mutuellement. Une fois « Autoriser le contrôle » activé, vos autres appareils peuvent contrôler à distance {{appName}} sur cette machine.",
       "allowControl": "Autoriser les appareils du même compte à contrôler cette machine",
       "allowControlHint": "Une fois activé, les autres appareils connectés avec le même compte peuvent contrôler cette machine sans approbation à chaque connexion. Un indicateur visible s'affiche pendant le contrôle, et vous pouvez vous déconnecter à tout moment.",
+      "ownModelAccess": {
+        "title": "Autoriser mes autres ordinateurs à utiliser les modèles de celui-ci",
+        "hint": "Une fois activé, vos autres ordinateurs peuvent utiliser les fournisseurs de cet ordinateur. L’Agent s’exécute ici, avec la connexion et le quota de cet ordinateur. Rien n’est partagé avec d’autres personnes.",
+        "writeFailed": "Impossible d’enregistrer ce réglage. Veuillez réessayer."
+      },
       "keepAwake": "Empêcher la mise en veille",
       "keepAwakeHint": "Une fois activé, cette machine ne se met pas en veille, afin que les Agents en arrière-plan et les tâches planifiées continuent de s'exécuter (vous pouvez toujours éteindre l'écran ou le verrouiller).",
       "linkStatus": {
@@ -8386,8 +8409,8 @@
         "workspaceDetail": "Lorsqu'il le demande, soit vous choisissez le dossier vous-même, soit vous voyez le chemin complet sur une carte de confirmation avant de décider ; pendant qu'il traite un appel que vous avez lancé, les sous-dossiers du répertoire de travail de la session en cours sont utilisés directement, sans demande supplémentaire. Les dossiers qui ont déjà une session sont réutilisés, et ce qui est créé est une session vide : rien ne démarre tout seul.",
         "sessionContext": "Peut savoir dans quel dossier de projet travaille la session en cours",
         "sessionContextDetail": "Ne partage que des informations d'emplacement (ID de session et chemin du dossier de projet) pendant qu'il travaille pour la session en cours : aucun contenu de fichier n'est partagé et aucun accès aux fichiers n'est accordé.",
-        "liveScreen": "Voir et contrôler des écrans d'appareils sur votre téléphone",
-        "liveScreenDetail": "Via le bureau à distance, votre téléphone peut afficher les écrans d'appareils qu'il fournit (comme des simulateurs) et leur envoyer des gestes tactiles, des appuis sur les boutons et du texte. La connexion n'a lieu que lorsque vous l'ouvrez depuis votre téléphone, et rien d'autre de cet ordinateur n'est affiché.",
+        "liveScreen": "Voir et contrôler des écrans d'appareils sur votre téléphone ou vos autres ordinateurs",
+        "liveScreenDetail": "Via le bureau à distance, votre téléphone ou vos autres ordinateurs peuvent afficher les écrans d'appareils qu'il fournit (comme des simulateurs) et leur envoyer des touchers, des boutons et du texte. La connexion n'a lieu que lorsque vous l'ouvrez depuis l'un de ces appareils et rien d'autre de cet ordinateur n'est affiché.",
         "preview": "Peut ouvrir des pages d'aperçu des sites ci-dessous dans le navigateur de la barre latérale",
         "previewDetail": "Seuls les sites listés ci-dessous peuvent être ouverts ; chaque page ouverte est attribuée à ce plugin.",
         "browserExtension": "Permet à son extension de navigateur intégrée de se connecter à Cindy",
@@ -12211,6 +12234,15 @@
     },
     "starterOptions": "Options de démarrage",
     "channels": {
+      "edit": {
+        "button": "Modifier",
+        "title": "Modifier la connexion iMessage",
+        "description": "Enregistrez pour vous reconnecter. Le modèle suit les paramètres de votre ami.",
+        "keepPassword": "Laissez vide pour conserver le mot de passe enregistré",
+        "save": "Enregistrer et reconnecter",
+        "loadFailed": "Impossible de charger les paramètres de connexion. Réessayez.",
+        "failed": "Impossible d’enregistrer la connexion. Vérifiez les paramètres et réessayez."
+      },
       "title": "Plateformes de messagerie",
       "platform": {
         "telegram": "Telegram",
@@ -15635,7 +15667,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Cet Agent n'est pas disponible sur l'autre ordinateur. Installez-le ou connectez-vous-y sur cet ordinateur, ou choisissez un autre Agent.",
       "REMOTE_AGENT_INVALID": "Un problème est survenu lors de la communication avec l'ordinateur qui exécute l'Agent. Réessayez ; si le problème persiste, mettez à jour Cindy sur les deux ordinateurs.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Ce modèle a atteint la limite de partage de modèle définie par son propriétaire. Choisissez un autre modèle disponible pour continuer.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas accordé l'accès à distance à ce fournisseur ou au modèle sélectionné. Demandez à son propriétaire d'ajuster l'accès dans Accès distant et partage, ou choisissez un autre modèle.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser mes autres ordinateurs à utiliser les modèles de celui-ci » dans sa connexion à distance. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",
       "REMOTE_AGENT_FORK_FAILED": "L'ordinateur qui exécute l'Agent n'a pas pu démarrer une nouvelle session à partir d'ici. Réessayez, ou essayez avec un autre message.",
       "REMOTE_AGENT_SHARE_PAUSED": "Le propriétaire a suspendu ce partage pour vous : ces modèles ne peuvent donc pas être utilisés tant qu'il n'est pas réactivé. Passez à un autre modèle pour continuer.",
       "REMOTE_AGENT_SHARE_REMOVED": "Ce partage n'est plus disponible (le propriétaire l'a supprimé ou vous l'avez quitté). Passez à un autre modèle pour continuer.",

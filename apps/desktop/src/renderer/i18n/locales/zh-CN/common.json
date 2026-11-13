@@ -1309,7 +1309,24 @@
     "credentialRequired": "请完成 Mac 密码验证。如果无法验证，请更新两台电脑上的 Cindy。",
     "handoffEnded": "这次代输入已经结束，没有可显示的窗口。",
     "handoffUnavailable": "这台电脑暂时不能只显示这个窗口。请在那台电脑上更新 Cindy，或开启远程桌面。",
-    "handoffWindow": "代输入 · {{app}}"
+    "handoffWindow": "代输入 · {{app}}",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "需要安装「{{plugin}}」插件",
+        "body": "这个任务在另一台电脑上开着 {{device}}。在这台电脑上安装「{{plugin}}」插件后，就能在右侧栏查看和操作它。",
+        "action": "去安装"
+      },
+      "enable": {
+        "title": "需要开启「{{plugin}}」插件",
+        "body": "这个任务在另一台电脑上开着 {{device}}。在这台电脑上开启「{{plugin}}」插件后，就能在右侧栏查看和操作它。",
+        "action": "去开启"
+      },
+      "update": {
+        "title": "需要更新「{{plugin}}」插件",
+        "body": "这个任务在另一台电脑上开着 {{device}}。把这台电脑上的「{{plugin}}」插件更新到新版本后，就能在右侧栏查看和操作它。",
+        "action": "去更新"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -4257,6 +4274,7 @@
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
           "writeFailed": "远程调用设置未能保存，请重试"
         },
+        "ownComputersCanUse": "我的其他电脑可用",
         "moreActionsAria": "更多操作",
         "runLocation": {
           "label": "在哪台电脑运行",
@@ -6879,6 +6897,11 @@
       "description": "同一飞书账号登录的设备可以互相发现；开启「允许控制」后，你的其他设备可以远程控制本机的 {{appName}}。",
       "allowControl": "允许同账号设备控制本机",
       "allowControlHint": "开启后，使用同一账号登录的其它设备无需逐次确认即可控制本机；本机会显示远程控制提示，可随时断开。",
+      "ownModelAccess": {
+        "title": "让我的其他电脑用本机模型",
+        "hint": "开启后，你的其他电脑可以用这台电脑上的模型供应商，Agent 在这台电脑上运行，用这台电脑的登录和配额。不会分享给别人。",
+        "writeFailed": "设置未能保存，请重试"
+      },
       "keepAwake": "保持电脑唤醒",
       "keepAwakeHint": "开启后本机不会进入休眠，后台的 Agent 与定时任务可持续运行（仍可关闭显示器 / 锁屏）。",
       "linkStatus": {
@@ -8271,8 +8294,8 @@
         "workspaceDetail": "它发起请求时，由你亲手选择文件夹，或在确认卡上看到完整路径后再决定；它正在处理你发起的调用时，当前任务工作目录内的子文件夹可直接使用，不再单独确认。文件夹已有任务时直接复用，不重复创建。创建的只是空任务，不会自动开始运行。",
         "sessionContext": "可获知当前任务正在使用的项目文件夹位置",
         "sessionContextDetail": "只在它为当前任务干活时告知位置信息（任务编号与项目文件夹路径），不包含文件内容，也不因此获得文件访问权。",
-        "liveScreen": "在手机上查看与操作设备画面",
-        "liveScreenDetail": "通过远程桌面，你的手机可以查看它提供的设备画面（例如模拟器）并直接触控、按键和输入文字。只在你从手机打开时连接，不会打开电脑的其他内容。",
+        "liveScreen": "在手机或其他电脑上查看与操作设备画面",
+        "liveScreenDetail": "通过远程桌面，你的手机或其他电脑可以查看它提供的设备画面（例如模拟器）并直接触控、按键和输入文字。只在你从这些设备打开时连接，不会打开电脑的其他内容。",
         "preview": "可在右侧栏浏览器中打开以下网站的预览页面",
         "previewDetail": "只能打开下方列出的网站；每次打开都会提示是哪个插件打开的。",
         "browserExtension": "可让它自带的浏览器扩展连接到 Cindy",
@@ -12244,6 +12267,15 @@
         "unbound": "可将官方 @askmycindy 收到的你的提问交给 {{name}}。",
         "managed": "X 提问由伙伴处理。可在该伙伴的消息平台设置中更改绑定。",
         "riskBody": "X 提问会使用伙伴的共享记忆、能力和工作目录，回答会公开。请勿通过 X 处理私人信息。专线不会直接使用伙伴的私聊记录。"
+      },
+      "edit": {
+        "button": "编辑",
+        "title": "编辑 iMessage 连接",
+        "description": "保存后重新连接，模型跟随伙伴设置。",
+        "keepPassword": "留空保留原密码",
+        "save": "保存并重连",
+        "loadFailed": "读取连接设置失败，请重试。",
+        "failed": "保存连接失败，请检查参数后重试。"
       }
     },
     "voiceMode": {
@@ -15466,7 +15498,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
       "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。请让电脑主人在「远程与分享」中调整开放范围，或换一个模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑的「远程连接」里打开「让我的其他电脑用本机模型」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
       "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
       "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",

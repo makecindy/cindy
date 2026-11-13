@@ -493,7 +493,7 @@ describe('paused account next-turn handoff', () => {
     if (limited || !allowed) await expect(result).rejects.toThrow('No subscription account');
     else expect(await result).toBe(true);
     expect(h.remote.mock.calls[1].slice(0, 3)).toEqual(['mini', 'maker:subscription-pool:quota', ['openai', model]]);
-    expect(h.accountAllowed).toHaveBeenCalledWith('old-imported', model, { remote: true, newRoute: true });
+    expect(h.accountAllowed).toHaveBeenCalledWith('old-imported', model, { remote: true, ownComputer: false, newRoute: true });
     expect(h.bindings.size).toBe(0);
   });
 

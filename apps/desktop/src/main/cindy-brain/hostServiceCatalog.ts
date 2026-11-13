@@ -81,6 +81,7 @@ export class HostServiceCatalog {
 export function createHostServiceToolExecutor(catalog: HostServiceCatalog, ports: {
   pluginCall(): PluginHostToolCaller | undefined;
   getGhost(id: string): InstalledGhost | null;
+  supportsPluginServer?(server: string): boolean;
 }): NonNullable<XdtHelperMcpDeps['hostServices']> {
   return { list(context) {
     const caller = context.hostCaller;
@@ -94,6 +95,8 @@ export function createHostServiceToolExecutor(catalog: HostServiceCatalog, ports
     if (!hasPluginHostToolGroupApproval(ghost, 'discovery')) throw new Error('PERMISSION_DENIED');
     const declared = declaredGhostHostToolGroups(ghost!.manifest);
     return { scope: 'local', services: catalog.list(context).map(service => ({ ...service,
+      ...(ports.supportsPluginServer?.(service.server) === false
+        ? { available: false, reason: 'unsupported' as const, tools: [], entryTool: undefined } : {}),
       declared: declared.includes(service.group), approved: hasPluginHostToolGroupApproval(ghost, service.group),
     })) };
   } };

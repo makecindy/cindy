@@ -1340,7 +1340,24 @@
     "handoffEnded": "Esta entrada manual ya finalizó, por lo que no hay ninguna ventana que mostrar.",
     "handoffUnavailable": "Esta computadora no puede mostrar solo esta ventana. Actualiza Cindy en ella o activa allí el escritorio remoto.",
     "handoffWindow": "Entrada manual · {{app}}",
-    "idleMinutes_many": "minutos {{count}}"
+    "idleMinutes_many": "minutos {{count}}",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "Instala el complemento «{{plugin}}»",
+        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Instala el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
+        "action": "Instalar"
+      },
+      "enable": {
+        "title": "Activa el complemento «{{plugin}}»",
+        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Activa el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
+        "action": "Activar"
+      },
+      "update": {
+        "title": "Actualiza el complemento «{{plugin}}»",
+        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Actualiza el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
+        "action": "Actualizar"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -4356,6 +4373,7 @@
           "ariaLabel": "Permita que sus otras computadoras y las personas con las que comparte usen este proveedor",
           "writeFailed": "No se pudo guardar la configuración de acceso remoto. Por favor inténtalo de nuevo."
         },
+        "ownComputersCanUse": "Disponible para mis otras computadoras",
         "moreActionsAria": "Más acciones",
         "runLocation": {
           "label": "Ejecutar en",
@@ -6989,6 +7007,11 @@
       "description": "Los dispositivos que hayan iniciado sesión con la misma cuenta de Feishu pueden detectarse entre sí. Al activar \"Permitir control\", tus otros dispositivos podrán controlar {{appName}} de forma remota en esta computadora.",
       "allowControl": "Permitir que los dispositivos de la misma cuenta controlen esta computadora",
       "allowControlHint": "Cuando está activado, otros dispositivos con la misma cuenta pueden controlar esta computadora sin aprobación por conexión. Se muestra un indicador visible mientras se controla y puedes desconectarla en cualquier momento.",
+      "ownModelAccess": {
+        "title": "Permitir que mis otras computadoras usen los modelos de esta",
+        "hint": "Cuando está activado, tus otras computadoras pueden usar los proveedores de esta computadora. El Agent se ejecuta aquí, con el inicio de sesión y la cuota de esta computadora. No se comparte nada con otras personas.",
+        "writeFailed": "No se pudo guardar este ajuste. Inténtalo de nuevo."
+      },
       "keepAwake": "Mantener la computadora activa",
       "keepAwakeHint": "Cuando está activado, esta computadora no entra en suspensión. Los Agents en segundo plano y las tareas programadas siguen ejecutándose. Puedes apagar la pantalla o bloquearla.",
       "linkStatus": {
@@ -8386,8 +8409,8 @@
         "workspaceDetail": "Cuando te lo pide, eliges la carpeta tú mismo o ves la ruta completa en una tarjeta de confirmación antes de decidir; mientras atiende una llamada que tú iniciaste, las subcarpetas dentro del directorio de trabajo de la sesión actual se usan directamente sin un aviso adicional. Las carpetas que ya tienen una sesión se reutilizan y lo que se crea es una sesión vacía: nada comienza a ejecutarse por sí solo.",
         "sessionContext": "Puede saber en qué carpeta de proyecto está trabajando la sesión actual",
         "sessionContextDetail": "Comparte solo datos de ubicación (ID de sesión y ruta de la carpeta del proyecto) mientras trabaja para la sesión actual; no incluye contenido de archivos ni concede acceso a archivos.",
-        "liveScreen": "Ver y controlar pantallas de dispositivos en tu teléfono",
-        "liveScreenDetail": "A través del escritorio remoto, tu teléfono puede mostrar las pantallas de dispositivos que ofrece (como simuladores) y enviarles toques, botones y texto. Solo se conecta cuando lo abres desde tu teléfono y no muestra nada más de esta computadora.",
+        "liveScreen": "Ver y controlar pantallas de dispositivos en tu teléfono u otros ordenadores",
+        "liveScreenDetail": "A través del escritorio remoto, tu teléfono o tus otros ordenadores pueden mostrar las pantallas de dispositivos que ofrece (como simuladores) y enviarles toques, botones y texto. Solo se conecta cuando lo abres desde uno de esos dispositivos y no muestra nada más de este ordenador.",
         "preview": "Puede abrir páginas de vista previa de los siguientes sitios en el navegador de la barra lateral",
         "previewDetail": "Solo se pueden abrir los sitios que se enumeran a continuación; cada página que abre se atribuye a este complemento.",
         "browserExtension": "Permite que su extensión de navegador incluida se conecte a Cindy",
@@ -12211,6 +12234,15 @@
     },
     "starterOptions": "Opciones iniciales",
     "channels": {
+      "edit": {
+        "button": "Editar",
+        "title": "Editar conexión de iMessage",
+        "description": "Guarda para volver a conectar. El modelo sigue la configuración de tu amigo.",
+        "keepPassword": "Déjalo en blanco para conservar la contraseña guardada",
+        "save": "Guardar y volver a conectar",
+        "loadFailed": "No se pudo cargar la configuración de la conexión. Inténtalo de nuevo.",
+        "failed": "No se pudo guardar la conexión. Comprueba la configuración e inténtalo de nuevo."
+      },
       "title": "Plataformas de mensajería",
       "platform": {
         "telegram": "Telegram",
@@ -15635,7 +15667,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
       "REMOTE_AGENT_INVALID": "Se produjo un error al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue ocurriendo, actualiza Cindy en ambas computadoras.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha concedido acceso remoto a este proveedor o al modelo seleccionado. Pide a su propietario que ajuste el acceso en Remoto y compartido, o elige otro modelo.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir que mis otras computadoras usen los modelos de esta» en su conexión remota. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "La computadora que ejecuta el Agent no pudo iniciar una nueva sesión desde aquí. Inténtalo de nuevo o prueba con un mensaje diferente.",
       "REMOTE_AGENT_SHARE_PAUSED": "El propietario pausó este recurso compartido para ti, así que no puedes usar estos modelos hasta que lo reanude. Cambia a otro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Este recurso compartido ya no está disponible (el propietario lo eliminó o saliste). Cambia a otro modelo para continuar.",

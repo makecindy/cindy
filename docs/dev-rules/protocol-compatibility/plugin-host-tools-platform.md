@@ -9,6 +9,8 @@
 `data.current/limit` 说明数量和上限；不排队、不终止已有作业。输出在运行中最多 256 KiB、
 终态最多 16 KiB；每个调用方保留最近 100 条终态记录，在退出时按结束顺序回收，不新增定时器。
 界面直接创建的终端沿用原生命周期，不受上述托管作业配额影响。
+任务托管作业仅订阅其真实 Session 实例的关闭状态，关闭时复用 ProcessOwner destroyed 的 PTY 释放链。
+释放或替换作用域时移除订阅，旧实例关闭不影响同任务 id 的新实例；普通轮次结束与客户端断开不回收。
 Node Host 与桌面控制端沿用上述工具签名、manifest 和 receipt。loopback SSE 客户端通过
 `protocol=2&confirmations=1` 显式协商不回放的 `host_prompt` 帧；只有现有四种插件确认请求/
 撤回 channel 可用，不占用或推进任务事件序号。旧客户端不协商就不投递此类帧；旧 Host
@@ -20,8 +22,10 @@ Node Host 的本机 `history` 查询增量接入相同回调和 owner 数据库�
 错误与来源范围。任务动作的输入快照与确认复用共享实现，不新增身份字段、任务副本或批准记录。
 Node Host 未装配的服务返回 MCP `UNSUPPORTED_CAPABILITY`，附当前执行环境不支持的说明；当前包括生产调度器。
 Desktop 原有暂未就绪场景仍返回 `HOST_NOT_READY`。不新增调用字段，也不改变旧宿主返回值。
-Node Host 已注册的 browser/computer 平台 provider 同时供两种调用方使用，保留原后端、客户端
-与输入协调器的可用性错误；provider 已注册不代表其全部桌面操作已在无界面环境可用。
+Node Host 的 browser 平台 provider 同时供 Agent 与插件使用，保留原后端与客户端门禁。
+插件 computer 调用因缺少可跨进程复核的 Desktop 逐次批准身份，在创建 runtime 和确认前返回
+`UNSUPPORTED_CAPABILITY`；插件能力发现也标为 unsupported，不创建跨调用观察快照。
+不信任转发的 caller 元数据，不新增授权证明；Node Agent、Desktop 插件的电脑路径不变。
 插件调用选中 `rsb-webview` 时返回既有 `BROWSER_RUNTIME_ACTION_FAILED`，不借界面焦点归属；专用浏览器、我的浏览器及原 Agent/UI 不变。
 
 `storage` 增量复用相同组批准与 `storage_request` 工具通道，支持 providers/targets/call/share；

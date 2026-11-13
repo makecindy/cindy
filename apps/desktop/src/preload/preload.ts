@@ -3,6 +3,7 @@ import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, typ
 import type { VoiceConversationApi } from '../shared/voiceConversation';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
+import { createLiveScreenEmbedBridge, createLiveScreenRelayBridge } from './liveScreenEmbed';
 import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapshot';
 import { createVoiceInputDataSnapshot } from './voiceInputDataSnapshot';
 import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
@@ -1282,6 +1283,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   } satisfies CompanionImportApi,
   platform: process.platform,
   accessibilitySupport: createAccessibilitySupportBridge(),
+  liveScreenEmbed: createLiveScreenEmbedBridge(),
+  liveScreenRelay: createLiveScreenRelayBridge(),
   supportsBetaUpdateChannel: supportsBetaUpdateChannel(process.platform, process.arch),
   windowBackdropMaterial: readWindowBackdropMaterialFromArgv(process.argv),
   onWindowBackdropMaterialChanged: (
@@ -2754,6 +2757,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── 伙伴自有 IM 机器人连接(Telegram / 飞书, 伙伴设置「消息平台」页)──
   // 凭证只进 main 的安全存储, 不回传; 记录按连接 id 管理。
   botImConnection: {
+    getIMessageConfig: (payload: { id: string }): Promise<import('../shared/botImConnection').BotIMessageConfig> => ipcRenderer.invoke('botImConnection:get-imessage-config', payload),
+    updateIMessageConfig: (payload: { id: string; config: import('../shared/botImConnection').BotIMessageUpdateInput }): Promise<import('../shared/botImConnection').BotImConnectionListPayload> => ipcRenderer.invoke('botImConnection:update-imessage-config', payload),
+
     list: (): Promise<import('../shared/botImConnection').BotImConnectionListPayload> =>
       ipcRenderer.invoke('botImConnection:list'),
     add: (
@@ -6874,6 +6880,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:provider:list'),
     setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
       ipcRenderer.invoke('maker:provider:remote-access:set', input),
+    getOwnComputerModelUse: (): Promise<{ enabled: boolean }> =>
+      ipcRenderer.invoke('maker:own-computer-model-use:get'),
+    setOwnComputerModelUse: (input: { enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
+      ipcRenderer.invoke('maker:own-computer-model-use:set', input),
     /** 供应商「运行于」：deviceId、'local'，或 null 回到默认。 */
     setProviderRunLocation: (input: { providerId: string; location: string | null }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:run-location:set', input),

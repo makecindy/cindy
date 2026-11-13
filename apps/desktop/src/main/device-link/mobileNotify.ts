@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { notificationPreview, truncateNotificationText } from '../notificationPreview.js';
 import {
   NOTIFY_ACTION_DETAIL_MAX_LENGTH,
@@ -185,7 +185,8 @@ export function buildSessionNotifyPayload(opts: {
         ...(opts.teammateAvatar ? { avatar: opts.teammateAvatar } : {}),
       },
     } : {}),
-    // 同会话的通知在系统层合并(APNs collapse-id / thread-id);混入任务归属设备 ID,
+    // 同会话的通知按 thread-id 分组；新版服务端用 notificationId 单独标识各事件。
+    // 旧服务端仍使用此键合并(APNs collapse-id)；混入任务归属设备 ID,
     // 多台桌面推同名会话时互不顶替。原样拼接不可行:deviceId 可能是 64 位
     // machineId,拼出 100+ 字符会被 APNs 的 64 字节 collapse-id 上限截断成
     // 设备级合并键(该设备所有会话的通知互相顶替)。取 sha256 前 32 hex:
@@ -234,7 +235,7 @@ function sessionDeepLink(sessionId: string, deviceId: string, teammateBotId?: st
  * 有回复标识时按同 session + 同 kind + 回复去重；不同回复不受时间窗口限制。
  * 无标识的调度事件保留短窗兜底，并与同轮的持久 turn 标识对账。覆盖 renderer 事件源的重复触发
  * (如 needs-reply 连续弹多个审批);不同 kind 不互压 —— done 紧跟 error 各有信息量,
- * 系统层还有 collapseId 合并兜底。
+ * 新版系统层仅合并同一 notificationId 的重试，collapseId 继续用于任务分组。
  */
 export class MobileNotifyDeduper {
   private readonly lastEvent = new Map<string, string>();
@@ -283,4 +284,11 @@ export class MobileNotifyDeduper {
       if (now - at >= this.windowMs) this.lastSentAt.delete(key);
     }
   }
+}
+
+/** Mirrored senders of the same execution-host event share one retirement identity. */
+export function mobileNotificationIdentity(deviceId: string, sessionId: string, kind: MobileSessionEventKind, eventId?: string): string {
+  if (!eventId) return randomUUID();
+  const hash = createHash('sha256').update(JSON.stringify([deviceId, sessionId, kind, eventId])).digest('hex');
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 }
