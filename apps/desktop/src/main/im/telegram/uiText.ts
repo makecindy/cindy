@@ -2,223 +2,207 @@
  * main/im/telegram/uiText.ts
  * ---------------------------------------------------------------------------
  * 个人 Telegram bot 渠道的用户文案包。DM + 群 lane 双形态, 不启用 threadScoped,
- * 只提供共享编排层的非 thread 文案字段。与 Discord 包同一基调(IM 侧控制文案
- * 硬编码中文, 不进 renderer i18n — 与 hook-control/interactions.ts 同规)。
+ * 只提供共享编排层的非 thread 文案字段。
+ *
+ * 控制文案跟随主人在 Cindy 里选的界面语言: 文案放在 desktop locale 的
+ * `imBot.text.telegram.*` 下, 经 `imText` 在**发送时**现取 —— 字符串字段是 getter、
+ * 带参字段是函数, 不在模块加载时求值, 主人切换语言后下一条消息即生效。
+ * 消费方只按属性/函数读取; 不要把这个包展开或缓存成常量, 否则语言会被冻结在那一刻。
  */
 
 import type { IMUnsupportedEntry } from '@cindy/im';
 
+import { imText, type ImTextVars } from '../shared/imText';
 import type { ImUiTextPack } from '../shared/types';
 
+/** `imBot.text.telegram.<key>` 的当前语言文案。 */
+function tg(key: string, vars?: ImTextVars): string {
+  return imText(`imBot.text.telegram.${key}`, vars);
+}
+
+function bulletList(entries: IMUnsupportedEntry[]): string {
+  return entries.map((e) => `• ${e.label}`).join('\n');
+}
+
 export const telegramUiText = {
-  expiredCardNotice: '卡片已过期',
-} as const;
+  get expiredCardNotice() { return tg('expiredCardNotice'); },
+};
 
 export const ui = {
   slash: {
-    start:
-      '👋 你好，我是你的个人 Cindy 助理~\n\n私聊直接发消息就行；群里 @ 我或回复我的消息才会触发。发 /help 看全部命令。',
-    new: '🌱 新任务已创建 — 已在任务列表显示，从头开始吧~',
-    help: `🤖 我能帮你做这些：
-
-/new         创建新任务（旧任务保留；群里按当前群话题创建）
-/project     切到某个项目目录干活（在 bot 这边跑，不接管 desktop）
-/session     列最近的 desktop 任务，点一个直接接管续聊
-/model       换个模型上场
-/permission  调一下权限模式（auto / bypass / ask 等）
-/settings    看看当前项目、Agent、模型、推理强度、权限
-/ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换任务）
-/exctr       结束接管，回到 Telegram 对话
-/help        看看我会啥
-
-有活儿在跑想让它停？发 /stop（或 \`!stop\`），我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。
-
-私聊直接发消息就行；群里 @ 我或回复我的消息才会触发，我也会记住群里最近的聊天做上下文~`,
-    unknownCommand: (cmd: string) =>
-      `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help`,
+    get start() { return tg('slash.start'); },
+    get new() { return tg('slash.new'); },
+    get help() { return tg('slash.help'); },
+    unknownCommand: (cmd: string) => tg('slash.unknownCommand', { cmd }),
     settings: ({ workspace, agent, model, effort, permission }) =>
-      `⚙️ 当前设置\n\n项目：${workspace}\nAgent：${agent}\n模型：${model}\n推理强度：${effort}\n权限：${permission}\n\n想改就发 /project、/model、/permission～`,
+      tg('slash.settings', { workspace, agent, model, effort, permission }),
     // 连接已交给伙伴: 五项读的是伙伴这条任务实际在用的, 要改去伙伴设置。
     settingsCompanion: ({ workspace, agent, model, effort, permission }) =>
-      `⚙️ 当前设置（伙伴）\n\n项目：${workspace}\nAgent：${agent}\n模型：${model}\n推理强度：${effort}\n权限：${permission}\n\n模型、权限和工作目录跟随伙伴设置，请在 Cindy 的伙伴设置里修改。`,
-    detachedBySlash: '🚪 接管结束，咱们回到 Telegram 对话。下次想远程操控 desktop 再 /ctr',
-    detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到 Telegram 对话。',
-    notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',
+      tg('slash.settingsCompanion', { workspace, agent, model, effort, permission }),
+    get detachedBySlash() { return tg('slash.detachedBySlash'); },
+    get detachedByRevoke() { return tg('slash.detachedByRevoke'); },
+    get notAttached() { return tg('slash.notAttached'); },
     // 连接已交给伙伴(伙伴即 IM 本体)时的命令提示。
-    companionDmNew:
-      '🧭 这里是伙伴的主对话，会一直接着聊，不会另开新任务。想换个话题直接说就好；需要单独做的事，伙伴会自己开后台任务。',
-    companionLaneNew: '🌱 已为这个群开始一段新对话，之前的上下文收起来了，从头开始吧~',
-    companionManagedCommand:
-      '🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。',
+    get companionDmNew() { return tg('slash.companionDmNew'); },
+    get companionLaneNew() { return tg('slash.companionLaneNew'); },
+    get companionManagedCommand() { return tg('slash.companionManagedCommand'); },
   },
 
   agent: {
-    completedNoText: '✅ 跑完啦（这一轮 agent 没说话）',
-    runtimeError: (errMsg: string) => `⚠️ Agent 翻车了：${errMsg.slice(0, 200)}`,
-    sendInternalError: (errMsg: string) => `❌ 内部出 bug 了：${errMsg}`,
-    apiKeyMissing:
-      '⚠️ Cindy AI Key 还没配呢~\n去 desktop 的 Settings → 模型供应商里连接 Cindy AI，再来 ping 我',
+    get completedNoText() { return tg('agent.completedNoText'); },
+    runtimeError: (errMsg: string) => tg('agent.runtimeError', { error: errMsg.slice(0, 200) }),
+    sendInternalError: (errMsg: string) => tg('agent.sendInternalError', { error: errMsg }),
+    get apiKeyMissing() { return tg('agent.apiKeyMissing'); },
     authMissing: ({ providerLabel, providerId, missing, agentKind, model, attached }) => {
-      const provider = providerLabel ?? providerId ?? '当前供应商';
+      const provider = providerLabel ?? providerId ?? tg('agent.authMissing.currentProvider');
       const reason =
         missing === 'gateway-key'
-          ? '需要先配置 Cindy AI Key'
+          ? tg('agent.authMissing.reasonGatewayKey')
           : missing === 'provider-key'
-            ? '还没有配置该供应商的 API Key'
+            ? tg('agent.authMissing.reasonProviderKey')
             : missing === 'provider-disconnected'
-              ? '未连接或连接已失效'
-              : `需要先登录 ${agentKind} 凭证`;
-      const message = `⚠️ 当前 Telegram 对话使用供应商「${provider}」（${model}），${reason}。`;
+              ? tg('agent.authMissing.reasonProviderDisconnected')
+              : tg('agent.authMissing.reasonAgentLogin', { agentKind });
+      const message = tg('agent.authMissing.message', { provider, model, reason });
       return attached
-        ? `${message}\n请在 desktop 的 Settings → 模型供应商中修复认证后，直接继续发送消息。`
-        : `${message}\n修改“新对话配置”后直接继续发送消息即可；若当前任务单独选过模型，请发送 \`/model\` 重新选择。`;
+        ? `${message}\n${tg('agent.authMissing.attachedHint')}`
+        : `${message}\n${tg('agent.authMissing.detachedHint')}`;
     },
-    controlInProgress:
-      '🎮 你 /ctr 还在选择中呢 — 先把上面那张卡片操作完（或点 🚪 退出），再来发别的~',
-    credentialBusy:
-      '⏳ 本地 agent 正在跑另一轮，暂时不能切换凭证模式。等上一轮结束后再发一次就行。',
+    get controlInProgress() { return tg('agent.controlInProgress'); },
+    get credentialBusy() { return tg('agent.credentialBusy'); },
     queuedNotice: (position: number) =>
-      position <= 1
-        ? '⏳ 上一轮还在跑，这条先排队——跑完自动接上。想直接叫停就发 `!stop`'
-        : `⏳ 上一轮还在跑，这条排在第 ${position} 位——会按顺序发给 agent。想直接叫停就发 \`!stop\``,
+      position <= 1 ? tg('agent.queuedNoticeFirst') : tg('agent.queuedNotice', { position }),
     /** `!stop` 生效 — 当前执行已中止, 任务保留可继续。 */
     stopDone: (droppedQueued: number) =>
       droppedQueued > 0
-        ? `⏹ 已叫停当前执行，排队中的 ${droppedQueued} 条消息也一并撤了。任务还在——想继续随时发新指令~`
-        : '⏹ 已叫停当前执行。任务还在——想继续随时发新指令~',
+        ? tg('agent.stopDoneDropped', { count: droppedQueued })
+        : tg('agent.stopDone'),
     /** `!stop` 时没有任务在跑。 */
-    stopIdle: '🤷 现在没有正在跑的任务，`!stop` 落了个空。等有活儿要停的时候再喊我~',
-    scheduledTaskHeader: (name: string | null) => (name ? `🤖 自动化「${name}」` : '🤖 自动化'),
+    get stopIdle() { return tg('agent.stopIdle'); },
+    scheduledTaskHeader: (name: string | null) =>
+      name ? tg('agent.scheduledTaskHeaderNamed', { name }) : tg('agent.scheduledTaskHeader'),
     unsupportedOnly: (entries: IMUnsupportedEntry[]) =>
-      `🙏 这条消息我吞不下：\n${entries.map((e) => `• ${e.label}`).join('\n')}\n\n` +
-      `我能消化的: 文本、图片（jpg/png/gif/webp）、PDF、代码与配置类文本文件。`,
+      tg('agent.unsupportedOnly', { list: bulletList(entries) }),
     unsupportedNotice: (entries: IMUnsupportedEntry[]) =>
-      `ℹ️ 以下内容我消化不了，先丢一边了：\n${entries.map((e) => `• ${e.label}`).join('\n')}\n\n` +
-      `其它部分收到啦，正在处理~`,
-    companionUnavailable: (reason: string) => `⏸ 伙伴现在接不了消息：${reason.slice(0, 200)}`,
+      tg('agent.unsupportedNotice', { list: bulletList(entries) }),
+    companionUnavailable: (reason: string) =>
+      tg('agent.companionUnavailable', { reason: reason.slice(0, 200) }),
   },
 
   error: {
-    agentUnsupported: '🤔 当前 Agent 无法在 Telegram 群里完成所需的权限确认，请换一个 Agent 再试。',
-    permissionModeUnsupported:
-      (mode: string) => mode === 'bypassPermissions'
-        ? '这条群消息尚未执行：当前任务设为「完全访问」，但其他群成员的请求仍需经过审批，本次未能切换到自动审批。请机器人绑定的用户在 Cindy 中把当前任务改为「自动审批」，或发送 /permission 修改后重发。'
-        : '这条群消息尚未执行：当前权限档位无法提供群消息所需的操作审批。请机器人绑定的用户在 Cindy 中把当前任务改为「自动审批」，或发送 /permission 修改后重发。',
+    get agentUnsupported() { return tg('error.agentUnsupported'); },
+    permissionModeUnsupported: (mode: string) =>
+      mode === 'bypassPermissions'
+        ? tg('error.permissionModeUnsupportedFullAccess')
+        : tg('error.permissionModeUnsupported'),
   },
 
   cards: {
     permission: {
-      title: (toolName: string) => `🔧 工具调用：${toolName}`,
-      paramsLabel: '**参数预览**',
-      btnAllowOnce: '✅ 仅本次允许',
-      btnAllowAlways: '✅ 总是允许',
-      btnDeny: '❌ 拒绝',
-      resolvedAllowOnce: '✅ 已允许（仅本次）',
-      resolvedAllowAlways: '✅ 已允许（这个工具以后都放行）',
-      resolvedDeny: '❌ 已拒绝',
+      title: (toolName: string) => tg('cards.permission.title', { tool: toolName }),
+      get paramsLabel() { return tg('cards.permission.paramsLabel'); },
+      get btnAllowOnce() { return tg('cards.permission.btnAllowOnce'); },
+      get btnAllowAlways() { return tg('cards.permission.btnAllowAlways'); },
+      get btnDeny() { return tg('cards.permission.btnDeny'); },
+      get resolvedAllowOnce() { return tg('cards.permission.resolvedAllowOnce'); },
+      get resolvedAllowAlways() { return tg('cards.permission.resolvedAllowAlways'); },
+      get resolvedDeny() { return tg('cards.permission.resolvedDeny'); },
     },
     ask: {
       title: (header: string) => `❓ ${header}`,
-      noOptionsHint: '_（这个问题没有预设选项，直接发文字回我吧）_',
-      resolved: (optionLabel: string) => `✅ 已选：${optionLabel}`,
+      get noOptionsHint() { return tg('cards.ask.noOptionsHint'); },
+      resolved: (optionLabel: string) => tg('cards.ask.resolved', { option: optionLabel }),
     },
     plan: {
-      title: '📋 我打算这么干',
-      btnApprove: '✅ 干吧',
-      btnReject: '❌ 等等',
-      resolvedApproved: '✅ 已批准，开干',
-      resolvedRejected: '❌ 已暂停',
+      get title() { return tg('cards.plan.title'); },
+      get btnApprove() { return tg('cards.plan.btnApprove'); },
+      get btnReject() { return tg('cards.plan.btnReject'); },
+      get resolvedApproved() { return tg('cards.plan.resolvedApproved'); },
+      get resolvedRejected() { return tg('cards.plan.resolvedRejected'); },
     },
     model: {
-      title: '🤖 换个模型',
+      get title() { return tg('cards.model.title'); },
       currentLine: (label: string, effort: string | null, description: string) =>
         effort
-          ? `**当前**：${label} · effort \`${effort}\`\n_${description}_`
-          : `**当前**：${label}\n_${description}_`,
-      hint: '点下面切换。我会自动给所选模型用最高 effort 跑',
+          ? tg('cards.model.currentLineWithEffort', { label, effort, description })
+          : tg('cards.model.currentLine', { label, description }),
+      get hint() { return tg('cards.model.hint'); },
       optionLabel: (providerName: string, label: string, effort: string | null) =>
         effort ? `${providerName} / ${label} · ${effort}` : `${providerName} / ${label}`,
       resolved: (label: string, effort: string | null) =>
-        effort ? `✅ 已切到 ${label}（effort：${effort}）` : `✅ 已切到 ${label}`,
-      failed: (reason: string) => `❌ 模型没切过去：${reason}`,
+        effort
+          ? tg('cards.model.resolvedWithEffort', { label, effort })
+          : tg('cards.model.resolved', { label }),
+      failed: (reason: string) => tg('cards.model.failed', { reason }),
     },
     permissionMode: {
-      title: '🛡️ 调一下权限模式',
-      currentLine: (label: string, description: string) => `**当前**：${label}\n_${description}_`,
-      hint: '点下面切换。auto = 常规放行+敏感操作弹卡片；bypass = 全放行；ask/default/plan/acceptEdits = 走卡片审批',
+      get title() { return tg('cards.permissionMode.title'); },
+      currentLine: (label: string, description: string) =>
+        tg('cards.permissionMode.currentLine', { label, description }),
+      get hint() { return tg('cards.permissionMode.hint'); },
       optionLabel: (label: string) => label,
-      resolved: (label: string) => `✅ 权限模式切到 ${label} 了`,
-      failed: (reason: string) => `❌ 权限模式没切过去：${reason}`,
-      fullAccessConfirmTitle: '⚠️ 确认开启 Full access？',
-      fullAccessConfirmBody:
-        'Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。',
-      btnConfirmFullAccess: '开启 Full access',
-      btnCancelFullAccess: '保留当前权限',
-      fullAccessCancelled: '已取消，保留当前权限',
+      resolved: (label: string) => tg('cards.permissionMode.resolved', { label }),
+      failed: (reason: string) => tg('cards.permissionMode.failed', { reason }),
+      get fullAccessConfirmTitle() { return tg('cards.permissionMode.fullAccessConfirmTitle'); },
+      get fullAccessConfirmBody() { return tg('cards.permissionMode.fullAccessConfirmBody'); },
+      get btnConfirmFullAccess() { return tg('cards.permissionMode.btnConfirmFullAccess'); },
+      get btnCancelFullAccess() { return tg('cards.permissionMode.btnCancelFullAccess'); },
+      get fullAccessCancelled() { return tg('cards.permissionMode.fullAccessCancelled'); },
     },
     project: {
-      title: '📂 切个项目目录',
-      hint: (currentName: string) =>
-        `**当前**：${currentName}\n选一个项目，接下来的消息就在那个目录里干活（会重开上下文，模型和权限设置保留）`,
-      emptyBody: '_desktop 端还没有活跃的项目工作区~ 先在 desktop 里打开一个项目再来_',
-      btnDialogue: '💬 回到对话',
-      btnCancel: '🚪 算了',
-      resolvedPick: (displayName: string) =>
-        `📂 已切到 **${displayName}** —— 新上下文已就位，直接发指令开干。想回普通聊天发 /project 选「回到对话」`,
-      resolvedDialogue: '💬 已回到对话目录，上下文重新开始~',
-      resolvedCancel: '🚪 没切，保持现状',
-      switchFailed: (reason: string) => `❌ 没切过去：${reason}（目录可能已被移动或删除）`,
-      attachedUnsupported:
-        '🎮 你正在 /ctr 接管一个 desktop 任务——接管期间消息直接进那个任务，不需要 /project。想切项目先 `/exctr` 退出接管',
-      dialogueName: '对话（托管目录）',
+      get title() { return tg('cards.project.title'); },
+      hint: (currentName: string) => tg('cards.project.hint', { name: currentName }),
+      get emptyBody() { return tg('cards.project.emptyBody'); },
+      get btnDialogue() { return tg('cards.project.btnDialogue'); },
+      get btnCancel() { return tg('cards.project.btnCancel'); },
+      resolvedPick: (displayName: string) => tg('cards.project.resolvedPick', { name: displayName }),
+      get resolvedDialogue() { return tg('cards.project.resolvedDialogue'); },
+      get resolvedCancel() { return tg('cards.project.resolvedCancel'); },
+      switchFailed: (reason: string) => tg('cards.project.switchFailed', { reason }),
+      get attachedUnsupported() { return tg('cards.project.attachedUnsupported'); },
+      get dialogueName() { return tg('cards.project.dialogueName'); },
     },
     control: {
-      title: '🎮 挑个工作区上号',
-      emptyBody: '_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_',
+      get title() { return tg('cards.control.title'); },
+      get emptyBody() { return tg('cards.control.emptyBody'); },
       recentSessions: {
-        title: '🕑 最近的任务',
-        hint: '点一个直接接管续聊（跨工作区按时间排）· 想按工作区挑用 /ctr · 🚪 退出取消',
-        emptyBody: '_desktop 端还没有活跃任务~ 先在 desktop 里开一个再来_',
+        get title() { return tg('cards.control.recentSessions.title'); },
+        get hint() { return tg('cards.control.recentSessions.hint'); },
+        get emptyBody() { return tg('cards.control.recentSessions.emptyBody'); },
         optionLabel: (title: string, workspaceName: string | null) =>
           workspaceName ? `${title} · ${workspaceName}` : title,
       },
-      hint: '点工作区往下走；点 🚪 退出 取消这次',
+      get hint() { return tg('cards.control.hint'); },
       attachedSwitchHint: (sessionTitle: string) =>
-        `🎮 当前接管中：**${sessionTitle}**\n选个新任务直接换乘；点 🚪 退出则保持现状`,
-      btnExit: '🚪 撤了',
-      resolvedExit: '🚪 走了，下次想远程操控再 /ctr',
-      sessionPickerTitle: (displayName: string) => `🎮 ${displayName} 里的任务`,
-      sessionPickerHint: '挑个任务继续 · ➕ 新建 开新任务 · ↩️ 后退 换工作区 · 🚪 退出 取消',
+        tg('cards.control.attachedSwitchHint', { title: sessionTitle }),
+      get btnExit() { return tg('cards.control.btnExit'); },
+      get resolvedExit() { return tg('cards.control.resolvedExit'); },
+      sessionPickerTitle: (displayName: string) =>
+        tg('cards.control.sessionPickerTitle', { name: displayName }),
+      get sessionPickerHint() { return tg('cards.control.sessionPickerHint'); },
       sessionPickerEmptyBody: (displayName: string) =>
-        `_工作区 **${displayName}** 这边还没有 active 任务~ 不如点 ➕ 新建 开一个？_`,
-      btnNew: '➕ 新建',
-      btnBack: '↩️ 后退',
+        tg('cards.control.sessionPickerEmptyBody', { name: displayName }),
+      get btnNew() { return tg('cards.control.btnNew'); },
+      get btnBack() { return tg('cards.control.btnBack'); },
       resolvedSessionPick: (sessionTitle: string, workspaceName: string) =>
-        `🎯 上号了：**${sessionTitle}**（${workspaceName}）\n接下来你发消息我就直接进这个任务；想撤随时 \`/exctr\``,
+        tg('cards.control.resolvedSessionPick', { title: sessionTitle, workspace: workspaceName }),
       resolvedNewSession: (workspaceName: string) =>
-        `✨ 新任务已建 + 接管完成（在 **${workspaceName}** 里）\n直接发指令开聊；想退就 \`/exctr\``,
-      attachFailed: (reason: string) => `❌ 没接上：${reason}`,
-      sessionBusyOldCardPlaceholder: '⏳ 那个任务还在跑——下方给你刷了张新卡片，重选一下吧',
+        tg('cards.control.resolvedNewSession', { workspace: workspaceName }),
+      attachFailed: (reason: string) => tg('cards.control.attachFailed', { reason }),
+      get sessionBusyOldCardPlaceholder() { return tg('cards.control.sessionBusyOldCardPlaceholder'); },
       sessionBusyPrompts: [
-        (sessionTitle: string) =>
-          `⏳ **${sessionTitle}** 这会儿正忙~\nagent 还在思考/敲代码，等它这轮跑完再 \`/ctr\` 上号`,
-        (sessionTitle: string) =>
-          `🚧 抢不进去——**${sessionTitle}** 还有一轮没收尾。\n喝口水等几秒，agent 把手头的事跑完就来叫你`,
-        (sessionTitle: string) =>
-          `🤖 **${sessionTitle}** 正忙着呢——agent 还在键盘上飞舞，强插会让它分神。\n稍等几秒再 \`/ctr\` 试一下`,
-        (sessionTitle: string) =>
-          `☕ 别急别急——**${sessionTitle}** 这一轮还没跑完。\nagent 干完手头的事，指挥权立刻交给你`,
+        (sessionTitle: string) => tg('cards.control.sessionBusyPrompts.variant1', { title: sessionTitle }),
+        (sessionTitle: string) => tg('cards.control.sessionBusyPrompts.variant2', { title: sessionTitle }),
+        (sessionTitle: string) => tg('cards.control.sessionBusyPrompts.variant3', { title: sessionTitle }),
+        (sessionTitle: string) => tg('cards.control.sessionBusyPrompts.variant4', { title: sessionTitle }),
       ],
       takeoverLoadingPrompts: [
-        (sessionTitle: string) =>
-          `⏳ 正在让你接管 **${sessionTitle}**…\n_📦 加载任务元数据_  ·  _🔌 接通 agent 通道_  ·  _🧠 复盘上一轮进展_\n_三两秒就好_`,
-        (sessionTitle: string) =>
-          `🎮 接入 **${sessionTitle}** 中…\n_正在把上下文搬过来，马上就好_`,
-        (sessionTitle: string) =>
-          `⌛ **${sessionTitle}** 加载中…  99%\n_这条进度条是真的——正在翻你们上一轮聊了啥_`,
-        (sessionTitle: string) =>
-          `🛰️ 正在与 **${sessionTitle}** 建立连接…\n_(在想该怎么给你 brief)_`,
+        (sessionTitle: string) => tg('cards.control.takeoverLoadingPrompts.variant1', { title: sessionTitle }),
+        (sessionTitle: string) => tg('cards.control.takeoverLoadingPrompts.variant2', { title: sessionTitle }),
+        (sessionTitle: string) => tg('cards.control.takeoverLoadingPrompts.variant3', { title: sessionTitle }),
+        (sessionTitle: string) => tg('cards.control.takeoverLoadingPrompts.variant4', { title: sessionTitle }),
       ],
+      // 接管后发给 Agent 的同步请求(模型输入, 不是给 IM 用户看的控制文案), 不随界面语言切换。
       sessionAttachedOneshotPrompts: [
         '我刚通过 Telegram 远程接入了——简单同步下现状：上一轮做了啥、当前在哪一步，然后问我下一步咋走。',
         '我接力了——一句话过下进度，告诉我现在到哪、刚做了啥，再问我要不要继续推进或者换方向。',
@@ -226,14 +210,10 @@ export const ui = {
         '切到我了——简单复盘下，告诉我现在是什么阶段，然后问我要不要继续干。',
       ],
       newSessionWelcomePrompts: [
-        (workspaceName: string) =>
-          `🎯 接管 + 新建 一气呵成——**${workspaceName}** 已就位，agent 待命中。\n发第一条指令开聊；想撤随时 \`/exctr\``,
-        (workspaceName: string) =>
-          `✨ 新任务已建——工作目录 **${workspaceName}** 已经备好，agent 等你发话。\n第一条消息开聊；\`/exctr\` 随时退出`,
-        (workspaceName: string) =>
-          `🎮 准备就绪——在 **${workspaceName}** 给你开了个全新任务。\n要做啥告诉我，agent 在线~  \`/exctr\` 收手`,
-        (workspaceName: string) =>
-          `🆕 全新开局——**${workspaceName}** 工作目录已经 ready。\n第一条指令开聊；不想继续就 \`/exctr\``,
+        (workspaceName: string) => tg('cards.control.newSessionWelcomePrompts.variant1', { workspace: workspaceName }),
+        (workspaceName: string) => tg('cards.control.newSessionWelcomePrompts.variant2', { workspace: workspaceName }),
+        (workspaceName: string) => tg('cards.control.newSessionWelcomePrompts.variant3', { workspace: workspaceName }),
+        (workspaceName: string) => tg('cards.control.newSessionWelcomePrompts.variant4', { workspace: workspaceName }),
       ],
     },
   },

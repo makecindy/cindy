@@ -16,6 +16,7 @@
 | IM 上下文展示与完成未读 | [IM 消息呈现](im-message-presentation.md) |
 | IM 工具授权、多端确认与暂停回执 | [IM 权限确认](im-permission-confirmation.md) |
 | Telegram 命令、消息、附件与官方／个人 bot 差异 | [Telegram 能力台账](telegram-bot-parity.md) |
+| 通知上的按钮：在锁屏与 Apple Watch 上允许一次、拒绝、回复 | [通知上的按钮](notification-actions.md) |
 | 登录、密码、验证码等主人代输入 | [代输入](input-handoff.md) |
 | 邮件卡的收件人与编辑、发送确认、深浅色、已读标记与头像权限 | [邮件卡](mail-card.md) |
 | 目标运行、补充消息、停止与手机 `/goal` | [目标模式](goal-mode.md) |

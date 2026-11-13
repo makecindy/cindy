@@ -16,6 +16,8 @@ import { Check, Copy, Pen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 import { domToPngBlob, resolveExportBackground } from '@/lib/rasterizeToImage';
 import { useCopyAsImage } from './useCopyAsImage';
 
@@ -80,12 +82,14 @@ export function CopyAsImageBlock({
       return { blob, plainText: extractPlainText?.(node) };
     });
 
-  const buttonClass = cn(
-    'inline-flex h-7 w-7 items-center justify-center',
-    'rounded-md border border-[var(--msg-code-block-border)]',
-    'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-    'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
-  );
+  // Hover colors may be translucent. Keep a solid surface beneath each button
+  // so the table / formula cannot show through its hover or pressed face.
+  const buttonBackdropClass = 'inline-flex rounded-full bg-[var(--surface-elevated)]';
+  const buttonClass = 'w-7 px-0 text-[var(--msg-tool-text)] hover:text-[var(--msg-assistant-text)]';
+  const copyLabel = copiedImage
+    ? t('chat.markdownRenderer.blockCopied')
+    : t('chat.markdownRenderer.copy');
+  const annotateLabel = t('chat.markdownRenderer.annotateImage');
 
   return (
     <div className={cn('group relative', className)}>
@@ -100,33 +104,33 @@ export function CopyAsImageBlock({
           'group-hover:opacity-100 focus-within:opacity-100',
         )}
       >
-        <button
-          type="button"
-          onClick={copyAsImage}
-          aria-label={
-            copiedImage
-              ? t('chat.markdownRenderer.blockCopied')
-              : t('chat.markdownRenderer.copy')
-          }
-          title={
-            copiedImage
-              ? t('chat.markdownRenderer.blockCopied')
-              : t('chat.markdownRenderer.copy')
-          }
-          className={buttonClass}
-        >
-          {copiedImage ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-        </button>
+        <span className={buttonBackdropClass}>
+          <Tip text={copyLabel}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={copyAsImage}
+              aria-label={copyLabel}
+              className={buttonClass}
+            >
+              {copiedImage ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            </Button>
+          </Tip>
+        </span>
         {canAnnotate ? (
-          <button
-            type="button"
-            onClick={openAnnotate}
-            aria-label={t('chat.markdownRenderer.annotateImage')}
-            title={t('chat.markdownRenderer.annotateImage')}
-            className={buttonClass}
-          >
-            <Pen className="h-3.5 w-3.5" />
-          </button>
+          <span className={buttonBackdropClass}>
+            <Tip text={annotateLabel}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={openAnnotate}
+                aria-label={annotateLabel}
+                className={buttonClass}
+              >
+                <Pen className="h-3.5 w-3.5" />
+              </Button>
+            </Tip>
+          </span>
         ) : null}
       </div>
       {annotateNode}

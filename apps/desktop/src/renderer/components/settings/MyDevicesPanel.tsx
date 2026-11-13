@@ -42,6 +42,7 @@ import {
   resolveActiveConnectionIssue,
 } from './myDevicesModel';
 import { platformLabel, relativeTime } from './deviceLabels';
+import appI18n from 'i18next';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
   const label = deviceInfo?.modelLabel?.trim() || deviceInfo?.cpuLabel?.trim();
@@ -50,7 +51,7 @@ function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): str
 
 function memoryLabel(memoryGb: number | null | undefined): string | null {
   if (typeof memoryGb !== 'number' || !Number.isFinite(memoryGb) || memoryGb <= 0) return null;
-  const formatted = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(memoryGb);
+  const formatted = new Intl.NumberFormat(appI18n.language, { maximumFractionDigits: 1 }).format(memoryGb);
   return `${formatted} GB`;
 }
 

@@ -166,6 +166,7 @@ vi.mock('../generic-oauth.desktop.js', () => ({
   configureGenericOAuth: () => undefined,
   hasGenericOAuthLogin: () => false,
   readCachedGenericOAuthAccessToken: () => null,
+  readGenericOAuthAccessToken: async () => null,
   resetGenericOAuthMemoryCache: () => undefined,
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({

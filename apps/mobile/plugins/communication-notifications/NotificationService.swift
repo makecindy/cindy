@@ -89,7 +89,7 @@ final class NotificationService: UNNotificationServiceExtension {
     handler = nil
     original = nil
     completionLock.unlock()
-    callback?(content)
+    callback?(NotificationRetirement.isRetired(content.userInfo) ? UNMutableNotificationContent() : content)
   }
 
   static func avatar(_ input: Any?, name: String) -> INImage? {

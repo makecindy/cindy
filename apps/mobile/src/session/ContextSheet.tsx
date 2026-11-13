@@ -49,6 +49,10 @@ export interface ContextSheetProps {
 /** 系统选择器要等面板真正关闭后再呈现，避免叠在面板上（与 iOS ContextSheet 同一语义）。 */
 const DismissAction = createContext<(action: () => void) => void>((action) => action());
 
+export function useContextSheetDismissAction() {
+  return useContext(DismissAction);
+}
+
 export function ContextSheet({
   visible,
   onClose,

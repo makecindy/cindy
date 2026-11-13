@@ -5250,6 +5250,18 @@ describe('liveScreen declaration', () => {
     const alone = validateGhostManifest({ ...base, liveScreen: true });
     expect(alone.ok).toBe(false);
   });
+  // 任务在另一台电脑上时也显示任务页：只有提供设备画面的插件能声明，且只接受字面量 true。
+  it('lets a task page opt into tasks on another computer only together with liveScreen', () => {
+    const taskView = { html: 'task.html', remote: true };
+    const declared = validateGhostManifest({ ...base, node, liveScreen: true, taskView });
+    expect(declared.ok && declared.manifest.taskView).toEqual({ html: 'task.html', remote: true });
+    expect(validateGhostManifest({ ...base, taskView }).ok).toBe(false);
+    expect(
+      validateGhostManifest({ ...base, node, liveScreen: true, taskView: { ...taskView, remote: 'yes' } }).ok,
+    ).toBe(false);
+    const local = validateGhostManifest({ ...base, node, liveScreen: true, taskView: { html: 'task.html' } });
+    expect(local.ok && local.manifest.taskView?.remote).toBeUndefined();
+  });
 });
 
 describe('ghost · readme 详细介绍声明', () => {

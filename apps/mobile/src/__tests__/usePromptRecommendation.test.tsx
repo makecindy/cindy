@@ -5,6 +5,26 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { usePromptRecommendation } from '@/session/usePromptRecommendation';
 import { createComposerDraftSource } from '@/session/composerDraftSource';
 import { textComposerDocument } from '@/session/composerDocument';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { __testing as preferenceTesting, savePromptRecommendationPreference, usePromptRecommendationPreference } from '@/session/promptRecommendationPreference';
+import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
+
+const storage = vi.hoisted(() => new Map<string, string>());
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
+  getItem: vi.fn(async (key: string) => storage.get(key) ?? null),
+  setItem: vi.fn(async (key: string, value: string) => { storage.set(key, value); }),
+  removeItem: vi.fn(async (key: string) => { storage.delete(key); }),
+} }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+// Exercise the real settings and prediction hooks with DOM adapters for native rows.
+vi.mock('@/session/SettingsGroupRows', () => ({
+  SettingsGroup: ({ children, messages }: any) => createElement('section', null, children,
+    messages?.filter(Boolean).map((message: any) => createElement('p', { key: message.text }, message.text))),
+  SettingsSwitchRow: ({ label, disabled, value, onValueChange }: any) => createElement('button', {
+    role: 'switch', 'aria-label': label, 'aria-checked': value, disabled, onClick: () => onValueChange(!value),
+  }),
+  ActionInfoRow: ({ label, onPress, disabled }: any) => createElement('button', { disabled, onClick: onPress }, label),
+}));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -12,7 +32,14 @@ let props: Parameters<typeof usePromptRecommendation>[0];
 let value: ReturnType<typeof usePromptRecommendation>;
 let request: ReturnType<typeof vi.fn>;
 let sequence = 0;
-function Probe() { value = usePromptRecommendation(props); return null; }
+let container: HTMLDivElement;
+let showSettings = false;
+let preference: ReturnType<typeof usePromptRecommendationPreference>;
+function Probe() {
+  value = usePromptRecommendation(props);
+  preference = usePromptRecommendationPreference();
+  return showSettings ? createElement(PromptRecommendationSettings) : null;
+}
 async function render(patch: Partial<typeof props> = {}) {
   props = { ...props, ...patch };
   await act(async () => root.render(createElement(Probe)));
@@ -20,12 +47,191 @@ async function render(patch: Partial<typeof props> = {}) {
 async function advance() { await act(async () => vi.advanceTimersByTimeAsync(500)); }
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.clearAllMocks();
+  storage.clear();
+  preferenceTesting.reset();
+  showSettings = false;
   request = vi.fn().mockResolvedValue({ prompt: 'Suggested next step' });
   props = { ownerId: 'owner', deviceId: 'host', sessionId: `task-${++sequence}`, agentKind: 'codex',
     revision: 10, running: false, maker: { predictNextPrompt: request } };
-  root = createRoot(document.createElement('div'));
+  container = document.createElement('div');
+  root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
+
+// Regression: mobile had no persistent opt-out. Existing prediction tests cover
+// task lifecycle only. These unit cases use the actual settings/store/hook to
+// verify no requests or visible suggestions after opt-out, including cold reads
+// and late responses, plus persistence/reset and write errors (in-memory storage).
+// Standalone run: 42 cases, 2.13s wall-clock on the development machine.
+it('preserves the original enabled default, remembers opt-out, and resets back to enabled', async () => {
+  showSettings = true;
+  await render(); await advance();
+  expect(value.prompt).toBeTruthy();
+  expect(storage.size).toBe(0);
+  expect(preference.customized).toBe(false);
+  const toggle = () => container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  await act(async () => toggle().click());
+  expect(value.prompt).toBeNull();
+  expect(toggle().getAttribute('aria-checked')).toBe('false');
+  expect(storage.get(preferenceTesting.storageKey)).toBe('false');
+  await act(async () => root.render(null));
+  preferenceTesting.reset();
+  await render();
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(value.prompt).toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('button:not([role])')!.click());
+  expect(storage.has(preferenceTesting.storageKey)).toBe(false);
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  expect(preference.customized).toBe(false);
+  await render({ running: true });
+  await render({ running: false, revision: 30 }); await advance();
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: false, completionRevision: 30 }));
+  expect(value.prompt).toBeTruthy();
+});
+
+it('does not request anything before a slow saved opt-out is read', async () => {
+  let resolve!: (raw: string | null) => void;
+  vi.mocked(AsyncStorage.getItem).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  expect(request).not.toHaveBeenCalled();
+  await act(async () => resolve('false'));
+  await advance();
+  expect(request).not.toHaveBeenCalled();
+  expect(value.prompt).toBeNull();
+});
+
+// Review regression: loading is not opt-out. A completed live turn must still
+// generate once when a delayed read confirms the default or explicit opt-in.
+it.each([null, 'true'])('preserves a live completion while preference loading resolves to %s', async (raw) => {
+  let resolve!: (raw: string | null) => void;
+  vi.mocked(AsyncStorage.getItem).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  expect(request).not.toHaveBeenCalled();
+  await act(async () => resolve(raw));
+  await advance();
+  expect(request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    cacheOnly: false, completionRevision: 20,
+  }));
+  expect(value.prompt).toBe('Suggested next step');
+});
+
+// Review regression: failed removal must leave a usable reset action, so users
+// can persist the default without toggling to an unwanted value first.
+it('keeps reset available after removal fails and lets the user retry', async () => {
+  storage.set(preferenceTesting.storageKey, 'false');
+  showSettings = true;
+  await render();
+  vi.mocked(AsyncStorage.removeItem).mockRejectedValueOnce(new Error('disk full'));
+  const reset = () => [...container.querySelectorAll<HTMLButtonElement>('button')]
+    .find(button => button.textContent === 'settings.promptRecommendation.reset');
+  await act(async () => reset()!.click());
+  expect(preference.enabled).toBe(true);
+  expect(storage.get(preferenceTesting.storageKey)).toBe('false');
+  expect(container.textContent).toContain('settings.promptRecommendation.saveFailed');
+  expect(reset()).toBeDefined();
+  expect(reset()!.disabled).toBe(false);
+  await act(async () => reset()!.click());
+  expect(storage.has(preferenceTesting.storageKey)).toBe(false);
+  expect(reset()).toBeUndefined();
+  expect(container.textContent).not.toContain('settings.promptRecommendation.saveFailed');
+  await act(async () => root.render(null));
+  preferenceTesting.reset();
+  await render();
+  expect(preference).toMatchObject({ ready: true, enabled: true, customized: false });
+});
+
+it('does not let an older reset clear a newer explicit choice', async () => {
+  storage.set(preferenceTesting.storageKey, 'false');
+  await render();
+  let completeRemoval!: () => void;
+  vi.mocked(AsyncStorage.removeItem).mockImplementationOnce(key => new Promise(done => {
+    completeRemoval = () => { storage.delete(key); done(); };
+  }));
+  let reset!: Promise<void>;
+  await act(async () => { reset = savePromptRecommendationPreference(null); });
+  let disable!: Promise<void>;
+  await act(async () => { disable = savePromptRecommendationPreference(false); });
+  await act(async () => { completeRemoval(); await Promise.all([reset, disable]); });
+  expect(preference).toMatchObject({ enabled: false, customized: true });
+  expect(storage.get(preferenceTesting.storageKey)).toBe('false');
+});
+
+it('cancels a scheduled prediction when disabled', async () => {
+  await render({ running: true });
+  await render({ running: false, revision: 20 });
+  await act(async () => { await savePromptRecommendationPreference(false); });
+  expect(vi.getTimerCount()).toBe(0);
+  await advance();
+  expect(request).not.toHaveBeenCalled();
+});
+
+it('drops an in-flight result after disabling and only reads cache when re-enabled', async () => {
+  let resolve!: (result: { prompt: string }) => void;
+  request.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  await act(async () => { await savePromptRecommendationPreference(false); });
+  await act(async () => resolve({ prompt: 'Late suggestion' }));
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  expect(value.prompt).toBeNull();
+  expect(request).toHaveBeenCalledTimes(1);
+  await act(async () => { await savePromptRecommendationPreference(true); });
+  await advance();
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: true }));
+  expect(value.prompt).toBe('Suggested next step');
+});
+
+it('clears an already scheduled cache retry when disabled', async () => {
+  request.mockResolvedValue({ prompt: null });
+  await render(); await advance();
+  await act(async () => { await savePromptRecommendationPreference(false); });
+  expect(vi.getTimerCount()).toBe(0);
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it('reports save failure in settings while retaining the choice for this process', async () => {
+  showSettings = true;
+  await render();
+  vi.mocked(AsyncStorage.setItem).mockRejectedValueOnce(new Error('disk full'));
+  const toggle = container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+  await act(async () => toggle.click());
+  expect(container.textContent).toContain('settings.promptRecommendation.saveFailed');
+  expect(preference.enabled).toBe(false);
+  await advance();
+  expect(request).not.toHaveBeenCalled();
+  await act(async () => toggle.click());
+  expect(storage.get(preferenceTesting.storageKey)).toBe('true');
+  expect(container.textContent).not.toContain('settings.promptRecommendation.saveFailed');
+});
+
+it('keeps an explicit choice over a late initial read and serializes rapid changes', async () => {
+  let resolve!: (raw: string | null) => void;
+  vi.mocked(AsyncStorage.getItem).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  await render();
+  await act(async () => { await Promise.all([
+    savePromptRecommendationPreference(true), savePromptRecommendationPreference(false),
+  ]); });
+  await act(async () => resolve('true'));
+  expect(preference.enabled).toBe(false);
+  expect(storage.get(preferenceTesting.storageKey)).toBe('false');
+  await advance();
+  expect(request).not.toHaveBeenCalled();
+});
+
+it('does not turn unread preferences into paid requests when storage fails', async () => {
+  vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(new Error('storage unavailable'));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  expect(request).not.toHaveBeenCalled();
+  expect(value.prompt).toBeNull();
+});
 
 it('historical navigation only requests a cached host result', async () => {
   await render(); await advance();

@@ -7577,9 +7577,9 @@ function handleStatusUpdate(
     };
   }
 
-  // Turn-complete updates (Done + !isRunning) carry authoritative values from
-  // getContextUsage() when contextWindow is known. Interrupted compact can end
-  // with a placeholder 0/0 snapshot; do not let that erase the last real value.
+  // Completion and mid-turn compaction carry authoritative context snapshots.
+  // Startup and generation statuses can keep reporting unknown zero until
+  // message_end; only a confirmed snapshot may clear the last known value.
   const isTurnComplete = !update.isRunning && update.status === 'Done';
   // Detect new turn start: isRunning flips from false → true.
   const isTurnStart = update.isRunning && !state.agentStatus.isRunning;
@@ -7593,11 +7593,14 @@ function handleStatusUpdate(
       : state.agentStatus.tokenUsage;
   const hasContextSnapshot =
     typeof update.contextWindow === 'number' &&
+    Number.isFinite(update.contextWindow) &&
     update.contextWindow > 0 &&
     typeof update.contextTokens === 'number' &&
+    Number.isFinite(update.contextTokens) &&
     update.contextTokens >= 0;
   const ct =
-    (isTurnComplete && hasContextSnapshot) || (update.contextTokens && update.contextTokens > 0)
+    ((isTurnComplete || update.contextSnapshotAuthoritative === true) && hasContextSnapshot)
+      || (update.contextTokens && update.contextTokens > 0)
       ? update.contextTokens
       : state.agentStatus.contextTokens;
   const cw =
@@ -7610,7 +7613,7 @@ function handleStatusUpdate(
       ? update.costUsd
       : state.agentStatus.costUsd;
 
-  // Context values are pushed by agentManager after each turn complete via getContextUsage().
+  // Runtime status carries context usage without waiting for the turn to finish.
 
   return {
     ...state,

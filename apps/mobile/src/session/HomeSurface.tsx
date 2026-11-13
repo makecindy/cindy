@@ -147,6 +147,7 @@ import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import {
   discoverRemoteHomeCollections,
+  remoteResourceDiscoveryKey,
   remoteResourceDiscoveryTargets,
   type RemoteHomeCollection,
 } from '@/device-link/remoteResources';
@@ -1990,47 +1991,71 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
     return () => { cancelled = true; };
   }, [accountGeneration, homeCacheUserId]);
+  // Busy state and last-seen time arrive with every presence message and do not change
+  // which computers are asked; rerun discovery only for what it actually reads.
+  const discoveryDevicesRef = useRef(deviceModels);
+  discoveryDevicesRef.current = deviceModels;
+  const discoveryDevicesKey = remoteResourceDiscoveryKey(deviceModels);
   useEffect(() => {
-    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
-    let cancelled = false;
-    const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
+    const discoveryDevices = discoveryDevicesRef.current;
+    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (discoveryDevices.length === 0 && lastSyncedAt === null)) return;
+    if (!screenFocused || !active) return;
+    const targets = remoteResourceDiscoveryTargets(discoveryDevices, remoteHomeCollectionsRef.current);
     if (targets.length === 0) {
       remoteHomeCollectionsRef.current = [];
       setRemoteHomeCollections([]);
-      return () => { cancelled = true; };
+      return;
     }
-    void discoverRemoteHomeCollections(
-      (deviceId, channel, args) => invoke(deviceId, channel, args, {
-        background: true,
-        preSend: () => {
-          if (cancelled || homeAccountGenerationRef.current !== accountGeneration)
-            throw new Error('Remote discovery superseded');
-        },
-      }),
-      targets,
-      i18nInstance.language,
-      remoteHomeCollectionsRef.current,
-    )
-      .then((collections) => {
-        if (!cancelled && homeAccountGenerationRef.current === accountGeneration) {
-          remoteHomeCollectionsRef.current = collections;
-          setRemoteHomeCollections(collections);
-          void cacheRemoteResourceHome(homeCacheUserId, collections);
-        }
-      })
-      .catch(() => {
-        // Optional capability discovery must not turn a healthy Sessions home into an error page.
-        // Keep the last same-account manifest during transient link failures.
+    let controller: AbortController | undefined;
+    const discover = () => {
+      if (AppState.currentState !== 'active' || (controller && !controller.signal.aborted)) return;
+      const current = new AbortController();
+      controller = current;
+      const isCurrent = () => !current.signal.aborted && homeAccountGenerationRef.current === accountGeneration;
+      const publish = (collections: RemoteHomeCollection[]) => {
+        if (!isCurrent()) return;
+        remoteHomeCollectionsRef.current = collections;
+        setRemoteHomeCollections(collections);
+        void cacheRemoteResourceHome(homeCacheUserId, collections);
+      };
+      void discoverRemoteHomeCollections(
+        (deviceId, channel, args) => invoke(deviceId, channel, args, {
+          background: true,
+          preSend: () => {
+            if (!isCurrent() || !screenFocusedRef.current || AppState.currentState !== 'active'
+              || !discoveryDevicesRef.current.some((device) => device.deviceId === deviceId && device.canOpen))
+              throw new Error('Remote discovery superseded');
+          },
+        }),
+        targets,
+        i18nInstance.language,
+        remoteHomeCollectionsRef.current,
+        publish,
+        current.signal,
+      ).catch(() => {
+        // Optional discovery keeps the same-account snapshot on failure; healthy
+        // hosts publish immediately while only failed hosts consume the retry budget.
       });
-    return () => { cancelled = true; };
+    };
+    discover();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') discover();
+      else controller?.abort();
+    });
+    return () => {
+      controller?.abort();
+      subscription.remove();
+    };
   }, [
+    screenFocused,
+    active,
     accountGeneration,
     connectionEpoch,
     resourceCacheAccount,
     lastSyncedAt,
     homeListCacheHydrated,
     homeCacheUserId,
-    deviceModels,
+    discoveryDevicesKey,
     i18nInstance.language,
     invoke,
   ]);

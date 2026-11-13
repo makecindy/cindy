@@ -24,7 +24,7 @@ export function PluginPromptReadsProvider({ children }: { children: ReactNode })
   current.current = reads;
   useLayoutEffect(() => reads.invalidate(), [reads, connectionEpoch, presenceVersion, status, revoked]);
   useEffect(() => {
-    const app = AppState.addEventListener('change', () => reads.invalidate());
+    const app = AppState.addEventListener('change', state => { if (state === 'active') reads.invalidate(); });
     const off = onRemoteResourceChanged((deviceId, payload) => {
       if (payload.collectionId === 'plugins') reads.invalidate(deviceId, payload);
     });

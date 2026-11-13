@@ -37,6 +37,7 @@ import { groupRunsForHistory } from '../lib/runHistoryGrouping';
 
 import { RunHistoryCard } from './RunHistoryCard';
 import { WebhookTriggerPanel } from './WebhookTriggerPanel';
+import appI18n from 'i18next';
 
 const PERSISTENT_SESSION_PREVIEW_LIMIT = 3;
 
@@ -243,7 +244,7 @@ export function RunHistoryPane({
           </h2>
           {s.expireAt != null && (
             <p className="text-xs text-[var(--text-secondary)]">
-              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString(appI18n.language)} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
               {isExpired && s.expireAt <= Date.now() && <> · {t('scheduler.deadline.expired')}</>}
             </p>
           )}

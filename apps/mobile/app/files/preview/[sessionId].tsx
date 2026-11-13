@@ -1567,11 +1567,13 @@ function ImagePreviewPage({
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
     let cancelled = false;
+    let completed = false;
     setFailure(null);
-    void exportToUrl(item.relPath, item.mtimeMs, { stream: false })
+    void exportToUrl(item.relPath, item.mtimeMs, { stream: false, isCancelled: () => cancelled })
       .then((url) => retainRemoteFilePreview(url, shareMimeForFileName(item.name), item.name))
       .then((source) => {
         if (cancelled) { source.release(); return; }
+        completed = true;
         releaseSourceRef.current?.();
         releaseSourceRef.current = source.release;
         setFullUrl(source.uri);
@@ -1583,6 +1585,9 @@ function ImagePreviewPage({
       });
     return () => {
       cancelled = true;
+      // A pending request cancelled by paging or a transport refresh must be
+      // eligible to restart; otherwise the thumbnail remains forever.
+      if (!completed) requestedRef.current = false;
     };
   }, [active, attempt, exportToUrl, item.mtimeMs, item.name, item.relPath, workdir,
   ]);

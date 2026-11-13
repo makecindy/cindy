@@ -1,42 +1,27 @@
+import { imText } from '../shared/imText';
 import type { ImUiTextPack } from '../shared/types';
 import { ui as telegramUi } from '../telegram/uiText';
+import { relabeledUiPack, telegramChannelRelabel } from '../dingtalk/relabeledUiPack';
+
+const K = 'imBot.text.imessage';
 
 /**
  * Shared IM control copy is channel-neutral apart from a small number of
  * route labels. Keep the iMessage pack derived at the composition boundary so
  * fixes to permissions, model selection, and takeover guidance stay aligned.
+ * The derivation is a lazy view: every leaf is read (in the owner's current
+ * interface language) when a message is built, never frozen at import time.
  */
-const sharedUi = replaceChannelLabel(telegramUi);
-
-export const ui = {
-  ...sharedUi,
-  slash: {
-    ...sharedUi.slash,
-    help: `🤖 我能帮你做这些：
-
-/new   开个新对话（清掉当前上下文）
-/stop  中止当前执行，并撤掉排队消息
-/help  查看可用命令
-
-模型、权限和远程接管请在 Cindy 桌面端调整。`,
-    unknownCommand: (cmd: string) =>
-      `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的：/new、/stop、/help`,
-    interactiveCommandUnsupported: (cmd: string) =>
-      `iMessage暂不支持 ${cmd} 的交互选择，请在 Cindy 桌面端完成对应设置。`,
+export const ui: ImUiTextPack = relabeledUiPack<ImUiTextPack>(
+  telegramUi,
+  // 产品名, 各语言一致。
+  telegramChannelRelabel(() => 'iMessage'),
+  {
+    slash: {
+      get help() { return imText(`${K}.slash.help`); },
+      unknownCommand: (cmd: string) => imText(`${K}.slash.unknownCommand`, { cmd }),
+      interactiveCommandUnsupported: (cmd: string) =>
+        imText(`${K}.slash.interactiveCommandUnsupported`, { cmd }),
+    },
   },
-} satisfies ImUiTextPack;
-
-function replaceChannelLabel<T>(value: T): T {
-  if (typeof value === 'string') {
-    return value.replaceAll('Telegram', 'iMessage').replaceAll('TG', 'iMessage') as T;
-  }
-  if (typeof value === 'function') {
-    return ((...args: unknown[]) =>
-      replaceChannelLabel((value as (...input: unknown[]) => unknown)(...args))) as T;
-  }
-  if (Array.isArray(value)) return value.map(replaceChannelLabel) as T;
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, child]) => [key, replaceChannelLabel(child)]),
-  ) as T;
-}
+);

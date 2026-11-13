@@ -489,7 +489,8 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       }),
     );
     const releaseBytes = fs.readFileSync(releaseAuth);
-    const releaseStat = fs.statSync(releaseAuth);
+    // NTFS file IDs can exceed Number.MAX_SAFE_INTEGER; compare exact identities.
+    const releaseStat = fs.statSync(releaseAuth, { bigint: true });
     const releaseBinding = path.join(h.userDataDir, 'native-provider-auth.json');
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -500,8 +501,10 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     });
     await expect(adapter.getAccessToken()).resolves.toBeNull();
     expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
-    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
-    expect(fs.statSync(releaseAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.statSync(releaseAuth, { bigint: true }).ino).toBe(releaseStat.ino);
+    expect(fs.statSync(releaseAuth, { bigint: true }).ino).not.toBe(
+      fs.statSync(systemAuth, { bigint: true }).ino,
+    );
     expect(fs.existsSync(releaseBinding)).toBe(false);
   });
 

@@ -138,6 +138,38 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
 
 
 describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
+  // #10187, unit: existing code-only cases missed the guest resume refusal.
+  // Exercise the real history, tail and live queue surfaces; no queue mutation.
+  it('explains guest resume rejection without offering the same failed send', async () => {
+    await i18n.changeLanguage(locale);
+    const error = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+    const key = 'session.remoteError.REMOTE_AGENT_RESUME_REJECTED';
+    expect(i18n.exists(key)).toBe(true);
+    const [historical] = normalizeRemoteMessages([row(error)]);
+    expect(historical.errorSummaryKey).toBe(key);
+    expect(historical.body).toBe(i18n.t(key));
+    expect(historical.rawError).toBe(error);
+    const state = resolveSessionTailBanner({ messages: [row(error)], session: null,
+      projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false,
+      continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+      interruptAcked: false, hiddenErrorClientIds: new Set() });
+    expect(state?.kind === 'error-tail' && state.retryable).toBe(false);
+    const retry = vi.fn();
+    const clear = vi.fn();
+    const projection = { error, errorRetryText: 'original user message' } as InputProjection;
+    for (const surface of ['live', 'tail'] as const) {
+      await act(async () => root.render(surface === 'live'
+        ? <InlineQueueSection projection={projection} onRetryError={retry} onContinueAfterError={retry}
+            onClearError={clear} onResume={vi.fn()} />
+        : <SessionTailBanner state={state!} onContinue={retry} onDismiss={clear} />));
+      expect(host.textContent).toContain(i18n.t(key));
+      expect(host.querySelector('[data-testid="queue.inline.retryButton"]')).toBeNull();
+      expect(host.querySelector('[data-testid="session.tailBanner.continue"]')).toBeNull();
+    }
+    expect(projection.errorRetryText).toBe('original user message');
+    expect(retry).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+  });
   // New member-budget refusal can be wrapped by the proxy; old cases only cover top-level codes.
   // Minimal input is a 403 wrapper. Verify the production history projection in every locale; unit.
   it('keeps a wrapped member budget pause understandable in history and action errors', async () => {

@@ -294,7 +294,10 @@ export const LIVE_SCREEN_PLATFORMS: readonly LiveScreenPlatform[] = [
 ];
 /** One screen offered by an enabled plugin, as listed by `screens`. */
 export interface RemoteLiveScreen {
+  /** Physical install key: routing only, never proof of source identity. */
   plugin: string;
+  /** Host-attested logical source/id, canonical pluginStoragePart; absent on older hosts. */
+  pluginIdentity?: string;
   pluginName: string;
   id: string;
   name: string;
@@ -302,6 +305,41 @@ export interface RemoteLiveScreen {
   state: "running" | "starting" | "off";
   /** Tasks the plugin has bound this screen to. */
   taskIds: string[];
+}
+/**
+ * The running screens in a host's `screens` reply. The reply is untrusted:
+ * entries of any other shape are dropped.
+ */
+export function runningLiveScreens(value: unknown): RemoteLiveScreen[] {
+  const list = (value as { screens?: unknown } | null)?.screens;
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (item): item is RemoteLiveScreen =>
+      !!item &&
+      typeof item === "object" &&
+      typeof item.plugin === "string" &&
+      LIVE_SCREEN_PLUGIN_ID.test(item.plugin) &&
+      (item.pluginIdentity === undefined ||
+        (typeof item.pluginIdentity === "string" &&
+          LIVE_SCREEN_PLUGIN_ID.test(item.pluginIdentity))) &&
+      typeof item.id === "string" &&
+      LIVE_SCREEN_ID.test(item.id) &&
+      typeof item.name === "string" &&
+      typeof item.pluginName === "string" &&
+      LIVE_SCREEN_PLATFORMS.includes(item.platform) &&
+      item.state === "running" &&
+      Array.isArray(item.taskIds) &&
+      item.taskIds.every((id: unknown) => typeof id === "string"),
+  );
+}
+/** The running screens a host's `screens` reply binds to one task. */
+export function taskLiveScreens(
+  value: unknown,
+  taskId: string,
+): RemoteLiveScreen[] {
+  return runningLiveScreens(value).filter((item) =>
+    item.taskIds.includes(taskId),
+  );
 }
 export const LIVE_SCREEN_BUTTON_ICONS = [
   "home",
@@ -328,6 +366,7 @@ export interface LiveScreenButton {
 /** Host-verified description of the plugin screen a live screen lease shows. */
 export interface RemoteDesktopLeaseScreen {
   plugin: string;
+  pluginIdentity?: string;
   id: string;
   name: string;
   platform: LiveScreenPlatform;
@@ -409,7 +448,7 @@ export type RemoteDesktopRequest =
       /** 代输入 request id; only to hosts advertising `handoffWindow`. */
       handoff?: string;
       /** A listed plugin screen; only to hosts advertising `liveScreens`. */
-      screen?: { plugin: string; id: string };
+      screen?: { plugin: string; id: string; pluginIdentity?: string };
     }
   | {
       op: "heartbeat";
@@ -517,6 +556,9 @@ export function parseRemoteDesktopRequest(
         typeof screen !== "object" ||
         typeof screen.plugin !== "string" ||
         !LIVE_SCREEN_PLUGIN_ID.test(screen.plugin) ||
+        (screen.pluginIdentity !== undefined &&
+          (typeof screen.pluginIdentity !== "string" ||
+            !LIVE_SCREEN_PLUGIN_ID.test(screen.pluginIdentity))) ||
         typeof screen.id !== "string" ||
         !LIVE_SCREEN_ID.test(screen.id) ||
         v.handoff !== undefined)
@@ -531,6 +573,9 @@ export function parseRemoteDesktopRequest(
             screen: {
               plugin: screen.plugin as string,
               id: screen.id as string,
+              ...(screen.pluginIdentity === undefined
+                ? {}
+                : { pluginIdentity: screen.pluginIdentity as string }),
             },
           }
         : {}),

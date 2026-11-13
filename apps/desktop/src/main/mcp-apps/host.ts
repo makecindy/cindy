@@ -489,7 +489,7 @@ export class McpAppsHost {
         throw new Error('MCP_APP_VIEW_LIMIT');
       const viewId = randomUUID();
       const document: McpAppDocument = {
-        sdk: hostAppSdkAsset,
+        sdk: { source: hostAppSdkAsset.source, addons: hostAppSdkAsset.addons },
         viewId,
         html: resource.html,
         csp: policy.header,
@@ -499,6 +499,10 @@ export class McpAppsHost {
       const remote = caller.startsWith('device:');
       // The optional runtime must not reduce the budget of an installed page.
       // With no source detection, a missing SDK can only fail that page's import.
+      if (remote && document.sdk && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
+        // Optional addons never displace an official SDK that would fit on its own.
+        document.sdk = { source: document.sdk.source };
+      }
       if (remote && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
         delete document.sdk;
         if (Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES)

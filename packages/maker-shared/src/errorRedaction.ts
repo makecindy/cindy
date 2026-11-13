@@ -296,10 +296,23 @@ export function parseAgentErrorCode(message: string): { code: string; fallback: 
   return { code: match[1], fallback: match[2] || message };
 }
 
-/** Resending unchanged content cannot fix these explicit configuration failures. */
+/**
+ * Presentation-only recognition of runHost's guest ownership refusal (#10187).
+ * Keep the exact message: other INVALID errors, including Pi's differently
+ * capitalized/punctuated refusal, have not established this recovery condition.
+ * This never authorizes clearing native ids, moving a task or consuming input.
+ */
+export function isRemoteAgentResumeRejectedError(message: string): boolean {
+  const parsed = parseAgentErrorCode(message);
+  return parsed?.code === 'REMOTE_AGENT_INVALID'
+    && parsed.fallback.trim() === 'this conversation cannot be resumed on this computer';
+}
+
+/** Resending unchanged content cannot fix these explicit configuration/startup failures. */
 export function requiresAgentErrorConfigurationChange(message: string): boolean {
   const code = parseAgentErrorCode(message)?.code;
-  return code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
+  return isRemoteAgentResumeRejectedError(message)
+    || code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
     || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
     || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
     || code === 'DEVICE_LINK_CONTROL_DISABLED';

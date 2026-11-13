@@ -17,7 +17,8 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getTableConfig } from 'drizzle-orm/sqlite-core';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 // 新任务经公共入口 openSession(模型准入)—— 准入本身由 sessionOpening 的测试覆盖, 这里
 // 只把准入前的路由原样透传给建行回调。
@@ -128,6 +129,11 @@ beforeEach(() => {
   raw.exec(createTableSql());
   db = drizzle(raw);
 });
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('workspaceKind 在复活 / upsert 冲突时的归属', () => {
   it('`/project` 切出去的行复活后仍留在项目分组', async () => {

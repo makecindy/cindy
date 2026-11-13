@@ -48,7 +48,7 @@
     "noHosts": "Aucun ordinateur compatible n'est disponible.",
     "noConversation": "Cet élément n'a actuellement aucune session à ouvrir.",
     "openFailed": "Impossible d'ouvrir la session",
-    "resolving": "Ouverture de la session…",
+    "resolving": "Ouverture de la dernière session…",
     "retry": "Réessayer",
     "hostCount": "{{count}} ordinateurs",
     "stale": "Ces éléments sont peut-être obsolètes. Actualisation impossible."
@@ -176,7 +176,7 @@
         "days": "{{count}} j",
         "weeks": "{{count}} sem.",
         "months": "{{count}} mois",
-        "years": "{{count}} an",
+        "years": "{{count}} a",
         "minutesAgo_many": "il y a {{count}} minutes",
         "hoursAgo_many": "il y a {{count}} heures",
         "daysAgo_many": "il y a {{count}} jours"
@@ -300,7 +300,7 @@
     "loading": "Chargement des appareils disponibles",
     "untitled": "Session sans titre",
     "connection": {
-      "connecting": "Connexion",
+      "connecting": "Connexion…",
       "disconnected": "Déconnecté"
     },
     "error": {
@@ -415,7 +415,7 @@
       },
       "taskInfoHeading": "Infos de la tâche",
       "taskInfo": {
-        "time": "Durée",
+        "time": "Date",
         "pr": "Statut de la PR",
         "tokens": "Jetons",
         "cost": "Coût"
@@ -429,7 +429,7 @@
       "filterSelectedTeammates": "{{count}} sélectionné(s)"
     },
     "search": {
-      "placeholder": "Rechercher titres ou contenu…",
+      "placeholder": "Rechercher dans les titres ou le contenu…",
       "filterA11y": "Filtres de recherche",
       "filterAria": "Filtres et tri de la recherche (tri : {{sort}}, statut : {{status}}, Agent : {{agent}}, dernière activité : {{lastActivity}}, projets : {{projects}})",
       "filter": {
@@ -634,7 +634,7 @@
     "status": {
       "queued": "Démarrage",
       "running": "En cours",
-      "waiting": "Attend une réponse",
+      "waiting": "En attente de réponse",
       "completed": "Terminé",
       "failed": "Échec",
       "cancelled": "Arrêté",
@@ -785,7 +785,7 @@
     "nameTaken": "Ce nom est déjà utilisé. Choisissez-en un autre.",
     "home": "Ordinateur principal",
     "chat": "Conversation",
-    "showReplyTarget": "Afficher le message auquel répond une réponse",
+    "showReplyTarget": "Afficher le message d'origine de chaque réponse",
     "showReplyTargetHint": "Au-dessus de la réponse d'un ami, afficher celui de vos messages auquel elle répond. S'applique à tous les amis. Les réponses plus anciennes ne l'affichent pas.",
     "channels": "Plateformes de messagerie",
     "channelsEmpty": "Aucune plateforme de messagerie connectée",
@@ -911,8 +911,8 @@
     "moveTo": "Déplacer vers « {{device}} »",
     "moveTitle": "Exécuter {{name}} sur « {{device}} » ?",
     "moveDescription": "Désormais, {{name}} s'exécute sur « {{device}} », et l'historique de conversation suit. Les répertoires de travail, les connexions et les fichiers locaux restent sur leur ordinateur actuel.",
-    "olderTarget": "Ancienne Cindy",
-    "olderTargetNote": "« {{device}} » utilise une ancienne version de Cindy : {{name}} y fonctionnera comme avant. L'historique de discussion reste synchronisé, mais les règles et automatisations du projet ne s'y appliquent pas.",
+    "olderTarget": "Ancienne version",
+    "olderTargetNote": "« {{device}} » utilise une ancienne version de Cindy : {{name}} y fonctionnera comme avant. L'historique de conversation reste synchronisé, mais les règles et automatisations du projet ne s'y appliquent pas.",
     "moveAction": "Déplacer vers « {{device}} »",
     "moving": "Déplacement de {{name}} vers « {{device}} »…",
     "busyTitle": "{{name}} est encore en train de répondre",

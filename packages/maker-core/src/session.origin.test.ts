@@ -8,7 +8,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
-import { Session } from './session.js';
+import { Session, markSessionSendTerminal } from './session.js';
 import {
   MAIN_OWNED_SEND_CONTEXT,
   AUTO_REVIEW_SOURCE_CONTENT,
@@ -751,6 +751,24 @@ describe('Session per-turn origin 打标', () => {
     releaseDispatch();
     await second;
     await session.close();
+  });
+
+  it.each(['current', 'prior', 'copied'] as const)('owns synthetic transport terminals only through the %s send context', async owner => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle);
+    try {
+      await session.send('first');
+      const prior = h.lastSendOptions();
+      await h.emit({ type: 'text', data: { text: 'first progress' } });
+      h.setTurnRunning(false);
+      await session.send('second');
+      const current = h.lastSendOptions();
+      const options = owner === 'current' ? current : owner === 'prior' ? prior : { ...current };
+      await h.emit(markSessionSendTerminal(options, { type: 'error', source: 'codex',
+        data: { message: 'transport closed', reason: 'remote_agent_closed', isTerminal: true } }));
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject(owner === 'current'
+        ? { kind: 'error', generation: 2 } : { kind: 'none' });
+    } finally { await session.close(); }
   });
 
   it('keeps a leftover terminal on queued generation after handle.send yields', async () => {

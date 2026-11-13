@@ -103,10 +103,10 @@
     "fetchPdfFailed": "取回 PDF 失敗：{{detail}}",
     "fetchingPdf": "正在從電腦取回 PDF…",
     "androidPdfHint": "Android 暫不支援在 Cindy 內預覽 PDF。點下方「匯出 / 分享」，選擇 PDF 閱讀器開啟。",
-    "unsupportedType": "此型別暫不支援在手機上預覽",
+    "unsupportedType": "此類型暫不支援在手機上預覽",
     "oversize": "檔案超過預覽上限（{{size}}），可下載原檔案檢視",
     "oversizeUnknown": "過大",
-    "binaryFile": "二進位制檔案，無法以文字預覽",
+    "binaryFile": "二進位檔案，無法以文字預覽",
     "readFailed": "讀取失敗",
     "truncated2mb": "檔案超過 2 MB，僅顯示前 2 MB 內容",
     "truncatedLines": "僅顯示前 {{lines}} 行",
@@ -139,7 +139,7 @@
   "export": {
     "exportFailed": "匯出失敗",
     "leftPage": "已離開頁面，匯出中止",
-    "exportTimeout": "匯出超時，請重試"
+    "exportTimeout": "匯出逾時，請重試"
   },
   "gallery": {
     "cacheMiss": "這個媒體還沒有快取到手機上，請在連上電腦後重新開啟"

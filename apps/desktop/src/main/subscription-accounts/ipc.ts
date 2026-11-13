@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { isProviderSharePeer } from '@cindy/device-link';
+import { getDeviceLinkInvokeContext, type DeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
@@ -24,12 +25,17 @@ import { broadcast } from '../device-link/index.js';
 import { setRemoteSubscriptionPoolQuotaReader } from '../device-link/dispatch.desktop.js';
 import { readLegacySubscriptionQuota } from './legacyQuota.js';
 
+/** 远程调用来自同账号的其他电脑：不是分享受邀者，也不是共享任务访客。 */
+function isOwnComputerContext(context: DeviceLinkInvokeContext | null): boolean {
+  return !!context && !context.sharedTask && !isProviderSharePeer(context.controllerDeviceId);
+}
+
 export function registerSubscriptionAccountsIpc(): void {
   setRemoteSubscriptionPoolQuotaReader((channel, args) =>
     readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, channel, args, readSubscriptionSessionUsage),
   );
-  onSubscriptionAccountsChanged((providerId) =>
-    broadcast('subscription-accounts:changed', { providerId }),
+  onSubscriptionAccountsChanged((providerId, resetAccountId) =>
+    broadcast('subscription-accounts:changed', { providerId, ...(resetAccountId ? { resetAccountId } : {}) }),
   );
   ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown, model?: unknown) => {
     const context = getDeviceLinkInvokeContext();
@@ -42,6 +48,7 @@ export function registerSubscriptionAccountsIpc(): void {
         throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
       return { providerId, model, available: await readSubscriptionPoolModelAvailability(providerId, model, {
         remote: !!context,
+        ownComputer: isOwnComputerContext(context),
       }) };
     }
     const usage = await readSubscriptionPoolUsage(providerId);
@@ -56,7 +63,9 @@ export function registerSubscriptionAccountsIpc(): void {
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
       try {
-        return await readSubscriptionSessionAccount(session.providerId, session, { remote: !!context });
+        return await readSubscriptionSessionAccount(session.providerId, session, {
+          remote: !!context, ownComputer: isOwnComputerContext(context),
+        });
       } catch {
         throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
       }

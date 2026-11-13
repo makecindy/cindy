@@ -12,7 +12,33 @@ import {
   redactSensitiveTextDeep,
   parseAgentErrorCode,
   localizeSubscriptionAccountError,
+  requiresAgentErrorConfigurationChange,
 } from './errorRedaction.js';
+
+// #10187: unit coverage for the host's explicit guest resume refusal. Existing
+// code-only cases cannot distinguish it from other REMOTE_AGENT_INVALID errors.
+describe('guest resume rejection guidance', () => {
+  const refusal = '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+  it.each([
+    refusal,
+    `LAZY_CREATE_FAILED: ${refusal}`,
+    `Error invoking remote method 'maker:send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: ${refusal}`,
+  ])('does not offer unchanged continuation for %s', message => {
+    expect(parseAgentErrorCode(message)?.code).toBe('REMOTE_AGENT_INVALID');
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(true);
+  });
+  it.each([
+    '[REMOTE_AGENT_INVALID] invalid request',
+    '[REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.',
+    '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer.',
+    '[REMOTE_AGENT_UNAUTHORIZED] this conversation cannot be resumed on this computer',
+    '[REMOTE_AGENT_OFFLINE] connection timed out',
+    '[REMOTE_FUTURE] this conversation cannot be resumed on this computer',
+    'this conversation cannot be resumed on this computer',
+  ])('preserves the existing fallback for other refusals and network errors: %s', message => {
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(false);
+  });
+});
 
 describe('explicit Codex history recovery offer', () => {
   const message = 'stream disconnected before completion: stream closed before response.completed';

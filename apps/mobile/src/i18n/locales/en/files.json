@@ -5,7 +5,7 @@
     "footerOnline": "Connected · Live sync",
     "footerConnecting": "Connecting…",
     "folderEmpty": "This folder is empty.",
-    "noWorkdir": "This session has no working directory, so files can't be browsed.",
+    "noWorkdir": "This session has no working directory, so files can’t be browsed.",
     "rootDir": "(Root)",
     "copyPath": "Copy Path",
     "sendToSession": "Send to Session",
@@ -58,24 +58,24 @@
     },
     "preview": {
       "nonText": {
-        "pdf": "PDF files can't be previewed inline on mobile yet. Copy the path and open it on desktop or in a system PDF reader.",
-        "drawio": "Draw.io files can't be previewed inline on mobile yet. Copy the path and continue viewing or editing on desktop.",
-        "office": "Office files can't be previewed inline on mobile yet. Copy the path and open it on desktop or in a system app.",
-        "binary": "This isn't a text file, so mobile won't read its contents. Copy the path to open it on desktop.",
-        "unknown": "The file type can't be determined, so mobile won't read its contents. Copy the path to open it on desktop.",
+        "pdf": "PDF files can’t be previewed inline on mobile yet. Copy the path and open it on desktop or in a system PDF reader.",
+        "drawio": "Draw.io files can’t be previewed inline on mobile yet. Copy the path and continue viewing or editing on desktop.",
+        "office": "Office files can’t be previewed inline on mobile yet. Copy the path and open it on desktop or in a system app.",
+        "binary": "This isn’t a text file, so mobile won’t read its contents. Copy the path to open it on desktop.",
+        "unknown": "The file type can’t be determined, so mobile won’t read its contents. Copy the path to open it on desktop.",
         "text": "Text preview is available on demand."
       },
-      "pathOnly": "Only the file path is available; the preview can't be read from the remote computer.",
-      "loading": "Reading the text preview from the remote computer",
+      "pathOnly": "Only the file path is available; the preview can’t be read from the remote computer.",
+      "loading": "Reading the text preview from the remote computer…",
       "ready": "Text preview loaded · {{size}}",
-      "idle": "The remote text preview is loaded on demand; file contents aren't fetched in bulk in the message list.",
+      "idle": "The remote text preview is loaded on demand; file contents aren’t fetched in bulk in the message list.",
       "failure": {
         "oversize": "File exceeds the remote preview limit · {{limit}} · Current size {{size}}",
         "forbidden": "The remote computer denied access to this path.",
-        "notFound": "The file wasn't found on the remote computer.",
+        "notFound": "The file wasn’t found on the remote computer.",
         "readFailed": "Read failed.",
         "readFailedWithError": "Read failed: {{error}}",
-        "default": "This file can't be previewed."
+        "default": "This file can’t be previewed."
       }
     }
   },
@@ -102,11 +102,11 @@
     "fetchAvFailed": "Fetch failed: {{detail}}",
     "fetchPdfFailed": "PDF fetch failed: {{detail}}",
     "fetchingPdf": "Fetching PDF from your computer…",
-    "androidPdfHint": "PDFs can't be previewed inside Cindy on Android yet. Tap \"Export / Share\" below and choose a PDF reader.",
-    "unsupportedType": "This type can't be previewed on your phone yet",
+    "androidPdfHint": "PDFs can’t be previewed inside Cindy on Android yet. Tap “Export / Share” below and choose a PDF reader.",
+    "unsupportedType": "This type can’t be previewed on your phone yet",
     "oversize": "File exceeds the preview limit ({{size}}); download the original to view it",
     "oversizeUnknown": "too large",
-    "binaryFile": "Binary file, can't be previewed as text",
+    "binaryFile": "Binary file, can’t be previewed as text",
     "readFailed": "Read failed",
     "truncated2mb": "File exceeds 2 MB; showing the first 2 MB only",
     "truncatedLines": "Showing the first {{lines}} lines only",
@@ -118,13 +118,13 @@
     "fetchingHtmlResources": "Fetching page resources…",
     "htmlResourcesMissing": "{{count}} page resource(s) could not be fetched; images or styles may be missing",
     "htmlResourcesTruncated": "Too many page resources; only the first {{limit}} were attempted",
-    "htmlResourcesOverBudget": "{{count}} more resource(s) were skipped because the page's total size limit was reached",
+    "htmlResourcesOverBudget": "{{count}} more resource(s) were skipped because the page’s total size limit was reached",
     "a11yViewImage": "View full image {{name}}",
     "fetchOriginalFailed": "Failed to fetch original: {{detail}}",
     "a11yRetryOriginal": "Retry fetching the original image",
     "retry": "Retry",
     "fetchingOriginal": "Fetching the original image from your computer…",
-    "originalFailedThumb": "Couldn't fetch the original; showing the thumbnail",
+    "originalFailedThumb": "Couldn’t fetch the original; showing the thumbnail",
     "fetchingOriginalHint": "Thumbnail · fetching the original…",
     "a11yExportShareFile": "Export and share the original file",
     "exportShare": "Export / Share",
@@ -142,6 +142,6 @@
     "exportTimeout": "Export timed out. Try again."
   },
   "gallery": {
-    "cacheMiss": "This media isn't cached on your phone yet. Open it again once your computer is connected"
+    "cacheMiss": "This media isn’t cached on your phone yet. Open it again once your computer is connected."
   }
 }

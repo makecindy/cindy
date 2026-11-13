@@ -177,6 +177,8 @@ export interface OneShotCandidatesPorts {
   getGrokAccessToken: typeof import('../maker-host/grok-oauth-login.desktop.js').getGrokAccessToken;
   getGrokOAuthCredentialGeneration: typeof import('../maker-host/grok-oauth-login.desktop.js').getGrokOAuthCredentialGeneration;
   readCachedGenericOAuthAccessToken: typeof import('../maker-host/generic-oauth.desktop.js').readCachedGenericOAuthAccessToken;
+  readGenericOAuthAccessToken: typeof import('../maker-host/generic-oauth.desktop.js').readGenericOAuthAccessToken;
+  getGenericOAuthLoginGeneration: typeof import('../maker-host/generic-oauth.desktop.js').getGenericOAuthLoginGeneration;
   undiciFetch: typeof import('../maker-host/outbound-fetch.desktop.js').outboundUndiciFetch;
   claudeUpstreamEndpoint: typeof import('../maker-host/runtime-configs.js').claudeUpstreamEndpoint;
   reportCindyGatewayKeyRejected: typeof import('../model-access/gatewayKeyRejection.js').reportCindyGatewayKeyRejected;
@@ -188,7 +190,7 @@ export interface OneShotCandidatesPorts {
 
 /** One instance per launcher. */
 export function createOneShotCandidates(ports: OneShotCandidatesPorts) {
-const { readClaudeApiKey, getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch, getGrokAccessToken, getGrokOAuthCredentialGeneration, readCachedGenericOAuthAccessToken, undiciFetch, claudeUpstreamEndpoint, reportCindyGatewayKeyRejected, readCustomProviderKey, ensureManagedOllamaReadyForSession, getUtilityModelChainProfiles, getEffectiveAuxiliaryModelChain } = ports;
+const { readClaudeApiKey, getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch, getGrokAccessToken, getGrokOAuthCredentialGeneration, readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken, getGenericOAuthLoginGeneration, undiciFetch, claudeUpstreamEndpoint, reportCindyGatewayKeyRejected, readCustomProviderKey, ensureManagedOllamaReadyForSession, getUtilityModelChainProfiles, getEffectiveAuxiliaryModelChain } = ports;
 
 
 const log = createLogger('utility-model:one-shot');
@@ -1065,11 +1067,18 @@ async function requestExplicitProviderText(
   const isOAuth = authStrategy === 'oauth-token';
   const wireProtocol = routing.wireProtocol;
   const noAuth = authStrategy === 'none';
-  const credential = isOAuth
-    ? readCachedGenericOAuthAccessToken(storedCustomProviderId(provider.id), provider.auth.oauth)
-    : noAuth
-      ? null
-      : readCustomProviderKey(provider.id, agentKind);
+  const oauthStorageId = storedCustomProviderId(provider.id);
+  const loginGeneration = getGenericOAuthLoginGeneration(oauthStorageId);
+  let credential: string | null;
+  try {
+    credential = isOAuth
+      ? await readGenericOAuthAccessToken(oauthStorageId, provider.auth.oauth)
+      : noAuth ? null : readCustomProviderKey(provider.id, agentKind);
+  } catch {
+    return { ok: false, reason: 'no_candidate', attempts: [{
+      providerId: provider.id, model, transport, status: 'skipped', reason: 'not_authenticated',
+    }] };
+  }
   const hasLegacyHeaderCredential = (
     authStrategy === 'api-key-header'
     && Object.entries(routing.headerOverride ?? {}).some(([key, value]) => {
@@ -1139,22 +1148,21 @@ async function requestExplicitProviderText(
         systemPrompt: requestOpts?.systemPrompt,
         onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
-        beforeDispatch: requestOpts?.beforeDispatch
-          ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
-          : undefined,
-        credentialStillCurrent: requestOpts?.beforeDispatch
-          ? () => {
-              if (noAuth) return true;
-              if (isOAuth) {
-                return readCachedGenericOAuthAccessToken(
-                  storedCustomProviderId(provider.id),
-                  provider.auth.oauth,
-                ) === credential;
-              }
-              return readCustomProviderKey(provider.id, agentKind) === credential;
-            }
-          : undefined,
-        routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
+        beforeDispatch: async () => {
+          if (requestOpts?.beforeDispatch && !(await requestOpts.beforeDispatch({
+            providerId: provider.id, agentKind, model,
+          }))) return false;
+          return routeStillCurrent();
+        },
+        credentialStillCurrent: () => {
+          if (noAuth) return true;
+          if (isOAuth) {
+            return getGenericOAuthLoginGeneration(oauthStorageId) === loginGeneration
+              && readCachedGenericOAuthAccessToken(oauthStorageId, provider.auth.oauth) === credential;
+          }
+          return readCustomProviderKey(provider.id, agentKind) === credential;
+        },
+        routeStillCurrent,
       });
     },
   };

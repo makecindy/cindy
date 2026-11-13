@@ -338,6 +338,38 @@ it.each(['automatic', 'manual', 'recovery'] as const)(
   },
 );
 
+it('keeps the original fire context while claiming an interrupted run', async () => {
+  const storage = new InMemoryStorage();
+  let owner = 'a';
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const h = makeHarness({ storage, captureFireContext: () => {
+    const captured = owner;
+    return () => { if (owner !== captured) throw new Error('owner changed'); };
+  } });
+  const schedule = await h.scheduler.create(baseInput);
+  const oldRun: ScheduleRun = { id: 'old-run', scheduleId: schedule.id,
+    sessionId: 'original-task', firedAt: h.clock.now() - 5000, status: 'interrupted' };
+  await storage.insertRun(oldRun);
+  storage.claimInterruptedRun = vi.fn(async () => {
+    entered();
+    await gate;
+    return storage.updateRun(oldRun.id, { status: 'running' });
+  });
+  await h.scheduler.start();
+  const resume = h.scheduler.resumeInterruptedRun('original-task');
+  await started;
+  owner = 'b';
+  release();
+  const result = await resume;
+  await expect(result!.completion).rejects.toThrow('owner changed');
+  expect(h.fireCalls).toHaveLength(0);
+  expect(storage.runs.get(oldRun.id)?.status).toBe('interrupted');
+  await h.scheduler.stop();
+});
+
 // discussion_r4419242692: a claimed continuation must remain reclaimable if
 // loading fails, while a rejection after completion must not replay settled work.
 // Unit: public resume entry, one original row and a one-shot storage failure.
@@ -589,6 +621,7 @@ interface Harness {
 
 function makeHarness(opts?: {
   runnerImpl?: (s: Schedule, ctx: FireContext) => Promise<FireResult>;
+  captureFireContext?: () => () => void;
   isManagedWorkspaceDir?: (dir: string) => boolean;
   validateModelSelection?: (schedule: Schedule, previous?: Schedule) => Promise<void>;
   validateTargetSession?: (
@@ -624,6 +657,7 @@ function makeHarness(opts?: {
   const scheduler = new Scheduler({
     storage,
     runner,
+    captureFireContext: opts?.captureFireContext,
     clock,
     generateId: opts?.generateId ?? makeIdGen(),
     tickIntervalMs: 60_000_000, // effectively disabled; tests call tick() manually
@@ -846,6 +880,50 @@ describe('Scheduler', () => {
       expect.objectContaining({ name: 'renamed', model: 'available' }), saved);
     expect(h.fireCalls).toHaveLength(0);
   });
+
+  it.each(['manual', 'automatic'] as const)(
+    'keeps the original fire context while target validation waits (%s)',
+    async (mode) => {
+      let owner = 'a';
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const local = makeHarness({
+        captureFireContext: () => {
+          const captured = owner;
+          return () => { if (owner !== captured) throw new Error('owner changed'); };
+        },
+        validateTargetSession: async (_id, op) => {
+          if (op === 'fire') { entered(); await gate; }
+        },
+      });
+      const schedule = await local.scheduler.create({ ...baseInput, targetSessionId: 'bound' });
+      if (mode === 'automatic') local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+      const fire = mode === 'manual' ? local.scheduler.runNow(schedule.id) : local.scheduler.tick();
+      await started;
+      owner = 'b';
+      release();
+      await fire;
+      expect(local.fireCalls).toHaveLength(0);
+      expect([...local.storage.runs.values()].at(-1)).toMatchObject({ status: 'failed', errorMsg: 'owner changed' });
+    },
+  );
+
+  it.each(['manual', 'automatic'] as const)(
+    'keeps script fires independent of the agent owner guard (%s)',
+    async (mode) => {
+      const local = makeHarness({ captureFireContext: () => () => { throw new Error('owner changed'); } });
+      const schedule = await local.scheduler.create({ ...baseInput, executionMode: 'script', workspaceKind: 'project', workingDir: '/repo', scriptConfig: { command: 'echo ok', capabilities: [] } });
+      if (mode === 'automatic') {
+        local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+        await local.scheduler.tick();
+      } else {
+        await local.scheduler.runNow(schedule.id);
+      }
+      expect(local.fireCalls).toHaveLength(1);
+    },
+  );
 
   it('passes the complete candidate Harness to host validation before saving and firing', async () => {
     let allowedAgent = 'codex';

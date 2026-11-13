@@ -26,7 +26,7 @@
   "connectStep2": "以與手機同一名籍登門",
   "connectStep3": "於「設定 → 遠端連線」中開啟「允許同帳號裝置控制本機」",
   "brandEyebrow": "CINDY 手機版",
-  "cloudTeaserTitle": "雲端 {{appName}}，方在籌措",
+  "cloudTeaserTitle": "雲端 {{appName}}，方在籌備",
   "cloudTeaserCopy": "上線之後，無須電腦，手機版即可逕用。",
   "sectionFirstRun": "始用",
   "sectionOffline": "曾連之機",
@@ -64,7 +64,7 @@
     "noOauth": "{{agent}} 不可用：電腦端尚未完成名籍授權。請於電腦端 {{appName}} 之「設定 → 模型供應商」重連名籍後再試。",
     "noCredentials": "{{agent}} 不可用：電腦端尚未登門。請於電腦端 {{appName}} 之「設定 → 模型供應商」登門後再試。",
     "noEncryption": "{{agent}} 不可用：電腦端系統安全儲存空間不可用，讀不到已存之金鑰。請察系統鑰匙圈（macOS）或系統帳號加密（Windows），然後重啟電腦端 {{appName}}。",
-    "proxyNotReady": "{{agent}} 暫不可用：電腦端元件未就。請稍候再試；若屢見之，請重啟電腦端 {{appName}}。",
+    "proxyNotReady": "{{agent}} 暫不可用：電腦端元件未就緒。請稍候再試；若屢見之，請重啟電腦端 {{appName}}。",
     "default": "{{agent}} 不可用：電腦端登門憑證不可用。請於電腦端 {{appName}} 之「設定 → 模型供應商」重新登門後再試。（{{reason}}）"
   },
   "remoteError": {

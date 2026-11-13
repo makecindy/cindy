@@ -1,3 +1,4 @@
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => native.window }));
 vi.mock('@/session/TaskDrawerPresentation', () => ({ useTaskDrawerPresentation: () => null, TaskDrawerPresentation: () => null }));
 vi.mock('@/session/SharedTaskList', () => ({ useSharedTaskList: () => null, SharedTaskListContent: () => null }));
 vi.mock('@/session/SessionOptionsExpoSheet', () => ({ SessionOptionsPresenter: () => null }));
@@ -11,7 +12,7 @@ import { rubberBand, SessionListDrawer, useSessionListDrawerMotion, useSessionLi
 import { SessionFloatingDrawer, SessionTaskDrawerProvider } from '@/session/SessionTaskDrawer';
 import { motionDuration } from '@/theme/tokens';
 import type { MobileHomeProps } from '@/session/HomeSurface';
-const native = vi.hoisted(() => ({ home: null as MobileHomeProps | null, widths: [] as number[], mounts: 0, unmounts: 0, instances: 0, residentAvailable: true, sharedAvailable: true, handoffAvailable: false, dock: null as (() => void) | null, activeEffects: 0, reduceMotion: true,
+const native = vi.hoisted(() => ({ window: { width: 669, height: 951 }, home: null as MobileHomeProps | null, widths: [] as number[], mounts: 0, unmounts: 0, instances: 0, residentAvailable: true, sharedAvailable: true, handoffAvailable: false, dock: null as (() => void) | null, activeEffects: 0, reduceMotion: true,
   attachedGestures: new Set<unknown>(), routeFocused: true, routeListeners: {} as Record<string, Set<() => void>>,
   timings: [] as { to: number; config: { duration: number }; done?: (finished: boolean) => void }[], values: [] as { value: any }[], divider: null as any, pans: {} as Record<string, Record<string, (...args: any[]) => void>>, gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
 vi.mock('@/session/HomeSurface', async () => {
@@ -127,6 +128,7 @@ vi.mock("react-native-reanimated", async () => {
       if (!native.values.includes(ref.current)) native.values.push(ref.current);
       return ref.current;
     },
+    useDerivedValue: (read: () => unknown) => ({ get value() { return read(); } }),
     useAnimatedStyle: () => ({}),
     useAnimatedReaction: () => undefined,
     Easing: { bezier: () => undefined },
@@ -149,7 +151,10 @@ vi.mock("@/platform/gestureHandler", async () => {
     }, [gesture]);
     return children;
   },
-  GestureHandlerRootView: ({ children }: { children: ReactNode }) => children,
+  GestureHandlerRootView: ({ children, style }: { children: ReactNode; style: unknown }) => {
+    const geometry = Object.assign({}, ...[style].flat());
+    return <div data-testid="drawer.window" style={{ width: geometry.width, height: geometry.height }}>{children}</div>;
+  },
   Gesture: {
     // panel: activeOffsetX(-16); dimmed area: activeOffsetX([-16, 16]); task pull-out: activeOffsetX(16).
     Pan: () => {
@@ -201,6 +206,7 @@ describe('shared Home drawer host', () => {
     onSelectSession: vi.fn(), runNavigation: vi.fn((action: () => void) => action()), open: true, width: 320 };
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    native.window = { width: 669, height: 951 };
     native.home = null; native.widths = []; native.mounts = 0; native.unmounts = 0; native.instances = 0; native.residentAvailable = true; native.sharedAvailable = true; native.handoffAvailable = false; native.dock = null; native.activeEffects = 0;
     native.attachedGestures = new Set(); native.routeFocused = true; native.routeListeners = {};
     native.values = []; native.gesture = {}; native.divider = null; native.pans = {};
@@ -212,6 +218,30 @@ describe('shared Home drawer host', () => {
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+  // Unit regression: the floating surface must cover the adaptive window on its
+  // first commit, including reopen after rotation; existing tests only checked
+  // that a Modal existed. Native frame timing remains a device-level check.
+  it('sizes the first floating frame from the live window, including reopen after rotation', async () => {
+    const render = (open: boolean) => root.render(<SessionListDrawer {...props} aboveSystemBar open={open} />);
+    await act(async () => render(true));
+    const window = () => container.querySelector<HTMLElement>('[data-testid="drawer.window"]')!;
+    expect([window().style.width, window().style.height]).toEqual(['669px', '951px']);
+    await act(async () => render(false));
+    native.window = { width: 951, height: 669 };
+    await act(async () => render(true));
+    expect([window().style.width, window().style.height]).toEqual(['951px', '669px']);
+  });
+  // Unit regression: publishing the same drawer controls must not rerender all
+  // Home rows. Existing lifetime tests caught remounts, not redundant renders.
+  it('does not rerender Home for unchanged drawer controls but applies changed width', async () => {
+    const render = (width = 320) => root.render(<SessionListDrawer {...props} width={width} />);
+    await act(async () => render());
+    const renders = native.widths.length;
+    await act(async () => render());
+    expect(native.widths).toHaveLength(renders);
+    await act(async () => render(400));
+    expect(native.home?.width).toBe(400);
+  });
   it('keeps the departing column mounted on blur and pauses its work', async () => {
     const render = (focused: boolean) => root.render(
       <SessionTaskDrawerProvider enabled focused={focused} windowHeight={900} topInset={0} floatingWidth={400}
@@ -261,26 +291,59 @@ describe('shared Home drawer host', () => {
     await act(async () => render(true));
     const search = container.querySelector<HTMLInputElement>('[data-testid="home.retainedSearch"]')!;
     search.value = 'kept filter';
-    expect(native.home?.onSelectSession).toBe(columnSelect);
+    const item = { session: { id: 's9' } } as Parameters<NonNullable<MobileHomeProps['onSelectSession']>>[0];
+    const selectedBy = (owner: typeof columnSelect) => {
+      columnSelect.mockClear(); floatingSelect.mockClear();
+      native.home!.onSelectSession!(item);
+      return owner.mock.calls.length === 1 && columnSelect.mock.calls.length + floatingSelect.mock.calls.length === 1;
+    };
+    expect(selectedBy(columnSelect)).toBe(true);
     await act(async () => render(false));
     expect(native.activeEffects).toBe(0);
     await act(async () => render(false, true));
-    expect(native.home?.onSelectSession).toBe(floatingSelect);
+    expect(selectedBy(floatingSelect)).toBe(true);
     // Rotation completes the old overlay handoff without hiding the list.
     props.onClosed.mockClear();
     await act(async () => render(true, false, true));
     expect(props.onClosed).toHaveBeenCalledTimes(1);
     expect(native.home?.newSessionInHeader).toBe(false);
     await act(async () => render(true));
-    expect(native.home?.onSelectSession).toBe(columnSelect);
+    expect(selectedBy(columnSelect)).toBe(true);
     await act(async () => render(false, true, true, 's2'));
     expect(native.home?.currentSessionId).toBe('s2');
-    expect(native.home?.onSelectSession).toBe(floatingSelect);
+    expect(selectedBy(floatingSelect)).toBe(true);
     expect(container.querySelector('[data-testid="home.retainedSearch"]')).toBe(search);
     expect(search.value).toBe('kept filter');
     expect(native.instances).toBe(1);
     expect(native.unmounts).toBe(0);
     expect(container.querySelectorAll('[data-testid="sessionDrawer.retainedHost"]')).toHaveLength(1);
+  });
+  it('renders the retained list for its own changes only, not for outer renders or replaced callbacks', async () => {
+    // Regression 2026-11-12 (pulling the floating list out felt slow on a wide portrait window): the task
+    // layout rebuilt the Home element on each of its renders and the route replaced its callbacks on
+    // opening, so the whole list rendered again before the panel could appear and on every layout render.
+    const owners = [{ select: vi.fn(), run: vi.fn() }, { select: vi.fn(), run: vi.fn() }];
+    const render = (open: boolean, owner = 0) => root.render(
+      <SessionTaskDrawerProvider enabled focused windowHeight={900} topInset={0} floatingWidth={400}
+        column={<SessionListDrawer {...props} persistent={false} open={false} width={0} />}>
+        <SessionFloatingDrawer {...props} aboveSystemBar width={400} retainedHeight={900} open={open} overlayMounted={open}
+          onSelectSession={owners[owner]!.select} runNavigation={owners[owner]!.run} />
+      </SessionTaskDrawerProvider>,
+    );
+    await act(async () => render(false));
+    await act(async () => { vi.runAllTimers(); });
+    const prepared = native.widths.length;
+    expect(prepared).toBeGreaterThan(0);
+    await act(async () => render(false));
+    expect(native.widths.length).toBe(prepared);
+    await act(async () => render(true, 1));
+    // The one render left is Home resuming its own work on becoming visible.
+    expect(native.widths.length).toBe(prepared + 1);
+    const item = { session: { id: 's9' } } as Parameters<NonNullable<MobileHomeProps['onSelectSession']>>[0], action = () => undefined;
+    native.home!.onSelectSession!(item); native.home!.runNavigation!(action);
+    expect(owners[1]!.select).toHaveBeenCalledWith(item); expect(owners[1]!.run).toHaveBeenCalledWith(action);
+    expect(owners[0]!.select).not.toHaveBeenCalled(); expect(owners[0]!.run).not.toHaveBeenCalled();
+    expect(native.instances).toBe(1);
   });
   it.each([true, false])('docks immediately with open=%s, without an exit animation or focus gap', async openAtRotation => {
     native.reduceMotion = false;
@@ -729,8 +792,10 @@ describe('shared Home drawer host', () => {
   });
   it('hosts the complete Home with container width, selection and the navigation coordinator', async () => {
     await act(async () => root.render(<SessionListDrawer {...props} persistent newSessionInSystemBar />));
-    expect(native.home).toMatchObject({ width: 320, currentSessionId: 's1', newSessionInSystemBar: true,
-      onSelectSession: props.onSelectSession, runNavigation: props.runNavigation });
+    expect(native.home).toMatchObject({ width: 320, currentSessionId: 's1', newSessionInSystemBar: true });
+    const item = { session: { id: 's9' } } as Parameters<NonNullable<MobileHomeProps['onSelectSession']>>[0], action = vi.fn();
+    native.home!.onSelectSession!(item); native.home!.runNavigation!(action);
+    expect(props.onSelectSession).toHaveBeenCalledWith(item); expect(props.runNavigation).toHaveBeenCalledWith(action);
     expect(container.querySelector('[data-testid="sessionDrawer.home"]')).toBeNull();
     expect(container.querySelector('[data-testid="sessionDrawer.scrim"]')).toBeNull();
   });

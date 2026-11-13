@@ -3,6 +3,7 @@ import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 
 import { i18n } from "@/i18n";
 import { createConversationShareAssetGate } from "@/session/conversationShareAssetGate";
+import { conservativeArialGlyphWidthEm } from "@/session/conversationShareRichSvg";
 import {
   buildConversationShareSvgLayout,
   conversationShareSvgRenderSize,
@@ -423,6 +424,62 @@ describe("ConversationShareSvg", () => {
     const text = layout.bubbles[0]!.textBlocks.flatMap((block) => block.lines).join("");
     expect(text).toContain("改为 ~~见 https://a.example/x 旧版~~ 新版");
     expect(text).not.toContain("~~~~");
+    expect(text).not.toContain("private-secret");
+  });
+
+  // #10103 / unit: rich-list layout tests do not reach whole-message redaction.
+  // A long child plus a synthetic secret must keep its level on every exported
+  // line without exposing the secret or repeating the list marker.
+  it.each([1, 2])("keeps wrapped redacted list lines at depth %s", (depth) => {
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["m"],
+      colors,
+      width: 280,
+      messages: [{
+        clientId: "m", kind: "assistant",
+        body: `- parent\n${depth === 2 ? "  - middle\n" : ""}${"  ".repeat(depth)}- ${"子".repeat(60)}\n\npassword: private-secret`,
+      }],
+    });
+    const lines = layout.bubbles.flatMap(bubble => bubble.textBlocks.flatMap(block => block.lines));
+    const childLines = lines.filter(line => line.includes("子"));
+    expect(childLines.length).toBeGreaterThan(1);
+    expect(childLines.every(line => line.startsWith("\u2003".repeat(depth)))).toBe(true);
+    expect(childLines.join("").match(/- /g)).toHaveLength(1);
+    expect(lines.join("")).not.toContain("private-secret");
+    expect(lines.join("")).toContain("[REDACTED]");
+    for (const bubble of layout.bubbles) {
+      for (const block of bubble.textBlocks) {
+        for (const line of block.lines) {
+          const units = [...line].reduce((sum, glyph) => sum + conservativeArialGlyphWidthEm(glyph), 0);
+          expect(units * block.fontSize).toBeLessThanOrEqual(bubble.width + 0.001);
+        }
+      }
+    }
+  });
+
+  // Image splitting must not trim the serialized list prefix after redaction.
+  it.each([1, 2])("keeps nested text after a redacted image at depth %s", (depth) => {
+    const url = "cindy-media://list-image";
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["m"],
+      colors,
+      width: 280,
+      messages: [{
+        clientId: "m", kind: "assistant",
+        body: `${depth === 2 ? "- parent\n  - middle" : "- parent"} ![pic](${url})\n${"  ".repeat(depth)}- ${"子".repeat(60)}\n\npassword: private-secret`,
+        images: new Map([[url, { uri: "data:image/png;base64,aGVsbG8=", width: 40, height: 20 }]]),
+      }],
+    });
+    expect(layout.images).toHaveLength(1);
+    const blocks = layout.bubbles.flatMap(bubble => bubble.textBlocks);
+    const child = blocks.find(block => block.lines.some(line => line.includes("子")))!;
+    const childLines = child.lines.filter(line => line.includes("子"));
+    expect(childLines.length).toBeGreaterThan(1);
+    expect(childLines.every(line => line.startsWith("\u2003".repeat(depth)))).toBe(true);
+    expect(child.y).toBeGreaterThan(layout.images[0]!.y + layout.images[0]!.height);
+    expect(childLines.join("").match(/- /g)).toHaveLength(1);
+    const text = blocks.flatMap(block => block.lines).join("");
+    expect(text).toContain("[REDACTED]");
     expect(text).not.toContain("private-secret");
   });
 

@@ -289,7 +289,7 @@ export function RemoteDesktopSecuritySettings(
                   {
                     options: [
                       ...REMOTE_DESKTOP_IDLE_MINUTES.map(idleLabel),
-                      t("common.cancel"),
+                      t("devices.common.cancel"),
                     ],
                     cancelButtonIndex: REMOTE_DESKTOP_IDLE_MINUTES.length,
                   },

@@ -96,7 +96,7 @@
     },
     "sessionList": {
       "section": {
-        "pinned": "居首",
+        "pinned": "置頂",
         "dialogue": "言談"
       },
       "filterWithCount": "{{label}} {{count}}",
@@ -125,7 +125,7 @@
         "detail": "{{result}}{{rows}} · {{filter}} · 依{{group}}分類",
         "searchResults": "尋得之果",
         "title": {
-          "active": "方興之差事",
+          "active": "活躍之差事",
           "waiting": "待理之差事",
           "automation": "自運所生之差事",
           "archived": "封存之差事",
@@ -137,7 +137,7 @@
           "waiting": "須於手機確認之權柄、計畫與問題，皆聚於此。",
           "automation": "自運所生之差事依計畫彙集，展之可入單次所行。",
           "archived": "長按封存之差事可批次擇取，而後解封存或刪之。",
-          "all": "方興、封存與自運所生之差事並列於此，便於速尋。"
+          "all": "活躍、封存與自運所生之差事並列於此，便於速尋。"
         }
       },
       "empty": {
@@ -158,7 +158,7 @@
           "copy": "長按差事，可批次封存或刪之。"
         },
         "active": {
-          "title": "此機今無方興之差事",
+          "title": "此機今無活躍之差事",
           "copy": "先於機上立或續差事，手機即見於此。"
         }
       },
@@ -202,7 +202,7 @@
         },
         "archived": {
           "title": "無封存之差事",
-          "copy": "轉至「全」或「方興」之篩，續覽今之案與差事。"
+          "copy": "轉至「全」或「活躍」之篩，續覽今之案與差事。"
         },
         "noSession": {
           "title": "尚無差事，吾閒極矣",
@@ -232,7 +232,7 @@
       "action": {
         "archive": "封存",
         "delete": "刪",
-        "pin": "居首",
+        "pin": "置頂",
         "restore": "解封存",
         "unpin": "解置頂"
       },
@@ -251,7 +251,7 @@
       "connected": "機已連線",
       "title": "身不在機前，\n亦可運籌千里。",
       "copy": "自此託付 Cindy，於機上代君料理。差事進展，隨時以手機觀之。",
-      "footerTitle": "其次，令機為君…",
+      "footerTitle": "繼而，令機為君…",
       "footerCopy": "新開一差事，於手機觀其進展。",
       "newTask": "新開差事",
       "tryThese": "試此新差事",
@@ -378,12 +378,12 @@
         "custom": "手調"
       },
       "status": {
-        "active": "方興",
+        "active": "活躍",
         "archived": "已封存",
         "all": "全"
       },
       "filterHeading": "篩",
-      "filterSummaryActive": "{{count}} 項已行",
+      "filterSummaryActive": "{{count}} 項生效",
       "filterReset": "清篩",
       "filterAll": "全",
       "filterProjectsHeading": "案",
@@ -445,7 +445,7 @@
           "activityAsc": "最早動"
         },
         "status": {
-          "active": "方興",
+          "active": "活躍",
           "archived": "已封存",
           "all": "全"
         },
@@ -498,7 +498,7 @@
   },
   "detail": {
     "filter": {
-      "active": "方興",
+      "active": "活躍",
       "waiting": "待理",
       "automation": "自運",
       "archived": "封存",
@@ -512,10 +512,10 @@
       "a11y": "依{{label}}分類"
     },
     "metric": {
-      "active": "方興",
+      "active": "活躍",
       "waiting": "待理",
       "automation": "自運",
-      "activeA11y": "篩方興之差事",
+      "activeA11y": "篩活躍之差事",
       "waitingA11y": "篩待理之差事",
       "automationA11y": "篩自運所生之差事"
     },
@@ -553,8 +553,8 @@
       "deleteA11y": "批次刪所擇差事",
       "cancelA11y": "罷批次之為",
       "partialFailure": "已理 {{done}} 件，{{failed}} 件未成（已還原，可再試）。",
-      "noArchivable": "所擇之中，無可封存之方興差事。",
-      "noPinnable": "所擇之中，無可置頂之方興差事。",
+      "noArchivable": "所擇之中，無可封存之活躍差事。",
+      "noPinnable": "所擇之中，無可置頂之活躍差事。",
       "noRestorable": "所擇之中，無封存之差事。",
       "noUnpinnable": "所擇之中，無已置頂之差事。",
       "noDeletable": "所擇之中，無可刪之差事。",
@@ -572,8 +572,8 @@
       "emptyTitle": "此案尚無差事，虛位以待"
     },
     "subtitle": {
-      "deviceActive": "{{deviceName}} · 方興差事 {{count}} 件",
-      "activeAndProjects": "方興差事 {{count}} 件 · 案 {{projects}} 個"
+      "deviceActive": "{{deviceName}} · 活躍差事 {{count}} 件",
+      "activeAndProjects": "活躍差事 {{count}} 件 · 案 {{projects}} 個"
     },
     "row": {
       "a11yAutomationGroup": "自運組 {{title}}",
@@ -589,7 +589,7 @@
       "sessionCount": "差事 {{count}} 件",
       "aggregate": "彙",
       "running": "方行",
-      "unread": "未閱 {{count}}"
+      "unread": "未讀 {{count}}"
     },
     "child": {
       "openA11y": "啟自運所生之差事 {{title}}"
@@ -724,12 +724,12 @@
     "memoryDisabled": "記憶已闔，同伴不讀亦不存記憶；已存者仍可觀之、刪之。",
     "memoryLoadFailed": "記憶未能讀取",
     "memoryToday": "今日",
-    "memoryUpdated": "{{time}} 更",
+    "memoryUpdated": "更於 {{time}}",
     "memoryEdit": "修",
     "memoryDone": "畢",
     "memoryTooLong": "內容過長，縮之方可存",
     "memoryRequired": "標題與內容皆不可空。",
-    "memoryChanged": "{{name}}方更此條記憶",
+    "memoryChanged": "{{name}}頃已更此條記憶",
     "memoryUseLatest": "用最新者",
     "memoryKeepMine": "留吾所改",
     "memorySaved": "已存",
@@ -746,7 +746,7 @@
     "direct": "同伴往來",
     "settings": "模型與權柄",
     "search": "尋訊",
-    "models": "模型次第",
+    "models": "模型鏈",
     "permissions": "所為之權柄",
     "personalSkills": "技藝",
     "connections": "所引技藝與連接",
@@ -773,7 +773,7 @@
     "settingsTitle": "同伴之規制",
     "name": "名",
     "portraitNumber": "肖像 {{number}}",
-    "uploadAvatar": "上呈頭像",
+    "uploadAvatar": "上呈肖像",
     "avatarFailed": "此圖不能開啟，請易一張。",
     "nameTaken": "已有同名之同伴，請易一名。",
     "home": "主力之機",
@@ -903,7 +903,7 @@
     "moveTitle": "令 {{name}} 移至「{{device}}」行事乎？",
     "moveDescription": "自今以後，{{name}} 行於「{{device}}」，言談之錄一併攜往。工作目錄、連線與此機之卷，仍留原機。",
     "olderTarget": "舊版 Cindy",
-    "olderTargetNote": "「{{device}}」之 Cindy 為舊版，{{name}} 於彼依舊法而行：對話記錄照常同步，項目規約與自動之事於彼不行。",
+    "olderTargetNote": "「{{device}}」之 Cindy 為舊版，{{name}} 於彼循舊法而行：言談之錄照常同步，然案之規約與自運於彼不行。",
     "moveAction": "移至「{{device}}」",
     "moving": "方將 {{name}} 移至「{{device}}」…",
     "busyTitle": "{{name}} 尚在作覆",

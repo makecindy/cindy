@@ -2430,6 +2430,22 @@ test("buildPnpmArgs switches vitest to related mode when related files are provi
 	assert.deepEqual(args.slice(-2), ["--exclude", "**/*.bench.ts"]);
 });
 
+test("related Vitest shards include passWithNoTests exactly once", () => {
+	const root = "F:/repo";
+	const workspace = { cwd: "packages/example" };
+	const selectedFiles = ["packages/example/src/only.test.ts"];
+	for (const shard of ["1/16", "16/16"]) {
+		const args = buildPnpmArgs(
+			root, workspace,
+			{ type: "packageBin", bin: "vitest", args: ["run", `--shard=${shard}`] },
+			{}, selectedFiles, ["packages/example/src/entry.ts"],
+		);
+		assert.equal(args.filter((arg) => arg === "--passWithNoTests").length, 1);
+		assert.ok(args.includes(`--shard=${shard}`));
+		assert.ok(args.includes("src/entry.ts"));
+	}
+});
+
 test("buildPnpmArgs only loosens Vitest sharding for undersized workspaces", () => {
 	const root = "F:/repo";
 	const workspace = { cwd: "packages/example" };

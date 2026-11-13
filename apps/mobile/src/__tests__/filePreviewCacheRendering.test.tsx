@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactElement, type ReactNode } from 'react';
+import { act, cloneElement, type ReactElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Screen from '../../app/files/preview/[sessionId]';
@@ -60,7 +60,7 @@ vi.mock('@/theme', async () => {
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => {}, multiRemove: async () => {} } }));
 vi.mock('lucide-react-native', () => Object.fromEntries(['ArrowDownToLine', 'Copy', 'Database', 'File', 'Info', 'MessageSquarePlus', 'Share'].map(key => [key, () => null])));
 vi.mock('expo-clipboard', () => ({}));
-vi.mock('expo-image', () => ({ Image: () => null }));
+vi.mock('expo-image', () => ({ Image: ({ source }: { source: { uri: string } }) => <img src={source.uri} /> }));
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('@/debug/mobileDebugLog', () => ({ mobileDebugLog: () => {} }));
 vi.mock('@/session/remoteAbsFileFetch', () => ({}));
@@ -69,7 +69,7 @@ vi.mock('@/session/fileBrowserExport', () => ({}));
 vi.mock('@/session/FileTransferBusyNotice', () => ({ FileTransferBusyNotice: () => null }));
 vi.mock('@/session/HtmlFileReader', () => ({}));
 vi.mock('@/session/HtmlPreviewLoading', () => ({}));
-vi.mock('@/session/HtmlBrowserChrome', () => ({}));
+vi.mock('@/session/HtmlBrowserChrome', () => ({ HtmlBrowserChrome: () => null }));
 vi.mock('@/session/HtmlWebsiteBrowser', () => ({}));
 vi.mock('@/session/mobileHtmlPreview', () => ({}));
 vi.mock('@/session/useHtmlSnapshot', () => ({}));
@@ -78,9 +78,11 @@ vi.mock('@/session/FileBrowserSegmentedControl', () => ({}));
 vi.mock('@/session/MarkdownFileReader', () => ({}));
 vi.mock('@/session/mediaPlayerWebView', () => ({}));
 vi.mock('@/session/NativeVideoPlayer', () => ({}));
-vi.mock('@/session/fileThumbnails', () => ({}));
+vi.mock('@/session/fileThumbnails', () => ({ useFileThumbnail: () => 'file:///thumb.png' }));
 vi.mock('@/session/ImageLightbox', () => ({}));
-vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({}));
+vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({
+  retainRemoteFilePreview: async (uri: string) => ({ uri, release() {} }),
+}));
 
 const entries = ['a.txt', 'b.txt', 'README.md', 's.txt', 't.txt', 'z.txt'].map(name => ({
   name, relPath: name, type: 'file' as const, size: 12200, mtimeMs: 1,
@@ -127,6 +129,45 @@ function expectVisiblePage(relPath: string, meta: string) {
   });
 }
 describe('cached file preview presentation', () => {
+  // Native iOS acceptance exposed a thumbnail that never upgraded after the
+  // pending effect was cancelled. Mount the actual page, defer the transfer,
+  // then revisit it or replace its transport callback before bytes arrive.
+  it.each(['revisit', 'transport refresh'])('resumes original SVG loading after %s', async (change) => {
+    await open();
+    const row = state.pager.renderItem({
+      item: { name: 'sample.svg', relPath: 'sample.svg', thumb: 'image', sizeBytes: 303, mtimeMs: 1 }, index: 0,
+    }) as ReactElement<{ children: ReactElement<any> }>;
+    const resolvers: Array<(uri: string) => void> = [];
+    const exportToUrl = vi.fn(() => new Promise<string>((resolve) => resolvers.push(resolve)));
+    const onOpenLightbox = vi.fn();
+    const pageHost = document.createElement('div');
+    const pageRoot = createRoot(pageHost);
+    const renderPage = async (active: boolean, transfer = exportToUrl) => act(async () => {
+      pageRoot.render(cloneElement(row.props.children, { active, visible: active, exportToUrl: transfer, onOpenLightbox }));
+    });
+    try {
+      await renderPage(true);
+      expect(pageHost.querySelector('img')?.getAttribute('src')).toBe('file:///thumb.png');
+      if (change === 'revisit') {
+        await renderPage(false);
+        await renderPage(true);
+      } else {
+        await renderPage(true, vi.fn(() => exportToUrl()));
+      }
+      expect(exportToUrl).toHaveBeenCalledTimes(2);
+      await act(async () => { resolvers[1]('file:///original.svg'); });
+      expect(pageHost.querySelector('img')?.getAttribute('src')).toBe('file:///original.svg');
+      expect(onOpenLightbox).toHaveBeenLastCalledWith('file:///original.svg');
+      await act(async () => { resolvers[0]('file:///stale.svg'); });
+      expect(pageHost.querySelector('img')?.getAttribute('src')).toBe('file:///original.svg');
+      await renderPage(false);
+      await renderPage(true);
+      expect(exportToUrl).toHaveBeenCalledTimes(2);
+    } finally {
+      act(() => pageRoot.unmount());
+    }
+  });
+
   it('shows the cached index, count and size on the first render and does not reposition on unchanged refresh', async () => {
     await open();
     expectVisiblePage('README.md', '3 / 6 · 11.9 KB');

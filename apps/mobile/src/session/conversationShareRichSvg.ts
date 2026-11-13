@@ -8,6 +8,7 @@ import { i18n } from "@/i18n";
 import { tokenizeCode } from "@/session/codeHighlight";
 import {
   mobileMarkdownInlineHasMark,
+  mobileMarkdownListMarkerText,
   parseMobileMarkdown,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
@@ -276,7 +277,8 @@ export function layoutConversationShareRichBody(
       const marker =
         typeof value.checked === "boolean"
           ? `${value.ordered ? `${value.marker} ` : ""}${value.checked ? "☑" : "☐"}`
-          : value.marker;
+          : value.depth ? mobileMarkdownListMarkerText(value).trim() : value.marker;
+      const indent = (value.depth ?? 0) * typeScale.bodyLarge;
       const markerUnits = Array.from(marker).reduce(
         (sum, character) => sum + conservativeArialGlyphWidthEm(character),
         0,
@@ -287,13 +289,13 @@ export function layoutConversationShareRichBody(
       );
       text(
         [{ text: marker, color: colors.textPrimary }],
-        x,
+        x + indent,
         cursor,
         markerWidth,
       );
       cursor += Math.max(
         lineHeight.body,
-        inlines(value.inlines, x + markerWidth, cursor, width - markerWidth),
+        inlines(value.inlines, x + indent + markerWidth, cursor, Math.max(1, width - indent - markerWidth)),
       );
     } else {
       const heading = value.type === "heading";

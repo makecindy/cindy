@@ -26,10 +26,10 @@ vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => false }));
 vi.mock('@/hooks/useSidebarCardMode', () => ({
   useSidebarCardMode: () => ({ mode: view.mode, setMode: vi.fn() }),
 }));
-vi.mock('../SessionItem', () => ({ SessionItem: () => null }));
+vi.mock('../SessionItem', () => ({ SessionItem: ({ session }: { session: Session }) => <span>{session.id}</span> }));
 vi.mock('../SessionCard', () => ({ SessionCard: () => null }));
 vi.mock('../CardMasonry', () => ({ CardMasonry: () => null }));
-vi.mock('@/components/sidebar/SortableList', () => ({ SortableList: () => null }));
+vi.mock('@/components/sidebar/SortableList', () => ({ SortableList: ({ items, renderItem }: { items: PinnedSidebarEntry[]; renderItem: (item: PinnedSidebarEntry, index: number) => ReactNode }) => <>{items.map((item, index) => <div key={item.id}>{renderItem(item, index)}</div>)}</> }));
 vi.mock('@/components/ui/tooltip', () => ({
   Tip: ({ children }: { children: ReactNode }) => children,
 }));
@@ -122,4 +122,48 @@ describe('pinned section remote starting settlement', () => {
       expect(getStartingSessionIds().has(task.id)).toBe(false);
     },
   );
+});
+
+// Collapse previously hid notifications together with ordinary pins. Unit: two pins,
+// unread removal and remote waiting arrival must change visible rows without reopening.
+it('keeps unread pins visible and reacts to remote feedback while collapsed', () => {
+  const local = session('local');
+  const remote = session('remote', 'device-a');
+  const base = props([entry(local), entry(remote)]);
+  const page = render(<PinnedSection {...base} notifications={new Set(['local'])} />);
+  fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+  expect(screen.getByText('local')).toBeTruthy();
+  expect(screen.queryByText('remote')).toBeNull();
+  act(() => applyRemoteSessionActivity('device-a', { sessionId: 'remote', phase: 'needs-interaction' }));
+  expect(screen.getByText('remote')).toBeTruthy();
+  page.rerender(<PinnedSection {...base} />);
+  expect(screen.queryByText('local')).toBeNull();
+  expect(screen.getByText('remote')).toBeTruthy();
+  act(() => clearRemoteSessionActivity());
+  expect(screen.queryByText('remote')).toBeNull();
+  const header = screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' });
+  expect(header.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(header);
+  expect(screen.getByText('local')).toBeTruthy();
+});
+
+// Unit regression for review #4555472387: a read persisted interruption must
+// remain reachable without notification/activity mirrors. Existing cases only
+// cover those volatile mirrors. One task, direct or project pin, local or remote.
+it.each([
+  ['session', null], ['session', 'device-a'],
+  ['project', null], ['project', 'device-a'],
+] as const)('keeps persisted interruptions in collapsed %s pins (device: %s)', (kind, deviceId) => {
+  const interrupted = {
+    ...session('interrupted', deviceId), status: 'active',
+    activeTurnStartedAt: 1000, interruptedTurnStartedAt: 1000, lastTurnEndedAt: 900,
+  } as Session;
+  const entries = (task: Session): PinnedSidebarEntry[] => kind === 'session'
+    ? [entry(task)]
+    : [{ kind: 'project', id: 'project', project: { sessions: [task] }, displaySessions: [task] } as PinnedSidebarEntry];
+  const page = render(<PinnedSection {...props(entries(interrupted))} />);
+  fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+  expect(screen.getByText('interrupted')).toBeTruthy();
+  page.rerender(<PinnedSection {...props(entries({ ...interrupted, lastTurnEndedAt: 1000 }))} />);
+  expect(screen.queryByText('interrupted')).toBeNull();
 });

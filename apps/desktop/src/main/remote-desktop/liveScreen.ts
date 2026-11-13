@@ -25,10 +25,15 @@ import type { LiveScreenEvent, LiveScreenOpened } from '../cindy-brain/liveScree
 const log = createLogger('remote-desktop:live-screen');
 
 export interface LiveScreenSource {
-  open(plugin: string, id: string): Promise<LiveScreenOpened>;
-  input(plugin: string, id: string, events: LiveScreenEvent[]): Promise<void>;
-  control(plugin: string, id: string, options: { fps?: number; keyframe?: boolean }): Promise<void>;
-  close(plugin: string, id: string): Promise<void>;
+  open(plugin: string, id: string, identity?: string): Promise<LiveScreenOpened>;
+  input(plugin: string, id: string, events: LiveScreenEvent[], identity?: string): Promise<void>;
+  control(
+    plugin: string,
+    id: string,
+    options: { fps?: number; keyframe?: boolean },
+    identity?: string,
+  ): Promise<void>;
+  close(plugin: string, id: string, identity?: string): Promise<void>;
 }
 
 /** The plugin host that lists live screens; injected at registration, never imported here. */

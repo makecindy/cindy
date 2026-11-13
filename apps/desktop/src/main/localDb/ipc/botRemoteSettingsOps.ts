@@ -33,6 +33,7 @@ export interface BotCapabilityCatalogEntry {
 
 /** Services the local settings IPC already uses; injected so the operations stay free of main singletons. */
 export interface BotSettingsOpsDeps {
+  projectRepository?(botId: string, retry: boolean, assertCurrent: () => void): Promise<unknown>;
   readProfile(botId: string): Promise<unknown>;
   updateProfile(input: Record<string, unknown>): Promise<unknown>;
   setAvatar(botId: string, avatarImageBase64: string): Promise<unknown>;
@@ -181,6 +182,10 @@ const KINDS: readonly Kind[] = ['skill', 'mcp', 'toolset'];
 
 export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Record<BotSettingsOp, BotSettingsOpHandler>> {
   return {
+    ...(deps.projectRepository ? {
+      'project.repository': (call: BotSettingsCall) => deps.projectRepository!(botOf(call), false, call.assertCurrent),
+      'project.retryRepository': (call: BotSettingsCall) => deps.projectRepository!(botOf(call), true, call.assertCurrent),
+    } : {}),
     'profile.get': async call => ({ profile: projectBotSettingsProfile(await deps.readProfile(botOf(call))) }),
     'profile.update': async call => {
       const botId = botOf(call);

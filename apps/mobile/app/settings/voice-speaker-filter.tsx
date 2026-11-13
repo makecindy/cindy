@@ -45,6 +45,7 @@ import {
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
+import appI18n from 'i18next';
 
 const CLIP_SECONDS = SPEAKER_ENROLLMENT_MAX_CLIP_SEC;
 const CLIP_INDEXES = Array.from({ length: SPEAKER_ENROLLMENT_CLIP_COUNT }, (_, index) => index);
@@ -366,7 +367,7 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
       testID="settings.voiceSpeakerFilter.profile.status"
       value={state.enrolled && state.enrolledAt
         ? t('settings.voiceSpeakerFilter.profile.enrolledAt', {
-          date: new Date(state.enrolledAt).toLocaleDateString(),
+          date: new Date(state.enrolledAt).toLocaleDateString(appI18n.language),
         })
         : ''}
     />,

@@ -3,6 +3,7 @@ import { providersSettings } from './ProvidersSection.settings-search';
 import {
   BorrowedProviderModels,
   borrowedProviderModelCount,
+  ProviderOwnComputersStatus,
   ProviderRunLocationSubtitle,
 } from './ProviderRunLocationRow';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
@@ -846,6 +847,11 @@ function DetailHeader({
                   </span>
                 )}
               </span>
+              {provider ? (
+                <span className="flex min-w-0" style={{ color: 'var(--settings-integration-subtitle)' }}>
+                  <ProviderOwnComputersStatus provider={provider} />
+                </span>
+              ) : null}
             </div>
           </div>
 

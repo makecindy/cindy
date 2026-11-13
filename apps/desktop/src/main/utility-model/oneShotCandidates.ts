@@ -5,7 +5,7 @@ export { isProviderModelRouteDisabled, isProviderRouteSuspended } from '../maker
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../maker-host/anthropic-responses-bridge-host.js';
 import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../maker-host/grok-oauth-login.desktop.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
+import { readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken, getGenericOAuthLoginGeneration } from '../maker-host/generic-oauth.desktop.js';
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
 import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
@@ -34,6 +34,8 @@ const desktopOneShot = createOneShotCandidates({
   getGrokAccessToken: (...args) => getGrokAccessToken(...args),
   getGrokOAuthCredentialGeneration: (...args) => getGrokOAuthCredentialGeneration(...args),
   readCachedGenericOAuthAccessToken: (...args) => readCachedGenericOAuthAccessToken(...args),
+  readGenericOAuthAccessToken: (...args) => readGenericOAuthAccessToken(...args),
+  getGenericOAuthLoginGeneration: (...args) => getGenericOAuthLoginGeneration(...args),
   undiciFetch: (...args) => undiciFetch(...args),
   claudeUpstreamEndpoint: (...args) => claudeUpstreamEndpoint(...args),
   reportCindyGatewayKeyRejected: (...args) => reportCindyGatewayKeyRejected(...args),

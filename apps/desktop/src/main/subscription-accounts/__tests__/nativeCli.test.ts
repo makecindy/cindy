@@ -52,6 +52,15 @@ const children: (EventEmitter & {
   stdout: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
 })[] = [];
+
+// Unit regression: account replacement during CLI startup must prevent the
+// reset request itself, not merely reject its already-consumed response.
+it('does not dispatch a reset after its credential guard expires during startup', async () => {
+  await expect(codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, () => false)).rejects.toThrow('changed before dispatch');
+  const methods = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+  expect(methods).toEqual(['initialize', 'initialized']);
+});
 beforeEach(() => {
   h.binary = '/fixture/codex';
   h.error = false;

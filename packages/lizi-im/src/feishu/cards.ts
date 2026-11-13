@@ -16,6 +16,7 @@
 
 import type { InteractiveCardSpec, StreamingProcessRecord } from '../types.js';
 import { collectXdtImageRefs } from '../xdtRefs.js';
+import { messages as transportMessages } from './messages.js';
 
 /**
  * 去掉 markdown inline code 的反引号，保留 fenced code block（```）不动。
@@ -195,7 +196,7 @@ function mixedBodyElements(
     } else {
       elements.push({
         tag: 'markdown',
-        content: `_[图片加载失败:${alt || url}]_`,
+        content: transportMessages.card.imageLoadFailed(alt || url),
       });
     }
     lastIdx = ref.end;
@@ -268,7 +269,7 @@ export function buildReplyCardV2(spec: ReplyCardSpec): unknown {
     spec.imageMap === null && !spec.appendImageKeys?.length
       ? [{ tag: 'markdown', content: stripInlineCode(spec.text) }]
       : mixedBodyElements(spec.text, spec.imageMap ?? new Map(), spec.appendImageKeys);
-  if (body.length === 0) body.push({ tag: 'markdown', content: '_(空回复)_' });
+  if (body.length === 0) body.push({ tag: 'markdown', content: transportMessages.streaming.emptyReply });
   const elements: unknown[] = [];
   if (spec.process) elements.push(processPanelElement(spec.process));
   elements.push(...body);

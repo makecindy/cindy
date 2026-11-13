@@ -300,6 +300,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | 浏览器大结果补读 | MCP 工具会话内存中保留最近四份原始 JSON，每份最多 200 万字符；不落盘、不上传，关闭会话后释放。`readResult` 只能读当前会话生成的引用，沿用原页面实际 profile 的代输入读取限制；切换后端、stop 或读取受保护页面时清除。工具复用宿主现有生命周期与后端对象引用，在下一次访问及异步预检后核对，包括设置/其它任务切换、切走再切回和嵌入后端恢复；切换中的动作仍报告真实结果，但不缓存原文或保存试跑凭证。超过上限明确截断，不能声称完整原文已保存。 |
 | 自建中转服务（Desktop） | `owners/<owner-key>/device-link-relay/`：`config.json` 只存选择、本机中转设置与服务器部署记录（地址、中转 ID、主人公钥，不含秘密）；`secrets/<中转ID>.enc` 是本机在该中转上的设备凭证与 Ed25519 签名私钥（本机当主人时即主人密钥），经 safeStorage 加密，Linux 只有 basic_text 时拒绝保存；第 1 版的 `credential.enc` / `owner-credential.enc` 读到旧配置时删除；`host/` 是本机运行中转时的数据（`relay-state.json` 只存各设备凭证的 SHA-256 与档案，0600 原子写入；`media/` 为设备间中转的文件，创建 24 小时后清理）。全部按账号隔离，账号作用域未提交时不读写。见 `device-link/selfHostedRelayConfig.ts`、`packages/device-link-relay` 与 [方案](../self-hosted-relay-plan.md) |
 | 自动化任务 Webhook | `owners/<账号>/schedule-webhooks/`：`state.json` 存本机端口、排队事件所属的本机路由 ID、固定元数据和 24 小时投递回执，不含请求正文和密钥；`secrets/<路由 ID>.enc` 存开发版本机入口的 safeStorage 加密签名密钥；`remote-identities.json` 只存任务 ID 与本机触发路由 ID 的对应关系，不含云端 URL 或密钥，创建请求前落盘、云端删除确认后清除，离线关闭时保留以防重启复用旧地址。宿主创建时固定账号目录，队列、身份与密钥的读写及清理始终使用该目录，停止后的迟到操作不得改用新账号目录。均为 0600 原子写入；触发条件关闭或任务删除时清理本机队列与密钥，启动时补清孤儿文件。加密不可用时生成密钥明确报错，不回退明文；启动不访问钥匙串，首个事件才解密。见 `scheduler-host/webhook/index.ts` 与 `__tests__/host.test.ts` |
+| Mobile 登录凭证 | `expo-secure-store` 的 `cindy.mobile.auth.session.v1`（当前登录的 refresh token 与区域）和 `cindy.mobile.auth.accounts.v1`（已存账号的凭证）。iOS 钥匙串档位为「开机后首次解锁起可读写」（`AFTER_FIRST_UNLOCK`）：用户在锁屏通知或 Apple Watch 上点了按钮，App 要在后台续期登录才能把结果送到电脑，见[通知上的按钮](../product-rules/notification-actions.md)。两项必须同档——续期同时读写二者，只改一项会在锁屏时提前失败。已有条目在下一次写入时改档，不做单独迁移；其余钥匙串条目（设备 ID、设备身份、中转与 Agent 网络密钥等）保持「解锁时可读」。App 在锁屏状态下被系统从后台拉起时不读写、不清理任何凭证（`lockedLaunchGate.ts`）。锁屏时读不到这两项不算退出登录：续期报 `AUTH_STORAGE_LOCKED`，调用方按可重试失败处理，不清本机数据。见 `apps/mobile/src/auth/secureStorage.ts` |
 | 模型组 | `owners/<账号>/model-groups.json` 只存用户建的路线与模式（名字、引用的供应商连接 ID 与模型、选法、例外），全部删除即删文件；`owners/<账号>/model-group-decisions.json` 存最近 50 次选择（组名、模型、来源、推理强度、原因、当时的配额与时间），不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/store.ts`、`decisionLog.ts`。 |
 | 模型组任务记录 | `owners/<账号>/model-group-session-bindings.json` 按任务 id 记这个任务来自哪条路线或模式（组的 id）以及正在用的候选（引擎 + 供应商连接 ID + 模型），最多保留最新 2000 条；撞配额时据此提议换来源。不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/sessionBindings.ts`。 |
 | 自建中转服务（Mobile） | AsyncStorage `cindy.mobile.self-hosted-relay.v2.<账号>` 只存选择（中转地址、名称、主人公钥、本机设备 ID），不含秘密；设备凭证与 Ed25519 签名私钥合存为 `expo-secure-store` 的 `cindy.selfHostedRelay.credential.v2.<账号哈希>`，仅本机、解锁后可读。没有签名私钥的 v1 记录不再使用，读到时尽力删除。见 `apps/mobile/src/device-link/selfHostedRelay.ts` |
@@ -381,6 +382,19 @@ relay 原有 60 秒主动续期节流保持不变。
   实现见 `packages/opencli-vendor/cindy/host.ts` 与
   `apps/desktop/src/main/mcp-integrations/browser-backend/rsb-webview-upload-policy.ts`；
   回归见对应上传策略测试和 `packages/lizi-mcps/src/browser/opencli-recipes.test.ts`。
+
+## Telegram 群准入记录
+
+个人与伙伴 Telegram 连接复用宿主加密 KV，以连接前缀下的
+`telegram-group-admission-v1` 保存 bot ID、绑定用户 ID、群 ID、群标题、邀请人名称与 ID、
+批准/拒绝/待批状态和随机按钮 token；不存群消息正文。记录不是可关闭的偏好设置。
+未知/损坏记录不授予群访问；先保存批准再反馈成功，保存失败保持未批准。
+解绑先删除并用三态读取确认记录缺失，无法确认则保持凭证、报存储错误并停止轮询。
+成员变更必须保存成功后才允许下次 getUpdates 确认消费；失败停止轮询并保留原 offset，
+恢复连接时从 Telegram 重放该事件，不依赖尽力删除来撤销旧授权。
+初始化和销毁都会丢弃准入缓存，确保宿主切换 Cindy 账号后重新读取当前账号记录。
+换 bot 或绑定用户时不继承不匹配身份的记录。
+实现与测试见 `packages/lizi-im/src/telegram/groupAdmission.ts`、`telegramIM.test.ts`。
 
 ## Review 清单
 

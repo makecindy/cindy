@@ -24,7 +24,7 @@ import { normalizeRecentWorkdirPath, upsertRecentWorkdir } from '../localDb/ipc/
 import { createLogger } from '../logger.js';
 import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { restoreLocalProjectVisibility } from '../sidebarSettingsStore.js';
-import { gitExec } from '../worktree/gitExec.js';
+import { gitExec, GitExecError } from '../worktree/gitExec.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import {
@@ -39,6 +39,7 @@ import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate } from './botProjectTe
 import { routeModelFields } from './botV2Carryover.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
+import type { BotProjectRepositoryStatus } from '../../shared/botProjectMode.js';
 
 const log = createLogger('maker-ipc:bot-project-mode');
 
@@ -302,24 +303,98 @@ export async function ensureTeammateTemplate(input: { botId: string; displayName
 }
 
 /** A repository whose root is the workspace itself; an enclosing repo does not count. */
-async function ensureWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
-  const before = await detectCwd(workspace);
+async function inspectWorkspaceRepository(workspace: string, repairSafeDirectory = true): Promise<'ready' | 'unborn' | 'missing' | 'unavailable'> {
+  const before = await detectCwd(workspace, { repairSafeDirectory });
+  const probeOptions = { timeoutMs: 10_000, repairSafeDirectory };
   if (!before.gitInstalled) return 'unavailable';
   const [ownRoot, repoRoot] = await Promise.all([
     fs.realpath(workspace),
     before.repoRoot ? fs.realpath(before.repoRoot).catch(() => before.repoRoot) : Promise.resolve(null),
   ]);
-  if (before.isGitRepo && repoRoot === ownRoot) return 'already-git';
+  if (before.isGitRepo && repoRoot === ownRoot) {
+    try {
+      await gitExec(['rev-parse', '--verify', 'HEAD^{commit}'], workspace, probeOptions);
+      return 'ready';
+    } catch (error) {
+      if (!(error instanceof GitExecError) || error.exitCode !== 128
+        || error.timedOut || error.aborted || error.cleanupUnconfirmed) throw error;
+      // A failed HEAD lookup alone does not mean an unborn branch: a detached HEAD,
+      // unreadable ref or missing commit object must not be repaired by a new commit.
+      const { stdout } = await gitExec(['symbolic-ref', '--quiet', 'HEAD'], workspace, probeOptions);
+      const branch = stdout.trim();
+      if (!branch.startsWith('refs/heads/')) throw error;
+      try {
+        await gitExec(['show-ref', '--verify', '--quiet', branch], workspace, probeOptions);
+      } catch (refError) {
+        if (!(refError instanceof GitExecError) || refError.exitCode !== 1
+          || refError.stderr.trim() || refError.timedOut || refError.aborted || refError.cleanupUnconfirmed) throw refError;
+        return 'unborn';
+      }
+      throw error;
+    }
+  }
+  // Discovery can report non-Git for damaged metadata. Never re-init over an existing
+  // .git entry (including a dangling link), or mistake an access failure for absence.
+  const gitEntry = await fs.lstat(path.join(workspace, '.git')).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (gitEntry) throw new Error('Existing buddy repository could not be read');
+  return 'missing';
+}
+
+/** Read-only: opening settings must never create a commit or change Git configuration. */
+export async function readWorkspaceRepositoryStatus(workspace: string): Promise<BotProjectRepositoryStatus> {
+  try {
+    const state = await inspectWorkspaceRepository(workspace, false);
+    if (state === 'ready' || state === 'unavailable') return state;
+    if (state === 'missing') return 'not-ready';
+    for (const identity of ['GIT_AUTHOR_IDENT', 'GIT_COMMITTER_IDENT']) {
+      await gitExec(['var', identity], workspace, { timeoutMs: 10_000, repairSafeDirectory: false, extraEnv: { LC_ALL: 'C' } });
+    }
+    return 'not-ready';
+  } catch (error) {
+    if (error instanceof GitExecError && error.exitCode === 128
+      && /identity unknown|unable to auto-detect|empty ident|no (?:name|email) was given/i.test(error.stderr)) return 'needs-identity';
+    return 'failed';
+  }
+}
+
+const repositoryPreparations = new Map<string, Promise<'initialized' | 'already-git' | 'unavailable'>>();
+
+/** Startup and explicit retries share one in-flight attempt for this workspace. */
+export function ensureWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
+  const key = path.resolve(workspace);
+  const pending = repositoryPreparations.get(key);
+  if (pending) return pending;
+  const attempt = initializeWorkspaceRepository(workspace).finally(() => {
+    if (repositoryPreparations.get(key) === attempt) repositoryPreparations.delete(key);
+  });
+  repositoryPreparations.set(key, attempt);
+  return attempt;
+}
+
+async function initializeWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
+  const state = await inspectWorkspaceRepository(workspace);
+  if (state === 'unavailable') return state;
+  if (state === 'ready') return 'already-git';
   // A long-lived teammate folder collects archives, databases and logs; versions are for its
   // own work, so those stay out of the history from the first snapshot on.
-  await writeIfMissing(path.join(workspace, '.gitignore'), BOT_PROJECT_GITIGNORE);
-  await gitExec(['init'], workspace);
-  await createSnapshotDetailed(workspace, {
+  if (state === 'missing') {
+    await writeIfMissing(path.join(workspace, '.gitignore'), BOT_PROJECT_GITIGNORE);
+    await gitExec(['init'], workspace, { timeoutMs: 10_000 });
+  }
+  await createInitialWorkspaceSnapshot(workspace);
+  return 'initialized';
+}
+
+async function createInitialWorkspaceSnapshot(workspace: string): Promise<void> {
+  const snapshot = await createSnapshotDetailed(workspace, {
     label: 'Start teammate project',
     meta: { sessionId: 'bot-project', kind: 'manual' },
     allowEmpty: true,
   });
-  return 'initialized';
+  if (!snapshot.commit) throw new Error('Buddy initial version was not created');
 }
 
 function broadcastProjectRegistered(workingDir: string): void {

@@ -4,8 +4,8 @@
     "onlyEncrypted": "惟用加密连线",
     "hint": "诸设备间以端到端加密相连。惟用加密连线时，两端皆须启用 Agent-Net。",
     "updateRequired": "请装新版应用，以用 Agent-Net。",
-    "notConfigured": "此中转尚无 Agent-Net，请更新或加入 V2 中转。",
-    "failed": "Agent-Net 设置未成，请核中转连线再试。"
+    "notConfigured": "此中继尚无 Agent-Net，请更新或加入 V2 中继。",
+    "failed": "Agent-Net 设置未成，请核中继连线再试。"
   },
   "settings": {
     "sectionTitle": "中继",
@@ -23,9 +23,9 @@
     "pushUnavailable": "用自建中继之时，机上差事之告不推至此手机。",
     "accountManagedOn": "于「{{device}}」上理之",
     "accountSwitchTitle": "入「{{name}}」乎？",
-    "accountSwitchBody": "此乃君账号下之中继，由「{{device}}」放行，此机自入，无需分享链接。用自建中继时，此机不得收机上任务之通知。",
+    "accountSwitchBody": "此乃君名籍下之中继，由「{{device}}」放行，此手机自入，无需分享链接。用自建中继时，此手机不得收机上差事之告。",
     "accountSwitchAction": "入",
-    "sharedHint": "设备之间经他人所分享之中转 {{address}} 相连，唯连君己之设备；登录、模型、共享任务诸事仍用 {{appName}} 官方之服务。",
+    "sharedHint": "诸设备经他人所分享之中继 {{address}} 相连，唯连君己之设备；登录、模型与共事等仍用 {{appName}} 官方服务。",
     "sharedCurrent": "{{name}}（{{owner}} 所分享）",
     "accountSharedBy": "{{owner}} 所分享 · 由「{{device}}」入之",
     "accountSharedOn": "由「{{device}}」入之"
@@ -37,7 +37,7 @@
   "join": {
     "title": "入中继",
     "checking": "方连中继…",
-    "body": "入之后，此手机经此中继连君之机；登录、模型等仍用 {{appName}} 官方服务。用自建中继之时，此手机不得机上差事之告。",
+    "body": "入之后，此手机经此中继连君之机；登录、模型与共事等仍用 {{appName}} 官方服务。用自建中继之时，此手机不得机上差事之告。",
     "switchNote": "入之后，将自「{{current}}」转至此中继。",
     "action": "入",
     "pairingCodeLabel": "配对码",
@@ -54,7 +54,7 @@
     "cancelled": "加入已罢。欲入此中继，请于机上重生分享之链接。",
     "accountRequesting": "正请「{{device}}」放行…",
     "accountWaiting": "正入，候「{{device}}」放行…",
-    "openOnComputer": "此乃他账号所分享之中转，请于君之电脑开此链接以入。电脑既入，此手机于设置之中转服务中即见之，一点即入。"
+    "openOnComputer": "此乃他名籍所分享之中继，请于君之机开此链接以入。机既入，此手机于规制之中继中即见之，一点即入。"
   },
   "errors": {
     "unreachable": "此中继连之不上。请确手机与机同在一网，或手机能访此地址。",
@@ -72,6 +72,6 @@
     "credentialUnavailable": "此手机无可用之中继凭证。请重入，或于规制中归官方中继。",
     "ownerUnavailable": "「{{device}}」无应。请确其开 {{appName}} 且已联网，或请其分享链接予君。",
     "relayUnavailable": "「{{device}}」已不用此中继。",
-    "accountDirectoryUnavailable": "暂连不上 {{appName}} 账号之服务，不得读君账号下之中继。请稍后再试，或请对方分享链接予君。"
+    "accountDirectoryUnavailable": "暂连不上 {{appName}} 名籍之服务，不得读君名籍下之中继。请稍后再试，或请对方分享链接予君。"
   }
 }

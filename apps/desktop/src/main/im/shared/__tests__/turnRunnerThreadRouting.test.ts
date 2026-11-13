@@ -8,7 +8,8 @@
  *  4. 出站串 thread: 流式首发 / 排队提示带 threadTs = scopeKey
  *  5. binding(identity+scopeKey)命中 → attached 路由到 desktop session
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 import path from 'node:path';
 
 import type { AgentEvent, Session, SessionSendResult } from '@cindy/maker-core';
@@ -320,6 +321,11 @@ async function runTurn(scopeKey: string, text = 'hello'): Promise<void> {
     scopeKey,
   });
 }
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('turnRunner thread = session 路由(slack threadScoped)', () => {
   it('顶层消息: 不同 scopeKey 各建独立 session', async () => {

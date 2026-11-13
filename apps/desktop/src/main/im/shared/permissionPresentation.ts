@@ -1,3 +1,4 @@
+import { imText } from './imText';
 import type { InteractionDecision } from '@cindy/maker-core';
 import type { InteractiveCardSpec } from '@cindy/im';
 import {
@@ -9,19 +10,26 @@ import { forgetSharedPending, registerPendingExternal } from './pendingInteracti
 import type { SessionPermissionRequest } from './interactionCardModel';
 
 /** Receipt only: the Host may hold the choice until the task resumes. */
-export const INTERACTION_CHOICE_RECEIVED_TEXT = '已收到你的选择。';
+export function interactionChoiceReceivedText(): string {
+  return imText('imBot.text.shared.permission.choiceReceived');
+}
+
+/** Expired confirmation status line, shared by rich cards and text channels. */
+export function permissionExpiredText(): string {
+  return imText('imBot.text.shared.permission.expired');
+}
 
 /** Text-only channels and Hook share the same final permission wording. */
 export function permissionOutcomeText(decision: InteractionDecision, toolName?: string): string {
   const status =
     decision.kind === 'permission' && decision.behavior === 'allow'
       ? hasSessionPermissionUpdates(decision)
-        ? '✅ 已允许（本任务）'
-        : '✅ 已允许（仅本次）'
+        ? imText('imBot.text.shared.permission.allowedSession')
+        : imText('imBot.text.shared.permission.allowedOnce')
       : isExpiredPermissionDecision(decision)
-        ? '⌛ 本次确认已失效'
-        : '❌ 已拒绝';
-  return toolName ? `${status}：${toolName}` : status;
+        ? permissionExpiredText()
+        : imText('imBot.text.shared.permission.denied');
+  return toolName ? imText('imBot.text.shared.permission.outcomeWithTool', { status, tool: toolName }) : status;
 }
 
 /** Register before network IO; a Desktop decision may arrive while send is in flight. */

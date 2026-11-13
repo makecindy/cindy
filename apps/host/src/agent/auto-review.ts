@@ -53,6 +53,8 @@ export function createHostAutoReview(options: {
     getGrokAccessToken: (...args) => config.grok.getGrokAccessToken(...args),
     getGrokOAuthCredentialGeneration: (...args) => config.grok.getGrokOAuthCredentialGeneration(...args),
     readCachedGenericOAuthAccessToken: (...args) => config.oauth.readCachedGenericOAuthAccessToken(...args),
+    readGenericOAuthAccessToken: (...args) => config.oauth.readGenericOAuthAccessToken(...args),
+    getGenericOAuthLoginGeneration: (...args) => config.oauth.getGenericOAuthLoginGeneration(...args),
     undiciFetch: (...args) => hostOutbound.outboundUndiciFetch(...args),
     claudeUpstreamEndpoint: () => options.gateway?.endpoint ?? '',
     reportCindyGatewayKeyRejected: key => { if (key) options.reportGatewayKeyRejected?.(key); },

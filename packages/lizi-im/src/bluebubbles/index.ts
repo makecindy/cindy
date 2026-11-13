@@ -38,6 +38,8 @@ export function parseBlueBubblesConfig(raw: unknown): BlueBubblesConfig {
 
 export interface BlueBubblesOptions {
   secretPrefix: string;
+  /** Host-persisted route identity survives a server address edit. */
+  contextId?(): string | null;
   storage: BlueBubblesStateStorage;
   receiver(host: string, port: number): LocalWebhookReceiver;
   api?(origin: string, password: string): BlueBubblesApi;
@@ -58,6 +60,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private config: BlueBubblesConfig | null = null;
   private api: BlueBubblesApi | null = null;
   private receipts: BlueBubblesReceipts | null = null;
+  private pendingEdit: object | null = null;
   private readonly chats = new Map<string, BlueBubblesChat>();
   private generation = 0;
   private account: unknown | null = null;
@@ -111,7 +114,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.retryAt.delete(guid);
     }
   }
-  get botContextId(): string { return this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''; }
+  get botContextId(): string { return this.options.contextId?.() || (this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''); }
   getOwnerUserId(): string | null {
     return [...this.chats.values()].find(chat => /^(?:iMessage|any);-;/.test(chat.guid) && (chat.participants?.length ?? 0) === 1
       && chat.participants![0]!.address.toLowerCase() === this.config?.ownerAddress)?.guid ?? null;
@@ -146,6 +149,72 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     // delete this connection, its credentials and its already-durable inbox.
     if (this.status.kind !== 'connected'
       && !(this.listener && this.api && this.config && this.receiveFailure === 'input')) throw new Error('BLUEBUBBLES_CONNECT_FAILED');
+  }
+
+  /** Public settings omit secrets; edits never reset the durable receipt journal. */
+  getEditableConfig(): BlueBubblesConfig {
+    const raw = this.host.secrets.read(this.key('bluebubbles-config'));
+    if (!raw) throw new Error('BLUEBUBBLES_CONFIG_MISSING');
+    return parseBlueBubblesConfig(JSON.parse(raw));
+  }
+
+  async updateCredentials(input: BlueBubblesConfig & { password?: string }): Promise<void> {
+    const config = parseBlueBubblesConfig(input);
+    const previous = BLUEBUBBLES_SECRET_KEYS.map(key => {
+      const result = this.host.secrets.readResult?.(this.key(key)) ?? { kind: 'error' as const };
+      if (result.kind === 'error') throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+      return [key, result.kind === 'value' ? result.value : null] as const;
+    });
+    const password = input.password || previous.find(([key]) => key === 'bluebubbles-password')?.[1];
+    if (!password || password.length > 4096 || !this.host.secrets.isAvailable()) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+    const previousConfig = parseBlueBubblesConfig(JSON.parse(previous.find(([key]) => key === 'bluebubbles-config')?.[1] ?? 'null'));
+    const addedChats = config.chatGuids.filter(chat => !previousConfig.chatGuids.includes(chat));
+    const account = this.host.accountScope?.capture();
+    let expectedGeneration = this.generation;
+    const current = () => this.generation === expectedGeneration
+      && (!this.host.accountScope || this.host.accountScope.isCurrent(account));
+    const cleanup = async () => {
+      const api = this.api, url = this.webhookUrl;
+      const disposedGeneration = this.generation + 1;
+      await this.dispose();
+      if (api && url) await api.unregisterWebhook(url).catch(() => this.log.warn('iMessage callback cleanup failed; local receiver is stopped'));
+      this.webhookUrl = null;
+      return disposedGeneration;
+    };
+    expectedGeneration = await cleanup();
+    if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
+    const edit = {};
+    this.pendingEdit = edit;
+    try {
+      new BlueBubblesReceipts(this.options.storage, this.now()).activateChats(addedChats, this.now());
+      // init disposes the previous generation, then starts a new one.
+      const beforeSave = this.generation;
+      try { await this.saveCredentials({ ...config, password }); }
+      finally {
+        // A synchronous storage failure has not entered init yet.
+        expectedGeneration = beforeSave + (this.generation === beforeSave ? 0 : 2);
+      }
+    } catch {
+      if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
+      this.pendingEdit = null;
+      expectedGeneration = await cleanup();
+      if (current()) {
+        for (const [key, value] of previous) {
+          if (value === null) this.host.secrets.remove(this.key(key));
+          else if (!this.host.secrets.write(this.key(key), value)) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+        }
+        await this.init();
+      }
+      throw new Error('BLUEBUBBLES_UPDATE_FAILED');
+    } finally {
+      if (this.pendingEdit === edit) this.pendingEdit = null;
+    }
+    // Only a committed configuration may classify or dispatch pending inputs.
+    // Later ingress faults do not roll back an already saved edit.
+    if (current()) {
+      const generation = this.generation;
+      await this.pump(generation).catch(error => this.fail(generation, error));
+    }
   }
 
   async clearCredentials(): Promise<void> {
@@ -308,7 +377,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     await api.info(); this.assertLive(generation);
     const before = this.now();
     for (const chat of config.chatGuids) {
-      const after = Math.max(receipts.activatedAt, receipts.cursor(chat) - 300_000);
+      const after = Math.max(receipts.activatedAtFor(chat), receipts.cursor(chat) - 300_000);
       let previousPage = '';
       for (let offset = 0; ; offset += 100) {
         const messages = await api.history(chat, after, before, offset);
@@ -319,7 +388,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         previousPage = fingerprint;
         for (const message of messages) {
           if (typeof message.guid !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(message.guid)) throw new Error('BLUEBUBBLES_INVALID_MESSAGE');
-          if (!message.isFromMe && message.dateCreated >= receipts.activatedAt) receipts.receive(message.guid, before);
+          if (!message.isFromMe && message.dateCreated >= receipts.activatedAtFor(chat)) receipts.receive(message.guid, before);
         }
         if (messages.length < 100) break;
       }
@@ -345,6 +414,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       ?? this.eventSentAt.get(this.deferredEvents.get(guid)!) ?? Infinity;
     receipts.orderPending(receipts.pendingGuids().sort((a, b) => sentAt(a) - sentAt(b)));
     this.recovering = false;
+    if (this.pendingEdit) {
+      // Retain verified metadata for dispatch after the configuration commits.
+      for (const [guid, message] of prefetched) this.metadata.set(guid, message);
+      this.lastCatchUpAt = before;
+      return;
+    }
     // Reconciliation still waits for its inputs, while the ingress scanner stays
     // available to live controls and other chats during attachment I/O.
     for (;;) {
@@ -382,7 +457,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   }
   private async drain(generation: number, prefetched?: ReadonlyMap<string, BlueBubblesMessage | null>): Promise<void> {
     const api = this.api, config = this.config, receipts = this.receipts;
-    if (!api || !config || !receipts || !this.messages.size) return;
+    if (!api || !config || !receipts || !this.messages.size || this.pendingEdit) return;
     const attempted = new Set<string>();
     for (const [guid, dueAt] of this.retryAt) if (dueAt > this.now()) attempted.add(guid);
     for (;;) {
@@ -442,7 +517,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
           const sender = message.handle?.address?.toLowerCase();
           if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
-            || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAt
+            || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAtFor(chat.guid)
             || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
             receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
           }

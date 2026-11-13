@@ -1,3 +1,4 @@
+import { trackMobileNotification, mobileNotificationDismissalBatch, acknowledgeMobileNotificationDismissals, onMobileNotificationDismissalsChanged } from './notificationDismissalHost.js';
 import { RemoteControlConsent, REMOTE_CONTROL_CONSENT_CHANNEL, consentDeviceName } from './remoteControlConsent.js';
 import { promptRemoteControlConsent } from './remoteControlConsentPrompt.js';
 import { PROVIDER_SHARE_AVAILABILITY_CAPABILITY, readShareAvailabilityCatalog } from './providerShareAvailability.js';
@@ -187,9 +188,12 @@ import { crossRegionInvoke, isCrossRegionProviderShareTarget } from './providerS
 import { sharedTaskApi } from './sharedTaskApi.js';
 import {
   MobileNotifyDeduper,
+  mobileNotificationIdentity,
   buildBotGroupNotifyPayload,
   buildSessionNotifyPayload,
   type MobileSessionEventKind,
+  type PermissionAlert,
+  type QuestionAlert,
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
 import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
@@ -844,6 +848,7 @@ function wsUrl(): string {
 export interface DeviceLinkServiceOptions {
   taskActivity?: {
     getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[];
+    getNotificationRequestIds?(sessionId: string): string[];
     subscribeTaskOverview(listener: () => void): () => void;
   };
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
@@ -865,6 +870,33 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     return;
   }
 
+  notificationActivity = sessionId => options.taskActivity?.getLocalTaskActivitySnapshots().find(row => row.sessionId === sessionId);
+  notificationRequestIds = options.taskActivity?.getNotificationRequestIds?.bind(options.taskActivity);
+  let dismissalUnsupportedScope: string | undefined;
+  const dismissalPublisher = createTaskActivityPublisher(async signal => {
+    if (activeSelfHostedRelay() || isAppSessionBoundaryPending()) return;
+    const owner = authManager.getCurrentUserId();
+    const token = authManager.getAccessToken();
+    if (!owner || !token) return;
+    const ids = mobileNotificationDismissalBatch();
+    if (!ids.length) return;
+    const generation = mobileNotifyGeneration;
+    const scope = `${officialDeviceLinkApiBase()}:${owner}:${generation}`;
+    if (dismissalUnsupportedScope === scope) return;
+    try { await serverApiFetch('/api/device-link/notification-dismissals', {
+      baseUrl: officialDeviceLinkApiBase(), token, body: { ids }, method: 'POST', signal,
+      timeoutMs: 8_000, skipAutoRefresh: true, skipSessionInvalidation: true, redactErrorDetails: true,
+      expectedErrors: [{ status: 404 }, { status: 405 }],
+    });
+    } catch (error) {
+      if (!signal.aborted && error instanceof ServerApiError && [404, 405].includes(error.statusCode)) dismissalUnsupportedScope = scope;
+      throw error;
+    }
+    if (!signal.aborted && generation === mobileNotifyGeneration && owner === authManager.getCurrentUserId()) acknowledgeMobileNotificationDismissals(ids);
+  });
+  dismissalPublisher.setOnline(true);
+  const stopDismissals = onMobileNotificationDismissalsChanged(dismissalPublisher.changed);
+  onQuit('notification-dismissals', () => { stopDismissals(); dismissalPublisher.dispose(); });
   const deviceNameReady = initializeDeviceName();
   let activityEndpointUnsupported = false;
   let lastActivityUpload: { key: string; at: number } | undefined;
@@ -2568,6 +2600,8 @@ export async function remoteUnsubscribe(
 // ─── 手机推送(notify 帧,经 relay 下发 APNs)───────────────────────────────────
 
 const mobileNotifyDeduper = new MobileNotifyDeduper();
+let notificationActivity: ((sessionId: string) => AgentIslandSessionSnapshot | undefined) | undefined;
+let notificationRequestIds: ((sessionId: string) => string[]) | undefined;
 
 /**
  * 会话终态时给本账号已注册推送 token 的手机发系统推送(fire-and-forget)。
@@ -2603,6 +2637,12 @@ export function sendMobileSessionNotify(payload: {
   muteExempt?: boolean;
   /** Execution host for a remotely mirrored session. */
   remoteDeviceId?: string;
+  /** needs-reply only: one waiting tool permission the alert describes and can answer. */
+  permission?: PermissionAlert;
+  /** needs-reply only: the one question the agent is waiting on. */
+  question?: QuestionAlert;
+  /** The alert offers a text reply into this task. */
+  reply?: boolean;
 }): boolean {
   if (!client) return false;
   // 「消息免打扰」任务不推手机。放在这里而不是各调用方:代输入等旁路不经过
@@ -2616,6 +2656,11 @@ export function sendMobileSessionNotify(payload: {
   }
   const selfDeviceId = client.getSelfDeviceId();
   if (!selfDeviceId) return false;
+  const notificationId = mobileNotificationIdentity(payload.remoteDeviceId ?? selfDeviceId, payload.sessionId, payload.kind, payload.eventId);
+  // A watching desktop may forward the same stable event even when this host
+  // suppresses its own push. Keep its identity on the execution host as well.
+  if (!payload.remoteDeviceId) trackMobileNotification({ id: notificationId, sessionId: payload.sessionId, kind: payload.kind,
+    requestIds: payload.kind === 'needs-reply' ? notificationRequestIds?.(payload.sessionId) ?? [] : [] });
   if (getControllersForTopic(`session:${payload.sessionId}`).length > 0) {
     log.debug(
       `mobile notify skipped: session ${payload.sessionId.slice(0, 8)} is being watched remotely`,
@@ -2624,8 +2669,10 @@ export function sendMobileSessionNotify(payload: {
   }
   const now = Date.now();
   if (!mobileNotifyDeduper.shouldSend(payload.sessionId, payload.kind, now, payload.eventId)) return false;
+  const activity = !payload.remoteDeviceId ? notificationActivity?.(payload.sessionId) : undefined;
+  if (!payload.muteExempt && activity && (payload.kind === 'needs-reply' ? activity.phase !== 'needs-interaction' : !activity.attention)) return false;
   const sent = client.sendNotify(
-    buildSessionNotifyPayload({
+    { notificationId, recipientId: authManager.getCurrentUserId() ?? undefined, ...buildSessionNotifyPayload({
       sessionId: payload.sessionId,
       title: payload.title,
       kind: payload.kind,
@@ -2636,7 +2683,10 @@ export function sendMobileSessionNotify(payload: {
       imageFallback: getNotificationImageLabel(),
       ...(payload.teammateBotId ? { teammateBotId: payload.teammateBotId } : {}),
       ...(payload.teammateAvatar ? { teammateAvatar: payload.teammateAvatar } : {}),
-    }),
+      ...(payload.permission ? { permission: payload.permission } : {}),
+      ...(payload.question ? { question: payload.question } : {}),
+      ...(payload.reply ? { reply: true } : {}),
+    }) },
   );
   if (sent) {
     mobileNotifyDeduper.recordSent(payload.sessionId, payload.kind, now, payload.eventId);

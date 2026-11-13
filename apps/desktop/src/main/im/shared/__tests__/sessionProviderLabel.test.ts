@@ -2,7 +2,8 @@
  * 额度说明里的「哪个供应商」必须是任务此刻实际走的那一家 —— 运行中会话口径
  * (actualSourceIdForModel), 停用 / 退役拷贝不让说明改名或退化成「当前供应商」。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 import type { ProviderView } from '@cindy/model-providers';
 
 const mocks = vi.hoisted(() => ({
@@ -59,6 +60,11 @@ beforeEach(() => {
   mocks.providers = [codexProvider('openai', 'OpenAI'), codexProvider('xd', 'Cindy AI')];
   mocks.live = undefined;
 });
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('resolveSessionErrorContext', () => {
   it('names the implicit native default source', async () => {

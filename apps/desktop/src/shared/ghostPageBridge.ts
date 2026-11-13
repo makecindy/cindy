@@ -96,6 +96,9 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     ports.send({ ...req, type: 'fs-request' }),
   deviceSync: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'device-sync-request' }),
+  // A live screen plugin's view of its own screens on the account's other computers.
+  liveScreenView: (req: Record<string, unknown>): Promise<unknown> =>
+    ports.send({ ...req, type: 'live-screen-view-request' }),
   library: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'library-request' }),
   targets: Object.fromEntries(['capabilities', 'list', 'resolve', 'send', 'get', 'cancel'].map(kind => [kind,

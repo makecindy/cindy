@@ -24,7 +24,7 @@
   },
   "connectStep1": "Instale e abra {{appName}} no seu computador",
   "connectStep2": "Entre com a mesma conta do celular",
-  "connectStep3": "Em Configurações → Conexão remota, ative \"Permitir que dispositivos da mesma conta controlem este computador\"",
+  "connectStep3": "Em Configurações → Conexão remota, ative “Permitir que dispositivos da mesma conta controlem este computador”",
   "brandEyebrow": "Cindy Mobile",
   "cloudTeaserTitle": "{{appName}} na nuvem, em breve",
   "cloudTeaserCopy": "Após o lançamento, o aplicativo móvel funcionará de forma independente, sem precisar de computador.",
@@ -55,7 +55,7 @@
     "hint": {
       "online": "As tarefas remotas podem ser sincronizadas.",
       "lastSynced": "Última sincronização: {{time}}",
-      "connecting": "As tarefas remotas serão reassinadas automaticamente quando a rede voltar.",
+      "connecting": "A assinatura das tarefas remotas será retomada automaticamente quando a rede voltar.",
       "stopped": "A conexão será retomada quando você voltar ao aplicativo ou entrar novamente."
     }
   },
@@ -63,7 +63,7 @@
     "noKey": "Não é possível usar {{agent}} porque nenhuma chave de API está configurada no computador. Configure uma em {{appName}} no computador, em Configurações → Provedores de modelos, e tente novamente.",
     "noOauth": "Não é possível usar {{agent}} porque a autorização da conta não foi concluída no computador. Reconecte a conta em {{appName}} no computador, em Configurações → Provedores de modelos, e tente novamente.",
     "noCredentials": "Não é possível usar {{agent}} porque o login não foi feito no computador. Entre por {{appName}} no computador, em Configurações → Provedores de modelos, e tente novamente.",
-    "noEncryption": "Não é possível usar {{agent}} porque o armazenamento seguro do sistema no computador está indisponível. Verifique o Keychain no macOS ou a criptografia da conta no Windows e reinicie {{appName}} no computador.",
+    "noEncryption": "Não é possível usar {{agent}} porque o armazenamento seguro do sistema no computador está indisponível. Verifique o Acesso às Chaves no macOS ou a criptografia da conta no Windows e reinicie {{appName}} no computador.",
     "proxyNotReady": "{{agent}} ainda não está pronto no computador. Tente novamente em breve; se isso continuar, reinicie {{appName}} no computador.",
     "default": "Não é possível usar {{agent}} porque seu login no computador está indisponível. Entre novamente por {{appName}} no computador, em Configurações → Provedores de modelos. ({{reason}})"
   },

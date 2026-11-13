@@ -5,13 +5,20 @@
  * 桌面弹出,用户在 IM 侧毫无感知,只能等到 CONFIRM_TIMEOUT。
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildDesktopConfirmNoticeText,
+  buildInputHandoffNoticeText,
   createDesktopConfirmNotifier,
+  desktopConfirmSubject,
   resolveFeishuNoticeTarget,
 } from '../desktopConfirmNotice.js';
+import { setMainLocale } from '../../i18n.desktop';
+
+// 断言中文控制文案:显式锁定界面语言,结束后还原默认。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -135,5 +142,15 @@ describe('resolveFeishuNoticeTarget(#1059 review P1)', () => {
         's2',
       ),
     ).toBe(null);
+  });
+});
+
+describe('desktop confirm notice copy follows the interface language', () => {
+  it('builds English notices with the card subject and task title filled in', () => {
+    setMainLocale('en');
+    expect(buildDesktopConfirmNoticeText(desktopConfirmSubject('githubIssue'))).toBe(
+      '🔔 The “Submit GitHub Issue” confirmation card is waiting for your confirmation in Cindy Desktop. It will be cancelled automatically if it times out; to continue, go to Cindy Desktop.',
+    );
+    expect(buildInputHandoffNoticeText('Deploy')).toBe('🔐 Your input is needed: Deploy · Open in Cindy');
   });
 });

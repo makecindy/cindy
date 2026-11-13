@@ -98,6 +98,7 @@ import {
   getProviderRoutingDescriptor,
   getSessionRoutingDescriptor,
   resolveProviderRouteById,
+  oauthRefreshFailedDecision,
   resolveProviderRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveSessionRoute,
@@ -3192,7 +3193,7 @@ function resolveCodexCustomProviderRoutingDecision(
             threadId,
             subagentRoute.reasoningEffort,
           ) ?? unresolvedCollabSpawnRouteDecision();
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       return resolveProviderRouteDecision(
         subagentRoute.providerId,
@@ -3222,7 +3223,7 @@ function resolveCodexCustomProviderRoutingDecision(
             model !== requestModel ? model : undefined,
             threadId,
           );
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
@@ -3262,7 +3263,7 @@ function resolveCodexCustomProviderRoutingDecision(
           );
           if (implicitProviderOAuth) return implicitProviderOAuth;
           return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
       if (implicitProviderOAuth) return implicitProviderOAuth;

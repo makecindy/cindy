@@ -905,6 +905,8 @@ describe('notificationService — channels 分发', () => {
       generation: 7,
       detail: '修好了,共改了 3 个文件。',
       eventId: 'reply-id',
+      // 完成的任务可以在通知上直接回复(docs/product-rules/notification-actions.md)。
+      reply: true,
     });
 
     sendMobileSessionNotify.mockClear();
@@ -923,6 +925,57 @@ describe('notificationService — channels 分发', () => {
       kind: 'error',
       generation: 7,
     });
+  });
+
+  // 通知按钮(docs/product-rules/notification-actions.md):等批准的通知只描述并绑定本机此刻仍在等的那一条请求。
+  // 镜像的远程任务在本机可能有同 id 的无关任务,绝不能把本机的请求挂到它的通知上——那会让手机批准另一条操作。
+  it('等批准或等回答:手机通知带本机那一条请求并按请求去重;远程镜像任务不带', async () => {
+    const { initNotificationService } = await freshService();
+    const permission = { requestId: 'req-1', body: 'Allow?\npnpm test' };
+    const question = { requestId: 'q-1', body: 'Which database?\n1. Postgres\n2. SQLite', options: ['Postgres', 'SQLite'] };
+    const pendingPermissionAlert = vi.fn((): { permission?: typeof permission; question?: typeof question } => ({ permission }));
+    initNotificationService({ ...baseDeps(makeFeishuIm('ou_owner')), pendingInteractionAlert: pendingPermissionAlert });
+    const event = { sessionId: 's1', title: 'Hello', kind: 'needs-reply', channels: { desktop: false, feishu: false, mobile: true } };
+
+    await invokeHandler(event);
+    await flushAsync();
+    expect(pendingPermissionAlert).toHaveBeenCalledWith('s1');
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: 'needs-reply', permission, eventId: 'permission:req-1',
+    }));
+
+    // Execution and mirrored alerts must share the same identity, independently
+    // of action buttons. A request-specific fallback is only for legacy callers.
+    await invokeHandler({ ...event, alertEventId: 'turn:1:permission:req-1' });
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
+      permission, eventId: 'turn:1:permission:req-1',
+    }));
+    pendingPermissionAlert.mockClear();
+    await invokeHandler({ ...event, alertEventId: 'turn:1:permission:req-1', remoteDeviceId: 'other-mac', markAttention: false });
+    await flushAsync();
+    expect(pendingPermissionAlert).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:1:permission:req-1' }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
+
+    // 等回答的是一道提问:同样绑定到那一条请求。
+    pendingPermissionAlert.mockReturnValueOnce({ question });
+    await invokeHandler({ ...event, alertEventId: 'turn:1:ask:q-1' });
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: 'needs-reply', question, eventId: 'turn:1:ask:q-1',
+    }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
+
+    sendMobileSessionNotify.mockClear();
+    pendingPermissionAlert.mockClear();
+    await invokeHandler({ ...event, alertEventId: 'turn:1:ask:q-1', remoteDeviceId: 'other-mac', markAttention: false });
+    await flushAsync();
+    expect(pendingPermissionAlert).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:1:ask:q-1' }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ question: expect.anything() }));
   });
 
   it('链路代次在 await 之前捕获:等待队列期间换号,透传的仍是发起时的代次', async () => {

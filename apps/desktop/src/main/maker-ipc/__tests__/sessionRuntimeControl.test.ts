@@ -20,6 +20,7 @@ import {
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
+  remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
   resolveSessionRuntimeRefreshEffort,
@@ -79,6 +80,43 @@ function provider(
 }
 
 describe('session runtime control state', () => {
+  // Unit #10271: account handoff must not clear Agent-selected model/axes or a
+  // different pending target. Existing recovery APIs reset that state wholesale.
+  it.each(['same-route', 'other-route', 'other-provider', 'no-override', 'stale-owner', 'stale-generation'] as const)(
+    'remaps only the admitted runtime provider with owner/generation fencing (%s)', mode => {
+      const sessionId = 'account-handoff';
+      const profile = { ...current, providerId: mode === 'other-provider' ? 'another-provider' : 'openai-old' };
+      if (mode !== 'no-override') {
+        acceptSessionRuntimeMutation({ sessionId, source: 'fallback', profile, deferred: false });
+        acceptSessionRuntimeMutation({ sessionId, source: 'fallback', deferred: true, thinking: false,
+          profile: { ...profile, effort: 'max', ...(mode === 'other-route' ? { model: 'other-model' } : {}) } });
+      }
+      const owner = captureSessionRuntimeControlOwnerEpoch();
+      const before = getSessionRuntimeControlSnapshot(sessionId);
+      if (mode === 'stale-owner') clearAllSessionRuntimeControlStates();
+      const expected = getSessionRuntimeControlSnapshot(sessionId);
+      const result = remapSessionRuntimeProvider({ sessionId, fromProviderId: 'openai-old', toProviderId: 'openai',
+        expectedOwnerEpoch: owner, expectedGeneration: before.generation + (mode === 'stale-generation' ? 1 : 0) });
+      if (mode === 'stale-owner' || mode === 'stale-generation') {
+        expect(result).toBeNull();
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual(expected);
+      } else if (mode === 'no-override') {
+        expect(result).toBe(before.generation + 1);
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1 });
+        expect(sessionRuntimeGenerationMatches(sessionId, before.generation)).toBe(false);
+      } else if (mode === 'other-provider') {
+        expect(result).toBe(before.generation + 1);
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1,
+          pending: { ...before.pending!, generation: before.generation + 1 } });
+      } else {
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1,
+          effectiveOverride: { ...profile, providerId: 'openai' }, pending: { ...before.pending!,
+            generation: before.generation + 1, profile: { ...before.pending!.profile,
+              providerId: mode === 'same-route' ? 'openai' : 'openai-old' } } });
+        expect(sessionRuntimeGenerationMatches(sessionId, before.generation)).toBe(false);
+      }
+    });
+
   it('uses one monotonic generation for deferred and settled mutations', () => {
     const sessionId = 'runtime-generation';
     expect(sessionRuntimeGenerationMatches(sessionId, 0)).toBe(true);

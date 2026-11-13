@@ -47,6 +47,7 @@ import {
 } from './components.js';
 import type { ButtonInteractionLike } from './components.js';
 import { startStreaming } from './streamingText.js';
+import { tt } from '../transportText.js';
 
 const TOKEN_SECRET_KEY = 'discord-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id';
@@ -62,8 +63,10 @@ const RUNTIME_OFFLINE_NOTICE_TIMEOUT_MS = 4_500;
 const RUNTIME_ONLINE_NOTICE_WAIT_TIMEOUT_MS = 1_000;
 const RUNTIME_NOTICE_SHUTDOWN_BUDGET_MS = 5_500;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
-const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
-const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
+const defaultExpiredCardNotice = (): string =>
+  tt('imBot.text.transport.common.cardExpired', '卡片已过期');
+const secretWriteFailedReason = (): string =>
+  tt('imBot.text.transport.common.secretWriteFailed', '无法安全保存凭证(系统安全存储不可用)');
 const DEFAULT_OWNER_NOTICES = {
   linked: '✅ All linked. Just send a message when you are ready.',
   disconnected: '🔌 Unlinked. Link again whenever you need me.',
@@ -100,7 +103,8 @@ export interface DiscordIMOptions {
   ipc?: boolean;
   resolveImageUrl?: (url: string) => string;
   gatewayFactory?: (ev: DiscordGatewayEvents) => DiscordGateway;
-  expiredCardNotice?: string;
+  /** Expired-card notice; a function is read at send time so it follows the current UI language. */
+  expiredCardNotice?: string | (() => string);
   ownerNoticeText?: Partial<Record<OwnerNoticePhase, string>> | ((phase: OwnerNoticePhase) => string);
   /**
    * 服务器频道白名单的存取（宿主持久化）。缺省 = 不开放任何服务器频道，只有主人私聊。
@@ -242,7 +246,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const ownerUserId =
       typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
     if (!this.host.secrets.isAvailable()) {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason() });
       return configResult();
     }
 
@@ -258,7 +262,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.restoreSecret(this.key(TOKEN_SECRET_KEY), previousToken);
       this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwnerUserId);
       this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason() });
       return configResult();
     }
 
@@ -1415,7 +1419,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const interaction = i as ButtonInteractionLike & {
       followUp?: (payload: { content: string; ephemeral?: boolean }) => Promise<unknown>;
     };
-    const notice = this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE;
+    const configured = this.opts.expiredCardNotice;
+    const notice = (typeof configured === 'function' ? configured() : configured) ?? defaultExpiredCardNotice();
     if (typeof interaction.followUp === 'function') {
       try {
         await interaction.followUp({ content: notice, ephemeral: true });

@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { WebhookAccountManager } from './WebhookAccountManager';
 import { webhookEventOptions } from '../lib/webhookEventOptions';
+import appI18n from 'i18next';
 
 type WebhookStatus = Awaited<ReturnType<typeof window.electronAPI.maker.schedule.webhookStatus>>;
 
@@ -77,6 +78,7 @@ function statusHint(status: NonNullable<WebhookStatus>): string | null {
   if (status.problem === 'suspended') return 'scheduler.webhook.suspended';
   if (status.problem === 'quota') return 'scheduler.webhook.quotaExhausted';
   if (status.problem === 'limit') return 'scheduler.webhook.endpointLimit';
+  if (status.problem === 'unsupported') return 'scheduler.webhook.unsupportedFormat';
   if (status.problem === 'failed') return 'scheduler.webhook.urlUnavailable';
   if (!status.url) return 'scheduler.webhook.preparing';
   if (!status.connected) return 'scheduler.webhook.offline';
@@ -221,7 +223,7 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   const receivedText = status
     ? status.lastReceivedAt
       ? t('scheduler.webhook.lastReceived', {
-          time: new Date(status.lastReceivedAt).toLocaleString(),
+          time: new Date(status.lastReceivedAt).toLocaleString(appI18n.language),
         })
       : t(
           !hint && status.connected && !needsSecret && schedule.status === 'active'
@@ -232,7 +234,7 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   const summary = hint
     ? t(hint, {
         limit: status?.quotaLimit,
-        time: status?.quotaResetAt ? new Date(status.quotaResetAt).toLocaleString() : '',
+        time: status?.quotaResetAt ? new Date(status.quotaResetAt).toLocaleString(appI18n.language) : '',
       })
     : needsSecret
       ? t(

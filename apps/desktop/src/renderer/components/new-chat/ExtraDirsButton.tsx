@@ -43,7 +43,8 @@ export function ExtraDirsButton({
   open,
   onOpenChange,
   panel,
-  maxContentHeight,
+  // 默认聊天沿用建议面板原来的 400px 上限；新建任务页可传更小值。
+  maxContentHeight = 400,
   disabled,
   dense = false,
   visualVariant = 'default',

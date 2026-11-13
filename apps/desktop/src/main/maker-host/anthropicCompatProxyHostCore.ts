@@ -82,6 +82,7 @@ import {
   getUserProviderIdForSession,
   inferProviderIdForModel,
   resolveImplicitLocalBridgeRouteResolution,
+  oauthRefreshFailedDecision,
   resolveImplicitProviderOAuthRouteDecision,
   resolvePendingSessionRouteDecision,
   resolveProviderRouteDecision,
@@ -1028,7 +1029,7 @@ function createModelRoutingTransform(): RoutingTransform {
         return implicitOAuth instanceof Promise
           ? implicitOAuth.then(authorizeImplicitOAuth)
           : authorizeImplicitOAuth(implicitOAuth);
-      });
+      }).catch(() => oauthRefreshFailedDecision());
     }
     return decideDefaultRoute();
 

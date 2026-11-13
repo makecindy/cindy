@@ -75,7 +75,7 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
-import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
+import { ensureBotProjectAutomations, ensureWorkspaceRepository, readWorkspaceRepositoryStatus, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
 import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
 import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { readBotProjectMode } from '../../../shared/botProjectMode.js';
@@ -1453,6 +1453,28 @@ export async function readBotSettingsProfile(botId: string) {
   return readProfile(getDbClient(), botId);
 }
 
+/** Same service for local settings and authorized same-account remote settings. */
+export async function botProjectRepository(botId: string, retry: boolean, assertExternal: () => void = () => {}) {
+  const owner = captureBotOperationOwner();
+  const [profile] = await getDbClient().drizzle.select({ id: botProfiles.id })
+    .from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+  owner.assertCurrent();
+  assertExternal();
+  if (!profile) throwIpcError('NOT_FOUND', 'Bot does not exist');
+  const workspace = path.join(botProfileDir(owner.userDataDir, botId), 'workspace');
+  if (retry) {
+    await ensureWorkspaceRepository(workspace).catch((error) => {
+      log.warn('buddy project repository retry failed', { botId, error: String(error) });
+    });
+    owner.assertCurrent();
+    assertExternal();
+  }
+  const status = await readWorkspaceRepositoryStatus(workspace);
+  owner.assertCurrent();
+  assertExternal();
+  return status;
+}
+
 /**
  * Device-link only needs enough Bot metadata to render the Mobile directory and
  * open the canonical task. Keep this projection main-side so profile prompts,
@@ -2532,6 +2554,12 @@ export function registerBotIpc(): void {
     const profile = await readRemoteBotProfile(client, botId);
     if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
     return profile;
+  });
+
+  ipcMain.handle('local-db:bots:project-repository', async (event, rawId: unknown, retry: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof retry !== 'boolean') throwIpcError('INVALID_PARAMS', 'Retry must be a boolean');
+    return botProjectRepository(requireString(rawId, 'botId'), retry);
   });
 
   // Source preparation is local-only and account-independent, including for a
