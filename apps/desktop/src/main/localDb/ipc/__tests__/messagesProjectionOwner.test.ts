@@ -60,6 +60,7 @@ vi.mock('../../client/current', () => ({
 }));
 
 import { createMessage, patchMessageAgentMetaWithResult } from '../messages';
+import { setTaskChangeListener } from '../../taskEvents';
 import { tx } from '../../worker/opHandlers/tx';
 
 function setupDb(): void {
@@ -100,7 +101,7 @@ function setupDb(): void {
 }
 
 describe('teammate projection owner broadcasts', () => {
-  afterEach(() => h.sqlite?.close());
+  afterEach(() => { setTaskChangeListener(undefined); h.sqlite?.close(); });
   beforeEach(() => {
     h.broadcast.mockClear();
     h.windowSend.mockClear();
@@ -125,6 +126,8 @@ describe('teammate projection owner broadcasts', () => {
   it.each([false, true])('keeps a projected reply on its original owner across message persistence (switch=%s)', async (switchOwner) => {
     const owner = { ownerScopeKey: 'original', ownerStamp: { dataOwnerId: 'original', ownerGeneration: 1 } };
     h.ownerScope = owner;
+    const events: unknown[] = [];
+    setTaskChangeListener((event, stamp) => events.push({ event, stamp }));
     h.duringInsert = () => {
       if (switchOwner) h.ownerScope = { ownerScopeKey: 'next', ownerStamp: { dataOwnerId: 'next', ownerGeneration: 2 } };
     };
@@ -135,9 +138,11 @@ describe('teammate projection owner broadcasts', () => {
     }, { broadcastOwnerScope: owner });
     expect(h.sqlite!.prepare('SELECT client_id FROM messages').get()).toEqual({ client_id: 'reply-anchor' });
     if (switchOwner) {
+      expect(events).toEqual([]);
       expect(h.windowSend).not.toHaveBeenCalled();
       expect(h.broadcast).not.toHaveBeenCalled();
     } else {
+      expect(events).toEqual([{ event: { kind: 'message', sessionId: 's1', message }, stamp: owner.ownerStamp }]);
       expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:created', { sessionId: 's1', message }, owner.ownerStamp);
       expect(h.windowSend).toHaveBeenCalledWith('local-db:messages:created', expect.objectContaining({ message }), owner.ownerStamp);
     }

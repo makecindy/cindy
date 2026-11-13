@@ -8,9 +8,20 @@ export function createTaskToolCallAuthorizer(deps: {
   getDb(): Pick<DbClient, 'drizzle'> | null;
   isScopeCurrent(db: Pick<DbClient, 'drizzle'>): boolean;
   authorizeAction?: ToolCallAuthorizer;
+  /** Plugin calls carry a Host-attested owner snapshot and gateway approval, never a fake task. */
+  authorizePluginCall?: ToolCallAuthorizer;
 }): ToolCallAuthorizer {
   return async (call) => {
     const { sessionId } = call;
+    const caller = call.caller ?? { kind: 'task', sessionId };
+    if (caller.kind === 'plugin') {
+      if (sessionId !== undefined || !deps.authorizePluginCall)
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Plugin Host approval is unavailable.' };
+      const db = deps.getDb();
+      if (!db) return { ok: false, errorCode: 'HOST_NOT_READY', message: '任务数据尚未就绪。' };
+      if (!deps.isScopeCurrent(db)) return { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号正在切换，请重试。' };
+      return deps.authorizePluginCall(call);
+    }
     if (!sessionId) return { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: '无法识别调用任务。' };
     const db = deps.getDb();
     if (!db) return { ok: false, errorCode: 'HOST_NOT_READY', message: '任务数据尚未就绪。' };

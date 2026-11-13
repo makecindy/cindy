@@ -15,6 +15,14 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 const { __testing, GRANTS_PER_GHOST } = await import('../pickGrantsStore');
 
 describe('normalize(台账清洗)', () => {
+  // §21 unit: the production storage normalizer must retain the native IO path
+  // while comparing it with the existing slash-normalized pick record on Windows.
+  it('保留 Windows 新目录引用，旧路径记录不自动生成引用', () => {
+    const root = { ref: '00000000-0000-4000-8000-000000000001', path: 'C:\\projects\\chosen', dev: '1', ino: '2' };
+    expect(__testing.normalize({ grants: { g1: ['C:/projects/chosen'] }, roots: { g1: [root] } }))
+      .toEqual({ grants: { g1: ['C:/projects/chosen'] }, roots: { g1: [root] } });
+    expect(__testing.normalize({ grants: { g1: ['C:/projects/chosen'] } })).toEqual({ grants: { g1: ['C:/projects/chosen'] } });
+  });
   it('路径统一归一化存取:尾斜杠去掉,同目录不重复', () => {
     expect(
       __testing.normalize({

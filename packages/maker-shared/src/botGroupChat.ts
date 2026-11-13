@@ -548,6 +548,8 @@ export interface BotGroupRoundView {
   canContinue: boolean;
   /** Server groups: someone else's request or teammate is also working, so stopping only yours leaves it running. */
   othersActive?: boolean;
+  /** This account has work it can stop with the default scope; canStopAll is separate. Absent on older hosts. */
+  canStop?: boolean;
 }
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';

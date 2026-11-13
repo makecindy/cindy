@@ -115,6 +115,7 @@ import {
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
+import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
 import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
@@ -479,6 +480,9 @@ export function broadcastSessionPatched(
   pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
+  if (hasTaskChangeListener('state') && !isProvisionalSession(sessionId) && patch.status !== undefined) {
+    publishTaskChange({ kind: 'state', sessionId, state: { status: patch.status } }, ownerStamp);
+  }
   try {
     // 未发送任务只在本机可见，转正前不推给控制端。
     if (isProvisionalSession(sessionId)) {

@@ -1,5 +1,9 @@
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
+import { registerTerminalTools, type TerminalToolCallbacks } from './xdt-helper/terminal.js';
+import { registerFileTools, type FileToolCallbacks } from './xdt-helper/files.js';
+import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/storage.js';
+import { registerHostServiceTools, type HostServicesToolCallbacks } from './xdt-helper/host_services.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
@@ -39,6 +43,11 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js';
+import { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
+import { registerReadSessionAttachmentTool } from './xdt-helper/read_session_attachment.js';
+import { registerDeleteSessionTool, type DeleteSessionCallback } from './xdt-helper/delete_session.js';
+import { registerSessionHistoryTools, type SessionHistoryCallback } from './xdt-helper/session_history_control.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -164,7 +173,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings', 'terminal', 'files', 'storage', 'discovery'] as const;
 
 /**
  * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
@@ -196,8 +205,8 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   control: [
     'list_projects(device) 可查询远程项目。',
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
-    '归档/取消归档支持本机与跨电脑（deviceId::sessionId）；',
-    '改名、移动、标签、排队消息、插话、停止、运行设置、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+    '归档/取消归档、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
+    '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   ].join(''),
   github: [
     '读取 PR、CI、评审变化与详情，明确管理任务关联。',
@@ -207,12 +216,18 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   history: [
     '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；',
     '不要默认限制当前工作目录或创建日期。',
+    'list_teammates 枚举伙伴及已保存的任务关系（含隐藏与暂停），list_sessions 包含隐藏任务并返回 hiddenAt。',
     '查询任务、工作目录、聊天记录、任务摘要与输入队列；',
     '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
-    '任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
+    '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
+    '任务附件（read_session_attachment）仅支持已有宿主授权的本机媒体和交接引用，历史文件路径与跨电脑附件返回 UNSUPPORTED_CAPABILITY，只返回分块字节和引用，不返回宿主路径。',
     '搜索还能查到主力电脑离线的伙伴的云端对话；',
     '其余本机。',
   ].join(''),
+  terminal: '启动、列举、输入、续读和停止当前调用方的宿主终端与后台作业。仅执行电脑本机，作业独立于读取连接；SSH 工作区不在本机代跑远程命令。',
+  files: '通过同一宿主文件服务访问真实任务工作目录或用户亲选的插件目录；读、写、列举、删除与有界监听。',
+  storage: '插件自身 KV、私有文件、作品库、媒体与交接文件的统一调用接口；跨插件快照分享每次经宿主确认，仅同账号本机和同一组织范围。',
+  discovery: '只读发现执行宿主实际提供的服务与本插件的批准事实；仅本机，不安装、启停或撤销其他插件。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
     '给已有任务发消息或新建任务。',
@@ -359,44 +374,43 @@ function registerCallToolEntry(
   telemetry: {
     logger?: LiziMcpLogger;
     getSessionId: () => string | undefined;
+    getHostCaller: () => import('./types.js').LiziMcpSessionContext['hostCaller'];
     authorizeCall?: ToolCallAuthorizer;
   },
   allowedSurface: () => Promise<HelperSurfaceAllow>,
-): void {
-  server.tool(
-    'call_tool',
-    D_CALL_TOOL,
-    CALL_TOOL_INPUT,
-    async ({ name, args }, extra) => {
-      const allowed = await allowedSurface();
-      const definition = registry.get(name);
-      if (definition && !toolAllowed(allowed, definition)) {
-        return errorPayload(
-          'CAPABILITY_NOT_AVAILABLE',
-          '这个工具不属于当前任务的能力面；请重新调用 list_tools。',
-        );
-      }
-      const result = definition
-        ? await withToolCallAuthority(
-          telemetry.authorizeCall,
-          { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args },
-          () => registry.call(name, args, extra?.signal),
-        )
-        : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
-            available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
-          });
-      // errorCode 遥测:UNKNOWN_TOOL / INVALID_ARGS / 业务 errorCode 返回给模型自纠
-      // 之前在这里落一条日志,否则 agent 犯错→自纠 的事件在日志里完全不存在。
-      logToolResultErrorCode({
-        logger: telemetry.logger,
-        server: 'cindy_helper',
-        tool: name,
-        result,
-        sessionId: telemetry.getSessionId(),
-      });
-      return result;
-    },
-  );
+): HostToolRuntime['call'] {
+  const call: HostToolRuntime['call'] = async (name, args, signal) => {
+    const allowed = await allowedSurface();
+    const definition = registry.get(name);
+    if (definition && !toolAllowed(allowed, definition)) {
+      return errorPayload(
+        'CAPABILITY_NOT_AVAILABLE',
+        '这个工具不属于当前任务的能力面；请重新调用 list_tools。',
+      );
+    }
+    const result = definition
+      ? await withToolCallAuthority(
+        telemetry.authorizeCall,
+        { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args,
+          ...(telemetry.getHostCaller() ? { caller: telemetry.getHostCaller() } : {}) },
+        () => registry.call(name, args, signal),
+      )
+      : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
+          available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
+        });
+    // errorCode 遥测:UNKNOWN_TOOL / INVALID_ARGS / 业务 errorCode 返回给模型自纠
+    // 之前在这里落一条日志,否则 agent 犯错→自纠 的事件在日志里完全不存在。
+    logToolResultErrorCode({
+      logger: telemetry.logger,
+      server: 'cindy_helper',
+      tool: name,
+      result,
+      sessionId: telemetry.getSessionId(),
+    });
+    return result;
+  };
+  server.tool('call_tool', D_CALL_TOOL, CALL_TOOL_INPUT, ({ name, args }, extra) => call(name, args, extra?.signal));
+  return call;
 }
 
 /** Teammate discovery and a group lane's private message to its owner. */
@@ -460,6 +474,10 @@ export type ControlDispatchOutcome =
 // ── Factory ────────────────────────────────────────────────────────────────
 
 export interface XdtHelperMcpDeps {
+  terminal?: TerminalToolCallbacks;
+  files?: FileToolCallbacks;
+  storage?: StorageToolCallbacks;
+  hostServices?: HostServicesToolCallbacks;
   github?: GithubToolCallbacks;
   getSessionProject?: import('./xdt-helper/get_current_session_id.js').GetCurrentSessionIdDeps['getSessionProject'];
   logger?: LiziMcpLogger;
@@ -565,6 +583,8 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  deleteSession?: DeleteSessionCallback;
+  sessionHistory?: SessionHistoryCallback;
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
   /**
    * 任务导入（与设置 → 任务导入同一实现）。host 注入后, control 类工具
@@ -584,12 +604,13 @@ export interface XdtHelperMcpSessionCtx {
   getSessionContext?: () => import('./types.js').LiziMcpSessionContext | undefined;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;
+  hostCaller?: import('./types.js').LiziMcpSessionContext['hostCaller'];
 }
 
 export function createXdtHelperMcpServer(
   deps: XdtHelperMcpDeps,
   sessionCtx: XdtHelperMcpSessionCtx,
-): McpServer {
+): HostToolMcpServer {
   const server = new McpServer({
     name: 'cindy_helper',
     version: '1.0.0',
@@ -624,6 +645,10 @@ export function createXdtHelperMcpServer(
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
   };
 
+  if (deps.terminal) registerTerminalTools(registry, deps.terminal, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.files) registerFileTools(registry, deps.files, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.storage) registerStorageTools(registry, deps.storage, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.hostServices) registerHostServiceTools(registry, deps.hostServices, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.github) registerGithubTools(registry, deps.github, () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
@@ -701,6 +726,12 @@ export function createXdtHelperMcpServer(
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
   }
+  if (deps.deleteSession) registerDeleteSessionTool(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), deleteSession: deps.deleteSession,
+  });
+  if (deps.sessionHistory) registerSessionHistoryTools(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), call: deps.sessionHistory,
+  });
   if (deps.sessionImport) {
     registerSessionImportTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
@@ -710,6 +741,8 @@ export function createXdtHelperMcpServer(
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
   if (deps.history) {
+    registerReadSessionAttachmentTool(registry, { history: deps.history, getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx) });
+    registerListTeammatesTool(registry, { history: deps.history, getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx) });
     const historyDeps = {
       history: deps.history,
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
@@ -823,11 +856,12 @@ export function createXdtHelperMcpServer(
     });
   }
   registerListToolsEntry(server, registry, allowedSurface, sessionCtx);
-  registerCallToolEntry(server, registry, {
+  const call = registerCallToolEntry(server, registry, {
     logger: deps.logger,
     // per-call 解析:codex HTTP bridge 的 server factory 阶段 ctx 是空的,
     // tool-call 阶段由 AsyncLocalStorage 恢复,所以 sessionId 必须调用时再取。
     getSessionId: () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
+    getHostCaller: () => resolveLiziMcpSessionContext(sessionCtx).hostCaller,
     ...(deps.authorizeCall ? { authorizeCall: deps.authorizeCall } : {}),
   }, allowedSurface);
 
@@ -974,5 +1008,13 @@ export function createXdtHelperMcpServer(
       ] };
     });
   }
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
+    describe(name: string) {
+      const tool = registry.get(name);
+      return tool ? { name: tool.name, category: tool.category } : undefined;
+    },
+    call,
+    close: () => server.close(),
+  } });
 }

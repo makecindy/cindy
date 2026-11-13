@@ -710,6 +710,7 @@
     "REMOTE_AGENT_TOTAL_LIMIT": "远方之机所留差事总数已达上限。请彼机之主人释出暂不用之差事，或于「远程与分享」中提高上限。",
     "REMOTE_AGENT_RESUME_LOST": "先前于彼机之言谈未能接续，Agent 将于无先前上下文之下续行。",
     "REMOTE_AGENT_UNSUPPORTED": "彼机上此 Agent 不可用。请于彼机安装或登门后再试，或易一 Agent。",
+    "REMOTE_AGENT_RESUME_UNAVAILABLE": "此机不能复差事旧态。请选择他机或供方之模型，交接上下文以续行；旧讯皆存。",
     "REMOTE_AGENT_INVALID": "与行 Agent 之机通信时有谬。请再试；若屡见之，请将两机之 Cindy 皆更新至最新版。",
     "REMOTE_AGENT_RESUME_REJECTED": "运行模型之电脑无法续此差事。请由差事列表新建差事，复制所需内容以续。原差事及待发之讯皆保留。",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达分享者所设之模型占比上限。请择他可用之模型以续。",

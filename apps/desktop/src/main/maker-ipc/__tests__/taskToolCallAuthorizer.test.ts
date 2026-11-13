@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { createTaskToolCallAuthorizer } from '../taskToolCallAuthorizer.js';
 
@@ -44,5 +44,19 @@ describe('shared task tool admission', () => {
     expect(await createTaskToolCallAuthorizer({ getDb: () => null, isScopeCurrent: () => true })({
       sessionId: 'companion', server: 'cindy_helper', tool: 'list_sessions', args: {},
     })).toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+  });
+
+  it('requires Host plugin admission separately from task authority and never accepts a borrowed task id', async () => {
+    const authorizePluginCall = vi.fn(async () => ({ ok: true as const }));
+    const authorizeAction = vi.fn(async () => ({ ok: true as const }));
+    const authorize = createTaskToolCallAuthorizer({ getDb: () => db, isScopeCurrent: () => current, authorizePluginCall, authorizeAction });
+    const call = { caller: { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 }, sessionId: undefined,
+      server: 'cindy_helper' as const, tool: 'archive_sessions', args: { session_ids: ['ordinary'] } };
+    expect(await authorize(call)).toEqual({ ok: true });
+    expect(authorizePluginCall).toHaveBeenCalledExactlyOnceWith(call);
+    expect(authorizeAction).not.toHaveBeenCalled();
+    expect(await authorize({ ...call, sessionId: 'ordinary' })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    current = false;
+    expect(await authorize(call)).toMatchObject({ ok: false, errorCode: 'OWNER_SCOPE_CHANGED' });
   });
 });

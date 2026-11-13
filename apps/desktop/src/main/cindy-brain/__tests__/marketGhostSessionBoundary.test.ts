@@ -219,7 +219,7 @@ describe('market Ghost session boundary', () => {
     )({
       hasPendingGhostCalls: () => false, hasRunningGhostErrand: () => false, hasRunningGhostCindyWork: () => false,
       fsSlotSingleton: null, networkSlotSingleton: null,
-      handoffStoreSingleton: { isBusy: (part: string) => part === 'busy' },
+      isGhostHandoffBusy: (part: string) => part === 'busy',
     });
     expect(() => assertGhostRelocationIdle('busy')).toThrow('Ghost relocation is waiting for active work to finish');
     expect(() => assertGhostRelocationIdle('idle')).not.toThrow();

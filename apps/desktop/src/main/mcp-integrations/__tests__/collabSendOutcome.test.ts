@@ -86,6 +86,10 @@ vi.mock('../../maker-host/index.js', () => ({
 vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduler: () => null,
 }));
+// This collaboration fixture exercises provider wiring without Desktop history/IPC setup.
+vi.mock('../historyAttachment.desktop.js', () => ({ readDesktopHistoryAttachment: vi.fn() }));
+vi.mock('../../maker-ipc/fork.js', () => ({ forkTaskAtMessage: vi.fn() }));
+vi.mock('../../maker-ipc/rewind.js', () => ({ commitTaskRewind: vi.fn() }));
 
 vi.mock('../../im/index.js', () => ({
   feishuIm: mockState.personalFeishu,

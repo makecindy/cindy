@@ -634,6 +634,7 @@ import {
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
   isTrustedCindyRendererWindow,
   isTrustedTopLevelCindyRendererEvent,
 } from './security/trustedAppRenderer.js';
@@ -1195,6 +1196,7 @@ import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
+import { refreshHostToolProviderOwner } from './mcp-integrations/hostToolCaller.js';
 import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
@@ -1332,7 +1334,29 @@ function installHostClientMode(): boolean {
   // The host owns the profile's database too; a local open would be a second writer.
   setHostClientMode(true);
   const hostClient = createHostClient(delegation);
-  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain, assertTrusted: assertTrustedAppRendererEvent });
+  const pluginConfirmations = new Map<string, { window: BrowserWindow; channel: string }>();
+  const confirmationWindows = new WeakSet<BrowserWindow>();
+  const cancelWindowConfirmations = (window: BrowserWindow) => {
+    for (const [requestId, pending] of pluginConfirmations) {
+      if (pending.window !== window) continue;
+      pluginConfirmations.delete(requestId);
+      if (isTrustedAppRendererWindow(window)) window.webContents.send(
+        pending.channel === 'ghosts:confirm-request' ? 'ghosts:confirm-dismissed' : 'ghosts:install-consent:dismissed', { requestId });
+      void hostClient.request(pending.channel === 'ghosts:confirm-request' ? '/api/ghosts/confirm/resolve' : '/api/ghosts/install-consent/resolve',
+        { requestId, confirmed: false }).catch(() => {});
+    }
+  };
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain,
+    assertTrusted: assertTrustedAppRendererEvent,
+    authorizePluginApproval: (event, channel, args) => {
+      if (!isTrustedAppRendererEvent(event)) return false;
+      if (channel === 'ghosts:request-task-approval') return true;
+      const requestId = (args[0] as { requestId?: unknown } | null)?.requestId;
+      const pending = typeof requestId === 'string' ? pluginConfirmations.get(requestId) : undefined;
+      return !!pending && !pending.window.isDestroyed() && pending.window.webContents === event.sender
+        && pending.channel === (channel === 'ghosts:confirm:resolve' ? 'ghosts:confirm-request' : 'ghosts:install-consent:request');
+    },
+  });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
@@ -1408,6 +1432,43 @@ function installHostClientMode(): boolean {
     onConnectionState: (state) => {
       hostConnectionState = state;
       sendToAllWindows('host-client:connection', state);
+      if (state.status !== 'connected') {
+        for (const [requestId, pending] of pluginConfirmations) {
+          if (!pending.window.isDestroyed()) pending.window.webContents.send(
+            pending.channel === 'ghosts:confirm-request' ? 'ghosts:confirm-dismissed' : 'ghosts:install-consent:dismissed', { requestId });
+        }
+        pluginConfirmations.clear();
+      }
+    },
+    onPluginPush: (channel, payload) => {
+      if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(channel)) {
+        for (const win of BrowserWindow.getAllWindows())
+          if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
+        return;
+      }
+      const requestId = (payload as { requestId?: unknown } | null)?.requestId;
+      if (typeof requestId !== 'string') return;
+      if (channel === 'ghosts:confirm-dismissed' || channel === 'ghosts:install-consent:dismissed') {
+        const pending = pluginConfirmations.get(requestId); pluginConfirmations.delete(requestId);
+        if (pending && isTrustedAppRendererWindow(pending.window)) pending.window.webContents.send(channel, payload);
+      } else if (channel === 'ghosts:confirm-request' || channel === 'ghosts:install-consent:request') {
+        if (pluginConfirmations.has(requestId)) return;
+        const focused = BrowserWindow.getFocusedWindow();
+        const target = isTrustedAppRendererWindow(focused) ? focused : mainWindowRef;
+        if (target && isTrustedAppRendererWindow(target)) {
+          if (!confirmationWindows.has(target)) {
+            confirmationWindows.add(target);
+            target.once('closed', () => cancelWindowConfirmations(target));
+            target.webContents.on('did-start-navigation', () => cancelWindowConfirmations(target));
+            target.webContents.on('render-process-gone', () => cancelWindowConfirmations(target));
+          }
+          const pending = { window: target, channel }; pluginConfirmations.set(requestId, pending);
+          target.webContents.send(channel, payload);
+        } else {
+          void hostClient.request(channel === 'ghosts:confirm-request' ? '/api/ghosts/confirm/resolve' : '/api/ghosts/install-consent/resolve',
+            { requestId, confirmed: false }).catch(() => {});
+        }
+      }
     },
     onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
     onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
@@ -2991,6 +3052,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
     const outcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });

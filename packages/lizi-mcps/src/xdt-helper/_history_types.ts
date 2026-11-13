@@ -93,6 +93,7 @@ export interface HistorySession {
   createdAt: number; // unix ms
   updatedAt: number;
   userSendAt: number | null;
+  hiddenAt?: number | null;
   messageCount: number;
   lastActivityAt?: number;
   companion?: HistoryCompanion | null;
@@ -100,6 +101,8 @@ export interface HistorySession {
 
 export interface HistoryMessage {
   id: string;
+  /** Stable UI/native history anchor; older hosts may omit it. */
+  clientId?: string;
   sessionId: string;
   sessionWorkingDir: string | null;
   sessionAgentKind: string;
@@ -242,6 +245,10 @@ export interface SearchChatHistoryResult {
 // ── Deps interface ─────────────────────────────────────────────────────────
 
 export interface XdtHelperHistoryDeps {
+  readSessionAttachment?: (args: import('./read_session_attachment.js').ReadSessionAttachmentArgs,
+    context?: import('../types.js').LiziMcpSessionContext) => Promise<ControlResult<Record<string, unknown>, string>>;
+  listTeammates?: (args: { teammateId?: string; limit: number; cursor: HistoryCursor | null },
+    callerSessionId?: string) => Promise<ControlResult<{ page: HistoryPage<Record<string, unknown>> }>>;
   /** Host-built task link; accepts local ids or deviceId::sessionId. No lookup or permission grant. */
   sessionUrl?: (sessionId: string) => string;
   remote?: import('./_history_devices.js').HistoryRemoteDeps;

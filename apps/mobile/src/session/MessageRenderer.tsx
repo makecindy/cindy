@@ -163,6 +163,7 @@ import {
 } from '@/session/sentMessageAtoms';
 import { SelectionQuoteContext } from '@/session/selectionQuote';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
+import { MarkdownListParagraph } from './MarkdownListParagraph';
 // Passive formatting inside a selectable iOS block stays a raw UITextView child without the share-row gesture context.
 import { UITextView } from 'react-native-uitextview';
 import {
@@ -243,6 +244,7 @@ import {
 } from '@/session/filePreview';
 import {
   groupMobileMarkdownSelectableBlocks,
+  mobileMarkdownListMarkerText,
   mobileMarkdownManagedImagePreviewUrl,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageAltChipText,
@@ -6186,6 +6188,10 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
+  const hasNestedLists = blocks.some(block => block.type === 'list_item' && (block.depth ?? 0) > 0);
+  // Paragraph layout needs UIKit on iOS. Expanded nested replies use bounded
+  // native runs instead of reintroducing the giant UITextView that blanked.
+  const paragraphUsesIosTextView = allowIosUITextView || hasNestedLists;
   const managedImagePreviewUrl = useCallback((url: string) => !publicMediaOnly && resolveMarkdownMedia
     ? mobileMarkdownManagedImagePreviewUrl(
       url, chatFilePathContext?.workdir, markdownImageCacheKey,
@@ -6277,9 +6283,9 @@ function MarkdownBodyBase({
   );
   const textRunGroupingOptions = useMemo(() => ({
     ...(Platform.OS === 'android' ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
-    ...(boundTextRuns ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
+    ...(boundTextRuns || hasNestedLists && !allowIosUITextView ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
     imageRendersPreview,
-  }), [boundTextRuns, imageRendersPreview]);
+  }), [allowIosUITextView, boundTextRuns, hasNestedLists, imageRendersPreview]);
   // 连续纯文本块合并为 text_run，图片预览保持独立。
   // Android selectable Text 在超长原生文本视图里会偶发高度/滚动协商异常,长 run 分块
   // 后仍保留块内跨段选择。伙伴的 iOS 长消息展开也复用同一分块，避免巨型 UITextView。
@@ -6287,21 +6293,20 @@ function MarkdownBodyBase({
     () => groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions),
     [blocks, textRunGroupingOptions],
   );
-  // 块可选中且 iOS → 嵌套 span 必须是 UITextView 家族;其余场景缺省 RN Text。
-  const spanFor = useCallback((blockSelectable: boolean) =>
-      blockSelectable && allowIosUITextView && Platform.OS === 'ios'
+  // iOS 的可选或段落排版根使用 UITextView 家族，其余场景保持 RN Text。
+  const spanFor = useCallback((blockSelectable: boolean, paragraphLayout = false) =>
+      (blockSelectable || paragraphLayout) && (allowIosUITextView || paragraphLayout) && Platform.OS === 'ios'
       ? MarkdownSelectableSpan
       : undefined, [allowIosUITextView]);
   // 文本运行组:连续纯文本块(段落/标题/列表项)合进同一个原生文本视图,
   // 原生选择手柄即可横跨段落(单个 text view 是 iOS/Android 原生选择的天然边界)。
   // 段间距用「lineHeight = markdownBodyGap 的空行 span」还原:原生文本树内没有块级 gap 可用,
   // 一个高度恰为 gap 的空行在视觉上与原块间距一致。由单块切出的 continuation 不插间距。
-  // 列表项在树内表达为「marker 前缀 span + 正文」
-  // (无悬挂缩进;任务项以 ☑/☐ 字符替代原边框小方块)。
+  // 列表项保留同一原生文本树，通过段落缩进让自动换行仍留在当前层级。
   const renderTextRunBlock = useCallback((block: MobileMarkdownBlock, leadingGap: boolean): ReactNode => {
     if (block.type !== 'paragraph' && block.type !== 'heading' && block.type !== 'list_item') return null;
     const runSelectable = selectable === true;
-    const RunSpan = spanFor(runSelectable) ?? Text;
+    const RunSpan = spanFor(runSelectable, hasNestedLists) ?? Text;
     const spans: ReactNode[] = [];
     if (leadingGap) {
       spans.push(
@@ -6313,23 +6318,30 @@ function MarkdownBodyBase({
     const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
       ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
       : styles.messageText;
+    const content: ReactNode[] = [];
     if (block.type === 'list_item' && !('textRunContinuation' in block && block.textRunContinuation)) {
-      const task = typeof block.checked === 'boolean';
-      spans.push(
+      content.push(
         <RunSpan key={`${block.key}:marker`} style={[styles.messageText, styles.markdownListMarkerInline]}>
-          {task ? block.checked ? '☑ ' : '☐ '
-              : block.ordered ? `${block.marker} ` : '• '}
+          {mobileMarkdownListMarkerText(block)}
         </RunSpan>,
       );
     }
-    spans.push(...renderInlines(block.inlines, spanFor(runSelectable), baseStyle, block.key));
+    content.push(...renderInlines(block.inlines, spanFor(runSelectable, hasNestedLists), baseStyle, block.key));
+    if (block.type === 'list_item' && (block.depth ?? 0) > 0) {
+      spans.push(<MarkdownListParagraph key={`${block.key}:paragraph`}
+        indent={(block.depth ?? 0) * typeScale.bodyLarge}
+        continuation={'textRunContinuation' in block && block.textRunContinuation === true}>
+        {content}
+      </MarkdownListParagraph>);
+    } else spans.push(...content);
     return spans;
-  }, [layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
+  }, [hasNestedLists, layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
   const renderTextRun = (group: Extract<MobileMarkdownBlockGroup, { type: 'text_run' }>): ReactNode => {
     const runSelectable = selectable === true;
     return (
       <MarkdownSelectableText
-        allowIosUITextView={allowIosUITextView}
+        allowIosUITextView={paragraphUsesIosTextView}
+        paragraphLayout={hasNestedLists}
         alignmentTextStyles={group.blocks.map((block) => block.type === 'heading'
           ? headingSizeStyle(styles, block.level)
           : styles.messageText)}
@@ -6353,7 +6365,7 @@ function MarkdownBodyBase({
     // Only text_run groups are bounded. Code, quotes and table cells retain
     // the stable RN Text fallback in expanded long companion messages.
     const singleBlockAllowsIosUITextView = allowIosUITextView && !boundTextRuns;
-    const singleBlockSpanFor = (blockSelectable: boolean) => singleBlockAllowsIosUITextView
+    const singleBlockSpanFor = (blockSelectable: boolean) => blockSelectable && singleBlockAllowsIosUITextView
       ? spanFor(blockSelectable)
       : undefined;
     if (block.type === 'mermaid') {
@@ -6454,7 +6466,7 @@ function MarkdownBodyBase({
       return (
         <View
           key={block.key}
-          style={[styles.markdownListRow, { gap: layout.markdownListGap }]}
+          style={[styles.markdownListRow, { gap: layout.markdownListGap, paddingLeft: (block.depth ?? 0) * typeScale.bodyLarge }]}
           testID={task ? 'message.markdownTaskItem' : undefined}
         >
           <Text style={[
@@ -6463,7 +6475,7 @@ function MarkdownBodyBase({
             task && styles.markdownTaskMarker,
           ]}>
             {task ? block.checked ? '✓' : ''
-                : block.ordered ? block.marker : '•'}
+                : mobileMarkdownListMarkerText(block).trim()}
           </Text>
           <MarkdownSelectableText
             allowIosUITextView={singleBlockAllowsIosUITextView}

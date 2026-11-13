@@ -40,6 +40,8 @@ import type { AgentIslandService } from '../service.js';
 import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { setTaskChangeListener, type TaskChangeEvent } from '../../localDb/taskEvents.js';
+import { getSafeDataOwnerPushStamp } from '../../device-link/broadcast-tap.js';
 
 // Keep the real implementation; record each instance so its scheduled publishing
 // cannot outlive a test and run against reset Electron mocks in the next test.
@@ -1118,6 +1120,38 @@ describe('AgentIslandService native publishing', () => {
     service.handleNotificationMuteChanged();
     expect(playSound).not.toHaveBeenCalled();
   }, 20_000);
+
+  // Unit, #9801: the plugin topic must omit stream/activity updates at the
+  // production source while retaining rapid turn boundaries without a timer.
+  it('publishes task-state only for lifecycle changes, keeping rapid turn transitions', async () => {
+    vi.useFakeTimers();
+    const events: TaskChangeEvent[] = [];
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend() {} } });
+    service.setEnabled(false);
+    vi.mocked(getSafeDataOwnerPushStamp).mockReturnValue({ dataOwnerId: 'test-owner', ownerGeneration: 1 });
+    setTaskChangeListener(event => events.push(event), ['state']);
+    try {
+      const meta = { sessionId: 'lifecycle-only', agentKind: 'codex' as const };
+      vi.setSystemTime(1_000);
+      service.handleUserPrompt(meta, 'start');
+      vi.setSystemTime(1_001);
+      service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true, status: 'Thinking...' } });
+      service.handleAgentEvent(meta, { type: 'text', source: 'codex', data: { text: 'streaming reply' } });
+      service.replaySessionActivity();
+      expect(events).toHaveLength(1);
+      service.handleAgentEvent(meta, doneEvent());
+      vi.setSystemTime(1_002);
+      service.handleUserPrompt(meta, 'next');
+      expect(events.map(event => event.kind === 'state' ? (event.state.activity as { phase: string } | null)?.phase : null))
+        .toEqual(['running', 'completed', 'running']);
+    } finally {
+      setTaskChangeListener(undefined);
+      vi.mocked(getSafeDataOwnerPushStamp).mockReturnValue(undefined);
+      vi.useRealTimers();
+    }
+  });
 
   it('exposes the canonical snapshot and emits per-session transition edges', async () => {
     const { AgentIslandService } = await import('../service.js');

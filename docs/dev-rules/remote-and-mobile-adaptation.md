@@ -200,6 +200,22 @@ Desktop 远控输入推荐使用任务执行电脑 B 的完成轮次；控制电
 显示与 Tab 采用。响应兼容说明见 [`protocol-compatibility.md`](protocol-compatibility.md)
 「远程输入推荐的完成轮次与重试」。
 
+### Agent-Net 中继连接保活
+
+2026-11-13：开启 Agent-Net 后，device-link 的 ping 由 worker 就地应答、不经过中继，察觉不到
+「还能收、发不出去」的中继连接（实测一台电脑到中继的上行重传约 20%，对端互判离线 9 分钟和
+15 分钟，重连后 1 秒内恢复）。Desktop Main 在实际持有的中继 WebSocket 上每 15 秒发一次标准
+WebSocket ping，45 秒收不到 pong 就关闭这条连接，交给 worker 既有的中继重连（0.5 秒起，最长
+15 秒）。计时器本身迟到（Main 繁忙、系统唤醒）时重新计时，不算作 pong 丢失。
+
+故障半径三问：① 证据是本机到中继这一条连接的往返失败（pong 由中继直接回，不经任何对端），
+单个对端静默或休眠不会触发；② 只重建本机这一条中继连接，已建立的对端通道（直连和经中继的
+加密连接）保留，device-link 链路不复位、不重放；在持续丢包的线路上最坏约每分钟重连一次，不会
+形成紧循环；③ `packages/agent-net/src/__tests__/workerSocket.test.ts` 用本机真实 WebSocket
+中继验证：不回 pong 时断开，正常回 pong 时超过时限也不断开。用的是标准控制帧，官方中继和自建
+中继（同一 V2 内核，默认自动回 pong）都无需改动。手机端（React Native 的 WebSocket 没有 ping
+接口）仍是同一盲区，尚未处理。
+
 ### 共享连接静默与请求隔离
 
 2026-10-30：Desktop 在业务超时时先检查共享 relay 最近是否仍有入站活动；整条连接

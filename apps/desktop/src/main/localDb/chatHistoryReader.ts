@@ -190,6 +190,7 @@ export interface ListSessionsParams {
 }
 
 export interface SessionSummary {
+  hiddenAt: number | null;
   lastActivityAt: number;
   companion: HistoryCompanion | null;
   id: string;
@@ -270,6 +271,7 @@ export async function listSessionsForHistory(
       workspaceKind: sessions.workspaceKind,
       model: sessions.model,
       status: sessions.status,
+      hiddenAt: sessions.hiddenAt,
       source: sessions.source,
       orcaRole: sessions.orcaRole,
       orcaRemoteLead: sessions.orcaRemoteLead,
@@ -310,6 +312,7 @@ export async function listSessionsForHistory(
     workspaceKind: r.workspaceKind,
     model: r.model,
     status: r.status,
+    hiddenAt: r.hiddenAt,
     source: r.source,
     orcaRole: r.orcaRole,
     ...remoteOrcaHistoryIdentity(r.orcaRemoteLead),

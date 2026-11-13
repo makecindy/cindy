@@ -12,8 +12,8 @@ import { bindDeviceAuthorizationTarget, bindPluginAuthorizationTarget } from '..
  * 安全边界：
  * - 只执行已安装目录内、ghost.json 明确声明的单个 JS 入口；无 command / args / shell；
  * - 子进程拥有当前系统用户级本机权限，绝不把它描述成系统沙箱；
- * - 子进程只有 JSON-RPC stdio，不能直接拿到 Cindy IPC。所有 Cindy 能力仍须
- *   Node → main.js → contextBridge → 主机，并再次经过对应 slot 守门；
+ * - 子进程不能直接拿到 Cindy IPC。宿主工具走引导层私有通道进入与逻辑页相同的
+ *   host-tool-request 守门；其它能力仍由 main.js 经 contextBridge 进入对应 slot；
  * - 一段启用的意识最多一个 Node 进程，多会话复用；按需启动、闲置关闭，
  *   停用/更新/卸载/主机退出时由上层 stop；原位更新另用 stopAndWait，等旧进程
  *   真正退出后才可替换其安装目录；
@@ -161,6 +161,9 @@ export interface GhostNodeRuntimeBrokerDeps {
   readSecret?: (ghostId: string, secretKey: string) => string | null;
   authenticatedFetch?: (ghostId: string, request: Record<string, unknown>, authorization: string,
     assertCurrent: () => void, signal: AbortSignal) => Promise<unknown>;
+  hostToolRequest?: (ghostId: string, payload: unknown, current: () => boolean) => Promise<unknown>;
+  /** Explicit disable/update/uninstall releases Host-owned resources; idle worker exit does not. */
+  onStopped?(ghostId: string): void;
   secretSaved?: (ghostId: string, secretKey: string) => boolean;
   /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
   resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
@@ -323,6 +326,8 @@ interface StartingChildProcEntry {
 
 interface WorkerEntry {
   ghost: InstalledGhost;
+  /** The approved install is stable; the manifest is a locale-dependent view. */
+  hostToolIdentity: { dir: string; approvalRevision: string | undefined };
   ownerScopeSnapshot: unknown;
   /** 本进程对应的入口(相对路径;主入口 = manifest.node.entry)。 */
   entryRel: string;
@@ -350,6 +355,8 @@ interface WorkerEntry {
   stdoutBuffer: string;
   nextId: number;
   pending: Map<string, PendingRpc>;
+  /** Autonomous Host calls can wait for native consent without an Agent RPC. */
+  hostToolRequests: number;
   /** 本 worker 名下代启的子进程(childId → 记账;级联生死)。 */
   children: Map<string, ChildProcEntry>;
   idleTimer: NodeJS.Timeout | null;
@@ -900,6 +907,9 @@ export class GhostNodeRuntimeBroker {
     if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)) return;
     const message = parseGhostNodeChildToHostMessage(raw);
     if (!message) return;
+    if (message.type === 'host-tool-request') {
+      void this.handleHostToolRequest(entry, message); return;
+    }
     if (message.type === 'device-authorize' || message.type === 'plugin-authorize') {
       this.authorizePlugin(entry, message);
       return;
@@ -919,6 +929,28 @@ export class GhostNodeRuntimeBroker {
       child.proc.sendControl?.({ type: 'stdin-end' });
     } else if (message.type === 'child-kill') {
       this.stopChild(entry, child, false);
+    }
+  }
+
+  private async handleHostToolRequest(entry: WorkerEntry, message: Extract<GhostNodeChildToHostMessage, { type: 'host-tool-request' }>) {
+    const id = GhostNodeRuntimeBroker.instanceId(entry.ghost);
+    const current = () => {
+      const ghost = this.deps.getGhost(id);
+      return this.workers.get(GhostNodeRuntimeBroker.keyOf(id, entry.entryRel)) === entry &&
+        this.ownerScopeUsable(id, entry.ownerScopeSnapshot) && ghost?.enabled === true && ghost.dir === entry.hostToolIdentity.dir &&
+        ghost.approval?.state === 'approved' && ghost.approval.revision === entry.hostToolIdentity.approvalRevision;
+    };
+    const denied = { isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"PERMISSION_DENIED"}' }] };
+    this.clearIdleTimer(entry);
+    entry.hostToolRequests += 1;
+    try {
+      const result = current() && this.deps.hostToolRequest ? await this.deps.hostToolRequest(id, message, current) : denied;
+      this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result: current() ? result : denied });
+    } catch {
+      this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result: denied });
+    } finally {
+      entry.hostToolRequests -= 1;
+      this.scheduleIdleStop(entry);
     }
   }
 
@@ -1294,6 +1326,7 @@ export class GhostNodeRuntimeBroker {
   stop(ghostId: string): void {
     this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
     this.stoppedGhosts.add(ghostId);
+    this.deps.onStopped?.(ghostId);
     for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
       this.stopStartingChild(starting);
     }
@@ -1659,6 +1692,8 @@ export class GhostNodeRuntimeBroker {
     attemptDiagnostic.pid = readChildDiagnosticPid();
     const entry: WorkerEntry = {
       ghost,
+      hostToolIdentity: { dir: ghost.dir,
+        approvalRevision: ghost.approval?.state === 'approved' ? ghost.approval.revision : undefined },
       ownerScopeSnapshot,
       entryRel,
       child,
@@ -1675,6 +1710,7 @@ export class GhostNodeRuntimeBroker {
       stdoutBuffer: '',
       nextId: 1,
       pending: new Map(),
+      hostToolRequests: 0,
       children: new Map(),
       idleTimer: null,
       hardKillTimer: null,
@@ -2377,7 +2413,7 @@ export class GhostNodeRuntimeBroker {
   private scheduleIdleStop(entry: WorkerEntry): void {
     const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.entryRel);
     if (this.workers.get(key) !== entry) return;
-    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0) return;
+    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0) return;
     // 有代启子进程在世时不空闲回收——收 worker 会级联杀掉正在干活的代理。
     if (entry.children.size > 0) return;
     this.clearIdleTimer(entry);

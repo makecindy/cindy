@@ -623,7 +623,7 @@ export async function readSubscriptionSessionUsage(provider: SubscriptionProvide
 
 /**
  * Provider group §5/§6.1 pre-send check for one bound account: it cannot take this model now
- * when it remembers a real failure (cooling), its trusted quota snapshot is exhausted, or it is
+ * when it remembers a real failure (cooling), its Claude quota snapshot is exhausted, or it is
  * signed out. Unknown quota is not exhaustion. Paused or removed accounts are not judged here.
  * Runs before every send, so it only reads what this owner already knows (failures, the cached
  * snapshot kept fresh by quota events and list reads) and never waits for the native CLI.
@@ -641,9 +641,10 @@ export function readSubscriptionAccountBlocked(
   const info = state.cache.get(keyOf(provider, accountId));
   if (!info || info.unavailable) return false;
   if (!info.auth.authenticated) return true;
-  return providerGroupMemberUsageState(info.usage ?? {},
-    provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model,
-    Date.now(), provider === 'openai' ? 'codex' : 'claude-code').limited;
+  // ChatGPT plan windows do not establish whether upstream can spend credits. Only a real
+  // failure (checked above) can retire this account and its native context before sending.
+  if (provider === 'openai') return false;
+  return providerGroupMemberUsageState(info.usage ?? {}, model, Date.now(), 'claude-code').limited;
 }
 
 /** A positive result can retire a member/model cooldown, so unknown quota is
@@ -678,7 +679,7 @@ export async function readSubscriptionPoolModelAvailability(
     const usage = providerGroupMemberUsageState(info.usage ?? {},
       provider === 'openai' ? model.replace(/^chatgpt\//, '') : model,
       Date.now(), provider === 'openai' ? 'codex' : 'claude-code');
-    return !usage.limited && usage.quota !== null;
+    return (provider === 'openai' || !usage.limited) && usage.quota !== null;
   });
 }
 
@@ -1220,7 +1221,9 @@ export async function acquireSubscriptionAccount(
       auth: info?.auth,
       unavailable: info?.unavailable,
       usage,
-      usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
+      // Like goal continuation, ChatGPT admission belongs to upstream: cached windows and
+      // credits cannot establish whether this request can run. Keep quota ranking and real cooling.
+      usable: !loggingIn && info?.auth.authenticated === true && (control || ((provider === 'openai' || !usage.limited)
         && ((Boolean(binding) && !rebind) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
           remote: options.remote === true, ownComputer: options.ownComputer === true,
@@ -1270,7 +1273,7 @@ export async function acquireSubscriptionAccount(
       throw new Error('[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in');
     if (!member.auth.authenticated)
       throw new Error('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login');
-    if (!control && member.usage.limited) {
+    if (!control && provider !== 'openai' && member.usage.limited) {
       const reset = member.usage.resetAtMs;
       throw new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset'
         + (reset && Number.isFinite(reset) && reset > Date.now() ? `\nresetAtMs=${reset}` : ''));

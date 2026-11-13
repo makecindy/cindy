@@ -2508,6 +2508,34 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  // #10187 / integration: stale resume rejection must not clear a newer runtime,
+  // overwrite preferences, or lose history if inserting the durable handoff fails.
+  it.each([false, true])('context.rebuild conditionally replaces only the rejected SDK id (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 's1', { contextTokens: 42_000 });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ?, effort = ?, fast_mode = ? WHERE id = ?',
+        ['rejected-native', 'current-model', 'current-provider', 'high', 1, 's1']);
+      const args = { sessionId: 's1', markerId: 'recovery', markerClientId: 'recovery',
+        markerContent: JSON.stringify({ reason: 'native-session-recovery', handoff: 'KEEP_HISTORY', consumed: false }),
+        markerCreatedAt: 1000, updatedAt: 1000, expectedSdkSessionId: 'rejected-native', expectedClearedAt: null };
+      for (const changed of [{ expectedSdkSessionId: 'stale-native' }, { expectedClearedAt: 123 }]) {
+        await expect(client.tx('context.rebuild', { ...args, ...changed })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+        expect(await client.query('SELECT id FROM messages WHERE client_id = ?', ['recovery'])).toEqual([]);
+      }
+      await client.exec('UPDATE sessions SET status = ? WHERE id = ?', ['deleted', 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec('UPDATE sessions SET status = ? WHERE id = ?', ['active', 's1']);
+      await client.tx('context.rebuild', args);
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id, effort, fast_mode, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({
+        sdk_session_id: null, model: 'current-model', provider_id: 'current-provider', effort: 'high', fast_mode: 1, context_tokens: 0,
+      });
+      expect(await client.queryOne('SELECT content FROM messages WHERE client_id = ?', ['recovery'])).toEqual({ content: args.markerContent });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, context_tokens = ? WHERE id = ?', ['rejected-native', 42_000, 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT sdk_session_id, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'rejected-native', context_tokens: 42_000 });
+    }, { useInlineWorker });
+  });
+
   it.each([false, true])('context.rebuild resets usage and appends markers (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
       await seedSession(client, 's1', { contextTokens: 245_000, contextWindow: 500_000 });

@@ -53,3 +53,15 @@ it('releases bounded pending requests on timeout', async () => {
     vi.useRealTimers();
   }
 });
+
+// Host tools are autonomous capabilities: no task or active Agent RPC is attributed to them.
+it('sends Host tool requests without an RPC identity and preserves the raw result', async () => {
+  const sent: any[] = [];
+  const client = new NodeHostServicesClient(new NodeRequestScopes(), value => sent.push(value));
+  const call = client.hostCall('cindy_helper', 'list_sessions');
+  expect(sent[0]).toEqual({ type: 'host-tool-request', reqId: 'host1', server: 'cindy_helper', tool: 'list_sessions', args: {} });
+  client.finish('unrelated-rpc');
+  const result = { content: [{ type: 'text', text: '{"ok":true}' }] };
+  client.reply({ reqId: 'host1', ok: true, result });
+  await expect(call).resolves.toBe(result);
+});

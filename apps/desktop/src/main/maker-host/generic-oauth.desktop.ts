@@ -6,4 +6,4 @@ export type * from './generic-oauth.js';
 
 export { parseModelsListResponse } from "@cindy/model-providers";
 
-export const { configureGenericOAuth, hasGenericOAuthLogin, logoutGenericOAuth, removeGenericOAuthCredentialsReversibly, resetGenericOAuthMemoryCache, refreshGenericOAuthIfNeeded, readCachedGenericOAuthAccessToken, cancelGenericOAuthLogin, runGenericOAuthLogin, deriveModelsDiscoveryUrl, discoverGenericOAuthModels } = createGenericOAuthService({ fetchImpl: outboundFetch });
+export const { readGenericOAuthAccessToken, getGenericOAuthLoginGeneration, configureGenericOAuth, hasGenericOAuthLogin, logoutGenericOAuth, removeGenericOAuthCredentialsReversibly, resetGenericOAuthMemoryCache, refreshGenericOAuthIfNeeded, readCachedGenericOAuthAccessToken, cancelGenericOAuthLogin, runGenericOAuthLogin, deriveModelsDiscoveryUrl, discoverGenericOAuthModels } = createGenericOAuthService({ fetchImpl: outboundFetch });

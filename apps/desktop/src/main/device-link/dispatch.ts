@@ -63,7 +63,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  * 本地 settings(第二道),server 缓存陈旧 / 被绕过时兜底。
  */
 
-import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from '@cindy/device-link';
+import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef } from '@cindy/device-link';
 import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
 import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
@@ -5447,7 +5447,7 @@ function readOptionalString(record: unknown, key: string): string | undefined {
 }
 
 function shortId(deviceId: string): string {
-  return deviceId.slice(0, 8);
+  return shortDeviceRef(deviceId);
 }
 
 const __testing = {

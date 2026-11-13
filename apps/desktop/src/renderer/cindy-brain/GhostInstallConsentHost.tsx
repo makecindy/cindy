@@ -186,6 +186,7 @@ export function GhostInstallConsentHost() {
 
   useEffect(() => {
     const aborts = new Map<string, AbortController>();
+    let disconnect: (() => void) | undefined;
     const unsubscribeDismissed = window.electronAPI.ghosts.onInstallConsentDismissed(
       (payload) => {
         if (payload && typeof payload.requestId === 'string') {
@@ -199,6 +200,11 @@ export function GhostInstallConsentHost() {
         const request = payload;
         const abort = new AbortController();
         aborts.set(request.requestId, abort);
+        if (window.electronAPI.hostConnection?.client === 'browser') {
+          disconnect ??= window.electronAPI.hostConnection.onStateChanged(state => {
+            if (state.status !== 'connected') for (const pendingAbort of aborts.values()) pendingAbort.abort();
+          });
+        }
         void (async () => {
           let confirmed = false;
           try {
@@ -250,8 +256,10 @@ export function GhostInstallConsentHost() {
               },
               abort.signal,
             );
+            confirmed = confirmed && !abort.signal.aborted;
           } finally {
             aborts.delete(request.requestId);
+            if (!aborts.size) { disconnect?.(); disconnect = undefined; }
             try {
               await window.electronAPI.ghosts.resolveInstallConsent(request.requestId, confirmed);
             } catch {
@@ -264,6 +272,8 @@ export function GhostInstallConsentHost() {
     return () => {
       unsubscribeRequest();
       unsubscribeDismissed();
+      disconnect?.();
+      disconnect = undefined;
       for (const abort of aborts.values()) abort.abort();
       aborts.clear();
     };

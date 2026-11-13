@@ -1,4 +1,5 @@
 import { withSendToSessionLock, advanceSessionRewindGeneration } from './sendToSessionLock.js';
+import { assertTaskActionCurrent } from './taskActionAuthorization.js';
 /**
  * registerMakerRewindIpc — maker:rewind:preview / maker:rewind:commit
  *
@@ -91,8 +92,10 @@ async function commitAfterPersistBarrier(
     let committed = false;
     try {
       assertRewindOwner(opts.ownerScope);
+      await assertTaskActionCurrent(sessionId, clientId);
       await prepareSessionForHistoryAction(sessionId, 'rewind');
       assertRewindOwner(opts.ownerScope);
+      await assertTaskActionCurrent(sessionId, clientId);
       const result = await commitRewindAtMessage(sessionId, clientId, opts);
       committed = true;
       advanceSessionRewindGeneration(sessionId);
@@ -139,82 +142,81 @@ export function registerMakerRewindIpc(): void {
     },
   );
 
-  ipcMain.handle(
-    MAKER_INVOKE.REWIND_COMMIT,
-    async (
-      event: Electron.IpcMainInvokeEvent,
-      sessionId: unknown,
-      clientId: unknown,
-      opts?: unknown,
-    ) => {
-      assertTrustedRewindCaller(event);
-      const sid = requireString(sessionId, 'sessionId');
-      const cid = requireString(clientId, 'clientId');
-      const ownerScope = captureDataOwnerBroadcastScope();
-      // edit-last-message 专用可选项:要求 target 必须是会话最新 user 消息,
-      // 在 main 侧权威校验(renderer 的切片判定有 TOCTOU 窗口)。普通 Rewind
-      // 不传 → 保持"可回到任意历史消息"的既有语义。
-      const requireLatestUser =
-        !!opts && typeof opts === 'object' &&
-        (opts as { requireLatestUser?: unknown }).requireLatestUser === true;
-      const stopIfRunning =
-        !!opts && typeof opts === 'object' &&
-        (opts as { stopIfRunning?: unknown }).stopIfRunning === true;
-      const allowFileRestore =
-        !!opts && typeof opts === 'object' &&
-        (opts as { allowFileRestore?: unknown }).allowFileRestore === false
-          ? false
-          : undefined;
-      const commitOpts = {
-        requireLatestUser,
-        ownerScope,
-        ...(allowFileRestore === false ? { allowFileRestore: false as const } : {}),
-      };
-      let subagentFence: SubagentRewindFence | null = null;
-      // This flag controls observation-generation advancement, not whether
-      // the underlying message transaction has already committed.
-      let fenceCommitted = false;
-      let visibleSubagentIdentitiesAfterCommit: VisibleSubagentObservationIdentity[] = [];
-      try {
-        subagentFence = beginSubagentRewindFence(sid);
-        primeSubagentRewindFence(
-          subagentFence,
-          await listVisibleSubagentObservationIdentities(sid),
-        );
-        // Normal Rewind owns stop -> authoritative idle -> commit as one main
-        // transaction. Edit-last-message keeps its existing direct orchestration.
-        const result = stopIfRunning
-          ? await withSessionInputStoppedForRewind(sid, () =>
-              commitAfterStopping(sid, cid, commitOpts))
-          : await commitAfterPersistBarrier(sid, cid, commitOpts);
-        visibleSubagentIdentitiesAfterCommit =
-          await listVisibleSubagentObservationIdentities(sid);
-        // The fence may advance generations only after the post-commit
-        // identity refresh succeeds. A failed refresh must take the same
-        // rollback path as any other rewind failure so buffered observations
-        // are not discarded behind an empty survivor set.
-        fenceCommitted = true;
-        // 回滚后缓存的待注入交接 / fork 来源标记都是按截断前的历史算出来的,丢弃它,
-        // 让下次 send 按回滚后的现状重新判定——被回滚掉的正是当初携带来源标记的那一轮时,
-        // DB 侧判定会自动重新 arm(它按 rewind_at 过滤)。
-        agentHandoffPending.clear(sid);
-        // 回滚后会话历史被截断,active 目标若继续就会对着变化后的上下文跑 —— 暂停它
-        // (保留计数,用户 review 后可 resume)。fire-and-forget,失败不阻塞 rewind。
-        void getGoalController()?.pauseGoal(sid, 'paused: conversation rewound').catch(() => {});
-        broadcastSubagentRunsInvalidated(sid, ownerScope);
-        return result;
-      } catch (err) {
-        log.warn('rewind:commit failed', { sid, cid, error: String(err) });
-        wrapErr(err);
-      } finally {
-        if (subagentFence) {
-          finishSubagentRewindFence(
-            subagentFence,
-            fenceCommitted,
-            visibleSubagentIdentitiesAfterCommit,
-          );
-        }
-      }
-    },
-  );
+  ipcMain.handle(MAKER_INVOKE.REWIND_COMMIT, async (event, sessionId, clientId, opts) => {
+    assertTrustedRewindCaller(event);
+    return commitTaskRewind(sessionId, clientId, opts);
+  });
+}
+
+/** Shared UI/Agent entry: preserve stop, persist barrier, send lock and observation cleanup. */
+export async function commitTaskRewind(sessionId: unknown, clientId: unknown, opts?: unknown) {
+  const ownerScope = captureDataOwnerBroadcastScope();
+  const sid = requireString(sessionId, 'sessionId');
+  const cid = requireString(clientId, 'clientId');
+  await assertTaskActionCurrent(sid, cid);
+  // edit-last-message 专用可选项:要求 target 必须是会话最新 user 消息,
+  // 在 main 侧权威校验(renderer 的切片判定有 TOCTOU 窗口)。普通 Rewind
+  // 不传 → 保持"可回到任意历史消息"的既有语义。
+  const requireLatestUser =
+    !!opts && typeof opts === 'object' &&
+    (opts as { requireLatestUser?: unknown }).requireLatestUser === true;
+  const stopIfRunning =
+    !!opts && typeof opts === 'object' &&
+    (opts as { stopIfRunning?: unknown }).stopIfRunning === true;
+  const allowFileRestore =
+    !!opts && typeof opts === 'object' &&
+    (opts as { allowFileRestore?: unknown }).allowFileRestore === false
+      ? false
+      : undefined;
+  const commitOpts = {
+    requireLatestUser,
+    ownerScope,
+    ...(allowFileRestore === false ? { allowFileRestore: false as const } : {}),
+  };
+  let subagentFence: SubagentRewindFence | null = null;
+  // This flag controls observation-generation advancement, not whether
+  // the underlying message transaction has already committed.
+  let fenceCommitted = false;
+  let visibleSubagentIdentitiesAfterCommit: VisibleSubagentObservationIdentity[] = [];
+  try {
+    subagentFence = beginSubagentRewindFence(sid);
+    primeSubagentRewindFence(
+      subagentFence,
+      await listVisibleSubagentObservationIdentities(sid),
+    );
+    await assertTaskActionCurrent();
+    // Normal Rewind owns stop -> authoritative idle -> commit as one main
+    // transaction. Edit-last-message keeps its existing direct orchestration.
+    const result = stopIfRunning
+      ? await withSessionInputStoppedForRewind(sid, () =>
+          commitAfterStopping(sid, cid, commitOpts))
+      : await commitAfterPersistBarrier(sid, cid, commitOpts);
+    visibleSubagentIdentitiesAfterCommit =
+      await listVisibleSubagentObservationIdentities(sid);
+    // The fence may advance generations only after the post-commit
+    // identity refresh succeeds. A failed refresh must take the same
+    // rollback path as any other rewind failure so buffered observations
+    // are not discarded behind an empty survivor set.
+    fenceCommitted = true;
+    // 回滚后缓存的待注入交接 / fork 来源标记都是按截断前的历史算出来的,丢弃它,
+    // 让下次 send 按回滚后的现状重新判定——被回滚掉的正是当初携带来源标记的那一轮时,
+    // DB 侧判定会自动重新 arm(它按 rewind_at 过滤)。
+    agentHandoffPending.clear(sid);
+    // 回滚后会话历史被截断,active 目标若继续就会对着变化后的上下文跑 —— 暂停它
+    // (保留计数,用户 review 后可 resume)。fire-and-forget,失败不阻塞 rewind。
+    void getGoalController()?.pauseGoal(sid, 'paused: conversation rewound').catch(() => {});
+    broadcastSubagentRunsInvalidated(sid, ownerScope);
+    return result;
+  } catch (err) {
+    log.warn('rewind:commit failed', { sid, cid, error: String(err) });
+    wrapErr(err);
+  } finally {
+    if (subagentFence) {
+      finishSubagentRewindFence(
+        subagentFence,
+        fenceCommitted,
+        visibleSubagentIdentitiesAfterCommit,
+      );
+    }
+  }
 }

@@ -29,6 +29,25 @@ export function botTurnContinuations(items: readonly RenderItem[]): ReadonlySet<
   }));
 }
 
+/** NEW marks the whole portrait's reply, not the seam between its process and prose.
+ * Keep unread selection/receipts unchanged; only project that message to its row owner. */
+export function botUnreadBoundaryItemKey(
+  items: readonly RenderItem[],
+  unreadClientId: string | null,
+  continuations: ReadonlySet<string>,
+): string | null {
+  if (!unreadClientId) return null;
+  let ownerKey: string | null = null;
+  for (const item of items) {
+    const portraitRow = item.type === 'work_group' || isProse(item);
+    if (portraitRow && (ownerKey === null || !continuations.has(item.key))) ownerKey = item.key;
+    if (item.type === 'message' && item.message.clientId === unreadClientId) {
+      return (portraitRow ? ownerKey : null) ?? item.key;
+    }
+  }
+  return null;
+}
+
 function isProse(item: RenderItem): item is MessageRenderItem {
   return item.type === 'message' && item.message.role === 'assistant'
     && !item.message.systemCardType;
