@@ -22185,7 +22185,7 @@
         "cost": {
           "input": 0.075,
           "output": 0.3,
-          "cacheRead": 0,
+          "cacheRead": 0.0375,
           "cacheWrite": 0
         },
         "execution": {
