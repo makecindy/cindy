@@ -11827,6 +11827,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","cause":{"code":"AbortError"}}' },
       { message: '{"code":"400","type":"permission_error"}' },
       { message: '{"code":"400","type":"permission_error"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","message":"Invalid model name"}' },
+      { message: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400"}', codexErrorInfo: 'cyberPolicy' },
       { message: '{"code":"400","type":"authentication_error"}' },
       { message: '{"code":"400","type":"unauthorized"}' },
       { message: '{"code":"400","message":"Unauthorized"}', codexErrorInfo: 'badRequest' },
@@ -11879,6 +11882,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","type":"billing_error"}', codexErrorInfo: 'other' as const },
       { message: '{"code":"400","cause":{"code":"EAI_AGAIN"}}', codexErrorInfo: 'other' as const },
       { message: '{"code":"400","type":"permission_error"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'other' as const },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400"}', codexErrorInfo: 'cyberPolicy' as const },
       { message: '{"code":"400","cause":{"code":"429","upstream":{"code":"529"}}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
     ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
       const { host, handle, events } = await start();
