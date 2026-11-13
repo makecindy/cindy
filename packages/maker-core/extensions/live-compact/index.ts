@@ -156,6 +156,42 @@
  * 连切几刀时,卡片按切出来的先后发出:「卡片地板」规定切点右边还有卡片就不切,后一刀只能落在
  * 前一张卡片右边,所以这个先后就是上下文里的时间序,与上游原地替换看到的一致。
  *
+ * 1.1.6(上游 2026-11-14 发布,tag 内含 #46 复审加固,以 v1.1.6 终态逐项比对后吸收八处):
+ *   - 本地引擎普通裁剪补图片屏障检查(selectCutIndexes 的 !cloud 分支):此前只有 cloud 分支
+ *     查「切点本身是不是屏障」,长 read 轮里「长文本结果在前、图片结果在后」时,本地分支会把
+ *     图片卷进切段;卡片与原文快照只有文本,图片从此丢失(Greptile P1 复核确认)。
+ *   - keptTokens 与实际切点对齐(上游 8ee6876b):长 read 刀可以落在普通保留轮右侧,按
+ *     「保留区整段」计数会把切点左侧的轮也数进来,tailBeyondKept 变负、尾巴守卫失效;改为
+ *     只数 rounds 里 start 在实际切点右边的轮,轮间杂项不计。
+ *   - 长 read 刀翻车后的普通回退(上游 8ee6876b):配对/指针/卡片检验失败时,带
+ *     disableLongRead 重试一次「不认长 read」的普通选点;标记只做递归保险,重试再翻车返回 null。
+ *   - 增长基线在被跳过的收尾上重置(上游 8ee6876b):官方压缩冷却/空闲窗口冷却/水位门三个
+ *     跳过路径把 last=当前总量、max=0;收尾完成后同样清 max。此前 max 永不重置,一次尖峰之后
+ *     projected 恒真,云端跟着连白切。
+ *   - 助手决策否决收窄(#46):模型/版本/区域 token(us-east-1、claude-3-5)只是普通行文;
+ *     只有带决策动词(决定/采用/pinned to/decided…)或中文方案表述的助手行才按
+ *     assistant-decision-not-retained 拦下。
+ *   - 检查点识别收紧(上游 5d0fba82):旧版标记「Spine extract.」只认位于条目文本开头的;
+ *     工具结果或普通句子提到这段文本(比如工具读到本文件)不再被当成永久切割边界。
+ *   - 原文快照发布加固(#46):meta 缺失(ENOENT)才算「没发完的半成品」,当前事件还带原文
+ *     就丢弃孤儿重建;坏 meta/哈希不符继续 fail-closed。同一 toolCallId 换了内容按
+ *     duplicate-tool-call-id 拒绝,不再静默沿用旧备份。正文写完先 fsync;meta 走
+ *     tmp+fsync+rename 原子发布(meta 是完成标记,半个 meta 不能被读侧看到);shadow 备份
+ *     同样先 fsync 再改名。
+ *   - 模型级 provider 端点(#45):目录条目带 models[] 时命中模型级 baseURL 优先于这家默认
+ *     端点;resolveSpineEngine 从 assistant 消息上读 model 传下去。当前 pi-ai 目录还没有
+ *     models[],管道先就位,pi-ai 将来带模型级端点时自动生效。
+ *   以下为 1.1.6 里判「pi 无对等层 / 本仓无该路径」的条目:
+ *   - e583b47b(十亿上下文 stand-down)与 49534acb(gate.js 隔离组):依赖 DSH 插件生态的
+ *     fiber registry 与 preset 门;gate.js 自 1.0 起裁定不搬,pi 扩展也没有竞争压缩器注册表。
+ *   - latestTurnCompleted 收紧(5d0fba82):pi 的 agent_before_settle 逐 run 触发,outcome
+ *     即当轮完成,不存在「扫到历史 completed 轮」的误报面。
+ *   - retryable 错误码(ESHADOWBUSY/EAGAIN/EBUSY/EINTR/EIO,#46):标记驱动上游 worker 池
+ *     的异步重试;本仓懒捕在下一轮 settle 自然重试,没有消费者,不加死字段。shadow worker
+ *     超时(#46)同因:本仓无 worker 池。
+ *   - shadow.js 的身份收紧/ACL(nlink/fstat/identity、ESHADOWACCESS)与 #35 rotation owner
+ *     系列同为 POSIX/shared-root 专属,Windows 口径不变。
+ *
  * Mapping notes (DSH -> pi):
  *   - agent/status idle + turn/end completed  -> pi.on("agent_before_settle", outcome === "completed")
  *   - session.surface.nodes + surfaceOp replace -> event.context.contextEntries +
@@ -210,7 +246,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -868,11 +904,17 @@ export function providerURLFromPatch(text: string, provider: string): string {
 }
 
 /** 内置目录只在这家没有自己的地址时使用。调用方传入 {id, baseURL},这里不读包。 */
-export function catalogProviderURL(provider: string, catalog: any[]): string {
+/** 1.1.6(#45): 目录条目带 models[] 时,命中模型级 baseURL 优先于这家默认端点。 */
+export function catalogProviderURL(provider: string, catalog: any[], model = ""): string {
   const name = String(provider || "");
   if (!name || !catalog) return "";
   const list = Array.isArray(catalog) ? catalog : [];
   const match = list.find((entry: any) => entry?.id === name || entry?.provider === name);
+  if (match && Array.isArray(match.models) && String(model || "")) {
+    const modelEntry = match.models.find((item: any) => item?.id === model);
+    const modelURL = String(modelEntry?.baseURL || modelEntry?.baseUrl || "");
+    if (modelURL) return modelURL;
+  }
   return String(match?.baseURL || match?.baseUrl || "");
 }
 
@@ -880,7 +922,7 @@ export function catalogProviderURL(provider: string, catalog: any[]): string {
 export function resolveProviderBaseURL(
   input: {
     provider?: string; headerURL?: string; listed?: any[]; layers?: any[]; config?: any;
-    patchText?: string; catalog?: any[];
+    patchText?: string; catalog?: any[]; model?: string;
   } = {},
 ): string {
   const provider = String(input.provider || "");
@@ -896,7 +938,7 @@ export function resolveProviderBaseURL(
   if (fromPatch) return fromPatch;
   const fallback = fallbackProviderURL(provider);
   if (fallback) return fallback;
-  return catalogProviderURL(provider, input.catalog || []);
+  return catalogProviderURL(provider, input.catalog || [], input.model);
 }
 
 export function resolveEngine(
@@ -927,7 +969,14 @@ function piCatalogProviders(): any[] {
       const loaded = createRequire(anchor)("@earendil-works/pi-ai/providers/all");
       const list = typeof loaded?.builtinProviders === "function" ? loaded.builtinProviders() : [];
       const mapped = list
-        .map((entry: any) => ({ id: entry?.id || "", baseURL: entry?.baseUrl || entry?.baseURL || "" }))
+        .map((entry: any) => ({
+          id: entry?.id || "",
+          baseURL: entry?.baseUrl || entry?.baseURL || "",
+          // 1.1.6(#45): pi-ai 目录将来带模型级端点时这里直接可用。
+          models: (Array.isArray(entry?.models) ? entry.models : [])
+            .map((item: any) => ({ id: item?.id || "", baseURL: item?.baseUrl || item?.baseURL || "" }))
+            .filter((item: any) => item.id && item.baseURL),
+        }))
         .filter((entry: any) => entry.id && entry.baseURL);
       if (mapped.length) {
         piCatalogCache = mapped;
@@ -939,9 +988,9 @@ function piCatalogProviders(): any[] {
   return piCatalogCache;
 }
 
-export function resolveSpineEngine(provider: string): { engine: SpineEngine; source: string } {
+export function resolveSpineEngine(provider: string, model = ""): { engine: SpineEngine; source: string } {
   const name = String(provider || "");
-  const baseURL = resolveProviderBaseURL({ provider: name, catalog: piCatalogProviders() });
+  const baseURL = resolveProviderBaseURL({ provider: name, model, catalog: piCatalogProviders() });
   const resolved = resolveEngine({ provider: name, baseURL });
   if (resolved.source !== "unknown") return resolved;
   if (!name) return resolved;
@@ -963,7 +1012,9 @@ interface CutItem {
 function isRewriteMarker(entry: SpineEntry): boolean {
   if (entry.entryType === "compaction" || entry.entryType === "branch_summary") return true;
   if (entry.role === "custom") return true;
-  return entry.text.includes(MARK);
+  // 1.1.6(上游 5d0fba82): 只认位于开头的旧版标记,行文中提到标记文本不算。
+  const text = entry.text.trimStart();
+  return text === MARK || text.startsWith(`${MARK}\n`) || text.startsWith(`${MARK}\r\n`);
 }
 
 function nonUserGain(items: CutItem[], start: number, end: number): number {
@@ -1094,6 +1145,9 @@ export function selectCutIndexes(
   if (cutCrossesNewerCheckpoint(items, end)) return null;
   if (!cloud) {
     if (lastUser >= 0 && end <= lastUser) return null;
+    // 1.1.6: 图片屏障与 cloud 分支同一条红线 —— 本地引擎的普通裁剪同样不能把不可恢复的
+    // 载荷卷进切段(长文本结果在前、图片结果在后的长 read 轮之前只有 cloud 分支受保护)。
+    if (items[end].barrier) return null;
     if ((items[end].tokens || 0) > pointerMax && items[end].type === "tool") {
       return { start: end, end, pointerOnly: true, gain: 0, tokens: items[end].tokens || 0 };
     }
@@ -1427,6 +1481,17 @@ function normalizeSourceLine(role: string, text: string): string {
 }
 
 /**
+ * 1.1.6(上游 #46 收窄): 模型/版本/区域 token(us-east-1、claude-3-5)只是普通行文,
+ * 不再单独触发否决;只有带决策动词或中文方案表述的助手行才按「未保留的决策」拦下。
+ */
+function unresolvedAssistantDecision(line: string): boolean {
+  const text = String(line || "");
+  if (/方案\s*[A-Za-z0-9]/.test(text)) return true;
+  if (/(?:决定|采用|选用|选择|固定为|改用|切换到|定为|使用|确定)/.test(text)) return true;
+  return /\b(?:pinned\s+to|decid(?:e|ed|es)|adopt(?:ed|s)?|selected|choose|chosen|will\s+use|must\s+use)\b/i.test(text);
+}
+
+/**
  * 1.0.9: 覆盖判定改成「按来源核对」。旧口径只看某行是否出现在卡片里,同一条文本来自别的
  * 来源(或被普通工具行顶掉)都算命中 —— 关键事实没进卡片也会 ok:true(上游 issue #14 P0-2)。
  * 现在只认 (sourceId, 归一化后的行) 完全一致,缺一条就 ok=false。
@@ -1546,7 +1611,7 @@ export function buildCard(
     if (source.role !== "assistant") continue;
     source.text.split(/\r?\n/).forEach((line) => {
       if (liveLines.has(line.trim())) return;
-      if (/[a-z]{2,}-[a-z0-9]+-\d+/i.test(line) || /方案\s*[A-Za-z0-9]/.test(line)) {
+      if (unresolvedAssistantDecision(line)) {
         coverage.ok = false;
         coverage.missing.push({ sourceId: source.id, text: line, reason: "assistant-decision-not-retained" });
       }
@@ -2134,6 +2199,13 @@ export function saveShadow(
   try {
     writeFileSync(temp, body, { mode: 0o600 });
     chmodSync(temp, 0o600);
+    // 1.1.6(#46): 备份字节先 fsync 落盘再改名 —— 切割被接受前,备份必须已持久化。
+    const fd = openSync(temp, "r+");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
   } catch (error) {
     try {
       unlinkSync(temp);
@@ -2266,7 +2338,9 @@ function isCheckpoint(entry: SpineEntry): boolean {
   // 图片等非文本载荷切走就恢复不了(卡片与原文快照只有文本),按屏障处理。
   if (entry.opaque) return true;
   if (entry.role === "custom") return true;
-  return entry.text.includes(MARK);
+  // 1.1.6(上游 5d0fba82): 工具结果/普通句子提到标记文本不算检查点,只认位于开头的旧版标记。
+  const text = entry.text.trimStart();
+  return text === MARK || text.startsWith(`${MARK}\n`) || text.startsWith(`${MARK}\r\n`);
 }
 
 function isUser(entry: SpineEntry): boolean {
@@ -2375,8 +2449,11 @@ function readExistingRaw(file: string, toolCallId: string): RawRecord {
   let meta: any;
   try {
     meta = JSON.parse(readFileSync(`${file}.meta.json`, "utf8"));
-  } catch {
-    return { ok: false, reason: "missing-meta", toolCallId };
+  } catch (error) {
+    // 1.1.6(#46): meta 文件不存在(ENOENT)才算「没发完的半成品」,可重建;
+    // 读到了但解析不了是坏 meta,继续 fail-closed。
+    if ((error as any)?.code === "ENOENT") return { ok: false, reason: "missing-meta", toolCallId };
+    return { ok: false, reason: "bad-meta", toolCallId };
   }
   if (meta?.toolCallId !== toolCallId || typeof meta.sha256 !== "string" || !Number.isInteger(meta.bytes)) {
     return { ok: false, reason: "bad-meta", toolCallId };
@@ -2460,10 +2537,28 @@ export function planRawEntry(options: {
   if (!toolCallId) return { ok: false, reason: "missing-id", toolCallId: "" };
   const surfaceText = String(options.text ?? "");
   const file = join(dir, rawName(toolCallId));
-  if (existsSync(file)) return readExistingRaw(file, toolCallId);
+  const bytes = Buffer.from(surfaceText, "utf8");
+  if (existsSync(file)) {
+    const existing = readExistingRaw(file, toolCallId);
+    if (existing.ok) {
+      // 1.1.6(#46): 同一 toolCallId 换了内容是异常复用,fail-closed,不再静默沿用旧备份。
+      if (!surfaceText.includes(PRUNE_MARKER) && (existing.sha256 !== contentHash(bytes) || existing.bytes !== bytes.length)) {
+        return { ok: false, reason: "duplicate-tool-call-id", toolCallId };
+      }
+      return existing;
+    }
+    // 1.1.6(#46): 只有 meta 缺失才算「没发完的半成品」——当前事件还带着原文就丢弃孤儿重建;
+    // 正文带修剪标记或坏 meta/哈希不符继续 fail-closed。
+    if (existing.reason !== "missing-meta" || surfaceText.includes(PRUNE_MARKER)) return existing;
+    try {
+      unlinkSync(file);
+    } catch {}
+    try {
+      unlinkSync(`${file}.meta.json`);
+    } catch {}
+  }
   if (surfaceText.includes(PRUNE_MARKER)) return { ok: false, reason: "already-pruned", toolCallId };
   const body = surfaceText;
-  const bytes = Buffer.from(body, "utf8");
   return {
     ok: true,
     pending: true,
@@ -2484,14 +2579,31 @@ export function commitRawEntry(record: RawRecord): RawRecord {
   try {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     writeFileSync(file, content, { flag: "wx", mode: 0o600 });
+    // 1.1.6(#46): 正文先 fsync 落盘,meta 再以 tmp+fsync+rename 原子发布 —— meta 是完成
+    // 标记,半个 meta 都不能被读侧看到;中途崩溃只会留下可重建的孤儿正文。
     try {
-      writeFileSync(
-        `${file}.meta.json`,
-        JSON.stringify({ toolCallId, bytes: content.length, sha256, label: record.label || "" }),
-        { mode: 0o600 },
-      );
+      const fd = openSync(file, "r+");
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {}
+    const metaTemp = `${file}.meta.json.tmp`;
+    try {
+      const fd = openSync(metaTemp, "wx", 0o600);
+      try {
+        writeSync(fd, Buffer.from(JSON.stringify({ toolCallId, bytes: content.length, sha256, label: record.label || "" }), "utf8"));
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(metaTemp, `${file}.meta.json`);
     } catch (error) {
-      // meta 写不进去就删掉正文:否则下次 readExisting 会当成坏备份。
+      try {
+        unlinkSync(metaTemp);
+      } catch {}
+      // meta 发不出去就删掉正文:否则下次 readExisting 会当成坏备份。
       try {
         unlinkSync(file);
       } catch {}
@@ -2607,6 +2719,8 @@ export function selectNewestChunk(
     /** 1.0.8: 实测总量与收尾标志,交给 selectCutIndexes 判「平时不切」。 */
     totalTokens?: number;
     drain?: boolean;
+    /** 1.1.6(上游 8ee6876b): 长 read 刀翻车后的重试标记,只做递归保险。 */
+    disableLongRead?: boolean;
   } = {},
 ) {
   const warn = (why: string) => { diag?.(why); return null; };
@@ -2674,9 +2788,11 @@ export function selectNewestChunk(
     .filter((round) => roundHasLongRead(round, longReads))
     .at(-1) ?? null;
   // 1.0.7: 尾部判据只算「保留区之外」的部分(原仓 tailBeyondKept),保留区本身不算尾巴。
+  // 1.1.6(上游 8ee6876b): keptTokens 改为在切点定案后统计「实际切点右侧」的保留轮 ——
+  // 长 read 刀可以落在普通保留轮右边,按保留区整段计数会数到切点左侧,tailBeyondKept
+  // 变负、尾巴守卫失效。计数挪到本函数末尾。
   let keptTokens = 0;
   if (cutEnd !== null && kept) {
-    for (let index = kept.start; index <= kept.end; index += 1) keptTokens += entries[index].est;
     end = cutEnd;
     while (end >= first && (isUser(entries[end]) || entries[end].opaque) && !(floorCard >= 0 && end - 1 <= floorCard)) end -= 1;
     if (floorCard >= 0 && end <= floorCard) return warn(`cut end ${end} reaches checkpoint floor=${floorCard}`);
@@ -2709,6 +2825,10 @@ export function selectNewestChunk(
   };
   let usedLongCut = false;
   let picked: ReturnType<typeof selectCutIndexes> = null;
+  // 1.1.6(上游 8ee6876b): 长 read 刀在配对/指针/卡片检验上翻车时,重试一次「不认长 read」
+  // 的普通选点;标记只做递归保险,重试再翻车就返回 null。
+  const fallbackWithoutLongRead = () =>
+    context.disableLongRead ? null : selectNewestChunk(entries, diag, { ...context, disableLongRead: true });
   if (longSpan) {
     const longPicked = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
     if (longPicked && longPicked.start >= longSpan.start && longPicked.end <= longSpan.end) {
@@ -2787,17 +2907,24 @@ export function selectNewestChunk(
         break;
       }
     }
-    if (pairStart < 0) return warn(`pointer-only result ${spanEnd} has no call in front`);
-    if (usedLongCut && longSpan && pairStart < longSpan.start) return warn(`pointer cut escapes long read round ${longSpan.start}`);
-    if (!pointerSpanAllowed(items, pairStart, spanEnd, engine)) return warn(`pointer span rejected ${pairStart}..${spanEnd}`);
-    if (!cutOk(() => pairStart <= 0 || prefixBalanced[pairStart - 1])) return warn(`prefix not balanced at pointer start=${pairStart}`);
+    if (pairStart < 0) return usedLongCut ? fallbackWithoutLongRead() : warn(`pointer-only result ${spanEnd} has no call in front`);
+    if (usedLongCut && longSpan && pairStart < longSpan.start) {
+      diag?.(`pointer cut escapes long read round ${longSpan.start}; retry without long read`);
+      return fallbackWithoutLongRead();
+    }
+    if (!pointerSpanAllowed(items, pairStart, spanEnd, engine)) {
+      return usedLongCut ? fallbackWithoutLongRead() : warn(`pointer span rejected ${pairStart}..${spanEnd}`);
+    }
+    if (!cutOk(() => pairStart <= 0 || prefixBalanced[pairStart - 1])) {
+      return usedLongCut ? fallbackWithoutLongRead() : warn(`prefix not balanced at pointer start=${pairStart}`);
+    }
     start = pairStart;
     tokens = spanTokens(items, start, spanEnd);
     const pointerPieces = spanPieces(start, spanEnd);
     // 1.1.5(#33): 上游的失败检查发生在 pairStart 扩展之后、查整段 —— 同一轮的短失败结果
     // 会随 pairStart 一起被换掉,只查超大结果本身会漏检。
     if (pointerPieces.some((piece) => normalizeRole(piece.role) === "tool" && isToolFailure(piece.text, piece.isError))) {
-      return warn(`pointer-only span ${start}..${spanEnd} holds a known failure`);
+      return usedLongCut ? fallbackWithoutLongRead() : warn(`pointer-only span ${start}..${spanEnd} holds a known failure`);
     }
     // 指针核不上时(原文快照的 meta 缺失或损坏),卡片里就没有任何可回查的路径。
     // 主 shadow 里存着这一段的正文,把它挂上 —— 切走之后模型还能找回原文。
@@ -2808,6 +2935,10 @@ export function selectNewestChunk(
   } else {
     card = buildCard(spanText(start, spanEnd), liveText(start, spanEnd), cardBudgetFor(spanText(start, spanEnd)), spanPieces(start, spanEnd), extras);
     if (card.ok !== true) {
+      if (usedLongCut) {
+        diag?.(`span UNCONFIRMED start=${start} end=${spanEnd}; retry without long read`);
+        return fallbackWithoutLongRead();
+      }
       return warn(`span UNCONFIRMED start=${start} end=${spanEnd} role=${entries[start].role} est=${entries[start].est} hard=${card.hardCount} missing=${card.missing.length} omittedHard=${card.omittedHard} spanChars=${spanText(start, spanEnd).length}`);
     }
     // 切割后 prefix 是 [0..start-1],所以平衡判据要取 start-1(原仓 toolPairingBalancedBefore)。
@@ -2816,7 +2947,8 @@ export function selectNewestChunk(
   }
   // 1.1.1: 长 read 的刀只能留在自己的轮里。
   if (usedLongCut && longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) {
-    return warn(`long read cut escapes ${longSpan.start}..${longSpan.end}`);
+    diag?.(`long read cut escapes ${longSpan.start}..${longSpan.end}; retry without long read`);
+    return fallbackWithoutLongRead();
   }
   // 1.0.8: 平衡判据盖住两种切法。上游的 toolPairingBalancedAfter 写在 pointerOnly/普通两支之后,
   // 指针段同样要对:一条 assistant 发两个调用、只把超大的那个结果换成指针时,
@@ -2826,6 +2958,11 @@ export function selectNewestChunk(
   for (let index = 0; index < start; index += 1) prefix += entries[index].est;
   let after = 0;
   for (let index = spanEnd + 1; index < entries.length; index++) after += entries[index].est;
+  // 1.1.6(上游 8ee6876b): 只数 start 在实际切点右边的保留轮,轮间杂项不计(上游口径)。
+  for (const round of rounds) {
+    if (!Number.isInteger(round.start) || !Number.isInteger(round.end) || round.start <= spanEnd) continue;
+    for (let index = round.start; index <= round.end; index += 1) keptTokens += entries[index].est;
+  }
   return { start, end: spanEnd, tokens, after, keptTokens, prefix, card, entries };
 }
 
@@ -2838,6 +2975,17 @@ function observedProvider(contextEntries: any[]): string {
     }
   }
   return provider;
+}
+
+/** 1.1.6(#45): pi 的 assistant 消息自带 model 字段,和 provider 一样从上下文投影里取。 */
+function observedModel(contextEntries: any[]): string {
+  let model = "";
+  for (const projected of contextEntries || []) {
+    for (const message of projected?.messages || []) {
+      if (typeof message?.model === "string" && message.model) model = message.model;
+    }
+  }
+  return model;
 }
 
 // 同一个会话只记一次引擎判定:每轮都刷一行的日志没人看。
@@ -2890,7 +3038,10 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
     const entries = spineEntries(event.context?.contextEntries ?? []);
     if (entries.length === 0) return undefined;
     // 1.0.7: 云端/本地分开切。pi 不把 baseURL 交给扩展,只能按 provider 名推断。
-    const resolved = resolveSpineEngine(observedProvider(event.context?.contextEntries));
+    const resolved = resolveSpineEngine(
+      observedProvider(event.context?.contextEntries),
+      observedModel(event.context?.contextEntries),
+    );
     const engineTag = `${resolved.engine}/${resolved.source}`;
     if (engineLogged.get(state.key) !== engineTag) {
       rememberTracked(engineLogged, state.key, engineTag);
@@ -2913,14 +3064,17 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
     const official = lastCompactionEntry(entries);
     if (official && cooldownSeen.get(state.key) !== official.id) {
       rememberTracked(cooldownSeen, state.key, official.id);
+      settleTurnGrowthBaseline(state, totalTokens);
       logLine(state, `spine cooldown: official compaction ${official.id} seen, skip this pass`);
       return undefined;
     }
     if (inCooldown(entries, { windowMs: COOLDOWN_MS })) {
+      settleTurnGrowthBaseline(state, totalTokens);
       logLine(state, "spine cooldown: recent official compaction, skip this pass");
       return undefined;
     }
     if (totalTokens < MIN_PRESSURE || totalTokens >= BIG_GATE) {
+      settleTurnGrowthBaseline(state, totalTokens);
       logLine(state, `spine idle: total=${totalTokens} gate=${totalTokens < MIN_PRESSURE ? '<MIN' : '>BIG'} n=${entries.length} :: ${describeEntries(entries)}`);
       return undefined;
     }
@@ -2964,6 +3118,7 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
       return undefined;
     }
     growth.last = simulated;
+    growth.max = 0;
     if (edits.length === 0 && cards.length === 0) return undefined;
     return { entries: [...(event.entries ?? []), ...orderedDrainDrafts(edits, cards)] };
   });
@@ -2989,6 +3144,14 @@ function turnGrowthFor(key: string): { last: number | null; max: number } {
   const fresh = { last: null, max: 0 };
   rememberTracked(turnGrowth, key, fresh);
   return fresh;
+}
+
+/** 1.1.6(上游 8ee6876b): 被跳过的这轮就是新基线。陈旧的 max 会在下一次放行时凭空放大
+ * 预测、逼出一轮白切;收尾完成后同样把 max 清零,下个周期从零重新量增长。 */
+function settleTurnGrowthBaseline(state: SpineState, total: number): void {
+  const growth = turnGrowthFor(state.key);
+  growth.last = total;
+  growth.max = 0;
 }
 
 /** 切范围里有调用参数进不了卡片(卡片只写 callCommand:命令或退化成工具名)。 */

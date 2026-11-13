@@ -1218,9 +1218,9 @@ describe('live compact 1.1.x: 收尾多刀与指针兜底', () => {
     }
   });
 
-  it('points a pointer-only card at the main shadow when the raw pointer cannot be verified', () => {
-    // 原文快照写了一半就崩(meta 缺失)时,卡片里核不出指针。
-    // 这时切走的结果就彻底没了下文 —— 主 shadow 里还有这一段的正文,必须挂上。
+  it('rebuilds an orphan raw snapshot that lost its meta from the current event body', () => {
+    // 1.1.6(#46): meta 缺失才算「没发完的半成品」。当前事件还带着完整正文时,孤儿被丢弃
+    // 重建,指针可核 —— 之前 fail-closed 会让这一段的指针永远核不上。
     const root = mkdtempSync(join(tmpdir(), 'spine-pointer-'));
     const previousRoot = process.env.SPINE_SHADOW_DIR;
     process.env.SPINE_SHADOW_DIR = root;
@@ -1228,7 +1228,7 @@ describe('live compact 1.1.x: 收尾多刀与指针兜底', () => {
       const sessionId = 'session-pointer';
       const dir = join(root, 'shadow', sessionId);
       mkdirSync(dir, { recursive: true });
-      // 原文文件在、meta 不在:核不出哈希与字节数,指针不可用。
+      // 原文文件在、meta 不在:上次写入在 meta 落盘前崩了。
       writeFileSync(join(dir, rawName('cBig')), 'x'.repeat(1000));
 
       const contextEntries = [
@@ -1244,10 +1244,48 @@ describe('live compact 1.1.x: 收尾多刀与指针兜底', () => {
       const card = result.entries.find((draft) => draft.type === 'custom_message');
       expect(card).toBeTruthy();
       const cardText = card.content.map((block) => block.text || '').join(String.fromCharCode(10));
-      // 指针核不上 → 卡片说没有可核的指针,但必须给出主 shadow 的路径。
+      // 重建成功 → 指针可核,不再退回「无完整备份」。
+      expect(cardText).not.toContain('无完整备份');
+      expect(cardText).toContain('sha256:');
+      // 孤儿正文被替换成当前事件的内容,meta 也补齐了。
+      expect(readFileSync(join(dir, rawName('cBig')), 'utf8')).toContain('y'.repeat(100));
+      expect(existsSync(join(dir, `${rawName('cBig')}.meta.json`))).toBe(true);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a half-written raw fail-closed when the current body is not recoverable', () => {
+    // 1.1.6(#46): 正文带了修剪标记说明当前事件也不完整 —— 孤儿继续 fail-closed,
+    // 卡片退回主 shadow 路径,不拿半份内容当原文。
+    const root = mkdtempSync(join(tmpdir(), 'spine-pointer-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      const sessionId = 'session-pointer';
+      const dir = join(root, 'shadow', sessionId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, rawName('cBig')), 'x'.repeat(1000));
+
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        toolCall('cBig', 'bash', { command: 'cat big.log' }),
+        toolResult('cBig', `${'y'.repeat(200000)}\n[... tool result middle pruned ...]`),
+        ...small('c1'),
+        ...small('c2'),
+        ...small('c3'),
+      ];
+      const result = settle(root, sessionId, contextEntries);
+      expect(result).toBeTruthy();
+      const card = result.entries.find((draft) => draft.type === 'custom_message');
+      expect(card).toBeTruthy();
+      const cardText = card.content.map((block) => block.text || '').join(String.fromCharCode(10));
       expect(cardText).toContain('无完整备份');
-      expect(cardText).toContain('省略的工具原文在');
-      // 主 shadow 里确实有这一段的正文。
+      // 正文带修剪标记 → 卡片不声明完整备份,但主 shadow 里的正文照旧落盘。
+      expect(cardText).not.toContain('省略的工具原文在');
       const shadowDir = join(root, 'shadow', sessionId);
       const shadows = readdirSync(shadowDir).filter((name) => name.endsWith('.txt') && !name.startsWith('raw-'));
       expect(shadows.length).toBeGreaterThan(0);
@@ -1423,5 +1461,214 @@ describe('live compact 1.1.5: failure diagnostics completeness, checkpoint floor
     ];
     expect(selectNewestChunk(mk(false), undefined, { drain: true, totalTokens: 90000 })).not.toBeNull();
     expect(selectNewestChunk(mk(true), undefined, { drain: true, totalTokens: 90000 })).toBeNull();
+  });
+});
+
+describe('live compact 1.1.6: 切点对齐、本地屏障、决策收窄与快照发布', () => {
+  const toolCall = (id, name = 'bash', args = {}) => ({
+    messages: [{ role: 'assistant', content: [{ type: 'text', text: `call ${id}` }, { type: 'toolCall', id, name, arguments: args }] }],
+    sourceEntry: { id: `a-${id}` },
+  });
+  const toolResult = (id, text) => ({
+    messages: [{ role: 'toolResult', toolCallId: id, content: [{ type: 'text', text }] }],
+    sourceEntry: { id: `r-${id}` },
+  });
+  const small = (id) => [toolCall(id), toolResult(id, 'ok '.repeat(20))];
+  const round = (id, tag, n, name = 'shell') => [
+    entry('assistant', `call ${id}`, { calls: [id], callMeta: new Map([[id, { name, command: '', filePath: '', jobId: '', hiddenArgs: false }]]) }),
+    entry('toolResult', `${tag} `.repeat(n), { results: [id] }),
+  ];
+  const settle = (root, sessionId, contextEntries, tokens = 200000) => {
+    let handler = null;
+    registerLiveCompact({ on: (name, fn) => { if (name === 'agent_before_settle') handler = fn; } });
+    const event = { outcome: 'completed', context: { contextEntries } };
+    const ctx = {
+      sessionManager: { getSessionId: () => sessionId },
+      getContextUsage: () => ({ tokens }),
+    };
+    return handler(event, ctx);
+  };
+
+  it('keeps the local engine from swallowing an image result that trails a long read', () => {
+    // Greptile P1:同一轮里「长文本结果在前、图片结果在后」时,本地引擎的普通裁剪
+    // 只查了 cloud 分支的「切点本身是不是屏障」,会把图片卷进切段。卡片/原文快照
+    // 只有文本,图片从此丢失。本地分支现在与 cloud 同一条红线。
+    const bothMeta = new Map([
+      ['c0', { name: 'read', command: '', filePath: '', jobId: '', hiddenArgs: false }],
+      ['c1', { name: 'screenshot', command: '', filePath: '', jobId: '', hiddenArgs: false }],
+    ]);
+    const readMeta = new Map([['c0', { name: 'read', command: '', filePath: '', jobId: '', hiddenArgs: false }]]);
+    const mk = (withImage) => [
+      entry('system', 'sys'),
+      entry('user', 'grab the page and the screenshot'),
+      entry('assistant', 'do both', { calls: withImage ? ['c0', 'c1'] : ['c0'], callMeta: withImage ? bothMeta : readMeta }),
+      entry('toolResult', 'log '.repeat(1200), { results: ['c0'] }),
+      ...(withImage ? [entry('toolResult', 'shot', { results: ['c1'], opaque: true })] : []),
+    ];
+    const withImage = mk(true);
+    expect(withImage[4].opaque).toBe(true);
+    // 本地引擎:切点站在图片上 → 拒绝,不再吞图。
+    expect(selectNewestChunk(withImage, undefined, { engine: 'local', drain: true, totalTokens: 60000 })).toBeNull();
+    // 对照:没有图片时同一轮照常成刀 —— null 只能来自图片屏障。
+    expect(selectNewestChunk(mk(false), undefined, { engine: 'local', drain: true, totalTokens: 60000 })).not.toBeNull();
+    // cloud 分支本来就有这条红线,两个引擎行为一致。
+    expect(selectNewestChunk(withImage, undefined, { engine: 'cloud', drain: true, totalTokens: 60000 })).toBeNull();
+  });
+
+  it('counts kept rounds to the right of the actual cut into keptTokens', () => {
+    // 上游 8ee6876b:长 read 刀落在普通保留轮的左边时,按「保留区整段」计数会数到
+    // 切点左侧(包括被切掉的长 read),tailBeyondKept 变负、尾巴守卫失效;现在只数
+    // start 在实际切点右边的保留轮。
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c1', 'old', 400),
+      ...round('rL', 'x', 100000, 'read'),
+      ...round('c2', 'tail', 2000),
+      ...round('c3', 'tail', 2000),
+    ];
+    const chunk = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 });
+    expect(chunk).not.toBeNull();
+    expect(chunk.end).toBe(5);
+    const expected = entries.slice(chunk.end + 1).reduce((sum, item) => sum + item.est, 0);
+    expect(expected).toBeGreaterThan(0);
+    expect(chunk.keptTokens).toBe(expected);
+    // 旧行为会把保留区整段(含被切掉的 50000 est)都数进去,远大于这个值。
+    expect(chunk.keptTokens).toBeLessThan(entries[5].est);
+  });
+
+  it('refuses a duplicated tool-call id whose body changed', () => {
+    // 上游 #46:同一 toolCallId 换了内容是异常复用;静默沿用旧备份会让指针指向错误正文。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-dup-'));
+    try {
+      const saved = commitRawEntry(planRawEntry({ dir, toolCallId: 'cDup', text: 'one body', turn: 1, name: 'bash', pathLabel: 'bash' }));
+      expect(verifiedRaw(saved).ok).toBe(true);
+      const changed = planRawEntry({ dir, toolCallId: 'cDup', text: 'different body', turn: 2, name: 'bash', pathLabel: 'bash' });
+      expect(changed.ok).toBe(false);
+      expect(changed.reason).toBe('duplicate-tool-call-id');
+      const same = planRawEntry({ dir, toolCallId: 'cDup', text: 'one body', turn: 3, name: 'bash', pathLabel: 'bash' });
+      expect(same.ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('discards a meta-less orphan but keeps a corrupt meta fail-closed', () => {
+    // 上游 #46:meta 缺失(ENOENT)才算没发完的半成品,当前事件带完整正文就重建;
+    // 坏 meta(解析失败)继续 fail-closed,不重建。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-meta-'));
+    try {
+      writeFileSync(join(dir, rawName('cOrphan')), 'orphan body');
+      const rebuilt = planRawEntry({ dir, toolCallId: 'cOrphan', text: 'orphan body', turn: 1, name: 'bash', pathLabel: 'bash' });
+      expect(rebuilt.ok).toBe(true);
+      const committed = commitRawEntry(rebuilt);
+      expect(verifiedRaw(committed).ok).toBe(true);
+      expect(readFileSync(committed.path, 'utf8')).toContain('orphan body');
+
+      const raw = join(dir, rawName('cBad'));
+      writeFileSync(raw, 'stored body');
+      writeFileSync(`${raw}.meta.json`, '{not json');
+      const planned = planRawEntry({ dir, toolCallId: 'cBad', text: 'stored body', turn: 1, name: 'bash', pathLabel: 'bash' });
+      expect(planned.ok).toBe(false);
+      expect(planned.reason).toBe('bad-meta');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resets the stale growth baseline when a settle is skipped', () => {
+    // 上游 8ee6876b:被跳过的收尾就是新基线。此前 max 永不重置,一次尖峰之后每轮
+    // projected 恒真,云端会跟着连白切。
+    const root = mkdtempSync(join(tmpdir(), 'spine-growth-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      // 场景设计:总量停在 40000(投影带,不及 URGENT_TOKENS)。第一轮只有指针大轮,切完
+      // last 停在很小的值;第二轮被官方压缩冷却跳过 —— 跳过轮就是新基线;第三轮换成五轮
+      // 普通内容,单刀受卡片预算限制切不完。基线若不重置,陈旧 max 会把 projected 抬成
+      // 恒真、逼出第二刀;重置后只有一刀。
+      const base = (extra = []) => [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        ...extra,
+        toolCall('c1'), toolResult('c1', 'ok '.repeat(20)),
+        toolCall('c2'), toolResult('c2', 'ok '.repeat(20)),
+        toolCall('c3'), toolResult('c3', 'ok '.repeat(20)),
+      ];
+      const pointerRound = [toolCall('cBig', 'read'), toolResult('cBig', 'x'.repeat(200000))];
+      const more = [
+        toolCall('cM2'), toolResult('cM2', 'm '.repeat(2000)),
+        toolCall('cM3'), toolResult('cM3', 'm '.repeat(2000)),
+        toolCall('cM4'), toolResult('cM4', 'm '.repeat(2000)),
+        toolCall('cM5'), toolResult('cM5', 'm '.repeat(2000)),
+        toolCall('cM6'), toolResult('cM6', 'm '.repeat(2000)),
+      ];
+      const compaction = { messages: [{ role: 'user', content: 'official summary', provider: 'minimax' }], sourceEntry: { id: 'x9', type: 'compaction', timestamp: 1_000_000 } };
+      const sessionId = 'session-growth';
+      settle(root, sessionId, base(pointerRound), 40000);
+      settle(root, sessionId, [...base(pointerRound), compaction], 40000);
+      settle(root, sessionId, base(more), 40000);
+      const log = readFileSync(join(root, 'spine.log'), 'utf8');
+      expect(log).toContain('cooldown: official compaction');
+      // 重置后 projected 恒假:第三轮按 1.0.9「云端平时不切」一刀不发。
+      // 基线不重置时,陈旧 max 会把 projected 抬成恒真、逼出第二刀。
+      expect((log.match(/spine cut \d+ms/g) || []).length).toBe(1);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('narrows the assistant decision veto to actual decision phrasing', () => {
+    // 上游 #46:模型/版本/区域 token 只是普通行文;带决策动词或中文方案表述的助手行才拦。
+    const plain = buildCard('', '', 8000, [{ role: 'assistant', text: 'us-east-1 is closer to the database, latency looks fine', isError: false }]);
+    expect(plain.ok).toBe(true);
+    const decided = buildCard('', '', 8000, [{ role: 'assistant', text: 'we decided to use pgBouncer for pooling', isError: false }]);
+    expect(decided.ok).toBe(false);
+    expect(decided.missing).toContain('we decided to use pgBouncer for pooling');
+    const zh = buildCard('', '', 8000, [{ role: 'assistant', text: '我们决定改用本地缓存来加速', isError: false }]);
+    expect(zh.ok).toBe(false);
+  });
+
+  it('prefers model-level provider endpoints over the provider default', () => {
+    // 上游 #45:目录条目带 models[] 时,命中模型级 baseURL 优先于这家默认端点。
+    const catalog = [{ id: 'x', baseURL: 'https://prov.example', models: [{ id: 'm1', baseURL: 'https://model.example' }] }];
+    expect(resolveProviderBaseURL({ provider: 'x', catalog, model: 'm1' })).toBe('https://model.example');
+    expect(resolveProviderBaseURL({ provider: 'x', catalog, model: 'other' })).toBe('https://prov.example');
+    expect(resolveProviderBaseURL({ provider: 'x', catalog })).toBe('https://prov.example');
+    expect(resolveProviderBaseURL({ provider: 'y', catalog, model: 'm1' })).toBe('');
+  });
+
+  it('recognizes the legacy checkpoint marker only at the start of an entry', () => {
+    // 上游 5d0fba82:工具结果或普通句子提到标记文本不再被当成永久切割边界;
+    // 只有位于条目文本开头的旧版标记才算检查点。
+    const round = (id) => [
+      entry('assistant', `call ${id}`, { calls: [id], callMeta: new Map([[id, { name: 'shell', command: '', filePath: '', jobId: '', hiddenArgs: false }]]) }),
+      entry('toolResult', `out ${id}`, { results: [id] }),
+    ];
+    // 引用了标记文本的工具结果不再是检查点:这刀照常能成。
+    const quoted = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('cA'),
+      entry('assistant', 'call cB', { calls: ['cB'], callMeta: new Map([['cB', { name: 'shell', command: '', filePath: '', jobId: '', hiddenArgs: false }]]) }),
+      entry('toolResult', `grep log found: Spine extract. inside a sentence ${'x'.repeat(5000)}`, { results: ['cB'] }),
+      ...round('c1'),
+      ...round('c2'),
+      ...round('c3'),
+    ];
+    const chunk = selectNewestChunk(quoted, undefined, { drain: true, totalTokens: 60000 });
+    expect(chunk).not.toBeNull();
+    expect(chunk.end).toBe(5);
+    // 位于开头的旧标记仍然是检查点:带它的用户条目还是把刀拦下来。
+    const checkpoint = [
+      entry('system', 'sys'),
+      entry('user', 'Spine extract.\nreal checkpoint card'),
+      ...round('c1'),
+      ...round('c2'),
+      ...round('c3'),
+    ];
+    expect(selectNewestChunk(checkpoint, undefined, { drain: true, totalTokens: 60000 })).toBeNull();
   });
 });
