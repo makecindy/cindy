@@ -10403,7 +10403,7 @@
         "control-requested": "親タスクから制御リクエストが送信されました。",
         "transcript-truncated": "記録の保存上限に達しました。",
         "turn-ended": "サブエージェントのターンが終了しました。",
-        "command-refused": "Pi がサブエージェントのコマンドを拒否しました。",
+        "command-refused": "Pi がサブエージェントへのコマンドを拒否しました。",
         "generation-unreadable": "この会話の以前の部分を読み取れませんでした。"
       },
       "activityKinds": {

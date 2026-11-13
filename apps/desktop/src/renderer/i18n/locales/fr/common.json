@@ -10526,7 +10526,7 @@
         "control-requested": "Une demande de contrôle a été envoyée depuis la tâche parente.",
         "transcript-truncated": "Limite de stockage de la transcription atteinte.",
         "turn-ended": "Tour du sous-Agent terminé.",
-        "command-refused": "Pi a refusé une commande du sous-Agent.",
+        "command-refused": "Pi a refusé une commande pour le sous-Agent.",
         "generation-unreadable": "Une partie antérieure de cette conversation n'a pas pu être lue."
       },
       "activityKinds": {
