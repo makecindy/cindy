@@ -29,7 +29,7 @@ import { getSessionFastMode, setSessionEffort, setSessionFastMode } from '../../
 import { resolveCompatibleSessionRuntimeEffort } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.js';
 import type { createSubscriptionFastPolicies } from '../../../desktop/src/main/maker-host/subscriptionFastPolicyCore.js';
 import type { SessionStartFailureContext } from '@cindy/maker-core';
-import type { WorktreeRuntimeLease } from '../../../desktop/src/main/worktree/runtimeLeasesCore.js';
+import type { WorktreeRuntimeLease } from '../../../desktop/src/main/worktree/runtimeLeases.js';
 import { hostPrecreatedCancellation, hostWorktreeRuntimeLeases } from './worktree-leases.js';
 import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../../desktop/src/shared/accountProviderReadiness.js';
