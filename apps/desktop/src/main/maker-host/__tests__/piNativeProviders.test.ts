@@ -18,6 +18,14 @@ vi.mock('../managed-skills.js', () => ({
 vi.mock('../model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
 }));
+// Native provider specifications do not dispatch accounts. Keep migration
+// admission fail-closed without booting share/credential services during collection.
+// Real account permissions are exercised by subscription-accounts/runtime.test.ts.
+vi.mock('../../subscription-accounts/legacyAccountAccess.js', () => ({
+  legacyCodexAccountCanRun: () => false,
+  openAiRouteAllowsModel: () => false,
+  setLegacyCodexAccountPaused: () => { throw new Error('Account mutation is outside this provider fixture'); },
+}));
 
 vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => true,
