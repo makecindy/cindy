@@ -5070,7 +5070,7 @@ export default async function cindyBridge(piApi: any) {
     if (entry.count <= 2) return undefined;
     return {
       block: true,
-      reason: 'This exact command already ran twice in this turn; running it again is polling, not progress. Hand the wait to the background instead: cindy_mcp_call_tool({server:"cindy_helper", tool:"call_tool", args:{name:"run_command_background", args:{command:"gh run watch <run-id> --exit-status"}}}) returns immediately and the host reports the exit code and log tail when the command finishes, so ending the turn is enough. If this call is genuinely not polling, rephrase the command slightly and it will go through.',
+      reason: 'This exact command already ran twice in this turn; running it again is polling, not progress. Hand the wait to the background instead: cindy_mcp_call_tool({server:"cindy_helper", tool:"call_tool", args:{name:"run_command_background", args:{command:"gh run watch <run-id> --exit-status"}}}) returns immediately and the host reports the exit code and log tail when the command finishes, so ending the turn is enough. If this call is genuinely not polling, rephrase the command slightly and it will go through. If a /pr follow-up gate is already watching this PR, instead just end the turn and let it wake you.',
     };
   }
   pi.on('tool_call', (event: any) => cindyRepeatCallGate(event.toolName, event.input && event.input.command, repeatCallTurnSeq));
