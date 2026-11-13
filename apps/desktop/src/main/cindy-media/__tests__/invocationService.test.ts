@@ -156,7 +156,8 @@ vi.mock('../../serverApiClient.desktop.js', () => ({
     }
   },
 }));
-vi.mock('../mediaInvocationStore.js', () => ({
+vi.mock('../mediaInvocationStore.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../mediaInvocationStore.js')>(),
   recoverInterruptedMediaInvocations: mocks.recover,
   pruneMediaInvocations: mocks.prune,
   countMediaInvocations: async () =>
@@ -427,6 +428,121 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.resolvedGuide.mockResolvedValue({ source: 'custom', value });
     return { model, connection, value };
   }
+
+  function recoveryVideoOperation(taskIdPath = ['job'], statusPath = ['phase'], mediaPath = ['movie']) {
+    return { ...operation({ mode: 'async', taskIdPath, poll: { method: 'GET', path: '/jobs/{taskId}',
+      statusPath, successValues: ['ready'], failureValues: ['error'], recommendedIntervalMs: 1000,
+      timeoutMs: 1000, maxResponseBytes: 1048576, media: [{ path: mediaPath, encoding: 'base64', kind: 'video' }] } }),
+      capability: 'video.generate' };
+  }
+
+  // Unit integration: repair the Guide through a new prepare and resume the
+  // original paid receipt; neither recovery nor a repeated request may pay again.
+  it('recovers a paid image response with a newly prepared Guide and leaves the original snapshot fixed', async () => {
+    const { model, value } = setupGuideDriven(operation({ mode: 'sync', media: [{ path: ['wrong'], encoding: 'base64', kind: 'image' }] }));
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    const originalGuide = structuredClone(mocks.rows.get(String(first.invocation_id))!.guide);
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ image: PNG.toString('base64') }));
+    expect(await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } })).toMatchObject({ ok: false });
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-image',
+      operations: [operation({ mode: 'sync', media: [{ path: ['image'], encoding: 'base64', kind: 'image' }] })] } });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
+      .toMatchObject({ ok: true, invocation_id: next.invocation_id, next_action: 'request' });
+    expect(await callCindyMedia({ action: 'request', invocationId: String(next.invocation_id), body: {} })).toMatchObject({ ok: true });
+    expect(mocks.rows.get(String(first.invocation_id))!.guide).toEqual(originalGuide);
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['missing', 'wrong'] as const)('recovers an original video task when the first Guide extracts a %s task ID', async failure => {
+    const { model, value } = setupGuideDriven(recoveryVideoOperation([failure === 'missing' ? 'absent' : 'wrongId']));
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'original-task', wrongId: 'incorrect-task' }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-task', operations: [recoveryVideoOperation()] } });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
+      .toMatchObject({ ok: true, next_action: 'poll' });
+    expect(await callCindyMedia({ action: 'request', invocationId: String(next.invocation_id), body: { prompt: 'cat' } }))
+      .toMatchObject({ ok: false, errorCode: 'INVOCATION_ALREADY_USED' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
+    expect(await callCindyMedia({ action: 'poll', invocationId: String(next.invocation_id) })).toMatchObject({ ok: true });
+    expect(mocks.outboundFetch.mock.calls.map(call => call[0])).toEqual([
+      'https://relay.example/proxy/v2/images/generations', 'https://relay.example/proxy/v2/jobs/original-task',
+    ]);
+  });
+
+  it.each(['status', 'media'] as const)('recovers the saved video result after a %s extraction error without another network call', async failure => {
+    const { model, value } = setupGuideDriven(recoveryVideoOperation(['job'], failure === 'status' ? ['wrong'] : ['phase'], failure === 'media' ? ['wrong'] : ['movie']));
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'original-task' }))
+      .mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    await callCindyMedia({ action: 'poll', invocationId: String(first.invocation_id) });
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-result', operations: [recoveryVideoOperation()] } });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
+      .toMatchObject({ ok: true });
+    expect(await callCindyMedia({ action: 'poll', invocationId: String(next.invocation_id) })).toMatchObject({ ok: true });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects recovery across changed connections and leaves the new prepare unused', async () => {
+    const { model, connection } = setupGuideDriven();
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ wrong: PNG.toString('base64') }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    mocks.httpConnection.mockReturnValue({ ...connection, revision: 'another-connection' });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
+      .toMatchObject({ ok: false, errorCode: 'RECOVERY_TARGET_MISMATCH' });
+    expect(mocks.rows.get(String(next.invocation_id))?.state).toBe('prepared');
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the paid submission receipt when persisting its extracted task ID fails', async () => {
+    const { model } = setupGuideDriven(recoveryVideoOperation());
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    mocks.failTransitionTo = 'pending';
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'original-task' }));
+    expect(await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } }))
+      .toMatchObject({ ok: false, errorCode: 'SUBMISSION_OUTCOME_UNKNOWN' });
+    expect(mocks.rows.get(String(first.invocation_id))).toMatchObject({ state: 'unknown', responseJson: expect.stringContaining('original-task') });
+    mocks.failTransitionTo = null;
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
+      .toMatchObject({ ok: true, next_action: 'poll' });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not consume a recovery prepare after task permission revocation', async () => {
+    const { model } = setupGuideDriven();
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ wrong: PNG.toString('base64') }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }, {
+      assertActive: () => { throw new Error('task permission revoked'); }, confirm: mocks.confirm, approvals: new Set(),
+    })).toMatchObject({ ok: false });
+    expect(mocks.rows.get(String(next.invocation_id))?.state).toBe('prepared');
+    expect(mocks.ingestMedia).not.toHaveBeenCalled();
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not recover a paid receipt belonging to another owner', async () => {
+    const { model } = setupGuideDriven();
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ wrong: PNG.toString('base64') }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    mocks.currentUserId = 'other-owner';
+    mocks.dbOwnerId = 'other-owner';
+    mocks.ownerGeneration += 1;
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
+      .toMatchObject({ ok: false, errorCode: 'INVOCATION_NOT_FOUND' });
+    expect(mocks.rows.get(String(next.invocation_id))?.state).toBe('prepared');
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
 
   // Unit at production dispatch: a new model must use its Guide's real path,
   // preserve the selected connection and never enter a legacy image adapter.

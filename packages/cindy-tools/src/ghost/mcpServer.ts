@@ -132,6 +132,7 @@ const D_MEDIA = [
   "插件已返回用户配置的 model_id/provider_id 时原样传给 prepare；指定了 source_agent 时也须原样保留。同名多连接返回 CONNECTION_AMBIGUOUS 时请用户选择实际连接。每次 prepare 按需获取 Guide，自定义优先、官方后备，随后固定快照。缺失时用 cindy_helper.manage_media_guide 根据用户提供的文档、cURL 或提示 validate/save，不要求用户写 JSON，也没有加载/重载。",
   "配置、验证调用和附件交接都走当前任务的 Ask/Auto/完全访问权限；不得用 shell/raw HTTP 或切换权限绕过。自定义契约被上游明确拒绝时，先核对参数，可用同一 provider/model/source_agent、guide_source=official 新 prepare 尝试官方；不暗换 host、凭证或计费账号，不循环后备。只有实际媒体交付才可报告接入验证成功。",
   "根据返回的 HTTP 状态、脱敏错误和任务状态自行判断原因及下一步。鉴权、额度或限流问题按连接/账号的既有流程处理；接口契约不适配才考虑官方 Guide 或请用户补资料。Core 不替你做业务错误分类或自动重试。",
+  "原调用已经提交但 Guide 提错任务编号、状态或媒体字段时，补好 Guide 后为原 provider/model/source_agent 重新 prepare，再 recover：invocation_id 传新的 prepare，source_invocation_id 传原付费调用。recover 只复用原回执，不发生成请求；随后按 next_action 调 request（body={}，只恢复已有结果）或 poll。两份 Guide 快照都不改变；原回执缺失时说明无法恢复，不自动重新生成。恢复、下载及交接仍走当前任务权限。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
   "Core 图片完成结果由当前 Agent 控制呈现：在最终回复中用返回的受管地址只嵌入展示一次，不要同时重复口播或再次附同一图片。",
   "生成结果返回受管媒体地址和元数据，不会自动把图片送给模型。是否查看图片或视频由 Agent 按任务需要决定；需要查看时先用 resolve_local_path 取得路径，再使用已有的文件查看或分析工具。",
@@ -601,7 +602,7 @@ const MEDIA_CAPABILITIES = new Set<CindyMediaCapability>([
 export async function handleMedia(
   deps: CindyGhostsMcpDeps,
   input: {
-    action: "list_models" | "resolve_local_path" | "import_image" | "prepare" | "request" | "poll";
+    action: "list_models" | "resolve_local_path" | "import_image" | "prepare" | "request" | "poll" | "recover";
     path?: string;
     capability?: CindyMediaCapability;
     url?: string;
@@ -610,6 +611,7 @@ export async function handleMedia(
     guide_source?: 'auto' | 'official';
     model_id?: string;
     invocation_id?: string;
+    source_invocation_id?: string;
     body?: Record<string, unknown>;
   },
 ): Promise<McpTextResult> {
@@ -673,6 +675,11 @@ export async function handleMedia(
         modelId: input.model_id,
         capability: input.capability,
       });
+    } else if (input.action === "recover") {
+      if (!input.invocation_id || !input.source_invocation_id) {
+        return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "recover 必须提供新的 invocation_id 和原付费调用的 source_invocation_id。" }, true);
+      }
+      result = await deps.callMedia({ action: "recover", invocationId: input.invocation_id, sourceInvocationId: input.source_invocation_id });
     } else if (input.action === "request") {
       if (!input.invocation_id || !input.body) {
         return textResult(
@@ -1428,7 +1435,7 @@ export function createCindyGhostsMcpServer(
     D_MEDIA,
     {
       action: z
-        .enum(["list_models", "resolve_local_path", "import_image", "prepare", "request", "poll"])
+        .enum(["list_models", "resolve_local_path", "import_image", "prepare", "request", "poll", "recover"])
         .describe("要执行的媒体调用阶段"),
       path: z.string().max(32768).optional().describe("import_image 时必填；实际存在的图片路径，相对路径按当前任务工作目录解析"),
       capability: z
@@ -1461,7 +1468,8 @@ export function createCindyGhostsMcpServer(
         .string()
         .max(128)
         .optional()
-        .describe("request / poll 时必填；必须来自 prepare 返回"),
+        .describe("request / poll / recover 时必填；必须来自 prepare 返回。recover 使用修好 Guide 后新的 prepare"),
+      source_invocation_id: z.string().max(128).optional().describe("recover 时必填：原付费调用的 invocation_id；仅复用其回执，不重新生成"),
       body: z
         .record(z.string(), z.unknown())
         .optional()

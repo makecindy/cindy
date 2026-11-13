@@ -1193,6 +1193,16 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
+  it('requires both Host-created invocation IDs for receipt recovery', async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, status: 'pending', next_action: 'poll' }));
+    const deps = fakeDeps({ callMedia });
+    expect(parsePayload(await handleMedia(deps, { action: 'recover', invocation_id: 'new-prepare' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(callMedia).not.toHaveBeenCalled();
+    expect(parsePayload(await handleMedia(deps, { action: 'recover', invocation_id: 'new-prepare', source_invocation_id: 'paid-source' })))
+      .toMatchObject({ ok: true, next_action: 'poll' });
+    expect(callMedia).toHaveBeenCalledExactlyOnceWith({ action: 'recover', invocationId: 'new-prepare', sourceInvocationId: 'paid-source' });
+  });
   it("imports existing screenshots without requiring a model or plugin", async () => {
     const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));
     const deps = fakeDeps({ callMedia });

@@ -54,7 +54,9 @@ import {
   createMediaInvocation,
   getMediaInvocation,
   pruneMediaInvocations,
+  readMediaInvocationReceipt,
   recoverInterruptedMediaInvocations,
+  serializeMediaInvocationReceipt,
   transitionMediaInvocation,
   type StoredMediaInvocation,
 } from './mediaInvocationStore.js';
@@ -979,7 +981,9 @@ function persistedResponse(invocation: StoredMediaInvocation): unknown {
     throw new MediaInvocationError('MEDIA_RESULT_MISSING', '已提交调用缺少可恢复的上游响应');
   }
   try {
-    return JSON.parse(invocation.responseJson) as unknown;
+    const receipt = readMediaInvocationReceipt(invocation.responseJson);
+    if (receipt.result === undefined) throw new Error('no result receipt');
+    return receipt.result;
   } catch {
     throw new MediaInvocationError('MEDIA_RESULT_INVALID', '已提交调用保存的上游响应不合法');
   }
@@ -1410,6 +1414,58 @@ async function requireInvocation(id: string): Promise<StoredMediaInvocation> {
   return invocation;
 }
 
+/** A new prepare owns the repaired Guide. Only copy an existing paid receipt;
+ * consuming the prepare as pending makes a later request unable to submit again. */
+async function recoverInvocation(invocation: StoredMediaInvocation, sourceId: string, context?: MediaDownloadContext): Promise<Record<string, unknown>> {
+  const scope = currentAuthScope(context);
+  assertAuthScope(scope, invocation.owner);
+  const db = captureMediaDb(scope);
+  if (invocation.state !== 'prepared') return failure('INVOCATION_ALREADY_USED', '恢复必须使用新的 prepare；不要重新生成');
+  if (Date.now() - invocation.createdAt > PREPARED_INVOCATION_TTL_MS) return failure('INVOCATION_EXPIRED', '恢复准备已过期，请重新 prepare');
+  if (activeInvocations.has(`${invocation.owner}:${sourceId}`)) return failure('MEDIA_INVOCATION_BUSY', '原调用仍在进行，请等待后恢复');
+  const source = await getMediaInvocation(sourceId, invocation.owner, db);
+  assertAuthScope(scope, invocation.owner);
+  if (!source) return failure('INVOCATION_NOT_FOUND', '原调用不存在或不属于当前账号');
+  const targetBinding = invocation.guide.binding;
+  const sourceBinding = source.guide.binding;
+  if (source.modelId !== invocation.modelId || source.capability !== invocation.capability ||
+      sourceBinding.executor !== 'provider-http' || targetBinding.executor !== 'provider-http' ||
+      sourceBinding.providerId !== targetBinding.providerId || sourceBinding.sourceAgent !== targetBinding.sourceAgent ||
+      sourceBinding.connectionRevision !== targetBinding.connectionRevision) {
+    return failure('RECOVERY_TARGET_MISMATCH', '恢复必须保持原 provider、模型、能力和实际连接；请恢复原连接后重新 prepare');
+  }
+  if (!['pending', 'unknown', 'failed'].includes(source.state)) return failure('RECOVERY_NOT_AVAILABLE', '原调用尚未提交或已经交付；请继续原调用');
+  const connection = await resolveInvocationConnection(invocation);
+  assertAuthScope(scope, invocation.owner);
+  connection.assertCurrent?.();
+  const receipt = readMediaInvocationReceipt(source.responseJson);
+  let taskId: string | undefined;
+  let responseJson: string;
+  if (invocation.guide.response.mode === 'sync') {
+    const result = receipt.result ?? receipt.poll ?? receipt.submission;
+    if (result === undefined) return failure('RECOVERY_NOT_AVAILABLE', '没有已保存的上游回执，无法恢复；不要重新生成');
+    responseJson = JSON.stringify(result);
+  } else {
+    const submission = receipt.submission !== undefined ? receipt.submission
+      : source.guide.response.mode === 'sync' ? receipt.result : undefined;
+    taskId = submission !== undefined
+      ? valuesAtPath(submission, invocation.guide.response.taskIdPath).find((value): value is string => typeof value === 'string' && value.length > 0)
+      : source.taskId;
+    if (!taskId) return failure('RECOVERY_NOT_AVAILABLE', '修正后的 Guide 仍未从原回执取得任务编号，请继续补齐 Guide；不要重新生成');
+    const poll = receipt.result ?? receipt.poll;
+    const status = valuesAtPath(poll, invocation.guide.response.poll.statusPath)[0];
+    const result = typeof status === 'string' && invocation.guide.response.poll.successValues.includes(status) ? poll : undefined;
+    responseJson = serializeMediaInvocationReceipt({ submission, poll: result === undefined ? poll : undefined, result });
+  }
+  const restored = await transitionMediaInvocation({ id: invocation.id, owner: invocation.owner,
+    from: 'prepared', to: 'pending', taskId, responseJson }, db);
+  assertAuthScope(scope, invocation.owner);
+  if (!restored) return failure('INVOCATION_ALREADY_USED', '这个 prepare 已被使用，请继续其原调用；不要重新生成');
+  return { ok: true, status: 'pending', invocation_id: invocation.id, source_invocation_id: source.id,
+    next_action: invocation.guide.response.mode === 'sync' ? 'request' : 'poll',
+    guidance: '已复用原付费回执；按 next_action 继续查询或交付，不会再次提交生成。' };
+}
+
 async function submitInvocation(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
@@ -1597,6 +1653,8 @@ async function submitInvocation(
           db,
         );
       }
+      const responseJson = invocation.guide.binding.executor === 'provider-http'
+        ? serializeMediaInvocationReceipt({ submission: response }) : undefined;
       const taskId = valuesAtPath(response, invocation.guide.response.taskIdPath).find(
         (value): value is string => typeof value === 'string' && value.length > 0,
       );
@@ -1607,6 +1665,7 @@ async function submitInvocation(
             owner: invocation.owner,
             from: 'submitting',
             to: 'unknown',
+            responseJson,
           },
           db,
         );
@@ -1623,6 +1682,7 @@ async function submitInvocation(
             from: 'submitting',
             to: 'pending',
             taskId,
+            responseJson,
           },
           db,
         );
@@ -1636,6 +1696,7 @@ async function submitInvocation(
             owner: invocation.owner,
             from: 'submitting',
             to: 'unknown',
+            responseJson,
           },
           db,
         ).catch(() => false);
@@ -1773,7 +1834,9 @@ async function pollInvocation(
     }
     catch (error) { return failure('CONNECTION_CHANGED', (error as Error).message); }
   }
-  if (invocation.responseJson && !refreshExpiredUrl) {
+  const receipt = readMediaInvocationReceipt(invocation.responseJson);
+  const hasSavedResult = receipt.result !== undefined;
+  if (hasSavedResult && !refreshExpiredUrl) {
     observeResponse?.(persistedResponse(invocation));
     // 已有成功响应的 poll 是结果恢复重试；刷新活动时间，避免仍在主动恢复的
     // 已付费结果被常规 TTL 清理。保持 pending，不引入新的本地状态。
@@ -1827,12 +1890,13 @@ async function pollInvocation(
     const rawStatus = valuesAtPath(response, guide.statusPath)[0];
     const status = typeof rawStatus === 'string' ? rawStatus : '';
     if (guide.successValues.includes(status)) {
-      if (invocation.responseJson) {
+      if (hasSavedResult) {
         // Keep the original durable response until refreshed media has actually
         // been ingested. Completion replaces it atomically with managed URLs.
         return materializeAsyncInvocation(invocation, response, scope, db);
       }
-      const responseJson = JSON.stringify(response);
+      const responseJson = invocation.guide.binding.executor === 'provider-http'
+        ? serializeMediaInvocationReceipt({ submission: receipt.submission, result: response }) : JSON.stringify(response);
       const persisted = await transitionMediaInvocation(
         {
           id: invocation.id,
@@ -1850,7 +1914,7 @@ async function pollInvocation(
         if (current?.state === 'complete' && current.responseJson) {
           return completedInvocationResult(current);
         }
-        if (current?.state === 'pending' && current.responseJson) {
+        if (current?.state === 'pending' && readMediaInvocationReceipt(current.responseJson).result !== undefined) {
           return materializeAsyncInvocation(
             current,
             persistedResponse(current),
@@ -1871,11 +1935,13 @@ async function pollInvocation(
       }
       return downloaded;
     }
-    if (invocation.responseJson) {
+    if (hasSavedResult) {
       return failure('MEDIA_DOWNLOAD_FAILED', '暂时无法刷新下载地址，已保留原生成结果', false, {
         invocation_id: invocation.id,
       });
     }
+    const responseJson = invocation.guide.binding.executor === 'provider-http'
+      ? serializeMediaInvocationReceipt({ submission: receipt.submission, poll: response }) : undefined;
     if (guide.failureValues.includes(status)) {
       await transitionMediaInvocation(
         {
@@ -1883,11 +1949,18 @@ async function pollInvocation(
           owner: invocation.owner,
           from: 'pending',
           to: 'failed',
+          responseJson,
         },
         db,
       );
       assertAuthScope(scope, invocation.owner);
       return failure('UPSTREAM_TASK_FAILED', `上游媒体任务失败，状态: ${status || 'unknown'}`);
+    }
+    if (responseJson !== undefined && responseJson !== invocation.responseJson) {
+      const saved = await transitionMediaInvocation({ id: invocation.id, owner: invocation.owner,
+        from: 'pending', to: 'pending', responseJson }, db);
+      assertAuthScope(scope, invocation.owner);
+      if (!saved) return failure('POLL_UNAVAILABLE', '原任务回执未能保存，请继续查询原调用', true);
     }
     return {
       ok: true,
@@ -1902,9 +1975,9 @@ async function pollInvocation(
     if (error instanceof MediaInvocationError) {
       // Polling an unfinished generation is safe to retry; completed-result
       // recovery must not start a new operation after its client retries finish.
-      return failure(error.code, error.message, error.code !== 'CONNECTION_CHANGED' && !invocation.responseJson);
+      return failure(error.code, error.message, error.code !== 'CONNECTION_CHANGED' && !hasSavedResult);
     }
-    return failure('POLL_UNAVAILABLE', '媒体任务状态查询失败', !invocation.responseJson);
+    return failure('POLL_UNAVAILABLE', '媒体任务状态查询失败', !hasSavedResult);
   }
 }
 
@@ -2024,6 +2097,7 @@ export async function callCindyMedia(
     }
     activeInvocations.add(operationKey);
     try {
+      if (request.action === 'recover') return await recoverInvocation(invocation, request.sourceInvocationId, context);
       return await (request.action === 'request'
         ? submitInvocation(invocation, request.body, context, sessionId, observeResponse)
         : pollInvocation(invocation, context, false, observeResponse));

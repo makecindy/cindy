@@ -365,6 +365,7 @@ export type CindyMediaToolRequest =
       capability: CindyMediaCapability;
     }
   | { action: 'request'; invocationId: string; body: Record<string, unknown> }
+  | { action: 'recover'; invocationId: string; sourceInvocationId: string }
   | { action: 'poll'; invocationId: string };
 
 /** Host-owned connections: Grok login, or a messaging platform a teammate connects to itself. */

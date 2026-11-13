@@ -71,7 +71,7 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
       const saved = localMediaGuides.save(target, connectionScope, parsed.value, change.expectedRevision, change.evidence);
       resetExecutableMediaModelCache();
       return { scope: 'local', target, saved: true, source: 'custom', customRevision: saved.guide.revision,
-        guide: saved.guide, verification: 'not_called', message: '已保存。再次 get/prepare 即可使用；实际生成仍须走媒体工具和当前权限。' };
+        guide: saved.guide, verification: 'not_called', message: '已保存。再次 get/prepare 即可使用；若原调用已经提交，用新 prepare 和原 invocation_id 执行媒体工具的 recover 恢复回执，不要重新生成。配置与调用仍走当前权限。' };
     } catch (error) {
       return { ok: false, errorCode: error instanceof Error && error.message === 'GUIDE_REVISION_CONFLICT' ? 'GUIDE_REVISION_CONFLICT' : 'GUIDE_ACCESS_FAILED',
         message: 'Guide 操作未完成，请重新 get 核对最新定义和连接；不要通过文件或原始 HTTP 绕过。' };

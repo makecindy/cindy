@@ -252,6 +252,16 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   协议版本，自定义 HTTP 绑定同时保存 Guide 来源与 sourceAgent；视频/HTTP 的
   `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
   变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
+- HTTP Guide 提错任务编号、状态或结果字段时，先补齐 Guide 并重新 `prepare`，再用 `recover`
+  将原付费调用的回执交给新快照；原 `guide_json` 不变。恢复要求同账号、provider、模型、能力、
+  sourceAgent 与连接摘要，且原 request/poll 当前不在执行；新 prepare 只转为已有结果/任务的 pending，不能再次生成。
+  `recover` 不访问上游，后续依 `next_action` 走现有 request/poll、权限和入仓流程。
+  原回执缺失时说明无法恢复，不自动重提。Guide 不能提供凭证；Google/Anthropic 鉴权头复用实际连接
+  （含型号覆盖）的协议与所选 runtime 的托管 Key。
+- 声明式 HTTP 的提交回执和最近轮询回执保存在账号数据库已有的 `response_json`，以
+  `__cindyMediaReceipt` 区分未完成回执与已生成结果；旧的直接结果 JSON 继续可读，不改物理 schema。
+  未完成回执仍占在途名额并按原 TTL 清理；待交付结果沿用原恢复保留规则。
+  回执不进入 Guide、日志或 Agent 输出。每次 poll 至多更新一份回执，内容未变不重复写入。
 - 升级时只解码旧快照的 `connection` 和旧视频 revision，不请求时重写历史记录，不改数据库
   物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。复用 Server 已有的公开协议读取接口，
   不新增服务端协议或要求配套发布。
