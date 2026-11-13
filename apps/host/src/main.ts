@@ -78,7 +78,7 @@ import { createHostModelAccess } from './agent/model-access.js';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
 import { closeClaudeCliProxyBridge } from '../../desktop/src/main/maker-host/claude-cli-proxy-bridge.js';
-import { markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
+import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
@@ -440,6 +440,11 @@ const listProviders = createProviderCatalog({
     agentGraph?.refreshModels();
   },
   markModelsUnknown: () => markXdGatewayModelAccessUnknown(),
+  // The XD snapshot in this process's active-catalog module (one module instance for every Host
+  // import of maker-host/active-catalog): setXdGatewayModels above writes it, and the subagent
+  // model access, the Codex proxy and the one-shot model candidates read it. A failed refresh keeps
+  // this current list, as the desktop's runModelsSync does with getXdGatewayModels().
+  readModels: () => getXdGatewayModels(),
   fetchModels: async () => {
     const baseUrl = readAuthEndpoints((account.realm ?? resolveHostRegion()) as 'cn' | 'global').modelAccessApiBaseUrl;
     if (!baseUrl) throw new Error('Model access endpoint is unavailable');

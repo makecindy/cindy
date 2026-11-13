@@ -23,7 +23,7 @@ vi.mock('../createDesktopProviderService.js', () => ({
 }));
 
 import { resolveDesktopClaudeSubagentModelAccess } from '../subagent-model-access.js';
-import { markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../active-catalog.js';
+import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../active-catalog.js';
 
 type HostAccess = typeof import('../../../../../host/src/agent/subagent-model-access.js');
 // providers.mjs is JavaScript without declarations; the shape this test calls.
@@ -66,6 +66,7 @@ describe('Host subagent model access matches the desktop', () => {
       readProviders: async () => [],
       applyModels: (value: never, options: never) => setXdGatewayModels(value, options),
       markModelsUnknown: () => markXdGatewayModelAccessUnknown(),
+      readModels: () => getXdGatewayModels(),
       fetchModels: () => new Promise((resolve, reject) => { h.pending.push({ resolve, reject }); }),
     });
     const gateway = (credential: string) => ({ endpoint: 'http://gateway.example.test', credential });
@@ -93,7 +94,7 @@ describe('Host subagent model access matches the desktop', () => {
     call = list({ gateway: gateway('key-a'), ownerId: 'owner', force: true });
     await settle(); states.nextInFlight = await table();
     answer('fail'); await call; states.failureAfterSuccess = await table();
-    call = list({ gateway: gateway('key-b'), ownerId: 'owner' });
+    call = list({ gateway: gateway('key-b'), ownerId: 'owner-b' });
     await settle(); states.accountChange = await table();
     answer('fail'); await call; states.failureNeverSucceeded = await table();
     expect(h.pending).toEqual([]);
