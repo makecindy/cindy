@@ -231,6 +231,7 @@ try {
     ['apps/host/src/plugins/node-worker.ts', 'node-worker.cjs'],
     ['apps/desktop/src/main/cindy-brain/libraryDbWorker.ts', 'library-worker.mjs'],
     ['apps/desktop/src/main/cindy-brain/ghostSnapshotWorkerProcess.ts', 'snapshot-worker.cjs'],
+    ['apps/host/src/agent/pi-subagent-runner-process.cts', 'pi-subagent-runner.cjs'],
   ]) await build({ ...common, entryPoints: [entry], outfile: path.join(bin, name), format: name.endsWith('.mjs') ? 'esm' : 'cjs' });
   await build({ absWorkingDir: repo, entryPoints: ['apps/web/shim.js'], outfile: path.join(resources, 'web/shim.js'),
     bundle: true, platform: 'browser', format: 'iife', target: 'es2022', nodePaths: [path.join(host, 'node_modules')] });

@@ -227,6 +227,7 @@ import {
   INHERITED_CAPABILITY_SELECTION, MAIN_OWNED_SEND_CONTEXT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, TurnDispatchRejectedError,
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
+import { redactEventForRenderer } from './rendererEventRedaction.js';
 import type {
   AgentEvent,
   AgentKind,
@@ -258,7 +259,6 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
 import { ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX } from '@cindy/maker-shared/interaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
@@ -444,6 +444,7 @@ import {
   runSessionCloseCleanup,
 } from './sessionBindingLifecycle.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
+import { snapshotSessionBackgroundTasks } from './sessionBackgroundTasksSnapshot.js';
 import {
   listAtBrowserTabs,
   parseAtContextCatalogRequest,
@@ -1005,12 +1006,12 @@ import {
 import { validateHandoffWorkingDir } from './handoffWorkingDir.js';
 import { registerProjectPluginPolicyHandlers } from './projectPluginPolicyHandlers.js';
 import { registerLocalModelHandlers } from '../local-model-runtime/ipc.js';
+import { beginTurnChangeSetAtDispatch } from '../turn-change-set/dispatchBoundary.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import {
   TURN_CHANGE_SET_DETAIL_ID_LIMIT,
   TurnChangeSetActionError,
   applyTurnChangeSetAction,
-  beginTurnChangeSet,
   clearPendingTurnChangeSets,
   finalizeTurnChangeSet,
   getTurnChangeSets,
@@ -6638,22 +6639,8 @@ type SendToSessionDispatchSession = {
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 };
 
-/** Starts exact turn capture at the accepted, durable user-message boundary. */
-export async function beginTurnChangeSetAtDispatch(
-  session: SendToSessionDispatchSession,
-  anchorClientId: string,
-): Promise<void> {
-  await waitForTurnChangeSetSeal(session.id);
-  await finalizeTurnChangeSet(session.id, null, 'partial');
-  await waitForTurnChangeSetSeal(session.id);
-  await beginTurnChangeSet({
-    sessionId: session.id,
-    anchorClientId,
-    provider: session.agentKind,
-    cwd: session.workDir,
-    remote: session.remoteHostId !== null,
-  });
-}
+// Shared with the Node Host (turn-change-set/dispatchBoundary.ts).
+export { beginTurnChangeSetAtDispatch };
 
 async function confirmReviewExternalArtifacts(
   event: IpcMainInvokeEvent,
@@ -7428,14 +7415,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // taskUpdates 后据此补回存量任务(实时增量仍走 agent_task_update 事件流)。
   ipcMain.handle(MAKER_INVOKE.LIST_SESSION_BACKGROUND_TASKS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
-    const live = maker.getSession(sessionId);
     // pendingContinuations:「任务已终态、wake turn 尚未启动或仍在跑」的
     // continuation claim 数。tasks 在任务终态后立即不含该任务,renderer 的
     // 唤醒桥接对账不能拿空 tasks 当「无后续」—— 必须本字段为 0 才允许收口。
-    return {
-      tasks: live ? live.listBackgroundTasks() : [],
-      pendingContinuations: live ? live.countPendingWakeContinuations() : 0,
-    };
+    // 与 Host 共用(客户端模式经 host-ipc-registry 转给 Host)。
+    return snapshotSessionBackgroundTasks(maker.getSession(sessionId));
   });
 
   // 后台命令输出尾部(只读)。任务卡展开区据此显示「最近输出」与最后写入时间。
@@ -26168,6 +26152,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   });
 
+  registerComputerUseIpc();
+
+  // ── Plugin hub (Phase 2) ──────────────────────────────────────────────────
+
+  log.info('maker:* IPC handlers registered');
+}
+
+/**
+ * Settings →「电脑使用」的 10 个 `maker:computer:*` 通道（驱动状态、安装与更新、授权引导）。
+ *
+ * 它们管理的是本机 CuaDriver，客户端模式下 Host 仍把电脑使用的工具调用转给窗口执行，
+ * 所以两种模式都由窗口处理：内嵌模式在 `registerMakerIpc` 原位置调用，客户端模式由
+ * bootstrap 在 splash 之后的同一时刻调用。只用模块级依赖，不闭合 `registerMakerIpc` 的状态。
+ */
+export function registerComputerUseIpc(): void {
   // ── Local desktop computer-use (Settings →「电脑使用」) ─────────────────
   // Probe the installed CuaDriver used by the phase-one Computer Use runtime.
   ipcMain.handle(
@@ -26315,10 +26314,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
   );
-
-  // ── Plugin hub (Phase 2) ──────────────────────────────────────────────────
-
-  log.info('maker:* IPC handlers registered');
 }
 
 const generatedImageDelivery = createGeneratedImageDelivery({
@@ -26465,81 +26460,6 @@ function emitWorkDirMissingError(
     sessionId,
     event: { type: 'error', data: { message }, source: agentSource } satisfies AgentEvent,
   });
-}
-
-function redactEventForRenderer(event: AgentEvent): AgentEvent {
-  // These are main/maker-core lifecycle fields, not renderer data. Keep them on the main-side
-  // event used for bookkeeping but never expose them through the raw renderer channel.
-  const rendererEvent = { ...event };
-  delete rendererEvent.turnAttemptToken;
-  delete rendererEvent.backgroundTurnStartedAt;
-  delete rendererEvent.sessionTurnGeneration;
-  delete rendererEvent.sessionInstanceId;
-  delete rendererEvent.runtimeRecovery;
-  if (!event.data || typeof event.data !== 'object') return rendererEvent;
-
-  const data = event.data as Record<string, unknown>;
-  const safeData = { ...data };
-  let changed = false;
-  if ('processMedia' in safeData) {
-    delete safeData.processMedia;
-    changed = true;
-  }
-  if (
-    typeof safeData.toolName === 'string' &&
-    Object.prototype.hasOwnProperty.call(safeData, 'input')
-  ) {
-    const redactedInput = redactToolInputForUntrustedBoundary(safeData.toolName, safeData.input);
-    if (redactedInput !== safeData.input) {
-      safeData.input = redactedInput;
-      changed = true;
-    }
-  }
-  // Main consumes this Cindy-owned durable projection marker before the event
-  // crosses renderer/device-link boundaries. Live task-card payloads therefore
-  // keep their existing wire shape and older mobile clients need no upgrade.
-  if (event.type === 'agent_task_update') {
-    for (const key of [
-      'subagentObservation',
-      'subagentParentContext',
-      'returnedResult',
-      'returnedResultEmpty',
-      'returnedResultTruncated',
-    ]) {
-      if (!(key in safeData)) continue;
-      delete safeData[key];
-      changed = true;
-    }
-  }
-  for (const key of ['message', 'sdkError'] as const) {
-    if (typeof safeData[key] === 'string') {
-      const redacted = redactSensitiveText(safeData[key]);
-      if (redacted !== safeData[key]) {
-        safeData[key] = redacted;
-        changed = true;
-      }
-    }
-  }
-
-  if (event.type === 'done' && safeData.raw && typeof safeData.raw === 'object') {
-    const raw = { ...(safeData.raw as Record<string, unknown>) };
-    if (raw.error && typeof raw.error === 'object') {
-      const error = { ...(raw.error as Record<string, unknown>) };
-      for (const key of ['message', 'detail', 'sdkError', 'additionalDetails'] as const) {
-        if (typeof error[key] === 'string') {
-          const redacted = redactSensitiveText(error[key]);
-          if (redacted !== error[key]) {
-            error[key] = redacted;
-            changed = true;
-          }
-        }
-      }
-      raw.error = error;
-    }
-    safeData.raw = raw;
-  }
-
-  return changed ? ({ ...rendererEvent, data: safeData } as AgentEvent) : rendererEvent;
 }
 
 function broadcastToAllWindows(
