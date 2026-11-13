@@ -26,7 +26,6 @@ export { getCodexHome } from './codex-home-path.js';
 import { app, safeStorage } from 'electron';
 import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.desktop.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { promises as fsp, existsSync } from 'node:fs';
@@ -297,7 +296,7 @@ export function isCodexAuthInheritedFromSystemCli(): boolean {
     const codexHome = getCodexHome();
     const localAuth = path.join(codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(codexHome, localAuth)) return false;
-    const systemAuth = path.join(os.homedir(), '.codex', 'auth.json');
+    const systemAuth = getCodexCliAuthPath();
     if (!existsSync(localAuth) || !existsSync(systemAuth)) return false;
     return pathsReferToSameFileSync(localAuth, systemAuth);
   } catch {

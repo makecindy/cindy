@@ -222,7 +222,7 @@ export function CustomProviderRuntimeFillOverlay({
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <div className="px-5 pb-2 pt-4">
-            <Dialog.Title className="text-15 font-semibold text-[var(--settings-section-title)]">
+            <Dialog.Title className="text-15 font-medium text-[var(--settings-section-title)]">
               {state.stage === 'review'
                 ? t('settings.providers.custom.runtimeFill.reviewTitle')
                 : t('settings.providers.custom.runtimeFill.confirmTitle')}

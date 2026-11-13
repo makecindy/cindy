@@ -1,6 +1,8 @@
 import { createGroupAssistantTasks } from '../groupAssistantTask.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import ts from 'typescript';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { HOST_ONLY_AGENT_PREFIX, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -44,13 +46,14 @@ vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; 
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }) } }));
 // The real filesystem, except an `lstat` failure a test injects for a delivery file.
 const fsFault = vi.hoisted(() => ({ lstat: null as Error | null }));
+vi.mock('../../dialogue-workspace-settings.js', () => ({ readDialogueWorkspaceSettings: () => ({ directory: '/test/group-workspace', isCustomized: true }) }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const lstat = (async (...args: Parameters<typeof actual.lstat>) => {
     if (fsFault.lstat) throw fsFault.lstat;
     return actual.lstat(...args);
   }) as typeof actual.lstat;
-  return { ...actual, default: { ...actual, lstat }, lstat };
+  return { ...actual, mkdir: vi.fn(async () => undefined), default: { ...actual, lstat }, lstat };
 });
 vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
@@ -205,7 +208,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.upload.mockReset().mockResolvedValue([]);
     replyImages.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
     replyFiles.prepare.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
-    deps = { ensureLane: vi.fn(async () => ({ ok: true, sessionId: 'lane' })), abortLane: vi.fn(async () => {}),
+    deps = { validateProjectDir: async (dir: string) => ({ ok: true as const, dir }), ensureLane: vi.fn(async () => ({ ok: true, sessionId: 'lane' })), abortLane: vi.fn(async () => {}),
       dispatch: vi.fn(async (input: Parameters<BotGroupChatServiceDeps['dispatch']>[0]) => { await input.onAccepted?.(); return { ok: true }; }),
       onChanged: vi.fn(),
     } as unknown as BotGroupChatServiceDeps;
@@ -1360,7 +1363,7 @@ describe('Chat Server result delivery and refresh', () => {
   // bot-group-chat.md §7.5: with no folder chosen here, a reply to the owner works in the one
   // registered project whose origin is the group's repository. Another member's reply never does,
   // even with `tools` access: the folder's work runs with the owner's logins.
-  it.each(['owner', 'tools', 'chat'] as const)('runs only an owner reply in the folder found from the group repository (%s)', async mode => {
+  it.each(['owner', 'tools', 'chat'] as const)('uses the group folder for every access mode and only lets the owner use tools (%s)', async mode => {
     deps.findProjectDirsForRepo = vi.fn(async () => ['/projects/cindy']);
     deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
     const project = { kind: 'github', repo: 'makecindy/cindy' };
@@ -1372,14 +1375,13 @@ describe('Chat Server result delivery and refresh', () => {
     });
     await start();
     const lane = vi.mocked(deps.ensureLane).mock.calls[0][0];
-    if (mode === 'owner') expect(lane).toMatchObject({ projectDir: '/projects/cindy' });
-    else expect(lane).not.toHaveProperty('projectDir');
+    expect(lane).toMatchObject({ projectDir: '/projects/cindy' });
     // In a group with a repository a teammate only talks to other members, whatever their grant.
     expect(vi.mocked(deps.dispatch).mock.calls[0][0].toolsDisabled).toBe(mode !== 'owner');
     const shown = await service.getGroup(roomId);
     if (!shown.ok) throw new Error(shown.errorCode);
     expect(shown.group).toMatchObject({ projectDir: '/projects/cindy', projectDirAuto: true, supportsGroupProject: true, project });
-    expect(deps.findProjectDirsForRepo).toHaveBeenCalledWith('makecindy/cindy');
+    expect(deps.findProjectDirsForRepo).toHaveBeenCalledWith({ kind: 'github', repo: 'makecindy/cindy' });
   });
   // #10009 real run: a miss was cached like a found folder, so a checkout registered after the
   // repository was set stayed unused for 5 minutes and replies worked in Home. A miss is retried
@@ -1395,19 +1397,79 @@ describe('Chat Server result delivery and refresh', () => {
       return response(route);
     });
     const shownDir = async () => { const shown = await service.getGroup(roomId); if (!shown.ok) throw new Error(shown.errorCode); return shown.group.projectDir; };
-    await start();
-    expect(vi.mocked(deps.ensureLane).mock.calls[0][0]).not.toHaveProperty('projectDir');
-    await service.settleLaneTurn(terminal);
-    expect(await shownDir()).toBeNull();
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(await shownDir()).not.toBe('/projects/cindy');
     await vi.advanceTimersByTimeAsync(25_000);
     expect(await shownDir()).toBe('/projects/cindy');
     expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
     next = { ...execution, id: '40000000-0000-4000-8000-000000000002', access_mode: 'owner' };
     await vi.advanceTimersByTimeAsync(4 * 60_000);
-    expect(deps.dispatch).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(deps.ensureLane).mock.calls[1][0]).toMatchObject({ projectDir: '/projects/cindy' });
+    expect(deps.dispatch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.ensureLane).mock.calls[0][0]).toMatchObject({ projectDir: '/projects/cindy' });
     expect(await shownDir()).toBe('/projects/cindy');
     expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
+  });
+  // bot-group-chat.md §7.5 (2026-11-14 request): choosing this computer's folder first left the
+  // group's repository empty, so other members' computers did not know the project. A folder that is
+  // a GitHub checkout now names it (a fork's upstream first) when the group has none and you manage
+  // the group; a different repository already set is only pointed out, never replaced.
+  it('names the group\'s repository from a folder chosen here and only points out a different one', async () => {
+    let project: Record<string, string> | null = null;
+    let role = 'owner';
+    const capabilities: Record<string, number> = { groupProject: 1 };
+    let folder = [{ kind: 'github' as const, repo: 'makecindy/cindy' }, { kind: 'github' as const, repo: 'me/cindy' }];
+    deps.repositoriesOfFolder = vi.fn(async () => folder);
+    fixture.handle.mockImplementation((route: string) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities } };
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project },
+        members: [{ id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role }], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const patches = () => fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH').map(call => call[2]);
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true, folderRepository: { repo: 'makecindy/cindy', filled: true } });
+    expect(patches()).toEqual([expect.objectContaining({ project: { kind: 'github', repo: 'makecindy/cindy' } })]);
+    expect(workspaceSettings.get(roomId)).toMatchObject({ projectDir: '/work/fork' });
+    role = 'member';
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true });
+    role = 'owner'; project = { kind: 'github', repo: 'other/repo' };
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true, folderRepository: { repo: 'makecindy/cindy', filled: false } });
+    project = { kind: 'github', repo: 'ME/cindy' };
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true });
+    expect(patches()).toHaveLength(1);
+    // A company GitLab checkout names nothing on a server that keeps GitHub only (see below for one that keeps any host).
+    project = null; folder = [];
+    folder.push({ kind: 'git', host: 'gitlab.example.com', path: 'platform/cindy' } as never);
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/gitlab' })).toEqual({ ok: true });
+    expect(patches()).toHaveLength(1);
+  });
+  // 2026-11-14 request: the group's repository may be on GitLab (a company's own too) or CNB. A link is
+  // kept as its host and path where the server takes any host; elsewhere it is refused plainly.
+  it('keeps a GitLab or CNB repository typed as a link where the server takes any git host', async () => {
+    let capabilities: Record<string, number> = { groupProject: 1, groupProjectGit: 1 };
+    fixture.handle.mockImplementation((route: string) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities } };
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project: null },
+        members: [{ id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role: 'owner' }], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const projects = () => fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH').map(call => (call[2] as { project: unknown }).project);
+    expect(await service.updateGroup({ groupId: roomId, repository: 'https://gitlab.example.com/platform/tools/cindy/-/tree/main' })).toEqual({ ok: true });
+    expect(await service.updateGroup({ groupId: roomId, repository: 'git@cnb.cool:org/name.git' })).toEqual({ ok: true });
+    expect(await service.updateGroup({ groupId: roomId, repository: 'https://github.com/makecindy/cindy/tree/main' })).toEqual({ ok: true });
+    expect(projects()).toEqual([{ kind: 'git', host: 'gitlab.example.com', path: 'platform/tools/cindy' }, { kind: 'git', host: 'cnb.cool', path: 'org/name' },
+      { kind: 'github', repo: 'makecindy/cindy' }]);
+    deps.repositoriesOfFolder = vi.fn(async () => [{ kind: 'git' as const, host: 'gitlab.example.com', path: 'platform/cindy' }]);
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/gitlab' }))
+      .toEqual({ ok: true, folderRepository: { repo: 'gitlab.example.com/platform/cindy', filled: true } });
+    for (const repository of ['not a repository', 'https://gitlab.example.com:65536/platform/cindy', 'https://999.999.999.999/org/repo'])
+      expect((await service.updateGroup({ groupId: roomId, repository })).ok).toBe(false);
+    capabilities = { groupProject: 1 };
+    service.dispose?.();
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    expect((await service.updateGroup({ groupId: roomId, repository: 'https://gitlab.example.com/platform/cindy' })).ok).toBe(false);
+    expect(projects()).toHaveLength(4);
   });
   // bot-group-chat.md §7.5 (#10009 review): a folder chosen here but gone now made the reply run in
   // Home. The choice is binding, so the round fails instead. A folder found from the repository was
@@ -1425,23 +1487,13 @@ describe('Chat Server result delivery and refresh', () => {
     });
     await vi.advanceTimersByTimeAsync(2000);
     const failures = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
-    if (how === 'chosen here') {
-      expect(deps.ensureLane).not.toHaveBeenCalled();
-      expect(deps.dispatch).not.toHaveBeenCalled();
-      expect(failures.map(([, , body]) => body.detail)).toEqual(['cindy-runtime-error:RUNTIME_ERROR']);
-      expect(deps.findProjectDirsForRepo).not.toHaveBeenCalled();
-      return;
-    }
-    expect(failures).toEqual([]);
-    expect(deps.dispatch).toHaveBeenCalledOnce();
-    expect(vi.mocked(deps.ensureLane).mock.calls[0][0]).not.toHaveProperty('projectDir');
-    await service.getGroup(roomId);
-    expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
+    expect(failures.map(([, , body]) => body.detail)).toEqual(['cindy-runtime-error:RUNTIME_ERROR']);
+    expect(deps.dispatch).not.toHaveBeenCalled();
   });
   // bot-group-chat.md §7.5: with no folder chosen here, a 分工 works in the registered project of the
   // group's repository instead of the group's own folder.
-  it('prepares a 分工 step in the folder found from the group repository', async () => {
-    const mode = 'owner';
+  it.each(['owner', 'chat'] as const)('prepares a %s division step in the resolved group project', async mode => {
+    deps.validateProjectDir = vi.fn(async dir => ({ ok: true as const, dir }));
     deps.findProjectDirsForRepo = vi.fn(async () => ['/projects/cindy']);
     deps.workDir = { prepare: vi.fn(), snapshot: vi.fn(), changedFiles: vi.fn(), trashGroupFolder: vi.fn() };
     const planId = '80000000-0000-4000-8000-000000000001';
@@ -1451,12 +1503,19 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.handle.mockImplementation(route => {
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: mode, plan_id: planId, plan_step: 0 }; claimed = true; return { body: { execution: next } }; }
-      if (route.includes('/plans?ids=')) return { body: [plan] };
+      if (route.includes('/plans')) return { body: [plan] };
       if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project: { kind: 'github', repo: 'makecindy/cindy' } }, members: [], messages: [], cursor: '1' } };
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fix it' }], deleted: false, threadRootId: null } };
       return response(route);
     });
     await vi.advanceTimersByTimeAsync(2000);
-    expect(deps.workDir.prepare).toHaveBeenCalledWith({ groupId: roomId, projectDir: '/projects/cindy' });
+    if (mode === 'owner') expect(deps.workDir.prepare).toHaveBeenCalledWith({ groupId: roomId, projectDir: '/projects/cindy' });
+    else {
+      expect(deps.workDir.prepare).not.toHaveBeenCalled();
+      expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ projectDir: '/projects/cindy',
+        plan: { planId, workDir: '/projects/cindy', sessionId: undefined } }));
+      expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true }));
+    }
   });
 
   // #9909: a group turn can end with nothing published. Each such ending now leaves a trace,
@@ -2006,10 +2065,11 @@ describe('Chat Server result delivery and refresh', () => {
       });
     });
     const dispatched = () => vi.mocked(deps.dispatch).mock.calls.map(([input]) => input);
+    // These requests come from another device: the head start this computer leaves it has passed.
     async function ask(n: number, text: string, requester = selfId) {
       history.push(message(n, requester, text));
       queue.push(request(n, requester));
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(12_000);
     }
 
     // Claimed as the group's Cindy, never through AI reply mode; the requester's own words become one
@@ -2020,7 +2080,7 @@ describe('Chat Server result delivery and refresh', () => {
       await ask(5, '@Cindy please fix it');
       expect(fixture.requests.some(r => r.url.endsWith('/v1/executions/claim') && r.actor === cindyId)).toBe(true);
       expect(fixture.urls.some(url => url.includes('/mask/'))).toBe(false);
-      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Room', projectDir: null });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Room', projectDir: expect.any(String) });
       const [input] = dispatched();
       expect(input).toMatchObject({ targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
         message: `@Cindy please fix it\n\n${t('bots.groupChat.assistant.groupRecent')}\nAnn：The build is red again`,
@@ -2049,7 +2109,7 @@ describe('Chat Server result delivery and refresh', () => {
       queue.splice(0, queue.length);
       vi.mocked(deps.dispatch).mockClear();
       queue.push(request(6));
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(12_000);
       const input = dispatched().at(-1)!;
       expect(input.message.startsWith('@Cindy check the logs')).toBe(true);
       expect(input.autoReviewUserText).toBeUndefined();
@@ -2073,11 +2133,13 @@ describe('Chat Server result delivery and refresh', () => {
       const rootB = message(2, peerId, 'Topic B');
       history.push(rootA, rootB, message(3, peerId, 'A background', { threadRootId: rootA.id }),
         message(4, peerId, 'B background', { threadRootId: rootB.id }));
-      assistantStore.value[roomId] = { sessionId: 'legacy-main', projectDir: null, deliveredSeq: { main: '2', [rootA.id]: '99' } };
+      const shown = await service.getGroup(roomId);
+      if (!shown.ok) throw new Error(shown.errorCode);
+      assistantStore.value[roomId] = { sessionId: 'legacy-main', projectDir: shown.group.projectDir, deliveredSeq: { main: '2', [rootA.id]: '99' } };
       const send = async (n: number, text: string, threadRootId: string | null) => {
         history.push(message(n, selfId, text, { threadRootId }));
         queue.push(request(n));
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(12_000);
         const input = dispatched().at(-1)!;
         await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId, resultText: 'Done' });
         return input;
@@ -2156,29 +2218,143 @@ describe('Chat Server result delivery and refresh', () => {
       expect(assistantStore.value[roomId]).toMatchObject({ sessionId: 'group-task-2', projectDir: '/projects/chosen', deliveredSeq: { main: '8' } });
     });
 
-    // bot-group-chat.md §7.5/§9: a group with a repository works in it. No registered project is that
-    // repository, so Cindy fetches its own copy; until it is on this computer (here: GitHub sign-in not
-    // finished) the request runs under 「对话」 and says why, and the next request moves into the project.
-    it('answers under 对话 with the reason until the repository is here, then in the project', async () => {
+    // bot-group-chat.md §7.5/§9 (2026-11-13 field report: ~9 minutes of 「正在处理」 with no task while
+    // the repository was cloned and pulled). A group with a repository works in Cindy's folder for it,
+    // which is there at once: the request reaches the task right away and says the repository is
+    // still on its way; the clone runs in the background and later requests use the same task.
+    it('starts the request in the project folder at once while the repository is fetched', async () => {
       project = { kind: 'github', repo: 'makecindy/cindy' };
-      const dir = '/cindy/projects/github/makecindy/cindy';
-      deps.validateProjectDir = vi.fn(async (folder: string) => ({ ok: true as const, dir: folder }));
-      const ensure = vi.fn<NonNullable<BotGroupChatServiceDeps['groupCheckouts']>['ensure']>()
-        .mockResolvedValueOnce({ status: 'sign-in-required', signInOpened: true }).mockResolvedValue({ status: 'ready', dir });
-      deps.groupCheckouts = { ensure, sync: vi.fn(async () => undefined), isManaged: folder => folder === dir };
-      await ask(5, 'Where are the docs?');
-      expect(ensure).toHaveBeenCalledWith('makecindy/cindy', expect.objectContaining({ signIn: true }));
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: null });
-      expect(dispatched()[0]!.message).toBe(`Where are the docs?\n\n${t('bots.groupChat.assistant.checkout.signInOpened').replaceAll('{{repo}}', 'makecindy/cindy')}`);
-      // The note is the host's; the request this turn speaks for is still only the owner's words.
-      expect(verifiedOwnerRequestText(dispatched()[0]!.autoReviewUserText)).toBe('Where are the docs?');
-      await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Connect GitHub first' });
-      await ask(6, 'And now?');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: dir });
-      expect(deps.groupCheckouts.sync).toHaveBeenCalledWith(dir);
-      expect(dispatched()[1]).toMatchObject({ targetSessionId: 'group-task-2' });
-      expect(dispatched()[1]!.message.startsWith('And now?')).toBe(true);
-      expect(dispatched()[1]!.message).not.toContain('GitHub');
+      const root = await mkdtemp(path.join(os.tmpdir(), 'group-cindy-'));
+      const dir = path.join(root, 'makecindy', 'cindy');
+      try {
+        deps.validateProjectDir = vi.fn(async (folder: string) => ({ ok: true as const, dir: folder }));
+        let cloned!: () => Promise<void>;
+        const ensure = vi.fn<NonNullable<BotGroupChatServiceDeps['groupCheckouts']>['ensure']>(() => new Promise(resolve => {
+          // This file stubs mkdir; the clone lands on the real disk.
+          cloned = async () => { await (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).mkdir(path.join(dir, '.git'), { recursive: true }); resolve({ status: 'ready', dir }); };
+        }));
+        const sync = vi.fn(() => new Promise<void>(() => {}));
+        deps.groupCheckouts = { ensure, sync, isManaged: folder => folder.startsWith(root), dirOf: () => dir };
+        // Finding the folder reads the real disk, which the fake clock does not wait for (slow CI).
+        const delivered = async (count: number) => {
+          for (let i = 0; i < 200 && dispatched().length < count; i++) {
+            await new Promise(resolve => setImmediate(resolve));
+            await vi.advanceTimersByTimeAsync(0);
+          }
+        };
+        await ask(5, 'Where are the docs?');
+        await delivered(1);
+        expect(ensure).toHaveBeenCalledWith({ kind: 'github', repo: 'makecindy/cindy' }, expect.objectContaining({ signIn: true }));
+        expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: dir });
+        expect(dispatched()[0]!.message.startsWith(`Where are the docs?\n\n${t('bots.groupChat.assistant.checkout.preparing').replaceAll('{{repo}}', 'makecindy/cindy')}`)).toBe(true);
+        await cloned();
+        await vi.advanceTimersByTimeAsync(0);
+        await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Soon' });
+        await ask(6, 'And now?');
+        await delivered(2);
+        expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Room', projectDir: dir });
+        expect(sync).toHaveBeenCalledWith(dir);
+        expect(dispatched()[1]).toMatchObject({ targetSessionId: 'group-task-1' });
+        expect(dispatched()[1]!.message.startsWith('And now?')).toBe(true);
+        expect(dispatched()[1]!.message).not.toContain('makecindy/cindy');
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    // 2026-11-13 field report: the group's task was created but stayed empty. Any heartbeat that did
+    // not get through (a timeout, a 503) dropped the turn while the task was being prepared, so the
+    // request never reached it. A missed renewal keeps the turn; the lease outlives it.
+    it('keeps the request when a heartbeat does not get through while its task is prepared', async () => {
+      let release!: () => void;
+      let failures = 0;
+      // Renewals fail only once the task is being prepared (the request was already checked).
+      deps.ensureGroupAssistantSession = vi.fn(() => new Promise<{ ok: true; sessionId: string; created: boolean }>(resolve => {
+        failures = 2;
+        release = () => resolve({ ok: true as const, sessionId: 'group-task-1', created: true });
+      }));
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (method === 'POST' && body?.action === 'heartbeat' && failures > 0) { failures--; return { status: 503, body: { error: { code: 'UNAVAILABLE' } } }; }
+        return previous(route, method, body);
+      });
+      await ask(5, 'slow start');
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(failures).toBe(0);
+      release();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(dispatched()).toHaveLength(1);
+      expect(dispatched()[0]!.message.startsWith('slow start')).toBe(true);
+    });
+
+    // 2026-11-14 owner report: «我现在连哪个设备会回复都搞不清了». Every computer of the account
+    // may take a request to the group's Cindy; the one it was sent from takes it at once, the others
+    // only after a short head start, so the answer comes from the computer in front of the user.
+    it('lets the computer the request was sent from take it first', async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets.at(-1)!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      // The server's notice that the group's Cindy has work, as every computer of the account gets it.
+      const notice = () => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: String(Date.now()),
+        changes: [{ type: 'work.available', data: { work: [{ botId: cindyId, conversationId: roomId }] } }] }));
+      const sent = await service.sendMessage({ groupId: roomId, text: '@Cindy look', clientId: 'studio-send-1', mentions: { all: false, botIds: [cindyId] } });
+      expect(sent).toMatchObject({ ok: true });
+      history.push(message(5, selfId, '@Cindy look'));
+      queue.push(request(5));
+      notice();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(dispatched()).toHaveLength(1);
+      await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Here' });
+      // A request sent elsewhere (another computer, a phone): this computer leaves it a head start.
+      await vi.advanceTimersByTimeAsync(61_000);
+      history.push(message(6, selfId, '@Cindy from the phone'));
+      queue.push(request(6));
+      notice();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(dispatched()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(dispatched()).toHaveLength(2);
+      expect(dispatched()[1]!.message.startsWith('@Cindy from the phone')).toBe(true);
+    });
+
+    // 2026-11-14 owner report: «已连接到某台电脑» said nothing about which computer took the request.
+    // The computer running it tells the server where (itself, the task, the model) as soon as the
+    // request is in the task; the requester's devices show it and open the task there.
+    it('reports which computer and model run the request, where the server keeps it', async () => {
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === '/me'
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        : previous(route, method, body));
+      deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', state: 'running' as const, model: 'GPT-6.1 Sol' }));
+      await ask(5, 'Where do you run?');
+      const beats = fixture.handle.mock.calls.filter(([route, method, body]) => method === 'POST' && route.includes('/executions/') && body?.action === 'heartbeat');
+      expect(beats.at(-1)![2]).toMatchObject({ executor: { deviceId: 'studio-device', sessionId: 'group-task-1', model: 'GPT-6.1 Sol' } });
+      fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${roomId}/executions`
+        ? { body: [{ ...request(5), status: 'running' }] } : route === '/me'
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        : previous(route, method, body));
+      const shown = await service.getGroup(roomId);
+      if (!shown.ok) throw new Error(shown.errorCode);
+      expect(shown.group.round.speakers.find(speaker => speaker.executionId === request(5).id)?.executor)
+        .toEqual({ deviceId: 'studio-device', here: true, sessionId: 'group-task-1', model: 'GPT-6.1 Sol' });
+    });
+
+    // cindy-server#1419 review: mid-rollout, a heartbeat may reach an older replica whose strict schema
+    // refuses `executor`. The lease is renewed at once without it and the turn goes on.
+    it('renews without the location when an older server refuses it', async () => {
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === '/me'
+        ? { body: { actor: { id: selfId }, deviceId: 'studio-device', capabilities: { groupAssistant: 1, groupProject: 1, executionExecutor: 1 }, groupAssistantActorId: cindyId } }
+        : method === 'POST' && route.includes('/executions/') && body?.action === 'heartbeat' && body.executor
+          ? { status: 400, body: { error: { code: 'VALIDATION_FAILED' } } }
+          : previous(route, method, body));
+      deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', state: 'running' as const, model: 'GPT-6.1 Sol' }));
+      await ask(5, 'Where do you run?');
+      await vi.advanceTimersByTimeAsync(31_000);
+      const beats = fixture.handle.mock.calls.filter(([route, method, body]) => method === 'POST' && route.includes('/executions/') && body?.action === 'heartbeat');
+      expect(beats.filter(([, , body]) => body.executor)).toHaveLength(1);
+      expect(beats.filter(([, , body]) => !body.executor).length).toBeGreaterThanOrEqual(2);
+      await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Here' });
+      expect(fixture.handle.mock.calls.some(([route, method, body]) => method === 'POST' && route.includes('/executions/') && body?.action === 'complete')).toBe(true);
     });
 
     // A task the group task opens while answering shows in the group as a card, posted as the group's Cindy.
@@ -3871,7 +4047,10 @@ describe('Chat Server result delivery and refresh', () => {
       return response(route);
     });
     await vi.advanceTimersByTimeAsync(2000);
-    expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: '', sessionId: undefined } }));
+    expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: expect.any(String), sessionId: undefined } }));
+    const laneInput = vi.mocked(deps.ensureLane).mock.calls[0][0];
+    expect(laneInput.plan?.workDir).toBe(laneInput.projectDir);
+    expect(laneInput.plan?.workDir).not.toBe('');
     expect(deps.workDir.prepare).not.toHaveBeenCalled();
     expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true, message: expect.stringContaining('Discuss the draft') }));
     await service.settleLaneTurn(terminal);

@@ -246,3 +246,15 @@ describe('sidebar project visibility', () => {
     ).toEqual(['remote:host-a:/one', 'local:/two']);
   });
 });
+
+// Unit: hidden projects must retain group task entry points for both stored workspace kinds.
+it.each(['dialogue', 'project'] as const)('keeps a hidden group project task visible as dialogue (%s)', kind => {
+  const task = { ...session({ workingDir: '/group-repo', workspaceKind: kind }),
+    companion: { id: 'buddy', role: 'group', taskProjectDir: '/group-repo' } } as Session;
+  const [presented] = sidebarSessionsWithHiddenProjectsAsDialogues([task], new Set(['local:/group-repo']), 'linux');
+  expect(groupSessions([presented]).dialogues).toContain(presented);
+  expect(presented.workspaceKind).toBe('dialogue');
+  expect(presented.companion).toMatchObject({ id: 'buddy', role: 'group' });
+  expect(presented.companion?.taskProjectDir).toBeUndefined();
+  expect(task.companion?.taskProjectDir).toBe('/group-repo');
+});

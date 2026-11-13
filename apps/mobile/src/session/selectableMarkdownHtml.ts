@@ -74,12 +74,8 @@ export function buildSelectableMarkdownHtml(
   const wantsTargetLine =
     options.targetLine !== undefined && Number.isInteger(options.targetLine) && options.targetLine > 0;
   const blocks = parseMobileMarkdown(markdown, { srcLines: wantsTargetLine });
-  const css = buildSelectableMarkdownCss(options);
-  // KaTeX runtime 只在文档确实含公式时注入(绝大多数文档没有,不为它们付
-  // CDN 请求;失败降级由占位内容天然承担——块级是源码 <pre>、行内是斜体源码)。
-  // CSS/JS 一律由 loader 动态注入,不放静态 <link>/<script src>:阻塞式外链在
-  // 资源请求挂起时会让 WebView 永久白屏(见 mathWebViewHtml.ts 的硬约束说明)。
   const hasMath = blocksContainMath(blocks);
+  const css = buildSelectableMarkdownCss(options, hasMath);
   return [
     '<!doctype html>',
     '<html>',
@@ -123,6 +119,27 @@ function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
   });
 }
 
+export interface InlineMathElementLike {
+  clientWidth: number;
+  scrollWidth: number;
+  parentElement?: { clientWidth: number } | null;
+  classList: {
+    add(token: string): void;
+    remove(token: string): void;
+  };
+}
+
+export function syncInlineMathOverflowElement(el: InlineMathElementLike): boolean {
+  el.classList.remove('xdt-math-inline-fit');
+  const parent = el.parentElement;
+  const limit = el.clientWidth > 0 ? el.clientWidth : (parent && parent.clientWidth > 0 ? parent.clientWidth : 0);
+  const fits = limit <= 0 || el.scrollWidth <= limit + 1;
+  if (fits) {
+    el.classList.add('xdt-math-inline-fit');
+  }
+  return fits;
+}
+
 /**
  * KaTeX 原位渲染脚本:KaTeX 就绪后把所有 data-latex 元素替换成 KaTeX 输出。
  * CSS/JS 经 buildKatexLoaderJs 动态注入(固定本地资源 + 超时,不阻塞首屏),
@@ -131,6 +148,16 @@ function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
  */
 function buildMathRuntimeScript(): string {
   const renderAllJs = [
+    'function syncInlineMathOverflow() {',
+    '  document.querySelectorAll(".xdt-math-inline").forEach(function (el) {',
+    '    el.classList.remove("xdt-math-inline-fit");',
+    '    var parent = el.parentElement;',
+    '    var limit = el.clientWidth > 0 ? el.clientWidth : (parent && parent.clientWidth > 0 ? parent.clientWidth : 0);',
+    '    if (limit <= 0 || el.scrollWidth <= limit + 1) {',
+    '      el.classList.add("xdt-math-inline-fit");',
+    '    }',
+    '  });',
+    '}',
     'document.querySelectorAll("[data-latex]").forEach(function (el) {',
     '  try {',
     '    window.katex.render(el.getAttribute("data-latex"), el, {',
@@ -140,6 +167,11 @@ function buildMathRuntimeScript(): string {
     '    });',
     '  } catch (error) { /* 保留占位源码 */ }',
     '});',
+    'syncInlineMathOverflow();',
+    'if (document.fonts && document.fonts.ready) {',
+    '  document.fonts.ready.then(syncInlineMathOverflow);',
+    '}',
+    'window.addEventListener("resize", syncInlineMathOverflow);',
   ].join('');
   return `<script>${buildKatexLoaderJs(renderAllJs)}</script>`;
 }
@@ -169,7 +201,7 @@ best.addEventListener('animationend',function(){best.classList.remove('xdt-line-
 })();</script>`;
 }
 
-export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): string {
+export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions, includeMath = true): string {
   // 缺省走 light hex(调用方一般从 useTheme().colors 显式注入,见 MarkdownFileReader)。
   const textColor = cssValue(options.textColor ?? lightColors.textPrimary);
   const mutedColor = cssValue(options.mutedColor ?? lightColors.textSecondary);
@@ -426,12 +458,21 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       overflow-x: auto;
       vertical-align: middle;
     }
+    .xdt-math-inline.xdt-math-inline-fit {
+      overflow-x: visible;
+      vertical-align: baseline;
+    }
     .xdt-math-block {
       max-width: 100%;
       min-width: 0;
+      padding: 4px 0;
       overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
       text-align: center;
     }
+    ${includeMath ? `.xdt-math-inline .katex { font-size: 1.05em; }
+    .xdt-math-block .katex-display { margin: 0; }` : ''}
     .xdt-math-block pre {
       text-align: left;
     }

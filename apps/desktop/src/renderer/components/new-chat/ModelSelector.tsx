@@ -4,6 +4,7 @@ import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
 import {
@@ -3692,6 +3693,16 @@ function ModelSelectorContentView({
           {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           {sshCodexNotice && <div className="shrink-0 p-2">{sshCodexNotice}</div>}
           <UnifiedModelPanel
+            {...(!deviceId && !providersOverride && localProviders.loading && !localProviders.error && providers.length === 0
+              ? {
+                  emptyCatalogNotice: (
+                    <div role="status" className="flex items-center justify-center gap-1.5 px-3 py-6 text-13 text-[var(--text-tertiary)]">
+                      <Spinner size={14} />
+                      {t('newChat.modelSelector.trigger.loading')}
+                    </div>
+                  ),
+                }
+              : {})}
             {...(pluginModels || modelGroups ? {
               // 模型组在「全部」最上方：不搜索时整段列出(用户建好就天天要用)，搜索时只列命中的。
               pinnedTop: (
@@ -4481,17 +4492,37 @@ export function ModelSelector({
   const displayProvider = agentKind
     ? modelDisplayProvider(providers, currentProviderId, modelId, agentKind, actualRoute)
     : undefined;
-  const resolvedModelName = (agentKind ? findCatalogModel(displayProvider, modelId, agentKind)?.name : undefined)
+  // 目标目录(另一台电脑 / 共享供应商)已就绪却没有这个模型:新建草稿此刻回落到本机默认
+  // 模型(PR #9369 review),名称也回本机目录取 —— trigger 显示真实名字而不是
+  // 「模型信息暂不可用」。仅显示口径:路由 / 能力 / 面板候选仍只看目标目录;加载中与
+  // 读取失败保持原有提示(失败态有重试入口,不做名称回退)。
+  // 只限新建草稿(!actualRoute):已建会话的模型身份由目标目录决定,目标目录里没有这个
+  // 模型时不能用本机同名模型的名字顶替 —— 路由与候选仍指向远端目标,名字却来自本机,
+  // 会显示成一个「看着正常但其实不对」的模型。
+  const localFallbackName = !actualRoute && deviceId && remoteModelListStatus === 'ready' && agentKind
+    ? localProviders.providers
+        .map((provider) => findCatalogModel(provider, modelId, agentKind, { exact: true })?.name)
+        .find((name) => name !== undefined)
+    : undefined;
+  const catalogName = (agentKind ? findCatalogModel(displayProvider, modelId, agentKind)?.name : undefined)
     ?? currentModel?.displayName;
   const labelKey = JSON.stringify([deviceId ?? null, currentProviderId ?? null, agentKind, modelId]);
   const lastModelName = useRef<{ key: string; name: string | undefined } | null>(null);
-  const modelName = resolvedModelName
+  const modelName = catalogName
+    ?? localFallbackName
     ?? (lastModelName.current?.key === labelKey ? lastModelName.current.name : undefined);
   useEffect(() => {
     // Retain only this selection's label through catalog refresh/failure. Never
     // borrow the previous model, source, engine or device's name for a new choice.
-    lastModelName.current = { key: labelKey, name: modelName };
-  }, [labelKey, modelName]);
+    // 只有**目录里查到的**名字进缓存:本机目录回退出来的名字不能进 —— 目录后来读失败时
+    // 它会消失,而缓存里那份还在,trigger 就继续显示一个「看着可用」的本机型号,失败状态
+    // (重试入口)被藏起来(Codex review #9369)。
+    if (catalogName !== undefined) {
+      lastModelName.current = { key: labelKey, name: catalogName };
+    } else if (lastModelName.current?.key !== labelKey) {
+      lastModelName.current = { key: labelKey, name: undefined };
+    }
+  }, [labelKey, catalogName]);
   const localizedName = modelName ? localizedModelName(modelName, t) : undefined;
   // Explicit diagnostic fields can supply unknownModelLabel; ordinary triggers
   // must not expose internal wire IDs when no display metadata is available.
