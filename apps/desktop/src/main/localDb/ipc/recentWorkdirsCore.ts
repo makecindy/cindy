@@ -27,6 +27,7 @@ import { recentWorkdirs, sessions } from '../schema';
 import { createLogger } from '../../logger';
 import { getManagedWorktreeBasePath } from '../../../shared/managedWorktreePaths';
 import { normalizeWorkingDirForGrouping } from '../../../shared/workingDir';
+import { emitProjectCatalogChanged } from '../../projectCatalogEvents';
 
 const log = createLogger('recentWorkdirs');
 
@@ -95,6 +96,7 @@ export async function upsertRecentWorkdir(
         path: normalized,
         lastUsedAt: atMs,
       });
+      emitProjectCatalogChanged();
       return true;
     }
 
@@ -106,6 +108,7 @@ export async function upsertRecentWorkdir(
         target: recentWorkdirs.path,
         set: { lastUsedAt: sql`MAX(${recentWorkdirs.lastUsedAt}, ${atMs})` },
       });
+    emitProjectCatalogChanged();
     return true;
   } catch (err) {
     log.warn('[localDb] upsertRecentWorkdir failed', {

@@ -12,8 +12,7 @@ export default {
       export const useHookWorkspacePrefs = () => ({
         reloadImDefaults: async () => {}, prefsFor: () => null, providerSourceFor: () => null,
         agentDeviceFor: () => null, applyProviderSource: () => {}, editable: false, pendingWs: null,
-        hint: null, retry: null, imDefaults: null, applyPatch: () => {}, teams: [],
-        selectedTeamId: null, selectTeam: () => {}, showTeamChip: false,
+        hint: null, retry: null, imDefaults: null, applyPatch: () => {},
       });
       export const WorkspacePrefsEditor = () => null;
     `,
@@ -86,7 +85,8 @@ export default {
       assert.ok(await card.getByText('团队 Cindy', { exact: true }).isVisible());
       assert.ok(await card.getByText('Alice', { exact: true }).isVisible());
       assert.ok(await card.getByText(await ui.t('settings.remoteControl.hook.feishu.bridgeDescription'), { exact: true }).isVisible());
-      assert.ok(await card.getByText(await ui.t('settings.remoteControl.hook.feishu.settingsDescription'), { exact: true }).isVisible());
+      // 项目与模型不在渠道卡里(整页只有一处, 所有官方机器人共用)。
+      assert.equal(await card.getByRole('radio').count(), 0);
       assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.unlink'), exact: true }).count(), 3);
     }
     if (ui.data.kind === 'store' || ui.data.kind === 'store-pending' || ui.data.kind === 'store-failed') {

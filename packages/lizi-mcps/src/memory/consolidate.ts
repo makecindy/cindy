@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 
-import { withStore } from './_shared.js';
+import { shardNameSchema, withStore } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 
@@ -29,11 +29,7 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
         .describe('要删除的源分片 filename 列表 (target 自身会被自动跳过)'),
       target: z.object({
         type: z.enum(['user', 'feedback', 'project', 'reference']),
-        name: z
-          .string()
-          .min(1)
-          .max(64)
-          .regex(/^[a-z0-9_-]+$/),
+        name: shardNameSchema,
         title: z.string().min(1).max(100),
         description: z.string().min(1).max(200),
         body: z.string().min(1),
@@ -41,8 +37,14 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
     },
     handler: async ({ sources, target }) => {
       const saved = deps.beginWrite?.(deps.getSessionContext?.());
-      const result = await withStore(deps, store => store.consolidate({ sources, target: { ...target } }));
-      if (!result.isError) saved?.({ key: `${target.type}_${target.name}.md`, title: target.title, action: 'updated' });
+      let written: { filename: string } | undefined;
+      const result = await withStore(deps, async (store) => {
+        written = await store.consolidate({ sources, target: { ...target } });
+        return written;
+      });
+      if (!result.isError && written) {
+        saved?.({ key: written.filename, title: target.title, action: 'updated' });
+      }
       return result;
     },
   });

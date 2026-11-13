@@ -176,6 +176,61 @@ describe('Chat Server Thread context reaches the Agent input', () => {
   const payload = (message: string) => JSON.parse(message.split('<untrusted-data>\n')[1].split('\n</untrusted-data>')[0]);
   const settle = (local: string, resultText: string) => service.settleLaneTurn({ sessionId: `lane-${local}`, activeInputClientId: null, outcome: 'done', resultText });
 
+  // Regression: automatic talk queues dropped the candidate list before a follow-up.
+  // Unlike existing quote/file tests, inspect each speaker's actual dispatch (unit).
+  it.each([false, true])('keeps the original discussion background for every speaker (thread=%s)', async inThread => {
+    const root = post('选择联网方式');
+    const background = post('候选方案：公网 SSH、VPN、Tailscale、ZeroTier', { by: 0, ...(inThread ? { threadRootId: root.id } : {}) });
+    const other = post('另一话题的私有候选', { threadRootId: uuid(90) });
+    const request = post('你推荐哪个呢', inThread ? { threadRootId: root.id } : {});
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: request.id, request_text: '你推荐哪个呢',
+      steps: bots.map((bot, position) => ({ position, botId: bot.id, botName: bot.name, task: '回答', status: 'running' })) };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    trigger(request, { plan_id: planId }).forEach((execution, position) => { execution.plan_step = position; });
+    await vi.advanceTimersByTimeAsync(2000);
+    for (const bot of bots) {
+      const input = inputs(bot.local)[0];
+      expect(input.message).toContain(background.content[0].text);
+      expect(input.message).not.toContain(other.content[0].text);
+      expect(payload(input.message).currentRequest.text).toBe('你推荐哪个呢');
+      if (inThread) expect(payload(input.message).thread.root.id).toBe(root.id);
+    }
+  });
+
+  // Review regression: Thread talk background repeated complete 8000-character
+  // answers beside the bounded handoff. Existing tests used only short replies.
+  // Unit: assert production dispatch keeps candidates but sends each answer once.
+  it('keeps long Thread queue answers only in the bounded handoff', async () => {
+    const root = post('选择联网方式');
+    const background = post('候选：Tailscale、ZeroTier', { threadRootId: root.id });
+    const request = post('你推荐哪个呢', { threadRootId: root.id, mentions: [bots[1].id] });
+    const older = post('旧答'.repeat(4000), { by: 0, threadRootId: root.id });
+    const latest = post('新答'.repeat(4000), { by: 0, threadRootId: root.id });
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: request.id, request_text: '你推荐哪个呢',
+      steps: [
+        { position: 0, botId: bots[0].id, botName: 'Nova', status: 'done', resultMessageId: older.id },
+        { position: 1, botId: bots[0].id, botName: 'Nova', status: 'done', resultMessageId: latest.id },
+        { position: 2, botId: bots[1].id, botName: 'Pico', status: 'running' },
+      ] };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    trigger(request, { plan_id: planId, plan_step: 2 });
+    await vi.advanceTimersByTimeAsync(2000);
+    const input = inputs('pico')[0];
+    const data = payload(input.message);
+    expect(data.thread.replies.map((m: { id: string }) => m.id)).toEqual([background.id, request.id]);
+    const blocks = [...input.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1]));
+    expect(blocks.find(block => block.earlierAnswers).earlierAnswers).toEqual([
+      { from: 'Nova', text: '旧答'.repeat(300) + '…', shortened: true },
+      { from: 'Nova', text: '新答'.repeat(1000) + '…', shortened: true },
+    ]);
+    expect(input.message.split('旧答').length - 1).toBe(300);
+    expect(input.message.split('新答').length - 1).toBe(1000);
+    expect(input.message).toContain(background.content[0].text);
+    expect(payload(input.persistedContent!).thread.replies).toEqual(data.thread.replies);
+  });
+
   // Text cursors consume only successful, verified native context. Cover actual
   // service input/history/settlement and the recovery snapshot separately (unit).
   it('sends only new main-group text while keeping the current request and full explicit quote', async () => {

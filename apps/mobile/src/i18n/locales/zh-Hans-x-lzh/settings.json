@@ -430,7 +430,11 @@
       "voice": "长按而言",
       "scrollKeys": "右摇杆",
       "scroll": "卷动",
-      "page": "翻页"
+      "page": "翻页",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字键上下",
+      "triggerScroll": "卷动所见",
+      "sendText": "遣所输之字",
+      "taskHint": "此诸捷键唯于差事页可用。若设为语音键，则以言为先；释之，字仍留于输入框。"
     }
   }
 }

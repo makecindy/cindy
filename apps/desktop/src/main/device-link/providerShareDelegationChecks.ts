@@ -1,4 +1,4 @@
-/** Local query scheduling only. Results never renew or cache an execution permission. */
+/** Request scheduling only. No cached result can authorize execution. */
 export interface DelegationCheckInput {
   shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
 }
@@ -18,22 +18,24 @@ export class DelegationCheckDeferredError extends Error {
 const QUEUE_DEADLINE_MS = 15_000;
 const MAX_PENDING = 128;
 interface Job {
-  key: string; input: DelegationCheckInput; scope: Scope; deadline: number;
-  promise: Promise<DelegationCheckResult>;
-  resolve(value: DelegationCheckResult): void;
+  key: string; scope: Scope; deadline: number; background: boolean;
+  request(timeoutMs: number, signal: AbortSignal): Promise<unknown>;
+  promise: Promise<unknown>;
+  resolve(value: unknown): void;
   reject(error: unknown): void;
-  started: boolean;
+  started: boolean; waiters: number;
   controller: AbortController;
   timer?: ReturnType<typeof setTimeout>;
 }
 interface Queue {
   key: string; pending: Map<string, Job>; waiting: Job[]; running: boolean;
   nextAt: number; retryAt: number; failures: number;
+  lastBackground: boolean;
   timer?: ReturnType<typeof setTimeout>;
 }
 
-/** One account/endpoint gate shared by initial grants and background rechecks.
- * Only in-flight identical queries join; each caller still checks its own task/generation.
+/** One account/endpoint gate shared by grants, generation-specific revokes and checks.
+ * Only identical in-flight operations join; each caller still checks its own task/generation.
  */
 export function createProviderShareDelegationChecks(deps: {
   captureScope(): Scope;
@@ -43,6 +45,9 @@ export function createProviderShareDelegationChecks(deps: {
 }) {
   const random = deps.random ?? Math.random;
   let current: Queue | undefined;
+  // Retain only live budgets, including when an account is switched away and back.
+  // A host rebuild cancels work, never resets the server's cooldown.
+  const scopes = new Map<string, Queue>();
 
   function clear(): void {
     const old = current;
@@ -80,37 +85,46 @@ export function createProviderShareDelegationChecks(deps: {
     });
     if (!state.waiting.length) return;
     if (state.nextAt > now) { schedule(state); return; }
-    const job = state.waiting.shift()!;
+    // Foreground gets the first turn; alternate when both classes have work so
+    // repairs cannot starve normal authorization (or vice versa).
+    let index = state.waiting.findIndex(job => job.background !== state.lastBackground);
+    if (index < 0) index = 0;
+    const [job] = state.waiting.splice(index, 1);
+    state.lastBackground = job.background;
     job.started = true;
     state.running = true;
     void (async () => {
       try {
-        const result = await deps.request(job.input, job.scope, job.deadline - now, job.controller.signal);
+        const result = await job.request(job.deadline - now, job.controller.signal);
         job.controller.signal.throwIfAborted();
         if (current !== state || !job.scope.isCurrent()) throw deps.scopeChanged();
         state.failures = 0;
         job.resolve(result);
       } catch (error) {
+        // A late 429 is still evidence about the old account's budget, even
+        // though its result cannot be delivered after cancellation/switching.
+        if (!(error instanceof DelegationCheckDeferredError) && error && typeof error === 'object'
+          && 'statusCode' in error && error.statusCode === 429) {
+          state.failures = Math.min(state.failures + 1, 4);
+          const supplied = 'retryAt' in error ? error.retryAt : undefined;
+          const fallback = Math.min(300_000, 60_000 * 2 ** (state.failures - 1));
+          state.retryAt = Math.max(state.retryAt,
+            typeof supplied === 'number' && Number.isSafeInteger(supplied) && supplied > Date.now()
+              ? supplied : Date.now() + fallback + Math.floor(random() * fallback * 0.2));
+          // The exact server bucket is not known here. Conservatively cool all
+          // delegation operations for this account/endpoint, not other services.
+          for (const queued of state.waiting) {
+            state.pending.delete(queued.key);
+            clearTimeout(queued.timer);
+            queued.reject(new DelegationCheckDeferredError(state.retryAt));
+          }
+          state.waiting.length = 0;
+        }
         if (job.controller.signal.aborted) {
           job.reject(job.controller.signal.reason);
         } else if (current !== state || !job.scope.isCurrent()) {
           job.reject(deps.scopeChanged());
         } else {
-          if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 429) {
-            state.failures = Math.min(state.failures + 1, 4);
-            const supplied = 'retryAt' in error ? error.retryAt : undefined;
-            const fallback = Math.min(300_000, 60_000 * 2 ** (state.failures - 1));
-            state.retryAt = typeof supplied === 'number' && Number.isSafeInteger(supplied) && supplied >= 0
-              ? Math.max(Date.now(), supplied) : Date.now() + fallback;
-            // The old server shares this account budget with management writes.
-            // Stop this batch immediately; do not spend more quota on its other peers.
-            for (const queued of state.waiting) {
-              state.pending.delete(queued.key);
-              clearTimeout(queued.timer);
-              queued.reject(new DelegationCheckDeferredError(state.retryAt));
-            }
-            state.waiting.length = 0;
-          }
           job.reject(error);
         }
       } finally {
@@ -122,39 +136,98 @@ export function createProviderShareDelegationChecks(deps: {
       }
     })();
   }
-  return {
-    check(input: DelegationCheckInput, generation?: string): Promise<DelegationCheckResult> {
-      const scope = deps.captureScope();
-      if (!scope.isCurrent()) return Promise.reject(deps.scopeChanged());
-      if (current?.key !== scope.key) {
-        clear();
-        current = { key: scope.key, pending: new Map(), waiting: [], running: false,
-          nextAt: 0, retryAt: 0, failures: 0 };
+  function run<T>(key: string,
+    request: (scope: Scope, timeoutMs: number, signal: AbortSignal) => Promise<T>,
+    options: { background?: boolean; signal?: AbortSignal } = {}): Promise<T> {
+    const scope = deps.captureScope();
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason);
+    if (!scope.isCurrent()) return Promise.reject(deps.scopeChanged());
+    if (current?.key !== scope.key) {
+      clear();
+      for (const [key, state] of scopes) if (!state.running && !state.pending.size
+        && state.nextAt <= Date.now()) scopes.delete(key);
+      if (!scopes.has(scope.key)) {
+        if (scopes.size >= MAX_PENDING) return Promise.reject(new DelegationCheckDeferredError(Date.now() + 5_000));
+        scopes.set(scope.key, { key: scope.key, pending: new Map(), waiting: [], running: false,
+          nextAt: 0, retryAt: 0, failures: 0, lastBackground: true });
       }
-      const state = current!;
-      const key = JSON.stringify([input.shareId, input.memberId, input.guestDeviceId, input.executorDeviceId, generation]);
-      const joined = state.pending.get(key);
-      if (joined) return joined.promise;
-      if (state.retryAt > Date.now()) return Promise.reject(new DelegationCheckDeferredError(state.retryAt));
-      if (state.pending.size >= MAX_PENDING) return Promise.reject(new DelegationCheckDeferredError(Date.now() + 5_000));
-      let resolve!: Job['resolve'], reject!: Job['reject'];
-      const promise = new Promise<DelegationCheckResult>((yes, no) => { resolve = yes; reject = no; });
-      const job: Job = { key, input: { ...input }, scope, deadline: Date.now() + QUEUE_DEADLINE_MS,
-        promise, resolve, reject, started: false, controller: new AbortController() };
-      job.timer = setTimeout(() => {
-        if (!job.started) {
-          state.pending.delete(key);
-          state.waiting = state.waiting.filter(queued => queued !== job);
+      current = scopes.get(scope.key)!;
+    }
+    const state = current!;
+    if ([...state.pending.values()].some(job => !job.scope.isCurrent())) clear();
+    const joined = state.pending.get(key);
+    // Individual cancellation must not cancel another caller's shared write.
+    if (joined) {
+      if (!options.background) joined.background = false;
+      return wait(joined, options.signal) as Promise<T>;
+    }
+    if (state.retryAt > Date.now()) return Promise.reject(new DelegationCheckDeferredError(state.retryAt));
+    if (state.pending.size >= MAX_PENDING && !options.background) {
+      const displaced = state.waiting.findLast(job => job.background);
+      if (displaced) {
+        state.pending.delete(displaced.key);
+        state.waiting = state.waiting.filter(job => job !== displaced);
+        clearTimeout(displaced.timer);
+        displaced.reject(new DelegationCheckDeferredError(Date.now() + 5_000));
+      }
+    }
+    if (state.pending.size >= MAX_PENDING) return Promise.reject(new DelegationCheckDeferredError(Date.now() + 5_000));
+    let resolve!: Job['resolve'], reject!: Job['reject'];
+    const promise = new Promise<unknown>((yes, no) => { resolve = yes; reject = no; });
+    const job: Job = { key, scope, background: options.background === true,
+      request: (timeoutMs, signal) => request(scope, timeoutMs, signal), deadline: Date.now() + QUEUE_DEADLINE_MS,
+      promise, resolve, reject, started: false, waiters: 0, controller: new AbortController() };
+    job.timer = setTimeout(() => {
+      if (!job.started) {
+        state.pending.delete(key);
+        state.waiting = state.waiting.filter(queued => queued !== job);
+      }
+      const error = new DelegationCheckDeferredError(Date.now() + 5_000);
+      job.controller.abort(error);
+      job.reject(error);
+    }, QUEUE_DEADLINE_MS);
+    job.timer.unref?.();
+    state.pending.set(key, job);
+    state.waiting.push(job);
+    schedule(state);
+    return wait(job, options.signal) as Promise<T>;
+  }
+  function wait(job: Job, signal?: AbortSignal): Promise<unknown> {
+    job.waiters++;
+    if (!signal) return job.promise;
+    return new Promise((resolve, reject) => {
+      const abort = () => {
+        signal.removeEventListener('abort', abort);
+        if (--job.waiters === 0) {
+          job.controller.abort(signal.reason);
+          const state = scopes.get(job.scope.key);
+          if (state?.pending.get(job.key) === job) state.pending.delete(job.key);
+          if (!job.started) {
+            if (state) {
+              state.waiting = state.waiting.filter(queued => queued !== job);
+              schedule(state);
+            }
+            clearTimeout(job.timer);
+            job.reject(signal.reason);
+          }
         }
-        const error = new DelegationCheckDeferredError(Date.now() + 5_000);
-        job.controller.abort(error);
-        job.reject(error);
-      }, QUEUE_DEADLINE_MS);
-      job.timer.unref?.();
-      state.pending.set(key, job);
-      state.waiting.push(job);
-      schedule(state);
-      return promise;
+        reject(signal.reason);
+      };
+      signal.addEventListener('abort', abort, { once: true });
+      job.promise.then(value => { signal.removeEventListener('abort', abort);
+        if (signal.aborted) reject(signal.reason); else resolve(value);
+      }, error => { signal.removeEventListener('abort', abort); reject(error); });
+      if (signal.aborted) abort();
+    });
+  }
+  return {
+    run,
+    retryAt: () => scopes.get(deps.captureScope().key)?.retryAt ?? 0,
+    check(input: DelegationCheckInput, generation?: string,
+      options: { background?: boolean; signal?: AbortSignal } = {}): Promise<DelegationCheckResult> {
+      const captured = { ...input };
+      return run(JSON.stringify(['check', input.shareId, input.memberId, input.guestDeviceId, input.executorDeviceId, generation]),
+        (scope, timeoutMs, signal) => deps.request(captured, scope, timeoutMs, signal), options);
     },
     clear,
   };

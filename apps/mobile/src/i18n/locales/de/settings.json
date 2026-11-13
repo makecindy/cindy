@@ -430,7 +430,11 @@
       "voice": "Gedrückt halten zum Sprechen",
       "scrollKeys": "Rechter Stick",
       "scroll": "Scrollen",
-      "page": "Seite vor / zurück"
+      "page": "Seite vor / zurück",
+      "triggerScrollKeys": "L2 / R2 + Steuerkreuz auf/ab",
+      "triggerScroll": "Sichtbaren Inhalt scrollen",
+      "sendText": "Eingegebenen Text senden",
+      "taskHint": "Diese Kurzbefehle gelten auf Sitzungsseiten. Ist eine Taste der Spracheingabe zugewiesen, hat diese Vorrang; beim Loslassen bleibt der Text im Nachrichtenfeld."
     }
   }
 }

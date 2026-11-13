@@ -65,6 +65,7 @@ import {
   type ControlProject,
   type ControlSession,
 } from './controlProjects';
+import { projectToken } from './projectToken';
 import { exitControl } from './controlState';
 import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
@@ -1339,9 +1340,21 @@ export function createCardActionHandler(
     let displayName: string;
     let workspaceKind: 'project' | 'dialogue';
     if (kind === 'project') {
-      workingDir = String(event.payload.workingDir ?? '');
-      displayName = String(event.payload.displayName ?? workingDir);
+      // 按钮只带不透明标记, 目录从当前项目清单找回; 清单里已经没有这个项目就按失败收口。
+      // 升级前发出的旧卡片按钮里还带着目录本身, 照旧认。
+      const token = String(event.payload.projectToken ?? '');
+      const picked = token
+        ? (await listProjectsForControl({ projectsOnly: true, all: true })).find(
+            (project) => projectToken(project.workingDir) === token,
+          )
+        : undefined;
+      workingDir = picked?.workingDir ?? (token ? '' : String(event.payload.workingDir ?? ''));
+      displayName = picked?.displayName ?? String(event.payload.displayName ?? workingDir);
       workspaceKind = 'project';
+      if (token && !picked) {
+        await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
+        return;
+      }
       if (!workingDir) {
         log.warn('project:pick missing workingDir — ignoring');
         return;

@@ -4,10 +4,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = vi.hoisted(() => ({ value: null as string | null, failWrite: false }));
-vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
+const native = vi.hoisted(() => ({
+  listener: null as ((event: { scope: string }) => void) | null,
+  configure: vi.fn(async (_config: { scope: string; sendTarget: string } | null) => undefined),
+  appListeners: new Map<string, (state?: string) => void>(),
+  appState: { currentState: 'active', addEventListener: vi.fn() },
+}));
+vi.mock('react-native', () => ({ AppState: native.appState, Platform: { OS: 'android' } }));
 vi.mock('expo-router', () => ({ useFocusEffect: () => undefined }));
 vi.mock('expo-modules-core', () => ({
-  requireOptionalNativeModule: (name: string) => (name === 'CindyHandheld' ? { available: true } : null),
+  requireOptionalNativeModule: (name: string) => (name === 'CindyHandheld' ? {
+    available: true,
+    setSessionControls: native.configure,
+    addListener: (_event: string, listener: (event: { scope: string }) => void) => {
+      native.listener = listener;
+      return { remove: () => undefined };
+    },
+  } : null),
 }));
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
@@ -28,6 +41,7 @@ import {
   hydrateHandheldSettings,
   parseHandheldSettings,
   registerHandheldVoiceKeyHandler,
+  registerHandheldSessionControls,
   resetHandheldSettings,
   resetHandheldVoiceKeyForTests,
   updateHandheldSettings,
@@ -42,6 +56,66 @@ beforeEach(() => {
   storage.value = null;
   storage.failWrite = false;
   resetHandheldVoiceKeyForTests();
+  native.configure.mockClear();
+  native.listener = null;
+  native.appState.currentState = 'active';
+  native.appListeners.clear();
+  native.appState.addEventListener.mockImplementation((event: string, listener: (state?: string) => void) => {
+    native.appListeners.set(event, listener);
+    return { remove: () => native.appListeners.delete(event) };
+  });
+});
+
+// Feature #10283: the public native receipt dispatcher must not submit another
+// task's draft after a focus switch. Voice-only coverage above misses this path.
+// Minimal input: receipt A arrives after B registers. Tier: unit (in-memory).
+describe('handheld existing-task controls', () => {
+  it('submits only the current focus receipt and drops delayed receipts after blur', async () => {
+    await updateHandheldSettings({ enabled: true });
+    const sent: string[] = [];
+    const blurA = registerHandheldSessionControls('button-a', () => sent.push('draft-a'));
+    const receiptA = native.configure.mock.calls.at(-1)![0]!;
+    const queuedListenerA = native.listener!;
+    const blurB = registerHandheldSessionControls('button-b', () => sent.push('draft-b'));
+    const receiptB = native.configure.mock.calls.at(-1)![0]!;
+    blurA();
+    queuedListenerA({ scope: receiptA.scope });
+    native.listener!({ scope: receiptA.scope });
+    native.listener!({ scope: receiptB.scope });
+    blurB();
+    native.listener!({ scope: receiptB.scope });
+    expect(sent).toEqual(['draft-b']);
+  });
+
+  it('ignores receipts while disabled, backgrounded or Start is the voice key', async () => {
+    const sent: string[] = [];
+    const blur = registerHandheldSessionControls('send', () => sent.push('text'));
+    const { scope } = native.configure.mock.calls.at(-1)![0]!;
+    native.listener!({ scope });
+    await updateHandheldSettings({ enabled: true, voiceKeyCode: 108 });
+    native.listener!({ scope });
+    await updateHandheldSettings({ voiceKeyCode: 99 });
+    native.appState.currentState = 'background';
+    native.listener!({ scope });
+    native.appState.currentState = 'active';
+    native.listener!({ scope });
+    expect(sent).toEqual(['text']);
+    blur();
+  });
+
+  it('discards a receipt queued before a system overlay even after focus returns', async () => {
+    await updateHandheldSettings({ enabled: true });
+    const sent: string[] = [];
+    const blur = registerHandheldSessionControls('send', () => sent.push('text'));
+    const oldScope = native.configure.mock.calls.at(-1)![0]!.scope;
+    native.appListeners.get('blur')!();
+    native.appListeners.get('focus')!();
+    native.listener!({ scope: oldScope });
+    const newScope = native.configure.mock.calls.at(-1)![0]!.scope;
+    native.listener!({ scope: newScope });
+    expect(sent).toEqual(['text']);
+    blur();
+  });
 });
 
 describe('handheld settings', () => {

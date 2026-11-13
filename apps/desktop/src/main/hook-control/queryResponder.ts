@@ -35,8 +35,8 @@ export interface AgentModelSource {
 }
 
 export interface QueryResponderDeps {
-  /** 当前连接的工作区别名清单(实时读配置)。 */
-  listWorkspaces: () => string[];
+  /** 当前连接的项目名称清单(实时读; 允许先与侧栏项目对齐再返回)。 */
+  listWorkspaces: () => string[] | Promise<string[]>;
   /** 全部 agent 的可用模型(与会话选择器同规则实时派生; listProviders 异步故允许 Promise)。 */
   listAgentModels: () => AgentModelSource[] | Promise<AgentModelSource[]>;
   /** 当前账号、仅本地白名单内的隐私最小化 recent sessions。 */
@@ -59,7 +59,7 @@ export async function buildQueryResponse(
         kind: 'workspaces',
         ok: true,
         error: null,
-        workspaces: deps.listWorkspaces(),
+        workspaces: await deps.listWorkspaces(),
       };
     }
     if (request.kind === 'sessions') {

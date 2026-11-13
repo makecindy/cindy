@@ -430,7 +430,11 @@
       "voice": "Hold to talk",
       "scrollKeys": "Right stick",
       "scroll": "Scroll",
-      "page": "Page up / down"
+      "page": "Page up / down",
+      "triggerScrollKeys": "L2 / R2 + D-pad up/down",
+      "triggerScroll": "Scroll visible content",
+      "sendText": "Send entered text",
+      "taskHint": "These shortcuts work on session pages. A key assigned to voice takes priority; releasing it keeps the text in the message box."
     }
   }
 }

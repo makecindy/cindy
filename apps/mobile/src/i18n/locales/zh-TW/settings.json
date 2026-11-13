@@ -430,7 +430,11 @@
       "voice": "長按說話",
       "scrollKeys": "右搖桿",
       "scroll": "捲動",
-      "page": "翻頁"
+      "page": "翻頁",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字鍵上/下",
+      "triggerScroll": "捲動目前內容",
+      "sendText": "傳送已輸入文字",
+      "taskHint": "組合鍵與 Start 僅用於任務頁。設為語音鍵時，優先按住說話；放開後文字留在輸入框。"
     }
   }
 }

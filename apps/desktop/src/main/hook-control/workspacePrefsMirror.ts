@@ -127,6 +127,9 @@ export function createWorkspacePrefsMirror(
           continue;
         }
         deps.onLocalPrefsChanged(channel);
+        // 回调里可能又写了这个渠道的行并要求再镜像一轮(共用配置投影、项目改名搬移);
+        // 这一轮此刻还占着 flight, 那次请求只能由这里接着跑。
+        if (requestedGeneration !== triggerGeneration(channel)) continue;
         return;
       } catch (error) {
         if (!ownerBoundaryCurrent(ownerGeneration)) return;

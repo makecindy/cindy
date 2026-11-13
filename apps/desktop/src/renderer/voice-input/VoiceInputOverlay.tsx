@@ -266,8 +266,8 @@ export function VoiceInputOverlay() {
   const sentAudioMsRef = useRef(0);
   const hasRecordingContentRef = useRef(false);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
-  const systemAudioMutedRef = useRef(false);
-  const pendingSystemAudioMutePromiseRef = useRef<Promise<void> | null>(null);
+  const recordingIdRef = useRef<string | null>(null);
+  const audioMutePromisesRef = useRef(new Map<string, Promise<void>>());
   const closingRef = useRef(false);
   const startAttemptIdRef = useRef(0);
   const pasteAttemptIdRef = useRef(0);
@@ -346,6 +346,7 @@ export function VoiceInputOverlay() {
     runIdRef.current = null;
     ownedRunIdRef.current = null;
     startReadyRef.current = null;
+    recordingIdRef.current = null;
     closingRef.current = false;
     cancelRequestedRef.current = false;
     stopInFlightRef.current = false;
@@ -516,49 +517,40 @@ export function VoiceInputOverlay() {
       });
   }, []);
 
-  const muteSystemAudioForRecording = useCallback((feedback: Promise<void>) => {
-    if (!supportsSystemAudioMute()) {
-      return Promise.resolve();
-    }
-    if (systemAudioMutedRef.current) {
-      return pendingSystemAudioMutePromiseRef.current ?? Promise.resolve();
-    }
-    if (pendingSystemAudioMutePromiseRef.current) return pendingSystemAudioMutePromiseRef.current;
-
+  const muteSystemAudioForRecording = useCallback((feedback: Promise<void>, recordingId: string) => {
+    if (!supportsSystemAudioMute()) return Promise.resolve();
+    const pending = audioMutePromisesRef.current.get(recordingId);
+    if (pending) return pending;
     const mutePromise = feedback.catch(() => undefined)
-      .then(() => window.electronAPI.voiceInput.muteSystemAudio())
+      .then(() => recordingIdRef.current === recordingId
+        ? window.electronAPI.voiceInput.muteSystemAudio({ recordingId })
+        : undefined)
       .then((result) => {
-        if (result.ok) {
-          systemAudioMutedRef.current = true;
-        } else {
+        if (result && !result.ok) {
           log.warn('global system audio mute failed:', result.error);
         }
       })
       .catch((muteError) => {
         log.warn('global system audio mute failed:', muteError instanceof Error ? muteError.message : String(muteError));
-      })
-      .finally(() => {
-        if (pendingSystemAudioMutePromiseRef.current === mutePromise) {
-          pendingSystemAudioMutePromiseRef.current = null;
-        }
       });
-    pendingSystemAudioMutePromiseRef.current = mutePromise;
+    audioMutePromisesRef.current.set(recordingId, mutePromise);
     return mutePromise;
   }, []);
 
-  const restoreSystemAudioForRecording = useCallback(async () => {
-    if (!supportsSystemAudioMute()) return;
-    const pendingMute = pendingSystemAudioMutePromiseRef.current;
-    if (pendingMute) await pendingMute;
-    if (!systemAudioMutedRef.current) return;
-    systemAudioMutedRef.current = false;
+  const restoreSystemAudioForRecording = useCallback(async (recordingId = recordingIdRef.current) => {
+    if (!supportsSystemAudioMute() || !recordingId) return;
+    const pendingMute = audioMutePromisesRef.current.get(recordingId);
+    if (!pendingMute) return;
+    await pendingMute;
     try {
-      const result = await window.electronAPI.voiceInput.restoreSystemAudio();
+      const result = await window.electronAPI.voiceInput.restoreSystemAudio({ recordingId });
       if (!result.ok) {
         log.warn('system audio restore failed:', result.error);
       }
     } catch (restoreError) {
       log.warn('system audio restore failed:', restoreError instanceof Error ? restoreError.message : String(restoreError));
+    } finally {
+      audioMutePromisesRef.current.delete(recordingId);
     }
   }, []);
 
@@ -595,16 +587,18 @@ export function VoiceInputOverlay() {
   }, [clearErrorCloseTimer, closeOverlay]);
 
   const closeOverlayAndReset = useCallback(async (options?: CloseOverlayOptions) => {
+    const presentation = pasteAttemptIdRef.current;
     await closeOverlay(options);
-    resetHiddenOverlaySession();
+    if (pasteAttemptIdRef.current === presentation) resetHiddenOverlaySession();
   }, [closeOverlay, resetHiddenOverlaySession]);
 
   const showStartFailure = useCallback(async (message: string, authErrorReason?: string) => {
     const failureAttemptId = startAttemptIdRef.current;
+    const recordingId = recordingIdRef.current;
     resetOverlayInteraction();
     log.warn('global voice input start failed:', message);
     await stopEngine();
-    await restoreSystemAudioForRecording();
+    await restoreSystemAudioForRecording(recordingId);
     const readiness = await window.electronAPI.voiceInput.getReadiness().catch((readinessError) => {
       log.warn(
         'read voice input readiness after start failure failed:',
@@ -631,6 +625,7 @@ export function VoiceInputOverlay() {
     setVoiceState('error');
     closingRef.current = false;
     const showResult = await window.electronAPI.voiceInput.showGlobalOverlay();
+    if (startAttemptIdRef.current !== failureAttemptId) return;
     if (!showResult.ok) {
       log.warn('show global voice input start failure overlay failed:', showResult.error);
     }
@@ -678,22 +673,25 @@ export function VoiceInputOverlay() {
     cancelRequestedRef.current = true;
     suppressedStartErrorAttemptsRef.current.add(startAttemptIdRef.current);
     closingRef.current = true;
-    startAttemptIdRef.current += 1;
+    invalidateStartAttempt();
     pasteAttemptIdRef.current += 1;
     resolveDoneWaiters();
 
-    const runId = runIdRef.current;
+    const runId = ownedRunIdRef.current ?? runIdRef.current;
+    const recordingId = recordingIdRef.current;
+    recordingIdRef.current = null;
     runIdRef.current = null;
     ownedRunIdRef.current = null;
-    try {
-      await stopEngine();
-      await window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined);
-    } finally {
-      await restoreSystemAudioForRecording();
-      commitUsageStats();
-      setVoiceState('done');
-      await closeOverlayAndReset();
-    }
+    // Queue cancellation now, before a replacement start can enqueue. Device
+    // and provider cleanup must not keep the cached window or Esc shortcut open.
+    void window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined)
+      .catch(() => log.warn('global voice input cancel failed after local cancellation'));
+    void stopEngine()
+      .catch(() => log.warn('global voice input device shutdown failed'))
+      .then(() => restoreSystemAudioForRecording(recordingId));
+    commitUsageStats();
+    setVoiceState('done');
+    await closeOverlayAndReset();
   }, [
     closeOverlayAndReset,
     commitUsageStats,
@@ -701,25 +699,30 @@ export function VoiceInputOverlay() {
     restoreSystemAudioForRecording,
     stopEngine,
     invalidateCodexRecoveryPrompt,
+    invalidateStartAttempt,
   ]);
 
   const failRecording = useCallback(async (message: string) => {
     if (stateRef.current !== 'listening') return;
     log.warn('global microphone capture interrupted:', message);
+    const attemptId = startAttemptIdRef.current;
+    const recordingId = recordingIdRef.current;
     const runId = runIdRef.current;
     runIdRef.current = null;
     ownedRunIdRef.current = null;
     setError(message);
     setVoiceState('error');
     resolveDoneWaiters();
-    await stopEngine();
     try {
-      await window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined);
+      const cancellation = window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined);
+      await Promise.all([stopEngine(), cancellation]);
+    } catch {
+      log.warn('global voice input cleanup failed after capture interruption');
     } finally {
-      await restoreSystemAudioForRecording();
-      commitUsageStats();
+      await restoreSystemAudioForRecording(recordingId);
+      if (startAttemptIdRef.current === attemptId) commitUsageStats();
     }
-    scheduleErrorClose();
+    if (startAttemptIdRef.current === attemptId) scheduleErrorClose();
   }, [
     closeOverlay,
     commitUsageStats,
@@ -797,6 +800,8 @@ export function VoiceInputOverlay() {
     resetOverlayInteraction();
     const attemptId = startAttemptIdRef.current + 1;
     startAttemptIdRef.current = attemptId;
+    const recordingId = crypto.randomUUID();
+    recordingIdRef.current = recordingId;
     createStartReadyState(attemptId);
     suppressedStartErrorAttemptsRef.current.delete(attemptId);
     pasteAttemptIdRef.current += 1;
@@ -804,6 +809,9 @@ export function VoiceInputOverlay() {
     closingRef.current = false;
     cancelRequestedRef.current = false;
     await stopEngine();
+    if (startAttemptIdRef.current !== attemptId) return;
+    stopInFlightRef.current = false;
+    setStopInFlight(false);
     const { elapsedMs } = timeline;
 
     setError(null);
@@ -879,7 +887,7 @@ export function VoiceInputOverlay() {
     // cue to wait for; do not leave system mute waiting for the cap.
     void capturePromise.then((capture) => { if (!capture.ok) cueGate.abandon(); });
     if (settings.muteSystemAudio && supportsSystemAudioMute()) {
-      void muteSystemAudioForRecording(feedback).then(() => timeline.mark('mute_finished'));
+      void muteSystemAudioForRecording(feedback, recordingId).then(() => timeline.mark('mute_finished'));
     } else {
       void feedback.catch(() => undefined);
     }
@@ -915,7 +923,7 @@ export function VoiceInputOverlay() {
       setVoiceState('done');
       closingRef.current = false;
       await stopEngine();
-      await restoreSystemAudioForRecording();
+      await restoreSystemAudioForRecording(recordingId);
       return;
     }
     if (!guards.accessibility.ok) {
@@ -925,7 +933,7 @@ export function VoiceInputOverlay() {
       setVoiceState('done');
       closingRef.current = false;
       await stopEngine();
-      await restoreSystemAudioForRecording();
+      await restoreSystemAudioForRecording(recordingId);
       return;
     }
     if (!guards.readiness.ok) {
@@ -940,6 +948,7 @@ export function VoiceInputOverlay() {
 
     const startResultPromise: Promise<StartVoiceInputResult> = window.electronAPI.voiceInput
       .start({
+        recordingId,
         sourceLanguage: settings.language,
         refinementEnabled: settings.refinementEnabled,
         refinementContext: settings.refinementEnabled ? buildRefinementContext() : undefined,
@@ -971,7 +980,8 @@ export function VoiceInputOverlay() {
         startAttemptIdRef.current += 1;
         cancelStartedRun(startResultPromise);
         suppressedStartErrorAttemptsRef.current.delete(attemptId);
-        await restoreSystemAudioForRecording();
+        await restoreSystemAudioForRecording(recordingId);
+        if (startAttemptIdRef.current !== attemptId + 1) return;
         // setVoiceState('listening') already ran, and this path owns no engine
         // or run, so no later cancel/state event will arrive to clear it.
         // Leaving it would strand the overlay in 'listening' — where the
@@ -985,7 +995,8 @@ export function VoiceInputOverlay() {
       startAttemptIdRef.current += 1;
       cancelStartedRun(startResultPromise);
       suppressedStartErrorAttemptsRef.current.delete(attemptId);
-      await restoreSystemAudioForRecording();
+      await restoreSystemAudioForRecording(recordingId);
+      if (startAttemptIdRef.current !== attemptId + 1) return;
       // Permission revoked after the start guard trusted a positive cache:
       // show the same recovery prompt as a guard-time denial so the user gets
       // the fix on this attempt instead of a raw capture error.
@@ -1006,7 +1017,7 @@ export function VoiceInputOverlay() {
       resolveStartReadyState(attemptId, { ok: false, error: 'Voice input start was cancelled.' });
       cancelStartedRun(startResultPromise);
       await stopEngine();
-      await restoreSystemAudioForRecording();
+      await restoreSystemAudioForRecording(recordingId);
       return;
     }
 
@@ -1200,7 +1211,9 @@ export function VoiceInputOverlay() {
         if (pasteAttemptIdRef.current !== pasteAttemptId) return;
         if (pasteResult.ok) {
           log.debug('global background paste finished', { pasteAttemptId });
-          void hiddenPromise.finally(resetHiddenOverlaySession);
+          void hiddenPromise.finally(() => {
+            if (pasteAttemptIdRef.current === pasteAttemptId) resetHiddenOverlaySession();
+          });
           return;
         }
         void showPasteFailure(pasteResult.error, pasteAttemptId, pasteResult.errorCode);
@@ -1231,11 +1244,13 @@ export function VoiceInputOverlay() {
   const stopAndPaste = useCallback(async () => {
     if (closingRef.current) return;
     closingRef.current = true;
+    const presentation = pasteAttemptIdRef.current;
+    const isCurrentStop = () => pasteAttemptIdRef.current === presentation && !cancelRequestedRef.current;
 
     const settings = settingsRef.current;
     if (hasRecordingContentRef.current) setVoiceState('submitting');
     await drainAndStopEngine();
-    if (cancelRequestedRef.current) return;
+    if (!isCurrentStop()) return;
     void restoreSystemAudioAndMaybePlayEndCue(settings.playInteractionSound);
     if (!hasRecordingContentRef.current && !draftTextRef.current.trim() && !finalTextRef.current.trim()) {
       log.info('global silent recording ended without ASR finalization');
@@ -1248,7 +1263,7 @@ export function VoiceInputOverlay() {
     if (!runId && startReadyRef.current) {
       const startReady = startReadyRef.current;
       const startResult = await waitForStartReadyWhileStopping(startReady);
-      if (cancelRequestedRef.current) return;
+      if (!isCurrentStop()) return;
       if (!startResult.ok) {
         if (settingsRecoveryTabRef.current) {
           commitUsageStats();
@@ -1268,12 +1283,15 @@ export function VoiceInputOverlay() {
       // startRecording() after runId is known; drain the IPC queue once more
       // before provider finalization so early-stop audio cannot be stranded.
       await drainAndStopEngine();
+      if (!isCurrentStop()) return;
       await drainQueuedAudioToMain();
+      if (!isCurrentStop()) return;
     }
     startAttemptIdRef.current += 1;
     runIdRef.current = null;
     if (!runId) {
       await window.electronAPI.voiceInput.cancel();
+      if (!isCurrentStop()) return;
       commitUsageStats();
     } else {
       const donePromise = waitForDone();
@@ -1283,10 +1301,12 @@ export function VoiceInputOverlay() {
       try {
         result = await window.electronAPI.voiceInput.stop();
       } finally {
-        stopInFlightRef.current = false;
-        setStopInFlight(false);
+        if (isCurrentStop()) {
+          stopInFlightRef.current = false;
+          setStopInFlight(false);
+        }
       }
-      if (cancelRequestedRef.current) return;
+      if (!isCurrentStop()) return;
       if (!result.ok) {
         setError(result.error);
         setVoiceState('error');
@@ -1295,6 +1315,7 @@ export function VoiceInputOverlay() {
         return;
       }
       await donePromise;
+      if (!isCurrentStop()) return;
       // A stop-time transcription failure resolves the shared done waiter
       // through the error event. Keep the overlay open so the error notice and
       // retry action remain visible instead of closing an empty draft.
@@ -1311,7 +1332,7 @@ export function VoiceInputOverlay() {
     // told the controller to discard the in-flight refine and closed the
     // overlay; running paste here would push stale partial text into the
     // user's target app after they explicitly asked to abandon.
-    if (cancelRequestedRef.current) return;
+    if (!isCurrentStop()) return;
     if (codexSessionPromptActiveRef.current) {
       stateRef.current = 'done';
       setVoiceState('done');

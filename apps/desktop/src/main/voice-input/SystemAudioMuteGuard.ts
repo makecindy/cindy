@@ -4,8 +4,8 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('voice-input:system-audio');
 
-// WebContents owners are numeric; the remote session has a separate identity.
-type AudioMuteOwner = number | 'remote-desktop';
+// Legacy windows are numeric; each recording and the remote session have separate identities.
+type AudioMuteOwner = number | 'remote-desktop' | symbol;
 
 type AudioSnapshot = {
   outputMuted: boolean;

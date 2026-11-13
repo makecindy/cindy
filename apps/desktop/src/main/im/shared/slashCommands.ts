@@ -542,7 +542,7 @@ export function createSlashHandlers(
       }
 
       case '/project': {
-        // 项目切换 — projectSwitching 渠道专属(个人 Telegram);其它渠道当
+        // 项目切换 — projectSwitching 渠道专属(个人 Telegram、个人飞书);其它渠道当
         // 未知命令处理, 不暴露半成品入口。
         const projectUi = ui.cards.project;
         if (!richIm || !adapter.projectSwitching || !projectUi) {
@@ -560,7 +560,7 @@ export function createSlashHandlers(
           return true;
         }
         const [projects, current] = await Promise.all([
-          listProjectsForControl(),
+          listProjectsForControl({ projectsOnly: true }),
           repo.findActiveSession(ctx.botContextId, ctx.userId),
         ]);
         const currentName = workspaceDisplayName(

@@ -119,6 +119,14 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
       state = { ...state, workspaces };
       return state;
     },
+    applyProjectWorkspaces(plan) {
+      state = { ...state, workspaces: plan.workspaces, retiredWorkspaces: plan.retired };
+      return state;
+    },
+    markProjectCatalogMigrated() {
+      state = { ...state, projectCatalogMigrated: true };
+      return state;
+    },
     setBindingsCache(entries) {
       state = { ...state, bindingsCache: entries.map((e) => ({ ...e })) };
       return state;

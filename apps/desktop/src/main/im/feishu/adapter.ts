@@ -255,6 +255,8 @@ export function buildFeishuAdapter(
       },
     },
     processingEmoji: REACTION_PROCESSING,
+    // /project: 把当前会话切到侧栏的某个项目里干活(bot 原生会话, 与个人 Telegram 同款)。
+    projectSwitching: true,
     groupHistoryAccessFor: (event) => {
       const lane = event.groupContextLane ?? decodeFeishuLaneUserId(event.senderId);
       const scope = receivedHistoryScope(

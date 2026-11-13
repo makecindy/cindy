@@ -16,14 +16,28 @@ export function botReadStateFixture() {
     publish: (event: BotReadStateChanged) => listeners.forEach(fn => fn(event)),
   };
   let main = createBotReadStateStorage(dependencies);
+  const pending = new Set<ReturnType<typeof main.access>>();
   return {
     bridge: {
-      botReadState: (request: BotReadStateRequest) => main.access(request),
+      botReadState: (request: BotReadStateRequest) => {
+        const reply = main.access(request);
+        pending.add(reply);
+        void reply.then(() => pending.delete(reply), () => pending.delete(reply));
+        return reply;
+      },
       onBotReadStateChanged: (fn: (event: BotReadStateChanged) => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; },
     },
     restart: () => { main = createBotReadStateStorage(dependencies); },
     publish: dependencies.publish,
     listenerCount: () => listeners.size,
+    async settled() {
+      do {
+        await Promise.all([...pending]);
+        // Let the renderer's resolved IPC continuations enqueue the next batch
+        // before declaring the real Main/file fixture quiescent.
+        await new Promise<void>(resolve => setImmediate(resolve));
+      } while (pending.size);
+    },
     dispose: () => rmSync(root, { recursive: true, force: true }),
   };
 }

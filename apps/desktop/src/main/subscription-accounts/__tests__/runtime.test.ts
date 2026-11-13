@@ -3356,6 +3356,80 @@ describe('disabled task account recovery before send', () => {
     expect(deps.rebuild).not.toHaveBeenCalled();
     expect(h.bindings.get('task:task-a')?.accountId).toBe('default');
   });
+  // Unit: an already-hosted default subscription can predate the first pool configuration.
+  // Existing live-handle coverage creates the pool before startup, so it misses the legacy path.
+  it.each((['openai', 'anthropic'] as const).flatMap(provider => [false, true].flatMap(implicit =>
+    [false, true].map(clearProvider => ({ provider, implicit, clearProvider })))))(
+    'honors first-time pause on a live unpooled $provider task (implicit=$implicit, clear=$clearProvider)', async ({ provider, implicit, clearProvider }) => {
+    delete h.pools[provider];
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: provider === 'openai' ? 'codex' : 'claude-code',
+      startSession: async () => ({ id: 'unpooled-native', send, setModel: async () => {}, close: async () => {} }),
+    } as unknown as BaseAgent, { getState: async () => ({ authenticated: true, authSource: 'oauth' }) });
+    const handle = await agent.startSession({ ...(implicit ? {} : { providerId: provider }), sessionId: 'unpooled-task',
+      deviceHosted: { workingDir: '/controller' },
+    } as StartSessionOptions);
+    await handle.send({ type: 'user', content: 'before' });
+    // Clearing the explicit source still uses the native default login.
+    if (clearProvider) await handle.setModel!(provider === 'openai' ? 'gpt-6' : 'claude-sonnet', { providerId: null });
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: provider, accountId: 'default', paused: true });
+    await expect(handle.send({ type: 'user', content: 'paused' })).rejects.toThrow('disabled');
+    expect(send).toHaveBeenCalledTimes(1);
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: provider, accountId: 'default', paused: false });
+    await handle.send({ type: 'user', content: 'enabled' });
+    expect(send).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+  it.each(['api-key', 'custom-default'] as const)('does not attach a subscription pause to an unpooled %s route', async source => {
+    delete h.pools.openai;
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async () => ({
+      id: 'unpooled-api', send, close: async () => {},
+    }) } as unknown as BaseAgent, {
+      getState: async () => ({ authenticated: true, authSource: source === 'api-key' ? 'api-key' : 'oauth' }),
+      resolveDefaultProvider: async () => source === 'custom-default' ? 'custom-api' : null,
+    });
+    const handle = await agent.startSession({ sessionId: 'unpooled-api' } as StartSessionOptions);
+    expect(h.pools.openai).toBeUndefined();
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: true });
+    await handle.send({ type: 'user', content: 'api' });
+    expect(send).toHaveBeenCalledTimes(1);
+    await handle.close();
+  });
+  // A successful in-place source switch must track the newly selected subscription,
+  // including callers retaining the handle's send function across that switch.
+  it.each(['anthropic', 'custom-api'])('honors first-time pause after switching from %s to OpenAI', async initial => {
+    delete h.pools.openai;
+    delete h.pools.anthropic;
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => ({
+      id: 'switch-subscription', send, setModel: async () => {}, close: async () => {},
+    }) } as unknown as BaseAgent, { getState: async () => ({ authenticated: true, authSource: 'oauth' }) });
+    const handle = await agent.startSession({ ...(initial === 'anthropic' ? {} : { providerId: initial }) } as StartSessionOptions);
+    const sendNext = handle.send.bind(handle);
+    await sendNext({ type: 'user', content: 'before' });
+    await handle.setModel!('gpt-6', { providerId: 'openai' });
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: true });
+    await expect(sendNext({ type: 'user', content: 'paused' })).rejects.toThrow('disabled');
+    expect(send).toHaveBeenCalledTimes(1);
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: false });
+    await sendNext({ type: 'user', content: 'enabled' });
+    expect(send).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+  it('does not apply a later subscription pause to a handle already switched to an API provider', async () => {
+    delete h.pools.openai;
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async () => ({
+      id: 'unpooled-switch', send, setModel: async () => {}, close: async () => {},
+    }) } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'openai' } as StartSessionOptions);
+    await handle.setModel!('custom-model', { providerId: 'custom-api' });
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: true });
+    await handle.send({ type: 'user', content: 'api' });
+    expect(send).toHaveBeenCalledTimes(1);
+    await handle.close();
+  });
   it('blocks the next send on an already-live handle after its account is disabled', async () => {
     const send = vi.fn(async () => {});
     const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => ({

@@ -3880,7 +3880,8 @@ export class PiAgent extends BaseAgent {
       const body = truncateToByteBudget(summary, PI_DIGEST_MAX_BODY_BYTES);
       const seq = ++digestSeq;
       // slug 唯一:sessionId 片段 + 递增序号;resume/跨会话用 Date.now 防撞名(create 模式撞名会抛)。
-      const slug = slugifyForMemory(`digest-${digestSlugBase}-${Date.now()}-${seq}`, 64);
+      // 不再带 `digest-` 前缀:文件名已由 storage 加 `digest_`, 重复前缀会被前缀校验拒绝。
+      const slug = slugifyForMemory(`${digestSlugBase}-${Date.now()}-${seq}`, 64);
       try {
         await manager.write(memoryScopeKey, {
           type: 'digest',

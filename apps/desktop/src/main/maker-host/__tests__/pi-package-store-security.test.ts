@@ -7,7 +7,7 @@ import fsSync, {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import type { PiPackageMutationRequest } from '../../../shared/piPackages.js';
@@ -4397,6 +4397,47 @@ describe('Pi package executable-code boundary', () => {
       )).resolves.toMatch(/^view:/);
     } finally {
       unsubscribe();
+    }
+  });
+
+  // CI #6656 / job 129924709772: a queued token event from the old directory
+  // can observe the first new token before the 2 s fallback poll reattaches.
+  // The real-OS case below cannot force that event ordering. Unit: keep real
+  // token files and the public subscription, control only fs.watch callbacks.
+  it('reattaches on a queued token event from a replaced directory before notifying peers', async () => {
+    const callbacks: Array<(event: 'rename', name: string) => void> = [];
+    const watchSpy = vi.spyOn(fsSync, 'watch').mockImplementation(((...args: unknown[]) => {
+      callbacks.push(args[2] as (event: 'rename', name: string) => void);
+      const watcher = { close: vi.fn(), on: vi.fn().mockReturnThis() };
+      return watcher as unknown as ReturnType<typeof fsSync.watch>;
+    }) as typeof fsSync.watch);
+    syncBuiltinESMExports();
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const home = path.join(runtime.userData, 'pi-package-home');
+      await fs.mkdir(home, { recursive: true });
+      const store = await import('../pi-package-store.js');
+      const listener = vi.fn();
+      unsubscribe = store.onPiPackagesChanged(listener);
+      const tokenName = 'cindy-package-runtime-change-token';
+      const publish = (tag: string) => writePeerToken(path.join(home, tokenName), `runtime:${Date.now()}-${tag}\n`);
+      publish('before');
+      callbacks[0]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.mkdir(home, { recursive: true });
+      publish('after');
+      // This is the old handle's queued token event, not a directory-name event.
+      callbacks[0]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
+      expect(watchSpy).toHaveBeenCalledTimes(2);
+      publish('next');
+      callbacks[1]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(3), { timeout: 1_000 });
+    } finally {
+      unsubscribe?.();
+      watchSpy.mockRestore();
+      syncBuiltinESMExports();
     }
   });
 

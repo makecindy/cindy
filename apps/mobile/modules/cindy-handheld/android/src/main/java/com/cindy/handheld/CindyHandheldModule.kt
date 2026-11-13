@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
+import android.hardware.input.InputManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -23,6 +24,7 @@ import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.view.Window
 import android.widget.ScrollView
+import com.facebook.react.uimanager.util.ReactFindViewUtil
 import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -56,6 +58,8 @@ private val NAVIGATION_KEYS = setOf(
  * The module wraps the activity window callback so it sees hardware keys before
  * React Native and the composer WebView: the configured voice key becomes a
  * hold-to-talk button, L1/R1 page the visible list and the right stick scrolls it.
+ * The focused task also accepts trigger + D-pad scrolling and a scoped Start
+ * receipt, with the configured voice key taking priority over both shortcuts.
  * D-pad/left-stick focus movement, A (confirm) and B (back) stay with Android's
  * own focus navigation and gamepad fallback keys; a focus ring makes the
  * focused control visible. Everything passes through untouched while disabled.
@@ -72,9 +76,31 @@ class CindyHandheldModule : Module() {
   private var voiceActive = false
   private var lastNavDirection = View.FOCUS_DOWN
   private var gamepadPresent = false
+  private var sessionScope: String? = null
+  private var sessionSendTarget: String? = null
+  private var inputManager: InputManager? = null
+  private val controllers = mutableMapOf<Int, ControllerState>()
   private val wrappedWindows = WeakHashMap<Window, HandheldWindowCallback>()
   private var ring: FocusRing? = null
   private val scroller = StickScroller()
+
+  private class ControllerState {
+    var l2Key = false
+    var r2Key = false
+    var l2Axis = false
+    var r2Axis = false
+    var hatY = 0f
+    var startDown = false
+    val scrollKeys = mutableSetOf<Int>()
+    val l2 get() = l2Key || l2Axis
+    val r2 get() = r2Key || r2Axis
+  }
+
+  private val inputListener = object : InputManager.InputDeviceListener {
+    override fun onInputDeviceAdded(deviceId: Int) { gamepadPresent = gamepadNames().isNotEmpty() }
+    override fun onInputDeviceChanged(deviceId: Int) { resetInput(); gamepadPresent = gamepadNames().isNotEmpty() }
+    override fun onInputDeviceRemoved(deviceId: Int) { resetInput(); gamepadPresent = gamepadNames().isNotEmpty() }
+  }
 
   private val holdRunnable = Runnable {
     if (!voiceDown || voiceActive) return@Runnable
@@ -85,12 +111,12 @@ class CindyHandheldModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("CindyHandheld")
     Constant("available") { true }
-    Events("onVoiceKey", "onKeyCaptured")
+    Events("onVoiceKey", "onKeyCaptured", "onSessionSend")
 
     // Plain map like the other local modules: Record conversion does not survive R8 here.
     AsyncFunction("configure") { config: Map<String, Any?> ->
       val nextVoiceKeyCode = (config["voiceKeyCode"] as? Number)?.toInt() ?: KeyEvent.KEYCODE_BUTTON_X
-      if (nextVoiceKeyCode != voiceKeyCode) releaseVoice()
+      if (nextVoiceKeyCode != voiceKeyCode) resetInput()
       voiceKeyCode = nextVoiceKeyCode
       val requestedHoldMs = (config["holdMs"] as? Number)?.toInt() ?: DEFAULT_HOLD_MS
       holdMs = min(max(requestedHoldMs, 150), 2000).toLong()
@@ -100,9 +126,8 @@ class CindyHandheldModule : Module() {
       if (enabled) {
         install()
       } else if (wasEnabled) {
-        releaseVoice()
+        resetInput()
         capturing = false
-        scroller.stop()
         if (!gamepadPresent) ring?.restoreAll()
       }
       ring?.setColor(focusColor)
@@ -110,7 +135,14 @@ class CindyHandheldModule : Module() {
     }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("setCapturing") { value: Boolean ->
+      resetInput()
       capturing = value && enabled
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("setSessionControls") { config: Map<String, String>? ->
+      if (sessionScope != config?.get("scope")) resetInput()
+      sessionScope = config?.get("scope")
+      sessionSendTarget = config?.get("sendTarget")
     }.runOnQueue(Queues.MAIN)
 
     Function("getDisplays") {
@@ -153,13 +185,13 @@ class CindyHandheldModule : Module() {
 
     OnActivityEntersBackground {
       main.post {
-        releaseVoice()
-        scroller.stop()
+        resetInput()
       }
     }
 
     OnActivityDestroys {
       main.post {
+        resetInput()
         val activity = appContext.currentActivity
         if (ring?.isFor(activity) != true) {
           ring?.detach()
@@ -180,6 +212,11 @@ class CindyHandheldModule : Module() {
     voiceDown = false
     voiceActive = false
     scroller.stop()
+    controllers.clear()
+    sessionScope = null
+    sessionSendTarget = null
+    inputManager?.unregisterInputDeviceListener(inputListener)
+    inputManager = null
     ring?.detach()
     ring = null
     for ((window, callback) in wrappedWindows) {
@@ -191,6 +228,10 @@ class CindyHandheldModule : Module() {
   private fun install() {
     val activity = appContext.currentActivity ?: return
     val window = activity.window ?: return
+    if (inputManager == null) {
+      inputManager = activity.getSystemService(Context.INPUT_SERVICE) as InputManager
+      inputManager?.registerInputDeviceListener(inputListener, main)
+    }
     if (!wrappedWindows.containsKey(window)) {
       val base = window.callback
       if (base != null) {
@@ -270,9 +311,48 @@ class CindyHandheldModule : Module() {
       sendEvent("onKeyCaptured", mapOf("keyCode" to code, "name" to KeyEvent.keyCodeToString(code)))
       return true
     }
+    if (code == KeyEvent.KEYCODE_BUTTON_L2 || code == KeyEvent.KEYCODE_BUTTON_R2) {
+      val state = controllers.getOrPut(event.deviceId) { ControllerState() }
+      if (event.action == KeyEvent.ACTION_UP || (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)) {
+        val down = event.action == KeyEvent.ACTION_DOWN
+        if (code == KeyEvent.KEYCODE_BUTTON_L2) state.l2Key = down else state.r2Key = down
+      }
+      updateTriggerVoice()
+      updateDpadScroll()
+      return code == voiceKeyCode || sessionScope != null
+    }
     if (code == voiceKeyCode) {
       handleVoiceKey(event)
       return true
+    }
+    if (sessionScope != null && code == KeyEvent.KEYCODE_BUTTON_START) {
+      val state = controllers.getOrPut(event.deviceId) { ControllerState() }
+      if (event.action == KeyEvent.ACTION_UP) state.startDown = false
+      if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && !state.startDown) {
+        state.startDown = true
+        val decor = appContext.currentActivity?.window?.decorView
+        val target = sessionSendTarget?.let { id -> decor?.let { ReactFindViewUtil.findView(it, id) } }
+        if (decor != null && decor.hasWindowFocus() && target != null &&
+          isVisiblyAttached(target) && !isCovered(target, decor)) {
+          sendEvent("onSessionSend", mapOf("scope" to sessionScope))
+        }
+      }
+      // Never let Android turn Start into another focused action (or stop).
+      return true
+    }
+    if (sessionScope != null && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)) {
+      val state = controllers.getOrPut(event.deviceId) { ControllerState() }
+      if (event.action == KeyEvent.ACTION_UP && state.scrollKeys.remove(code)) {
+        updateDpadScroll()
+        return true
+      }
+      val leftStickFallback = (event.flags and KeyEvent.FLAG_FALLBACK) != 0 &&
+        event.isFromSource(InputDevice.SOURCE_JOYSTICK) && state.hatY == 0f
+      if (event.action == KeyEvent.ACTION_DOWN && !leftStickFallback && scrollModifier(state)) {
+        state.scrollKeys.add(code)
+        updateDpadScroll()
+        return true
+      }
     }
     if (code == KeyEvent.KEYCODE_BUTTON_L1 || code == KeyEvent.KEYCODE_BUTTON_R1) {
       if (event.action == KeyEvent.ACTION_DOWN) {
@@ -318,6 +398,10 @@ class CindyHandheldModule : Module() {
 
   /** Deepest drawn view at a window point; empty transparent containers let the point through. */
   private fun topmostAt(view: View, x: Int, y: Int): View? {
+    // RN mounts this transparent, non-interactive full-window drawing surface
+    // in development builds even when no inspector highlight is being drawn.
+    // It does not cover the content or the real send button beneath it.
+    if (view.javaClass.name == "com.facebook.react.views.debuggingoverlay.DebuggingOverlay") return null
     if (view.visibility != View.VISIBLE || view.alpha <= 0.01f) return null
     if (!view.getGlobalVisibleRect(hitRect) || !hitRect.contains(x, y)) return null
     if (view is ViewGroup) {
@@ -377,6 +461,7 @@ class CindyHandheldModule : Module() {
         }
       }
       KeyEvent.ACTION_UP -> {
+        if (!voiceDown) return
         main.removeCallbacks(holdRunnable)
         val wasActive = voiceActive
         voiceDown = false
@@ -405,9 +490,51 @@ class CindyHandheldModule : Module() {
     if (wasActive) sendEvent("onVoiceKey", mapOf("phase" to "end"))
   }
 
+  private fun resetInput() {
+    releaseVoice()
+    controllers.clear()
+    swallowKeyCode = KeyEvent.KEYCODE_UNKNOWN
+    scroller.stop()
+  }
+
+  private fun scrollModifier(state: ControllerState): Boolean =
+    (state.l2 && voiceKeyCode != KeyEvent.KEYCODE_BUTTON_L2) ||
+      (state.r2 && voiceKeyCode != KeyEvent.KEYCODE_BUTTON_R2)
+
+  private fun updateDpadScroll() {
+    val direction = if (sessionScope == null) 0 else controllers.values.sumOf { state ->
+      if (!scrollModifier(state)) 0 else
+        (if (KeyEvent.KEYCODE_DPAD_DOWN in state.scrollKeys) 1 else 0) -
+          (if (KeyEvent.KEYCODE_DPAD_UP in state.scrollKeys) 1 else 0)
+    }
+    scroller.updateDpad(direction.coerceIn(-1, 1).toFloat())
+  }
+
+  private fun updateTriggerVoice() {
+    val down = when (voiceKeyCode) {
+      KeyEvent.KEYCODE_BUTTON_L2 -> controllers.values.any { it.l2 }
+      KeyEvent.KEYCODE_BUTTON_R2 -> controllers.values.any { it.r2 }
+      else -> return
+    }
+    if (down == voiceDown) return
+    handleVoiceKey(KeyEvent(if (down) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP, voiceKeyCode))
+  }
+
   private fun handleMotion(event: MotionEvent) {
     if (!enabled) return
     if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.actionMasked != MotionEvent.ACTION_MOVE) return
+    val state = controllers.getOrPut(event.deviceId) { ControllerState() }
+    // Android maps triggers to LTRIGGER/RTRIGGER or BRAKE/GAS. Use the device's
+    // neutral range/flat rather than imposing one controller's actuation threshold.
+    fun pressed(axis: Int): Boolean {
+      val range = event.device?.getMotionRange(axis, event.source)
+      return event.getAxisValue(axis) > max(0f, range?.min ?: 0f) + (range?.flat ?: 0f)
+    }
+    state.l2Axis = pressed(MotionEvent.AXIS_LTRIGGER) || pressed(MotionEvent.AXIS_BRAKE)
+    state.r2Axis = pressed(MotionEvent.AXIS_RTRIGGER) || pressed(MotionEvent.AXIS_GAS)
+    state.hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+    updateTriggerVoice()
+    updateDpadScroll()
     scroller.update(event.getAxisValue(MotionEvent.AXIS_RZ))
   }
 
@@ -419,15 +546,15 @@ class CindyHandheldModule : Module() {
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
       // Observe only: the same event carries the left stick / hat that Android
-      // turns into D-pad focus movement when it is left unconsumed.
+      // turns into D-pad KeyEvents when left unconsumed. Those keys go through
+      // handleKey too, so trigger + HAT_Y scrolls without stealing left-stick input.
       handleMotion(event)
       return base.dispatchGenericMotionEvent(event)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
       if (!hasFocus) {
-        releaseVoice()
-        scroller.stop()
+        resetInput()
       }
       base.onWindowFocusChanged(hasFocus)
     }
@@ -582,6 +709,8 @@ class CindyHandheldModule : Module() {
   /** Right-stick continuous scrolling and L1/R1 paging of the list the user is looking at. */
   private inner class StickScroller : Choreographer.FrameCallback {
     private var velocity = 0f
+    private var stick = 0f
+    private var dpad = 0f
     private var running = false
     private var lastFrameNanos = 0L
     private var remainder = 0f
@@ -589,7 +718,17 @@ class CindyHandheldModule : Module() {
     private var cachedAt = 0L
 
     fun update(value: Float) {
-      velocity = if (abs(value) < STICK_DEAD_ZONE) 0f else value
+      stick = if (abs(value) < STICK_DEAD_ZONE) 0f else value
+      updateVelocity()
+    }
+
+    fun updateDpad(value: Float) {
+      dpad = value * 0.6f
+      updateVelocity()
+    }
+
+    private fun updateVelocity() {
+      velocity = if (dpad != 0f) dpad else stick
       if (velocity != 0f && !running) {
         running = true
         lastFrameNanos = 0L
@@ -600,6 +739,8 @@ class CindyHandheldModule : Module() {
 
     fun stop() {
       velocity = 0f
+      stick = 0f
+      dpad = 0f
       Choreographer.getInstance().removeFrameCallback(this)
       running = false
       cachedTarget = null

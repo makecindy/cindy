@@ -259,6 +259,7 @@ function botTaskDispatchHarness(
     commitAgentIslandUserPrompt: noop,
     rollbackAgentIslandUserPrompt: noop,
     createDbMessage: asyncNoop,
+    persistUserTurnMessage: asyncNoop,
     runAcceptedCallback: async (callback?: () => unknown) => {
       await callback?.();
     },
@@ -444,7 +445,7 @@ describe('external handoff to hidden group lanes', () => {
       live ? { child: { id: 'child', agentKind: 'codex' } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         botSessionLinks: links,
-        syncBotLanePermission: sync, createDbMessage: persist,
+        syncBotLanePermission: sync, persistUserTurnMessage: persist,
       });
     return { ...h, sync, persist, accepted };
   }
@@ -544,7 +545,7 @@ describe('companion internal delivery after automation', () => {
       path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active', hasRecyclableProjectResourceDrift: () => false } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
-        createDbMessage: async () => { shadowed = true; },
+        persistUserTurnMessage: async () => { shadowed = true; },
       });
     expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Late cloud input' }))
       .toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'shadowed' });

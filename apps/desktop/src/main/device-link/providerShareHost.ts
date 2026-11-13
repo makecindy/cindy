@@ -132,6 +132,16 @@ let accessRevision = 0;
 export function providerShareAccessRevision(): number { return accessRevision; }
 /** 分享快照变化的旁听者(见 onProviderShareHostChanged)。 */
 const snapshotListeners = new Set<() => void>();
+const accessListeners = new Set<() => void>();
+/** Local unfinished migrations may retry after a successful authority read. */
+const refreshListeners = new Set<() => void>();
+
+/** Requests, display names and list order do not change execution authority. */
+function accessFacts(shares: readonly ProviderShareOwned[]): string {
+  return JSON.stringify(shares.map(share => [share.shareId, share.providerId, share.hostDeviceId,
+    share.members.map(member => [member.memberId, member.status, member.joinedAt]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+}
 
 /**
  * 远程管理生成链接后，host runtime 可能因设备互联断开、重新接管或账号边界重建。
@@ -224,9 +234,11 @@ function schedule(rt: Runtime): void {
   (rt.timer as { unref?: () => void }).unref?.();
 }
 
-function applySnapshot(rt: Runtime, next: ProviderShareOwned[], prepared = false): void {
+function applySnapshot(rt: Runtime, next: ProviderShareOwned[], prepared = false, completenessChanged = false): void {
   const previous = rt.shares;
-  if (JSON.stringify(previous) !== JSON.stringify(next)) accessRevision++;
+  const changed = rt.fetchedAt === 0 || JSON.stringify(previous) !== JSON.stringify(next);
+  const accessChanged = rt.fetchedAt === 0 || accessFacts(previous) !== accessFacts(next);
+  if (changed) accessRevision++;
   rt.shares = next;
   rt.fetchedAt = Date.now();
   // 原来 active 的成员不再 active：结束任务、断开连接。成员从快照里消失(删除、退出)时，不论之前
@@ -266,7 +278,8 @@ function applySnapshot(rt: Runtime, next: ProviderShareOwned[], prepared = false
     if (until <= now) rt.quietLinks.delete(key);
   }
   rt.events.changed(next);
-  for (const listener of snapshotListeners) {
+  for (const listener of [...(changed || completenessChanged ? snapshotListeners : []),
+    ...(accessChanged ? accessListeners : []), ...refreshListeners]) {
     try {
       listener();
     } catch (error) {
@@ -278,11 +291,14 @@ function applySnapshot(rt: Runtime, next: ProviderShareOwned[], prepared = false
 /**
  * 分享快照变了(成员加入、暂停、删除等)：供应商组的转分享据此重新报上分享的人(provider-sharing.md §4.3)。
  * 只通知，不带内容；读最新的用 {@link getProviderShareHostLoadedSnapshot}。
+ * 默认也通知完整性变化；accessOnly 只看权限事实，refreshed 供未完成的本地补记重试。
  */
-export function onProviderShareHostChanged(listener: () => void): () => void {
-  snapshotListeners.add(listener);
+export function onProviderShareHostChanged(listener: () => void,
+  options: { accessOnly?: boolean; refreshed?: boolean } = {}): () => void {
+  const listeners = options.refreshed ? refreshListeners : options.accessOnly ? accessListeners : snapshotListeners;
+  listeners.add(listener);
   return () => {
-    snapshotListeners.delete(listener);
+    listeners.delete(listener);
   };
 }
 
@@ -413,8 +429,10 @@ export function refreshProviderShareHost(reason: string): Promise<void> {
       }
       await rt.events.prepareSnapshot?.(next);
       if (!current(rt) || rt.shares !== before) return;
-      rt.complete = !shares.authorityIncomplete;
-      applySnapshot(rt, next, !!rt.events.prepareSnapshot);
+      const complete = !shares.authorityIncomplete;
+      const completenessChanged = rt.complete !== complete;
+      rt.complete = complete;
+      applySnapshot(rt, next, !!rt.events.prepareSnapshot, completenessChanged);
       rt.blockedMembers.clear();
       if (!rt.reconciled && !shares.authorityIncomplete) {
         rt.reconciled = true;

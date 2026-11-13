@@ -31,8 +31,11 @@ export const HOOK_CONTROL_INVOKE = {
   SET_ENABLED: 'maker:hook-control:set-enabled',
   /** Slack Bot 是否发送本设备上下线通知。 */
   SET_LIFECYCLE_ANNOUNCEMENT: 'maker:hook-control:set-lifecycle-announcement',
-  /** 覆写工作目录清单(别名 -> 本地绝对路径, 全量替换)。 */
-  SET_WORKSPACES: 'maker:hook-control:set-workspaces',
+  /**
+   * 添加项目: 把一个本机目录登记进侧栏的项目列表。IM 机器人可选的项目就是侧栏的
+   * 本机项目, 这里没有单独的清单可写(见 hook-control/projectWorkspaces.ts)。
+   */
+  ADD_PROJECT: 'maker:hook-control:add-project',
   /**
    * 设置某个 provider 派发任务的默认工作目录(null / 「对话」= 内置伪目录)。
    * 进程内通道, 没有跨版本兼容问题 —— 原 set-x-default-workspace 直接改名。
@@ -43,10 +46,10 @@ export const HOOK_CONTROL_INVOKE = {
   BIND_START: 'maker:hook-control:bind-start',
   /** 解除 Slack 账号绑定(bind.revoke)。 */
   BIND_REVOKE: 'maker:hook-control:bind-revoke',
-  /** 拉取绑定用户的全部目录偏好快照(经 WS prefs.get, 10s 超时)。 */
-  PREFS_GET: 'maker:hook-control:prefs-get',
-  /** 部分更新某目录偏好(经 WS prefs.set; null = 清空回默认)。 */
-  PREFS_SET: 'maker:hook-control:prefs-set',
+  /** 读所有官方机器人共用的项目偏好(本机正本)。 */
+  SHARED_PREFS_GET: 'maker:hook-control:shared-prefs-get',
+  /** 部分更新某个项目的共用偏好(null = 清空回默认); 随后投影到各渠道并镜像到各服务端。 */
+  SHARED_PREFS_SET: 'maker:hook-control:shared-prefs-set',
   /** (multi-team)添加新 Slack workspace 绑定(bind.start 空 teamId, 授权页自选)。 */
   ADD_BINDING: 'maker:hook-control:add-binding',
   /** (multi-team)给指定 team 重新授权(bind.start 带 teamId, pin 授权页)。 */
@@ -67,10 +70,6 @@ export const HOOK_CONTROL_INVOKE = {
   PROVIDER_BIND_SELECT: 'maker:hook-control:provider-bind-select',
   /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接。 */
   PROVIDER_OPEN_ACTION: 'maker:hook-control:provider-open-action',
-  /** 读取 provider-neutral(Telegram / X / 飞书)独立的 workspace 偏好。 */
-  PROVIDER_PREFS_GET: 'maker:hook-control:provider-prefs-get',
-  /** 更新 provider-neutral(Telegram / X / 飞书)独立的 workspace 偏好。 */
-  PROVIDER_PREFS_SET: 'maker:hook-control:provider-prefs-set',
   /** 读取官方 Telegram bot 的回应、引用与群激活设置。 */
   TELEGRAM_BEHAVIOR_GET: 'maker:hook-control:telegram-behavior-get',
   /** 部分更新官方 Telegram bot 的回应或引用设置。 */
@@ -88,10 +87,8 @@ export const HOOK_CONTROL_INVOKE = {
 export const HOOK_CONTROL_EVENT = {
   /** 状态推送(完整快照; 连接与绑定状态变化都走这里)。 */
   STATUS_CHANGED: 'maker:hook-control:status-changed',
-  /** 目录偏好快照推送(prefs.state; 含 Slack /model 卡改动的实时同步)。 */
-  PREFS_CHANGED: 'maker:hook-control:prefs-changed',
-  /** provider-neutral 偏好快照推送（Telegram / X / 飞书消费）。 */
-  PROVIDER_PREFS_CHANGED: 'maker:hook-control:provider-prefs-changed',
+  /** 共用项目偏好快照推送(设置页写入、IM 里 /model 卡改动并入后)。 */
+  SHARED_PREFS_CHANGED: 'maker:hook-control:shared-prefs-changed',
   /** 官方 Telegram 行为配置快照推送（含其它客户端写入）。 */
   TELEGRAM_BEHAVIOR_CHANGED: 'maker:hook-control:telegram-behavior-changed',
   /** 目录模型来源偏好全量推送(本地写入后广播全窗口, 多窗口设置页同步)。 */
@@ -323,7 +320,10 @@ export interface SlackHookView {
   lifecycleAnnouncement: boolean;
   /** 实际生效的服务器地址(默认内置值; 被 urlOverride 覆写时为覆写值)。 */
   url: string;
-  /** 工作区别名 -> 本地绝对路径。协议里只跑别名, 路径不出本机。 */
+  /**
+   * 项目名称 -> 本地绝对路径, 与侧栏的本机项目一一对应(名称跟随侧栏)。
+   * 协议里只跑名称, 路径不出本机。
+   */
   workspaces: Record<string, string>;
   status: HookConnectionStatus;
   lastError: string | null;
@@ -352,8 +352,15 @@ export interface SlackHookView {
   feishu: ProviderHookView;
 }
 
-/** 工作区别名的合法格式(与 hook server 侧约定一致)。 */
-export const HOOK_WORKSPACE_ALIAS_RE = /^[A-Za-z0-9_-]{1,32}$/;
+/**
+ * 协议里项目名称的合法格式: 1–32 个字, 不含控制字符, 首尾不是空白, 也不像绝对路径
+ * (协议拒收以 `/`、`\\`、盘符或 `file:` 开头的名称 —— 路径不出本机)。
+ *
+ * 名称来自侧栏的项目名, 所以允许中文等任意文字; 服务端只把它当不透明字符串
+ * (按它存会话选的项目与偏好), 没有字符集限制。
+ */
+export const HOOK_WORKSPACE_ALIAS_RE =
+  /^(?![\\/])(?![A-Za-z]:[\\/])(?!file:)(?!\s)\P{Cc}{1,32}(?<!\s)$/iu;
 
 /**
  * 保留别名「对话」: 内置的伪工作目录, 与真实目录同级 —— 桌面端把它恒定加进
@@ -377,7 +384,8 @@ export const HOOK_CHAT_WORKSPACE_ALIAS = 'chat';
  */
 export interface HookWorkspaceProviderSourceEntry {
   agentDeviceId?: string | null;
-  channel: 'slack' | 'telegram' | 'x' | 'feishu';
+  /** `shared` = 所有官方机器人共用的那一份(派发与设置页读写它)。 */
+  channel: 'slack' | 'telegram' | 'x' | 'feishu' | 'shared';
   /** Slack multi-team 归属; Telegram / X / 飞书 / 单绑定为 null。 */
   teamId: string | null;
   workspace: string;
@@ -404,6 +412,11 @@ export interface HookPrefsView {
 }
 
 /** provider-neutral 偏好快照；selector 与协议帧同形。 */
+/** 所有官方机器人共用的项目偏好(本机正本); 没配置过的项目不在其中。 */
+export interface SharedProjectPrefsView {
+  prefs: HookWorkspacePrefs[];
+}
+
 export interface ProviderPrefsView extends HookPrefsView {
   provider: HookProvider;
   bindingId: string | null;

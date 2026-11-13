@@ -24,12 +24,15 @@ type CindyHandheldNative = {
   available?: boolean;
   configure(config: HandheldNativeConfig): Promise<void>;
   setCapturing(value: boolean): Promise<void>;
+  /** Optional on older Android binaries. Only the focused existing-task page registers. */
+  setSessionControls?(config: { scope: string; sendTarget: string } | null): Promise<void>;
   getDisplays(): HandheldDisplay[];
   getCurrentDisplayId(): Promise<number>;
   moveToDisplay(displayId: number): Promise<boolean>;
   getGamepads(): string[];
   addListener(event: 'onVoiceKey', listener: (event: { phase: HandheldVoiceKeyPhase }) => void): EventSubscription;
   addListener(event: 'onKeyCaptured', listener: (event: { keyCode: number; name: string }) => void): EventSubscription;
+  addListener(event: 'onSessionSend', listener: (event: { scope: string }) => void): EventSubscription;
 };
 
 /** Android-only; older binaries and other platforms get null and hide handheld mode. */

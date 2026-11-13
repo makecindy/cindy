@@ -1,0 +1,22 @@
+diff --git a/dist/parse/token.js b/dist/parse/token.js
+index fc9997c8508190b59ca44100b56be5f5403206f3..a176da38023298799d82d77861fe3ce899c24c1d 100644
+--- a/dist/parse/token.js
++++ b/dist/parse/token.js
+@@ -170,11 +170,12 @@ export function groupFromNode(node, { path, groups }) {
+         };
+     }
+     // first, copy all parent groups’ properties into local, since they cascade
+-    const groupIDs = Object.keys(groups);
+-    groupIDs.sort(); // these may not be sorted; re-sort just in case (order determines final values)
+-    for (const groupID of groupIDs) {
+-        const isParentGroup = jsonID.startsWith(groupID) && groupID !== jsonID;
+-        if (isParentGroup) {
++    // Matching parents are proper string prefixes, already ordered shortest
++    // first by lexical sorting. Probe those prefixes instead of sorting every
++    // group for every node; keep the same startsWith inheritance semantics.
++    for (let end = 0; end < jsonID.length; end++) {
++        const groupID = jsonID.slice(0, end);
++        if (Object.hasOwn(groups, groupID)) {
+             groups[jsonID].$deprecated = groups[groupID]?.$deprecated ?? groups[jsonID].$deprecated;
+             groups[jsonID].$description = groups[groupID]?.$description ?? groups[jsonID].$description;
+             groups[jsonID].$type = groups[groupID]?.$type ?? groups[jsonID].$type;

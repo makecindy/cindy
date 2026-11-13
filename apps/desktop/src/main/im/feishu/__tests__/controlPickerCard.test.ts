@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setMainLocale } from '../../../i18n.desktop';
 import type { ControlProject } from '../../shared/controlProjects';
 import { createCardBuilders } from '../../shared/cardBuilders';
+import { projectToken } from '../../shared/projectToken';
 import { ui } from '../uiText';
 
 // 控制文案跟随界面语言; 本文件断言的是中文原文。
@@ -36,7 +37,7 @@ describe('buildControlPickerCard — 接管态换乘提示', () => {
     expect(spec.body).toContain('修复登录 bug');
     // 提示在 body 最前面 (picker hint 之前)
     expect(spec.body!.indexOf('当前接管中')).toBeLessThan(
-      spec.body!.indexOf('点工作区往下走'),
+      spec.body!.indexOf('点项目往下走'),
     );
     expect(spec.buttons).toHaveLength(PROJECTS.length + 1);
   });
@@ -48,7 +49,7 @@ describe('buildControlPickerCard — 接管态换乘提示', () => {
       currentAttachedTitle: '修复登录 bug',
     });
     expect(spec.body).toContain('当前接管中');
-    expect(spec.body).toContain('还没有可接管的工作区');
+    expect(spec.body).toContain('还没有可接管的项目');
     expect(spec.buttons).toHaveLength(1); // 只剩退出按钮
   });
 
@@ -60,5 +61,24 @@ describe('buildControlPickerCard — 接管态换乘提示', () => {
       currentAttachedTitle: null,
     });
     expect(b.body).toBe(a.body);
+  });
+});
+
+// PR #10291 review: 飞书把按钮数据原样存到平台上, /project 卡片不能把本机绝对路径放进去
+// (会带出用户名、仓库名)。生产入口 buildProjectPickerCard; 可观察结果是发给飞书的按钮数据。
+describe('buildProjectPickerCard — 按钮数据不带本机路径', () => {
+  it('项目按钮只带不透明标记与显示名', () => {
+    const spec = cards.buildProjectPickerCard({
+      botAppId: 'bot1',
+      projects: PROJECTS,
+      currentName: '对话',
+    });
+    const picks = spec.buttons.filter((button) => button.id === 'project:pick');
+    expect(picks.map((button) => button.payload?.projectToken)).toEqual(
+      PROJECTS.map((project) => projectToken(project.workingDir)),
+    );
+    for (const project of PROJECTS) {
+      expect(JSON.stringify(spec.buttons)).not.toContain(project.workingDir);
+    }
   });
 });

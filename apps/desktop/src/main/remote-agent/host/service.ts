@@ -28,7 +28,7 @@ import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
 import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { applyProviderShareDelegation, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
-import { checkProviderShareDelegation, clearProviderShareDelegationChecks, grantProviderShareDelegation, providerShareOwnerKey, revokeProviderShareDelegation } from '../../device-link/providerShareApi.js';
+import { checkProviderShareDelegation, clearProviderShareDelegationChecks, grantProviderShareDelegation as requestDelegationGrant, providerShareOwnerKey, providerShareDelegationRetryAt, revokeProviderShareDelegation as requestDelegationRevoke } from '../../device-link/providerShareApi.js';
 import { startProviderShareDelegationRechecks } from '../../device-link/providerShareDelegationChecks.js';
 import { remoteModelAccess } from '../../device-link/remoteModelAccess.js';
 import { handleProviderShareReshare, providerShareReshareAllows } from '../../device-link/providerShareReshare.js';
@@ -142,6 +142,11 @@ let stopDirectGroupWatch: (() => void) | undefined;
 let stopDirectSettingsWatch: (() => void) | undefined;
 let directRouteSweep: ReturnType<typeof setInterval> | undefined;
 let stopDelegationChecks: (() => void) | undefined;
+let journalLifetime: AbortController | undefined;
+let journalFollowup: ReturnType<typeof setTimeout> | undefined;
+// Keys are scoped receipt generations, bounded by the durable journal. Keep
+// failed attempts across same-process host rebuilds, without persisting identities.
+const journalRetries = new Map<string, { failures: number; retryAt: number }>();
 
 /** M's per-task delegated lease takes precedence over any other task's lease. */
 function guestAccessForTask(controller: string, sessionId?: string) {
@@ -279,6 +284,12 @@ export function installRemoteAgentHost(options: {
   managedSkills?: () => Promise<Array<{ command: string; dir: string }>>;
 }): void {
   if (host) return;
+  const lifetime = new AbortController();
+  journalLifetime = lifetime;
+  const grantProviderShareDelegation: typeof requestDelegationGrant = (input, options) =>
+    requestDelegationGrant(input, { ...options, signal: AbortSignal.any([lifetime.signal]) });
+  const revokeProviderShareDelegation: typeof requestDelegationRevoke = (input, options) =>
+    requestDelegationRevoke(input, { background: true, ...options, signal: AbortSignal.any([lifetime.signal]) });
   const previousHostDisposal = hostDisposal;
   const usage = installProviderShareUsageStore(options.userDataDir);
   const isControllerAuthorized = (controller: string): boolean => {
@@ -318,7 +329,7 @@ export function installRemoteAgentHost(options: {
       const deviceId = getSelfDeviceId();
       if (peer?.role !== 'guest' || !deviceId) throw new Error('Provider share executor is unavailable');
       return checkProviderShareDelegation({ shareId: peer.shareId, memberId: peer.memberId,
-        guestDeviceId: peer.deviceId, executorDeviceId: deviceId }, first.lease.generation);
+        guestDeviceId: peer.deviceId, executorDeviceId: deviceId }, first.lease.generation, { background: true });
     },
     invalidate: item => invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce),
   });
@@ -345,6 +356,7 @@ export function installRemoteAgentHost(options: {
   };
   const allocations = new Map<string, Promise<void>>();
   const directTaskContext = (controller: string, sessionId: string) => {
+    lifetime.signal.throwIfAborted();
     const peer = parseProviderSharePeer(controller);
     const access = ownedProviderShareGuestAccess(controller);
     const settings = readDeviceLinkSettings();
@@ -417,7 +429,7 @@ export function installRemoteAgentHost(options: {
     const settings = readDeviceLinkSettings();
     const peer = providerShareGuestPeer(route.shareId, route.memberId, route.guestDeviceId);
     const access = ownedProviderShareGuestAccess(peer);
-    return route.ownerScope === providerShareOwnerKey() && route.ownerDeviceId === getSelfDeviceId()
+    return !lifetime.signal.aborted && route.ownerScope === providerShareOwnerKey() && route.ownerDeviceId === getSelfDeviceId()
       && route.expiresAt > Date.now() && settings.remoteControlEnabled
       && usage.memberGenerationReady(route, route.memberJoinedAt)
       && usage.listActiveDirectReceiptRoutes(route.ownerScope).some((saved) => saved.ownerDeviceId === route.ownerDeviceId
@@ -484,7 +496,7 @@ export function installRemoteAgentHost(options: {
     const memberJoinedAt = previous.memberJoinedAt ?? getProviderShareHostLoadedSnapshot()
       ?.find((share) => share.shareId === previous.shareId)?.members.find((member) => member.memberId === previous.memberId)?.joinedAt;
     if (!memberJoinedAt) throw new Error('Previous provider share membership is unavailable');
-    const granted = await grantProviderShareDelegation(delegation);
+    const granted = await grantProviderShareDelegation(delegation, { background: true });
     const restored: ProviderShareDirectReceiptRoute = {
       ownerScope: previous.ownerScope, ownerDeviceId: previous.ownerDeviceId, ...delegation, memberJoinedAt,
       sessionId: previous.sessionId, agentKind: previous.agentKind,
@@ -655,6 +667,7 @@ export function installRemoteAgentHost(options: {
   let reconcilingJournal = false;
   let reconcileJournalAgain = false;
   const reconcileDirectJournal = async () => {
+    if (lifetime.signal.aborted) return;
     if (reconcilingJournal) { reconcileJournalAgain = true; return; }
     const self = getSelfDeviceId();
     if (!self) return;
@@ -672,6 +685,28 @@ export function installRemoteAgentHost(options: {
         route.shareId, route.memberId, route.guestDeviceId, route.executorDeviceId]);
       const sessionExecutorKey = (route: JournalRoute) => JSON.stringify([
         sessionKey(route), route.executorDeviceId]);
+      const retryKey = (route: JournalRoute) => {
+        const previous = latestExecutor.get(sessionExecutorKey(route));
+        return JSON.stringify([route.ownerScope, route.ownerDeviceId, sessionExecutorKey(route), route.generation,
+          route.committedAt === undefined && previous && previousDirectRouteAllowed(previous) ? 'restore' : 'retire']);
+      };
+      const attemptKeys = new Map<JournalRoute, string>();
+      const failed = new Set<string>();
+      const defer = (route: JournalRoute, error?: unknown) => {
+        const key = attemptKeys.get(route) ?? retryKey(route);
+        if (failed.has(key)) return;
+        failed.add(key);
+        const failures = Math.min((journalRetries.get(key)?.failures ?? 0) + 1, 5);
+        const delay = Math.min(300_000, 15_000 * 2 ** (failures - 1));
+        const supplied = error && typeof error === 'object' && 'retryAt' in error ? error.retryAt : 0;
+        // Elapsed retry time is monotonic; a wall-clock adjustment cannot reset
+        // the wait. Server wall deadlines are converted once at observation.
+        journalRetries.set(key, { failures, retryAt: performance.now() + Math.max(
+          delay + Math.floor(Math.random() * delay * 0.2),
+          providerShareDelegationRetryAt() - Date.now(),
+          typeof supplied === 'number' && Number.isFinite(supplied) ? supplied - Date.now() : 0,
+        ) });
+      };
       const latestSession = new Map<string, JournalRoute>();
       const latestExecutor = new Map<string, JournalRoute>();
       const latestPair = new Map<string, JournalRoute>();
@@ -704,6 +739,9 @@ export function installRemoteAgentHost(options: {
         group.push(route);
         jobs.set(key, group);
       }
+      const activeRetries = new Set(rows.map(retryKey));
+      for (const [key, retry] of journalRetries) if (!activeRetries.has(key)
+        && retry.retryAt + 300_000 <= performance.now()) journalRetries.delete(key);
       const reconcileRoute = async (route: JournalRoute) => {
         if (allocations.has(JSON.stringify([
           providerShareGuestPeer(route.shareId, route.memberId, route.guestDeviceId), route.sessionId,
@@ -743,6 +781,7 @@ export function installRemoteAgentHost(options: {
                 recovered = true;
               });
             } catch (error) {
+              defer(route, error);
               log.warn('provider group previous direct route restoration failed', {
                 executorDeviceId: route.executorDeviceId, error: String(error),
               });
@@ -768,6 +807,7 @@ export function installRemoteAgentHost(options: {
                 revokeUnusedDirectPair(route),
               ]);
               if (revokes.some((result) => result.status === 'rejected')) {
+                defer(route);
                 log.warn('provider group provisional direct revocation will retry', {
                   executorDeviceId: route.executorDeviceId,
                 });
@@ -786,19 +826,27 @@ export function installRemoteAgentHost(options: {
           return;
         }
         const serverRevoke = latestPair.get(pairKey(route)) === route;
-        const revoke = { op: 'delegate' as const, action: 'revoke' as const,
-          shareId: route.shareId, memberId: route.memberId, guestDeviceId: route.guestDeviceId,
-          providerId: route.executorProviderId, model: route.model, sessionId: route.sessionId,
-          generation: route.generation };
-        const work = [groupRelay.connect(route.executorDeviceId).invoke([revoke])];
+        const retiring = rows.filter(old => routeOrder.get(old)! <= routeOrder.get(route)!
+          && sessionExecutorKey(old) === sessionExecutorKey(route));
+        // A provisional generation may never have reached M. Revoking only it
+        // then retiring g1's evidence would leave M's committed g1 executable.
+        // Revoke known generations sequentially before acknowledging cleanup;
+        // M's generation fence protects any concurrent newer allocation.
+        const work = [(async () => {
+          const { invoke } = groupRelay.connect(route.executorDeviceId);
+          for (const old of retiring) await invoke([{ op: 'delegate', action: 'revoke',
+            shareId: old.shareId, memberId: old.memberId, guestDeviceId: old.guestDeviceId,
+            providerId: old.executorProviderId, model: old.model, sessionId: old.sessionId,
+            generation: old.generation }]);
+        })()];
         if (serverRevoke) work.push(revokeUnusedDirectPair(route));
         const outcomes = await Promise.allSettled(work);
         if (outcomes.some((outcome) => outcome.status === 'rejected')) {
+          defer(route, outcomes.find((outcome) => outcome.status === 'rejected')?.reason);
           log.warn('provider group direct revocation will retry', { executorDeviceId: route.executorDeviceId });
           return;
         }
-        for (const old of rows) if (routeOrder.get(old)! <= routeOrder.get(route)!
-          && sessionExecutorKey(old) === sessionExecutorKey(route)) {
+        for (const old of retiring) {
           await usage.markDirectReceiptRouteRevoked(old);
           dropLiveDirectReceiptRoute(old);
         }
@@ -809,8 +857,19 @@ export function installRemoteAgentHost(options: {
         while (nextGroup < groups.length) {
           const group = groups[nextGroup++]!;
           for (const route of group) {
-            try { await reconcileRoute(route); }
+            if (lifetime.signal.aborted) return;
+            // Local permission revocation is immediate even while remote repair
+            // waits. Snapshot callbacks and sweeps cannot bypass this retry date.
+            if (!valid(route)) dropLiveDirectReceiptRoute(route);
+            const key = retryKey(route);
+            if ((journalRetries.get(key)?.retryAt ?? 0) > performance.now()) continue;
+            attemptKeys.set(route, key);
+            try {
+              await reconcileRoute(route);
+              if (!failed.has(key)) journalRetries.delete(key);
+            }
             catch (error) {
+              defer(route, error);
               log.warn('provider group direct journal route reconciliation failed', {
                 executorDeviceId: route.executorDeviceId, error: String(error),
               });
@@ -824,7 +883,13 @@ export function installRemoteAgentHost(options: {
       reconcilingJournal = false;
       if (reconcileJournalAgain) {
         reconcileJournalAgain = false;
-        queueMicrotask(() => { void reconcileDirectJournal(); });
+        if (!lifetime.signal.aborted && !journalFollowup) {
+          journalFollowup = setTimeout(() => {
+            journalFollowup = undefined;
+            void reconcileDirectJournal();
+          }, 0);
+          journalFollowup.unref?.();
+        }
       }
     }
   };
@@ -836,7 +901,7 @@ export function installRemoteAgentHost(options: {
         || !remoteModelAccess.allowsDelegatedExecution(route.groupProviderId, route.model, route.memberId)) revokeDirectRoute(key, route);
     }
     void reconcileDirectJournal();
-  });
+  }, { accessOnly: true });
   stopDirectModelWatch = remoteModelAccess.subscribe(() => {
     for (const [key, route] of directRoutes) {
       if (!remoteModelAccess.allowsDelegatedExecution(route.groupProviderId, route.model, route.memberId)) revokeDirectRoute(key, route);
@@ -1564,6 +1629,10 @@ export function resolveRemoteAgentHostClaudeSessionId(sdkSessionId: string): str
 
 /** 退出时结束全部远程 Agent 任务。 */
 export function disposeRemoteAgentHost(): void {
+  journalLifetime?.abort(new Error('Remote agent host disposed'));
+  journalLifetime = undefined;
+  clearTimeout(journalFollowup);
+  journalFollowup = undefined;
   stopDelegationChecks?.();
   stopDelegationChecks = undefined;
   clearProviderShareDelegationChecks();

@@ -86,6 +86,7 @@ const h = vi.hoisted(() => {
     readRemotePermissionModes: vi.fn(async () => ['ask', 'bypassPermissions']),
     getWorkspacePref: vi.fn((): unknown => null),
     isWorkspacePrefsMigrated: vi.fn(() => true),
+    isSharedPrefsAdopted: vi.fn(() => true),
     useActualDefaults: false,
     /** 每个 fake session 的事件监听回调(emit done 用)。 */
     statusCbs: new Map<string, (status: 'active' | 'aborting' | 'closed' | 'error') => void>(),
@@ -290,6 +291,7 @@ vi.mock('../workspacePrefsStore.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../workspacePrefsStore.js')>()),
   getWorkspacePref: h.getWorkspacePref,
   isWorkspacePrefsMigrated: h.isWorkspacePrefsMigrated,
+  isSharedPrefsAdopted: h.isSharedPrefsAdopted,
 }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: h.listProviders }),
@@ -537,6 +539,7 @@ beforeEach(() => {
   } });
   h.getWorkspacePref.mockReturnValue(null);
   h.isWorkspacePrefsMigrated.mockReturnValue(true);
+  h.isSharedPrefsAdopted.mockReturnValue(true);
   h.peekPendingHandoff.mockResolvedValue(null);
   h.listMessagesForAgentHandoff.mockReset();
   h.listMessagesForAgentHandoff.mockResolvedValue([]);
@@ -692,8 +695,32 @@ describe('hook task model selection on next send', () => {
     const target = await policy.resolveTarget(providers);
     expect(target).toMatchObject({ agentKind: 'claude-code', model: 'test-model', providerId: 'xd' });
     expect(target.fingerprint).toBe(policy.fingerprint());
+    // 所有官方机器人共用一套项目配置: 读的是共用的那一份, 不是 Telegram 自己的行。
+    expect(h.getWorkspacePref).toHaveBeenCalledWith('shared', null, 'repo');
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+  });
+
+  // 规则: 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts)。升级后某个渠道还没连上过
+  // 服务端时, 它原有的按渠道偏好尚未并入共用的那一份 —— 这段时间必须继续按它自己的行跑,
+  // 否则用户原先给这个项目配的模型会在升级后悄悄变回默认。
+  // 生产入口: runner.run 的取值链; 最小失败输入: 渠道未并入 + 该渠道有自己的行。tier: unit。
+  it('渠道原有偏好尚未并入共用配置时, 继续读它自己的那一行与来源', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockReturnValue({
+      channel: 'telegram', teamId: null, workspace: 'repo',
+      agentKind: 'claude-code', model: 'test-model', effort: 'high', permissionMode: null,
+    });
+    await createMakerHookSessionRunner({ log }).run(baseReq({
+      isNew: false, workspaceAlias: 'repo',
+      source: { im: 'telegram', userText: 'hello' },
+    }));
+    const policy = h.followPolicy.mock.calls[0][0];
+    const target = await policy.resolveTarget([connectedProvider('xd', [catalogModel('test-model')])]);
+    expect(target).toMatchObject({ agentKind: 'claude-code', model: 'test-model' });
+    expect(h.isSharedPrefsAdopted).toHaveBeenCalledWith('telegram');
     expect(h.getWorkspacePref).toHaveBeenCalledWith('telegram', null, 'repo');
-    expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
+    expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('telegram', null, 'repo');
   });
 
   it.each(['telegram', 'slack', 'x'])('resolves automatic %s defaults and follows catalog changes', async (channel) => {
@@ -1029,7 +1056,7 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
     );
 
     expect(outcome.status).toBe('error');
-    expect(outcome.errorMessage).toContain('已不在工作目录映射里的目录');
+    expect(outcome.errorMessage).toContain('已不属于任何项目');
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send).not.toHaveBeenCalled();
   });
@@ -3886,7 +3913,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
       const outcome = await runner.run(xChatReq());
 
       expect(outcome.status).toBe('ok');
-      expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('x', null, 'chat');
+      expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('shared', null, 'chat');
       expect(fakeMaker.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ model: 'test-model', providerId: 'xd' }),
       );
@@ -3964,7 +3991,29 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     );
 
     expect(outcome.status).toBe('ok');
-    expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+  });
+
+  // 规则(2026-11-13 用户裁决): 所有官方机器人共用一套配置, 没单独配置过的项目在哪个官方机器人里
+  // 都按同一份默认跑。官方 Slack 以前另读一份自己的默认(早已没有设置入口), 现在与其它三个一致。
+  // 最小失败输入: 一条来自 Slack 的新任务。tier: unit。
+  it('官方 Slack 新任务读的也是 global 默认设置, 不再另读 slack 那一份', async () => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': { providerId: null, model: 'test-model', effort: 'high' },
+        codex: { providerId: null, model: 'gpt-5.6', effort: 'high' },
+      },
+    });
+    h.listProviders.mockResolvedValueOnce([connectedProvider('xd', [catalogModel('test-model')])]);
+    const outcome = await createMakerHookSessionRunner({ log }).run(
+      baseReq({ source: { im: 'slack', userText: 'hello' } }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+    expect(h.readImDefaultSettings).not.toHaveBeenCalledWith('slack');
   });
 
   it('新建: 当前无任何已连接来源时保持无 providerId(no-break)', async () => {
