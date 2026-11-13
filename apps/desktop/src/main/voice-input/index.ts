@@ -305,8 +305,8 @@ export type DictionaryAdviceIpcResult =
 const activeByWebContentsId = new Map<number, ActiveVoiceInput>();
 // Scope opaque renderer recording IDs to their sender; old callers retain
 // their numeric window lease. Pending recordings own a lease before runId exists.
-const recordingAudioOwners = new Map<number, Map<string, symbol>>();
-function audioOwner(webContentsId: number, recordingId?: string): number | symbol {
+const recordingAudioOwners = new Map<number, Map<string, { owner: symbol; muteGeneration: number }>>();
+function audioOwner(webContentsId: number, recordingId?: string, acquiring = false): number | symbol {
   if (recordingId === undefined) return webContentsId;
   if (typeof recordingId !== 'string' || recordingId.length === 0 || recordingId.length > 128) {
     throw new Error('Invalid voice recording ID');
@@ -314,8 +314,9 @@ function audioOwner(webContentsId: number, recordingId?: string): number | symbo
   let owners = recordingAudioOwners.get(webContentsId);
   if (!owners) { owners = new Map(); recordingAudioOwners.set(webContentsId, owners); }
   let owner = owners.get(recordingId);
-  if (!owner) { owner = Symbol('dictation-audio'); owners.set(recordingId, owner); }
-  return owner;
+  if (!owner) { owner = { owner: Symbol('dictation-audio'), muteGeneration: 0 }; owners.set(recordingId, owner); }
+  if (acquiring) owner.muteGeneration++;
+  return owner.owner;
 }
 const voiceInputOperations = new VoiceInputOperationQueue();
 const destroyedWebContentsListeners = new Set<number>();
@@ -2187,7 +2188,7 @@ export function registerVoiceInputIpc(): void {
     try {
       if (event.sender.isDestroyed()) throw new Error('Voice input window was closed.');
       registerVoiceInputWebContentsDestroyedCleanup(event.sender);
-      await systemAudioMuteGuard.mute(audioOwner(event.sender.id, payload?.recordingId));
+      await systemAudioMuteGuard.mute(audioOwner(event.sender.id, payload?.recordingId, true));
       return { ok: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2770,10 +2771,17 @@ async function restoreSystemAudioForSender(webContentsId: number, recordingId?: 
 }
 
 async function releaseSystemAudioForSender(webContentsId: number, recordingId?: string): Promise<void> {
-  await systemAudioMuteGuard.restore(audioOwner(webContentsId, recordingId));
+  const owner = audioOwner(webContentsId, recordingId);
+  const lease = recordingId === undefined ? undefined : recordingAudioOwners.get(webContentsId)?.get(recordingId);
+  const muteGeneration = lease?.muteGeneration;
+  await systemAudioMuteGuard.restore(owner);
   if (recordingId !== undefined) {
     const owners = recordingAudioOwners.get(webContentsId);
-    owners?.delete(recordingId);
+    // A later mute may already be queued with this symbol behind our restore.
+    // Keep its identity reachable for renderer restore and window destruction.
+    if (owners?.get(recordingId) === lease && lease?.muteGeneration === muteGeneration) {
+      owners?.delete(recordingId);
+    }
     if (owners?.size === 0) recordingAudioOwners.delete(webContentsId);
   }
 }

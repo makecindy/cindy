@@ -36,6 +36,7 @@ const m = vi.hoisted(() => {
     handlers: new Map<string, (...args: any[]) => any>(),
     listeners: new Map<string, (...args: any[]) => any>(),
     restore: vi.fn(async (_id: number | symbol | 'remote-desktop') => {}), unregister: vi.fn(),
+    setMuted: vi.fn(async (_value: boolean) => {}),
   };
 });
 vi.mock('electron', () => ({ app: { isPackaged: true, once: vi.fn(), on: vi.fn(),
@@ -72,7 +73,7 @@ vi.mock('../VoiceInputDataStore.js', () => ({ registerVoiceInputDataStoreIpc: vi
   voiceInputDataStore: { getSettings: () => ({ speakerFilterEnabled: false }), updateSettings: vi.fn() } }));
 vi.mock('../speaker/index.js', () => ({ registerVoiceSpeakerFilterIpc: vi.fn(), getSpeakerFilterService: () => ({ createGate: () => undefined }) }));
 vi.mock('loudness', () => ({ default: { getMuted: async () => m.muted,
-  setMuted: async (value: boolean) => { m.muted = value; } } }));
+  setMuted: async (value: boolean) => { await m.setMuted(value); m.muted = value; } } }));
 // Keep the production guard and OS mutation queue; only the OS API is fake.
 vi.mock('../SystemAudioMuteGuard.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../SystemAudioMuteGuard.js')>();
@@ -101,6 +102,7 @@ vi.mock('../VolcengineSaucAsrProvider.js', () => ({ VolcengineSaucAsrProvider: c
 vi.mock('../VoiceInputProviderHealth.js', () => ({ orderVoiceInputProvidersByHealth: (_kind: string, chain: string[]) => chain }));
 
 import { registerVoiceInputIpc } from '../index.js';
+import { systemAudioMuteGuard } from '../SystemAudioMuteGuard.js';
 
 let nextId = 100;
 let windows: ReturnType<typeof createWindowEvent>[];
@@ -121,6 +123,7 @@ beforeEach(() => { vi.useFakeTimers(); windows = []; m.providers.length = 0; m.o
 afterEach(async () => {
   for (const p of [...m.providers.map(provider => provider.plan), ...m.plans]) { p.connect.resolve(); p.disposed.resolve(); }
   for (const event of windows) await invoke('cancel', event);
+  await systemAudioMuteGuard.restoreAll();
   m.plans.length = 0;
   vi.clearAllTimers(); vi.useRealTimers();
 });
@@ -193,6 +196,40 @@ describe('registered main dictation lifecycle (#6656)', () => {
     await provider.started.promise; provider.connect.reject(new Error('connection failed'));
     expect((await starting).ok).toBe(false);
     expect(m.muted).toBe(false);
+  });
+
+  // discussion_r4558610003: failure cleanup can precede a cue-delayed mute.
+  // Existing startup-failure coverage mutes first and has no pending OS restore.
+  // Real start/mute/restore handlers and guard, deferred OS boundary; unit tier.
+  it.each(['renderer', 'destroyed'])('releases a late mute after failed startup via %s cleanup', async cleanup => {
+    const event = windowEvent();
+    await invoke('mute-system-audio', event, { recordingId: 'closed-topic' });
+    const restoring = m.deferred(); const enteredRestore = m.deferred();
+    m.setMuted.mockImplementationOnce(async () => { enteredRestore.resolve(); await restoring.promise; });
+    const oldRestore = invoke('restore-system-audio', event, { recordingId: 'closed-topic' });
+    await enteredRestore.promise;
+    const provider = plan(); provider.disposed.resolve();
+    const starting = invoke('start', event, { recordingId: 'failed-main', refinementEnabled: false });
+    await provider.started.promise;
+    provider.connect.reject(new Error('connection failed'));
+    try {
+      await vi.waitFor(() => expect(m.restore).toHaveBeenCalledTimes(2));
+      const lateMute = invoke('mute-system-audio', event, { recordingId: 'failed-main' });
+      restoring.resolve();
+      await oldRestore;
+      expect((await starting).ok).toBe(false);
+      expect((await lateMute).ok).toBe(true);
+      expect(m.muted).toBe(true);
+      if (cleanup === 'renderer') {
+        expect((await invoke('restore-system-audio', event, { recordingId: 'failed-main' })).ok).toBe(true);
+      } else {
+        event.sender.isDestroyed.mockReturnValue(true);
+        event.sender.once.mock.calls.find(([name]) => name === 'destroyed')![1]();
+        await vi.waitFor(() => expect(m.muted).toBe(false));
+      }
+      expect(m.muted).toBe(false);
+      expect(systemAudioMuteGuard.hasPendingOrActiveMute).toBe(false);
+    } finally { restoring.resolve(); await oldRestore; await starting; }
   });
 
   it('rejects malformed recording IDs without muting the OS', async () => {
