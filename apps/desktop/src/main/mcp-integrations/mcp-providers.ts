@@ -29,7 +29,7 @@ import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { listProjects, renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { join as pathJoin } from 'node:path';
@@ -93,6 +93,8 @@ import {
   requestMcpSetupForSession,
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
+import { readTeammateDirectory } from '../localDb/teammateDirectory.js';
+import { readDesktopHistoryAttachment } from './historyAttachment.desktop.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
 import {
   listWorkdirsForHistory,
@@ -116,7 +118,10 @@ import { runBotProjectsTool } from '../maker-ipc/botLinkedProjects.js';
 import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
+import { authorizePluginHostToolCall, getPluginHostToolCaller, setHostToolProviders } from './hostToolCaller.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
+import { forkTaskAtMessage } from '../maker-ipc/fork.js';
+import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
@@ -139,7 +144,9 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
-import { createRemoteSessionsStatusSetter } from './sessionStatusRemote.js';
+import { createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
+import { DeviceLinkError } from '@cindy/device-link';
+import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
 import { getLearnController } from '../learn-host/index.js';
@@ -270,7 +277,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       })
     : null;
   // 跨电脑投递的来源:发起任务的 id 与标题(对方按「由任务「X」发送」标注来源)。
-  const remoteHandoffSender = async (dispatcherSessionId: string) => {
+  const remoteHandoffSender = async (dispatcherSessionId: string | undefined) => {
+    if (!dispatcherSessionId) {
+      const plugin = getPluginHostToolCaller();
+      if (!plugin) throw new Error('NO_SESSION_CONTEXT');
+      return { kind: 'plugin' as const, pluginId: plugin.caller.pluginId };
+    }
     const dbClient = tryGetDbClient();
     const [row] = dbClient
       ? await dbClient.drizzle.select({ title: sessions.title }).from(sessions)
@@ -369,6 +381,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   };
 
   const authorizeTaskToolCall = createTaskToolCallAuthorizer({
+    authorizePluginCall: authorizePluginHostToolCall,
     getDb: () => (isAppSessionBoundaryPending() ? null : tryGetDbClient()),
     isScopeCurrent: (db) => !isAppSessionBoundaryPending() && db === tryGetDbClient(),
     authorizeAction: createDesktopTaskActionAuthorizer({
@@ -377,16 +390,19 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   });
   // Companion history uses the same account scope as ordinary task history.
   const botReadsAccountHistory = async (sessionId: string | undefined): Promise<boolean> => {
+    if (!sessionId && getPluginHostToolCaller()) return true;
     const result = await authorizeTaskToolCall({ sessionId, server: 'cindy_helper', tool: 'history', args: {} });
     return result.ok;
   };
 
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
     const dbClient = tryGetDbClient();
-    if (!dbClient || !sessionId) throw new Error('Account data caller unavailable');
+    const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
+    if (!dbClient || (!sessionId && !plugin)) throw new Error('Account data caller unavailable');
     const assertAccess = async () => {
+      plugin?.assertCurrent();
       if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
-      if (await resolveHelperSurface(dbClient, sessionId) === 'restricted')
+      if (sessionId && await resolveHelperSurface(dbClient, sessionId) === 'restricted')
         throw new Error('Account data is unavailable for this task');
       if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
     };
@@ -542,12 +558,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),
+      getApprovedScheduleGuard: () => getPluginHostToolCaller()?.scheduleGuard,
       // 其它电脑上的定时任务:与历史查询共用设备目录与 owner fence,走既有远程控制通道。
       ...(deps.historyRemote
         ? {
             remote: createSchedulerRemoteDeps({
               listDevices: deps.historyRemote.listDevices,
               captureAccess: deps.historyRemote.captureAccess,
+              captureInvocationGuard: () => getPluginHostToolCaller()?.assertCurrent,
               invoke: deps.invokeRemote,
             }),
           }
@@ -972,6 +990,60 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       setRemoteSessionsStatus: deps.historyRemote
         ? createRemoteSessionsStatusSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })
         : undefined,
+      deleteSession: ({ sessionId, callerSessionId }) => withAccountDataAccess(callerSessionId, async assertCurrent => {
+        await assertTaskActionCurrent();
+        await assertCurrent();
+        const split = sessionId.indexOf('::');
+        if (split > 0) {
+          if (!deps.historyRemote) return { ok: false as const, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task control is unavailable.' };
+          const result = await createRemoteSessionsStatusSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })({
+            deviceId: sessionId.slice(0, split), sessionIds: [sessionId.slice(split + 2)], status: 'deleted',
+          });
+          return result.ok ? { ok: true as const, sessionId, status: 'deleted' as const } : result;
+        }
+        try {
+          await patchSessionMetaInDb(sessionId, { status: 'deleted' }, { beforeWrite: captureTaskActionSyncGuard() });
+          return { ok: true as const, sessionId, status: 'deleted' as const };
+        } catch (error) {
+          return { ok: false as const, errorCode: isIpcError(error) ? error.code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task deletion failed.' };
+        }
+      }),
+      sessionHistory: params => withAccountDataAccess(params.callerSessionId, async assertCurrent => {
+        await assertTaskActionCurrent();
+        await assertCurrent();
+        const split = params.sessionId.indexOf('::');
+        const remote = split > 0;
+        try {
+          let result: { id: string };
+          if (remote) {
+            if (!deps.historyRemote) return { ok: false as const, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task control is unavailable.' };
+            const access = deps.historyRemote.captureAccess();
+            const action = captureTaskActionSyncGuard();
+            const response = await deps.invokeRemote(params.sessionId.slice(0, split),
+              params.kind === 'fork' ? MAKER_INVOKE.FORK : MAKER_INVOKE.REWIND_COMMIT,
+              [params.sessionId.slice(split + 2), params.messageClientId, ...(params.kind === 'rewind'
+                ? [{ stopIfRunning: params.stopIfRunning, allowFileRestore: params.allowFileRestore }] : [])],
+              { preSend: () => { access(); action?.(); } });
+            await assertCurrent();
+            if (!response.ok) return { ok: false as const, ...remoteSessionMutationFailure(response.error.code, response.error.message) };
+            const row = response.result as { id?: unknown } | null;
+            if (!row || typeof row.id !== 'string' || (params.kind === 'rewind' && row.id !== params.sessionId.slice(split + 2)))
+              return { ok: false as const, ...remoteSessionMutationFailure('UNKNOWN', '') };
+            result = { id: `${params.sessionId.slice(0, split)}::${row.id}` };
+          } else {
+            result = params.kind === 'fork'
+              ? await forkTaskAtMessage(params.sessionId, params.messageClientId)
+              : await commitTaskRewind(params.sessionId, params.messageClientId,
+                { stopIfRunning: params.stopIfRunning, allowFileRestore: params.allowFileRestore });
+          }
+          return { ok: true as const, sessionId: result.id };
+        } catch (error) {
+          if (remote) return { ok: false as const, ...remoteSessionMutationFailure(error instanceof DeviceLinkError ? error.code : 'IPC_ERROR',
+            error instanceof Error ? error.message : '', error instanceof DeviceLinkError && !error.inFlight) };
+          const code = (error as { code?: unknown }).code;
+          return { ok: false as const, errorCode: typeof code === 'string' ? code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task history operation failed.' };
+        }
+      }),
       setSessionsStatus: async ({ sessionIds, status }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -1326,6 +1398,16 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
       }),
       history: {
+        readSessionAttachment: (args, context) => withAccountDataAccess(context?.sessionId, async assertCurrent => {
+          const result = await readDesktopHistoryAttachment(args, context);
+          await assertCurrent();
+          return result;
+        }),
+        listTeammates: (args, callerSessionId) => withAccountDataAccess(callerSessionId, async assertCurrent => {
+          const page = await readTeammateDirectory(args);
+          await assertCurrent();
+          return { ok: true as const, page };
+        }),
         sessionUrl: (sessionId) => buildHistorySessionDeepLink(sessionId, getDeviceId()),
         remote: deps.historyRemote,
         resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {
@@ -1525,5 +1607,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     }),
   });
 
+  setHostToolProviders(gated, getActiveDataOwnerPushStamp());
   return gated;
 }

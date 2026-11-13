@@ -222,7 +222,9 @@ function codexUsageState(snapshot: ProviderGroupCodexUsageSnapshot, model: strin
   const tight = timed.some((w) => w.windowMinutes! * 60_000 <= FIVE_HOURS_MS
     && fiveHourTight(w.usedPercent, w.resetsAt ? w.resetsAt * 1000 : null, now));
   return {
-    ...limit,
+    // The executing native pool admits ChatGPT requests and remembers real rejections.
+    // Its plan-only projection must not block credits before that admission can run.
+    ...(snapshot.nativeAccountPool ? { limited: false, resetAtMs: null } : limit),
     fiveHourTight: tight,
     ...paceState(paced.length > 0 && paced.every(current)
       ? paced.map((w) => ({

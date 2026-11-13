@@ -42,6 +42,16 @@ function setup() {
   };
 }
 describe('remote history query handler', () => {
+  it('serves the same account directory schema on the source computer', async () => {
+    const s = setup();
+    const listTeammates = vi.fn(async () => ({ ok: true as const, page: {
+      items: [{ id: 'paused' }], nextCursor: null, hasMore: false,
+    } }));
+    const execute = createHistoryQueryHandler({ listSessions: s.listSessions, searchChatHistory: s.searchChatHistory, listTeammates });
+    expect(await execute({ tool: 'list_teammates', args: {} })).toMatchObject({ ok: true, teammates: [{ id: 'paused' }] });
+    await expect(execute({ tool: 'list_teammates', args: { device: 'all' } })).rejects.toThrow('cannot forward');
+    expect(listTeammates).toHaveBeenCalledOnce();
+  });
   it('preserves listing filters and source cursor with the same MCP schema', async () => {
     const s = setup();
     const first = await s.execute({

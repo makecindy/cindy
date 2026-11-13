@@ -8,9 +8,16 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
+import { withGhostResolvedLocale } from '../../../shared/ghost';
+import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
+import { authorizePluginHostToolCall } from '../../mcp-integrations/hostToolCaller.js';
+import { bindTaskActionInput } from '../../maker-ipc/taskActionAuthorization.js';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
   createUtilityNodeWorkerProcess,
   GhostNodeRuntimeBroker,
+  type GhostNodeRuntimeBrokerDeps,
   type NodeWorkerStartupObservation,
   type NodeWorkerStartupState,
   type NodeWorkerProcess,
@@ -2646,6 +2653,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     ghost: InstalledGhost,
     spawnChild?: () => FakeRawChild,
     autoSpawnChild = true,
+    hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'],
   ) {
     const worker = new FakeControlProcess((message) => {
       if (message.id !== undefined && typeof message.method === 'string') {
@@ -2655,6 +2663,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     const spawned: Array<{ entryPath: string; args: string[]; child: FakeRawChild }> = [];
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
+      hostToolRequest,
       spawnProcess: () => worker as unknown as NodeWorkerProcess,
       spawnChildProcess: (entryPath, _cwd, _ghostId, args) => {
         const child = spawnChild?.() ?? new FakeRawChild();
@@ -2666,6 +2675,157 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     await broker.handleRequest('node-ghost', rpcRequest()); // 拉起 worker
     return { broker, worker, spawned };
   }
+
+  // §1.2/§3: the private worker port binds the real install and uses the UI gateway;
+  // a plugin can call independently of an Agent RPC, and a changed installation cancels the result.
+  it.each([false, true])('routes autonomous Host tools through the shared gateway and fences install changes: %s', async stale => {
+    const ghost = childSpawnGhost();
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const result = { content: [{ type: 'text', text: '{"ok":true,"tasks":[]}' }] };
+    const hostToolRequest = vi.fn(async (id: string, payload: unknown, current: () => boolean) => {
+      expect(id).toBe('node-ghost');
+      expect(payload).toMatchObject({ server: 'cindy_helper', tool: 'list_sessions', args: {} });
+      expect(current()).toBe(true);
+      await gate;
+      return result;
+    });
+    const { broker, worker } = await bootWorker(ghost, undefined, true, hostToolRequest);
+    try {
+      worker.emitControl({ type: 'host-tool-request', reqId: 'host1', server: 'cindy_helper', tool: 'list_sessions', args: {} });
+      await vi.waitFor(() => expect(hostToolRequest).toHaveBeenCalledOnce());
+      if (stale) ghost.approval = { state: 'approved', revision: 'r2' };
+      finish();
+      await vi.waitFor(() => expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'host1', ok: true }));
+      const reply = worker.lastOf('node-host-result')!;
+      if (stale) expect(reply.result).toMatchObject({ isError: true, content: [{ text: '{"ok":false,"errorCode":"PERMISSION_DENIED"}' }] });
+      else expect(reply.result).toEqual(result);
+    } finally { broker.destroyAll(); }
+  });
+
+  // Unit, #9801 / 4538031073: Host queries localize the approved manifest on
+  // every lookup, while resident workers keep running. Existing install tests
+  // changed revision, not locale. A locale change must keep the same worker's
+  // control-frame call usable both before dispatch and during its Host callback.
+  it.each(['before', 'during'] as const)('keeps autonomous Host tools usable after a locale change %s dispatch', async phase => {
+    const ghost = childSpawnGhost();
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ghost.manifest = withGhostResolvedLocale(ghost.manifest, 'en');
+    const localize = () => {
+      ghost.manifest = { ...withGhostResolvedLocale(ghost.manifest, 'zh-CN'), name: '本地化插件名称' };
+    };
+    const result = { content: [{ type: 'text', text: '{"ok":true,"tasks":[]}' }] };
+    const hostToolRequest = vi.fn(async (_id: string, _payload: unknown, current: () => boolean) => {
+      expect(current()).toBe(true);
+      if (phase === 'during') localize();
+      expect(current()).toBe(true);
+      return result;
+    });
+    const { broker, worker } = await bootWorker(ghost, undefined, true, hostToolRequest);
+    try {
+      if (phase === 'before') localize();
+      worker.emitControl({ type: 'host-tool-request', reqId: 'localized', server: 'cindy_helper', tool: 'list_sessions', args: {} });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(hostToolRequest).toHaveBeenCalledOnce();
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'localized', result });
+      expect(worker.killed).toBe(false);
+    } finally { broker.destroyAll(); }
+  });
+
+  // Unit: independent Host calls are active work even without an Agent RPC.
+  // Existing immediate replies missed native consent exceeding the 30s idle timeout.
+  it('keeps concurrent Host calls alive and resumes idle collection after success and failure', async () => {
+    vi.useFakeTimers();
+    const ghost = childSpawnGhost();
+    ghost.manifest.node!.idleTimeoutSeconds = 30;
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    let finish!: () => void, reject!: (error: Error) => void;
+    const first = new Promise<void>(resolve => { finish = resolve; });
+    const second = new Promise<void>((_resolve, fail) => { reject = fail; });
+    const result = { content: [{ type: 'text', text: 'saved' }] };
+    const hostToolRequest = vi.fn().mockImplementationOnce(async () => { await first; return result; })
+      .mockImplementationOnce(async () => { await second; });
+    const { broker, worker } = await bootWorker(ghost, undefined, true, hostToolRequest);
+    try {
+      for (const reqId of ['first', 'second'])
+        worker.emitControl({ type: 'host-tool-request', reqId, server: 'cindy_helper', tool: 'list_sessions', args: {} });
+      expect(hostToolRequest).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(worker.killed).toBe(false);
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'first', result });
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(worker.killed).toBe(false);
+      reject(new Error('consent unavailable'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'second', result: { isError: true } });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(worker.killed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(worker.killed).toBe(true);
+    } finally { broker.destroyAll(); }
+  });
+
+  // Unit #9801/622jIH: real broker idle collection -> Host admission -> coordinator
+  // drain. Earlier broker tests only checked the immediate reply, before collection.
+  it('delivers an accepted message once after its source worker is normally collected', async () => {
+    vi.useFakeTimers();
+    const ghost = childSpawnGhost();
+    ghost.manifest.node!.idleTimeoutSeconds = 30;
+    ghost.manifest.agent = { hostTools: ['control'] };
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ghost.approvedHostToolGroups = ['control'];
+    let running = true;
+    const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async () => ({ kind: 'session-dispatch', source: 'test', dispatched: true }));
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
+      isTurnRunning: () => running, isLiveTurnRunning: () => running,
+      hasPendingInteraction: () => false, getAgentKind: () => 'codex', getSdkSessionId: async () => 'sdk',
+      createUserMessage: vi.fn<AgentInputCoordinatorDeps['createUserMessage']>(),
+      touchUserSend: vi.fn<AgentInputCoordinatorDeps['touchUserSend']>(async () => {}), emitProjection: () => {},
+    });
+    const item: AgentInputQueuedMessage = {
+      clientId: 'accepted-host-message', text: 'approved body', persistedContent: 'approved body',
+      model: 'model', effort: '', permissionMode: 'auto', workingDir: '/fixture',
+      chatMessage: { clientId: 'accepted-host-message', role: 'user', content: 'approved body' },
+      createOpts: { agentKind: 'codex', model: 'model', workingDir: '/fixture' },
+    };
+    const result = { content: [{ type: 'text' as const, text: '{"ok":true,"queued":true}' }] };
+    const ports: PluginHostToolPorts = {
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
+      approveGroup: async () => true, policy: () => 'auto-approve', confirm: async () => true,
+      createRuntime: (server, caller) => ({ describe: name => ({ name, category: 'control' }), close: async () => {},
+        call: async (tool, args) => {
+          const admission = await authorizePluginHostToolCall({ caller, sessionId: undefined, server: server as 'cindy_helper', tool, args });
+          if (!admission.ok || !admission.run) throw Error('missing Host admission');
+          return await admission.run(async () => {
+            bindTaskActionInput('target', item);
+            coordinator.enqueue('target', item);
+            return result;
+          });
+        },
+      }),
+    };
+    const { broker, worker } = await bootWorker(ghost, undefined, true, (id, payload, current) =>
+      handlePluginHostToolRequest(id, payload, current, ports));
+    try {
+      worker.emitControl({ type: 'host-tool-request', reqId: 'queued', server: 'cindy_helper', tool: 'send_to_session', args: { target_session_id: 'target', message: item.text } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'queued', result });
+      expect(send).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(worker.killed).toBe(true);
+      running = false;
+      coordinator.wakeSession('target', 'source-worker-collected');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenCalledOnce();
+      coordinator.wakeSession('target', 'duplicate-wake');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenCalledOnce();
+    } finally { coordinator.clearSession('target'); broker.destroyAll(); }
+  });
 
   it('未声明 childSpawn:代生请求收到结构化拒绝,不 fork', async () => {
     const { worker, spawned } = await bootWorker(childSpawnGhost(false));
