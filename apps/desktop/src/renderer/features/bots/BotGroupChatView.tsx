@@ -1508,6 +1508,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           } : null}
           speakers={speakers}
           onStop={scope => void stopRound(scope)}
+          canStop={group.round.canStop}
           canStopAll={!!group.canStopAll && !!group.round.othersActive}
           stopping={stopping}
         />
@@ -1555,7 +1556,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
             members={group.members}
-            running={running}
+            running={running} canStop={group.round.canStop}
             planState={botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}

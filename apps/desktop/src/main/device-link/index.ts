@@ -174,7 +174,7 @@ import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime, authorizeSharedTaskTransportRequest } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
 import { refreshProviderShareHost, ownedProviderShareGuestAccess } from './providerShareHost.js';
-import { providerShareGuestPeer } from '@cindy/device-link';
+import { providerShareGuestPeer, shortDeviceRef } from '@cindy/device-link';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
 import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied } from './providerMetadataContinuity.js';
 import { retireControlOffRetention } from './controlOffRetention.js';
@@ -583,7 +583,7 @@ function retriggerReopenForControlledDevices(): void {
     seen.add(deviceId);
     if (client.isLinkReady(deviceId)) continue;
     if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) continue;
-    log.info(`re-opening control link for ${deviceId.slice(0, 8)} after ownership takeover`);
+    log.info(`re-opening control link for ${shortDeviceRef(deviceId)} after ownership takeover`);
     transportTimeoutReopen.trigger(deviceId);
   }
 }
@@ -1095,7 +1095,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // 不重放的话 push 驱动的列表 / 会话镜像会一直缺流,直到用户手动重试。
       // linkTornDown 闸:teardown 的 resetAll 也会触发本回调,那时不能再发订阅。
       if (recovered && !linkTornDown && client?.connectionFor(deviceId).getStatus() === 'online') {
-        replayActiveSubscriptions(`responsiveness-recovered:${deviceId.slice(0, 8)}`, deviceId);
+        replayActiveSubscriptions(`responsiveness-recovered:${shortDeviceRef(deviceId)}`, deviceId);
       }
     },
     // 探测只在熔断器已经放行 half-open 单飞席位后到达这里；presence 的未知态
@@ -1260,7 +1260,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (!hasOutboundControlIntent(deviceId)) return false;
     if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return false;
     log.info(
-      `re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`,
+      `re-opening control link for ${shortDeviceRef(deviceId)} after before-link reliable frame`,
     );
     transportTimeoutReopen.trigger(deviceId);
     return true;
@@ -1316,7 +1316,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 在线时 ws-online 重放已先行,这里多发的一次 subscribe 幂等(重放代次翻代
     // 收敛)。
     if (available && wasAvailable !== true) {
-      replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);
+      replayActiveSubscriptions(`presence-online:${shortDeviceRef(snap.deviceId)}`, snap.deviceId);
     }
     // 词典同步不看「允许被控」开关(push 帧不是控制类帧,这是自己设备之间的数据
     // 流动),但撤销过的设备必须排除 —— 判定统一走 shouldExchangeDictionaryWith,
@@ -1367,7 +1367,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   setOrdinaryPeerLinkAcceptedListener((deviceId) => {
     broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId });
     // 同账号互控共用双向链路；对端先开链也可能恢复本端传输，但不会触发出站 accept。
-    replayActiveSubscriptions(`inbound-link-accepted:${deviceId.slice(0, 8)}`, deviceId);
+    replayActiveSubscriptions(`inbound-link-accepted:${shortDeviceRef(deviceId)}`, deviceId);
   });
   wireInboundDispatch(client);
   // outbox flush 的 presence 显式离线门禁(运行期接线,模块顶层会撞 import 环 TDZ)
@@ -1386,7 +1386,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 订阅按既有契约幂等,重放经调度器按 peer 串行去重;无订阅快照的 peer 是 no-op;
     // provider-share guest 只轮询不订阅,排除在外。
     if (!isProviderSharePeer(peer)) {
-      replayActiveSubscriptions(`link-accepted:${peer.slice(0, 8)}`, peer);
+      replayActiveSubscriptions(`link-accepted:${shortDeviceRef(peer)}`, peer);
     }
     if (parseSharedTaskPeer(peer)?.role !== 'host' || sharedHostStreams.get(peer)?.streamId === streamId) return;
     sharedHostStreams.set(peer, { streamId, epoch: ++sharedHostSourceEpoch });
@@ -1987,7 +1987,7 @@ export async function revokeController(deviceId: string): Promise<void> {
     try {
       client?.closeLink(deviceId, 'revoked', 'inbound');
     } catch (err) {
-      log.warn(`closeLink failed while revoking ${deviceId.slice(0, 8)}: ${String(err)}`);
+      log.warn(`closeLink failed while revoking ${shortDeviceRef(deviceId)}: ${String(err)}`);
     }
     forgetControllerInvokeState(deviceId);
     // 踢掉它的订阅 registry + 重算转发/横幅(复用对等下线的单设备清理路径)。
@@ -1998,7 +1998,7 @@ export async function revokeController(deviceId: string): Promise<void> {
     // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
     // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
     pollExternalSettingsChange();
-    log.info(`access revoked for controller ${deviceId.slice(0, 8)}`);
+    log.info(`access revoked for controller ${shortDeviceRef(deviceId)}`);
   } finally {
     releaseRevocation();
   }
@@ -2025,7 +2025,7 @@ export async function restoreController(deviceId: string): Promise<void> {
   // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
-  log.info(`access restored for controller ${deviceId.slice(0, 8)}`);
+  log.info(`access restored for controller ${shortDeviceRef(deviceId)}`);
 }
 
 /**
@@ -2039,7 +2039,7 @@ export async function setControllerModelUse(deviceId: string, allowed: boolean):
     : latest.includes(deviceId) ? latest : [...latest, deviceId]);
   if (allowed) notifyControllerModelUseRestored(deviceId);
   else await revokeControllerModelUse(deviceId);
-  log.info(`model use ${allowed ? 'restored' : 'revoked'} for controller ${deviceId.slice(0, 8)}`);
+  log.info(`model use ${allowed ? 'restored' : 'revoked'} for controller ${shortDeviceRef(deviceId)}`);
 }
 
 // ─── busy presence(被控端把「本机有 turn 在跑」上报,供控制端设备列表显示)──
@@ -2108,14 +2108,14 @@ function pollExternalSettingsChange(): void {
       client.closeLink(deviceId, 'revoked', 'inbound');
     } catch (err) {
       log.warn(
-        `closeLink failed while applying external revoke for ${deviceId.slice(0, 8)}: ${String(err)}`,
+        `closeLink failed while applying external revoke for ${shortDeviceRef(deviceId)}: ${String(err)}`,
       );
     }
     forgetControllerInvokeState(deviceId);
     handleControllerOffline(deviceId);
     remoteControlConsent.peerGone(deviceId);
     purgeRevokedController(deviceId);
-    log.info(`access revoked for controller ${deviceId.slice(0, 8)} (external settings change)`);
+    log.info(`access revoked for controller ${shortDeviceRef(deviceId)} (external settings change)`);
   }
 
   const restored = prev.revokedControllers.filter((id) => !revokedControllers.includes(id));
