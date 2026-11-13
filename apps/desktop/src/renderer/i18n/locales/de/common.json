@@ -11490,6 +11490,7 @@
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {
+          "preparing": "(Cindy) Das Projekt {{repo}} dieser Gruppe wird gerade in diesen Ordner auf diesem Computer heruntergeladen und sollte in wenigen Minuten bereit sein. Bis dahin kann der Ordner leer sein: Beantworte reine Gesprächsfragen sofort; Arbeit, die den Code braucht, erst wenn die Projektdateien da sind.",
           "gitMissing": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: git ist hier nicht installiert. {{guide}} Danach @Cindy erneut, dann lädt Cindy das Projekt herunter und arbeitet darin.",
           "signInOpened": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Cindy hat die GitHub-Anmeldung auf diesem Computer geöffnet; nach der Anmeldung @Cindy erneut, dann lädt Cindy das Projekt herunter.",
           "signIn": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Melde dich in Cindy auf diesem Computer bei GitHub an und @Cindy dann erneut.",

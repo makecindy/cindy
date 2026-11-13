@@ -13931,7 +13931,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // A group's GitHub repository picks this computer's checkout among the registered projects.
     findProjectDirsForRepo: async (repo) => findRepositoryFolders(
       (await listRecentWorkdirs()).filter(row => row.exists).map(row => row.path), repo, {
-        origin: async (dir) => (await runGit(['remote', 'get-url', 'origin'], { cwd: dir, timeoutMs: 3000, allowedExitCodes: [0, 2, 128] })).stdout.trim() || null,
+        remotes: async (dir) => (await runGit(['config', '--get-regexp', '^remote\\..*\\.url$'], { cwd: dir, timeoutMs: 3000, allowedExitCodes: [0, 1, 128] })).stdout
+          .split('\n').map(line => line.trim().split(/\s+/)[1] ?? '').filter(Boolean),
         isMainCheckout: async (dir) => (await fsp.stat(path.join(dir, '.git'))).isDirectory(),
       }),
     captureOwnerScope: captureDataOwnerBroadcastScope,

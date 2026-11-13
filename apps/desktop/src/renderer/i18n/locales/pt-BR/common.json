@@ -11581,6 +11581,7 @@
         "earlierOmitted": "(Mensagens anteriores omitidas)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
+          "preparing": "(Cindy) O projeto {{repo}} deste grupo está sendo baixado para esta pasta neste computador e deve ficar pronto em alguns minutos. Até lá a pasta pode estar vazia: responda na hora se for só conversa; para trabalho que precise do código, espere os arquivos do projeto aparecerem.",
           "gitMissing": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: o git não está instalado. {{guide}} Depois de instalar, mencione @Cindy de novo e o Cindy baixará o projeto e trabalhará nele.",
           "signInOpened": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: conecte primeiro sua conta do GitHub. O Cindy abriu o login do GitHub neste computador; depois de entrar, mencione @Cindy de novo e o projeto será baixado.",
           "signIn": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: conecte primeiro sua conta do GitHub. Entre no GitHub pelo Cindy neste computador e mencione @Cindy de novo.",

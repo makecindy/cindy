@@ -7,12 +7,12 @@ import { randomUUID } from 'node:crypto';
  * keeps one copy per repository at `<root>/<owner>/<name>` (shared by every group with that
  * repository) and registers it as an ordinary project named after the repository.
  *
- * - The first need clones it lightly (latest version only) before the task starts, so the
- *   repository's own rules and Skills are on disk when the harness loads the project.
+ * - The folder is there from the first request on, so the group's task opens in it at once; the
+ *   repository is cloned into it in the background (latest version only) and never delays a reply.
  * - Clone, pull and push use Cindy's GitHub sign-in on this computer (`gh auth git-credential`, set
  *   in the checkout's own git config; no credential is written anywhere). Not signed in: Cindy may
  *   open its own GitHub sign-in and wait a short while; a public repository clones without it.
- * - Until the repository is fetched there is no folder: the result says why, and a later need tries again.
+ * - Until the repository is fetched the folder is empty: the result says why, and a later need tries again.
  * - A clean checkout is fast-forwarded before a request (`sync`); local changes are never touched.
  */
 export type GroupCheckoutResult =
@@ -95,6 +95,17 @@ export function createGroupProjectCheckouts(deps: GroupCheckoutDeps) {
     await git(['config', '--local', '--add', HELPER_KEY, command], dir);
   }
 
+  /** Moves every entry of `from` into `to` (created when missing); false when `to` gained a clashing entry meanwhile. */
+  async function moveInto(from: string, to: string): Promise<boolean> {
+    if (!await deps.fs.exists(to)) { await deps.fs.rename(from, to); return true; }
+    const present = new Set(await deps.fs.readdir(to));
+    const entries = await deps.fs.readdir(from);
+    if (entries.some(entry => present.has(entry))) return false;
+    for (const entry of entries) await deps.fs.rename(path.join(from, entry), path.join(to, entry));
+    await deps.fs.rm(from);
+    return true;
+  }
+
   async function ensureOnce(repo: string, dir: string, options: { signIn: boolean; isCurrent: () => boolean }): Promise<GroupCheckoutResult> {
     if (!await deps.gitAvailable()) return { status: 'git-missing' };
     if (await deps.fs.exists(path.join(dir, '.git'))) {
@@ -130,8 +141,11 @@ export function createGroupProjectCheckouts(deps: GroupCheckoutDeps) {
       await deps.fs.rm(staging);
       return gh ? { status: 'unavailable' } : { status: 'sign-in-required', ...(signInOpened ? { signInOpened } : {}) };
     }
-    await deps.fs.rm(dir);
-    await deps.fs.rename(staging, dir);
+    // The folder already holds the group's task: its contents move in, the folder itself stays.
+    if (!await moveInto(staging, dir)) {
+      await deps.fs.rm(staging);
+      return { status: 'unavailable' };
+    }
     if (gh) await useSignIn(dir, gh);
     // The account may have changed during the clone: the folder is that account's, never registered for another.
     if (!options.isCurrent()) throw new Error('OWNER_CHANGED');
@@ -141,6 +155,11 @@ export function createGroupProjectCheckouts(deps: GroupCheckoutDeps) {
 
   return {
     isManaged,
+    /** Where Cindy keeps its checkout of `repo` on this computer; null for a name that is not plain `owner/name`. */
+    dirOf(repo: string): string | null {
+      const parsed = parseGithubRepository(repo);
+      return parsed ? path.join(deps.root(), parsed.owner, parsed.name) : null;
+    },
     /**
      * The checkout of `repo`, cloned on first need. `signIn`: open Cindy's GitHub sign-in and wait
      * briefly when not signed in (the requester's own request on their computer). Null for a

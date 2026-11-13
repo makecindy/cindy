@@ -11445,6 +11445,7 @@
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {
+          "preparing": "（Cindy）此群之项目 {{repo}} 方载入此机今之目录，数分即成。未成之前，目录或空：但为言谈，即答之；需用其码者，待目录有其文再为之。",
           "gitMissing": "（Cindy）此群之项目 {{repo}} 未至此机：此机未装 git。{{guide}}装毕，再 @Cindy，Cindy 自取项目而治之。",
           "signInOpened": "（Cindy）此群之项目 {{repo}} 未至此机：须先连君之 GitHub。Cindy 已于此机启 GitHub 登录，登毕再 @Cindy，Cindy 自取项目。",
           "signIn": "（Cindy）此群之项目 {{repo}} 未至此机：须先连君之 GitHub。请于此机之 Cindy 登 GitHub，而后再 @Cindy。",

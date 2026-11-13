@@ -11445,6 +11445,7 @@
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
+          "preparing": "（Cindy）這個群組的專案 {{repo}} 正在下載到這台電腦的目前目錄，幾分鐘內會好。下載完成前目錄可能是空的：只是聊天就直接回答；要用到程式碼時，等目錄裡出現專案檔案再做。",
           "gitMissing": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：這台電腦還沒有安裝 git。{{guide}}裝好後再 @Cindy，Cindy 會自動下載專案並在裡面工作。",
           "signInOpened": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。Cindy 已在這台電腦上開啟 GitHub 登入，登入後再 @Cindy，Cindy 會自動下載專案。",
           "signIn": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。請在這台電腦的 Cindy 裡登入 GitHub，然後再 @Cindy。",

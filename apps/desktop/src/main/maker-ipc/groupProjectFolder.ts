@@ -1,16 +1,20 @@
 import path from 'node:path';
-import { mkdir, stat } from 'node:fs/promises';
+import { access, mkdir, stat } from 'node:fs/promises';
 import { githubRepositoryOfRemote, type GroupCheckoutResult, type GroupProjectCheckouts } from './groupProjectCheckout.js';
 
 /**
  * A group's project folder on this computer (bot-group-chat.md §7.5), in this order:
  *
  * 1. the folder chosen here in group management;
- * 2. the one project registered in Cindy whose git `origin` is the group's repository;
- * 3. Cindy's own checkout of that repository, cloned on first need (`groupProjectCheckout.ts`).
+ * 2. a project registered in Cindy that is a checkout of the group's repository (any of its git
+ *    remotes, so a fork whose `upstream` is the repository counts), the most recently used one;
+ * 3. Cindy's own folder for that repository (`groupProjectCheckout.ts`), cloned in the background;
+ * 4. without a repository, the group's own folder under the conversation workspace.
  *
- * A chosen folder is binding: when it is gone the work fails rather than running somewhere else.
- * The other two are found for the user, so a folder that went away is simply looked up again.
+ * Finding the folder never waits on the network: work starts in it right away, and a repository
+ * still being fetched is reported as `pending`. A chosen folder is binding: when it is gone the work
+ * fails rather than running somewhere else. The others are found for the user, so a folder that
+ * went away is simply looked up again.
  */
 export interface GroupProjectRoom { id: string; name?: string; project?: { kind: 'github'; repo: string } | null }
 export interface GroupProjectFolder {
@@ -18,8 +22,8 @@ export interface GroupProjectFolder {
   /** Found from the group's repository, not chosen on this computer. */
   auto: boolean;
 }
-/** `pending`: why the group's repository is not on this computer yet; `dir` is null then. */
-export type GroupWorkFolder = GroupProjectFolder & { pending?: Exclude<GroupCheckoutResult, { status: 'ready' }> };
+/** `pending`: the group's repository is not in `dir` yet, and why (`preparing`: being cloned now). */
+export type GroupWorkFolder = GroupProjectFolder & { pending?: { status: 'preparing' } | Exclude<GroupCheckoutResult, { status: 'ready' }> };
 
 /** How long a found folder is trusted, and how soon a miss is looked up again. */
 const FOUND_MS = 5 * 60_000;
@@ -32,9 +36,11 @@ export function createGroupProjectFolders(deps: {
   fallback?: (room: GroupProjectRoom) => string | null;
   bindFallback?: (roomId: string, dir: string) => void;
   workspaceRoot?: () => { directory: string; isCustomized: boolean };
-  /** Registered project folders whose git `origin` is this repository. */
+  /** Registered project folders that are checkouts of this repository, most recently used first. */
   findRegistered?: (repo: string) => Promise<string[]>;
-  checkouts?: Pick<GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged'>;
+  checkouts?: Pick<GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged' | 'dirOf'>;
+  /** The account is still the one this service runs for: a background clone stops otherwise. */
+  owner?: () => boolean;
   /** An existing local directory usable as a project (same rules as a new task's project). */
   validate?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false }>;
 }) {
@@ -48,9 +54,9 @@ export function createGroupProjectFolders(deps: {
     const cached = registered.get(key);
     if (cached && Date.now() < cached.until) return cached.dir;
     const entry: { until: number; dir: Promise<string | null> } = { until: Date.now() + FOUND_MS, dir: Promise.resolve(null) };
-    // Several registered checkouts of one repository: Cindy does not guess which one is meant.
+    // Several registered checkouts of one repository: the one used last is the one being worked in.
     entry.dir = (deps.findRegistered?.(repo) ?? Promise.resolve([]))
-      .then(dirs => dirs.length === 1 ? dirs[0]! : null, () => null)
+      .then(dirs => dirs[0] ?? null, () => null)
       .then(dir => { if (!dir) entry.until = Date.now() + MISSED_MS; return dir; });
     registered.set(key, entry);
     return entry.dir;
@@ -81,17 +87,43 @@ export function createGroupProjectFolders(deps: {
     return { dir, auto: true };
   };
 
+  /** The last attempt to fetch each repository that did not succeed, shown until one does. */
+  const failed = new Map<string, Exclude<GroupCheckoutResult, { status: 'ready' }>>();
+  /**
+   * Cindy's folder for `repo`, there at once. Without the repository in it yet, a clone starts in the
+   * background (one at a time per repository) and the folder is returned as pending.
+   */
+  async function managedFolder(room: GroupProjectRoom, repo: string, options: { signIn: boolean; isCurrent: () => boolean }): Promise<GroupWorkFolder> {
+    const checkouts = deps.checkouts;
+    const dir = checkouts?.dirOf(repo);
+    if (!checkouts || !dir) throw new Error('WORKDIR_UNAVAILABLE');
+    if (!options.isCurrent()) throw new Error('OWNER_CHANGED');
+    if (await access(path.join(dir, '.git')).then(() => true, () => false)) {
+      // Brought up to date in the background; the request never waits for the network.
+      void checkouts.sync(dir);
+      return { dir, auto: true };
+    }
+    await mkdir(dir, { recursive: true });
+    const owner = deps.owner ?? options.isCurrent;
+    const key = repo.toLowerCase();
+    const last = failed.get(key);
+    void checkouts.ensure(repo, { signIn: options.signIn, isCurrent: owner })
+      ?.then(result => { if (result.status === 'ready') { failed.delete(key); forget(repo); } else failed.set(key, result); },
+        () => undefined);
+    return { dir, auto: true, pending: last ?? { status: 'preparing' } };
+  }
+
   return {
-    /** What group management shows: the chosen folder, else the registered project. Never clones. */
+    /** What group management shows: the chosen folder, else the folder work would use. Never clones. */
     async shown(room: GroupProjectRoom): Promise<GroupProjectFolder> {
       const chosen = deps.chosen(room.id);
       if (chosen) return { dir: chosen, auto: false };
       const repo = repoOf(room);
-      return { dir: (repo ? await registeredFolder(repo) : null) ?? fallback(room).dir, auto: true };
+      return { dir: (repo ? await registeredFolder(repo) ?? deps.checkouts?.dirOf(repo) : null) ?? fallback(room).dir, auto: true };
     },
     /**
-     * The folder work for this group runs in, checked to exist. `signIn`: Cindy may open its GitHub
-     * sign-in to clone the repository (the requester's own request, on their computer).
+     * The folder work for this group runs in, checked to exist; never waits on the network.
+     * `signIn`: a background clone may open Cindy's GitHub sign-in (the requester's own request).
      */
     async forWork(room: GroupProjectRoom, options: { signIn: boolean; isCurrent: () => boolean }): Promise<GroupWorkFolder> {
       // A host that cannot check folders has no project folders.
@@ -111,28 +143,19 @@ export function createGroupProjectFolders(deps: {
         if (dir) return { dir, auto: true };
         forget(repo);
       }
-      // A configured repository must be available before this group can execute.
-      const checkout = await deps.checkouts?.ensure(repo, options)
-        ?.catch(error => { if (!options.isCurrent()) throw error; return null; });
-      if (!checkout) throw new Error('WORKDIR_UNAVAILABLE');
-      if (checkout.status !== 'ready') throw new Error('WORKDIR_UNAVAILABLE');
-      // Registered by the clone: group management shows it from now on.
-      forget(repo);
-      const dir = await usable(checkout.dir);
-      if (!dir) throw new Error('WORKDIR_UNAVAILABLE');
-      await deps.checkouts!.sync(dir);
-      return { dir, auto: true };
+      return managedFolder(room, repo, options);
     },
   };
 }
 export type GroupProjectFolders = ReturnType<typeof createGroupProjectFolders>;
 
 /**
- * Registered project folders that are checkouts of `repo` (their `origin`), main checkouts only:
- * a linked worktree (`.git` is a file) or a folder inside another match is the same project.
+ * Registered project folders that are checkouts of `repo`: any of their git remotes is it, so a
+ * fork whose `upstream` is the repository counts. Main checkouts only: a linked worktree (`.git` is
+ * a file) or a folder inside another match is the same project. Keeps the order of `dirs`.
  */
 export async function findRepositoryFolders(dirs: readonly string[], repo: string, read: {
-  origin(dir: string): Promise<string | null>;
+  remotes(dir: string): Promise<string[]>;
   isMainCheckout(dir: string): Promise<boolean>;
 }): Promise<string[]> {
   const wanted = repo.toLowerCase();
@@ -140,8 +163,8 @@ export async function findRepositoryFolders(dirs: readonly string[], repo: strin
   for (let start = 0; start < dirs.length; start += 8) {
     const batch = dirs.slice(start, start + 8);
     const found = await Promise.all(batch.map(async dir => {
-      const origin = await read.origin(dir).catch(() => null);
-      return origin && githubRepositoryOfRemote(origin)?.toLowerCase() === wanted && await read.isMainCheckout(dir).catch(() => false) ? dir : null;
+      const remotes = await read.remotes(dir).catch(() => [] as string[]);
+      return remotes.some(url => githubRepositoryOfRemote(url)?.toLowerCase() === wanted) && await read.isMainCheckout(dir).catch(() => false) ? dir : null;
     }));
     for (const dir of found) if (dir) matches.push(path.resolve(dir));
   }

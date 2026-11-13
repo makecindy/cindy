@@ -32,7 +32,7 @@ export function createDesktopGroupProjectCheckouts(log?: Log) {
     git: async (args, { cwd, timeoutMs }) => {
       try {
         // gh's saved sign-in only, never a token from the environment Cindy was started with.
-        return await runGit(args, { ...(cwd ? { cwd } : {}), timeoutMs, extraEnv: { GH_TOKEN: undefined, GITHUB_TOKEN: undefined, GCM_INTERACTIVE: 'never' } });
+        return await runGit(args, { ...(cwd ? { cwd } : {}), timeoutMs, killProcessGroup: true, extraEnv: { GH_TOKEN: undefined, GITHUB_TOKEN: undefined, GCM_INTERACTIVE: 'never' } });
       } catch (error) {
         if (error instanceof GitRunError && error.exitCode !== null) return { exitCode: error.exitCode, stdout: error.stdout, stderr: error.stderr };
         if (error instanceof GitRunError && !error.cause) return { exitCode: -1, stdout: error.stdout, stderr: error.stderr };

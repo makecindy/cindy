@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { mkdtemp, mkdir, stat, rm } from 'node:fs/promises';
 import os from 'node:os';
-import { createGroupProjectFolders } from '../groupProjectFolder.js';
+import { createGroupProjectFolders, findRepositoryFolders } from '../groupProjectFolder.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createGroupProjectCheckouts, type GitResult, type GroupCheckoutDeps } from '../groupProjectCheckout.js';
 
@@ -78,6 +78,17 @@ describe('group project checkout', () => {
     expect(disk.has(path.join(dir, '.git'))).toBe(true);
   });
 
+  // The group's task already works in the (empty) folder while the clone runs: the clone moves in
+  // beside it and the folder itself is never replaced under the task.
+  it('clones into the folder the task already uses', async () => {
+    const { checkouts, deps, disk } = setup();
+    disk.add(dir);
+    expect(await checkouts.ensure('makecindy/cindy', request)).toEqual({ status: 'ready', dir });
+    expect(disk.has(path.join(dir, '.git')) && disk.has(path.join(dir, 'AGENTS.md'))).toBe(true);
+    expect([...disk].some(entry => entry.includes('.cloning-'))).toBe(false);
+    expect(deps.register).toHaveBeenCalledExactlyOnceWith(dir);
+  });
+
   it.each([
     ['opens GitHub sign-in and clones once it is finished', true, true, { status: 'ready', dir }],
     ['says sign-in is needed when it is not finished in time', true, false, { status: 'sign-in-required', signInOpened: true }],
@@ -113,6 +124,56 @@ describe('group project checkout', () => {
     const { checkouts } = setup();
     expect(checkouts.ensure('../../etc', request)).toBeNull();
     expect(checkouts.ensure('makecindy/cindy.git', request)).toBeNull();
+  });
+});
+
+// 2026-11-13 field report: a request waited ~9 minutes while the repository was cloned and pulled,
+// with no task to look at, although the user's own checkout (a fork, `upstream` = the group's
+// repository) was registered. Finding the folder never waits on the network now. Unit: the real
+// resolver over a temporary root; git and the clone are scripted.
+describe('group work folder', () => {
+  const repoRoom = { id: 'group-repo', name: 'Cindy', project: { kind: 'github' as const, repo: 'makecindy/cindy' } };
+  const options = { signIn: true, isCurrent: () => true };
+
+  it('uses the most recently used registered checkout, a fork included', async () => {
+    const read = { isMainCheckout: async () => true,
+      remotes: async (dir: string) => ({ '/work/fork': ['https://github.com/me/cindy.git', 'git@github.com:makecindy/cindy.git'],
+        '/work/other': ['https://github.com/someone/else.git'], '/work/older': ['https://github.com/makecindy/cindy'] } as Record<string, string[]>)[dir] ?? [] };
+    expect(await findRepositoryFolders(['/work/fork', '/work/other', '/work/older'], 'makecindy/cindy', read))
+      .toEqual(['/work/fork', '/work/older'].map(dir => path.resolve(dir)));
+    const ensure = vi.fn();
+    const folders = createGroupProjectFolders({ chosen: () => null, findRegistered: async () => ['/work/fork', '/work/older'],
+      checkouts: { ensure, sync: vi.fn(), isManaged: () => false, dirOf: () => '/managed/makecindy/cindy' },
+      validate: async dir => ({ ok: true as const, dir }) });
+    expect(await folders.forWork(repoRoom, options)).toEqual({ dir: '/work/fork', auto: true });
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it('opens Cindy\'s folder at once and fetches the repository in the background', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'group-managed-'));
+    const dir = path.join(root, 'makecindy', 'cindy');
+    try {
+      let finish!: (result: { status: 'sign-in-required' }) => void;
+      const ensure = vi.fn(() => new Promise<{ status: 'sign-in-required' }>(resolve => { finish = resolve; }));
+      const sync = vi.fn(() => new Promise<void>(() => {}));
+      const owner = vi.fn(() => true);
+      const folders = createGroupProjectFolders({ chosen: () => null, findRegistered: async () => [], owner,
+        checkouts: { ensure, sync, isManaged: () => true, dirOf: () => dir }, validate: async d => ({ ok: true as const, dir: d }) });
+      // Nothing local yet: the folder is there right away and the clone has only started.
+      expect(await folders.forWork(repoRoom, options)).toEqual({ dir, auto: true, pending: { status: 'preparing' } });
+      expect((await stat(dir)).isDirectory()).toBe(true);
+      expect(ensure).toHaveBeenCalledWith('makecindy/cindy', { signIn: true, isCurrent: owner });
+      // A clone that failed is what the next request hears about, while it tries again.
+      finish({ status: 'sign-in-required' });
+      await Promise.resolve(); await Promise.resolve();
+      expect((await folders.forWork(repoRoom, options)).pending).toEqual({ status: 'sign-in-required' });
+      expect(ensure).toHaveBeenCalledTimes(2);
+      // With the repository there, the request goes ahead while the update runs in the background.
+      await mkdir(path.join(dir, '.git'));
+      expect(await folders.forWork(repoRoom, options)).toEqual({ dir, auto: true });
+      expect(sync).toHaveBeenCalledWith(dir);
+      expect(await folders.shown(repoRoom)).toEqual({ dir, auto: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
 

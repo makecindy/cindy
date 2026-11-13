@@ -11581,6 +11581,7 @@
         "earlierOmitted": "(Mensajes anteriores omitidos)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
+          "preparing": "(Cindy) El proyecto {{repo}} de este grupo se está descargando en esta carpeta de este ordenador y estará listo en unos minutos. Hasta entonces la carpeta puede estar vacía: responde enseguida si solo es una conversación; para trabajo que necesite el código, espera a que estén los archivos del proyecto.",
           "gitMissing": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: git no está instalado. {{guide}} Cuando esté instalado, vuelve a mencionar a @Cindy y Cindy descargará el proyecto y trabajará en él.",
           "signInOpened": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: primero conecta tu cuenta de GitHub. Cindy abrió el inicio de sesión de GitHub en este ordenador; cuando hayas iniciado sesión, vuelve a mencionar a @Cindy y descargará el proyecto.",
           "signIn": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: primero conecta tu cuenta de GitHub. Inicia sesión en GitHub desde Cindy en este ordenador y vuelve a mencionar a @Cindy.",

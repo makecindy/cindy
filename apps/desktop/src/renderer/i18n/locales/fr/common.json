@@ -11581,6 +11581,7 @@
         "earlierOmitted": "(Messages plus anciens omis)",
         "actingFor": "{{name}} · pour {{person}}",
         "checkout": {
+          "preparing": "(Cindy) Le projet {{repo}} de ce groupe est en cours de téléchargement dans ce dossier sur cet ordinateur et devrait être prêt d'ici quelques minutes. D'ici là, le dossier peut être vide : réponds tout de suite s'il s'agit seulement de discuter ; pour un travail qui a besoin du code, attends que les fichiers du projet soient là.",
           "gitMissing": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : git n'est pas installé ici. {{guide}} Une fois installé, mentionnez à nouveau @Cindy et Cindy téléchargera le projet pour y travailler.",
           "signInOpened": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Cindy a ouvert la connexion GitHub sur cet ordinateur ; une fois connecté, mentionnez à nouveau @Cindy et le projet sera téléchargé.",
           "signIn": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Connectez-vous à GitHub dans Cindy sur cet ordinateur, puis mentionnez à nouveau @Cindy.",

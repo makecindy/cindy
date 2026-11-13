@@ -11445,6 +11445,7 @@
         "earlierOmitted": "（更早的消息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
+          "preparing": "（Cindy）这个群的项目 {{repo}} 正在下载到这台电脑的当前目录，几分钟内会好。下载完成前目录可能是空的：只是聊天就直接回答；要用到代码时，等目录里出现项目文件再做。",
           "gitMissing": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：这台电脑还没有安装 git。{{guide}}装好后再 @Cindy，Cindy 会自动下载项目并在里面干活。",
           "signInOpened": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：需要先连接你的 GitHub 账号。Cindy 已在这台电脑上打开 GitHub 登录，登录好后再 @Cindy，Cindy 会自动下载项目。",
           "signIn": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：需要先连接你的 GitHub 账号。请在这台电脑的 Cindy 里登录 GitHub，然后再 @Cindy。",

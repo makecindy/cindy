@@ -1,6 +1,8 @@
 import { createGroupAssistantTasks } from '../groupAssistantTask.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import ts from 'typescript';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { HOST_ONLY_AGENT_PREFIX, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -2155,26 +2157,62 @@ describe('Chat Server result delivery and refresh', () => {
       expect(assistantStore.value[roomId]).toMatchObject({ sessionId: 'group-task-2', projectDir: '/projects/chosen', deliveredSeq: { main: '8' } });
     });
 
-    // bot-group-chat.md §7.5/§9: a group with a repository works in it. No registered project is that
-    // repository, so Cindy fetches its own copy; until it is on this computer (here: GitHub sign-in not
-    // finished) the request runs under 「对话」 and says why, and the next request moves into the project.
-    it('waits for the repository instead of creating a dialogue task elsewhere', async () => {
+    // bot-group-chat.md §7.5/§9 (2026-11-13 field report: ~9 minutes of 「正在处理」 with no task while
+    // the repository was cloned and pulled). A group with a repository works in Cindy's folder for it,
+    // which is there at once: the request reaches the task right away and says the repository is
+    // still on its way; the clone runs in the background and later requests use the same task.
+    it('starts the request in the project folder at once while the repository is fetched', async () => {
       project = { kind: 'github', repo: 'makecindy/cindy' };
-      const dir = '/cindy/projects/github/makecindy/cindy';
-      deps.validateProjectDir = vi.fn(async (folder: string) => ({ ok: true as const, dir: folder }));
-      const ensure = vi.fn<NonNullable<BotGroupChatServiceDeps['groupCheckouts']>['ensure']>()
-        .mockResolvedValueOnce({ status: 'sign-in-required', signInOpened: true }).mockResolvedValue({ status: 'ready', dir });
-      deps.groupCheckouts = { ensure, sync: vi.fn(async () => undefined), isManaged: folder => folder === dir };
-      await ask(5, 'Where are the docs?');
-      expect(ensure).toHaveBeenCalledWith('makecindy/cindy', expect.objectContaining({ signIn: true }));
-      expect(deps.ensureGroupAssistantSession).not.toHaveBeenCalled();
-      expect(dispatched()).toHaveLength(0);
-      await ask(6, 'And now?');
-      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: dir });
-      expect(deps.groupCheckouts.sync).toHaveBeenCalledWith(dir);
-      expect(dispatched()[0]).toMatchObject({ targetSessionId: 'group-task-1' });
-      expect(dispatched()[0]!.message.startsWith('And now?')).toBe(true);
-      expect(dispatched()[0]!.message).not.toContain('GitHub');
+      const root = await mkdtemp(path.join(os.tmpdir(), 'group-cindy-'));
+      const dir = path.join(root, 'makecindy', 'cindy');
+      try {
+        deps.validateProjectDir = vi.fn(async (folder: string) => ({ ok: true as const, dir: folder }));
+        let cloned!: () => Promise<void>;
+        const ensure = vi.fn<NonNullable<BotGroupChatServiceDeps['groupCheckouts']>['ensure']>(() => new Promise(resolve => {
+          // This file stubs mkdir; the clone lands on the real disk.
+          cloned = async () => { await (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).mkdir(path.join(dir, '.git'), { recursive: true }); resolve({ status: 'ready', dir }); };
+        }));
+        const sync = vi.fn(() => new Promise<void>(() => {}));
+        deps.groupCheckouts = { ensure, sync, isManaged: folder => folder.startsWith(root), dirOf: () => dir };
+        await ask(5, 'Where are the docs?');
+        expect(ensure).toHaveBeenCalledWith('makecindy/cindy', expect.objectContaining({ signIn: true }));
+        expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: dir });
+        expect(dispatched()[0]!.message.startsWith(`Where are the docs?\n\n${t('bots.groupChat.assistant.checkout.preparing').replaceAll('{{repo}}', 'makecindy/cindy')}`)).toBe(true);
+        await cloned();
+        await vi.advanceTimersByTimeAsync(0);
+        await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Soon' });
+        await ask(6, 'And now?');
+        expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Room', projectDir: dir });
+        expect(sync).toHaveBeenCalledWith(dir);
+        expect(dispatched()[1]).toMatchObject({ targetSessionId: 'group-task-1' });
+        expect(dispatched()[1]!.message.startsWith('And now?')).toBe(true);
+        expect(dispatched()[1]!.message).not.toContain('makecindy/cindy');
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    // 2026-11-13 field report: the group's task was created but stayed empty. Any heartbeat that did
+    // not get through (a timeout, a 503) dropped the turn while the task was being prepared, so the
+    // request never reached it. A missed renewal keeps the turn; the lease outlives it.
+    it('keeps the request when a heartbeat does not get through while its task is prepared', async () => {
+      let release!: () => void;
+      let failures = 0;
+      // Renewals fail only once the task is being prepared (the request was already checked).
+      deps.ensureGroupAssistantSession = vi.fn(() => new Promise(resolve => {
+        failures = 2;
+        release = () => resolve({ ok: true as const, sessionId: 'group-task-1', created: true });
+      }));
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (method === 'POST' && body?.action === 'heartbeat' && failures > 0) { failures--; return { status: 503, body: { error: { code: 'UNAVAILABLE' } } }; }
+        return previous(route, method, body);
+      });
+      await ask(5, 'slow start');
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(failures).toBe(0);
+      release();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(dispatched()).toHaveLength(1);
+      expect(dispatched()[0]!.message.startsWith('slow start')).toBe(true);
     });
 
     // A task the group task opens while answering shows in the group as a card, posted as the group's Cindy.

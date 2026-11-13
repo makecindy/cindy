@@ -536,6 +536,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     get findRegistered() { return deps.findProjectDirsForRepo; },
     get checkouts() { return deps.groupCheckouts; },
     get validate() { return deps.validateProjectDir; },
+    owner: () => current(),
   });
   const pendingPlanCancels = new Map<string, Map<string, boolean>>();
   async function cancelPlanning(roomId: string, sourceId: string, failed = false) {
@@ -2719,8 +2720,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   });
   /** What a request says when the group's repository is not on this computer yet: why, and what to do. */
   function checkoutNote(repo: string, pending: NonNullable<GroupAssistantTask['pending']>): string {
-    const key = pending.status === 'git-missing' ? 'gitMissing' : pending.status === 'sign-in-required'
-      ? pending.signInOpened ? 'signInOpened' : 'signIn' : 'unavailable';
+    const key = pending.status === 'preparing' ? 'preparing' : pending.status === 'git-missing' ? 'gitMissing'
+      : pending.status === 'sign-in-required' ? pending.signInOpened ? 'signInOpened' : 'signIn' : 'unavailable';
     const guide = t(`bots.groupChat.assistant.checkout.installGit.${process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux'}`);
     return t(`bots.groupChat.assistant.checkout.${key}`).replaceAll('{{repo}}', () => repo).replaceAll('{{guide}}', () => guide);
   }
@@ -2826,6 +2827,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
       changed(roomId);
     } catch (error) {
+      // Never silent: a request that does not reach the task says why in the log.
+      deps.log?.warn('Group Cindy request was not delivered', { executionId: execution.id, sessionId: run.sessionId || null,
+        live: live(), ...chatErrorDiagnostic(error) });
       await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
         outcome: 'error', resultText: '', failureCode: botGroupRuntimeFailureCode(error) }, true);
     }
@@ -3495,6 +3499,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         await cancelExecution(run);
         return;
       }
+      // A heartbeat that did not get through keeps the turn: the lease outlives a missed renewal and the
+      // next one retries. Dropping it here left the group's Cindy task empty (2026-11-13 field report).
+      if (!(error instanceof ChatResponseError) || retryableResponse(error)) {
+        deps.log?.warn('Group execution heartbeat failed; retrying', { executionId: run.execution.id, ...chatErrorDiagnostic(error) });
+        return;
+      }
+      deps.log?.warn('Group execution lease lost', { executionId: run.execution.id, ...chatErrorDiagnostic(error) });
       // An in-flight heartbeat must not discard a result that became ready while
       // it was awaiting its response; retry the terminal operation for its receipt.
       if (!run.settlement && running.get(run.execution.id) === run) {
