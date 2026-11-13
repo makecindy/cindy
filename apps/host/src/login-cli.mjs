@@ -17,6 +17,7 @@ import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { runHostLogin } from './auth/login.mjs';
 import { createCredentialStore } from './credentials/store.mjs';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
+import { hostAuthFetch } from './auth-fetch.mjs';
 
 
 /** Open the system browser without blocking the login flow on its exit. */
@@ -63,7 +64,7 @@ export async function runLoginCommand(argv, io = {}) {
     region,
     deviceId,
     clientType: 'desktop',
-    fetch: (input, init) => globalThis.fetch(input, init),
+    fetch: (input, init) => hostAuthFetch(input, init),
   });
 
   const noOpen = argv.includes('--no-open') || (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);

@@ -86,6 +86,7 @@ import { createHostHistoryReader, readMessagesList, readMessagesAroundClientId }
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
+import { hostAuthFetch } from './auth-fetch.mjs';
 import type { Effort, PermissionMode } from '@cindy/maker-core';
 import { createRequire } from 'node:module';
 import { readAuthEndpoints } from './auth/endpoints.mjs';
@@ -318,7 +319,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
     region: realm,
     deviceId: verifiedDeviceId,
     clientType: 'desktop',
-    fetch: (input, init) => globalThis.fetch(input, init),
+    fetch: (input, init) => hostAuthFetch(input, init),
   });
   const { sessionToken } = await refreshHostSession({
     store,
@@ -1137,7 +1138,7 @@ const serverDeps = {
       region: realm,
       deviceId: resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '')),
       clientType: 'desktop',
-      fetch: (input, init) => globalThis.fetch(input, init),
+      fetch: (input, init) => hostAuthFetch(input, init),
     });
     const result = await withCrossProcessLock(
       path.join(resolveHostDataDir(), '.cindy-auth-accounts-v1.lock'),
