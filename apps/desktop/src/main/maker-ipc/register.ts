@@ -103,6 +103,7 @@ import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote
 import { createNativeHistoryRelocator } from '../remote-agent/controller/relocateNativeHistory.js';
 import { forgetCredentialGrants } from '../remote-agent/executor/credentialGrants.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+import { withSharedSessionResumeRecovery } from './sharedSessionResumeRecovery.js';
 import {
   isProviderGroupReleased,
   listRemoteProviderGroupBindings,
@@ -9340,6 +9341,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }> {
     let session: Awaited<ReturnType<typeof maker.createSession>> | undefined;
     const creationSignal = o.id ? currentSessionCreationSignal(o.id) : undefined;
+    const resumeRecoveryOwner = captureDataOwnerBroadcastScope();
+    const assertResumeRecoveryCurrent = () => {
+      assertAccess?.();
+      creationSignal?.throwIfAborted();
+      if (!isDataOwnerBroadcastScopeCurrent(resumeRecoveryOwner)) throw new Error('REMOTE_AGENT_ACCOUNT_CHANGED');
+    };
     const closeCancelled = () => {
       if (session) void maker.closeSessionIfCurrent(session).catch(error => {
         log.warn('Cancelled creation cleanup failed', { sessionId: o.id, error: String(error) });
@@ -9493,7 +9500,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
-        session = await createSessionWithRuntimePlugins(o, creationSignal);
+        const start = () => createSessionWithRuntimePlugins(o, creationSignal);
+        session = nativeHistoryResume || nativeRelocation?.nativeId
+          ? await start()
+          : await withSharedSessionResumeRecovery(o, start, {
+              assertCurrent: assertResumeRecoveryCurrent,
+              readGeneration: id => agentHandoffPending.readGeneration(id),
+              getSessionRow: async id => {
+                await drainPersistQueue();
+                assertResumeRecoveryCurrent();
+                const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+                return row;
+              },
+              listMessages: id => listMessagesForAgentHandoff(id, 400),
+              commit: commitContextRebuild,
+              setPending: (id, handoff, generation) => agentHandoffPending.set(id, handoff, generation),
+              publish: id => broadcastSessionPatched(id, { sdkSessionId: null, contextTokens: 0 }),
+            });
         try { assertAccess?.(); assertTaskPromptCurrent(session.id); } catch (error) {
           const cancelledSession = session;
           session = undefined;

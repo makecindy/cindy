@@ -13,10 +13,14 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 
 import Database from 'better-sqlite3';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import * as codexSessions from '../../maker-host/codex-local-sessions';
+import { defaultClassifyEnv, groupFor } from '../classify';
+import { codexAdapter } from '../sources/codex';
 import { cursorAdapter } from '../sources/cursor';
 import { deepseekAdapter } from '../sources/deepseek';
 import { factoryAdapter } from '../sources/factory';
@@ -61,6 +65,79 @@ afterAll(async () => {
 });
 
 describe('foreign source adapters', () => {
+  // #10209: existing fixtures do not combine a Codex state DB with rollout metadata.
+  // Exercise real SQLite/list/read/grouping; only discovery is scoped to this temporary home.
+  it('Codex fills missing state metadata from rollouts without inventing a home directory or listing subagents', async () => {
+    const codexHome = path.join(home, '.codex');
+    await mkdir(codexHome, { recursive: true });
+    const db = new Database(path.join(codexHome, 'state_5.sqlite'));
+    db.exec('CREATE TABLE threads (id TEXT, cwd TEXT, thread_source TEXT, source TEXT, title TEXT, rollout_path TEXT, updated_at INTEGER)');
+    const insert = db.prepare('INSERT INTO threads VALUES (?,?,?,?,?,?,?)');
+    const id = (n: number) => `019dcd5a-6e54-7960-95e0-${String(n).padStart(12, '0')}`;
+    const rollout = (n: number) => `.codex/sessions/rollout-2026-11-12T10-00-00-${id(n)}.jsonl`;
+    const cases = [
+      { n: 1, cwd: '', metaCwd: project(), source: 'vscode', title: '' },
+      { n: 2, cwd: null, metaCwd: path.join(home, 'work', 'another-app'), source: 'vscode', title: 'Named project', compressed: true },
+      { n: 3, cwd: project(), metaCwd: path.join(home, 'old-project'), source: 'vscode', title: 'Keep database cwd' },
+      { n: 4, cwd: '', metaCwd: '', source: 'vscode', title: 'Unknown directory' },
+      { n: 5, cwd: '', metaCwd: project(), source: { subagent: { spawn: { parent_thread_id: id(1) } } }, title: 'Internal child' },
+      { n: 6, cwd: project(), metaCwd: project(), source: 'subagent', title: 'Internal child with cwd', compressed: true },
+      { n: 7, cwd: null, metaCwd: project(), source: 'vscode', title: '', paginated: true },
+      { n: 8, cwd: '', metaCwd: project(), source: 'voice_chat', title: 'User voice conversation' },
+    ];
+    for (const c of cases) {
+      const lines = [
+        { type: 'session_meta', payload: { id: id(c.n), cwd: c.metaCwd, source: c.source,
+          ...(c.paginated ? { history_mode: 'paginated', history_base: { thread_id: id(1), end_byte_offset: 1 } } : {}) } },
+        ...(!c.paginated ? [{ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `Question ${c.n}` }] } }] : []),
+      ];
+      const file = await put(rollout(c.n) + (c.compressed ? '.zst' : ''), '');
+      const content = lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+      await writeFile(file, c.compressed ? zstdCompressSync(Buffer.from(content)) : content);
+      insert.run(id(c.n), c.cwd, null, 'vscode', c.title, path.join(home, rollout(c.n)), 1000);
+    }
+    // An extra page for a DB-backed internal thread must not make it appear or count twice.
+    await put(rollout(5).replace('.jsonl', `_${id(50)}.jsonl`), [
+      { type: 'session_meta', payload: { id: id(5), cwd: project(), source: 'subagent' } },
+    ]);
+    for (const n of [9, 10]) {
+      const file = await put(rollout(n), 'not valid json\n');
+      insert.run(id(n), n === 9 ? '' : project(), null, 'vscode', 'Damaged rollout', file, 1000);
+    }
+    insert.run(id(11), '', null, 'vscode', 'Missing rollout', path.join(home, rollout(11)), 1000);
+    db.close();
+    const discovery = vi.spyOn(codexSessions, 'discoverExternalCodexHomesSync').mockReturnValue([codexHome]);
+    try {
+      const listed = await codexAdapter.list({ homeDir: home, cindyUserDataDir: null });
+      const byId = new Map(listed.sessions.map((s) => [s.sourceSessionId, s]));
+      expect.soft(listed.internalCount).toBe(2);
+      expect.soft(listed.unreadableCount).toBe(1);
+      expect.soft(byId.has(id(5))).toBe(false);
+      expect.soft(byId.has(id(6))).toBe(false);
+      expect.soft(byId.has(id(11))).toBe(false);
+      for (const n of [1, 3, 7, 8, 10]) expect.soft(byId.get(id(n))?.cwd).toBe(project());
+      expect.soft(byId.get(id(2))?.cwd).toBe(path.join(home, 'work', 'another-app'));
+      for (const n of [4, 9]) {
+        expect.soft(byId.get(id(n))?.cwd).toBeNull();
+        expect.soft(byId.get(id(n))?.dialogue).toBe(true);
+      }
+      const env = { ...defaultClassifyEnv({ appDataDir: null, dialogueRoots: [] }), homeDir: home };
+      const groups = [1, 2, 4].map((n) => {
+        const s = byId.get(id(n))!;
+        return groupFor(s.cwd, s.dialogue === true, env, () => null);
+      });
+      expect.soft(groups.map((g) => g.groupName)).toEqual(['my-app', 'another-app', '']);
+      expect.soft(groups[2]!.dialogue).toBe(true);
+      const messages: NormalizedMessage[] = [];
+      for await (const m of codexAdapter.read(byId.get(id(2))!, { cindySessionId: 'test-import' })) messages.push(m);
+      expect.soft(brief(messages)).toEqual(['user:Question 2']);
+      // Scanning may enrich the candidate, but must never repair the external source DB.
+      const sourceDb = new Database(path.join(codexHome, 'state_5.sqlite'), { readonly: true });
+      try { expect.soft(sourceDb.prepare('SELECT cwd FROM threads WHERE id = ?').get(id(1))).toEqual({ cwd: '' }); }
+      finally { sourceDb.close(); }
+    } finally { discovery.mockRestore(); }
+  });
+
   it('Gemini CLI folds overwrites, patches and rewinds and maps the project folder', async () => {
     await put('.gemini/projects.json', JSON.stringify({ projects: { [project()]: 'my-app' } }));
     await put('.gemini/tmp/my-app/chats/session-2026-10-30T10-00-abcd1234.jsonl', [

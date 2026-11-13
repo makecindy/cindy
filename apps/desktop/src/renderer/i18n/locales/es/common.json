@@ -10526,7 +10526,7 @@
         "control-requested": "Se envió una solicitud de control desde la tarea principal.",
         "transcript-truncated": "Se alcanzó el límite de almacenamiento de la transcripción.",
         "turn-ended": "El turno del Subagent terminó.",
-        "command-refused": "PI rechazó un comando del Subagent secundario.",
+        "command-refused": "PI rechazó un comando para el Subagent secundario.",
         "generation-unreadable": "No se pudo leer una parte anterior de esta conversación."
       },
       "activityKinds": {
@@ -15647,6 +15647,7 @@
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "La computadora aún no puede confirmar si se envió este mensaje. Espera un momento y vuelve a intentarlo. No envíes el mismo mensaje dos veces.",
       "REMOTE_AGENT_UNAVAILABLE": "Se perdió la conexión con la computadora que ejecuta el Agent. Inténtalo de nuevo. Si sigue pasando, asegúrate de que esté en línea y permita el control remoto.",
       "REMOTE_AGENT_PEER_TOO_OLD": "La versión de Cindy en la otra computadora es demasiado antigua para esta acción. Actualiza Cindy allí primero.",
+      "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este equipo no puede restaurar el estado anterior de la sesión. Selecciona un modelo de otro equipo o proveedor para continuar mediante una transferencia de contexto. Los mensajes existentes se conservan.",
       "REMOTE_AGENT_EXPIRED": "Esta sesión ya finalizó en la computadora que ejecuta el Agent. Envía tu mensaje nuevamente.",
       "REMOTE_AGENT_NOT_FOUND": "Esta sesión ya finalizó en la computadora que ejecuta el Agent. Envía tu mensaje nuevamente.",
       "REMOTE_AGENT_BUSY": "Se están ejecutando demasiadas sesiones en la otra computadora. Termina algunas y vuelve a intentarlo.",
