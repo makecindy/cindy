@@ -14,7 +14,7 @@ import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
 import { clientMigrationContract } from '../src/client-migration-contract.mjs';
 import { selectReleaseHarnesses } from '../src/release-harnesses.mjs';
-import { resolvesToExistingCopy } from '../src/release-dependency-copies.mjs';
+import { redundantCopies } from '../src/release-dependency-copies.mjs';
 
 const repo = fileURLToPath(new URL('../../..', import.meta.url));
 const host = path.join(repo, 'apps/host');
@@ -64,14 +64,11 @@ function packageRoot(name, require, specifier = name) {
 }
 
 // Preserve the lockfile's actual dependency graph. Nested versions stay nested,
-// cycles resolve through their ancestor, identical copies already resolvable from
-// an enclosing node_modules are reused, and the artifact has no checkout links.
+// cycles resolve through their ancestor, and the artifact has no checkout links.
 async function copyPackage(source, parent, ancestors = new Map()) {
   const manifest = await readJson(path.join(source, 'package.json'));
   if (ancestors.get(manifest.name) === source) return;
   const destination = path.join(parent, 'node_modules', manifest.name);
-  // Skip copies Node would never load: the nearest enclosing copy is this source.
-  if (resolvesToExistingCopy(copying, { root: staging, parent, name: manifest.name, source })) return;
   if (copying.has(destination)) {
     if (copying.get(destination) !== source) throw new Error(`Conflicting runtime dependency at ${destination}`);
     return;
@@ -251,6 +248,12 @@ try {
     const ancestors = new Map(packages);
     ancestors.delete(name);
     await copyPackage(source, staging, ancestors);
+  }
+  // With the complete layout in place, drop nested copies Node would never load
+  // because an identical copy is the nearest one above them.
+  for (const destination of redundantCopies(copying, staging)) await fs.rm(destination, { recursive: true, force: true });
+  for (const relative of dependencyRecords.keys()) {
+    if (!syncFs.existsSync(path.join(staging, relative))) dependencyRecords.delete(relative);
   }
   await fs.copyFile(process.execPath, path.join(bin, process.platform === 'win32' ? 'node.exe' : 'node'));
   await fs.copyFile(path.join(repo, 'LICENSE'), path.join(staging, 'LICENSE'));
