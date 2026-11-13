@@ -20,6 +20,8 @@ import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActive
 import { createInputQueue } from './input-queue.mjs';
 import { createEventHub } from '../events.mjs';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
+import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
+import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
 import { applyLiveSessionSettings } from './session-settings.mjs';
 import { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.ts';
 import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/maker-ipc/acceptedCallbackRunner.ts';
@@ -588,6 +590,35 @@ test('agent events leave the Host as the desktop renderer-boundary projection', 
   assert.equal(raw[0].data.input.args.proxyServer.includes('fixture-pass'), true);
   assert.equal(JSON.stringify(h.persisted).includes('fixture-pass'), false);
   await h.queue.dispose();
+});
+
+// As the desktop (sessionEventDelivery.ts): a turn that ends on a rejected Cindy AI Key on the
+// gateway reports the current key (credential resync); other errors and other providers do not.
+test('a turn ended on a rejected Cindy AI Key reports the current key, as on the desktop', { timeout: 60_000 }, async () => {
+  const rejected = { message: 'gateway proxy token invalid', reason: GATEWAY_PROXY_TOKEN_INVALID_REASON };
+  const cases = [
+    { providerId: 'xd', event: { type: 'error', data: { ...rejected, isTerminal: true } } },
+    { providerId: 'xd', event: { type: 'error', data: { ...rejected, isTerminal: false } } },
+    { providerId: 'xd', event: { type: 'error', data: { message: 'overloaded', isTerminal: true } } },
+    { providerId: 'cprov-other', event: { type: 'error', data: { ...rejected, isTerminal: true } } },
+  ];
+  for (const [index, { providerId, event }] of cases.entries()) {
+    let reports = 0;
+    const h = createHarness({
+      reportAgentCindyGatewayKeyRejected: () => { reports += 1; },
+      readSession: async (sessionId) => ({ id: sessionId, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+        workingDir: '/tmp', providerId, permissionMode: 'ask', planModeEnabled: false }),
+    });
+    const id = `key-rejected-${index}`;
+    await enqueue(h, id, { clientId: 'input', text: 'hello' });
+    const session = h.maker.getSession(id);
+    session.emit(event);
+    session.emit({ type: 'done' });
+    await waitFor(() => !h.queue.projection(id).turnInProgress);
+    assert.equal(reports, isGatewayProxyTokenRecoveryErrorEventForProvider(providerId, event) ? 1 : 0, `case ${index}`);
+    await h.queue.dispose();
+  }
+  assert.equal(isGatewayProxyTokenRecoveryErrorEventForProvider('xd', cases[0].event), true, 'the first case is the one that reports');
 });
 
 test('continuation and nonterminal error events do not release another queued input', async () => {

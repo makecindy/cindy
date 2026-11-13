@@ -62,6 +62,8 @@ export function createHostModelAccess(options: {
   };
   return {
     gateway, sync, reportRejectedKey: rejection.reportUsedKey,
+    /** An agent turn ended on a rejected Cindy AI Key without saying which key it used. */
+    reportCurrentKeyRejected: rejection.reportCurrentKey,
     isReplacedKey: (value: string) => current() && replaced.has(keyFingerprint(value)),
     async start() {
       check(); sync.handleAuthChange({ isAuthenticated: true, userId: options.ownerId, realm: options.region });

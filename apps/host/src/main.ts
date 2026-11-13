@@ -910,6 +910,7 @@ const inputQueue = createInputQueue({
   getGitSnapshot: () => gitSnapshot,
   hub: eventHub,
   hasPendingCredentialSwitch: (id: string) => agentGraph?.gatewayRestart.isSessionRestarting(id) ?? false,
+  reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),
   onSessionSettled: () => agentGraph?.gatewayRestart.onSessionSettled(),
   beforeSessionStart: async (_id: string, kind: string) => {
     if (kind === 'codex') await agentGraph?.gatewayRestart.flushBeforeLocalCodexSessionStart();

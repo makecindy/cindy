@@ -87,3 +87,26 @@ test('the shared gateway endpoint reader follows what the Host sync writes', asy
     assert.equal(effectiveXdGatewayBaseUrl(), f.service.gateway.endpoint);
   } finally { f.close(); }
 });
+
+// The agent-turn path (turn-executor reportAgentCindyGatewayKeyRejected): a turn that ended on a
+// rejected Cindy AI Key does not say which key it used; the current key is resynchronized once per
+// window, as the desktop's reportCindyGatewayKeyRejectedForCurrentKey.
+test('an agent turn rejected on the current key resynchronizes once per window', { timeout: 60_000 }, async () => {
+  let payload = { endpoint: 'https://gateway.invalid/', apiKey: 'fixture-key-1' };
+  const f = fixture(async () => payload);
+  try {
+    await f.service.start();
+    assert.equal(f.requests, 1);
+    payload = { endpoint: 'https://gateway.invalid/', apiKey: 'fixture-key-2' };
+    f.service.reportCurrentKeyRejected();
+    f.service.reportCurrentKeyRejected();
+    for (let attempt = 0; attempt < 200 && f.service.gateway.credential !== 'fixture-key-2'; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(f.service.gateway.credential, 'fixture-key-2');
+    assert.equal(f.requests, 2, 'the second report inside the window sends nothing');
+  } finally { f.close(); }
+  // main.ts gives the input queue (and so the turn executor) this entry.
+  const main = fs.readFileSync(new URL('../main.ts', import.meta.url), 'utf8');
+  assert.ok(main.includes('  reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),\n'));
+});
