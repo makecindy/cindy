@@ -1132,7 +1132,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (currentWorker?.status !== 'running') return true;
 
     // 恢复状态时一并把派活清掉的旧回报还回去，否则标记与问题会从面板上消失。
-    await deps.updateWorkerStatus(params.worker.id, params.previousStatus, params.previousLatestReport);
+    await deps.updateWorkerStatus(params.worker.id, params.previousStatus);
+    await deps.setWorkerLatestReport(params.worker.id, params.previousLatestReport);
     deps.broadcastOrcaWorkerChanged(params.worker.leadSessionId);
     return true;
   }
@@ -1396,7 +1397,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               resolveSettlement,
             };
             provisionalDispatches.set(target.sessionId, currentProvisional);
-            await deps.updateWorkerStatus(target.id, 'running', null);
+            await deps.updateWorkerStatus(target.id, 'running');
+            await deps.setWorkerLatestReport(target.id, null);
             deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           });
           if (currentPending) await markPendingReady(target.sessionId, currentPending);
