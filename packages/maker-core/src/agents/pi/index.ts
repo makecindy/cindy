@@ -175,7 +175,7 @@ import {
 import { applyPiDisabledSkillSettings, filterPiDisabledProjectSkills, piDisabledDiscoveryPaths } from './skill-activation.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
-import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
+import { loadMemoryContext } from '../../memory/context.js';
 import type {
   Capabilities,
   ManualCompactResult,
@@ -3853,10 +3853,15 @@ export class PiAgent extends BaseAgent {
     // curated 记忆)。gate 与 CC 同口径;best-effort,失败只 warn,绝不阻断会话。
     // memoryScopeKey / compactionMemoryEnabled 已在 MCP 注册前解析并冻进 ctx。
     let makerMemoryIndex = '';
+    let makerMemoryRules = '';
     if (makerMemoryPromptEnabled) {
       try {
-        makerMemoryIndex = opts.makerMemoryIndexSnapshot
-          ?? await (await this.deps.makerMemory!.getStore(memoryScopeKey)).getIndex();
+        const memoryContext = await loadMemoryContext({
+          manager: this.deps.makerMemory, scopeKey: memoryScopeKey, hosted: !!opts.deviceHosted,
+          snapshot: opts.makerMemoryIndexSnapshot, projectDirectory: opts.makerMemoryProjectDir,
+        });
+        makerMemoryIndex = memoryContext.index;
+        makerMemoryRules = memoryContext.rules;
       } catch (err) {
         this.deps.logger.warn('pi maker memory load failed at session start (skipping injection)', {
           message: err instanceof Error ? err.message : String(err),
@@ -3908,8 +3913,7 @@ export class PiAgent extends BaseAgent {
       ['host', isolatedBotProfile(opts.botRuntimeProfile) ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
       ['plugins', ghostRosterPrompt.trim()],
       ['profile', reviewMode ? undefined : opts.botProfileContextPrompt?.trim()],
-      ['memoryRules', makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
-        ? MAKER_MEMORY_RULES : undefined],
+      ['memoryRules', makerMemoryRules],
       ['memoryIndex', makerMemoryIndex.trim()],
       ['user', reviewMode ? undefined : opts.botUserProfilePrompt?.trim()],
       ['user', reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt?.trim()],

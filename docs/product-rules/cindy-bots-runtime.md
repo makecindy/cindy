@@ -453,8 +453,15 @@ V2 伙伴（伙伴 = 一个项目，见 6.1）的记忆就是它项目的记忆�
 - **唯一解析点**：桌面记忆存储的 `resolveStorageDir`（`maker-host/maker-memory-host.ts` →
   `maker-ipc/botProjectMemory.ts` 的 `teammateProjectMemoryStorageDir`）按记忆范围认出本账号的伙伴项目
   （`@cindy/maker-shared/teammate-project` 的路径规则）。主任务、IM 与群专线、夜间 `teammate-memory-review`
-  自动化、在该项目里的普通任务、`cindy_memory`、启动注入的 `MEMORY.md` 索引、记忆检索（`fts.db`）、
+  自动化、在该项目里的普通任务、兼容的 `cindy_memory`、按需读取的 `MEMORY.md` 索引、记忆检索（`fts.db`）、
   伙伴记忆页（本机与远程设置 `memory.*`）、设备互联远程 Agent 都经这一处，读写同一个文件夹。
+- **2026-11-13 项目文件优先**：AGENTS.md 只提供记忆位置和查询时机，完整索引及正文不自动注入。
+  `.cindy/memory/README.md` 说明普通文件搜索、读取、更新、去重和可恢复维护；Codex、Claude Code、Pi
+  用原生文件工具即可使用，不要求 `cindy_memory`。工具保留兼容，按需检索时刷新外部编辑的记录。
+  现有路径与记录不搬动、不裁剪；用户修改过的 AGENTS.md / AGENTS.override.md / 自定义 CLAUDE.md
+  只追加路由，不替换原规则。只复制项目即可携带知识与规则，数据库是可重建缓存。
+  原生客户端需支持并启用对应项目指令发现；不能承诺未测试 AI 的行为一致。旧运行中的会话可能仍含旧索引，
+  新建原生上下文后才完全移除。Cindy 的记忆开关控制工具和宿主注入，不能阻止有文件访问权的外部 AI 读取项目。
 - 伙伴项目的记忆范围按伙伴自己的记忆开关，不随 Cindy 全局记忆开关关闭，也不被全局「清空记忆」删除。
 - **进 Git 的**：记录 `*.md` 与存储的复制回执 `.cindy-memory-migration-v1.json`；**不进 Git 的**（项目
   `.gitignore`）：重建的 `MEMORY.md`、`meta.json`、`fts.db` 及其日志、临时文件。新项目的默认忽略清单含这几行，

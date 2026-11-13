@@ -18,6 +18,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 
 import { MemoryFts } from './fts.js';
 import { MemoryStorage, sanitizeWorkdir, buildFilename, parseFilename } from './storage.js';
@@ -44,6 +45,8 @@ export interface MakerMemoryStoreDeps {
   logger: Logger;
   /** 配置覆盖, 缺省走 DEFAULT_MEMORY_CONFIG */
   config?: Partial<MemoryConfig>;
+  /** The Markdown files are also edited through native file tools. */
+  nativeFileEdits?: boolean;
   /**
    * 每次 mutation (write/delete/consolidate/resetType/resetAll) 执行前的 owner
    * scope 守卫 (review #2388 Codex 5th P1): 裸 store 经 getStore 返回后可能被
@@ -78,6 +81,7 @@ export class MakerMemoryStore {
   private readonly fts: MemoryFts;
   private readonly logger: Logger;
   private initialized = false;
+  private searchFingerprint = '';
 
   constructor(private readonly deps: MakerMemoryStoreDeps) {
     const config = { ...DEFAULT_MEMORY_CONFIG, ...(deps.config ?? {}) };
@@ -245,6 +249,17 @@ export class MakerMemoryStore {
     // 边界不得把旧 owner 的 FTS 检索结果返回给新会话。
     this.assertScopeOk();
     await this.init();
+    if (this.deps.nativeFileEdits) {
+      // On-demand only, never a background scan. Files are authoritative: include same-name
+      // edits and deletions, which a record-count check would miss. No model/embedding call.
+      const records = await this.storage.list();
+      this.assertScopeOk();
+      const fingerprint = createHash('sha256').update(JSON.stringify(records)).digest('hex');
+      if (fingerprint !== this.searchFingerprint) {
+        this.fts.rebuild(records);
+        this.searchFingerprint = fingerprint;
+      }
+    }
     const hits = await this.fts.search(query, opts);
     this.assertScopeOk();
     return hits;

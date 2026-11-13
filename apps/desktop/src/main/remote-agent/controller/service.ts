@@ -245,7 +245,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       opts.makerMemoryScopeKey = scopeKey;
       if (opts.makerMemoryIndexSnapshot === undefined) {
         try {
-          const store = await deps.makerMemory()?.getStore(scopeKey);
+          const manager = deps.makerMemory();
+          opts.makerMemoryProjectDir = manager?.getProjectMemoryDirectory(scopeKey);
+          const store = opts.makerMemoryProjectDir ? undefined : await manager?.getStore(scopeKey);
           requireCurrent();
           opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
         } catch (error) {

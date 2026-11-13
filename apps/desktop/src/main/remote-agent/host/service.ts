@@ -88,6 +88,7 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
     ...(options.makerMemoryEnabled !== undefined ? { makerMemoryEnabled: options.makerMemoryEnabled } : {}),
     ...(options.makerMemorySwitchOwned ? { makerMemorySwitchOwned: true } : {}),
     ...(options.makerMemoryScopeKey ? { makerMemoryScopeKey: options.makerMemoryScopeKey } : {}),
+    ...(options.makerMemoryProjectDir ? { makerMemoryProjectDir: options.makerMemoryProjectDir } : {}),
     // 记忆在对方电脑上：没有快照时也给空快照，本机不读自己的记忆库。
     ...(options.makerMemoryEnabled ? { makerMemoryIndexSnapshot: options.makerMemoryIndexSnapshot ?? '' } : {}),
     // 插件同理在对方电脑上：Agent 用对方给的花名册快照(空串表示对方没有可用插件，也要原样传下去)。
