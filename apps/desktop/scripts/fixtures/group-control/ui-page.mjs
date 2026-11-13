@@ -37,6 +37,9 @@ export default {
   notCovered:
     'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'public-cindy': { about: 'Public Cindy work remains visible to a peer without private process or stop access',
+      data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, workState: 'unknown', canStop: false } },
+
     'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
     'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
     'plan-read-missing': { about: '#9398: a confirmed missing plan has a neutral visible fallback', data: { ...base, sidebar: false, messages: 1, planRead: 'missing' } },
@@ -136,6 +139,7 @@ export default {
       data: { ...base, bubbles: true, threadUnread: true },
     },
     'thread-work': { about: 'Concurrent topic work stays in its own thread', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true } },
+    'thread-work-no-stop': { about: 'Source topic retains public progress without unauthorized stop controls', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, canStop: false } },
     'thread-work-overflow': { about: 'Long topic work scrolls while reply composer stays visible', viewport: { width: 1280, height: 600 }, data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, threadWorkTall: true } },
     'thread-follow': {
       about: 'The Thread panel\'s 关注 switch, off by default; switched on it reads 已关注',
@@ -183,6 +187,17 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'public-cindy') {
+      await page.getByTestId('bot-group-work').waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), 1);
+      assert.ok((await page.getByTestId('bot-group-work').innerText()).includes('Cindy'));
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true }).count(), 0);
+      await ui.capture('public-work');
+      return;
+    }
+
     if (definition.data.planRead) {
       const missing = page.getByText(await ui.t('bots.groupChat.plan.missing'), { exact: true });
       const organizer = page.getByText(await ui.t('bots.groupChat.organizer'), { exact: true });
@@ -645,12 +660,17 @@ export default {
       assert.ok(ui.case === 'arrangement' ? placeholder.includes('正在说') : !placeholder.includes('改改'), placeholder);
       return;
     }
-    if (ui.case === 'thread-work' || ui.case === 'thread-work-overflow') {
+    if (['thread-work', 'thread-work-overflow', 'thread-work-no-stop'].includes(ui.case)) {
       assert.equal(await page.getByTestId('bot-group-work').count(), 0, 'topic work must not appear in main');
-      await page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true }).waitFor();
+      const mainStop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
+      if (ui.case === 'thread-work-no-stop') assert.equal(await mainStop.count(), 0);
+      else await mainStop.waitFor();
       await page.locator('[data-thread-preview="a1"]').first().click();
       await page.getByTestId('bot-group-work').first().waitFor();
       assert.equal(await page.getByTestId('bot-group-work').count(), ui.case === 'thread-work-overflow' ? 19 : 1, 'only the selected topic work');
+      if (ui.case === 'thread-work-no-stop') {
+        assert.equal(await page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0, 'topic respects group stop capability');
+      }
       if (ui.case === 'thread-work') {
         const stop = page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
         await stop.click();

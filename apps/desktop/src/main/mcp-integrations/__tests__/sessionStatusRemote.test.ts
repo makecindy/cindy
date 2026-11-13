@@ -17,11 +17,11 @@ function setup(outcome: InvokeResultPayload | Error) {
 describe('remote session archive status', () => {
   // #6399, unit: invocation admission precedes transport queue/connection waits.
   // Exercise its actual preSend callback, preserving earlier receipts on rejection.
-  it.each(['active', 'archived'] as const)('rechecks %s action at the final transport send', async status => {
+  it.each(['active', 'archived', 'deleted'] as const)('rechecks %s action at the final transport send', async status => {
     let current = true;
     const check = () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
     const decision = await admitTaskAction(
-      { server: 'cindy_helper', tool: status === 'active' ? 'unarchive_sessions' : 'archive_sessions', sessionId: 'caller', args: {} },
+      { server: 'cindy_helper', tool: status === 'active' ? 'unarchive_sessions' : status === 'deleted' ? 'delete_session' : 'archive_sessions', sessionId: 'caller', args: {} },
       { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => check(), assertCurrentSync: check },
     );
     if (!decision.ok || !decision.run) throw new Error('Expected admission');

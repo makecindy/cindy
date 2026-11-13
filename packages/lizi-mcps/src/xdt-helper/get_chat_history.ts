@@ -284,6 +284,7 @@ export function registerGetChatHistoryTool(
           createdAt: new Date(m.createdAt).toISOString(),
         };
         if (m.toolUseId !== null) out.toolUseId = m.toolUseId;
+        if (m.clientId !== undefined) out.clientId = m.clientId;
         if (m.agentMeta !== null && m.agentMeta !== undefined) out.agentMeta = m.agentMeta;
         if (m.rewindAt !== null) out.rewindAt = new Date(m.rewindAt).toISOString();
         return out;

@@ -1227,3 +1227,16 @@ it('reads a missing source once per load and retries it on a later refresh', asy
     expect(request.mock.calls.filter(([path]) => path.endsWith(`/messages/${id(20)}`))).toHaveLength(count);
   }
 });
+
+// Unit regression: public execution rows must survive denial of the stop affordance.
+// Earlier projection coverage did not distinguish request ownership.
+// Stopping own work plus a running peer exposed a stop that the real route cannot act on.
+it.each([10, 11].flatMap(requester => ['running', 'stopping'].map(status => ({ requester, status }))))('keeps public work visible while projecting stop permission for $requester ($status)', ({ requester, status }) => {
+  const page = { snapshot: snapshot(), messages: [message(20), message(21)], before: null, executions: [
+    { id: id(30), source_message_id: id(20), bot_id: id(12), epoch: 1, status, requester_id: id(requester) },
+    { id: id(31), source_message_id: id(21), bot_id: id(12), epoch: 1, status: 'running', requester_id: id(10) },
+  ] };
+  const view = chatGroupView(page, id(11));
+  expect(view.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
+  expect(view.round.canStop).toBe(requester === 11 && status === 'running');
+});

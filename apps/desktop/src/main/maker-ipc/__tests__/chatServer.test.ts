@@ -2113,6 +2113,51 @@ describe('Chat Server result delivery and refresh', () => {
       expect(fixture.requests.filter(r => r.url.endsWith(`/conversations/${roomId}/messages`)).every(r => r.actor === cindyId)).toBe(true);
     });
 
+    // Unit regression: getGroup must not turn request ownership into personal-mask identity.
+    // Existing tests covered the member list, but never a public reply carrying actingFor.
+    it('keeps public Cindy replies visible with their real identity and task ownership', async () => {
+      const card = (requester: string) => message(requester === selfId ? 40 : 41, cindyId, '', {
+        actingFor: { actorId: requester, name: 'requester' },
+        content: [{ type: 'card', namespace: 'cindy.task', schemaRevision: 2,
+          data: { deviceId: null, taskId: 'task-9', title: 'Fix CI', state: 'running', requesterName: 'Chris', botName: 'Cindy' }, fallback: 'Fix CI' }],
+      });
+      const attribution = { ownerActorId: peerId, botActorId: teammateId, botName: 'Luna' };
+      const replies = [message(39, cindyId, 'Public answer', { actingFor: { actorId: peerId, name: 'Ann' } }),
+        card(selfId), card(peerId), message(42, peerId, 'Personal reply', { maskAttribution: attribution })];
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: replies, cursor: '1' } };
+        if (route === `/conversations/${roomId}/messages?limit=100`) return { body: replies };
+        if (route === `/conversations/${roomId}/executions`) return { body: [
+          { ...request(39, peerId), status: 'running' }, { ...request(40), status: 'needs_input' }] };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.messages.map(m => m.authorName)).toEqual(['Cindy', 'Cindy', 'Cindy', 'Ann']);
+      expect(result.group.messages[1].liveTask?.openable).toBe(true);
+      expect(result.group.messages[2].liveTask?.openable).toBeUndefined();
+      expect(result.group.messages[3].maskAttribution).toEqual(attribution);
+      expect(result.group.round.speakers.map(s => [s.executionId, s.executionStatus, s.sessionId])).toEqual([
+        [request(39).id, 'running', null], [request(40).id, 'needs_input', null],
+      ]);
+    });
+
+    // A stopping own execution must not enable stop while a peer is still running (P2 review regression).
+    it.each([selfId, peerId].flatMap(requester => ['running', 'stopping'].map(status => [requester, status])))('separates public execution visibility from stop permission for %s (%s)', async (requester, status) => {
+      members = cindyMembers.map(m => ({ ...m, role: 'member' }));
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupSingleSpeaker: 1 }, groupAssistantActorId: cindyId } };
+        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(50, requester), status }, { ...request(51, peerId), status: 'running' }] };
+        return previous(route, method, body);
+      });
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
+      expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
+    });
+
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;
     // group management sees the switch, and an older server none of it.
     it('projects the group Cindy and its switch', async () => {

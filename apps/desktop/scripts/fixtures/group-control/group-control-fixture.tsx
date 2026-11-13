@@ -34,6 +34,7 @@ interface GroupData {
   sharePending?: boolean;
   workState?: 'thinking' | 'reading-file' | 'testing' | 'waiting' | 'stopping' | 'unknown' | 'queued';
   workRemote?: boolean;
+  canStop?: boolean;
   workParallel?: boolean;
   workQueuedStep?: boolean;
   workLastStopping?: boolean;
@@ -372,7 +373,7 @@ function groupFrom(data: GroupData) {
       createdAt: 1700000000000 + i,
     })),
     hasMoreBefore: false,
-    round: data.workState ? { status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
+    round: data.workState ? { canStop: data.canStop, status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
       ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 41_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
       : { status: 'idle', speakers: [], canContinue: false },
   };
@@ -390,8 +391,8 @@ void mountPage({
       ] };
     }
     if (data.threadWork) {
-      Object.assign(group, { canStopAll: true });
-      Object.assign(group.round, { othersActive: true });
+      Object.assign(group, { canStopAll: data.canStop !== false });
+      Object.assign(group.round, { othersActive: true, canStop: data.canStop });
     }
     if (data.threadWorkTall) {
       group.round.speakers.push(...Array.from({ length: 18 }, (_, index) => ({

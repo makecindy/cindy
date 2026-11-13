@@ -717,7 +717,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               </Fragment>
             ))}
             {!sharing && <>
-              {speakers.length > 0 && <BotGroupProgressStrip step={null} speakers={speakers} onStop={onStop} stopping={stopping} canStopAll={canStopAll} />}
+              {speakers.length > 0 && <BotGroupProgressStrip step={null} speakers={speakers} onStop={onStop} stopping={stopping} canStop={group.round.canStop} canStopAll={canStopAll} />}
               {speakers.map(speaker => <BotGroupSpeakerInteraction key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />)}
             </>}
           </div>
