@@ -62,6 +62,28 @@ describe('persisted Magpie source recovery', () => {
     expect(visible(before)[0].discoveredSource).toBeUndefined();
   });
 
+  // Unit regression for #10156: a successful first page followed by an outage
+  // is not an authoritative withdrawal. Keep old receipts retryable until complete.
+  it('preserves old sources after a partial directory read and restores them on retry', async () => {
+    const before = saved();
+    before.runtimes.pi!.models.push({ ...before.runtimes.pi!.models[0], id: 'supplier/later' });
+    let complete = false;
+    const fetcher: typeof fetch = async url => {
+      if (!String(url).includes('cursor=')) return fakeResponse(200, JSON.stringify({
+        data: [{ id: 'supplier/model', owned_by: 'supplier', magpie_label: 'Model · Supplier' }],
+        next_cursor: 'page2',
+      }));
+      return complete ? fakeResponse(200, JSON.stringify({ data: [
+        { id: 'supplier/later', owned_by: 'supplier', magpie_label: 'Later · Supplier' },
+      ] })) : fakeResponse(503, '{}');
+    };
+    expect(await restoreProviderModelSources(before, () => 'saved-key', () => true, fetcher)).toBeNull();
+    expect(before.runtimes.pi!.models.every(model => model.discoveredSource?.snapshotId === 'previous-boot:receipt')).toBe(true);
+    complete = true;
+    const after = await restoreProviderModelSources(before, () => 'saved-key', () => true, fetcher);
+    expect(visible(after!).map(model => modelSupplierLabel(model.discoveredSource))).toEqual(['supplier', 'supplier']);
+  });
+
   it('removes stale supplier labels when the current directory withdraws them', async () => {
     const after = await restoreProviderModelSources(saved(), () => 'saved-key', () => true,
       async () => fakeResponse(200, '{"data":[{"id":"supplier/model"}]}'));

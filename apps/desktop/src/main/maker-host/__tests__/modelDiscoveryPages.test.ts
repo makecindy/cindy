@@ -34,6 +34,7 @@ describe('model list pagination', () => {
   it.each(['https://attacker.example/v1/models?page=2', '/other?page=2', 'https://user:pass@models.example/v1/models'])('never sends credentials to an untrusted next link: %s', async next => {
     const fetch = vi.fn();
     expect(await collectModelDiscoveryPages({ data: ['one'], next }, endpoint, fetch)).toHaveLength(1);
+    expect(await collectModelDiscoveryPages({ data: ['one'], next }, endpoint, fetch, true)).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -42,6 +43,20 @@ describe('model list pagination', () => {
     const fetch = vi.fn(async () => page);
     expect(await collectModelDiscoveryPages(page, endpoint, fetch)).toHaveLength(1);
     expect(fetch).toHaveBeenCalledOnce();
+    expect(await collectModelDiscoveryPages(page, endpoint, fetch, true)).toBeNull();
     expect(await collectModelDiscoveryPages(page, endpoint, async () => { throw new Error('offline'); })).toHaveLength(1);
   });
+
+  // Unit recovery regression: the supplementary speech catalog is authoritative
+  // only if its continuation also succeeds; ordinary discovery retains chat rows.
+  it('requires complete supplemental speech pages in recovery mode', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      if (url.includes('cursor=')) throw new Error('offline');
+      return { data: [], next_cursor: 'later' };
+    });
+    expect(await collectModelDiscoveryPages({ data: ['chat-model'] },
+      'https://openrouter.ai/api/v1/models', fetch, true)).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
 });
