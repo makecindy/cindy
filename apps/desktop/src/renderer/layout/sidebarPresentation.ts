@@ -18,12 +18,16 @@ export function useSidebarPresentation(
   userToggle = true,
   /** 当前侧栏所属的任务（全局为 ''）；只用来判断就绪空档前后是不是同一个任务。 */
   sessionKey = '',
+  /** 首次挂载时这次展开由视图强制（首帧程序展示），既不是启动恢复也不是用户开栏。 */
+  passiveReveal = false,
 ): SidebarPresentation {
   const [presentation, setPresentation] = useState<SidebarPresentation>({ collapsed, instant: false });
   const expansion = useRef(expansionWidth);
   expansion.current = expansionWidth;
   const userResize = useRef(userToggle);
   userResize.current = userToggle;
+  const passive = useRef(passiveReveal);
+  passive.current = passiveReveal;
   const previous = useRef<boolean | null>(null);
   /** 已经走过一次就绪渲染：之前的 false 是启动前的等待，不是路由离开。 */
   const everReady = useRef(false);
@@ -63,11 +67,15 @@ export function useSidebarPresentation(
     const gap = beforeGap.current;
     const relanded = openingFromMount && !userResize.current && gap !== null
       && (gap.ownsWidth === false || gap.sessionKey !== sessionKey);
+    // 启动时按存档恢复展开照常占窗口宽度；但同一帧里由视图强制的展示（首帧 Orca
+    // workers 等程序动作）只是把面板放出来，不能顺手把窗口拉宽。
+    const forcedReveal = openingFromMount && !userResize.current && passive.current;
     if (ready && wasCollapsed === null) beforeGap.current = null;
     // A session switch restores that task's remembered visibility. Only the user's own
     // toggle may resize the native window; navigation keeps the width the user chose.
     const restored = !userResize.current && ready && wasCollapsed !== null;
-    if (!ready || (wasCollapsed === null && collapsed) || !resize || width <= 0 || restored || relanded) {
+    if (!ready || (wasCollapsed === null && collapsed) || !resize || width <= 0 || restored || relanded
+      || forcedReveal) {
       // 这一帧没有占用窗口宽度（包括程序展示、路由就绪前的等待）：回来时也不再补展开。
       ownsWidth.current = false;
       if (!ready && wasCollapsed === false && resize) {

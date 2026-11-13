@@ -25,3 +25,11 @@ it('drops a superseded reveal instead of handing it to a later task switch', () 
   // 以后再普通切到 task-a 不能算用户开栏。
   expect(marker.consume('task-a')).toBe(false);
 });
+
+it('drops the marker when the navigation loses its landing', () => {
+  const marker = createUserRevealMarker();
+  marker.mark('task-a');
+  // 导航还悬着时用户去了设置页：这次手势没有落点。
+  marker.cancel();
+  expect(marker.consume('task-a')).toBe(false);
+});

@@ -326,6 +326,9 @@ export function MainLayout() {
   // 当前会话的记忆开合是否已读入：未读入前不观察开合变化，否则启动恢复开栏会被
   // 当成切任务恢复，窗口停在独立宽度里。
   const [rightTabsRestored, setRightTabsRestored] = useState(false);
+  // 这次展开是视图自己强制的（首帧展示 Orca workers 等程序动作，不是启动恢复也不是
+  // 用户开栏）：面板照常展开，但不占用窗口宽度。
+  const [rightTabsPassiveReveal, setRightTabsPassiveReveal] = useState(false);
   // 「侧边栏在新窗口中显示」偏好 + 子窗口开闭(main 权威,广播镜像)。
   // 副窗(会话多开窗)不参与 detach:内嵌行为保持不变,只有主窗联动子窗口
   // (main 侧 SET_CONTEXT 也只信主窗 sender,双保险)。
@@ -379,7 +382,9 @@ export function MainLayout() {
       const nextCollapsed = hasInitialCollapsed
         ? opts.initialCollapsed === true
         : readCollapsedFor(sessionId);
-      setRightTabsUserToggle(userReveal.consume(sessionId));
+      // 标记只在真的落地到目标任务时消费（见下面的会话提交 effect）。这里再消费一次会
+      // 让同任务的普通重声明（如 subagentsAvailable 解析完）提前清掉用户手势。
+      setRightTabsPassiveReveal(hasInitialCollapsed && nextCollapsed === false);
       setIsRightSidebarCollapsed(nextCollapsed);
       setRightTabsRestored(true);
       if (hasInitialCollapsed && opts.writeInitialCollapsedRecord === true) {
@@ -955,6 +960,7 @@ export function MainLayout() {
     rightSidebarRef.current?.requestAnimateNextChange();
     writeCollapsedFor(rightSidebarSessionId, false);
     setRightTabsUserToggle(true);
+    setRightTabsPassiveReveal(false);
     setIsRightSidebarCollapsed(false);
   }, [isRightSidebarCollapsed, rightSidebarSessionId, rsbDetached, rsbWindow.loaded]);
 
@@ -964,6 +970,7 @@ export function MainLayout() {
     rightSidebarRef.current?.requestAnimateNextChange();
     writeCollapsedFor(rightSidebarSessionId, true);
     setRightTabsUserToggle(true);
+    setRightTabsPassiveReveal(false);
     setIsRightSidebarCollapsed(true);
   }, [isRightSidebarCollapsed, rightSidebarSessionId, rsbDetached]);
 
@@ -1021,13 +1028,19 @@ export function MainLayout() {
   // sessionId 切换时按新 session 的存档刷新折叠态。无需 prime 动画 —— RightSidebar 默认
   // 直接同步,切 session "瞬间生效"(用户体感:不应看着一栏慢慢展开/收起)。
   useLayoutEffect(() => {
-    if (!rsbWindow.loaded || !rightSidebarSessionId || rsbDetached) return;
+    if (!rightSidebarSessionId) {
+      // 离开聊天视图（设置页接管等）时那次导航已经没有落点：标记必须在这里作废，
+      // 否则它会被以后某次普通切到目标任务当成用户开栏，把窗口拉宽。
+      userReveal.cancel();
+      return;
+    }
+    if (!rsbWindow.loaded || rsbDetached) return;
     // 跨任务用户开栏保留用户来源，其余切任务恢复都按导航处理；标记用完即清。
     const reveal = userReveal.consume(rightSidebarSessionId);
     setRightTabsUserToggle(reveal);
     setIsRightSidebarCollapsed(readCollapsedFor(rightSidebarSessionId));
     setRightTabsRestored(true);
-  }, [rightSidebarSessionId, rsbDetached, rsbWindow.loaded]);
+  }, [rightSidebarSessionId, rsbDetached, rsbWindow.loaded, userReveal]);
 
   // 监听"右侧栏可见性"信号 —— Phase 5 RsbWebviewBackend 触发(rsbBrowserBridge
   // .handleTabOpRequest):open/focus → 'open',close 最后一个 tab → 'close'。
@@ -2036,6 +2049,7 @@ export function MainLayout() {
               suppressNonChatPanels={isSettingsRoute}
               sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached && rightTabsRestored}
               rightTabsUserToggle={rightTabsUserToggle}
+              rightTabsPassiveReveal={rightTabsPassiveReveal}
               rightTabsSessionKey={rightSidebarSessionId ?? ''}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
