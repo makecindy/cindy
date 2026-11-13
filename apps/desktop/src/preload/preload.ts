@@ -856,9 +856,8 @@ const fanOutRemoteSshCcMgrUpgradeAvailable = createIpcFanOut(
 );
 // Hook 连接(hook-control)状态推送(单条连接快照)。
 const fanOutHookControlStatus = createIpcFanOut('maker:hook-control:status-changed');
-// Hook 目录偏好快照推送(prefs.state; 含 Slack /model 卡改动的实时同步)。
-const fanOutHookControlPrefs = createIpcFanOut('maker:hook-control:prefs-changed');
-const fanOutHookControlProviderPrefs = createIpcFanOut('maker:hook-control:provider-prefs-changed');
+// 所有官方机器人共用的项目偏好快照推送(含 IM 里 /model 卡改动并入后的实时同步)。
+const fanOutHookControlSharedPrefs = createIpcFanOut('maker:hook-control:shared-prefs-changed');
 const fanOutHookControlTelegramBehavior = createIpcFanOut(
   'maker:hook-control:telegram-behavior-changed',
 );
@@ -5713,8 +5712,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       enabled: boolean,
     ): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-provider-enabled', { provider, enabled }),
-    setWorkspaces: (workspaces: Record<string, string>): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:set-workspaces', { workspaces }),
+    addProject: (directory: string): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:add-project', { directory }),
     setXCompanion: (botId: string | null, expectedBotId: string | null): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-x-companion', { botId, expectedBotId }),
     setProviderDefaultWorkspace: (
@@ -5751,28 +5750,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       scopeId?: string,
     ): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:hook-control:provider-open-action', { provider, action, ...(scopeId ? { scopeId } : {}) }),
-    // 目录偏好本机读写(正本在本地; 连上后镜像到 hook server 供 /model 卡使用;
-    // teamId 为 multi-team 下的归属 team, 单绑定缺省)
-    getWorkspacePrefs: (): Promise<{ prefs: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:prefs-get'),
-    setWorkspacePrefs: (
-      workspace: string,
-      patch: Record<string, string | null>,
-      teamId?: string | null,
-    ): Promise<{ prefs: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:prefs-set', {
-        workspace,
-        patch,
-        ...(teamId !== undefined ? { teamId } : {}),
-      }),
-    getProviderWorkspacePrefs: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ prefs: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-prefs-get', { provider }),
-    setProviderWorkspacePrefs: (
-      provider: 'telegram' | 'x' | 'feishu',
+    // 所有官方机器人共用的项目偏好(本机正本)
+    getSharedProjectPrefs: (): Promise<{ prefs: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:shared-prefs-get'),
+    setSharedProjectPrefs: (
       workspace: string,
       patch: Record<string, string | null>,
     ): Promise<{ prefs: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-prefs-set', { provider, workspace, patch }),
+      ipcRenderer.invoke('maker:hook-control:shared-prefs-set', { workspace, patch }),
     getTelegramBehavior: (bindingId: string): Promise<{ behavior: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:telegram-behavior-get', { bindingId }),
     setTelegramBehavior: (
@@ -5797,14 +5782,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-get'),
     setWorkspaceProviderSource: (payload: {
       agentDeviceId?: string | null;
-      channel: 'slack' | 'telegram' | 'x' | 'feishu';
+      channel: 'slack' | 'telegram' | 'x' | 'feishu' | 'shared';
       teamId: string | null;
       workspace: string;
       providerId: string | null;
     }): Promise<{ entries: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-set', payload),
-    onPrefsChanged: fanOutHookControlPrefs,
-    onProviderPrefsChanged: fanOutHookControlProviderPrefs,
+    onSharedProjectPrefsChanged: fanOutHookControlSharedPrefs,
     onTelegramBehaviorChanged: fanOutHookControlTelegramBehavior,
     onWorkspaceProviderSourcesChanged: fanOutHookControlWorkspaceProviderSource,
     onStatusChanged: fanOutHookControlStatus,

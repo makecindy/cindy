@@ -4679,8 +4679,9 @@ interface ElectronAPI {
       provider: 'telegram' | 'x' | 'feishu',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    setWorkspaces: (
-      workspaces: Record<string, string>,
+    /** 把一个本机目录加进项目列表(侧栏与 IM 机器人共用)。 */
+    addProject: (
+      directory: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     /** Official X assignment, compared with the caller's last observed value. */
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
@@ -4724,22 +4725,16 @@ interface ElectronAPI {
       action: import('../shared/hookControlIpc').ProviderOpenAction,
       scopeId?: string,
     ) => Promise<{ ok: true }>;
-    getWorkspacePrefs: () => Promise<{
-      prefs: import('../shared/hookControlIpc').HookPrefsView;
+    getSharedProjectPrefs: () => Promise<{
+      prefs: import('../shared/hookControlIpc').SharedProjectPrefsView;
     }>;
-    setWorkspacePrefs: (
+    setSharedProjectPrefs: (
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
-      teamId?: string | null,
-    ) => Promise<{ prefs: import('../shared/hookControlIpc').HookPrefsView }>;
-    getProviderWorkspacePrefs: (provider: 'telegram' | 'x' | 'feishu') => Promise<{
-      prefs: import('../shared/hookControlIpc').ProviderPrefsView;
-    }>;
-    setProviderWorkspacePrefs: (
-      provider: 'telegram' | 'x' | 'feishu',
-      workspace: string,
-      patch: import('../shared/hookControlIpc').HookPrefsPatch,
-    ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
+    ) => Promise<{ prefs: import('../shared/hookControlIpc').SharedProjectPrefsView }>;
+    onSharedProjectPrefsChanged: (
+      cb: (view: import('../shared/hookControlIpc').SharedProjectPrefsView) => void,
+    ) => () => void;
     getTelegramBehavior: (bindingId: string) => Promise<{
       behavior: import('../shared/hookControlIpc').TelegramHookBehaviorState;
     }>;
@@ -4764,7 +4759,7 @@ interface ElectronAPI {
     }>;
     setWorkspaceProviderSource: (payload: {
       agentDeviceId?: string | null;
-      channel: 'slack' | 'telegram' | 'x' | 'feishu';
+      channel: 'slack' | 'telegram' | 'x' | 'feishu' | 'shared';
       teamId: string | null;
       workspace: string;
       providerId: string | null;
@@ -4775,12 +4770,6 @@ interface ElectronAPI {
       listener: (
         entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[],
       ) => void,
-    ) => () => void;
-    onPrefsChanged: (
-      cb: (view: import('../shared/hookControlIpc').HookPrefsView) => void,
-    ) => () => void;
-    onProviderPrefsChanged: (
-      cb: (view: import('../shared/hookControlIpc').ProviderPrefsView) => void,
     ) => () => void;
     onTelegramBehaviorChanged: (
       cb: (view: import('../shared/hookControlIpc').TelegramHookBehaviorState) => void,

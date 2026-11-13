@@ -210,6 +210,11 @@ export interface HookControlManagerDeps {
   listAgentModels?: () => AgentModelSource[] | Promise<AgentModelSource[]>;
   /** session-picker-v1 的 privacy-minimised 当前账号数据源。 */
   listRecentSessions?: () => QuerySessionEntry[] | Promise<QuerySessionEntry[]>;
+  /**
+   * 回答 query.request(workspaces) 之前先与侧栏项目对齐一次 —— IM 里敲 /project
+   * 看到的就是此刻的项目列表。不注入时直接读配置。实现不得 reject。
+   */
+  syncProjectWorkspaces?: () => Promise<void>;
   /** dispatcher/store 命名空间使用的当前 Cindy 账号不可逆指纹。 */
   getAccountFingerprint?: () => string | null;
   /** Production opens this only after the current account DB is ready. */
@@ -633,6 +638,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     dispatcher,
     listAgentModels,
     listRecentSessions,
+    syncProjectWorkspaces,
     getAccountFingerprint,
     accountInitiallyActive,
     openExternalUrl,
@@ -2846,9 +2852,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       trackAccountOp(
         buildQueryResponse(
           {
-            listWorkspaces: () => [
-              ...new Set([HOOK_CHAT_WORKSPACE_ALIAS, ...Object.keys(store.get().workspaces)]),
-            ],
+            listWorkspaces: async () => {
+              await syncProjectWorkspaces?.();
+              return [
+                ...new Set([HOOK_CHAT_WORKSPACE_ALIAS, ...Object.keys(store.get().workspaces)]),
+              ];
+            },
             listAgentModels: () => listAgentModels?.() ?? [],
             // 双方都声明才算协商成功: 本机没声明的(如官方飞书), 服务端宣告了也不交出任务列表。
             listSessions: () =>
