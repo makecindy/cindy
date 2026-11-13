@@ -298,15 +298,16 @@ describe('device-link IPC handlers', () => {
     expect(probe).toHaveBeenCalledWith(['wss://relay.example.com/api/device-link/ws']);
   });
 
-  it('#9537 出站路径判定:拿不到 transport URL 时按两条候选线路 origin 探测', async () => {
+  // 测试价值(#9537 review): 指名了设备、却查不到它实际走的 transport URL(主连接由
+  // agent-net 承载 / 对端在 scoped 路由连接上 / client 未就绪)时,这条对端根本不走
+  // 那两条 REST base。探它们得到的是无关端点的判定,报出来是一条自信的假提示 ——
+  // 必须直接返回 null,一次探针都不发。
+  it('#9537 出站路径判定:指名了设备但 transport URL 不可知 → null,不探 REST base', async () => {
     const probe = vi.fn(async () => null);
-    // 有 deviceId 但 transport URL 不可知(agent-net 承载 / client 未就绪)→ 回落;
-    // 两个候选 = 当前中转 + 自建中转下共享任务走的官方连接(测试端点替身两者同值)。
-    await handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a');
-    expect(probe).toHaveBeenCalledWith([
-      'https://continuity.test.invalid',
-      'https://continuity.test.invalid',
-    ]);
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toBeNull();
+    expect(probe).not.toHaveBeenCalled();
   });
 
   it('#9537 出站路径判定:没问出判定(unknown)照实透传、地址缺省归一 null;无快照 → null', async () => {

@@ -162,6 +162,10 @@ export function useOutboundProxyVerdict(
       setVerdict(null);
       return;
     }
+    // 换对端时先清掉上一家的判定:新探测还没回来之前不能把上一家的代理提示挂在新对端
+    // 上(同一路由组件复用,只有 deviceId 变);探测失败也要清 —— 空 catch 会把上一家的
+    // 判定一直留在界面上,新对端永远顶着别人的提示。
+    setVerdict(null);
     let cancelled = false;
     void window.electronAPI.deviceLink
       .getProxyVerdict(deviceId)
@@ -170,6 +174,7 @@ export function useOutboundProxyVerdict(
       })
       .catch(() => {
         /* 诊断不可用 → 不提示,静默失败 */
+        if (!cancelled) setVerdict(null);
       });
     return () => {
       cancelled = true;

@@ -38,6 +38,11 @@ import {
 } from '@cindy/anthropic-compat-proxy';
 
 import { createMakerLogger } from './logger-adapter.js';
+// 传输层(真实 socket)自己的解析口径:诊断探针必须用同一把尺子,否则判出来的路径
+// 与真实请求不是同一条(协议归一 + path + 明文 ws 的代理限制)。
+// 用函数而非静态 import:outbound-fetch 在模块求值期就要 resolveDesktopOutboundProxy,
+// 静态 import 会形成环(本模块还没初始化完)。
+import { transportIsPlaintextWebSocket, transportProxyResolveKey } from './outbound-fetch.js';
 
 const log = createMakerLogger('outbound-proxy');
 
@@ -440,11 +445,27 @@ export const resolveDesktopOutboundProxy: OutboundProxyResolver = async (upstrea
 export async function probeOutboundPathFor(
   upstreamUrls: readonly string[],
 ): Promise<OutboundPathSnapshot | null> {
-  const origins = [...new Set(upstreamUrls.map((u) => originForLog(u)))];
-  if (origins.length === 0) return null;
-  if (origins.some(isLoopbackOrigin)) return null;
-  await Promise.all(origins.map((o) => resolveDesktopOutboundProxy(o)));
-  const verdicts = origins.map((o) => getOutboundPathSnapshotFor([o]));
+  // 与传输层同一把尺子:解析键 = 协议归一(ws→http / wss→https)+ host + path。
+  // 只送 origin 会让 env 代理读到另一个协议槽(HTTPS_PROXY / HTTP_PROXY)、让 PAC
+  // 丢掉逐 path 的判定 —— 判出来的路径可能与真实 socket 正好相反(#9537 评审)。
+  const targets = [...new Map(
+    upstreamUrls.map((url) => [url, {
+      url,
+      resolveKey: transportProxyResolveKey(url),
+      plaintextWebSocket: transportIsPlaintextWebSocket(url),
+    }]),
+  ).values()];
+  if (targets.length === 0) return null;
+  if (targets.some((t) => isLoopbackOrigin(originForLog(t.url)))) return null;
+  await Promise.all(targets.map((t) => resolveDesktopOutboundProxy(t.resolveKey)));
+  const verdicts = targets.map((t) => {
+    const snap = getOutboundPathSnapshotFor([t.resolveKey]);
+    if (!snap) return null;
+    // 明文 ws:// 遇到 HTTP 代理:传输层拒用该代理(upgrade 握手必须是隧道),实际是
+    // 直连 —— 报「经代理」是谎报,宁可不报。socks5 不受这条限制。
+    if (t.plaintextWebSocket && snap.kind === 'proxy' && isHttpProxyAddress(snap.proxy)) return null;
+    return snap;
+  });
   const first = verdicts[0];
   if (!first) return null;
   for (const v of verdicts) {
@@ -452,6 +473,11 @@ export async function probeOutboundPathFor(
     if (!v || v.kind !== first.kind || v.proxy !== first.proxy) return null;
   }
   return first;
+}
+
+/** 快照里的代理地址是不是 HTTP 代理(脱敏形态 scheme://host:port)。 */
+function isHttpProxyAddress(proxy: string | null | undefined): boolean {
+  return typeof proxy === 'string' && proxy.startsWith('http://');
 }
 
 /** origin(protocol//host)的 hostname 是否 loopback —— 传输层对此类上游一律直连。 */

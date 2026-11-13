@@ -115,4 +115,35 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
     await act(async () => {});
     expect(hook.result.current).toBeNull();
   });
+
+  // 测试价值(#9537 review): 同一路由组件在 :sessionId 间复用,deviceId 变了组件没换。
+  // 换对端时必须先清掉上一家的判定 —— 新探测还没回来之前,新对端不能顶着上一家的代理
+  // 提示;探测被拒(IPC 失败)同样要清,否则上一家的判定会一直留在界面上。
+  it('换对端先清空上一家的判定;探测被拒时也不保留旧判定', async () => {
+    let resolveProbe: ((v: DeviceLinkProxyVerdict | null) => void) | null = null;
+    const getProxyVerdict = vi.fn(
+      () => new Promise<DeviceLinkProxyVerdict | null>((resolve) => { resolveProbe = resolve; }),
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { getProxyVerdict } },
+    });
+    const hook = renderHook(
+      ({ deviceId }: { deviceId: string }) => useOutboundProxyVerdict(true, deviceId),
+      { initialProps: { deviceId: 'peer-a' } },
+    );
+    await act(async () => { resolveProbe?.({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' }); });
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+
+    // 切到 peer-b:探测还没回来,界面上不得再挂 peer-a 的提示。
+    hook.rerender({ deviceId: 'peer-b' });
+    await act(async () => {});
+    expect(hook.result.current).toBeNull();
+
+    // 探测被拒:判定保持清空,不回退成 peer-a 的旧值。
+    const rejectProbe = resolveProbe;
+    await act(async () => { rejectProbe?.(Promise.reject(new Error('probe failed')) as never); });
+    await act(async () => {});
+    expect(hook.result.current).toBeNull();
+  });
 });

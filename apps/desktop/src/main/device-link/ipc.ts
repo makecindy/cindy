@@ -381,6 +381,10 @@ export async function handleGetProxyVerdict(
   deviceId?: string,
 ): Promise<DeviceLinkProxyVerdict | null> {
   const transportUrl = deviceId ? deviceLinkPeerTransportUrl(deviceId) : null;
+  // 指名了设备、却查不到它实际走的 transport URL(主连接由 agent-net 承载 / 对端在
+  // scoped 路由连接上 / client 未就绪):这条对端根本不走下面那两条 REST base,探它们
+  // 得到的代理与本对端无关 —— 报出来是一条自信的假提示。宁可不给判定。
+  if (deviceId && !transportUrl) return null;
   const candidates = transportUrl
     ? [transportUrl]
     : [resolveDeviceLinkApiBase(), officialDeviceLinkApiBase()];
