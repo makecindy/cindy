@@ -2734,6 +2734,22 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(false);
   });
 
+  // 2026-11-11 acceptance: a task a companion opened from the owner's group request asked the
+  // owner to repeat it. The group round is a hidden host envelope beside the owner's verified
+  // words (chatServer leaves them empty for other members and companions).
+  it.each([['the owner', 'Add a line to README.md', true], ['another member', '', false]] as const)(
+    'lets a group round started by %s speak for the owner request', async (_who, ownerWords, expected) => {
+      const h = createHarness(), sid = `group-lane-${expected}`;
+      h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+      h.coordinator.enqueue(sid, makeItem(BOT_GROUP_CLIENT_ID.memberTurn('room', 'execution', 'bot'),
+        `${UI_ACTION_TRIGGER_PREFIX}[group envelope]`, { agentOmitsTriggerPrefix: true, autoReviewUserText: ownerWords }));
+      await flush();
+      expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(expected);
+      // Never fresh owner input (app update and other owner-only Host actions).
+      expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+      expect(h.coordinator.getAcceptedInputProvenance(sid)?.authoredText).toBe(ownerWords);
+    });
+
   it('keeps a Worker Lead directive distinct from accepted human input', async () => {
     const h = createHarness(), sid = 'worker-input-origin';
     h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
@@ -8486,7 +8502,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       getSessionActivitySnapshot: vi.fn(), getSessionRuntimeDetails: vi.fn(), setSessionRuntime: vi.fn(),
       assertExternalInputAllowed: async () => undefined,
       createQueuedMessage: async ({ queuedMessageId, message, callerSessionId }) => makeItem(queuedMessageId, message, {
-        origin: { kind: 'session', senderSessionId: callerSessionId, displayText: message },
+        ...(callerSessionId ? { origin: { kind: 'session' as const, senderSessionId: callerSessionId, displayText: message } } : {}),
       }),
       steerQueuedMessage: (id, item, expected) => h.coordinator.steer(id, item, {
         fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
@@ -8560,7 +8576,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       getSessionActivitySnapshot: vi.fn(), getSessionRuntimeDetails: vi.fn(), setSessionRuntime: vi.fn(),
       assertExternalInputAllowed: async () => undefined,
       createQueuedMessage: async ({ queuedMessageId, message, callerSessionId }) => makeItem(queuedMessageId, message, {
-        origin: { kind: 'session', senderSessionId: callerSessionId, displayText: message },
+        ...(callerSessionId ? { origin: { kind: 'session' as const, senderSessionId: callerSessionId, displayText: message } } : {}),
       }),
       steerQueuedMessage: (id, item, expected) => h.coordinator.steer(id, item, {
         fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
@@ -11494,6 +11510,86 @@ describe('AgentInputCoordinator queue mutations', () => {
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
+  it('refreshes a queued route and its crash snapshot after a model switch (#6793)', async () => {
+    const sid = 'queued-route-switch';
+    const h = createHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const queued = makeItem('queued', 'Send on the selected route');
+    queued.createOpts.providerId = 'old-provider';
+    h.coordinator.enqueue(sid, queued);
+    await flush();
+
+    h.coordinator.refreshQueuedRoute(sid, { model: 'new-model', providerId: 'new-provider' });
+    const snapshot = h.persistQueueSnapshot.mock.calls.at(-1)?.[1][0];
+    expect(snapshot?.createOpts).toMatchObject({ model: 'new-model', providerId: 'new-provider' });
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => JSON.parse(JSON.stringify([snapshot])));
+    await restarted.coordinator.ensureQueueRestored(sid);
+    expect(restarted.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.createOpts)
+      .toMatchObject({ model: 'new-model', providerId: 'new-provider' });
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent.mock.calls[0]?.[2]).toMatchObject({ model: 'new-model', providerId: 'new-provider' });
+  });
+
+  it('rebases an old snapshot that finishes loading after the model switch (#6793)', async () => {
+    const sid = 'route-switch-during-restore';
+    const h = createHarness();
+    const loading = deferred<void>();
+    const snapshot = deferred<AgentInputQueuedMessage[]>();
+    h.setLoadQueueSnapshot(async () => {
+      loading.resolve();
+      return snapshot.promise;
+    });
+    const restoring = h.coordinator.ensureQueueRestored(sid);
+    await loading.promise;
+    h.coordinator.refreshQueuedRoute(sid, { model: 'new-model', providerId: 'new-provider' });
+    const old = makeItem('restored-old-route', 'Recovered input');
+    old.createOpts.providerId = 'old-provider';
+    snapshot.resolve([old]);
+    await restoring;
+    await flush();
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.createOpts)
+      .toMatchObject({ model: 'new-model', providerId: 'new-provider' });
+    expect(h.persistQueueSnapshot.mock.calls.at(-1)?.[1][0]?.createOpts)
+      .toMatchObject({ model: 'new-model', providerId: 'new-provider' });
+  });
+
+  it('keeps a scheduled run route scoped to that run during a user model switch (#6793)', async () => {
+    const h = createHarness();
+    const sid = 'scheduled-route-scope';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const scheduled = makeItem('scheduled', 'Scheduled input', {
+      origin: { kind: 'scheduler', scheduleId: 'schedule-1', scheduleName: 'Check', runId: 'run-1' },
+    });
+    scheduled.createOpts.providerId = 'run-provider';
+    h.coordinator.enqueue(sid, scheduled);
+    h.coordinator.refreshQueuedRoute(sid, { model: 'user-model', providerId: 'user-provider' });
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]?.createOpts.providerId)
+      .toBe('run-provider');
+  });
+
+  it('retries a failed queue head on the newly selected provider (#6793)', async () => {
+    const h = createHarness();
+    const sid = 'failed-head-route';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.sendToAgent.mockRejectedValueOnce(new Error('old provider unavailable'));
+    const queued = makeItem('failed-head', 'Retry me');
+    queued.createOpts.providerId = 'old-provider';
+    h.coordinator.enqueue(sid, queued);
+    await flush();
+    expect(h.coordinator.getProjection(sid).recovery).toEqual({ kind: 'queue-head', clientId: 'failed-head' });
+
+    h.coordinator.refreshQueuedRoute(sid, { model: 'new-model', providerId: 'new-provider' });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls.at(-1)?.[2]).toMatchObject({ model: 'new-model', providerId: 'new-provider' });
+  });
+
   it.each(['member', 'plan'] as const)('drops restored %s group inputs before a new execution can use their lane', async kind => {
     const sid = 'reused-group-lane';
     const oldId = kind === 'member' ? BOT_GROUP_CLIENT_ID.memberTurn('room', 'old-execution', 'bot')

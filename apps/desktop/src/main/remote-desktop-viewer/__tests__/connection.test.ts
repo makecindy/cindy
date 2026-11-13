@@ -1053,6 +1053,73 @@ describe('代输入 window view', () => {
   });
 });
 
+// 测试价值：设备画面窗口只能连它被打开时指定的那台设备，且不带任何作用于电脑本身的能力
+// （锁屏、空闲锁、解锁、剪贴板同步）；页面若能换掉或去掉 screen，就会开成整屏远程桌面。
+// 现有用例只覆盖整屏与代输入窗口。最小输入：一个带 screen 的目标；unit tier。
+describe('device screen view', () => {
+  it('starts only the device screen it was opened for and never acts on the computer', async () => {
+    const request = vi.fn(async (_target: string, message: RemoteDesktopRequest) => {
+      if (message.op === 'capabilities')
+        return {
+          version: 1,
+          enabled: true,
+          canControl: false,
+          platform: 'darwin',
+          displays: [{ id: '1', name: 'Display', width: 800, height: 600 }],
+          liveScreens: true,
+          clipboardSync: true,
+          privacyScreen: true,
+          lockOnExit: true,
+          idleLock: true,
+        };
+      return { lease: 'lease-s', controlling: true, display: { id: 'live-screen:sim' } };
+    });
+    const credentials = { run: vi.fn(async () => ({})), dispose: vi.fn() };
+    const connection = new RemoteViewerConnection({
+      owner: () => 'account-a:1',
+      request,
+      readClipboard: () => '',
+      writeClipboard: () => {},
+      credentials: credentials as never,
+    });
+    const screen = { plugin: 'cindy-simulator', id: 'sim', pluginIdentity: 'cindy-simulator' };
+    connection.bind({ deviceId: 'computer-a', name: 'Computer', screen });
+    connection.setActive(true);
+    const { generation } = connection.snapshot();
+    expect((await connection.request(generation, { op: 'capabilities' })).ok).toBe(true);
+    // The page cannot drop the device screen or swap it for another one.
+    for (const start of [
+      { op: 'start', displayId: '1' },
+      { op: 'start', displayId: 'live-screen', screen: { ...screen, id: 'other' } },
+      { op: 'start', displayId: 'live-screen', screen: { ...screen, pluginIdentity: undefined } },
+      { op: 'start', displayId: 'live-screen', screen: { ...screen, pluginIdentity: '_ns__acme__cindy-simulator' } },
+    ])
+      expect(await connection.request(generation, start)).toEqual({
+        ok: false,
+        code: 'DESKTOP_UNAVAILABLE',
+      });
+    const start = { op: 'start', displayId: 'live-screen', screen };
+    expect((await connection.request(generation, start)).ok).toBe(true);
+    // Sent as asked: no exit lock or idle lock rides along for a device screen.
+    expect(request).toHaveBeenLastCalledWith('computer-a', start, expect.any(Function));
+    await connection.safety(generation);
+    expect(request.mock.calls.map(([, message]) => message.op)).not.toContain('clipboardSync');
+    await expect(connection.credential(generation, 'unlock', undefined)).rejects.toThrow(
+      'CREDENTIAL_UNAVAILABLE',
+    );
+    expect(credentials.run).not.toHaveBeenCalled();
+    // Closing, even for a local lock, never locks the computer showing the device.
+    connection.close(generation, true);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenLastCalledWith(
+        'computer-a',
+        { op: 'stop', lease: 'lease-s' },
+        expect.any(Function),
+      ),
+    );
+  });
+});
+
 // Unit: negotiate the host-enforced policy before sending it, and persist live edits.
 it.each([true, false])('negotiates idle protection only for capable hosts: %s', async (supported) => {
   let preferences = { ...DEFAULT_VIEWER_PREFERENCES };

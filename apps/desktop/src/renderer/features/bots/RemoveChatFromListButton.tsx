@@ -21,7 +21,7 @@ export function RemoveChatFromListButton({ groupId, onRemoved }: { groupId: stri
     const owner = getDataOwnerGeneration();
     const current = () => active.current && isDataOwnerGenerationCurrent(owner);
     try {
-      if (!await confirm({ presentation: 'standard', title: t('bots.groupChat.lifecycle.hide'), description: t('bots.groupChat.lifecycle.hideNote'),
+      if (!await confirm({ title: t('bots.groupChat.lifecycle.hide'), description: t('bots.groupChat.lifecycle.hideNote'),
         confirmText: t('bots.groupChat.lifecycle.hide'), cancelText: t('bots.cancel'), confirmVariant: 'destructive' }) || !current()) return;
       const result = await window.electronAPI.maker.chatServer.manage({ groupId, action: { type: 'hide' } });
       if (!current()) return;

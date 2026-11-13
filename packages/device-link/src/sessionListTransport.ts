@@ -32,21 +32,20 @@ export function encodeSessionTagCatalog(
     !Array.isArray(value)
   )
     return value;
-  const tags: unknown[] = [];
-  const byValue = new Map<string, number>();
+  // Index references preserve even differing snapshots of the same ID exactly.
+  // Numbering follows the snapshot text, not row order, so a task moving to the top
+  // does not renumber every other row (keeps repeated lists byte-stable for deltas).
+  const byValue = new Map<string, unknown>();
+  for (const row of value) {
+    if (!record(row) || !Array.isArray(row.tags)) continue;
+    for (const tag of row.tags) byValue.set(JSON.stringify(tag), tag);
+  }
+  const keys = [...byValue.keys()].sort();
+  const indexOf = new Map(keys.map((key, index) => [key, index]));
+  const tags = keys.map((key) => byValue.get(key));
   const sessions = value.map((row) => {
     if (!record(row) || !Array.isArray(row.tags)) return row;
-    // Index references preserve even differing snapshots of the same ID exactly.
-    const tagIds = row.tags.map((tag) => {
-      const key = JSON.stringify(tag);
-      let index = byValue.get(key);
-      if (index === undefined) {
-        index = tags.length;
-        byValue.set(key, index);
-        tags.push(tag);
-      }
-      return index;
-    });
+    const tagIds = row.tags.map((tag) => indexOf.get(JSON.stringify(tag))!);
     const { tags: _tags, ...rest } = row;
     return { ...rest, tagIds };
   });

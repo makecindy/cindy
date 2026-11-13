@@ -500,7 +500,7 @@ describe('sendToSession ordering', () => {
     expect(createBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {');
     expect(createBranch).toContain('planMode: false,');
     expectOrder(createBranch, 'onAccepted: async () => {', 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {');
-    expectOrder(createBranch, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await createDbMessage(session.id, {');
+    expectOrder(createBranch, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await persistUserTurnMessage(session.id, {');
     expect(createBranch).toContain('content: persistedContent ?? message,');
     expect(createBranch).not.toContain('persist user message failed (non-fatal)');
     expect(createBranch).toContain('if (isSessionRunningError(err))');
@@ -532,11 +532,11 @@ describe('sendToSession ordering', () => {
       createBranch.indexOf(sendCallEndNeedle) + sendCallEndNeedle.length,
     );
 
-    expect(acceptedBlock).toContain('await createDbMessage(session.id, {');
+    expect(acceptedBlock).toContain('await persistUserTurnMessage(session.id, {');
     expect(acceptedBlock).toContain('notifyAgentIslandUserPrompt(session, persistedContent ?? message, {');
     expect(acceptedBlock).toContain('broadcastSessionCreated(session.id);');
-    expectOrder(acceptedBlock, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await createDbMessage(session.id, {');
-    expectOrder(acceptedBlock, 'await createDbMessage(session.id, {', 'broadcastSessionCreated(session.id);');
+    expectOrder(acceptedBlock, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await persistUserTurnMessage(session.id, {');
+    expectOrder(acceptedBlock, 'await persistUserTurnMessage(session.id, {', 'broadcastSessionCreated(session.id);');
     expect(afterSendResolves).not.toContain('broadcastSessionCreated(session.id);');
     expect(countOccurrences(sendCall, 'broadcastSessionCreated(session.id);')).toBe(1);
   });
@@ -738,8 +738,8 @@ describe('sendToSession ordering', () => {
     const block = extractSendToSessionSource();
     // 同 sendPersistedUserMessageToSession 的顺序硬约束(Codex review P2):
     // prompt preview 可先发,但 accepted 副作用仍必须等落库成功后才执行。
-    expectOrder(block, 'notifyAgentIslandUserPrompt(previewSessionMeta', 'await createDbMessage(targetSessionId, {');
-    expectOrder(block, 'await createDbMessage(targetSessionId, {', 'await runAcceptedCallback(onAccepted, targetSessionId, clientId);');
+    expectOrder(block, 'notifyAgentIslandUserPrompt(previewSessionMeta', 'await persistUserTurnMessage(targetSessionId, {');
+    expectOrder(block, 'await persistUserTurnMessage(targetSessionId, {', 'await runAcceptedCallback(onAccepted, targetSessionId, clientId);');
     const liveBranch = extractBetween(
       block,
       'live = maker.getSession(targetSessionId);',

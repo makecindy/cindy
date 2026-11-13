@@ -15,6 +15,7 @@ vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn() },
 }));
 
+import appI18n from 'i18next';
 import { UserPromptSection } from '../UserPromptSection';
 
 describe('UserPromptSection placeholder', () => {
@@ -29,4 +30,17 @@ describe('UserPromptSection placeholder', () => {
     // 占位档本身已是最淡的文字档(DESIGN.md §10 规则 6),再叠透明度会淡到看不见。
     expect(textarea.className).not.toMatch(/placeholder:opacity-/);
   });
+});
+
+it('updates the counter locale without changing the draft length', () => {
+  const original = appI18n.language;
+  try {
+    appI18n.language = 'en';
+    const view = render(<UserPromptSection />);
+    const counter = () => view.container.querySelector('[aria-live="polite"]')!.textContent;
+    const english = counter();
+    appI18n.language = 'de';
+    view.rerender(<UserPromptSection />);
+    expect(counter()).not.toBe(english);
+  } finally { appI18n.language = original; }
 });

@@ -9,11 +9,36 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createPrivateNetwork, generateIdentity, signature, verifyCertificate } from '@cindy/agent-net-relay';
 import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { MEDIA_ENCRYPTED_HEADER_BYTES as HEADER } from '@cindy/agent-net-protocol';
-import { PortableAgentNetClient } from '../portableClient.js';
+import { PortableAgentNetClient, type BinarySocket } from '../portableClient.js';
 import { readNativeMedia } from '../nativeMedia.js';
 import type { NativeEnginePort } from '../nativeTransport.js';
 
 afterEach(() => vi.useRealTimers());
+
+// App routing protocol, unit: real portable signing/WS handshake and presence
+// serializer. Media tests never sent presence, so dropping metadata was invisible.
+it('sends the App label in portable presence and accepts additive directory metadata', async () => {
+  const identity = generateIdentity('app-controller'), { bootstrap } = createPrivateNetwork('App metadata', identity);
+  let receive: BinarySocket['onmessage'] = null, ready!: () => void;
+  const listening = new Promise<void>(resolve => { ready = resolve; });
+  const send = vi.fn();
+  const ws: BinarySocket = { readyState: 1, bufferedAmount: 0, binaryType: '', onerror: null, onclose: null,
+    get onmessage() { return receive; }, set onmessage(callback) { receive = callback; ready(); }, send, close() {} };
+  const api = new PortableAgentNetClient('https://relay.example.test', { identity,
+    sign: async text => signature(identity.signingPrivateKey, text), random: async () => Buffer.alloc(32, 17).toString('base64url') },
+    bootstrap.ownerCertificate, bootstrap.rootPublicKey, { verifyCertificate, assertCurrent() {},
+      sha256: value => createHash('sha256').update(value).digest('base64url'), createWebSocket: () => ws });
+  const connected = api.connect();
+  await listening;
+  ws.onmessage!({ data: JSON.stringify({ type: 'hello', deviceId: identity.deviceId, protocolVersion: 2,
+    devices: [{ certificate: bootstrap.ownerCertificate, name: 'Phone', app: 'cindy', online: true, remoteControlEnabled: false, capabilities: [] }], delegations: [] }) });
+  const uplink = await connected;
+  try {
+    uplink.presence(false, [], { platform: 'ios', app: 'cindy' });
+    expect(JSON.parse(send.mock.calls.at(-1)![0] as string)).toMatchObject({ type: 'presence', app: 'cindy', platform: 'ios' });
+    expect(uplink.devices[0].app).toBe('cindy');
+  } finally { uplink.close(); }
+});
 function fixture(complete = false, kind: 'portable' | 'node' = 'portable', requestFetch?: typeof fetch, assertCurrent = () => {}) {
   const identity = generateIdentity('media-controller'), { bootstrap } = createPrivateNetwork('Media cancellation', identity);
   let upstream!: AbortSignal, source!: ReadableStreamDefaultController<Uint8Array>;

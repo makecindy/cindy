@@ -69,7 +69,7 @@ export function InteractionPromptCardShell({
         )}
       >
         <div className="flex min-w-0 items-center gap-[12px]">
-          <span className="min-w-0 truncate text-14 font-semibold text-[var(--plan-min-title)]">
+          <span className="min-w-0 truncate text-14 font-medium text-[var(--plan-min-title)]">
             {minimizedTitle}
           </span>
           {minimizedMeta ? (

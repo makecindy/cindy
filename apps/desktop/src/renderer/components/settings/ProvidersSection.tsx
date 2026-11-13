@@ -3,6 +3,7 @@ import { providersSettings } from './ProvidersSection.settings-search';
 import {
   BorrowedProviderModels,
   borrowedProviderModelCount,
+  ProviderOwnComputersStatus,
   ProviderRunLocationSubtitle,
 } from './ProviderRunLocationRow';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
@@ -846,6 +847,11 @@ function DetailHeader({
                   </span>
                 )}
               </span>
+              {provider ? (
+                <span className="flex min-w-0" style={{ color: 'var(--settings-integration-subtitle)' }}>
+                  <ProviderOwnComputersStatus provider={provider} />
+                </span>
+              ) : null}
             </div>
           </div>
 
@@ -3031,7 +3037,6 @@ export function ProvidersSection() {
       try {
         const scope = await window.electronAPI.maker.listProviders();
         const ok = await confirm({
-          presentation: 'standard',
           title: t('settings.providers.custom.deleteConfirm.title'),
           description: t('settings.providers.custom.deleteConfirm.description', { name: p.name }),
           confirmText: t('settings.providers.custom.deleteConfirm.confirm'),

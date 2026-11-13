@@ -101,11 +101,11 @@ export function ProviderSharePasteDialog({ onClose }: { onClose: () => void }) {
           )}
         </FormField>
         <ProviderShareDialogFooter>
-          <Button type="submit" variant="cta" palette="confirmation" size="lg">
-            {t('providerShare.received.pasteDialog.open')}
-          </Button>
           <Button variant="secondary" palette="confirmation" size="lg" onClick={onClose}>
             {t('providerShare.received.pasteDialog.cancel')}
+          </Button>
+          <Button type="submit" variant="cta" palette="confirmation" size="lg">
+            {t('providerShare.received.pasteDialog.open')}
           </Button>
         </ProviderShareDialogFooter>
       </form>

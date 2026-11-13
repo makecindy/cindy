@@ -67,6 +67,11 @@
 
 | 英文 | 语言 | 译法 | 什么场合 |
 | --- | --- | --- | --- |
+| **Active** | fr | actif | 默认 |
+| Active | fr | Actif | 标题或状态标签使用大写首字母。 |
+| Active | fr | active | 阴性名词使用 active / actives，阳性复数 actifs 已包含标准词干。 |
+| **Active** | de | Aktiv | 默认 |
+| Active | de | aktiv | 句中形容词使用小写，并按性、数、格变为 aktive / aktiven 等。 |
 | **Active** | zh-CN | 活跃 | 默认 |
 | Active | zh-CN | 生效中 | 计费语境（"no active subscription"→没有生效中的订阅），指订阅状态而非活跃度 |
 | **Active** | zh-TW | 活躍 | 默认 |
@@ -418,6 +423,10 @@ Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 a
 
 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
 
+### Cindy Friend
+
+Agent-Net App name supplied by the product request; preserve the brand in every locale.
+
 ### Cindy Make
 
 用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。
@@ -570,6 +579,10 @@ GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 G
 
 伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
 
+### Group Cindy
+
+每个服务器群自带的那位 Cindy 成员（docs/product-rules/bot-group-chat.md 第 9 节，2026-11-12）：谁 @ 它就在谁自己的电脑上替他做事，不属于任何人，也不是个人伙伴。名字各语言都叫 Cindy，群管理开关与说明里用这个称呼；不叫「群助手」「群伙伴」「默认伙伴」。先登记为 proposed，等 UI 走查后再定。
+
 ### Main Chat
 
 伙伴群聊的主时间线（产品规则里也称「主群」），与话题相对。中文 UI 写「群聊」（如「同时发到群聊」「贴回群聊」），不写「主聊天」——「聊天」是 Chat 条目的禁用译法。贴回指把话题回复以引用形式发到这里，原回复不移动。
@@ -704,7 +717,7 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 ### Model Group
 
-用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一条条「路线」（几个来源加一种选法，可选推理强度，英文 Route；2026-11-11 原「模式」并入路线）；这个词只在模型组语境下这样用，不约束网络路由等其它语境。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。
+用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。
 
 ### Model ID
 
