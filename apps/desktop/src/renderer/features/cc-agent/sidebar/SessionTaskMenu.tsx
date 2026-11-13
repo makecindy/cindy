@@ -229,7 +229,8 @@ function ActiveSessionTaskMenu({
       <DropdownMenuContent
         align="start"
         sideOffset={sideOffset}
-        className="min-w-32 overflow-hidden"
+        collisionPadding={8}
+        className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-32 overflow-y-auto"
         onClick={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
           if (dialog) event.preventDefault();
