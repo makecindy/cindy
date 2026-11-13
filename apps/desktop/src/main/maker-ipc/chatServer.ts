@@ -3102,10 +3102,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       };
       const chronological = (messages: Message[]) => [...messages].sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
       const request = { currentRequest: source ? { ...focusMessage(source), location: thread ? 'thread' : 'main' } : { id: execution.source_message_id, unavailable: true } };
+      const talk = run.plan?.kind === 'talk' ? run.plan : undefined;
+      // Queue answers already have bounded handoffs below. Keep them out of both
+      // full and incremental Thread background, including the recovery snapshot.
+      const talkAnswerIds = new Set(talk?.steps.filter(step => step.position < execution.plan_step!)
+        .flatMap(step => step.resultMessageId ? [step.resultMessageId] : []));
+      const threadBackground = (messages: Message[]) => messages.filter(message => !talkAnswerIds.has(message.id));
       // A Thread lane gets its Thread alone; the main lane gets the main group without Thread replies.
       const fullConversation = digest ? { messages: chronological(history).map(promptMessage) } : thread ? {
         thread: { root: thread.root ? focusMessage(thread.root) : { id: threadRootId, unavailable: true },
-          replies: chronological(textHistory).map(focusMessage), earlierRepliesOmitted: thread.earlierRepliesOmitted },
+          replies: chronological(threadBackground(textHistory)).map(focusMessage), earlierRepliesOmitted: thread.earlierRepliesOmitted },
       } : run.plan?.kind === 'talk' ? mainGroupContext(chronological(history.filter(message =>
         !message.threadRootId && source && BigInt(message.seq) <= BigInt(source.seq))), promptMessage)
         // The shortened main-group context belongs to single-speaker servers; older ones keep the full projection.
@@ -3114,7 +3120,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const conversation = previous ? thread ? { thread: {
         root: thread.root ? previous.seen.get(thread.root.id) === messageVersion(thread.root)
           ? { id: thread.root.id, retainedInContext: true } : focusMessage(thread.root) : { id: threadRootId, unavailable: true },
-        replies: chronological(additions).map(focusMessage), earlierRepliesOmitted: false,
+        replies: chronological(threadBackground(additions)).map(focusMessage), earlierRepliesOmitted: false,
       } } : run.plan?.kind === 'talk' ? fullConversation : {
         messages: chronological(additions.filter(m => !m.threadRootId)).map(mainMessage),
       } : fullConversation;
@@ -3126,7 +3132,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...additions.filter(m => !m.threadRootId),
         ].map(m => [m.id, m])).values()]).map(mainMessage),
       } : fullConversation;
-      const talk = run.plan?.kind === 'talk' ? run.plan : undefined;
       // Teammates ask each other with @ (bot-group-chat.md §4.0): the reply's @ wakes whom it names.
       // The speaker stays in the name table (its own name must not resolve to a namesake) and is
       // dropped from the result; alone, it has nobody to name.
