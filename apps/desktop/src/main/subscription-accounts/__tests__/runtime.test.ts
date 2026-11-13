@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   rpc: vi.fn(),
   tokens: vi.fn(),
   usage: vi.fn(),
+  modelCacheRead: vi.fn(),
   login: vi.fn(),
   bound: true,
   shared: true,
@@ -67,7 +68,7 @@ vi.mock('../nativeCli.js', () => ({
 vi.mock('../../maker-host/codex-home-path.js', () => ({
   getCodexHome: () => '/existing-cindy/codex-home',
 }));
-vi.mock('node:fs/promises', () => ({ mkdir: vi.fn() }));
+vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead }));
 vi.mock('../legacyAccountAccess.js', () => ({
   legacyCodexAccountCanRun: h.accountAllowed,
   openAiRouteAllowsModel: h.routeAllowed,
@@ -110,6 +111,9 @@ import {
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
   refreshSubscriptionPool,
+  refreshSubscriptionPoolCodexModels,
+  readSubscriptionPoolCodexModels,
+  resetDefaultSubscriptionCodexDiscovery,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
   readSubscriptionPoolModelAvailability,
@@ -154,6 +158,7 @@ beforeEach(() => {
     chatgptAccountId: directory, canDispatch: () => true,
   }));
   h.usage.mockReset().mockResolvedValue({});
+  h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
   h.login.mockReset().mockResolvedValue(undefined);
   h.legacyRead.mockReset().mockResolvedValue({
     authenticated: true,
@@ -170,6 +175,114 @@ beforeEach(() => {
   h.cooling = {};
   h.writeCooling.mockReset().mockResolvedValue(undefined);
   h.clearCooling.mockReset().mockResolvedValue(undefined);
+});
+
+// Unit regression (2026-11-13): native accounts had auth/quota snapshots but no
+// independent model discovery. Existing dispatch tests never read the supplier
+// catalog after default logout. Minimal input: default revoked, second healthy.
+describe('pooled Codex model discovery', () => {
+  it('publishes only healthy saved accounts, restores the default, and fails closed without a healthy account', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    let defaultHealthy = false;
+    let secondHealthy = true;
+    h.read.mockImplementation(async (_provider: string, directory: string) => ({
+      authenticated: directory.endsWith('default') ? defaultHealthy : secondHealthy,
+      identity: directory,
+    }));
+    h.rpc.mockImplementation(async (directory: string, method: string, params: { cursor: string | null }) => {
+      expect(method).toBe('model/list');
+      return { data: [{ id: directory.endsWith('default') ? 'default-model' : params.cursor ? 'second-page' : 'healthy-model' }],
+        nextCursor: directory.endsWith('second') && !params.cursor ? 'page-2' : null };
+    });
+    h.modelCacheRead.mockImplementation(async (file: string) => JSON.stringify({ models: [{
+      slug: 'healthy-model', visibility: 'list', supported_in_api: true,
+      context_window: file.includes('second') ? 600_000 : 100_000,
+      input_modalities: ['text', 'image'],
+    }, { slug: 'cache-only-model', visibility: 'list', supported_in_api: true }] }));
+    await refreshSubscriptionPool('openai');
+    await Promise.all([refreshSubscriptionPoolCodexModels(), refreshSubscriptionPoolCodexModels()]);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['healthy-model', 'second-page']);
+    expect(readSubscriptionPoolCodexModels()?.[0]).toMatchObject({ contextWindow: 600_000, supportsImageInput: true });
+    expect(h.rpc).toHaveBeenCalledTimes(2);
+    const lease = await acquireSubscriptionAccount('openai', 'healthy-model', [], false, { remote: true });
+    expect(lease?.account.configDir).toBe('openai/second');
+    lease?.release();
+    defaultHealthy = true;
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['default-model', 'healthy-model', 'second-page']);
+    resetDefaultSubscriptionCodexDiscovery(false);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['healthy-model', 'second-page']);
+    resetDefaultSubscriptionCodexDiscovery(true);
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    h.pools.openai.accounts[1].paused = true;
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['default-model']);
+    defaultHealthy = false;
+    secondHealthy = false;
+    await refreshSubscriptionPool('openai', true);
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    await expect(acquireSubscriptionAccount('openai', 'healthy-model', [])).rejects.toThrow('No subscription account');
+    h.owner = 'other-owner';
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+  });
+
+  it('drops stale in-flight discovery on owner/login changes and never publishes partial or failed lists', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('second')] };
+    await refreshSubscriptionPool('openai');
+    let complete!: (value: unknown) => void;
+    h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const old = refreshSubscriptionPoolCodexModels();
+    h.owner = 'next-owner';
+    complete({ data: [{ id: 'old-owner-model' }], nextCursor: null });
+    await old;
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    await refreshSubscriptionPool('openai');
+    h.rpc.mockImplementation(async (_directory: string, _method: string, params: { cursor: string | null }) => {
+      if (params.cursor) throw new Error('model list failed');
+      return { data: [{ id: 'partial-model' }], nextCursor: 'next' };
+    });
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    const calls = h.rpc.mock.calls.length;
+    await refreshSubscriptionPoolCodexModels();
+    expect(h.rpc).toHaveBeenCalledTimes(calls);
+    await refreshSubscriptionPool('openai', true);
+    h.rpc.mockResolvedValue({ data: [{ id: 'new-owner-model' }], nextCursor: null });
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['new-owner-model']);
+    await refreshSubscriptionPool('openai', true);
+    h.rpc.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const beforeLogin = refreshSubscriptionPoolCodexModels();
+    h.read.mockResolvedValue({ authenticated: true, identity: 'different-login' });
+    await refreshSubscriptionPool('openai', true);
+    complete({ data: [{ id: 'stale-login-model' }], nextCursor: null });
+    await beforeLogin;
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+    h.pools.openai.disconnected = true;
+    expect(readSubscriptionPoolCodexModels()).toEqual([]);
+  });
+
+  // Unit timing regression: local-control can revoke the default credential
+  // while the pool's earlier account/read is still in flight. Its late success
+  // must not restore default-only membership over the healthy second account.
+  it('keeps a revoked default excluded when an earlier auth read finishes late', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.rpc.mockImplementation(async (directory: string) => ({ data: [{ id: directory }], nextCursor: null }));
+    await refreshSubscriptionPool('openai');
+    await refreshSubscriptionPoolCodexModels();
+    let finishAuth!: (value: unknown) => void;
+    h.read.mockImplementation(async (_provider: string, directory: string) => directory.endsWith('default')
+      ? new Promise(resolve => { finishAuth = resolve; }) : { authenticated: true, identity: 'account' });
+    const reading = refreshSubscriptionPool('openai', true);
+    resetDefaultSubscriptionCodexDiscovery(false);
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['openai/second']);
+    finishAuth({ authenticated: true, identity: 'account' });
+    await reading;
+    await refreshSubscriptionPoolCodexModels();
+    expect(readSubscriptionPoolCodexModels()?.map(m => m.id)).toEqual(['openai/second']);
+  });
 });
 
 // Regression: added OpenAI accounts had neither reset RPC routing nor an automatic
