@@ -672,6 +672,11 @@ describe('provider catalog realm reload', () => {
       h.pool = null;
       h.placement = {};
       h.refreshed.clear();
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
+
   // #10405, unit: owner reset and a failed next-owner DB read must remove account-derived
   // provider names too. Previous owner-reset coverage only injected custom configurations.
   it.each(['owner-reset', 'read-failure'] as const)('clears created subscription providers on %s', async reason => {
