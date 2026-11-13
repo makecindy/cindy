@@ -199,6 +199,11 @@ describe('MemoryStorage · 分片地址解析', () => {
     expect(await readFile(path.join(dir, 'project_fresh-note.md'), 'utf8')).toContain('v1');
   });
 
+  it('工具描述里给出的示例 project_foo.md 能直接写入', async () => {
+    // 描述里的示例值就是模型照着发的值: 示例本身不可用等于又把调用方骗一次 (#10274 review)
+    await expect(storage.write(opts('project_foo.md'))).resolves.toMatchObject({ filename: 'project_foo.md' });
+  });
+
   it('新建时拒绝 <type>- 前缀, 建议的纯 slug 可直接重发', async () => {
     const suggestion = await suggestionOf('project-fresh');
     expect(await missing('project_project-fresh.md')).toBe(true);
