@@ -332,6 +332,10 @@ done.addEventListener('click', async () => {
 // 加入页面现有 teardown 清理：state.dispose()；不要覆盖其它清理逻辑。
 ```
 
+官方 `App` 没有可叠加的 teardown 注册接口；如果页面要自己设置 `app.onteardown`，请在创建
+`createViewState`（或 React hook）之前设置。辅助模块随后会在该处理器上叠加页面状态写出，
+之后再赋值会替换这层写出逻辑。
+
 `set(value | updater)` 返回 void，更新本地状态且失败不回滚屏幕；使用完整不可变对象。
 同值不重发。`-32602` 只提示一次固定错误，不打印状态；暂时错误或断线也不自动重试。
 同一失败值重复 set/flush 不重试，下一次真实变化才再保存。
