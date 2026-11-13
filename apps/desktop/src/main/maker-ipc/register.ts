@@ -698,7 +698,7 @@ import {
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
-import { withChatServer } from './chatServer.js';
+import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -20936,6 +20936,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item), broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info })),
     beforeDispatchUserTurn: async (sessionId, item, signal) => {
+      if (isRetiredGroupWelcomeInput(item)) throw new Error('INVALID_EXECUTION_TRIGGER');
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
@@ -20980,7 +20981,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: async (sessionId) => {
       await restoreSavedUsageLimitWait(sessionId);
-      return loadAgentInputQueueSnapshot(sessionId);
+      return (await loadAgentInputQueueSnapshot(sessionId)).filter(item => !isRetiredGroupWelcomeInput(item));
     },
     getPersistedClientIds: getPersistedInputClientIds,
   });
