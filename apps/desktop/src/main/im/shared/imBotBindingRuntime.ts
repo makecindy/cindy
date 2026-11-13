@@ -8,7 +8,7 @@
  *   - 群 / 话题 / 外部用户私聊 → bots.ts 的 channel 专线(幂等创建);
  *   - 发送前守卫 → register.ts 的 prepareBotSessionForImSend(与桌面发送同源)。
  *
- * 一份连接实例只属于一位伙伴, 所以归属解析就是常量 botId。
+ * 独立连接使用固定归属；个人微信单实例通过回调读取当前伙伴归属。
  */
 
 import { eq } from 'drizzle-orm';
@@ -21,7 +21,8 @@ import {
 } from '../../localDb/ipc/bots';
 import { botProfiles, sessions } from '../../localDb/schema';
 import { resolveBotCanonicalSession } from '../../maker-ipc/botCanonicalSessionRegistry';
-import { prepareBotSessionForImSend, tryGetBotDelegationService } from '../../maker-ipc/register';
+import { broadcastSessionCreated, prepareBotSessionForImSend } from '../../maker-ipc/register';
+import { ensureBotCanonicalSession } from '../../maker-ipc/botCanonicalSessionEnsure.js';
 import type { ImCompanionRouteDeps, ImCompanionSessionResult } from './imBotBindingRoute';
 
 async function readProfileStatus(botId: string): Promise<string | null> {
@@ -42,9 +43,9 @@ async function isActiveSession(sessionId: string): Promise<boolean> {
   return row?.status === 'active' && row.source === 'bot';
 }
 
-export function createImCompanionRouteDeps(ownerBotId: string): ImCompanionRouteDeps {
+export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {
   return {
-    readBinding: () => ownerBotId,
+    readBinding: () => typeof ownerBotId === 'function' ? ownerBotId() : ownerBotId,
 
     async resolveSession({ botId, target, create }): Promise<ImCompanionSessionResult | null> {
       if (!create) {
@@ -65,11 +66,7 @@ export function createImCompanionRouteDeps(ownerBotId: string): ImCompanionRoute
         return sessionId ? { ok: true, sessionId, created: false } : null;
       }
       if (target.kind === 'canonical') {
-        const service = tryGetBotDelegationService();
-        if (!service) {
-          return { ok: false, errorCode: 'DELEGATION_UNAVAILABLE', message: '伙伴消息服务尚未就绪' };
-        }
-        const ensured = await service.ensureCanonicalSession(botId);
+        const ensured = await ensureBotCanonicalSession(botId, { onCreated: broadcastSessionCreated });
         return ensured.ok
           ? { ok: true, sessionId: ensured.sessionId, created: false }
           : { ok: false, errorCode: ensured.errorCode, message: ensured.message };

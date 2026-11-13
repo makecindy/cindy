@@ -141,7 +141,7 @@ export async function recordSessionTurnSpend(
           : current
         : (current ?? legacy);
     if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcast(
+    broadcastSessionSpend(
       {
       sessionId,
       totalMoney,
@@ -154,7 +154,8 @@ export async function recordSessionTurnSpend(
   }
 }
 
-function broadcast(payload: SessionSpendPayload, ownerScope: OwnerScope | null = null): void {
+export function broadcastSessionSpend(payload: SessionSpendPayload, ownerScope: OwnerScope | null = null): void {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   // device-link 旁路:控制端经 sessions topic(列表订阅常开,会话未打开也不丢)收到
   // 累计 cost 镜像(本模块走裸 UPDATE、不发 sessions:patched,没有这条 tap 控制端的
@@ -196,13 +197,14 @@ export async function recordSessionTurnTokens(
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
     if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcastTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
+    broadcastSessionTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnTokens failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
-function broadcastTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
+export function broadcastSessionTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   if (ownerScope === null) {
     broadcastTap.tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload);
@@ -221,7 +223,7 @@ function broadcastTokens(payload: SessionTokensPayload, ownerScope: OwnerScope |
 }
 
 /**
- * 写入本 session 的 context 快照 (turn 结束时由 register.ts 调)。
+ * 写入本 session 的 context 快照（turn 结束或成功的 Pi 压缩边界）。
  *
  * 字段写入语义:
  *   - contextTokens: 总是覆盖写 (包括 0 —— SDK 自动压缩后真值可能很小, 不能因 ">0"
@@ -230,7 +232,7 @@ function broadcastTokens(payload: SessionTokensPayload, ownerScope: OwnerScope |
  *   - contextWindow: 仅在 > 0 时写 (0 = "SDK 未给", 不能覆盖已有真值;
  *     与 usage-tracker.ts:84-86 setContextWindow 同语义)
  *
- * 调用方 (register.ts) 已确保只在 turn end 调一次, 不会高频 IO。
+ * 调用方仅在这些离散边界记录，不跟随 token 流高频写入。
  */
 export async function recordSessionContextSnapshot(
   sessionId: string,

@@ -18,7 +18,7 @@ import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { createLogger } from '../logger.js';
 import { getCurrentDataOwnerId } from '../authManager';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { wireSessionToIpc } from '../maker-ipc/register.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getDbClient } from '../localDb/client/current';
@@ -66,7 +66,7 @@ export interface StartLearnHostDeps {
   maker: Maker;
   /** learn:event 广播到 renderer(bootstrap 注入 broadcastToAllWindows 包装)。 */
   broadcast: (payload: LearnEventPayload) => void;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** hub 源:拉市场 skill 详情 + 可用已发布文件(bootstrap 注入,/learn hub:<slug>
    *  与 skill hub「学习此技能」共用)。未注入时 hub 源请求报 INVALID_PARAMS(兜底)。 */
@@ -135,7 +135,7 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
         {
           fallbackModel: newTaskDefault?.model,
           desiredEffort: originMeta?.effort,
-          desiredFastMode: originMeta?.fastMode === true,
+          desiredFastMode: originMeta?.fastMode ?? false,
         },
       );
       if (route.degraded) {

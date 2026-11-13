@@ -6,7 +6,7 @@ import type {
 import type { RoutineInput } from '@cindy/maker-scheduler';
 
 export interface ImportSource {
-  kind: CompanionImportSourceKind;
+  kind: CompanionImportSourceKind | 'cindy';
   agentId: string;
   name: string;
   root: string;
@@ -22,6 +22,9 @@ export interface ImportFile {
   /** Host-validated native Python interpreter; retain its runtime/library location. */
   interpreterLink?: string;
 }
+
+/** Main-only vault identity, never an arbitrary filesystem path. */
+export interface ImportResourceRef { key: string; id: string; digest: string }
 
 export interface ImportedMcpServer {
   name: string;
@@ -44,6 +47,11 @@ export interface ImportItem {
   /** Stable index in the originating preview, retained in selected-only checkpoints. */
   sourceIndex?: number;
   files?: ImportFile[];
+  skillArchive?: ImportResourceRef;
+  /** Only known credentials actually found in archived selected content. */
+  archiveRedactions?: Record<string, string>;
+  /** Compact references found by streaming resources used by automations. */
+  resourceReferences?: string;
   sourceDirectory?: string;
   sourceAlias?: string;
   /** Failed document or subtree read; retained for an explicit retry. */
@@ -75,6 +83,8 @@ export interface ImportItem {
 }
 
 export interface ImportSnapshot {
+  nativePackage?: import('../../shared/botMarket.js').BotPackageIdentity & { description: string; locale?: string;
+    opening?: import('../../shared/botMarket.js').BotPackageOpening };
   source: ImportSource;
   items: ImportItem[];
   avatarImageBase64?: string;

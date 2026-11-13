@@ -113,6 +113,28 @@ export function companionPluginWorkEntries(items: readonly import('./messageRend
   return entries;
 }
 
+// Stands in for any other row that directly follows a tool call: it keeps the call's "next row"
+// boundary for legacy adjacency pairing without carrying the streaming row's changing identity.
+const PAIRING_BOUNDARY_ROW: RemoteMessage = {
+  id: '', clientId: '', sessionId: '', role: 'assistant', content: '', toolUseId: null, agentMeta: null, createdAt: '',
+};
+
+/**
+ * The rows collectCompanionPluginInvocations reads: user and tool rows, plus a fixed boundary
+ * wherever another row sits right after a tool call. Elements stay the store's own objects, so
+ * the result is element-identical across streaming flushes that only change assistant output.
+ */
+export function companionPluginSourceMessages(messages: readonly RemoteMessage[]): RemoteMessage[] {
+  const rows: RemoteMessage[] = [];
+  let afterToolUse = false;
+  for (const message of messages) {
+    if (message.role === 'user' || message.role === 'tool_use' || message.role === 'tool_result') rows.push(message);
+    else if (afterToolUse) rows.push(PAIRING_BOUNDARY_ROW);
+    afterToolUse = message.role === 'tool_use';
+  }
+  return rows;
+}
+
 /** History work rows may be deferred placeholders; derive identity from available source messages. */
 export function collectCompanionPluginInvocations(messages: readonly RemoteMessage[]) {
   return collectPluginInvocations(messages, buildMessageToolResultPairing(messages, {

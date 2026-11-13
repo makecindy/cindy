@@ -27,6 +27,9 @@
  * 正确。后续要精确区分时再与 maker-core 一起演进。
  */
 
+import { beginChannelToolScope } from '../im/shared/channelToolScope.js';
+import { getSessionRuntimeStartOverride } from '../maker-ipc/sessionRuntimeControl.js';
+
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -53,6 +56,7 @@ import {
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
+import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
@@ -60,6 +64,7 @@ import {
   acquirePendingAgentSwitchForImSend,
   beginTurnChangeSetAtDispatch,
   prepareUnhealthySessionForSend,
+  prepareBotSessionForImSend,
   wireSessionToIpc,
   isSessionInTurn,
   noteSilentStopUserSend,
@@ -81,7 +86,7 @@ import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.j
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
-import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
@@ -97,13 +102,14 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 
-import { resolveSafe as resolveXdtImage } from '../imageCacheStore.js';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
+import { resolveSafe as resolveXdtImage } from '../imageCacheStore.desktop.js';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop.js';
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
 import { isImDefaultPermissionMode } from '../../shared/imDefaultSettings.js';
-import { readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
+import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
+import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
   getWorkspacePref,
@@ -126,6 +132,7 @@ import { describeInteractionSource } from '../im/shared/interactionSource';
 import { hookAutoReviewReferences } from '../im/shared/autoReviewReferences.js';
 import { isQuotaExhaustionFailure, terminalErrorText } from '../im/shared/turnRetryNotice.js';
 import { resolveSessionErrorContext } from '../im/shared/sessionProviderLabel.js';
+import { unlinkLocalFileLinks } from '../im/shared/localFileLinks.js';
 import { fingerprintImDefaultSettings } from '../im/shared/channelDefaultRoute.js';
 import { createDefaultRouteFollower } from '../im/shared/channelDefaultRouteSync.js';
 import { isHookDefaultRouteRow, writeHookDefaultRouteRecord } from './defaultRouteFollow.js';
@@ -139,6 +146,7 @@ import {
   type HookSessionRunner,
 } from './dispatcher.js';
 import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defaults.js';
+import { resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import { decodeAttachments, sanitizeAttachmentName } from './attachments.js';
 import {
   cancelHookInteraction,
@@ -146,7 +154,9 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.desktop.js';
+import { imText } from '../im/shared/imText.js';
+import { modernLocaleOf } from '../../shared/locale.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
@@ -154,11 +164,12 @@ type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel
 function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
   switch (value) {
     case 'telegram':
-      // `source.im=telegram` identifies the official server-backed hook here,
-      // not the authenticated personal-bot adapter. Keep managed package
-      // mutations on the Desktop confirmation path.
-      return { kind: 'hook', source: value };
     case 'feishu':
+      // `source.im=telegram|feishu` identifies the official server-backed hook
+      // here, not the authenticated personal-bot adapter that shares the same
+      // channel id. Keep managed package mutations on the Desktop confirmation
+      // path: a personal-bot `im` origin would let an official relay turn skip it.
+      return { kind: 'hook', source: value };
     case 'discord':
     case 'slack':
     case 'wechat':
@@ -170,8 +181,10 @@ function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin
   }
 }
 
-/** 路由不可用时附在错误后的恢复指引(渠道回帖与 request ledger 都看得到)。 */
-const ROUTE_RESELECT_HINT = '。请在 设置 → IM 机器人 中为这个渠道的工作目录重新选择模型。';
+/** 路由不可用时附在错误后的恢复指引(渠道回帖与 request ledger 都看得到; 抛错时按界面语言现取)。 */
+function routeReselectHint(): string {
+  return imText('imBot.text.hook.run.routeReselectHint');
+}
 
 type HookDispatchOverrides = {
   agentKind: string | null;
@@ -192,7 +205,9 @@ function hookDefaultInputs(
   workspaceCtx: HookWorkspaceCtx | undefined,
 ) {
   const prefsChannel: HookPrefsChannel | null =
-    sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' ? sourceIm : null;
+    sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' || sourceIm === 'feishu'
+      ? sourceIm
+      : null;
   const workspaceAlias = workspaceCtx?.alias;
   const localPref =
     prefsChannel !== null && workspaceAlias
@@ -253,7 +268,24 @@ async function resolveNewSessionConfig(
   }
 
   const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
-  const defaults = imDefaults;
+  let defaults = imDefaults;
+  const selectedAgent = mergedOverrides.agentKind;
+  const selectedDefaultAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : imDefaults.agentKind;
+  const automatic = usesAutomaticImModel({ ...imDefaults, agentKind: selectedDefaultAgent }) && mergedOverrides.model === null;
+  if (automatic) {
+    const automaticAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : undefined;
+    const remoteDeviceId = workdirRoute?.agentDeviceId ?? imDefaults.agents[selectedDefaultAgent].agentDeviceId;
+    const resolved = remoteDeviceId
+      ? await readImRemoteAutomaticDefaults(imDefaults, {
+          agentDeviceId: remoteDeviceId, agentKind: automaticAgent,
+          providerId: workdirRoute?.providerId ?? imDefaults.agents[selectedDefaultAgent].providerId,
+        })
+      // Workspace sources are paired with their former model. Resolve the inherited
+      // model first, then apply the existing stale-source checks below.
+      : await resolveImAutomaticDefaults(imDefaults, undefined, providers, automaticAgent);
+    if (!resolved) throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} no available default model${routeReselectHint()}`);
+    defaults = resolved;
+  }
   const requestedAgent = mergedOverrides.agentKind === 'claude-code' || mergedOverrides.agentKind === 'codex' || mergedOverrides.agentKind === 'pi'
     ? mergedOverrides.agentKind : defaults.agentKind;
   const defaultRoute = defaults.agents[requestedAgent];
@@ -271,7 +303,7 @@ async function resolveNewSessionConfig(
       !isImDefaultPermissionMode(requestedPermissionMode) ||
       !permissionModes.includes(requestedPermissionMode)
     )) {
-      throw new Error('Selected permission mode is unavailable for the remote agent' + ROUTE_RESELECT_HINT);
+      throw new Error('Selected permission mode is unavailable for the remote agent' + routeReselectHint());
     }
     const remote = resolveHookSessionConfig({
       readDefaults: () => defaults,
@@ -279,12 +311,13 @@ async function resolveNewSessionConfig(
       getPermissionModes: () => requestedPermissionMode === null ? [] : [requestedPermissionMode],
       log,
     }, { ...mergedOverrides, agentKind: requestedAgent, model: requestedModel });
-    return { ...remote, agentDeviceId, providerId, fingerprint };
+    return { ...remote, agentDeviceId, providerId,
+      fingerprint: automatic ? resolvedImDefaultFingerprint(fingerprint, defaults) : fingerprint };
   }
 
   const resolved = resolveHookSessionConfig(
     {
-      readDefaults: () => imDefaults,
+      readDefaults: () => defaults,
       // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
       // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
       // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名
@@ -331,7 +364,7 @@ async function resolveNewSessionConfig(
     : preferredProviderId;
   if (providers && preferredProviderId && !providerId) {
     throw new Error(
-      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" cannot serve model "${resolved.model}"${ROUTE_RESELECT_HINT}`,
+      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" cannot serve model "${resolved.model}"${routeReselectHint()}`,
     );
   }
   // 停用收口(PR #744 review 第十、十四轮):两条路径都必须经宽松降级裁决 ——
@@ -347,18 +380,19 @@ async function resolveNewSessionConfig(
     : await resolveLenientSessionRoute(resolved.agentKind, resolved.model, providerId ?? null);
   if (preferredProviderId && lenient.providerId !== preferredProviderId) {
     throw new Error(
-      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" is unavailable${ROUTE_RESELECT_HINT}`,
+      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" is unavailable${routeReselectHint()}`,
     );
   }
   if (!lenient.model) {
-    throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} model disabled in settings${ROUTE_RESELECT_HINT}`);
+    throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} model disabled in settings${routeReselectHint()}`);
   }
   if (lenient.degraded) {
     log.warn(
       `hook saved route degraded (disabled in settings): model=${resolved.model} providerId=${providerId ?? 'null'} catalog=${providers ? 'ok' : 'outage'}`,
     );
   }
-  return { ...resolved, model: lenient.model, providerId: lenient.providerId, fingerprint };
+  return { ...resolved, model: lenient.model, providerId: lenient.providerId,
+    fingerprint: automatic ? resolvedImDefaultFingerprint(fingerprint, defaults) : fingerprint };
 }
 
 /**
@@ -410,29 +444,31 @@ function isRenderableImageUrl(u: string): boolean {
  * **刻意不说卡片去了哪**: 投递位置由 hook server 决定(Telegram 群里的授权卡自
  * 2026-08 起改投宿主私聊), 客户端不知道对端版本, 写"已发到私聊"可能是假的。
  */
-const AWAITING_INTERACTION_NOTICE: Record<string, string> = {
-  permission: '等待授权 · 需要你确认',
-  ask_user_question: '等待回答 · 需要你选择',
-  plan_review: '等待审阅 · 需要你确认计划',
+const AWAITING_INTERACTION_NOTICE_KEY: Record<string, string> = {
+  permission: 'imBot.text.hook.run.awaitingPermission',
+  ask_user_question: 'imBot.text.hook.run.awaitingAnswer',
+  plan_review: 'imBot.text.hook.run.awaitingPlan',
 };
-/** 未知 kind(将来新增类型)不编造语义, 只说在等你。 */
-const AWAITING_INTERACTION_FALLBACK = '等待你的确认';
 
 function awaitingInteractionNotice(kind: string): string {
-  return AWAITING_INTERACTION_NOTICE[kind] ?? AWAITING_INTERACTION_FALLBACK;
+  // 未知 kind(将来新增类型)不编造语义, 只说在等你。
+  return imText(AWAITING_INTERACTION_NOTICE_KEY[kind] ?? 'imBot.text.hook.run.awaitingFallback');
 }
 
-/** 兜底账本条目是否图片(hook 本期只外发图片):cindy-media 地址按扩展名判。 */
+/** 兜底账本图片白名单；X 还接收 MP4/MOV 视频:cindy-media 地址按扩展名判。 */
 const PRODUCED_IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 
 /** 导出仅供单测(纯函数,不碰 electron)。 */
-export function extractToolResultImageUrls(toolResultText: string): string[] {
-  if (!toolResultText.includes('xdt_image_url') && !toolResultText.includes('xdt_media_produced')) {
+export function extractToolResultMediaUrls(toolResultText: string, provider?: string): string[] {
+  if (!toolResultText.includes('xdt_image_url') && !toolResultText.includes('xdt_media_produced')
+    && !(provider === 'x' && toolResultText.includes('xdt_video_url'))) {
     return [];
   }
   let parsed: {
     xdt_image_url?: unknown;
     xdt_image_urls?: unknown;
+    xdt_video_url?: unknown;
+    xdt_video_urls?: unknown;
     xdt_media_produced?: unknown;
     _xdt_render_image?: unknown;
   };
@@ -451,11 +487,17 @@ export function extractToolResultImageUrls(toolResultText: string): string[] {
       if (typeof u === 'string' && isRenderableImageUrl(u)) urls.push(u);
     }
   }
+  if (provider === 'x') {
+    const videos = [parsed.xdt_video_url, ...(Array.isArray(parsed.xdt_video_urls) ? parsed.xdt_video_urls : [])];
+    for (const url of videos) {
+      if (typeof url === 'string' && isRenderableImageUrl(url)) urls.push(url);
+    }
+  }
   // 兜底账本(xdt_media_produced,ghost_call 层在意识未声明媒体字段时注入,
-  // 主机记账、意识删不掉):可能混有视频/音频/3D,这里只接走图片。
+  // 主机记账、意识删不掉):X 接走图片与视频,其余渠道维持图片。
   if (Array.isArray(parsed.xdt_media_produced)) {
     for (const u of parsed.xdt_media_produced) {
-      if (typeof u === 'string' && isRenderableImageUrl(u) && PRODUCED_IMAGE_EXT_RE.test(u)) {
+      if (typeof u === 'string' && isRenderableImageUrl(u) && (PRODUCED_IMAGE_EXT_RE.test(u) || (provider === 'x' && /\.(mp4|mov)$/i.test(u)))) {
         urls.push(u);
       }
     }
@@ -474,12 +516,13 @@ function resolveRenderableImageUrl(url: string): { absPath: string } {
  * art image_generate 等工具按设计不在文本里嵌 xdt-image markdown, 渠道侧能拿到
  * 图的唯一通路是从 tool_result JSON 里接走 URL。解析失败只 warn, 不拖垮 turn。
  */
-function collectOutboundImages(
+function collectOutboundMedia(
   fullText: string,
   sink: string[],
   log: { warn(msg: string): void },
+  provider?: string,
 ): void {
-  for (const url of extractToolResultImageUrls(fullText)) {
+  for (const url of extractToolResultMediaUrls(fullText, provider)) {
     try {
       const { absPath } = resolveRenderableImageUrl(url);
       sink.push(absPath);
@@ -531,6 +574,17 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
   };
 }
 
+/** 附件未发出提示跟随界面语言, 并点名没发出的附件。 */
+function formatHookIncompleteNotice(skippedNames: string[]): string {
+  const locale = getResolvedMainLocale();
+  const modern = modernLocaleOf(locale);
+  const separator = modern === 'zh-CN' || modern === 'zh-TW' || modern === 'ja' ? '、' : ', ';
+  const names = skippedNames.map((name) => name || t('imBot.unnamedAttachment', locale));
+  return t('imBot.outboundAttachmentsIncomplete', locale)
+    .replace('{{count}}', String(skippedNames.length))
+    .replace('{{names}}', names.join(separator));
+}
+
 /**
  * 收口时的出站附件收集(run() 与 watchContinuation 共用)。
  *
@@ -546,7 +600,9 @@ async function collectOutboundForFinalText(
   extraImageAbsPaths: string[],
   allowedFileRoots: string[],
   log: { warn(msg: string): void },
-): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments'] }> {
+  provider?: string,
+  relayXVideo?: HookRunRequest['relayXVideo'],
+): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments']; xMediaIds?: string[] }> {
   // Defense in depth for X/Slack/Telegram: live Codex traffic is normalized in
   // maker-core, but older persisted/continuation text and future adapters must
   // never forward private Web citation delimiters to an external channel.
@@ -557,11 +613,12 @@ async function collectOutboundForFinalText(
   // once so a temporary source changing cannot split the body from its attachment.
   const scanText = stripInternalWebCitations(texts.wholeTurn);
   const materialized = canReadLocal
-    ? await materializeTaskImageTextResult(sessionId, scanText)
+    ? await materializeTaskImageTextResult(sessionId, scanText, log)
     : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
-  const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
-    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements);
+  // Recipients cannot open this computer's files: links to local paths keep only their label.
+  const publicText = unlinkLocalFileLinks(texts.wholeTurn === texts.publicText ? wholeTurn
+    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements));
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }
@@ -571,7 +628,10 @@ async function collectOutboundForFinalText(
         throw new Error('Remote media is not available on this host');
       },
       allowedFileRoots,
+      provider,
+      ...(canReadLocal && relayXVideo ? { relayVideo: relayXVideo } : {}),
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
+      formatIncompleteNotice: formatHookIncompleteNotice,
       log,
     });
     if (collected.skipped > 0) {
@@ -580,6 +640,7 @@ async function collectOutboundForFinalText(
     return {
       finalText: collected.text,
       ...(collected.attachments.length > 0 ? { attachments: collected.attachments } : {}),
+      ...(collected.xMediaIds.length > 0 ? { xMediaIds: collected.xMediaIds } : {}),
     };
   } catch (err) {
     log.warn(
@@ -619,7 +680,7 @@ export function createMakerHookSessionRunner(deps: {
       const maker = getMaker();
       // 新任务的账号代次从读取偏好 / 默认配置之前算起(与个人 IM 同一判据): 中途换账号时
       // 不拿旧账号读到的配置去新账号的库里建任务。
-      const assertAccount = req.isNew ? captureChannelAccount() : undefined;
+      const assertAccount = req.isNew || req.companionBotId ? captureChannelAccount() : undefined;
       /** 新任务建行后的补写(来源、发送时间、worktree)同样只写入口账号的库。 */
       const accountStillCurrent = (): boolean => {
         try {
@@ -645,7 +706,7 @@ export function createMakerHookSessionRunner(deps: {
           )
         : null;
       const recordNewTaskDefaultRoute = async (sessionId: string): Promise<void> => {
-        if (!resolved || !['telegram', 'slack', 'x'].includes(req.source?.im ?? '')) return;
+        if (!resolved || !['telegram', 'slack', 'x', 'feishu'].includes(req.source?.im ?? '')) return;
         assertAccount?.();
         await writeHookDefaultRouteRecord(sessionId, resolved.fingerprint).catch((err) => {
           log.warn(`hook default route record failed: ${String(err)}`);
@@ -655,6 +716,7 @@ export function createMakerHookSessionRunner(deps: {
       let model: string | undefined = resolved?.model;
       let effort = resolved?.effort;
       let resumeSessionId: string | undefined;
+      let companionFastMode: boolean | 'ultrafast' | undefined;
       let effectiveAgentKind: AgentKind = resolved?.agentKind ?? 'claude-code';
       // 新建路径 resolved 必有值(capabilities 校验过); 复用路径由下方 meta 覆盖
       let permissionMode: PermissionMode = (resolved?.permissionMode ??
@@ -678,7 +740,14 @@ export function createMakerHookSessionRunner(deps: {
           resumeSessionId = meta.sdkSessionId;
           effectiveAgentKind = meta.agentKind;
         }
-        effort = undefined;
+        effort = req.companionBotId ? meta?.effort : undefined;
+        companionFastMode = req.companionBotId ? meta?.fastMode : undefined;
+        if (req.companionBotId) {
+          // This lane bypasses bootstrapSession. Claude subscription bridges read
+          // these stores, not createSession options, including on cold resume.
+          setSessionEffort(req.sessionId, effort);
+          setSessionFastMode(req.sessionId, companionFastMode ?? false);
+        }
         permissionMode = meta?.permissionMode ?? 'bypassPermissions';
         rowProviderId = row?.providerId ?? null;
         agentDeviceId = row?.agentDeviceId ?? meta?.agentDeviceId ?? null;
@@ -711,7 +780,9 @@ export function createMakerHookSessionRunner(deps: {
        * 上一版把它跟临时降档一起删了, 而两者本来无关 —— 原注释就写着“即使复用
        * 会话已是安全档、不需要切档, 也要持住这段独占”)。
        */
-      const isTelegramGroupTurn = req.source?.im === 'telegram' && req.laneKind === 'group';
+      // 官方飞书 / Lark 的话题轮次同属多人可见的群轮次(deriveLaneKind), 同样持有 lease。
+      const isOfficialGroupTurn =
+        (req.source?.im === 'telegram' || req.source?.im === 'feishu') && req.laneKind === 'group';
       let releaseTelegramGroupTurnLease: (() => void) | null = null;
       let releaseGroupHistoryAccess: (() => void) | null = null;
       const releaseGroupHistory = (): void => {
@@ -762,6 +833,7 @@ export function createMakerHookSessionRunner(deps: {
         ...(providerId !== null ? { providerId } : {}),
         ...(effort !== undefined ? { effort } : {}),
         permissionMode,
+        ...(companionFastMode !== undefined ? { fastMode: companionFastMode } : {}),
         // chat 伪目录新会话: 标记 dialogue, 落侧边栏「对话」分组而非按
         // dialogues/<日期>/<id> 目录名聚成项目节点
         ...(req.isNew && req.workspaceKind !== undefined
@@ -777,15 +849,19 @@ export function createMakerHookSessionRunner(deps: {
         //     进程生命周期(对齐 im/turnRunner「attached 不传 vendorOptions」
         //     的裁决)。hook turn 本身的渠道说明由逐 turn 的
         //     provider-aware hook prompt note 全覆盖,不依赖这里。
-        ...(req.isNew
+        ...((req.isNew || req.companionBotId)
           ? {
               vendorOptions: {
+                // 官方飞书刻意不用 'feishu': 那是个人飞书 bot 会话的来源值, 会让
+                // cindy_feishu_bot 把本会话当成个人 bot 渠道。
                 source:
                   req.source?.im === 'telegram'
                     ? 'telegram'
                     : req.source?.im === 'x'
                       ? 'x'
-                      : 'slack-hook',
+                      : req.source?.im === 'feishu'
+                        ? 'feishu-hook'
+                        : 'slack-hook',
               },
             }
           : {}),
@@ -841,7 +917,11 @@ export function createMakerHookSessionRunner(deps: {
             setSessionProvider(req.sessionId, admittedProviderId);
             await setSessionProviderIdInDb(req.sessionId, admittedProviderId);
           }
-          if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+          if (
+            req.source?.im === 'telegram' ||
+            req.source?.im === 'x' ||
+            req.source?.im === 'feishu'
+          ) {
             assertAccount?.();
             await setSessionSourceInDb(req.sessionId, req.source.im);
           }
@@ -874,7 +954,22 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
       try {
-        await prepareUnhealthySessionForSend(req.sessionId);
+        if (await prepareUnhealthySessionForSend(req.sessionId)) {
+          // Recovery retained the context but retired the original native id.
+          createOpts.resumeSessionId = undefined;
+          const recovered = await getSessionRowSnapshotStrict(req.sessionId);
+          assertAccount?.();
+          if (!recovered || recovered.status === 'deleted') throw new Error('The task route changed');
+          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, createOpts.agentKind, createOpts.agentDeviceId);
+          Object.assign(createOpts, { providerId: recovered.providerId ?? null }, runtimeOverride);
+          if (runtimeOverride.model) {
+            setSessionEffort(req.sessionId, runtimeOverride.effort);
+            setSessionFastMode(req.sessionId, runtimeOverride.fastMode ?? false);
+          }
+          rowProviderId = createOpts.providerId ?? null;
+          sessionProviderId = rowProviderId;
+          createOpts.providerId = rowProviderId;
+        }
         session = req.isNew
           ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
               sessionProviderId = admitted.providerId;
@@ -893,6 +988,68 @@ export function createMakerHookSessionRunner(deps: {
           void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
         }
         return fail(err instanceof Error ? err.message : String(err));
+      }
+
+      // 项目资源漂移(会话中途新增 skill/extension):createSession 可能复用活实例,
+      // 空闲时经 Maker 回收后重取 —— 再走一次同样的获取路径即得重建实例。
+      // 两种失败分开:回收本身失败 → 旧实例大概率仍可用,原样投递(hook 轮次
+      // 不因回收故障中断);回收成功(旧实例已关)后的重建失败必须上抛 —— 继续
+      // 用已关闭实例只会把真实启动原因(如新增扩展导致 pi 启动失败)换成误导
+      // 性的「会话已关闭」(2026-11-09 Greptile P2)。
+      let driftedRecycled = false;
+      try {
+        driftedRecycled = await maker.recyclePiRuntimeIfResourcesDrifted(session);
+      } catch {
+        // 回收抛出时 Session 已停在 error(close 失败不回退),旧实例不可用 ——
+        // 继续投递只会被 ensureActive 拒,必须走重建(Codex P2,2026-11-10)。
+        driftedRecycled = session.getStatus() !== 'active';
+      }
+      if (driftedRecycled) {
+        try {
+          session = req.isNew
+            ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
+                sessionProviderId = admitted.providerId;
+                return maker.createSession({
+                  ...createOpts,
+                  model: admitted.model,
+                  ...(admitted.providerId !== null ? { providerId: admitted.providerId } : {}),
+                  ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
+                });
+              }, assertAccount)
+            : await maker.createSession(createOpts);
+        } catch (err) {
+          // session 未建成: 预建 worktree 同步回收(同上方新建失败路径), 防孤儿泄漏
+          if (req.isNew && worktreeStore.get(req.sessionId)) {
+            void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
+          }
+          return fail(err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙)必须先于
+      // 取消探针:新建任务的行已落库但 providerId 未写(DesktopSessionStorage.create
+      // 不写、freezeSessionProviderAtStart 只写内存),取消早返回若跳过这里,应用重启
+      // 后复用会读到空来源,改走默认供应商或因模型不可用而失败。
+      // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
+      // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
+      if (req.isNew) {
+        if (sessionProviderId && accountStillCurrent()) {
+          setSessionProvider(session.id, sessionProviderId);
+        }
+      } else {
+        hydrateSessionProvider(session.id, rowProviderId);
+      }
+
+      // 取消探针:回收/重建是异步窗口,期间 task.cancel 的 abort 对旧实例无目标、
+      // 对新实例未登记 —— 喊停后不得把消息投给新进程执行。此处尚未发送,提前以
+      // error 收口;execute 收口会按取消账本把状态统一改写为 cancelled。
+      if (req.isCancelRequested?.()) {
+        return {
+          status: 'error',
+          finalText: '',
+          errorMessage: imText('imBot.text.hook.run.cancelledBeforeRun'),
+          durationMs: Date.now() - startedAt,
+        };
       }
 
       /**
@@ -923,20 +1080,7 @@ export function createMakerHookSessionRunner(deps: {
         log.warn(
           `hook run aborted: live session ${req.sessionId} runs in a directory that is no longer in the workspace map`,
         );
-        return fail(
-          '这个任务正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个任务后重发。',
-        );
-      }
-
-      // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙):
-      // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
-      // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
-      if (req.isNew) {
-        if (sessionProviderId && accountStillCurrent()) {
-          setSessionProvider(session.id, sessionProviderId);
-        }
-      } else {
-        hydrateSessionProvider(session.id, rowProviderId);
+        return fail(imText('imBot.text.hook.run.liveSessionDirUnmapped'));
       }
 
       // renderer 可见性: 不 wire 则消息不落库、UI 空白(scheduler Phase 6 老坑)
@@ -1034,14 +1178,17 @@ export function createMakerHookSessionRunner(deps: {
         };
       };
       /** turn 收口清扫: 未决交互按默认自决 + 释放中央 route。幂等。 */
+      let releaseXCompanionScope: (() => void) | undefined;
       const finalizeInteractions = (): void => {
+        releaseXCompanionScope?.();
+        releaseXCompanionScope = undefined;
         headlessTurn.closed = true;
         headlessTurn.release?.();
         headlessTurn.release = null;
         interactionRouteLease?.release('hook_turn_terminal');
         interactionRouteLease = null;
         for (const iid of [...ownInteractionIds]) {
-          cancelHookInteraction(iid, '任务已结束, 此交互已失效');
+          cancelHookInteraction(iid, imText('imBot.text.hook.run.interactionExpired'));
         }
         ownInteractionIds.clear();
         // 收口后不再有待决交互: 先清空, 各 handler 的 finally 随后只会摘掉状态行。
@@ -1067,7 +1214,10 @@ export function createMakerHookSessionRunner(deps: {
         if (sessionProviderId && accountStillCurrent()) {
           await setSessionProviderIdInDb(session.id, sessionProviderId);
         }
-        if ((req.source?.im === 'telegram' || req.source?.im === 'x') && accountStillCurrent()) {
+        if (
+          (req.source?.im === 'telegram' || req.source?.im === 'x' || req.source?.im === 'feishu') &&
+          accountStillCurrent()
+        ) {
           await setSessionSourceInDb(session.id, req.source.im);
         }
         if (accountStillCurrent()) await recordNewTaskDefaultRoute(session.id);
@@ -1100,7 +1250,7 @@ export function createMakerHookSessionRunner(deps: {
           ? { progressBodyMode: 'whole' as const, flushProgressOnDone: true }
           : {}),
         onToolResult: (fullText) => {
-          if (allowedFileRoots.length > 0) collectOutboundImages(fullText, extraImageAbsPaths, log);
+          if (allowedFileRoots.length > 0) collectOutboundMedia(fullText, extraImageAbsPaths, log, req.source?.im);
         },
         onSilentStopSettled,
         log,
@@ -1243,7 +1393,10 @@ export function createMakerHookSessionRunner(deps: {
       // 渲染层展示的用户消息保持来源 IM 原话。逐 turn 追加固定文本,教模型
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
+      const publicCompanionNote = req.companionBotId
+        ? '\n[渠道说明] 本轮是主人通过官方 X 账号绑定发起的公开提问，最终回答将公开回帖。请勿公开伙伴记忆或工作目录中的私人信息。回复由当前 X 通道投递，不要另用 X Manager 发帖。'
+        : '';
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale(), { replyStyle: false })}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {
@@ -1399,7 +1552,7 @@ export function createMakerHookSessionRunner(deps: {
           afterTurnReserved: () => {
             // 只取 lease, 不动权限档(用户配的就是最终档)。取在预约之后:
             // 忙的 Desktop 轮次已在 send 预约阶段被拒, 轮到这里就是本轮的世界。
-            if (isTelegramGroupTurn) {
+            if (isOfficialGroupTurn) {
               releaseTelegramGroupTurnLease ??= session.acquireTurnLease();
             }
           },
@@ -1418,6 +1571,14 @@ export function createMakerHookSessionRunner(deps: {
                 sessionId: session.id,
                 sessionInstanceId: session.instanceId,
                 scope: req.groupHistoryAccess,
+              });
+            }
+            if (req.companionBotId && req.source?.im === 'x') {
+              releaseXCompanionScope = beginChannelToolScope({
+                sessionId: session.id, sessionInstanceId: session.instanceId,
+                scope: { channel: 'x', botId: req.companionBotId, companion: true,
+                  chatId: req.origin.externalKey, laneUserId: req.origin.externalKey,
+                  chatKind: 'group', requesterIsOwner: true },
               });
             }
             const routeOrigin: RoutedTurnOrigin =
@@ -1451,7 +1612,7 @@ export function createMakerHookSessionRunner(deps: {
               handle: handleHookInteraction,
               onCancel: (requestId) => {
                 ownInteractionIds.delete(requestId);
-                return cancelHookInteraction(requestId, '任务已结束, 此交互已失效');
+                return cancelHookInteraction(requestId, imText('imBot.text.hook.run.interactionExpired'));
               },
             });
           },
@@ -1543,14 +1704,14 @@ export function createMakerHookSessionRunner(deps: {
         observer.stop();
         const collected = observer.errorReason === 'output-limit'
           ? await collectOutboundForFinalText(
-            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log,
+            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log, req.source?.im, req.relayXVideo,
           )
           : { finalText: '' };
         // 额度类失败要说清是哪个供应商: 名字只在这里按需读一次(读不到退回「当前供应商」)。
         const message = isQuotaExhaustionFailure(observer.errorData)
           ? terminalErrorText(observer.errorData, {
             ...await resolveSessionErrorContext(session.id),
-            botLabel: req.source?.im === 'telegram' ? 'Telegram 官方 bot' : req.origin.connectionName,
+            botLabel: req.source?.im === 'telegram' ? imText('imBot.text.hook.run.telegramOfficialBot') : req.origin.connectionName,
             surface: 'official',
           })
           : err instanceof Error ? err.message : String(err);
@@ -1575,21 +1736,27 @@ export function createMakerHookSessionRunner(deps: {
         extraImageAbsPaths,
         allowedFileRoots,
         log,
+        req.source?.im,
+        req.relayXVideo,
       );
       let finalText = collected.finalText;
       const outAttachments = collected.attachments;
+      const xMediaIds = collected.xMediaIds;
       if (inboundAttachmentFailures > 0) {
         const warning =
           `⚠️ Incoming attachment processing incomplete: ${inboundAttachmentFailures} ` +
           `item${inboundAttachmentFailures === 1 ? '' : 's'} could not be prepared.`;
         finalText = `${finalText.trimEnd()}${finalText.trim().length > 0 ? '\n\n' : ''}${warning}`;
       }
+      const process = observer.processRecord();
       return {
         status: 'ok',
         finalText,
         errorMessage: null,
         durationMs: Date.now() - startedAt,
         ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
+        ...(xMediaIds !== undefined ? { xMediaIds } : {}),
+        ...(process ? { process } : {}),
       };
     },
 
@@ -1614,6 +1781,10 @@ export function createMakerHookSessionRunner(deps: {
     ...runner,
     async run(req) {
       if (req.isNew) return runner.run(req);
+      if (req.companionBotId) {
+        const blocked = await prepareBotSessionForImSend(req.sessionId);
+        if (blocked) return { status: 'error' as const, finalText: '', errorMessage: blocked, durationMs: 0 };
+      }
       // 切换可能重建引擎，必须先应用选择，再读 meta、建会话和挂观察器。
       // 与创建任务共用取值链：迁移前保留 server 偏好，迁移后由本机正本忽略旧便签。
       const overrides: HookDispatchOverrides = {
@@ -1689,7 +1860,7 @@ function beginContinuationWatch(
       ? { progressBodyMode: 'whole' as const, flushProgressOnDone: true }
       : {}),
     onToolResult: (fullText) => {
-      if (allowedFileRoots.length > 0) collectOutboundImages(fullText, extraImageAbsPaths, log);
+      if (allowedFileRoots.length > 0) collectOutboundMedia(fullText, extraImageAbsPaths, log, req.source?.im);
     },
     onSilentStopSettled,
     log,
@@ -1733,6 +1904,7 @@ function beginContinuationWatch(
         extraImageAbsPaths,
         allowedFileRoots,
         log,
+        req.source?.im,
       );
       req.onEnd({
         status: errorMessage === null ? 'ok' : 'error',

@@ -236,7 +236,7 @@ describe("remote task recommendations", () => {
       host.querySelector('[data-testid="home.taskSuggestions.newTask"]'),
     ).toBeNull();
   });
-  it.each(["zh-CN", "zh-TW", "en", "ja", "ko"])(
+  it.each(["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"])(
     "has real labels and editable prompts in %s",
     async (language) => {
       await i18n.changeLanguage(language);

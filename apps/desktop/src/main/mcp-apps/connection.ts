@@ -1,3 +1,4 @@
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
@@ -22,14 +23,15 @@ import { MCP_APPS_EXTENSION } from './protocol.js';
 export interface AppServerConfig {
   id: string;
   url: string;
-  transport: 'http' | 'sse';
+  transport: 'http' | 'sse' | 'in-process';
+  plugin?: { ghostId?: string; namespace?: string | null; instance: string; revision: string; packageSha256: string; directory: string; title: string; trust: string; domains: string[]; assertCurrent(sessionId?: string): void; createTransport(): Transport };
   headers?: Record<string, string>;
 }
 
 /** Credentials and the MCP client always stay in Main, never in a View. */
 export class AppConnection {
   private createClient(): Client {
-    const capabilities = this.peer?.capabilities() ?? {};
+    const capabilities = this.config.plugin ? {} : this.peer?.capabilities() ?? {};
     const client = new Client(
       { name: 'Cindy', version: '1.0.0' },
       {
@@ -42,7 +44,7 @@ export class AppConnection {
         },
       },
     );
-    if (this.peer) {
+    if (this.peer && !this.config.plugin) {
       const peer = this.peer;
       const pending = new Map<RequestId, AbortController>();
       client.fallbackRequestHandler = async (request, extra) => {
@@ -83,23 +85,24 @@ export class AppConnection {
   ) {}
 
   async getClient(signal?: AbortSignal): Promise<Client> {
+    this.config.plugin?.assertCurrent();
     signal?.throwIfAborted();
     if (this.closed) throw new Error('MCP_APP_CONNECTION_CLOSED');
     if (!this.connecting) {
       const client = this.createClient();
       this.client = client;
       const requestInit = { headers: this.config.headers };
-      const url = new URL(this.config.url);
+      const url = this.config.plugin ? undefined : new URL(this.config.url);
       const transport =
-        this.config.transport === 'sse'
-          ? new SSEClientTransport(url, {
+        this.config.plugin ? this.config.plugin.createTransport() : this.config.transport === 'sse'
+          ? new SSEClientTransport(url!, {
               requestInit,
               eventSourceInit: {
                 fetch: (input, init) =>
                   fetch(input, { ...init, headers: { ...this.config.headers, ...init?.headers } }),
               },
             })
-          : new StreamableHTTPClientTransport(url, { requestInit });
+          : new StreamableHTTPClientTransport(url!, { requestInit });
       // A transport loss retires only this attempt. A later independent request
       // may connect again; requests already sent are never replayed here.
       const retire = () => {
@@ -206,4 +209,14 @@ export class AppConnection {
     }
     return { result };
   }
+}
+
+const pluginConnections = new WeakMap<object, Map<string, AppConnection>>();
+export function sharedPluginConnection(config: AppServerConfig, owner: object): AppConnection {
+  let entries = pluginConnections.get(owner);
+  if (!entries) pluginConnections.set(owner, entries = new Map());
+  const key = JSON.stringify([config.id, config.plugin?.revision, config.plugin?.packageSha256, config.plugin?.directory]);
+  let connection = entries.get(key);
+  if (!connection || connection.isClosed) entries.set(key, connection = new AppConnection(config));
+  return connection;
 }

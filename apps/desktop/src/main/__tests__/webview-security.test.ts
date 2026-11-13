@@ -27,6 +27,9 @@ const nativeSurfaceMocks = vi.hoisted(() => ({
   attribute: vi.fn(),
 }));
 
+// Native capture's focus/frame/lifecycle contract has its own injected tests.
+vi.mock('../nativeTrackpad', () => ({ installNativeTrackpad: vi.fn() }));
+
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   createRsbNativePopupSurface: nativeSurfaceMocks.create,
   attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,
@@ -302,6 +305,63 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
       nativePopupSurfaceId: 'surface-oauth',
     });
     expect(popup.close).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：installBrowserGuestHandlers 的 createWindow 回调；即使 Electron 没给 child WebContents，目标链接仍作为 RSB 标签投递、回调不抛错且 opener 保持打开。
+  // - Bug／规则依据：#7910；Electron 从链接触发的新窗口路径允许 createWindow 收到缺省 guest。
+  // - 现有覆盖缺口：已有测试只传入 Electron 预创建的 popup WebContents。
+  // - 最小失败输入：HTTP(S) window-open 回调后调用 createWindow({})。
+  // - tier：unit；通过生产回调和内存 WebContents fake 观察 host IPC。
+  it('routes to a tab when Electron calls createWindow without popup WebContents', () => {
+    const host = makeContents(1);
+    const opener = makeContents(42);
+    installBrowserGuestHandlers(host as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'https://x.com/i/jf/onboarding/web?mode=login',
+      disposition: 'foreground-tab',
+    }) as {
+      action: string;
+      createWindow: (options: { webContents?: WebContents }) => WebContents;
+    };
+
+    expect(response.action).toBe('allow');
+    expect(response.createWindow({})).toBe(opener);
+    expect(opener.close).not.toHaveBeenCalled();
+    expect(nativeSurfaceMocks.create).not.toHaveBeenCalled();
+    expect(host.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://x.com/i/jf/onboarding/web?mode=login',
+      disposition: 'foreground-tab',
+    });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：验证同一 createWindow 回调对 about:blank 不抛异常、不创建 native surface，也不向 renderer 投递空白标签。
+  // - Bug／规则依据：#7910；缺少 Electron child WebContents 时，主进程不能因允许的初始空白页退出。
+  // - 现有覆盖缺口：HTTP(S) 缺省 guest 已覆盖；about:blank 分支仍需验证不会被误路由。
+  // - 最小失败输入：about:blank window-open 回调后调用 createWindow({})。
+  // - tier：unit；通过生产回调与内存 WebContents fake 观察 host IPC 和 native surface。
+  it('does not route about:blank when Electron omits popup WebContents', () => {
+    const host = makeContents(1);
+    const opener = makeContents(42);
+    installBrowserGuestHandlers(host as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'about:blank',
+      disposition: 'foreground-tab',
+    }) as {
+      action: string;
+      createWindow: (options: { webContents?: WebContents }) => WebContents;
+    };
+
+    expect(response.action).toBe('allow');
+    expect(response.createWindow({})).toBe(opener);
+    expect(nativeSurfaceMocks.create).not.toHaveBeenCalled();
+    expect(host.send).not.toHaveBeenCalledWith(
+      RSB_BROWSER_POPUP_CHANNEL,
+      expect.anything(),
+    );
   });
 });
 
@@ -1086,6 +1146,40 @@ describe('installDeferredPopupRouter', () => {
     });
     // 旧 host 不再收到 —— 它的 Shell 已退订,发它就是丢消息。
     expect(hostContents.send).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:installDeferredPopupRouter 经 host resolver 发送 popup;可观察的是 resolver
+  //   收到捕获时的 hostContents,并可据此让「弹出到独立窗口的页签」的 popup 留在那扇窗口 renderer。
+  // - Bug / 规则依据:review「弹出的浏览器页签的 window.open 被改投整栏侧栏,popup 页签无法显示、
+  //   原生 popup surface owner 校验失败」。
+  // - 现有覆盖缺口:现有用例的 resolver 不看捕获的 host。
+  // - 最小失败输入:resolver 对捕获的页签窗口 host 返回其自身,对其它 host 返回侧栏宿主。
+  it('把捕获的 hostContents 交给 host resolver,页签窗口的 popup 留在原 renderer', () => {
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    const sidebarHost = {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    } as unknown as WebContents & { send: ReturnType<typeof vi.fn> };
+    const seen: unknown[] = [];
+    setRsbPopupHostResolver((captured) => {
+      seen.push(captured);
+      return captured === hostContents ? captured : sidebarHost;
+    });
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+
+    expect(seen).toEqual([hostContents]);
+    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    });
+    expect(sidebarHost.send).not.toHaveBeenCalled();
   });
 
   it('host resolver 解析失败或返回已销毁 host 时回落捕获的 hostContents', () => {

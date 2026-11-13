@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { nativeImage } from 'electron';
 import { promisify } from 'node:util';
 import {
   readDesktopInputPermission,
@@ -15,7 +16,7 @@ import type {
   WindowCapture,
   WindowCaptureError,
 } from './types.js';
-import { captureWindowArea, captureWindowQr, type DetectedQr } from './windowCapture.js';
+import { captureWindowArea, captureWindowQr, cutQrFromImage, type DetectedQr } from './windowCapture.js';
 
 const exec = promisify(execFile);
 
@@ -23,9 +24,15 @@ const exec = promisify(execFile);
 export interface HandoffDriver {
   permission(): Promise<'granted' | 'missing' | 'unknown'>;
   requestPermission(): Promise<void>;
-  windows(): Promise<NativeWindowList>;
+  /** Apps with a window on screen; `background` also lists apps whose only windows are minimized (slower). */
+  windows(options?: { background?: boolean }): Promise<NativeWindowList>;
   snapshot(pid: number, window?: NativeWindowRef): Promise<NativeAxSnapshot | { error: string }>;
   act(request: NativeActRequest): Promise<NativeActResult>;
+  /**
+   * Ask a browser to build its page for accessibility, or to stop. True when
+   * this call changed it, so a browser that already had it on is left alone.
+   */
+  exposePage?(pid: number, on: boolean): Promise<boolean>;
   /** Command line of a process, for agent-controlled target detection only. */
   commandLine(pid: number): Promise<string>;
   /** Screenshot steps. Absent where the platform cannot photograph a single window. */
@@ -39,7 +46,7 @@ export interface HandoffDriver {
    */
   qr?(target: { pid: number; window: NativeWindowRef }, frame: number[] | null): Promise<FoundQr | null | { error: WindowCaptureError }>;
   /** Bring the window to the front; its frame and window-server id, for a live view of just that window. */
-  raise?(target: { pid: number; window: NativeWindowRef }): Promise<{ frame: number[]; windowId: number } | { error: WindowCaptureError }>;
+  raise?(target: { pid: number; window: NativeWindowRef }): Promise<{ frame: number[]; windowId: number; activated?: boolean } | { error: WindowCaptureError }>;
 }
 
 /**
@@ -99,7 +106,7 @@ async function runHelper(request: Record<string, unknown>, timeoutMs: number): P
  * QR codes in one photographed window; null when the helper could not look (not "no code").
  * The picture travels on a pipe only; the reply carries no pixels.
  */
-async function detectQr(jpeg: Buffer): Promise<DetectedQr[] | null> {
+export async function detectHandoffQr(jpeg: Buffer): Promise<DetectedQr[] | null> {
   const binary = await resolveDesktopInputBinary();
   const reply = await new Promise<string>((resolve, reject) => {
     const child = spawn(binary, ['--handoff-qr'], { stdio: 'pipe' });
@@ -144,6 +151,21 @@ async function detectQr(jpeg: Buffer): Promise<DetectedQr[] | null> {
 }
 
 /**
+ * The sign-in QR code in a picture the agent supplied (代输入 from a
+ * screenshot): cut out like a window's code; null when the picture has none.
+ */
+export async function readPictureQr(
+  bytes: Buffer,
+): Promise<{ text: string; jpeg: Buffer; width: number; height: number } | null | { error: 'not_image' | 'unreadable' }> {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return { error: 'not_image' };
+  const found = await cutQrFromImage(image, detectHandoffQr);
+  if (!found) return null;
+  if ('error' in found) return { error: 'unreadable' };
+  return { text: found.text, jpeg: found.jpeg, width: found.width, height: found.height };
+}
+
+/**
  * Whether typing into this app would land in a password field: the element at
  * a screen point, or the focused element. Used to point the agent at 代输入
  * instead of typing a secret. Unknown (no permission, helper failure) is false.
@@ -172,11 +194,12 @@ async function windowIdAt(pid: number, frame: number[]): Promise<number | { erro
 }
 
 async function raiseWindow(target: { pid: number; window: NativeWindowRef }): Promise<
-  { frame: number[]; windowId?: number } | { error: WindowCaptureError }
+  { frame: number[]; windowId?: number; activated?: boolean } | { error: WindowCaptureError }
 > {
   const raised = (await runHelper({ op: 'raise', pid: target.pid, window: target.window }, 6000)) as {
     frame?: unknown;
     windowId?: unknown;
+    activated?: unknown;
     error?: string;
   };
   const frame = raised.frame;
@@ -186,6 +209,7 @@ async function raiseWindow(target: { pid: number; window: NativeWindowRef }): Pr
   return {
     frame: frame as number[],
     ...(typeof windowId === 'number' && Number.isSafeInteger(windowId) && windowId > 0 && windowId <= 0xffff_ffff ? { windowId } : {}),
+    ...(typeof raised.activated === 'boolean' ? { activated: raised.activated } : {}),
   };
 }
 
@@ -199,8 +223,8 @@ export function createMacHandoffDriver(): HandoffDriver {
       const binary = await resolveDesktopInputBinary();
       await exec(binary, ['--request-permission'], { timeout: 5000, maxBuffer: 1024 }).catch(() => undefined);
     },
-    async windows() {
-      const result = (await runHelper({ op: 'windows' }, 8000)) as NativeWindowList & { error?: string };
+    async windows(options) {
+      const result = (await runHelper({ op: 'windows', ...(options?.background ? { background: true } : {}) }, 8000)) as NativeWindowList & { error?: string };
       if (result.error || !Array.isArray(result.apps)) throw new Error(result.error ?? 'unavailable');
       return result;
     },
@@ -213,6 +237,10 @@ export function createMacHandoffDriver(): HandoffDriver {
     async act(request) {
       return (await runHelper({ op: 'act', ...request }, 15_000)) as NativeActResult;
     },
+    async exposePage(pid, on) {
+      const result = (await runHelper({ op: 'exposePage', pid, on }, 3000)) as { changed?: unknown };
+      return result.changed === true;
+    },
     async capture(target) {
       const raised = await raiseWindow(target);
       if ('error' in raised) return raised;
@@ -222,16 +250,18 @@ export function createMacHandoffDriver(): HandoffDriver {
     async qr(target, frame) {
       if (frame) {
         const id = await windowIdAt(target.pid, frame);
-        return typeof id === 'number' ? captureWindowQr(frame, id, detectQr) : id;
+        return typeof id === 'number' ? captureWindowQr(frame, id, detectHandoffQr) : id;
       }
       const raised = await raiseWindow(target);
       if ('error' in raised) return raised;
-      return raised.windowId ? captureWindowQr(raised.frame, raised.windowId, detectQr) : { error: 'unavailable' };
+      return raised.windowId ? captureWindowQr(raised.frame, raised.windowId, detectHandoffQr) : { error: 'unavailable' };
     },
     async raise(target) {
       const raised = await raiseWindow(target);
       if ('error' in raised) return raised;
-      return raised.windowId ? { frame: raised.frame, windowId: raised.windowId } : { error: 'unavailable' };
+      return raised.windowId
+        ? { frame: raised.frame, windowId: raised.windowId, ...(raised.activated !== undefined ? { activated: raised.activated } : {}) }
+        : { error: 'unavailable' };
     },
     async focusedField(pid) {
       const result = (await runHelper({ op: 'focused', pid }, 3000)) as { editable?: unknown; secure?: unknown };

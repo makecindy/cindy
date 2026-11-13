@@ -7,7 +7,7 @@
  */
 import { i18n } from '@/i18n';
 
-export type MobileMessageMenuActionId = 'add-to-chat' | 'copy-link' | 'rewind' | 'delete';
+export type MobileMessageMenuActionId = 'side-chat' | 'add-to-chat' | 'copy-link' | 'edit' | 'rewind' | 'delete';
 
 export interface MobileMessageMenuItem {
   id: MobileMessageMenuActionId;
@@ -19,12 +19,18 @@ export interface MobileMessageMenuItem {
 }
 
 export function buildMobileMessageMenu(input: {
+  canSideChat?: boolean;
   canAddToChat: boolean;
   canCopyLink: boolean;
   canDelete: boolean;
+  /** 任务运行中「编辑」不外显，收进菜单(对齐桌面);停下后回到操作行。 */
+  canEditInMenu?: boolean;
   canRewind: boolean;
 }): MobileMessageMenuItem[] {
   const items: MobileMessageMenuItem[] = [];
+  if (input.canSideChat) {
+    items.push({ id: 'side-chat', label: i18n.t('session.sideChat.ask'), image: 'cindy-message-square-plus' });
+  }
   // 语义与 desktop 的 chat.messageActionBar.* 一一对应:fork 产出的是一条新任务;
   // fork 已与复制同级外显;copy-link 复制的是带 messageClientId 的消息深链;
   // delete 删的是单条消息。
@@ -34,6 +40,9 @@ export function buildMobileMessageMenu(input: {
   }
   if (input.canCopyLink) {
     items.push({ id: 'copy-link', label: i18n.t('session.messageMenu.copyLink'), image: 'cindy-link-2' });
+  }
+  if (input.canEditInMenu) {
+    items.push({ id: 'edit', label: i18n.t('message.renderer.controlEdit'), image: 'cindy-pencil' });
   }
   if (input.canRewind) items.push({ id: 'rewind', label: i18n.t('session.messageMenu.rewind'), image: 'cindy-undo-2' });
   if (input.canDelete) {

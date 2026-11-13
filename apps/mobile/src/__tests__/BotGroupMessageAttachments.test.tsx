@@ -6,25 +6,63 @@ import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 import { openBrowserAsync } from 'expo-web-browser';
 
 // The shared renderer imports site-video; replace only its native surface.
+vi.mock('@/platform/gestureHandler', () => {
+  const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
+  return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
+});
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: () => null,
+  requireNativeViewManager: () => () => null,
+}));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
+// Assertions read English copy. Keep the real i18n initializer and English catalog
+// without collecting the eleven unused locale catalogs (most of this file's import time).
+vi.mock('@/i18n/locales/es', () => ({ default: {} }));
+vi.mock('@/i18n/locales/fr', () => ({ default: {} }));
+vi.mock('@/i18n/locales/de', () => ({ default: {} }));
+vi.mock('@/i18n/locales/pt-PT', () => ({ default: {} }));
+vi.mock('@/i18n/locales/pt-BR', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-Hant-x-lzh', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-Hans-x-lzh', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-CN', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-TW', () => ({ default: {} }));
+vi.mock('@/i18n/locales/ja', () => ({ default: {} }));
+vi.mock('@/i18n/locales/ko', () => ({ default: {} }));
 
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
 const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) => void; onError: () => void; onDisplay: () => void; transition: number }>());
+const nativeTextRoots = vi.hoisted(() => new Map<string, {
+  selectable: boolean;
+  onTextLayout?: (event: { nativeEvent: { lines: string[] } }) => void;
+  onMenuAction?: (event: { nativeEvent: { target: number; start: number; end: number } }) => void;
+  onSideChatMenuAction?: (event: { nativeEvent: { target: number; start: number; end: number } }) => void;
+}>());
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('react-native', async () => {
   const React = await import('react');
-  const view = ({ children, testID, accessibilityLabel, onPress, style }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress, style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children);
+  const view = ({ children, testID, accessibilityLabel, onPress, onContextMenu, style, paragraphIndent, paragraphFirstLineIndent }: any) => React.createElement('div', { 'data-testid': testID, 'data-paragraph-indent': paragraphIndent, 'data-first-line-indent': paragraphFirstLineIndent, 'aria-label': accessibilityLabel, onClick: onPress, onContextMenu, style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children);
+  const pressable = ({ onLongPress, disabled, ...props }: any) => view({
+    ...props,
+    onPress: disabled ? undefined : props.onPress,
+    onContextMenu: (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!disabled) onLongPress?.();
+    },
+  });
   class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
-    View: view, Text: view, Pressable: view, ScrollView: view, Modal: () => null,
+    View: view, Text: view, Pressable: pressable, ScrollView: view, Modal: () => null,
     Image: Object.assign(view, { getSize() {} }), ActivityIndicator: view,
     Animated: { Value, View: view, Text: view, createAnimatedComponent: (c: any) => c,
       timing: () => ({ start() {}, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
-    AccessibilityInfo: {}, Alert: {}, Linking: {}, StatusBar: {},
+    AccessibilityInfo: {}, Alert: {}, Linking: {}, StatusBar: {}, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+    Dimensions: { get: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }), addEventListener: () => ({ remove() {} }) },
     useWindowDimensions: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }),
   };
 });
@@ -32,10 +70,19 @@ vi.mock('lucide-react-native', () => ({
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Users: () => null, Star: () => null,
   Image: () => null, ImageOff: () => null, Database: () => null, FileArchive: () => null, FileAudio: () => null, FileChartColumn: () => null,
   FileCode: () => null, FileImage: () => null, FileSpreadsheet: () => null, FileText: () => null, FileVideo: () => null,
-  ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleStop: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
+  ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleMinus: () => null, CircleStop: () => null, CircleX: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
 }));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));
-vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
+vi.mock('react-native-uitextview', async () => {
+  const { createElement } = await import('react');
+  const { Text } = await import('react-native');
+  return { UITextView: ({ children, ...props }: any) => {
+    if (props.uiTextView && props.testID) nativeTextRoots.set(props.testID, props);
+    return createElement('span', {
+      'data-uitextview': props.uiTextView ? 'root' : 'span',
+    }, createElement(Text, props, children));
+  } };
+});
 vi.mock('expo-image', async () => {
   const { createElement } = await import('react');
   return { Image: ({ source, onLoad, onError, onDisplay, transition, style }: any) => {
@@ -65,25 +112,64 @@ vi.mock('@/session/expandedBlockMemory', () => ({ useFoldableExpandedState: () =
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, showActionMenu: vi.fn(), usesNativePullDownMenu: () => false, usesSystemActionMenu: () => false }));
 vi.mock('@/session/MobileComposerInputRow', () => ({ MobileComposerInputRow: () => null, MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT: 0, MOBILE_COMPOSER_CONTROL_SIZE: 44 }));
 vi.mock('@/session/ImageLightbox', async () => {
-  const { createElement } = await import('react');
-  return { ImageLightbox: ({ initialUrl }: { initialUrl: string }) => createElement('div', { 'data-testid': 'lightbox', 'data-url': initialUrl }) };
+  const { createElement, useEffect, useState } = await import('react');
+  return { ImageLightbox: ({ initialUrl, resolveOpaqueSource, onResolveRemoteMedia }: any) => {
+    const [url, setUrl] = useState(resolveOpaqueSource ? '' : initialUrl);
+    useEffect(() => {
+      if (resolveOpaqueSource) void onResolveRemoteMedia({ url: initialUrl }, {}).then((value: any) => setUrl(value.url));
+    }, []);
+    return createElement('div', { 'data-testid': 'lightbox', 'data-url': url });
+  } };
 });
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 vi.mock('@/session/mermaidWebView', () => ({ MermaidDiagram: () => null }));
 vi.mock('@/session/mathWebView', () => ({ MathFormulaWebView: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
-vi.mock('@/session/MarkdownBlockContent', () => ({ MarkdownBlockContent: () => null }));
+vi.mock('@/session/BotGroupTextAttachmentPreview', async () => {
+  const React = await import('react');
+  return {
+    botGroupTextAttachmentPreviewKind: (name: string) => /\.html?$/.test(name) ? 'html' : /\.md$/.test(name) ? 'markdown' : /\.json$/.test(name) ? 'json' : /\.txt$/.test(name) ? 'text' : null,
+    BotGroupTextAttachmentPreview: ({ fileName, kind, resolveDeviceMedia }: any) => {
+      const [url, setUrl] = React.useState('');
+      React.useEffect(() => {
+        void resolveDeviceMedia({}, {}).then((value: any) => setUrl(value.url));
+      }, []);
+      return React.createElement('div', {
+        'data-testid': 'groupChat.server.textAttachmentPreview', 'data-url': url, 'data-kind': kind,
+      }, fileName);
+    },
+  };
+});
 vi.mock('@/session/MessageActionSheet', () => ({ MessageActionSheet: () => null }));
 vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard: () => null }));
 vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => null }));
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionMessageCard: () => null }));
 vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null }));
+// Stores and cards these attachment/Markdown bodies never reach; real imports dominate collection.
+vi.mock('@/session/remoteSessionStore', () => ({
+  useRemoteDeviceIdentity: () => null, useRemoteSessionMessages: () => [], useRemoteSessionTitles: () => undefined,
+}));
+vi.mock('@/device-link/remoteStatus', () => ({ describeAgentAuthError: () => null }));
+vi.mock('@/plugins/PluginCardActions', () => ({ PluginCardActions: () => null }));
+vi.mock('@/session/sessionOutbox', () => ({ outboxItemAttachments: () => [] }));
+// The package barrel re-exports ~70 transport modules. Keep the production helpers these
+// attachment and Markdown paths call, loaded from their dependency-light source files.
+vi.mock('@cindy/device-link', async () => ({
+  ...await import('../../../../packages/device-link/src/attachmentOssRef'),
+  ...await import('../../../../packages/device-link/src/peerAttachment'),
+  ...await import('../../../../packages/device-link/src/sharedTaskPeer'),
+  ...await import('../../../../packages/device-link/src/filePeer'),
+  ...await import('../../../../packages/device-link/src/fileTransferPolicy'),
+}));
 vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
 
 import { BotGroupMessageAttachments, botGroupAttachmentRuns } from '@/session/BotGroupMessageAttachments';
-import { AttachmentStrip } from '@/session/MessageRenderer';
+import { AttachmentStrip, MarkdownBody } from '@/session/MessageRenderer';
+import { ChatFilePathContext } from '@/session/chatFilePathContext';
 import { MessageLoadingImage } from '@/session/MessageLoadingImage';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
+import { MessageContentLongPressContext } from '@/session/messageContentLongPress';
+import { SelectionQuoteContext } from '@/session/selectionQuote';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -92,12 +178,12 @@ afterEach(() => { act(() => root?.unmount()); root = undefined; host?.remove(); 
 
 const imageUrl = 'xdt-image://cache/group-picture.png';
 const thumbnailUrl = 'https://example.invalid/group-thumbnail.png';
-const resolveMedia = vi.fn<ResolveRemoteMediaFn>(async () => ({
-  url: thumbnailUrl, previewable: true, mimeType: 'image/png',
+const resolveMedia = vi.fn<ResolveRemoteMediaFn>(async (_media, options) => ({
+  url: options?.front ? imageUrl : thumbnailUrl, previewable: true, mimeType: 'image/png',
   ossKey: 'thumbnail', size: 10, expiresAt: '',
 }));
 
-beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); vi.mocked(openBrowserAsync).mockClear(); });
+beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); nativeTextRoots.clear(); vi.mocked(openBrowserAsync).mockClear(); });
 
 async function renderAttachment(messageId: string) {
   host = document.createElement('div');
@@ -113,6 +199,27 @@ async function renderAttachment(messageId: string) {
 }
 
 describe('group image attachments outside LegendList (#5278)', () => {
+  it.each(['image', 'file'] as const)('opens the message menu from the %s attachment responder while preserving preview taps', async (kind) => {
+    const openMenu = vi.fn();
+    const openPreview = vi.fn();
+    host = document.createElement('div');
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(MessageContentLongPressContext.Provider, { value: openMenu },
+      createElement(AttachmentStrip, {
+        attachments: [{ kind, name: kind === 'image' ? 'picture.png' : 'brief.pdf', uri: kind === 'image' ? imageUrl : 'file:///brief.pdf', previewable: true }],
+        messageKey: 'menu-message', align: 'left', layout: buildMessageContentLayout({ screenWidth: 402 }),
+        usePreviewState: useState, onOpen: openPreview, onResolveRemoteMedia: resolveMedia,
+      }),
+    )));
+    const attachment = host.querySelector('[aria-label]') as HTMLElement;
+    expect(attachment).not.toBeNull();
+    act(() => attachment.click());
+    expect(openPreview).toHaveBeenCalledTimes(1);
+    act(() => attachment.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
+    expect(openMenu).toHaveBeenCalledTimes(1);
+    expect(openPreview).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['displayed', 'error'] as const)('resets the real loading image after %s and ignores late events from the previous image', async (previousState) => {
     host = document.createElement('div');
     root = createRoot(host);
@@ -157,7 +264,7 @@ describe('group image attachments outside LegendList (#5278)', () => {
     expect(resolveMedia).toHaveBeenCalledWith(
       expect.objectContaining({ url: imageUrl, thumbnail: true }), expect.anything(),
     );
-    act(() => (container.querySelector('[data-testid="message.mediaPreviewButton"]') as HTMLElement).click());
+    await act(async () => (container.querySelector('[data-testid="message.mediaPreviewButton"]') as HTMLElement).click());
     expect(container.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe(imageUrl);
   });
 
@@ -192,7 +299,7 @@ describe('group image attachments outside LegendList (#5278)', () => {
     expect(resolveMedia).toHaveBeenCalledTimes(2);
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('[data-testid="message.mediaThumbFallback"]')).not.toBeNull();
-    act(() => (container.querySelector('[data-testid="message.mediaPreviewButton"]') as HTMLElement).click());
+    await act(async () => (container.querySelector('[data-testid="message.mediaPreviewButton"]') as HTMLElement).click());
     expect(container.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe(imageUrl);
   });
 
@@ -203,6 +310,26 @@ describe('group image attachments outside LegendList (#5278)', () => {
     host!.remove();
     const reopened = await renderAttachment('historical-message');
     expect(reopened.querySelector('img')?.getAttribute('src')).toBe(thumbnailUrl);
+  });
+});
+
+// #9650: group and cloud-companion rich answers render MarkdownBody in a plain ScrollView.
+// Before the fix, LegendList row state read a null list store and Android crashed on entry.
+describe('rich answer bodies outside LegendList', () => {
+  it('renders Markdown and lit file paths around a cindy-ui block without a list provider', async () => {
+    host = document.createElement('div');
+    root = createRoot(host);
+    const statPath = vi.fn(async () => ({ kind: 'file' as const }));
+    const content = 'See `src/app.ts` first.\n\n```cindy-ui\n'
+      + '{"version":1,"seq":1,"op":"create","id":"intro","kind":"markdown","props":{"text":"Rich **intro**"}}\n```';
+    await act(async () => root!.render(createElement(ChatFilePathContext.Provider, {
+      value: { deviceId: 'device', workdir: '/work', statPath } as any,
+    }, createElement(MarkdownBody, {
+      renderRichAnswers: true, text: content, layout: buildMessageContentLayout({ screenWidth: 402 }),
+    }))));
+    expect(host.textContent).toContain('Rich intro');
+    expect(host.textContent).toContain('src/app.ts');
+    expect(statPath).toHaveBeenCalledWith('/work/src/app.ts');
   });
 });
 
@@ -227,21 +354,52 @@ describe('group attachments the computer has not fetched yet', () => {
         pending('gone', 'gone.md', 'unavailable'), ready('photo', 'photo.png')],
     })));
     const chips = [...host.querySelectorAll<HTMLElement>('[data-testid^="message.filePreviewButton"]')];
-    expect(chips).toHaveLength(4);
+    expect(chips).toHaveLength(3);
     expect(chips[0]!.parentElement).toBe(chips[1]!.parentElement);
-    expect(chips[1]!.parentElement).not.toBe(chips[3]!.parentElement);
-    expect(resolveServerMedia).not.toHaveBeenCalled();
+    expect(chips[1]!.parentElement).not.toBe(chips[2]!.parentElement);
+    expect(resolveServerMedia.mock.calls.map(([id]) => id)).toEqual(['first', 'second', 'photo']);
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('https://example.invalid/signed/photo');
+    resolveServerMedia.mockClear();
     expect(resolveMedia).not.toHaveBeenCalled();
     await act(async () => chips[1]!.click());
     await act(async () => chips[0]!.click());
     expect(resolveServerMedia.mock.calls.map(([id]) => id)).toEqual(['second', 'first']);
-    expect(vi.mocked(openBrowserAsync).mock.calls.map(([url]) => url)).toEqual([
-      'https://example.invalid/signed/second', 'https://example.invalid/signed/first',
-    ]);
-    await act(async () => chips[3]!.click());
-    expect(resolveServerMedia).toHaveBeenLastCalledWith('photo');
+    expect(host.querySelector('[data-testid="groupChat.server.textAttachmentPreview"]')?.getAttribute('data-url')).toBe('https://example.invalid/signed/first');
+    expect(openBrowserAsync).not.toHaveBeenCalled();
+    await act(async () => host!.querySelector<HTMLElement>('[data-testid="message.mediaPreviewButton"]')!.click());
+    expect(resolveServerMedia).toHaveBeenLastCalledWith('photo', expect.any(AbortSignal));
     expect(host.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe('https://example.invalid/signed/photo');
-    expect(openBrowserAsync).toHaveBeenCalledTimes(2);
+    expect(openBrowserAsync).not.toHaveBeenCalled();
+  });
+
+  it('opens HTML, Markdown and JSON server files in the in-app preview instead of the browser', async () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const names: Record<string, string> = { html: 'report.html', markdown: 'notes.md', json: 'summary.json' };
+    const resolveServerMedia = vi.fn(async (id: string) => ({
+      ...ready(id, names[id]!),
+      url: 'https://example.invalid/signed/' + id,
+    }));
+    await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
+      messageId: 'text-files', align: 'left', onResolveRemoteMedia: resolveMedia, resolveServerMedia,
+      attachments: Object.entries(names).map(([id, name]) => ready(id, name)),
+    })));
+
+    for (const [index, [id, name, kind]] of [
+      ['html', names.html, 'html'],
+      ['markdown', names.markdown, 'markdown'],
+      ['json', names.json, 'json'],
+    ].entries()) {
+      const chip = host.querySelectorAll<HTMLElement>('[data-testid^="message.filePreviewButton"]')[index]!;
+      await act(async () => chip.click());
+      const preview = host.querySelector('[data-testid="groupChat.server.textAttachmentPreview"]');
+      expect(preview?.textContent).toBe(name);
+      expect(preview?.getAttribute('data-url')).toBe('https://example.invalid/signed/' + id);
+      expect(resolveServerMedia).toHaveBeenLastCalledWith(id, expect.any(AbortSignal));
+      expect(preview?.getAttribute('data-kind')).toBe(kind);
+    }
+    expect(openBrowserAsync).not.toHaveBeenCalled();
   });
 
   it('keeps the sent order: neighbours of one kind share a strip, each pending one stands alone', () => {
@@ -271,4 +429,102 @@ describe('group attachments the computer has not fetched yet', () => {
     expect(host.textContent).toContain('Unavailable right now');
     expect(resolveMedia).not.toHaveBeenCalled();
   });
+});
+
+vi.mock('expo-file-system', () => ({ File: class {} }));
+vi.mock('expo-sharing', () => ({ shareAsync: vi.fn() }));
+vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
+vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
+vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
+
+// #8603 / unit: mount the real MarkdownBody on native host substitutes. The
+// parser-only tests cannot catch a renderer that still emits identical bullets.
+it('renders nested reply levels inside one selectable text run', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable: true,
+    text: '- A\n  - B\n    - C\n  - D\n- E',
+  })));
+  expect(host.textContent).toBe('• A\n\n\u2003◦ B\n\n\u2003\u2003▪ C\n\n\u2003◦ D\n\n• E');
+  expect(host.querySelectorAll('[data-testid="message.markdownTextRun"]')).toHaveLength(1);
+});
+
+// #10103 / unit: existing rendering tests never dispatch a selection after
+// streaming completes. UITextView does not re-emit layout when only selectable
+// changes: unchanged text/frame keeps its cached layout and native text tree.
+it('quotes across nested items after streaming completes without another native layout', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  const commitQuote = vi.fn();
+  const askInSideChat = vi.fn();
+  const renderBody = (selectable: boolean) => createElement(SelectionQuoteContext.Provider, {
+    value: { commitQuote, askInSideChat },
+  }, createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable, streaming: !selectable,
+    text: '- parent\n  - child 😀',
+  }));
+  await act(async () => root!.render(renderBody(false)));
+  const streamingRoot = host.querySelector('[data-uitextview="root"]');
+  const native = nativeTextRoots.get('message.markdownTextRun')!;
+  expect(native.selectable).toBe(false);
+  expect(native.onMenuAction).toBeUndefined();
+  const text = host.textContent!;
+  native.onTextLayout?.({ nativeEvent: { lines: [text] } });
+  await act(async () => root!.render(renderBody(true)));
+  expect(host.querySelector('[data-uitextview="root"]')).toBe(streamingRoot);
+  const settled = nativeTextRoots.get('message.markdownTextRun')!;
+  expect(settled.selectable).toBe(true);
+  const event = { nativeEvent: { target: 1, start: text.indexOf('parent'), end: text.length } };
+  settled.onMenuAction!(event);
+  settled.onSideChatMenuAction!(event);
+  expect(commitQuote).toHaveBeenCalledExactlyOnceWith('parent\n\n\u2003◦ child 😀');
+  expect(askInSideChat).toHaveBeenCalledExactlyOnceWith('parent\n\n\u2003◦ child 😀');
+});
+
+it('retains nesting when an inline image puts a reply item on the single-block path', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable: true,
+    text: '- A\n  - B ![pic](https://example.invalid/nested.png)',
+  })));
+  const marker = [...host.querySelectorAll('div')].find(e => e.textContent === '◦');
+  expect(marker).toBeDefined();
+  expect(marker!.parentElement!.style.paddingLeft).toBe('17px');
+  expect(marker!.parentElement!.textContent).toContain('B');
+});
+
+// #10103: real text-run output must carry native paragraph layout, including
+// continuation chunks. DOM substitutes verify the native contract, not wrapping.
+it.each([true, false])('keeps paragraph indentation on long nested text and its bounded continuation (selectable=%s)', async (selectable) => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  const child = 'child 😀 **bold** '.repeat(200);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable,
+    allowIosUITextView: false, text: '- A\n  - ' + child + '\n  - sibling',
+  })));
+  const paragraphs = [...host.querySelectorAll<HTMLElement>('[data-paragraph-indent="17"]')];
+  expect(paragraphs.length).toBeGreaterThan(2);
+  expect(paragraphs[0]!.getAttribute('data-first-line-indent')).toBe('0');
+  expect(paragraphs.some(p => p.getAttribute('data-first-line-indent') === '17')).toBe(true);
+  expect(host.textContent?.match(/◦/g)).toHaveLength(2);
+  expect(paragraphs.at(-1)!.textContent).toBe('\u2003◦ sibling');
+});
+
+// Native span families must match their root even when nested list text runs
+// use UIKit but streaming/fallback quote and highlighted-code blocks do not.
+it.each([
+  { selectable: false, allowIosUITextView: true },
+  { selectable: true, allowIosUITextView: false },
+  { selectable: true, allowIosUITextView: true, boundTextRuns: true },
+])('keeps fallback blocks out of the UIKit span family (%j)', async (options) => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), ...options,
+    text: '- A\n  - B\n\n> **quote**\n\n```js\nconst answer = 1;\n```',
+  })));
+  expect(host.textContent).toContain('quote');
+  expect(host.textContent).toContain('const answer = 1;');
+  expect(host.querySelector('[data-testid="message.markdownQuote"] [data-uitextview]')).toBeNull();
+  const orphanedSpans = [...host.querySelectorAll('[data-uitextview="span"]')]
+    .filter(span => !span.closest('[data-uitextview="root"]'));
+  expect(orphanedSpans).toHaveLength(0);
 });

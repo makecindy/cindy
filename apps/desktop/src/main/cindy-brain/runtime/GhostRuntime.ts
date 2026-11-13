@@ -1,4 +1,4 @@
-import type { InstalledGhost } from '../../../shared/ghost.js';
+import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 
 /**
@@ -57,8 +57,26 @@ interface GhostRuntimeOptions {
 interface RuntimeEntry {
   state: GhostRuntimeState;
   handle: SandboxHandle | null;
+  loading: Promise<void> | null;
+  /** 当前沙箱按哪一份安装拉起(sandboxIdentity);换版后据此识别过期沙箱。 */
+  identity: string | null;
   /** 熔断窗口内的崩溃时间戳(旧的滚动淘汰)。 */
   crashTimestamps: number[];
+}
+
+/**
+ * 沙箱的安装身份:adapter 按安装目录 + 安装回执划分区,面板 webview 也按同一份
+ * 现装记录解析分区。更新换版期间若有人(面板 /wake、常驻拉起)拿旧记录把沙箱
+ * 拉了起来,提交后它就留在旧分区,与重挂载的面板永远不同源——spawn 据此识别
+ * 并换新。
+ */
+function sandboxIdentity(ghost: InstalledGhost): string {
+  return JSON.stringify([
+    ghost.dir,
+    ghostInstallApprovalToken(ghost.approval),
+    ghost.manifest.version,
+    ghost.namespace ?? null,
+  ]);
 }
 
 export class GhostRuntime {
@@ -66,6 +84,7 @@ export class GhostRuntime {
     GhostRuntimeOptions;
 
   private readonly entries = new Map<string, RuntimeEntry>();
+  private readonly readinessObservers = new Map<string, Set<() => void>>();
 
   constructor(options: GhostRuntimeOptions) {
     this.options = { crashWindowMs: 60_000, crashLimit: 3, ...options };
@@ -88,7 +107,13 @@ export class GhostRuntime {
   async spawn(ghost: InstalledGhost): Promise<{ ok: true; state: GhostRuntimeState } | { ok: false; reason: string }> {
     const id = installedGhostStoragePart(ghost);
     const entry = this.getEntry(id);
-    if (entry.state === 'starting' || entry.state === 'running') return { ok: true, state: entry.state };
+    const identity = sandboxIdentity(ghost);
+    if (entry.state === 'starting' || entry.state === 'running') {
+      if (entry.identity === identity) return { ok: true, state: entry.state };
+      // 旧安装的沙箱(更新换版窗口里被拉起)按新记录重开,否则它困在旧分区。
+      this.options.log?.info('ghost sandbox restarts for the updated install', { id });
+      this.stop(id);
+    }
     if (entry.state === 'fused') return { ok: false, reason: '已熔断(反复崩溃),重新唤醒后可再试' };
     if (entry.state === 'stopping') return { ok: false, reason: '正在熄灯,稍后再试' };
     const blocked = this.options.startBlockedReason?.(id) ?? null;
@@ -106,9 +131,11 @@ export class GhostRuntime {
       return { ok: false, reason: '沙箱创建失败' };
     }
     entry.handle = handle;
+    entry.identity = identity;
     handle.onGone((details) => this.handleGone(id, details.reason));
     try {
-      await handle.load();
+      entry.loading = handle.load();
+      await entry.loading;
     } catch (err) {
       // 入口都加载不出来按一次崩溃记账(坏 entry 反复 spawn 同样会熔断)。
       this.options.log?.warn('ghost sandbox load failed', { id, error: err instanceof Error ? err.message : String(err) });
@@ -123,8 +150,62 @@ export class GhostRuntime {
     }
     // load 期间可能已被 stop/crash 改道;只有仍处 starting 才转 running。
     // (经 stateOf 重读:setState 走方法赋值,TS 的字面量收窄跟不上。)
-    if (this.stateOf(id) === 'starting') this.setState(id, entry, 'running');
+    if (entry.handle === handle && this.stateOf(id) === 'starting') this.setState(id, entry, 'running');
     return { ok: true, state: this.stateOf(id) };
+  }
+
+  /** Tool calls must not treat an already-starting sandbox as ready to receive IPC.
+   * Bind the wait to this handle, so stop/update cannot deliver an old call to its replacement.
+   * The startup deadline is separate from the tool execution deadline.
+   */
+  async spawnForTool(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const starting = this.spawn(ghost);
+    const id = installedGhostStoragePart(ghost);
+    const entry = this.entries.get(id);
+    const handle = entry?.handle;
+    if (!entry || !handle) {
+      const result = await starting;
+      return result.ok ? { ok: false, reason: '插件未就绪' } : result;
+    }
+    const result = await new Promise<{ ok: true } | { ok: false; reason: string }>((resolve) => {
+      const observers = this.readinessObservers.get(id) ?? new Set<() => void>();
+      this.readinessObservers.set(id, observers);
+      let settled = false;
+      const finish = (result: { ok: true } | { ok: false; reason: string }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        observers.delete(check);
+        if (observers.size === 0) this.readinessObservers.delete(id);
+        resolve(result);
+      };
+      const check = () => {
+        if (entry.handle !== handle || entry.identity !== sandboxIdentity(ghost) ||
+            (entry.state !== 'starting' && entry.state !== 'running')) {
+          finish({ ok: false, reason: '插件启动已停止或实例已更换' });
+        } else if (entry.state === 'running') finish({ ok: true });
+      };
+      const timer = setTimeout(() => finish({ ok: false, reason: '插件启动等待超时' }), 30_000);
+      observers.add(check);
+      // Consume startup failures even after timeout; never stop another caller's startup.
+      void starting.then(result => result.ok ? check() : finish(result),
+        () => finish({ ok: false, reason: '插件启动失败' }));
+      check();
+    });
+    // A state-change observer may synchronously stop/replace the just-ready handle.
+    if (result.ok && (entry.handle !== handle || entry.state !== 'running')) {
+      return { ok: false, reason: '插件就绪后实例已更换或停止' };
+    }
+    return result;
+  }
+
+  /** Await this sandbox's actual entry load, including an already-starting instance. */
+  async waitUntilRunning(id: string): Promise<boolean> {
+    const entry = this.entries.get(id);
+    const handle = entry?.handle;
+    if (!entry || !handle) return false;
+    try { await entry.loading; } catch { return false; }
+    return entry.handle === handle && entry.state === 'running';
   }
 
   /** 熄灯(沉睡 / 抽离 / 闲置超时 / 退出前逐个关)。幂等。 */
@@ -169,7 +250,7 @@ export class GhostRuntime {
   private getEntry(id: string): RuntimeEntry {
     let entry = this.entries.get(id);
     if (!entry) {
-      entry = { state: 'off', handle: null, crashTimestamps: [] };
+      entry = { state: 'off', handle: null, loading: null, identity: null, crashTimestamps: [] };
       this.entries.set(id, entry);
     }
     return entry;
@@ -203,6 +284,7 @@ export class GhostRuntime {
   private setState(id: string, entry: RuntimeEntry, state: GhostRuntimeState): void {
     if (entry.state === state) return;
     entry.state = state;
+    for (const observer of [...(this.readinessObservers.get(id) ?? [])]) observer();
     this.options.onStateChanged?.(id, state);
   }
 }

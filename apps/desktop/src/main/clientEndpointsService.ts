@@ -1123,6 +1123,33 @@ export function isUsingCachedClientEndpoints(): boolean {
  * 运行期端点读取入口(main 进程)。init 成功前调用 = 启动时序 bug,直接抛错
  * 炸出来(随包兜底也必须先经过启动解析;--smoke-test 旁路不消费端点)。
  */
+function runtimeEndpoint(endpoints: ClientEndpointMap, key: ClientEndpointKey, region: ClientEndpointRegion): string {
+  // A personal build is not a test-service opt-in. Only explicit development
+  // overrides may replace the shared Webhook endpoint.
+  const local = app.isPackaged ? undefined : key === 'webhookApiBaseUrl'
+    ? (region === 'cn' ? process.env.XDT_WEBHOOK_CN_LOCAL_URL : process.env.XDT_WEBHOOK_GLOBAL_LOCAL_URL)?.trim()
+    : key === 'deviceLinkApiBaseUrl'
+      ? (region === 'cn'
+        ? process.env.XDT_DEVICE_LINK_CN_LOCAL_URL ?? process.env.XDT_DEVICE_LINK_LOCAL_URL
+        : process.env.XDT_DEVICE_LINK_GLOBAL_LOCAL_URL)?.trim()
+      : undefined;
+  if (!local) return endpoints[key];
+  let url: URL;
+  try {
+    url = new URL(local);
+  } catch {
+    throw new Error('Development endpoint override requires a loopback HTTP(S) URL with an explicit port');
+  }
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    !['127.0.0.1', '[::1]'].includes(url.hostname) ||
+    !url.port || url.username || url.password || url.pathname !== '/' || url.search || url.hash
+  ) {
+    throw new Error('Development endpoint override requires a loopback HTTP(S) URL with an explicit port');
+  }
+  return url.origin;
+}
+
 export function getClientEndpoint(key: ClientEndpointKey): string {
   if (resolvedEndpoints === null) {
     throw new Error(
@@ -1130,13 +1157,13 @@ export function getClientEndpoint(key: ClientEndpointKey): string {
     );
   }
   if (BUILD_SCOPED_ENDPOINT_KEYS.has(key) || activeSessionRealm === null) {
-    return resolvedEndpoints[key];
+    return runtimeEndpoint(resolvedEndpoints, key, resolvedRegion ?? BUILD_AUTH_REGION);
   }
   const sessionEndpoints = realmEndpointCache.get(activeSessionRealm);
   if (!sessionEndpoints) {
     throw new Error(`client endpoints for active realm '${activeSessionRealm}' not loaded`);
   }
-  return sessionEndpoints[key];
+  return runtimeEndpoint(sessionEndpoints, key, activeSessionRealm);
 }
 
 /** 安装包身份/更新链始终读取启动时清单，不随组织会话区域切换。 */
@@ -1197,7 +1224,7 @@ export function getClientEndpointForRealm(
   if (!endpoints) {
     throw new Error(`client endpoints for realm '${region}' not loaded`);
   }
-  return endpoints[key];
+  return runtimeEndpoint(endpoints, key, region);
 }
 
 export function activateClientEndpointRealm(region: ClientEndpointRegion): void {

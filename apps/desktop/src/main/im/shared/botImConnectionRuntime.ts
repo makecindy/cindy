@@ -1,3 +1,4 @@
+import { BLUEBUBBLES_SECRET_KEYS, parseBlueBubblesConfig } from '@cindy/im';
 /**
  * main/im/shared/botImConnectionRuntime.ts
  * ---------------------------------------------------------------------------
@@ -17,21 +18,27 @@
 
 import { BrowserWindow, ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
-import type { DingTalkIM, DiscordIM, FeishuIM, IMStatus, TelegramIM, WecomIM } from '@cindy/im';
+import type { BlueBubblesIM, DingTalkIM, DiscordIM, FeishuIM, IMStatus, TelegramIM, WecomIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import { getDbClient } from '../../localDb/client/current';
 import { archiveBotChannelLanes } from '../../localDb/ipc/bots';
 import { botProfiles } from '../../localDb/schema';
+import { withBotProfileLocks } from '../../maker-ipc/botProfileLock';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
+import { isIpcError } from '../../../shared/ipc-errors';
 import { ownerScopedImSecrets } from '../ownerScopedStorage';
+import { readWechatChannelSettings, writeWechatCompanionBinding } from '../wechat/channelSettings';
 import {
   BOT_IM_CONNECTION_CHANGED_EVENT,
+  isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionAddInput,
   type BotImConnectionAddResult,
   type BotImConnectionGroupsPayload,
+  BOT_IM_DISCORD_ACCESS_VERSION,
+  type BotImDiscordChannelsPayload,
   type BotImConnectionListPayload,
   type BotImConnectionRecord,
   type BotImConnectionRemoveResult,
@@ -47,16 +54,18 @@ import {
   readBotImConnection,
   removeBotImConnectionRecord,
   secretKeyPrefixFor,
+  setBotImConnectionDiscordChannelAccess,
   setBotImConnectionGroupActivation,
   updateBotImConnectionRecord,
 } from './botImConnectionStore';
 import { companionConnectionRouteKeyPrefix } from './imBotBindingRoute';
-import { listBotImConnectionLanes, resetBotImConnectionLane } from './botImLaneRuntime';
+import { archiveBotImConnectionLane, listBotImConnectionLanes, resetBotImConnectionLane } from './botImLaneRuntime';
 import type { ImOrchestrator } from './orchestrator';
 
 const log = createLogger('im:bot-connections');
 
 export type BotImTransportInstance =
+  | { kind: 'imessage'; im: BlueBubblesIM; orchestrator: ImOrchestrator }
   | { kind: 'telegram'; im: TelegramIM; orchestrator: ImOrchestrator }
   | { kind: 'feishu'; im: FeishuIM; orchestrator: ImOrchestrator }
   | { kind: 'wecom'; im: WecomIM; orchestrator: ImOrchestrator }
@@ -73,6 +82,8 @@ export interface BotImSettingsIdentity {
 }
 
 export interface BotImConnectionRuntimeDeps {
+  /** Drain the shared WeChat transport and cancel queued work before clearing its owner. */
+  removeWechatCompanionBinding(update: () => void, isCurrent: () => boolean): Promise<void>;
   /** 为一条记录装配传输层 + 编排器(不 init)。渠道尚未支持时抛错。 */
   create(record: BotImConnectionRecord): BotImTransportInstance;
   /** 设置页那份个人 bot 当前用的平台身份(用于拒绝同一个 bot 两处同时用)。 */
@@ -115,6 +126,7 @@ const DISCORD_SECRET_KEYS = [
   'discord-bot-lifecycle-announcement',
 ] as const;
 export const SECRET_KEYS_BY_CHANNEL: Record<BotImChannel, readonly string[]> = {
+  imessage: BLUEBUBBLES_SECRET_KEYS,
   telegram: TELEGRAM_SECRET_KEYS,
   feishu: FEISHU_SECRET_KEYS,
   wecom: WECOM_SECRET_KEYS,
@@ -127,6 +139,7 @@ export const SECRET_KEYS_BY_CHANNEL: Record<BotImChannel, readonly string[]> = {
  * 同名键。凭证身份只比相等, 不读出来展示。
  */
 export const IDENTITY_SECRET_KEY: Record<BotImChannel, string> = {
+  imessage: 'bluebubbles-origin',
   telegram: 'telegram-bot-token',
   feishu: 'feishu_bot_app_id',
   wecom: 'wecom-bot-id',
@@ -134,6 +147,7 @@ export const IDENTITY_SECRET_KEY: Record<BotImChannel, string> = {
   discord: 'discord-bot-token',
 };
 const IDENTITY_IN_USE_CODE: Record<BotImChannel, string> = {
+  imessage: 'APP_IN_USE: this BlueBubbles server is already connected on this computer',
   telegram: 'TOKEN_IN_USE: this Telegram bot is already connected on this computer',
   feishu: 'APP_IN_USE: this Feishu app is already connected on this computer',
   wecom: 'APP_IN_USE: this WeCom bot is already connected on this computer',
@@ -185,7 +199,8 @@ function identityOf(transport: BotImTransportInstance | undefined): BotImConnect
       return { username: state.botUsername ?? null, ownerUserId: state.ownerUserId ?? null };
     }
     case 'feishu':
-      return { username: null, ownerUserId: null };
+      return { username: null, ownerUserId: transport.im.getOwnerOpenId() };
+    case 'imessage':
     case 'wecom':
     case 'dingtalk':
       return { username: null, ownerUserId: transport.im.getOwnerUserId() || null };
@@ -201,11 +216,13 @@ function identityOf(transport: BotImTransportInstance | undefined): BotImConnect
 
 function toView(record: BotImConnectionRecord): BotImConnectionView {
   const transport = instances.get(record.id)?.transport;
-  return { ...record, status: statusOf(transport), identity: identityOf(transport) };
+  return { ...record, status: statusOf(transport), identity: identityOf(transport),
+    ...(transport?.kind === 'imessage' ? { health: transport.im.health() } : {}) };
 }
 
-export function buildBotImConnectionListPayload(): BotImConnectionListPayload {
-  return { connections: listBotImConnections().map(toView) };
+export function buildBotImConnectionListPayload(botId?: string): BotImConnectionListPayload {
+  const records = botId === undefined ? listBotImConnections() : listBotImConnectionsForBot(botId);
+  return { connections: records.map(toView) };
 }
 
 function broadcastChanged(): void {
@@ -275,6 +292,30 @@ export function getBotImConnectionOrchestrator(id: string): ImOrchestrator | und
   return instances.get(id)?.transport.orchestrator;
 }
 
+/**
+ * 某位伙伴当前在线的飞书连接(伙伴主任务出站用)。
+ *
+ * 伙伴主任务(role='canonical')与桌面共用、不带专线的 `feishuChatId`, 所以非飞书入站轮次
+ * (后台任务回执 / 心跳 / scheduler)拿不到逐轮作用域。这些轮次必须仍走伙伴自己的连接,
+ * 不能回落到设置页那份可能已被清空的个人 bot —— 否则 `getOwnerOpenId()` 为 null 时
+ * `send_message_to_user` / `send_file_to_user` 会误报 NO_CHAT_CONTEXT。
+ */
+export function getBotFeishuTransport(botId: string, ownerOpenId?: string): FeishuIM | null {
+  for (const record of listBotImConnectionsForBot(botId)) {
+    if (record.channel !== 'feishu') continue;
+    const live = instances.get(record.id);
+    if (live?.transport.kind !== 'feishu' || live.record.botId !== botId) continue;
+    const im = live.transport.im;
+    const owner = im.getOwnerOpenId();
+    if (im.getStatus().kind !== 'connected' || !owner) continue;
+    // open_id belongs to this app. Never send a previously resolved recipient
+    // through a different owner's connection after a disconnect/reconfiguration.
+    if (ownerOpenId && owner !== ownerOpenId) continue;
+    return im;
+  }
+  return null;
+}
+
 async function readBotProfileStatus(botId: string): Promise<string | null> {
   const [row] = await getDbClient()
     .drizzle.select({ status: botProfiles.status })
@@ -286,6 +327,7 @@ async function readBotProfileStatus(botId: string): Promise<string | null> {
 
 function identityValueOf(input: BotImConnectionAddInput): string {
   switch (input.channel) {
+    case 'imessage': return input.serverUrl;
     case 'telegram':
       return input.token;
     case 'feishu':
@@ -301,6 +343,7 @@ function identityValueOf(input: BotImConnectionAddInput): string {
 
 function settingsIdentityValueOf(settings: BotImSettingsIdentity, channel: BotImChannel): string | null {
   switch (channel) {
+    case 'imessage': return null;
     case 'telegram':
       return settings.telegramToken;
     case 'feishu':
@@ -460,6 +503,11 @@ async function addBotImConnectionNow(
   }
   let live: LiveInstance;
   try {
+    // New iMessage connections need an identity independent of the editable URL.
+    // Existing records retain their saved identity so their lanes stay reachable.
+    if (input.channel === 'imessage') {
+      record = (await updateBotImConnectionRecord(record.id, { botContextId: `imessage-${record.id}` })) ?? record;
+    }
     live = instantiate(record);
   } catch (err) {
     await removeBotImConnectionRecord(record.id);
@@ -468,6 +516,7 @@ async function addBotImConnectionNow(
   const carriedOwner = options.ownerUserId?.trim() || '';
 
   const rollback = async (reason: string): Promise<never> => {
+    if (live.transport.kind === 'imessage') await live.transport.im.clearCredentials();
     await releaseInstance(live);
     purgeSecrets(record);
     await removeBotImConnectionRecord(record.id);
@@ -479,6 +528,11 @@ async function addBotImConnectionNow(
   if (transport.kind !== input.channel) return rollback('channel mismatch');
   try {
     switch (transport.kind) {
+      case 'imessage': {
+        if (input.channel !== 'imessage') return rollback('channel mismatch');
+        await transport.im.saveCredentials(input);
+        break;
+      }
       case 'telegram': {
         if (input.channel !== 'telegram') return rollback('channel mismatch');
         const state = await transport.im.setConfig({ token: input.token, ownerUserId: input.ownerUserId });
@@ -551,11 +605,55 @@ async function addBotImConnectionNow(
   return { ...list, connection: view };
 }
 
+/** Same transport and connection ID: no lane archive, rebinding or receipt deletion. */
+export function getBotIMessageConfig(id: string) {
+  const record = readBotImConnection(id);
+  if (!record || record.channel !== 'imessage') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  try {
+    const raw = ownerScopedImSecrets.read(`${secretKeyPrefixFor(id)}bluebubbles-config`);
+    return parseBlueBubblesConfig(JSON.parse(raw ?? 'null'));
+  } catch { throwIpcError('PRECONDITION_FAILED', 'BLUEBUBBLES_CONFIG_MISSING'); }
+}
+
+export async function updateBotIMessageConfig(id: string, input: unknown): Promise<BotImConnectionListPayload> {
+  const connection = readBotImConnection(id);
+  if (!connection || connection.channel !== 'imessage') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  // Import already holds the profile lock when it enters addQueue. Keep the
+  // same order here so a waiting edit cannot block that import's queued add.
+  return withBotProfileLocks([connection.botId], () => {
+    const run = addQueue.then(async () => {
+      const record = readBotImConnection(id);
+      if (!record || record.channel !== 'imessage' || record.botId !== connection.botId) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+      if (await readBotProfileStatus(record.botId) !== 'active') throwIpcError('PRECONDITION_FAILED', 'BOT_INACTIVE');
+      const previous = getBotIMessageConfig(id);
+      const p = (input ?? {}) as Record<string, unknown>;
+      let config;
+      try {
+        config = parseBlueBubblesConfig({ ...p, groupAliases: previous.groupAliases });
+        if (p.password !== undefined && (typeof p.password !== 'string' || p.password.length > 4096)) throw new Error();
+      } catch { throwIpcError('INVALID_PARAMS', 'BLUEBUBBLES_INVALID_CONFIG'); }
+      const duplicate = findBotImConnectionByIdentity('imessage', config.serverUrl);
+      if (duplicate && duplicate.id !== id) throwIpcError('PRECONDITION_FAILED', IDENTITY_IN_USE_CODE.imessage);
+      const live = instances.get(id) ?? instantiate(record);
+      if (live.transport.kind !== 'imessage') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+      try { await live.transport.im.updateCredentials({ ...config, password: p.password as string | undefined }); }
+      catch { throwIpcError('PRECONDITION_FAILED', 'BLUEBUBBLES_UPDATE_FAILED'); }
+      finally { broadcastChanged(); }
+      return buildBotImConnectionListPayload();
+    });
+    addQueue = run.catch(() => undefined);
+    return run;
+  });
+}
+
 /** 伙伴页「群聊」小节: 已知群 + 每群参与模式(仅 @ / 全响应)。 */
 export async function listBotImConnectionGroups(id: string): Promise<BotImConnectionGroupsPayload> {
   const record = readBotImConnection(id);
   if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
-  const groups = record.botContextId ? await requireDeps().listKnownGroups(record) : [];
+  const transport = instances.get(id)?.transport;
+  const groups = transport?.kind === 'imessage'
+    ? transport.im.listChats().filter(chat => transport.im.isGroup(chat.guid)).map(chat => ({ chatId: chat.guid, chatName: chat.displayName ?? null }))
+    : record.botContextId ? await requireDeps().listKnownGroups(record) : [];
   const activation = record.groupActivation ?? {};
   return {
     connectionId: id,
@@ -578,6 +676,34 @@ export async function setBotImConnectionGroupMode(
   if (live) live.record = updated;
   log.info(`bot im connection ${id}: group ${chatId.slice(-6)} activation=${mode}`);
   return listBotImConnectionGroups(id);
+}
+
+/** 伙伴页「服务器频道」小节：这条 Discord 连接当前能看到的服务器 / 频道 + 它自己的白名单。 */
+export function listBotImDiscordChannels(id: string): BotImDiscordChannelsPayload {
+  const record = readBotImConnection(id);
+  if (!record || record.channel !== 'discord') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const transport = instances.get(id)?.transport;
+  const live = transport?.kind === 'discord' ? transport.im : null;
+  return {
+    connectionId: id,
+    accessVersion: BOT_IM_DISCORD_ACCESS_VERSION,
+    online: live?.getStatus().kind === 'connected',
+    guilds: live ? live.listGuilds() : [],
+    access: record.discordChannelAccess ?? { channels: [] },
+  };
+}
+
+/** 整份替换这条连接的白名单（含逐频道「允许成员」）；传输层下一条消息就按新配置判定。 */
+export async function setBotImDiscordChannelAccess(
+  id: string,
+  access: unknown,
+): Promise<BotImDiscordChannelsPayload> {
+  const updated = await setBotImConnectionDiscordChannelAccess(id, access);
+  if (!updated) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const live = instances.get(id);
+  if (live) live.record = updated;
+  log.info(`bot im connection ${id}: discord channel access updated (${updated.discordChannelAccess?.channels.length ?? 0})`);
+  return listBotImDiscordChannels(id);
 }
 
 export async function removeBotImConnection(id: string): Promise<BotImConnectionRemoveResult> {
@@ -625,8 +751,36 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
   return { ...buildBotImConnectionListPayload(), archivedSessionIds };
 }
 
+/** Keep profile validation and deferred WeChat persistence in one lifecycle operation. */
+export async function setWechatCompanionBinding(
+  botId: string | null,
+  apply: (commit: () => void) => Promise<void>,
+): Promise<void> {
+  const run = async () => {
+    if (botId) {
+      if (await readBotProfileStatus(botId) !== 'active') throw new Error('BOT_INACTIVE');
+      const current = readWechatChannelSettings().companionBotId;
+      if (current && current !== botId) throw new Error('WECHAT_COMPANION_IN_USE');
+    }
+    await apply(() => { writeWechatCompanionBinding(botId); });
+  };
+  // Match deletion lock order: profile first, then the WeChat transport lifecycle.
+  await withBotProfileLocks(botId ? [botId] : [], run);
+}
+
 /** 伙伴被删除 / 归档时带走它的全部连接。 */
 export async function removeBotImConnectionsForBot(botId: string): Promise<void> {
+  // WeChat shares the personal transport: remove only the teammate assignment,
+  // even when there are no dedicated connections. Keep its authorization intact.
+  if (readWechatChannelSettings().companionBotId === botId) {
+    await requireDeps().removeWechatCompanionBinding(() => {
+      if (readWechatChannelSettings().companionBotId !== botId) return;
+      const settings = writeWechatCompanionBinding(null);
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send('wechatBot:channel-settings-changed', settings);
+      }
+    }, () => readWechatChannelSettings().companionBotId === botId);
+  }
   for (const record of listBotImConnectionsForBot(botId)) {
     try {
       await removeBotImConnection(record.id);
@@ -642,6 +796,13 @@ export function parseBotImConnectionAddInput(payload: unknown): BotImConnectionA
   if (typeof p.botId !== 'string' || !p.botId.trim()) throwIpcError('INVALID_PARAMS', 'botId is required');
   if (!isBotImChannel(p.channel)) throwIpcError('INVALID_PARAMS', 'channel is invalid');
   const botId = p.botId.trim();
+  if (p.channel === 'imessage') {
+    try {
+      const config = parseBlueBubblesConfig(p);
+      if (typeof p.password !== 'string' || !p.password || p.password.length > 4096) throw new Error('invalid password');
+      return { botId, channel: 'imessage', ...config, password: p.password };
+    } catch { throwIpcError('INVALID_PARAMS', 'BLUEBUBBLES_INVALID_CONFIG'); }
+  }
   if (p.channel === 'telegram') {
     const token = typeof p.token === 'string' ? p.token.trim() : '';
     const ownerUserId = typeof p.ownerUserId === 'string' ? p.ownerUserId.trim() : '';
@@ -678,6 +839,12 @@ export function parseBotImConnectionAddInput(payload: unknown): BotImConnectionA
   return { botId, channel: 'discord', token, ownerUserId };
 }
 
+/** 隐藏任务小节(本机设置页与远程桌面的设置页共用): 群名沿用「群聊」小节同一份已知群。 */
+const laneOptions = () => ({ knownGroups: (record: BotImConnectionRecord) => requireDeps().listKnownGroups(record) });
+export const listBotImConnectionLanesForSettings = (id: string) => listBotImConnectionLanes(id, laneOptions());
+export const resetBotImConnectionLaneForSettings = (id: string, sessionId: string) =>
+  resetBotImConnectionLane(id, sessionId, laneOptions());
+
 export function registerBotImConnectionIpc(): void {
   if (ipcRegistered) return;
   ipcRegistered = true;
@@ -688,6 +855,16 @@ export function registerBotImConnectionIpc(): void {
   ipcMain.handle('botImConnection:add', (e, payload) => {
     assertTrustedAppRendererEvent(e);
     return addBotImConnection(parseBotImConnectionAddInput(payload));
+  });
+  ipcMain.handle('botImConnection:get-imessage-config', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    if (!isBotImConnectionId(payload?.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    return getBotIMessageConfig(payload.id);
+  });
+  ipcMain.handle('botImConnection:update-imessage-config', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    if (!isBotImConnectionId(payload?.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    return updateBotIMessageConfig(payload.id, payload.config);
   });
   ipcMain.handle('botImConnection:remove', (e, payload) => {
     assertTrustedAppRendererEvent(e);
@@ -701,23 +878,34 @@ export function registerBotImConnectionIpc(): void {
     if (!isBotImConnectionId(id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
     return listBotImConnectionGroups(id);
   });
+  ipcMain.handle('botImConnection:list-discord-channels', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const id = (payload as { id?: unknown } | null)?.id;
+    if (!isBotImConnectionId(id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    return listBotImDiscordChannels(id);
+  });
+  ipcMain.handle('botImConnection:set-discord-channel-access', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { id?: unknown; access?: unknown };
+    if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    return setBotImDiscordChannelAccess(p.id, p.access);
+  });
   ipcMain.handle('botImConnection:set-group-activation', (e, payload) => {
     assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { id?: unknown; chatId?: unknown; mode?: unknown };
     if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
-    if (typeof p.chatId !== 'string' || !/^-?\d{1,32}$/.test(p.chatId)) {
+    if (!isBotImGroupChatId(p.chatId)) {
       throwIpcError('INVALID_PARAMS', 'chatId is invalid');
     }
     const mode = p.mode === 'always' ? 'always' : 'mention';
     return setBotImConnectionGroupMode(p.id, p.chatId, mode);
   });
   // 隐藏任务小节: 群名沿用「群聊」小节同一份已知群(deps.listKnownGroups)。
-  const laneOptions = { knownGroups: (record: BotImConnectionRecord) => requireDeps().listKnownGroups(record) };
   ipcMain.handle('botImConnection:list-lanes', (e, payload) => {
     assertTrustedAppRendererEvent(e);
     const id = (payload as { id?: unknown } | null)?.id;
     if (!isBotImConnectionId(id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
-    return listBotImConnectionLanes(id, laneOptions);
+    return listBotImConnectionLanesForSettings(id);
   });
   ipcMain.handle('botImConnection:reset-lane', (e, payload) => {
     assertTrustedAppRendererEvent(e);
@@ -726,7 +914,23 @@ export function registerBotImConnectionIpc(): void {
     if (typeof p.sessionId !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(p.sessionId)) {
       throwIpcError('INVALID_PARAMS', 'sessionId is invalid');
     }
-    return resetBotImConnectionLane(p.id, p.sessionId, laneOptions);
+    return resetBotImConnectionLaneForSettings(p.id, p.sessionId);
+  });
+  ipcMain.handle('botImConnection:archive-lane', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { id?: unknown; sessionId?: unknown };
+    if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    if (typeof p.sessionId !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(p.sessionId)) {
+      throwIpcError('INVALID_PARAMS', 'sessionId is invalid');
+    }
+    return archiveBotImConnectionLane(p.id, p.sessionId, laneOptions()).catch((error: unknown) => {
+      if (isIpcError(error)) throw error;
+      if (error instanceof Error && (error.message === 'ARCHIVE_CAPACITY_REACHED' || error.message === 'OWNER_CHANGED')) {
+        throwIpcError('PRECONDITION_FAILED', error.message);
+      }
+      // Storage errors can include owner-specific absolute paths; keep them in main.
+      throwIpcError('INTERNAL', 'LANE_ARCHIVE_FAILED');
+    });
   });
 }
 

@@ -17,15 +17,31 @@
 import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
 import { mergeSlashCommands } from '@cindy/maker-shared/composer-palette';
 import type { MobileLearnStartRequest, MobileSlashCommand, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { composerDocumentProjectedText, normalizeComposerDocument, type ComposerDocument } from './composerDocument';
+
+/** Remove only the command prefix; reference bodies and quote positions belong to the draft. */
+export function buildMobileSideChatDraft(document: ComposerDocument): ComposerDocument {
+  const prefix = /^\s*\/side(?:\s+|$)/.exec(composerDocumentProjectedText(document));
+  if (!prefix) return document;
+  let remaining = prefix[0].length;
+  return normalizeComposerDocument({ version: 1, nodes: document.nodes.map(node => {
+    // Quotes have zero projected width and must survive even inside the prefix.
+    if (!remaining || (node.type !== 'text' && node.type !== 'pasted-text')) return node;
+    const removed = Math.min(remaining, node.text.length);
+    remaining -= removed;
+    return { ...node, text: node.text.slice(removed) };
+  }) });
+}
 
 /**
  * 移动端可执行的 desktop 命令白名单。只放行已实现分流的命令:
  * - goal:现有目标面板与 maker:goal:* 业务。
  * - learn:直调被控端 `learn:start`(评审 UI 暂在桌面端,移动端出系统卡提示)。
+ * - side:创建追问并打开浮层，参数保留为追问草稿，不发送到主任务。
  * 其余 desktop 命令(/help /clear /issue /workflows /jump-session 等)是控制端
  * UI 动作,移动端没有对应实现,展示了也执行不了 → 不放行。
  */
-export const MOBILE_SUPPORTED_DESKTOP_COMMANDS: ReadonlySet<string> = new Set(['learn', 'goal']);
+export const MOBILE_SUPPORTED_DESKTOP_COMMANDS: ReadonlySet<string> = new Set(['learn', 'goal', 'side']);
 
 /** palette 展示用:被控端 desktop 命令清单 → 只保留移动端可执行子集。 */
 export function filterMobileDesktopCommands(
@@ -33,6 +49,15 @@ export function filterMobileDesktopCommands(
 ): MobileSlashCommand[] {
   return commands.filter(
     (command) => command.kind === 'desktop' && MOBILE_SUPPORTED_DESKTOP_COMMANDS.has(command.name),
+  );
+}
+
+/** Available before the host command catalogue arrives; preserve skill precedence. */
+export function mergeMobileSideChatCommand(commands: readonly MobileSlashCommand[], description: string): MobileSlashCommand[] {
+  return mergeSlashCommands(
+    commands.filter(command => command.kind === 'agent-builtin'),
+    commands.filter(command => command.kind === 'agent-skill'),
+    [{ name: 'side', kind: 'desktop', description }, ...commands.filter(command => command.kind === 'desktop' && command.name !== 'side')],
   );
 }
 

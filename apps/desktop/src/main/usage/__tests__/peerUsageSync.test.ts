@@ -104,6 +104,15 @@ function harness(over: Partial<PeerUsageSyncDeps> = {}) {
 }
 
 describe('usage device rows wire format', () => {
+  it('preserves media fees with zero tokens across devices', async () => {
+    const rows = rowsFor(['2026-10-15'], 0);
+    rows.modelRows[0].agentKind = 'media';
+    const decoded = await decodeUsageDeviceRowsResponse(await hostResponse(rows, '2026-10-15', null));
+    expect(decoded?.kind).toBe('rows');
+    if (decoded?.kind !== 'rows') throw new Error('expected rows');
+    expect(decoded.rows.modelRows[0]).toMatchObject({ agentKind: 'media', money: usd(1), inputTokens: 0 });
+  });
+
   it('round-trips rows, filters by sinceDay and validates requests', async () => {
     const rows = rowsFor(['2026-09-24', '2026-09-25', '2026-09-26']);
     const decoded = await decodeUsageDeviceRowsResponse(

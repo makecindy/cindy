@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 /**
  * 远程 Agent 的「其他电脑」模型目录(纯逻辑,与桌面模型面板同口径):
  * 手机的模型选择器在被控电脑自己的供应商之后,列出同账号其他电脑上开了「允许被远程调用」的
@@ -5,8 +6,11 @@
  * 「其他电脑」标题。一个都没开的电脑不出现,列表不随设备数变长。
  * 别人分享给被控电脑的供应商(供应商分享)同样按「一台电脑」接在后面,见 providerShareRemoteCatalogs。
  */
-import type { DeviceView } from '@cindy/device-link';
+import type { DeviceView, ProviderShareFavoriteSource } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
+import { remoteInvocationModels } from '@cindy/model-providers';
+import type { NewSessionRemoteAgentPick } from './newSession';
+import { matchesEntry, mobileUnifiedEntries } from './unifiedMobileModels';
 
 import { toDeviceListItems } from '@/device-link/devices';
 import type { ProviderShareCatalogEntry } from '@/device-link/providerShareCatalogCache';
@@ -21,6 +25,8 @@ export interface RemoteAgentCatalog {
   status: 'loading' | 'ready' | 'error';
   /** 此刻连不上(只因任务的 Agent 在这台才留在清单里,目录可能来自缓存)。 */
   offline?: true;
+  /** 分享来的供应商的收藏身份。同账号电脑没有这个字段。 */
+  favoriteSource?: ProviderShareFavoriteSource;
   providers: ProviderView[];
   modelVisibilityOverrides?: Record<string, boolean>;
 }
@@ -29,7 +35,7 @@ export interface RemoteAgentCatalog {
 export function remoteAgentProviders(providers: readonly ProviderView[]): ProviderView[] {
   return providers.filter(
     (provider) => (provider as { remoteInvocationEnabled?: unknown }).remoteInvocationEnabled === true,
-  );
+  ).map(remoteInvocationModels);
 }
 
 /**
@@ -50,7 +56,7 @@ export function selectRemoteAgentDevices(input: {
     .filter((item) => item.canOpen || input.keepDeviceIds.includes(item.device.deviceId))
     .map((item) => ({
       deviceId: item.device.deviceId,
-      name: item.device.name?.trim() || item.device.deviceId,
+      name: deviceDisplayName(item.device.deviceId, item.device.name, input.devices),
       canOpen: item.canOpen,
     }));
 }
@@ -84,13 +90,17 @@ export function providerShareRemoteCatalogs(input: {
     if (seen.has(share.agentDeviceId)) continue;
     seen.add(share.agentDeviceId);
     const kept = keep.delete(share.agentDeviceId);
-    const reachable = share.status === 'active' && share.hostOnline;
+    const reachable = share.status === 'active' && (share.hostOnline
+      || (share.payload?.providerContinuity?.remainingMs ?? 0) > 0);
     if (!kept && (input.keepOnly || !reachable)) continue;
     const payload = share.payload;
     catalogs.push({
       deviceId: share.agentDeviceId,
       name: input.deviceName(share),
       status: payload ? 'ready' : 'error',
+      // 已暂停 / 分享者电脑不在线的分享只因被选着才留在清单里:与留下的离线电脑一样标出,选不了。
+      ...(reachable ? {} : { offline: true as const }),
+      ...(share.favoriteSource ? { favoriteSource: share.favoriteSource } : {}),
       providers: payload
         ? remoteAgentProviders(payload.providers).filter((provider) => provider.id === share.providerId)
         : [],
@@ -105,4 +115,22 @@ export function providerShareRemoteCatalogs(input: {
     }
   }
   return catalogs;
+}
+
+/**
+ * 按记忆恢复的远程选择此刻还能不能用:清单读完后那台电脑 / 分享不在了、读不到、离线,或模型已不在
+ * 那份目录里「可选」的条目(供应商断开 / 停用、模型被隐藏)都算不能用。清单没读完先不下结论。
+ */
+export function restoredRemoteAgentUnusable(input: {
+  pick: NewSessionRemoteAgentPick;
+  catalog: RemoteAgentCatalog | undefined;
+  settled: boolean;
+}): boolean {
+  const { pick, catalog } = input;
+  if (!catalog) return input.settled;
+  if (catalog.status === 'loading') return false;
+  if (catalog.status === 'error' || catalog.offline) return true;
+  return !mobileUnifiedEntries(catalog.providers, [pick.agentKind], catalog.modelVisibilityOverrides, false)
+    .some((entry) => (pick.providerId === null || entry.providerId === pick.providerId)
+      && matchesEntry(entry, pick.model));
 }

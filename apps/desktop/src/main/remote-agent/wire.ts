@@ -11,7 +11,9 @@
  *  - 消息里的图片 → 字节随载荷带过去，被控端写到本次任务的附件目录再引用。
  * 被控端解码时按最小合同校验类型，不认识的字段丢弃。
  */
+import { createHash } from 'node:crypto';
 import {
+  LOCAL_AGENT_CLIENT,
   AUTO_REVIEW_DELEGATED_CONTINUATION,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
@@ -25,7 +27,7 @@ import {
   type UserMessage,
 } from '@cindy/maker-core';
 import { projectAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
-import { REMOTE_AGENT_RELAY_KEY_PATTERN } from '@cindy/device-link';
+import { REMOTE_AGENT_RELAY_KEY_PATTERN, type RemoteAgentKind } from '@cindy/device-link';
 
 import {
   channelForceConfirmMutatingToolCall,
@@ -34,6 +36,8 @@ import {
 
 export const REMOTE_AGENT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PROJECT_FILES = 512;
+/** 个人配置(含旧运行端收到的托管 Skill)的文件数上限：超过时旧运行端拒绝整个打开。 */
+export const REMOTE_AGENT_MAX_PERSONAL_FILES = MAX_PROJECT_FILES;
 const MAX_TEXT = 512 * 1024;
 
 // ─── 通用校验 ────────────────────────────────────────────────────
@@ -98,18 +102,24 @@ export interface RemoteAgentWireFile {
 }
 
 export interface RemoteAgentWireStartOptions {
+  /** Negotiated external-application isolation. No controller URL, token or path. */
+  localApplication?: { mcpName: string; hostToolsOnly: boolean; storageKey: string };
   model: string;
   providerId?: string | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   thinkingEnabled?: boolean;
   userPrompt?: string;
   botProfilePrompt?: string;
   botProfileContextPrompt?: string;
   botUserProfilePrompt?: string;
   makerMemoryEnabled?: boolean;
+  /** 记忆开关由伙伴自己的设置决定；旧被控端解码时丢弃。 */
+  makerMemorySwitchOwned?: boolean;
   makerMemoryScopeKey?: string;
   makerMemoryIndexSnapshot?: string;
+  /** 本机(任务所在电脑)的插件花名册段；旧控制端不带，旧被控端解码时丢弃。 */
+  ghostRosterSnapshot?: string;
   permissionMode?: string;
   planMode?: boolean;
   displayReasoning?: string;
@@ -125,6 +135,18 @@ export interface RemoteAgentWireAncestorFile {
   up: number;
   name: string;
   data: string;
+}
+
+/**
+ * 项目各级上级目录里有没有 Codex 沿上级目录查找的那几个名字(`.git`、插件清单目录等)，打开任务时一次带过去：
+ * 被控端对不存在的直接回答「不存在」，不再逐个经设备互联往返。只报这几个名字存不存在，Agent 本来就能逐个
+ * 查到，不多泄露上级目录里的其它内容。
+ */
+export interface RemoteAgentWireAncestorMarkers {
+  /** 控制端检查过的名字：新旧版本的名单可能不同，被控端只按这里列出的判断。 */
+  names: string[];
+  /** 各级上级目录(up 从 1 起，到根目录为止)里存在的名字；没列出的级别按不知道处理。 */
+  levels: Array<{ up: number; present: string[] }>;
 }
 
 /**
@@ -151,9 +173,79 @@ export interface RemoteAgentWirePersonal {
   permissions?: { allow?: string[]; deny?: string[]; ask?: string[] };
   /** 个人说明(Codex 的 AGENTS.md 等)：写进给 Agent 的环境说明。 */
   instructions?: string;
+  /**
+   * 你这台本次可用的 Cindy 托管 Skill(内置与插件带的，已按你这台的启用状态与伙伴授权过滤)。文件随 `files`
+   * 放在 Agent 找项目 Skill 的位置(`dir`，如 `.claude/skills/cindy-pr`)，旧运行端当项目 Skill 加载。
+   * 字段存在(含空数组)时，新运行端以它为准，不再加载自己的托管 Skill；Claude Code 改挂到
+   * {@link managedSkillPluginLayout} 的插件目录，保持 `cindy:pr` 这样的命名。缺省时沿用运行端原规则。
+   */
+  managedSkills?: RemoteAgentWireManagedSkill[];
+  /**
+   * 对方声明了 `caps.managedSkills` 时，托管 Skill 的文件放这里(不占 `files` 的额度)；每个文件都在某个
+   * `managedSkills[].dir` 之下。旧运行端不会收到它。
+   */
+  managedFiles?: RemoteAgentWireFile[];
+}
+
+export interface RemoteAgentWireManagedSkill {
+  /** 本机的 Claude 命令名 `<插件>:<Skill>`，如 `cindy:pr`。 */
+  command: string;
+  /** 文件在影子目录里的位置(个人 Skill 目录下的一级，见 {@link managedSkillDir})。 */
+  dir: string;
+  /** 内容指纹(见 managedSkillDigest.ts)。 */
+  digest?: string;
+  /** 与对方 `caps.managedSkills.digests` 里的指纹相同：没带文件，对方复制自己那份(指纹仍要一致)。 */
+  reuse?: true;
+}
+
+/** 新运行端单独给托管 Skill 的文件额度。 */
+export const MAX_MANAGED_SKILL_FILES = 2048;
+/** 同步给对方的单个文件、一批文件的大小上限（项目说明、个人配置；旧运行端的托管 Skill 与个人配置共用后者）。 */
+export const REMOTE_AGENT_SYNC_FILE_BYTES = 512 * 1024;
+export const REMOTE_AGENT_SYNC_TOTAL_BYTES = 4 * 1024 * 1024;
+/** 新运行端单独给托管 Skill 的大小额度。 */
+export const MAX_MANAGED_SKILL_BYTES = 16 * 1024 * 1024;
+/** `personal.managedSkills` 的条目上限：超过时接收方拒绝整个打开，收集时就要截断。 */
+export const MAX_MANAGED_SKILLS = 512;
+
+const MANAGED_SKILL_PART = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** `<插件>:<Skill>` 两段都是安全的目录名时返回两段，否则 null。 */
+export function parseManagedSkillCommand(command: string): { plugin: string; skill: string } | null {
+  const [plugin, skill, extra] = command.split(':');
+  return extra === undefined && plugin && skill && MANAGED_SKILL_PART.test(plugin) && MANAGED_SKILL_PART.test(skill)
+    ? { plugin, skill }
+    : null;
+}
+
+/**
+ * 托管 Skill 的文件在影子目录里的位置：Agent 找项目 Skill 的目录下 `<插件>-<Skill>`。名字本身可以含 `-`，
+ * 两个命令可能拍平成同一个名字（`a-b:c` 与 `a:b-c`）：名字里有 `-` 时追加整条命令的短哈希，保证不同命令不同目录，
+ * 同一条命令每次都得到同一个目录。`forceHash`：普通名字已被项目或个人的同名 Skill 占用时，换成带哈希的目录共存。
+ */
+export function managedSkillDir(kind: RemoteAgentKind, command: string, forceHash = false): string | null {
+  const parts = parseManagedSkillCommand(command);
+  if (!parts) return null;
+  const ambiguous = forceHash || parts.plugin.includes('-') || parts.skill.includes('-');
+  const name = ambiguous
+    ? `${parts.plugin}-${parts.skill}-${createHash('sha256').update(command).digest('hex').slice(0, 8)}`
+    : `${parts.plugin}-${parts.skill}`;
+  return `${kind === 'claude-code' ? '.claude/skills' : '.agents/skills'}/${name}`;
+}
+
+/** 新运行端给 Claude Code 挂的插件目录(相对影子目录)：插件根与其中这个 Skill 的目录。 */
+export function managedSkillPluginLayout(command: string): { root: string; dir: string } | null {
+  const parts = parseManagedSkillCommand(command);
+  if (!parts) return null;
+  const root = `.cindy/managed-skills/${parts.plugin}`;
+  return { root, dir: `${root}/skills/${parts.skill}` };
 }
 
 export interface RemoteAgentOpenPayload {
+  /** Controller can acknowledge durable image delivery; absent on legacy controllers. */
+  acceptsImageDeliveryReceipts?: boolean;
+  /** Task Host clear generation, preserved through provider-group relays. */
+  imageDeliveryEpoch?: number;
   /** 控制端任务 id。 */
   sessionId: string;
   /** 能力增量：Agent 使用本机虚拟工作区；新控制端在 open 前必须确认对端 caps 支持。 */
@@ -168,6 +260,8 @@ export interface RemoteAgentOpenPayload {
    * 隔离运行，会话记录与目录按(控制端, relay)分开。只发给 caps 声明了 guestRelay 的电脑。
    */
   relay?: string;
+  /** Capability-negotiated reverse checks against the original sharing member. */
+  relayModelAccess?: boolean;
   /**
    * 供应商组转分享：组所在电脑把受邀者的任务转给分享来的组内电脑时，带上这个受邀者(按账号)的转分享键，
    * 与组所在电脑经 op `reshare` 报上去的键相同。那台的主人同意过这个人才运行；没同意或没带时拒绝。
@@ -187,6 +281,8 @@ export interface RemoteAgentOpenPayload {
   projectFiles: RemoteAgentWireFile[];
   /** 项目上级目录里的说明文件。 */
   ancestorFiles: RemoteAgentWireAncestorFile[];
+  /** 项目上级目录里有没有 Codex 要找的那几个名字；旧控制端不带，旧被控端解码时丢弃。 */
+  ancestorMarkers?: RemoteAgentWireAncestorMarkers;
   /** 说明文件里 `@` 导入的文件；旧被控端不认识，按没有处理。 */
   importFiles?: RemoteAgentWireImportFile[];
   /** 你这台的个人配置。 */
@@ -198,6 +294,15 @@ export interface RemoteAgentOpenPayload {
 /** 上级目录说明文件只认这几个名字，最多向上这么多级。 */
 export const ANCESTOR_INSTRUCTION_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md'] as const;
 export const MAX_ANCESTOR_LEVELS = 24;
+/**
+ * Codex 建线程时在各级上级目录里查找的名字(固定 Codex 0.159.2 实测：每级 `.git` 与三种插件清单目录；
+ * 项目根在上级时还会查 `.agents`、`.codex` 与说明文件)。控制端按它报告各级有没有。
+ */
+export const ANCESTOR_MARKER_NAMES = [
+  '.git', '.agents', '.codex', '.codex-plugin', '.claude-plugin', '.cursor-plugin', 'AGENTS.md', 'AGENTS.override.md',
+] as const;
+/** 解码时接受的名字个数上限(给新版本加名字留余量)。 */
+const MAX_ANCESTOR_MARKER_NAMES = 32;
 /**
  * 同步到影子目录的项目文件白名单(控制端按它收集；被控端对不受信任的控制端按它复核)：
  * 工作目录根上的说明文件、Claude Code 项目设置(只保留权限规则)，以及这些目录下的
@@ -220,10 +325,11 @@ const PERSONAL_PREFIXES = ['.claude/skills/', '.claude/agents/', '.claude/comman
 
 const START_STRING_FIELDS = [
   'effort', 'userPrompt', 'botProfilePrompt', 'botProfileContextPrompt', 'botUserProfilePrompt',
-  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'permissionMode', 'displayReasoning', 'resumeSessionId',
+  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'ghostRosterSnapshot', 'permissionMode', 'displayReasoning',
+  'resumeSessionId',
 ] as const;
 const START_BOOL_FIELDS = [
-  'fastMode', 'thinkingEnabled', 'makerMemoryEnabled', 'planMode', 'codexHistoryHasProductPrompt',
+  'fastMode', 'thinkingEnabled', 'makerMemoryEnabled', 'makerMemorySwitchOwned', 'planMode', 'codexHistoryHasProductPrompt',
 ] as const;
 
 /** vendorOptions 里只有这些是可序列化、对另一台电脑有意义的。 */
@@ -232,6 +338,11 @@ const VENDOR_OPTION_KEYS = new Set(['source', 'resumeSessionAt', 'forkSession'])
 export function encodeStartOptions(opts: StartSessionOptions): RemoteAgentWireStartOptions {
   const record = opts as unknown as Record<string, unknown>;
   const wire: RemoteAgentWireStartOptions = { model: opts.model };
+  const client = opts[LOCAL_AGENT_CLIENT];
+  if (client) wire.localApplication = {
+    mcpName: client.mcpName ?? 'client', hostToolsOnly: client.hostToolsOnly,
+    storageKey: createHash('sha256').update(client.storageDirectory ?? opts.sessionId!).digest('hex'),
+  };
   if (opts.providerId !== undefined) wire.providerId = opts.providerId;
   for (const key of START_STRING_FIELDS) {
     const value = record[key];
@@ -257,6 +368,13 @@ export function decodeStartOptions(value: unknown): RemoteAgentWireStartOptions 
     throw new Error('REMOTE_AGENT_INVALID');
   }
   const wire: RemoteAgentWireStartOptions = { model: value.model };
+  if (value.localApplication !== undefined) {
+    const client = value.localApplication;
+    if (!isRecord(client) || typeof client.mcpName !== 'string' || !/^[a-z0-9_-]{1,64}$/i.test(client.mcpName)
+      || client.mcpName === 'cindy_exec' || typeof client.hostToolsOnly !== 'boolean'
+      || typeof client.storageKey !== 'string' || !/^[a-f0-9]{64}$/.test(client.storageKey)) throw new Error('REMOTE_AGENT_INVALID');
+    wire.localApplication = { mcpName: client.mcpName, hostToolsOnly: client.hostToolsOnly, storageKey: client.storageKey };
+  }
   if (value.providerId === null || typeof value.providerId === 'string') wire.providerId = value.providerId as string | null;
   for (const key of START_STRING_FIELDS) {
     const item = optString(value[key]);
@@ -325,9 +443,13 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
   });
   return {
     sessionId,
+    ...(value.acceptsImageDeliveryReceipts === true ? { acceptsImageDeliveryReceipts: true } : {}),
+    ...(typeof value.imageDeliveryEpoch === 'number' && Number.isSafeInteger(value.imageDeliveryEpoch) && value.imageDeliveryEpoch >= 0
+      ? { imageDeliveryEpoch: value.imageDeliveryEpoch } : {}),
     ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
     ...(value.groupAssigned === true ? { groupAssigned: true } : {}),
     ...(typeof value.relay === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.relay) ? { relay: value.relay } : {}),
+    ...(value.relayModelAccess === true ? { relayModelAccess: true } : {}),
     ...(typeof value.reshareKey === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.reshareKey)
       ? { reshareKey: value.reshareKey }
       : {}),
@@ -339,6 +461,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     workspace: decodeWorkspace(value.workspace),
     projectFiles,
     ancestorFiles,
+    ...decodeAncestorMarkers(value.ancestorMarkers),
     ...decodeImportFiles(value.importFiles),
     personal: decodePersonal(value.personal),
     mcpServers: (stringArray(value.mcpServers, 128) ?? []).filter((name) => /^[a-z0-9_-]{1,64}$/i.test(name)),
@@ -350,6 +473,33 @@ export function isSafeImportPath(relative: string): boolean {
   if (!relative || relative.length > 1024 || relative.includes('\0') || relative.includes('\\')) return false;
   if (relative.startsWith('/') || /^[A-Za-z]:/.test(relative)) return false;
   return relative.split('/').every((part) => part !== '' && part !== '.');
+}
+
+/** 上级目录标记名只能是单个路径段。 */
+function isMarkerName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 64 && value !== '.' && value !== '..'
+    && !/[\\/\0:]/.test(value);
+}
+
+/**
+ * 格式不对的整段丢掉(按没带处理，被控端照常转发每次查询)：宁可慢，不能把存在的路径答成不存在。
+ */
+function decodeAncestorMarkers(value: unknown): { ancestorMarkers?: RemoteAgentWireAncestorMarkers } {
+  if (!isRecord(value) || !Array.isArray(value.names) || !Array.isArray(value.levels)) return {};
+  if (value.names.length > MAX_ANCESTOR_MARKER_NAMES || value.levels.length > MAX_ANCESTOR_LEVELS) return {};
+  if (!value.names.every(isMarkerName)) return {};
+  const names = [...new Set(value.names)];
+  const seen = new Set<number>();
+  const levels: RemoteAgentWireAncestorMarkers['levels'] = [];
+  for (const item of value.levels) {
+    if (!isRecord(item) || !Array.isArray(item.present)) return {};
+    const { up } = item;
+    if (typeof up !== 'number' || !Number.isInteger(up) || up < 1 || up > MAX_ANCESTOR_LEVELS || seen.has(up)) return {};
+    if (!item.present.every((name) => isMarkerName(name) && names.includes(name))) return {};
+    seen.add(up);
+    levels.push({ up, present: [...new Set(item.present as string[])] });
+  }
+  return names.length && levels.length ? { ancestorMarkers: { names, levels } } : {};
 }
 
 function decodeImportFiles(value: unknown): { importFiles?: RemoteAgentWireImportFile[] } {
@@ -384,6 +534,32 @@ function decodePersonal(value: unknown): RemoteAgentWirePersonal {
     const rules = (key: string) => (stringArray(value.permissions && (value.permissions as Record<string, unknown>)[key], 1024) ?? []).slice(0, 512);
     const permissions = { allow: rules('allow'), deny: rules('deny'), ask: rules('ask') };
     if (permissions.allow.length || permissions.deny.length || permissions.ask.length) personal.permissions = permissions;
+  }
+  if (Array.isArray(value.managedSkills)) {
+    if (value.managedSkills.length > MAX_MANAGED_SKILLS) throw new Error('REMOTE_AGENT_INVALID');
+    const seen = new Set<string>();
+    personal.managedSkills = value.managedSkills.flatMap((item): RemoteAgentWireManagedSkill[] => {
+      if (!isRecord(item) || typeof item.command !== 'string' || typeof item.dir !== 'string') return [];
+      const parts = parseManagedSkillCommand(item.command);
+      // 只认个人 Skill 目录下的一级：运行端会把这个目录整体挪走。
+      const valid = parts && isSafeProjectFilePath(item.dir) && item.dir.split('/').length === 3
+        && (item.dir.startsWith('.claude/skills/') || item.dir.startsWith('.agents/skills/'));
+      if (!valid || seen.has(item.command) || seen.has(item.dir)) return [];
+      const digest = typeof item.digest === 'string' && /^[0-9a-f]{64}$/.test(item.digest) ? item.digest : undefined;
+      // 复用必须带指纹：对方据此确认自己那份与任务所在电脑的一字不差。
+      if (item.reuse === true && !digest) return [];
+      seen.add(item.command).add(item.dir);
+      return [{ command: item.command, dir: item.dir, ...(digest ? { digest } : {}), ...(item.reuse === true ? { reuse: true as const } : {}) }];
+    });
+    const managedFiles = Array.isArray(value.managedFiles) ? value.managedFiles : [];
+    if (managedFiles.length > MAX_MANAGED_SKILL_FILES) throw new Error('REMOTE_AGENT_INVALID');
+    const dirs = personal.managedSkills.filter((skill) => !skill.reuse).map((skill) => `${skill.dir}/`);
+    const files = managedFiles.flatMap((item): RemoteAgentWireFile[] => {
+      if (!isRecord(item) || typeof item.path !== 'string' || typeof item.data !== 'string') return [];
+      const filePath = item.path;
+      return isSafeProjectFilePath(filePath) && dirs.some((dir) => filePath.startsWith(dir)) ? [{ path: filePath, data: item.data }] : [];
+    });
+    if (files.length) personal.managedFiles = files;
   }
   return personal;
 }
@@ -608,7 +784,7 @@ function decodeOrigin(value: unknown): TurnPermissionOrigin | undefined {
     case 'hook':
       return typeof value.source === 'string' ? { kind: 'hook', source: value.source } : undefined;
     case 'im': {
-      const channels = ['feishu', 'discord', 'slack', 'wechat', 'telegram', 'dingtalk', 'wecom'] as const;
+      const channels = ['feishu', 'discord', 'slack', 'wechat', 'telegram', 'dingtalk', 'wecom', 'imessage'] as const;
       const channel = channels.find((item) => item === value.channel);
       return channel ? prune({ kind: 'im' as const, channel, taskId: optString(value.taskId, 256) }) : undefined;
     }
@@ -637,38 +813,38 @@ export async function decodeSendOptions(value: unknown, callbacks: DecodeSendCal
     toolsDisabled: optBool(value.toolsDisabled),
   });
   if (value.transcriptCallback === true) opts.onTranscriptUserEntry = callbacks.onTranscriptUserEntry;
-  if (isRecord(value.turnPolicy)) {
+  if (value.turnPolicy !== undefined) {
     const policy = value.turnPolicy;
+    if (!isRecord(policy)) throw new Error('REMOTE_AGENT_INVALID: invalid turn permission policy');
     const origin = decodeOrigin(policy.origin);
+    if (!origin) throw new Error('REMOTE_AGENT_INVALID: unsupported turn permission origin');
     const surface = policy.confirmationSurface === 'channel' ? 'channel' : 'desktop';
     const force = policy.forceConfirm === 'channel'
       ? channelForceConfirmToolCall
       : policy.forceConfirm === 'channel-mutating'
         ? channelForceConfirmMutatingToolCall
         : () => true;
-    if (origin) {
-      opts.turnPermissionPolicy = prune({
-        origin,
-        confirmationSurface: surface,
-        confirmationTimeoutMs: optNumber(policy.confirmationTimeoutMs),
-        autoReviewContext: isRecord(policy.autoReviewContext) ? policy.autoReviewContext : undefined,
-        onInteractionStateChange: policy.stateCallback === true ? callbacks.onInteractionStateChange : undefined,
-        forceConfirmToolCall: force,
-      }) as unknown as TurnPermissionPolicy;
-    }
+    opts.turnPermissionPolicy = prune({
+      origin,
+      confirmationSurface: surface,
+      confirmationTimeoutMs: optNumber(policy.confirmationTimeoutMs),
+      autoReviewContext: isRecord(policy.autoReviewContext) ? policy.autoReviewContext : undefined,
+      onInteractionStateChange: policy.stateCallback === true ? callbacks.onInteractionStateChange : undefined,
+      forceConfirmToolCall: force,
+    }) as unknown as TurnPermissionPolicy;
   }
   if (isRecord(value.cindy)) {
     const cindy = value.cindy;
-    if (isRecord(cindy.mainOwned)) {
+    if (cindy.mainOwned !== undefined) {
+      if (!isRecord(cindy.mainOwned)) throw new Error('REMOTE_AGENT_INVALID: invalid Main-owned send context');
       const origin = decodeOrigin(cindy.mainOwned.origin);
-      if (origin) {
-        opts[MAIN_OWNED_SEND_CONTEXT] = prune({
-          origin,
-          rawChannelText: optString(cindy.mainOwned.rawChannelText),
-          // Re-projected here: shape and bounds are never taken from the wire as-is.
-          autoReviewReferences: projectAutoReviewUserReferences(cindy.mainOwned.autoReviewReferences),
-        });
-      }
+      if (!origin) throw new Error('REMOTE_AGENT_INVALID: unsupported Main-owned origin');
+      opts[MAIN_OWNED_SEND_CONTEXT] = prune({
+        origin,
+        rawChannelText: optString(cindy.mainOwned.rawChannelText),
+        // Re-projected here: shape and bounds are never taken from the wire as-is.
+        autoReviewReferences: projectAutoReviewUserReferences(cindy.mainOwned.autoReviewReferences),
+      });
     }
     if (isRecord(cindy.autoReviewSourceContent)) {
       const message = await decodeUserMessage(cindy.autoReviewSourceContent, callbacks.writeAttachment);

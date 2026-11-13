@@ -52,13 +52,15 @@ vi.mock('../../maker-host/anthropic-responses-bridge-host.js', () => ({
   getChatgptBridgeAuthForDispatch: vi.fn(),
 }));
 
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: vi.fn(),
   getGrokOAuthCredentialGeneration: vi.fn(() => 0),
 }));
 
-vi.mock('../../maker-host/generic-oauth.js', () => ({
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: vi.fn(),
+  readGenericOAuthAccessToken: vi.fn(),
+  getGenericOAuthLoginGeneration: vi.fn(() => 0),
 }));
 
 vi.mock('../../maker-host/active-catalog.js', () => ({
@@ -100,11 +102,11 @@ vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
 }));
 
 import type { Maker } from '@cindy/maker-core';
-import { buildUserProvider } from '@cindy/model-providers';
 // model-compat's own profile table; one test adds a temporary gateway-object
 // profile because the only real one (cline-pass) shares its address with a
 // conflicting profile and never resolves.
 import upstreamProfiles from '../../../../../../packages/model-compat/src/upstream-profiles.json';
+import { BUNDLED_CATALOG, buildUserProvider, type PiModelApi } from '@cindy/model-providers';
 import { DictationDictionaryAdvisor } from '@cindy/voice-input-core';
 import { DictionaryLearningTextModelClient } from '../../voice-input/DictionaryLearningTextModelClient.js';
 import { fetch as undiciFetch } from 'undici';
@@ -112,8 +114,8 @@ import { fetch as undiciFetch } from 'undici';
 import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../../maker-host/anthropic-responses-bridge-host.js';
-import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.js';
-import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
+import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.desktop.js';
+import { readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken } from '../../maker-host/generic-oauth.desktop.js';
 import {
   getActiveCatalog,
   isXdGatewayPaymentRequiredRoute,
@@ -124,6 +126,7 @@ import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { reportCindyGatewayKeyRejected } from '../../model-access/gatewayKeyRejection.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
 import { parseAutoPermissionReviewDecision } from '../../maker-host/auto-permission-reviewer.js';
+import { decodeCatalogPin } from '../textOneshotPinOptions.js';
 import {
   DEDICATED_AUTO_REVIEW_CANDIDATES,
   createCustomAutoReviewFallback,
@@ -183,6 +186,7 @@ describe('utility one-shot candidates', () => {
     readGrokToken.mockRejectedValue(new Error('not authenticated'));
     grokCredentialGeneration.mockReturnValue(0);
     readGenericOAuthToken.mockReturnValue(null);
+    vi.mocked(readGenericOAuthAccessToken).mockImplementation(async (...args) => readGenericOAuthToken(...args));
     providerRouteMutationInProgress.mockReturnValue(false);
     providerRouteCredentialRevision.mockReturnValue(0);
     readCustomKey.mockReturnValue(null);
@@ -1117,7 +1121,8 @@ describe('utility one-shot candidates', () => {
     });
   });
 
-  it('routes an explicitly selected custom provider to its own Codex endpoint', async () => {
+  it.each(['https://custom.example/v1', 'https://openrouter.ai/api/v1'])
+  ('routes an explicit auxiliary selection to %s with the application identity', async upstream => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'tapsvc',
@@ -1127,7 +1132,7 @@ describe('utility one-shot candidates', () => {
         auth: { method: 'apiKey' },
         routing: {
           codex: {
-            upstream: 'https://custom.example/v1',
+            upstream,
             authStrategy: 'api-key-header',
             headerOverride: { 'X-Tenant': 'tenant-a' },
           },
@@ -1157,7 +1162,7 @@ describe('utility one-shot candidates', () => {
       transport: 'codex-responses',
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://custom.example/v1/responses',
+      `${upstream}/responses`,
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer custom-secret',
@@ -1168,7 +1173,126 @@ describe('utility one-shot candidates', () => {
     expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls[0]?.[1]?.body))).toMatchObject({
       model: 'custom-mini',
     });
+    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers as HeadersInit);
+    expect(headers.get('http-referer')).toBe(upstream.includes('openrouter.ai') ? 'https://cindy.app' : null);
+    expect(headers.get('x-openrouter-title')).toBe(upstream.includes('openrouter.ai') ? 'Cindy' : null);
   });
+
+  it('dispatches a saved Pi-only Go Flash auxiliary selection without launching an agent', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find((entry) => entry.id === 'opencode-go')!;
+    const provider = buildUserProvider({ id: 'go', name: 'Go', runtimes: {
+      pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [{ id: 'deepseek-v4.1-flash', name: 'Flash' }] },
+    } }, { presets: BUNDLED_CATALOG.presets });
+    activeCatalog.mockReturnValue({ ...BUNDLED_CATALOG, providers: [provider] });
+    chainState.source = 'custom';
+    chainState.refs = [`cat:${provider.id}:pi:deepseek-v4.1-flash`];
+    readCustomKey.mockReturnValue('test-key');
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({ choices: [{ message: { content: 'title' } }] }) } as never);
+    const maker = makerMock(false);
+    expect(await requestUtilityText(maker, 'hello', { maxTokens: 80 })).toMatchObject({ ok: true, text: 'title', providerId: provider.id });
+    expect(maker.oneShot).not.toHaveBeenCalled();
+    expect(readCustomKey).toHaveBeenCalledWith(provider.id, 'pi');
+    expect(fetchMock.mock.calls[0][0]).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ model: 'deepseek-v4.1-flash', max_tokens: 80 });
+  });
+
+  it.each([
+    ['claude-code', 'openai-completions', 'openai-chat', '/chat/completions'],
+    ['codex', 'anthropic-messages', 'anthropic-messages', '/v1/messages'],
+    ['pi', 'openai-responses', 'openai-responses', '/responses'],
+  ] as const)('uses the model API instead of the %s connection default (%s)', async (agent, api, wireProtocol, path) => {
+    const provider = {
+      id: 'mixed', name: 'Mixed', source: 'user', agents: [agent], auth: { method: 'apiKey' },
+      routing: { [agent]: { upstream: 'https://default.example', authStrategy: 'api-key-header', wireProtocol: 'openai-chat', requestPath: '/old' } },
+      models: { [agent]: [{ id: 'model', name: 'Model', mode: 'chat', api, route: { baseUrl: 'https://model.example', wireProtocol } }] },
+    };
+    activeCatalog.mockReturnValue({ providers: [provider] } as never);
+    readCustomKey.mockReturnValue('test-key');
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({
+      choices: [{ message: { content: 'answer' } }], content: [{ type: 'text', text: 'answer' }], output_text: 'answer',
+    }) } as never);
+    const result = await requestUtilityText(makerMock(false), 'hello', { providerId: 'mixed', agentKind: agent, model: 'model' });
+    expect(result).toMatchObject({ ok: true, text: 'answer' });
+    expect(fetchMock.mock.calls[0][0]).toBe(`https://model.example${path}`);
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(api === 'openai-responses' ? body.input : body.messages).toBeDefined();
+  });
+
+  it.each([
+    ['codex', 'openai-chat', 'openai-completions', 'plugin-pin'],
+    ['claude-code', 'anthropic-messages', 'anthropic-messages', 'plugin-pin'],
+    ['codex', 'openai-chat', 'openai-completions', 'auxiliary-chain'],
+    ['claude-code', 'anthropic-messages', 'anthropic-messages', 'auxiliary-chain'],
+  ] as const)('retains the connection custom path for %s/%s via %s/%s', async (agent, wireProtocol, api, entry) => {
+    const baseUrl = 'https://custom-path.example';
+    const provider = buildUserProvider({ id: 'custom-path', name: 'Custom path', runtimes: {
+      [agent]: { baseUrl, wireProtocol, requestPath: '/tenant/infer?mode=fast', models: [{
+        id: 'model', name: 'Model', api, route: { baseUrl, wireProtocol },
+      }] },
+    } });
+    activeCatalog.mockReturnValue({ providers: [provider] } as never);
+    readCustomKey.mockReturnValue('test-key');
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({
+      choices: [{ message: { content: 'answer' } }], content: [{ type: 'text', text: 'answer' }],
+    }) } as never);
+    const pin = `cat:${provider.id}:${agent}:model`;
+    chainState.source = 'custom';
+    chainState.refs = [pin];
+    // Plugin catalog pins use the decoded explicit route; unpinned plugins and
+    // host auxiliary callers follow the shared saved chain.
+    const options = entry === 'plugin-pin' ? decodeCatalogPin(pin)! : undefined;
+    expect(await requestUtilityText(makerMock(false), 'hello', options)).toMatchObject({ ok: true, text: 'answer' });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://custom-path.example/tenant/infer?mode=fast');
+  });
+
+  it('continues from a failed Pi HTTP route to the saved legacy fallback', async () => {
+    const provider = buildUserProvider({ id: 'http-chain', name: 'HTTP', runtimes: {
+      pi: { baseUrl: 'https://primary.example/v1', wireProtocol: 'openai-chat', models: [{ id: 'primary', name: 'Primary' }] },
+      codex: { baseUrl: 'https://backup.example/v1', wireProtocol: 'openai-responses', models: [{ id: 'backup', name: 'Backup' }] },
+    } });
+    activeCatalog.mockReturnValue({ providers: [provider] } as never);
+    chainState.source = 'custom';
+    chainState.refs = [`cat:${provider.id}:pi:primary`, `cat:${provider.id}:codex:backup`];
+    readCustomKey.mockReturnValue('test-key');
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 503, text: async () => '' } as never);
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify({ output_text: 'fallback' }) } as never);
+    expect(await requestUtilityText(makerMock(false), 'hello')).toMatchObject({ ok: true, model: 'backup', text: 'fallback' });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['https://primary.example/v1/chat/completions', 'https://backup.example/v1/responses']);
+  });
+
+  it.each(['model-disabled', 'provider-disabled', 'model-route-changed', 'credential-changed'] as const)(
+    'rechecks a saved Pi HTTP choice before sending (%s)', async (change) => {
+      const provider = buildUserProvider({ id: 'live-http', name: 'HTTP', runtimes: {
+        pi: { baseUrl: 'https://original.example/v1', wireProtocol: 'openai-chat', models: [{ id: 'model', name: 'Model' }] },
+      } });
+      activeCatalog.mockReturnValue({ providers: [provider] } as never);
+      readCustomKey.mockReturnValue('test-key');
+      const result = await requestUtilityText(makerMock(false), 'hello', {
+        providerId: provider.id, agentKind: 'pi', model: 'model',
+        beforeDispatch: async () => {
+          if (change === 'model-disabled') readDisableOverrides.mockReturnValue({ disabledModels: { [`${provider.id}:model`]: true } });
+          if (change === 'provider-disabled') readDisableOverrides.mockReturnValue({ disabledProviders: { [provider.id]: true } });
+          if (change === 'model-route-changed') provider.models.pi![0].route = { baseUrl: 'https://changed.example/v1', wireProtocol: 'openai-chat' };
+          if (change === 'credential-changed') readCustomKey.mockReturnValue('different-test-key');
+          return true;
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['google-generative-ai', 'bedrock-converse-stream'] as PiModelApi[])(
+    'does not dispatch an unsupported model API %s through the connection Chat default', async (api) => {
+      const provider = buildUserProvider({ id: 'sdk', name: 'SDK', runtimes: {
+        pi: { baseUrl: 'https://sdk.example/v1', wireProtocol: 'openai-chat', models: [{ id: 'model', name: 'Model', api }] },
+      } });
+      activeCatalog.mockReturnValue({ providers: [provider] } as never);
+      readCustomKey.mockReturnValue('test-key');
+      expect(await requestUtilityText(makerMock(false), 'hello', { providerId: provider.id, agentKind: 'pi', model: 'model' })).toMatchObject({ ok: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects a retired model pinned to an explicit auxiliary route', async () => {
     activeCatalog.mockReturnValue({
@@ -2129,7 +2253,7 @@ describe('utility one-shot candidates', () => {
     expect(init.headers['X-Tenant']).toBe('tenant-a');
   });
 
-  it('uses a generic OAuth token for a custom Codex provider', async () => {
+  it.each([true, false])('waits for a generic OAuth token for a custom Codex provider (refresh succeeds=%s)', async succeeds => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'codex-oauth',
@@ -2158,16 +2282,32 @@ describe('utility one-shot candidates', () => {
       }],
     } as never);
     readGenericOAuthToken.mockReturnValue('oauth-access-token');
+    let release!: (token: string) => void;
+    let fail!: (error: Error) => void;
+    vi.mocked(readGenericOAuthAccessToken).mockReturnValue(new Promise<string>((resolve, reject) => {
+      release = resolve;
+      fail = reject;
+    }));
     fetchMock.mockResolvedValueOnce({
       ok: true,
       text: async () => 'data: {"type":"response.output_text.delta","delta":"script"}\ndata: [DONE]\n',
     } as never);
 
-    const result = await requestUtilityText(makerMock(false), 'generate', {
+    const pending = requestUtilityText(makerMock(false), 'generate', {
       providerId: 'codex-oauth',
       agentKind: 'codex',
       model: 'codex-oauth-5-5',
     });
+    await vi.waitFor(() => expect(readGenericOAuthAccessToken).toHaveBeenCalled());
+    expect(fetchMock).not.toHaveBeenCalled();
+    if (!succeeds) {
+      fail(new Error('provider_oauth_refresh_failed'));
+      expect(await pending).toMatchObject({ ok: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+      return;
+    }
+    release('oauth-access-token');
+    const result = await pending;
 
     expect(result).toMatchObject({ ok: true, providerId: 'codex-oauth' });
     const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
@@ -2879,9 +3019,10 @@ describe('utility one-shot candidates', () => {
   });
 
   it.each([
-    { candidateIndex: 1, model: 'gpt-5.4-nano' },
-    { candidateIndex: 2, model: 'gpt-6-luna' },
-  ])('uses $model with a tool-free subscription Responses body', async ({ candidateIndex, model }) => {
+    // Codex's review model is reachable for ChatGPT accounts without being a catalog entry.
+    { candidateIndex: 1, model: 'codex-auto-review', catalogModel: 'gpt-5.4-nano' },
+    { candidateIndex: 2, model: 'gpt-6-luna', catalogModel: 'gpt-6-luna' },
+  ])('uses $model with a tool-free subscription Responses body', async ({ candidateIndex, model, catalogModel }) => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'openai',
@@ -2896,7 +3037,7 @@ describe('utility one-shot candidates', () => {
           },
         },
         models: {
-          codex: [{ id: model, name: model, contextWindow: 272_000 }],
+          codex: [{ id: catalogModel, name: catalogModel, contextWindow: 272_000 }],
         },
       }],
     } as never);
@@ -4634,6 +4775,27 @@ describe('utility one-shot candidates', () => {
       });
 
       expect(bodyOf(0)).toMatchObject({ max_output_tokens: 16 });
+    });
+
+    it('retains the Responses fallback for a Pi connection without a wire override', async () => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'custom-pi', name: 'Custom Pi', source: 'user', agents: ['pi'],
+          auth: { method: 'apiKey' },
+          routing: { pi: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header' } },
+          models: { pi: [{ id: 'pi-model', name: 'Pi Model', contextWindow: 100_000, efforts: [] }] },
+        }],
+      } as never);
+      readCustomKey.mockReturnValue('custom-secret');
+      fetchMock.mockResolvedValueOnce(responsesOk('ok') as never);
+
+      const result = await requestExplicitUtilityText('hello', {
+        providerId: 'custom-pi', agentKind: 'pi', model: 'pi-model', disableReasoning: true,
+      });
+
+      expect(result).toMatchObject({ ok: true, text: 'ok' });
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://custom.example/v1/responses');
+      expect(bodyOf(0)).toMatchObject({ model: 'pi-model' });
     });
 
     it('still turns thinking off first for a custom Pi model with a placeholder effort list', async () => {

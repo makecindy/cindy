@@ -1,5 +1,6 @@
 import { MenuView, type MenuAction } from "@react-native-menu/menu";
 import { cloneElement, isValidElement, type ReactNode } from "react";
+import type { LucideIcon } from "lucide-react-native";
 import {
   NativeModules,
   Platform,
@@ -9,13 +10,18 @@ import {
 } from "react-native";
 import { AnchoredPullDownMenu } from "@/platform/chrome/AnchoredPullDownMenu";
 import { useTheme, type ThemeColors } from "@/theme";
+import { useNativeMenuReminderImage } from './useNativeMenuReminderImage';
 
 export type NativePullDownAction = {
   disabled?: boolean;
   destructive?: boolean;
   displayInline?: boolean;
+  /** 跟随筛选入口的提醒点，标出当前收窄列表的选项。 */
+  filterReminder?: boolean;
   id: string;
   image?: MenuAction["image"];
+  /** 与 iOS image 对应的跨平台菜单图标。 */
+  icon?: LucideIcon;
   keepPresented?: boolean;
   preferredElementSize?: "small" | "medium" | "large";
   state?: "on" | "off" | "mixed";
@@ -42,18 +48,23 @@ export function usesNativePullDownMenu(): boolean {
 function toMenuAction(
   action: NativePullDownAction,
   colors: ThemeColors,
+  reminderImage: string | undefined,
 ): MenuAction {
+  const showReminder = action.filterReminder && reminderImage !== undefined;
+  const image = showReminder ? reminderImage : action.image;
   return {
     id: action.id,
     title: action.title,
     // Fabric defaults the library's optional Int32 imageColor to transparent.
     // Always pair a symbol with a visible semantic color.
-    ...(action.image
+    ...(image
       ? {
-          image: action.image,
-          imageColor: action.destructive
-            ? colors.destructive
-            : colors.textPrimary,
+          image,
+          imageColor: showReminder
+            ? colors.statusAccent
+            : action.destructive
+              ? colors.destructive
+              : colors.textPrimary,
         }
       : {}),
     ...(action.subtitle ? { subtitle: action.subtitle } : {}),
@@ -74,7 +85,7 @@ function toMenuAction(
     ...(action.subactions?.length
       ? {
           subactions: action.subactions.map((item) =>
-            toMenuAction(item, colors),
+            toMenuAction(item, colors, reminderImage),
           ),
         }
       : {}),
@@ -100,9 +111,17 @@ function childDisabled(children: ReactNode): boolean {
   return (children.props as { disabled?: unknown }).disabled === true;
 }
 
+/** Prepare the image even while off, so changing the filter needs no new load. */
+function usesFilterReminder(actions: readonly NativePullDownAction[]): boolean {
+  return actions.some((action) =>
+    action.filterReminder !== undefined ||
+    (action.subactions !== undefined && usesFilterReminder(action.subactions)),
+  );
+}
+
 /**
- * 收起时完全是调用方原来的按钮/标题;iOS 点开是系统 UIMenu 下拉,Android 是 Material
- * 下拉菜单(AnchoredPullDownMenu.android)。iOS 尚未编进 MenuView 的包只渲染 children,
+ * 收起时完全是调用方原来的按钮/标题;iOS 用系统 UIMenu，Android 用 Material 下拉菜单。
+ * iOS 尚未编进 MenuView 的包只渲染 children,
  * 由调用方继续走自绘面板。
  */
 export function NativePullDownMenu({
@@ -112,6 +131,7 @@ export function NativePullDownMenu({
   disabled = false,
   longPress = false,
   onAction,
+  onPress,
   style,
   testID,
 }: {
@@ -124,6 +144,11 @@ export function NativePullDownMenu({
   longPress?: boolean;
   onAction(id: string): void;
   /**
+   * longPress 时的短按动作。Android 触发器接管整块触摸，子元素的点按收不到，必须经这里转发；
+   * iOS 系统菜单只拦长按，短按仍交给子元素，这里不重复调用。
+   */
+  onPress?(): void;
+  /**
    * 菜单外层在父布局里的样式。外层替代子元素成为父布局的直接子节点,子元素原本
    * 依赖父布局的样式(如 flex: 1 占满标题区)要同时交给这里。
    */
@@ -131,6 +156,7 @@ export function NativePullDownMenu({
   testID?: string;
 }) {
   const { colors } = useTheme();
+  const reminderImage = useNativeMenuReminderImage(usesFilterReminder(actions));
   if (disabled || childDisabled(children) || !usesNativePullDownMenu())
     return children;
   // 一项能点的都没有(空列表或全部禁用)时不挂菜单,触发控件也显示为禁用:
@@ -146,6 +172,7 @@ export function NativePullDownMenu({
         actions={actions}
         longPress={longPress}
         onAction={onAction}
+        onPress={onPress}
         style={style}
         testID={testID}
       >
@@ -155,7 +182,7 @@ export function NativePullDownMenu({
   }
   return (
     <MenuView
-      actions={actions.map((action) => toMenuAction(action, colors))}
+      actions={actions.map((action) => toMenuAction(action, colors, reminderImage))}
       onPressAction={({ nativeEvent }) => {
         if (nativeEvent.event) onAction(nativeEvent.event);
       }}

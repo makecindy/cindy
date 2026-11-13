@@ -20,6 +20,10 @@ import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import type { ComposerFileMentionPayload } from '@/lib/composerMentionDrag';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety';
+import { readPluginUiEntries } from '@/cindy-brain/PluginUiContributions';
+import { processPluginUiAttachment } from '@/cindy-brain/pluginUiAttachments';
+import { assertPluginUiDraftWritable } from '@/cindy-brain/pluginUiContext';
+import { insertComposerDocumentForRestore, plainTextToComposerDocument } from '@/lib/composerListDocument';
 
 const log = createLogger('UseAttachments');
 import {
@@ -35,9 +39,11 @@ import { inferFileType, base64ToUint8Array, PEEK_BYTES } from '@/lib/fileTypeInf
 import {
   captureDraftDiscardToken,
   getDraft as getComposerDraft,
+  flushDraft,
   isDraftDiscardTokenCurrent,
   saveDraft as saveComposerDraft,
   subscribeDraft as subscribeComposerDraft,
+  subscribeDraftContent,
   type ComposerDraftDiscardToken,
 } from '@/lib/composerDraftStore';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
@@ -57,6 +63,8 @@ export interface AttachmentRejection {
   message: string;
 }
 
+export type PendingFolder = string | { path: string; source: 'task' } | { path: string; source: 'local'; file: File };
+
 export interface UseAttachmentsReturn {
   attachments: AttachedFile[];
   hasAttachments: boolean;
@@ -73,11 +81,11 @@ export interface UseAttachmentsReturn {
   /** Clear all inline rejections. */
   clearRejections: () => void;
   /** Queue a folder path for insertion as an @dir mention chip. */
-  addFolderPath: (folderPath: string) => void;
+  addFolderPath: (folderPath: string, source?: 'task' | File) => void;
   /** Bumps whenever a pending folder path is queued. */
   pendingFoldersVersion: number;
   /** Drain and return all queued folder paths (clears the queue). */
-  consumePendingFolders: () => string[];
+  consumePendingFolders: () => PendingFolder[];
   /** Queue a file mention payload for insertion as an @file chip. */
   addFileMention: (payload: ComposerFileMentionPayload) => void;
   /** Bumps whenever a pending file mention is queued. */
@@ -185,6 +193,11 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   const { t } = useTranslation();
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const attachmentsRef = useRef<AttachedFile[]>(attachments);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // The persistence layer is keyed by draftKey when provided, else sessionId.
   const storageKey = draftKey ?? sessionId;
@@ -240,6 +253,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
   const isAttachmentOperationScopeCurrent = useCallback(
     (scope: AttachmentOperationScope): boolean =>
+      mountedRef.current &&
       isAttachmentDraftScopeActive(scope) &&
       isSameAttachmentOperationScope(attachmentOperationScopeRef.current, scope),
     [],
@@ -261,7 +275,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         cleanupStagedChatAttachmentFiles(items);
         return;
       }
-      if (isSameAttachmentOperationScope(attachmentOperationScopeRef.current, scope)) {
+      if (isAttachmentOperationScopeCurrent(scope)) {
         appendAttachments(items);
         return;
       }
@@ -274,18 +288,60 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       saveComposerDraft(
         scope.storageKey,
         {
+          ...existing,
           text: existing?.text ?? null,
           attachments: mergeAttachmentsById(existing?.attachments ?? [], items),
-          quotes: existing?.quotes ?? [],
-          browserComments: existing?.browserComments ?? [],
-          ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-          ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
         },
-        { silent: true },
+        // Refresh attachment subscribers without replacing unsaved editor text.
+        { silent: true, preserveRemoteOptimisticRecovery: true },
       );
     },
-    [appendAttachments],
+    [appendAttachments, isAttachmentOperationScopeCurrent],
   );
+
+  const processAddedFiles = useCallback(async (scope: AttachmentOperationScope, files: readonly AttachedFile[]) => {
+    for (const file of files) {
+      const currentFiles = () => isAttachmentOperationScopeCurrent(scope)
+        ? attachmentsRef.current : scope.storageKey ? getComposerDraft(scope.storageKey)?.attachments ?? [] : [];
+      // Editing annotations replaces the object but deliberately keeps its id.
+      const current = () => isAttachmentDraftScopeActive(scope) && currentFiles().includes(file);
+      if (!current()) continue;
+      const controller = new AbortController();
+      const stop = scope.storageKey ? subscribeDraftContent(scope.storageKey, () => { if (!current()) controller.abort(); }) : () => {};
+      let output: Awaited<ReturnType<typeof processPluginUiAttachment>> = null;
+      try {
+        output = await processPluginUiAttachment(file, scope.sessionId ?? null, controller.signal);
+        if (!output?.handled || !current()) continue;
+        const replacements = (output.files ?? []).map(item => {
+          const ext = extractExt(item.name);
+          return { ...item, id: crypto.randomUUID(), ext, category: categorizeFile(ext) ?? 'file' } satisfies AttachedFile;
+        });
+        if (output.text && !scope.storageKey) throw new Error('MCP_APP_DRAFT_UNAVAILABLE');
+        if (scope.storageKey) { flushDraft(scope.storageKey); assertPluginUiDraftWritable(scope.storageKey); }
+        if (!current()) continue;
+        const next = currentFiles().filter(item => item.id !== file.id).concat(replacements);
+        const draft = scope.storageKey ? getComposerDraft(scope.storageKey) : undefined;
+        const text = output.text ? insertComposerDocumentForRestore(plainTextToComposerDocument(output.text),
+          draft?.text ?? plainTextToComposerDocument(''), draft?.text?.content?.length ?? 0).document : draft?.text ?? null;
+        stop();
+        if (isAttachmentOperationScopeCurrent(scope)) { attachmentsRef.current = next; setAttachments(next); }
+        if (scope.storageKey) saveComposerDraft(scope.storageKey, { ...draft, text, attachments: next });
+        cleanupStagedChatAttachmentFiles([file]);
+        cleanupRemovedCachedImage(file.cacheUrlShared ? undefined : file);
+        output = null; // The draft now owns every returned file.
+      } catch {
+        if (!controller.signal.aborted) pushScopedRejections(scope, [t('pluginUi.attachmentFailed', { name: file.name })]);
+      } finally {
+        stop();
+        if (output?.files) cleanupStagedChatAttachmentFiles(output.files);
+      }
+    }
+  }, [isAttachmentOperationScopeCurrent, pushScopedRejections, t]);
+
+  const settleUserAddedAttachments = useCallback((scope: AttachmentOperationScope, files: readonly AttachedFile[]) => {
+    settleAttachmentsForScope(scope, files);
+    if (readPluginUiEntries('composer.attachment').length) void processAddedFiles(scope, files);
+  }, [settleAttachmentsForScope, processAddedFiles]);
 
   // ── Per-session draft (composer-draft-per-session) ──
   // Save current attachments back to the store on unmount / sessionId-change,
@@ -352,6 +408,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
           attachments: attachmentsRef.current,
           quotes: existing?.quotes ?? [],
           browserComments: existing?.browserComments ?? [],
+          ...(existing?.botGroupEdit ? { botGroupEdit: existing.botGroupEdit } : {}),
           ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
           ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
         },
@@ -360,18 +417,31 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     };
   }, [dataOwner, storageKey]);
 
-  // Same-session external draft writes (rewind/fork prefill) must replace the
-  // parent-held attachment list immediately. Session switches are handled by
-  // the restore effect above; this covers the "storageKey did not change" path.
+  // Observe attachments on every write, including silent late cache results.
+  // ChatInput keeps the separate external-write channel for document replacement;
+  // attachment-only updates must not restore its potentially older saved text.
   useEffect(() => {
     if (storageKey === undefined || !isDataOwnerGenerationCurrent(dataOwner)) return;
-    return subscribeComposerDraft(storageKey, () => {
+    let observed = getComposerDraft(storageKey)?.attachments ?? [];
+    const refresh = (external: boolean) => {
       if (!isDataOwnerGenerationCurrent(dataOwner)) return;
       const draft = getComposerDraft(storageKey);
       const next = draft?.attachments ?? [];
+      // A text-only save can run before React mirrors a locally added file.
+      // Ignore its unchanged stored list instead of overwriting that new file.
+      const unchanged = next.length === observed.length
+        && next.every((file, index) => file === observed[index]);
+      observed = next;
+      if (!external && unchanged) return;
+      if (next === attachmentsRef.current) return;
       attachmentsRef.current = next;
       setAttachments(next);
-    });
+    };
+    // Explicit rewind/discard writes must replace the tray even if the stored
+    // list was already empty while a local attachment was still being mirrored.
+    const unsubscribeExternal = subscribeComposerDraft(storageKey, () => refresh(true));
+    const unsubscribeContent = subscribeDraftContent(storageKey, () => refresh(false));
+    return () => { unsubscribeExternal(); unsubscribeContent(); };
   }, [dataOwner, storageKey]);
 
   // 附件变化实时(silent)镜像进 composerDraftStore,而非只在 unmount 快照。
@@ -391,6 +461,9 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       lastSyncedDraftScopeRef.current = draftScope;
       return;
     }
+    // A clear or external write can precede this render's passive effect.
+    // Do not mirror the stale snapshot back into the live attachment subscription.
+    if (attachments !== attachmentsRef.current) return;
     const existing = getComposerDraft(storageKey);
     // `discardDraft` synchronously clears mounted attachment state. Its state
     // update may render once before navigation; do not recreate an empty Map
@@ -406,6 +479,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         attachments,
         quotes: existing?.quotes ?? [],
         browserComments: existing?.browserComments ?? [],
+        ...(existing?.botGroupEdit ? { botGroupEdit: existing.botGroupEdit } : {}),
         ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
         ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
       },
@@ -416,15 +490,17 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   // ── Folder path queue ──
   // Drop handlers push folder paths here; ChatInput consumes them as
   // @dir mention chips (it has editor access, useAttachments does not).
-  const pendingFoldersRef = useRef<string[]>([]);
+  const pendingFoldersRef = useRef<PendingFolder[]>([]);
   const [pendingFoldersVersion, setPendingFoldersVersion] = useState(0);
 
-  const addFolderPath = useCallback((folderPath: string) => {
-    pendingFoldersRef.current = [...pendingFoldersRef.current, folderPath];
+  const addFolderPath = useCallback((folderPath: string, source?: 'task' | File) => {
+    pendingFoldersRef.current = [...pendingFoldersRef.current,
+      source === 'task' ? { path: folderPath, source }
+        : source ? { path: folderPath, source: 'local', file: source } : folderPath];
     setPendingFoldersVersion((version) => version + 1);
   }, []);
 
-  const consumePendingFolders = useCallback((): string[] => {
+  const consumePendingFolders = useCallback((): PendingFolder[] => {
     const paths = pendingFoldersRef.current;
     pendingFoldersRef.current = [];
     return paths;
@@ -695,9 +771,9 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         }
       }
 
-      settleAttachmentsForScope(operationScope, newAttachments);
+      settleUserAddedAttachments(operationScope, newAttachments);
     },
-    [isAttachmentOperationScopeCurrent, pushScopedRejections, settleAttachmentsForScope, t],
+    [isAttachmentOperationScopeCurrent, pushScopedRejections, settleUserAddedAttachments, t],
   );
 
   /**
@@ -744,7 +820,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         }
 
         if (cached) {
-          settleAttachmentsForScope(operationScope, [
+          settleUserAddedAttachments(operationScope, [
             {
               id: crypto.randomUUID(),
               name,
@@ -765,7 +841,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
           if (currentSessionId && isAttachmentOperationScopeCurrent(operationScope)) {
             toast.warning(t('logic.toasts.attachmentLocalCacheFailed'));
           }
-          settleAttachmentsForScope(operationScope, [
+          settleUserAddedAttachments(operationScope, [
             {
               id: crypto.randomUUID(),
               name,
@@ -787,7 +863,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         ]);
       }
     },
-    [isAttachmentOperationScopeCurrent, pushScopedRejections, settleAttachmentsForScope, t],
+    [isAttachmentOperationScopeCurrent, pushScopedRejections, settleUserAddedAttachments, t],
   );
 
   const removeFile = useCallback((id: string) => {

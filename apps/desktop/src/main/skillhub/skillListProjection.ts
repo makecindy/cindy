@@ -37,7 +37,7 @@ function normalizeScope(engine: string, rawScope: string): SkillScope {
   if (engine === 'codex' || engine === 'pi') {
     return rawScope === 'repo' ? 'project' : 'global';
   }
-  return rawScope as SkillScope;
+  return rawScope === 'project' ? 'project' : 'global';
 }
 
 function realPathOrNormalized(value: string): string {

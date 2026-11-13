@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 
 import {
   beginInteractionRoute,
+  allowHostPagePermission,
   getActiveInteractionRoute,
   requestHostInteraction,
   installDesktopInteractionHandler,
@@ -10,6 +11,8 @@ import {
   noteInteractionRouteSteer,
   type InteractionHandler,
 } from '../interactionRouter';
+import { beginUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
+import { takeUnattendedPlanReviewDeclines } from '../../mcp-integrations/unattendedTurn';
 
 function permission(requestId: string): InteractionRequest {
   return {
@@ -29,8 +32,8 @@ function ask(requestId: string): InteractionRequest {
 }
 
 function makeSession() {
-  let listener: InteractionHandler | null = null;
-  const setInteractionListener = vi.fn((next: InteractionHandler | null) => {
+  let listener: InteractionResolver | null = null;
+  const setInteractionListener = vi.fn((next: InteractionResolver | null) => {
     listener = next;
   });
   return {
@@ -44,6 +47,36 @@ function makeSession() {
 }
 
 describe('session interaction router', () => {
+  it('resolves questions and plan reviews for an unattended scheduled turn instead of opening a card', async () => {
+    const host = makeSession();
+    const desktop = vi.fn<InteractionHandler>(async (): Promise<InteractionDecision> => ({
+      kind: 'permission', behavior: 'allow',
+    }));
+    installDesktopInteractionHandler(host.session, desktop);
+    const release = beginUnattendedTurn(host.session.id);
+    try {
+      await expect(requestHostInteraction(host.session, ask('ask-1'), new AbortController().signal))
+        .resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
+      await expect(requestHostInteraction(
+        host.session,
+        { kind: 'plan_review', requestId: 'plan-1', plan: 'do it' } as InteractionRequest,
+        new AbortController().signal,
+      )).resolves.toEqual({
+        kind: 'plan_review', behavior: 'deny', dismissed: true, reason: 'unattended_scheduled_run',
+      });
+      // 拒绝要能被 run 结果引用，否则 plan 模式的定时任务看起来就像“什么也没做”。
+      expect(takeUnattendedPlanReviewDeclines(host.session.id)).toBe(1);
+      expect(takeUnattendedPlanReviewDeclines(host.session.id)).toBe(0);
+      expect(desktop).not.toHaveBeenCalled();
+      // Permissions keep their own card and timeout semantics.
+      await expect(requestHostInteraction(host.session, permission('perm-1'), new AbortController().signal))
+        .resolves.toMatchObject({ kind: 'permission', behavior: 'allow' });
+      expect(desktop).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
+  });
+
   it('routes Host download permissions through the active channel without replacing the listener', async () => {
     const host = makeSession();
     const desktop = vi.fn<InteractionHandler>((_request, shared) => shared!.result);
@@ -390,4 +423,20 @@ describe('session interaction router', () => {
 
     first.release();
   });
+});
+
+// unit: a committed mode change must answer the existing page request, not cancel
+// and start a second request. Minimum input: one model request and one page request.
+it('Full Access answers only the page request through the existing Desktop resolver', async () => {
+  const host = makeSession();
+  const resolvers = new Map<string, (decision: InteractionDecision) => void>();
+  const resolve = vi.fn((id: string, decision: InteractionDecision) => resolvers.get(id)?.(decision));
+  installDesktopInteractionHandler(host.session, request => new Promise(r => resolvers.set(request.requestId, r)), undefined, resolve);
+  const signal = new AbortController();
+  const model = requestHostInteraction(host.session, permission('model'), signal.signal);
+  const page = requestHostInteraction(host.session, { ...permission('page'), metadata: { mcpApp: { clientId: 'card' } } } as InteractionRequest, signal.signal);
+  allowHostPagePermission(host.session, 'model'); expect(resolve).not.toHaveBeenCalled();
+  allowHostPagePermission(host.session, 'page');
+  expect(await page).toEqual({ kind: 'permission', behavior: 'allow' });
+  signal.abort(); await model;
 });

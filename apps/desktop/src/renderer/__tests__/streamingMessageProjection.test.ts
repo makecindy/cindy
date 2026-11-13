@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildRenderItems, groupWorkRuns } from '@/components/chat/MessageStream';
+import {
+  buildMessageStreamRenderProjection,
+  buildRenderItems,
+  groupWorkRuns,
+} from '@/components/chat/MessageStream';
+import { HistoryViewController, HistoryViewHandoff } from '@cindy/maker-shared/message-window';
 import {
   createMessageMetadataProjection,
   createStreamingMessageProjection,
   createWorkGroupProjection,
   createStreamingWorkGroupProjection,
 } from '@/components/chat/streamingMessageProjection';
-import type { ChatMessage } from '@/lib/makerChatStore';
+import type { ChatMessage, HistoryChatMessage } from '@/lib/makerChatStore';
 import type { RenderItem } from '@/components/chat/messageWorkGroups';
 
 function fixture(): ChatMessage[] {
@@ -32,6 +37,84 @@ function replaceTail(messages: ChatMessage[], change: Partial<ChatMessage>): Cha
 }
 
 describe('streaming history projection', () => {
+  // Unit regression for the 2026-10-21 input stalls: the ready-history path
+  // rebuilt all work groups on every text delta, bypassing the local cache.
+  // Existing cases only project raw rows. Use the production history boundary
+  // with one completed tool group and a live answer, including copied rows and
+  // authoritative timestamps, to protect both reuse and the displayed content.
+  it('reuses ready history across live text updates without losing history order or corrections', async () => {
+    let messages: HistoryChatMessage[] = fixture().map((message, index) => ({
+      ...message,
+      id: message.clientId,
+      createdAt: new Date(1_700_000_000_000 + index * 1000).toISOString(),
+    }));
+    let historyRows = messages;
+    const view = new HistoryViewController<HistoryChatMessage>({
+      page: async () => ({
+        version: 1,
+        items: [{ type: 'messages', key: 'history', messages: historyRows }],
+        hasMore: false,
+        nextCursor: null,
+      }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    const historyProjection = createStreamingMessageProjection();
+    const handoff = new HistoryViewHandoff<HistoryChatMessage>(
+      (message) => message.isStreaming === true,
+    );
+    const generatedFilesItemCache = new Map<
+      string,
+      Extract<RenderItem, { type: 'generated_files' }>
+    >();
+    const render = (reuse = true) => {
+      const snapshot = view.getSnapshot();
+      // MessageStream normalizes live rows into new objects on every batch.
+      const live = messages.map((message) => ({ ...message }));
+      return buildMessageStreamRenderProjection({
+        historyView: view,
+        historySnapshot: snapshot,
+        historyLiveMessages: live,
+        handoff: handoff.reconcile(snapshot, live),
+        isSessionStreaming: true,
+        generatedFilesItemCache,
+        historyProjection: reuse ? historyProjection : undefined,
+        buildRaw: () => buildRenderItems(messages),
+      });
+    };
+    try {
+      await view.refresh();
+      const authoritativeTime = messages.at(-1)!.createdAt;
+      messages = messages.map((message, index) =>
+        index === messages.length - 1 ? { ...message, createdAt: '2026-10-21T00:00:00Z' } : message,
+      );
+      const first = render();
+      const completed = first.items.find((item) => item.type === 'work_group');
+      expect(completed).toBeDefined();
+      for (const content of ['Starting now', '# Delivery\n\n' + 'Text. '.repeat(400)]) {
+        messages = messages.map((message, index) =>
+          index === messages.length - 1 ? { ...message, content } : message,
+        );
+        const actual = render();
+        expect(actual).toEqual(render(false));
+        expect(actual.singleResultMap).toBe(first.singleResultMap);
+        expect(actual.items.find((item) => item.type === 'work_group')).toBe(completed);
+        expect(actual.items.at(-1)).toMatchObject({
+          message: { content, createdAt: authoritativeTime },
+        });
+      }
+      historyRows = historyRows.map((message) =>
+        message.clientId === 'r1' ? { ...message, content: 'corrected result' } : message,
+      );
+      await view.refresh();
+      const corrected = render();
+      expect(corrected).toEqual(render(false));
+      expect(corrected.items.find((item) => item.type === 'work_group')).not.toBe(completed);
+    } finally {
+      view.setActive(false);
+    }
+  });
+
   it('matches the full builder while retaining completed history during text-only updates', () => {
     const project = createStreamingMessageProjection();
     const groups = createWorkGroupProjection();

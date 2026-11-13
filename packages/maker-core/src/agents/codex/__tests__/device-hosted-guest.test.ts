@@ -10,7 +10,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps, DeviceHostedSession } from '../../base-agent.js';
+import type { AgentDeps, DeviceHostedSession, StartSessionOptions } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import { AppServerClient, type RequestProgressDeadline } from '../app-server/client.js';
 import { Method } from '../app-server/protocol.js';
@@ -113,6 +113,9 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 interface Fixture {
   guest: boolean;
+  permissionMode?: StartSessionOptions['permissionMode'];
+  extraDirs?: string[];
+  writableDirs?: string[];
   codexHomeInstructions?: string;
   resume?: boolean;
   /**
@@ -126,6 +129,12 @@ interface Fixture {
   noFeatureList?: boolean;
   /** 宿主提供的任务隧道往来记录。 */
   linkActivity?: DeviceHostedSession['linkActivity'];
+  /** 任务所在电脑带来的插件花名册快照。 */
+  ghostRosterSnapshot?: string;
+  /** 经隧道的 Cindy MCP；默认只有通讯录。 */
+  mcpServers?: string[];
+  /** 任务所在电脑带来了自己的托管 Skill。 */
+  controllerManagedSkills?: boolean;
 }
 
 /** app-server 的功能清单，分两页返回。 */
@@ -167,9 +176,9 @@ async function startHosted(fixture: Fixture) {
   const systemSkill = path.join(codexHome, 'skills', '.system', 'imagegen', 'SKILL.md');
   const pluginSkill = path.join(codexHome, 'plugins', 'cache', 'personal', 'secret-plugin', '1.0.0', 'skills', 's', 'SKILL.md');
   const guestSkill = path.join(workingDir, '.agents', 'skills', 'guest', 'SKILL.md');
+  const hostManagedSkill = path.join(codexHome, 'skills', 'cindy-cindy%3Alearn', 'SKILL.md');
 
   const getGhostRosterPrompt = vi.fn(() => GHOST_ROSTER);
-  const getContactsPromptState = vi.fn(() => 'enabled' as const);
   const getDisabledSkillPaths = vi.fn(() => [hostSkill]);
   const prepareCodexSkills = vi.fn(async () => {});
   const prepareCodexResumeSession = vi.fn(async () => undefined);
@@ -192,8 +201,10 @@ async function startHosted(fixture: Fixture) {
     binaryPath: process.execPath,
     logger: noopLogger(),
     getGhostRosterPrompt,
-    getContactsPromptState,
     getDisabledSkillPaths,
+    getManagedSkills: async () => [{
+      kind: 'agent-skill', name: 'learn', path: hostManagedSkill, source: 'skill', enabled: true, claudeCommandName: 'cindy:learn',
+    }],
     prepareCodexSkills,
     prepareCodexResumeSession,
     resolveCodexThreadStorage,
@@ -256,6 +267,8 @@ async function startHosted(fixture: Fixture) {
         };
       case Method.ThreadResume:
         return { thread: { id: 'resume-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai', cwd: workingDir };
+      case Method.ThreadFork:
+        return { thread: { id: 'fork-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai' };
       case Method.TurnStart:
         return { turn: { id: 'turn-1' } };
       default:
@@ -302,32 +315,36 @@ async function startHosted(fixture: Fixture) {
 
   const deviceHosted: DeviceHostedSession = {
     workingDir,
-    extraDirs: [],
-    writableDirs: [],
+    extraDirs: fixture.extraDirs ?? [],
+    writableDirs: fixture.writableDirs ?? [],
     platform: 'darwin',
     shell: 'zsh',
     isGitRepo: false,
     tunnelUrl: 'http://127.0.0.1:4000/',
     tunnelToken: 'tok',
-    mcpServers: ['cindy_contacts'],
+    mcpServers: fixture.mcpServers ?? ['cindy_contacts'],
     mirrorRoot,
     ...(fixture.guest ? { guest: true, guestProvider: SHARED_PROVIDER } : {}),
     ...(guestHome ? { guestHome } : {}),
     ...(fixture.linkActivity ? { linkActivity: fixture.linkActivity } : {}),
+    ...(fixture.controllerManagedSkills ? { controllerManagedSkills: { claudePluginRoots: [] } } : {}),
   };
   const started = agent.startSession({
     sessionId: 'hosted-session',
     model: 'gpt-5.5',
     ...(fixture.guest ? { providerId: fixture.providerId ?? SHARED_PROVIDER.providerId } : {}),
     workingDir,
-    permissionMode: 'acceptEdits',
+    permissionMode: fixture.permissionMode ?? 'acceptEdits',
+    extraDirs: fixture.extraDirs,
+    writableDirs: fixture.writableDirs,
     deviceHosted,
+    ...(fixture.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: fixture.ghostRosterSnapshot } : {}),
     ...(fixture.resume ? { resumeSessionId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000' } : {}),
   });
   return {
-    started, request, getHost, getGhostRosterPrompt, getContactsPromptState, getDisabledSkillPaths,
+    started, request, getHost, getGhostRosterPrompt, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
-    hostSkill, systemSkill, pluginSkill, guestSkill, guestHome, codexHome,
+    hostSkill, systemSkill, pluginSkill, guestSkill, hostManagedSkill, guestHome, codexHome, agent, workingDir,
   };
 }
 
@@ -349,6 +366,129 @@ afterEach(async () => {
 });
 
 describe('Codex device-hosted guest sessions', () => {
+  // 测试价值：startSession / setWritableDirs / send 生成的 exec-server 环境必须带齐模型可见的目录。
+  // 依据：本 PR 修复了 Claude hosted 遗漏附加目录；Codex 原有 runtimeWorkspaceRoots 用例只覆盖本机路径。
+  // 最小失败输入：hosted 初始只读、可写目录各一个，追加可写目录后发送；完全访问也不能省略目录。
+  // tier：unit，复用内存 app-server fake，断言 thread/start 和 turn/start 的真实协议参数。
+  it.each(['acceptEdits', 'bypassPermissions'] as const)('routes hosted workspace roots through the execution environment in %s mode', async (permissionMode) => {
+    const root = await makeTempDir('maker-core-codex-hosted-roots-');
+    const referenceDir = path.join(root, 'reference');
+    const writableDir = path.join(root, 'output');
+    const addedDir = path.join(root, 'additional-output');
+    const fixture = await startHosted({
+      guest: false,
+      permissionMode,
+      extraDirs: [referenceDir],
+      writableDirs: [writableDir],
+    });
+    const handle = await fixture.started;
+    try {
+      const initial = threadParams(fixture.request, Method.ThreadStart);
+      expect(initial).not.toHaveProperty('runtimeWorkspaceRoots');
+      expect.soft(initial.environments).toEqual([{
+        environmentId: expect.any(String),
+        cwd: fixture.workingDir,
+        runtimeWorkspaceRoots: [fixture.workingDir, referenceDir, writableDir],
+      }]);
+
+      await handle.setWritableDirs?.([writableDir, addedDir]);
+      await handle.send({ type: 'user', content: 'use the added output directory' });
+      const turn = threadParams(fixture.request, Method.TurnStart);
+      expect(turn).not.toHaveProperty('runtimeWorkspaceRoots');
+      expect(turn.environments).toEqual([{
+        environmentId: expect.any(String),
+        cwd: fixture.workingDir,
+        runtimeWorkspaceRoots: [fixture.workingDir, referenceDir, writableDir, addedDir],
+      }]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // Provider sharing §9.5: even a history-only native fork initializes MCP and
+  // connectors. Existing fork tests covered proxy/history ownership only.
+  // Minimal input: one guest source and a native turn anchor; tier: unit.
+  it.each([false, true])('isolates history-only guest forks before allocating a child (feature inspection fails: %s)', async (inspectionFails) => {
+    const fixture = await startHosted({ guest: true });
+    const handle = await fixture.started;
+    await handle.close();
+    fixture.request.mockClear();
+    if (inspectionFails) {
+      const baseRequest = fixture.request.getMockImplementation()!;
+      fixture.request.mockImplementation(async (method, params) => {
+        if (method === Method.ExperimentalFeatureList) throw new Error('feature inspection failed');
+        return baseRequest(method, params);
+      });
+    }
+    const forked = fixture.agent.forkSdkSession({
+      sourceSdkSessionId: 'guest-source', upToMessageId: undefined,
+      lastTurnId: 'kept-turn', workingDir: fixture.workingDir,
+      hostedGuestHome: fixture.guestHome, providerId: SHARED_PROVIDER.providerId,
+    });
+    if (inspectionFails) {
+      await expect(forked).rejects.toThrow('feature inspection failed');
+      expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadFork)).toBe(false);
+    } else {
+      await expect(forked).resolves.toMatchObject({ newSdkSessionId: 'fork-thread-id' });
+      expect(threadParams(fixture.request, Method.ThreadFork)).toMatchObject({
+        config: {
+          'mcp_servers.local_docs.enabled': false,
+          'mcp_servers.cindy_contacts.enabled': false,
+          'plugins."configured@personal".enabled': false,
+          'features.apps': false,
+          'features.hooks': false,
+          'features.future_local_tool': false,
+          'memories.use_memories': false,
+        },
+      });
+    }
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    expect(fixture.getHost).toHaveBeenLastCalledWith(undefined, expect.anything(), expect.objectContaining({
+      nativeStorageOnly: true,
+    }));
+  });
+
+  // Provider sharing §9.5: rewind must retain the consumer's MCP transport and
+  // guest isolation. Startup-only coverage missed that native fork reloads host
+  // defaults. Minimal input: a hosted session rewound at a persisted turn anchor;
+  // tier: unit, through startSession -> commitRewindFiles -> send.
+  it.each([false, true])('keeps the task tool route and capability scope after rewind (guest: %s)', async (guest) => {
+    const fixture = await startHosted({ guest });
+    const handle = await fixture.started;
+    const initial = threadParams(fixture.request, Method.ThreadStart);
+
+    await expect(handle.commitRewindFiles?.('', '', { tailTurnsToDrop: 1, lastTurnId: 'kept-turn' }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+
+    const fork = threadParams(fixture.request, Method.ThreadFork);
+    expect(fork).toMatchObject({
+      threadId: 'start-thread-id',
+      lastTurnId: 'kept-turn',
+      approvalPolicy: initial.approvalPolicy,
+      sandbox: initial.sandbox,
+      environments: initial.environments,
+      config: {
+        'mcp_servers.local_docs.enabled': false,
+        'mcp_servers.cindy_contacts.enabled': true,
+        'mcp_servers.cindy_contacts.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_contacts',
+      },
+    });
+    expect(fork.config).toEqual(initial.config);
+    if (guest) expect(fork.config).toMatchObject({
+      'features.apps': false,
+      'features.hooks': false,
+      'features.plugins': false,
+      'features.future_local_tool': false,
+      'memories.use_memories': false,
+    });
+
+    await handle.send({ type: 'user', content: 'continue after rewind' });
+    expect(threadParams(fixture.request, Method.TurnStart)).toMatchObject({
+      threadId: 'fork-thread-id', environments: initial.environments,
+    });
+    await handle.close();
+  });
+
   it.each([false, true])('isolates this computer\'s capabilities from a shared user (resume: %s)', async (resume) => {
     const fixture = await startHosted({ guest: true, resume });
     const handle = await fixture.started;
@@ -403,12 +543,36 @@ describe('Codex device-hosted guest sessions', () => {
     ]));
     expect(skills.map((entry) => entry.path)).not.toContain(fixture.systemSkill);
     expect(skills.map((entry) => entry.path)).not.toContain(fixture.guestSkill);
-    // 不带本机的插件清单、通讯录说明与技能偏好。
+    // 不带本机的插件清单与技能偏好。
     expect(String(params.developerInstructions ?? '')).not.toContain(GHOST_ROSTER);
     expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
-    expect(fixture.getContactsPromptState).not.toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  // 插件工具经隧道回到受邀者电脑：花名册用它带来的快照，本机的仍不读。
+  it('gives a shared user the roster from its own computer', async () => {
+    const ownerRoster = 'TASK COMPUTER GHOST ROSTER';
+    const fixture = await startHosted({ guest: true, ghostRosterSnapshot: ownerRoster, mcpServers: ['cindy'] });
+    const handle = await fixture.started;
+    const instructions = String(threadParams(fixture.request, Method.ThreadStart).developerInstructions ?? '');
+    expect(instructions).toContain(ownerRoster);
+    expect(instructions).not.toContain(GHOST_ROSTER);
+    expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  // 任务所在电脑带来的托管 Skill 作为项目 Skill 加载；共用 CODEX_HOME 里本机的那份对这个线程停用，不重复出现。
+  it('turns off this computer managed skills when the task computer brings its own', async () => {
+    for (const controllerManagedSkills of [true, false]) {
+      const fixture = await startHosted({ guest: false, controllerManagedSkills });
+      const handle = await fixture.started;
+      const config = threadParams(fixture.request, Method.ThreadStart).config as Record<string, unknown>;
+      const disabled = (config['skills.config'] as Array<{ path: string; enabled: boolean }> | undefined ?? [])
+        .filter((entry) => !entry.enabled).map((entry) => entry.path);
+      expect(disabled.some((entry) => entry.includes('cindy-cindy%3Alearn'))).toBe(controllerManagedSkills);
+      await handle.close();
+    }
   });
 
   it('keeps same-account hosted sessions unchanged', async () => {
@@ -434,7 +598,6 @@ describe('Codex device-hosted guest sessions', () => {
       'mcp_servers.cindy_contacts.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_contacts',
     });
     expect(String(params.developerInstructions)).toContain(GHOST_ROSTER);
-    expect(fixture.getContactsPromptState).toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).toHaveBeenCalled();
     // 同账号不检查本机 Skill / MCP 清单(Review 与受邀者才逐项关闭)，Codex 功能也不按白名单收窄。
     expect(fixture.request.mock.calls.some(([method]) => method === Method.McpServerStatusList)).toBe(false);
@@ -479,6 +642,8 @@ describe('Codex device-hosted guest sessions', () => {
     expect(String(options?.keyOverride)).toMatch(/^local-guest:hosted-session/);
     // 独占的 app-server 带上分享的供应商：host 据此只留这个供应商的路由，不开智能子代理调配。
     expect(options?.deviceHostedGuestProviderId).toBe('xd');
+    expect(options?.deviceHostedGuestSessionId).toBe('hosted-session');
+    expect(options?.deviceHostedGuestModelIds).toEqual(SHARED_PROVIDER.modelIds);
     // 不按 id 到本机用户的 Codex 历史里查找，不把本机托管技能投影进来，也不登记线程位置。
     expect(fixture.prepareCodexResumeSession).not.toHaveBeenCalled();
     expect(fixture.resolveCodexThreadStorage).not.toHaveBeenCalled();
@@ -492,6 +657,7 @@ describe('Codex device-hosted guest sessions', () => {
     const handle = await fixture.started;
     expect(fixture.getHost.mock.calls.some(([, , opts]) => opts?.historyHome)).toBe(false);
     expect(fixture.getHost.mock.calls.some(([, , opts]) => opts && 'deviceHostedGuestProviderId' in opts)).toBe(false);
+    expect(fixture.getHost.mock.calls.some(([, , opts]) => opts && 'deviceHostedGuestSessionId' in opts)).toBe(false);
     expect(fixture.prepareCodexResumeSession).toHaveBeenCalled();
     expect(fixture.resolveCodexThreadStorage).toHaveBeenCalled();
     expect(fixture.prepareCodexSkills).toHaveBeenCalled();
@@ -673,6 +839,45 @@ describe('Codex device-hosted guest sessions', () => {
     const replacement = replacementCall?.[2] as Record<string, unknown> | undefined;
     expect(replacement).toMatchObject({ timeoutMs: 360_000 });
     expect(replacement).not.toHaveProperty('extendWhileProgress');
+    await handle.close();
+  });
+
+  // 2026-10-22 远程供应商调查：执行环境首次握手超时后，Codex 之后每一轮都跳过它(模型能回答，却没有 Shell 与
+  // 文件工具)，链路恢复也不会自己重连。隧道上已没有执行环境连接时，下一轮开始前按同一个 id 重新登记；
+  // 连接还开着时不发任何查询(正常发送不多一次往返)。
+  it.each([
+    ['re-registers a disconnected execution environment', 0, 'disconnected', 2],
+    ['leaves an execution environment that is still connecting', 0, 'pending', 1],
+    ['does not query a connected execution environment', 1, 'ready', 1],
+  ] as const)('%s before the next turn of a hosted session', async (_label, open, status, registered) => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 0,
+      execResponses: 0,
+      execMaxInFlight: 0,
+      httpInFlight: 0,
+      wsConnectionsOpen: open,
+    }));
+    const fixture = await startHosted({ guest: true, linkActivity });
+    const handle = await fixture.started;
+    const base = fixture.request.getMockImplementation()!;
+    fixture.request.mockImplementation(async (method: string, params: unknown) => (
+      method === Method.EnvironmentStatus
+        ? { status, error: 'timed out waiting for exec-server initialize handshake after 10s' }
+        : base(method, params)
+    ));
+    await handle.send({ type: 'user', content: 'hello' });
+    const methods = fixture.request.mock.calls.map(([method]) => method);
+    expect(methods.filter((method) => method === Method.EnvironmentAdd)).toHaveLength(registered);
+    expect(methods.includes(Method.EnvironmentStatus)).toBe(open === 0);
+    // 重新登记排在这一轮 turn/start 之前，turn/start 选的仍是同一个环境 id。
+    expect(methods.lastIndexOf(Method.EnvironmentAdd)).toBeLessThan(methods.indexOf(Method.TurnStart));
+    const environmentIds = fixture.request.mock.calls
+      .filter(([method]) => method === Method.EnvironmentAdd)
+      .map(([, params]) => (params as { environmentId: string }).environmentId);
+    expect(new Set(environmentIds).size).toBe(1);
+    const turnEnvironments = threadParams(fixture.request, Method.TurnStart).environments as Array<{ environmentId: string }>;
+    expect(turnEnvironments.map((environment) => environment.environmentId)).toEqual([environmentIds[0]]);
     await handle.close();
   });
 

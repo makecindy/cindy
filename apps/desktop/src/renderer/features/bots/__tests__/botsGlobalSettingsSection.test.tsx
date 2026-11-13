@@ -10,11 +10,11 @@
  *
  * 于是三行连同无用状态文案整体删除。导入/导出(portability)整段能力随本轮砍削
  * 一并移除;这组用例只钉住剩下的两件事:
- *   1. 这一屏不许再出现任何没接运行时的通知设置;
- *   2. 真正能用的模型链入口必须真的调到链路上。
+ *   1. 这一屏不许再出现任何没接运行时的设置(唯一的开关「显示回复对应的消息」由私聊气泡读取);
+ *   2. 全局模型链入口已退役，逐伙伴配置保留。
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -76,7 +76,13 @@ describe('设置 › 伙伴', () => {
   it('不再摆没人消费的通知开关', () => {
     const { container } = render(<BotsGlobalSettingsSection />);
 
-    expect(screen.queryByRole('switch')).toBeNull();
+    // 唯一的开关是「显示回复对应的消息」:私聊气泡读它(BotChatReplyTarget),切换真的落到偏好里。
+    const switches = screen.queryAllByRole('switch');
+    expect(switches.map((item) => item.getAttribute('aria-label'))).toEqual(['bots.globalSettings.showReplyTarget']);
+    fireEvent.click(switches[0]!);
+    expect(localStorage.getItem('bots.chat.showReplyTarget')).toBe('true');
+    fireEvent.click(switches[0]!);
+    expect(localStorage.getItem('bots.chat.showReplyTarget')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(container.querySelector('input[type="checkbox"]')).toBeNull();
     // 「勿扰时段」那一行连值都是假的（存了个默认串、既不可编辑也没人读），一并删掉。
@@ -99,49 +105,12 @@ describe('设置 › 伙伴', () => {
     expect(container.textContent).not.toContain('bots.portability');
   });
 
-  it('模型链修改走主进程持久化入口', async () => {
+  // Unit regression: render the real settings section. Global model editing was
+  // removed by product decision; per-teammate model editors remain elsewhere.
+  it('does not offer the retired global model chain or reset action', () => {
     render(<BotsGlobalSettingsSection />);
-
-    fireEvent.click(screen.getByText('model-chain-editor'));
-    await waitFor(() => expect(mocks.setBotGlobalModelChain).toHaveBeenCalledWith([
-      expect.objectContaining({ harness: 'pi', model: 'z-ai/glm-5.3-flash' }),
-    ]));
-  });
-  it('restores through the dedicated reset operation and prevents duplicate clicks', async () => {
-    let finish!: () => void;
-    mocks.resetBotGlobalModelChain.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
-    render(<BotsGlobalSettingsSection />);
-    fireEvent.click(screen.getByText('restore-default'));
-    fireEvent.click(screen.getByText('restore-default'));
-    fireEvent.click(screen.getByText('model-chain-editor'));
-    expect(mocks.resetBotGlobalModelChain).toHaveBeenCalledOnce();
-    expect(mocks.setBotGlobalModelChain).not.toHaveBeenCalled();
-    finish();
-    await waitFor(() => expect(screen.getByText('restore-default').closest('fieldset')?.disabled).toBe(false));
-  });
-
-  it('keeps failures visible and allows retry without saving a default snapshot', async () => {
-    mocks.resetBotGlobalModelChain.mockRejectedValueOnce(new Error('internal path'));
-    render(<BotsGlobalSettingsSection />);
-    fireEvent.click(screen.getByText('restore-default'));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('bots.globalSettings.restoreFailed'));
-    fireEvent.click(screen.getByText('restore-default'));
-    await waitFor(() => expect(mocks.resetBotGlobalModelChain).toHaveBeenCalledTimes(2));
-    expect(mocks.setBotGlobalModelChain).not.toHaveBeenCalled();
-  });
-
-  it('only offers restore for an explicit customization', () => {
-    mocks.customized = false;
-    render(<BotsGlobalSettingsSection />);
+    expect(screen.queryByText('model-chain-editor')).toBeNull();
     expect(screen.queryByText('restore-default')).toBeNull();
-  });
-
-  it('keeps restore reachable while customization is unknown after a failed read', async () => {
-    mocks.customized = null;
-    render(<BotsGlobalSettingsSection />);
-    fireEvent.click(screen.getByText('restore-default'));
-    await waitFor(() => expect(mocks.resetBotGlobalModelChain).toHaveBeenCalledOnce());
     expect(mocks.setBotGlobalModelChain).not.toHaveBeenCalled();
   });
-
 });

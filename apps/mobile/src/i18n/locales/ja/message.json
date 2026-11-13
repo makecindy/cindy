@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "ローカルアプリ「{{name}}」から送信",
+    "sourceLocalAppId": "アプリ ID：{{id}}",
     "failedSamplingAttempt": "この返信は完了しませんでした。内容は参考情報としてご覧ください。",
     "moreActions": "その他のメッセージ操作",
     "reply": "返信",
@@ -62,13 +64,15 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "今回は選択した {{selected}} ではなく {{actual}} が応答しました（サーバー側の一時的なダウングレード）",
     "copyStateCopying": "コピー中",
     "copyStateCopied": "コピーしました",
     "copyStateFailed": "コピー失敗",
     "copyStateCopy": "コピー",
+    "copyCode": "コードをコピー",
     "thinkingHidden": "思考内容は非表示",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -103,6 +107,7 @@
     "subagentSummary": "サブエージェントの要約",
     "agentSwitchLabel": "{{from}} から {{to}} に切り替えました",
     "agentSwitchViewHandoff": "{{label}}、引き継ぎ内容を表示",
+    "sessionFallbackPill": "要約から続行",
     "sessionResumedPill": "元のセッションを再開しました",
     "handoffContentDesc": "引き継ぎ内容——切り替え時に新しいエンジンへ送るコンテキスト要約（チャット履歴には含まれず、ここでのみ表示）",
     "handoffContentDescEnglishSource": "引き継ぎ内容——切り替え時に新しいエンジンへ送るコンテキスト要約。原文は英語（チャット履歴には含まれず、ここでのみ表示）",
@@ -158,6 +163,7 @@
     "mediaErrorLine": "エラー: {{message}}",
     "mediaDeviceLinkHint": "開く前に、スマートフォンからリモートデバイスにこのメディアのアップロードを依頼します。",
     "controlDelete": "メッセージを削除",
+    "controlEdit": "編集",
     "controlRewind": "ここまで戻る",
     "controlFork": "ここから新しいセッションを始める",
     "markdownDocAriaLabel": "メッセージ本文",
@@ -171,7 +177,9 @@
     "diffEditCount": "{{n}} 件の編集",
     "groupSentNamed": "グループ「{{name}}」から送信",
     "groupSent": "グループから送信",
-    "sourceGroupId": "グループ ID: {{id}}"
+    "sourceGroupId": "グループ ID: {{id}}",
+    "selectText": "テキストを選択",
+    "you": "あなた"
   },
   "actions": {
     "attachmentsPrefix": "添付ファイル：{{names}}",
@@ -182,6 +190,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "originalUnavailable": "元の画像を読み込めません",
+    "retryOriginal": "元の画像を再読み込み",
+    "loadingOriginal": "元の画像を読み込み中…",
     "sourceMissing": "このコンピューターに元の画像がありません。元のファイルを再度インポートしてください。",
     "deviceOffline": "コンピューターが未接続です。再接続してからお試しください。",
     "cancelAnnotation": "注釈をキャンセル",
@@ -229,6 +240,10 @@
     "cancel": "キャンセル",
     "edit": "編集",
     "steer": "割り込み",
+    "steerQueued": "まだ届いていません。メッセージはキューに残っています。",
+    "moveUp": "1つ前へ",
+    "moveDown": "1つ後ろへ",
+    "cancelSend": "送信をキャンセル",
     "collapseQueued": "キュー内メッセージを折りたたむ",
     "expandRemainingQueued": "残り {{n}} 件のキュー内メッセージを展開",
     "collapse": "折りたたむ",
@@ -237,12 +252,28 @@
     "sendingMessage": "送信中のメッセージ:{{text}}",
     "uploadingAttachments": "添付ファイルをアップロード中 {{uploaded}}/{{total}}",
     "delete": "削除",
-    "retry": "再試行"
+    "retry": "再試行",
+    "notSent": "未送信",
+    "imagesNotUploaded_one": "{{count}} 枚の画像を送れませんでした",
+    "imagesNotUploaded_other": "{{count}} 枚の画像を送れませんでした",
+    "waitingForComputer": "パソコンにつながったら送信",
+    "waitingForNetwork": "ネットワークが戻ったら送信",
+    "queued": "順番待ち",
+    "retryImage": "この画像を再アップロード",
+    "waitingMessage": "送信待ちのメッセージ:{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} がこのタスクに {{model}} を選びました",
+      "kept": {
+        "no-opinion": "{{plugin}} は今回モデルを変えませんでした。このタスクは {{model}} を使います",
+        "failed": "{{plugin}} から時間内に応答がなかったため、このタスクは {{model}} を使います",
+        "unavailable-route": "{{plugin}} が選んだモデルは使えないため、このタスクは {{model}} を使います"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "コンテキストを整理して続行しました",
-      "labelTimeout": "直前の応答がなかったため、整理して続行しました",
+      "labelTimeout": "直前の応答がなかったため、コンテキストを整理して続行しました",
       "labelStrip": "大きな画像を除いて続行しました",
       "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
       "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
@@ -253,9 +284,9 @@
       "auto": "自動圧縮",
       "aria": "会話を圧縮しました"
     },
-    "goalComplete": "目標を達成 · {{turns}} 回 · 所要 {{duration}}",
-    "goalResumed": "使用量が回復、目標を継続",
-    "goalCapacityRetry": "モデルサービスが混雑していました。目標を再試行します",
+    "goalComplete": "ゴールを達成 · {{turns}} ターン · 所要 {{duration}}",
+    "goalResumed": "使用量が回復、ゴールを継続",
+    "goalCapacityRetry": "モデルサービスが混雑していました。ゴールを再試行します",
     "autoResume": {
       "separator": "接続が中断されたため、自動的に再開しました",
       "succeeded": "再接続しました",
@@ -291,6 +322,7 @@
     "agentSwitchLocation": "Agent の実行先を {{device}} に変更しました",
     "agentSwitchLocationThisComputer": "Agent の実行先をこのパソコンに戻しました",
     "agentSwitchLocationOtherComputer": "Agent の実行先を別のパソコンに変更しました",
+    "agentSwitchLocationQuotaRebalance": "こちらのクォータを先に使うため",
     "learnStarted": "スキル学習を開始しました",
     "learnStartedBody": "蒸留はデスクトップのバックグラウンドで進行します。完了後、デスクトップでスキルの草案を確認・レビューしてください。",
     "learnFailed": "スキル学習を開始できませんでした",
@@ -321,21 +353,21 @@
       "first": "すでにキューの先頭です。",
       "last": "すでにキューの末尾です。",
       "steering": "割り込み送信中",
-      "orcaTitle": "コラボレーションキュー {{index}}",
+      "orcaTitle": "協同キュー {{index}}",
       "title": "キュー {{index}}",
-      "orcaEditDisabled": "コラボレーションメッセージは編集できません。",
+      "orcaEditDisabled": "協同メッセージは編集できません。",
       "busy": "キュー操作を同期中です。完了後にもう一度操作してください。",
-      "steeringDisabled": "現在の turn に割り込みを送信中です。デスクトップから戻るまでお待ちください。",
+      "steeringDisabled": "現在のターンに割り込みを送信中です。デスクトップからの応答を待ってから操作してください。",
       "editLocked": "このキューメッセージは編集中です。完了後に操作してください。",
       "interactionLocked": "別の操作がキューをロックしています。完了後に操作してください。",
       "syntheticHint": "システムが自動生成した指令です。キャンセルはできますが、編集や割り込み送信はできません。",
-      "steeringHint": "現在の turn に割り込みを送信中のため、まだ編集や移動はできません。",
+      "steeringHint": "現在のターンに割り込みを送信中のため、まだ編集や移動はできません。",
       "editHint": "このメッセージは編集中で、デスクトップの自動送信は一時停止しています。",
       "interactionHint": "キューの並べ替えまたは別の操作中のため、まだ編集できません。"
     }
   },
   "payloadPresentation": {
-    "remoteFetchBody": "モバイルアプリがリモートのデスクトップからメディアを取得します。",
+    "remoteFetchBody": "モバイルアプリがリモートのデスクトップからメディアの取得を試みます。",
     "missingRemotePath": "表示できるリモートパスがありません",
     "missingRemotePathSentence": "表示できるリモートパスがありません。",
     "mermaidSourceTitle": "Mermaid 図のソース",
@@ -393,9 +425,55 @@
     "skillUpdated": "スキルを更新：{{title}}"
   },
   "richAnswer": {
+    "send": "メッセージを送信",
+    "sending": "送信中…",
+    "sent": "送信済み",
+    "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
     "playVideo": "動画を再生",
+    "downloadVideo": "動画をダウンロード",
     "openVideoSource": "元の動画を開く",
     "calculationUnavailable": "この値を計算できません。",
     "incomplete": "一部の内容を表示できませんでした。"
+  },
+  "usageCost": {
+    "title": "費用の内訳",
+    "conversation": "チャット",
+    "additional": "追加費用",
+    "unknownModel": "モデル未記録",
+    "estimate": "推定価値",
+    "charged": "従量料金",
+    "loading": "内訳を読み込み中…",
+    "unavailable": "この記録の内訳は取得できません。",
+    "explanation": "モデルと経路別に集計します。サブスクリプションの価値は推定であり、追加請求ではありません。記録済みの費用のみを含み、過去の内訳は不完全な場合があります。",
+    "source": {
+      "subscription": "サブスクリプション",
+      "cindy-ai": "Cindy AI",
+      "provider": "API プロバイダー",
+      "unknown": "経路未記録"
+    }
+  },
+  "attachmentPreview": {
+    "more": "その他の操作",
+    "retry": "再試行",
+    "image": "画像",
+    "video": "動画",
+    "file": "ファイル",
+    "close": "閉じる",
+    "reset": "表示をリセット",
+    "open": "プレビューを開く",
+    "actualSize": "実際のサイズ（1:1）",
+    "save": "元のファイルを保存",
+    "share": "共有",
+    "previous": "前の添付ファイル",
+    "next": "次の添付ファイル",
+    "password": "PDF のパスワードを入力",
+    "find": "文書内を検索",
+    "matches": "一致するページ：{{count}}",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ",
+    "redo": "やり直す",
+    "wrap": "行の折り返し",
+    "lineNumbers": "行番号",
+    "rendered": "文書を表示"
   }
 }

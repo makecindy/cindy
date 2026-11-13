@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
 /**
  * LearnStatusCard —— /learn 蒸馏 run 的聊天流状态卡(systemCardType='learn')。
@@ -77,7 +78,7 @@ export function LearnStatusCard({ data, contextSessionId }: LearnStatusCardProps
     if (cardDeviceId && distillSessionOrigin === undefined) {
       void refreshRemoteDeviceSessions(
         cardDeviceId,
-        remoteProjectsStore.getDeviceName(cardDeviceId) ?? cardDeviceId,
+        deviceDisplayName(cardDeviceId, remoteProjectsStore.getDeviceName(cardDeviceId)),
       );
       return;
     }

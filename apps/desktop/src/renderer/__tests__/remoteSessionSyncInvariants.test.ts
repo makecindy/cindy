@@ -55,7 +55,10 @@ const chatInputSrc = readFileSync(
 describe('useRemoteSessionSync 接线不变式', () => {
   it('WS 重连(onStatusChanged online)重建重 topic 订阅 + 对账', () => {
     expect(syncSrc).toContain('onStatusChanged');
-    expect(syncSrc).toContain("p.status !== 'online'");
+    // 重连后恢复订阅；信令离线时仅该目标已保留的健康直连也可恢复。
+    expect(syncSrc).toContain("p.status === 'online' || p.directDataDeviceIds?.includes(deviceId) === true");
+    expect(syncSrc).toContain('if (p.dataPathChangedDeviceId && p.dataPathChangedDeviceId !== deviceId) return;');
+    expect(syncSrc).toContain('if (!online || (p.dataPathChangedDeviceId && !changed)) return;');
     expect(syncSrc).toContain('subscribeHeavy()');
     expect(syncSrc).toContain('reconcileRemoteMessages');
   });
@@ -88,7 +91,7 @@ describe('CCAgentSessionView 接线不变式', () => {
     );
     expect(sessionViewSrc).not.toContain('if (remoteSessionUnavailable) return false');
     expect(sessionViewSrc).not.toContain('remoteSessionUnavailableRef');
-    expect(sessionViewSrc).toContain('if (!remoteDeviceId) {');
+    expect(sessionViewSrc).toContain('if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {');
     expect(sessionViewSrc).not.toContain('beforeEnqueue: checkVendorReady');
     // device-link 远程交接期间仍要禁用(见 remoteHandoffPreparing):那几段 await
     // 可能数十秒,不禁用的话用户补发的消息会插到草稿提交的首条之前。
@@ -121,7 +124,7 @@ describe('CCAgentSessionView 接线不变式', () => {
       /const noConnectedSource =\s*enforceConnectedSourceGate &&\s*!!currentModelAgentKind/,
     );
     expect(chatInputSrc).toMatch(
-      /if\s*\(\s*enforceConnectedSourceGate\s*&&\s*currentModelAgentKind\s*&&[\s\S]*?\)\s*\{/,
+      /if\s*\(\s*enforceConnectedSourceGate\s*&&\s*!canAttemptBaselineRecovery\s*&&\s*currentModelAgentKind\s*&&[\s\S]*?\)\s*\{/,
     );
   });
   it('断线缓存的远程 session 可查看,但生命周期/元数据写操作必须走统一 gate', () => {

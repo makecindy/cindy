@@ -5,23 +5,37 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { WindowGeometry } from './windowGeometry';
 
 import { GeometryContext } from './AdaptiveWindowContext';
-const native = Platform.OS === 'ios'
-  ? requireOptionalNativeModule<{ windowLayoutAvailable?: boolean }>('XdtIosActionSheet') : null;
+// Android supplies fold bounds only; safe-area-context remains its inset source.
+type GeometrySnapshot = Pick<WindowGeometry, 'width' | 'height' | 'regions' | 'reservedRegionsSupported'> & Partial<WindowGeometry>;
+const moduleName = Platform.OS === 'ios' ? 'XdtIosActionSheet' : Platform.OS === 'android' ? 'CindyWindowLayout' : null;
+const native = moduleName
+  ? requireOptionalNativeModule<{ windowLayoutAvailable?: boolean }>(moduleName) : null;
 const Probe = native?.windowLayoutAvailable
-  ? requireNativeViewManager<ViewProps & { onGeometryChange(event: { nativeEvent: WindowGeometry }): void }>('XdtIosActionSheet') : null;
+  ? requireNativeViewManager<ViewProps & { onGeometryChange(event: { nativeEvent: GeometrySnapshot }): void }>(moduleName!) : null;
 
 /** One observation source per window; old packages and other platforms keep normal responsive layout. */
 export function AdaptiveWindowProvider({ children }: { children: ReactNode }) {
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const [geometry, setGeometry] = useState<WindowGeometry | null>(null);
+  const [geometry, setGeometry] = useState<GeometrySnapshot | null>(null);
   const current = geometry && Math.abs(geometry.width - window.width) < 1 && Math.abs(geometry.height - window.height) < 1
     ? geometry : null;
-  const value = useMemo<WindowGeometry>(() => current ?? ({
-    width: window.width, height: window.height, insets,
-    regularWidth: window.width >= 600, regularHeight: window.height >= 600,
-    barEdge: 'none', regions: [], reservedRegionsSupported: false,
-  }), [current, window.width, window.height, insets]);
+  const value = useMemo<WindowGeometry>(() => {
+    // iOS reports a complete, container-local snapshot. Dimensions and safe-area
+    // context arrive independently during rotation: mixing them creates a fake
+    // no-fold layout (320pt column) before the real Duo division arrives.
+    // Keep one source authoritative, including when the native event arrives first.
+    // Android only reports fold bounds, so it still needs the matching-size fallback.
+    if (Platform.OS === 'ios' && geometry?.insets
+      && geometry.regularWidth !== undefined && geometry.regularHeight !== undefined
+      && geometry.barEdge !== undefined) return geometry as WindowGeometry;
+    return {
+      width: window.width, height: window.height, insets,
+      regularWidth: window.width >= 600, regularHeight: window.height >= 600,
+      barEdge: 'none', regions: [], reservedRegionsSupported: false,
+      ...current,
+    };
+  }, [geometry, current, window.width, window.height, insets]);
   return <GeometryContext.Provider value={value}>
     <View style={styles.root}>
       {children}

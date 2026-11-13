@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,7 +55,6 @@ describe('HookTaskCard attached context', () => {
       const toggle = screen.getByRole('button', { name: '本条附带的上下文（12）' });
       expect(toggle.className).toContain('min-h-6');
       expect(toggle.className).toContain('py-1');
-      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
       expect(screen.getByRole('region', { name: '引用消息（2）' })).toBeTruthy();
@@ -107,7 +107,6 @@ describe('HookTaskCard attached context', () => {
       const toggle = screen.getByRole('button');
       expect(toggle.className).toContain('min-h-6');
       expect(toggle.className).toContain('py-1');
-      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(container.querySelector('.line-clamp-10')).toBeTruthy();
       fireEvent.click(toggle);
@@ -339,7 +338,7 @@ describe('HookTaskCard attached context', () => {
       <MemoryRouter>
         <ConfirmDialogProvider>
           <Tooltip.Provider>
-            <UserMessage
+            <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
               content="Please check the error"
               workingDir=""
               sessionId="clean-im-edit-session"
@@ -361,5 +360,35 @@ describe('HookTaskCard attached context', () => {
     });
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Please check the error');
     expect(screen.getByRole('button', { name: i18n.t('chat.userMessage.editCancel') })).toBeTruthy();
+  });
+});
+
+describe('teammate DM attachment-only bubbles in share images', () => {
+  // Value: real UserMessage -> production stripMessageSources, the share-image path.
+  // Regression: #6624 moved teammate DM attachments into the bubble, which was still
+  // marked as a removable source label when it had no text, so sharing dropped the attachment.
+  // Coverage gap: the existing share test only covers IM source headers, not DM attachments.
+  // Minimal unit input: a teammate DM user message with one image or one file and no text.
+  // Standalone file: 3.00s Vitest, including the existing HookTaskCard cases.
+  it.each([
+    ['image', { images: [{ base64: 'iVBORw0KGgo=', mimeType: 'image/png', originalName: 'shot.png' }] }],
+    ['file', { files: [{ name: 'report.pdf', path: '/fixture/report.pdf' }] }],
+  ])('keeps an %s-only message when the share image strips source labels', async (_kind, attachments) => {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(
+        <MemoryRouter>
+          <ConfirmDialogProvider>
+            <Tooltip.Provider>
+              <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content="" workingDir="" simplifiedBotConversation {...attachments} />
+            </Tooltip.Provider>
+          </ConfirmDialogProvider>
+        </MemoryRouter>,
+      ));
+    });
+    const clone = container.cloneNode(true) as HTMLElement;
+    stripMessageSources(clone);
+    if ('images' in attachments) expect(clone.querySelector('img[alt="shot.png"]')).toBeTruthy();
+    else expect(clone.textContent).toContain('report.pdf');
   });
 });

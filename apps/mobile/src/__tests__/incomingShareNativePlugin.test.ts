@@ -92,7 +92,7 @@ describe("incoming share native file ownership", () => {
     expect(patched).toContain(
       "guard !shareClosed else { return }\n      if !payload.isEmpty",
     );
-    expect(patched).toContain("override func didSelectCancel()");
+    expect(patched).toContain("func didSelectCancel()");
     // Invalid input, an empty parsed payload and a failed persistent write all
     // report reception failure, not "received" or silent completeRequest.
     expect(patched.match(/showShareFeedback\(received: false\)/g)).toHaveLength(
@@ -107,9 +107,14 @@ describe("incoming share native file ownership", () => {
   it("embeds complete localized feedback in the extension, without relying on the JS app", () => {
     const strings = require("../../plugins/incoming-share-strings.json");
     expect(Object.keys(strings).sort()).toEqual([
+      "de",
       "en",
+      "es",
+      "fr",
       "ja",
       "ko",
+      "pt-BR",
+      "pt-PT",
       "zh-Hans",
       "zh-Hant",
     ]);
@@ -117,11 +122,15 @@ describe("incoming share native file ownership", () => {
       Record<string, string>
     >) {
       expect(Object.keys(values).sort()).toEqual([
+        "cancel",
         "done",
         "failedMessage",
         "failedTitle",
         "receivedMessage",
         "receivedTitle",
+        "receiving",
+        "tooManyMessage",
+        "tooManyTitle",
       ]);
       expect(
         Object.values(values).every((value) => value.trim().length > 0),
@@ -141,3 +150,24 @@ describe("incoming share native file ownership", () => {
     ).toThrow("expo-sharing template changed");
   });
 });
+
+it("preserves original exports ahead of previews and copies temporary URLs within callbacks", ({ skip }) => {
+  const script = join(dirname(fileURLToPath(import.meta.url)), "../../scripts/test-incoming-share-formats.mjs");
+  const result = spawnSync(process.execPath, [script], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], timeout: 150_000, killSignal: "SIGKILL",
+  });
+  if (result.error) throw result.error;
+  if (result.status === 77) return skip();
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain("PASS: concrete Markdown/source files and plain text previews");
+  expect(result.stdout).toContain("PASS: original documents/videos beat thumbnails; real images remain images");
+  expect(result.stdout).toContain("PASS: web URL survives its image thumbnail");
+  expect(result.stdout).toContain("PASS: concrete property lists beat previews; Safari preprocessing remains text");
+  expect(result.stdout).toContain("PASS: concrete images beat source URLs; abstract thumbnails remain previews");
+  expect(result.stdout).toContain("PASS: unreadable account-boundary fence survives process restart and recovery");
+  expect(result.stdout).toContain("PASS: failed rejection removal retains retry state until durable recovery");
+  expect(result.stdout).toContain("PASS: Data-encoded file URLs preserve originals within provider callbacks");
+  expect(result.stdout).toContain("PASS: unnamed abstract image bytes preserve concrete extensions and MIME");
+  expect(result.stdout).toContain("PASS: temporary file URL copied inside provider callback");
+  expect(result.stdout).toContain("PASS: durable exact-snapshot rejection, retry and replacement");
+}, 180_000);

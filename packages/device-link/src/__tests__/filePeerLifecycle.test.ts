@@ -24,6 +24,7 @@ class Peer extends EventTarget {
   }
 }
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   Peer.instances = [];
 });
@@ -38,9 +39,9 @@ it("reports transport closure once, leaves other peers alive and ignores stale e
   await runtime.offer("a", []);
   await runtime.offer("b", []);
   const [a, b] = Peer.instances;
-  a.connectionState = "disconnected";
+  a.connectionState = "failed";
   a.onconnectionstatechange();
-  expect(closed.mock.calls).toEqual([["a"]]);
+  expect(closed.mock.calls).toEqual([["a", "failed"]]);
   expect(b.connectionState).toBe("connected");
   runtime.close("a");
   expect(closed).toHaveBeenCalledOnce();
@@ -48,5 +49,40 @@ it("reports transport closure once, leaves other peers alive and ignores stale e
   a.onconnectionstatechange();
   expect(Peer.instances[2].connectionState).toBe("connected");
   runtime.dispose();
-  expect(closed.mock.calls).toEqual([["a"], ["b"], ["a"]]);
+  expect(closed.mock.calls).toEqual([["a", "failed"], ["b"], ["a"]]);
+});
+
+// Oct 30: a brief ICE interruption destroyed a working direct file connection.
+// Unit: exercise the runtime lifecycle with a second peer and a stale timer;
+// existing closure coverage only tested terminal failure, not recovery.
+it("retains a briefly disconnected peer, but bounds an unrecovered interruption", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("RTCPeerConnection", Peer);
+  const closed = vi.fn();
+  const runtime = createFilePeerRuntime({ read: async () => "", write: async () => {}, closed });
+  await runtime.offer("a", []);
+  await runtime.offer("b", []);
+  const [a, b] = Peer.instances;
+  a.connectionState = "disconnected";
+  a.onconnectionstatechange();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(closed).not.toHaveBeenCalled();
+  a.connectionState = "connected";
+  a.onconnectionstatechange();
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(closed).not.toHaveBeenCalled();
+  a.connectionState = "disconnected";
+  a.onconnectionstatechange();
+  await vi.advanceTimersByTimeAsync(10_000);
+  a.onconnectionstatechange(); // Duplicate events cannot extend recovery indefinitely.
+  a.connectionState = "connecting"; // Restarting checks is not a recovered path yet.
+  a.onconnectionstatechange();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(closed.mock.calls).toEqual([["a", "disconnect-timeout"]]);
+  expect(b.connectionState).toBe("connected");
+  b.connectionState = "disconnected";
+  b.onconnectionstatechange();
+  runtime.dispose();
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(closed.mock.calls).toEqual([["a", "disconnect-timeout"], ["b"]]);
 });

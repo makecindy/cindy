@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InvokeScheduler } from "../invokeScheduler.js";
 import { DeviceLinkError } from "../protocol.js";
-import { isBackgroundInvoke, bypassInvokeScheduling } from "../invokePolicy.js";
+import { isBackgroundInvoke, bypassInvokeScheduling, isInteractiveInvoke, resolveInvokePriority } from "../invokePolicy.js";
 import { sharedTaskGuestPeer, sharedTaskHostPeer } from "../sharedTaskPeer.js";
+import { StallDiagnostics } from '../stallDiagnostics.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -17,6 +18,36 @@ const flush = async () => {
 afterEach(() => vi.useRealTimers());
 
 describe("invoke admission", () => {
+  // Incident: queue-full was visible but its 12 occupants and 128 waiters were
+  // not. Unit, real admission boundary; no payload is retained by diagnostics.
+  it('reports who occupies a full physical-host queue before rejecting new work', async () => {
+    let now = 0;
+    const emit = vi.fn();
+    const diagnostics = new StallDiagnostics(emit);
+    const scheduler = new InvokeScheduler(() => false,
+      (_peer, reason, fields) => diagnostics.record('admission', { reason, ...fields }), () => now);
+    const active = deferred();
+    const pending = Array.from({ length: 140 }, (_, n) => scheduler.run('host', false, 30_000,
+      () => active.promise, { channel: n < 12 ? 'local-db:sessions:list' : 'maker:session:messages:view',
+        request: `${n.toString(16).padStart(8, '0')}-0000-0000-0000-000000000000`, source: 'renderer' }).catch(e => e));
+    now = 2_000;
+    for (let n = 0; n < 20; n++) await expect(scheduler.run('host', false, 30_000, async () => 1))
+      .rejects.toMatchObject({ code: 'BACKPRESSURE' });
+    // A request flood cannot suppress the independent transport-failure sample.
+    diagnostics.record('path', { reason: 'ack-timeout' });
+    diagnostics.flush();
+    const rows = emit.mock.calls.map(([message]) => JSON.parse(message.slice('device-link diagnostic '.length)));
+    expect(rows[0]).toMatchObject({ stage: 'admission', reason: 'full', active: 12, queued: 128,
+      running: { top: [{ channel: 'local-db:sessions:list', count: 12, oldestMs: 2000, request: '00000000', source: 'renderer' }] },
+      waiting: { top: [{ count: 128, oldestMs: 2000 }] } });
+    expect(rows.filter(r => r.stage === 'admission')).toHaveLength(4);
+    expect(rows).toContainEqual(expect.objectContaining({ stage: 'path', reason: 'ack-timeout' }));
+    expect(rows.at(-1)).toMatchObject({ stage: 'suppressed', counts: { 'admission:full': 16 } });
+    await expect(scheduler.run('other', false, 30_000, async () => 42)).resolves.toBe(42);
+    scheduler.clear(new DeviceLinkError('NOT_CONNECTED', 'stop'));
+    active.resolve(); await Promise.all(pending);
+  });
+
   // A pressured peer previously refilled all four background slots. Exercise
   // production admission with deferred reads: foreground/other peers still run.
   it("reduces pressured background concurrency and recovers after delivery", async () => {
@@ -80,6 +111,26 @@ describe("invoke admission", () => {
     active.resolve();
     await Promise.all([...running, ...pending, fresh]);
     expect(started).toEqual([...sameHost.filter(peer => peer !== cancelledPeer), "fresh"]);
+  });
+
+  // Unit: a relay outage cancels unsent relay work, while bounded, healthy
+  // direct peers retain their queue and the existing concurrency limit.
+  it("keeps direct-peer admissions without replaying cancelled relay writes", async () => {
+    const scheduler = new InvokeScheduler();
+    const active = deferred();
+    const running = ['direct', 'relay'].flatMap(peer => Array.from({ length: 12 }, () =>
+      scheduler.run(peer, false, 30_000, () => active.promise)));
+    const directWrite = vi.fn(async () => {}), relayWrite = vi.fn(async () => {});
+    const kept = scheduler.run('direct', false, 30_000, directWrite);
+    const cancelled = scheduler.run('relay', false, 30_000, relayWrite);
+    const rejected = expect(cancelled).rejects.toMatchObject({ code: 'NOT_CONNECTED', inFlight: undefined });
+    scheduler.clear(new DeviceLinkError('NOT_CONNECTED', 'relay lost'), peer => peer === 'direct');
+    await rejected;
+    expect(directWrite).not.toHaveBeenCalled();
+    active.resolve();
+    await Promise.all([...running, kept]);
+    expect(directWrite).toHaveBeenCalledOnce();
+    expect(relayWrite).not.toHaveBeenCalled();
   });
 
   it("runs a 32-request burst in bounded batches and prioritizes current work", async () => {
@@ -221,6 +272,49 @@ describe("invoke admission", () => {
     scheduler.clear(new DeviceLinkError("NOT_CONNECTED", "stop"));
     active.resolve();
     await Promise.all(pending);
+  });
+
+  // A task view keeps up to twelve history/list reads in flight; before the allowance
+  // a send queued behind them until one settled (one relay round trip ≈ 0.5 s each).
+  it("admits interactive writes beyond the twelve-slot limit and ahead of queued reads", async () => {
+    const scheduler = new InvokeScheduler();
+    const reads = Array.from({ length: 12 }, deferred);
+    const running = reads.map((job) => scheduler.run("a", "foreground", 30_000, () => job.promise));
+    const started: string[] = [];
+    const queuedRead = scheduler.run("a", "foreground", 30_000, async () => { started.push("read"); });
+    const sends = Array.from({ length: 3 }, deferred);
+    const sent = sends.map((job, index) => scheduler.run("a", "interactive", 30_000, () => {
+      started.push(`send-${index}`);
+      return job.promise;
+    }));
+    // Two extra slots: the third send waits, but still ahead of the queued read.
+    expect(started).toEqual(["send-0", "send-1"]);
+    sends[0].resolve();
+    await flush();
+    expect(started).toEqual(["send-0", "send-1", "send-2"]);
+    sends[1].resolve();
+    sends[2].resolve();
+    await flush();
+    // Sends never borrow from the read limit: twelve reads are still running.
+    expect(started).toEqual(["send-0", "send-1", "send-2"]);
+    reads[0].resolve();
+    await flush();
+    expect(started).toEqual(["send-0", "send-1", "send-2", "read"]);
+    reads.forEach((job) => job.resolve());
+    await Promise.all([...running, queuedRead, ...sent]);
+  });
+
+  it("classifies sends and interaction answers as interactive, never demoted by a background hint", () => {
+    for (const channel of ["maker:input:enqueue", "maker:input:steer", "maker:input:stop", "maker:send", "maker:resolve-interaction", "maker:agent-task:stop"]) {
+      expect(isInteractiveInvoke(channel)).toBe(true);
+      expect(resolveInvokePriority(channel, true)).toBe("interactive");
+    }
+    // Queue-management edits and reads stay where they were.
+    expect(resolveInvokePriority("maker:input:move")).toBe("foreground");
+    expect(resolveInvokePriority("local-db:messages:view")).toBe("foreground");
+    expect(resolveInvokePriority("local-db:messages:view", true)).toBe("background");
+    expect(resolveInvokePriority("git-context:pr-status")).toBe("background");
+    expect(resolveInvokePriority("maker:predict-prompt")).toBe("background");
   });
 
   it("classifies PR reads as background and keeps control/lease maintenance outside the queue", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isDesktopInput,
+  runningLiveScreens,
   parseRemoteDesktopRequest,
   REMOTE_DESKTOP_CHANNEL,
   isDesktopPermission,
@@ -8,6 +9,7 @@ import {
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelReply,
+  isLiveScreenOnlyInput,
 } from "../remoteDesktop";
 import { REMOTE_INVOKE_ALLOWLIST, PUSH_FORWARD_ALLOWLIST } from "../allowlist";
 describe("remote desktop wire boundary", () => {
@@ -288,4 +290,110 @@ describe("remote desktop viewerHidden", () => {
       "INVALID_LEASE",
     );
   });
+});
+
+// Unit: wire compatibility keeps legacy senders unchanged and rejects invalid safety durations.
+it.each([{ op: "start", displayId: "1" }, { op: "heartbeat", lease: "a" }])(
+  "validates the optional idle duration on $op", (request) => {
+    expect(parseRemoteDesktopRequest(request)).toEqual(request);
+    for (const idleTimeoutMinutes of [0, 1, 5, 10, 15, 30])
+      expect(parseRemoteDesktopRequest({ ...request, idleTimeoutMinutes })).toEqual({ ...request, idleTimeoutMinutes });
+    for (const idleTimeoutMinutes of [-1, 0.5, 2, 60, Infinity, NaN, "5", null, true])
+      expect(() => parseRemoteDesktopRequest({ ...request, idleTimeoutMinutes })).toThrow("INVALID_REQUEST");
+  },
+);
+
+describe("remote desktop live screens", () => {
+  it("parses a listed screen on start and refuses one combined with a window view", () => {
+    const screen = { plugin: "_ns__acme__sim", id: "AB-12.3:x" };
+    expect(parseRemoteDesktopRequest({ op: "screens", extra: 1 })).toEqual({ op: "screens" });
+    expect(
+      parseRemoteDesktopRequest({ op: "start", displayId: "live-screen", screen: { ...screen, extra: 1 } }),
+    ).toEqual({ op: "start", displayId: "live-screen", screen });
+    for (const bad of [
+      null,
+      "sim|1",
+      { plugin: "a/b", id: "1" },
+      { plugin: "sim", id: "x".repeat(129) },
+      { plugin: "sim", id: "a b" },
+    ])
+      expect(() =>
+        parseRemoteDesktopRequest({ op: "start", displayId: "live-screen", screen: bad }),
+      ).toThrow("INVALID_REQUEST");
+    expect(() =>
+      parseRemoteDesktopRequest({ op: "start", displayId: "x", screen, handoff: "req1" }),
+    ).toThrow("INVALID_REQUEST");
+  });
+
+  it("accepts every-contact touch snapshots and listed buttons, nothing looser", () => {
+    const touch = {
+      kind: "touch",
+      touches: [
+        { id: 0, x: 0, y: 1, phase: "began" },
+        { id: 1, x: 0.5, y: 0.5, phase: "stationary" },
+      ],
+      edge: "bottom",
+    };
+    expect(isDesktopInput(touch)).toBe(true);
+    expect(isDesktopInput({ kind: "touch", touches: [] })).toBe(true);
+    expect(isDesktopInput({ kind: "press", button: "volume-up" })).toBe(true);
+    for (const bad of [
+      { ...touch, edge: "middle" },
+      { kind: "touch", touches: [{ id: 0, x: 1.1, y: 0, phase: "moved" }] },
+      { kind: "touch", touches: [{ id: 10, x: 0, y: 0, phase: "moved" }] },
+      { kind: "touch", touches: [{ id: 0, x: 0, y: 0, phase: "hover" }] },
+      { kind: "touch", touches: [{ id: 2, x: 0, y: 0, phase: "moved" }, { id: 2, x: 1, y: 1, phase: "moved" }] },
+      { kind: "touch", touches: Array.from({ length: 11 }, (_, id) => ({ id, x: 0, y: 0, phase: "moved" })) },
+      { kind: "press", button: "Home" },
+      { kind: "press", button: "x".repeat(33) },
+    ])
+      expect(isDesktopInput(bad)).toBe(false);
+    expect(isLiveScreenOnlyInput(touch as never)).toBe(true);
+    expect(isLiveScreenOnlyInput({ kind: "text", text: "a" })).toBe(false);
+  });
+});
+
+it("validates attested logical identity separately from physical screen routing", () => {
+  const screen = {
+    plugin: "helper",
+    pluginName: "Helper",
+    id: "phone",
+    name: "Phone",
+    platform: "ios",
+    state: "running",
+    taskIds: [],
+  };
+  expect(
+    runningLiveScreens({
+      screens: [{ ...screen, pluginIdentity: "_ns__acme__helper" }],
+    }),
+  ).toHaveLength(1);
+  for (const pluginIdentity of [null, 1, {}, "bad/source"])
+    expect(
+      runningLiveScreens({ screens: [{ ...screen, pluginIdentity }] }),
+    ).toEqual([]);
+  // Legacy metadata is readable by general viewers, but is not proof for plugin authorization.
+  expect(runningLiveScreens({ screens: [screen] })).toHaveLength(1);
+});
+
+it("preserves the expected source constraint on a device start", () => {
+  const screen = {
+    plugin: "helper",
+    id: "phone",
+    pluginIdentity: "_ns__acme__helper",
+  };
+  expect(
+    parseRemoteDesktopRequest({
+      op: "start",
+      displayId: "live-screen",
+      screen,
+    }),
+  ).toMatchObject({ screen });
+  expect(() =>
+    parseRemoteDesktopRequest({
+      op: "start",
+      displayId: "live-screen",
+      screen: { ...screen, pluginIdentity: 1 },
+    }),
+  ).toThrow("INVALID_REQUEST");
 });

@@ -1,12 +1,15 @@
 {
   "site": "medium.com",
-  "auth": "只读公开内容无需登录:走 Medium 公开 RSS feed",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://medium.com",
-    "tagFeed": "https://medium.com/feed/tag/<tag-slug>",
-    "userFeed": "https://medium.com/feed/@<username>",
-    "publicationFeed": "https://medium.com/feed/<publication>"
+    "home": "https://medium.com"
   },
-  "recipes": ["medium-tag-feed"],
-  "notes": "Medium 没有公开的 JSON 读接口,网页正文是 React 渲染、直接扒 DOM 很脆;但它对外提供稳定的公开 RSS 2.0 feed(无需登录),这是最可靠的只读入口。姿势:先 navigate 到 https://medium.com 取同源,再在页面内 fetch RSS 文本、用 DOMParser('text/xml') 解析。RSS 每个 <item> 字段:title、link、guid、dc:creator(作者,命名空间标签要用 getElementsByTagName('dc:creator') 取,querySelector 对带冒号的标签名不可靠)、pubDate、category(多个标签)、description(CDATA 包裹的 HTML 摘要,需 strip 掉标签)。medium-tag-feed 配方封装的是 /feed/tag/<slug>(话题最新文章)。其它公开 RSS 端点同理可解析:1) 某作者文章 /feed/@<username>;2) 某 publication 文章 /feed/<publication-slug>。注意:Medium 站内搜索(/search?q=)没有 RSS / JSON 接口,只能扒渲染 DOM,不稳定,本站不提供搜索配方——要找文章优先用 tag/作者/publication feed。tag slug 用连字符英文,如 artificial-intelligence、machine-learning。"
+  "recipes": [
+    "medium-tag-feed"
+  ],
+  "notes": "兼容入口 medium-tag-feed 现执行内置 medium/tag，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

@@ -56,6 +56,7 @@ import { currentLedgerCurrency } from './ledgerCurrency.js';
 import {
   addCompatibleRegionalMoney,
   normalizeRegionalMoney,
+  toLedgerCurrency,
   USD_TO_CNY_FIXED_RATE,
   type ModelPriceQuote,
   type MoneyCurrency,
@@ -77,7 +78,8 @@ const MODEL_WINDOW_DAYS = 30;
 // v5:日账改为按币种分行后折叠口径变了；v4 快照是用「按区域猜出来的账本币种」折叠出来
 //    的聚合值，直接沿用会让升级后的首页继续显示按错币种算出的历史。整份作废重算。
 // v4:恢复 CN usage 的 CNY 账本口径，并让订阅 USD 估值按 6.7 投影到 CNY。
-const DISK_CACHE_VERSION = 5;
+// v6：重算每日展示投影，避免迁移前的 USD 历史继续沿用已归零的旧缓存。
+const DISK_CACHE_VERSION = 6;
 const DISK_CACHE_FILE = 'usage-history.json';
 /** 后台刷新完成后, renderer 的短轮询能拿到 fresh payload, 避免 stale 状态自循环。 */
 const MEMORY_FRESH_MS = 10_000;
@@ -90,8 +92,12 @@ export interface UsageHistoryDay {
   tokens: number;
 }
 
+function usageAgentKind(value: string): UsageHistoryModel['agentKind'] {
+  return value === 'codex' || value === 'pi' || value === 'media' ? value : 'claude-code';
+}
+
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -106,7 +112,7 @@ export interface UsageHistoryModel {
 /** 每日 × 模型的一行明细 — 右栏堆叠柱状图的分段数据。 */
 export interface UsageHistoryModelDay {
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;
@@ -523,12 +529,13 @@ export function piSubscriptionUsageModelKey(model: string): string {
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 export function getSubscriptionValuePriceFor(
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media',
   model: string,
   pricing: ModelPricingMap | null,
   at?: string | Date,
   overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
+  if (agentKind === 'media') return undefined;
   if (agentKind === 'codex') {
     return (
       getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??
@@ -681,12 +688,13 @@ export async function readUsageHistoryWith(
   const modelWindowDays = normalizeWindowDays(opts?.modelDays, MODEL_WINDOW_DAYS);
   const todayKey = deps.todayKey();
 
-  // 历史聚合只有一个金额口径:兼容当前账本币种的金额保留,无法确定换算语义的
-  // 异币种金额在入口丢弃为 0。token 等非金额统计仍保留。
+  // 每日展示统一到账本币种：USD→CNY 按既有固定汇率投影，不新增展示标记。
+  // XD 切换结算源后不会再切回 USD，不能把这些历史行永久显示为 0。
+  // 不支持的 CNY→USD 仍保持原有过滤规则；原始账本与 token 均不改动。
   //
   // 账本币种与写入侧同一事实源(currentLedgerCurrency)：由服务端按账号所属租户下发，
   // 不保证等于发行区域。按区域取会把以 USD 结算的账号在 CN 构建上的每一行判成异币种、
-  // 整段归零成不计费。历史遗留的异币种行(换号 / 跨区)仍按 keepCompatibleMoney 归零。
+  // 整段归零成不计费。此投影仅服务用量展示，不回写任何金额。
   const [spendDayRows, , pricing] = await Promise.all([
     deps.getAllSpendDays(),
     // Gateway 报价只读内存或账号作用域内的磁盘快照，不发网络请求。必须等它完成，
@@ -712,22 +720,25 @@ export async function readUsageHistoryWith(
     kind: 'value-estimate',
     estimateReasons: ['subscription-value'],
   });
-  const keepCompatibleMoney = (money: RegionalMoney): RegionalMoney =>
-    money.currency === ledgerCurrency
-      ? money
-      : { ...money, amount: 0, currency: ledgerCurrency };
+  const keepCompatibleMoney = (money: RegionalMoney): RegionalMoney => {
+    const projected = toLedgerCurrency(money, ledgerCurrency);
+    return projected.currency === ledgerCurrency
+      ? projected
+      : { ...projected, amount: 0, currency: ledgerCurrency };
+  };
   const addOrZero = (
     values: RegionalMoney[],
     kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
   ): RegionalMoney =>
     addCompatibleRegionalMoney(
-      values.filter((value) => value.currency === ledgerCurrency),
+      values.map(value => toLedgerCurrency(value, ledgerCurrency))
+        .filter(value => value.currency === ledgerCurrency),
       ledgerCurrency,
     ) ?? (kind === 'actual-cost' ? zeroActual() : zeroEstimate());
   // 日账按币种拆开取回，折叠推迟到这里 —— 与上面等 pricing 是同一个理由：折叠依赖账本
   // 币种，而它要等报价快照恢复才确定。若在 getAllSpendDays 内部折叠，冷启动时会先按
   // 兜底币种把本账号那一行丢掉，等到这里再怎么等也拿不回来。
-  // 与 model 行共用 addOrZero，异币种同样归零，两条链路口径一致。
+  // 与 model 行使用同一展示换算，日总额、模型分段和小组件保持一致。
   const allDays = spendDayRows.map((row) => ({
     day: row.day,
     money: addOrZero(row.monies),
@@ -808,7 +819,7 @@ export async function readUsageHistoryWith(
     if (row.day === todayKey) todayTokens += rowTokens;
   }
   for (const row of modelRows) {
-    const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+    const agentKind = usageAgentKind(row.agentKind);
     // claude 订阅行同样带 #billing= 后缀, 展示名统一剥后缀; key 保留原始 model
     // (api / subscription 两个计费维度分行聚合)。
     const model = displayModelName(row.model);
@@ -868,11 +879,7 @@ export async function readUsageHistoryWith(
   // 每日 × 模型明细 (30 天窗口) — 堆叠柱状图分段。金额口径与 models 一致:
   // Claude 实报 $, Codex 行按价格表折算 (无价格 → 0, 该模型只出现在图例 token 行)。
   const modelDaily: UsageHistoryModelDay[] = modelRows.map((row) => {
-    const agentKind = row.agentKind === 'codex'
-      ? ('codex' as const)
-      : row.agentKind === 'pi'
-        ? ('pi' as const)
-        : ('claude-code' as const);
+    const agentKind = usageAgentKind(row.agentKind);
     const model = displayModelName(row.model);
     const apiMoney = row.money.kind === 'actual-cost' ? row.money : zeroActual();
     const subscriptionEstimateMoney = isSubscriptionUsageModel(row.model)
@@ -1181,7 +1188,7 @@ async function readAggregatedUsageHistory(
     if (cachedHistory && cachedHistoryOptsKey === key) return stalePayload(cachedHistory);
     const diskPayload = await hydrateFromDisk(key);
     if (diskPayload) return stalePayload(diskPayload);
-    return emptyUsageHistoryPayload();
+    return unreadUsageHistoryPayload();
   }
   if (cachedHistory && cachedHistoryOptsKey === key) {
     if (refreshInFlightByOptsKey.has(key)) return stalePayload(cachedHistory);
@@ -1203,7 +1210,15 @@ async function readAggregatedUsageHistory(
     return stalePayload(diskPayload);
   }
   const fresh = await refreshUsageHistory(key, opts);
-  return fresh ? settle(fresh) : emptyUsageHistoryPayload();
+  return fresh ? settle(fresh) : unreadUsageHistoryPayload();
+}
+
+/**
+ * Nothing could be read yet (typically the local database is still opening at launch). Marked
+ * stale so callers look again shortly instead of caching zero usage as the current answer.
+ */
+function unreadUsageHistoryPayload(): UsageHistoryPayload {
+  return stalePayload(emptyUsageHistoryPayload());
 }
 
 /** DB 出错时的兜底空 payload (查询型 handler fallback-data 模式)。 */

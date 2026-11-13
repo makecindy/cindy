@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
@@ -43,7 +43,7 @@ export async function listWorkLouderCodexTaskCatalog(
 ): Promise<WorkLouderCodexTaskCatalog> {
   const visibleActiveTask = and(
     eq(sessions.status, 'active'),
-    inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+    inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
     or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker')),
   );
   const rows = await db

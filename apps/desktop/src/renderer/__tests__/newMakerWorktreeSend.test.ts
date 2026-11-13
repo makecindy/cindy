@@ -82,7 +82,7 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     const failedCard = source.indexOf("status: 'failed'", worktreeCreate);
     const restoreHelper = source.indexOf('const restoreFirstMessageDraft');
     const saveDraft = source.indexOf('restoreFirstMessageDraft();', failedCard);
-    const restoreText = source.indexOf('plainTextToTiptapDoc(message)', restoreHelper);
+    const restoreText = source.indexOf('plainTextToTiptapDoc(builtInSkillIntent ? builtInSkillDraftMessage : message)', restoreHelper);
 
     expect(worktreeCreate).toBeGreaterThan(-1);
     expect(failedCard).toBeGreaterThan(worktreeCreate);

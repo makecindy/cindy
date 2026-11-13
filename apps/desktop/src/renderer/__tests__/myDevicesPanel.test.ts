@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
@@ -46,7 +47,7 @@ function device(deviceId: string, name: string, isSelf = false): DeviceLinkDevic
 describe('MyDevicesPanel device identity', () => {
   afterEach(cleanup);
 
-  it('shows the reported versions and complete identities of same-name devices', () => {
+  it('shows versions and compact names without exposing device fingerprints', () => {
     const s = settings();
     s.devices = [
       { ...device('self', 'Mac Studio', true), appVersion: '0.1.76' },
@@ -58,13 +59,63 @@ describe('MyDevicesPanel device identity', () => {
 
     for (const d of s.devices) {
       const row = document.querySelector(`[data-device-id="${d.deviceId}"]`);
-      expect(row?.textContent).toContain(d.deviceId);
+      expect(row?.textContent).not.toContain(d.deviceId);
+      if (!d.isSelf && d.name === 'Mac Studio') expect(row?.textContent).toMatch(/Mac Studio \(\d\)/);
       if (d.appVersion) expect(row?.textContent).toContain(`Cindy ${d.appVersion}`);
       else {
         expect(row?.textContent).not.toContain('Cindy null');
         expect(row?.textContent).not.toContain('Cindy undefined');
       }
     }
+  });
+});
+
+// 统一授权 B 方案把两个 Switch 换成「我可以 / 它可以」胶囊;点击必须仍走原来的
+// setDeviceControlEnabled / revoke / restore,禁用与隐藏条件不变。
+describe('MyDevicesPanel access pills', () => {
+  afterEach(cleanup);
+
+  const pill = (name: string) => screen.getByRole('button', { name });
+
+  it('keeps both directions wired to the original device-link actions and gates', () => {
+    const s = settings();
+    s.devices = [
+      device('self', 'Studio Mac', true),
+      { ...device('mac', 'MBP'), platform: 'darwin', remoteControlEnabled: false },
+      device('phone-1', 'iPhone'),
+    ];
+    s.revokedControllers = ['phone-1'];
+    // settings() 里各操作共用一个 noop,这里拆开才能分辨调用的是哪个。
+    s.setDeviceControlEnabled = vi.fn(async () => undefined);
+    s.revoke = vi.fn(async () => undefined);
+    s.restore = vi.fn(async () => undefined);
+    const { rerender } = render(createElement(MyDevicesPanel, { s, variant: 'others' }));
+
+    const macRow = within(document.querySelector<HTMLElement>('[data-device-id="mac"]')!);
+    expect(macRow.getByText('settings.remoteControl.myDevices.peerControlOff')).toBeTruthy();
+    fireEvent.click(pill('settings.remoteControl.deviceControlToggleAria'));
+    expect(s.setDeviceControlEnabled).toHaveBeenCalledExactlyOnceWith('mac', false);
+
+    const inbound = 'settings.remoteControl.myDevices.allowInboundAria';
+    const phoneRow = within(document.querySelector<HTMLElement>('[data-device-id="phone-1"]')!);
+    const macInbound = macRow.getByRole('button', { name: inbound });
+    const phoneInbound = phoneRow.getByRole('button', { name: inbound });
+    expect(macInbound.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(macInbound);
+    expect(s.revoke).toHaveBeenCalledExactlyOnceWith('mac');
+    expect(phoneInbound.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(phoneInbound);
+    expect(s.restore).toHaveBeenCalledExactlyOnceWith('phone-1');
+
+    // 手机不可被控:只有「它可以」行。
+    expect(phoneRow.queryByText('settings.remoteControl.myDevices.iCan')).toBeNull();
+
+    // 本机总开关关:「控制本机」置灰并说明原因。
+    rerender(createElement(MyDevicesPanel, { s: { ...s, enabled: false }, variant: 'others' }));
+    for (const b of screen.getAllByRole('button', { name: 'settings.remoteControl.myDevices.allowInboundAria' })) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(screen.getAllByText('settings.remoteControl.myDevices.masterOffHint')).toHaveLength(2);
   });
 });
 
@@ -118,7 +169,9 @@ describe('MyDevicesPanel device focus deep link', () => {
     });
   };
 
-  it('scrolls the focused device into view and briefly highlights it', async () => {
+  // 用户反馈 2026-11-12:设备定位保留滚动,移除借用搜索样式的黄色高亮。
+  // 生产入口 MyDevicesPanel;最小输入为一条设备深链。沿用 unit 的目标行与重复定位覆盖。
+  it('scrolls the focused device into view', async () => {
     render(
       createElement(MyDevicesPanel, {
         s: settings(),
@@ -131,13 +184,6 @@ describe('MyDevicesPanel device focus deep link', () => {
 
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(scrollIntoView.mock.contexts[0]).toBe(row('phone-1'));
-    expect(row('phone-1')?.classList.contains('settings-search-target-highlight')).toBe(true);
-    expect(row('pad-1')?.classList.contains('settings-search-target-highlight')).toBe(false);
-
-    await act(async () => {
-      vi.advanceTimersByTime(1600);
-    });
-    expect(row('phone-1')?.classList.contains('settings-search-target-highlight')).toBe(false);
   });
 
   it('focuses each request once and again for a new request key', async () => {

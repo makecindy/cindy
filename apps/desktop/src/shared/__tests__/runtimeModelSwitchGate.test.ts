@@ -23,6 +23,12 @@ const base = {
 };
 
 describe('assessRuntimeModelSwitchGate', () => {
+  // Codex can compact with the previous model before sampling the smaller one.
+  // Rebuilding here would discard the native history before it gets that chance.
+  it.each([false, true])('leaves Codex shrink compaction to native (remote=%s)', (isRemote) => {
+    expect(assessRuntimeModelSwitchGate({ ...base, agentKind: 'codex', isRemote,
+      verifiedTargetWindow: twoHundredK })).toEqual({ skipRebuild: true, defer: false });
+  });
   it.each([
     {
       name: 'same route idle → hot apply, no rebuild',
@@ -184,7 +190,7 @@ describe('assessRuntimeModelSwitchGate', () => {
       want: { skipRebuild: false, defer: true },
     },
     {
-      name: 'Codex shrink danger running → defer',
+      name: 'Codex shrink danger running → native switch without destructive rebuild',
       input: {
         ...base,
         agentKind: 'codex',
@@ -192,7 +198,7 @@ describe('assessRuntimeModelSwitchGate', () => {
         verifiedTargetWindow: twoHundredK,
         contextTokens: 190_000,
       },
-      want: { skipRebuild: false, defer: true },
+      want: { skipRebuild: true, defer: false },
     },
     {
       name: 'remote running same-route effort-only → still defer',
@@ -287,20 +293,26 @@ describe('buildDeferredRuntimeSelectionProfile', () => {
         model: 'local-llama',
         providerId: 'custom:ollama',
         atomicSelection: { effort: null, fastMode: false },
+        currentEffort: 'xhigh',
         currentFastMode: true,
       }).effort,
     ).toBeNull();
   });
 
-  it('without atomic selection, Fast falls back to the live session, effort stays null', () => {
+  // Regression: scheduler Pi route refresh omitted atomicSelection and projected
+  // null over an xhigh session. Both immediate and queued profiles use this
+  // production builder; previous coverage only exercised explicit selections.
+  // Unit tier: no native process or database is needed to reproduce the lost axis.
+  it.each(['xhigh', null] as const)('route-only refresh preserves current effort %s', (currentEffort) => {
     expect(
       buildDeferredRuntimeSelectionProfile({
-        agentKind: 'codex',
-        model: 'gpt-5.5',
-        providerId: 'openai',
+        agentKind: 'pi',
+        model: 'reasoner',
+        providerId: 'custom',
+        currentEffort,
         currentFastMode: true,
       }),
-    ).toMatchObject({ effort: null, fastMode: true });
+    ).toMatchObject({ effort: currentEffort, fastMode: true });
   });
 });
 

@@ -14,6 +14,7 @@
  * 渠道失败提示, 不静默换模型。
  */
 
+import { imText } from './imText';
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
@@ -29,7 +30,7 @@ export interface ChannelSessionRoute {
   /** 缺席 = 渠道没有显式指定(准入后的默认值不回写给调用方, 保持渠道原有省略语义)。 */
   effort?: Effort;
   /** 缺席同上。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode: PermissionMode;
   workingDir: string;
   workspaceKind?: 'project' | 'dialogue';
@@ -41,7 +42,7 @@ export interface AdmittedChannelRoute {
   model: string;
   providerId: string | null;
   effort?: Effort;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 
 /**
@@ -53,7 +54,7 @@ export function captureChannelAccount(): () => void {
   const owner = getCurrentDbClientSnapshot();
   return () => {
     if (!owner || getCurrentDbClientSnapshot() !== owner) {
-      throw new Error('账号已变化，请重新新建任务');
+      throw new Error(imText('imBot.text.shared.session.accountChanged'));
     }
   };
 }

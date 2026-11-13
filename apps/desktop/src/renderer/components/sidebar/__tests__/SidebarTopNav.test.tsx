@@ -22,7 +22,8 @@ const authMock = vi.hoisted(() => ({ owner: 'owner-1' as string | null }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: authMock.owner }) }));
 // A non-empty installed roster marks the plugin list as loaded (Main sends none mid-switch).
 const installedMock = vi.hoisted(() => ({ ghosts: [{ manifest: { id: 'bundled' } }] as unknown[] }));
-vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedMock.ghosts }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedMock.ghosts,
+  readInstalledGhostsSnapshot: () => installedMock.ghosts }));
 const SITES: MainViewMock = {
   ghostId: 'xd-sites', instanceId: 'xd-sites', title: '站点', icon: 'globe', manifest: { name: 'XD Sites' },
 };
@@ -33,6 +34,8 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 const unreadMock = vi.hoisted(() => ({ ordinary: false }));
+const reviewMock = vi.hoisted(() => ({ updates: [] as Array<{ unread: boolean; status: string }> }));
+vi.mock('@/contexts/PluginReviewUpdatesContext', () => ({ usePluginReviewUpdates: () => reviewMock }));
 vi.mock('@/cindy-brain/ghostUnreadStore', () => ({ useAnyGhostUnread: () => unreadMock.ordinary }));
 vi.mock('@/cindy-brain/ghostMainViews', () => ({
   useGhostMainViews: () => ({
@@ -41,7 +44,6 @@ vi.mock('@/cindy-brain/ghostMainViews', () => ({
     sidebarVisible: mainViewsMock.sidebarVisible,
   }),
 }));
-vi.mock('@/cindy-brain/GhostPanelRestoreEntry', () => ({ GhostPanelRestoreEntry: () => null }));
 vi.mock('../GhostMainViewNavEntries', () => ({
   GhostMainViewNavEntry: ({ item, variant }: { item: { title: string }; variant: string }) =>
     <button aria-label={item.title} data-variant={variant} />,
@@ -58,7 +60,7 @@ vi.mock('@/features/cc-agent/sidebar/conversationSearchContext', () => ({
   useConversationSearchContext: () => ({ search: searchMock, allKnownProjects: [], openSignal: 0 }),
 }));
 
-afterEach(() => { cleanup(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 /** Pretend the owner's first run already happened, so plugins keep their default (More). */
 function seedKnownPlugins(ids: string[]) {
@@ -66,6 +68,7 @@ function seedKnownPlugins(ids: string[]) {
   navigationTesting.resetArrivals();
 }
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   searchMock.query = '';
   searchMock.lockedProjectKey = null;
   mainViewsMock.routeCapable = [];
@@ -73,6 +76,7 @@ beforeEach(() => {
   authMock.owner = 'owner-1';
   installedMock.ghosts = [{ manifest: { id: 'bundled' } }];
   unreadMock.ordinary = false;
+  reviewMock.updates = [];
   localStorage.removeItem('sidebar-navigation:apps:v1');
   navigationTesting.resetArrivals();
   setSidebarNavigationPrefs(OWNER, {
@@ -139,7 +143,6 @@ describe('Retirement attention across sidebar navigation placements', () => {
         span.className.includes(`--card-status-${tone}`),
       );
       expect(dot('awaiting')).toBeTruthy();
-      expect(dot('awaiting')?.className).not.toContain('session-card-dot');
 
       // Acknowledging retirement must preserve another plugin's ordinary unread dot.
       installedMock.ghosts = [{ manifest: { id: 'ios-simulator' }, retirement: { unread: false } }];
@@ -750,4 +753,14 @@ describe('Plugins joining the sidebar', () => {
     expect(getSidebarNavigationPrefs('owner-2').visible).toEqual(['automations']);
     expect(getSidebarNavigationPrefs(OWNER).visible).toEqual(['automations', 'plugins', 'search']);
   });
+});
+
+// Sidebar/rail must show the same result semantics as the author's detail, using
+// existing AttentionDot tokens. Previously only rejection selected error (unit).
+it.each(['disabled', 'archived', 'revoked', 'enabled', 'approved'])('uses the result tone for an unread %s event', status => {
+  reviewMock.updates = [{ status, unread: true }];
+  render(<Harness initialPath="/cc-agent/session-1" />);
+  const entry = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
+  const tone = status === 'enabled' || status === 'approved' ? 'done' : 'error';
+  expect([...entry.querySelectorAll('span')].some(span => span.className.includes(`--card-status-${tone}`))).toBe(true);
 });

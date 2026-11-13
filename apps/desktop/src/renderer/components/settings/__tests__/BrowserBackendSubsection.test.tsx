@@ -108,3 +108,22 @@ describe('BrowserBackendSubsection', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+// Regression 2026-11-07: a usable plugin with a stale selection was mislabeled as outdated.
+// Render the real setup row; cover updating vs selection with no update/store action (unit/jsdom).
+it.each(['plugin-updating', 'plugin-selection-required'] as const)('explains %s without claiming the plugin is outdated', reason => {
+  const setup = vi.fn();
+  render(<BrowserBackendSubsection active="user-browser" pending={false} recovering={false}
+    health={{ active: 'user-browser', status: 'error', canRecover: false, reason }}
+    onSelect={vi.fn()} onRecover={vi.fn()} userBrowserPluginState="enabled"
+    userBrowserPluginSupportsControl onSetUpUserBrowser={setup} />);
+  const prefix = 'settings.computerUse.browserBackend.userBrowserSetup.';
+  expect(screen.queryByText(prefix + 'updatePluginTitle')).toBeNull();
+  if (reason === 'plugin-updating') {
+    expect(screen.getByText(prefix + 'updatingTitle')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: prefix + 'selectPlugin' })).toBeNull();
+  } else {
+    fireEvent.click(screen.getByRole('button', { name: prefix + 'selectPlugin' }));
+    expect(setup).toHaveBeenCalledOnce();
+  }
+});

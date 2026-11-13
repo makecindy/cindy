@@ -1,3 +1,12 @@
+import { createServer } from 'node:http';
+import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
+import { loadCatalogWithSource, type ModelRegistry } from '@cindy/model-providers';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { setLocalCatalogOverrides } from '../active-catalog.js';
+import { EMPTY_MODEL_CATALOG_OVERRIDES } from '../model-plane/localCatalogOverrides.js';
+import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
 const { mockGetAppCapabilities } = vi.hoisted(() => ({
@@ -28,6 +37,7 @@ import {
   resolveSessionRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
+  resolveConnectedDefaultProviderIdForModel,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
@@ -54,10 +64,52 @@ import {
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
 import { migrateManagedOllamaProvider } from '../../local-model-runtime/managedOllamaProvider.js';
 import { ANTHROPIC_DIRECT_UPSTREAM } from '../claude-gateway-config.js';
+import { buildByokProvider } from '../../model-access/byokProvider.js';
 
 // CODEX_OAUTH_UPSTREAM 不直接 import —— codex-proxy-host.ts 在 import 期触电(app.getPath),
 // 会让本测试在 vitest 无 electron 环境炸。其值稳定(codex-gateway-config.ts),这里以字面量锁定。
 const CODEX_OAUTH_UPSTREAM = 'https://chatgpt.com/backend-api/codex';
+
+// Unit: missing app attribution made Cindy traffic anonymous or credited the
+// underlying harness. Existing auth-route cases did not cover provider identity.
+describe('provider application attribution', () => {
+  it.each([
+    ['https://openrouter.ai/api/v1', 'X-OpenRouter-Title'],
+    ['https://ai-gateway.vercel.sh/v1', 'X-Title'],
+    ['https://router.requesty.ai/v1', 'X-Title'],
+    ['https://router.eu.requesty.ai/v1', 'X-Title'],
+  ])('attributes all harness routes to Cindy at %s', (upstream, title) => {
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const routing: RoutingDescriptor = { upstream, authStrategy: 'api-key-header' };
+      expect(buildRouteDecision(routing, null, agent, 'fixture-key')?.headerOverride).toMatchObject({
+        'HTTP-Referer': 'https://cindy.app', [title]: 'Cindy',
+        authorization: 'Bearer fixture-key',
+      });
+      expect(routing.headerOverride).toBeUndefined();
+      expect(buildLocalHandlerHeaders({ providerId: 'fixture', providerSource: 'user', routing,
+        apiKey: 'fixture-key', oauthToken: null }, agent).headers).toMatchObject({ 'HTTP-Referer': 'https://cindy.app', [title]: 'Cindy' });
+    }
+  });
+
+  it('preserves explicit mixed-case and legacy attribution, and header deletion', () => {
+    const headers = { 'http-referer': 'https://custom.example', 'x-TITLE': '', 'x-extra': 'value' };
+    const routing: RoutingDescriptor = { upstream: 'https://openrouter.ai/api/v1', authStrategy: 'oauth-token', headerOverride: headers };
+    const sent = buildRouteDecision(routing, null, 'pi', null, 'fixture-token')!.headerOverride!;
+    expect(sent).toMatchObject(headers);
+    expect(sent['X-OpenRouter-Title']).toBeUndefined();
+    expect(sent['HTTP-Referer']).toBeUndefined();
+    const deleted = buildRouteDecision({ ...routing, headerOverride: {}, headerDelete: ['http-referer', 'x-title'] }, null, 'pi')!;
+    expect(deleted.headerOverride).not.toHaveProperty('HTTP-Referer');
+    expect(deleted.headerOverride).not.toHaveProperty('X-OpenRouter-Title');
+  });
+
+  it.each(['https://openrouter.ai.example/api/v1', 'http://openrouter.ai/api/v1',
+    'https://openrouter.ai:8443/api/v1', 'https://api.anthropic.com', 'http://127.0.0.1:1234/v1'])
+  ('leaves unrelated or custom endpoint %s unchanged', upstream => {
+    expect(buildRouteDecision({ upstream, authStrategy: 'api-key-header' }, null, 'codex', 'fixture-key')?.headerOverride)
+      .toEqual({ authorization: 'Bearer fixture-key' });
+  });
+});
 
 /**
  * no-break 锁定:catalog 描述符经 buildRouteDecision 出来的路由,必须与退役前 decideXxxRoute
@@ -234,6 +286,22 @@ describe('Pi per-model protocol routing', () => {
 });
 
 describe('implicit local bridge resume routing', () => {
+  // PR #9998 review, unit: catalog uniqueness is not the connected default.
+  // Two connected custom sources sharing one model used to be mistaken for OpenAI.
+  it('uses the same connected default for account selection and an implicit Codex bridge', async () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: id, auth: { method: 'apiKey' }, runtimes: { codex: {
+        baseUrl: `https://${id}.example.test/v1`, wireProtocol: 'openai-chat',
+        models: [{ id: 'shared-custom-model', name: 'Shared Custom Model' }],
+      } },
+    })));
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'account-a': true, 'account-b': true }, {}));
+    try {
+      expect(inferProviderIdForModel('shared-custom-model', 'codex')).toBeNull();
+      await expect(resolveConnectedDefaultProviderIdForModel('shared-custom-model', 'codex')).resolves.toBe('account-a');
+      expect((await resolveImplicitLocalBridgeRoute('shared-custom-model', 'codex'))?.providerId).toBe('account-a');
+    } finally { setCustomProviders([]); }
+  });
   it('never resolves a Codex session to the Claude subscription, even for a retired Claude model', async () => {
     setAnthropicDiscoveredModels([
       {
@@ -348,6 +416,23 @@ describe('pi: provider-aware Anthropic wire routing', () => {
       headerOverride: { 'x-api-key': KEY, authorization: `Bearer ${KEY}` },
     });
   });
+
+  it.each(['anthropic-messages', 'openai-chat', 'openai-responses'] as const)(
+    'removes the Pi placeholder API key when injecting generic OAuth over %s',
+    (wireProtocol) => {
+      const decision = buildRouteDecision({
+        upstream: 'https://api.kimi.com/coding',
+        authStrategy: 'oauth-token',
+        wireProtocol,
+        headerDelete: ['x-test-private'],
+      }, null, 'pi', null, 'test-kimi-oauth-token');
+      expect(decision).toMatchObject({
+        upstreamOverride: 'https://api.kimi.com/coding',
+        headerOverride: { authorization: 'Bearer test-kimi-oauth-token' },
+        headerDelete: ['x-test-private', 'x-api-key'],
+      });
+    },
+  );
 
   it('Pi 会话选 Claude 订阅 → 无路由(不注入 host OAuth,调用方本地拒绝)', async () => {
     setSessionProvider('s-pi', 'anthropic');
@@ -935,7 +1020,9 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
 
     expect(isUserProviderSession('s-user')).toBe(true);
     expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toEqual({
-      headerOverride: { authorization: 'Bearer sk-or-123' },
+      headerOverride: { authorization: 'Bearer sk-or-123',
+        'HTTP-Referer': 'https://cindy.app', 'X-OpenRouter-Title': 'Cindy',
+      },
       upstreamOverride: 'https://openrouter.ai/api/v1',
       headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
     });
@@ -1440,6 +1527,46 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
     expect(newDecision?.routing).not.toHaveProperty('headerOverride');
   });
+
+  // Unit regression: Codex API-key requests include originator, which BYOK gateways use
+  // to admit Cindy, but resumed threads can carry another client's originator.
+  // A generated BYOK/personal route is the minimal input; buildRouteDecision must
+  // force Cindy's identity only for BYOK forwarding while still stripping account metadata.
+  it.each(['organization', 'personal'] as const)(
+    'forces Cindy Codex originator only for BYOK: %s',
+    (source) => {
+      const providerId = 'originator-test';
+      const endpoint = 'https://gateway.example.invalid/v1';
+      const provider = source === 'organization'
+        ? buildByokProvider({
+            provider: {
+              id: providerId, name: 'Enterprise', connectionRevision: 1,
+              models: [{
+                id: 'custom-model', agents: ['codex'], currency: 'CNY',
+                perAgent: { codex: { wireProtocol: 'openai-responses' } },
+              }],
+            },
+            credential: {
+              providerId, connectionRevision: 1, status: 'ready', endpoint,
+              apiKey: KEY,
+            },
+          })
+        : buildUserProvider({
+            id: providerId, name: 'Personal', auth: { method: 'apiKey' },
+            runtimes: { codex: {
+              baseUrl: endpoint, wireProtocol: 'openai-responses',
+              models: [{ id: 'custom-model', name: 'Custom Model' }],
+            } },
+          });
+      const routing = provider.routing.codex!;
+      const decision = buildRouteDecision(routing, null, 'codex', KEY)!;
+      expect(decision.headerOverride?.originator).toBe(source === 'organization' ? 'cindy' : undefined);
+      expect(decision.headerDelete).toEqual(expect.arrayContaining([
+        'chatgpt-account-id', 'openai-beta', 'session_id',
+      ]));
+      expect(decision.headerDelete?.includes('originator')).toBe(source === 'personal');
+    },
+  );
 
   it('does not inject stale personal headers into organization-managed routes', async () => {
     const providerId = 'byok-header-isolation';
@@ -1969,4 +2096,99 @@ describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => 
     setCustomProviderKeyReader(() => null);
     expect(resolveVisionBackendRoute('nokey-provider', 'nokey-model', null)).toBeNull();
   });
+});
+
+// Tier: integration. Persisted transport must survive catalog refresh + process
+// restart, while retirement blocks dispatch. No credentials enter the snapshot.
+describe('task interface snapshot', () => {
+  it('pins across restart and refuses retired profiles without falling back', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'cindy-interface-'));
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const config = { id: 'snapshot-kimi', name: 'Kimi', runtimes: { codex: {
+      catalogPresetId: 'moonshot-kimi-code', baseUrl: 'https://api.kimi.com/coding/v1',
+      wireProtocol: 'openai-chat' as const, models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+    } } };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const initial = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
+      const first = sessionModelInterface('task', config.id, 'codex', initial, registry)!;
+      expect(first.api).toBe('openai-responses');
+      expect(first.defaults).toMatchObject({ contextWindow: 262144, maxOutputTokens: 262144 });
+      registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const next = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
+      configureSessionModelInterfaceStorage(() => directory); // real disk restore
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      expect(sessionModelInterface('new-task', config.id, 'codex', next, registry)?.api).toBe('openai-completions');
+      // Explicit image edits override pinned metadata, never the saved interface.
+      // Reset removes the override rather than permanently rewriting the snapshot.
+      for (const value of [false, true]) {
+        setLocalCatalogOverrides({ ...EMPTY_MODEL_CATALOG_OVERRIDES, patches: {
+          'snapshot-kimi:k3.1-pro': { perAgent: { codex: { supportsImageInput: value } } },
+        } });
+        configureSessionModelInterfaceStorage(() => directory);
+        const edited = sessionModelInterface('task', config.id, 'codex', next, registry)!;
+        expect(edited.defaults.supportsImageInput).toBe(value);
+        expect(edited.route).toEqual(first.route);
+        expect(edited.api).toBe(first.api);
+      }
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      registry.interfaceProfiles!.find(p => p.id === first.profileId)!.retired = true;
+      expect(() => sessionModelInterface('task', config.id, 'codex', next, registry)).toThrow('MODEL_INTERFACE_RETIRED');
+    } finally {
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      configureSessionModelInterfaceStorage(() => null);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+// Tier: integration. Fixed production loader + resolver + proxy, real HTTP on
+// both sides. Only the served registry changes between calls; no client rebuild.
+it('dispatches a newly delivered model through all three existing HTTP interfaces', async () => {
+  let delivered: unknown;
+  const received: Array<{ url: string; body: Record<string, unknown>; auth?: string }> = [];
+  const upstream = createServer(async (req, res) => {
+    if (req.url?.startsWith('/api/model-catalog/catalog')) {
+      res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(delivered)); return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    received.push({ url: req.url!, body: JSON.parse(Buffer.concat(chunks).toString()), auth: req.headers.authorization });
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const port = (upstream.address() as { port: number }).port;
+  const base = `http://127.0.0.1:${port}`;
+  let decision: ReturnType<typeof buildRouteDecision>;
+  const proxy = await createAnthropicCompatProxy({ upstream: base, routingTransform: () => decision });
+  try {
+    for (const [index, api] of ['anthropic-messages', 'openai-responses', 'openai-completions'].entries()) {
+      const wire = api === 'openai-completions' ? 'openai-chat' : api;
+      const requestPath = ['/v1/messages', '/responses', '/chat/completions'][index];
+      const modelId = `future-model-${index}`;
+      const registry: ModelRegistry = { schemaVersion: 6, updatedAt: `2099-01-0${index + 1}T00:00:00.000Z`,
+        interfaceProfiles: ['anthropic-messages', 'openai-responses', 'openai-completions'].map((api, i) => ({ id: `fixture-api-${i}`, providerId: 'fixture', api, baseUrl: base, inputBaseUrls: [base], requestPath: ['/v1/messages', '/responses', '/chat/completions'][i] })),
+        models: [{ id: modelId, name: 'Future', routes: [{ providerId: 'fixture', modelId, agents: ['codex'],
+          defaults: { contextWindow: 32768, maxOutputTokens: 1024 }, interfaces: [{ profileId: `fixture-api-${index}`, wireModelId: `wire-${index}` }], preferredInterfaces: { codex: [`fixture-api-${index}`] } }] }],
+      };
+      delivered = { version: '2', providers: BUNDLED_CATALOG.providers, modelRegistry: registry };
+      const loaded = await loadCatalogWithSource({ baseUrl: base }, { fetchText: async url => (await fetch(url)).text() });
+      expect(loaded.source).toBe('remote');
+      const provider = buildUserProvider({ id: 'http-account', name: 'HTTP', runtimes: { codex: {
+        catalogPresetId: 'fixture', baseUrl: base, wireProtocol: 'openai-chat', models: [{ id: modelId, name: 'Future' }],
+      } } }, { modelRegistry: loaded.catalog.modelRegistry });
+      const routing = providerRoutingForModel(provider, 'codex', modelId)!;
+      expect(routing.wireProtocol).toBe(wire);
+      decision = buildRouteDecision(routing, null, 'codex', 'fixture-key');
+      decision = { ...decision!, pathOverride: routing.requestPath };
+      const response = await fetch(`${proxy.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: modelId, stream: false }) });
+      expect(await response.json()).toEqual({ ok: true });
+      expect(received.at(-1)).toMatchObject({ url: requestPath, body: { model: `wire-${index}` }, auth: 'Bearer fixture-key' });
+    }
+  } finally {
+    await proxy.dispose();
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
 });

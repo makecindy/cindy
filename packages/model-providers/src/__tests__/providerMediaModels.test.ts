@@ -9,6 +9,7 @@ import {
 import { deriveModelList } from '../modelList.js';
 import { buildRegistry, chatEligibleSourcesForModel } from '../registry.js';
 import { buildUserProvider } from '../user-provider.js';
+import { remoteInvocationModels, withEffectiveModelContextWindows } from '../remoteModels.js';
 import {
   isChatEligible,
   isAgentSelectableModel,
@@ -16,6 +17,7 @@ import {
 } from '../classification.js';
 import type { ModelRegistry } from '../modelAccessBean.js';
 import type { Provider } from '../types.js';
+import type { ProviderView } from '../registry.js';
 
 const modes = [
   'image_generation',
@@ -35,6 +37,63 @@ const shell: Provider = {
   routing: {},
   models: {},
 };
+
+// Unit regression for PR #6592 / provider-sharing.md §12: the remote catalog must
+// omit denied media, which existing metadata projection tests do not exercise.
+// Minimal input: one allowed and one denied media model in a restricted ProviderView.
+describe('remote media authorization projection', () => {
+  // #9501 unit: old directories and malformed optional budgets must retain their
+  // original window. Existing authorization cases had no source-host override.
+  it.each([undefined, 0, -1, NaN, Infinity, '1000000', 1_000_000])('handles optional source budget %s without changing defaults or grants', (limit) => {
+    const model = { id: 'allowed', name: 'Model', contextWindow: 200_000, contextWindowOverride: limit as number,
+      efforts: [], defaultEffort: null };
+    const original: ProviderView = { ...shell, connected: true, remoteModelIds: ['allowed'],
+      models: { 'claude-code': [model, { ...model, id: 'denied' }] } };
+    const projected = remoteInvocationModels(original);
+    expect(projected.models['claude-code']).toEqual([{ ...model, contextWindow: limit === 1_000_000 ? 1_000_000 : 200_000 }]);
+    expect(model.contextWindow).toBe(200_000);
+    expect(original.models['claude-code']).toHaveLength(2);
+    // A controlled computer's picker uses the same budget projection but keeps
+    // its full catalog, including models that cannot be invoked from elsewhere.
+    const controlled = withEffectiveModelContextWindows(original);
+    expect(controlled.models['claude-code']?.map((row) => [row.id, row.contextWindow])).toEqual([
+      ['allowed', limit === 1_000_000 ? 1_000_000 : 200_000],
+      ['denied', limit === 1_000_000 ? 1_000_000 : 200_000],
+    ]);
+  });
+  const fields = ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const;
+  const defaultsFields = ['imageDefaults', 'videoDefaults', 'embeddingDefaults'] as const;
+  const media = [{ id: 'allowed', name: 'Allowed' }, { id: 'denied', name: 'Denied' }];
+  const provider: ProviderView = {
+    ...shell,
+    connected: true,
+    imageModels: media, videoModels: media, audioModels: media, embeddingModels: media,
+  };
+
+  it.each(['allowed', 'denied'])('filters media and defaults when standard is %s', (standard) => {
+    const defaults = { standard, draft: 'allowed', best: 'denied' };
+    const original = {
+      ...provider, remoteModelIds: ['allowed'],
+      imageDefaults: defaults, videoDefaults: defaults, embeddingDefaults: defaults,
+    };
+    const result = remoteInvocationModels(original);
+    for (const field of fields) {
+      expect(result[field]).toEqual([media[0]]);
+      expect(original[field]).toEqual(media);
+    }
+    for (const field of defaultsFields) {
+      expect(result[field]).toEqual(standard === 'allowed' ? { standard, draft: 'allowed' } : undefined);
+      expect(original[field]).toEqual(defaults);
+    }
+    expect(remoteInvocationModels(provider)).toBe(provider);
+  });
+
+  it.each([{ scope: [] }, { scope: ['allowed', null] }])('hides all media for scope $scope', ({ scope }) => {
+    const result = remoteInvocationModels({ ...provider, remoteModelIds: scope as string[] });
+    for (const field of fields) expect(result[field]).toEqual([]);
+  });
+});
+
 function registry(mode: string): ModelRegistry {
   return {
     schemaVersion: 4,

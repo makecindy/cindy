@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Maker } from '@cindy/maker-core';
 import { scanAllSkills } from '../../skillhub/scanner';
+import { FORGE_GUIDE } from '../../cindy-brain/forgeGuide';
 
 vi.mock('../../skillhub/customizationScanHost', async () => {
   const { buildSkillList } = await import('../../skillhub/skillListProjection');
@@ -18,15 +19,20 @@ import {
   builtInSkillPluginRoot,
   migrateBuiltInGlobalSkillLinks,
   activeCindyBuiltInAgentSkills,
-  BUILT_IN_SKILLS_BUNDLE_VERSION,
+  BUILT_IN_SKILLS_BUNDLE_VERSION_BASE,
+  BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY,
   builtInSkillDescriptors,
+  builtInSkillDescriptorsAsync,
   markCindyBuiltInAgentSkills,
   prepareBuiltInSkills,
+  readBuiltInSkillsBundleVersion,
   refreshBuiltInClaudeSkillLinks,
   resolveBundledSystemSkillsRoot,
 } from '../built-in-skills';
 
 const roots: string[] = [];
+/** The fixture bundle ships exactly one version record. */
+const BUILT_IN_SKILLS_BUNDLE_VERSION = BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + 1;
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-built-in-skills-'));
@@ -34,17 +40,32 @@ function fixture() {
   const bundledRoot = path.join(root, 'resources', 'system-skills');
   const source = path.join(bundledRoot, 'cindy-skill-creator');
   const learnSource = path.join(bundledRoot, 'learn');
+  const pluginSource = path.join(bundledRoot, 'cindy-plugin-creator');
+  const themeSource = path.join(bundledRoot, 'cindy-theme-creator');
   const userDataDir = path.join(root, 'user-data');
   const appDataDir = path.join(root, 'app-data');
   const homeDir = path.join(root, 'home');
   fs.mkdirSync(homeDir, { recursive: true });
   fs.mkdirSync(path.join(source, 'scripts'), { recursive: true });
   fs.mkdirSync(learnSource, { recursive: true });
+  fs.mkdirSync(pluginSource, { recursive: true });
+  fs.mkdirSync(themeSource, { recursive: true });
+  fs.writeFileSync(
+    path.join(themeSource, 'SKILL.md'),
+    '---\nname: cindy-theme-creator\ndescription: Create Cindy themes\n---\n\n# Theme Creator\n',
+  );
+  fs.writeFileSync(
+    path.join(pluginSource, 'SKILL.md'),
+    '---\nname: cindy-plugin-creator\ndescription: Create Cindy plugins\n---\n\n# Plugin Creator\n',
+  );
   fs.writeFileSync(
     path.join(source, 'SKILL.md'),
     '---\nname: cindy-skill-creator\ndescription: Create Skills\n---\n\n# Creator\n',
   );
   fs.writeFileSync(path.join(source, 'scripts', 'validate.py'), 'print("ok")\n');
+  const versionRecords = path.join(bundledRoot, BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY);
+  fs.mkdirSync(versionRecords, { recursive: true });
+  fs.writeFileSync(path.join(versionRecords, 'fixture.md'), 'fixture bundle\n');
   fs.writeFileSync(
     path.join(learnSource, 'SKILL.md'),
     '---\nname: learn\ndescription: Start Cindy Learn\n---\n\n# Learn\n',
@@ -90,6 +111,159 @@ afterEach(() => {
 });
 
 describe('built-in Skills', () => {
+  // Unit: the theme entry needs a real managed Skill, including its verification
+  // resources. Listing metadata alone cannot prove that a user can load it.
+  it('ships the theme creator and its verification resources through the managed bundle', async () => {
+    const input = fixture();
+    const result = await prepareBuiltInSkills({
+      ...input,
+      bundledRoot: path.resolve(__dirname, '../../../../resources/system-skills'),
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.projectionSafe).toBe(true);
+    const theme = result.descriptors.find((item) => item.name === 'cindy-theme-creator');
+    expect(theme).toBeDefined();
+    expect(fs.realpathSync(theme!.nativeClaudePath)).toBe(fs.realpathSync(theme!.absolutePath));
+    for (const resource of ['SKILL.md', 'references/capabilities.md', 'references/verification.md', 'scripts/validate_theme.py']) {
+      expect(fs.statSync(path.join(theme!.absolutePath, resource)).isFile()).toBe(true);
+    }
+  });
+
+  // Unit: older releases shipped three Skills. A missing new resource must not
+  // make those authenticated, already-active Skills disappear during upgrade.
+  it.each([83, 97, 98, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112].flatMap(bundleVersion => ['success', 'missing-source'].map(mode => ({ bundleVersion, mode }))))('upgrades the pre-theme bundle $bundleVersion without losing existing Skills ($mode)', async ({ bundleVersion, mode }) => {
+    const input = fixture();
+    const previous = await prepareBuiltInSkills({ ...input, bundleVersion });
+    const theme = previous.descriptors.find((item) => item.name === 'cindy-theme-creator')!;
+    const manifestPath = path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    delete manifest.fingerprints[theme.name];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.rmSync(theme.absolutePath, { recursive: true });
+    fs.unlinkSync(theme.nativeClaudePath);
+    const existing = previous.descriptors.filter((item) => item.name !== theme.name);
+    expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toEqual(existing);
+    if (mode === 'missing-source') fs.rmSync(path.join(input.bundledRoot, theme.name), { recursive: true });
+
+    const shipped = await readBuiltInSkillsBundleVersion(path.resolve(__dirname, '../../../../resources/system-skills'));
+    const updated = await prepareBuiltInSkills({ ...input, bundleVersion: shipped });
+    expect(updated.projectionSafe).toBe(true);
+    expect(updated.descriptors).toEqual(mode === 'success' ? previous.descriptors : existing);
+    if (mode === 'success') expect(updated.warnings).toEqual([]);
+    else expect(updated.warnings.length).toBeGreaterThan(0);
+  });
+
+  it('stays above every bundle version pre-release builds of the /pr removal wrote', async () => {
+    // Builds that still shipped the built-in /pr reached 78. A lower number would make
+    // prepareBuiltInSkills keep their newer bundle (and its pr/ folder) instead of replacing it.
+    const shipped = await readBuiltInSkillsBundleVersion(
+      path.resolve(__dirname, '../../../../resources/system-skills'),
+    );
+    expect(shipped).toBeGreaterThan(78);
+    // The hand-incremented number ended at the base; every shipped bundle since has a record.
+    expect(shipped).toBeGreaterThan(BUILT_IN_SKILLS_BUNDLE_VERSION_BASE);
+  });
+
+  // Unit: the version is no longer a constant two pull requests both edit; it is counted from
+  // record files in the bundle. Rule: docs/dev-rules/credentials-and-local-storage.md
+  // 「Cindy 托管的预装技能」. Minimal failing input: a bundle without its records directory
+  // must be refused rather than read as a low version, which would keep stale installed bytes.
+  it('counts one bundle version per record file and refuses a bundle without records', async () => {
+    const input = fixture();
+    const records = path.join(input.bundledRoot, BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY);
+    expect(await readBuiltInSkillsBundleVersion(input.bundledRoot)).toBe(BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + 1);
+
+    fs.writeFileSync(path.join(records, 'second.md'), 'second change\n');
+    fs.writeFileSync(path.join(records, 'notes.txt'), 'not a record\n');
+    fs.mkdirSync(path.join(records, 'nested.md'));
+    expect(await readBuiltInSkillsBundleVersion(input.bundledRoot)).toBe(BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + 2);
+    const prepared = await prepareAndProjectBuiltInSkills(input);
+    expect(prepared.warnings).toEqual([]);
+    const manifest = JSON.parse(fs.readFileSync(
+      path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json'),
+      'utf8',
+    ));
+    expect(manifest.bundleVersion).toBe(BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + 2);
+
+    fs.rmSync(records, { recursive: true });
+    await expect(prepareAndProjectBuiltInSkills(input)).rejects.toThrow(/version records are missing/);
+    fs.mkdirSync(records);
+    await expect(readBuiltInSkillsBundleVersion(input.bundledRoot)).rejects.toThrow(/version records are empty/);
+  });
+
+  // Unit: the new authoring Skill must survive real bundle materialization with
+  // every referenced chapter readable. Synthetic Skill fixtures did not cover
+  // shipping missing resources or diverging legacy-tool documentation.
+  it('ships the plugin creator and all its references through the managed bundle', async () => {
+    const input = fixture();
+    const result = await prepareBuiltInSkills({
+      ...input,
+      bundledRoot: path.resolve(__dirname, '../../../../resources/system-skills'),
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.projectionSafe).toBe(true);
+    const plugin = result.descriptors.find((item) => item.name === 'cindy-plugin-creator')!;
+    expect(fs.realpathSync(plugin.nativeClaudePath)).toBe(fs.realpathSync(plugin.absolutePath));
+    const entry = fs.readFileSync(path.join(plugin.absolutePath, 'SKILL.md'), 'utf8');
+    const referencePaths = [...entry.matchAll(/\]\((references\/[^)]+\.md)\)/g)].map((match) => match[1]!);
+    expect(referencePaths.length).toBeGreaterThan(0);
+    for (const relative of referencePaths) {
+      expect(fs.statSync(path.join(plugin.absolutePath, relative)).isFile()).toBe(true);
+    }
+    const references = path.join(plugin.absolutePath, 'references');
+    const chapters = fs.readdirSync(references).filter(file => file.endsWith('.md')).sort();
+    // The legacy tool and native Skill loaders consume the same shipped bytes,
+    // even though capability filenames no longer encode the legacy chapter order.
+    let remainingGuide = FORGE_GUIDE;
+    for (const file of chapters) {
+      const chapter = fs.readFileSync(path.join(references, file), 'utf8');
+      expect(remainingGuide).toContain(chapter);
+      remainingGuide = remainingGuide.replace(chapter, '');
+    }
+    // Shipped examples are executable assets, not guide chapters. They must also
+    // survive the production Skill copy (a link to a missing example is unusable).
+    for (const example of ['static/ghost.json', 'static/main.js', 'static/ui/page.html', 'loader/main.js', 'loader/ui/page.html', 'files/main.js', 'REFERENCE.md', 'README.md']) {
+      expect(fs.statSync(path.join(references, 'examples/interactive-pages', example)).isFile()).toBe(true);
+    }
+    expect(remainingGuide.trim()).toBe('');
+    expect(new Set(referencePaths.map((file) => path.basename(file)))).toEqual(new Set(chapters));
+  });
+
+  // Unit: existing installations have only the two previous built-ins. Updating
+  // must add the creator automatically and retain the other Skills' stable paths.
+  it.each(['success', 'missing-source'] as const)('upgrades a two-Skill bundle without losing existing Skills (%s)', async (mode) => {
+    const input = fixture();
+    const previous = await prepareBuiltInSkills({ ...input, bundleVersion: 12 });
+    const plugin = previous.descriptors.find((item) => item.name === 'cindy-plugin-creator')!;
+    const root = path.join(input.appDataDir, 'Cindy', 'shared-system-skills');
+    const manifestPath = path.join(root, '.cindy-system-skills.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    // Model the previous shipped bundle, which did not contain this Skill.
+    delete manifest.fingerprints['cindy-plugin-creator'];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.rmSync(plugin.absolutePath, { recursive: true });
+    fs.unlinkSync(plugin.nativeClaudePath);
+    const existingDescriptors = previous.descriptors.filter((item) => item.name !== plugin.name);
+    expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toEqual(existingDescriptors);
+    if (mode === 'missing-source') {
+      fs.rmSync(path.join(input.bundledRoot, plugin.name), { recursive: true });
+    }
+    const updated = await prepareBuiltInSkills(input);
+    expect(updated.projectionSafe).toBe(true);
+    if (mode === 'success') {
+      expect(updated.warnings).toEqual([]);
+      expect(updated.descriptors).toEqual(previous.descriptors);
+      expect(fs.readFileSync(path.join(plugin.nativeClaudePath, 'SKILL.md'), 'utf8')).toContain('# Plugin Creator');
+    } else {
+      expect(updated.warnings.join('\n')).toContain('bundled Skill is missing SKILL.md');
+      expect(updated.descriptors).toEqual(existingDescriptors);
+      expect(fs.existsSync(plugin.nativeClaudePath)).toBe(false);
+    }
+    for (const descriptor of updated.descriptors) {
+      expect(fs.realpathSync(descriptor.nativeClaudePath)).toBe(fs.realpathSync(descriptor.absolutePath));
+    }
+  });
+
   it('publishes a fresh bundle without replacing an entry created in the same preparation', async () => {
     const replaceDirectoryEntryAtomically = vi.fn(async () => {
       throw new Error('fresh preparation must not need an existing-entry replacement');
@@ -151,7 +325,8 @@ describe('built-in Skills', () => {
     expect(fs.readFileSync(path.join(repairedDescriptor.absolutePath, 'SKILL.md'), 'utf8')).toContain(
       '# Creator',
     );
-    expect(fs.existsSync(path.join(firstImmutablePath, 'SKILL.md'))).toBe(true);
+    // Repair publishes a new official copy; the user's modified bytes remain intact.
+    expect(fs.readFileSync(path.join(firstImmutablePath, 'SKILL.md'), 'utf8')).toBe('# Tampered\n');
 
     fs.appendFileSync(path.join(input.source, 'SKILL.md'), '\nUpdated\n');
     const updated = await prepareAndProjectBuiltInSkills({
@@ -497,7 +672,7 @@ describe('built-in Skills', () => {
     );
   });
 
-  it.each(['directory', 'outside-link', 'wrong-bundle', 'modified-content', 'missing-manifest', 'linked-bundle'])(
+  it.each(['directory', 'outside-link', 'wrong-bundle', 'modified-content', 'missing-manifest', 'linked-bundle', 'missing-creator-fingerprint'])(
     'withholds official identity from %s even after successful preparation',
     async (damage) => {
       const input = fixture();
@@ -507,11 +682,18 @@ describe('built-in Skills', () => {
       const target = fs.realpathSync(active);
       const skillPath = path.join(active, 'cindy-skill-creator');
       expect(prepared.projectionSafe).toBe(true);
-      expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toHaveLength(2);
+      expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toHaveLength(4);
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(4);
       if (damage === 'modified-content') {
         fs.appendFileSync(path.join(skillPath, 'SKILL.md'), '\nChanged');
       } else if (damage === 'missing-manifest') {
         fs.unlinkSync(path.join(root, '.cindy-system-skills.json'));
+      } else if (damage === 'missing-creator-fingerprint') {
+        const manifestPath = path.join(root, '.cindy-system-skills.json');
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        delete manifest.fingerprints['cindy-plugin-creator'];
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+        fs.rmSync(path.join(active, 'cindy-plugin-creator'), { recursive: true });
       } else if (damage === 'linked-bundle') {
         const outside = path.join(input.homeDir, 'substituted-bundle');
         fs.renameSync(target, outside);
@@ -528,6 +710,7 @@ describe('built-in Skills', () => {
       }
       const descriptors = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
       expect(descriptors).toEqual([]);
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual([]);
       const [command] = markCindyBuiltInAgentSkills([{
         kind: 'agent-skill', name: 'cindy-skill-creator', source: 'skill',
         path: path.join(skillPath, 'SKILL.md'), scope: 'user', enabled: true, builtIn: true,
@@ -540,6 +723,63 @@ describe('built-in Skills', () => {
       const scanned = await scanAllSkills({}, maker, [], descriptors);
       expect(scanned.skills).toHaveLength(1);
       expect(scanned.skills[0]?.builtIn).not.toBe(true);
+    },
+  );
+
+  // Unit: yielding identity verification must reject a publication that changes
+  // while bytes are being read; synchronous tampering coverage has no such race.
+  it('withholds official identity when the manifest changes during async verification', async () => {
+    const input = fixture();
+    await prepareBuiltInSkills(input);
+    const manifestPath = path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const pending = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, bundleVersion: manifest.bundleVersion + 1 }));
+    await expect(pending).resolves.toEqual([]);
+    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(4);
+  });
+
+  // Unit, PR #8493: changes to an already-hashed Skill must be rejected even
+  // when its manifest and active target stay unchanged. Mutate during a later
+  // Skill read, without sleeps; earlier corruption tests only changed pre-read data.
+  // A linked app-data parent exercises the logical/physical path difference seen
+  // under macOS /var folders on every platform (engineering conventions section 3.3).
+  it.each(['rewrite', 'add-file', 'replace-directory'] as const)(
+    'rejects %s in an earlier Skill while a later Skill is being hashed', async damage => {
+      const input = fixture();
+      fs.mkdirSync(input.appDataDir, { recursive: true });
+      const linkedAppData = path.join(path.dirname(input.appDataDir), 'linked-app-data');
+      fs.symlinkSync(input.appDataDir, linkedAppData, process.platform === 'win32' ? 'junction' : 'dir');
+      input.appDataDir = linkedAppData;
+      await prepareBuiltInSkills(input);
+      const descriptors = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
+      const first = fs.realpathSync.native(descriptors[0]!.absolutePath);
+      const later = fs.realpathSync.native(descriptors[1]!.absolutePath);
+      const readFile = fs.promises.readFile.bind(fs.promises);
+      let changed = false;
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (...args) => {
+        const result = await readFile(...args);
+        if (!changed && fs.realpathSync.native(String(args[0])).startsWith(later + path.sep)) {
+          changed = true;
+          if (damage === 'rewrite') {
+            const file = path.join(first, 'SKILL.md');
+            const stat = fs.statSync(file);
+            const bytes = fs.readFileSync(file);
+            bytes[0] = bytes[0]! ^ 1;
+            fs.writeFileSync(file, bytes);
+            fs.utimesSync(file, stat.atime, stat.mtime);
+          } else if (damage === 'add-file') {
+            fs.writeFileSync(path.join(first, 'added.txt'), 'changed');
+          } else {
+            const backup = first + '-previous';
+            fs.renameSync(first, backup);
+            fs.cpSync(backup, first, { recursive: true });
+          }
+        }
+        return result;
+      });
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual([]);
+      expect(changed).toBe(true);
     },
   );
 

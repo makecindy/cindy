@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
-import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
-import { createPiProviderFetch, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
+import { SseTranslator } from '@cindy/anthropic-responses-bridge';
+import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
+import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
   ...await importOriginal<typeof import('@earendil-works/pi-ai/api/openai-completions')>(),
@@ -13,6 +14,256 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  // #10269, unit: the ID-only model on a Messages connection must carry its
+  // Chat identity through the installed serializer, including a tool result.
+  // Descriptor-only tests cannot catch SDK compatibility/header regressions.
+  it.each(['claude-code', 'codex', 'pi'] as const)('round-trips Copilot Carbon text and tools for %s', async agent => {
+    const upstream = 'https://api.individual.githubcopilot.com';
+    const provider = buildUserProvider({ id: 'copilot-carbon', name: 'Copilot', runtimes: {
+      [agent]: { baseUrl: upstream, wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot',
+        models: [{ id: 'gemini-4-carbon', name: 'Carbon' }] },
+    } }, { presets: BUNDLED_CATALOG.presets });
+    const model = provider.models[agent]![0];
+    const row = invocationModelRecord(model, upstream)!;
+    const frames = [
+      { choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'carbon-call',
+        type: 'function', function: { name: 'lookup', arguments: '{"key":"fixture"}' } }] } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+    ].map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('') + 'data: [DONE]\n\n';
+    const requests: Record<string, any>[] = [];
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-copilot-token',
+      fetchImpl: async (url, init) => {
+        expect(String(url)).toBe(`${upstream}/chat/completions`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get('authorization')).toBe('Bearer fixture-copilot-token');
+        expect(headers.get('copilot-integration-id')).toBe('vscode-chat');
+        expect(headers.get('editor-version')).toBe(row.execution.pi.headers!['Editor-Version']);
+        expect(headers.get('editor-plugin-version')).toBe(row.execution.pi.headers!['Editor-Plugin-Version']);
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        expect(body).toMatchObject({ model: 'gemini-4-carbon', stream: true });
+        expect(body).not.toHaveProperty('store');
+        expect(body).not.toHaveProperty('reasoning_effort');
+        expect(body.messages.some((message: { role: string }) => message.role === 'developer')).toBe(false);
+        return new Response(requests.length === 1 ? frames : reply, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    const input = [{ role: 'user', content: 'Look up fixture' }];
+    const options = { model: model.id, instructions: 'Use lookup', stream: true, store: true,
+      reasoning: { effort: 'high' }, tools: [{ type: 'function', name: 'lookup', strict: true,
+        parameters: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } }] };
+    const first = await (await send('https://unused.invalid', { body: JSON.stringify({ ...options, input }) })).text();
+    const events = first.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+    const call = events.find(event => event.type === 'response.completed')?.response.output
+      .find((item: { type: string }) => item.type === 'function_call');
+    expect(call).toMatchObject({ type: 'function_call', call_id: 'carbon-call', name: 'lookup', arguments: '{"key":"fixture"}' });
+    // Pi tools are non-strict; supportsStrictMode permits the SDK's explicit
+    // false rather than forcing strict validation on arbitrary agent tools.
+    expect(requests[0].tools[0].function.strict).toBe(false);
+    const second = await (await send('https://unused.invalid', { body: JSON.stringify({ ...options,
+      input: [...input, call, { type: 'function_call_output', call_id: call.call_id, output: 'fixture result' }],
+    }) })).text();
+    expect(requests).toHaveLength(2);
+    expect(requests[1].messages).toContainEqual(expect.objectContaining({ role: 'tool', tool_call_id: 'carbon-call', content: 'fixture result' }));
+    expect(second).toContain('response.completed');
+    expect(second).toContain('Hello');
+    expect(second).not.toContain('response.failed');
+  });
+
+  // Native bridge regression: create_worker is a prefix of create_workers, so
+  // ChatSseTranslator defers its item until finish(). A reasoning-history item
+  // must not reuse that reserved output_index or Anthropic loses the tool call.
+  // Unit: real native adapter -> Responses SSE -> Anthropic SSE, fake fetch only;
+  // previous tests checked response.completed without consuming the second bridge.
+  it.each([
+    [true, false], [true, true], [false, false],
+  ])('preserves deferred native tool calls (prefix=%s, text=%s)', async (prefix, text) => {
+    const name = 'mcp__cindy_orca__create_worker';
+    const row = PROVIDER_MODEL_CATALOG.providers['opencode-go'].find(model => model.id === 'deepseek-v4.1-flash')!;
+    const upstream = [
+      { choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'Plan' } }] },
+      ...(text ? [{ choices: [{ index: 0, delta: { content: 'Starting.' } }] }] : []),
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'fixture-call', type: 'function',
+        function: { name, arguments: '{"label":"fixture"}' } }] } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 5 } },
+    ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
+    const send = createPiProviderFetch({ row, providerId: 'opencode-go', apiKey: 'fixture-key',
+      fetchImpl: async () => new Response(upstream, { headers: { 'content-type': 'text/event-stream' } }) });
+    const response = await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, stream: true,
+      input: 'fixture', tools: [name, ...(prefix ? [`${name}s`] : [])].map(tool => ({ type: 'function', name: tool,
+        parameters: { type: 'object', properties: { label: { type: 'string' } } } })),
+    }) });
+    const events = (await response.text()).split('\n').filter(line => line.startsWith('data: '))
+      .map(line => JSON.parse(line.slice(6)));
+    const translator = new SseTranslator(row.id);
+    const anthropic = events.flatMap(event => translator.push(event));
+    anthropic.push(...translator.finish());
+    const calls = anthropic.filter(event => event.event === 'content_block_start'
+      && (event.data.content_block as { type?: string })?.type === 'tool_use');
+    expect(calls.map(event => event.data.content_block)).toEqual([
+      expect.objectContaining({ type: 'tool_use', name, id: 'fixture-call' }),
+    ]);
+    const argumentsJson = anthropic.filter(event => event.event === 'content_block_delta'
+      && event.data.index === calls[0].data.index)
+      .map(event => (event.data.delta as { partial_json?: string })?.partial_json ?? '').join('');
+    expect(JSON.parse(argumentsJson)).toEqual({ label: 'fixture' });
+    expect(anthropic.find(event => event.event === 'message_delta')?.data.delta)
+      .toMatchObject({ stop_reason: 'tool_use' });
+    const indices = events.filter(event => event.type === 'response.output_item.added').map(event => event.output_index);
+    expect(new Set(indices).size).toBe(indices.length);
+  });
+
+  // #9630 review, unit: a retained preset ID must not reintroduce the same
+  // Messages extension through Claude/Codex's native bridge descriptor.
+  it('keeps message-scoped effort out of an edited Anthropic preset bridge', () => {
+    const row = invocationModelRecord({ id: 'claude-opus-5', name: 'Opus', group: 'custom',
+      contextWindow: 200_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium',
+      catalogPresetId: 'anthropic-api', api: 'anthropic-messages' }, 'https://relay.example')!;
+    expect(row.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+    expect(row.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+  });
+
+  // #9101, unit: preset import + installed Chat SDK serialization protects all
+  // harnesses from assuming Messages/Responses based on their names. Existing
+  // cases use other suppliers/protocols; the minimum input is the Hinoki seed.
+  it.each(['claude-code', 'codex', 'pi'] as const)
+  ('serializes the Hinoki %s preset through Bearer Chat without changing the wire model', async agent => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
+    const runtime = preset.runtimes[agent]!;
+    const provider = buildUserProvider({ id: 'hinoki-test', name: 'Hinoki', runtimes: {
+      [agent]: { ...runtime, catalogPresetId: preset.id },
+    } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const model = provider.models[agent]![0];
+    const api = modelProtocolComparison(provider, { [agent]: model }).forAgent(agent)!.outbound!;
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl, api)!;
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+      expect(String(url)).toBe('https://inference.hinoki.security/v1/chat/completions');
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'hinoki-offensive', stream: true });
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const output = await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: model.id, input: 'Hello', max_output_tokens: 128, stream: true,
+    }) })).text();
+    expect(output).toContain('response.completed');
+    expect(output).not.toContain('response.failed');
+  });
+  it.each(['deepseek-v4-flash', 'kimi-k3.1-pro', 'glm-5.3'])
+  ('sends the OpenHubs %s template through the installed Pi Chat adapter', async id => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!;
+    const runtime = preset.runtimes.pi!;
+    const provider = buildUserProvider({ id: 'openhubs-test', name: 'OpenHubs', runtimes: { pi: {
+      ...runtime, catalogPresetId: preset.id, models: runtime.models.filter(m => m.id === id),
+    } } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const model = provider.models.pi![0];
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl)!;
+    const requests: string[] = [];
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+      requests.push(String(url));
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: id, stream: true });
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const output = await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: id, input: 'Hello', max_output_tokens: 128, stream: true,
+    }) })).text();
+    expect(requests).toEqual(['https://openhubs.zhidemai.com/v1/chat/completions']);
+    expect(output).toContain('response.completed');
+    expect(output).not.toContain('response.failed');
+  });
+  // Unit protocol regression: official Pi SDK defaults must not override Cindy
+  // or an explicit legacy title at the final fetch boundary.
+  it.each([undefined, { 'x-title': 'Custom app', 'http-referer': 'https://custom.example' }])
+  ('retains application attribution through native serialization (%j)', async headers => {
+    const upstream = 'https://openrouter.ai/api/v1';
+    const row = { id: 'fixture-model', name: 'Fixture', upstream,
+      execution: { pi: { api: 'openai-completions' as const,
+        headers: { 'HTTP-Referer': 'https://pi.example', 'X-Title': 'pi' } } } };
+    let sent = new Headers();
+    const send = createPiProviderFetch({ row, providerId: 'router', apiKey: 'fixture-key', headers,
+      fetchImpl: async (_url, init) => {
+        sent = new Headers(init?.headers);
+        return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    const output = await (await send('https://unused.invalid', {
+      body: JSON.stringify({ model: row.id, input: 'Hello', stream: true }),
+    })).text();
+    expect(output).toContain('response.completed');
+    expect(sent.get('http-referer')).toBe(headers?.['http-referer'] ?? 'https://cindy.app');
+    expect(sent.get('x-openrouter-title') ?? sent.get('x-title')).toBe(headers?.['x-title'] ?? 'Cindy');
+    expect(sent.get('x-title')).not.toBe('pi');
+    expect(sent.get('authorization')).toBe('Bearer fixture-key');
+  });
+  // PR server#1096 P1: route-label checks missed the SDK appending /v1/messages
+  // to a versioned base. Exercise the production default and official serializer.
+  it.each(['agnes', 'openhubs'].flatMap(id => (['claude-code', 'pi', 'codex'] as const).map(agent => [id, agent] as const)))
+  ('sends %s %s defaults to a single version prefix', async (id, agent) => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
+    const runtime = preset.runtimes[agent]!;
+    const provider = buildUserProvider({ id: 'agnes-request', name: 'Agnes', runtimes: {
+      [agent]: { ...runtime, catalogPresetId: id },
+    } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const model = provider.models[agent]![0];
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl)!;
+    let destination = '';
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url) => {
+      destination = String(url);
+      const events = [
+        { type: 'message_start', message: { id: 'msg-agnes', type: 'message', role: 'assistant', model: model.id, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 0 } },
+        { type: 'message_stop' },
+      ];
+      return new Response(agent === 'codex'
+        ? 'data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n'
+        : agent === 'pi' ? reply : events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+      { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const result = await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: model.id, input: 'Hello', max_output_tokens: 1024, stream: true,
+    }) })).text();
+    expect(destination.split('?')[0]).toBe(`https://${id === 'agnes' ? 'apihub.agnes-ai.com' : 'openhubs.zhidemai.com'}/v1/${agent === 'pi' ? 'chat/completions' : agent === 'codex' ? 'responses' : 'messages'}`);
+    expect(result).toContain('response.completed');
+    expect(result).not.toContain('response.failed');
+    expect(runtime.modelsUrl).toBe(`https://${id === 'agnes' ? 'apihub.agnes-ai.com' : 'openhubs.zhidemai.com'}/v1/models`);
+  });
+
+  // Tier 2: exercise official serializers, not just selected API labels. Responses
+  // input is converted once and must reach Kimi's matching endpoint and wire ID.
+  it.each(['anthropic-messages', 'openai-responses', 'openai-completions'] as const)(
+    'serializes Kimi V6 %s through the installed official adapter', async api => {
+      const provider = buildUserProvider({ id: 'kimi-v6', name: 'Kimi', runtimes: { codex: {
+        baseUrl: 'https://api.kimi.com/coding/v1', catalogPresetId: 'moonshot-kimi-code', wireProtocol: 'openai-chat',
+        models: [{ id: 'k3.1-pro', name: 'K3.1', interfaceId: `moonshot-kimi-code-${api}` }],
+      } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      const model = provider.models.codex![0];
+      const row = invocationModelRecord(model, model.route!.baseUrl)!;
+      let sent: Record<string, unknown> | undefined;
+      let destination = '';
+      const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+        destination = String(url);
+        sent = JSON.parse(String(init?.body));
+        const events = [
+          { type: 'message_start', message: { id: 'msg-fixture', type: 'message', role: 'assistant', model: 'k3.1-pro', content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+          { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 0 } },
+          { type: 'message_stop' },
+        ];
+        const body = api === 'openai-completions' ? reply : api === 'openai-responses'
+          ? 'data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n'
+          : events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      } });
+      const result = await (await send('https://unused.invalid', { body: JSON.stringify({
+        model: model.id, input: 'Hello', max_output_tokens: 1024, stream: true,
+      }) })).text();
+      expect(destination.split('?')[0]).toBe('https://api.kimi.com/coding' + (api === 'anthropic-messages' ? '/v1/messages' : api === 'openai-responses' ? '/v1/responses' : '/v1/chat/completions'));
+      expect(result).toContain('response.completed');
+      expect(result).not.toContain('response.failed');
+      expect(sent).toMatchObject({ model: 'k3.1-pro' });
+      expect(Array.isArray(sent?.[api === 'openai-responses' ? 'input' : 'messages'])).toBe(true);
+    },
+  );
+
   it.each([true, false, undefined])('sends discovered Sub2API effort and declared Fast (%s) through the native Chat adapter', async supportsFastMode => {
     const upstream = 'https://sub2api.example/custom/v1';
     const models = parseModelsListResponse({ data: [{ id: 'grok-4.7',
@@ -302,8 +553,8 @@ describe('imported Gemini native image capability', () => {
     pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: imported },
   } }, { presets: [preset] });
   it.each([undefined, true, false])('keeps imported Gemini image input consistent for supportsImageInput=%s', async supportsImageInput => {
-    expect(provider.models.pi![0].supportsImageInput).toBeUndefined();
-    expect(provider.models.pi![0].modalities).toBeUndefined();
+    expect(provider.models.pi![0].supportsImageInput).toBe(true);
+    expect(provider.models.pi![0].modalities?.input).toContain('image');
     // Compare the same imported model with no declaration and explicit on/off values.
     const model = { ...provider.models.pi![0], supportsImageInput };
     const row = invocationModelRecord(model, model.route?.baseUrl ?? provider.routing.pi!.upstream!)!;
@@ -496,6 +747,36 @@ it.each([undefined, 200, 302])('keeps iterator exceptions private after HTTP %s 
   }
 });
 
+describe('Codex 原生传输的确定性错误终态 (#9344)', () => {
+  const row = PROVIDER_MODEL_CATALOG.providers.together.find(
+    row => row.execution.pi.api === 'openai-completions',
+  )!;
+
+  it('把「协议特性不支持」落成终态 400,而不是冒泡成可重试的 502', async () => {
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const res = { once: vi.fn(), off: vi.fn(), writeHead, end, headersSent: false } as never;
+    const upstream = vi.fn(async () => new Response(reply, { headers: { 'content-type': 'text/event-stream' } }));
+    const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl: upstream });
+
+    // user 消息的 content 为 null:Chat Completions 桥接无法翻译,抛确定性错误。
+    await handlePiProviderRequest(send, {
+      model: row.id,
+      input: [{ type: 'message', role: 'user', content: null }],
+      stream: true,
+    } as never, res);
+
+    expect(writeHead).toHaveBeenCalledWith(400, expect.objectContaining({
+      'content-type': 'application/json; charset=utf-8',
+    }));
+    expect(JSON.parse(String(end.mock.calls[0][0]))).toMatchObject({
+      error: { type: 'invalid_request_error', code: 'unsupported_feature' },
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+
 describe('OpenCode Go session header on the native transport (#5325)', () => {
   const goUpstream = 'https://opencode.ai/zen/go/v1';
   function rowFor(providerId: string, baseUrl: string, catalogPresetId?: string) {
@@ -559,4 +840,23 @@ describe('OpenCode Go session header on the native transport (#5325)', () => {
     expect(seen[1]!.get('x-opencode-session')).toMatch(/^[0-9a-f-]{36}$/);
     expect(seen[2]!.get('x-opencode-session')).not.toBe(seen[1]!.get('x-opencode-session'));
   });
+});
+
+// The new protocol probe may opt into a larger reasoning budget; old callers must not change.
+it.each([undefined, 256])('keeps legacy probe options isolated from automatic probes: %s', async budget => {
+  const upstream = 'https://fixture.example/v1';
+  const provider = buildUserProvider({ id: 'probe-scope', name: 'Probe scope', runtimes: {
+    pi: { baseUrl: upstream, wireProtocol: 'openai-chat', models: [{ id: 'scope-model', name: 'Scope', reasoning: true, reasoningEfforts: ['low', 'high'] }] },
+  } });
+  const row = invocationModelRecord(provider.models.pi![0], upstream, 'openai-completions')!;
+  const stream = vi.spyOn(openaiCompletions, 'streamSimple');
+  try {
+    await probePiProvider({ row, providerId: provider.id, upstream, apiKey: 'fixture-key',
+      fetchImpl: async () => new Response(reply, { headers: { 'content-type': 'text/event-stream' } }),
+    }, new AbortController().signal, budget);
+    const options = stream.mock.calls.at(-1)![2];
+    expect(options?.maxTokens).toBe(budget ?? 16);
+    if (budget === undefined) expect(options).not.toHaveProperty('reasoning');
+    else expect(options).toHaveProperty('reasoning');
+  } finally { stream.mockRestore(); }
 });

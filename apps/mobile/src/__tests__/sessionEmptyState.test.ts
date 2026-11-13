@@ -3,11 +3,17 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { readTeammateTasks } from '@/session/readTeammateTasks';
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import {
+  resolveSessionMessageEmptyState,
+  type SessionMessageEmptyStateInput,
   shouldSuppressEmptyMessageState,
   shouldSuppressRemoteListEmptyState,
 } from '@/session/sessionEmptyState';
+import { HistoryViewController } from '@cindy/maker-shared/message-window';
+import zhMessages from '@/i18n/locales/zh-CN/message.json';
 
 // Run the real detail-page sync callback without loading native navigation.
 // Existing policy tests cannot detect an old active/archive response publishing
@@ -72,7 +78,10 @@ it.each(['resolve', 'reject'])('keeps a new filter pending when the old request 
   const listQueryScopeRef = { current: firstScope };
   let finish!: (rows: unknown[]) => void;
   let fail!: (error: Error) => void;
-  const invoke = vi.fn(() => new Promise<unknown[]>((yes, no) => { finish = yes; fail = no; }));
+  const invoke = vi.fn((_device: string, channel: string) => channel === 'local-db:sessions:list'
+    ? new Promise<unknown[]>((yes, no) => { finish = yes; fail = no; })
+    : Promise.resolve(channel === 'local-db:history:query'
+      ? { ok: true, sessions: [] } : { collectionId: 'teammates', items: [] }));
   const published: unknown[][] = [];
   let syncedScope: unknown = null;
   let loading = false;
@@ -80,14 +89,20 @@ it.each(['resolve', 'reject'])('keeps a new filter pending when the old request 
   const compile = (listQueryScope: typeof firstScope) => {
     const bindings = {
       deviceId: 'mac', deviceName: 'Mac', listQueryScope, listQueryScopeRef,
+      getMobileAuthOwner, isMobileAuthOwnerCurrent, readTeammateTasks,
       requestedListFilter: listQueryScope.filter, automationScopeKey: null, statusFilter: listQueryScope.filter,
       remoteListStatusFilter: (filter: string) => filter,
       LIST_LIMIT: 200, invoke, subscribe: async () => undefined,
       withTransientRemoteRetry: (read: () => Promise<unknown>) => read(),
       remoteSessionStore: {
+        getHomeSessions: () => [],
         captureDeviceSessionListMutationEpoch: () => 0,
         isDeviceSessionListMutationEpochCurrent: () => true,
-        setDeviceSessions: (_id: string, _name: string, rows: unknown[]) => published.push(rows),
+        // The real store coalesces identical preliminary/final snapshots.
+        // Any stale first publication still reaches the assertion below.
+        setDeviceSessions: (_id: string, _name: string, rows: unknown[]) => {
+          if (JSON.stringify(published.at(-1)) !== JSON.stringify(rows)) published.push(rows);
+        },
       },
       remoteScheduleEventStore: { clearDeviceMirrorInvalidation: () => undefined },
       invalidateOfflineScheduleIndexFailureFor: () => undefined,
@@ -131,6 +146,45 @@ const base = {
   hasSyncedThisOpen: false,
   remoteUnavailable: false,
 };
+
+// #6519 / #6527, unit: these presentation cases import the screen's production
+// selector directly. Legacy page callback fixtures could not exercise a restored
+// empty cache without also extracting unrelated screen source.
+describe('session message empty presentation', () => {
+  const input: SessionMessageEmptyStateInput = {
+    subscriptionIdentity: JSON.stringify(['d1', 's1', 1]), historyRead: null,
+    historySnapshot: { ready: false, items: [] }, messageCount: 0,
+    loading: false, showSyncingShell: false, remoteUnavailableReason: null,
+    status: 'online', targetAvailable: true,
+    historyNotCachedMessage: zhMessages.renderer.historyNotCached,
+  };
+
+  it('explains uncached offline history immediately', () => {
+    expect(resolveSessionMessageEmptyState({ ...input, status: 'stopped' })).toEqual({
+      syncingWhileEmpty: false, emptyMessage: '历史消息尚未缓存，连接电脑后同步',
+    });
+  });
+
+  it('honors an empty restored history cache on an offline cold reopen', async () => {
+    const view = new HistoryViewController({
+      page: async () => ({ version: 1 as const, items: [], hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1 as const, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    view.setNetworkAvailable(false);
+    await view.restoreCachedView(async () => ({ ...view.getSnapshot(), ready: true }));
+    expect(resolveSessionMessageEmptyState({ ...input, status: 'stopped', historySnapshot: view.getSnapshot() }))
+      .toEqual({ syncingWhileEmpty: false, emptyMessage: undefined });
+  });
+
+  it.each([
+    { status: 'connecting', presence: null, syncing: true, copy: undefined },
+    { status: 'online', presence: false, syncing: false, copy: '历史消息尚未缓存，连接电脑后同步' },
+  ] as const)('distinguishes $status with presence=$presence from confirmed unavailability', ({ status, presence, syncing, copy }) => {
+    expect(resolveSessionMessageEmptyState({ ...input, status, targetAvailable: presence }))
+      .toEqual({ syncingWhileEmpty: syncing, emptyMessage: copy });
+  });
+});
 
 describe('shouldSuppressEmptyMessageState', () => {
   it('suppresses the empty state on cold open before the first sync (0 msgs, not synced, online)', () => {

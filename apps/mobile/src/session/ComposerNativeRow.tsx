@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-export interface ComposerNativeRowProps {
+import type { CommonViewModifierProps } from '@expo/ui/swift-ui';
+export interface ComposerNativeRowProps extends CommonViewModifierProps {
   leading?: ReactNode;
   accessory?: ReactNode;
   optionsIcon?: ReactNode;

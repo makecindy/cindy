@@ -15,6 +15,7 @@ function createTables(db: Database.Database): void {
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       worktree_path TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       provider_id TEXT,
@@ -38,6 +39,12 @@ function createTables(db: Database.Database): void {
       user_send_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+      state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,

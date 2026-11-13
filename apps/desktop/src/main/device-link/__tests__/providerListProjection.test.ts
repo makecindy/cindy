@@ -15,7 +15,8 @@
  * 只 mock electron(app)+ logger,与同目录 dispatchSendSafety.test 同范式。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { connectedProvidersForAgent, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
+import { connectedProvidersForAgent, pickRecommendedAgent, remoteInvocationModels, type ProviderView } from '@cindy/model-providers';
+import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 // The projection never reads persistence; avoid loading Electron through transitive stores.
@@ -35,19 +36,51 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { __testing } from '../dispatch';
+import { __testing, setProviderShareAccess } from '../dispatch.desktop';
 
 const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
     providerOrder?: string[];
+    providerContinuity?: { stale: boolean; remainingMs: number };
   };
 const projectForCurrentController = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result, true) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
   };
+
+// Upgrade 2026-11-11, standard: folding the local list must not remove an old remote grant.
+it.each([false, true])('retains the old remote source unless the complete pool is offered (%s)', offered => {
+  const projected = project({ providers: [
+    { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: offered },
+    { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+  ] });
+  expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+    .toBe(offered ? true : undefined);
+});
+
+// PR #9900, standard: the pool's remote switch does not imply model coverage.
+// Previous upgrade fixtures had empty catalogs and could not expose a lost grant.
+it.each([
+  { poolModels: ['model-a'], oldModels: ['model-b'], hidden: false },
+  { poolModels: ['model-a', 'model-b'], oldModels: ['model-b'], hidden: true },
+])('keeps the old remote source until its models are covered: %j', ({ poolModels, oldModels, hidden }) => {
+  setProviderShareAccess({
+    guestAccess: () => null, ensureKnown: async () => {}, hasShares: () => false,
+    remoteModels: id => id === 'openai' ? poolModels : oldModels,
+  });
+  try {
+    const models = { codex: ['model-a', 'model-b'].map(id => ({ id, name: id, efforts: [], contextWindow: 1000 })) };
+    const projected = project({ providers: [
+      { id: 'openai', name: 'OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true },
+      { id: 'old-openai', name: 'Old OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+    ] });
+    expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+      .toBe(hidden ? true : undefined);
+  } finally { setProviderShareAccess(null); }
+});
 
 describe('schedule binding list projection', () => {
   const fields = {
@@ -58,13 +91,20 @@ describe('schedule binding list projection', () => {
     const full = [
       { ...fields, prompt: 'x'.repeat(5 * 1024 * 1024), script: { code: 'private' } },
       { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'persistent', persistentSession: true },
+      { ...fields, id: 'explicit-off', persistentSession: false },
       { ...fields, id: 'expired', status: 'expired' },
       { ...fields, id: 'unbound', targetSessionId: undefined },
     ];
     const projected = __testing.projectInvokeResultForTunnel(
       'maker:schedule:list', full, false, [null, { sessionBindings: true }],
     );
-    expect(projected).toEqual([fields, { ...fields, id: 'second', recurring: false }]);
+    expect(projected).toEqual([
+      fields,
+      { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'persistent', persistentSession: true },
+      { ...fields, id: 'explicit-off' },
+    ]);
     expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
     expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
   });
@@ -125,7 +165,52 @@ function xdProviderWithFullRouting() {
   };
 }
 
+
+describe('allowed object-form read stamps', () => {
+  it.each(['maker:get-capabilities', 'maker:agent:status'] as const)(
+    'adds the host first-hop stamp to %s and keeps a shorter upstream budget',
+    (channel) => {
+      const value = channel === 'maker:agent:status' ? { binaryReady: true } : { availableModels: [] };
+      expect(__testing.projectInvokeResultForTunnel(channel, value)).toEqual({
+        ...value, providerContinuity: { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
+      });
+      const shorter = { ...value, providerContinuity: { stale: true, remainingMs: 1000 } };
+      expect(__testing.projectInvokeResultForTunnel(channel, shorter)).toEqual(shorter);
+    },
+  );
+
+  it('keeps array replies and unrelated object channels unchanged', () => {
+    const agents = ['claude-code', 'codex'];
+    expect(__testing.projectInvokeResultForTunnel('maker:list-available-agents', agents)).toBe(agents);
+    const other = { ok: true };
+    expect(__testing.projectInvokeResultForTunnel('maker:set-model', other)).toBe(other);
+  });
+});
+
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  // #9501 unit: the actual tunnel projection must preserve the host-only budget
+  // for Remote Agent selection while remote-control/settings keep the default.
+  it('preserves separate context overrides across tunnel serialization', () => {
+    const provider = xdProviderWithFullRouting();
+    const model = { ...provider.models['claude-code'][0], contextWindow: 200_000, contextWindowOverride: 1_000_000 };
+    provider.models['claude-code'] = [model];
+    const result = JSON.parse(JSON.stringify(project({ providers: [provider] })));
+    expect(result.providers[0].models['claude-code'][0]).toMatchObject({ contextWindow: 200_000, contextWindowOverride: 1_000_000 });
+    expect(remoteInvocationModels(result.providers[0]).models['claude-code']![0].contextWindow).toBe(1_000_000);
+  });
+  it('advertises the bounded directory budget and keeps a shorter upstream remainder', () => {
+    expect(project({ providers: [] }).providerContinuity)
+      .toEqual({ stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS });
+    expect(project({ providers: [], providerContinuity: { stale: true, remainingMs: 1000 } }).providerContinuity)
+      .toEqual({ stale: true, remainingMs: 1000 });
+  });
+  it('keeps the source account name for mobile and desktop controllers', () => {
+    for (const name of ['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio']) {
+      const input = { providers: [{ ...xdProviderWithFullRouting(), name }] };
+      expect(project(input).providers[0]?.name).toBe(name);
+      expect(projectForCurrentController(input).providers[0]?.name).toBe(name);
+    }
+  });
   it('applies owner visibility per provider and runtime before transport, preserving enabled model options', () => {
     const models = [
       { id: 'default-on', defaultEnabled: true, supportsFastMode: true },
@@ -390,6 +475,30 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
     expect(providers[0].logoKind).toBe('vercel');
     expect(providers[0].routing).toEqual({ codex: {} });
+  });
+
+  // PR #9941 review, unit: the enterprise artwork set by the host reaches this account's
+  // current controllers only. Other accounts (shared-task / provider-share guests), legacy
+  // controllers and non-organization sources never receive it.
+  it('企业专属图标只透传给同账号的当前控制端，且只认企业来源', () => {
+    const enterprise = {
+      ...xdProviderWithFullRouting(),
+      id: 'byok-1b2c3d4e',
+      source: 'organization',
+      logoKind: 'openai-spectrum',
+      routing: { codex: { upstream: 'https://gateway.example.invalid/v1' } },
+    };
+    const forged = { ...enterprise, id: 'custom-provider', source: 'user' };
+    const projectFor = (supportsFullLogoKinds: boolean, sameAccount: boolean) =>
+      (__testing.projectInvokeResultForTunnel(
+        'maker:provider:list', { providers: [enterprise, forged] }, supportsFullLogoKinds, [], sameAccount,
+      ) as { providers: Record<string, unknown>[] }).providers;
+
+    const own = projectFor(true, true);
+    expect(own[0].logoKind).toBe('openai-spectrum');
+    expect(own[1]).not.toHaveProperty('logoKind');
+    expect(projectFor(true, false)[0]).not.toHaveProperty('logoKind');
+    expect(projectFor(false, true)[0]).not.toHaveProperty('logoKind');
   });
 
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {

@@ -19,6 +19,7 @@ import {
 
 interface LibraryDbWorkerStartup {
   betterSqliteModulePath?: string;
+  betterSqliteNativeBinding?: string;
 }
 
 const workerPort = parentPort;
@@ -39,6 +40,7 @@ function loadDatabaseConstructor(modulePath: string | undefined): SqliteDatabase
 
 const core = createLibraryDbCore({
   DatabaseCtor: loadDatabaseConstructor(startup.betterSqliteModulePath),
+  nativeBinding: startup.betterSqliteNativeBinding,
   onLog: () => {
     /* worker 侧静默;错误经 RPC 结果回传,不落日志(不含用户内容) */
   },

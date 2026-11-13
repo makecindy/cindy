@@ -22,6 +22,23 @@ binding, rechecking and restoration. Run the Windows crate's `cargo test` with a
 task-specific `--target-dir` outside the checkout. It is separate from Node unit
 tests and does not prove lock/UAC or physical cross-device behavior.
 
+## Windows service pipe access
+
+The broker pipe of the lock-screen control service grants interactive clients
+data, synchronization and read-attributes access. Windows `CreateFileW` checks
+`FILE_READ_ATTRIBUTES` even when a client requests only data access, so omitting
+it leaves the service running but rejects every connection with Win32 error 5 —
+the elevated install reports a failed authorization and settings shows
+"authorization was not completed". Do not substitute generic write access, which
+would also grant creation of pipe server instances.
+
+`pipe::tests::interactive_client_can_open_service_pipe_and_exchange_probe` runs
+the production ACL from an interactive, non-SYSTEM account: it opens the client
+end, exchanges a probe, and proves the same account still cannot create a second
+server instance. Run it with the crate's `cargo test` (same task-specific
+`--target-dir` as above); an ad-hoc pipe test with a caller-owned default ACL
+does not cover this grant.
+
 ## macOS input helper trust boundary
 
 The input helper authenticates its caller before inspecting any command or

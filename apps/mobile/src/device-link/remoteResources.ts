@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   REMOTE_RESOURCE_GET_CHANNEL,
   REMOTE_RESOURCE_INVOKE_CHANNEL,
@@ -26,6 +27,7 @@ import { BOT_GROUP_CHAT_PRIMITIVE, type BotGroupMemberView } from '@cindy/maker-
 
 import { normalizeRemoteActions, normalizeRemoteBlocks } from './remoteResourceContent';
 import type { RemoteInvoke } from './mobileMakerTransport';
+import { isTransientRemoteError } from './remoteRetry';
 
 export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
   'status',
@@ -40,15 +42,14 @@ export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
  */
 const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
   'form',
-  'routine-list',
-  'routine-detail',
   BOT_GROUP_CHAT_PRIMITIVE,
   'plugin-capabilities',
   'plugin-card-actions',
-  'teammate-todos',
+  'plugin-card-forms',
+  'mail-message',
 ];
 
-/** Routines remain a desktop feature; other portable collections stay available. */
+/** Teammate routines are gone; a stale `routines` link from an older desktop stays unsupported. */
 export function isMobileRemoteCollectionSupported(collectionId: string): boolean {
   return collectionId !== 'routines';
 }
@@ -86,9 +87,20 @@ export function remoteResourceDiscoveryTargets(
   const known = new Set(previous.flatMap((collection) => collection.targets.map((host) => host.deviceId)));
   return devices
     .filter((device) => device.canOpen || (device.state === 'offline' && known.has(device.deviceId)))
-    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name,
+    .map((device) => ({ deviceId: device.deviceId, deviceName: deviceDisplayName(device.deviceId, device.name, devices),
       ...(!device.canOpen ? { offline: true } : {}),
     }));
+}
+
+/**
+ * What `remoteResourceDiscoveryTargets` reads from the device list, as one comparable value.
+ * Presence also reports each computer's busy state and last-seen time; a caller that reruns
+ * discovery for those asks every computer for its manifest again on each presence message.
+ */
+export function remoteResourceDiscoveryKey(
+  devices: readonly { canOpen: boolean; state: string; deviceId: string; name: string }[],
+): string {
+  return JSON.stringify(devices.map((device) => [device.deviceId, device.name, device.canOpen, device.state === 'offline']));
 }
 
 function clientDescriptor(locale?: string): RemoteResourceClientDescriptor {
@@ -183,9 +195,12 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
     title,
     ...(subtitle ? { subtitle } : {}),
     ...(preview ? { preview } : {}),
+    ...(boundedString(recordOf(record.teammateActivity)?.phase, 80)
+      ? { teammateActivity: { phase: boundedString(recordOf(record.teammateActivity)?.phase, 80)! } } : {}),
     ...(generationPhase ? { generation: { phase: generationPhase, startedAt: generationStartedAt ?? null } } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
+    ...(normalizeRemoteTimestamp(record.lastReadAt) !== undefined ? { lastReadAt: record.lastReadAt as number } : {}),
     ...(avatar ? { avatar } : {}),
     ...(status ? { status } : {}),
     ...(Array.isArray(record.badges) ? { badges: record.badges.slice(0, 8).flatMap(value => {
@@ -229,6 +244,7 @@ function validDescriptor(value: unknown): RemoteCollectionDescriptor | null {
     id,
     resourceKind,
     title,
+    ...(record.actions !== undefined ? { actions: normalizeRemoteActions(record.actions) } : {}),
     ...(placement ? { placement } : {}),
     ...(iconName && iconFallbackText !== null
       ? { icon: { name: iconName, fallbackText: iconFallbackText } }
@@ -279,9 +295,39 @@ export async function loadRemoteResourceManifest(
   }
 }
 
+// Opt-in home discovery recovery: one request at a time per failed host, with
+// a finite budget. Cancellation releases the timer without touching shared links.
+async function loadHomeManifest(
+  invoke: RemoteInvoke,
+  target: RemoteResourceHostTarget,
+  locale?: string,
+  signal?: AbortSignal,
+): Promise<RemoteResourceManifestResponse | null> {
+  const delays = [5_000, 15_000, 60_000];
+  for (let attempt = 0; ; attempt++) {
+    if (signal?.aborted) throw new Error('Remote discovery superseded');
+    try {
+      return await loadRemoteResourceManifest(invoke, target, locale);
+    } catch (error) {
+      if (!signal || signal.aborted || attempt >= delays.length || !isTransientRemoteError(error)) throw error;
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', finish);
+          resolve();
+        };
+        const timer = setTimeout(finish, delays[attempt]);
+        signal.addEventListener('abort', finish, { once: true });
+      });
+    }
+  }
+}
+
 /**
  * Merge the same host-advertised collection across computers. The mobile shell
  * uses placement and portable display primitives after applying mobile availability.
+ * A retry signal opts into bounded per-host recovery; callers must abort it when
+ * their scope expires and use onProgress to receive healthy hosts without delay.
  */
 export async function discoverRemoteHomeCollections(
   invoke: RemoteInvoke,
@@ -289,6 +335,7 @@ export async function discoverRemoteHomeCollections(
   locale?: string,
   previous: readonly RemoteHomeCollection[] = [],
   onProgress?: (collections: RemoteHomeCollection[]) => void,
+  retrySignal?: AbortSignal,
 ): Promise<RemoteHomeCollection[]> {
   const cachedManifest = (target: RemoteResourceHostTarget): RemoteResourceManifestResponse => ({
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
@@ -327,11 +374,13 @@ export async function discoverRemoteHomeCollections(
   };
   const discovered = targets.map(({ offline: _offline, ...target }) => ({ target, manifest: cachedManifest(target) as RemoteResourceManifestResponse | null }));
   const settled = await Promise.allSettled(targets.map(async ({ offline, ...target }, index) => {
-    const manifest = offline ? cachedManifest(target) : await loadRemoteResourceManifest(invoke, target, locale);
+    const manifest = offline ? cachedManifest(target) : await loadHomeManifest(invoke, target, locale, retrySignal);
+    if (retrySignal?.aborted) throw new Error('Remote discovery superseded');
     discovered[index] = { target, manifest };
     onProgress?.(merge(discovered));
     return { target, manifest };
   }));
+  if (retrySignal?.aborted) throw new Error('Remote discovery superseded');
   const hasManifestReply = settled.some((result, index) => result.status === 'fulfilled'
     && result.value.manifest !== null && !targets[index].offline);
   if (targets.length > 0 && !hasManifestReply && !discovered.some(entry => entry.manifest?.collections.length)) {
@@ -433,8 +482,9 @@ function normalizeRemoteCollectionItem(
   const display = normalizeRemoteDisplay(item?.display);
   const revision = boundedString(item?.revision, 1_024);
   if (!item || !ref || ref.collectionId !== collectionId || !display || !revision) return null;
+  // A teammate row carries a link per open task it follows (the desktop sends at most 200).
   const links = Array.isArray(item.links)
-    ? item.links.slice(0, 64).flatMap((link) => {
+    ? item.links.slice(0, 256).flatMap((link) => {
         const normalized = normalizeRemoteLink(link);
         return normalized ? [normalized] : [];
       })
@@ -471,6 +521,7 @@ export interface HostedRemoteCollectionItem {
   item: RemoteCollectionItem;
   /** Local direct Chat Server projection; never changes the device-link wire display. */
   lastReplySequence?: string;
+  chatUnread?: { count: number; mentioned: boolean; threadCount: number; threadMentioned: boolean };
   /** Authorized server identities for direct group rows; display only, never cached as permissions. */
   groupMembers?: readonly Pick<BotGroupMemberView, 'botId' | 'name' | 'avatar' | 'avatarUrl' | 'avatarColor'>[];
 }
@@ -533,7 +584,7 @@ export function parseRemoteResourceTargets(value: unknown): RemoteResourceHostTa
       ) {
         return [];
       }
-      return [{ deviceId, deviceName: deviceName || deviceId }];
+      return [{ deviceId, deviceName: deviceDisplayName(deviceId, deviceName) }];
     });
   } catch {
     return [];

@@ -1,12 +1,20 @@
 {
   "id": "pypi-package",
-  "match": ["pypi.org"],
-  "description": "查询某个 PyPI 包的公开信息 API,返回 JSON(包名/版本/摘要/发布等)。读接口而非扒 DOM。",
-  "inputs": { "package": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://pypi.org/pypi/{{package}}/json" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "pypi.org"
   ],
-  "output": "{{json}}"
+  "description": "Single PyPI package metadata (latest version, license, homepage, classifiers)",
+  "access": "read",
+  "adapter": "pypi/package",
+  "adapterInputMap": {
+    "package": "name"
+  },
+  "inputs": {
+    "package": {
+      "required": true,
+      "type": "str",
+      "description": "PyPI package name (e.g. \"requests\", \"pandas\")"
+    }
+  },
+  "steps": []
 }

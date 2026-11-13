@@ -31,6 +31,77 @@ afterEach(() => {
 });
 
 describe('all OpenAI routes share the daily context default', () => {
+  it('keeps private 500K fallbacks through the active catalog without bypassing OpenAI working defaults', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    const original = config([
+      { id: 'private-unknown', name: 'Private unknown' },
+      { id: 'private/gpt-unknown', name: 'Private namespace' },
+      { id: 'gpt-5.6-sol', name: 'OpenAI family' },
+    ]);
+    const before = JSON.stringify(original);
+    setCustomProviderConfigs([original, config([
+      { id: 'gpt-5.6-sol', name: 'Explicit window', contextWindow: 500_000 },
+    ], 'custom:pinned')]);
+    for (const agent of agents) {
+      for (const id of ['private-unknown', 'private/gpt-unknown']) {
+        const model = row(agent, id);
+        expect(model.contextWindow).toBe(500_000);
+        expect(model.contextWindowExplicit).not.toBe(true);
+        expect(model.contextWindowVerified).not.toBe(true);
+        expect(model.userModelConfig?.contextWindow).toBeUndefined();
+        expect(resolveModelDefaultContextWindow(getActiveCatalog(), agent, 'custom:sub2api', id)).toBe(500_000);
+      }
+      expect(row(agent, 'gpt-5.6-sol').contextWindow).toBe(272_000);
+      expect(resolveModelDefaultContextWindow(getActiveCatalog(), agent, 'custom:sub2api', 'gpt-5.6-sol')).toBe(272_000);
+      expect(row(agent, 'gpt-5.6-sol', 'custom:pinned').contextWindow).toBe(500_000);
+      expect(resolveModelDefaultContextWindow(getActiveCatalog(), agent, 'custom:pinned', 'gpt-5.6-sol')).toBe(500_000);
+    }
+    expect(JSON.stringify(original)).toBe(before);
+  });
+
+  // Regression: the final 272K projection discarded subscription defaults from
+  // the remote Registry. Exercise the active catalog and runtime budget lookup,
+  // including refresh and reset; existing cases only covered the 272K fallback.
+  // Unit tier: one discovered member and an in-memory catalog, no credentials.
+  it('follows subscription route defaults across harnesses and refreshes without overriding user budgets', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG) as Catalog;
+    const entry = catalog.modelRegistry!.models.find(m => m.id === 'openai/gpt-6.1-sol')!;
+    const setWindow = (window: number) => {
+      entry.routes[0]!.defaults = { ...entry.routes[0]!.defaults, contextWindow: window };
+      for (const agent of ['codex', 'claude-code'] as const) {
+        entry.perAgent![agent] = { ...entry.perAgent![agent], contextWindow: window };
+      }
+      setActiveCatalog(structuredClone(catalog));
+    };
+    setDiscoveredCodexModels([{
+      id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', contextWindow: 500_000,
+      contextWindowMax: 872_000, efforts: ['medium'], defaultEffort: 'medium',
+      discoveredMetadata: { contextWindow: 500_000 },
+    }]);
+    const check = (window: number) => {
+      for (const agent of agents) {
+        const id = agent === 'codex' ? 'gpt-6.1-sol' : 'chatgpt/gpt-6.1-sol';
+        expect(row(agent, id, 'openai').contextWindow).toBe(window);
+        expect(resolveModelDefaultContextWindow(getActiveCatalog(), agent, 'openai', id)).toBe(window);
+      }
+      expect(row('codex', 'gpt-6.1-sol', 'openai').contextWindowMax).toBe(872_000);
+    };
+    setWindow(500_000);
+    check(500_000);
+    setCustomProviderConfigs([config(discovery({ slug: 'gpt-6.1-sol', context_window: 500_000 }))]);
+    for (const agent of agents) {
+      expect(row(agent, 'gpt-6.1-sol').contextWindow).toBe(272_000);
+    }
+    setWindow(400_000);
+    check(400_000);
+    setLocalCatalogOverrides({ ...EMPTY_MODEL_CATALOG_OVERRIDES, baseModels: {
+      'openai/gpt-6.1-sol': { contextWindow: 800_000 },
+    } });
+    check(800_000);
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    check(400_000);
+  });
+
   it('imports and refreshes Sub2API without turning capacity or the default into a user edit', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const original = config();

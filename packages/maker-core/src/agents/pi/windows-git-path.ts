@@ -6,7 +6,6 @@ import {
   buildWindowsPathKindProbeScript,
   buildWindowsRegistryProbeScript,
   maxWindowsPathKindProbeBatchCount,
-  terminateWindowsPowerShellDescendants,
   type WindowsGitPathLogger,
   warnWindowsGitPathProbeDiagnostics,
   warnWindowsGitPathProbeFailure,
@@ -267,11 +266,8 @@ function defaultProbeWindowsPathKindBatches(
     warnWindowsGitPathProbeDiagnostics(logger, 'path-kinds', output);
     return decodeWindowsPathKindLines(output);
   } catch (error) {
-    terminateWindowsPowerShellDescendants(
-      powershell,
-      (error as { pid?: number } | undefined)?.pid,
-      logger,
-    );
+    // The coordinator's private kill-on-close job owns any nested probes,
+    // including when execFileSync terminates the coordinator on timeout.
     warnWindowsGitPathProbeFailure(logger, 'path-kinds', error);
     return decodeWindowsPathKindsFromProbeError(error);
   }

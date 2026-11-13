@@ -1,11 +1,17 @@
-import { TokenSpeedMeter } from '../shared/token-speed.js';
+import {
+  CalibratedTokenSpeedMeter,
+  CLAUDE_SUMMARY_LEAD_TOKENS,
+  CLAUDE_THINKING_SUMMARY_SCALE,
+  CLAUDE_TOOL_CALL_OVERHEAD_TOKENS,
+  type SpeedCalibrationReport,
+} from '../shared/calibrated-token-speed.js';
 
 const CLAUDE_GENERATION_HEARTBEAT_MS = 5_000;
 const CLAUDE_GENERATION_SUSPEND_GAP_MS = 30_000;
 
 export interface ClaudeGenerationState {
-  /** Live tok/s for the main thread (Pi extension algorithm). */
-  tokenSpeed: TokenSpeedMeter;
+  /** Live tok/s for the main thread, measured from the stream and corrected by each request's usage. */
+  tokenSpeed: CalibratedTokenSpeedMeter;
   /** Main-thread content block index → tool name, for argument-delta counting. */
   tokenSpeedToolByIndex: Map<number, string>;
   startedAt: number | null;
@@ -37,7 +43,7 @@ export interface ClaudeGenerationState {
 
 export function newClaudeGenerationState(): ClaudeGenerationState {
   return {
-    tokenSpeed: new TokenSpeedMeter(),
+    tokenSpeed: new CalibratedTokenSpeedMeter({ summaryLeadTokens: CLAUDE_SUMMARY_LEAD_TOKENS }),
     tokenSpeedToolByIndex: new Map(),
     startedAt: null,
     durationMs: 0,
@@ -192,4 +198,75 @@ export function noteClaudeSubagent(state: ClaudeGenerationState): void {
 
 export function noteClaudeParentStreamedOutputIncomplete(state: ClaudeGenerationState): void {
   state.parentStreamedOutputIncomplete = true;
+}
+
+/** The part of a main-thread stream event that the speed meter reads. */
+export interface ClaudeSpeedStreamEvent {
+  type?: string;
+  index?: number;
+  delta?: Record<string, unknown>;
+  content_block?: { type?: string; name?: string };
+  message?: { model?: string };
+}
+
+/**
+ * Feeds one main-thread stream event to the speed meter. Returns true when a
+ * status refresh is due. Shared with `scripts/token-speed-replay.ts`, so
+ * a recorded stream is measured by exactly the code that runs in the app.
+ */
+export function observeClaudeSpeedEvent(
+  state: ClaudeGenerationState,
+  event: ClaudeSpeedStreamEvent,
+  now = Date.now(),
+): boolean {
+  const speed = state.tokenSpeed;
+  const tools = state.tokenSpeedToolByIndex;
+  const index = typeof event.index === 'number' ? event.index : 0;
+  switch (event.type) {
+    case 'message_start':
+      tools.clear();
+      // Claude models stream a summary; other providers behind the same protocol stream
+      // their thinking in full.
+      speed.assumeThinkingSummaryScale(/claude/i.test(event.message?.model ?? '') ? CLAUDE_THINKING_SUMMARY_SCALE : 1);
+      return false;
+    case 'content_block_start': {
+      const type = event.content_block?.type;
+      speed.start(now, type === 'thinking' || type === 'redacted_thinking' ? 'thinking' : 'visible');
+      if (type !== 'tool_use') return false;
+      tools.set(index, event.content_block?.name ?? '');
+      return speed.recordTokens(CLAUDE_TOOL_CALL_OVERHEAD_TOKENS, now, 'visible');
+    }
+    case 'content_block_delta': {
+      const delta = event.delta;
+      if (delta?.type === 'thinking_delta') {
+        // Redacted thinking streams no text, only the provider's own token count.
+        if (typeof delta.estimated_tokens === 'number') return speed.recordTokens(delta.estimated_tokens, now);
+        return typeof delta.thinking === 'string' ? speed.recordDelta(delta.thinking, now, 'thinking') : false;
+      }
+      const text = delta?.type === 'input_json_delta' ? (tools.has(index) ? delta.partial_json : undefined) : delta?.text;
+      return typeof text === 'string' ? speed.recordDelta(text, now) : false;
+    }
+    case 'content_block_stop':
+      if (tools.has(index)) speed.pause(now);
+      return false;
+    default:
+      return false;
+  }
+}
+
+/**
+ * A main-thread request ended with real usage: replace the stream estimate and
+ * stop the clock until the next request's first block.
+ */
+export function settleClaudeSpeedRequest(
+  state: ClaudeGenerationState,
+  turnOutputTokens: number,
+  usage: { output_tokens?: unknown; output_tokens_details?: unknown } | undefined,
+  now = Date.now(),
+): SpeedCalibrationReport | undefined {
+  // Usage that does not report output says nothing about this request: keep the stream estimate.
+  if (typeof usage?.output_tokens !== 'number') return undefined;
+  const details = usage?.output_tokens_details as { thinking_tokens?: unknown } | undefined;
+  const thinkingTokens = typeof details?.thinking_tokens === 'number' ? details.thinking_tokens : undefined;
+  return state.tokenSpeed.settle(turnOutputTokens, now, thinkingTokens);
 }

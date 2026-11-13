@@ -58,22 +58,33 @@ const SUPPORTS_MUTE = process.platform === 'darwin' || process.platform === 'win
 export class SystemAudioMuteGuard {
   private readonly owners = new Set<AudioMuteOwner>();
   private snapshot: AudioSnapshot | null = null;
+  private pendingMutes = 0;
   private tail: Promise<void> = Promise.resolve();
+
+  /** Includes the async OS mutation so speaker playback cannot race a starting dictation. */
+  get hasPendingOrActiveMute(): boolean {
+    return this.pendingMutes > 0 || this.owners.size > 0 || this.snapshot !== null;
+  }
 
   async mute(ownerId: AudioMuteOwner): Promise<void> {
     if (!SUPPORTS_MUTE) return;
-    await this.enqueue(async () => {
-      if (this.owners.has(ownerId)) return;
-      if (this.snapshot === null) {
-        this.snapshot = await muteOutputAndReadSnapshot();
-        log.info('muted for voice input', { ownerId, wasMuted: this.snapshot.outputMuted });
-      } else if (this.owners.size === 0) {
-        // A rejected restore may still have reached the OS. Reassert mute for
-        // the new owner without replacing the outstanding original snapshot.
-        await setOutputMuted(true);
-      }
-      this.owners.add(ownerId);
-    });
+    this.pendingMutes++;
+    try {
+      await this.enqueue(async () => {
+        if (this.owners.has(ownerId)) return;
+        if (this.snapshot === null) {
+          this.snapshot = await muteOutputAndReadSnapshot();
+          log.info('muted for voice input', { ownerId, wasMuted: this.snapshot.outputMuted });
+        } else if (this.owners.size === 0) {
+          // A rejected restore may still have reached the OS. Reassert mute for
+          // the new owner without replacing the outstanding original snapshot.
+          await setOutputMuted(true);
+        }
+        this.owners.add(ownerId);
+      });
+    } finally {
+      this.pendingMutes--;
+    }
   }
 
   async restore(ownerId: AudioMuteOwner): Promise<void> {

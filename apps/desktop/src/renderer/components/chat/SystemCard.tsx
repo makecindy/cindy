@@ -1,4 +1,6 @@
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
+import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
+import { isImportSourceId } from '../../../shared/sessionImport';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
@@ -11,18 +13,23 @@ import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCa
 
 import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
+import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
 import {
   ArrowLeftRight,
   ArrowRight,
   Check,
   ChevronDown,
   ChevronRight,
+  Info,
   Layers,
+  Plug,
+  Waypoints,
   RefreshCw,
   Target,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { summarizeContextTextEstimate } from '@cindy/maker-shared/session-controls';
 import { useNavigate } from 'react-router-dom';
 
 import {
@@ -45,6 +52,8 @@ import {
   BotSessionTaskMessageTrace,
 } from '@/features/bots/BotCollaborationCard';
 import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
+import { VoiceCallCard, VoiceCallTaskEntry } from '@/features/bots/voice/VoiceCallTranscript';
+import { readVoiceCallRecord } from '@/../shared/voiceConversation';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -57,6 +66,9 @@ import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
 interface SystemCardProps {
   cardType:
+    | 'plugin-model-route'
+    | 'voice-call'
+    | 'voice-call-task'
     | 'mcp-app'
     | 'input-handoff'
     | 'cindy-make-doctor'
@@ -81,7 +93,8 @@ interface SystemCardProps {
     | 'bot-session-task-result'
     | 'bot-direct-message'
     | 'bot-authorization'
-    | 'context-rebuild';
+    | 'context-rebuild'
+    | 'session-import';
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -229,6 +242,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
   }
 
   const categories = Array.isArray(usage.categories) ? usage.categories : [];
+  const estimateRows = summarizeContextTextEstimate(usage.textEstimate, {
+    translate: (key, fallback, params) => t(key.replace('session.presentation.controls.context.', 'chat.systemCard.context.'), { defaultValue: fallback, ...params }),
+  });
   const mcpTools = Array.isArray(usage.mcpTools) ? usage.mcpTools : [];
   const memoryFiles = Array.isArray(usage.memoryFiles) ? usage.memoryFiles : [];
   const agents = Array.isArray(usage.agents) ? usage.agents : [];
@@ -363,6 +379,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
       )}
     >
       <button
+        data-chat-copy-content
         type="button"
         className="flex w-full items-center gap-2 text-left"
         onClick={() => setExpanded((prev) => !prev)}
@@ -396,6 +413,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         className="mt-2 flex h-[7px] w-full overflow-hidden rounded-full bg-[var(--msg-tool-card-bg)]"
         aria-label={t('chat.systemCard.context.barAria')}
       >
+        {visibleCategories.length === 0 && totalTokens > 0 && (
+          <div className="h-full bg-[var(--msg-tool-text)]" style={{ width: `${pct}%` }} />
+        )}
         {visibleCategories
           .filter((cat) => !cat.isDeferred)
           .map((cat) => (
@@ -489,6 +509,24 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
             </div>
           )}
 
+          {estimateRows.length > 0 && (
+            <div className="mt-3 space-y-1.5 border-t border-[var(--msg-tool-card-border)] pt-3">
+              {estimateRows.map((row, index) => (
+                index === 0 ? (
+                  <div key={row.label} className="space-y-1">
+                    <div className={labelClass}>{row.label}</div>
+                    <p className="text-12 text-[var(--msg-tool-text)]">{row.value}</p>
+                  </div>
+                ) : (
+                  <div key={row.label} className="flex items-start justify-between gap-3 text-12 text-[var(--msg-tool-text)]">
+                    <span className="min-w-0 break-words">{row.label}</span>
+                    <span className="shrink-0 tabular-nums">{row.value}</span>
+                  </div>
+                )
+              ))}
+            </div>
+          )}
+
           {(usage.messageBreakdown || usage.apiUsage) && (
             <div className="mt-3 space-y-3 border-t border-[var(--msg-tool-card-border)] pt-3">
               {usage.messageBreakdown && (
@@ -551,6 +589,7 @@ interface ContextDetailRow {
 }
 
 interface ContextUsageData {
+  textEstimate?: unknown;
   categories: Array<{ name: string; tokens: number; color: string; isDeferred?: boolean }>;
   totalTokens: number;
   maxTokens: number;
@@ -834,6 +873,38 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
 }
 
 /**
+ * 新任务「让插件选」的结果：第一条消息下方一行，左对齐、次级小字(设计稿 2026-10-31 r1)。
+ * routed 说插件为这个任务选了什么；kept 说明插件没给可用结果、沿用了原来的模型。
+ */
+function PluginModelRouteCard({ data }: { data?: Partial<PluginModelRouteNote> }) {
+  const { t } = useTranslation();
+  if (!data?.pluginName || !data.modelName) return null;
+  const model = data.effort
+    ? `${data.modelName} · ${t(`effortLevels.${data.effort}`, { defaultValue: data.effort })}`
+    : data.modelName;
+  const strong = (text: string) => <span className="font-medium text-[var(--text-secondary)]">{text}</span>;
+  return (
+    <div className="flex items-start gap-2 py-0.5 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+      {data.outcome !== 'routed' ? <Info size={13} className="mt-[3px] shrink-0" aria-hidden />
+        : data.source === 'model-group' ? <Waypoints size={13} className="mt-[3px] shrink-0" aria-hidden />
+        : <Plug size={13} className="mt-[3px] shrink-0" aria-hidden />}
+      <span className="min-w-0">
+        {data.outcome === 'routed' ? (
+          <>
+            {strong(data.pluginName)} {t('chat.pluginModelRoute.routed')} {strong(model)}
+            {data.reason ? ` · ${data.reason}` : ''}
+          </>
+        ) : (
+          <>
+            {t(`chat.pluginModelRoute.kept.${data.why ?? 'no-opinion'}`, { plugin: data.pluginName })} {strong(model)}
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/**
  * /goal 提示分隔条(目前:usageLimited 到点自动续跑的"用量已恢复,继续目标")。
  * 同 GoalCompleteCard 复用 CompactBoundaryCard 的分隔条语言。
  */
@@ -1064,7 +1135,7 @@ function AutoResumeActionRow({
         >
           {info.error && (
             <>
-              <div className="text-12 opacity-70">
+              <div className="text-12 text-[var(--text-secondary)]">
                 {t('chat.systemCard.autoResume.detail.reason')}
               </div>
               <pre className="m-0 mt-[2px] whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]">
@@ -1123,8 +1194,19 @@ function isEnglishSourceHandoff(handoff: string): boolean {
 /**
  * 远程 Agent 换电脑的分隔条文案:只有边界行带 toAgentDeviceId 时才是换电脑。null = 任务所在电脑 ——
  * 在本机打开的任务就是「本机」;远程控制另一台电脑上的任务时那台不是本机,用切换时快照的名字。
+ * 用户确认为了先用那台的配额换过去的(switchReason: 'quota-rebalance')在后面写明原因。
  */
 function agentRelocationLabel(
+  data: Record<string, unknown> | undefined,
+  sessionId: string | undefined,
+  t: ReturnType<typeof useTranslation>['t'],
+): string | null {
+  const place = agentRelocationPlace(data, sessionId, t);
+  if (place === null || data?.switchReason !== 'quota-rebalance') return place;
+  return `${place} · ${t('chat.systemCard.agentSwitch.quotaRebalance')}`;
+}
+
+function agentRelocationPlace(
   data: Record<string, unknown> | undefined,
   sessionId: string | undefined,
   t: ReturnType<typeof useTranslation>['t'],
@@ -1150,7 +1232,8 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
   const toLabel = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
-  const label =
+  const modelOnly = data?.modelOnly === true;
+  const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` :
     agentRelocationLabel(data, sessionId, t) ??
     t('chat.systemCard.agentSwitch.label', { from: fromLabel, to: toLabel });
 
@@ -1172,8 +1255,8 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
           title={handoff ? t('chat.systemCard.agentSwitch.toggleHint') : undefined}
         >
           <ArrowLeftRight size={12} className="shrink-0" />
-          <span>{label}</span>
-          {toModel && (
+          <span className="min-w-0 truncate" title={label}>{label}</span>
+          {toModel && !modelOnly && (
             <>
               <span className="opacity-50">·</span>
               <span title={toModel} className="min-w-0 truncate font-mono">
@@ -1181,10 +1264,10 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
               </span>
             </>
           )}
-          {Boolean(data?.resumed) && (
+          {(Boolean(data?.resumed) || data?.nativeHistory === 'fallback') && (
             <>
               <span className="opacity-50">·</span>
-              <span>{t('chat.systemCard.agentSwitch.resumedBadge')}</span>
+              <span className="shrink-0 whitespace-nowrap">{t(data?.nativeHistory === 'fallback' ? 'chat.systemCard.agentSwitch.fallbackBadge' : 'chat.systemCard.agentSwitch.resumedBadge')}</span>
             </>
           )}
           {handoff && (
@@ -1290,6 +1373,48 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
           </div>
         ) : null}
       </Collapse>
+    </div>
+  );
+}
+
+const IMPORT_HARNESS_LABEL: Record<string, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi' };
+
+/** 任务导入的时间线标记：开头说明来源与原文件夹，结尾一条分隔说明之后由谁接着做。 */
+function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
+  const { t, i18n } = useTranslation();
+  const source = typeof data?.source === 'string' && isImportSourceId(data.source) ? data.source : null;
+  const sourceLabel = source ? IMPORT_SOURCE_NAMES[source] : typeof data?.sourceLabel === 'string' ? data.sourceLabel : '';
+  if (data?.phase === 'end') {
+    const harness = typeof data.harness === 'string' ? IMPORT_HARNESS_LABEL[data.harness] : undefined;
+    const label = data.mode === 'handoff' && harness
+      ? t('settings.sessionImport.marker.endHandoff', { source: sourceLabel, harness })
+      : t('settings.sessionImport.marker.end', { source: sourceLabel });
+    return (
+      <div className="flex w-full select-none items-center gap-3 py-2 text-12 leading-[1.33] text-[var(--text-tertiary)]" role="separator" aria-label={label}>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+        <span className="max-w-[78%] text-center">{label}</span>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+      </div>
+    );
+  }
+  const importedAt = typeof data?.importedAt === 'number' ? data.importedAt : 0;
+  const date = importedAt > 0
+    ? new Intl.DateTimeFormat(i18n.language, { month: 'short', day: 'numeric' }).format(new Date(importedAt))
+    : '';
+  const folder = typeof data?.originalCwd === 'string' && data.originalCwd ? data.originalCwd : null;
+  return (
+    <div className="flex w-full select-none flex-col items-center gap-1 py-2 text-center">
+      <span className="inline-flex items-center gap-2 text-13 font-medium leading-[1.38] text-[var(--text-secondary)]">
+        {source && <ImportSourceMark source={source} size={16} />}
+        {date
+          ? t('settings.sessionImport.marker.from', { source: sourceLabel, date })
+          : sourceLabel}
+      </span>
+      {folder && (
+        <span className="max-w-full truncate text-12 leading-[1.33] text-[var(--text-tertiary)] select-text" title={folder}>
+          {t('settings.sessionImport.marker.folder', { path: folder })}
+        </span>
+      )}
     </div>
   );
 }
@@ -1439,6 +1564,8 @@ export function SystemCard({
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
       return <GoalResumedCard data={data as { kind?: string } | undefined} />;
+    case 'plugin-model-route':
+      return <PluginModelRouteCard data={data as Partial<PluginModelRouteNote> | undefined} />;
     case 'auto-resume': {
       // 同一个卡类型承载两套自愈:带中断上下文的是本份的「重连」记录,没有的是 silent-stop
       // 的「已自动继续」分隔条 —— 后者保持原形态原文案,不被重连三态改写(copilot review)。
@@ -1455,10 +1582,18 @@ export function SystemCard({
       return <AgentSwitchCard data={data} sessionId={sessionId} />;
     case 'context-rebuild':
       return <ContextRebuildCard data={data} />;
+    case 'session-import':
+      return <SessionImportCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
       return <ReviewCard data={data} workingDir={workingDir} />;
+    case 'voice-call': {
+      const record = readVoiceCallRecord(data?.record);
+      return record ? <VoiceCallCard record={record} /> : null;
+    }
+    case 'voice-call-task':
+      return typeof data?.text === 'string' ? <VoiceCallTaskEntry text={data.text} /> : null;
     case 'bot-session-task-message':
       return <BotSessionTaskMessageTrace data={data} />;
     case 'bot-session-task-result':

@@ -20,12 +20,16 @@ import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
 import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import { isCindyBuiltInSkillMetadata } from '@/../shared/cindyBuiltInSkills';
+import type { BuiltInSkillDraftIntent } from './composerDraftStore';
 
 export { leadingSlashInvocation };
 
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SlashCommands');
+// Diagnostics only: retain at most 256 name/kind conflicts per renderer lifetime.
+// Once full, suppress new conflicts too rather than evicting and repeating old warnings.
+const warnedCommandConflicts = new Set<string>();
 const shadowedUnavailableSkillsByCommands = new WeakMap<UnifiedCommand[], Set<string>>();
 
 export type { UnifiedCommand } from '@cindy/maker-core';
@@ -126,6 +130,33 @@ export async function rewritePiSkillMessageForSend(params: {
   const hit = commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
   return params.agentKind === 'pi' ? rewritePiSkillAliasFromCommand(params.message, hit)
     : rewriteAgentSkillInvocationForDispatch(params.message, hit);
+}
+
+/** Preserve a routed built-in choice when the user changes the draft's engine or computer. */
+export async function rewriteBuiltInSkillDraftForSend(params: {
+  message: string;
+  intent: BuiltInSkillDraftIntent;
+  agentKind: AgentKind;
+  workingDir?: string | null;
+  deviceId?: string;
+  remoteHostId?: string | null;
+}): Promise<string | null> {
+  const leading = leadingSlashInvocation(params.message);
+  if (!leading || leading.name !== params.intent.commandName) return params.message;
+  // SSH has no Cindy built-in catalog. Never resolve that task against local files.
+  if (params.remoteHostId) return null;
+  const commands = await loadAllCommands(params.agentKind, params.workingDir, {
+    forceReload: true,
+  }, params.deviceId);
+  const skill = commands.find((command) => (
+    command.kind === 'agent-skill'
+    && command.builtIn === true
+    && command.enabled !== false
+    && !isSlashCommandUnavailable(command)
+    && (command.name === params.intent.name || command.name === `cindy:${params.intent.name}`)
+  ));
+  if (!skill) return null;
+  return `${params.message.slice(0, leading.start)}/${slashCommandInvocationName(skill)}${params.message.slice(leading.end)}`;
 }
 
 /**
@@ -230,11 +261,11 @@ export function isSlashCommandRosterReady(
 /**
  * 合并三源 → UnifiedCommand[]。
  * 优先级 (同名时谁覆盖谁) : agent-skill > desktop > agent-builtin。
- *   - agent-skill (用户自定义) 排第一: 体现"用户能盖默认"的语义
+ *   - agent-skill 排第一;同名时 Main 验证过的 Cindy 内置 Skill 优先。
  *   - desktop 第二: app 内置功能 (/help, /clear)
  *   - agent-builtin 兜底: agent 自带 (/compact)
  *
- * 同一类目内按 name 字母序; 不同类目之间按上述优先级排。
+ * Skill 类目内 Cindy 内置项优先，其余按 name 字母序；不同类目按上述优先级排。
  */
 export function mergeCommands(
   desktop: UnifiedCommand[],
@@ -247,7 +278,10 @@ export function mergeCommands(
   const availableSkills = agentSkill.filter((command) => !isSlashCommandUnavailable(command));
   const unavailableSkills = agentSkill.filter(isSlashCommandUnavailable);
   const tiers: UnifiedCommand[][] = [
-    availableSkills.sort((a, b) => a.name.localeCompare(b.name)),
+    availableSkills.sort((a, b) => (
+      Number(isCindyOfficialSlashCommand(b)) - Number(isCindyOfficialSlashCommand(a))
+      || a.name.localeCompare(b.name)
+    )),
     [...desktop].sort((a, b) => a.name.localeCompare(b.name)),
     [...agentBuiltin].sort((a, b) => a.name.localeCompare(b.name)),
     unavailableSkills.sort((a, b) => a.name.localeCompare(b.name)),
@@ -258,7 +292,11 @@ export function mergeCommands(
         if (isSlashCommandUnavailable(cmd)) {
           shadowedUnavailableSkills.add(cmd.name.toLowerCase());
         } else {
-          log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+          const conflict = JSON.stringify([cmd.name, cmd.kind]);
+          if (!warnedCommandConflicts.has(conflict) && warnedCommandConflicts.size < 256) {
+            warnedCommandConflicts.add(conflict);
+            log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+          }
         }
         continue;
       }
@@ -282,6 +320,55 @@ function hasShadowedUnavailableSkill(
 export function hasUnavailableProjectSkillPreview(commands: UnifiedCommand[]): boolean {
   return commands.some(isSlashCommandUnavailable)
     || (shadowedUnavailableSkillsByCommands.get(commands)?.size ?? 0) > 0;
+}
+
+export interface PluginSkillSetupPaletteEntry {
+  skillName: string;
+  description: string;
+  /** Short row tag, e.g. "needs install". */
+  meta?: string;
+  /**
+   * The plugin is installed but unusable in this project, so the Skill linked from its global install
+   * would only fail here: this row takes that command's place. (A same-named Skill of the user's own is
+   * hidden from the list too, but typing its name still runs it.)
+   */
+  replacesInstalled?: boolean;
+}
+
+const pluginSkillSetupCommands = new WeakMap<UnifiedCommand, string>();
+
+/**
+ * Palette-only rows for plugin Skills whose plugin is not usable yet. They go
+ * after every real command and, unless the entry says its installed Skill is
+ * unusable here (`replacesInstalled`), only when no command of that name exists,
+ * so a real Skill wins. Keep them out of the decoration roster and dispatch:
+ * they are a setup entry, not a sendable command.
+ */
+export function addPluginSkillSetupCommands(
+  commands: UnifiedCommand[],
+  entries: readonly PluginSkillSetupPaletteEntry[],
+): UnifiedCommand[] {
+  const replaced = new Set(entries.filter((entry) => entry.replacesInstalled).map((entry) => entry.skillName.toLowerCase()));
+  if (replaced.size > 0) commands = commands.filter((command) => !replaced.has(command.name.toLowerCase()));
+  const names = new Set(commands.map((command) => command.name.toLowerCase()));
+  const extra = entries
+    .filter((entry) => !names.has(entry.skillName.toLowerCase()))
+    .map((entry) => {
+      const command: UnifiedCommand = {
+        kind: 'desktop',
+        name: entry.skillName,
+        description: entry.description,
+        ...(entry.meta ? { meta: entry.meta } : {}),
+      };
+      pluginSkillSetupCommands.set(command, entry.skillName);
+      return command;
+    });
+  return extra.length > 0 ? [...commands, ...extra] : commands;
+}
+
+/** The Skill a palette row would set up, or undefined for ordinary commands. */
+export function pluginSkillSetupName(command: UnifiedCommand): string | undefined {
+  return pluginSkillSetupCommands.get(command);
 }
 
 /**
@@ -321,6 +408,33 @@ export function filterSlashCommands(
   return filtered.length > limit ? filtered.slice(0, limit) : filtered;
 }
 
+type SkillListResult = { success: boolean; skills?: unknown[] };
+const pendingSkillLists = new WeakMap<object, Map<string, Promise<SkillListResult>>>();
+
+/** Share only outstanding reads; edits and activation changes remain live. */
+function loadPendingSkills(
+  key: string | null,
+  forceReload: boolean,
+  load: () => Promise<SkillListResult>,
+): Promise<SkillListResult> {
+  const owner = window.electronAPI;
+  let pending = pendingSkillLists.get(owner);
+  if (!pending) {
+    pending = new Map();
+    pendingSkillLists.set(owner, pending);
+  }
+  if (key !== null && !forceReload) {
+    const existing = pending.get(key);
+    if (existing) return existing;
+  }
+  const request = load().catch(() => ({ success: false })).finally(() => {
+    // An older request must not evict an in-flight forced refresh.
+    if (key !== null && pending.get(key) === request) pending.delete(key);
+  });
+  if (key !== null) pending.set(key, request);
+  return request;
+}
+
 /**
  * 拉三路 IPC, 合并成 UnifiedCommand[]。
  *
@@ -348,7 +462,6 @@ export async function loadAllCommands(
     commands?: unknown[];
     runtimeStatus?: PiPackageCommandRuntimeStatus;
   };
-  type SkillRes = { success: boolean; skills?: unknown[] };
 
   // device-link「以被控端为准」:agent-builtin / agent-skill 是被控端**该会话**的能力,远程时经隧道
   // 从被控端读(channel 已 allowlist,workingDir 是被控端路径,扫描在被控端跑正确)。
@@ -384,15 +497,17 @@ export async function loadAllCommands(
     ...(opts?.forceReload !== undefined ? { forceReload: opts.forceReload } : {}),
     ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
   };
-  const skillP: Promise<SkillRes> = shouldLoadSkills
-    ? (
-        deviceId
+  const skillP: Promise<SkillListResult> = shouldLoadSkills
+    ? loadPendingSkills(
+        opts?.sessionId ? JSON.stringify([agentKind, deviceId || null, workingDir || null, opts.sessionId]) : null,
+        opts?.forceReload === true,
+        () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
               agentKind,
               skillParams,
-            ]) as Promise<SkillRes>)
-          : api.listAgentSkills(agentKind, skillParams)
-      ).catch(() => ({ success: false }))
+            ]) as Promise<SkillListResult>)
+          : api.listAgentSkills(agentKind, skillParams),
+      )
     : Promise.resolve({ success: true, skills: [] });
 
   const [desktopRes, builtinRes, skillRes] = await Promise.all([desktopP, builtinP, skillP]);

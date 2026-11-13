@@ -62,3 +62,26 @@ it('does not forward a partial message if the connection closes before FIN', asy
   const failed = once(transform, 'error'); transform.end(frame(Buffer.from('partial'), true, 1, false)); await failed;
   expect(output).toEqual([]);
 });
+
+it('holds later frames behind an async rewrite so message order is preserved', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const writer = createWebSocketMessageTransform(true, async message => {
+    if (message.toString() !== 'slow') return message;
+    await gate;
+    return Buffer.from('rewritten');
+  });
+  const rewritten: Buffer[] = [];
+  writer.on('data', chunk => rewritten.push(chunk));
+  const ended = once(writer, 'end');
+  writer.write(frame(Buffer.from('slow'), true));
+  writer.write(frame(Buffer.from('ping'), true, 9));
+  writer.end(frame(Buffer.from('next'), true));
+  await new Promise(resolve => setImmediate(resolve));
+  expect(rewritten).toEqual([]);
+  release(); await ended;
+  const messages: string[] = [];
+  const reader = createWebSocketMessageTransform(true, message => { messages.push(message.toString()); return message; });
+  reader.resume(); const readEnd = once(reader, 'end'); reader.end(Buffer.concat(rewritten)); await readEnd;
+  expect(messages).toEqual(['rewritten', 'next']);
+});

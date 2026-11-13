@@ -349,3 +349,70 @@ describe('GhostMainViewHost', () => {
     expect(screen.getByTestId('webview')).not.toBe(ownerAWebview);
   });
 });
+
+// 测试价值
+// - 生产入口与可观察结果:GhostMainViewHost 的单实例守卫;可观察的是进整页时该插件的侧栏
+//   页签被收掉、整页开着时页签出现则导航回主入口、声明 mainView.multiple 的插件两者并存。
+// - Bug / 规则依据:同一视图两份界面各自保存整份数据会互相覆盖(Mivo Canvas PR #1109 审查 P1);
+//   插件缺省单实例,自己处理好一致性的才声明 multiple。
+// - 现有覆盖缺口:整页与全局页签此前互不知晓。
+// - 最小失败输入:已有 g_workspace 页签时挂载整页。
+// - tier:unit(jsdom,localStorage 全局页签)。
+describe('GhostMainViewHost · 单实例视图守卫', () => {
+  const ghostOf = () => mocks.routeCapable[0].installedGhost as InstalledGhost;
+
+  beforeEach(async () => {
+    const { setDataOwnerGeneration } = await import('@/contexts/dataOwnerGeneration');
+    const { __resetGlobalTabsForTest } = await import('@/features/right-sidebar/globalTabs');
+    const { __resetTabGroupsForTest } = await import('@/features/right-sidebar/tabGroups');
+    window.localStorage.clear();
+    __resetGlobalTabsForTest();
+    __resetTabGroupsForTest();
+    setDataOwnerGeneration('owner-a', 1);
+  });
+
+  it('entering the page removes an existing tab; a tab appearing later makes the page yield', async () => {
+    const { addGlobalPluginTab, getGlobalTabs } = await import('@/features/right-sidebar/globalTabs');
+    const { act } = await import('@testing-library/react');
+    addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    expect(getGlobalTabs()).toHaveLength(1);
+    renderInHeaderSlot();
+    expect(getGlobalTabs()).toHaveLength(0);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+
+    act(() => {
+      addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    });
+    expect(mocks.navigate).toHaveBeenCalledWith('/', { replace: true });
+    expect(getGlobalTabs()).toHaveLength(1);
+  });
+
+  it('does not treat a docked panel tab on a different page as the main view', async () => {
+    const { addGlobalPluginTab, getGlobalTabs } = await import('@/features/right-sidebar/globalTabs');
+    // panel.html ≠ mainView.html:两个页面是不同界面,可以并存,整页不收页签。
+    const distinct = { ...manifest, panel: { html: 'panel.html' } };
+    mocks.routeCapable = [
+      { ...mocks.routeCapable[0], manifest: distinct, installedGhost: { ...ghostOf(), manifest: distinct } },
+    ];
+    addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    renderInHeaderSlot();
+    expect(getGlobalTabs()).toHaveLength(1);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('leaves both alive when the plugin declares mainView.multiple', async () => {
+    const { addGlobalPluginTab, getGlobalTabs } = await import('@/features/right-sidebar/globalTabs');
+    const { act } = await import('@testing-library/react');
+    const multi = { ...manifest, mainView: { html: 'main-view.html', multiple: true } };
+    mocks.routeCapable = [
+      { ...mocks.routeCapable[0], manifest: multi, installedGhost: { ...ghostOf(), manifest: multi } },
+    ];
+    addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    renderInHeaderSlot();
+    expect(getGlobalTabs()).toHaveLength(1);
+    act(() => {
+      addGlobalPluginTab('workspace', { ghost: ghostOf() });
+    });
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+});

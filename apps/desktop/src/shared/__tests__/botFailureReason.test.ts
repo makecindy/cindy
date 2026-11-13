@@ -35,6 +35,17 @@ describe('Hermes Bot failure reasons', () => {
     ['maximum context length is 128000 tokens', 'context_overflow'],
     ['No LLM provider configured', 'missing_config'],
     ['No access token found for profile', 'missing_config'],
+    // Real errors when the Bot's custom provider was deleted (Pi start / send route guard).
+    [
+      "Error: pi: BYOM provider 'magpie-8a1e5ed8' cannot serve model 'auto/glm-5p3-flash' (provider absent, or it no longer offers this model); refusing to fall back to the Cindy gateway (would send prompts to the wrong endpoint).",
+      'missing_config',
+    ],
+    [
+      '[INVALID_PARAMS] provider "magpie-8e1b0a66" is unavailable; select an available provider before sending',
+      'missing_config',
+    ],
+    // A transient native lookup failure is not a configuration problem.
+    ["pi: BYOM provider 'p1' cannot serve model 'm1' (native provider resolution failed); refusing", 'unknown'],
     ["model 'gpt-9' not found", 'model_unavailable'],
     ['agent is blocked awaiting approval', 'agent_blocked'],
   ] as const)('classifies %s', (text, expected) => {

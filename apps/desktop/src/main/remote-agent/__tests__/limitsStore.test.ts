@@ -32,7 +32,7 @@ describe('remote task limit overrides', () => {
       value: { perDevice: 16, total: 80 }, customizedKeys: ['perDevice', 'total'],
     });
     await expect(saveRemoteAgentLimits({ total: 8 })).rejects.toThrow('INVALID_PARAMS');
-    expect(readRemoteAgentLimitsState().value).toEqual({ perDevice: 16, total: 80 });
+    expect(readRemoteAgentLimitsState().value).toEqual({ perDevice: 16, total: 80, idleMinutes: 30 });
   });
 
   it('validates concurrent partial updates against the value inside the write lock', async () => {
@@ -49,16 +49,31 @@ describe('remote task limit overrides', () => {
     expect(readRemoteAgentLimitsState().customizedKeys).toEqual(['perDevice', 'total']);
     await saveRemoteAgentLimits({ perDevice: 32, total: 128 });
     state.owner = 'b';
-    expect(readRemoteAgentLimitsState().value).toEqual({ perDevice: 16, total: 64 });
+    expect(readRemoteAgentLimitsState().value).toEqual({ perDevice: 16, total: 64, idleMinutes: 30 });
     state.owner = 'a';
-    expect(readRemoteAgentLimitsState().value).toEqual({ perDevice: 32, total: 128 });
+    expect(readRemoteAgentLimitsState().value).toEqual({ perDevice: 32, total: 128, idleMinutes: 30 });
     await saveRemoteAgentLimits(null);
-    expect(readRemoteAgentLimitsState()).toMatchObject({ isCustomized: false, value: { perDevice: 16, total: 64 } });
+    expect(readRemoteAgentLimitsState()).toMatchObject({ isCustomized: false, value: { perDevice: 16, total: 64, idleMinutes: 30 } });
+  });
+  // provider-sharing.md §3「闲置收回由提供方决定」：旧版写下的设置文件没有这一项时按默认 30 读；
+  // 0 是有效的「不收回」，只存用户改过的这一项，不改动另外两项的覆盖。
+  it('reads idle reclaim minutes from files written before the setting existed and stores 0 as an explicit choice', async () => {
+    await fs.mkdir(path.join(state.root, 'a'), { recursive: true });
+    await fs.writeFile(path.join(state.root, 'a', 'remote-agent-limits.json'), JSON.stringify({ perDevice: 24 }));
+    expect(readRemoteAgentLimitsState().value).toEqual({ perDevice: 24, total: 64, idleMinutes: 30 });
+    await saveRemoteAgentLimits({ idleMinutes: 0 });
+    expect(readRemoteAgentLimitsState()).toMatchObject({
+      value: { perDevice: 24, total: 64, idleMinutes: 0 }, customizedKeys: ['perDevice', 'idleMinutes'],
+    });
+    expect(JSON.parse(await fs.readFile(path.join(state.root, 'a', 'remote-agent-limits.json'), 'utf8')))
+      .toEqual({ perDevice: 24, idleMinutes: 0 });
   });
   it.each([
     { perDevice: 0, total: 64 }, { perDevice: 2, total: 1 },
     { perDevice: 1.5, total: 64 }, { perDevice: 16, total: 1001 },
     { perDevice: NaN, total: 64 }, { perDevice: 16, total: Infinity },
+    { perDevice: 16, total: 64, idleMinutes: -1 }, { perDevice: 16, total: 64, idleMinutes: 1441 },
+    { perDevice: 16, total: 64, idleMinutes: 2.5 },
   ])('rejects invalid settings %j', async value => {
     expect(isRemoteAgentLimits(value)).toBe(false);
     await expect(saveRemoteAgentLimits(value)).rejects.toThrow('INVALID_PARAMS');

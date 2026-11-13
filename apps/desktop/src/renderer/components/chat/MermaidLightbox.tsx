@@ -1,3 +1,5 @@
+import { usePreviewFocusReturn } from './PreviewChrome';
+import { PlaintextEditor } from '@/components/markdown/PlaintextEditor';
 /**
  * MermaidLightbox
  * ---------------------------------------------------------------------------
@@ -15,8 +17,19 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { FocusScope } from '@radix-ui/react-focus-scope';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton as ToolbarButton,
+  PreviewScrim,
+} from './PreviewChrome';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { toast } from '@/lib/toast';
 import { createPortal } from 'react-dom';
-import { Check, Copy, Minus, Pen, Plus, X } from 'lucide-react';
+import { Check, Copy, Minus, Pen, Plus, Maximize } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { resolveExportBackground, svgToPngBlob } from '@/lib/rasterizeToImage';
@@ -47,7 +60,9 @@ interface MermaidLightboxProps {
 }
 
 export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLightboxProps) {
+  const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
+  const [showSource, setShowSource] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
@@ -57,6 +72,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   const isClosingRef = useRef(false);
   const isWheelingRef = useRef(false);
   const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<LightboxViewport>({ scale: 1, tx: 0, ty: 0 });
@@ -116,7 +132,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   // Esc closes
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose();
+      if (e.key === 'Escape' && !e.defaultPrevented) handleClose();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -238,13 +254,19 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   }
 
   const overlay = (
-    <div
+    <>
+    <PreviewScrim onClose={handleClose} />
+    <FocusScope onUnmountAutoFocus={restorePreviewFocus} trapped loop asChild
+      onMountAutoFocus={(event) => { event.preventDefault(); overlayRef.current?.focus(); }}
+    >
+      <div
+      ref={overlayRef}
       data-mermaid-lightbox-overlay
+      data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
-        position: 'fixed',
-        inset: 0,
+        ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--overlay-lightbox)',
         transition: 'opacity 200ms ease',
         opacity: isVisible ? 1 : 0,
         display: 'flex',
@@ -254,12 +276,17 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
       }}
       onClick={handleOverlayClick}
     >
-      <div
+        {showSource ? (
+          <div className="absolute inset-x-0 bottom-16 top-16 flex bg-[var(--surface)]">
+            <PlaintextEditor readOnly initialValue={source ?? svg} showLineNumbers />
+          </div>
+        ) : null}
+        <div
         ref={stageRef}
         style={{
           position: 'absolute',
           inset: 0,
-          display: 'flex',
+          display: showSource ? 'none' : 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           cursor: isDragging ? 'grabbing' : 'grab',
@@ -286,8 +313,8 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
             // Fixed stage box so scale=1 means "SVG fits the viewport". Without
             // this the SVG renders at its mermaid-emitted intrinsic size and
             // looks tiny on a 2K screen.
-            width: 'min(calc(100vw - 80px), 1800px)',
-            height: 'calc(100vh - 140px)',
+            width: 'calc(var(--preview-width) - 80px)',
+            height: 'calc(var(--preview-height) - 140px)',
             userSelect: 'none',
             pointerEvents: 'none',
             boxShadow: 'var(--shadow-menu)',
@@ -296,16 +323,32 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
         />
       </div>
 
-      {/* Toolbar */}
-      <div
-        className={cn(
-          'absolute bottom-6 left-1/2 -translate-x-1/2',
-          'flex items-center gap-1 rounded-full',
-          'border border-[var(--lightbox-toolbar-border)] bg-[var(--lightbox-toolbar-bg)] px-2 py-1',
-          'backdrop-blur',
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
+        <PreviewHeader
+          name="Mermaid"
+          onClose={handleClose}
+          onSave={() => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              if (typeof reader.result === 'string')
+                void window.electronAPI
+                  .saveMediaAs({ url: reader.result })
+                  .catch(() => toast.error(t('chat.media.saveFailed')));
+            };
+            reader.readAsDataURL(new Blob([svg], { type: 'image/svg+xml' }));
+          }}
+          menu={
+            source ? (
+              <DropdownMenuItem onClick={() => setShowSource((value) => !value)}>
+                {t(showSource ? 'attachmentPreview.rendered' : 'attachmentPreview.source')}
+              </DropdownMenuItem>
+            ) : undefined
+          }
+        />
+        <PreviewFooter>
+          <ToolbarButton label={t('attachmentPreview.fit')}
+        onClick={reset}>
+            <Maximize className="h-4 w-4" />
+          </ToolbarButton>
         <ToolbarButton
           onClick={() => zoomBy(1 / LIGHTBOX_ZOOM_STEP)}
           label={t('chat.mermaidLightbox.zoomOut')}
@@ -314,7 +357,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
         </ToolbarButton>
         <span className="px-2 text-12 tabular-nums text-[var(--lightbox-toolbar-fg)] select-none">
           {Math.round(scale * 100)}%
-        </span>
+          </span>
         <ToolbarButton
           onClick={() => zoomBy(LIGHTBOX_ZOOM_STEP)}
           label={t('chat.mermaidLightbox.zoomIn')}
@@ -335,38 +378,11 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
         >
           {copiedImage ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
         </ToolbarButton>
-        <ToolbarButton onClick={handleClose} label={t('chat.mermaidLightbox.close')}>
-          <X className="h-4 w-4" />
-        </ToolbarButton>
+      </PreviewFooter>
       </div>
-    </div>
+    </FocusScope>
+    </>
   );
 
   return createPortal(overlay, document.body);
-}
-
-function ToolbarButton({
-  onClick,
-  label,
-  children,
-}: {
-  onClick: () => void;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className={cn(
-        'inline-flex h-7 w-7 items-center justify-center',
-        'rounded-full text-[var(--lightbox-toolbar-fg)]',
-        'hover:bg-[var(--lightbox-toolbar-hover-bg)] hover:text-[var(--lightbox-toolbar-fg-hover)]',
-      )}
-    >
-      {children}
-    </button>
-  );
 }

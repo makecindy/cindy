@@ -1,3 +1,4 @@
+import type { TaskTag } from './taskTags.js';
 import { projectDraftSessionTitle } from './sessionTitle.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from './cindyMakeFeature.js';
@@ -52,15 +53,25 @@ export interface ConversationSearchFilters {
 export type ConversationSearchMatchKind = 'title' | 'content' | 'both';
 
 export interface ConversationSearchSessionSummary {
+  /** Optional for search responses from older hosts. */
+  tags?: TaskTag[];
   id: string;
   title: string;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: ConversationSearchWorkspaceKind;
   agentKind: ConversationSearchAgentKind;
   status: ConversationSearchSessionStatus;
   source?: string | null;
   orcaRole?: ConversationSearchOrcaRole | null;
   parentSessionId?: string | null;
+  /** Host-verified personal companion chat; absent for ordinary/background tasks. */
+  companion?: {
+    id: string;
+    name: string;
+    role: 'canonical' | 'history';
+    readOnly: boolean;
+  };
   userSendAt: string | null;
   updatedAt: string;
   createdAt: string;
@@ -212,7 +223,7 @@ export function remoteIndexedSearchIgnoredWorkingDirs(
   const allowed = normalizeWorkingDirSet(workingDirs);
   if (allowed == null) return false;
   const results = Array.isArray(response?.results) ? response.results : [];
-  return results.some((item) => !matchesWorkingDirSet(item.session.workingDir, allowed));
+  return results.some((item) => !matchesWorkingDirSet(item.session.projectDir ?? item.session.workingDir, allowed));
 }
 
 export function filterResultsByWorkingDirs(
@@ -235,8 +246,7 @@ export function filterResultsByRequestFilters(
     ...response,
     results: response.results.filter((item) => {
       if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) return false;
-      if (!matchesWorkingDirSet(item.session.workingDir, allowedDirs)) return false;
-      if (item.session.orcaRole === 'worker') return false;
+      if (!matchesWorkingDirSet(item.session.projectDir ?? item.session.workingDir, allowedDirs)) return false;
       if (!matchesStatus(item.session.status, status)) return false;
       if (agentKind !== 'all' && item.session.agentKind !== agentKind) return false;
       if (activityCutoff !== null && sessionActivityMs(item.session) < activityCutoff) {
@@ -262,7 +272,8 @@ function normalizeWorkingDirForGrouping(raw: string | null | undefined): string 
     if (/^[A-Za-z]:\/$/.test(out)) break;
     out = out.slice(0, -1);
   }
-  return collapseWorktreeDirForGrouping(out);
+  const collapsed = collapseWorktreeDirForGrouping(out);
+  return isWindowsPathLike(collapsed) ? collapsed.toLowerCase() : collapsed;
 }
 
 function stripWindowsLongPathPrefix(value: string): string {

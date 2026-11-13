@@ -218,3 +218,11 @@
   border-radius: var(--rich-borderRadius, var(--radius-xl)) !important;
   object-fit: contain;
 }
+
+/* Inside a teammate's reply bubble (already the elevated surface), tracks and fields step down a level. */
+[data-bot-reply-bubble] .rich-answer-track {
+  background: var(--surface);
+}
+[data-bot-reply-bubble] .rich-answer-control input {
+  background: var(--surface);
+}

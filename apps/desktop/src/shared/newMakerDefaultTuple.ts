@@ -1,9 +1,13 @@
 import {
+  isCindyAutoModelId,
+  connectedProvidersForAgent,
+  isCindyDistributedProvider,
   isModelSelectableForNewRoute,
   providerCatalogId,
   defaultEffortForCapabilities,
   clampEffortToSupported,
   type AgentKind,
+  type CatalogModel,
   type Effort,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -23,14 +27,24 @@ interface ProviderDefaultPolicy {
   agents: readonly AgentKind[];
   modelIds: readonly string[];
   allowOtherModels?: boolean;
+  /**
+   * Also search Cindy-distributed pool connections, and try the Auto the server marked as this
+   * agent's new-task default before `modelIds`.
+   */
+  serverMarkedAuto?: boolean;
 }
 
 /**
  * 新用户的产品默认顺序。
  *
- * Codex / Claude 订阅优先，再采用服务端提供的 Cindy Auto，最后保留 xAI 回退。
+ * Codex / Claude 订阅优先，再采用服务端指定的 Cindy Auto，最后保留 xAI 回退。
  * 出厂推荐按完整路由选择：Sol 使用 Codex，Opus 使用 Claude Code，Cindy Auto 使用 Pi。
  * 不为了提供默认值把订阅模型静默放到另一个 Harness。
+ *
+ * Cindy Auto 由服务端决定：模型组 Auto（`auto/<组ID>`）可能挂在 Cindy AI 或企业号池供应商下，
+ * 这里在两类来源中跟随服务端的 Pi 新任务默认标记；没有标记时（旧服务端）回退预设 `auto`。
+ * 只认 Auto 系列的标记：个人目录仍把旧 GLM 标为 Pi 默认，不能让它取代 Auto。
+ * 这条规则同时负责把没有订阅的用户默认切到 Pi，不能删除。
  */
 const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
   {
@@ -51,6 +65,7 @@ const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
     agents: ['pi'],
     modelIds: ['auto'],
     allowOtherModels: false,
+    serverMarkedAuto: true,
   },
   {
     providerId: 'xai',
@@ -89,28 +104,69 @@ export function isKnownProductDefaultTupleIdentity(args: {
   );
 }
 
+/** Search passes in priority order: server-marked Auto, the policy's own ids, other models. */
+type ModelSearchPass = 'serverMarkedAuto' | 'serverMarkedGroupAuto' | 'preferred' | 'other';
+
+function bySortOrder(a: CatalogModel, b: CatalogModel): number {
+  return (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER);
+}
+
+/** Only an Auto marker counts; other server markers (e.g. legacy GLM) are ignored. */
+function isServerMarkedAuto(model: CatalogModel, agent: AgentKind): boolean {
+  return isCindyAutoModelId(model.id) && (model.newSessionDefault?.includes(agent) ?? false);
+}
+
 function matchingModel(
   provider: ProviderView,
   agent: AgentKind,
   modelIds: readonly string[],
-  allowOtherModels = true,
-  enabled?: (agent: AgentKind, providerId: string, model: { id: string; defaultEnabled?: boolean }) => boolean,
+  pass: ModelSearchPass,
+  enabled?: (
+    agent: AgentKind,
+    providerId: string,
+    model: { id: string; defaultEnabled?: boolean },
+  ) => boolean,
 ) {
   const models = provider.models[agent] ?? [];
-  const preferred = modelIds.map((id) => models.find((model) => model.id === id));
   // Both renderer and unattended callers keep the same-provider fallback.
   // Without local visibility overrides, use the catalog's default visibility.
   // Cindy Auto is an upstream route identity; do not substitute a fixed model.
-  const fallback = allowOtherModels ? models.slice().sort(
-    (a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER),
-  ) : [];
-  return [...preferred, ...fallback]
-    .find(
-      (model) =>
-        model !== undefined &&
-        (enabled ? enabled(agent, provider.id, model) : model.defaultEnabled !== false) &&
-        isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
-    );
+  const candidates =
+    pass === 'serverMarkedAuto' || pass === 'serverMarkedGroupAuto'
+      ? models
+          .filter(
+            (model) =>
+              isServerMarkedAuto(model, agent) &&
+              (pass !== 'serverMarkedGroupAuto' || model.id !== 'auto'),
+          )
+          .sort(bySortOrder)
+      : pass === 'preferred'
+        ? modelIds.map((id) => models.find((model) => model.id === id))
+        : models.slice().sort(bySortOrder);
+  return candidates.find(
+    (model) =>
+      model !== undefined &&
+      (enabled ? enabled(agent, provider.id, model) : model.defaultEnabled !== false) &&
+      isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
+  );
+}
+
+function isAvailableDefaultProvider(provider: ProviderView): boolean {
+  return provider.connected && !provider.suspended && !provider.modelDiscoveryFailure;
+}
+
+/** 普通草稿跨 Cindy 来源校准的前提：当前引擎已有可用的服务端组默认。 */
+export function hasAvailableServerMarkedGroupAuto(
+  providers: readonly ProviderView[],
+  agent: AgentKind,
+  isModelEnabled?: Parameters<typeof matchingModel>[4],
+): boolean {
+  return connectedProvidersForAgent([...providers], agent).some(
+    (provider) =>
+      isCindyDistributedProvider(provider) &&
+      isAvailableDefaultProvider(provider) &&
+      matchingModel(provider, agent, [], 'serverMarkedGroupAuto', isModelEnabled) !== undefined,
+  );
 }
 
 /**
@@ -131,29 +187,31 @@ export function resolveNewMakerDefaultTuples(args: {
   const tuples: NewMakerDefaultTuple[] = [];
 
   for (const policy of DEFAULT_POLICIES) {
-    const matchingProviders = providers.filter(
-      (candidate) =>
-        providerCatalogId(candidate) === policy.providerId &&
-        candidate.connected &&
-        !candidate.suspended &&
-        !candidate.modelDiscoveryFailure &&
-        candidate.access?.kind === policy.accessKind,
-    );
+    const isPolicyProvider = (candidate: ProviderView) =>
+      providerCatalogId(candidate) === policy.providerId;
+    const matchingProviders = providers
+      .filter(
+        (candidate) =>
+          ((isPolicyProvider(candidate) && candidate.access?.kind === policy.accessKind) ||
+            (policy.serverMarkedAuto === true && isCindyDistributedProvider(candidate))) &&
+          isAvailableDefaultProvider(candidate),
+      )
+      // 服务端每个引擎只标一个默认；管理员恰在两次拉取之间改配置时，Cindy AI 与号池可能
+      // 短暂各标一个，此时以 Cindy AI 为准，不取决于来源列表的顺序。
+      .sort((a, b) => Number(isPolicyProvider(b)) - Number(isPolicyProvider(a)));
+    const passes: ModelSearchPass[] = [
+      ...(policy.serverMarkedAuto ? ['serverMarkedAuto' as const] : []),
+      'preferred',
+      ...(policy.allowOtherModels === false ? [] : ['other' as const]),
+    ];
     // Search every account for the recommendation before falling back to other
     // enabled models. An earlier account's fallback must not hide a later Sol.
-    policySearch: for (const allowOtherModels of [false, true]) {
-      if (allowOtherModels && policy.allowOtherModels === false) break;
+    policySearch: for (const pass of passes) {
       for (const provider of matchingProviders) {
         for (const agent of policy.agents) {
           const vendor = vendorForAgent(agent);
           if (!availableAgents.has(vendor)) continue;
-          const model = matchingModel(
-            provider,
-            agent,
-            policy.modelIds,
-            allowOtherModels,
-            args.isModelEnabled,
-          );
+          const model = matchingModel(provider, agent, policy.modelIds, pass, args.isModelEnabled);
           if (!model) continue;
           tuples.push({
             vendor,

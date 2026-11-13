@@ -15,7 +15,7 @@ vi.mock('../../localDb/client/current.js', async () => {
 import { tx } from '../../localDb/worker/opHandlers/tx.js';
 import { BotPlanWorkDirUnavailableError, prepareBotWorkspaceRuntime } from '../botWorkspaceRuntime.js';
 import { ensureBotChatOnlyWorkspaceDir } from '../botProfileFolder.js';
-import { chatGroupLaneRouteKey } from '../../../shared/botGroupChat.js';
+import { chatGroupLaneRouteKey, chatGroupTalkRouteKey } from '../../../shared/botGroupChat.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
 
 function laneSession(id: string) {
@@ -54,15 +54,25 @@ describe('Bot group lane transactions', () => {
         status TEXT NOT NULL,
         current_version INTEGER NOT NULL DEFAULT 1
       );
+      CREATE TABLE bot_profile_versions (bot_id TEXT, version INTEGER, capabilities_json TEXT);
+      INSERT INTO bot_profile_versions VALUES ('mimi',3,'{"permissions":"ask"}'), ('abu',1,'{"permissions":"ask"}');
       CREATE TABLE sessions (
-        id TEXT PRIMARY KEY, title TEXT, working_dir TEXT, workspace_kind TEXT, model TEXT,
+        id TEXT PRIMARY KEY, title TEXT, working_dir TEXT, project_dir TEXT, workspace_kind TEXT, model TEXT,
+        scheduled_model_baseline TEXT,
         effort TEXT, permission_mode TEXT, status TEXT NOT NULL, sdk_session_id TEXT,
         total_token_usage INTEGER, total_cost_usd REAL, context_tokens INTEGER,
         context_window INTEGER, fast_mode INTEGER, plan_mode_enabled INTEGER, cleared_at INTEGER,
         pinned_at INTEGER, user_send_at INTEGER, agent_kind TEXT, orca_role TEXT,
         parent_session_id TEXT, forked_at_message_id TEXT, worktree_path TEXT, extra_dirs TEXT,
-        remote_host_id TEXT, provider_id TEXT, source TEXT NOT NULL, created_at INTEGER,
+        remote_host_id TEXT, agent_device_id TEXT, provider_id TEXT, source TEXT NOT NULL, created_at INTEGER,
         updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (id TEXT PRIMARY KEY);
+      CREATE TABLE mcp_app_view_states (
+        message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+        state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
       );
       CREATE TABLE bot_session_links (
         id TEXT PRIMARY KEY,
@@ -119,6 +129,29 @@ describe('Bot group lane transactions', () => {
       .toEqual({ route_key: 'group:g1:plan:p1' });
   });
 
+  // bot-group-chat.md §7.5: a V2 teammate's group lane follows the group's project folder on this
+  // computer. Moving archives the old lane; a restart keeps the folder and fails if it is gone.
+  it('moves a group lane into the project folder and restarts it there', async () => {
+    const routeKey = chatGroupLaneRouteKey('g1', { mode: 'owner', revision: 1 });
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session: laneSession('lane-1') } });
+    const projectDir = path.join(ownerRoot, 'cindy');
+    await mkdir(projectDir);
+    const moved = { ...laneSession('lane-2'), workingDir: projectDir, projectDir, workspaceKind: 'project' };
+    expect(tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session: moved, replaceOtherWorkingDir: true } }))
+      .toEqual({ sessionId: 'lane-2', created: true, replacedSessionId: 'lane-1' });
+    expect(db.prepare("SELECT s.status, l.archived_at FROM sessions s JOIN bot_session_links l ON l.session_id = s.id WHERE s.id = 'lane-1'").get())
+      .toEqual({ status: 'archived', archived_at: 10 });
+    expect(tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session: laneSession('lane-3') } }))
+      .toEqual({ sessionId: 'lane-2', created: false });
+    const ensureWorkspaceDir = vi.fn(async () => path.join(ownerRoot, 'bots', 'mimi', 'workspace'));
+    const opts: MakerSessionCreateOpts = { id: 'lane-2', agentKind: 'claude-code', model: 'model-a', workingDir: '/stale', workspaceKind: 'dialogue' };
+    await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
+    expect(opts).toMatchObject({ workingDir: projectDir, workspaceKind: 'project', projectDir, remoteHostId: undefined });
+    await rm(projectDir, { recursive: true });
+    await expect(prepareBotWorkspaceRuntime({ ...opts, workingDir: '/stale' }, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir }))
+      .rejects.toBeInstanceOf(BotPlanWorkDirUnavailableError);
+  });
+
   it.each(['owner', 'tools', 'chat'] as const)('starts and restores a server plan lane with %s access without a local plan table', async mode => {
     const routeKey = `${chatGroupLaneRouteKey('g1', { mode, revision: 1 })}:plan:server-plan`;
     const workingDir = mode === 'chat'
@@ -138,6 +171,20 @@ describe('Bot group lane transactions', () => {
       expect((await stat(opts.workingDir)).isDirectory()).toBe(true);
     }
     expect(ensureWorkspaceDir).not.toHaveBeenCalled();
+  });
+
+  // bot-group-chat.md §7.0: a queue turn has no project folder. It starts where its group lane works:
+  // the teammate's own place, or the grant's isolated chat folder for chat-only access.
+  it.each(['owner', 'tools', 'chat'] as const)('starts a %s queue lane where its group lane works', async mode => {
+    const access = { mode, revision: 1 };
+    const routeKey = chatGroupTalkRouteKey('g1', access, 'queue-1');
+    const workingDir = mode === 'chat' ? await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', chatGroupLaneRouteKey('g1', access)) : '/private-bot-home';
+    const session = { ...laneSession('queue-step'), workingDir, workspaceKind: 'dialogue' };
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
+    const ensureWorkspaceDir = vi.fn(async () => '/private-bot-home');
+    const opts: MakerSessionCreateOpts = { id: session.id, agentKind: 'claude-code', model: session.model, workingDir: '', workspaceKind: 'project', remoteHostId: 'stale-host' };
+    await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
+    expect(opts).toMatchObject({ workingDir, workspaceKind: 'dialogue', remoteHostId: undefined });
   });
 
   it.each(['', ':plan:server-plan'])('isolates chat-only startup%s even with a matching legacy project plan and stale session directory', async suffix => {

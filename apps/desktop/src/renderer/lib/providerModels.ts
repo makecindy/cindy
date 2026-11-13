@@ -106,6 +106,7 @@ export function resolveFastSupported(params: {
   providerId: string | null | undefined;
   modelId: string;
   agentKind: AgentKind | null;
+  fastMode?: boolean | 'ultrafast';
 }): boolean {
   const { deviceId, deviceProviders, localProviders, capabilities, providerId, modelId, agentKind } =
     params;
@@ -114,6 +115,15 @@ export function resolveFastSupported(params: {
   if (!capabilities?.hasFastMode) return false;
 
   const effectiveProviders = deviceId ? deviceProviders : localProviders;
+
+  // Ultrafast eligibility belongs to the execution account; flattened or local
+  // fallback capabilities cannot prove that a remote/other account supports it.
+  if (params.fastMode === 'ultrafast') {
+    const provider = effectiveProviders.find((entry) => entry.id === providerId);
+    const model = agentKind === 'codex' ? findCatalogModel(provider, modelId, agentKind) : undefined;
+    return model?.supportsUltrafastMode === true &&
+      sessionModelSupportsFastMode(effectiveProviders, providerId ?? null, modelId, agentKind);
+  }
 
   // 旧被控端（或 device providers 加载首帧）→ 无 per-provider 数据 → 回退拍平 caps。
   if (deviceId && effectiveProviders.length === 0) {

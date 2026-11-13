@@ -1,3 +1,10 @@
+import '@/styles/chatContentDirection.css';
+import { BotChatQuoteInBubble } from '@/features/bots/BotChatQuoteViews';
+import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
+import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
+import type { ChatReplyQuote } from '../../../shared/chatReplyQuote';
+import { BotDmThreadPreview } from '@/features/bots/BotDmThreadPreview';
+import { useBotDmThreadForMessage } from '@/features/bots/botDmThreadsContext';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import type { ImMessageSource } from '../../../shared/imMessageSource';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -16,8 +23,8 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  * F-MSG-DOC: document paths rendered inline as @path chips in text content
  */
 
-import { CHAT_BODY_CLASS } from './chatChrome';
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   ChevronDown,
@@ -65,7 +72,6 @@ import {
   useAgentCapabilities,
   type AgentKind as MakerAgentKind,
 } from '@/hooks/useAgentCapabilities';
-import { useAgentOnOtherDevice } from './AgentOnOtherDeviceContext';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isRemoteFileOrigin, originDeviceId, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
@@ -79,9 +85,10 @@ import {
 } from '@/lib/chatQuotes';
 import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
+import { renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -111,13 +118,9 @@ import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@/lib/mentionRefFormat';
 import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } from '@/cindy-brain/ghostCommand';
 import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
-import {
-  GhostFulfillmentContext,
-  GhostSummonCard,
-  hasGhostSummonFulfillment,
-  type GhostSummonDisplay,
-} from './GhostSummonCard';
+import { GhostSummonCard } from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
@@ -145,6 +148,11 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  pluginUi: PluginUiMessageCandidates;
+  /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
+  pendingActions?: ReactNode;
+  pendingEditing?: boolean;
+  pendingIndicator?: ReactNode;
   sharedAuthorName?: string;
   /** 共享任务成员 id:作者行悬停显示。 */
   sharedAuthorMemberId?: string;
@@ -202,6 +210,8 @@ interface UserMessageProps {
   isLastUserMessage?: boolean;
   /** 伙伴对话使用常显、无 Fork 的轻量消息操作栏。 */
   simplifiedBotConversation?: boolean;
+  /** 伙伴私聊引用回复:本条回复的那条消息,气泡正文上方显示引用块。 */
+  replyQuote?: ChatReplyQuote;
   /** scheduler 注入的消息来源标记;存在时在气泡上方渲染"由自动化任务发送"标签。 */
   automationOrigin?: MessageAutomationOrigin;
   /** Hook 来源元数据;存在时渲染左对齐 Cindy 署名任务卡片(替代右对齐气泡)。 */
@@ -820,6 +830,10 @@ export function renderContent(
 // 老 UserImageItemView 已迁出,见 ChatImageView.tsx。
 
 export function UserMessage({
+  pluginUi,
+  pendingActions,
+  pendingEditing,
+  pendingIndicator,
   sharedAuthorName,
   sharedAuthorMemberId,
   workingDir,
@@ -841,6 +855,7 @@ export function UserMessage({
   isFirstUserMessage,
   isLastUserMessage,
   simplifiedBotConversation = false,
+  replyQuote,
   automationOrigin,
   hookSource,
   sourceDevice,
@@ -869,10 +884,8 @@ export function UserMessage({
   // 远端 cc daemon 会话暂不支持 Fork/Rewind 依赖的 query rebuild (MVP),
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
-  // Agent 在另一台电脑运行：会话记录在那台，分叉入口先隐藏(回退照常可用)。
-  const agentOnOtherDevice = useAgentOnOtherDevice();
   const forkSupported =
-    !isRemote && !agentOnOtherDevice && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
     !isRemote &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
@@ -887,6 +900,7 @@ export function UserMessage({
     name: string;
   } | null>(null);
   const [orcaExpanded, setOrcaExpanded] = useState(false);
+  const [letterExpanded, setLetterExpanded] = useState(false);
   const [longMessageExpanded, setLongMessageExpanded] = useState(false);
   // issue #946: 已发送消息里点粘贴段胶囊 → 只读全文 lightbox(无文件路径可给
   // TextLightbox,与 composer 侧一样走 ToolPayloadLightbox 的 text 模式)。
@@ -908,7 +922,10 @@ export function UserMessage({
   // 显示文本推导(Orca JSON 解包 / hook 消息取 userText 或剥 <thread_context>)
   // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts;上面已
   // 解析过的 Orca 结果传入复用,渲染热路径不重复 JSON.parse(Copilot review)。
-  const displayContent = resolveUserDisplayText({ content, hookSource }, orcaCommunication);
+  const displayContent = resolveUserDisplayText({ content, hookSource, automationOrigin }, orcaCommunication);
+  // Only the bubble is decoded. Draft restoration must retain the canonical envelope.
+  const forwardedDraftBody = !hookSource && !orcaCommunication
+    && automationOrigin?.kind === 'session' && displayContent !== content ? content : undefined;
   const groupContext = useMemo(
     () => resolveHookGroupContext({ content, hookSource }),
     [content, hookSource],
@@ -948,13 +965,16 @@ export function UserMessage({
   );
   // 意识指令等既有语义判断只看用户自己的正文,不把引用原文误识别成命令。
   const bubbleBody = useMemo(() => joinChatQuoteTextSegments(quoteSegments), [quoteSegments]);
+  const draftBody = forwardedDraftBody ?? bubbleBody;
   const inlineQuoteCount = quoteSegments.reduce(
     (count, segment) => count + (segment.kind === 'quote' ? 1 : 0),
     0,
   );
   const quoteDraftDocument = useMemo(
-    () => (quotesEncoded ? quoteSegmentsToComposerDocument(quoteSegments) : undefined),
-    [quoteSegments, quotesEncoded],
+    () => forwardedDraftBody !== undefined
+      ? textToTiptapDoc(forwardedDraftBody)
+      : quotesEncoded ? quoteSegmentsToComposerDocument(quoteSegments) : undefined,
+    [forwardedDraftBody, quoteSegments, quotesEncoded],
   );
   // $指令 开头且确认命中意识时,气泡正文渲剥掉指令 token 的余文($token 的
   // 语义由气泡内的召唤标注行承载,正文不重复报幕);普通消息里的 $word 不受
@@ -964,33 +984,9 @@ export function UserMessage({
   // 触发符恒为 1 个字符($ 或全角变体),token = 触发符 + 指令词。
   const ghostCmdToken = ghostCmd ? bubbleBody.slice(0, 1 + ghostCommandTokenLength(ghostCmd)) : null;
   const ghostPromptBody = ghostCmdToken ? bubbleBody.slice(ghostCmdToken.length).trim() : '';
-  // 软提示兑现(语义调用):本条消息触发的那一轮 AI 真调了被提及的意识时,
-  // 升级为与硬指令同形态的召唤标注行。判据来自 GhostFulfillmentContext
-  // (MessageStream 从会话历史现算,重启幂等)。
-  const ghostFulfillment = useContext(GhostFulfillmentContext);
-  const ghostFulfilledIds = messageClientId ? ghostFulfillment.get(messageClientId) : undefined;
-  const ghostMentionFulfilled =
-    ghostDirective?.kind === 'mention' &&
-    Boolean(
-      ghostDirective.ghosts.some((g) => hasGhostSummonFulfillment(ghostFulfilledIds, g.ghostId)),
-    );
-  // 语义自主召唤:消息一个触发词都没命中(无任何追加段),AI 本轮仍真调了
-  // ghost_call → 合成 semantic 展示数据,渲染同一行召唤标注(与硬指令/兑现
-  // 软提示渲染一致)。orca / hook 消息不参与(它们本就不经意识展开)。
-  const ghostSemanticDisplay: GhostSummonDisplay | null =
-    !ghostDirective &&
-    !orcaCommunication &&
-    !hookSource &&
-    ghostFulfilledIds &&
-    ghostFulfilledIds.size > 0
-      ? { kind: 'semantic', ghostIds: [...ghostFulfilledIds] }
-      : null;
-  // 召唤展示数据(追加段解析优先;没有追加段才可能是 semantic),按形态分流:
-  // - 标注行(chip):硬指令 / 软提示已兑现 / semantic → 嵌进气泡顶部;
-  // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
-  const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
-  const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostMentionFulfilled;
-  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostCardDisplay;
+  // A user's bubble records their selection, never the assistant's later calls.
+  const ghostPillForm = ghostDirective?.kind === 'mention';
+  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostDirective;
   const ghostPillDisplay = !simplifiedBotConversation && ghostPillForm ? ghostDirective : null;
   // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的
   // 偏移投影用):硬指令剥 $token,其余原样。
@@ -1056,7 +1052,10 @@ export function UserMessage({
   const projectedSource = projectSlashCommandsInText(ghostBody, slashCommandRanges);
   const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(projectedSource) : projectedSource;
   const visibleSource = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
-  const editSubmitText = quotesEncoded
+  // Display decoding must not change an unedited resend's wire bytes.
+  const editSubmitText = forwardedDraftBody !== undefined
+    ? forwardedDraftBody
+    : quotesEncoded
     ? ghostBody
     : copyBody !== visibleSource
       ? visibleSource
@@ -1072,10 +1071,17 @@ export function UserMessage({
           deviceId: getStickySessionDeviceId(sessionId),
         })
       : undefined;
+  // 伙伴私聊里「回复」是引用回复:引用块等在输入框上方(cindy-bots-runtime.md「私聊引用回复」)。
+  const botQuote = useBotChatQuote(simplifiedBotConversation ? sessionId : undefined);
   const handleAddToChat = useCallback(() => {
+    if (botQuote && messageClientId) {
+      const quote = botReplyQuoteFor({ clientId: messageClientId, role: 'user', content, images, files, automationOrigin, hookSource });
+      if (quote) botQuote.quote(quote);
+      return;
+    }
     if (!sessionId || !messageDeepLink) return;
     insertSessionLinkIntoComposer({ targetSessionId: sessionId, href: messageDeepLink });
-  }, [messageDeepLink, sessionId]);
+  }, [botQuote, content, files, images, automationOrigin, hookSource, messageClientId, messageDeepLink, sessionId]);
 
   // 分享为图片:进入选择模式并预选本条(入口那条天然该已勾选,省一次点击)。
   const handleShareAsImage = useMemo(
@@ -1095,7 +1101,7 @@ export function UserMessage({
     sessionId,
     messageClientId,
     forkBlocked: shouldBlockUserFork(sessionRunning, delivery),
-    draftText: quotesEncoded ? undefined : bubbleBody,
+    draftText: quotesEncoded ? undefined : draftBody,
     draftDocument: quoteDraftDocument,
   });
   const handleDelete = useDeleteMessage({
@@ -1138,7 +1144,7 @@ export function UserMessage({
       // Rewind soft-deletes this row server-side (rewind_at set), so on next
       // reload it disappears from the list; the composer keeps the draft so
       // the user can edit and re-send.
-      const draftText = quoteDraftDocument ?? textToTiptapDoc(bubbleBody);
+      const draftText = quoteDraftDocument ?? textToTiptapDoc(draftBody);
       const probe = rewindSourceProbeRef.current;
       rewindSourceProbeRef.current = null;
       const draftImages = probe && probe.images === images ? probe.imagesForDraft() : images;
@@ -1161,16 +1167,15 @@ export function UserMessage({
       // Force chat store to re-fetch messages (server filters rewind_at).
       makerChatStore.reloadMessages(sessionId);
     },
-    [sessionId, bubbleBody, quoteDraftDocument, images, files],
+    [sessionId, draftBody, quoteDraftDocument, images, files],
   );
 
-  // 第一条 user 消息没有可作为锚点的 prior assistant uuid → 后端必抛
-  // NO_PRIOR_ASSISTANT。直接藏掉按钮，避免无效点击。
-  // 同时按 capabilities.rewind.supported gate；文件恢复能力由实际 Git 保存点决定。
+  // 第一条消息同样可回退：Codex / Pi 回到原生线程开头，Claude 目标之前没有可续接的
+  // 回复时换全新原生会话(见 main 侧 commitRewindAtMessage)。
+  // 按 capabilities.rewind.supported gate；文件恢复能力由实际 Git 保存点决定。
   const canRewind =
     !sharedGuest &&
     Boolean(sessionId && messageClientId) &&
-    !isFirstUserMessage &&
     rewindSupported &&
     !orcaCommunication &&
     !hasEmbeddedImPrompt(hookSource);
@@ -1178,8 +1183,8 @@ export function UserMessage({
   // ── edit-last-message ──────────────────────────────────────────────────
   // 编辑 = rewind 到本条 + 用编辑后的文本立即重发(见 UserMessageEditBox)。
   // 只在最后一条 user 消息开放;能力门控与 Rewind 完全一致(编辑走同一条
-  // commit 链路,rewind 不可用则编辑必然也不可用),首条消息同样因缺
-  // prior assistant 锚点而隐藏。进入编辑态零副作用,取消原样恢复。
+  // commit 链路,rewind 不可用则编辑必然也不可用),首条消息同样可编辑。
+  // 进入编辑态零副作用,取消原样恢复。
   const [editing, setEditing] = useState(false);
   // 被意识钩子拦下的消息(订阅槽①):从未落库、无 turn 可 rewind,编辑走
   // 普通重发(onCommitOverride),故可编辑条件与 rewind 无关——只要有
@@ -1202,11 +1207,11 @@ export function UserMessage({
     }
   }, [sessionId]);
 
-  // 点编辑 = 立即中断运行中的 turn(产品决策,对齐 2026-07 的 Codex 调研:
-  // 用户点编辑的意图就是"停下来我要改",且 interrupt 终止性、无恢复原语,
-  // 取消编辑后 AI **不会**继续工作——Codex 同语义,用户已知悉接受)。
-  // 发送侧不依赖这里的 stop 已完成:EditBox 会等 sessionRunning 翻 false 再
-  // 提交(含超时兜底 + 发送时再补一次 stop 的保险),两端解耦。
+  // 点编辑不中断运行中的 turn(2026-11 产品决策):interrupt 终止性、无恢复
+  // 原语,点编辑就停会让「误点 / 改主意取消」白白丢掉这轮工作。中断推迟到
+  // 编辑框点「发送」:EditBox 经 onRequestStop 中断并等 sessionRunning 翻 false
+  // 再提交(含超时兜底);取消编辑对运行中的 turn 零影响。
+  // 运行中编辑按钮不外显、收进 More 菜单(editInMenu),停下后回到操作行。
   //
   // 队列门槛:有排队中的消息时拒绝进入编辑(toast 说明)。排队消息是针对
   // rewind 前的旧上下文写的,而编辑重发只会追加到 paused 队列尾部——Continue
@@ -1218,9 +1223,8 @@ export function UserMessage({
       toast.error(t('chat.userMessage.editQueueNotEmpty'));
       return;
     }
-    if (sessionRunning) stopForEdit();
     setEditing(true);
-  }, [sessionId, sessionRunning, stopForEdit, t]);
+  }, [sessionId, t]);
 
   // 稳定引用:内联箭头会让 EditBox 的 doCommit(依赖 onSent)每次父组件
   // 重渲都重建,连带"等待停止接力" effect 无谓重跑(bot review 指出)。
@@ -1247,27 +1251,58 @@ export function UserMessage({
 
   const orcaWorkerRole =
     automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
+  const orcaBatchCount = automationOrigin?.kind === 'session' ? automationOrigin.orcaAutoBridgeBatchCount : undefined;
   const orcaCardTitle =
-    orcaCommunication?.orcaSource === 'lead'
-      ? t('chat.userMessage.orcaFromLead')
-      : orcaWorkerRole
-        ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
-        : t('chat.userMessage.orcaFromWorker');
+    orcaBatchCount
+      ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
+      : orcaCommunication?.orcaSource === 'lead'
+        ? t('chat.userMessage.orcaFromLead')
+        : orcaWorkerRole
+          ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
+          : t('chat.userMessage.orcaFromWorker');
+
+  // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
+  // （2026-11-10 主人裁决；普通任务页不变）。
+  const botLetter =
+    simplifiedBotConversation && !editing && !orcaCommunication && !hookSource
+    && automationOrigin?.kind === 'session' && !automationOrigin.orca;
+  const letterPreview = botLetter
+    ? (displayContent.split('\n').find((line) => line.trim()) ?? '').trim()
+    : '';
+  const attachmentsInBubble =
+    simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && !botLetter && (hasImages || hasFiles);
+  // 伙伴私聊：常用操作始终在气泡下方，保留群聊原图标与菜单。
+  const bubbleActions = simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && !botLetter
+    && Boolean(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble);
+  // 私聊话题：只有本机伙伴主对话里、主人自己发的消息能开话题（cindy-bots-runtime.md「私聊话题」）。
+  const dmThread = useBotDmThreadForMessage(
+    simplifiedBotConversation && !sharedGuest && !isBlocked && !automationOrigin && !orcaCommunication && !hookSource ? sessionId : undefined,
+    messageClientId,
+  );
 
   // Attachments belong to the user message independently of its visual shell.
-  const messageActions = (
+  const messageActions = pendingActions ?? (
     <MessageActionBar
+      pluginUi={pluginUi}
       createdAt={createdAt}
       copyText={copyText}
       copyLinkText={messageDeepLink}
-      align={hookSource ? 'left' : 'right'}
+      align={hookSource || botLetter ? 'left' : 'right'}
       hovered={hovered}
       simplifiedBotConversation={simplifiedBotConversation}
+      companionFooter={bubbleActions}
+      replyAction={dmThread && bubbleActions ? {
+        onClick: dmThread.open,
+        label: dmThread.thread
+          ? t('bots.groupChat.server.openTopic', { count: dmThread.thread.replyCount })
+          : t('bots.groupChat.server.startTopic'),
+      } : undefined}
       onFork={!isBlocked && canFork ? handleFork : undefined}
       onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
       onShareAsImage={handleShareAsImage}
       onDelete={!sharedGuest && !isBlocked && sessionId && messageClientId ? handleDelete : undefined}
       onEdit={canEdit ? handleEdit : undefined}
+      editInMenu={sessionRunning === true}
       onRewind={!isBlocked && canRewind ? handleRewind : undefined}
       rewindInFlight={rewindOpen}
     />
@@ -1300,7 +1335,7 @@ export function UserMessage({
       <div
         className={cn(
           'flex flex-wrap items-end gap-1.5',
-          hookSource ? 'justify-start' : 'justify-end',
+          hookSource || botLetter || attachmentsInBubble ? 'justify-start' : 'justify-end',
         )}
       >
         {files.map((f, idx) => (
@@ -1325,25 +1360,35 @@ export function UserMessage({
       // scrollIntoView 也以此为目标)。messageClientId 缺失时不挂属性,以免
       // querySelector 命中"data-user-msg-id" 空字符串。
       {...(messageClientId ? { 'data-user-msg-id': messageClientId } : {})}
-      // 自己发送的消息不显示主动浮出的“添加到对话”；右键菜单仍可添加。
-      data-selection-floating-quote-disabled=""
+      data-selection-quote-scope=""
       className={cn(
         'flex w-full',
-        orcaCommunication || hookSource ? 'justify-start' : 'justify-end',
+        orcaCommunication || hookSource || botLetter ? 'justify-start' : 'justify-end',
+        bubbleActions && 'group/message',
+        simplifiedBotConversation && 'chat-bubble-layout',
+        // 与伙伴回复的气泡对齐：头像 28px + 间距 10px。
+        botLetter && 'group/letter pl-[38px]',
       )}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
+      {pendingIndicator && <span className="mr-2 flex h-12 shrink-0 items-center text-[var(--text-secondary)]">{pendingIndicator}</span>}
       <div
         className={cn(
           'flex flex-col gap-2',
-          orcaCommunication || hookSource
+          botLetter
+            ? cn(CHAT_BUBBLE_COLUMN_CLASS, 'w-full items-start')
+            : orcaCommunication || hookSource
             ? 'w-full max-w-[560px] items-start'
             : // 编辑态铺满可用宽度(上限 720px,Codex 同款"气泡展开成编辑器"观感);
               // 附件 chips 行保持右对齐不动。
               editing
               ? 'w-full max-w-[720px] items-end'
-              : 'max-w-[488px] items-end',
+              : // 伙伴私聊与群聊同一气泡上限（bot-group-chat.md §5）。
+                // 左侧留出贴边操作栏的位置。
+                simplifiedBotConversation
+                ? cn(CHAT_BUBBLE_COLUMN_CLASS, 'items-end')
+                : 'max-w-[488px] items-end',
         )}
       >
         {sharedAuthorName && (
@@ -1396,12 +1441,42 @@ export function UserMessage({
               </button>
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
-                  <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-[var(--foreground)]">
+                  <pre data-selection-quote-body="" className="chat-content-text m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
                     {displayContent}
                   </pre>
                 </div>
               )}
             </div>
+          </>
+        ) : botLetter ? (
+          <>
+            <BotTaskLetterPill
+              senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+              senderTitle={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionTitle ?? null : null}
+              hostSessionId={sessionId}
+              preview={letterPreview}
+              expanded={letterExpanded}
+              onToggle={() => setLetterExpanded((value) => !value)}
+            />
+            {letterExpanded && (
+              <div className="flex w-full flex-col items-start gap-1.5 border-l-2 border-[var(--border-default)] pl-3">
+                <div className="chat-content-text w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                  {displayContent}
+                </div>
+                <BotTaskLetterOpen
+                  senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+                  hostSessionId={sessionId}
+                />
+              </div>
+            )}
+            {imageAttachmentNodes}
+            {fileAttachmentNodes}
+            {/* 伙伴对话的操作栏常显；来信收起时只占一行，展开后操作在悬停或聚焦时出现。 */}
+            {letterExpanded && (
+              <div className="opacity-0 transition-opacity group-hover/letter:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
+                {messageActions}
+              </div>
+            )}
           </>
         ) : hookSource && !editing ? (
           <>
@@ -1454,8 +1529,9 @@ export function UserMessage({
                 </span>
               </span>
             )}
-            {imageAttachmentNodes}
-            {fileAttachmentNodes}
+            {/* 伙伴私聊：图片与文件随正文进同一个气泡（编辑态照常在上方）。 */}
+            {!attachmentsInBubble && imageAttachmentNodes}
+            {!attachmentsInBubble && fileAttachmentNodes}
             {/* edit-last-message: 编辑态原地替换文本气泡 + 操作条(附件 chips 保持
             只读展示在上方);非编辑态走原有渲染。 */}
             {editing && sessionId && messageClientId ? (
@@ -1503,36 +1579,22 @@ export function UserMessage({
                 {/* 召唤标注行(chip)嵌进气泡顶部;正文永远回归文字气泡(2026-07-29
             取消合并形态)。气泡在有标注、有引用或有正文任一时渲染——$指令
             无余文时气泡只剩标注行。 */}
-                {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay) && (
-                  <div
+                {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble) && (
+                  <ChatBubble
+                    data-plugin-appearance-region
+                    data-plugin-appearance-speaker="user"
+                    speaker="user"
                     // 只剩插件标注行的气泡:分享图会剥掉标注,整泡一起去掉,不留空壳。
-                    {...(inlineQuoteCount === 0 && !displayBubbleBody.trim()
+                    // 伙伴私聊里附件也在气泡内,有附件就不是空壳。
+                    {...(inlineQuoteCount === 0 && !displayBubbleBody.trim() && !attachmentsInBubble
                       ? { [SHARE_SOURCE_ATTR]: '' }
                       : {})}
-                    className={cn(
-                      // overflow-wrap:anywhere（不是 break-words）才能让超长无空格序列
-                      // 在任意字符处断行，并把内容的 min-content 缩小到一个字符宽。
-                      // min-w-0 解除 flex item 默认的 min-width:auto，否则父容器的
-                      // max-w-[488px] 会被超长 token 顶穿。两者缺一不可。
-                      'relative min-w-0 max-w-full rounded-xl',
-                      'border border-[var(--msg-user-border)]',
-                      'bg-[var(--msg-user-bg)]',
-                      'px-4 py-3',
-                      CHAT_BODY_CLASS,
-                      'text-[var(--msg-user-text)]',
-                      'select-text',
-                    )}
+                    className={cn("select-text", pendingEditing && "opacity-40 transition-opacity motion-reduce:transition-none")}
                   >
                     {ghostChipDisplay && (
-                      /* ghost-summon-chip:标注行(法阵 + 意识名 + 状态 + 展开
-                 caret)。running = 本条消息触发的 turn 仍在执行(最后一条
-                 user 消息 + 会话流式中),期间法阵旋转,turn 结束播终态编舞。
-                 下方有正文/引用时加分隔线,单独成泡时不加。 */
                       <GhostSummonCard
                         directive={ghostChipDisplay}
                         commandNamespace={ghostCmd?.namespace ?? undefined}
-                        running={Boolean(sessionRunning) && Boolean(isLastUserMessage)}
-                        {...(messageClientId ? { messageClientId } : {})}
                         className={
                           inlineQuoteCount > 0 || displayBubbleBody.trim()
                             ? 'mb-2.5 border-b border-[var(--msg-user-border)] pb-2.5'
@@ -1540,6 +1602,11 @@ export function UserMessage({
                         }
                       />
                     )}
+                    {replyQuote && botQuote ? (
+                      <div className="mb-1.5 flex min-w-0">
+                        <BotChatQuoteInBubble quote={replyQuote} context={botQuote} align="left" />
+                      </div>
+                    ) : null}
                     {collapseMeasureEnabled && (
                       /* 收起判定的测量镜像:与正文同宽(inset-x-4 对应 px-4)、同字号
                  同换行规则的纯文本。max-h-0 + overflow-hidden 让它不占布局、
@@ -1549,7 +1616,7 @@ export function UserMessage({
                         aria-hidden="true"
                         className={cn(
                           'invisible absolute inset-x-4 top-0 max-h-0 overflow-hidden',
-                          'whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text whitespace-pre-wrap [overflow-wrap:anywhere]',
                         )}
                       >
                         {collapseMeasureBody}
@@ -1557,8 +1624,9 @@ export function UserMessage({
                     )}
                     {inlineQuoteCount > 0 ? (
                       <div
+                        data-selection-quote-body=""
                         className={cn(
-                          'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
                             (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
@@ -1633,9 +1701,13 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
+                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId,
+                        disabled: isRemoteFileOrigin(sessionFileCtx.origin), plugin: sourcePlugin?.pluginId,
+                        context: () => ({ message: { clientId: messageClientId, role: 'user', content } }) } : undefined,
                       <div
+                        data-selection-quote-body=""
                         className={cn(
-                          'whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
                             (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
@@ -1693,6 +1765,7 @@ export function UserMessage({
                               bubbleAgentReferences,
                             )}
                       </div>
+                      )
                     ) : null}
                     {shouldCollapseLongMessage && (
                       <button
@@ -1702,8 +1775,8 @@ export function UserMessage({
                         className={cn(
                           'mt-2 inline-flex items-center gap-1 rounded-full px-1 py-0.5',
                           'text-12 font-medium leading-5',
-                          'text-[var(--msg-user-text)] opacity-65 transition-opacity',
-                          'hover:opacity-100',
+                          'text-[var(--text-secondary)] transition-colors',
+                          'hover:text-[var(--msg-user-text)]',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
                         )}
                       >
@@ -1717,15 +1790,18 @@ export function UserMessage({
                         )}
                       </button>
                     )}
-                  </div>
+                    {attachmentsInBubble && (
+                      <div className={cn('flex flex-col items-start gap-2', (inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay) && 'mt-2')}>
+                        {imageAttachmentNodes}
+                        {fileAttachmentNodes}
+                      </div>
+                    )}
+                  </ChatBubble>
                 )}
-                {/* ghost-summon-pill:未兑现的软提示保持低调胶囊,留在气泡下方
+                {/* ghost-summon-pill:历史提及保持低调胶囊,留在气泡下方
             (chip 标注行形态见气泡内部;提示原文仍可点开查看)。 */}
                 {ghostPillDisplay && (
-                  <GhostSummonCard
-                    directive={ghostPillDisplay}
-                    {...(messageClientId ? { messageClientId } : {})}
-                  />
+                  <GhostSummonCard directive={ghostPillDisplay} />
                 )}
                 {/* 订阅槽①:被意识钩子拦下 —— 气泡照常显示(未发出),下方渲一条
             error 红条,内容 = 意识返回的文本(直接显示,主机不加框不署名);
@@ -1742,6 +1818,10 @@ export function UserMessage({
                 right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}
                 {messageActions}
+                {dmThread?.thread ? (
+                  <BotDmThreadPreview align="right" thread={dmThread.thread} bot={dmThread.bot}
+                    unread={dmThread.unread} onOpen={dmThread.open} />
+                ) : null}
               </>
             )}
           </>

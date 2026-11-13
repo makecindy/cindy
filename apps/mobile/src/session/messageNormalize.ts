@@ -1,7 +1,10 @@
+import { normalizeAskQuestions, answerKey } from "@cindy/maker-shared/interaction";
+import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { formatDuration } from '@cindy/maker-shared/message-render';
 import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import { collectPluginInvocations, type PluginInvocation } from './pluginInvocations';
-import { extractPayloadToolResultFiles, extractPayloadToolCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
+import { extractPayloadToolResultFiles, extractPayloadToolCardIds, extractPayloadTurnEndCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
 import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { readBotDirectMessageMeta, type BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
@@ -23,6 +26,9 @@ import {
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText, parseInputHandoffEndRecord } from '@cindy/maker-shared/synthetic-trigger';
+import {
+  asyncQuestionReplyDisplayText, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+} from '@cindy/maker-shared/interaction';
 import {
   isHookSchedulerOrigin,
   readMessageSourceDevice,
@@ -49,7 +55,7 @@ import {
   parseOrcaPersistedMessage,
   type OrcaCollabCard,
 } from '@/session/orcaCollab';
-import { isMobileImPlatform, type MobileImPlatform } from '@/session/messageSourceLabels';
+import { isMobileImPlatform, orcaAutoBridgeBatchCount, type MobileImPlatform } from '@/session/messageSourceLabels';
 import {
   parseMobilePersistedSessionReferenceMetadata,
   type MobilePersistedSessionReferenceMetadata,
@@ -90,6 +96,8 @@ export interface NormalizedRemoteMessage {
   role: RemoteMessageRole;
   label: string;
   body: string;
+  /** Original forwarded envelope for fork / rewind; display-only decoding must not change drafts. */
+  draftBody?: string;
   rawError?: string;
   errorSummaryKey?: string;
   /** user 消息正文包含产品引用编码；驱动跨端 marker/legacy 解析。 */
@@ -100,6 +108,8 @@ export interface NormalizedRemoteMessage {
   slashCommandRanges?: Array<{ start: number; end: number }>;
   /** user Composer 的结构化语义引用；用于 fork / rewind 恢复同款 chip。 */
   agentReferences?: AgentInputReference[];
+  /** user 专用：伙伴私聊的引用回复（信封 replyQuote），气泡正文上方显示引用块。 */
+  replyQuote?: ChatReplyQuote;
   secondaryBody?: string;
   authorization?: Record<string, unknown>;
   systemCardData?: Record<string, unknown>;
@@ -110,6 +120,7 @@ export interface NormalizedRemoteMessage {
   media?: NormalizedToolMedia[];
   files?: PayloadToolFile[];
   cardIds?: string[];
+  turnEndCardIds?: string[];
   pluginInvocations?: PluginInvocation[];
   diff?: NormalizedToolDiff;
   align: 'user' | 'agent';
@@ -264,7 +275,7 @@ const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
 export function normalizeRemoteMessages(
   messages: readonly RemoteMessage[],
-  options: { preserveSourceOrder?: boolean; sessionSource?: string | null } = {},
+  options: { preserveSourceOrder?: boolean; sessionSource?: string | null; includeInteractionTools?: boolean; pendingQuestionIds?: ReadonlySet<string> } = {},
 ): NormalizedRemoteMessage[] {
   // History views already place live tails after their persisted prefix. A live
   // row's provisional timestamp must not undo that order during normalization.
@@ -330,7 +341,10 @@ export function normalizeRemoteMessages(
       const agentTaskStatus = normalizeAgentTaskTerminalStatus(
         message.agentMeta?.agentTaskStatus,
       );
-      if (tool.toolName === 'AskUserQuestion' || tool.toolName === 'ExitPlanMode') continue;
+      // Private chat has dedicated interaction rows; process-only views need
+      // the read-only call/result too, or an entire work segment disappears.
+      const interactionTool = tool.toolName === 'AskUserQuestion' || tool.toolName === 'ExitPlanMode';
+      if (interactionTool && !options.includeInteractionTools) continue;
       // Lead 派活(create_worker / send_to_worker)→ 渲染成 dispatch 卡片(kind:'system' 使其成为
       // 独立卡片而非折叠进 tool_group),其余 tool 照常走下面的 tool 渲染。
       const dispatchCard = buildOrcaDispatchCard(tool.toolName, tool.input);
@@ -355,11 +369,12 @@ export function normalizeRemoteMessages(
         kind: 'tool',
         role: message.role,
         label: tool.toolName || 'tool_use',
-        body: tool.summary,
+        body: interactionTool ? contentToPreview(tool.input) : tool.summary,
         secondaryBody,
         media: extractToolResultMedia(secondaryBody ?? ''),
         files: extractPayloadToolResultFiles(secondaryBody ?? ''),
         cardIds: extractPayloadToolCardIds(secondaryBody ?? ''),
+        turnEndCardIds: extractPayloadTurnEndCardIds(secondaryBody ?? ''),
         diff: tool.diff,
         align: 'agent',
         createdAt: message.createdAt,
@@ -373,7 +388,7 @@ export function normalizeRemoteMessages(
     }
 
     if (message.role === 'ask_user') {
-      const ask = normalizeAskUser(message);
+      const ask = normalizeAskUser(message, options.pendingQuestionIds);
       if (ask) result.push(ask);
       continue;
     }
@@ -397,7 +412,7 @@ export function normalizeRemoteMessages(
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop);
+      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText, c?.outputLimit);
       const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),
@@ -414,6 +429,15 @@ export function normalizeRemoteMessages(
       continue;
     }
 
+    if (message.role === 'assistant' && readRecord(message.agentMeta?.modelChange)) {
+      result.push({
+        key: messageNormalizeKey(message), source: message, kind: 'system',
+        role: message.role, label: 'system:agent-switch', body: '',
+        systemCardType: 'agent-switch', systemCardData: readRecord(message.agentMeta?.modelChange)!,
+        align: 'agent', createdAt: message.createdAt,
+      });
+      continue;
+    }
     // Desktop persists context rebuilds as empty assistant rows with metadata.
     if (message.role === 'assistant') {
       const rebuild = readRecord(message.agentMeta?.contextRebuild);
@@ -443,6 +467,22 @@ export function normalizeRemoteMessages(
       const goalCard = normalizeGoalCard(message);
       if (goalCard) {
         result.push(goalCard);
+        continue;
+      }
+      const routeNote = readRecord(message.agentMeta?.pluginModelRoute);
+      if (routeNote) {
+        result.push({
+          key: messageNormalizeKey(message),
+          source: message,
+          kind: 'system',
+          role: message.role,
+          label: 'system:plugin-model-route',
+          body: '',
+          systemCardType: 'plugin-model-route',
+          systemCardData: routeNote,
+          align: 'agent',
+          createdAt: message.createdAt,
+        });
         continue;
       }
     }
@@ -489,6 +529,7 @@ export function normalizeRemoteMessages(
       const reportCard = parseOrcaPersistedMessage(
         message.content,
         orcaOrigin?.kind === 'orca' ? readString(orcaOrigin.senderLabel) ?? undefined : undefined,
+        orcaAutoBridgeBatchCount(orcaOrigin),
       );
       if (reportCard) {
         result.push({
@@ -503,7 +544,7 @@ export function normalizeRemoteMessages(
           orcaCard: reportCard,
           align: 'agent',
           createdAt: message.createdAt,
-          ...readSessionOrigin(message),
+          ...(orcaAutoBridgeBatchCount(orcaOrigin) ? {} : readSessionOrigin(message)),
         });
         continue;
       }
@@ -570,13 +611,33 @@ export function normalizeRemoteMessages(
       });
       continue;
     }
-    const rawBody = userContent ? userContent.text : contentToPreview(message.content);
+    // The question card already shows this answer: the row keeps its place in the
+    // timeline (like the hidden instruction rows above) without a second copy as a bubble.
+    if (userContent && isAnsweredAsyncQuestionClientId(message.clientId)) {
+      result.push({
+        key: messageNormalizeKey(message),
+        source: message,
+        kind: 'user',
+        role: message.role,
+        label: 'user',
+        body: '',
+        isSyntheticTrigger: true,
+        align: 'user',
+        createdAt: message.createdAt,
+      });
+      continue;
+    }
+    // Replies saved before the readable copy existed hold the text sent to the model.
+    const rawBody = userContent
+      ? (isAsyncQuestionReplyClientId(message.clientId) ? asyncQuestionReplyDisplayText(userContent.text) : userContent.text)
+      : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
     // /goal 裁决块只给 Desktop 驱动续跑,与 Desktop 一致只在显示层剥掉(原文仍在 source)。
     // 本机 IM 落库的就是用户原文:正文保持完整落库内容,分叉 / 回退据此恢复草稿。
     const body = hookSource && !hookSource.userTextContent
       ? hookSource.userText
-      : message.role === 'assistant' ? stripGoalVerdictBlock(rawBody) : rawBody;
+      : message.role === 'assistant' ? stripGoalVerdictBlock(rawBody)
+        : readRecord(message.agentMeta?.origin)?.kind === 'session' ? forwardedRequestDisplayText(rawBody) : rawBody;
     const turnCost = readTurnCost(message);
     result.push({
       key: messageNormalizeKey(message),
@@ -585,6 +646,7 @@ export function normalizeRemoteMessages(
       role: message.role,
       label: message.role,
       body,
+      ...(message.role === 'user' && !hookSource && body !== rawBody ? { draftBody: rawBody } : {}),
       attachments: userContent?.attachments,
       ...(userContent?.quotesEncoded === true ? { quotesEncoded: true } : {}),
       sessionReferences: userContent?.sessionReferences,
@@ -597,6 +659,7 @@ export function normalizeRemoteMessages(
       ...(userContent?.agentReferences?.length
         ? { agentReferences: userContent.agentReferences }
         : {}),
+      ...(userContent?.replyQuote ? { replyQuote: userContent.replyQuote } : {}),
       align: message.role === 'user' && hookSource === undefined ? 'user' : 'agent',
       createdAt: message.createdAt,
       isStreaming: readMessageStreaming(message) || undefined,
@@ -613,6 +676,24 @@ export function normalizeRemoteMessages(
       ...(message.role === 'user' ? readMessageSourceFields(message) : {}),
       ...(hookSource ? { hookSource } : {}),
     });
+    const quotaResumeInfo = readRecord(message.agentMeta?.autoResumeInfo);
+    if (message.role === 'user' && quotaResumeInfo?.reason === 'usage-limit-reset') {
+      // Same durable row, two visible parts: retain the user's original input
+      // and show the existing recovery activity without creating another turn.
+      result.push({
+        key: `${messageNormalizeKey(message)}:usage-limit-resume`,
+        source: message,
+        kind: 'system',
+        role: message.role,
+        label: 'system:auto-resume',
+        body: '',
+        systemCardType: 'auto-resume',
+        systemCardData: quotaResumeInfo,
+        isSyntheticTrigger: true,
+        align: 'agent',
+        createdAt: message.createdAt,
+      });
+    }
   }
 
   const pluginInvocations = collectPluginInvocations(sorted, toolResultPairing);
@@ -726,6 +807,7 @@ function parseUserContent(content: unknown): {
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
   agentReferences?: AgentInputReference[];
+  replyQuote?: ChatReplyQuote;
 } {
   const parsed = parseMaybeJsonObject(content);
   if (!parsed) {
@@ -740,8 +822,10 @@ function parseUserContent(content: unknown): {
   const pastedTextRanges = readSentPastedTextRanges(parsed.pastedTextRanges, text);
   const slashCommandRanges = readSentSlashCommandRanges(parsed.slashCommandRanges, text);
   const agentReferences = readAgentInputReferences(parsed.agentReferences, text);
+  const replyQuote = readChatReplyQuote(parsed.replyQuote);
   return {
     text,
+    ...(replyQuote ? { replyQuote } : {}),
     quotesEncoded: parsed.quotesEncoded === true,
     ...(pastedTextRanges ? { pastedTextRanges } : {}),
     ...(slashCommandRanges !== undefined ? { slashCommandRanges } : {}),
@@ -821,15 +905,17 @@ function normalizeGoalCard(message: RemoteMessage): NormalizedRemoteMessage | nu
   };
 }
 
-function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | null {
+function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlySet<string>): NormalizedRemoteMessage | null {
   const content = readRecord(message.content);
   if (!content) return null;
-  if (content.status !== 'answered') return null;
+  const withdrawalReason = content.status === 'cancelled' ? readString(content.withdrawalReason) : undefined;
+  if (content.status === 'pending' && (pendingQuestionIds === undefined || pendingQuestionIds.has(String(content.requestId)))) return null;
+  if (!['answered', 'cancelled', 'expired', 'pending'].includes(String(content.status))) return null;
 
-  const questions = readQuestionTexts(content.questions);
+  const questions = normalizeAskQuestions(content.questions);
   const answers = readStringRecord(content.answers);
   const pairs = questions.length > 0
-    ? questions.map((question) => ({ question, answer: answers?.[question] ?? '' }))
+    ? questions.map((question) => ({ question: question.question, answer: answers?.[answerKey(question)] ?? answers?.[question.question] ?? '' }))
     : [{
         question: readString(content.question) ?? contentToPreview(message.content),
         answer: readString(content.reply) ?? '',
@@ -837,7 +923,9 @@ function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | nul
 
   const body = pairs
     .filter((pair) => pair.question || pair.answer)
-    .map((pair) => `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
+    .map((pair) => content.status !== 'answered'
+      ? `Q: ${pair.question}\n${withdrawalReason ? `${i18n.t('interaction.panel.questionWithdrawn')} · ${withdrawalReason}` : i18n.t('interaction.panel.questionUnanswered')}`
+      : `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
     .join('\n\n');
 
   if (!body) return null;
@@ -925,13 +1013,6 @@ function buildToolDiff(toolName: string, input: unknown): NormalizedToolDiff | u
 
 export function extractToolResultMedia(toolResult: string): NormalizedToolMedia[] {
   return extractPayloadToolResultMedia(toolResult);
-}
-
-function readQuestionTexts(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => readString(readRecord(item)?.question))
-    .filter((item): item is string => !!item);
 }
 
 function readStringRecord(value: unknown): Record<string, string> | null {

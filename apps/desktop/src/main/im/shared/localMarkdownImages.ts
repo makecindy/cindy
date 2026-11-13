@@ -3,18 +3,21 @@
  * and an explicit delivery notice, never a machine-local URL.
  */
 
+import { imText } from './imText';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
+import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore.desktop';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
-import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
+import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore.desktop';
 import { materializeTaskImageText } from '../../cindy-media/taskImageDelivery';
 import {
   localTaskImagePath,
   taskImageReferences,
   rewriteTaskImageReferences,
 } from '../../cindy-media/taskImageMarkdown';
+
+type TaskImageReferenceLike = ReturnType<typeof taskImageReferences>[number];
 
 const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -129,6 +132,37 @@ export async function materializeLocalMarkdownImages(
   }
 
   const body = rewriteTaskImageReferences(sourceText, replacements, 'alt');
-  const notice = failedUrls.size > 0 ? `有 ${failedUrls.size} 张图片未能作为附件发送。` : '';
+  const notice = failedUrls.size > 0 ? imagesNotSentNotice(failedUrls.size) : '';
   return { absPaths, text: notice ? `${body.trimEnd()}\n\n${notice}` : body };
+}
+
+/** 没能作为附件发出的图片说明(跟随界面语言)。 */
+function imagesNotSentNotice(count: number): string {
+  return imText('imBot.text.shared.images.notSent', { count });
+}
+
+/**
+ * Card channels (Feishu, Telegram, Discord) upload managed image references in
+ * place. Rewrite local image paths to managed references through the same Host
+ * importer; an unavailable image keeps only its caption plus a delivery notice.
+ */
+export async function materializeLocalMarkdownImageRefs(
+  params: { text: string; sessionId: string },
+  deps: Pick<LocalMarkdownImageDeps, 'materialize'> = defaultDeps,
+): Promise<string> {
+  const sourceText = await deps.materialize(params.sessionId, params.text);
+  const failed = new Map<string, string>();
+  const titled: TaskImageReferenceLike[] = [];
+  for (const ref of taskImageReferences(sourceText)) {
+    if (localTaskImagePath(ref.url)) failed.set(ref.url, ref.url);
+    // Card uploaders take the whole destination, so a quoted title would be read as part of the URL.
+    else if (ref.title && !ref.identifier && isManagedImageTarget(ref.url)) titled.push(ref);
+  }
+  let source = sourceText;
+  for (const ref of titled.reverse()) {
+    source = `${source.slice(0, ref.start)}![${ref.alt.replace(/[\\\[\]]/g, '\\$&')}](${ref.url})${source.slice(ref.end)}`;
+  }
+  if (failed.size === 0) return source;
+  const body = rewriteTaskImageReferences(source, failed, 'alt');
+  return `${body.trimEnd()}\n\n${imagesNotSentNotice(failed.size)}`;
 }

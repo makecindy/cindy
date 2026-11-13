@@ -12,6 +12,7 @@ import {
 import type { RemoteInvoke } from "@/device-link/mobileMakerTransport";
 import { installPeerFileDownload } from "@/device-link/peerFileRegistry";
 const fileCache = vi.hoisted(() => ({ readLatest: vi.fn(), readInline: vi.fn(), storeInline: vi.fn(), invalidate: vi.fn(), download: vi.fn() }));
+vi.mock('@/device-link/peerMediaStream', () => ({ openPeerMediaStream: async () => null }));
 vi.mock('@/device-link/peerFileCache', () => ({ createPeerFileCache: async () => fileCache }));
 import { isDirectPreviewableMediaUrl, resolveMobileRemoteMedia } from "@/session/remoteMedia";
 import { fetchRemoteAbsFileOnce } from '@/session/remoteAbsFileFetch';
@@ -39,6 +40,81 @@ function harness() {
 }
 
 describe("mobile maker transport", () => {
+  // #8332, unit: readBytes must return shared workdir content across the inline
+  // boundary. Existing shared tests only cover direct three-byte media reads;
+  // 65,537 bytes with readBytes' owner export fallback reproduced the rejection.
+  // Standalone file: 2.60s Vitest / 3.68s command wall time on Windows.
+  it.each([
+    { size: 65_536, fileRead: true },
+    { size: 65_537, fileRead: true },
+    { size: 65_537, fileRead: undefined },
+  ])('reads a $size-byte shared workdir file through authorized media (fileRead=$fileRead)', async ({ size, fileRead }) => {
+    const url = `xdt-file://open?path=/work/changed.txt&baseDir=/work&maxBytes=${size}`;
+    const metadata = { ossKey: '', size, mimeType: 'text/plain' };
+    const inline = { ...metadata, inlineBase64: Buffer.alloc(size, 7).toString('base64') };
+    const uploaded = { ...metadata, ossKey: 'shared/changed.txt' };
+    const peer = vi.fn(async () => null);
+    const uninstall = installPeerFileDownload(peer);
+    const invoke = vi.fn(async (_device, channel, [request]) => {
+      if (channel === 'file-browser:remote-op' && request.op === 'caps') return { fileRead };
+      if (channel === 'file-browser:remote-op' && request.op === 'fileUrl') return { ok: true, url };
+      if (channel !== 'device-link:media:fetch') throw new Error('PERMISSION_DENIED');
+      expect(request.url).toBe(url);
+      expect(request).not.toHaveProperty('metadataOnly');
+      return request.prepareOnly ? size <= 65_536 ? inline : { ...metadata, transferRequired: true } : uploaded;
+    });
+    try {
+      const maker = createMobileMakerTransport({ deviceId: sharedTaskHostPeer('shared', 'host'), invoke: invoke as RemoteInvoke });
+      expect(await maker.fileBrowser.readBytes('/work', 'changed.txt')).toEqual(size <= 65_536 ? inline : uploaded);
+      expect(peer).not.toHaveBeenCalled();
+    } finally { uninstall(); }
+  });
+
+  it.each(['prepare', 'upload', 'cancel'] as const)('stops shared file reads on %s rejection', async (failure) => {
+    const abort = new AbortController();
+    const peer = vi.fn(async () => null);
+    const uninstall = installPeerFileDownload(peer);
+    const invoke = vi.fn(async (_device, channel, [request]) => {
+      if (channel === 'file-browser:remote-op' && request.op === 'caps') return { fileRead: true };
+      if (channel === 'file-browser:remote-op' && request.op === 'fileUrl') return { ok: true, url: 'xdt-file://open?path=/work/a' };
+      if (channel !== 'device-link:media:fetch') throw new Error('owner export must not run');
+      if (failure === 'prepare' || !request.prepareOnly) throw new Error('PERMISSION_DENIED');
+      if (failure === 'cancel') abort.abort();
+      return { ossKey: '', size: 65_537, mimeType: 'text/plain', transferRequired: true };
+    });
+    try {
+      const maker = createMobileMakerTransport({ deviceId: sharedTaskHostPeer('shared', 'host'), invoke: invoke as RemoteInvoke });
+      await expect(maker.fileBrowser.readBytes('/work', 'a', abort.signal))
+        .rejects.toThrow(failure === 'cancel' ? 'FILE_PEER_CANCELLED' : 'PERMISSION_DENIED');
+      expect(peer).not.toHaveBeenCalled();
+      expect(invoke.mock.calls.filter(([, channel]) => channel === 'device-link:media:fetch'))
+        .toHaveLength(failure === 'upload' ? 2 : 1);
+    } finally { uninstall(); }
+  });
+
+  // Unit: validate the real transport's versioned Host protocol, including an
+  // older Host rejection. Creating a side chat is never retried as a new task.
+  it('uses versioned side-chat channels and surfaces unsupported hosts without fallback', async () => {
+    const calls: string[] = [];
+    const maker = createMobileMakerTransport({ deviceId: 'side-host', invoke: (async (_device, channel, args) => {
+      calls.push(channel);
+      expect(args).toEqual(['main']);
+      if (channel === 'maker:side-chat:list:v1') return [{ id: 'child' }];
+      throw new Error('CHANNEL_NOT_ALLOWED');
+    }) as RemoteInvoke });
+    expect(await maker.listSideChats('main')).toEqual([{ id: 'child' }]);
+    await expect(maker.createSideChat('main')).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    expect(calls).toEqual(['maker:side-chat:list:v1', 'maker:side-chat:v1']);
+  });
+  it('writes reset preferences to the execution device and rejects a different account response', async () => {
+    const invoke = vi.fn(async () => ({ providerId: 'openai-b', autoUse: { accountKey: 'bound-account' } }));
+    const maker = createMobileMakerTransport({ deviceId: 'execution-device', invoke: invoke as RemoteInvoke });
+    await maker.setCodexResetAutoUse({ minimumDays: 7 }, 'bound-account', 'openai-b');
+    expect(invoke).toHaveBeenCalledWith('execution-device', 'maker:usage:codex-reset-auto-use', [{ minimumDays: 7 }, 'bound-account', 'openai-b']);
+    invoke.mockResolvedValueOnce({ providerId: 'openai-b', autoUse: { accountKey: 'changed-account' } });
+    await expect(maker.setCodexResetAutoUse({ enabled: true }, 'bound-account', 'openai-b')).rejects.toThrow('Account scope changed');
+  });
+
   // Unit: a visible text snapshot is already cached by the reader. Its refresh
   // must await the Host, while retaining the existing confirmed-version cache.
   it('revalidates text without returning stale bytes or invalidating a confirmed version', async () => {
@@ -442,9 +518,11 @@ describe("mobile maker transport", () => {
       "local-db:messages:estimatedSessionValue",
       "maker:usage:codex-rate-limits",
       "maker:usage:codex-rate-limit-reset",
+      "maker:usage:codex-reset-auto-use",
       "maker:usage:claude-subscription",
       "maker:usage:xai-subscription",
       "maker:claude-session-route:get",
+      "device-link:usage-widget:snapshot:v1",
       "maker:api-key:present",
       "maker:list-agent-commands",
       "maker:list-agent-skills",
@@ -463,6 +541,8 @@ describe("mobile maker transport", () => {
       "maker:goal:resume",
       "maker:goal:update",
       "maker:fork",
+      "maker:side-chat:v1",
+      "maker:side-chat:list:v1",
       "maker:fork-strip-encrypted",
       "maker:get-session-tree",
       "maker:navigate-session-tree",
@@ -479,6 +559,8 @@ describe("mobile maker transport", () => {
       "maker:worker:acknowledge-done",
       "maker:worker:archive",
       "maker:collaboration-settings:get",
+      "maker:worker-roles:get",
+      "maker:worker-roles:apply",
       "local-db:orca-workflows:list-workers-by-lead",
       "local-db:orca-workflows:get-by-worker-session",
       "maker:schedule:list",
@@ -572,6 +654,8 @@ describe("mobile maker transport", () => {
     await maker.orca.acknowledgeDone("lead-1", "w-1");
     await maker.orca.archiveWorker("lead-1", "w-1");
     await maker.orca.getCollaborationSettings();
+    await maker.orca.getWorkerRoles();
+    await maker.orca.applyWorkerRoles({ kind: "forget", role: "tester" });
     await maker.orca.disable("lead-1");
 
     expect(calls.map(({ channel, args }) => ({ channel, args }))).toEqual([
@@ -585,6 +669,8 @@ describe("mobile maker transport", () => {
       { channel: "maker:worker:acknowledge-done", args: [{ leadSessionId: "lead-1", workerId: "w-1" }] },
       { channel: "maker:worker:archive", args: [{ leadSessionId: "lead-1", workerId: "w-1" }] },
       { channel: "maker:collaboration-settings:get", args: [] },
+      { channel: "maker:worker-roles:get", args: [] },
+      { channel: "maker:worker-roles:apply", args: [{ kind: "forget", role: "tester" }] },
       { channel: "maker:session:disable-orca", args: ["lead-1"] },
     ]);
   });
@@ -1330,4 +1416,10 @@ describe("mobile maker transport", () => {
     );
     expect(invokeMock).not.toHaveBeenCalled();
   });
+});
+
+it('retries an existing image artifact on the task Host without sending a new prompt', async () => {
+  const { calls, maker } = harness();
+  await maker.input.retryImageDelivery('task', 'a'.repeat(64));
+  expect(calls).toEqual([{ deviceId: 'dev-1', channel: 'maker:images:retry', args: ['task', 'a'.repeat(64)] }]);
 });

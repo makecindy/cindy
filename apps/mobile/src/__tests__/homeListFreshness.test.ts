@@ -6,6 +6,7 @@ import {
   planHomeListFocusReturn,
 } from '@/session/homeListFreshness';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import type { RemoteSession } from '@/session/types';
 
 /**
  * Drives the freshness planner the way Home does: a successful full pull marks a device fresh,
@@ -109,6 +110,14 @@ describe('Home list freshness on return', () => {
     // Over LIST_LIMIT tasks: an archive or an outside task's activity changes which tasks belong
     // in the window, which local patches cannot fill in. A complete list keeps reusing patches.
     const home = createHarness(['big', 'small']);
+    for (const deviceId of ['big', 'small']) {
+      // These are known rows from a completed pull. An unseen child removal must
+      // instead request a reseed so host-owned side-chat lists can refresh.
+      remoteSessionStore.upsertDeviceSession(deviceId, deviceId, {
+        id: 'old', status: 'active', title: 'old', source: 'desktop',
+        createdAt: '2026-10-20T00:00:00Z', updatedAt: '2026-10-20T00:00:00Z',
+      } as RemoteSession);
+    }
     await home.hydrate('big', undefined, true);
     await home.hydrate('small');
     home.invoke.mockClear();

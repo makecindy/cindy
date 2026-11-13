@@ -148,6 +148,8 @@ async function startHarness(args: {
   transcriptExists: boolean;
   onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'];
   forkSession?: boolean;
+  requireNativeResume?: boolean;
+  initialize?: (stream: ReturnType<typeof createControlledStream>) => Promise<void>;
 }) {
   const configDir = await makeTempDir();
   const workingDir = await makeTempDir();
@@ -158,6 +160,8 @@ async function startHarness(args: {
 
   const streams = [createControlledStream(), createControlledStream(), createControlledStream()];
   const queries = streams.map(createFakeQuery);
+  const initializationResult = vi.fn(() => args.initialize?.(streams[0]) ?? Promise.resolve());
+  Object.assign(queries[0], { initializationResult });
   const queryOptions: Array<Record<string, unknown>> = [];
   const consumedInputs: unknown[][] = [];
   sdkMock.query.mockImplementation((options: unknown) => {
@@ -188,7 +192,10 @@ async function startHarness(args: {
     permissionMode: 'acceptEdits',
     resumeSessionId: args.resumeSessionId,
     onInvalidResumeSession: args.onInvalidResumeSession,
-    vendorOptions: args.forkSession ? { forkSession: true } : undefined,
+    vendorOptions: {
+      ...(args.forkSession ? { forkSession: true } : {}),
+      ...(args.requireNativeResume ? { _cindyRequireNativeResume: true } : {}),
+    },
   });
   const events: AgentEvent[] = [];
   const collected = (async () => {
@@ -203,6 +210,7 @@ async function startHarness(args: {
     events,
     collected,
     debug,
+    initializationResult,
   };
 }
 
@@ -220,6 +228,45 @@ afterEach(async () => {
 });
 
 describe('Claude invalid-resume recovery', () => {
+  it('does not publish transferred history before the CLI accepts its resume', async () => {
+    let release!: () => void;
+    const handshake = new Promise<void>(resolve => { release = resolve; });
+    const initialize = vi.fn(() => handshake);
+    let published = false;
+    const starting = startHarness({ resumeSessionId: 'sdk-source', transcriptExists: true,
+      onInvalidResumeSession: vi.fn(async () => true), requireNativeResume: true, initialize })
+      .then(h => { published = true; return h; });
+    await vi.waitFor(() => expect(initialize).toHaveBeenCalledOnce());
+    expect(published).toBe(false);
+    release();
+    const h = await starting;
+    expect(h.handle.id).toBe('sdk-source');
+    await h.handle.close();
+    h.streams[0].end();
+    await h.collected;
+  });
+
+  it.each(['rejected', 'different-id'] as const)('returns a %s native resume to the host without a fresh retry', async failure => {
+    const onInvalidResumeSession = vi.fn(async () => true);
+    await expect(startHarness({ resumeSessionId: 'sdk-source', transcriptExists: true,
+      onInvalidResumeSession, requireNativeResume: true,
+      initialize: async stream => {
+        if (failure === 'rejected') {
+          const error = new Error('No conversation found with session ID: sdk-source');
+          stream.fail(error);
+          await Promise.resolve();
+          throw error;
+        }
+        stream.emit({ type: 'system', subtype: 'init', session_id: 'fresh-empty' });
+        await Promise.resolve();
+        await Promise.resolve();
+      },
+    })).rejects.toThrow(failure === 'rejected' ? 'No conversation found' : 'Native history resume');
+    expect(onInvalidResumeSession).not.toHaveBeenCalled();
+    expect(sdkMock.query).toHaveBeenCalledOnce();
+    expect(sdkMock.query.mock.calls[0][0].options.abortController.signal.aborted).toBe(true);
+  });
+
   it('binds a new native session before SDK init so its first request can resolve the provider', async () => {
     const h = await startHarness({ transcriptExists: false, onInvalidResumeSession: undefined });
     const sessionId = h.queryOptions[0].sessionId;

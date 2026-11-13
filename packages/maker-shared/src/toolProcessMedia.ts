@@ -120,16 +120,23 @@ export function withToolProcessMedia(
   const encoded = encode(payload);
   // Remote history has an 8KB byte budget. Truncate prose, never cut JSON or a URL.
   if (bytes.encode(encoded).length <= 8192) return encoded;
+  const originalText = typeof payload.text === 'string' ? payload.text : text;
+  const truncatedPayload = (value: string) =>
+    typeof payload.text === 'string' ? { ...payload, text: value } : { text: value };
+  // 同级字段本身已超限时无法全部保留，退回有界的纯文本 envelope，仍不能超出预算。
+  if (bytes.encode(encode(truncatedPayload(''))).length > 8192) {
+    return encode({ text: '' });
+  }
   let low = 0;
-  let high = text.length;
+  let high = originalText.length;
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    if (bytes.encode(encode({ text: text.slice(0, mid) })).length <= 8192)
+    if (bytes.encode(encode(truncatedPayload(originalText.slice(0, mid)))).length <= 8192)
       low = mid;
     else high = mid - 1;
   }
-  if (low > 0 && /[\uD800-\uDBFF]/.test(text[low - 1])) low--;
-  return encode({ text: text.slice(0, low) });
+  if (low > 0 && /[\uD800-\uDBFF]/.test(originalText[low - 1])) low--;
+  return encode(truncatedPayload(originalText.slice(0, low)));
 }
 
 export function nativeToolMediaFields(content: unknown): {
@@ -137,4 +144,16 @@ export function nativeToolMediaFields(content: unknown): {
 } {
   const processMedia = collectNativeToolMedia(content);
   return processMedia.length ? { processMedia } : {};
+}
+
+/** Only the Host-issued delivery record enables retry; arbitrary paths/URLs never do. */
+export function readFailedImageDelivery(text: string | undefined): string | null {
+  if (!text?.includes('native_image_delivery')) return null;
+  try {
+    const value = record(JSON.parse(text));
+    const delivery = record(value?.native_image_delivery);
+    return value?.kind === 'generation' && delivery?.state === 'failed'
+      && typeof delivery.id === 'string' && /^[a-f0-9]{64}$/.test(delivery.id)
+      ? delivery.id : null;
+  } catch { return null; }
 }

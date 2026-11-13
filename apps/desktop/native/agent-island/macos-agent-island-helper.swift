@@ -146,9 +146,6 @@ struct PululuMascotView: View {
   private static let eyeC = Color(red: 0.96, green: 0.97, blue: 1.0)
   private static let alertC = Color(red: 0.0, green: 0.85, blue: 0.77)
   private static let approvalGlowC = Color(red: 1.0, green: 0.72, blue: 0.20)
-  private static let kbBase = Color(red: 0.16, green: 0.18, blue: 0.23)
-  private static let kbKey = Color(red: 0.44, green: 0.49, blue: 0.58)
-  private static let kbHi = Color.white
   private static let idleCycleDuration: Double = 4.8
   private static let idleSleepStart: Double = 1.15
 
@@ -225,13 +222,6 @@ struct PululuMascotView: View {
 
   private func rounded(_ rect: CGRect, radius: CGFloat) -> Path {
     Path(roundedRect: rect, cornerRadius: radius)
-  }
-
-  private func drawShadow(_ c: GraphicsContext, v: V, width: CGFloat, opacity: Double, dy: CGFloat = 0) {
-    c.fill(
-      Path(ellipseIn: v.ellipse(cx: 8, cy: 14.0, rx: width / 2, ry: 0.55, dy: dy)),
-      with: .color(.black.opacity(opacity))
-    )
   }
 
   private func drawPululu(
@@ -313,23 +303,6 @@ struct PululuMascotView: View {
 
     c.fill(rounded(left, radius: radius), with: .color(color.opacity(opacity)))
     c.fill(rounded(right, radius: radius), with: .color(color.opacity(opacity)))
-  }
-
-  private func drawKeyboard(_ c: GraphicsContext, v: V, phase: Int, dy: CGFloat) {
-    c.fill(Path(v.rect(0.5, 12.0, 15, 3, dy: dy)), with: .color(Self.kbBase))
-    for row in 0..<2 {
-      let ky = 12.5 + CGFloat(row) * 1.2
-      for col in 0..<6 {
-        let kx = 1.0 + CGFloat(col) * 2.4
-        c.fill(Path(v.rect(kx, ky, 1.8, 0.7, dy: dy)), with: .color(Self.kbKey))
-      }
-    }
-
-    let flashRow = phase / 3
-    let flashCol = phase % 6
-    let fkx = 1.0 + CGFloat(flashCol) * 2.4
-    let fky = 12.5 + CGFloat(flashRow) * 1.2
-    c.fill(Path(v.rect(fkx, fky, 1.8, 0.7, dy: dy)), with: .color(Self.kbHi.opacity(0.9)))
   }
 
   private func drawBang(_ c: GraphicsContext, v: V, pct: CGFloat, jumpY: CGFloat) {
@@ -440,7 +413,6 @@ struct PululuMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.2 - abs(float) * 0.25, opacity: 0.22)
       drawPululu(
         c,
         v: v,
@@ -462,7 +434,6 @@ struct PululuMascotView: View {
   private func workCanvas(t: Double) -> some View {
     let bounce = sin(t * 2 * .pi / 0.38) * 0.75
     let breathe = sin(t * 2 * .pi / 2.6)
-    let keyPhase = Int(t / 0.1) % 6
     let blinkPhase = t.truncatingRemainder(dividingBy: 3.2)
     let eyeScale: CGFloat = blinkPhase > 1.15 && blinkPhase < 1.26 ? 0.0 : 1.0
     let headTurn = CGFloat(sin(t * 2 * .pi / 0.86)) * 0.26
@@ -472,9 +443,6 @@ struct PululuMascotView: View {
       let dy = CGFloat(bounce - 0.25)
       let squashY: CGFloat = dy > 0.25 ? 0.98 : 1.0
 
-      drawShadow(c, v: v, width: 8.1 - abs(dy) * 0.32, opacity: 0.30)
-      // 键盘先画：角色要挡在键盘前面，而不是被键盘条横切。
-      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
       drawPululu(
         c,
         v: v,
@@ -529,7 +497,6 @@ struct PululuMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.4 - abs(min(0, jumpY)) * 0.42, opacity: 0.36)
       var body = c
       body.translateBy(x: shakeX * v.s, y: 0)
       drawPululu(
@@ -576,7 +543,6 @@ struct PululuMascotView: View {
       let v = V(sz)
       if mascotPct < 1 {
         let dy = hop
-        drawShadow(c, v: v, width: 8.0 - abs(dy) * 0.36, opacity: 0.26 * Double(disappear))
         var mascot = c
         let center = CGPoint(x: v.ox + 8 * v.s, y: v.oy + 8.15 * v.s)
         mascot.translateBy(x: center.x, y: center.y)
@@ -611,8 +577,6 @@ struct SpriteMascotConfig {
   let completionBadgeColor: Color
   let eyeColor: Color
   let approvalGlowColor: Color
-  let keyboardBaseColor: Color
-  let keyboardKeyColor: Color
   let bodyScale: CGFloat
   let eyeLeftX: CGFloat
   let eyeRightX: CGFloat
@@ -630,8 +594,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.0, green: 0.85, blue: 0.77),
     eyeColor: Color(red: 0.239, green: 0.447, blue: 0.894),
     approvalGlowColor: Color(red: 0.0, green: 0.85, blue: 0.77),
-    keyboardBaseColor: Color(red: 0.00, green: 0.38, blue: 0.34),
-    keyboardKeyColor: Color(red: 0.00, green: 0.85, blue: 0.77),
     bodyScale: 1.0,
     eyeLeftX: 6.9,
     eyeRightX: 9.7,
@@ -650,8 +612,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.620, green: 0.761, blue: 0.961),
     eyeColor: .black,
     approvalGlowColor: Color(red: 0.949, green: 0.988, blue: 0.463),
-    keyboardBaseColor: Color(red: 0.16, green: 0.18, blue: 0.23),
-    keyboardKeyColor: Color(red: 0.44, green: 0.49, blue: 0.58),
     bodyScale: 0.80,
     eyeLeftX: 5.63,
     eyeRightX: 10.63,
@@ -670,8 +630,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.569, green: 0.682, blue: 0.373),
     eyeColor: .black,
     approvalGlowColor: Color(red: 0.976, green: 0.882, blue: 0.345),
-    keyboardBaseColor: Color(red: 0.16, green: 0.18, blue: 0.23),
-    keyboardKeyColor: Color(red: 0.44, green: 0.49, blue: 0.58),
     bodyScale: 1.0,
     eyeLeftX: 6.86,
     eyeRightX: 9.50,
@@ -690,8 +648,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.467, green: 0.769, blue: 0.918),
     eyeColor: Color(red: 0.682, green: 0.129, blue: 0.275),
     approvalGlowColor: Color(red: 0.992, green: 0.388, blue: 0.549),
-    keyboardBaseColor: Color(red: 0.18, green: 0.42, blue: 0.56),
-    keyboardKeyColor: Color(red: 0.467, green: 0.769, blue: 0.918),
     bodyScale: 1.0,
     eyeLeftX: 6.31,
     eyeRightX: 9.56,
@@ -710,8 +666,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.129, green: 0.741, blue: 0.682),
     eyeColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     approvalGlowColor: Color(red: 0.992, green: 0.812, blue: 0.271),
-    keyboardBaseColor: Color(red: 0.45, green: 0.32, blue: 0.03),
-    keyboardKeyColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     bodyScale: 1.0,
     eyeLeftX: 6.19,
     eyeRightX: 9.69,
@@ -730,8 +684,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.490, green: 0.600, blue: 0.835),
     eyeColor: .black,
     approvalGlowColor: Color(red: 1.0, green: 0.306, blue: 0.192),
-    keyboardBaseColor: Color(red: 0.19, green: 0.24, blue: 0.38),
-    keyboardKeyColor: Color(red: 0.490, green: 0.600, blue: 0.835),
     bodyScale: 1.0,
     eyeLeftX: 5.56,
     eyeRightX: 10.56,
@@ -755,8 +707,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     eyeColor: Color(red: 0.420, green: 0.239, blue: 0.196),
     approvalGlowColor: Color(red: 0.875, green: 0.180, blue: 0.153),
-    keyboardBaseColor: Color(red: 0.149, green: 0.169, blue: 0.271),
-    keyboardKeyColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     bodyScale: 1.0,
     eyeLeftX: 6.71,
     eyeRightX: 9.30,
@@ -778,8 +728,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     eyeColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     approvalGlowColor: Color(red: 0.875, green: 0.180, blue: 0.153),
-    keyboardBaseColor: Color(red: 0.122, green: 0.141, blue: 0.161),
-    keyboardKeyColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     bodyScale: 1.0,
     eyeLeftX: 5.95,
     eyeRightX: 10.05,
@@ -799,8 +747,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.353, green: 0.612, blue: 0.667),
     eyeColor: Color(red: 0.529, green: 0.365, blue: 0.259),
     approvalGlowColor: Color(red: 0.953, green: 0.796, blue: 0.314),
-    keyboardBaseColor: Color(red: 0.200, green: 0.278, blue: 0.302),
-    keyboardKeyColor: Color(red: 0.353, green: 0.612, blue: 0.667),
     bodyScale: 1.0,
     eyeLeftX: 6.84,
     eyeRightX: 9.16,
@@ -858,7 +804,6 @@ struct SpriteMascotView: View {
   @State private var timelineStart = Date().timeIntervalSinceReferenceDate
   @Environment(\.agentIslandMascotAnimationsActive) private var animationsActive
   @Environment(\.agentIslandMascotAnimationEpoch) private var animationEpoch
-  private static let keyboardHighlightColor = Color.white
   private static let idleCycleDuration: Double = 4.9
   private static let idleSleepStart: Double = 1.15
 
@@ -941,13 +886,6 @@ struct SpriteMascotView: View {
     Path(roundedRect: rect, cornerRadius: radius)
   }
 
-  private func drawShadow(_ c: GraphicsContext, v: V, width: CGFloat, opacity: Double, dy: CGFloat = 0) {
-    c.fill(
-      Path(ellipseIn: v.ellipse(cx: 8, cy: 14.3, rx: width / 2, ry: 0.48, dy: dy)),
-      with: .color(.black.opacity(opacity))
-    )
-  }
-
   private func drawSprite(
     _ c: GraphicsContext,
     v: V,
@@ -1000,21 +938,6 @@ struct SpriteMascotView: View {
     c.fill(
       Path(ellipseIn: v.ellipse(cx: config.eyeRightX + x, cy: cy, rx: rx, ry: ry, dy: dy)),
       with: .color(config.eyeColor.opacity(opacity))
-    )
-  }
-
-  private func drawKeyboard(_ c: GraphicsContext, v: V, phase: Int, dy: CGFloat) {
-    c.fill(Path(v.rect(0.5, 13.0, 15, 3, dy: dy)), with: .color(config.keyboardBaseColor))
-    for row in 0..<2 {
-      let ky = 13.5 + CGFloat(row) * 1.2
-      for col in 0..<6 {
-        let kx = 1.0 + CGFloat(col) * 2.4
-        c.fill(Path(v.rect(kx, ky, 1.8, 0.7, dy: dy)), with: .color(config.keyboardKeyColor))
-      }
-    }
-    c.fill(
-      Path(v.rect(1.0 + CGFloat(phase % 6) * 2.4, 13.5 + CGFloat(phase / 3) * 1.2, 1.8, 0.7, dy: dy)),
-      with: .color(Self.keyboardHighlightColor.opacity(0.9))
     )
   }
 
@@ -1125,7 +1048,6 @@ struct SpriteMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.8 - abs(float) * 0.22, opacity: 0.23)
       drawSprite(
         c,
         v: v,
@@ -1148,7 +1070,6 @@ struct SpriteMascotView: View {
   private func workCanvas(t: Double) -> some View {
     let bounce = sin(t * 2 * .pi / 0.38) * 0.72
     let breathe = sin(t * 2 * .pi / 2.5)
-    let keyPhase = Int(t / 0.1) % 6
     let blinkPhase = t.truncatingRemainder(dividingBy: 3.1)
     let eyeScale: CGFloat = blinkPhase > 1.12 && blinkPhase < 1.23 ? 0.0 : 1.0
     let headTurn = CGFloat(sin(t * 2 * .pi / 0.84)) * 0.22
@@ -1157,9 +1078,6 @@ struct SpriteMascotView: View {
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
       let dy = bounce - 0.25
-      drawShadow(c, v: v, width: 8.4 - abs(dy) * 0.32, opacity: 0.30)
-      // 键盘先画：角色要挡在键盘前面，而不是被键盘条横切。
-      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
       drawSprite(
         c,
         v: v,
@@ -1211,7 +1129,6 @@ struct SpriteMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.6 - abs(min(0, jumpY)) * 0.42, opacity: 0.36)
       drawSprite(
         c,
         v: v,
@@ -1252,7 +1169,6 @@ struct SpriteMascotView: View {
       let v = V(sz)
       if mascotPct < 1 {
         let dy = hop
-        drawShadow(c, v: v, width: 8.4 - abs(dy) * 0.36, opacity: 0.26 * Double(disappear))
         drawSprite(
           c,
           v: v,
@@ -1294,6 +1210,10 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
   let displayId: Int
   let frame: AgentIslandRect
   let hasNotch: Bool
+  /// The display hosts the macOS Dynamic Island (MenuBarAgent's CenterHUD): the
+  /// PROLED MacBook Pro's hole-punch camera. The system island draws above our
+  /// panel and does not swallow clicks, so the island avoids the screen center.
+  let hasSystemIsland: Bool
   let notchWidth: Double
   let topBarHeight: Double
   let menuBarHeight: Double
@@ -1305,6 +1225,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
     displayId: 0,
     frame: AgentIslandRect(x: 0, y: 0, width: 1728, height: 1117),
     hasNotch: false,
+    hasSystemIsland: false,
     notchWidth: 210,
     topBarHeight: 24,
     menuBarHeight: 24,
@@ -1323,6 +1244,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
         "height": frame.height,
       ],
       "hasNotch": hasNotch,
+      "hasSystemIsland": hasSystemIsland,
       "notchWidth": notchWidth,
       "topBarHeight": topBarHeight,
       "menuBarHeight": menuBarHeight,
@@ -1344,6 +1266,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
       displayId: displayId,
       frame: frame,
       hasNotch: false,
+      hasSystemIsland: hasSystemIsland,
       notchWidth: simulatedNotchWidth,
       topBarHeight: topBarHeight,
       menuBarHeight: menuBarHeight,
@@ -1365,9 +1288,23 @@ struct AgentIslandPermissionAction: Codable, Equatable {
   let canAllowForSession: Bool
 }
 
+/// The companion a Bot Session speaks for; drawn instead of the agent mark.
+struct AgentIslandCompanion: Codable, Equatable {
+  let name: String
+  let groupName: String?
+  let hue: String
+  let imageJpeg: String?
+  let glyph: String
+  let glyphIsInitial: Bool
+}
+
 struct AgentIslandSession: Codable, Equatable, Identifiable {
+  var groupChat: AgentIslandGroupChat? = nil
   let sessionId: String
+  var completionToken: String? = nil
   let title: String
+  // Older main-process payloads have no companion field.
+  var companion: AgentIslandCompanion? = nil
   let projectName: String?
   let detail: String
   let compactDetail: String
@@ -1386,13 +1323,18 @@ struct AgentIslandSession: Codable, Equatable, Identifiable {
   var subtitle: String { compactDetail }
 }
 
+struct AgentIslandGroupChat: Codable, Equatable {
+  let avatars: [AgentIslandCompanion]
+  let mentionLabel: String?
+}
+
 struct AgentIslandPillSnapshot: Codable {
   let priorityId: String?
   let priorityStatus: String
   let priorityMicroTitle: String
   let priorityCompactTitle: String
   let sessionCount: Int
-  let activeSessionCount: Int
+  let runningSessionCount: Int
   let pendingInteractionCount: Int
   let unreadCompletedCount: Int
   let deferredRevealCount: Int
@@ -1404,7 +1346,7 @@ struct AgentIslandPillSnapshot: Codable {
     priorityMicroTitle: "",
     priorityCompactTitle: "",
     sessionCount: 0,
-    activeSessionCount: 0,
+    runningSessionCount: 0,
     pendingInteractionCount: 0,
     unreadCompletedCount: 0,
     deferredRevealCount: 0,
@@ -1435,6 +1377,8 @@ struct AgentIslandStrings: Codable, Equatable {
   let allowOnce: String
   let alwaysAllowForSession: String
   let deny: String
+  var markRead: String? = nil
+  var archive: String? = nil
 
   // Older main-process payloads do not contain appName; keep their idle view brand-current.
   var displayAppName: String { appName ?? "Cindy" }
@@ -1443,9 +1387,9 @@ struct AgentIslandStrings: Codable, Equatable {
     appName: "Cindy",
     newConversationTitle: "New Session",
     newConversationHint: "Start a new session",
-    muteSound: "Mute Agent Island",
-    enableSound: "Enable Agent Island sound",
-    settings: "Agent Island settings",
+    muteSound: "Mute Agent Notch",
+    enableSound: "Enable Agent Notch sound",
+    settings: "Agent Notch settings",
     newMessage: "New message",
     review: "Review",
     needsInput: "Needs input",
@@ -1525,7 +1469,29 @@ enum AgentIslandSoundChoice: Codable {
   }
 }
 
+struct AgentIslandCompactReminder: Codable {
+  let phase: String
+  let until: Double
+}
+
+/// One plan's remaining quota; main decides every value (see `AgentIslandQuotaItem` in
+/// `shared/agentIsland.ts`), including the nominal `width` used to decide what fits.
+struct AgentIslandQuotaItem: Codable, Equatable, Identifiable {
+  let id: String
+  let logoSvg: String
+  let text: String
+  let level: String
+  let stale: Bool
+  let accessibilityLabel: String
+  let lowest: Bool
+  var compactText: String? = nil
+  let width: Double
+  let textWidth: Double
+}
+
 struct AgentIslandDisplayState: Codable {
+  var compactReminder: AgentIslandCompactReminder? = nil
+  var quota: [AgentIslandQuotaItem]? = nil
   let visible: Bool
   let mode: String
   let notchStatus: String
@@ -1582,6 +1548,10 @@ struct AgentIslandDisplayState: Codable {
     strings ?? .fallback
   }
 
+  var displayQuota: [AgentIslandQuotaItem] {
+    quota ?? []
+  }
+
   var displaySoundSettings: AgentIslandSoundSettings {
     soundSettings ?? .fallback
   }
@@ -1596,6 +1566,8 @@ struct AgentIslandDisplayState: Codable {
 
 struct IncomingMessage: Codable {
   let type: String
+  let requestId: String?
+  let success: Bool?
   let state: AgentIslandDisplayState?
   let frame: AgentIslandCarrierFrame?
   let frames: [AgentIslandCarrierFrame]?
@@ -1632,8 +1604,9 @@ private let expandedIslandTopPadding: CGFloat = 7
 private let expandedIslandBodySpacing: CGFloat = 4
 private let expandedIslandBottomPadding: CGFloat = 16
 private let compactIslandBaseWidth: CGFloat = 210
+/// Idle pill without a notch: padding, the 16pt mascot and its gap.
+private let compactIdleQuotaChrome: CGFloat = 11 * 2 + 16 + 6
 private let compactIslandMinContentWidth: CGFloat = 80
-private let compactCollapseLeadingReservedWidth: CGFloat = 80
 private let compactCollapseTrailingReservedWidth: CGFloat = 100
 private let compactIslandBadgeCollapseContentThreshold: CGFloat = 152
 private let compactIslandDetailCollapseContentThreshold: CGFloat = 190
@@ -1645,7 +1618,7 @@ private let compactIslandStatusIconWidth: CGFloat = 18
 private let compactIslandCarrierInset: CGFloat = 20
 private let expandedIslandCarrierExpandedInset: CGFloat = 80
 private let expandedIslandMinContentWidth: CGFloat = 360
-private let expandedIslandDefaultContentWidth: CGFloat = 640
+private let expandedIslandDefaultContentWidth: CGFloat = 440
 private let expandedIslandMaxContentWidth: CGFloat = 920
 private let expandedIslandHardwareNotchSideWidth: CGFloat = 96
 private let expandedIslandHardwareNotchHorizontalPadding: CGFloat = 36
@@ -1663,6 +1636,8 @@ private let hardwareNotchTextRevealDistance: CGFloat = 38
 // beside the count badge. Reserving this much guarantees the badge is never clipped at
 // the default compact width.
 private let hardwareNotchBadgeReservedInset: CGFloat = 9
+/// Smallest inset `hardwareNotchSideInset` returns beside the notch.
+private let hardwareNotchMinimumSideInset: CGFloat = 7
 // How close a compact width must be to a snap point to count as sitting on it.
 private let compactWidthSnapTolerance: CGFloat = 1.5
 private let agentIslandTopDragHitSlop: CGFloat = 2
@@ -1679,6 +1654,8 @@ private let agentIslandDebugLoggingEnabled =
 private let agentIslandOrange = Color(red: 1.0, green: 0.4, blue: 0.0)
 private let agentIslandBlue = Color(red: 0.0, green: 0.851, blue: 0.773)
 private let agentIslandErrorRed = Color(red: 0.937, green: 0.267, blue: 0.267)
+// 滑动归档沿用手机版 swipeActionArchive 的蓝色（2026-10-24 用户裁决）。
+private let agentIslandArchiveBlue = Color(red: 59.0 / 255, green: 130.0 / 255, blue: 246.0 / 255)
 private let agentIslandUnreadGreen = Color(red: 0.133, green: 0.773, blue: 0.369)
 private let runningAgentGifFileName = "running-agent.gif"
 private let tararaMascotFileName = "tarara.png"
@@ -1882,6 +1859,9 @@ private enum AgentIslandScreenMetricsProvider {
     } else {
       safeAreaTop = 0
     }
+    // A camera hole-punch may report auxiliary top areas, but there is no notch
+    // to hide behind: lay the island out like any notchless screen.
+    let hasSystemIsland = screenHasSystemIsland(screen)
     return AgentIslandScreenMetrics(
       displayId: displayId(for: screen),
       frame: AgentIslandRect(
@@ -1890,8 +1870,9 @@ private enum AgentIslandScreenMetricsProvider {
         width: Double(frame.width),
         height: Double(frame.height)
       ),
-      hasNotch: screenHasNotch(screen),
-      notchWidth: Double(notchWidth(for: screen)),
+      hasNotch: !hasSystemIsland && screenHasNotch(screen),
+      hasSystemIsland: hasSystemIsland,
+      notchWidth: Double(hasSystemIsland ? simulatedNotchWidth(for: screen) : notchWidth(for: screen)),
       topBarHeight: Double(topBarHeight(menuBarHeight: menuBarHeight, safeAreaTop: safeAreaTop)),
       menuBarHeight: Double(menuBarHeight),
       safeAreaTop: Double(safeAreaTop),
@@ -1912,6 +1893,34 @@ private enum AgentIslandScreenMetricsProvider {
       return screen.auxiliaryTopLeftArea != nil || screen.auxiliaryTopRightArea != nil
     }
     return false
+  }
+
+  /// Built-in touch screens are the Dynamic Island MacBook Pros. Both signals are
+  /// read through the runtime so older SDKs still compile: `touchCapabilities`
+  /// is public from macOS 27; `_centerHUDDefaultFrame` is AppKit's private
+  /// CenterHUD geometry (macOS 27.3), used only as a corroborating signal.
+  /// `XDT_AGENT_ISLAND_SIMULATE_SYSTEM_ISLAND=1` treats the main screen as one,
+  /// for testing in a VM with MenuBarAgent's emulated island.
+  static func screenHasSystemIsland(_ screen: NSScreen) -> Bool {
+    if ProcessInfo.processInfo.environment["XDT_AGENT_ISLAND_SIMULATE_SYSTEM_ISLAND"] == "1" {
+      return screen == NSScreen.screens.first
+    }
+    let hudSelector = NSSelectorFromString("_centerHUDDefaultFrame")
+    if screen.responds(to: hudSelector),
+       let value = screen.value(forKey: "_centerHUDDefaultFrame") as? NSValue,
+       !value.rectValue.isEmpty {
+      return true
+    }
+    let displayNumber = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    guard displayNumber != 0, CGDisplayIsBuiltin(displayNumber) != 0 else {
+      return false
+    }
+    let touchSelector = NSSelectorFromString("touchCapabilities")
+    guard screen.responds(to: touchSelector),
+          let capabilities = screen.value(forKey: "touchCapabilities") as? NSNumber else {
+      return false
+    }
+    return capabilities.uintValue & 1 != 0
   }
 
   static func notchWidth(for screen: NSScreen) -> CGFloat {
@@ -1988,7 +1997,7 @@ private enum AgentIslandScreenMetricsProvider {
         return bestOverlap.0
       }
     }
-    if let notchedScreen = screens.first(where: { screenHasNotch($0) }) {
+    if let notchedScreen = screens.first(where: { screenHasNotch($0) || screenHasSystemIsland($0) }) {
       return notchedScreen
     }
     return NSScreen.main ?? screens.first
@@ -2093,7 +2102,7 @@ struct AgentIslandLayout: Equatable {
     let compactBadgeWidth = !expanded && layoutScreenMetrics.hasNotch && hasSession
       ? PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
       : 0
-    let width = computeWidth(
+    let baseWidth = computeWidth(
       expanded: expanded,
       hasSession: hasSession,
       availableFrameWidth: availableFrameWidth,
@@ -2101,6 +2110,16 @@ struct AgentIslandLayout: Equatable {
       preferredContentWidth: preferredContentWidth,
       compactBadgeWidth: compactBadgeWidth
     )
+    // A hidden island reveals only enough room for its existing icon and count.
+    // Wider user preferences stay unchanged, and the saved width is never rewritten.
+    var width = baseWidth
+    if !expanded, state.compactReminder != nil {
+      let minimumReminderWidth = layoutScreenMetrics.hasNotch
+        ? defaultCompactWidth(hasSession: true, screenMetrics: layoutScreenMetrics, compactBadgeWidth: compactBadgeWidth)
+        : compactIslandStatusIconWidth + 14 + 22
+          + PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
+      width = min(max(baseWidth, minimumReminderWidth), max(1, availableFrameWidth - compactIslandCarrierInset * 2))
+    }
     let height = computeHeight(state: state, expanded: expanded, notchBaselineHeight: notchBaselineHeight)
     let shape = shapeForStatus(notchStatus)
     let shadow = shadowForStatus(notchStatus)
@@ -2455,8 +2474,12 @@ struct AgentIslandRootView: View {
           y: layout.shadowY
         )
 
-      content(layout: layout)
+      ZStack(alignment: .top) {
+        content(layout: layout)
+      }
         .frame(width: layout.width, height: layout.height, alignment: .top)
+        // Clip outgoing transition layers together with the incoming content.
+        .compositingGroup()
         .clipShape(NotchShape(
           topExtension: layout.topExtension,
           bottomRadius: layout.bottomRadius,
@@ -2472,6 +2495,7 @@ struct AgentIslandRootView: View {
         ExpandedSessionsView(
           current: current,
           sessions: model.state.sessions,
+          quota: model.state.displayQuota,
           displaySurface: model.state.displaySurface,
           totalCount: model.state.totalCount,
           updatedAt: model.state.updatedAt,
@@ -2487,6 +2511,7 @@ struct AgentIslandRootView: View {
         CompactSessionView(
           session: current,
           pillSnapshot: model.state.pillSnapshot,
+          reminder: model.state.compactReminder,
           layout: layout,
           mascotSkin: model.state.displayMascotSkin,
           runningMascotNamespace: runningMascotNamespace
@@ -2496,6 +2521,7 @@ struct AgentIslandRootView: View {
     } else {
       IdleIslandView(
         layout: layout,
+        quota: model.state.displayQuota,
         strings: model.state.displayStrings,
         soundEnabled: model.state.displaySoundSettings.enabled,
         mascotSkin: model.state.displayMascotSkin,
@@ -2509,6 +2535,7 @@ struct AgentIslandRootView: View {
 struct CompactSessionView: View {
   let session: AgentIslandSession
   let pillSnapshot: AgentIslandPillSnapshot
+  let reminder: AgentIslandCompactReminder?
   let layout: AgentIslandLayout
   let mascotSkin: String
   let runningMascotNamespace: Namespace.ID
@@ -2516,6 +2543,8 @@ struct CompactSessionView: View {
   var body: some View {
     if layout.hardwareNotchHidden {
       Color.clear
+    } else if let reminder {
+      CompactReminderView(reminder: reminder, pillSnapshot: pillSnapshot, layout: layout, mascotSkin: mascotSkin, runningMascotNamespace: runningMascotNamespace)
     } else if layout.hasHardwareNotch && !layout.expanded {
       hardwareNotchBody
     } else {
@@ -2740,8 +2769,62 @@ struct CompactSessionView: View {
   }
 }
 
+/// The notice describes new attention across tasks, so it must not borrow the
+/// current task's title, output preview, identity color, or running animation.
+struct CompactReminderView: View {
+  let reminder: AgentIslandCompactReminder
+  let pillSnapshot: AgentIslandPillSnapshot
+  let layout: AgentIslandLayout
+  let mascotSkin: String
+  let runningMascotNamespace: Namespace.ID
+
+  var body: some View {
+    if layout.hasHardwareNotch {
+      let sideWidth = max(0, (layout.width - layout.notchWidth) / 2)
+      HStack(spacing: 0) {
+        notice
+          .padding(.leading, max(7, (min(sideWidth, 40) - 18) / 2))
+          .frame(width: sideWidth, alignment: .leading)
+          .clipped()
+        Spacer(minLength: layout.notchWidth)
+        PillBadge(pillSnapshot: pillSnapshot, compact: true)
+          .padding(.trailing, max(7, (min(sideWidth, 40) - 22) / 2))
+          .frame(width: sideWidth, alignment: .trailing)
+          .clipped()
+      }
+    } else {
+      HStack(spacing: 7) {
+        notice
+          .layoutPriority(1)
+        Spacer(minLength: 0)
+        PillBadge(pillSnapshot: pillSnapshot, compact: true)
+          .fixedSize()
+      }
+      .padding(.horizontal, 11)
+    }
+  }
+
+  @ViewBuilder
+  private var notice: some View {
+    if let state = mascotAnimationState(for: reminder.phase) {
+      RunningMascotIcon(
+        skin: mascotSkin,
+        state: state,
+        size: compactIslandStatusIconWidth,
+        namespace: runningMascotNamespace
+      )
+    } else {
+      Image(systemName: "exclamationmark.triangle")
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundColor(agentIslandErrorRed)
+        .frame(width: compactIslandStatusIconWidth, height: compactIslandStatusIconWidth)
+    }
+  }
+}
+
 struct IdleIslandView: View {
   let layout: AgentIslandLayout
+  let quota: [AgentIslandQuotaItem]
   let strings: AgentIslandStrings
   let soundEnabled: Bool
   let mascotSkin: String
@@ -2786,8 +2869,21 @@ struct IdleIslandView: View {
       Color.clear
     } else if layout.hasHardwareNotch {
       hardwareNotchBody
+    } else if hasQuota && layout.expanded {
+      // Stays centered where the collapsed island showed it, so expanding only grows the
+      // island around it; it moves left only as far as the toolbar needs.
+      let leadingRoom = layout.width - expandedIslandCardHorizontalPadding * 2
+        - ExpandedIslandToolbarControls.width - 8
+      let quotaWidth = leadingRoom - idleMascotWidth
+      let markWidth = idleMascotWidth
+        + AgentIslandQuotaRow.selection(items: quota, maxWidth: quotaWidth).nominalWidth
+      let overflow = max(0, (layout.width + markWidth) / 2 - expandedIslandCardHorizontalPadding - leadingRoom)
+      idleMark(quotaWidth: quotaWidth)
+        .offset(x: -overflow)
+        .frame(height: layout.menuBarZoneHeight)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     } else {
-      idleMark()
+      idleMark(quotaWidth: layout.width - compactIdleQuotaChrome)
         .frame(height: layout.expanded ? layout.menuBarZoneHeight : nil)
         .frame(
           maxWidth: .infinity,
@@ -2800,13 +2896,34 @@ struct IdleIslandView: View {
   private var hardwareNotchBody: some View {
     let sideWidth = max(0, (layout.width - layout.notchWidth) / 2)
     let textOpacity = hardwareNotchTextOpacity(sideWidth: sideWidth)
+    // Collapsed, quota sits on the trailing side like the task badge; expanded, the toolbar
+    // takes that side and quota follows the mascot.
+    let trailingQuota = !layout.expanded && hasQuota
+    // Chips keep the badge's inset; the bare percentage may use the narrowest one, so the
+    // default notch width still fits it.
+    // Falls back to the narrow inset whenever nothing fits at the badge's, not only when the
+    // bare percentage is what fits there: a 100% reading can be too wide for 9pt yet fit 7pt.
+    let trailingInset = AgentIslandQuotaRow.selection(items: quota, maxWidth: sideWidth - hardwareNotchBadgeReservedInset).items.isEmpty
+      ? hardwareNotchMinimumSideInset
+      : hardwareNotchBadgeReservedInset
     return HStack(spacing: 0) {
-      idleMark(textOpacity: textOpacity)
+      idleMark(
+        textOpacity: textOpacity,
+        quotaWidth: trailingQuota ? nil : sideWidth - idleMascotWidth
+      )
         .frame(width: sideWidth, alignment: .leading)
         .clipped()
       Spacer(minLength: layout.notchWidth)
-      Color.clear
-        .frame(width: sideWidth)
+      Group {
+        if trailingQuota {
+          AgentIslandQuotaRow(items: quota, maxWidth: sideWidth - trailingInset)
+            .padding(.trailing, trailingInset)
+        } else {
+          Color.clear
+        }
+      }
+      .frame(width: sideWidth, alignment: .trailing)
+      .clipped()
     }
     .frame(height: layout.expanded ? layout.menuBarZoneHeight : nil)
     .frame(
@@ -2816,16 +2933,26 @@ struct IdleIslandView: View {
     )
   }
 
-  private func idleMark(textOpacity: Double = 1) -> some View {
+  private var idleMascotWidth: CGFloat { 16 + 5 }
+
+  private var hasQuota: Bool { !quota.isEmpty }
+
+  /// The mascot, then the quota when `quotaWidth` leaves room for it, otherwise the app name.
+  @ViewBuilder
+  private func idleMark(textOpacity: Double = 1, quotaWidth: CGFloat? = nil) -> some View {
     HStack(spacing: 5) {
       AgentIslandMascotView(skin: mascotSkin, state: .idle, size: 16)
         .frame(width: 16, height: 16)
-      Text(strings.displayAppName)
-        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-        .foregroundColor(Color.white.opacity(0.24))
-        .opacity(textOpacity)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
+      if let quotaWidth, !AgentIslandQuotaRow.selection(items: quota, maxWidth: quotaWidth).items.isEmpty {
+        AgentIslandQuotaRow(items: quota, maxWidth: quotaWidth)
+      } else {
+        Text(strings.displayAppName)
+          .font(.system(size: 10, weight: .semibold, design: .monospaced))
+          .foregroundColor(Color.white.opacity(0.24))
+          .opacity(textOpacity)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
+      }
     }
   }
 
@@ -2894,6 +3021,7 @@ struct IdleCreateConversationRow: View {
 struct ExpandedIslandTopBar: View {
   var title: String? = nil
   let mascotState: AgentIslandMascotAnimationState?
+  var quota: [AgentIslandQuotaItem] = []
   let layout: AgentIslandLayout
   let strings: AgentIslandStrings
   let soundEnabled: Bool
@@ -2914,12 +3042,33 @@ struct ExpandedIslandTopBar: View {
   }
 
   private var regularBody: some View {
-    HStack(spacing: 8) {
-      leadingContent
-      Spacer(minLength: 8)
-      ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
+    ZStack {
+      HStack(spacing: 8) {
+        leadingContent(width: 0, includesQuota: false)
+        Spacer(minLength: 8)
+        ExpandedIslandToolbarControls(strings: strings, soundEnabled: soundEnabled, eventSink: eventSink)
+      }
+      if title == nil && !quota.isEmpty {
+        centeredQuota
+      }
     }
     .frame(maxWidth: .infinity, minHeight: expandedIslandTopBarHeight, alignment: .center)
+  }
+
+  /// Centered in the bar, where the idle island shows it too, so the expanded top bar reads
+  /// the same with or without tasks; it moves aside only as far as the mascot or the toolbar
+  /// needs.
+  private var centeredQuota: some View {
+    let barWidth = layout.width - expandedIslandCardHorizontalPadding * 2
+    let leadingReserve: CGFloat = mascotState != nil ? 18 + 8 : 0
+    let trailingReserve = ExpandedIslandToolbarControls.width + 8
+    let quotaWidth = barWidth - leadingReserve - trailingReserve
+    let rowWidth = AgentIslandQuotaRow.selection(items: quota, maxWidth: quotaWidth).nominalWidth
+    let leftEdge = (barWidth - rowWidth) / 2
+    let shiftRight = max(0, leadingReserve - leftEdge)
+    let shiftLeft = max(0, leftEdge + rowWidth - (barWidth - trailingReserve))
+    return AgentIslandQuotaRow(items: quota, maxWidth: quotaWidth)
+      .offset(x: shiftRight - shiftLeft)
   }
 
   private var hardwareNotchBody: some View {
@@ -2927,7 +3076,7 @@ struct ExpandedIslandTopBar: View {
       let notchWidth = min(layout.notchWidth, max(0, proxy.size.width))
       let sideWidth = max(0, (proxy.size.width - notchWidth) / 2)
       HStack(spacing: 0) {
-        leadingContent
+        leadingContent(width: sideWidth, includesQuota: true)
           .frame(width: sideWidth, alignment: .leading)
           .clipped()
 
@@ -2948,9 +3097,11 @@ struct ExpandedIslandTopBar: View {
     )
   }
 
+  /// Beside a hardware notch the center is taken, so quota follows the mascot and fills
+  /// what it leaves of `width`.
   @ViewBuilder
-  private var leadingContent: some View {
-    if mascotState != nil || title != nil {
+  private func leadingContent(width: CGFloat, includesQuota: Bool) -> some View {
+    if mascotState != nil || title != nil || (includesQuota && !quota.isEmpty) {
       HStack(spacing: 8) {
         if let mascotState {
           RunningMascotIcon(skin: mascotSkin, state: mascotState, size: 18, namespace: runningMascotNamespace)
@@ -2962,6 +3113,8 @@ struct ExpandedIslandTopBar: View {
             .foregroundColor(Color.white.opacity(0.34))
             .lineLimit(1)
             .truncationMode(.tail)
+        } else if includesQuota {
+          AgentIslandQuotaRow(items: quota, maxWidth: width - (mascotState != nil ? 18 + 8 : 0))
         }
       }
     }
@@ -2973,6 +3126,9 @@ struct ExpandedIslandToolbarControls: View {
   let soundEnabled: Bool
   let eventSink: ([String: Any]) -> Void
   @State private var controlsVisible = false
+
+  /// Three 23pt buttons with 5pt gaps.
+  static let width: CGFloat = 23 * 3 + 5 * 2
 
   var body: some View {
     HStack(spacing: 5) {
@@ -3047,11 +3203,120 @@ struct ExpandedIslandToolbarButton: View {
   }
 }
 
+enum AgentIslandQuotaLogos {
+  private static var cache: [String: NSImage] = [:]
+
+  static func image(_ svg: String) -> NSImage? {
+    if let cached = cache[svg] { return cached }
+    guard let data = svg.data(using: .utf8), let image = NSImage(data: data) else { return nil }
+    image.isTemplate = true
+    cache[svg] = image
+    return image
+  }
+}
+
+/// Remaining quota per plan: logo and amount, in the menu bar's order. The island never
+/// widens for it (the width is the user's), so the row shows what fits `maxWidth`, judged by
+/// the nominal widths main sent. The menu bar's lowest plan gets room first, so widening only
+/// ever adds plans around it; when not even its chip fits it folds to its bare percentage, as
+/// the menu bar icon shows it. Plans fade in and out as the width crosses each step.
+struct AgentIslandQuotaRow: View {
+  let items: [AgentIslandQuotaItem]
+  let maxWidth: CGFloat
+
+  // Mirrors the `AGENT_ISLAND_QUOTA_*` metrics in `shared/agentIsland.ts`.
+  static let logoSize: CGFloat = 10
+  static let logoGap: CGFloat = 3
+  static let chipSpacing: CGFloat = 8
+
+  struct Selection: Equatable {
+    /// In the menu bar's order.
+    let items: [AgentIslandQuotaItem]
+    /// Only the lowest plan's percentage fits.
+    let logoHidden: Bool
+
+    var nominalWidth: CGFloat {
+      guard !items.isEmpty else { return 0 }
+      if logoHidden { return CGFloat(items[0].textWidth) }
+      return items.reduce(CGFloat(0)) { $0 + CGFloat($1.width) } + chipSpacing * CGFloat(items.count - 1)
+    }
+  }
+
+  static func selection(items: [AgentIslandQuotaItem], maxWidth: CGFloat) -> Selection {
+    let budget = maxWidth + 0.5
+    var chosen = Set<String>()
+    var used: CGFloat = 0
+    for item in items.filter(\.lowest) + items.filter({ !$0.lowest }) {
+      let next = used + (chosen.isEmpty ? 0 : chipSpacing) + CGFloat(item.width)
+      if next > budget { break }
+      used = next
+      chosen.insert(item.id)
+    }
+    if chosen.isEmpty, let lowest = items.first(where: \.lowest), CGFloat(lowest.textWidth) <= budget {
+      return Selection(items: [lowest], logoHidden: true)
+    }
+    return Selection(items: items.filter { chosen.contains($0.id) }, logoHidden: false)
+  }
+
+  var body: some View {
+    let selection = Self.selection(items: items, maxWidth: maxWidth)
+    HStack(spacing: Self.chipSpacing) {
+      ForEach(selection.items) { item in
+        chip(item, showsLogo: !selection.logoHidden)
+          .transition(.opacity.combined(with: .scale(scale: 0.8)))
+      }
+    }
+    .fixedSize()
+    .animation(.easeOut(duration: 0.2), value: selection)
+    // Resizing the island turns animations off while dragging; a step in what fits still
+    // animates, since nothing else here changes with the drag.
+    .transaction { $0.disablesAnimations = false }
+  }
+
+  private func chip(_ item: AgentIslandQuotaItem, showsLogo: Bool) -> some View {
+    HStack(spacing: showsLogo ? Self.logoGap : 0) {
+      if showsLogo {
+        Group {
+          if let image = AgentIslandQuotaLogos.image(item.logoSvg) {
+            Image(nsImage: image)
+              .renderingMode(.template)
+              .resizable()
+              .interpolation(.high)
+              .aspectRatio(contentMode: .fit)
+          } else {
+            Color.clear
+          }
+        }
+        .frame(width: Self.logoSize, height: Self.logoSize)
+        .foregroundColor(Color.white.opacity(0.5))
+        .transition(.opacity.combined(with: .scale(scale: 0.5, anchor: .trailing)))
+      }
+
+      Text(showsLogo ? item.text : (item.compactText ?? item.text))
+        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+        .foregroundColor(textColor(item.level))
+        .lineLimit(1)
+    }
+    .opacity(item.stale ? 0.55 : 1)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(item.accessibilityLabel)
+    .help(item.accessibilityLabel)
+  }
+
+  private func textColor(_ level: String) -> Color {
+    switch level {
+    case "error": return agentIslandErrorRed
+    case "warn": return agentIslandOrange
+    default: return Color.white.opacity(0.62)
+    }
+  }
+}
+
 struct PillBadge: View {
   let pillSnapshot: AgentIslandPillSnapshot
   var compact: Bool = false
 
-  /// Text runs and minimum capsule width for the badge variant a snapshot renders.
+  /// Text runs and minimum width for the badge variant a snapshot renders.
   /// Shared by `body` and `intrinsicWidth` so reserved layout width can never
   /// drift away from what actually gets drawn.
   struct Metrics {
@@ -3061,23 +3326,48 @@ struct PillBadge: View {
     let fontSize: CGFloat
   }
 
+  /// One colored text run of the badge.
+  struct Run {
+    let text: String
+    let color: Color
+  }
+
+  /// Mirrors `getAgentIslandCompactBadgeSegments` in `shared/agentIsland.ts`:
+  /// running only → `running`; attention + running → `attention · running`;
+  /// attention only → `attention`; neither → session count.
+  static func runs(pillSnapshot: AgentIslandPillSnapshot) -> [Run] {
+    let attention = pillSnapshot.attentionCount
+    let running = pillSnapshot.runningSessionCount
+    // 等用户操作(提问 / 授权)优先于完成未读,与列表里的状态点同色。
+    let attentionColor = pillSnapshot.pendingInteractionCount > 0 ? agentIslandBlue : agentIslandUnreadGreen
+    if attention > 0 && running > 0 {
+      return [
+        Run(text: "\(attention)", color: attentionColor),
+        Run(text: "·", color: Color.white.opacity(0.42)),
+        Run(text: "\(running)", color: agentIslandOrange),
+      ]
+    }
+    if attention > 0 {
+      return [Run(text: "\(attention)", color: attentionColor)]
+    }
+    if running > 0 {
+      return [Run(text: "\(running)", color: agentIslandOrange)]
+    }
+    return [Run(text: "\(max(1, pillSnapshot.sessionCount))", color: Color.white.opacity(0.92))]
+  }
+
   static func metrics(pillSnapshot: AgentIslandPillSnapshot, compact: Bool) -> Metrics {
     let fontSize: CGFloat = compact ? 10 : 11
-    if pillSnapshot.activeSessionCount > 0 && pillSnapshot.sessionCount > 1 {
-      return Metrics(
-        segments: ["\(pillSnapshot.activeSessionCount)", "/", "\(pillSnapshot.sessionCount)"],
-        minWidth: compact ? 30 : 34,
-        fontSize: fontSize
-      )
-    }
+    let segments = runs(pillSnapshot: pillSnapshot).map(\.text)
+    let isPair = segments.count > 1
     return Metrics(
-      segments: ["\(max(1, pillSnapshot.sessionCount))"],
-      minWidth: compact ? 22 : 24,
+      segments: segments,
+      minWidth: isPair ? (compact ? 30 : 34) : (compact ? 22 : 24),
       fontSize: fontSize
     )
   }
 
-  /// Width the hardware-notch layout reserves for the capsule so a multi-digit count is
+  /// Width the hardware-notch layout reserves for the badge so a multi-digit count is
   /// never clipped.
   ///
   /// This is deliberately a *nominal* width computed from digit counts, not an `NSFont`
@@ -3092,11 +3382,11 @@ struct PillBadge: View {
     let segmentsWidth = metrics.segments.reduce(CGFloat(0)) { total, segment in
       total + CGFloat(segment.count) * nominalCharWidth + segmentRoundingSlack
     }
-    let spacing = activeTotalSpacing * CGFloat(max(0, metrics.segments.count - 1))
+    let spacing = runSpacing * CGFloat(max(0, metrics.segments.count - 1))
     return max(metrics.minWidth, segmentsWidth + spacing + contentInset * 2)
   }
 
-  private static let activeTotalSpacing: CGFloat = 1
+  private static let runSpacing: CGFloat = 1
   private static let contentInset: CGFloat = 2
   /// Upper bound for one monospaced 10pt digit (real advance is ~6pt). Mirrors
   /// `AGENT_ISLAND_COMPACT_BADGE_CHAR_WIDTH_BOUND` on the TS side.
@@ -3106,48 +3396,18 @@ struct PillBadge: View {
   private static let segmentRoundingSlack: CGFloat = 1
 
   var body: some View {
-    if pillSnapshot.activeSessionCount > 0 && pillSnapshot.sessionCount > 1 {
-      activeTotalBadge(
-        active: pillSnapshot.activeSessionCount,
-        total: pillSnapshot.sessionCount,
-        emphasized: isEmphasized
-      )
-    } else {
-      badge("\(max(1, pillSnapshot.sessionCount))", emphasized: isEmphasized)
-    }
-  }
-
-  private func badge(_ text: String, emphasized: Bool) -> some View {
-    Text(text)
-      .font(badgeFont)
-      .foregroundColor(Color.white.opacity(0.92))
-      .lineLimit(1)
-      .padding(.horizontal, Self.contentInset)
-      .frame(minWidth: metrics.minWidth, minHeight: compact ? 18 : 20)
-      .background(Color.white.opacity(emphasized ? 0.11 : 0.065))
-      .clipShape(Capsule())
-      // Fix the whole capsule, not just the text: a squeezed `minWidth` frame would
-      // otherwise shrink the background while multi-digit text overflows it.
-      .fixedSize(horizontal: true, vertical: false)
-  }
-
-  private func activeTotalBadge(active: Int, total: Int, emphasized: Bool) -> some View {
-    HStack(spacing: Self.activeTotalSpacing) {
-      Text("\(active)")
-        .foregroundColor(emphasized ? agentIslandBlue : agentIslandOrange)
-      Text("/")
-        .foregroundColor(Color.white.opacity(0.42))
-      Text("\(total)")
-        .foregroundColor(Color.white.opacity(0.92))
+    HStack(spacing: Self.runSpacing) {
+      ForEach(Array(Self.runs(pillSnapshot: pillSnapshot).enumerated()), id: \.offset) { _, run in
+        Text(run.text)
+          .foregroundColor(run.color)
+      }
     }
     .font(badgeFont)
     .lineLimit(1)
     .padding(.horizontal, Self.contentInset)
     .frame(minWidth: metrics.minWidth, minHeight: compact ? 18 : 20)
-    .background(Color.white.opacity(emphasized ? 0.11 : 0.065))
-    .clipShape(Capsule())
-    // Fix the whole capsule, not just the text: a squeezed `minWidth` frame would
-    // otherwise shrink the background while multi-digit text overflows it.
+    // Keep the full reserved width (mirrored on the TS side) instead of letting a
+    // squeezed `minWidth` frame truncate multi-digit text.
     .fixedSize(horizontal: true, vertical: false)
   }
 
@@ -3157,10 +3417,6 @@ struct PillBadge: View {
 
   private var badgeFont: Font {
     .system(size: metrics.fontSize, weight: .semibold, design: .monospaced)
-  }
-
-  private var isEmphasized: Bool {
-    pillSnapshot.pendingInteractionCount > 0 || pillSnapshot.attentionCount > 0
   }
 }
 
@@ -3242,6 +3498,7 @@ struct AgentIslandWaveText: View {
 struct ExpandedSessionsView: View {
   let current: AgentIslandSession
   let sessions: [AgentIslandSession]
+  let quota: [AgentIslandQuotaItem]
   let displaySurface: String
   let totalCount: Int
   let updatedAt: Double
@@ -3263,16 +3520,10 @@ struct ExpandedSessionsView: View {
   }
 
   private var sessionListViewportHeight: CGFloat {
-    let reservedHeight = expandedIslandTopPadding
-      + expandedIslandTopBarHeight
-      + expandedIslandBodySpacing
-      + expandedIslandBottomPadding
-    let availableHeight = max(
-      expandedIslandMultiRowSlotHeight,
-      layout.height - reservedHeight
-    )
-    let maxVisibleRowsHeight = CGFloat(expandedIslandMaxVisibleRows) * expandedIslandMultiRowSlotHeight
-    return min(availableHeight, maxVisibleRowsHeight)
+    // Depends only on the row budget: layout.height comes from the measured height of
+    // this very view, so sizing the viewport from it would let a stale, shorter
+    // measurement keep the list short (and only creep taller across re-expansions).
+    CGFloat(expandedIslandMaxVisibleRows) * expandedIslandMultiRowSlotHeight
   }
 
   private var currentMascotState: AgentIslandMascotAnimationState? {
@@ -3283,6 +3534,7 @@ struct ExpandedSessionsView: View {
     VStack(spacing: expandedIslandBodySpacing) {
       ExpandedIslandTopBar(
         mascotState: currentMascotState,
+        quota: quota,
         layout: layout,
         strings: strings,
         soundEnabled: soundEnabled,
@@ -3327,7 +3579,10 @@ struct ExpandedSessionsView: View {
         onFocus: {
           eventSink(["type": "focus-session", "sessionId": current.sessionId])
         },
-        onPermissionAction: emitPermissionAction
+        onPermissionAction: emitPermissionAction,
+        onCompletionAction: { action, requestId in
+          eventSink(["type": "completion-action", "sessionId": current.sessionId, "action": action, "requestId": requestId, "completionToken": current.completionToken ?? ""])
+        }
       )
       .equatable()
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -3367,7 +3622,10 @@ struct ExpandedSessionsView: View {
           onFocus: {
             eventSink(["type": "focus-session", "sessionId": session.sessionId])
           },
-          onPermissionAction: emitPermissionAction
+          onPermissionAction: emitPermissionAction,
+          onCompletionAction: { action, requestId in
+            eventSink(["type": "completion-action", "sessionId": session.sessionId, "action": action, "requestId": requestId, "completionToken": session.completionToken ?? ""])
+          }
         )
         .equatable()
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3392,6 +3650,7 @@ struct ExpandedSessionRow: View, Equatable {
   let mascotSkin: String
   let onFocus: () -> Void
   let onPermissionAction: (AgentIslandPermissionAction, String) -> Void
+  let onCompletionAction: (String, String) -> Void
   @State private var isHovered = false
 
   static func == (lhs: ExpandedSessionRow, rhs: ExpandedSessionRow) -> Bool {
@@ -3404,6 +3663,18 @@ struct ExpandedSessionRow: View, Equatable {
   }
 
   var body: some View {
+    if session.phase == "completed", let completionToken = session.completionToken {
+      CompletedSessionSwipeRow(strings: strings, canArchive: session.companion == nil,
+        onFocus: onFocus, onAction: onCompletionAction) {
+        card
+      }
+      .id("\(session.sessionId):\(completionToken)")
+    } else {
+      card
+    }
+  }
+
+  @ViewBuilder private var card: some View {
     let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
     VStack(alignment: .leading, spacing: rowSpacing) {
       if session.permissionAction == nil {
@@ -3453,21 +3724,254 @@ struct ExpandedSessionRow: View, Equatable {
     4
   }
 
+  /// Every row shares one leading column, so titles and summaries line up whether the
+  /// row speaks as a companion (avatar) or reports a task (agent mark / status icon).
   private var rowMainContent: some View {
-    VStack(alignment: .leading, spacing: rowSpacing) {
-      ExpandedSessionHeaderLine(
-        session: session,
-        strings: strings,
-        titleFontSize: 13,
-        mascotSkin: mascotSkin,
-        onFocus: onFocus
-      )
-      ExpandedRowSummaryLine(session: session, strings: strings)
-        .padding(.leading, 28)
+    HStack(alignment: .center, spacing: 10) {
+      Group {
+        if let group = session.groupChat {
+          AgentIslandGroupAvatar(group: group, size: expandedRowLeadingSize)
+        } else if let companion = session.companion {
+          AgentIslandCompanionStatusAvatar(session: session, companion: companion, size: expandedRowLeadingSize)
+        } else {
+          StatusDot(
+            session: session,
+            compact: false,
+            showsRunningAnimation: showsRunningIcon,
+            mascotSkin: mascotSkin,
+            size: 26
+          )
+        }
+      }
+      .frame(width: expandedRowLeadingSize, height: expandedRowLeadingSize)
+      VStack(alignment: .leading, spacing: rowSpacing) {
+        ExpandedSessionHeaderLine(
+          session: session,
+          strings: strings,
+          titleFontSize: 13,
+          onFocus: onFocus
+        )
+        ExpandedRowSummaryLine(session: session, strings: strings)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
+
+  private var showsRunningIcon: Bool {
+    switch session.phase {
+    case "needs-interaction", "completed":
+      return false
+    default:
+      return true
+    }
+  }
 }
+
+/// One displacement shared by mouse dragging and AppKit's phased trackpad events.
+/// Momentum never commits an action: only the user's release can do that.
+struct CompletedSessionSwipeRow<Content: View>: View {
+  let strings: AgentIslandStrings
+  let canArchive: Bool
+  let onFocus: () -> Void
+  let onAction: (String, String) -> Void
+  @ViewBuilder let content: () -> Content
+  @State private var offset: CGFloat = 0
+  @State private var armed = false
+  @State private var commitRequestId: String?
+  @State private var collapsed = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  private let reveal: CGFloat = 80
+  private var settleAnimation: Animation? { reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86) }
+
+  var body: some View {
+    content()
+      .offset(x: offset)
+      .background(GeometryReader { geometry in
+        let right = offset >= 0
+        Button { commit(width: geometry.size.width) } label: {
+          VStack(spacing: 5) {
+            Image(systemName: right ? "checkmark" : "archivebox")
+              .font(.system(size: 18, weight: .medium))
+            Text(right ? (strings.markRead ?? "Mark as read") : (strings.archive ?? "Archive"))
+              .font(.system(size: 11, weight: .medium))
+              .lineLimit(1)
+          }
+          .foregroundColor(.white.opacity(0.95))
+          .fixedSize(horizontal: true, vertical: false)
+          .frame(width: reveal, height: geometry.size.height)
+          // Lay out the label once behind the card. The opening clips it; it never reflows.
+          .frame(width: geometry.size.width, alignment: right ? .leading : .trailing)
+          .background((right ? agentIslandBlue : agentIslandArchiveBlue).opacity(armed ? 1 : 0.8))
+          .mask(alignment: right ? .leading : .trailing) {
+            Rectangle().frame(width: abs(offset))
+          }
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: right ? .leading : .trailing)
+        .opacity(offset == 0 ? 0 : 1)
+        .accessibilityHidden(offset == 0)
+      })
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay(GeometryReader { geometry in
+        CompletionSwipeInput(offset: offset,
+          onChange: { proposed in
+            guard commitRequestId == nil else { return }
+            offset = min(geometry.size.width, max(canArchive ? -geometry.size.width : 0, proposed))
+            let nextArmed = abs(offset) >= max(140, geometry.size.width * 0.72)
+            if nextArmed && !armed {
+              NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            }
+            armed = nextArmed
+          },
+          onEnd: { cancelled in
+            guard commitRequestId == nil else { return }
+            if armed && !cancelled {
+              commit(width: geometry.size.width)
+              return
+            }
+            withAnimation(settleAnimation) {
+              offset = !cancelled && abs(offset) >= 24 ? (offset > 0 ? reveal : -reveal) : 0
+              armed = false
+            }
+          },
+          onClick: { x in
+            guard commitRequestId == nil else { return }
+            if (offset > 0 && x < offset) || (offset < 0 && x > geometry.size.width + offset) {
+              commit(width: geometry.size.width)
+            }
+            else if offset != 0 {
+              withAnimation(settleAnimation) { offset = 0 }
+            } else { onFocus() }
+          })
+      })
+      .frame(height: collapsed ? 0 : nil)
+      .clipped()
+      .allowsHitTesting(commitRequestId == nil)
+      .task(id: commitRequestId) {
+        guard commitRequestId != nil else { return }
+        // Fill first, then collapse locally. Neither animation waits for disk or the remote host.
+        do {
+          if !reduceMotion { try await Task.sleep(nanoseconds: 120_000_000) }
+          withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) { collapsed = true }
+        } catch { /* View disappeared or a newer completion replaced it. */ }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .islandCompletionActionResult)) { notification in
+        guard notification.userInfo?["requestId"] as? String == commitRequestId,
+          notification.userInfo?["success"] as? Bool == false else { return }
+        offset = 0
+        armed = false
+        commitRequestId = nil
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { collapsed = false }
+      }
+  }
+
+  private func commit(width: CGFloat) {
+    guard commitRequestId == nil else { return }
+    let requestId = UUID().uuidString
+    let action = offset >= 0 ? "mark-read" : "archive"
+    commitRequestId = requestId
+    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
+      offset = offset >= 0 ? width : -width
+      armed = true
+    }
+    // A committed user action survives the island closing during its brief animation.
+    let send = onAction
+    DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : 0.22)) {
+      send(action, requestId)
+    }
+  }
+}
+
+extension Notification.Name {
+  static let islandCompletionActionResult = Notification.Name("islandCompletionActionResult")
+}
+
+struct CompletionSwipeInput: NSViewRepresentable {
+  let offset: CGFloat
+  let onChange: (CGFloat) -> Void
+  let onEnd: (Bool) -> Void
+  let onClick: (CGFloat) -> Void
+
+  func makeNSView(context: Context) -> CompletionSwipeInputView { CompletionSwipeInputView() }
+  func updateNSView(_ view: CompletionSwipeInputView, context: Context) {
+    view.input = self
+  }
+}
+
+final class CompletionSwipeInputView: NSView {
+  var input: CompletionSwipeInput?
+  private var origin: NSPoint?
+  private var startOffset: CGFloat = 0
+  private var translation = NSPoint.zero
+  private var axis = 0 // 0 undecided, 1 horizontal, 2 vertical
+  private var wheelActive = false
+  private var suppressWheelMomentum = false
+  private var wheelEnd: DispatchWorkItem?
+  override var acceptsFirstResponder: Bool { true }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+  override func mouseDown(with event: NSEvent) {
+    origin = event.locationInWindow
+    startOffset = input?.offset ?? 0
+    axis = 0
+  }
+  override func mouseDragged(with event: NSEvent) {
+    guard let origin else { return }
+    update(x: event.locationInWindow.x - origin.x, y: event.locationInWindow.y - origin.y)
+  }
+  override func mouseUp(with event: NSEvent) {
+    guard origin != nil else { return }
+    origin = nil
+    if axis == 1 { input?.onEnd(false) }
+    else if axis == 0 { input?.onClick(convert(event.locationInWindow, from: nil).x) }
+    axis = 0
+  }
+  private func update(x: CGFloat, y: CGFloat) {
+    if axis == 0 && max(abs(x), abs(y)) >= 6 { axis = abs(x) > abs(y) ? 1 : 2 }
+    if axis == 1 { input?.onChange(startOffset + x) }
+  }
+  override func scrollWheel(with event: NSEvent) {
+    // Vertical inertia belongs to the list; horizontal inertia cannot commit another row.
+    if !event.momentumPhase.isEmpty {
+      if !suppressWheelMomentum { super.scrollWheel(with: event) }
+      return
+    }
+    if !wheelActive || event.phase.contains(.began) {
+      wheelActive = true
+      suppressWheelMomentum = false
+      startOffset = input?.offset ?? 0
+      translation = .zero
+      axis = 0
+    }
+    translation.x += event.scrollingDeltaX
+    translation.y += event.scrollingDeltaY
+    update(x: translation.x, y: translation.y)
+    if axis != 1 { super.scrollWheel(with: event) }
+    wheelEnd?.cancel()
+    if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+      finishWheel(cancelled: event.phase.contains(.cancelled))
+    } else if event.phase.isEmpty {
+      let work = DispatchWorkItem { [weak self] in self?.finishWheel(cancelled: false) }
+      wheelEnd = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+  }
+  private func finishWheel(cancelled: Bool) {
+    suppressWheelMomentum = axis == 1
+    if axis == 1 { input?.onEnd(cancelled) }
+    wheelActive = false
+    axis = 0
+  }
+  override func keyDown(with event: NSEvent) {
+    if event.keyCode == 53 { input?.onEnd(true) }
+    else { super.keyDown(with: event) }
+  }
+  override func viewDidMoveToWindow() {
+    if window == nil { wheelEnd?.cancel() }
+  }
+}
+
+private let expandedRowLeadingSize: CGFloat = 32
 
 func expandedCardFillOpacity(session: AgentIslandSession, hovered: Bool) -> Double {
   let base = session.phase == "needs-interaction" ? 0.065 : 0.035
@@ -3483,40 +3987,50 @@ struct ExpandedSessionHeaderLine: View {
   let session: AgentIslandSession
   let strings: AgentIslandStrings
   let titleFontSize: CGFloat
-  let mascotSkin: String
   let onFocus: () -> Void
 
-  private var showsMascot: Bool {
-    switch session.phase {
-    case "needs-interaction", "completed":
-      return false
-    default:
-      return true
+  /// A finished companion turn reads as a message: the reply is the content, no "Done" tag.
+  private var isCompanionReply: Bool {
+    (session.companion != nil || session.groupChat != nil) && session.phase == "completed"
+  }
+
+  private var titleText: Text {
+    let title = Text(expandedPrimaryTitle(for: session, strings: strings))
+      .foregroundColor(Color.white.opacity(0.92))
+    if let mention = session.groupChat?.mentionLabel {
+      return title + Text(" · \(mention)").foregroundColor(Color.white.opacity(0.65))
     }
+    guard let group = companionGroupName else { return title }
+    // The group yields first when the line is too narrow: the speaker stays readable.
+    return title + Text(" · \(group)").foregroundColor(Color.white.opacity(0.42))
+  }
+
+  private var titleHelp: String {
+    let title = expandedPrimaryTitle(for: session, strings: strings)
+    guard let group = companionGroupName else { return title }
+    return "\(title) · \(group)"
+  }
+
+  private var companionGroupName: String? {
+    let group = session.companion?.groupName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return group.isEmpty ? nil : group
   }
 
   var body: some View {
     HStack(alignment: .center, spacing: 8) {
-      StatusDot(
-        session: session,
-        compact: false,
-        showsRunningAnimation: showsMascot,
-        mascotSkin: mascotSkin
-      )
 
-      Text(expandedPrimaryTitle(for: session, strings: strings))
+      titleText
         .font(.system(size: titleFontSize, weight: .medium))
-        .foregroundColor(Color.white.opacity(0.92))
         .lineLimit(1)
         .truncationMode(.tail)
         .layoutPriority(1)
-        .help(expandedPrimaryTitle(for: session, strings: strings))
+        .help(titleHelp)
 
       Spacer(minLength: 8)
 
       if session.phase == "needs-interaction", session.permissionAction == nil {
         InteractionInlineButton(label: strings.review, action: onFocus)
-      } else {
+      } else if !isCompanionReply {
         SessionStatusLabel(session: session, strings: strings)
       }
     }
@@ -3682,6 +4196,10 @@ struct ExpandedRowSummary {
 }
 
 func expandedPrimaryTitle(for session: AgentIslandSession, strings: AgentIslandStrings) -> String {
+  // A companion is named by its owner; never filter it like a generic agent title.
+  if let name = session.companion?.name.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+    return name
+  }
   let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
   if isMeaningfulExpandedTitle(title) {
     return title
@@ -3959,27 +4477,41 @@ struct StatusDot: View {
   var showsRunningAnimation = true
   var mascotSkin = defaultAgentIslandMascotSkin
   var runningMascotNamespace: Namespace.ID?
+  /// Overrides the default 18pt (compact) / 20pt slot; glyphs scale with it.
+  var size: CGFloat? = nil
+
+  private var side: CGFloat { size ?? (compact ? 18 : 20) }
+  private var glyphScale: CGFloat { side / 20 }
 
   var body: some View {
     let accent = statusAccentColor(for: session)
     ZStack {
-      if usesExpandedVendorStatusIcon {
+      if let group = session.groupChat {
+        AgentIslandGroupAvatar(group: group, size: side)
+      } else if let companion = session.companion {
+        AgentIslandCompanionStatusAvatar(
+          session: session,
+          companion: companion,
+          size: side
+        )
+      } else if usesExpandedVendorStatusIcon {
         AgentIslandSessionVendorIcon(
           session: session,
           running: isRunningSession(session),
-          highlighted: session.phase == "completed" && session.attention
+          highlighted: session.phase == "completed" && session.attention,
+          size: side
         )
       } else if let mascotState = mascotAnimationState(for: session), showsRunningAnimation {
         if let runningMascotNamespace {
           RunningMascotIcon(
             skin: mascotSkin,
             state: mascotState,
-            size: compact ? 18 : 20,
+            size: side,
             namespace: runningMascotNamespace
           )
         } else {
-          AgentIslandMascotView(skin: mascotSkin, state: mascotState, size: compact ? 18 : 20)
-            .frame(width: compact ? 18 : 20, height: compact ? 18 : 20)
+          AgentIslandMascotView(skin: mascotSkin, state: mascotState, size: side)
+            .frame(width: side, height: side)
         }
       } else {
         Circle().fill(accent.opacity(session.phase == "completed" ? 0.08 : 0.13))
@@ -3987,7 +4519,7 @@ struct StatusDot: View {
           .foregroundColor(accent.opacity(session.phase == "completed" ? 0.78 : 0.96))
       }
     }
-    .frame(width: compact ? 18 : 20, height: compact ? 18 : 20)
+    .frame(width: side, height: side)
   }
 
   private var usesExpandedVendorStatusIcon: Bool {
@@ -4000,13 +4532,13 @@ struct StatusDot: View {
     switch session.phase {
     case "needs-interaction":
       Image(systemName: "questionmark.bubble")
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(size: 11 * glyphScale, weight: .semibold))
     case "completed":
       Image(systemName: "checkmark")
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(size: 11 * glyphScale, weight: .semibold))
     case "error":
       Image(systemName: "exclamationmark.triangle")
-        .font(.system(size: 10, weight: .semibold))
+        .font(.system(size: 10 * glyphScale, weight: .semibold))
     default:
       EmptyView()
     }
@@ -4055,6 +4587,7 @@ struct AgentIslandSessionVendorIcon: View {
   let session: AgentIslandSession
   let running: Bool
   let highlighted: Bool
+  var size: CGFloat = 20
   @State private var isBreathing = false
   @Environment(\.agentIslandMascotAnimationsActive) private var animationsActive
 
@@ -4063,7 +4596,7 @@ struct AgentIslandSessionVendorIcon: View {
   }
 
   private var markSize: CGFloat {
-    vendor == .cc ? 13 : 12
+    (vendor == .cc ? 13 : 12) * size / 20
   }
 
   var body: some View {
@@ -4096,7 +4629,7 @@ struct AgentIslandSessionVendorIcon: View {
     .onChange(of: running) { _, isRunning in
       isBreathing = isRunning && animationsActive
     }
-    .frame(width: 20, height: 20)
+    .frame(width: size, height: size)
   }
 
   @ViewBuilder
@@ -4108,6 +4641,157 @@ struct AgentIslandSessionVendorIcon: View {
       Text("XD")
         .font(.system(size: 8.5, weight: .bold, design: .rounded))
     }
+  }
+}
+
+/// Dark tints of the BotAvatar hue family (`--bot-avatar-*-bg`, dark); the island is always dark.
+func agentIslandCompanionHueColor(_ hue: String) -> Color {
+  let rgb: (Double, Double, Double)
+  switch hue {
+  case "red": rgb = (0x4a, 0x2e, 0x2a)
+  case "orange": rgb = (0x4a, 0x35, 0x27)
+  case "amber": rgb = (0x47, 0x3a, 0x22)
+  case "green": rgb = (0x26, 0x40, 0x2a)
+  case "teal": rgb = (0x21, 0x40, 0x3e)
+  case "blue": rgb = (0x26, 0x34, 0x49)
+  case "pink": rgb = (0x45, 0x2b, 0x39)
+  case "graphite": rgb = (0x3c, 0x3c, 0x3a)
+  default: rgb = (0x32, 0x2b, 0x48)
+  }
+  return Color(red: rgb.0 / 255, green: rgb.1 / 255, blue: rgb.2 / 255)
+}
+
+final class AgentIslandCompanionAvatarStore {
+  static let shared = AgentIslandCompanionAvatarStore()
+
+  // Keyed by the thumbnail itself: a changed avatar arrives as different bytes.
+  private var cache: [String: NSImage?] = [:]
+
+  func image(forJpegBase64 base64: String) -> NSImage? {
+    if let cached = cache[base64] { return cached }
+    let image = Data(base64Encoded: base64).flatMap { NSImage(data: $0) }
+    if cache.count >= 16 { cache.removeAll() }
+    cache[base64] = image
+    return image
+  }
+}
+
+/// Same first-five, first-member-in-front geometry as the teammate sidebar.
+struct AgentIslandGroupAvatar: View {
+  let group: AgentIslandGroupChat
+  let size: CGFloat
+
+  var body: some View {
+    let members = Array(group.avatars.prefix(5))
+    ZStack(alignment: .topLeading) {
+      if members.isEmpty {
+        Image(systemName: "person.2.fill")
+          .font(.system(size: size * 0.6))
+          .foregroundColor(.white.opacity(0.7))
+          .frame(width: size, height: size)
+      } else if members.count == 1 {
+        AgentIslandCompanionAvatar(companion: members[0], size: size)
+      } else {
+        let diameter = size * (members.count <= 3 ? 0.6 : members.count == 4 ? 0.55 : 0.5)
+        let radius = (size - diameter) / 2
+        ForEach(Array(members.indices.reversed()), id: \.self) { index in
+          let position = members.count - 1 - index
+          let angle = -3 * Double.pi / 4 + Double(position) * 2 * Double.pi / Double(members.count)
+          let x = members.count == 2 ? (index == 0 ? size - diameter : 0) : radius * (1 + CGFloat(cos(angle)))
+          let y = members.count == 2 ? (index == 0 ? size - diameter : 0) : radius * (1 + CGFloat(sin(angle)))
+          AgentIslandCompanionAvatar(companion: members[index], size: diameter)
+            .overlay(Circle().stroke(Color.black, lineWidth: max(1, size / 20)))
+            .offset(x: x, y: y)
+        }
+      }
+    }
+    .frame(width: size, height: size)
+  }
+}
+
+struct AgentIslandCompanionAvatar: View {
+  let companion: AgentIslandCompanion
+  let size: CGFloat
+
+  var body: some View {
+    ZStack {
+      Circle().fill(agentIslandCompanionHueColor(companion.hue))
+      if let base64 = companion.imageJpeg,
+         let image = AgentIslandCompanionAvatarStore.shared.image(forJpegBase64: base64) {
+        Image(nsImage: image)
+          .resizable()
+          .interpolation(.high)
+          .aspectRatio(contentMode: .fill)
+      } else if companion.glyphIsInitial {
+        Text(companion.glyph)
+          .font(.system(size: size * 0.5, weight: .medium))
+          .foregroundColor(Color.white.opacity(0.92))
+      } else {
+        Text(companion.glyph)
+          .font(.system(size: size * 0.58))
+      }
+    }
+    .frame(width: size, height: size)
+    .clipShape(Circle())
+    .accessibilityLabel(companion.name)
+  }
+}
+
+/// Companion avatar plus the session state the agent mark would otherwise carry:
+/// a breathing ring while it works, a corner dot when it waits, failed or replied unread.
+struct AgentIslandCompanionStatusAvatar: View {
+  let session: AgentIslandSession
+  let companion: AgentIslandCompanion
+  let size: CGFloat
+  @State private var isBreathing = false
+  @Environment(\.agentIslandMascotAnimationsActive) private var animationsActive
+
+  private var running: Bool { isRunningSession(session) }
+
+  private var badgeSize: CGFloat { max(6, min(size * 0.3, 10)) }
+
+  private var badgeColor: Color? {
+    switch session.phase {
+    case "needs-interaction":
+      return agentIslandBlue
+    case "error":
+      return agentIslandErrorRed
+    case "completed":
+      return session.attention ? agentIslandUnreadGreen : nil
+    default:
+      return nil
+    }
+  }
+
+  var body: some View {
+    AgentIslandCompanionAvatar(companion: companion, size: size)
+      .overlay(
+        Circle()
+          .strokeBorder(agentIslandOrange, lineWidth: size >= 28 ? 2 : 1.5)
+          .opacity(running ? (animationsActive ? (isBreathing ? 0.95 : 0.3) : 0.85) : 0)
+          .animation(
+            running && animationsActive ? .easeInOut(duration: 0.75).repeatForever(autoreverses: true) : .default,
+            value: isBreathing
+          )
+      )
+      .overlay(alignment: .bottomTrailing) {
+        if let badgeColor {
+          Circle()
+            .fill(badgeColor)
+            .frame(width: badgeSize, height: badgeSize)
+            .overlay(Circle().strokeBorder(Color.black, lineWidth: size >= 28 ? 1.5 : 1.2))
+        }
+      }
+      .frame(width: size, height: size)
+      .onAppear {
+        isBreathing = running && animationsActive
+      }
+      .onChange(of: animationsActive) { _, active in
+        isBreathing = running && active
+      }
+      .onChange(of: running) { _, isRunning in
+        isBreathing = isRunning && animationsActive
+      }
   }
 }
 
@@ -4139,7 +4823,11 @@ struct AgentIslandMascotView: View {
 }
 
 private func mascotAnimationState(for session: AgentIslandSession) -> AgentIslandMascotAnimationState? {
-  switch session.phase {
+  mascotAnimationState(for: session.phase)
+}
+
+private func mascotAnimationState(for phase: String) -> AgentIslandMascotAnimationState? {
+  switch phase {
   case "needs-interaction":
     return .waitingApproval
   case "completed":
@@ -4261,6 +4949,7 @@ final class TrackingView: NSView {
   var dragActive = false
   var dragMode: String?
   var onHover: ((Bool, Bool) -> Void)?
+  private var resizeCursorShown = false
   private var lastMenuBar = false
   private var lastPanel = false
 
@@ -4308,10 +4997,21 @@ final class TrackingView: NSView {
     let point = convert(event.locationInWindow, from: nil)
     if isResizeHit(point, edge: .left) {
       agentIslandFrameResizeCursor(edge: .left).set()
+      resizeCursorShown = true
       return
     }
     if isResizeHit(point, edge: .right) {
       agentIslandFrameResizeCursor(edge: .right).set()
+      resizeCursorShown = true
+      return
+    }
+    // Only undo the resize cursor this view set; otherwise a transparent carrier area passes
+    // clicks to the window below, so leave that window's cursor (e.g. an I-beam) alone.
+    if resizeCursorShown {
+      resizeCursorShown = false
+      NSCursor.arrow.set()
+    }
+    guard visualRect().contains(point) else {
       return
     }
     super.cursorUpdate(with: event)
@@ -4604,6 +5304,7 @@ final class AgentIslandController {
   private var screenMetricsTimer: Timer?
   private var pendingScreenMetricsForceRefresh = false
   private var dragInteraction: PanelDragInteraction?
+  private var didApplyDragLayout = false
   private var pendingMoveInteraction: PanelDragInteraction?
   private var lastMoveTime: TimeInterval = 0
   private var lastLayoutEmitTime: TimeInterval = 0
@@ -4690,10 +5391,12 @@ final class AgentIslandController {
       hardwareNotchLayoutEnabled: hardwareNotchLayoutEnabled,
       preferredContentWidth: preferredContentWidth
     )
+    // The main process sends one carrier size for both modes so expanding never
+    // resizes the window (Mission Control animates every resize).
     let cocoaFrame = convertToCocoaFrame(
       frame,
       screen: screen,
-      carrierHeight: ceil(layout.height + layout.carrierInset)
+      carrierHeight: max(CGFloat(frame.height), ceil(layout.height + layout.carrierInset))
     )
     emitFrameDebug(
       event: "apply-frame",
@@ -4734,7 +5437,16 @@ final class AgentIslandController {
     if state.mode == "expanded" {
       cancelPendingCarrierFrame()
     }
-    let shouldResizeCarrierBeforeState = state.mode == "expanded" && lastCocoaFrame != cocoaFrame
+    // A carrier that only grows around the current panel (the shared size coming back after a
+    // resize drag) is set before the animated state change. Set afterwards, the panel would jump
+    // to the new size while the island's offset inside it springs across, so the island would
+    // swing sideways on screen and back.
+    let carrierGrowsAroundPanel = lastCocoaFrame != nil
+      && cocoaFrame.minX <= panel.frame.minX + 0.5
+      && cocoaFrame.maxX >= panel.frame.maxX - 0.5
+      && cocoaFrame.height >= panel.frame.height - 0.5
+    let shouldResizeCarrierBeforeState = (state.mode == "expanded" || carrierGrowsAroundPanel)
+      && lastCocoaFrame != cocoaFrame
     let shouldDelayCarrierShrink = state.visible
       && model.state.mode == "expanded"
       && state.mode != "expanded"
@@ -5119,6 +5831,11 @@ final class AgentIslandController {
   }
 
   private func continueDrag(screenPoint: NSPoint, interaction: PanelDragInteraction) {
+    // The held-pointer poller also calls this without movement. A reminder can
+    // temporarily widen the island, but pressing its edge must not save that width.
+    guard didApplyDragLayout || screenPoint.x != interaction.startMouseX else {
+      return
+    }
     pushDragCursor(for: interaction)
     let nextFrame: NSRect
     let contentWidth: CGFloat
@@ -5168,6 +5885,7 @@ final class AgentIslandController {
       from: lastInteractiveSnapMode,
       to: nextSnapMode
     )
+    didApplyDragLayout = true
     applyInteractiveFrame(nextFrame, animatedSnap: shouldAnimateSnap)
     lastInteractiveSnapMode = nextSnapMode
     emitDragDebug(
@@ -5202,24 +5920,28 @@ final class AgentIslandController {
       event: "drag-finish",
       interaction: interaction,
       frame: panel.frame,
-      contentWidth: currentContentWidth(frame: panel.frame, layout: lastLayout),
+      contentWidth: displayedContentWidth(),
       screenPoint: screenPoint,
       force: true
     )
+    let shouldPersistLayout = didApplyDragLayout
     dragInteraction = nil
+    didApplyDragLayout = false
     model.layoutDragActive = false
     model.layoutDragMode = nil
     lastInteractiveSnapMode = .free
     popPushedCursor()
     eventSink(["type": "drag", "active": false])
-    emitLayoutPreference(
-      frame: panel.frame,
-      contentWidth: currentContentWidth(frame: panel.frame, layout: lastLayout),
-      force: true,
-      snapCenter: interaction.mode == .move
-    )
+    if shouldPersistLayout {
+      emitLayoutPreference(
+        frame: panel.frame,
+        contentWidth: displayedContentWidth(),
+        force: true,
+        snapCenter: interaction.mode == .move
+      )
+    }
     handleMouseMoved(screenPoint: screenPoint, force: true)
-    replayDeferredInteractionUpdateIfNeeded(preservingCurrentPanelFrame: true)
+    replayDeferredInteractionUpdateIfNeeded(preservingCurrentPanelFrame: shouldPersistLayout)
   }
 
   private func finishPendingMove(screenPoint: NSPoint) {
@@ -5260,6 +5982,7 @@ final class AgentIslandController {
   private func activateDragInteraction(_ interaction: PanelDragInteraction, screenPoint: NSPoint) {
     pendingMoveInteraction = nil
     dragInteraction = interaction
+    didApplyDragLayout = false
     model.layoutDragActive = true
     model.layoutDragMode = interaction.mode.eventName
     lastInteractiveSnapMode = compactWidthSnapMode(
@@ -5369,7 +6092,13 @@ final class AgentIslandController {
     guard model.state.visible, panel.isVisible else {
       return nil
     }
-    let frame = panel.frame
+    // Drag math sizes the carrier around the island itself; the main process sends
+    // the shared carrier size again once the drag ends.
+    let frame = centeredFrameForResize(
+      contentWidth: lastLayout.width,
+      inset: lastLayout.carrierInset,
+      startFrame: panel.frame
+    )
     let resolvedHit = hit ?? hitTestInteraction(screenPoint: screenPoint)
     if let resizeMode = resolvedHit.resizeMode {
       let contentWidth = constrainedContentWidth(lastLayout.width, expanded: lastLayout.expanded)
@@ -5421,9 +6150,8 @@ final class AgentIslandController {
       && abs(screenPoint.y - interaction.startMouseY) <= agentIslandClickDragTolerance
   }
 
-  /// The screen rectangle where the collapsed island sat. After expand, that
-  /// center strip is blank (hardware-notch Color.clear, or the top-bar spacer).
-  /// Clicking it should fold the island back; toolbar / title live outside it.
+  /// Keep the full compact footprint clickable, including its notch-side wings.
+  /// The leading title/mascot is passive; only the trailing toolbar owns clicks.
   private func isCompactFootprintClick(interaction: PanelDragInteraction) -> Bool {
     let layout = interaction.startLayout
     let footprintWidth = compactCollapseFootprintWidth(layout: layout)
@@ -5432,15 +6160,8 @@ final class AgentIslandController {
     guard clickX >= centerX - footprintWidth / 2 && clickX <= centerX + footprintWidth / 2 else {
       return false
     }
-    let visualMinX = centerX - layout.width / 2
     let visualMaxX = centerX + layout.width / 2
-    let sideChrome = layout.hasHardwareNotch
-      ? max(0, (layout.width - layout.notchWidth) / 2)
-      : 0
-    let leadingReserved = max(compactCollapseLeadingReservedWidth, sideChrome)
-    let trailingReserved = max(compactCollapseTrailingReservedWidth, sideChrome)
-    return clickX > visualMinX + leadingReserved
-      && clickX < visualMaxX - trailingReserved
+    return clickX < visualMaxX - compactCollapseTrailingReservedWidth
   }
 
   private func compactCollapseFootprintWidth(layout: AgentIslandLayout) -> CGFloat {
@@ -5563,6 +6284,16 @@ final class AgentIslandController {
       && abs(target.minY - frame.minY) < 0.5
       && abs(target.width - frame.width) < 0.5
       && abs(target.height - frame.height) < 0.5
+  }
+
+  // The island's own width. Unlike currentContentWidth(frame:), it stays correct while the
+  // panel still has the shared carrier size, e.g. a resize edge pressed but never dragged.
+  private func displayedContentWidth() -> CGFloat {
+    constrainedContentWidth(
+      lastLayout.width,
+      expanded: lastLayout.expanded,
+      fixedCenterX: panel.frame.midX
+    )
   }
 
   private func currentContentWidth(frame: NSRect, layout: AgentIslandLayout) -> CGFloat {
@@ -5786,6 +6517,10 @@ final class AgentIslandController {
       return constrainedCenterX(desiredCenterX, contentWidth: contentWidth)
     }
     let constrained = constrainedCenterX(desiredCenterX, contentWidth: contentWidth)
+    // The center belongs to the system Dynamic Island there; do not pull toward it.
+    if AgentIslandScreenMetricsProvider.screenHasSystemIsland(screen) {
+      return constrained
+    }
     if abs(constrained - screen.frame.midX) <= expandedIslandCenterSnapDistance {
       return constrainedCenterX(screen.frame.midX, contentWidth: contentWidth)
     }
@@ -6058,7 +6793,7 @@ final class AgentIslandController {
       height: Double(panel.frame.height),
       displayId: frame.displayId,
       displayBounds: frame.displayBounds,
-      contentWidth: Double(currentContentWidth(frame: panel.frame, layout: lastLayout))
+      contentWidth: Double(displayedContentWidth())
     )
   }
 
@@ -6232,8 +6967,14 @@ enum AgentIslandDebugHarness {
       width: Double(screenFrame.width),
       height: Double(screenFrame.height)
     )
+    // Mirrors main's default on Dynamic Island displays (computeAgentIslandSystemIslandDefaultCenterXRatio):
+    // right of the system island's expanded footprint, clamped to the screen.
+    var centerX = screenFrame.midX
+    if let screen, AgentIslandScreenMetricsProvider.screenHasSystemIsland(screen) {
+      centerX = min(screenFrame.maxX - frameWidth / 2, screenFrame.midX + 131 + 12 + 298 / 2)
+    }
     let frame = AgentIslandCarrierFrame(
-      x: Double(screenFrame.minX + (screenFrame.width - frameWidth) / 2),
+      x: Double(centerX - frameWidth / 2),
       y: 0,
       width: Double(frameWidth),
       height: 640,
@@ -6289,7 +7030,7 @@ enum AgentIslandDebugHarness {
     now: Double
   ) -> AgentIslandDisplayState {
     let current = sessions.first { $0.sessionId == currentSessionId } ?? sessions[0]
-    let activeCount = sessions.filter { $0.phase == "running" || $0.phase == "needs-interaction" }.count
+    let runningCount = sessions.filter { $0.phase == "running" }.count
     let pendingCount = sessions.filter { $0.phase == "needs-interaction" }.count
     let unreadDoneCount = sessions.filter { $0.phase == "completed" || $0.phase == "error" }.count
     return AgentIslandDisplayState(
@@ -6310,7 +7051,7 @@ enum AgentIslandDebugHarness {
         priorityMicroTitle: current.displayTitle,
         priorityCompactTitle: current.displayTitle,
         sessionCount: sessions.count,
-        activeSessionCount: activeCount,
+        runningSessionCount: runningCount,
         pendingInteractionCount: pendingCount,
         unreadCompletedCount: unreadDoneCount,
         deferredRevealCount: 1,
@@ -6688,11 +7429,57 @@ private enum AgentIslandMascotPreview {
   }
 }
 
+/// `--export-mascots <dir>`: writes a still of every skin in each Live Activity status
+/// (`<skin>-running.png`, `-attention.png`, `-completed.png`, 128px) for the widget extension's
+/// asset catalog (native/agent-island/live-activity/build.mjs). The sprite PNGs carry no eyes —
+/// this view draws them — so the extension must use these stills, not the raw sprites.
+private enum AgentIslandMascotExport {
+  static let flag = "--export-mascots"
+
+  static var outputDirectory: URL? {
+    let args = Array(CommandLine.arguments.dropFirst())
+    guard let index = args.firstIndex(of: flag), index + 1 < args.count else { return nil }
+    return URL(fileURLWithPath: args[index + 1], isDirectory: true)
+  }
+
+  @MainActor
+  static func run(to directory: URL) -> Bool {
+    let poses: [(String, AgentIslandMascotAnimationState)] = [
+      ("running", .working), ("attention", .waitingApproval), ("completed", .completed),
+    ]
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      for skin in AgentIslandMascotCatalog.skins {
+        for (status, state) in poses {
+          let view = AgentIslandMascotView(skin: skin, state: state, size: 64)
+            .agentIslandMascotAnimationsActive(false)
+          let renderer = ImageRenderer(content: view)
+          renderer.scale = 2
+          guard let image = renderer.cgImage,
+                let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+          else {
+            FileHandle.standardError.write(Data("could not render \(skin) \(status)\n".utf8))
+            return false
+          }
+          try png.write(to: directory.appendingPathComponent("\(skin)-\(status).png"))
+        }
+      }
+      return true
+    } catch {
+      FileHandle.standardError.write(Data("\(error)\n".utf8))
+      return false
+    }
+  }
+}
+
 final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
   private let controllerManager = AgentIslandDisplayControllerManager()
   private let decoder = JSONDecoder()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if let directory = AgentIslandMascotExport.outputDirectory {
+      exit(AgentIslandMascotExport.run(to: directory) ? 0 : 1)
+    }
     if AgentIslandMascotPreview.isEnabled {
       AgentIslandMascotPreview.present()
       return
@@ -6721,6 +7508,13 @@ final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
     guard let data = line.data(using: .utf8) else { return }
     do {
       let message = try decoder.decode(IncomingMessage.self, from: data)
+      if message.type == "completion-action-result", let requestId = message.requestId {
+        DispatchQueue.main.async {
+          NotificationCenter.default.post(name: .islandCompletionActionResult, object: nil,
+            userInfo: ["requestId": requestId, "success": message.success == true])
+        }
+        return
+      }
       if message.type == "shutdown" {
         DispatchQueue.main.async { [controllerManager] in
           controllerManager.closeAll()
@@ -6754,8 +7548,10 @@ final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
   }
 }
 
+#if !AGENT_ISLAND_INTERACTION_TEST
 let app = NSApplication.shared
 let delegate = AgentIslandAppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()
+#endif

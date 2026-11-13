@@ -1,8 +1,16 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, type MakerSessionAgentSwitchHandlerDeps } from '../sessionAgentSwitchHandler';
+import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, isUserPendingAgentSwitchIntent, type MakerSessionAgentSwitchHandlerDeps, type PendingAgentSwitchIntent } from '../sessionAgentSwitchHandler';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
+import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock';
+import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessions';
+import { effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
+import { resolveSessionRuntimeAxes, acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch,
+  sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider,
+  clearSessionRuntimeControlState } from '../sessionRuntimeControl';
+import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
+import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
 
 // Execute the actual picker admission branches (local and agent-device), with
 // everything after admission represented by applyLive. No Electron bootstrap.
@@ -12,7 +20,56 @@ const branches: string[] = [];
 const confirmationChecks: string[] = [];
 let applySelectionAdapter = '';
 let piWindowOverride = '';
+let directSendAdapter = '';
+let scheduledAccountPreparation = '';
+let scheduledExecutionSelection = '';
+let subscriptionRuntimeRead = '';
+let subscriptionRouteMove = '';
+let bootstrapRuntimeOverride = '';
+let directSendEntry = '';
+let archivedAdmission = '';
+let terminalGuard = '';
+let stageAxisAdapter = '';
+let scheduledAxisAdapter = '';
 function visit(node: ts.Node) {
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'readSubscriptionRuntimeSession') {
+    subscriptionRuntimeRead = node.getText(source);
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'subscriptionAccountRecoveryDeps') {
+    const expression = ts.isSatisfiesExpression(node.initializer!) ? node.initializer.expression : node.initializer;
+    if (expression && ts.isObjectLiteralExpression(expression)) {
+      const move = expression.properties.find(prop => ts.isPropertyAssignment(prop) && prop.name.getText(source) === 'moveRoute');
+      if (move && ts.isPropertyAssignment(move)) subscriptionRouteMove = move.initializer.getText(source);
+    }
+  }
+  if (ts.isIfStatement(node) && node.expression.getText(source) === 'runtimeOverride && runtimeOverride.agentKind === o.agentKind') {
+    bootstrapRuntimeOverride = node.getText(source);
+  }
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'acquirePendingAgentSwitchForDirectSend' && node.body) {
+    directSendEntry = node.getText(source).replace(/^export /, '');
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'updateSavedScheduledAxis') {
+    scheduledAxisAdapter = node.initializer!.getText(source);
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'resolveScheduledExecutionSelection') {
+    scheduledExecutionSelection = node.initializer!.getText(source);
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'stagePendingUserRuntimeAxis') {
+    stageAxisAdapter = node.initializer!.getText(source);
+  }
+  if (ts.isBinaryExpression(node) && node.left.getText(source) === 'pendingAgentSwitchApplyHolder') {
+    directSendAdapter = node.right.getText(source);
+  }
+  if (ts.isBinaryExpression(node) && node.left.getText(source) === 'scheduledSessionBootstrapHolder'
+    && ts.isCallExpression(node.right)) {
+    scheduledAccountPreparation = node.right.arguments[1]!.getText(source);
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'canStageArchivedSelection') {
+    archivedAdmission = node.initializer!.getText(source);
+  }
+  if (ts.isIfStatement(node) && node.expression.getText(source) === "runtimeStatus.status !== 'active' && !canStageArchivedSelection") {
+    terminalGuard = node.getText(source);
+  }
   if (ts.isPropertyAssignment(node)) {
     if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('runtimeStatus.orcaRole')) {
       confirmationChecks.push(node.initializer.getText(source));
@@ -36,7 +93,496 @@ const orcaIdentities = [
   { orcaRole: null, orcaRemoteLead: JSON.stringify(remoteLead) },
 ];
 
+function compile(expression: string, bindings: Record<string, unknown>) {
+  const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const context = { getSessionRowSnapshotStrict: async () => null, ...bindings };
+  return new Function(...Object.keys(context), js)(...Object.values(context));
+}
+
+function axisCatalogBindings(row: object = {}) {
+  const models = ['target', 'new'].map(id => ({ id, name: id, mode: 'chat', efforts: ['low', 'high'], defaultEffort: 'low', supportsFastMode: true }));
+  const providers = [{ id: 'provider', connected: true, agents: ['codex', 'pi'], routing: { codex: {}, pi: {} },
+    models: { codex: models, pi: models } }] as unknown as ProviderView[];
+  return {
+    effectiveSourceIdForModel, findCatalogModel, resolveSessionRuntimeAxes,
+    getActiveCatalog: () => ({}),
+    getDesktopProviderService: () => ({ listProviders: async () => providers }),
+    readUsableAgentDeviceProviders: vi.fn(async () => providers),
+    agentSwitchDeps: { getSessionRow: async () => row },
+    throwIpcError: (code: string, message: string) => { throw new Error(`[${code}] ${message}`); },
+  };
+}
+
+describe('owner settings during an automatic turn', () => {
+  it.each([{ effort: 'high' as const }, { fastMode: true }])('saves %j against the owner model', async (patch) => {
+    const baseline = { scopeId: 'run', agentKind: 'codex', model: 'target', providerId: 'provider',
+      effort: 'low', fastMode: false };
+    const updateScheduledPreference = vi.fn(async () => {});
+    const assertCurrent = vi.fn();
+    const query = { from: () => query, where: () => query, limit: async () => [{ baseline: JSON.stringify(baseline) }] };
+    const update = compile(scheduledAxisAdapter, {
+      ...axisCatalogBindings(), parseScheduledModelBaseline,
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      sessions: {}, eq: vi.fn(), updateScheduledPreference,
+    });
+    expect(await update('s1', patch, assertCurrent)).toBe(true);
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', patch);
+  });
+});
+
+// Unit: stale UI axes must be admitted against the pending execution route,
+// before publishing or persisting a recovery tail. Previous send tests only
+// used target-compatible values and could not detect this bypass.
+describe('pending target axis admission', () => {
+  const routes = ['cross-engine', 'remote', 'remote-same-agent', 'inherited-remote', 'return-local', 'recovery'] as const;
+  it.each(routes.flatMap(route => ['effort', 'fastMode'].map(axis => ({ route, axis }))))(
+    'rejects stale $axis for $route without changing intent or DB', async ({ route, axis }) => {
+      const row = { agentDeviceId: route === 'inherited-remote' || route === 'remote-same-agent' || route === 'return-local' ? 'old-device' : null };
+      const bindings = axisCatalogBindings(row);
+      const providers = [{ id: 'provider', connected: true, models: { pi: [{ id: 'target', efforts: ['low'], defaultEffort: 'low', supportsFastMode: false }] } }] as unknown as ProviderView[];
+      bindings.getDesktopProviderService = () => ({ listProviders: async () => providers });
+      bindings.readUsableAgentDeviceProviders.mockResolvedValue(providers);
+      const pending = createPendingAgentSwitchRegistry();
+      const intent = { targetAgentKind: 'pi', model: 'target', providerId: 'provider', effort: 'low', fastMode: false,
+        confirmedContextWindow: 200000,
+        ...(route === 'remote' ? { targetAgentDeviceId: 'target-device' } : {}),
+        ...(route === 'remote-same-agent' ? { sameAgentSelection: true } : {}),
+        ...(route === 'return-local' ? { targetAgentDeviceId: null } : {}),
+        ...(route === 'recovery' ? { resumeFallbackRecovery: { boundaryClientId: 'boundary' } } : {}),
+      } as PendingAgentSwitchIntent;
+      pending.set('s1', intent);
+      const persist = vi.fn();
+      const changed = vi.fn();
+      const stage = compile(stageAxisAdapter, { ...bindings, agentSwitchPending: pending,
+        agentSwitchDeps: { ...bindings.agentSwitchDeps, onPendingSwitchChanged: changed,
+          selectSameAgentModel: vi.fn(async () => ({ deferred: true })) },
+        persistSessionFields: persist, projectPendingAgentSwitchIntent: (value: unknown) => value,
+        wakeSessionInputAfterCredentialSwitch: vi.fn() });
+      await expect(stage('s1', intent, axis === 'effort' ? { effort: 'xhigh' } : { fastMode: true }, vi.fn()))
+        .rejects.toThrow('INVALID_PARAMS');
+      expect(pending.get('s1')).toBe(intent);
+      expect(persist).not.toHaveBeenCalled();
+      expect(changed).not.toHaveBeenCalled();
+      const device = route === 'remote' ? 'target-device' : route === 'inherited-remote' || route === 'remote-same-agent' ? 'old-device' : null;
+      if (device) expect(bindings.readUsableAgentDeviceProviders).toHaveBeenCalledWith(device, 'pi', 'target', 'provider');
+      else expect(bindings.readUsableAgentDeviceProviders).not.toHaveBeenCalled();
+    });
+
+  it.each(['valid', 'owner-changed', 'catalog-failed'] as const)('uses the target device catalog and preserves the route: %s', async mode => {
+    const bindings = axisCatalogBindings();
+    const localRead = vi.fn(async () => []);
+    bindings.getDesktopProviderService = () => ({ listProviders: localRead });
+    if (mode === 'catalog-failed') bindings.readUsableAgentDeviceProviders.mockRejectedValue(new Error('device unavailable'));
+    const pending = createPendingAgentSwitchRegistry();
+    const intent = { targetAgentKind: 'pi', model: 'target', providerId: 'provider', effort: 'low', fastMode: false,
+      targetAgentDeviceId: 'target-device', confirmedContextWindow: 200000 } as PendingAgentSwitchIntent;
+    pending.set('s1', intent);
+    const stage = compile(stageAxisAdapter, { ...bindings, agentSwitchPending: pending,
+      projectPendingAgentSwitchIntent: (value: unknown) => value, wakeSessionInputAfterCredentialSwitch: vi.fn() });
+    const assertCurrent = () => { if (mode === 'owner-changed') throw new Error('owner changed'); };
+    const result = stage('s1', intent, { effort: 'high', fastMode: true }, assertCurrent);
+    if (mode === 'valid') {
+      await expect(result).resolves.toMatchObject({ pendingUntilSend: true });
+      expect(pending.get('s1')).toEqual({ ...intent, effort: 'high', fastMode: true });
+    } else {
+      await expect(result).rejects.toThrow(mode === 'owner-changed' ? 'owner changed' : 'device unavailable');
+      expect(pending.get('s1')).toBe(intent);
+    }
+    expect(localRead).not.toHaveBeenCalled();
+  });
+});
+
+// PR #6403 round 5: earlier closure tests pre-populated the intent and skipped
+// Renderer persistence. Exercise the real queue/lease and recovery boundary;
+// Renderer-to-IPC persistence is covered in the existing cross-file guard suite.
+describe('complete selection commit boundaries', () => {
+  // Unit #10271: run the actual account reader, route-move adapter and bootstrap
+  // override block. The old reader checked the saved model, while a stale Agent
+  // override then re-pinned startup; a different saved provider must survive.
+  it.each(['saved-alias', 'temporary-alias'] as const)('hands off the effective route and preserves preferences (%s)', async mode => {
+    const id = 'runtime-account-' + mode;
+    const saved = { status: 'active', agentKind: 'codex', model: 'saved-model',
+      providerId: mode === 'saved-alias' ? 'openai-old' : 'saved-provider', agentDeviceId: null };
+    const profile = { agentKind: 'codex' as const, providerId: 'openai-old', model: 'effective-model',
+      effort: 'max' as const, fastMode: 'ultrafast' as const, agentDeviceId: null };
+    acceptSessionRuntimeMutation({ sessionId: id, source: 'agent', profile, deferred: false });
+    const persist = vi.fn(async (_id: string, patch: object) => Object.assign(saved, patch));
+    const setProvider = vi.fn();
+    const bindings = { getSessionRowSnapshotStrict: async () => ({ ...saved }), dbToMakerAgentKind: (kind: string) => kind,
+      captureSessionRuntimeControlOwnerEpoch, sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot,
+      remapSessionRuntimeProvider, persistSessionFields: persist, setSessionProvider: setProvider };
+    try {
+      const read = compile(subscriptionRuntimeRead, bindings);
+      expect(await read(id)).toMatchObject({ providerId: 'openai-old', model: 'effective-model' });
+      const move = compile(subscriptionRouteMove, bindings);
+      await move(id, 'openai', vi.fn(), 'openai-old');
+      expect(saved).toMatchObject({ model: 'saved-model', providerId: mode === 'saved-alias' ? 'openai' : 'saved-provider' });
+      expect(persist).toHaveBeenCalledTimes(mode === 'saved-alias' ? 1 : 0);
+      expect(setProvider).toHaveBeenCalledWith(id, 'openai');
+      const bootstrap = compile('(o, runtimeOverride) => { const providerGroupStart = null; ' + bootstrapRuntimeOverride + '; return o; }', {});
+      expect(bootstrap({ ...saved }, getSessionRuntimeControlSnapshot(id).effectiveOverride))
+        .toMatchObject({ ...profile, providerId: 'openai' });
+      expect(await read(id)).toMatchObject({ model: 'effective-model', providerId: 'openai' });
+    } finally { clearSessionRuntimeControlState(id); }
+  });
+
+  // Unit #10271: after the first fire migrates the task to account B, the saved
+  // alias still pins account A. Exercise two real lease acquisitions and prove
+  // the second fire never reapplies the alias, locally or on the same remote host.
+  it.each([null, 'executor'] as const)('retains an already migrated task on the next fire (%s)', async device => {
+    const saved = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old',
+      effort: 'high', fastMode: false, agentDeviceId: device } as ScheduledModelSelection;
+    let row = { ...saved };
+    const applied: string[] = [];
+    const resolveExecution = compile(scheduledExecutionSelection, {
+      getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
+      isProviderShareAgentDeviceId: () => false, readLegacyCodexAccountId: () => 'account-a',
+      legacyCodexAccountCanRun: () => true, findCatalogModel, isModelSelectableForNewRoute,
+      readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: true,
+        models: { codex: [{ id: 'gpt-5', mode: 'chat' }] } }], remoteBackgroundInvoke: vi.fn(),
+    });
+    const applyProfile = async (_id: string, choice: ScheduledModelSelection) => {
+      const resolved = await resolveExecution(_id, choice);
+      applied.push(resolved.providerId!); row = { ...resolved }; return resolved;
+    };
+    let baseline: string | null = null;
+    const scope = createScheduledModelScope({ createId: () => 'owner-baseline', isBusy: () => false,
+      read: async () => ({ profile: row, baseline }),
+      write: async (_id, next, _revision, _expected, restored) => {
+        baseline = next ? JSON.stringify(next) : null;
+        if (restored) row = { ...restored };
+      }, apply: applyProfile,
+    });
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock, agentSwitchPending: new Map(),
+      isUserPendingAgentSwitchIntent, scheduledModelScope: scope,
+      reconcileBotModelRoute: vi.fn(), applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(),
+      getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
+      applyScheduledProfile: applyProfile,
+      prepareUnhealthySessionForSend: async () => {
+        if (applied.length !== 1) return false;
+        row = { ...row, providerId: 'openai' }; return true;
+      },
+    });
+    for (let fire = 0; fire < 2; fire++) {
+      const lease = await adapter('scheduled-repeat', undefined, saved);
+      try { expect(lease.selection.providerId).toBe('openai'); }
+      finally { lease.release(); }
+    }
+    expect(applied).toEqual(['openai-old', 'openai']);
+    await scope.restore('scheduled-repeat');
+    expect(baseline).toBeNull();
+    expect(row).toMatchObject({ ...saved, providerId: 'openai' });
+    expect(applied).toEqual(['openai-old', 'openai', 'openai']);
+    expect(saved.providerId).toBe('openai-old');
+  });
+
+  it.each(['local-model-disabled', 'remote-model-revoked', 'remote-not-alias'] as const)(
+    'retains original admission when a saved alias cannot follow the migrated task (%s)', async mode => {
+      const device = mode === 'local-model-disabled' ? null : 'executor';
+      const selection = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old', agentDeviceId: device };
+      const resolve = compile(scheduledExecutionSelection, {
+        getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai' }),
+        dbToMakerAgentKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
+        readLegacyCodexAccountId: () => 'account-a', legacyCodexAccountCanRun: () => false,
+        readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: mode !== 'remote-not-alias',
+          models: { codex: mode === 'remote-model-revoked' ? [] : [{ id: 'gpt-5', mode: 'chat' }] } }],
+        remoteBackgroundInvoke: vi.fn(), findCatalogModel, isModelSelectableForNewRoute,
+      });
+      expect(await resolve('migrated', selection)).toBe(selection);
+    });
+
+  // Unit #10271: execute the actual bootstrap preparation adapter, with no DB row
+  // for a new per-fire task. Existing tests covered only already-saved task sends.
+  it.each(['fresh-blocked', 'fresh-healthy', 'existing-blocked'] as const)(
+    'prepares only the current scheduled startup source (%s)', async mode => {
+      const saved = { id: 'new-fire-id', agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old' };
+      const options = { ...saved };
+      let row = mode === 'existing-blocked' ? { ...saved } : null;
+      const assertCurrent = vi.fn();
+      const failover = vi.fn(async (id: string, deps: { readSession(id: string): Promise<Record<string, unknown>>;
+        moveRoute(id: string, provider: string, assert: () => void): Promise<void> }) => {
+        expect(id).toBe(saved.id);
+        expect(await deps.readSession(id)).toMatchObject({ providerId: 'openai-old', sdkSessionId: null });
+        if (mode === 'fresh-healthy') return false;
+        await deps.moveRoute(id, 'openai', assertCurrent);
+        return true;
+      });
+      const prepareSaved = vi.fn(async () => { row = { ...saved, providerId: 'openai' }; return true; });
+      const prepare = compile(scheduledAccountPreparation, {
+        maker: { getSession: () => null }, getSessionRowSnapshotStrict: async () => row,
+        prepareUnhealthySessionForSend: prepareSaved, remoteBackgroundInvoke: vi.fn(),
+        prepareSubscriptionAccountForSend: vi.fn(async () => false), prepareSubscriptionAccountFailover: failover,
+      });
+      expect(await prepare(options, assertCurrent)).toBe(mode !== 'fresh-healthy');
+      expect(options.providerId).toBe(mode === 'fresh-healthy' ? 'openai-old' : 'openai');
+      expect(saved.providerId).toBe('openai-old');
+      expect(prepareSaved).toHaveBeenCalledTimes(mode === 'existing-blocked' ? 1 : 0);
+      expect(failover).toHaveBeenCalledTimes(mode === 'existing-blocked' ? 0 : 1);
+    });
+
+  // Unit regression: the real direct-send lease used to return the saved legacy
+  // source after account recovery had moved the task. Scheduler startup then
+  // overwrote the recovered row with that stale source. Existing cases returned
+  // false from recovery and could not observe this route mismatch.
+  it.each([false, true])('returns the admitted automation route without changing its saved selection (recovered: %s)', async recovered => {
+    const saved: ScheduledModelSelection = { agentKind: 'codex', model: 'gpt-5',
+      providerId: 'openai-old', effort: 'high', fastMode: false, agentDeviceId: 'executor' };
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock,
+      agentSwitchPending: new Map(), isUserPendingAgentSwitchIntent,
+      scheduledModelScope: { begin: vi.fn() }, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(),
+      applyScheduledProfile: vi.fn(async (_id, selection) => selection),
+      prepareUnhealthySessionForSend: vi.fn(async () => recovered),
+      getSessionRowSnapshotStrict: vi.fn(async () => ({ ...saved, providerId: 'openai' })),
+      dbToMakerAgentKind: (kind: string) => kind,
+    });
+    const lease = await adapter('scheduled-legacy', undefined, saved);
+    try {
+      expect(lease.selection).toEqual({ ...saved, providerId: recovered ? 'openai' : 'openai-old' });
+      expect(saved.providerId).toBe('openai-old');
+    } finally { lease.release(); }
+  });
+
+  // 2026-10-23: the real direct-send adapter restored the owner's smaller
+  // window before applying the next automation. Existing tests covered picker
+  // intents only. Unit tier: preserve native history across repeated automation
+  // sends and restore the durable owner preference only for an ordinary send.
+  // PR #6831: legacy schedules have no complete selection, but still must
+  // preserve the native context before the runner applies their model override.
+  it.each(['explicit', 'legacy', 'ordinary'])('applies only the next send route (%s)', async route => {
+    const owner: ScheduledModelSelection = {
+      agentKind: 'codex', model: 'owner-model', providerId: 'provider', effort: 'high', fastMode: false,
+    };
+    const automatic = { ...owner, model: 'automatic-model' };
+    let profile = owner;
+    let baseline: string | null = null;
+    const transitions: string[] = [];
+    const apply = async (_id: string, next: ScheduledModelSelection) => {
+      transitions.push(next.model);
+      profile = next;
+      return next;
+    };
+    const deps = {
+      createId: () => 'saved-owner', read: async () => ({ profile, baseline }),
+      write: async (_id: string, saved: unknown) => { baseline = saved ? JSON.stringify(saved) : null; },
+      isBusy: () => false,
+      apply: async (id: string, next: ScheduledModelSelection) => { await apply(id, next); },
+    };
+    await createScheduledModelScope(deps).begin('scheduled-task');
+    profile = automatic;
+    // A new scope instance also exercises a restart between turns.
+    const recoverRenamedSessionModelOnSend = vi.fn(async () => {});
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession,
+      scheduledModelScope: createScheduledModelScope(deps),
+      acquireSendToSessionLock, agentSwitchPending: new Map(),
+      isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
+      recoverRenamedSessionModelOnSend,
+      applyScheduledProfile: apply, prepareUnhealthySessionForSend: vi.fn(async () => false),
+      // 发送边界的预算对账（register.ts）：本用例只关心路由选择，注入 no-op。
+      reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      appliedContextWindowBudgets: new Map<string, number | null>(),
+      pendingSessionContextWindowBudgetReconciles: new Set<string>(),
+    });
+    const directSend = compile(directSendEntry, { pendingAgentSwitchApplyHolder: adapter });
+    const lease = await directSend('scheduled-task', undefined,
+      route === 'explicit' ? automatic : undefined, route === 'legacy');
+    // The legacy runner applies its model later under this same lease.
+    if (route === 'legacy') await apply('scheduled-task', automatic);
+    if (typeof lease === 'function') lease();
+    else lease.release();
+    expect(transitions).toEqual([route === 'ordinary' ? owner.model : automatic.model]);
+    expect(profile.model).toBe(route === 'ordinary' ? owner.model : automatic.model);
+    expect(baseline === null).toBe(route === 'ordinary');
+    expect(recoverRenamedSessionModelOnSend).toHaveBeenCalledTimes(route === 'ordinary' ? 1 : 0);
+  });
+
+  it('reads a picker intent staged while the direct send waits for the real route lock', async () => {
+    const pending = createPendingAgentSwitchRegistry();
+    let status = 'archived';
+    let finishPicker!: () => void;
+    let pickerStarted!: () => void;
+    const started = new Promise<void>(resolve => { pickerStarted = resolve; });
+    const picker = withSendToSessionLock('queued-picker', async () => {
+      pickerStarted();
+      await new Promise<void>(resolve => { finishPicker = resolve; });
+      pending.set('queued-picker', { targetAgentKind: 'codex', model: 'new', providerId: null, sameAgentSelection: true });
+    });
+    await started;
+    const selected = vi.fn(async () => {
+      if (status !== 'active') throw new Error('archived selection applied');
+      return {};
+    });
+    const deps = { pendingSwitches: pending, getLiveSession: () => null, selectSameAgentModel: selected,
+      bootstrapSwitchedSession: vi.fn(), log: { warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
+    const directSend = compile(directSendAdapter, { agentSwitchPending: pending, acquireSendToSessionLock,
+      takeOverLocalAgentVisibleSession,
+      scheduledModelScope: { restore: vi.fn(async () => {}) },
+      restoreArchivedSessionForSend: async () => { status = 'active'; },
+      reconcileBotModelRoute: vi.fn(), applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent,
+      recoverRenamedSessionModelOnSend: vi.fn(async () => {}),
+      agentSwitchDeps: deps, prepareUnhealthySessionForSend: vi.fn(async () => false),
+      reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      appliedContextWindowBudgets: new Map<string, number | null>(),
+      pendingSessionContextWindowBudgetReconciles: new Set<string>() });
+    const sending = directSend('queued-picker');
+    finishPicker();
+    await picker;
+    const lease = await sending;
+    try {
+      expect(status).toBe('active');
+      expect(selected).toHaveBeenCalledOnce();
+      expect(pending.get('queued-picker')).toBeUndefined();
+      let subsequentStarted = false;
+      const subsequent = withSendToSessionLock('queued-picker', async () => { subsequentStarted = true; });
+      await Promise.resolve();
+      expect(subsequentStarted).toBe(false);
+      lease.release();
+      await subsequent;
+    } finally { lease.release(); }
+  });
+
+  it.each([false, true])('retains new axes through the recovery tail (persistence fails: %s)', async fails => {
+      const pending = createPendingAgentSwitchRegistry();
+      const row = { status: 'archived', model: 'target', effort: 'low', fastMode: false };
+      const intent: PendingAgentSwitchIntent = { targetAgentKind: 'codex', model: 'target', providerId: null,
+        effort: 'low', fastMode: false, resumeFallbackRecovery: {
+          boundaryClientId: 'boundary', boundaryContent: { fromAgentKind: 'cc', toAgentKind: 'codex',
+            fromModel: 'old', toModel: 'target', fromSdkSessionId: null, handoff: 'handoff', resumed: false },
+          handoff: 'handoff', handoffClearEpoch: 0,
+        } };
+      pending.set('s1', intent);
+      const persistSessionFields = vi.fn(async (_id: string, patch: object) => {
+        if (fails) throw new Error('sqlite rejected');
+        Object.assign(row, patch);
+      });
+      const deps = { pendingSwitches: pending, getLiveSession: () => null, getSessionRow: async () => row,
+        applyResumeFallbackAtomically: vi.fn(), setPendingHandoff: vi.fn(), onPendingSwitchChanged: vi.fn(),
+        log: { warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
+      const stageAxis = compile(stageAxisAdapter, { ...axisCatalogBindings(row), agentSwitchPending: pending, agentSwitchDeps: deps,
+        persistSessionFields, projectPendingAgentSwitchIntent: (value: unknown) => value,
+        wakeSessionInputAfterCredentialSwitch: vi.fn() });
+      if (fails) {
+        await expect(stageAxis('s1', intent, { effort: 'high', fastMode: true }, vi.fn())).rejects.toThrow('sqlite rejected');
+        expect(pending.get('s1')).toBe(intent);
+        expect(row).toMatchObject({ effort: 'low', fastMode: false });
+      } else {
+        await stageAxis('s1', intent, { effort: 'high', fastMode: true }, vi.fn());
+        await applyPendingAgentSwitchIfIdle(deps, 's1');
+        expect(pending.get('s1')).toBeUndefined();
+        expect(row).toMatchObject({ model: 'target', effort: 'high', fastMode: true });
+      }
+  });
+});
+
 describe('Orca model-only picker intent admission', () => {
+  // PR #6403 P1: the composer already restores archived tasks, but Goal's
+  // direct-send lease did not. Execute the real lease, send boundary and model
+  // admission together; earlier picker tests stop before this boundary (unit).
+  const directSendCases = ['archived', 'cross-engine', 'relocation', 'config', 'agent', 'restore-failed', 'cancelled'] as const;
+  it.each(directSendCases)('handles archived direct-send selection: %s', async mode => {
+    const row = { id: 's1', status: 'archived', agentKind: 'codex', model: 'old', providerId: 'provider', effort: 'low', fastMode: false,
+      sdkSessionId: null, remoteHostId: null, agentDeviceId: null };
+    const pending = createPendingAgentSwitchRegistry();
+    const crossEngine = mode === 'cross-engine';
+    const intent: PendingAgentSwitchIntent = { targetAgentKind: crossEngine ? 'pi' : 'codex', model: 'new', providerId: 'provider',
+      ...(mode === 'relocation' ? { targetAgentDeviceId: 'executor-device' } : !crossEngine ? { sameAgentSelection: true } : {}),
+      ...(mode === 'config' ? { configStaged: true } : mode === 'agent' ? { runtimeSource: 'agent' } : {}),
+    };
+    pending.set('s1', intent);
+    const applied = vi.fn(() => ({ deferred: false }));
+    const throwIpcError = (code: string, message: string) => { throw new Error(`[${code}] ${message}`); };
+    const admission = compile(`(internalOptions) => {
+      const canStageArchivedSelection = ${archivedAdmission};
+      ${terminalGuard}
+      return applied();
+    }`, { runtimeStatus: row, applied, throwIpcError });
+    const selectSameAgentModel = compile(applySelectionAdapter, { throwIpcError,
+      applySessionRuntimeSelection: (_id: string, _model: string, _provider: unknown, _axes: unknown, opts: unknown) => admission(opts),
+    });
+    const release = vi.fn();
+    const acquire = vi.fn(async () => release);
+    const restore = vi.fn(async () => {
+      if (mode === 'restore-failed') throw new Error('restore failed');
+      row.status = 'active';
+    });
+    const switchToDb = vi.fn(async (_id: string, patch: object) => {
+      expect(row.status).toBe('active');
+      Object.assign(row, patch);
+    });
+    const automatic = mode === 'config' || mode === 'agent';
+    const deps = { pendingSwitches: pending, getSessionRow: async () => row,
+      getLiveSession: () => ({ isTurnRunning: () => automatic }), selectSameAgentModel,
+      closeSession: vi.fn(), listMessagesForHandoff: async () => [], applyAgentSwitchToDb: switchToDb,
+      setSessionProvider: vi.fn(), insertBoundaryMessage: async () => 'boundary', setPendingHandoff: vi.fn(),
+      bootstrapSwitchedSession: vi.fn(), withCloseSuppressed: (_id: string, fn: () => Promise<unknown>) => fn(),
+      log: { info: vi.fn(), warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
+    const directSend = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession,
+      scheduledModelScope: { restore: vi.fn(async () => {}) },
+      agentSwitchPending: pending, restoreArchivedSessionForSend: restore,
+      acquireSendToSessionLock: acquire, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent, agentSwitchDeps: deps, prepareUnhealthySessionForSend: vi.fn(async () => false),
+      recoverRenamedSessionModelOnSend: vi.fn(async () => {}),
+      reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      appliedContextWindowBudgets: new Map<string, number | null>(),
+      pendingSessionContextWindowBudgetReconciles: new Set<string>(),
+    });
+    if (mode === 'cross-engine' || mode === 'relocation') {
+      const stageAxis = compile(stageAxisAdapter, { ...axisCatalogBindings(row), agentSwitchPending: pending, agentSwitchDeps: deps,
+        projectPendingAgentSwitchIntent: (intent: unknown) => intent, wakeSessionInputAfterCredentialSwitch: vi.fn() });
+      await stageAxis('s1', pending.get('s1'), { effort: 'high' }, vi.fn());
+      await stageAxis('s1', pending.get('s1'), { fastMode: true }, vi.fn());
+      expect(row).toMatchObject({ status: 'archived', model: 'old', effort: 'low', fastMode: false });
+    }
+    const controller = new AbortController();
+    if (mode === 'cancelled') controller.abort();
+    if (automatic) {
+      const lease = await directSend('s1', controller.signal);
+      expect(restore).not.toHaveBeenCalled();
+      expect(row.status).toBe('archived');
+      expect(pending.get('s1')).toBe(intent);
+      expect(applied).not.toHaveBeenCalled();
+      expect(switchToDb).not.toHaveBeenCalled();
+      lease.release();
+    } else if (mode !== 'restore-failed' && mode !== 'cancelled') {
+      const sending = directSend('s1', controller.signal);
+      const lease = await sending;
+      expect(row.status).toBe('active');
+      if (mode === 'archived') expect(applied).toHaveBeenCalledOnce();
+      else {
+        expect(switchToDb).toHaveBeenCalledOnce();
+        expect(row.model).toBe('new');
+        expect(row.agentKind).toBe(mode === 'relocation' ? 'codex' : 'pi');
+        if (mode === 'relocation') expect(row.agentDeviceId).toBe('executor-device');
+        if (mode === 'cross-engine' || mode === 'relocation') expect(row).toMatchObject({ effort: 'high', fastMode: true });
+      }
+      expect(pending.get('s1')).toBeUndefined();
+      expect(acquire.mock.invocationCallOrder[0]).toBeLessThan(restore.mock.invocationCallOrder[0]);
+      expect(restore).toHaveBeenCalledWith('s1', { routeLockHeld: true, signal: controller.signal });
+      expect(release).not.toHaveBeenCalled();
+      lease.release();
+      expect(release).toHaveBeenCalledOnce();
+    } else {
+      await expect(directSend('s1', controller.signal)).rejects.toThrow(mode === 'restore-failed' ? 'restore failed' : /abort/i);
+      expect(row.status).toBe('archived');
+      expect(applied).not.toHaveBeenCalled();
+      expect(switchToDb).not.toHaveBeenCalled();
+      expect(pending.get('s1')).toBeDefined();
+      if (mode === 'cancelled') expect(restore).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+    }
+  });
+
   it.each(['lead', 'worker'] as const)('stages %s model and axes on both execution locations until send', async orcaRole => {
     expect(branches).toHaveLength(2);
     for (const branch of branches) {
@@ -69,6 +615,9 @@ describe('Orca model-only picker intent admission', () => {
       expect(pending.get('s1')).toMatchObject({ sameAgentSelection: true, targetAgentKind: 'codex',
         model: 'new', providerId: 'provider', effort: 'high', fastMode: true });
       expect(changed).toHaveBeenCalledTimes(1);
+      // A deferred choice must not let Device Link overwrite the source route,
+      // including when this task's Agent runs on another computer.
+      expect(bindings.markRemoteSettingPersistedInsideHandler).toHaveBeenCalledOnce();
       expect(applyLive).not.toHaveBeenCalled();
       expect(runtimeStatus.model).toBe('old');
       if (!onOtherDevice) {

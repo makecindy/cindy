@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { readTranscriptPage } from '../room.js';
 import { startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import type { CompanionApi } from '../types.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
 
 const ROOM = '10000000-0000-4000-8000-000000000001';
@@ -17,11 +19,13 @@ const MIA = { name: 'Mia', description: '', soul: '', systemPrompt: '', user: ''
 let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
-function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[];
+function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
+  identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
-  canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean }) {
+  canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
+  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived']; current?: () => boolean }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -33,9 +37,11 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     throw new Error(`unexpected ${method} ${route}`);
   }));
   const local = fakeLocal();
-  const { state } = memoryState();
+  const { state, files } = memoryState(options.savedState);
   const refresh = vi.fn(async () => undefined);
   const publish = vi.fn();
+  const onShadowChanged = vi.fn();
+  const log = { warn: vi.fn(), info: vi.fn() };
   const host: CompanionCloudHost = {
     homes: createCompanionHomeRegistry(), openState: () => state,
     readValues: options.readValues ?? (async () => options.values ?? [{ key: 'companion.profile.v1', value: { name: 'Mia' } }]),
@@ -47,15 +53,505 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     ...(options.turnActive ? { isBotBusy: async () => options.turnActive!() } : {}),
     ...(options.homeLink ? { homeLink: options.homeLink } : {}),
     ...(options.stopBotTurns ? { stopBotTurns: options.stopBotTurns } : {}),
+    ...(options.upgradeArrived ? { upgradeArrived: options.upgradeArrived } : {}),
   };
-  runtime = startCompanionCloud({ api, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
+  runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
+    api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
+    store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: options.current ?? (() => true),
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
-    actors: () => actors, refresh, publish, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
+    actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, log, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
-  return { runtime, actors, calls, local, state, refresh, publish };
+  return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host, log };
 }
 
+describe('private report recovery', () => {
+  it('retries a failed local import into the canonical chat without duplicating the report or marking read', async () => {
+    const report = { id: 'report-1', seq: '1', authorId: 'actor-1', origin: 'bot', createdAt: '2026-10-29T06:00:00Z', content: [{ type: 'text', text: 'A pending confirmation' }] };
+    const t = setup({ home: 'desk', handler: route => {
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [report];
+      throw new Error(`Unexpected report route: ${route}`);
+    } });
+    vi.mocked(t.local.host.insertHistory).mockRejectedValueOnce(new Error('LOCAL_BUSY'));
+    await expect(t.runtime.receivePrivateReport('bot_mia')).rejects.toThrow('LOCAL_BUSY');
+    expect(await t.runtime.receivePrivateReport('bot_mia')).toBe(true);
+    expect(await t.runtime.receivePrivateReport('bot_mia')).toBe(true);
+    expect(t.local.rows).toHaveLength(1);
+    expect(t.local.host.insertHistory).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ role: 'assistant', text: 'A pending confirmation' }), expect.anything());
+    expect(t.calls.some(call => call.route.endsWith('/read'))).toBe(false);
+    t.actors[0]!.homeDeviceId = 'laptop';
+    expect(await t.runtime.receivePrivateReport('bot_mia')).toBe(false);
+  });
+});
+
 describe('take over', () => {
+  // #10205 review, unit: the public repair action must not replay an old cloud snapshot
+  // over edits made on the current home after opening the draft. Previous coverage only
+  // repaired a missing local copy; a pending local memory/name edit is the minimal regression.
+  // Pausing after opening the draft must not turn that repair into a full restore either.
+  it.each(['active', 'paused'] as const)('repairs only the rejected fields on the %s current home, preserving unsynced local edits', async status => {
+    const original = { ...MIA, soul: 'x'.repeat(12001) };
+    const t = setup({ home: 'desk', handler: route => route === '/preferences'
+      ? [{ key: 'companion.profile.v1', revision: 1, value: original },
+        { key: 'companion.memory.v1:note.md', revision: 1, value: { content: 'old cloud memory' } }]
+      : route === '/conversations' ? { id: ROOM } : route.includes('/messages?') ? [] : {} });
+    t.local.setProfile({ status: 'active', displayName: 'Mia', description: '' });
+    t.host.materializer!.backupProfileSource = vi.fn(async () => undefined);
+    const write = vi.fn(async () => undefined);
+    Object.assign(t.host, { repairProfileSources: write });
+    const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+    if (!opened.ok || !opened.draft) throw new Error('missing draft');
+    t.local.setProfile({ status, displayName: 'New local name', description: 'new local description' });
+    t.local.memories.set('note.md', 'new local memory');
+    t.local.skills.set('skill', 'new local skill');
+    expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token,
+      values: { identitySource: 'corrected' } })).toEqual({ ok: true });
+    expect(await t.local.host.readProfile('bot_mia')).toMatchObject({ status, displayName: 'New local name', description: 'new local description' });
+    expect(t.local.memories.get('note.md')).toBe('new local memory');
+    expect(t.local.skills.get('skill')).toBe('new local skill');
+    expect(write).toHaveBeenCalledWith('bot_mia', opened.draft.fields, { identitySource: 'corrected' }, expect.anything());
+    expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+    expect(t.local.host.rebuildContext).not.toHaveBeenCalled();
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+  });
+
+  // The correction must survive a failed history read and a runtime restart. The source
+  // version/home guards are still checked by the automatic restore, with no new polling loop.
+  it.each(['same-runtime', 'restart', 'explicit-retry', 'revision', 'home', 'account'] as const)('retains a pending correction across a transient failure (%s)', async scenario => {
+    vi.useFakeTimers();
+    try {
+      let profile = { ...MIA, soul: 'x'.repeat(12001) }, revision = 1, offline = true, current = true;
+      const handler: ApiHandler = (route, method, data) => {
+        if (route === '/preferences') {
+          if (method === 'POST') { profile = (data as { value: typeof profile }).value; return { revision: ++revision }; }
+          return [{ key: 'companion.profile.v1', revision, value: profile }];
+        }
+        if (route === '/actors') return t.actors;
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) { if (offline) throw new Error('ECONNRESET'); return []; }
+        return {};
+      };
+      let t = setup({ home: 'desk', handler, current: () => current });
+      const backup = vi.fn(async () => undefined);
+      t.host.materializer!.backupProfileSource = backup;
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      if (!opened.ok || !opened.draft) throw new Error('missing draft');
+      expect((await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token,
+        values: { identitySource: 'corrected' } })).ok).toBe(false);
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      if (scenario === 'restart') {
+        const savedState = t.files.get('state.json');
+        t.runtime.dispose();
+        t = setup({ home: 'desk', handler, savedState });
+        t.host.materializer!.backupProfileSource = backup;
+      }
+      if (scenario === 'revision') revision++;
+      if (scenario === 'home') t.actors[0]!.homeDeviceId = 'other';
+      if (scenario === 'account') current = false;
+      vi.mocked(t.local.host.createProfile).mockClear(); vi.mocked(t.local.host.updateProfile).mockClear();
+      t.host.readValues = async () => [{ key: 'companion.profile.v1', value: { ...profile, soul: 'corrected' } }];
+      offline = false;
+      if (scenario === 'explicit-retry') expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      else {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      if (scenario === 'same-runtime' || scenario === 'restart' || scenario === 'explicit-retry') {
+        expect(t.state.isDemoted('bot_mia')).toBe(false);
+        expect(t.state.bot('bot_mia')?.profileCorrection).toBeDefined();
+        await t.runtime.syncNow();
+        expect(profile.soul).toBe('corrected');
+        expect(t.state.bot('bot_mia')?.profileCorrection).toBeUndefined();
+        expect(backup).toHaveBeenCalledOnce();
+      } else {
+        expect(t.state.isDemoted('bot_mia')).toBe(true);
+        expect(t.local.host.createProfile).not.toHaveBeenCalled();
+        expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+        expect(profile.soul).toBe('x'.repeat(12001));
+      }
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  // #10112, unit tier: the public recovery action must preserve the original and restore
+  // only the rejected fields; neither the host writer nor the uploader was exercised by UI retry tests.
+  it('repairs the rejected source, backs up its original and uploads the owner edit after restoring', async () => {
+    vi.useFakeTimers();
+    try {
+      let profile = { ...MIA, soul: 'x'.repeat(12001), user: 'keep this context' };
+      let revision = 1;
+      const t = setup({ home: 'desk', handler: (route, method, data) => {
+        if (route === '/preferences') {
+          if (method === 'POST') { profile = (data as { value: typeof profile }).value; return { revision: ++revision }; }
+          return [{ key: 'companion.profile.v1', revision, value: profile }];
+        }
+        if (route === '/actors') return t.actors;
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      const backup = vi.fn(async () => undefined);
+      t.host.materializer!.backupProfileSource = backup;
+      t.host.readValues = async () => [{ key: 'companion.profile.v1', value: { ...profile,
+        soul: vi.mocked(t.local.host.createProfile).mock.calls[0]?.[0].identitySource ?? profile.soul } }];
+      expect(await t.runtime.takeOver('bot_mia')).toMatchObject({ ok: false, profileFailure: { field: 'identitySource' } });
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      expect(opened.ok && opened.draft?.fields).toEqual([{ field: 'identitySource', source: profile.soul, maxLength: 12000 }]);
+      if (!opened.ok || !opened.draft) throw new Error('missing repair draft');
+      expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token, values: { identitySource: profile.soul } }))
+        .toMatchObject({ ok: false, profileFailure: { field: 'identitySource' } });
+      expect(t.calls.every(c => c.method === 'GET')).toBe(true);
+      expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token, values: { identitySource: 'corrected by owner' } }))
+        .toEqual({ ok: true });
+      expect(backup).toHaveBeenCalledWith('bot_mia', expect.objectContaining({ soul: 'x'.repeat(12001), user: 'keep this context' }), expect.anything());
+      expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'corrected by owner', userContextSource: 'keep this context' }), expect.anything());
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      await t.runtime.syncNow();
+      expect(profile.soul).toBe('corrected by owner');
+      expect(profile.user).toBe('keep this context');
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['revision', 'home', 'account', 'backup', 'extra-field'] as const)('does not overwrite a recovery draft after %s changes', async change => {
+    vi.useFakeTimers();
+    try {
+      let revision = 1; let current = true;
+      const original = { ...MIA, soul: 'x'.repeat(12001) };
+      const t = setup({ home: 'desk', current: () => current, handler: (route, method) => {
+        if (route === '/preferences') return [{ key: 'companion.profile.v1', revision, value: original }];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.host.materializer!.backupProfileSource = async () => { if (change === 'backup') throw new Error('disk full'); };
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      if (!opened.ok || !opened.draft) throw new Error('missing repair draft');
+      if (change === 'revision') revision++;
+      if (change === 'home') t.actors[0]!.homeDeviceId = 'other';
+      if (change === 'account') current = false;
+      const result = await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token,
+        values: { identitySource: 'corrected', ...(change === 'extra-field' ? { userContextSource: 'not rejected' } : {}) } });
+      expect(result.ok).toBe(false);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+      expect(t.calls.filter(c => c.route === '/preferences' && c.method === 'POST')).toEqual([]);
+      if (change !== 'backup') expect(t.calls.every(c => c.method === 'GET')).toBe(true);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('serializes concurrent recovery submissions, including the asynchronous busy check', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ home: 'desk', turnActive: () => false, handler: (route, method) => {
+        if (route === '/preferences') return [{ key: 'companion.profile.v1', revision: 1, value: { ...MIA, soul: 'x'.repeat(12001) } }];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.host.materializer!.backupProfileSource = async () => undefined;
+      const [opened, overlappingRead] = await Promise.all([
+        t.runtime.repairProfile('bot_mia', { action: 'read' }),
+        t.runtime.repairProfile('bot_mia', { action: 'read' }),
+      ]);
+      expect(overlappingRead).toEqual({ ok: false, code: 'BUSY' });
+      if (!opened.ok || !opened.draft) throw new Error('missing draft');
+      const request = { action: 'save' as const, token: opened.draft.token, values: { identitySource: 'owner edit' } };
+      const results = await Promise.all([t.runtime.repairProfile('bot_mia', request), t.runtime.repairProfile('bot_mia', request)]);
+      expect(results).toEqual([{ ok: true }, { ok: false, code: 'BUSY' }]);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  // #10112: a refreshed actor replaces the old object while an editor save awaits the host/network.
+  // The owner's stale draft must not take the buddy back from its newly selected home.
+  it.each(['busy-probe', 'profile-read'] as const)('rejects a draft when home changes during %s', async phase => {
+    vi.useFakeTimers();
+    try {
+      let saving = false;
+      let entered!: () => void;
+      let release!: () => void;
+      const waiting = new Promise<void>(resolve => { entered = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const rows = [{ key: 'companion.profile.v1', revision: 1, value: { ...MIA, soul: 'x'.repeat(12001) } }];
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences' && method === 'GET') {
+          if (saving && phase === 'profile-read') { entered(); return gate.then(() => rows); }
+          return rows;
+        }
+        return {};
+      } });
+      t.host.materializer!.backupProfileSource = vi.fn(async () => undefined);
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      if (!opened.ok || !opened.draft) throw new Error('missing draft');
+      if (phase === 'busy-probe') t.host.isBotBusy = async () => { entered(); await gate; return false; };
+      saving = true;
+      const save = t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token, values: { identitySource: 'owner edit' } });
+      await waiting;
+      t.actors[0] = { ...t.actors[0]!, homeDeviceId: 'new-home' };
+      release();
+      expect(await save).toEqual({ ok: false, code: 'FAILED', profileRepairError: 'changed' });
+      expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      expect(t.host.materializer!.backupProfileSource).not.toHaveBeenCalled();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('corrects the authoritative large store profile without replacing its other fields', async () => {
+    vi.useFakeTimers();
+    try {
+      const key = 'companion.profile.v1';
+      const profile = { ...MIA, soul: 'x'.repeat(70000), user: 'keep user context', systemPrompt: 'p'.repeat(70000) };
+      const stored = { key, revision: 2, cursor: '2', deleted: false, value: { companionStore: 1, prefRevision: 1, value: profile } };
+      const t = setup({ home: 'desk', store: { enabled: () => true }, handler: route => {
+        if (route === '/preferences') return [{ key, revision: 1, value: MIA }];
+        if (route.startsWith('/companion-store/entry?')) return stored;
+        if (route.startsWith('/companion-store/changes')) return { entries: [stored], cursor: '2', hasMore: false };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      const backup = vi.fn(async () => undefined);
+      t.host.materializer!.backupProfileSource = backup;
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      if (!opened.ok || !opened.draft) throw new Error('missing draft');
+      expect(opened.draft.fields[0]?.source).toBe(profile.soul);
+      expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token, values: { identitySource: 'owner edit' } })).toEqual({ ok: true });
+      expect(backup).toHaveBeenCalledWith('bot_mia', profile, expect.anything());
+      expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'owner edit', userContextSource: profile.user }), expect.anything());
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('keeps the original home when handing over a profile the target would reject', async () => {
+    const profile = { ...MIA, soul: 'x'.repeat(12001) };
+    const t = setup({ home: 'desk', devices: [device('laptop')], values: [{ key: 'companion.profile.v1', value: profile }],
+      handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: profile }] : { revision: 2 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toMatchObject({ ok: false, profileFailure: { field: 'identitySource' } });
+    expect(t.actors[0]!.homeDeviceId).toBe('desk');
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+    expect(t.calls.some(c => c.method === 'PATCH')).toBe(false);
+  });
+
+  // #10112: old preferences can remain while a larger profile lives in the store.
+  // Unit tier: the real runtime must select the same revision as materialization.
+  it.each([false, true])('uses the current store profile for validation (corrected: %s)', async corrected => {
+    vi.useFakeTimers();
+    try {
+      let prefRevision = 1;
+      const key = 'companion.profile.v1';
+      const stored = { key, revision: 1, cursor: '1', deleted: false, hash: 'synthetic', size: 72000,
+        value: { companionStore: 1, prefRevision: 1, value: { ...MIA,
+          soul: corrected ? 'corrected' : 'x'.repeat(70000), systemPrompt: 'p'.repeat(70000) } } };
+      const t = setup({ home: 'laptop', store: { enabled: () => true }, handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key, revision: prefRevision,
+          value: { ...MIA, soul: corrected && prefRevision === 1 ? 'x'.repeat(12001) : 'ok' } }] : { revision: prefRevision };
+        if (route.startsWith('/companion-store/changes')) return { entries: [stored], cursor: '1', hasMore: false };
+        if (route.startsWith('/companion-store/entry?')) return stored;
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      if (corrected) {
+        expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+        expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'corrected' }), expect.anything());
+        return;
+      }
+      expect(await t.runtime.takeOver('bot_mia')).toMatchObject({ ok: false, profileFailure: { field: 'identitySource' } });
+      expect(t.actors[0]!.homeDeviceId).toBe('laptop');
+      expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+      // Simulate a legacy hand-over that already selected this computer.
+      t.actors[0]!.homeDeviceId = 'desk';
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      const writes = t.calls.filter(call => call.method !== 'GET');
+      await vi.advanceTimersByTimeAsync(60_000);
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.calls.filter(call => call.method !== 'GET')).toEqual(writes);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      // A newer small edit supersedes the retained large store value.
+      prefRevision = 2;
+      expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'ok' }), expect.anything());
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  // #10112: an overlong cloud soul was rejected by the real profile writer on every
+  // reconcile. Unit tier: verify the public runtime stops writes, exposes the reason,
+  // and recovers when the source changes (the DB suite covers the writer boundary).
+  it.each(['automatic', 'explicit'] as const)('holds invalid profile sources and recovers through %s retry', async retry => {
+    vi.useFakeTimers();
+    try {
+      let soul = 'x'.repeat(12001);
+      const t = setup({ home: 'desk', installationId: 'this-install', handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET'
+          ? [{ key: 'companion.profile.v1', value: { ...MIA, soul }, revision: 1 }]
+          : { revision: 1 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.profileFailure('bot_mia')).toEqual({ field: 'identitySource', maxLength: 12000 });
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      const writes = t.calls.filter(call => call.method !== 'GET');
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(t.calls.filter(call => call.method !== 'GET')).toEqual(writes);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+      soul = 'x'.repeat(12000);
+      if (retry === 'automatic') {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      } else {
+        expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      }
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('rejects an invalid source before moving the original home', async () => {
+    const t = setup({ home: 'laptop', handler: (route, method) => {
+      if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { ...MIA, soul: 'x'.repeat(12001) }, revision: 1 }];
+      return {};
+    } });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED', profileFailure: { field: 'identitySource', maxLength: 12000 } });
+    expect(t.actors[0]!.homeDeviceId).toBe('laptop');
+    expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+  });
+
+  it('does not carry a rejected source across actor, home or account boundaries', async () => {
+    vi.useFakeTimers();
+    try {
+      let current = true;
+      const t = setup({ home: 'desk', current: () => current, handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: { ...MIA, soul: 'x'.repeat(12001) }, revision: 1 }] : {};
+        return {};
+      } });
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.profileFailure('bot_mia')).toBeDefined();
+      current = false;
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+      expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'NOT_ENABLED' });
+      current = true;
+      t.actors[0]!.homeDeviceId = 'elsewhere';
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+      t.actors[0]!.homeDeviceId = 'desk';
+      t.actors[0]!.id = 'replacement';
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+      t.runtime.dispose();
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  // Regression: a different local Cindy made automatic take-over recreate the same missing
+  // profile every minute. Existing tests only used an unconstrained in-memory profile.
+  // Unit tier: drive real takeOver/reconcile; conflicting identities never overwrite or upload.
+  it('refuses a different Cindy before changing its home or claiming the installation', async () => {
+    const t = setup({ home: 'laptop', installationId: 'this-install', handler: (route, method) => {
+      if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { ...MIA, templateId: 'cindy' }, revision: 1 }];
+      return {};
+    } });
+    t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy', conflictingDeviceId: 'desk' });
+    expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy',
+    });
+    expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+    expect(t.actors[0]!.homeDeviceId).toBe('laptop');
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+    expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('holds a conflicting Cindy without repeating cloud writes, then resumes after the conflict clears', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: { ...MIA, templateId: 'cindy' }, revision: 1 }] : { revision: 1 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      const conflict = vi.fn(async (): Promise<string | null> => 'local-cindy');
+      t.local.host.findConflictingCindy = conflict;
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      const calls = t.calls.length;
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(t.calls).toHaveLength(calls);
+      expect(t.local.host.writeSystemPrompt).not.toHaveBeenCalled();
+      conflict.mockResolvedValue(null);
+      await vi.advanceTimersByTimeAsync(60_000);
+      t.runtime.reconcile([]);
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+      t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['replacement-actor', 'explicit-retry'])('rechecks cloud identity after a conflict: %s', async mode => {
+    vi.useFakeTimers();
+    try {
+      let templateId: string | undefined = 'cindy';
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: { ...MIA, templateId }, revision: 1 }] : { revision: 1 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      templateId = undefined;
+      if (mode === 'replacement-actor') {
+        t.actors[0]!.id = 'replacement';
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      } else {
+        expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      }
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('resolves an uncached actor through the explicit refresh channel before taking over', async () => {
+    let restore = () => {};
+    const foreground = vi.fn(async () => { restore(); });
+    const t = setup({ home: 'laptop', refreshForeground: foreground });
+    const actor = t.actors.pop()!;
+    restore = () => { t.actors.push(actor); };
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    expect(foreground).toHaveBeenCalledOnce();
+    expect(t.refresh).not.toHaveBeenCalled();
+  });
   it('moves the home with compare-and-set, then builds the local companion', async () => {
     const t = setup({ home: 'laptop' });
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
@@ -63,6 +559,27 @@ describe('take over', () => {
     expect(t.actors[0]!.homeDeviceId).toBe('desk');
     expect(t.local.host.createProfile).toHaveBeenCalledOnce();
     expect(t.publish).toHaveBeenCalled();
+  });
+
+  // Teammate V2 (cloud-companions.md §2.1): a teammate that arrives becomes a project right away,
+  // not only at the next start; a take-over that did not complete does not upgrade it.
+  it('upgrades the teammate to V2 once it arrived, and not when the take-over did not complete', async () => {
+    const upgradeArrived = vi.fn(async () => undefined);
+    const t = setup({ home: 'laptop', upgradeArrived });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    await vi.waitFor(() => expect(upgradeArrived).toHaveBeenCalledExactlyOnceWith('bot_mia'));
+    const failed = setup({ home: 'laptop', upgradeArrived: vi.fn(async () => undefined) });
+    vi.mocked(failed.local.host.createProfile).mockRejectedValueOnce(new Error('DISK_FULL'));
+    expect((await failed.runtime.takeOver('bot_mia')).ok).toBe(false);
+    expect(failed.host.upgradeArrived).not.toHaveBeenCalled();
+  });
+
+  it('tells what depends on the hidden copies when this one is hidden and again when it is lifted', async () => {
+    const t = setup({ home: 'laptop' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    // Hidden while it is built, visible once the take-over completes: each change is announced once.
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+    expect(t.onShadowChanged).toHaveBeenCalledTimes(2);
   });
 
   it('does not move the home while the cloud has no profile snapshot', async () => {
@@ -73,6 +590,17 @@ describe('take over', () => {
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
+    expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'PROFILE_SNAPSHOT_MISSING',
+    });
+  });
+
+  it('does not copy an arbitrary failure message into explicit home-change logs', async () => {
+    const t = setup({ home: 'laptop', handler: () => { throw new Error('private response /some/account/file'); } });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.log.warn).toHaveBeenCalledExactlyOnceWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'FAILED',
+    });
   });
 
   it('does not move the home for an incomplete profile snapshot', async () => {
@@ -107,6 +635,43 @@ describe('take over', () => {
 });
 
 describe('reconcile', () => {
+  it.each([true, false])('distinguishes local identity deferral from a failed check and leaves rechecks due (%s)', async deferred => {
+    vi.useFakeTimers();
+    try {
+      const rejected = new Error('CHECK_NOT_COMPLETED');
+      let fail = false;
+      const background = fakeApi(() => {
+        if (fail) throw rejected;
+        return [{ key: 'companion.install.v1', revision: 1, value: { installationId: 'this-install', deviceId: 'desk' } }];
+      });
+      const t = setup({ home: 'desk', installationId: 'this-install', backgroundIdentityApi: background.api,
+        identityDeferred: error => deferred && error === rejected });
+      const locals = [{ id: 'bot_mia', status: 'active' }];
+      t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(true);
+      await vi.advanceTimersByTimeAsync(120_000);
+      fail = true; t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(deferred);
+      fail = false; t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(background.calls).toHaveLength(3);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(true);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+  it.each(['install', 'arrival', 'retirement'] as const)('uses background identity admission for %s without blocking explicit user actions', async kind => {
+    vi.useFakeTimers();
+    try {
+      const background = vi.fn(async () => { throw new Error('BACKGROUND_DEFERRED'); });
+      const t = setup({ home: 'desk', installationId: kind === 'install' ? 'this-install' : undefined, backgroundIdentityApi: background });
+      if (kind === 'retirement') t.state.update('bot_mia', 'actor-1', entry => { entry.retirePending = true; });
+      t.runtime.reconcile(kind === 'arrival' ? [] : [{ id: 'bot_mia', status: 'active' }]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(background).toHaveBeenCalledOnce();
+      expect(t.calls).toHaveLength(0);
+      // A user's explicit take-over retains its own API and full data restoration.
+      expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      expect(t.calls.some(call => call.route === '/preferences')).toBe(true);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
   it('demotes a local copy whose home is another computer', () => {
     const t = setup({ home: 'laptop' });
     t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
@@ -267,6 +832,64 @@ describe('transfer', () => {
     expect(t.state.isDemoted('bot_mia')).toBe(false);
   });
 
+  // Regression: 127 shipped store readers but still advertised v2. Exercise the real
+  // transfer decision with the shipped declaration, not a hardcoded v3 test peer.
+  it.each([
+    { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true, succeeds: true },
+    { peer: 'old', version: 2, storeEnabled: true, succeeds: false },
+    { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, succeeds: false },
+  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, succeeds }) => {
+    const key = 'companion.skill.v1:large';
+    const value = { slug: 'large', content: 'x'.repeat(70 * 1024) };
+    let stored: unknown;
+    const t = setup({ home: 'desk', devices: [device('laptop')],
+      values: [{ key: 'companion.profile.v1', value: MIA }, { key, value }],
+      store: { enabled: () => storeEnabled },
+      homeLink: { version: async () => version, targets: async () => [], handOver: async () => ({ ok: true }) },
+      handler: (route, method, data) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: MIA, revision: 1 }] : { revision: 1 };
+        if (route.startsWith('/companion-store/changes')) return { entries: [], cursor: '0', hasMore: false };
+        if (route === '/companion-store/entry' && method === 'POST') {
+          stored = (data as { value: unknown }).value;
+          return { revision: 1 };
+        }
+        if (route.startsWith('/companion-store/entry?')) return { key, revision: 1, deleted: false, value: stored };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        if (route.endsWith('/import') || method === 'PATCH') return {};
+        throw new Error(`unexpected ${method} ${route}`);
+      } });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: 'FAILED' });
+    expect(t.actors[0]!.homeDeviceId).toBe(succeeds ? 'laptop' : 'desk');
+    expect(t.state.isDemoted('bot_mia')).toBe(succeeds);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(succeeds);
+    if (succeeds) {
+      expect(stored).toEqual({ companionStore: 1, prefRevision: 0, value });
+      const uploaded = t.calls.findIndex(call => call.route === '/companion-store/entry' && call.method === 'POST');
+      expect(uploaded).toBeLessThan(t.calls.findIndex(call => call.method === 'PATCH'));
+    } else expect(stored).toBeUndefined();
+  });
+
+  // Teammate V2 (cloud-companions.md §2.1 第 4 条, 2026-11-10 owner): a computer whose Cindy cannot run
+  // a V2 teammate (caps < 4) is listed as outdated, and still receives one, from here or asked elsewhere.
+  it('hands a V2 teammate to a computer that runs an older Cindy, listed as outdated', async () => {
+    const homeLink = { version: vi.fn(async (deviceId: string) => (deviceId === 'laptop' ? 3 : COMPANION_CLOUD_VERSION)),
+      targets: vi.fn(async () => []), handOver: vi.fn(async () => ({ ok: true as const })) };
+    const t = setup({ home: 'desk', devices: [device('laptop'), device('tablet')], homeLink });
+    expect(await t.runtime.transferTargets()).toEqual([
+      { deviceId: 'laptop', name: 'laptop', online: true, outdated: true },
+      { deviceId: 'tablet', name: 'tablet', online: true },
+    ]);
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({ ok: true });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(true);
+    expect(t.state.isDemoted('bot_mia')).toBe(true);
+    // Asked from another computer: the home hands it over.
+    const remote = setup({ home: 'laptop', devices: [device('laptop')], homeLink: { ...homeLink, version: vi.fn(async () => COMPANION_CLOUD_VERSION),
+      targets: vi.fn(async () => [{ deviceId: 'tablet', name: 'Tablet', online: true, outdated: true }]) } });
+    expect(await remote.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: true });
+    expect(homeLink.handOver).toHaveBeenCalledOnce();
+  });
+
   it('only transfers from the home computer', async () => {
     const t = setup({ home: 'laptop', devices: [device('tablet')] });
     expect(await t.runtime.transfer('bot_mia', 'tablet')).toMatchObject({ ok: false, code: 'FAILED', homeDeviceId: 'laptop' });
@@ -330,6 +953,12 @@ describe('switch home from any computer', () => {
     version: vi.fn(async () => version),
     targets: vi.fn(async () => targets),
     handOver: vi.fn(async (): Promise<{ ok: true } | { ok: false; code: 'BUSY' }> => ({ ok: true })),
+  });
+
+  it('says why this computer is not offered when it has not allowed same-account control', async () => {
+    const t = setup({ home: 'laptop', devices: [device('laptop'), device('desk', { isSelf: true, name: 'Desk', remoteControlEnabled: false })], homeLink: link(2, [{ deviceId: 'tablet', name: 'Tablet', online: true }]) });
+    expect(await t.runtime.homeChoices('bot_mia')).toMatchObject({ mode: 'remote', thisComputer: 'REMOTE_CONTROL_OFF',
+      targets: [{ deviceId: 'tablet', name: 'Tablet', online: true, isSelf: false }] });
   });
 
   it('hands over from here when this computer is the home', async () => {
@@ -410,6 +1039,50 @@ describe('transcript', () => {
 });
 
 describe('retire', () => {
+  // An explicit local deletion must survive an unavailable actor registry. Persist the
+  // known actor identity; a later registry must still prove home + installation ownership.
+  it('persists retirement without an actor registry and completes it after restart', async () => {
+    const t = setup({ home: 'desk' });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.roomId = ROOM; });
+    t.actors.length = 0;
+    await t.runtime.retire('bot_mia');
+    const savedState = t.files.get('state.json');
+    expect(JSON.parse(savedState!).bots.bot_mia.retirePending).toBe(true);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    t.runtime.dispose();
+
+    const restarted = setup({ home: 'desk', savedState });
+    restarted.runtime.reconcile([]);
+    await vi.waitFor(() => expect(restarted.actors[0]!.disabled).toBe(true));
+    expect(restarted.state.bot('bot_mia')?.retirePending).toBeUndefined();
+    expect(restarted.local.host.createProfile).not.toHaveBeenCalled();
+  });
+
+  it.each(['laptop', 'replacement', 'disabled'])('does not apply a deferred deletion to %s', async target => {
+    const t = setup({ home: 'desk' });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.retirePending = true; });
+    if (target === 'laptop') t.actors[0]!.homeDeviceId = 'laptop';
+    else if (target === 'replacement') t.actors[0]!.id = 'actor-replacement';
+    else t.actors[0]!.disabled = true;
+    // Keep a local row to avoid exercising automatic materialization in this retirement test.
+    t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+    await Promise.resolve();
+    expect(t.calls.some(call => call.method === 'PATCH' && (call.data as { disabled?: boolean }).disabled)).toBe(false);
+    expect(t.actors[0]!.disabled === true).toBe(target === 'disabled');
+    expect(t.state.bot('bot_mia')?.retirePending).toBeUndefined();
+  });
+
+  it('does not queue an unknown or demoted companion when the registry is unavailable', async () => {
+    const t = setup({ home: 'desk' });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+    t.actors.length = 0;
+    await t.runtime.retire('bot_mia');
+    await t.runtime.retire('unknown');
+    expect(t.state.bot('bot_mia')?.retirePending).toBeUndefined();
+    expect(t.state.bot('unknown')).toBeNull();
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
   it('disables the cloud companion when it is deleted on its main computer', async () => {
     const t = setup({ home: 'desk' });
     await t.runtime.retire('bot_mia');
@@ -693,6 +1366,40 @@ describe('merging copies of Cindy', () => {
     expect(t.order).toEqual(['flush', 'flush', 'patch /actors/actor-from']);
   });
 
+  // Regression (unit): a cloud Cindy assigned here but never restored was rejected as OFFLINE.
+  // Existing merge tests only had runnable sources; exercise the real merge entry and retirement.
+  it('merges an absent, demoted source homed here after proving there is no local data', async () => {
+    const t = mergeSetup({ sourceHome: 'desk' });
+    t.state.update('bot_lap', 'actor-from', entry => { entry.demoted = true; });
+    const probe = vi.fn(async () => false);
+    Object.assign(t.host, { hasLocalData: probe });
+    expect(await t.runtime.mergeCindy('cindy-default', ['bot_lap'])).toMatchObject({ ok: true, merged: 1 });
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(t.order).toEqual(['patch /actors/actor-from']);
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a previously synced local copy as a never-restored cloud copy', async () => {
+    const t = mergeSetup({ sourceHome: 'desk' });
+    t.state.update('bot_lap', 'actor-from', entry => { entry.demoted = true; entry.prefsSeeded = true; });
+    Object.assign(t.host, { hasLocalData: async () => false });
+    expect(await t.runtime.mergeCindy('cindy-default', ['bot_lap'])).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.order).toEqual([]);
+  });
+
+  it.each(['present', 'unreadable', 'unsupported', 'appeared-before-retire'])('preserves the source when local data is %s', async mode => {
+    const t = mergeSetup({ sourceHome: 'desk' });
+    t.state.update('bot_lap', 'actor-from', entry => { entry.demoted = true; });
+    let reads = 0;
+    if (mode !== 'unsupported') Object.assign(t.host, { hasLocalData: async () => {
+      if (mode === 'unreadable') throw new Error('EACCES');
+      return mode === 'present' || ++reads > 1;
+    } });
+    expect(await t.runtime.mergeCindy('cindy-default', ['bot_lap'])).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.order).toEqual([]);
+    expect(t.actors.find(actor => actor.id === 'actor-from')?.disabled).not.toBe(true);
+  });
+
   it('does not merge while the other copy is still replying, and leaves it active', async () => {
     const flush = vi.fn(async () => ({ ok: false as const, code: 'BUSY' }));
     const t = mergeSetup({ sourceHome: 'laptop', flush });
@@ -754,4 +1461,14 @@ describe('merging copies of Cindy', () => {
     expect(await t.runtime.flushHere('bot_lap')).toEqual({ ok: false, code: 'HOME_CONFLICT' });
     expect(await t.runtime.flushHere('cindy-default')).toEqual({ ok: true });
   });
+});
+
+// Filtering still needs Cindy's identity after all cloud copies have already been merged.
+it('lists a single remaining Cindy by profile identity, without running a merge', async () => {
+  const t = setup({ home: 'laptop', handler: (route, method) => {
+    if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { ...MIA, templateId: 'cindy' }, revision: 1 }];
+    throw new Error(`unexpected ${method} ${route}`);
+  } });
+  expect(await t.runtime.cindyCopies()).toEqual([{ botId: 'bot_mia', name: 'Mia', homeDeviceId: 'laptop' }]);
+  expect(t.calls.every(call => call.method === 'GET')).toBe(true);
 });

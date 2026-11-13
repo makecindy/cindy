@@ -37,8 +37,9 @@ import { logMobileVoice } from './mobileVoiceDiagnostics';
  * "Recognize my voice" on mobile. Same models, thresholds and gate as desktop;
  * inference runs through ONNX Runtime in the cindy-speaker-onnx module.
  *
- * Dictation start waits for saved preferences and the voiceprint before
- * choosing its gate. Model loading stays lazy; failures still pass through.
+ * Audio forwarding waits for saved preferences and the voiceprint before
+ * choosing its gate; microphone capture may buffer locally meanwhile.
+ * Model loading stays lazy; failures still pass through.
  *
  * The voiceprint is biometric data: it stays on this device, in the OS
  * keychain/keystore through SecureStore, one per account, and is never
@@ -493,8 +494,10 @@ export function warmMobileSpeakerFilter(): void {
  * The gate for one dictation run. Await saved state so the first run after
  * launch/account switch uses the user's setting. Bound storage stalls without
  * waiting for model download or native model loading before opening the mic.
+ * `onFiltered` runs each time a stretch of speech is muted, so the screen can
+ * tell the user why those words are missing.
  */
-export async function createMobileSpeakerGate(): Promise<SpeakerGate | undefined> {
+export async function createMobileSpeakerGate(onFiltered?: () => void): Promise<SpeakerGate | undefined> {
   const owner = getMobileAuthOwner();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -537,6 +540,7 @@ export async function createMobileSpeakerGate(): Promise<SpeakerGate | undefined
         acceptedSoFar: accepted,
         rejectedSoFar: rejected,
       });
+      if (!decision.accepted) onFiltered?.();
     },
     onPassthrough: (reason) => {
       logMobileVoice('warn', 'speaker gate passthrough', { reason });

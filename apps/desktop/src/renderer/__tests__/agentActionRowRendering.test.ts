@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
 /**
@@ -16,9 +17,10 @@
  *   - Codex file_change 与 Claude 文件编辑共用 diff lightbox
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
+import { i18n } from '../i18n';
 
 const ghostFixtures = vi.hoisted(() => ({ ghosts: [] as unknown[] }));
 const openFileMenuAt = vi.hoisted(() => vi.fn());
@@ -26,15 +28,18 @@ vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
   useInstalledGhosts: () => ghostFixtures.ghosts,
 }));
 
-vi.mock('react-i18next', () => ({
-  // t 返回原 key(带 count 时后缀 :count),断言直接对 key 做,避免复制文案表。
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
+  // Image delivery uses production translations; other rows retain stable key-based assertions.
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
-      options && typeof options.count === 'number'
-        ? `${key}:${String(options.count)}`
-        : options && typeof options.size === 'string'
-          ? `${key}:${options.size}`
-          : key,
+      key.startsWith('chat.imageDelivery.')
+        ? i18n.t(key, { lng: 'en' })
+        : options && typeof options.count === 'number'
+          ? `${key}:${String(options.count)}`
+          : options && typeof options.size === 'string'
+            ? `${key}:${options.size}`
+            : key,
   }),
 }));
 
@@ -60,6 +65,7 @@ vi.mock('@/lib/filePreview', () => ({ shouldOpenTextLightbox: async () => false 
 vi.mock('@/lib/localPathResolver', () => ({ toLocalFileUrl: (p: string) => `xdt-file://${p}` }));
 
 import { AgentActionRow, humanizeDocumentToolResult } from '@/components/chat/AgentActionRow';
+import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
 import { AgentActionsBlock } from '@/components/chat/AgentActionsBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -83,7 +89,7 @@ const mkTool = (id: string, toolName: string, toolInput: unknown): ChatMessage =
 });
 
 it.each(['ContextMenu', 'F10'])('passes the focused tool row to its file menu (%s)', (key) => {
-  render(createElement(AgentActionRow, {
+  render(createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
     message: mkTool('read-file', 'Read', { file_path: '/repo/example.ts' }),
   }));
   const row = screen.getByRole('button');
@@ -107,7 +113,7 @@ describe('AgentActionRow — ghost_call 插件名称', () => {
     const toolInput = namespace === undefined
       ? { ghost_id: ghostId, tool: 'echo' }
       : { ghost_id: ghostId, namespace, tool: 'echo' };
-    render(createElement(AgentActionRow, {
+    render(createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
       message: mkTool('ghost', 'mcp__cindy__ghost_call', toolInput),
     }));
   };
@@ -196,7 +202,7 @@ describe('document tool result presentation', () => {
 describe('AgentActionRow — 行主文案', () => {
   it('Bash 有 description:显示描述、隐藏动词、hover title 为命令原文', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'git status', description: '查看工作区状态' }),
       }),
     );
@@ -207,7 +213,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('工作动作模式:Bash 首行保留 description，命令原文收进点击详情', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'git status', description: '查看工作区状态' }),
         showRawCommand: true,
       }),
@@ -220,7 +226,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('exec 无法分类时回退为动词 + 命令文本', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', { command: 'docker ps' }),
       }),
     );
@@ -230,7 +236,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('工作动作模式:历史 Codex wrapper 无 displayCommand 也会友好化并在详情解包', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', {
           command: "/bin/zsh -lc 'git status --short'",
         }),
@@ -246,7 +252,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('工作动作模式:无法识别的命令仍用第二行原文兜底', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', { command: 'docker ps' }),
         showRawCommand: true,
       }),
@@ -262,7 +268,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('exec 带 codex commandActions:意图动词 + 目标,hover 保留命令原文', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', {
           command: 'rg -n useMemo src/renderer | head -40',
           commandActions: [
@@ -284,7 +290,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('exec 无 commandActions 时本地规则解析意图:pnpm test → 运行测试动词', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', { command: 'pnpm --filter desktop test' }),
       }),
     );
@@ -295,7 +301,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('MCP 行:显示 server · tool 人话标签,title 保留原始 toolName', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'mcp__feishu__read_by_url', { url: 'https://f.cn/doc' }),
       }),
     );
@@ -306,7 +312,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('file_change:主行显示文件数与总 diff，点击后直接进入共享 diff lightbox', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'file_change', {
           changes: [
             {
@@ -340,7 +346,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('file_change:单文件重命名直接显示源文件和目标文件', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'file_change', {
           changes: [
             {
@@ -359,7 +365,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi bash:小写工具名照样解析出意图动词,不再是「调用 bash」', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'bash', { command: 'git status' }),
       }),
     );
@@ -370,7 +376,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi bash:无法分类的命令回退为运行动词 + 命令原文', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'bash', { command: 'docker ps' }),
       }),
     );
@@ -380,7 +386,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi read:path 字段渲染成文件 chip 与读取动词', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'read', { path: '/repo/src/app.ts' }),
       }),
     );
@@ -391,14 +397,14 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi grep / find:搜索动词 + 搜索目标', () => {
     const { rerender } = render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'grep', { pattern: 'TODO', path: 'src/' }),
       }),
     );
     expect(screen.getByText('chat.agentActionRow.verb.searched')).toBeTruthy();
     expect(screen.getByText('TODO')).toBeTruthy();
     rerender(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'find', { pattern: '**/*.spec.ts' }),
       }),
     );
@@ -408,7 +414,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi write:创建动词 + 行内 +N 统计,点击进共享 diff lightbox', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'write', { path: '/repo/src/new.ts', content: 'a\nb' }),
       }),
     );
@@ -422,7 +428,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi edit:edits[].oldText/newText 汇成编辑动词与 diff lightbox', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'edit', {
           path: '/repo/src/app.ts',
           edits: [{ oldText: 'old', newText: 'new' }],
@@ -442,7 +448,7 @@ describe('AgentActionRow — 行主文案', () => {
   // 会让这种事件退化成空 diff 与 +0 -0。
   it('pi edit:legacy 顶层 oldText/newText 也给出真实统计与非空 diff', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'edit', {
           path: '/repo/src/app.ts',
           oldText: 'old A\nold B',
@@ -463,14 +469,14 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('状态图标:running / done 经 aria-label 可达,缺省为 done', () => {
     const { rerender } = render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'ls' }),
         status: 'running',
       }),
     );
     expect(screen.getByLabelText('chat.agentActionRow.status.running')).toBeTruthy();
     rerender(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'ls' }),
       }),
     );
@@ -479,7 +485,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('就地展开区:命令原文保留,不再出现 # description 重复行', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'git status', description: '查看工作区状态' }),
         toolResult: 'clean',
       }),
@@ -493,7 +499,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('已精简的工具结果显示释放提示与原始大小', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'git status' }),
         toolResult: JSON.stringify({
           type: 'tool_result_compacted',
@@ -511,7 +517,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('exposes the tool clientId as a viewport child anchor', () => {
     const { container } = render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'ls' }),
       }),
     );
@@ -528,6 +534,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
   it('streaming 中无 result 的行 running,有 result 的行 done;块头出现 spinner', () => {
     const { container } = render(
       createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         toolCalls: [
           mkTool('t1', 'Bash', { command: 'ls' }),
           mkTool('t2', 'Bash', { command: 'pwd' }),
@@ -546,6 +553,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
   it('settledIds(被隐藏的 orca 空结果)按 done 渲染,不出现永久 spinner', () => {
     const { container } = render(
       createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         toolCalls: [mkTool('t1', 'mcp__orca_worker_bridge__send_to_lead', { message: 'hi' })],
         resultMap: new Map(),
         settledIds: new Set(['t1']),
@@ -560,6 +568,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
   it('非 streaming(历史 / 中断会话)一律 done,即便没有 result', () => {
     const { container } = render(
       createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         toolCalls: [mkTool('t1', 'Bash', { command: 'ls' })],
         resultMap: new Map(),
       }),
@@ -568,4 +577,30 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
     expandBlock();
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
   });
+});
+
+// #6412 / PR #6420: real locale lookup catches misplaced keys hidden by the previous identity mock.
+// The retry button must display translated text and target the existing artifact on the task host.
+it.each(['local', 'device'] as const)('retries image delivery through the %s task route without sending a model message', async (kind) => {
+  const retry = vi.fn(async () => {});
+  const invoke = vi.fn(async () => {});
+  const previous = window.electronAPI;
+  window.electronAPI = { maker: { input: { retryImageDelivery: retry } }, deviceLink: { invoke } } as never;
+  try {
+    render(createElement(ChatSessionFileProvider, { value: {
+      sessionId: 'task', workingDir: '/task', origin: kind === 'device' ? { kind, deviceId: 'task-host' } : { kind },
+    }, children: createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+      message: mkTool('image', 'imagegen', {}),
+      toolResult: JSON.stringify({ kind: 'generation', native_image_delivery: { id: 'a'.repeat(64), state: 'failed' } }),
+    }) }));
+    expect(screen.getByRole('status').textContent).toBe('Image delivery failed. Retry transferring the existing image.');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' })); });
+    if (kind === 'device') {
+      expect(invoke).toHaveBeenCalledWith('task-host', 'maker:images:retry', ['task', 'a'.repeat(64)]);
+      expect(retry).not.toHaveBeenCalled();
+    } else {
+      expect(retry).toHaveBeenCalledWith('task', 'a'.repeat(64));
+      expect(invoke).not.toHaveBeenCalled();
+    }
+  } finally { window.electronAPI = previous; }
 });

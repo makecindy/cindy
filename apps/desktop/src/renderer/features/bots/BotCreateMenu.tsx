@@ -9,7 +9,10 @@ import { ChatInviteDialog } from './ChatInviteDialog';
 import { useTranslation } from 'react-i18next';
 
 /** `header`:侧栏伙伴段头里的 20px 图标钮,与置顶 / 全部任务段头动作同尺寸。 */
-export function BotCreateMenu({ variant, label }: { variant?: 'header'; label?: string }) {
+export function BotCreateMenu({ variant, label }: {
+  variant?: 'header';
+  label?: string;
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<'bot' | 'group' | 'join' | null>(null);
@@ -79,7 +82,7 @@ export function BotCreateMenu({ variant, label }: { variant?: 'header'; label?: 
       {dialog === 'join' ? (
         <ChatInviteDialog
           onClose={() => { setDialog(null); trigger.current?.focus(); }}
-          onJoined={id => navigate(`/bots/groups/${encodeURIComponent(id)}`)}
+          onJoined={(id, configureMask) => navigate(`/bots/groups/${encodeURIComponent(id)}${configureMask ? '?groupSettings=1&groupMask=1' : ''}`)}
         />
       ) : null}
     </>

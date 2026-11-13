@@ -1,9 +1,13 @@
 {
   "site": "wikipedia.org",
-  "auth": "只读无需登录",
-  "entry": {
-    "searchApi": "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=&srlimit=20&format=json&utf8=1"
-  },
-  "recipes": ["wikipedia-search"],
-  "notes": "搜索走公开 MediaWiki API(/w/api.php?action=query&list=search&srsearch=&srlimit=20&format=json&utf8=1),返回 JSON {query:{search:[{title,snippet,pageid,size,wordcount,timestamp,...}]}};直接 navigate 到该 URL 再读 body 即拿到 JSON。srlimit 控制条数(默认 10、上限 50),utf8=1 让非 ASCII 正常返回。snippet 内含 HTML 高亮标记。条目页地址 https://<lang>.wikipedia.org/wiki/<title 下划线代空格>。en. 子域可换成其它语言子域。"
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
+  "entry": {},
+  "recipes": [
+    "wikipedia-search"
+  ],
+  "notes": "兼容入口 wikipedia-search 现执行内置 wikipedia/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

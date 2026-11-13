@@ -9,10 +9,8 @@ import {
   buildWindowsNetworkDriveProbeScript,
   buildWindowsPathKindProbeScript,
   buildWindowsRegistryProbeScript,
-  buildWindowsDescendantCleanupScript,
   countWindowsPowerShellDiagnostics,
   maxWindowsPathKindProbeBatchCount,
-  terminateWindowsPowerShellDescendants,
   warnWindowsGitPathProbeDiagnostics,
   warnWindowsGitPathProbeFailure,
 } from './windows-git-path-powershell.js';
@@ -102,18 +100,16 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(script).toContain('$nextGroupIndex += 1');
   });
 
-  it('builds a recursive descendant cleanup script without candidate path data', () => {
-    const script = buildWindowsDescendantCleanupScript(4321);
+  it('attaches the coordinator to its owned job before starting any nested probe', () => {
+    const script = buildWindowsPathKindProbeScript(2, 3_000);
 
-    expect(script).toContain('[void]$pending.Add(4321)');
-    expect(script).toContain('Get-CimInstance Win32_Process');
-    expect(script).toContain('ParentProcessId = ');
-    expect(script).toContain('-ErrorAction SilentlyContinue');
-    expect(script).toContain('$descendants.Count - 1');
-    expect(script).toContain('Stop-Process -Id $childProcessId -Force');
-    expect(script).toContain('taskkill.exe /PID $childProcessId /F /T');
-    expect(script).not.toContain('C:\\');
-    expect(() => buildWindowsDescendantCleanupScript(0)).toThrow(RangeError);
+    expect(script).toContain('limits.Basic.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE');
+    expect(script).toContain('AssignProcessToJobObject(job, GetCurrentProcess())');
+    expect(script.indexOf('[CindyWindowsPathProbeJob]::Attach()')).toBeLessThan(
+      script.indexOf('[void]$process.Start()'),
+    );
+    expect(script).toContain('__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__`tpath-process-job');
+    expect(script).not.toContain('Get-CimInstance');
   });
 
   it('bounds an explicit child budget and queue admission by the coordinator budget', () => {
@@ -202,130 +198,79 @@ describe('Windows Git PATH PowerShell probes', () => {
     PATH_PROBE_TEST_PROCESS_TIMEOUT_MS * 2 + 10_000,
   );
 
-  it.runIf(process.platform === 'win32')(
-    'kills probe descendants after the coordinator is terminated',
-    async () => {
+  // Regression: #6117 CI left a real child alive when the separate CIM cleanup
+  // timed out. Exercise the production coordinator and keep the OS liveness
+  // assertion; source-contract tests above cannot validate a Windows Job Object.
+  // Tier: existing native Windows unit probe; macOS/Linux explicitly skip it.
+  it.runIf(process.platform === 'win32').each(['terminated', 'exited'] as const)(
+    'reaps live probe descendants when the coordinator is %s',
+    async (exitMode) => {
       const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
       if (!systemRoot) throw new Error('Windows system root is unavailable');
-      const powershell = path.join(
-        systemRoot,
-        'System32',
-        'WindowsPowerShell',
-        'v1.0',
-        'powershell.exe',
-      );
-      const encodedSleepCommand = Buffer.from('Start-Sleep -Seconds 30', 'utf16le').toString(
-        'base64',
-      );
-      const script = [
-        '$startInfo = New-Object System.Diagnostics.ProcessStartInfo',
-        `$startInfo.FileName = '${powershell.replaceAll("'", "''")}'`,
-        `$startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ${encodedSleepCommand}'`,
-        '$startInfo.UseShellExecute = $false',
-        '$startInfo.CreateNoWindow = $true',
-        '$process = New-Object System.Diagnostics.Process',
-        '$process.StartInfo = $startInfo',
+      const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const productionScript = buildWindowsPathKindProbeScript(2, 30_000, 1, { operationTimeoutMs: 30_000 });
+      const encoded = productionScript.match(/\$probeCommand = '([^']+)'/)?.[1];
+      if (!encoded) throw new Error('Missing nested probe command');
+      const sleepingCommand = Buffer.from('Start-Sleep -Seconds 120', 'utf16le').toString('base64');
+      // Instrument the existing spawn boundary, never a production delay hook.
+      // Publish the real child PID before terminating/exiting the coordinator.
+      const script = productionScript.replace(encoded, sleepingCommand).replace(
         '[void]$process.Start()',
-        '[Console]::Out.WriteLine($process.Id)',
-        '[Console]::Out.Flush()',
-        'Start-Sleep -Seconds 30',
-      ].join('\n');
+        [
+          '[void]$process.Start()',
+          '[Console]::Out.WriteLine("child=" + $process.Id)',
+          '[Console]::Out.Flush()',
+          ...(exitMode === 'exited' ? ['exit 0'] : []),
+        ].join('\n'),
+      );
       let childPid: number | undefined;
-      let coordinatorPid: number | undefined;
+      let childGone = false;
       let coordinator: ReturnType<typeof spawn> | undefined;
       try {
-        coordinator = spawn(
-          powershell,
-          ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
-          {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            windowsHide: true,
-          },
-        );
-        coordinatorPid = coordinator.pid;
-        expect(Number.isInteger(coordinatorPid) && (coordinatorPid ?? 0) > 0).toBe(true);
-
-        let output = '';
-        coordinator.stdout?.setEncoding('utf8');
-        coordinator.stdout?.on('data', (chunk: string) => {
-          output += chunk;
+        coordinator = spawn(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true,
         });
-        await vi.waitFor(
-          () => {
-            childPid = Number(output.trim().split(/\r?\n/).at(-1));
-            expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
-          },
-          { timeout: 5_000, interval: 50 },
-        );
-
         const coordinatorExit = new Promise<void>((resolve) => {
           coordinator?.once('exit', () => resolve());
         });
-        expect(coordinator.kill()).toBe(true);
+        coordinator.stdin?.end(JSON.stringify([{ paths: ['unused-one', 'unused-two'] }]));
+        let output = '';
+        let errors = '';
+        coordinator.stdout?.setEncoding('utf8');
+        coordinator.stdout?.on('data', (chunk: string) => { output += chunk; });
+        coordinator.stderr?.setEncoding('utf8');
+        coordinator.stderr?.on('data', (chunk: string) => { errors += chunk; });
+        await vi.waitFor(() => {
+          childPid = Number(output.match(/child=(\d+)/)?.[1]);
+          expect(Number.isInteger(childPid) && childPid > 0, JSON.stringify({ output, errors })).toBe(true);
+        }, { timeout: PATH_PROBE_TEST_PROCESS_TIMEOUT_MS, interval: 50 });
+        if (exitMode === 'terminated') expect(coordinator.kill()).toBe(true);
         await coordinatorExit;
 
-        const cleanupWarnings: unknown[] = [];
-        const cleanupStarted = performance.now();
-        terminateWindowsPowerShellDescendants(powershell, coordinatorPid, {
-          warn: (...args: unknown[]) => {
-            cleanupWarnings.push(args);
-          },
-        });
-        const cleanupMs = Math.round(performance.now() - cleanupStarted);
-
-        // EncodedCommand avoids Windows argv splitting of a multi-line -Command.
-        // Poll until the orphaned child is gone; a live child after cleanup is a real leak.
-        const livenessCommand = Buffer.from(
-          [
-            `$child = Get-Process -Id ${childPid} -ErrorAction SilentlyContinue`,
-            'if ($child) {',
-            '  $child | Select-Object Id, ProcessName, StartTime, HasExited | ConvertTo-Json -Compress',
-            '  exit 1',
-            '}',
-            'exit 0',
-          ].join('\n'),
-          'utf16le',
-        ).toString('base64');
-        await vi.waitFor(
-          () => {
-            const liveness = spawnSync(
-              powershell,
-              ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', livenessCommand],
-              { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000, windowsHide: true },
-            );
-            // Keep the real exit assertion, but report whether cleanup timed out,
-            // failed, or left a process alive instead of only "expected 1 to be 0".
-            expect(liveness.status, JSON.stringify({
-              coordinatorPid,
-              childPid,
-              cleanupMs,
-              cleanupWarnings,
-              livenessError: liveness.error?.message,
-              livenessSignal: liveness.signal,
-              livenessStdout: liveness.stdout,
-              livenessStderr: liveness.stderr,
-            })).toBe(0);
-          },
-          { timeout: 8_000, interval: 50 },
-        );
+        // Probe the actual OS process directly, without another cold PowerShell
+        // startup. Only ESRCH proves absence; permission or other errors fail.
+        await vi.waitFor(() => {
+          let exists = true;
+          try {
+            process.kill(childPid!, 0);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+            exists = false;
+          }
+          expect(exists, JSON.stringify({ coordinatorPid: coordinator?.pid, childPid, output, errors })).toBe(false);
+        }, { timeout: 8_000, interval: 50 });
+        childGone = true;
       } finally {
-        if (coordinatorPid) {
-          spawnSync('taskkill.exe', ['/PID', String(coordinatorPid), '/F'], {
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-        }
-        if (childPid) {
-          spawnSync('taskkill.exe', ['/PID', String(childPid), '/F'], {
-            stdio: 'ignore',
-            windowsHide: true,
-          });
+        // Only this fixture's live coordinator is owned. A completed PID can
+        // already be reused; do not send taskkill to it after a successful exit.
+        if (coordinator && coordinator.exitCode === null && coordinator.signalCode === null) coordinator.kill();
+        if (childPid && !childGone) {
+          spawnSync('taskkill.exe', ['/PID', String(childPid), '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
         }
       }
     },
-    // waitFor(5s) + descendant cleanup exec(10s) + liveness probe exec(15s) already
-    // sum to 30s; leave headroom for coordinator exit, taskkill, and scheduling.
-     45_000,
+    PATH_PROBE_TEST_PROCESS_TIMEOUT_MS + 15_000,
   );
 
   it('reports recoverable script failures only when a logger is supplied', () => {

@@ -1,4 +1,6 @@
-import { readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { Button } from '@/components/ui/button';
 import { ChatVideoView } from './ChatVideoView';
 import { ChatImageView } from './ChatImageView';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
@@ -96,6 +98,8 @@ import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import { renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
+import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -103,7 +107,7 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
@@ -733,6 +737,7 @@ function buildDiffPayload(
 }
 
 export interface AgentActionRowProps {
+  pluginUi: PluginUiMessageCandidates;
   message: ChatMessage;
   toolResult?: string;
   /** 工作过程展开 / live preview 使用：仅无法识别的命令另显原文兜底。 */
@@ -782,6 +787,7 @@ function isImagePath(filePath: string): boolean {
 }
 
 export function AgentActionRow({
+  pluginUi,
   message,
   toolResult,
   showRawCommand = false,
@@ -1177,6 +1183,7 @@ export function AgentActionRow({
           {rawCommand}
         </div>
       )}
+      {readFailedImageDelivery(resultText) && <GeneratedImageRetry imageId={readFailedImageDelivery(resultText)!} />}
       {processMedia.length > 0 && (
         <div className="flex min-w-0 flex-col gap-3 py-2 pl-8" data-tool-process-media="true">
           {processMedia.map((media) => media.kind === 'image'
@@ -1192,7 +1199,10 @@ export function AgentActionRow({
           v11 (2026-04-20):背景色 + 边框对齐"用户输入气泡"
           (`--msg-user-bg` + `--msg-user-border`),与 hover 嵌入式 inline-code
           灰区分开,把就地展开视觉上提升为一个独立"卡片"。 */}
-      {isInlineExpand && expanded && (
+      {renderPluginUiBody(pluginUi.toolBody ? { position: 'tool.body', sessionId: fileCtx.sessionId, tool: toolName,
+        disabled: isRemoteFileOrigin(fileCtx.origin), plugin: message.sourcePlugin?.pluginId,
+        context: () => ({ tool: { clientId: message.clientId, name: toolName, input: message.toolInput, result: toolResult, status } }) } : undefined,
+      isInlineExpand && expanded && (
         <div
           // 行按钮本身是 select-none,这里必须显式 select-text,让用户能复制
           // grep pattern、bash command 这种关键文本。
@@ -1201,7 +1211,7 @@ export function AgentActionRow({
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]',
-            'text-[var(--foreground)]',
+            'text-foreground',
             'select-text cursor-text',
           )}
         >
@@ -1224,8 +1234,7 @@ export function AgentActionRow({
             </span>
           )}
         </div>
-      )}
-
+      ))}
       {/*
         tool 返回 JSON 里若带 xdt_image_url(单张) / xdt_image_urls(多张)的图片,
         不在这里渲染——MessageStream Pass 2 会把它们提取出来作为独立的
@@ -1252,4 +1261,21 @@ export function AgentActionRow({
       )}
     </div>
   );
+}
+
+function GeneratedImageRetry({ imageId }: { imageId: string }) {
+  const { t } = useTranslation();
+  const { sessionId, origin } = useChatSessionFile();
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return <div className="flex flex-wrap items-center gap-2 py-2 pl-8 text-13 text-muted-foreground">
+    <span role="status">{t(failed ? 'chat.imageDelivery.retryFailed' : 'chat.imageDelivery.failed')}</span>
+    {sessionId && !(origin.kind === 'device' && isSharedTaskPeer(origin.deviceId)) && <Button variant="secondary" size="sm" disabled={pending} onClick={async () => {
+      setPending(true); setFailed(false);
+      try {
+        if (origin.kind === 'device') await window.electronAPI.deviceLink.invoke(origin.deviceId, 'maker:images:retry', [sessionId, imageId]);
+        else await window.electronAPI.maker.input.retryImageDelivery(sessionId, imageId);
+      } catch { setFailed(true); } finally { setPending(false); }
+    }}>{t(pending ? 'chat.imageDelivery.retrying' : 'chat.imageDelivery.retry')}</Button>}
+  </div>;
 }

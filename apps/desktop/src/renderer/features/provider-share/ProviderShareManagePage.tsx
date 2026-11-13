@@ -1,3 +1,7 @@
+import { deviceDisplayName } from '@/lib/deviceName';
+import { ProviderShareVisibilitySection } from './ProviderShareVisibilitySection';
+import { SubscriptionFastSetting } from './SubscriptionFastSetting';
+import { RemoteModelAccessSection, RemoteModelAccessDialog } from './RemoteModelAccessSection';
 import { RemoteAgentLimitsSection } from './RemoteAgentLimitsSection';
 /**
  * 「{供应商} · 远程与分享」页(供应商分享 §7.2；供应商组 §10)。从设置 → 模型供应商「允许被远程调用」一行的
@@ -17,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { Button } from '@/components/ui/button';
+import { SETTINGS_PAGE_TITLE_CLASS, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -40,6 +45,8 @@ import type {
   ProviderUsageHistoryView,
 } from '../../../shared/providerShare';
 import { ProviderShareLinkDialog } from './ProviderShareLinkDialog';
+import { ProviderShareMemberNoteDialog } from './ProviderShareMemberNoteDialog';
+import { providerShareMemberName } from '../../../shared/providerShareMemberNote';
 import { pendingResharesFromOwned, sharesClaudeLoginEmail, type ProviderShareGate, type ProviderSharePendingRequest } from './providerShareFormat';
 import { ProviderUsageSection, type ProviderUsageStatus } from './ProviderUsageSection';
 import { presentProviderShareApproval, publishProviderShareOwnerState, removeProviderSharePendingRequest } from './providerShareStore';
@@ -80,6 +87,10 @@ export function ProviderShareManagePage({
     : devices?.find((device) => device.isSelf)?.name ?? null;
   const [remoteGroup, setRemoteGroup] = useState<ProviderGroupConfig | null>(initialGroup ?? null);
   const [state, setState] = useState<ProviderShareOwnerState | null>(null);
+  const [noteMemberId, setNoteMemberId] = useState<string | null>(null);
+  const [modelMemberId, setModelMemberId] = useState<string | null>(null);
+  const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const noteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadErrorKey, setLoadErrorKey] = useState<string | null>(null);
   const [history, setHistory] = useState<ProviderUsageHistoryView | null>(null);
@@ -263,7 +274,7 @@ export function ProviderShareManagePage({
                 : status === 'resume'
                   ? 'providerShare.toast.resumed'
                   : 'providerShare.toast.removed',
-              { name: member.displayName },
+              { name: providerShareMemberName(member) },
             ),
           );
         } catch (error) {
@@ -299,9 +310,9 @@ export function ProviderShareManagePage({
     async (member: ProviderShareMemberView) => {
       const ok = await confirm({
         presentation: 'standard',
-        title: t('providerShare.manage.removeConfirm.title', { name: member.displayName }),
+        title: t('providerShare.manage.removeConfirm.title', { name: providerShareMemberName(member) }),
         description: t('providerShare.manage.removeConfirm.description', {
-          name: member.displayName,
+          name: providerShareMemberName(member),
           provider: providerName,
         }),
         confirmText: t('providerShare.manage.removeConfirm.confirm'),
@@ -324,15 +335,20 @@ export function ProviderShareManagePage({
     canApproveReshare: providerClassificationReady,
     onTogglePause: (member) => void setMember(member, member.status === 'paused' ? 'resume' : 'pause'),
     onRemove: (member) => void removeMember(member),
-    onReshare: (member, reshare, decision) => void decideReshare(reshare, member.displayName, decision),
+    onEditNote: (member, trigger) => { noteTriggerRef.current = trigger; setNoteMemberId(member.memberId); },
+    onModelAccess: (member, trigger) => { modelTriggerRef.current = trigger; setModelMemberId(member.memberId); },
+    onReshare: (member, reshare, decision) => void decideReshare(reshare, providerShareMemberName(member), decision),
   }), [busy, decideReshare, loadFailed, providerClassificationReady, removeMember, setMember]);
+  const noteMember = members.find((member) => member.memberId === noteMemberId);
+  const modelMember = members.find((member) => member.memberId === modelMemberId);
 
   return (
-    // 这一页自己滚动(设置页外层在「模型供应商」分区不滚)。始终预留滚动条槽位：展开组内电脑的配额、
-    // 加载出已分享的人等让内容超过一屏时，滚动条出现不再把整页挤窄 12px(2026-10-11 用户反馈宽度跳变)。
-    // 槽位用 -mr-3 挪进外层右侧留白，内容宽度与「模型供应商」卡片保持一致。
+    // 这一页自己滚动(设置页外层在「模型供应商」分区不滚)。滚动时也不显示滚动条(2026-11-11 用户要求)：
+    // 滚动条不占宽度，内容超过一屏时整页也不会变窄，宽度与「模型供应商」卡片一致。
+    // 只竖向滚：overflow-y 设了 auto，横向会跟着变成 auto，Windows 125%/150% 缩放下取整多出的 1px
+    // 就能横向滚动。宽内容(明细表、热力图)各自在卡片里横向滚。
     <div
-      className="-mr-3 flex h-full min-h-0 flex-col overflow-y-auto pb-8 [scrollbar-gutter:stable]"
+      className="scrollbar-hide flex h-full min-h-0 flex-col overflow-y-auto overflow-x-hidden pb-8"
       data-testid="provider-share-manage"
     >
       <button
@@ -352,7 +368,7 @@ export function ProviderShareManagePage({
         >
           {providerIcon}
         </div>
-        <h2 className="min-w-0 flex-1 text-16 font-medium leading-[1.3] text-[var(--settings-section-title)]">
+        <h2 className={`min-w-0 flex-1 ${SETTINGS_PAGE_TITLE_CLASS}`}>
           {t('providerGroup.page.title', { provider: providerName })}
         </h2>
         <Button variant="cta" size="md" disabled={!canCreateLink} onClick={() => setLinkOpen(true)}>
@@ -362,7 +378,7 @@ export function ProviderShareManagePage({
 
       {deviceId && (
         <p className="mt-2 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('providerGroup.management.note', { device: selfDeviceName ?? deviceId })}
+          {t('providerGroup.management.note', { device: deviceDisplayName(deviceId ?? '', selfDeviceName) })}
         </p>
       )}
 
@@ -382,11 +398,15 @@ export function ProviderShareManagePage({
       )}
 
       {(requests.length > 0 || reshares.length > 0) && (
-        <section className="mt-6 shrink-0" aria-labelledby="provider-share-pending-title">
-          <h3 id="provider-share-pending-title" className="mb-2 text-13 font-medium text-[var(--settings-section-title)]">
-            {t('providerShare.manage.pending.title')}
-          </h3>
-          <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
+        <SettingsSection
+          className="mt-6 shrink-0"
+          aria-labelledby="provider-share-pending-title"
+          headingLevel={3}
+          titleId="provider-share-pending-title"
+          title={t('providerShare.manage.pending.title')}
+        >
+          {/* 待处理的申请是带头像和操作的条目列表，行结构不套设置行。 */}
+          <SettingsCard>
             {requests.map((item, index) => (
               <div
                 key={item.request.requestId}
@@ -459,13 +479,13 @@ export function ProviderShareManagePage({
                   <div className="flex flex-wrap items-baseline gap-2 text-13">
                     <span className="font-medium text-[var(--text-primary)]">{item.reshare.name}</span>
                     <span className="text-12 text-[var(--text-secondary)]">
-                      {t('providerShare.manage.reshare.applying', { owner: item.owner.displayName })}
+                      {t('providerShare.manage.reshare.applying', { owner: providerShareMemberName(item.owner) })}
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-1.5 text-12 text-[var(--text-secondary)]">
                     <span>{t('providerShare.manage.reshare.requestedAt', { time: time.relative(item.reshare.requestedAt) })}</span>
                     <span aria-hidden="true">·</span>
-                    <span>{t('providerShare.manage.reshare.usageHint', { name: item.reshare.name, owner: item.owner.displayName })}</span>
+                    <span>{t('providerShare.manage.reshare.usageHint', { name: item.reshare.name, owner: providerShareMemberName(item.owner) })}</span>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
@@ -474,7 +494,7 @@ export function ProviderShareManagePage({
                     size="sm"
                     compact
                     disabled={loadFailed || busy.has(item.reshare.id)}
-                    onClick={() => void decideReshare(item.reshare, item.owner.displayName, 'reject')}
+                    onClick={() => void decideReshare(item.reshare, providerShareMemberName(item.owner), 'reject')}
                   >
                     {t('providerShare.manage.reshare.reject')}
                   </Button>
@@ -483,21 +503,31 @@ export function ProviderShareManagePage({
                     size="sm"
                     compact
                     disabled={loadFailed || !providerClassificationReady || busy.has(item.reshare.id)}
-                    onClick={() => void decideReshare(item.reshare, item.owner.displayName, 'approve')}
+                    onClick={() => void decideReshare(item.reshare, providerShareMemberName(item.owner), 'approve')}
                   >
                     {t('providerShare.manage.reshare.approve')}
                   </Button>
                 </div>
               </div>
             ))}
-          </div>
-        </section>
+          </SettingsCard>
+        </SettingsSection>
       )}
+
+      {deviceId && providerForApproval?.subscriptionFastPolicy && (
+        <div className="mt-6 shrink-0">
+          <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />
+        </div>
+      )}
+      <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
 
       <ProviderGroupSection
         providerId={providerId} providerName={providerName} deviceId={deviceId} deviceName={deviceName}
+        fastPolicySupported={Boolean(providerForApproval?.subscriptionFastPolicy)}
         initialConfig={initialGroup} remoteProvider={remoteProvider} onConfigChange={setRemoteGroup}
       />
+
+      <ProviderShareVisibilitySection key={`${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
 
       <RemoteAgentLimitsSection key={deviceId ?? 'local'} deviceId={deviceId} />
 
@@ -522,6 +552,26 @@ export function ProviderShareManagePage({
           onClose={() => setLinkOpen(false)}
         />
       )}
+      {noteMember && (
+        <ProviderShareMemberNoteDialog
+          key={`${deviceId ?? 'local'}:${noteMember.memberId}`}
+          member={noteMember}
+          returnFocusTo={noteTriggerRef.current}
+          deviceId={deviceId}
+          onClose={() => setNoteMemberId(null)}
+          onSaved={() => {
+            setNoteMemberId(null);
+            // 保存前发出的轮询不能把旧备注写回来；作废旧读取后再取已落盘的备注。
+            loadSeq.current += 1;
+            remoteLoading.current = false;
+            void load();
+          }}
+        />
+      )}
+      {modelMember && <RemoteModelAccessDialog key={`${deviceId ?? 'local'}:${modelMember.memberId}`}
+        providerId={providerId} deviceId={deviceId} memberId={modelMember.memberId}
+        memberName={providerShareMemberName(modelMember)} returnFocusTo={modelTriggerRef.current}
+        onClose={() => setModelMemberId(null)} />}
     </div>
   );
 }

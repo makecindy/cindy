@@ -17,6 +17,12 @@ describe('writable directory grant wiring', () => {
     expect(dialog).toContain('assertTrustedAppRendererEvent(event)');
     expect(dialog).toContain('issueWritableDirectoryPickerGrant({');
     expect(dialog).toContain('senderId: event.sender.id');
+    // 最近列表是第二个发放入口：同样只给可信窗口，且只认最近项目里的路径。
+    const recentStart = bootstrap.indexOf("'dialog:authorize-recent-writable-directory'");
+    const recent = bootstrap.slice(recentStart, bootstrap.indexOf('ipcMain.handle(', recentStart));
+    expect(recent).toContain('assertTrustedAppRendererEvent(event)');
+    expect(recent).toContain('isRecentProject: (candidate) => hasRecentWorkdir(candidate)');
+    expect(recent).toContain('senderId: event.sender.id');
     expect(register).toContain('consumeWritableDirectoryPickerGrants({');
     expect(register).toContain('scopeId: sessionId');
     expect(register).toContain('senderId: options.senderId');
@@ -24,7 +30,8 @@ describe('writable directory grant wiring', () => {
 
   it('uses the reserved local draft task id for picker scope and persisted session creation', () => {
     const draft = read('renderer/features/cc-agent/NewMakerDraftRoute.tsx');
-    expect(draft).toContain('const localDraftSessionIdRef = useRef(makeDraftSessionId())');
+    // An unsent task already opened from this draft keeps its id when the user comes back.
+    expect(draft).toContain('const localDraftSessionIdRef = useRef(provisionalDraftTaskIdForCurrentOwner() ?? makeDraftSessionId())');
     expect(draft).toContain('writableGrantScope={localDraftSessionIdRef.current}');
     expect(draft).toContain('const sessionId = localDraftSessionIdRef.current');
     expect(draft).toContain('goalSessionId = localDraftSessionIdRef.current');
@@ -35,9 +42,14 @@ describe('writable directory grant wiring', () => {
     const createStart = sessions.indexOf("ipcMain.handle('local-db:sessions:create'");
     const updateStart = sessions.indexOf("ipcMain.handle('local-db:sessions:update'");
     const create = sessions.slice(createStart, updateStart);
-    expect(create).toContain('consumeWritableDirectoryPickerGrants({');
-    expect(create.indexOf('consumeWritableDirectoryPickerGrants({')).toBeLessThan(
-      create.indexOf('db.insert(sessions)'),
+    expect(create).toContain('assertTrustedAppRendererEvent(event)');
+    expect(create).toContain('return createUserSession(body, {');
+    expect(create).toContain('senderId: event.sender.id');
+    const service = read('main/localDb/ipc/createUserSession.ts');
+    expect(service).toContain('senderId: ports.senderId');
+    expect(service).toContain('consumeWritableDirectoryPickerGrants({');
+    expect(service.indexOf('consumeWritableDirectoryPickerGrants({')).toBeLessThan(
+      service.indexOf('db.insert(sessions)'),
     );
     // update handler 只做 adapter,业务体在 updateSessionInDb(MCP 会话操作工具共用同一路径)。
     const update = sessions.slice(updateStart, sessions.indexOf("'local-db:sessions:patch-meta'"));

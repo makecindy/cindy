@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  collectInTurnSessionIds,
   isSessionTurnDispatchBoundaryBusy,
   SessionTurnActivityTracker,
 } from '../sessionTurnActivityTracker';
@@ -27,6 +28,25 @@ describe('SessionTurnActivityTracker.isSessionInTurn', () => {
     t.setSessionInTurn('s', false);
     expect(t.isSessionInTurn('s')).toBe(false);
     expect(isSessionTurnDispatchBoundaryBusy(t, 's', null)).toBe(false);
+  });
+
+  it('主监听方与额外旁观者都收到 turn 变化;旁观者出错不影响其他人,可取消订阅', () => {
+    const t = new SessionTurnActivityTracker();
+    const main = vi.fn();
+    const observer = vi.fn();
+    t.setSessionTurnChangeListener(main);
+    t.addSessionTurnObserver(() => {
+      throw new Error('observer failure');
+    });
+    const stop = t.addSessionTurnObserver(observer);
+    t.setSessionInTurn('s1', true);
+    t.setSessionInTurn('s1', false);
+    expect(main).toHaveBeenCalledTimes(2);
+    expect(observer).toHaveBeenCalledTimes(2);
+    stop();
+    t.setSessionInTurn('s1', true);
+    expect(main).toHaveBeenCalledTimes(3);
+    expect(observer).toHaveBeenCalledTimes(2);
   });
 
   it('terminal 广播 → isSessionInTurn 立即 false(keepalive grace 不拖住它)', () => {
@@ -115,5 +135,19 @@ describe('SessionTurnActivityTracker per-session change listener', () => {
     });
     t.setSessionInTurn('s', true);
     expect(t.isSessionInTurn('s')).toBe(true);
+  });
+});
+
+
+describe('collectInTurnSessionIds', () => {
+  it('includes tracker turns and live turns that are not latched yet, once each', () => {
+    const tracker = new SessionTurnActivityTracker();
+    tracker.setSessionInTurn('tracked', true);
+    tracker.setSessionInTurn('idle', false);
+    expect(collectInTurnSessionIds(tracker, [
+      { id: 'tracked', isTurnRunning: () => true },
+      { id: 'live', isTurnRunning: () => true },
+      { id: 'stopped', isTurnRunning: () => false },
+    ])).toEqual(['tracked', 'live']);
   });
 });

@@ -557,6 +557,7 @@ it('maps real mouse movement, right button and wheel to the picture below the to
   pointer('pointerdown', 500, 352, 2);
   pointer('pointerup', 500, 352, 2);
   stage.dispatchEvent(new WheelEvent('wheel', { deltaY: 32, bubbles: true, cancelable: true }));
+  vi.advanceTimersByTime(33);
   expect(events()).toContainEqual({ kind: 'button', button: 2, down: true, x: 0.5, y: 0.5 });
   expect(events()).toContainEqual({ kind: 'button', button: 2, down: false, x: 0.5, y: 0.5 });
   expect(events()).toContainEqual({ kind: 'scroll', dx: 0, dy: 32 });
@@ -565,16 +566,91 @@ it('carries sub-pixel wheel deltas instead of letting hosts truncate them away',
   pointer('pointermove');
   vi.advanceTimersByTime(34);
   const wheel = (deltaX: number, deltaY: number) =>
-    stage.dispatchEvent(new WheelEvent('wheel', { deltaX, deltaY, bubbles: true, cancelable: true }));
+    stage.dispatchEvent(
+      new WheelEvent('wheel', { deltaX, deltaY, bubbles: true, cancelable: true }),
+    );
   wheel(0, 0.4);
   wheel(0, 0.4);
   expect(events().filter((e) => e.kind === 'scroll')).toEqual([]);
   wheel(-0.5, 0.4);
+  vi.advanceTimersByTime(33);
   wheel(-0.7, 2.5);
+  vi.advanceTimersByTime(33);
   expect(events().filter((e) => e.kind === 'scroll')).toEqual([
     { kind: 'scroll', dx: 0, dy: 1 },
     { kind: 'scroll', dx: -1, dy: 2 },
   ]);
+});
+// Regression: desktop wheel bypassed the shared batching timer, sending a
+// message per trackpad event. Exercise DOM input, preserving distance/order;
+// existing wheel tests only covered individual deltas (unit, fake timers).
+it('coalesces a wheel burst on the input tick and flushes it before a button edge', () => {
+  const wheel = (deltaY: number) =>
+    stage.dispatchEvent(new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }));
+  wheel(2);
+  vi.advanceTimersByTime(8);
+  wheel(3);
+  vi.advanceTimersByTime(24);
+  expect(events()).toEqual([]);
+  vi.advanceTimersByTime(1);
+  expect(messages.filter((m) => m.type === 'input')).toHaveLength(1);
+  expect(events()).toEqual([{ kind: 'scroll', dx: 0, dy: 5 }]);
+  messages = [];
+  wheel(4);
+  wheel(5);
+  pointer('pointerdown');
+  expect(events().filter((e) => e.kind !== 'move')).toEqual([
+    { kind: 'scroll', dx: 0, dy: 9 },
+    { kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 },
+  ]);
+});
+// The host retires only input-v1 if input/release fails. Exercise the real viewer's
+// transport selection: later input uses relay with its sequence intact, while
+// the video peer remains alive (unit, fake RTC transport).
+it('continues input over relay after the input channel closes without replacing video', async () => {
+  const channel = { readyState: 'open', bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+  const close = vi.fn();
+  class Peer {
+    connectionState = 'connected';
+    iceGatheringState = 'complete';
+    localDescription = { sdp: 'offer' };
+    close = close;
+    createDataChannel() {
+      return channel;
+    }
+    addTransceiver() {}
+    async createOffer() {
+      return this.localDescription;
+    }
+    async setLocalDescription() {}
+  }
+  vi.stubGlobal('RTCPeerConnection', Peer);
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  const config = messages.findLast((message) => message.type === 'iceConfig')!;
+  viewer.receive({
+    type: 'iceConfig',
+    epoch: 'lease',
+    attemptId: config.attemptId,
+    iceServers: [],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  viewer.receive({ type: 'control', enabled: true });
+  messages = [];
+  pointer('pointermove');
+  vi.advanceTimersByTime(33);
+  const direct = JSON.parse(channel.send.mock.calls.at(-1)![0]);
+  expect(direct.events).toEqual([{ kind: 'move', x: 0.5, y: 0.5 }]);
+  expect(messages.filter((message) => message.type === 'input')).toEqual([]);
+  channel.readyState = 'closed';
+  pointer('pointerdown');
+  expect(messages.find((message) => message.type === 'input')).toMatchObject({
+    epoch: 'lease',
+    sequence: direct.sequence + 1,
+    events: expect.arrayContaining([{ kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 }]),
+  });
+  expect(channel.send).toHaveBeenCalledOnce();
+  expect(close).not.toHaveBeenCalled();
+  expect(messages.some((message) => message.type === 'fallback')).toBe(false);
 });
 it('commits IME text once and never forwards local toolbar keyboard input', () => {
   pointer('pointerdown');
@@ -781,4 +857,66 @@ it('still releases host input when a local view-only switch abandons an in-fligh
   const count = messages.filter((m) => m.type === 'input').length;
   viewer.receive({ type: 'control', enabled: false });
   expect(messages.filter((m) => m.type === 'input').length).toBe(count);
+});
+
+function finger(type: string, id: number, x: number, y: number) {
+  const e = new MouseEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true });
+  Object.defineProperty(e, 'pointerId', { value: id });
+  stage.dispatchEvent(e);
+}
+
+it('sends device touches with every contact, an edge for system swipes and no local zoom', () => {
+  viewer.receive({ type: 'deviceTouch', enabled: true, maxTouches: 2 });
+  messages = [];
+  finger('pointerdown', 7, 500, 650);
+  finger('pointerdown', 8, 250, 202);
+  finger('pointerdown', 9, 100, 100); // past the device's two contacts
+  finger('pointermove', 7, 500, 502);
+  finger('pointerup', 7, 500, 502);
+  finger('pointercancel', 8, 250, 202);
+  vi.advanceTimersByTime(40);
+  expect(events()).toEqual([
+    {
+      kind: 'touch',
+      touches: [{ id: 0, x: 0.5, y: expect.closeTo(0.997, 2), phase: 'began' }],
+      edge: 'bottom',
+    },
+    {
+      kind: 'touch',
+      touches: [
+        { id: 0, x: 0.5, y: expect.closeTo(0.997, 2), phase: 'stationary' },
+        { id: 1, x: 0.25, y: 0.25, phase: 'began' },
+      ],
+    },
+    {
+      kind: 'touch',
+      touches: [
+        { id: 0, x: 0.5, y: 0.75, phase: 'moved' },
+        { id: 1, x: 0.25, y: 0.25, phase: 'stationary' },
+      ],
+    },
+    {
+      kind: 'touch',
+      touches: [
+        { id: 0, x: 0.5, y: 0.75, phase: 'ended' },
+        { id: 1, x: 0.25, y: 0.25, phase: 'stationary' },
+      ],
+    },
+    { kind: 'touch', touches: [{ id: 1, x: 0.25, y: 0.25, phase: 'cancelled' }] },
+  ]);
+  expect(document.getElementById('image')!.style.width).toBe('1000px');
+});
+
+it('takes no contacts on a device without touch and returns to desktop input when turned off', () => {
+  viewer.receive({ type: 'deviceTouch', enabled: true, maxTouches: 0 });
+  messages = [];
+  finger('pointerdown', 1, 500, 352);
+  finger('pointerup', 1, 500, 352);
+  vi.advanceTimersByTime(40);
+  expect(events()).toEqual([]);
+  viewer.receive({ type: 'deviceTouch', enabled: false });
+  pointer('pointerdown');
+  pointer('pointerup');
+  vi.advanceTimersByTime(40);
+  expect(events()).toContainEqual({ kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 });
 });

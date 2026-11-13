@@ -17,7 +17,7 @@
  */
 
 const bySession = new Map<string, string>();
-const fastBySession = new Set<string>();
+const fastBySession = new Map<string, true | 'ultrafast'>();
 
 /** 记下某会话当前 effort(SET_EFFORT / hydrate 时调用); nullish/空值显式清除。 */
 export function setSessionEffort(sessionId: string, effort: string | null | undefined): void {
@@ -32,14 +32,14 @@ export function getSessionEffort(sessionId: string): string | null {
 }
 
 /** 记下某会话 Fast 模式开关(SET_FAST_MODE / hydrate 时调用;false 即清除)。 */
-export function setSessionFastMode(sessionId: string, enabled: boolean): void {
-  if (enabled) fastBySession.add(sessionId);
+export function setSessionFastMode(sessionId: string, enabled: boolean | 'ultrafast'): void {
+  if (enabled) fastBySession.set(sessionId, enabled);
   else fastBySession.delete(sessionId);
 }
 
 /** 读取某会话 Fast 模式;未记录返回 false(bridge 不发 service_tier)。 */
-export function getSessionFastMode(sessionId: string): boolean {
-  return fastBySession.has(sessionId);
+export function getSessionFastMode(sessionId: string): boolean | 'ultrafast' {
+  return fastBySession.get(sessionId) ?? false;
 }
 
 /** 账户 / app-session 边界清理全部 owner-scoped 运行时轴。 */

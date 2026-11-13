@@ -1,0 +1,45 @@
+{
+  "excludedCommands": [
+    "1688/download", "bilibili/download", "douban/download", "grok/image",
+    "geogebra/triangle", "geogebra/hexagon",
+    "instagram/download", "midjourney/download", "pinterest/download",
+    "pixiv/bookmark-download", "pixiv/download", "pixiv/novel-download",
+    "rednote/download", "suno/download", "twitter/download", "uiverse/preview",
+    "weixin/download", "xiaohongshu/download", "zhihu/download"
+  ],
+  "excludedCommandsReason": "Local file exports are deferred: a checked path string is not an atomic write capability. Full sources are retained; use existing host file tools to save browser results.",
+  "excludedArguments": {
+    "band/post": ["output"],
+    "doubao/meeting-transcript": ["download"],
+    "midjourney/generate": ["output"],
+    "proton/inbox": ["read-code"],
+    "twitter/bookmarks": ["resume-file", "output-file"],
+    "twitter/likes": ["resume-file", "output-file"],
+    "web/read": ["output", "download-images"],
+    "yollomi/background": ["output"],
+    "yollomi/edit": ["output"],
+    "yollomi/face-swap": ["output"],
+    "yollomi/generate": ["output"],
+    "yollomi/object-remover": ["output"],
+    "yollomi/remove-bg": ["output"],
+    "yollomi/restore": ["output"],
+    "yollomi/try-on": ["output"],
+    "yollomi/upscale": ["output"],
+    "yollomi/video": ["output"]
+  },
+  "excludedSites": {
+    "zlibrary": "Not in Cindy's default catalog: copyright enforcement history and unverified mirror ownership (reviewed 2026-10-23).",
+    "slock": "Deferred: app.slock.ai redirects to app.raft.build; the adapter still assumes the old origin and token storage. Revalidate before inclusion.",
+    "claude": "Excluded: Claude subscription login and use belong to the unmodified built-in Claude Code CLI, not a Claude.ai browser adapter (credentials-and-local-storage.md).",
+    "spotify": "Deferred: client credentials still depend on a plaintext spotify.env file. Do not bundle until credential configuration uses the host encrypted store.",
+    "ones": "Deferred: the login adapter accepts account passwords as model inputs and prints reusable bearer tokens. Login must use the existing trusted input handoff instead.",
+    "xiaoyuzhou": "Deferred: authenticated adapters require manually configured access/refresh tokens without a host secure configuration entry. Plaintext credential fallback is removed; the independent public Cindy recipe remains available.",
+    "paperreview": "Deferred: submit returns a reusable review capability token and review/feedback accept it as a model input. Keep capability credentials inside the host before inclusion.",
+    "quark": "Deferred: share-tree returns a reusable share capability stoken and save accepts it as a model input. Keep capability credentials inside the host before inclusion.",
+    "kimi": "Deferred: storage-get returns arbitrary Web Storage values and cookies exposes credential previews. Remove these diagnostic credential exits before inclusion; no model-facing raw secrets.",
+    "weread-official": "Deferred: requires a reusable API key from the process environment without a host secure configuration entry. Keep sources; do not advertise unusable authenticated commands.",
+    "minimax": "Deferred: requires an environment-only API key without a host secure configuration entry. No new credential configuration mechanism in this refresh.",
+    "jira": "Deferred: Atlassian authentication depends on environment-only tokens or passwords without a host secure configuration entry.",
+    "confluence": "Deferred: Atlassian authentication depends on environment-only tokens or passwords without a host secure configuration entry."
+  }
+}

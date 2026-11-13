@@ -62,7 +62,7 @@ vi.mock("expo-file-system", () => ({
     }
     async base64() { return Buffer.from(disk.files.get(this.uri)!).toString('base64'); }
     async text() { return new TextDecoder().decode(disk.files.get(this.uri)); }
-    write(value: string | Uint8Array) { disk.files.set(this.uri, typeof value === "string" ? new TextEncoder().encode(value) : value); }
+    writeSync(value: string | Uint8Array) { disk.files.set(this.uri, typeof value === "string" ? new TextEncoder().encode(value) : value); }
     async copy(target: { uri: string }) {
       disk.copying = true;
       if (disk.gate) await disk.gate;
@@ -73,6 +73,16 @@ vi.mock("expo-file-system", () => ({
       disk.copying = false;
     }
   },
+}));
+vi.mock('expo-file-system/legacy', () => ({
+  EncodingType: { Base64: 'base64' },
+  readAsStringAsync: async (uri: string, options: { position: number; length: number }) =>
+    Buffer.from(disk.files.get(uri)!).subarray(options.position, options.position + options.length).toString('base64'),
+  createDownloadResumable: (url: string, uri: string) => ({
+    downloadAsync: async () => { disk.files.set(uri, disk.files.get(url)!.slice()); return { uri, status: 200 }; },
+    cancelAsync: async () => {},
+  }),
+  deleteAsync: async (uri: string) => { disk.files.delete(uri); },
 }));
 import { createRemoteMediaDiskCache } from '@/session/remoteMediaDiskCache';
 import { createExpoRemoteMediaDiskCacheIO } from '@/session/remoteMediaDiskCacheExpo';
@@ -103,7 +113,7 @@ it('restores preview bytes offline, isolates account/device/SSH, and rejects a c
   expect(createMobileHtmlPreviewCache(sharedTaskHostPeer('shared', 'host'), '/site')).toBeUndefined();
   const cache = createMobileHtmlPreviewCache('desktop-a', '/site')!;
   const input = new File('file:///input.html');
-  input.write('<p>Cached</p>');
+  input.writeSync('<p>Cached</p>');
   // A transfer saved before cache-first previews existed must also open offline.
   const transfer = await createPeerFileCache(JSON.stringify(['global', 'html-owner']));
   const meta = { ...metadata, size: input.size };
@@ -176,16 +186,16 @@ it.each(['', '<p>Old</p>'])('persists empty preview files after initial content 
   const cache = createMobileHtmlPreviewCache('desktop', '/site')!;
   const source = new File(`file:///input-${account}.html`);
   const destination = new File(`file:///output-${account}.html`);
-  source.write('<p>Old transfer</p>');
+  source.writeSync('<p>Old transfer</p>');
   const transfer = await createPeerFileCache(owner);
   const meta = { ...metadata, size: source.size };
   const media = { ossKey: '', ...meta };
   recordPeerMedia(media, source.uri, () => {});
   await transfer.store('desktop', remoteFileMediaUrl('/site/index.html', undefined, undefined,
     { baseDir: '/site', maxBytes: FILE_PEER_MAX_BYTES }), meta, media);
-  source.write(initial);
+  source.writeSync(initial);
   await cache.store('index.html', source, 'text/html');
-  source.write('');
+  source.writeSync('');
   await cache.store('index.html', source, 'text/html');
   expect(await cache.copy('index.html', destination)).toBe(0);
   expect(await destination.text()).toBe('');
@@ -278,4 +288,44 @@ it.each(['download', 'store', 'direct'] as const)('keeps the old version when %s
   }
   expect(new Set(disk.files.keys())).toEqual(before);
   expect(await cache.readLatest('device', 'url', () => true)).toMatchObject(metadata);
+});
+
+// Companion icons used to bypass the disk cache entirely. Verify real bytes survive
+// opening a new index reader, and account/device/content identities remain separate (unit).
+it('persists avatar bytes in the existing account cache and reads them without a download', async () => {
+  const owner = JSON.stringify(['global', 'avatar-owner']);
+  const identity = JSON.stringify(['mac', 'cindy-media://blobs/avatar.png']);
+  const source = 'file:///fixture-avatar.png';
+  disk.files.set(source, new Uint8Array([1, 2, 3, 4]));
+  const cache = await createPeerFileCache(owner);
+  expect(await cache.storeAvatar(identity, source, 'image/png', () => true)).toBe(true);
+  disk.files.delete(source);
+  const namespace = `files-${createHash('sha256').update(owner).digest('hex')}`;
+  const reopened = createRemoteMediaDiskCache(createExpoRemoteMediaDiskCacheIO(namespace));
+  const hit = await reopened.lookup(`companion-avatar:${identity}`);
+  expect(hit?.size).toBe(4);
+  expect(await new File(hit!.uri).base64()).toBe('AQIDBA==');
+  expect((await cache.lookupAvatar(identity))?.uri).toBe(hit!.uri);
+  expect(await cache.lookupAvatar(JSON.stringify(['other-mac', 'cindy-media://blobs/avatar.png']))).toBeNull();
+  expect(await (await createPeerFileCache('different-avatar-owner')).lookupAvatar(identity)).toBeNull();
+  disk.files.set(source, new Uint8Array([5]));
+  expect(await cache.storeAvatar('cancelled', source, 'image/png', () => false)).toBe(false);
+  expect(await cache.lookupAvatar('cancelled')).toBeNull();
+});
+
+// Review regression (unit): a public endpoint may return HTTP 200 with an HTML
+// error page. Real cache + download adapter must reject it and allow later recovery.
+it('rejects non-image avatar responses and persists recovered image bytes using their actual MIME', async () => {
+  const cache = await createPeerFileCache('avatar-response-owner');
+  const url = 'https://avatars.example.invalid/profile';
+  disk.files.set(url, new TextEncoder().encode('<html>Temporary outage</html>'));
+  expect(await cache.storeAvatar(url, url, 'image/png', () => true)).toBe(false);
+  expect(await cache.lookupAvatar(url)).toBeNull();
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  disk.files.set(url, jpeg);
+  expect(await cache.storeAvatar(url, url, 'image/png', () => true)).toBe(true);
+  const hit = await cache.lookupAvatar(url);
+  expect(hit?.mimeType).toBe('image/jpeg');
+  expect(await new File(hit!.uri).base64()).toBe(Buffer.from(jpeg).toString('base64'));
+  expect([...disk.files.keys()].filter(uri => uri.includes('/remote-media-share/'))).toEqual([]);
 });

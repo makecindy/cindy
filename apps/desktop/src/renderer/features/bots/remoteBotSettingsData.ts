@@ -10,6 +10,8 @@ import { normalizeBotModelChain, type BotModelRoute } from '../../../shared/botM
 
 export type SettingsValues = Record<string, string | boolean>;
 export interface SettingsPanel {
+  invitationAvailable?: boolean;
+  dismissAction?: RemoteActionDescriptor;
   id: string;
   title: string | { fallback: string; translations?: Record<string, string> };
   text: string;
@@ -135,7 +137,7 @@ export function parseRemoteBotSettings(
     !id(resource.revision, 1_024) ||
     !isText(resource.display?.title)
   )
-    throw new Error('Invalid teammate settings');
+    throw new Error('Invalid buddy settings');
   const actions = new Map<string, RemoteActionDescriptor>();
   if (Array.isArray(resource.actions) && resource.actions.length <= 256) {
     const duplicates = new Set<string>();
@@ -171,6 +173,10 @@ export function parseRemoteBotSettings(
       text: block.fallbackMarkdown,
       action,
       values,
+      ...(block.id === 'follow-up' ? {
+        invitationAvailable: data.invitationAvailable === true,
+        dismissAction: actions.get(String(record(data.operationActions).dismiss ?? '')),
+      } : {}),
       entries: (Array.isArray(data.entries) ? data.entries : []).flatMap((raw) => {
         const row = record(raw);
         return id(row.id) && id(row.resourceId, 256) && isText(row.title)

@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "由本機應用程式「{{name}}」傳送",
+    "sourceLocalAppId": "應用程式 ID：{{id}}",
     "failedSamplingAttempt": "此回覆未完成，內容僅供參考。",
     "moreActions": "更多訊息操作",
     "reply": "回覆",
@@ -62,13 +64,15 @@
       "discord": "Discord",
       "wechat": "微信",
       "wecom": "企業微信",
-      "dingtalk": "釘釘"
+      "dingtalk": "釘釘",
+      "imessage": "iMessage"
     },
-    "modelMismatch": "本輪由 {{actual}} 響應，而非所選的 {{selected}}（服務端臨時降級）",
+    "modelMismatch": "本輪由 {{actual}} 回應，而非所選的 {{selected}}（伺服器端臨時降級）",
     "copyStateCopying": "複製中",
     "copyStateCopied": "已複製",
     "copyStateFailed": "複製失敗",
     "copyStateCopy": "複製",
+    "copyCode": "複製程式碼",
     "thinkingHidden": "思考內容已隱藏",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -103,6 +107,7 @@
     "subagentSummary": "Subagent 小結",
     "agentSwitchLabel": "已從 {{from}} 切換到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，檢視交接內容",
+    "sessionFallbackPill": "已用摘要接續",
     "sessionResumedPill": "已續接原任務",
     "handoffContentDesc": "交接內容——切換時傳送給新引擎的上下文摘要（不計入對話記錄，僅在此展示）",
     "handoffContentDescEnglishSource": "交接內容——切換時傳送給新引擎的上下文摘要，原文為英文（不計入對話記錄，僅在此展示）",
@@ -151,13 +156,14 @@
     "mediaBuffering": "{{label}} 緩衝中{{progress}}",
     "mediaEnded": "{{label}} 已結束{{progress}}",
     "mediaError": "{{label}} 播放出錯{{error}}",
-    "mediaSourceUrl": "原始地址：{{url}}",
-    "mediaDownloadUrl": "下載地址：{{url}}",
+    "mediaSourceUrl": "原始網址：{{url}}",
+    "mediaDownloadUrl": "下載網址：{{url}}",
     "mediaSize": "大小：{{size}}",
     "mediaExpiresAt": "過期時間：{{time}}",
     "mediaErrorLine": "錯誤：{{message}}",
     "mediaDeviceLinkHint": "開啟前，手機會先請遠端裝置上傳這個媒體。",
     "controlDelete": "刪除訊息",
+    "controlEdit": "編輯",
     "controlRewind": "回到此處",
     "controlFork": "從這裡開啟新任務",
     "markdownDocAriaLabel": "訊息正文",
@@ -171,7 +177,9 @@
     "diffEditCount": "{{n}} 處編輯",
     "groupSentNamed": "從群聊「{{name}}」傳送",
     "groupSent": "從群聊傳送",
-    "sourceGroupId": "群聊 ID：{{id}}"
+    "sourceGroupId": "群聊 ID：{{id}}",
+    "selectText": "選取文字",
+    "you": "你"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -182,6 +190,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "originalUnavailable": "原圖暫時無法載入",
+    "retryOriginal": "重試原圖",
+    "loadingOriginal": "正在載入原圖…",
     "sourceMissing": "原始圖片已不在這台電腦上，請重新匯入原始檔案。",
     "deviceOffline": "電腦尚未連線，請恢復連線後重試。",
     "cancelAnnotation": "取消標註",
@@ -214,7 +225,7 @@
     "usageLimitAutoContinueAt": "將於 {{time}} 自動繼續",
     "usageLimitAutoContinueCancel": "取消自動繼續",
     "noRetryContent": "沒有可重新傳送的內容，請清除錯誤後重新輸入。",
-    "piImageInputUnsupported": "當前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自定義模型，請在供應商設定中開啟“支援圖片輸入”，然後新建 Pi 任務。",
+    "piImageInputUnsupported": "目前的 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自訂模型，請在供應商設定中開啟「支援圖片輸入」，然後建立新的 Pi 任務。",
     "codexResumeNotReady": "Codex 暫時無法恢復這個任務，請稍後重試",
     "credentialSwitchWait": "正在等待其它 Codex 任務結束，結束後自動傳送",
     "aborting": "正在停止，排隊訊息會保留在這裡",
@@ -229,6 +240,10 @@
     "cancel": "取消",
     "edit": "編輯",
     "steer": "插話",
+    "steerQueued": "尚未送達，訊息仍保留在佇列中。",
+    "moveUp": "提前一位",
+    "moveDown": "延後一位",
+    "cancelSend": "取消傳送",
     "collapseQueued": "收起排隊訊息",
     "expandRemainingQueued": "展開剩餘 {{n}} 條排隊訊息",
     "collapse": "收起",
@@ -237,9 +252,25 @@
     "sendingMessage": "傳送中的訊息：{{text}}",
     "uploadingAttachments": "附件上傳中 {{uploaded}}/{{total}}",
     "delete": "刪除",
-    "retry": "重試"
+    "retry": "重試",
+    "notSent": "未傳送",
+    "imagesNotUploaded_one": "{{count}} 張圖片沒傳上去",
+    "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
+    "waitingForComputer": "等電腦連上後傳送",
+    "waitingForNetwork": "等網路恢復後傳送",
+    "queued": "排隊中",
+    "retryImage": "重新上傳這張圖片",
+    "waitingMessage": "等待傳送的訊息：{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 為這個任務選了 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 這次沒有改模型，這個任務用 {{model}}",
+        "failed": "{{plugin}} 沒有及時回應，這個任務用 {{model}}",
+        "unavailable-route": "{{plugin}} 選的模型現在無法使用，這個任務用 {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "已整理上下文並繼續",
       "labelTimeout": "上一輪沒有回應，已整理後繼續",
@@ -291,8 +322,9 @@
     "agentSwitchLocation": "Agent 改到 {{device}} 執行",
     "agentSwitchLocationThisComputer": "Agent 改回這台電腦執行",
     "agentSwitchLocationOtherComputer": "Agent 改到另一台電腦執行",
+    "agentSwitchLocationQuotaRebalance": "這個帳號的配額更該先用",
     "learnStarted": "技能學習已啟動",
-    "learnStartedBody": "蒸餾在電腦端後臺進行，完成後請到電腦端檢視並評審技能草案。",
+    "learnStartedBody": "蒸餾在電腦端背景進行，完成後請到電腦端檢視並評審技能草案。",
     "learnFailed": "技能學習未能啟動",
     "learnBusyBody": "已有一個學習任務在執行中，等它完成後再試。",
     "learnFailedBody": "啟動失敗：{{detail}}",
@@ -329,7 +361,7 @@
       "editLocked": "這條佇列訊息正在編輯中，完成後再操作。",
       "interactionLocked": "佇列正在被其它操作鎖定，完成後再操作。",
       "syntheticHint": "這是系統自動生成的指令，可以取消，但不能編輯或插話傳送。",
-      "steeringHint": "插話正在傳送到目前 turn，暫時不能編輯或移動。",
+      "steeringHint": "插話正在傳送到目前這一輪，暫時不能編輯或移動。",
       "editHint": "這條訊息正在編輯中，電腦端會暫停自動傳送。",
       "interactionHint": "佇列正在被排序或其它互動鎖定，暫時不能編輯。"
     }
@@ -393,9 +425,55 @@
     "skillUpdated": "已更新技能：{{title}}"
   },
   "richAnswer": {
+    "send": "傳送訊息",
+    "sending": "正在傳送…",
+    "sent": "已提交",
+    "sendFailed": "訊息未提交，已保留填寫內容",
     "playVideo": "播放影片",
+    "downloadVideo": "下載影片",
     "openVideoSource": "開啟原影片",
     "calculationUnavailable": "此項暫時無法計算。",
     "incomplete": "部分內容未能顯示。"
+  },
+  "usageCost": {
+    "title": "費用明細",
+    "conversation": "對話",
+    "additional": "附加費用",
+    "unknownModel": "未記錄模型",
+    "estimate": "估算價值",
+    "charged": "按量費用",
+    "loading": "正在讀取明細…",
+    "unavailable": "這筆記錄暫無明細。",
+    "explanation": "按模型和渠道彙總。訂閱價值是估算，不是額外扣費。僅包含已記錄的費用，歷史記錄的明細可能不完整。",
+    "source": {
+      "subscription": "訂閱帳戶",
+      "cindy-ai": "Cindy AI",
+      "provider": "API 供應商",
+      "unknown": "未記錄渠道"
+    }
+  },
+  "attachmentPreview": {
+    "more": "更多操作",
+    "retry": "重試",
+    "image": "圖片",
+    "video": "影片",
+    "file": "檔案",
+    "close": "關閉",
+    "reset": "重設視角",
+    "open": "開啟預覽",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "儲存原件",
+    "share": "分享",
+    "previous": "上一個附件",
+    "next": "下一個附件",
+    "password": "輸入 PDF 密碼",
+    "find": "在文件中尋找",
+    "matches": "{{count}} 頁符合",
+    "previousPage": "上一頁",
+    "nextPage": "下一頁",
+    "redo": "重做",
+    "wrap": "自動換行",
+    "lineNumbers": "行號",
+    "rendered": "查看文件"
   }
 }

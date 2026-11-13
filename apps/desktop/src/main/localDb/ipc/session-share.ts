@@ -38,7 +38,7 @@ import {
 } from '../../session-share/sessionShareImport.js';
 import { getDbClient, tryGetDbClient } from '../client/current.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
-import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.js';
+import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.desktop.js';
 import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 import {
   broadcastSessionPatched,
@@ -285,7 +285,7 @@ function sanitizeDraftPrefs(raw: unknown): ShareImportDraftPrefs | null {
     effort: typeof r.effort === 'string' ? r.effort : undefined,
     permissionMode: typeof r.permissionMode === 'string' ? r.permissionMode : undefined,
     planMode: r.planMode === true,
-    fastMode: r.fastMode === true,
+    fastMode: (r.fastMode === 'ultrafast' ? 'ultrafast' : r.fastMode === true),
     providerId: typeof r.providerId === 'string' && r.providerId.length > 0 ? r.providerId : null,
   };
 }

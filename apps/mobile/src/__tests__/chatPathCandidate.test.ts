@@ -9,15 +9,16 @@ import ts from 'typescript';
 
 const rendererTree = ts.createSourceFile('renderer.tsx', readFileSync(join(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const pathFunctions = new Set(['ChatPathChipSpan', 'LinkPathChipSpan', 'clickableInlineStyle', 'underlineDecoration']);
-const pathCode = rendererTree.statements.filter((node) => ts.isFunctionDeclaration(node) && node.name && pathFunctions.has(node.name.text)).map((node) => node.getText(rendererTree)).join('\n');
+const spanTree = ts.createSourceFile('span.tsx', readFileSync(join(process.cwd(), 'src/session/ChatPathChipSpan.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const pathCode = [rendererTree, spanTree].flatMap((tree) => tree.statements.filter((node) => ts.isFunctionDeclaration(node) && node.name && pathFunctions.has(node.name.text)).map((node) => node.getText(tree).replace(/^export /, ''))).join('\n');
 const compiledPath = ts.transpileModule(pathCode, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
 const flattenStyle = (value: any): any => Array.isArray(value) ? Object.assign({}, ...value.map(flattenStyle)) : value ?? {};
 const pathContext = React.createContext<any>(null);
 const verdictListeners = new Set<(key: string) => void>();
 const verifyPath = vi.fn(async () => undefined);
 const pathBindings = {
-  React, useContext: React.useContext, useCallback: React.useCallback, useEffect: React.useEffect, useMemo: React.useMemo,
-  useRecyclingState: React.useState, ChatFilePathContext: pathContext,
+  React, useContext: React.useContext, useCallback: React.useCallback, useEffect: React.useEffect, useMemo: React.useMemo, useRef: React.useRef,
+  useRowStateHook: () => React.useState, ChatFilePathContext: pathContext,
   resolveChatAbsPath, toWorkdirRel, canOpenChatPathChip, classifyChatPathLinkTarget, chatPathLabelReadsAsFileReference,
   StyleSheet: { flatten: flattenStyle },
   peekRemotePathVerdictForRender: () => 'unknown', peekRemotePathVerdict: () => undefined,
@@ -236,6 +237,31 @@ describe('classifyChatPathLinkTarget', () => {
 });
 
 describe('resolveChatAbsPath', () => {
+  it.each([
+    ['C:/repo', 'E:/'],
+    ['/home/user', '/E:'],
+  ])('保留盘根链接 /E:/ 经目录分类后的身份（%s）', (workdir, expected) => {
+    const candidate = classifyChatPathLinkTarget('/E:/');
+    expect(candidate).not.toBeNull();
+    if (candidate) expect(resolveChatAbsPath(candidate.href, workdir)).toBe(expected);
+  });
+
+  // Target-workdir semantics: a phone must not reinterpret a POSIX host's
+  // literal /E: directory as a Windows drive, or keep the extra slash on Windows.
+  it.each([
+    ['E:/repo', '/E:/demo', 'E:/demo'],
+    ['C:\\repo', '/E:\\demo\\a.ts', 'E:\\demo\\a.ts'],
+    ['\\\\server\\share', '/E:/demo', 'E:/demo'],
+    ['//server/share', '/E:/demo', 'E:/demo'],
+    ['/home/user', '/E:/demo', '/E:/demo'],
+    ['', '/E:/demo', '/E:/demo'],
+    ['C:/repo', '/home/a.ts', '/home/a.ts'],
+    ['C:/repo', '//server/share/a.ts', '//server/share/a.ts'],
+    ['C:/repo', '//E:/demo', '//E:/demo'],
+  ])('按目标工作目录 %s 解析 %s', (workdir, href, expected) => {
+    expect(resolveChatAbsPath(href, workdir)).toBe(expected);
+  });
+
   it('POSIX workdir join 相对路径', () => {
     expect(resolveChatAbsPath('src/App.tsx', '/w/proj')).toBe('/w/proj/src/App.tsx');
     expect(resolveChatAbsPath('./a.md', '/w/proj/')).toBe('/w/proj/./a.md');

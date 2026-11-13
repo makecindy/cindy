@@ -39,6 +39,7 @@ import { getLinkOpenPreference, getLinkOpenPreferenceForUrl } from '@/hooks/useL
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
 import type { SessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { isSeparateLinkActivation, linkMenuPosition } from './linkInteraction';
+import { readMailPreview, openMailPreview } from '@/features/right-sidebar/lib/mailPreview';
 
 /** 左键"按偏好直开"只对浏览器"作为页面渲染"有意义的 html 家族生效;其余本地
  *  文件保持原有"点击即预览"。右键菜单的 BROWSER_OPENABLE_EXTS 也收敛到
@@ -63,6 +64,11 @@ export async function openUrlByPreference(
   url: string,
   t: TFunction,
 ): Promise<void> {
+  if (url.startsWith('https://')) {
+    let supported = false;
+    try { supported = (await readMailPreview(sessionId, url, false)).supported; } catch { /* Older hosts retain normal link opening. */ }
+    if (supported) { await openMailPreview(sessionId, url); return; }
+  }
   if (getLinkOpenPreferenceForUrl(url) === 'sidebar') {
     await openInSidebar(sessionId, url, t);
     return;
@@ -73,7 +79,7 @@ export async function openUrlByPreference(
 
 /** Identical activation for user URLs, assistant Markdown and keyboard/middle clicks. */
 export async function activateMessageUrl(
-  event: MouseEvent<HTMLElement>,
+  event: Pick<MouseEvent<HTMLElement>, 'preventDefault' | 'stopPropagation' | 'shiftKey' | 'metaKey' | 'ctrlKey' | 'button'>,
   sessionId: string | undefined,
   url: string,
   t: TFunction,

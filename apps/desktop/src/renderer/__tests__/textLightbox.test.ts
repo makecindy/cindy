@@ -1,4 +1,3 @@
-import { colorRegistry } from '../themes/color-registry';
 import '../themes/colors';
 /**
  * textLightbox.test.ts
@@ -16,7 +15,8 @@ import '../themes/colors';
  *       moved exclusively to the Oversize CTA after the file-modal-and-toast
  *       polish on 2026-04-19.
  *   F4  Toolbar Close (X) button wires to handleClose.
- *   F4  Doc Card sized at 80vw/80vh capped 1600/1200 (no longer 1024×640).
+ *   Private-card geometry and tooltip source checks retired with PreviewChrome;
+ *   real closing and rendering are covered in runtime acceptance.
  *   F5  Oversize body shows triangle-alert + i18n 阈值文案 + Open-in-system CTA
  *       (Oversize is the SOLE caller of window.electronAPI.openPath now).
  *   F6  Esc closes; Doc Card clicks stop propagation; Overlay onClick=handleClose
@@ -30,8 +30,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { formatBytes } from '../components/chat/TextLightbox';
-import { detectRenderable, buildFence } from '../lib/textPreview';
+import { formatBytes } from '../components/chat/formatBytes';
+import { detectRenderable, buildFence, isTextPreviewSupported, EXT_TO_LANG } from '../lib/textPreview';
+import { languageFromPath } from '../features/right-sidebar/plugins/review/DiffViewer/highlight';
+import { classHighlighter, highlightTree } from '@lezer/highlight';
+import { getCodeMirrorLanguage } from '../components/markdown/codemirrorLanguages';
+import { EditorState } from '@codemirror/state';
+import { syntaxTree } from '@codemirror/language';
 
 const sourcePath = resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx');
 const source = readFileSync(sourcePath, 'utf8');
@@ -58,19 +63,6 @@ describe('TextLightbox — F6 close behaviour', () => {
     expect(source).toMatch(/handleClose\(\)/);
   });
 
-  it('backdrop button wires onClick to handleClose (backdrop click closes)', () => {
-    expect(source).toMatch(/<button[\s\S]*type="button"[\s\S]*aria-label=\{t\('chat\.lightbox\.close'\)\}/);
-    expect(source).toMatch(/onClick=\{handleClose\}/);
-  });
-
-  it('Doc Card is layered above the backdrop button so inner clicks DO NOT close', () => {
-    // The backdrop close target is a separate background button behind the Doc
-    // Card. Toolbar buttons and text selection stay on the higher card layer.
-    expect(source).toMatch(/data-text-lightbox-card/);
-    expect(source).toContain('backdrop is a separate background button behind the Doc Card');
-    expect(source).toMatch(/zIndex:\s*1/);
-  });
-
   it('handleClose guards against double-fire via isClosingRef', () => {
     expect(source).toContain('isClosingRef.current');
     expect(source).toMatch(/if\s*\(isClosingRef\.current\)\s*return;/);
@@ -80,27 +72,12 @@ describe('TextLightbox — F6 close behaviour', () => {
 // ── F3: overlay style parity ────────────────────────────────────────────────
 
 describe('TextLightbox — F3 overlay style', () => {
-  it('overlay background uses the lightbox overlay theme token', () => {
-    // overlay 已迁到主题 token,避免组件内写死 rgba 颜色。
-    expect(source).toContain("background: 'var(--overlay-lightbox)'");
-    for (const mode of ['light', 'dark'] as const) expect(colorRegistry.resolveDefault('overlay-lightbox', mode)).toBe('rgba(0, 0, 0, 0.85)');
-  });
-
-  it('overlay is rendered via createPortal to document.body', () => {
-    expect(source).toMatch(/createPortal\(overlay,\s*document\.body\)/);
-  });
-
-  it('keeps every toolbar tooltip above the lightbox overlay', () => {
-    expect(source).toMatch(/TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*=\s*9999/);
-    expect(source).toMatch(
-      /TEXT_LIGHTBOX_TOOLTIP_STYLE\s*=\s*\{[\s\S]*zIndex:\s*TEXT_LIGHTBOX_OVERLAY_Z_INDEX\s*\+\s*1/,
-    );
-
-    const tooltipContents = source.match(/<Tooltip\.Content\b/g) ?? [];
-    const layeredTooltipContents =
-      source.match(/<Tooltip\.Content\s+style=\{TEXT_LIGHTBOX_TOOLTIP_STYLE\}/g) ?? [];
-    expect(tooltipContents.length).toBeGreaterThan(0);
-    expect(layeredTooltipContents).toHaveLength(tooltipContents.length);
+  it('floats the document over the shared preview scrim instead of filling the window', () => {
+    // 遮罩与弹窗共用 .modal-scrim(PreviewScrim),组件内不写遮罩颜色;
+    // 文稿卡片使用公共预览窗几何。
+    expect(source).toContain('<PreviewScrim onClose={handleClose} zIndex={0} />');
+    expect(source).toContain('style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}');
+    expect(source).not.toContain("width: '100vw'");
   });
 });
 
@@ -145,27 +122,6 @@ describe('TextLightbox — F4 toolbar wiring', () => {
     const openInSystemMatches = source.match(/onClick=\{openInSystem\}/g) ?? [];
     expect(openInSystemMatches.length).toBe(1);
   });
-
-  it('Toolbar adds an X close button wired to handleClose', () => {
-    // The new affordance — a visible × button on the Toolbar's right side
-    // gives users a third escape hatch (besides Esc and backdrop click).
-    expect(source).toMatch(/import\s+\{[^}]*\bX\b[^}]*\}\s+from\s+'lucide-react'/);
-    // Two `onClick={handleClose}` are now expected: overlay backdrop + Toolbar X.
-    const handleCloseClicks = source.match(/onClick=\{handleClose\}/g) ?? [];
-    expect(handleCloseClicks.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('Doc Card sizes to 80vw/80vh with 1600/1200 caps (post-polish)', () => {
-    // Old hard-coded `min(1024px, …)` caused the modal to feel small + offset.
-    // Polish picks the design-spec 80%/80% with sane upper bounds for 4K/5K.
-    expect(source).toMatch(/width:\s*'80vw'/);
-    expect(source).toMatch(/height:\s*'80vh'/);
-    expect(source).toMatch(/maxWidth:\s*'1600px'/);
-    expect(source).toMatch(/maxHeight:\s*'1200px'/);
-    // And explicitly NOT the old hard-coded 1024 / 640 values.
-    expect(source).not.toMatch(/min\(1024px/);
-    expect(source).not.toMatch(/min\(640px/);
-  });
 });
 
 // ── F5: Oversize body ───────────────────────────────────────────────────────
@@ -178,9 +134,7 @@ describe('TextLightbox — F5 Oversize body', () => {
   it('uses i18n copy with dynamic file size and the preview cap', () => {
     // 文案必须通过 i18n 注入动态 size/limit，组件内不再保留英文裸文案。
     expect(source).toContain("t('chat.textLightbox.oversizeTitle')");
-    expect(source).toContain(
-      "t('chat.textLightbox.oversizeBody', { size: oversizeSizeText, limit: oversizeLimitMb })",
-    );
+    expect(source.replace(/\s+/g, "")).toContain("t('chat.textLightbox.oversizeBody',{size:oversizeSizeText,limit:oversizeLimitMb");
     expect(source).not.toMatch(
       /This file is \{oversizeSizeText\}, exceeding the \{oversizeLimitMb\} MB preview limit/,
     );
@@ -303,6 +257,92 @@ describe('TextLightbox — formatBytes', () => {
 // ── detectRenderable — file-type dispatch ──────────────────────────────────
 
 describe('TextLightbox — detectRenderable', () => {
+  // #10143, unit: project/config files were readable but lost highlighting,
+  // dotfiles and compound project.user names never reached the right parser.
+  it.each([
+    ['App.csproj', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.fsproj', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.vbproj', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.props', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.targets', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.slnx', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.resx', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.nuspec', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.config', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.settings', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.manifest', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.runsettings', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.pubxml', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.filters', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.ruleset', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.dotsettings', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.testsettings', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.rdl', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.rdlc', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.resw', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.xaml', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.axaml', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.plist', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.ps1xml', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.csproj.user', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.fsproj.user', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['App.vbproj.user', 'xml', '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ['.editorconfig', 'ini', 'root = true'],
+    ['.globalconfig', 'ini', 'is_global = true'],
+    ['team.globalconfig', 'ini', 'is_global = true'],
+    ['Solution.slnf', 'json', '{"solution": {"path": "App.sln"}}'],
+    ['schema.avsc', 'json', '{"type": "record"}'],
+    ...['csx', 'cake', 'linq'].map(ext => [`script.${ext}`, 'csharp', 'public class Item {}']),
+    ...['fs', 'fsi', 'fsx'].map(ext => [`script.${ext}`, 'fsharp', 'let answer = 42']),
+    ['Module.vb', 'vbnet', 'Public Class Item\nEnd Class'],
+    ...['psm1', 'psd1'].map(ext => [`Module.${ext}`, 'powershell', '$value = "hello"']),
+    ['schema.psql', 'sql', 'SELECT * FROM items'],
+    ...['graphql', 'gql', 'graphqls'].map(ext => [`schema.${ext}`, 'graphql', 'type Query { name: String }']),
+    ...['http', 'rest'].map(ext => [`request.${ext}`, 'http', 'GET /items HTTP/1.1']),
+    ['Index.vbhtml', 'xml', '<h1 class="title">Title</h1>'],
+  ])('recognizes and produces syntax tokens for %s', (path, lang, doc) => {
+    expect(isTextPreviewSupported(path)).toBe(true);
+    expect(detectRenderable(path)).toEqual({ kind: 'code', lang });
+    expect(languageFromPath(path)).toBe(lang);
+    const extension = getCodeMirrorLanguage(lang);
+    expect(extension).not.toBeNull();
+    const state = EditorState.create({ doc, extensions: extension ? [extension] : [] });
+    const tokens: string[] = [];
+    highlightTree(syntaxTree(state), classHighlighter, (_from, _to, classes) => tokens.push(classes));
+    expect(tokens.length).toBeGreaterThan(0);
+  });
+
+  it('keeps every advertised language connected to an editor parser or an explicit fallback', () => {
+    // makefile remains highlight.js-only; plaintext deliberately has no parser.
+    const unparsed = Object.values(EXT_TO_LANG).filter(lang => !getCodeMirrorLanguage(lang));
+    expect([...new Set(unparsed)].sort()).toEqual(['makefile', 'plaintext']);
+  });
+
+  it.each(['App.sln', 'build.cmd', 'infra.bicep', 'schema.fbs', 'schema.thrift', 'schema.capnp', 'main.tf'])(
+    'keeps %s readable with code chrome without guessing its grammar',
+    path => {
+      expect(isTextPreviewSupported(path)).toBe(true);
+      expect(detectRenderable(path)).toEqual({ kind: 'code', lang: 'plaintext' });
+    },
+  );
+
+  // Regression: Razor files fell through to plain text. Exercise the preview
+  // dispatch and its real editor parser; existing cases only covered web files.
+  it.each(['ErrorPage.razor', 'Index.CSHTML'])('highlights Razor markup in %s', (path) => {
+    expect(isTextPreviewSupported(path)).toBe(true);
+    const renderable = detectRenderable(path);
+    expect(renderable.kind).toBe('code');
+    if (renderable.kind !== 'code') throw new Error('Expected code preview');
+    const language = getCodeMirrorLanguage(renderable.lang);
+    expect(language).not.toBeNull();
+    const state = EditorState.create({
+      doc: '@page "/error"\n<PageTitle class="title">Error</PageTitle>',
+      extensions: language ? [language] : [],
+    });
+    expect(syntaxTree(state).toString()).toContain('TagName');
+    expect(syntaxTree(state).toString()).toContain('AttributeValue');
+  });
+
   it('routes Markdown extensions to the rich-text renderer', () => {
     expect(detectRenderable('/x/README.md')).toEqual({ kind: 'markdown' });
     expect(detectRenderable('a/b/notes.MARKDOWN')).toEqual({ kind: 'markdown' });

@@ -63,6 +63,15 @@ function harness(over: Partial<Parameters<typeof createCodexRateLimitResetServic
 }
 
 describe('Codex rate-limit reset control plane', () => {
+  it('rechecks automatic authorization immediately before consuming, while manual use remains available', async () => {
+    const { service, deps } = harness({ readRateLimits: vi.fn().mockResolvedValue(response({ rateLimits: { primary: { usedPercent: 20 } } })) });
+    const offer = (await service.read()).resetOffer!;
+    await expect(service.consume(offer.idempotencyKey, () => false)).rejects.toMatchObject({ reason: 'OFFER_EXPIRED' });
+    expect(deps.consumeResetCredit).not.toHaveBeenCalled();
+    await service.consume(offer.idempotencyKey);
+    expect(deps.consumeResetCredit).toHaveBeenCalledOnce();
+  });
+
   it('selects the earliest eligible credit without exposing its id to mobile', async () => {
     const { deps, service } = harness();
     const snapshot = await service.read();

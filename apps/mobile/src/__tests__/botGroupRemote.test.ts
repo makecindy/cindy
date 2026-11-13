@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { groupExecutionVisualFixture } from '@/debug/groupExecutionVisualFixture';
+import { getRemoteResource } from '@/device-link/remoteResources';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
-import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupComposerPlanState, botGroupPlanStepState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
 import {
   botGroupChatDataFromResource,
   botGroupErrorCode,
@@ -47,6 +49,69 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  it.each([
+    ['RUNTIME_TIMEOUT', 'unclaimed_timeout', 'unclaimed_timeout'],
+    ['RUNTIME_TIMEOUT', 'future-reason', undefined],
+    ['RUNTIME_TIMEOUT', undefined, undefined],
+    ['AUTH_REQUIRED', 'unclaimed_timeout', undefined],
+  ])('preserves only the public reason matching the error (%s, %s)', (code, reason, expected) => {
+    const parsed = parseBotGroupChatData(chatData({ messages: [{ id: 'failure', sequence: 1,
+      kind: 'notice', authorKind: 'system', authorName: 'Bot', content: '', createdAt: 1,
+      runtimeFailureCode: code, runtimeFailureReason: reason }] }))!;
+    expect(parsed.messages[0].runtimeFailureReason).toBe(expected);
+  });
+  it('preserves skip permissions, pending-skip support, execution identity and skipped rows from the computer', () => {
+    const base = chatData().plans[0];
+    const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true, canSetAutoContinue: true,
+      steps: [
+        { ...base.steps[0], status: 'running', executionId: 'turn', executionStatus: 'queued' },
+        { ...base.steps[1], status: 'skipped' },
+      ],
+    }] }))!;
+    expect(parsed.plans[0]).toMatchObject({ canManage: true, supportsPendingSkip: true, canSetAutoContinue: true, steps: [
+      { executionId: 'turn', executionStatus: 'queued' }, { status: 'skipped' },
+    ] });
+    const legacy = parseBotGroupChatData(chatData({ plans: [{ ...base, canManage: 'true', supportsPendingSkip: 'true', canSetAutoContinue: 'true' }] }))!;
+    expect(legacy.plans[0].canManage).toBeUndefined();
+    expect(legacy.plans[0].supportsPendingSkip).toBe(false);
+    expect(legacy.plans[0].canSetAutoContinue).toBe(false);
+    // #9909: an explicit null says the turn published nothing; a missing field is an older
+    // projection. Only the former reads as skipped, so the null must survive the computer's
+    // projection instead of collapsing into "not reported".
+    const reported = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', steps: [
+      { ...base.steps[0], status: 'done', resultMessageId: null },
+      { ...base.steps[1], status: 'done' },
+    ] }] }))!;
+    expect(reported.plans[0]!.steps.map(step => step.resultMessageId)).toEqual([null, undefined]);
+    expect(botGroupPlanStepState(reported.plans[0]!, reported.plans[0]!.steps[0]!)).toBe('skipped');
+    expect(botGroupPlanStepState(reported.plans[0]!, reported.plans[0]!.steps[1]!)).toBe('done');
+  });
+  // The remote resource must preserve the queue semantics before choosing composer copy.
+  it.each([
+    ['all', 'talk', true, { kind: 'running', botName: '咪咪', talk: true }],
+    ['mentioned', 'talk', true, null],
+    ['all', 'talk', false, null],
+    ['mentioned', 'future', 'true', { kind: 'running', botName: '' }],
+  ] as const)('keeps the host queue reply policy through parsing (%s, %s, %s)', (replyMode, kind, canAdd, expected) => {
+    const data = chatData({ replyMode, plans: [{ ...chatData().plans[0], status: 'running', kind, canAdd }] });
+    const parsed = parseBotGroupChatData(data)!;
+    expect(botGroupComposerPlanState(openBotGroupPlan(parsed), parsed.replyMode)).toEqual(expected);
+    expect(parsed.plans[0].kind).toBe(kind === 'talk' ? 'talk' : undefined);
+    expect(parsed.plans[0].canAdd).toBe(typeof canAdd === 'boolean' ? canAdd : undefined);
+  });
+
+  // The new public group image field must not turn a host path, credentialed URL
+  // or malformed input into a phone image source; keep the legacy fallback (unit).
+  it.each([null, 7, 'http://example.invalid/avatar.png', 'file:///avatar.png',
+    'https://user:pass@example.invalid/avatar.png', 'https://', `https://example.invalid/${'x'.repeat(4_096)}`,
+  ])('drops an invalid member image URL without dropping its fallback: %s', avatarUrl => {
+    const member = parseBotGroupChatData(chatData({ members: [
+      { botId: 'person', name: 'Person', avatar: '🙂', avatarUrl, status: 'active' },
+    ] }))!.members[0];
+    expect(member.avatarUrl).toBeUndefined();
+    expect(member.avatar).toBe('🙂');
+  });
+
   it('retains validated management roles, revisions and capability without granting them to old hosts', () => {
     const parsed = parseBotGroupChatData(chatData({ revision: 3, supportsSettingsManagement: true,
       members: [{ botId: 'mimi', name: 'Mimi', role: 'admin', isOwned: true }] }));
@@ -60,6 +125,23 @@ describe('parseBotGroupChatData', () => {
     const parsed = parseBotGroupChatData(data)!;
     expect(parsed.messages[0].runtimeFailureCode).toBe(runtimeFailureCode === 'AUTH_REQUIRED' ? runtimeFailureCode : undefined);
     expect(JSON.stringify(parsed.messages)).not.toContain('private diagnostic');
+  });
+  // Unit #8443 review: the real device-link parser must preserve the localized
+  // notice discriminator, while old/unknown input keeps its readable fallback.
+  it.each([
+    ['GROUP_AUTHORIZATION_REQUIRED', 'bot', false, true],
+    ['GROUP_AUTHORIZATION_UNAVAILABLE', 'bot', false, true],
+    ['ATTACHMENTS_UNAVAILABLE', 'bot', false, true],
+    ['private diagnostic', 'bot', false, false],
+    [undefined, 'bot', false, false],
+    ['ATTACHMENTS_UNAVAILABLE', 'user', false, false],
+    ['ATTACHMENTS_UNAVAILABLE', 'bot', true, false],
+  ])('preserves only a live companion capability notice (%s, %s, deleted=%s)', (code, authorKind, deleted, keep) => {
+    const parsed = parseBotGroupChatData(chatData({ messages: [{ id: 'capability', sequence: 1,
+      kind: 'notice', authorKind, authorName: 'Bot', content: 'Readable host-language fallback',
+      createdAt: 1, deleted, capabilityNoticeCode: code }] }))!;
+    expect(parsed.messages[0].capabilityNoticeCode).toBe(keep ? code : undefined);
+    expect(parsed.messages[0].content).toBe('Readable host-language fallback');
   });
   it('preserves server member identities and removal capability', () => {
     const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsMemberRemoval: true,
@@ -88,6 +170,16 @@ describe('parseBotGroupChatData', () => {
     expect(byId.get('q4')?.quote).toEqual({ ...quote, originalDeleted: true });
     // Older computers send neither field.
     expect(parseBotGroupChatData(chatData())!.messages.every(message => !message.quote && !message.deleted)).toBe(true);
+  });
+
+  it('preserves an owned-host process reference through remote group and thread data', () => {
+    const process = { groupId: 'g1', executionId: 'turn', sessionId: 'lane', clientId: 'source' };
+    const base = { id: 'p', sequence: 7, kind: 'message', authorKind: 'bot', authorBotId: 'mimi', authorName: '',
+      content: 'Result', noticeCode: null, planId: null, files: [], createdAt: 70, process, threadRootId: 'root' };
+    const view = parseBotGroupChatData(chatData({ messages: [base, { ...base, id: 'human', authorKind: 'user' },
+      { ...base, id: 'bad', process: { ...process, sessionId: '' } }, { ...base, id: 'deleted', deleted: true }] }))!;
+    expect(view.messages[0]).toMatchObject({ process, threadRootId: 'root', content: 'Result' });
+    expect(view.messages.slice(1).every(row => !row.process)).toBe(true);
   });
 
   it('keeps a validated task card only on a teammate message (bot-group-chat.md §10)', () => {
@@ -133,6 +225,16 @@ describe('parseBotGroupChatData', () => {
     expect(parsed.round).toEqual({ status: 'running', speakers: [{ botId: 'abu', sessionId: 's1', activity: 'step' }], canContinue: false });
     expect(parsed.openPlan).toMatchObject({ id: 'p1', status: 'waiting', currentStepStatus: 'done' });
     expect(parsed.hasMoreBefore).toBe(true);
+  });
+
+  // Unit/protocol: old hosts silently ignore scope, so only literal capabilities permit all.
+  it.each([true, false, undefined, 'true'])('preserves stop permission separately from scope support (%s)', supportsScopedStop => {
+    const parsed = parseBotGroupChatData(chatData({ canStopAll: true, supportsScopedStop,
+      round: { status: 'running', speakers: [], othersActive: true },
+    }))!;
+    expect(parsed.canStopAll).toBe(true);
+    expect(parsed.round.othersActive).toBe(true);
+    expect(parsed.supportsScopedStop).toBe(supportsScopedStop === true);
   });
 
   it('reads attachments and the attachment support flag, keeping only computer media addresses', () => {
@@ -284,5 +386,25 @@ describe('actions', () => {
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['new'] }).clientId).toBe('c2');
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['other', 'picked'] }).clientId).toBe('c3');
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: true, botIds: ['picked', 'other'] }).clientId).toBe('c4');
+    const quoted = nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original');
+    expect(quoted.clientId).toBe('c5');
+    expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original')).toBe(quoted);
+    expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'another').clientId).toBe('c6');
   });
+});
+
+// Wire: a phone must retain the host's personal setting and reject unknown modes.
+it('retains notification capability and confirmed mode from a computer', () => {
+  expect(parseBotGroupChatData(chatData({ supportsNotificationSettings: true, notificationMode: 'mentions' })))
+    .toMatchObject({ supportsNotificationSettings: true, notificationMode: 'mentions' });
+  expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
+});
+
+// Unit/protocol: missing fallbackMarkdown discarded the new native fixture's rich block.
+// Existing fixtures bypassed getRemoteResource; validate this scene via the real resource normalizer.
+it('opens the execution acceptance scene through the actual remote resource reader', async () => {
+  const ref = { collectionId: 'bot-groups', kind: 'bot-group', id: 'execution-qa' };
+  const resource = await getRemoteResource(async <T,>(_device: string, channel: string, args?: unknown[]) =>
+    groupExecutionVisualFixture(channel, args ?? []) as T, { deviceId: 'mock', deviceName: 'Mock' }, ref, 'zh-CN', ['bot-group-chat']);
+  expect(botGroupChatDataFromResource(resource)?.round.speakers).toHaveLength(4);
 });

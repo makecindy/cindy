@@ -1,12 +1,11 @@
+import { prNumberLabel, prKindLabel } from '@cindy/maker-shared';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
   ChevronUp,
-  Eye,
   FileText,
   GitPullRequest,
   Megaphone,
-  Square,
   SquareArrowOutUpRight,
   TriangleAlert,
 } from 'lucide-react';
@@ -19,19 +18,13 @@ import {
   useChatSessionFile,
 } from '@/components/chat/ChatSessionFileContext';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
-import { Spinner } from '@/components/ui/spinner';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
-import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
-import { makerChatStore } from '@/lib/makerChatStore';
-import { makerApiForSticky } from '@/lib/makerTransport';
-import * as sessionService from '@/lib/sessionService';
-import { toast } from '@/lib/toast';
+import { prStatusColor, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { cn } from '@/lib/utils';
 import { readWorkingPhase, WORKING_PHASE_KEYS } from '../../../shared/workingStatus';
 import type { BotCollaborationMeta } from '../../../shared/botCollaboration';
-import { BOT_INTERJECTION_MAX_CHARS, readBotCollaborationMeta } from '../../../shared/botCollaboration';
-import { isActiveDelegationStatus } from './botDelegationLive';
+import { readBotCollaborationMeta } from '../../../shared/botCollaboration';
 import { useBotTaskSession } from './BotSessionTaskLink';
 import { useRemoteBots } from './useRemoteBots';
 
@@ -76,7 +69,7 @@ interface Props {
   sessionId?: string;
 }
 
-/** The one card for a background task, in the reply column; state changes in place. */
+/** The one card for a V1 background task, in the reply column. Read-only history. */
 export function BotSessionTaskCard({ data, sessionId }: Props) {
   const parsed = readBotCollaborationCardData(data);
   if (!parsed || parsed.meta.role !== 'delegation-request') return null;
@@ -100,22 +93,18 @@ export function BotSessionTaskMessageTrace({ data }: Pick<Props, 'data'>) {
   );
 }
 
-type CardState = 'starting' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+type CardState = 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown';
 
 const HARNESS_LABEL: Record<string, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi' };
 
 function Chip({
   children,
   onClick,
-  tone = 'default',
-  disabled,
   expanded,
   controls,
 }: {
   children: ReactNode;
   onClick: () => void;
-  tone?: 'default' | 'danger';
-  disabled?: boolean;
   expanded?: boolean;
   controls?: string;
 }) {
@@ -123,15 +112,12 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
-      disabled={disabled}
       aria-expanded={expanded}
       aria-controls={controls}
       className={cn(
         'inline-flex h-6 max-w-full shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2.5 text-11 transition-colors',
-        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] disabled:cursor-default disabled:opacity-50',
-        tone === 'danger'
-          ? 'text-[var(--error-fg)]'
-          : 'text-[var(--text-secondary)] enabled:hover:text-[var(--text-primary)]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
       )}
     >
       {children}
@@ -140,17 +126,16 @@ function Chip({
 }
 
 function StatusGlyph({ state }: { state: CardState }) {
-  if (state === 'starting' || state === 'running') {
-    return <Spinner size={12} className="shrink-0 text-[var(--status-bar-accent)]" aria-hidden="true" />;
+  if (state === 'running') {
+    return <span className="size-2 shrink-0 rounded-full bg-[var(--warning-accent)] session-status-breathing" aria-hidden="true" />;
   }
   return (
     <span
       aria-hidden="true"
       className={cn(
         'size-[7px] shrink-0 rounded-full',
-        state === 'waiting' && 'bg-[var(--status-info)]',
-        state === 'completed' && 'bg-[var(--status-success)]',
-        state === 'failed' && 'bg-[var(--error-fg)]',
+        state === 'completed' && 'bg-[var(--card-status-done)]',
+        state === 'failed' && 'bg-[var(--card-status-error)]',
         (state === 'cancelled' || state === 'unknown') && 'bg-[var(--text-tertiary)]',
       )}
     />
@@ -158,46 +143,23 @@ function StatusGlyph({ state }: { state: CardState }) {
 }
 
 /**
- * Local bot chats only: the owner adds a line to the original task like typing in it.
- * The Bot's chat then keeps the same quiet trace a Bot's own `message_session_task`
- * leaves (first line only). The line is delivered before the trace, so a failed trace
- * never turns a sent note into an error.
- */
-async function sendToTask(
-  parentSessionId: string | null,
-  delegationId: string,
-  childSessionId: string,
-  text: string,
-): Promise<boolean> {
-  if (text.length > BOT_INTERJECTION_MAX_CHARS) return false;
-  const owner = getDataOwnerGeneration();
-  const row = await sessionService.get(childSessionId);
-  if (!isDataOwnerGenerationCurrent(owner) || !row?.workingDir) return false;
-  const sent = await makerChatStore.sendMessage(
-    childSessionId, text, row.model, row.effort, row.permissionMode, row.workingDir,
-  );
-  if (sent && parentSessionId && isDataOwnerGenerationCurrent(owner)) {
-    await window.electronAPI.maker
-      .traceBotDelegationNote(parentSessionId, delegationId, text)
-      .catch(() => undefined);
-  }
-  return sent;
-}
-
-/**
- * Background task card. A `delegation-request` anchor follows the live task row;
- * a `delegation-result` receipt keeps its frozen status, text, files and error,
- * reading only the title and PR links from the original task. `attached` is the
- * receipt under the bot's closing reply: its result starts open.
+ * V1 background task card, read-only. A `delegation-request` anchor shows the stored task row
+ * (nothing updates it any more: an unfinished row shows the original task's real running state,
+ * otherwise "unknown"); a `delegation-result` receipt keeps its frozen status, text, files and
+ * error, reading only the title and PR links from the original task. `attached` is the receipt
+ * under the bot's closing reply: its result starts open.
  */
 export function BotTaskCard({
   card,
   sessionId,
   attached = false,
+  inset = false,
 }: {
   card: BotCollaborationMeta;
   sessionId?: string;
   attached?: boolean;
+  /** Inside a message bubble (group chat): a flat inset instead of a bordered card. */
+  inset?: boolean;
 }) {
   const { t } = useTranslation();
   const fileContext = useChatSessionFile();
@@ -210,9 +172,6 @@ export function BotTaskCard({
   const online =
     !ref.sourceDeviceId || remoteBots.some((bot) => bot.deviceId === ref.sourceDeviceId && bot.online);
   const [resultOpen, setResultOpen] = useState(attached);
-  const [noteOpen, setNoteOpen] = useState(false);
-  const [note, setNote] = useState('');
-  const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const resultId = useId();
@@ -223,30 +182,19 @@ export function BotTaskCard({
       : frozen.status === 'cancelled'
         ? 'cancelled'
         : 'failed'
-    : row?.status === 'waiting'
-      ? 'waiting'
-      : ref.running || row?.status === 'running'
-        ? 'running'
-        : !row
-          ? ref.resolved ? 'unknown' : 'starting'
-          : row.status === 'queued'
-            ? 'starting'
-            : row.status === 'completed'
-              ? 'completed'
-              : row.status === 'failed' || row.status === 'timed-out'
-                ? 'failed'
-                : row.status === 'cancelled'
-                  ? 'cancelled'
-                  : 'unknown';
-  const live = state === 'starting' || state === 'running' || state === 'waiting';
-  const active = !frozen && Boolean(row && isActiveDelegationStatus(row.status));
+    : row?.status === 'completed'
+      ? 'completed'
+      : row?.status === 'failed' || row?.status === 'timed-out'
+        ? 'failed'
+        : row?.status === 'cancelled'
+          ? 'cancelled'
+          : ref.running
+            ? 'running'
+            : 'unknown';
+  const live = state === 'running';
   const statusLabel = frozen
     ? t(`bots.collab.status.${frozen.status}`)
-    : state === 'unknown'
-      ? t('bots.collab.status.unknown')
-      : state === 'starting'
-        ? t('bots.collab.status.queued')
-        : t(`bots.collab.status.${state === 'failed' && row ? row.status : state}`);
+    : t(`bots.collab.status.${state === 'failed' && row ? row.status : state}`);
 
   // 只在还在干活时起秒级 tick，收拢后不再空转。
   useEffect(() => {
@@ -297,49 +245,23 @@ export function BotTaskCard({
   // differ from the Bot's main task: the frozen receipt records it, the live card reads the
   // child session's. The surrounding chat's directory is only the last resort.
   const workingDir = frozen?.workingDir ?? session?.workingDir ?? fileContext.workingDir;
+  // The result is the child's: a confirmed-local chat does not make a child that runs on another
+  // device (or over SSH, or with a conflicting origin) local, and its directory must not be
+  // searched on this machine. Until the child's row has loaded its ownership is unknown.
+  const childLocalConfirmed =
+    fileContext.localConfirmed === true &&
+    session !== null &&
+    !ref.sourceDeviceId &&
+    !ref.originConflict &&
+    !session?.deviceLinkDeviceId &&
+    !session?.remoteHostId;
   const canOpen = Boolean(childSessionId) && !ref.originConflict;
-  const canAddNote = state === 'running' && Boolean(childSessionId) && !ref.sourceDeviceId && !frozen;
   const resultLabel =
     state === 'completed'
       ? t(resultOpen ? 'bots.collab.collapseResult' : 'bots.collab.expandResult')
       : t(resultOpen ? 'bots.collab.collapseDetails' : 'bots.collab.expandDetails');
   const hasResultBody = Boolean(frozen) || state === 'completed' || state === 'failed' || state === 'cancelled';
 
-  const stop = async () => {
-    if (!parentSessionId || pending || !online) return;
-    setPending(true);
-    setActionError(null);
-    try {
-      const result = await makerApiForSticky(parentSessionId).cancelBotDelegation(
-        parentSessionId,
-        card.delegationId,
-      );
-      if (!result.ok) setActionError(result.message || t('bots.collab.actionFailed'));
-    } catch {
-      setActionError(t('bots.collab.actionFailed'));
-    } finally {
-      setPending(false);
-    }
-  };
-  const submitNote = async () => {
-    const text = note.trim();
-    if (!text || !childSessionId || pending) return;
-    setPending(true);
-    setActionError(null);
-    try {
-      if (await sendToTask(parentSessionId, card.delegationId, childSessionId, text)) {
-        setNote('');
-        setNoteOpen(false);
-        toast.success(t('bots.collab.addNoteSent'));
-      } else {
-        setActionError(t('bots.collab.actionFailed'));
-      }
-    } catch {
-      setActionError(t('bots.collab.actionFailed'));
-    } finally {
-      setPending(false);
-    }
-  };
   const openPr = (url: string) => {
     setActionError(null);
     void window.electronAPI
@@ -357,27 +279,16 @@ export function BotTaskCard({
   ].filter(Boolean).join(' · ');
 
   let line2: ReactNode = null;
-  if (state === 'running' || state === 'starting') {
+  if (state === 'running') {
     line2 = (
       <>
-        <span className="min-w-0 truncate text-[var(--status-bar-accent)]">
-          {state === 'starting' ? t('bots.collab.status.queued') : currentAction}
-        </span>
+        <span className="min-w-0 truncate text-[var(--status-bar-accent)]">{currentAction}</span>
         {elapsed ? (
           <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]">
             · {t('bots.collab.elapsed', { duration: elapsed })}
           </span>
         ) : null}
       </>
-    );
-  } else if (state === 'waiting') {
-    const summary = row?.pendingInteraction?.summary?.trim();
-    line2 = (
-      <span className="min-w-0 line-clamp-2 break-words">
-        {summary
-          ? t('bots.collab.awaitingConfirm', { summary })
-          : t('bots.collab.awaitingConfirmGeneric')}
-      </span>
     );
   } else if (state === 'completed' && resultText.trim() && !resultOpen) {
     line2 = (
@@ -398,7 +309,7 @@ export function BotTaskCard({
       <Icon
         size={12}
         aria-hidden="true"
-        style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }}
+        style={{ color: prStatusColor(kind ?? null, confirmed?.ok ? confirmed.conflicts : null) }}
       />
     );
   };
@@ -413,12 +324,15 @@ export function BotTaskCard({
     <div
       ref={observeCard}
       data-bot-task-card={state}
-      className="my-2 w-full min-w-0 max-w-[560px] rounded-xl border border-[var(--msg-tool-card-border)] bg-[var(--msg-tool-card-bg)] px-3 py-2.5"
+      className={inset
+        ? 'w-full min-w-0 rounded-lg bg-[var(--surface)] px-3 py-2.5'
+        : 'my-2 w-full min-w-0 max-w-[560px] rounded-xl border border-[var(--msg-tool-card-border)] bg-[var(--msg-tool-card-bg)] px-3 py-2.5'}
     >
       <div className="flex min-w-0 items-center gap-2">
         <StatusGlyph state={state} />
         <span className="sr-only">{statusLabel}</span>
         <button
+          data-chat-copy-content
           type="button"
           disabled={!canOpen}
           onClick={ref.open}
@@ -441,70 +355,51 @@ export function BotTaskCard({
           {t('bots.collab.stale')}
         </p>
       ) : null}
-      {noteOpen ? (
-        <form
-          className="mt-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submitNote();
-          }}
-        >
-          <input
-            autoFocus
-            value={note}
-            maxLength={BOT_INTERJECTION_MAX_CHARS}
-            disabled={pending}
-            onChange={(event) => setNote(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                setNoteOpen(false);
-              }
-            }}
-            aria-label={t('bots.collab.addNote')}
-            placeholder={t('bots.collab.addNotePlaceholder')}
-            className="h-8 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
-          />
-        </form>
-      ) : null}
       {resultOpen && hasResultBody ? (
         <div
           id={resultId}
           className="mt-2 space-y-2 border-t border-[var(--border-default)] pt-2 text-13 text-[var(--text-primary)]"
         >
-          <ChatSessionFileProvider
-            value={{ ...fileContext, workingDir, sessionId: childSessionId ?? undefined }}
-          >
-            {resultText ? (
-              <MarkdownRenderer
-                workingDir={workingDir}
-                currentSessionId={childSessionId ?? undefined}
-                renderRichAnswers
-                streamFadeKey={`bot-result:${childSessionId ?? parentSessionId}:${card.delegationId}`}
-                content={resultText}
-              />
-            ) : (
-              <p className="whitespace-pre-wrap break-words text-[var(--text-secondary)]">
-                {t('bots.collab.noWrittenResult')}
-              </p>
-            )}
-            {files.map((path) => (
-              <MarkdownRenderer
-                key={path}
-                workingDir={workingDir}
-                currentSessionId={childSessionId ?? undefined}
-                content={`[${
-                  path
-                    .split(/[\\/]/)
-                    .pop()
-                    ?.replace(/[[\]\\]/g, '\\$&') ?? t('bots.collab.viewResult')
-                }](<${encodeURI(path).replace(/[<>?#]/g, encodeURIComponent)}>)`}
-              />
-            ))}
-          </ChatSessionFileProvider>
+          <SessionQuickSendProvider value={null}>
+            <ChatSessionFileProvider
+              value={{
+                ...fileContext,
+                workingDir,
+                sessionId: childSessionId ?? undefined,
+                localConfirmed: childLocalConfirmed,
+              }}
+            >
+              {resultText ? (
+                <MarkdownRenderer
+                  workingDir={workingDir}
+                  currentSessionId={childSessionId ?? undefined}
+                  renderRichAnswers
+                  streamFadeKey={`bot-result:${childSessionId ?? parentSessionId}:${card.delegationId}`}
+                  content={resultText}
+                />
+              ) : (
+                <p className="whitespace-pre-wrap break-words text-[var(--text-secondary)]">
+                  {t('bots.collab.noWrittenResult')}
+                </p>
+              )}
+              {files.map((path) => (
+                <MarkdownRenderer
+                  key={path}
+                  workingDir={workingDir}
+                  currentSessionId={childSessionId ?? undefined}
+                  content={`[${
+                    path
+                      .split(/[\\/]/)
+                      .pop()
+                      ?.replace(/[[\]\\]/g, '\\$&') ?? t('bots.collab.viewResult')
+                  }](<${encodeURI(path).replace(/[<>?#]/g, encodeURIComponent)}>)`}
+                />
+              ))}
+            </ChatSessionFileProvider>
+          </SessionQuickSendProvider>
           {errorText ? (
             <details>
-              <summary className="flex min-h-8 cursor-pointer items-center rounded-lg text-12 text-[var(--text-secondary)] focus-visible:outline focus-visible:outline-2">
+              <summary className="flex min-h-8 cursor-pointer items-center rounded-lg text-12 text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                 {t('appError.details')}
               </summary>
               <p className="whitespace-pre-wrap break-words text-12 text-[var(--text-secondary)]">
@@ -514,23 +409,11 @@ export function BotTaskCard({
           ) : null}
         </div>
       ) : null}
-      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
-        {state === 'waiting' && canOpen ? (
-          <Chip onClick={ref.open}>
-            <Eye size={12} aria-hidden="true" />
-            {t('bots.collab.lookAt')}
-          </Chip>
-        ) : null}
-        {(state === 'running' || state === 'starting') && canOpen ? (
+      <div data-chat-copy-exclude className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+        {state === 'running' && canOpen ? (
           <Chip onClick={ref.open}>
             <SquareArrowOutUpRight size={12} aria-hidden="true" />
             {t('bots.collab.watchWork')}
-          </Chip>
-        ) : null}
-        {canAddNote ? (
-          <Chip onClick={() => setNoteOpen((open) => !open)} expanded={noteOpen} disabled={pending}>
-            <Megaphone size={12} aria-hidden="true" />
-            {t('bots.collab.addNote')}
           </Chip>
         ) : null}
         {!live && fileCount > 0 ? (
@@ -542,8 +425,8 @@ export function BotTaskCard({
         {pullRequests.map((pr) => (
           <Chip key={pr.url} onClick={() => openPr(sessionPrUrl(pr))}>
             {prIcon(pr)}
-            <span className="truncate" title={`${pr.owner}/${pr.repo} #${pr.prNumber}`}>
-              PR #{pr.prNumber}
+            <span className="truncate" title={`${pr.owner}/${pr.repo} ${prNumberLabel(pr)}`}>
+              {prKindLabel(pr)} {prNumberLabel(pr)}
             </span>
           </Chip>
         ))}
@@ -562,16 +445,6 @@ export function BotTaskCard({
             <Chip onClick={ref.open}>
               <SquareArrowOutUpRight size={12} aria-hidden="true" />
               {t('bots.collab.watchWork')}
-            </Chip>
-          ) : null}
-          {active ? (
-            <Chip
-              tone="danger"
-              disabled={pending || !parentSessionId || !online}
-              onClick={() => void stop()}
-            >
-              <Square size={12} aria-hidden="true" />
-              {t('bots.collab.stop')}
             </Chip>
           ) : null}
         </span>

@@ -1,16 +1,18 @@
 /**
  * 伙伴的「主力电脑」入口（docs/product-rules/cloud-companions.md §3.1）：伙伴设置里的一行，以及聊天
- * 顶部「在 X 上运行」。任何一台电脑上都能看到伙伴在哪里运行，点开列出可以换去的电脑：
+ * 头部近况浮层的「电脑」块（BotGlancePopover）。任何一台电脑上都能看到伙伴在哪里运行，点开列出可以换去的电脑：
  * 本机是主力电脑时由本机交出；主力电脑在线时请它交出；主力电脑连不上时只能在这台电脑继续。
  * 确认后打开换过去的伙伴。服务器不支持云端伙伴时不出现。
  */
 import { useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Monitor } from 'lucide-react';
+import { ChevronRight, Monitor } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Button } from '@/components/ui/button';
+import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { toast } from '@/lib/toast';
+import { toast, type ToastAction } from '@/lib/toast';
 import type {
   CompanionCloudFailureCode,
   CompanionCloudSnapshot,
@@ -36,6 +38,7 @@ import {
 
 const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   HOME_CONFLICT: 'bots.cloud.switchConflict',
+  LOCAL_CINDY_CONFLICT: 'bots.cloud.localCindyConflict',
   OFFLINE: 'bots.cloud.switchOffline',
   NOT_ENABLED: 'bots.cloud.notEnabled',
   TARGET_UNAVAILABLE: 'bots.cloud.targetUnavailable',
@@ -43,6 +46,7 @@ const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   BUSY: 'bots.cloud.transferBusy',
   HOME_OUTDATED: 'bots.cloud.homeOutdated',
   PAUSED: 'bots.cloud.resumeToMove',
+  TARGET_OUTDATED: 'bots.cloud.targetOutdated',
 };
 
 /** How long a companion moved here from its online home may take to be built on this computer. */
@@ -64,23 +68,27 @@ export function companionArrivedHere(cloud: CompanionCloudSnapshot, botId: strin
 }
 
 /** Wait until the automatic take-over here finished (or time out). */
-async function waitForArrival(botId: string, isCurrent: () => boolean): Promise<boolean> {
+async function waitForArrival(botId: string, isCurrent: () => boolean): Promise<boolean | NonNullable<CompanionCloudSnapshot['actors'][number]['profileFailure']>> {
   const deadline = Date.now() + ARRIVAL_TIMEOUT_MS;
   while (isCurrent() && Date.now() < deadline) {
     const profiles = await ensureBotProfilesLoaded(true).catch(() => []);
     const local = profiles.filter((profile) => profile.status === 'active').map((profile) => profile.id);
-    if (companionArrivedHere(getCompanionCloudSnapshot(), botId, local)) return true;
+    const cloud = getCompanionCloudSnapshot();
+    const failure = cloud.actors.find(actor => actor.externalId === botId)?.profileFailure;
+    if (failure) return failure;
+    if (companionArrivedHere(cloud, botId, local)) return true;
     refreshCompanionCloud();
     await new Promise((resolve) => setTimeout(resolve, ARRIVAL_POLL_MS));
   }
   return false;
 }
 
-/** `inline`: the settings row shows failures under itself; `toast`: the header chip has no room. */
-function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toast') {
+/** `inline`: the settings row shows failures under itself; `toast`: the 近况 popover has no room. */
+export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toast') {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const cloud = useCompanionCloud();
+  const conflict = useCompanionCindyConflictAction();
   const [choices, setChoices] = useState<CompanionHomeChoices | null>(null);
   const [choicesFailed, setChoicesFailed] = useState(false);
   const [pending, setPending] = useState<CompanionTransferTarget | null>(null);
@@ -88,8 +96,10 @@ function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toa
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repairOpen, setRepairOpen] = useState(false);
+  const [repairAvailable, setRepairAvailable] = useState(false);
   const inFlight = useRef(false);
-  const report = (message: string) => { if (failures === 'toast') toast.error(message); else setError(message); };
+  const report = (message: string, action?: ToastAction) => { if (failures === 'toast') toast.error(message, { action }); else setError(message); };
   const actor = cloud.enabled ? cloud.actors.find((candidate) => candidate.externalId === bot.id) : undefined;
   const home = actor?.homeDeviceId ?? null;
   const homeHere = !!home && home === cloud.selfDeviceId;
@@ -120,6 +130,8 @@ function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toa
     inFlight.current = true;
     setBusy(true);
     setError(null);
+    setRepairAvailable(false);
+    conflict.clear();
     const device = targetName(target);
     const owner = getDataOwnerGeneration();
     const current = () => isDataOwnerGenerationCurrent(owner);
@@ -135,7 +147,10 @@ function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toa
         return;
       }
       if (!result.ok) {
-        report(t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }));
+        setRepairAvailable(!!result.profileFailure);
+        report(result.profileFailure ? t(result.profileFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: result.profileFailure.maxLength })
+          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }),
+          result.profileFailure ? { label: t('bots.cloud.repair.action'), onClick: () => setRepairOpen(true) } : conflict.report(result));
         refreshCompanionCloud();
         return;
       }
@@ -147,7 +162,14 @@ function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toa
       // Asked from another computer: this one builds the companion once the move reaches it.
       if (choices?.mode === 'remote') {
         toast.info(t('bots.cloud.takingOver', { name: bot.name }));
-        if (!(await waitForArrival(bot.id, current))) {
+        const arrival = await waitForArrival(bot.id, current);
+        if (!current()) return;
+        if (typeof arrival === 'object') {
+          report(t(arrival.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: arrival.maxLength }));
+          navigate(`/bots/remote/${encodeURIComponent(target.deviceId)}/${encodeURIComponent(bot.id)}`);
+          return;
+        }
+        if (!arrival) {
           if (current()) toast.info(t('bots.cloud.arrivingLater', { name: bot.name }));
           return;
         }
@@ -172,10 +194,10 @@ function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toa
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
   return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget, busy,
-    error, setError, inFlight, load, confirm, targetName };
+    error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
 
-type HomeSwitch = ReturnType<typeof useCompanionHomeSwitch>;
+export type HomeSwitch = ReturnType<typeof useCompanionHomeSwitch>;
 
 function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitch }) {
   const { t } = useTranslation();
@@ -192,27 +214,33 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
           : t('bots.cloud.notEnabled')}
       </DropdownMenuItem>
     );
+  const hereOff = choices.thisComputer === 'REMOTE_CONTROL_OFF'
+    ? <DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.hereControlOff')}</DropdownMenuItem> : null;
   if (choices.targets.length === 0)
-    return <DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.noTargets')}</DropdownMenuItem>;
+    return <><DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.noTargets')}</DropdownMenuItem>{hereOff}</>;
   return (
     <>
       {choices.targets.map((target) => (
         <DropdownMenuItem key={target.deviceId} onSelect={() => { state.setError(null); state.setPending(target); }}>
           <span className="min-w-0 truncate">
-            {target.isSelf ? t('bots.cloud.switchHere') : t('bots.cloud.switchTo', { device: state.targetName(target) })}
+            {target.isSelf ? t('bots.cloud.switchHere')
+              // An older Cindy: it can take the teammate, which then runs there the older way.
+              : t(target.outdated ? 'bots.cloud.targetOutdatedItem' : 'bots.cloud.switchTo', { device: state.targetName(target) })}
           </span>
         </DropdownMenuItem>
       ))}
+      {hereOff}
     </>
   );
 }
 
-function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitch }) {
+export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitch }) {
   const { t } = useTranslation();
   const device = state.pending ? state.targetName(state.pending) : '';
   const busyDevice = state.busyTarget ? state.targetName(state.busyTarget) : '';
   return (
     <>
+    <CompanionProfileRepairDialog botId={bot.id} open={state.repairOpen} onOpenChange={state.setRepairOpen} />
     <ConfirmDialog
       open={state.busyTarget !== null}
       presentation="standard"
@@ -234,6 +262,9 @@ function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state: HomeS
       onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setPending(null); }}
       title={t('bots.cloud.switchTitle', { name: bot.name, device })}
       description={t('bots.cloud.switchDescription', { name: bot.name, device })}
+      // An older Cindy there: say what the teammate keeps and what does not apply.
+      content={state.pending?.outdated
+        ? <p className="text-base text-[var(--confirm-desc)]">{t('bots.cloud.olderTargetNote', { name: bot.name, device })}</p> : undefined}
       confirmText={t('bots.cloud.switchAction', { device })}
       cancelText={t('bots.cancel')}
       loading={state.busy}
@@ -272,37 +303,9 @@ export function BotHomeComputerSetting({ bot, className = 'mt-3' }: { bot: Compa
       {state.error ? (
         <p role="alert" className="mt-2 px-1 text-12 text-[var(--text-danger)]">{state.error}</p>
       ) : null}
+      {state.error ? <CompanionCindyConflictAction action={state.conflictAction} /> : null}
+      {state.repairAvailable && state.error && <Button variant="secondary" size="md" className="mt-2" onClick={() => state.setRepairOpen(true)}>{t('bots.cloud.repair.action')}</Button>}
       <HomeSwitchConfirm bot={bot} state={state} />
     </div>
-  );
-}
-
-/** 「在 X 上运行」 in the chat header; null when the companion has no known home. */
-export function CompanionHomeChip({ bot }: { bot: CompanionHomeBot }) {
-  const { t } = useTranslation();
-  const state = useCompanionHomeSwitch(bot, 'toast');
-  if (!state.actor || !state.home) return null;
-  const label = state.homeHere ? t('bots.cloud.runsHere') : t('bots.cloud.runsOn', { device: state.homeName });
-  return (
-    <>
-      <DropdownMenu onOpenChange={(open) => { if (open) state.load(); }}>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            data-testid="bot-home-computer-chip"
-            title={t('bots.cloud.switchHint', { name: bot.name })}
-            className="flex min-w-0 max-w-56 shrink items-center gap-1 rounded-full px-2 py-1 text-12 text-[var(--text-tertiary)] outline-none hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            style={WINDOW_NO_DRAG_STYLE}
-          >
-            <span className="min-w-0 truncate">{label}</span>
-            <ChevronDown size={12} className="shrink-0" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-56 max-w-80">
-          <HomeMenuItems bot={bot} state={state} />
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <HomeSwitchConfirm bot={bot} state={state} />
-    </>
   );
 }

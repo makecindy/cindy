@@ -18,6 +18,7 @@
  *     不是偏好记忆;静默还原会让旧目录无感知地带进新会话)
  */
 
+import { sanitizeModelGroupSelection, type ModelGroupSelection } from '../../shared/modelGroups';
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
@@ -43,6 +44,8 @@ export interface VendorPrefs {
   model: string;
   effort: Effort;
   permissionMode: PermissionMode;
+  /** Explicit picker choice; absent legacy non-auto values are preserved. */
+  permissionModeCustomized?: boolean;
   /**
    * 计划模式一级开关(与 permissionMode 正交)。草稿开着时,发送建会话透传
    * planModeEnabled 落库 + createOpts.planMode 生效。老 localStorage 缺字段 → false。
@@ -76,7 +79,7 @@ export interface CollabWorkerConfig {
   role: string;
   model: string;
   effort?: Effort;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;null/缺省 = 未显式(main 侧按默认路由解析)。 */
   providerId?: string | null;
   /** 首条派工任务。一次性,故意不跨重启持久化(sanitize 加载时丢弃,见下方解析)。 */
@@ -108,6 +111,8 @@ export interface NewMakerDraft {
   vendor: MakerVendor;
   /** 选中的 workingDir;初次 null,Project 行内 + 会预填到此。 */
   workingDir: string | null;
+  /** 用户明确选过「对话（不在项目中）」；本次草稿不得再由默认目录回填。 */
+  explicitNoProject: boolean;
   /** 远程项目所属 host。null = 本地项目或对话。 */
   remoteHostId: string | null;
   /**
@@ -149,7 +154,7 @@ export interface NewMakerDraft {
    * New Maker 的 Fast Mode 记忆,按模型分开。
    * 缺省 false;实际是否可用还要由 UI 结合 capabilities 判定。
    */
-  fastModeByModel: Record<string, boolean>;
+  fastModeByModel: Record<string, boolean | 'ultrafast'>;
   /**
    * 每个 modelId 上一次显式选过的 effort,跨 ChatInput 实例 / 跨 New Maker
    * 创建持久化。场景:在 Opus 4.7 选了 high → 切到 Haiku (强制落到 low) →
@@ -186,11 +191,24 @@ export interface NewMakerDraft {
    * false 才允许连接态为新任务下放产品默认；目录热更与登录变化不得覆盖 true。
    */
   defaultTupleCustomized: boolean;
+  /** Local new-task default. null follows the product default (auto). */
+  newChatDefaultPermissionMode?: PermissionMode | null;
   /**
    * 自定义里是否包含 Harness / 来源 / 模型选择。与只调 effort / Fast 分开记，
    * 这样「恢复推荐」只能撤销调档意图，不会顺手清掉真正的路由选择。
    */
   defaultTupleSelectionCustomized: boolean;
+  /**
+   * 新任务「让插件选」(2026-10-31)：选中后新任务第一条消息发出前问一次这个插件用哪个模型；
+   * 记住为新任务默认，用户手动选任何模型即清除。null = 不用。
+   */
+  /** 选中的插件模型；底下的模型设置保留，插件没给结果时用它们。 */
+  pluginModel: { pluginId: string; modelId: string } | null;
+  /**
+   * 新任务选中的模型组(用户建的路线；旧版的模式读取时丢弃)：第一条消息发出前按它选一个具体模型；记住为新任务默认，
+   * 手动选任何模型或插件模型即清除。底下的模型设置保留，组里没有能用的模型时用它们。
+   */
+  modelGroup: ModelGroupSelection | null;
 }
 
 /**
@@ -207,6 +225,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
       effort: 'high',
       // 新 Pi 草稿默认走 Auto Review；完全访问只能由用户显式选择并持久化。
       permissionMode: 'auto',
+      permissionModeCustomized: false,
       planMode: false,
       providerId: null,
     };
@@ -216,6 +235,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
       model: getDefaultModelForVendor('codex').id,
       effort: 'high',
       permissionMode: 'auto',
+      permissionModeCustomized: false,
       planMode: false,
       providerId: null,
     };
@@ -226,6 +246,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
     // 三种 vendor 都保留 Auto-review 种子默认；已有用户落盘的
     // lastByVendor 记忆不受影响(sanitize 只在缺失 / 脏值时回落本默认)。
     permissionMode: 'auto',
+    permissionModeCustomized: false,
     planMode: false,
     providerId: null,
   };
@@ -241,6 +262,7 @@ function makeDefault(): NewMakerDraft {
   return {
     vendor: 'cc',
     workingDir: null,
+    explicitNoProject: false,
     remoteHostId: null,
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
@@ -261,7 +283,10 @@ function makeDefault(): NewMakerDraft {
     },
     modelChosenByVendor: {},
     defaultTupleCustomized: false,
+    newChatDefaultPermissionMode: null,
     defaultTupleSelectionCustomized: false,
+    pluginModel: null,
+    modelGroup: null,
   };
 }
 
@@ -307,7 +332,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   const fastModeByModel = Object.fromEntries(
     Object.entries(fastModeByModelRaw)
       .filter(([modelId]) => modelId.length > 0)
-      .map(([modelId, enabled]) => [modelId, enabled === true]),
+      .map(([modelId, enabled]) => [modelId, enabled === 'ultrafast' ? 'ultrafast' as const : enabled === true]),
   );
   // effortByModel: 接受任何 string 值 (Effort 枚举校验交给消费方按当前模型 capabilities 过滤)。
   // 老版本 localStorage 没有这个字段 → 空对象兜底。
@@ -350,7 +375,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       role,
       model,
       effort: typeof wc.effort === 'string' ? (wc.effort as Effort) : undefined,
-      fast: typeof wc.fast === 'boolean' ? wc.fast : undefined,
+      fast: (typeof wc.fast === 'boolean' || wc.fast === 'ultrafast') ? wc.fast : undefined,
       // 来源与模型是同一次选择的两个维度,随 model 一起耐久保留;与 role 同样 trim,
       // 空白串回落未显式 —— IPC 侧把非空 string 当显式来源,漏 trim 会把无效 id
       // 一路带到 PROVIDER_ROUTE_UNAVAILABLE(copilot review)。
@@ -366,8 +391,14 @@ function sanitize(raw: unknown): NewMakerDraft {
     };
   })();
   const collab: CollabDraft = { enabled: collabEnabled, worker: collabWorker, workerConfig };
+  const newChatDefaultPermissionMode =
+    r.newChatDefaultPermissionMode === 'auto' || r.newChatDefaultPermissionMode === 'bypassPermissions'
+      ? r.newChatDefaultPermissionMode : null;
   const sanitizeVendorPrefs = (p: Partial<VendorPrefs> | undefined, v: MakerVendor): VendorPrefs => {
-    const fallback = defaultVendorPrefs(v);
+    const fallback = { ...defaultVendorPrefs(v), permissionMode: newChatDefaultPermissionMode ?? 'auto' };
+    const permissionModeCustomized = p?.permissionModeCustomized === true ||
+      (p?.permissionModeCustomized === undefined && typeof p?.permissionMode === 'string' &&
+        p.permissionMode !== 'auto' && p.permissionMode !== 'plan');
     if (!p || typeof p !== 'object') return fallback;
     // 计划模式独立成一级开关后, 历史草稿里 permissionMode='plan' 迁移为
     // planMode=true + 该 vendor 默认权限档(与 DB 迁移同语义)。
@@ -376,9 +407,10 @@ function sanitize(raw: unknown): NewMakerDraft {
       model: typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model,
       effort: typeof p.effort === 'string' ? (p.effort as Effort) : fallback.effort,
       permissionMode:
-        typeof p.permissionMode === 'string' && !legacyPlanPermission
+        permissionModeCustomized && typeof p.permissionMode === 'string' && !legacyPlanPermission
           ? (p.permissionMode as PermissionMode)
           : fallback.permissionMode,
+      permissionModeCustomized,
       planMode: p.planMode === true || legacyPlanPermission,
       // providerId: 接受非空 string 或 null;脏数据 / 缺字段一律落 null(跟随默认路由)。
       providerId:
@@ -467,6 +499,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   return {
     vendor,
     workingDir,
+    explicitNoProject: workingDir == null && r.explicitNoProject === true,
     remoteHostId: workingDir == null ? null : remoteHostId,
     // device-link 目标**不跨重启恢复**:绑定的是活动设备,重启后可能已离线 → 一律置 null。
     deviceLinkDeviceId: null,
@@ -491,8 +524,20 @@ function sanitize(raw: unknown): NewMakerDraft {
     },
     modelChosenByVendor,
     defaultTupleCustomized,
+    newChatDefaultPermissionMode,
     defaultTupleSelectionCustomized,
+    pluginModel: sanitizePluginModel(r.pluginModel),
+    modelGroup: sanitizeModelGroupSelection(r.modelGroup),
   };
+}
+
+function sanitizePluginModel(value: unknown): NewMakerDraft['pluginModel'] {
+  if (!value || typeof value !== 'object') return null;
+  const { pluginId, modelId } = value as { pluginId?: unknown; modelId?: unknown };
+  return typeof pluginId === 'string' && pluginId.trim() && pluginId.length <= 512
+    && typeof modelId === 'string' && modelId.trim() && modelId.length <= 64
+    ? { pluginId, modelId }
+    : null;
 }
 
 function loadFromStorage(): NewMakerDraft {
@@ -535,6 +580,7 @@ type StoredDefaultTuplePreference = Pick<
   | 'effortByModel'
   | 'lastByVendor'
   | 'modelChosenByVendor'
+  | 'newChatDefaultPermissionMode'
   | 'defaultTupleCustomized'
   | 'defaultTupleSelectionCustomized'
 >;
@@ -546,6 +592,7 @@ function defaultTuplePreferenceOf(draft: NewMakerDraft): StoredDefaultTuplePrefe
     effortByModel: draft.effortByModel,
     lastByVendor: draft.lastByVendor,
     modelChosenByVendor: draft.modelChosenByVendor,
+    newChatDefaultPermissionMode: draft.newChatDefaultPermissionMode ?? null,
     defaultTupleCustomized: draft.defaultTupleCustomized,
     defaultTupleSelectionCustomized: draft.defaultTupleSelectionCustomized,
   };
@@ -835,10 +882,26 @@ export function setWorktreePreference(enabled: boolean): void {
   emit();
 }
 
+/** Only explicit settings changes update the default; preserve independent picker choices. */
+export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): void {
+  if (mode !== null && mode !== 'auto' && mode !== 'bypassPermissions') return;
+  rebaseStoredDefaultTuplePreference();
+  const lastByVendor = { ...currentDraft.lastByVendor };
+  for (const vendor of ['cc', 'pi', 'codex', 'orca'] as const) {
+    if (!lastByVendor[vendor].permissionModeCustomized) {
+      lastByVendor[vendor] = { ...lastByVendor[vendor], permissionMode: mode ?? 'auto', permissionModeCustomized: false };
+    }
+  }
+  currentDraft = { ...currentDraft, newChatDefaultPermissionMode: mode, lastByVendor };
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
+  emit();
+}
+
 export function patchDraft(patch: Partial<NewMakerDraft>): void {
   const normalizedPatch: Partial<NewMakerDraft> = { ...patch };
   // worktree 偏好只能经 setWorktreePreference 写入。把这条约束放在 store 边界，
   // 避免项目切换、草稿恢复或未来的通用 patch 调用方绕过「仅 checkbox 修改」契约。
+  delete normalizedPatch.newChatDefaultPermissionMode;
   delete normalizedPatch.worktreeEnabled;
   delete normalizedPatch.worktreePreferenceCustomized;
   if ('workingDir' in normalizedPatch) {
@@ -852,6 +915,9 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
         : null;
   }
   const next: NewMakerDraft = { ...currentDraft, ...normalizedPatch };
+  if ('workingDir' in normalizedPatch && next.workingDir != null) {
+    next.explicitNoProject = false;
+  }
   if ('workingDir' in patch && next.workingDir == null) {
     next.remoteHostId = null;
   } else if ('workingDir' in patch && !('remoteHostId' in patch)) {
@@ -918,13 +984,18 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
  * fastModeByModel 等模型偏好保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
  *
  * **任何「另起一段干净对话」的入口都必须走这里,不要各自手写字段清单。**
+ * 功能引导默认保留「无项目」意图；发送成功后传 explicitNoProject=false，
+ * 让下一次通用新建可以选用用户设置的默认目录。
  * extraDirs 是单次草稿的**目录读取授权**,漏掉它会让新会话悄悄继承对无关本地目录的
  * 访问权(#1103 review 实例:两个预填入口都手写了清单,把级联已经处理的三个字段
  * 抄了一遍,却都漏了真正需要清的这一个)。新增工作区字段时只改这一处。
  */
-export function resetDraftWorkspaceTargets(): void {
+export function resetDraftWorkspaceTargets(
+  { explicitNoProject = true }: { explicitNoProject?: boolean } = {},
+): void {
   patchDraft({
     workingDir: null,
+    explicitNoProject,
     extraDirs: [],
     writableDirs: [],
     collab: { ...currentDraft.collab, enabled: false },
@@ -964,7 +1035,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   const current: BotModelRoute | null = prefs.model ? {
     harness: base.vendor === 'cc' || base.vendor === 'orca' ? 'claude' : base.vendor,
     model: prefs.model, providerId: prefs.providerId ?? null, effort: prefs.effort ?? '',
-    fastMode: base.fastModeByModel[prefs.model] === true,
+    fastMode: (base.fastModeByModel[prefs.model] ?? false),
   } : null;
   if (!sameModelRoute(current, selection.expectedRoute) && !sameModelRoute(current, selection.route)) return false;
   const route = selection.route;
@@ -1119,6 +1190,10 @@ function patchVendorPrefsInternal(
   const marksDefaultTuple = marksSelection || (opts.markModelChoice && 'effort' in patch);
   const modelChosen = { ...currentDraft.modelChosenByVendor };
   const nextPatch = { ...patch };
+  delete nextPatch.permissionModeCustomized;
+  if (opts.markModelChoice && typeof nextPatch.permissionMode === 'string') {
+    nextPatch.permissionModeCustomized = true;
+  }
   if (typeof nextPatch.model === 'string' && nextPatch.model.length > 0) {
     if (opts.markModelChoice) {
       // 新建页 picker 或已有任务换模 → 打标记,下次新建跟随这次选择,不再回落区域默认。
@@ -1174,6 +1249,44 @@ export function patchVendorPrefsPreservingModelChoice(
   patchVendorPrefsInternal(vendor, patch, { markModelChoice: false });
 }
 
+/**
+ * 已有任务里只换模型(来源沿用任务自己的)时写回新建默认。
+ *
+ * 任务的来源不是这次选择的一部分：新建默认落在另一个来源上时整次不写，否则以后的新建
+ * 任务会被悄悄搬到这个任务的来源(例：在 Cindy AI 任务里换个模型，新建默认就从 Anthropic
+ * 变成 Cindy AI)。只有确认来源一致才照常写回并打标；来源无法确定时不写。换来源、跨引擎等
+ * 显式选择仍走 patchVendorPrefs。
+ *
+ * `taskProviderId` 是任务实际生效的来源(null = 任务来源未知，照常写回)，只用于比较；`resolveDraftProviderId` 给跟随默认
+ * 路由(providerId=null)的新建默认解析生效来源。返回是否写入。
+ */
+export function patchVendorPrefsFromTaskModelSwitch(
+  vendor: MakerVendor,
+  patch: Pick<VendorPrefs, 'model' | 'providerId'> & { effort?: Effort },
+  taskProviderId: string | null,
+  resolveDraftProviderId?: (prefs: VendorPrefs) => string | null,
+): boolean {
+  // 先吸收另一窗口刚保存的默认，再比较来源，避免用过期的内存值放行后覆盖它。
+  rebaseStoredDefaultTuplePreference();
+  const saved = currentDraft.lastByVendor[vendor];
+  if (taskProviderId) {
+    // 存着的来源可能已被服务端搬走(例如企业号池 Auto 搬到 XD)，先按实际路由解析，
+    // 解析不出再用存的值。
+    const draftProviderId = resolveDraftProviderId?.(saved) ?? saved.providerId ?? null;
+    // 只有确认新建默认就在任务的来源上才写回；来源不明(目录未就绪、账号切换中、没有来源提供该
+    // 模型)按保守处理，宁可这次不写，也不把默认搬到任务的来源。
+    if (draftProviderId !== taskProviderId) return false;
+  }
+  // 走到这里说明新建默认的实际来源已确认等于任务来源(或任务来源未知的旧行为)。草稿本来跟随默认
+  // 路由(providerId=null)就保持跟随，不因为任务显式用了某来源就把它固化成 override；草稿显式存着
+  // 来源时写入已确认的任务来源(不信任 patch 里可能过期的值)——存着的旧来源可能已被搬走，不能复活。
+  patchVendorPrefs(vendor, {
+    ...patch,
+    providerId: saved.providerId ? (taskProviderId ?? patch.providerId ?? saved.providerId) : null,
+  });
+  return true;
+}
+
 /** 单字段写入当前 vendor 的某个 pref(用户在 ChatInput 改 model 等时同步落地)。 */
 export function patchCurrentVendorPrefs(patch: Partial<VendorPrefs>): void {
   patchVendorPrefs(currentDraft.vendor, patch);
@@ -1200,12 +1313,12 @@ export function setEffortForModel(modelId: string, effort: Effort): void {
   emit();
 }
 
-export function getFastModeForModel(modelId: string | null | undefined): boolean {
+export function getFastModeForModel(modelId: string | null | undefined): boolean | 'ultrafast' {
   if (!modelId) return false;
-  return currentDraft.fastModeByModel[modelId] === true;
+  return (currentDraft.fastModeByModel[modelId] ?? false);
 }
 
-export function setFastModeForModel(modelId: string, enabled: boolean): void {
+export function setFastModeForModel(modelId: string, enabled: boolean | 'ultrafast'): void {
   if (!modelId) return;
   rebaseStoredDefaultTuplePreference();
   currentDraft = {
@@ -1285,6 +1398,17 @@ export function __resetForTest(): void {
     }
   }
   emit();
+}
+
+/**
+ * 测试用 —— 模拟 renderer 重新加载本模块(app 重启):丢弃全部内存态,按模块首次求值的
+ * 方式从 localStorage 恢复,不写盘、不通知。新增模块级状态时要在这里一并复位。
+ */
+export function __reloadForTest(): void {
+  activeDataOwnerId = null;
+  preferenceSyncFallback = null;
+  listeners.clear();
+  currentDraft = loadFromStorage();
 }
 
 export const __STORAGE_KEY = STORAGE_KEY;

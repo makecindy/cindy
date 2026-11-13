@@ -1,14 +1,23 @@
+import { SharedTaskListProvider } from '@/session/SharedTaskList';
+import { taskListScreenAnimation } from '@/session/taskListNavigationPolicy';
 import { completePrecreatedWorktreeRecovery } from '@/session/completePrecreatedWorktreeRecovery';
 import { recentTaskKey } from '@/session/recentTasks';
+import { TaskListTransitionContext, useTaskListTransition } from '@/session/SessionDrawerNavigationContext';
 import { readComposerEntry } from '@/session/composerMorph';
 import { RecentMessageHistoriesProvider } from '@/session/RecentMessageHistories';
 import { McpAppViewsProvider } from '@/session/McpAppViews';
 import { ResidentHomeListProvider } from '@/session/ResidentHomeList';
+import { HomeRosterStoreProvider } from '@/session/HomeRosterContext';
+import { PluginPromptReadsProvider } from '@/plugins/PluginPromptReadsContext';
 import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
 import { PeerFileTransport } from '@/device-link/peerFileTransport';
+import { noteRootCommitted } from '@/debug/jsErrorGuard';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import { RemoteHistoryPrefetchBridge } from '@/session/RemoteHistoryPrefetchBridge';
+import { UsageWidgetBridge } from '@/widgets/UsageWidgetBridge';
+import { AgentActivityBridge } from '@/widgets/AgentActivityBridge';
+import { HandheldModeBridge } from '@/handheld/HandheldModeBridge';
 import {
   DarkTheme as NavigationDarkTheme,
   DefaultTheme as NavigationLightTheme,
@@ -23,6 +32,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
+import { RootErrorBoundary } from '@/components/RootErrorBoundary';
 import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdaptiveWindowProvider } from '@/platform/AdaptiveWindow';
@@ -41,6 +51,9 @@ import {
   useDeviceLink,
 } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
+import { NotificationActionBridge } from '@/notifications/NotificationActionBridge';
+import { useLockedLaunchGate } from '@/notifications/lockedLaunchGate';
+import { TaskBadgeBridge } from '@/notifications/TaskBadgeBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
 import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
@@ -83,18 +96,68 @@ import {
 } from '@/session/precreatedWorktreeRecovery';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 import { usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
+import { usePendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { removeLegacyClipboardInvitationHistory } from '@/device-link/legacyClipboardInvitationHistory';
-import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
+import { useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
+import { ChatInviteHost } from '@/chat/ChatInviteHost';
+import { TaskArchiveUndoHost } from '@/session/TaskArchiveUndoNotice';
 
 const holdSplash = () => undefined;
 
-function NavigationGate() {
-  const pendingSharedTaskInvitation = usePendingSharedTaskInvitationIntent();
+/** Geometry changes only the navigation chrome; account/link/history providers
+ * above this leaf must not rebuild their children on every rotation update. */
+function AdaptiveNavigationStack({ accountGeneration, statusBarTheme }: {
+  accountGeneration: number; statusBarTheme: 'light' | 'dark';
+}) {
+  const { colors } = useTheme();
   const windowGeometry = useAdaptiveWindow();
+  const { instant, run: switchFromTaskList, finish: finishTaskListSwitch } = useTaskListTransition();
   // Establish chrome before push starts, rather than revealing a hidden bar after mount.
   const sessionHeaderShown = Platform.OS === 'ios'
     && (windowGeometry.barEdge !== 'none' || !sessionPaneLayout(windowGeometry).persistent);
+  return useMemo(() => (
+    <TaskListTransitionContext.Provider value={switchFromTaskList}><SharedTaskListProvider key={accountGeneration}><Stack
+      key={accountGeneration}
+      screenListeners={{ transitionEnd: finishTaskListSwitch, state: finishTaskListSwitch }}
+      screenOptions={({ route }) => ({
+        animation: taskListScreenAnimation(route.params, instant),
+        headerShown: false,
+        // Custom titles register after mount and clear on unmount. Never expose route names in between.
+        title: '',
+        contentStyle: { backgroundColor: colors.surface },
+        ...(Platform.OS === 'ios'
+          ? { statusBarStyle: statusBarTheme === 'dark' ? 'light' : 'dark' }
+          : null),
+        // iOS 26 起返回手势与系统一致,内容区任意位置右滑即可返回;不要设 gestureResponseDistance,
+        // 否则会退回只认屏幕前缘起手。内容宽于视口的横向 ScrollView(表格/代码块)由
+        // react-native-screens 让滚动优先识别,不会被返回手势抢走。
+      })}
+    >
+      <Stack.Screen name="sessions/[sessionId]" dangerouslySingular={(_name, params) => recentTaskKey(params)} options={{
+        headerShown: sessionHeaderShown,
+        headerTransparent: true,
+        headerShadowVisible: false,
+        headerBackVisible: false,
+        headerStyle: { backgroundColor: 'transparent' },
+      }} />
+      {/* 新建页只在圆钮形变仍可交接时关掉推入动画（形变本身就是入场）；
+          交接记录已过期就照常推入，页面进入后再恢复普通返回动画。 */}
+      <Stack.Screen name="sessions/new" options={({ route }) => ({
+        animation: readComposerEntry((route.params as { composerMorph?: string } | undefined)?.composerMorph) ? 'none' : 'default',
+      })} />
+      <Stack.Screen
+        name="add-account"
+        options={{ animation: 'fade', gestureEnabled: false }}
+      />
+    </Stack></SharedTaskListProvider></TaskListTransitionContext.Provider>
+  ), [accountGeneration, sessionHeaderShown, colors.surface, statusBarTheme, instant, switchFromTaskList, finishTaskListSwitch]);
+}
+
+function NavigationGate() {
+  const pendingSharedTaskInvitation = usePendingSharedTaskInvitationIntent();
+  // 登录前扫了「加入中转」二维码:登录完成后回到加入页继续(加入码只在内存里)。
+  const pendingRelayJoin = Boolean(usePendingRelayJoinIntent()?.link);
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
@@ -121,10 +184,9 @@ function NavigationGate() {
     [mode, colors],
   );
 
-  // 登录与本机首页偏好就绪、默认入口重定向完成后再释放常驻 splash。
-  // 深链不经过 index；同样在这里释放，避免先露出任务再跳回伙伴。
+  // 登录与本机首页偏好（伙伴段收起状态）就绪后再释放常驻 splash；深链同样在这里释放。
   // 显示模式偏好读回前不释放，避免已选浅色 / 深色的用户先看到系统外观再切换。
-  useHomeEntrySplashRelease(preferenceReady ? releaseSplash : holdSplash);
+  useHomeStartupSplashRelease(preferenceReady ? releaseSplash : holdSplash);
 
   // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
   // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。
@@ -136,17 +198,24 @@ function NavigationGate() {
     if (!auth.initialized) return;
     const inAuthGroup = segments[0] === '(auth)';
     // 供应商分享链接的提示页只说明「请在电脑上打开」,不读账号数据,未登录也直接显示。
-    if (!auth.isAuthenticated && !inAuthGroup && segments[0] !== 'provider-share') {
+    // 加入中转页未登录时只提示先登录(不发任何请求),同样直接显示。
+    if (
+      !auth.isAuthenticated &&
+      !inAuthGroup &&
+      segments[0] !== 'provider-share' &&
+      segments[0] !== 'relay-join'
+    ) {
       router.replace('/login');
       return;
     }
     if (auth.isAuthenticated && inAuthGroup) {
       if (pendingSharedTaskInvitation) router.replace('/shared-session');
+      else if (pendingRelayJoin) router.replace('/relay-join');
       else router.replace('/');
     } else if (auth.isAuthenticated && pendingSharedTaskInvitation && segments.join('/') !== 'shared-session') {
       router.replace('/shared-session');
     }
-  }, [auth.initialized, auth.isAuthenticated, pendingSharedTaskInvitation, router, segments]);
+  }, [auth.initialized, auth.isAuthenticated, pendingRelayJoin, pendingSharedTaskInvitation, router, segments]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.accountDeletionRestored) return;
@@ -174,44 +243,18 @@ function NavigationGate() {
         <McpAppViewsProvider>
         <RecentMessageHistoriesProvider key={auth.accountGeneration}>
         <ResidentHomeListProvider>
-        <Stack
-          key={auth.accountGeneration}
-          screenOptions={{
-            headerShown: false,
-            // Custom titles register after mount and clear on unmount. Never expose route names in between.
-            title: '',
-            contentStyle: { backgroundColor: colors.surface },
-            ...(Platform.OS === 'ios'
-              ? { statusBarStyle: statusBarTheme === 'dark' ? 'light' : 'dark' }
-              : null),
-            // iOS 26 起 react-native-screens 的返回手势默认全屏识别(fullScreenSwipe 默认 true),
-            // 判定范围过大:会与消息内表格/代码块的横向 ScrollView 抢手势,拖动内容时还会误触返回。
-            // 限定手势起始点在屏幕前缘 44pt 内(end = 距前缘最大 x),恢复经典边缘返回的判定范围;
-            // iOS < 26 默认就是边缘返回,本配置不改变其行为;Android 返回手势不走这条路径,不受影响。
-            gestureResponseDistance: { end: 44 },
-          }}
-        >
-          <Stack.Screen name="sessions/[sessionId]" getId={({ params }) => recentTaskKey(params ?? {})} options={{
-            headerShown: sessionHeaderShown,
-            headerTransparent: true,
-            headerShadowVisible: false,
-            headerBackVisible: false,
-            headerStyle: { backgroundColor: 'transparent' },
-          }} />
-          {/* 新建页只在圆钮形变仍可交接时关掉推入动画（形变本身就是入场）；
-              交接记录已过期就照常推入，页面进入后再恢复普通返回动画。 */}
-          <Stack.Screen name="sessions/new" options={({ route }) => ({
-            animation: readComposerEntry((route.params as { composerMorph?: string } | undefined)?.composerMorph) ? 'none' : 'default',
-          })} />
-          <Stack.Screen
-            name="add-account"
-            options={{ animation: 'fade', gestureEnabled: false }}
-          />
-        </Stack>
+        <HomeRosterStoreProvider>
+        <PluginPromptReadsProvider>
+        <AdaptiveNavigationStack accountGeneration={auth.accountGeneration} statusBarTheme={statusBarTheme} />
+        </PluginPromptReadsProvider>
+        </HomeRosterStoreProvider>
         </ResidentHomeListProvider>
         </RecentMessageHistoriesProvider>
         </McpAppViewsProvider>
       </RemoteDesktopHost>
+      <TaskArchiveUndoHost />
+      <ChatInviteHost ready={auth.initialized && auth.isAuthenticated
+        && segments[0] !== '(auth)' && segments[0] !== 'add-account'} />
     </NavigationThemeProvider>
   );
 }
@@ -356,6 +399,9 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
   // 自建变体:启动即生效的 JS 热更门(冷启动 check→fetch→reload,本次启动就跑上最新 JS)。
   // 内部 gate 自建 + 非 dev + updates 可用,其余直接 ready=true 不阻塞。见 useStartupOtaGate。
   const otaReady = useStartupOtaGate(channel);
+  // 通知按钮会在锁屏时把 App 拉到后台启动:此时钥匙串读不出凭证,先不挂载业务树,
+  // 等用户打开 App 再启动(见 useLockedLaunchGate)。手机已解锁时只多一次钥匙串读取。
+  const credentialsReadable = useLockedLaunchGate();
   // handoff reporter:OTA 门就绪在本层上报(reload 期间保持 pending,readiness 不推进)
   const handoff = useLoginHandoff();
   const dispatchHandoff = handoff.dispatch;
@@ -373,19 +419,32 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
   if (!otaReady) {
     return null;
   }
+  // 与上面的门一样只返回 null，不另画启动画面:此时 App 在后台，没有人在看。
+  if (!credentialsReadable) return null;
   return (
     <AuthProvider>
       <AuthHandoffBridge />
       {/* 任务完成推送:注册同步 + 通知点击路由 + 前台横幅压制(不渲染 UI) */}
       <PushNotificationsBridge />
       <DeviceLinkProvider>
+        {/* 通知按钮(允许一次 / 拒绝 / 回复)在后台经这里取得设备连接(不渲染 UI) */}
+        <NotificationActionBridge />
+        <TaskBadgeBridge />
         <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
         <MobileOutboxBridge />
         <RemoteHistoryPrefetchBridge />
-        <HomeEntryProvider>
+        <UsageWidgetBridge />
+        <AgentActivityBridge />
+        {/* 掌机模式:手柄语音键 / 焦点导航 / 副屏(仅含 cindy-handheld 的 Android 原生包,不渲染 UI) */}
+        <HandheldModeBridge />
+        {/* 渲染兜底:启动稳定后,页面树里任何一处渲染报错都落到这里,显示可重新加载的错误页而不是
+            让 App 退出。只包页面树、留在 AuthProvider / DeviceLinkProvider 里面:重新加载只重挂页面,
+            不会重建登录与设备连接——重建 AuthProvider 会让可能仍在途的令牌刷新与新实例的刷新
+            各用同一个会轮换的令牌,被服务端拒绝时会清掉登录状态(登出)。 */}
+        <RootErrorBoundary fallback={renderErrorFallback}>
           <NavigationGate />
-        </HomeEntryProvider>
+        </RootErrorBoundary>
       </DeviceLinkProvider>
     </AuthProvider>
   );
@@ -406,6 +465,11 @@ function RootAfterEndpoints() {
 
 function RootLayout() {
   useEffect(() => startLocalDiagnostics(), []);
+  // JS 报错兜底的启动窗口从根布局首次提交起算(见 jsErrorGuard):窗口内报错照旧致命,
+  // 留给热更新的错误恢复回滚;窗口之后才显示错误页 / 继续运行。
+  useEffect(() => {
+    noteRootCommitted();
+  }, []);
   // Dev-only:注册开发者菜单的"清缓存 + reload"项(内部 __DEV__ gate,生产为 no-op)。
   useEffect(() => {
     registerDevCacheMenu();
@@ -437,7 +501,7 @@ function RootLayout() {
     // 白底体系(PR4a):错误屏包 MobileLoginHandoffStage(品牌显示),阻断内容层
     // 透明置于其上——阻断语义不变:没有"跳过 / 稍后再说",只有重试。
     body = (
-      <MobileLoginHandoffStage>
+      <MobileLoginHandoffStage staticBrand>
         <StartupGateBlockedContent
           title={loginText('endpointGateTitle')}
           subtitle={loginText('endpointGateSubtitle').replace(
@@ -461,7 +525,7 @@ function RootLayout() {
     // 业务树整体不挂载,含 AuthProvider / DeviceLinkProvider / 预创建 worktree 恢复桥:
     // 强更期间不该发起任何 Device Link 调用;恢复账本是持久化的,阻断解除后下次启动照常补偿。
     body = (
-      <MobileLoginHandoffStage>
+      <MobileLoginHandoffStage staticBrand>
         <ForcedUpdateGateContent target={forcedUpdate} />
       </MobileLoginHandoffStage>
     );
@@ -497,6 +561,23 @@ function RootLayout() {
       </SafeAreaProvider>
       </OutsideTapProvider>
     </GestureHandlerRootView>
+  );
+}
+
+/**
+ * 渲染兜底页:与启动闸门同一套阻断内容层(标题 / 说明 / 唯一动作),唯一动作是重新加载——
+ * 丢弃出错的页面树并重新挂载它。
+ */
+function renderErrorFallback(retry: () => void): ReactElement {
+  return (
+    <MobileLoginHandoffStage staticBrand>
+      <StartupGateBlockedContent
+        title={loginText('renderErrorTitle')}
+        subtitle={loginText('renderErrorSubtitle')}
+        actionLabel={loginText('renderErrorAction')}
+        onAction={retry}
+      />
+    </MobileLoginHandoffStage>
   );
 }
 

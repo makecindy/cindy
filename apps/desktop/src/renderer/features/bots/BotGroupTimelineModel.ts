@@ -21,12 +21,13 @@ import type {
   BotGroupPlanStepView,
   BotGroupPlanView,
   BotGroupQuoteView,
+  BotGroupThreadSummary,
 } from '../../../shared/botGroupChat';
 import type { BotGroupOutboxEntry } from './botGroupOutbox';
 import { mergeBotGroupMessages, mergeBotGroupPlans } from './botGroupPresentation';
 
-/** A timeline row; `pending` marks the optimistic copy of a message still on its way. */
-export type BotGroupTimelineMessage = BotGroupMessageView & { pending?: true; outbox?: BotGroupOutboxEntry };
+/** `pending` retains the local row until its authorized echo; `sendConfirmed` ends sending on receipt. */
+export type BotGroupTimelineMessage = BotGroupMessageView & { pending?: true; sendConfirmed?: true; outbox?: BotGroupOutboxEntry };
 
 /** Consecutive messages by one author within this window share one header. */
 export const BOT_GROUP_MERGE_WINDOW_MS = 5 * 60 * 1_000;
@@ -37,6 +38,8 @@ export interface BotGroupLoadedTimeline {
   older: BotGroupMessageView[];
   olderPlans: BotGroupPlanView[];
   olderHasMore: boolean;
+  /** Latest complete page's upper bound, retained while isolated deltas are displayed. */
+  latestPageCeiling?: number;
 }
 
 const signatures = new WeakMap<object, string>();
@@ -53,6 +56,23 @@ function signature(value: object): string {
  * `next` with every entry whose content equals the previous entry of the same id replaced by
  * that previous object; the previous array itself when nothing changed at all.
  */
+/**
+ * Pages opened through 「查看更早」 are not re-read, so their Thread roots take the unread state
+ * from the latest Thread list; otherwise a Thread read here or on another computer keeps its badge.
+ */
+function withThreadUnread(older: BotGroupMessageView[], threads: readonly BotGroupThreadSummary[] | undefined): BotGroupMessageView[] {
+  if (!threads?.length || !older.length) return older;
+  const unread = new Map(threads.map(thread => [thread.rootId, thread.unread]));
+  let changed = false;
+  const next = older.map((message) => {
+    const latest = unread.get(message.id);
+    if (!latest || signature(latest) === signature(message.threadUnread ?? {})) return message;
+    changed = true;
+    return { ...message, threadUnread: latest };
+  });
+  return changed ? next : older;
+}
+
 export function stabilizeById<T extends { id: string }>(
   previous: readonly T[],
   next: readonly T[],
@@ -83,9 +103,13 @@ export function mergeBotGroupLatestPage(
   previous: BotGroupLoadedTimeline,
   next: BotGroupDetail,
 ): BotGroupLoadedTimeline {
+  if (next.historyRevision && next.historyRevision !== previous.group.historyRevision) {
+    return { group: next, older: [], olderPlans: [], olderHasMore: next.hasMoreBefore };
+  }
   const page = next.messages;
   const floor = page.reduce((min, message) => Math.min(min, message.sequence), Number.POSITIVE_INFINITY);
-  const ceiling = previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY);
+  const ceiling = previous.latestPageCeiling
+    ?? previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY);
   // More than a page arrived at once (e.g. while the window was in the background): the new page
   // neither overlaps nor directly adjoins the one on screen. Keeping the old rows
   // would hide that gap for good, so start over from the new page, as on first load; 「查看更早」
@@ -105,9 +129,11 @@ export function mergeBotGroupLatestPage(
   const pushedOut = next.hasMoreBefore
     ? previous.group.messages.filter((message) => message.sequence < floor)
     : [];
-  const older = pushedOut.length > 0
-    ? stabilizeById(previous.older, mergeBotGroupMessages(previous.older, pushedOut))
-    : previous.older;
+  const updates = new Map(next.messageUpdates?.map(message => [message.id, message]));
+  const refreshedOlder = updates.size ? stabilizeById(previous.older, previous.older.map(message => updates.get(message.id) ?? message)) : previous.older;
+  const older = withThreadUnread(pushedOut.length > 0
+    ? stabilizeById(refreshedOlder, mergeBotGroupMessages(refreshedOlder, pushedOut.map(message => updates.get(message.id) ?? message)))
+    : refreshedOlder, next.threads);
   // The first rows moving down take over what the old latest page said about earlier history.
   const olderHasMore = pushedOut.length > 0 && previous.older.length === 0 ? previous.group.hasMoreBefore : previous.olderHasMore;
   const messages = stabilizeById(previous.group.messages, page, previous.older);
@@ -118,6 +144,7 @@ export function mergeBotGroupLatestPage(
     : previous.olderPlans;
   // Nothing moved: hand back the same object so the page skips the render entirely.
   if (messages === previous.group.messages && plans === previous.group.plans && older === previous.older
+    && previous.latestPageCeiling === undefined
     && olderPlans === previous.olderPlans
     && olderHasMore === previous.olderHasMore
     && signature({ ...next, messages: null, plans: null }) === signature({ ...previous.group, messages: null, plans: null })) {
@@ -170,6 +197,7 @@ export function pendingBotGroupMessage(send: BotGroupPendingSend): BotGroupTimel
     ...(send.quote ? { quote: send.quote } : {}),
     createdAt: send.createdAt,
     pending: true,
+    ...(send.messageId ? { sendConfirmed: true } : {}),
   };
 }
 

@@ -1,0 +1,282 @@
+[
+  {
+    "recipe": "books-list",
+    "status": "example-only",
+    "reason": "Scraping sandbox; excluded from the product catalog"
+  },
+  {
+    "recipe": "hockey-search",
+    "status": "example-only",
+    "reason": "Scraping sandbox; excluded from the product catalog"
+  },
+  {
+    "recipe": "36kr-news",
+    "adapter": "36kr/news",
+    "status": "updated"
+  },
+  {
+    "recipe": "x-tweet",
+    "status": "native-preserved",
+    "reason": "No equivalent upstream input/auth contract"
+  },
+  {
+    "recipe": "arxiv-search",
+    "adapter": "arxiv/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "barchart-quote",
+    "adapter": "barchart/quote",
+    "status": "updated"
+  },
+  {
+    "recipe": "bbc-news-feed",
+    "status": "native-preserved",
+    "reason": "No equivalent upstream input/auth contract"
+  },
+  {
+    "recipe": "bilibili-hot",
+    "adapter": "bilibili/hot",
+    "status": "updated"
+  },
+  {
+    "recipe": "sinablog-search",
+    "adapter": "sinablog/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "bloomberg-feed",
+    "status": "native-preserved",
+    "reason": "No equivalent upstream input/auth contract"
+  },
+  {
+    "recipe": "bluesky-user-posts",
+    "adapter": "bluesky/user",
+    "status": "updated"
+  },
+  {
+    "recipe": "coingecko-search",
+    "status": "native-preserved",
+    "reason": "No equivalent upstream input/auth contract"
+  },
+  {
+    "recipe": "crates-search",
+    "adapter": "crates/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "ctrip-suggest",
+    "adapter": "ctrip/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "devto-articles",
+    "adapter": "devto/tag",
+    "status": "updated"
+  },
+  {
+    "recipe": "mdn-search",
+    "adapter": "mdn/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "douban-search",
+    "adapter": "douban/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "douyin-user-videos",
+    "adapter": "douyin/user-videos",
+    "status": "updated"
+  },
+  {
+    "recipe": "facebook-search",
+    "adapter": "facebook/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "sinafinance-news",
+    "adapter": "sinafinance/news",
+    "status": "updated"
+  },
+  {
+    "recipe": "yahoo-finance-quote",
+    "adapter": "yahoo-finance/quote",
+    "status": "updated"
+  },
+  {
+    "recipe": "hf-model-search",
+    "adapter": "hf/models",
+    "status": "updated"
+  },
+  {
+    "recipe": "imdb-search",
+    "adapter": "imdb/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "instagram-profile",
+    "adapter": "instagram/profile",
+    "status": "updated"
+  },
+  {
+    "recipe": "jd-item",
+    "adapter": "jd/item",
+    "status": "updated"
+  },
+  {
+    "recipe": "linkedin-jobs-search",
+    "adapter": "linkedin/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "linuxdo-latest",
+    "adapter": "linux-do/feed",
+    "status": "updated"
+  },
+  {
+    "recipe": "lobsters-feed",
+    "status": "native-preserved",
+    "reason": "No equivalent upstream input/auth contract"
+  },
+  {
+    "recipe": "jike-user-posts",
+    "adapter": "jike/user",
+    "status": "updated"
+  },
+  {
+    "recipe": "medium-tag-feed",
+    "adapter": "medium/tag",
+    "status": "updated"
+  },
+  {
+    "recipe": "wechat-article",
+    "status": "native-preserved",
+    "reason": "No equivalent upstream input/auth contract"
+  },
+  {
+    "recipe": "hn-search",
+    "adapter": "hackernews/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "npm-search",
+    "adapter": "npm/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "pixiv-search",
+    "adapter": "pixiv/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "producthunt-feed",
+    "adapter": "producthunt/posts",
+    "status": "updated"
+  },
+  {
+    "recipe": "pubmed-search",
+    "adapter": "pubmed/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "pypi-package",
+    "adapter": "pypi/package",
+    "status": "updated"
+  },
+  {
+    "recipe": "reddit-listing",
+    "adapter": "reddit/hot",
+    "status": "updated"
+  },
+  {
+    "recipe": "reuters-search",
+    "adapter": "reuters/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "smzdm-search",
+    "adapter": "smzdm/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "stackoverflow-search",
+    "adapter": "stackoverflow/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "steam-search",
+    "adapter": "steam/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "substack-search",
+    "adapter": "substack/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "tieba-hot-topics",
+    "adapter": "tieba/hot",
+    "status": "updated"
+  },
+  {
+    "recipe": "v2ex-hot",
+    "adapter": "v2ex/hot",
+    "status": "updated"
+  },
+  {
+    "recipe": "weibo-hot",
+    "adapter": "weibo/hot",
+    "status": "updated"
+  },
+  {
+    "recipe": "weread-search",
+    "adapter": "weread/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "wikipedia-search",
+    "adapter": "wikipedia/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "coupang-search",
+    "adapter": "coupang/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "xiaoyuzhou-podcast",
+    "status": "native-preserved",
+    "reason": "No equivalent upstream input/auth contract"
+  },
+  {
+    "recipe": "zsxq-dynamics",
+    "adapter": "zsxq/dynamics",
+    "status": "updated"
+  },
+  {
+    "recipe": "twitter-profile",
+    "adapter": "twitter/profile",
+    "status": "updated"
+  },
+  {
+    "recipe": "xiaohongshu-search",
+    "adapter": "xiaohongshu/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "xueqiu-search-stock",
+    "adapter": "xueqiu/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "youtube-search",
+    "adapter": "youtube/search",
+    "status": "updated"
+  },
+  {
+    "recipe": "zhihu-search",
+    "adapter": "zhihu/search",
+    "status": "updated"
+  }
+]

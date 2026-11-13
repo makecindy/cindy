@@ -28,18 +28,20 @@ import { open, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { FILE_INLINE_MAX_BYTES } from '@cindy/device-link';
 
-import * as imageCacheStore from '../imageCacheStore.js';
+import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as videoCacheStore from '../videoCacheStore.js';
-import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
+import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
 import { getSensitiveMediaBlocklist, isPathAllowedAgainst } from '../filePathPolicy.js';
 import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { mimeOf, uploadLocalFile } from './mediaTransfer.js';
+import { mimeOf, uploadLocalFile } from './mediaTransfer.desktop.js';
 import { createLogger } from '../logger.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { sharedTaskMediaId, withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import { assertSharedTaskMedia } from './sharedTaskMediaAccess.js';
 import { fileVersion } from './fileVersion.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
+import { agentNetMediaCacheScope } from './agentNetMediaRouting.js';
 
 const log = createLogger('device-link:mediaFetch');
 
@@ -320,7 +322,7 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
   const url = record.url;
   if (typeof url !== 'string' || !url) throw new Error('media:fetch 缺少 url');
   const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
-  let sharedRoot: string | undefined;
+  let sharedRoot: string | { file: string } | undefined;
   if (sharedTask) {
     sharedRoot = await assertSharedTaskMedia(url, sharedTask);
   }
@@ -391,8 +393,10 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
       throw new Error('媒体文件不存在或不可读');
     }
     // realpath 再查:挡字面形式看似无害的 symlink 逃逸。
-    if (sharedRoot && !isInsideRealDir(real, sharedRoot)) {
-      throw new Error('[PERMISSION_DENIED] Media left the shared task workdir');
+    if (sharedRoot && (typeof sharedRoot === 'string'
+      ? !isInsideRealDir(real, sharedRoot)
+      : path.relative(sharedRoot.file, real) !== '')) {
+      throw new Error('[PERMISSION_DENIED] Media left the shared task file scope');
     }
     if (!isPathAllowedAgainst(real, getSensitiveMediaBlocklist())) {
       log.warn(`media:fetch blocked sensitive realpath ${url.slice(0, 60)}`);
@@ -437,16 +441,23 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
   };
 }
 
-export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResult> {
+export function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResult> {
+  const scope = activeOwnerScopeKey();
+  const assertCurrent = () => { if (scope !== activeOwnerScopeKey()) throw new Error('DEVICE_LINK_SCOPE_CHANGED'); };
+  return fetchLocalMediaForOwner(arg, assertCurrent).then((result) => { assertCurrent(); return result; });
+}
+async function fetchLocalMediaForOwner(arg: unknown, assertCurrent: () => void): Promise<MediaFetchResult> {
   const record =
     arg && typeof arg === 'object'
       ? (arg as { url?: unknown; skipCache?: unknown; thumbnail?: unknown; prepareOnly?: unknown; metadataOnly?: unknown })
       : {};
   const { absPath, mimeType, uploadExtHint, maxBytes, sourceVersion } = await resolveAuthorizedMedia(arg);
+  assertCurrent();
   const url = record.url as string;
   const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
   const mediaScope = sharedTask?.author.sharedTaskId ?? sharedTaskMediaId();
-  const cacheKey = mediaScope ? `${mediaScope}:${url}` : url;
+  const transportScope = agentNetMediaCacheScope();
+  const cacheKey = (transportScope ? transportScope + '\0' : '') + (mediaScope ? `${mediaScope}:${url}` : url);
   const skipCache = record.skipCache === true;
   if (record.prepareOnly === true && record.thumbnail !== true) {
     const file = await open(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -527,7 +538,9 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
   }
 
   if (sharedTask && !sharedTask.isCurrent()) throw new Error('[PERMISSION_DENIED] Shared task access revoked');
+  assertCurrent();
   const uploaded = await withSharedTaskMedia(sharedTask?.author.sharedTaskId, () => uploadLocalFile(absPath, {
+    assertCurrent,
     ...(maxBytes !== null ? { maxBytes } : {}),
     ...(mimeType ? { contentType: mimeType } : {}),
     ...(uploadExtHint ? { extHint: uploadExtHint } : {}),

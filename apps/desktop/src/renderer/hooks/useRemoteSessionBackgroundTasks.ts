@@ -41,13 +41,24 @@ const EMPTY_STATE: RemoteBackgroundState = { active: false, tasks: [] };
  * listRunningClaudeBashTasks 同口径:只认 local_bash,PI 任务另有控制面。
  */
 export function pickRemoteBashTasks(
-  tasks: ReadonlyArray<{ taskId: string; taskType?: string; title?: string; provider?: string }>,
+  tasks: ReadonlyArray<{
+    taskId: string;
+    taskType?: string;
+    title?: string;
+    provider?: string;
+    backgroundCommandKind?: string;
+  }>,
 ): RunningBashTask[] {
   const out = new Map<string, RunningBashTask>();
   for (const task of tasks) {
     if (task.taskType !== 'local_bash' || task.provider === 'pi') continue;
     if (out.has(task.taskId)) continue;
-    out.set(task.taskId, { taskId: task.taskId, ...(task.title ? { title: task.title } : {}) });
+    out.set(task.taskId, {
+      taskId: task.taskId,
+      ...(task.title ? { title: task.title } : {}),
+      // 旧版被控端不带种类,按工作显示。
+      ...(task.backgroundCommandKind === 'service' ? { service: true } : {}),
+    });
   }
   return [...out.values()];
 }
@@ -56,7 +67,12 @@ function sameState(a: RemoteBackgroundState, b: RemoteBackgroundState): boolean 
   return (
     a.active === b.active &&
     a.tasks.length === b.tasks.length &&
-    a.tasks.every((task, i) => task.taskId === b.tasks[i].taskId && task.title === b.tasks[i].title)
+    a.tasks.every(
+      (task, i) =>
+        task.taskId === b.tasks[i].taskId &&
+        task.title === b.tasks[i].title &&
+        task.service === b.tasks[i].service,
+    )
   );
 }
 
@@ -88,7 +104,7 @@ export function useRemoteSessionBackgroundTasks(
     EMPTY_STATE,
   );
   const [stoppingViewKey, setStoppingViewKey] = useState<string | null>(null);
-  // 读取序号:定时器不等上一轮返回,慢的旧读取只能被更新的结果取代,不能反过来覆盖;
+  // 读取序号:同一视图不叠加轮询,切换视图后的旧读取也不能覆盖新结果;
   // 停止成功时把已发出的读取整体作废,避免在途旧快照重新点亮已熄灭的提示。
   const issuedSeqRef = useRef(0);
   const appliedSeqRef = useRef(0);
@@ -100,22 +116,29 @@ export function useRemoteSessionBackgroundTasks(
       return;
     }
     let disposed = false;
+    let inFlight = false;
     const read = () => {
+      if (inFlight) return;
+      inFlight = true;
       const seq = ++issuedSeqRef.current;
       void Promise.all([
         sessionBackgroundActivityFor(sessionId),
         listSessionBackgroundTasksFor(sessionId),
-      ]).then(([activity, list]) => {
-        if (disposed || seq <= appliedSeqRef.current) return;
-        appliedSeqRef.current = seq;
-        const next = {
-          active: activity?.active === true,
-          tasks: pickRemoteBashTasks(Array.isArray(list?.tasks) ? list.tasks : []),
-        };
-        setSnapshot((prev) =>
-          prev.viewKey === viewKey && sameState(prev, next) ? prev : { ...next, viewKey },
-        );
-      });
+      ])
+        .then(([activity, list]) => {
+          if (disposed || seq <= appliedSeqRef.current) return;
+          appliedSeqRef.current = seq;
+          const next = {
+            active: activity?.active === true,
+            tasks: pickRemoteBashTasks(Array.isArray(list?.tasks) ? list.tasks : []),
+          };
+          setSnapshot((prev) =>
+            prev.viewKey === viewKey && sameState(prev, next) ? prev : { ...next, viewKey },
+          );
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     };
     read();
     const timer = setInterval(read, POLL_MS);

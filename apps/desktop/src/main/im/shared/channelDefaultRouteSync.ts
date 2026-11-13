@@ -8,7 +8,11 @@
  */
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { AgentKind } from '@cindy/maker-core';
-import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
+import {
+  effectiveSourceIdForModel,
+  movedCindyAutoSourceId,
+  type ProviderView,
+} from '@cindy/model-providers';
 
 import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings.js';
 import { getDbClient } from '../../localDb/client/current';
@@ -78,7 +82,7 @@ export interface SessionRouteRow {
   providerId: string | null;
   effort: string | null;
   /** Fast 不属于路由; 只有跟随切换用得到(保留任务自己的开关), 回填选择不带它。 */
-  fastMode?: boolean | null;
+  fastMode?: boolean | 'ultrafast' | null;
   imDefaultRoute: string | null;
   feishuBotAppId: string | null;
   imBotContextId: string | null;
@@ -133,11 +137,24 @@ function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
 
 /**
  * 隐式来源按「新路由选择」口径落到具体来源 —— 系统建会话钉住 / 切换时独占改道
- * 用的就是这个口径, 与它钉出的具体 id 视为同一条路由。显式来源原样比较。
+ * 用的就是这个口径, 与它钉出的具体 id 视为同一条路由。显式来源原样比较;
+ * 唯一例外是被服务端挪到另一家 Cindy 来源的 Auto, 新旧位置视为同一条路由, 否则
+ * 任务跟着 Auto 换了来源后会被误判成用户单独改过, 从此不再跟随渠道默认。
  */
 function providerNormalizer(providers: ProviderView[]) {
-  return (route: ImDefaultRoute): string | null =>
-    route.agentDeviceId ? route.providerId : route.providerId ?? effectiveSourceIdForModel(providers, null, route.model, route.agentKind as AgentKind);
+  return (route: ImDefaultRoute): string | null => {
+    if (route.agentDeviceId) return route.providerId;
+    const agent = route.agentKind as AgentKind;
+    return (
+      movedCindyAutoSourceId(providers, {
+        agent,
+        model: route.model,
+        providerId: route.providerId,
+      }) ??
+      route.providerId ??
+      effectiveSourceIdForModel(providers, null, route.model, agent)
+    );
+  };
 }
 
 async function listProviders(): Promise<ProviderView[] | null> {
@@ -159,7 +176,7 @@ interface Evaluation {
    * 任务当前的 Fast 开关。渠道默认不存 Fast, 跟随切换只管 Agent/模型/来源/档位,
    * 单独开过 Fast 的任务不能被顺手清掉(chatgpt-codex-connector P2, PR #5155)。
    */
-  currentFastMode: boolean;
+  currentFastMode: boolean | 'ultrafast';
 }
 
 export function createImChannelDefaultRouteSync(deps: {
@@ -199,6 +216,9 @@ export function createDefaultRouteFollower(deps: {
     // 的系统意图, 调用方必须暂缓通用意图应用(PR #5155 review P2)。
     if (!providers) return 'defer-unknown';
     const defaults = await deps.resolveTarget(providers);
+    // Automatic settings are stable while their catalog-resolved route may change.
+    // Skip writes when re-resolution confirms the last adopted route is still current.
+    if (defaults.fingerprint === record.fp && !record.pendingRoute) return null;
     const target: ImDefaultRoute = {
       agentKind: defaults.agentKind,
       model: defaults.model,
@@ -232,7 +252,7 @@ export function createDefaultRouteFollower(deps: {
       target,
       targetFingerprint: defaults.fingerprint,
       providers,
-      currentFastMode: row.fastMode === true,
+      currentFastMode: row.fastMode ?? false,
     };
   }
 

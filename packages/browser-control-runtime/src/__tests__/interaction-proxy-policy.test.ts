@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import { readBrowserDom } from '../shim/browser-dom-read.js';
 
 const mocks = vi.hoisted(() => ({
   assertBrowserNavigationResultAllowed: vi.fn(async () => undefined),
-  assertPageNavigationCompletedSafely: vi.fn(async (_opts?: { page?: unknown }) => undefined),
-  closeBlockedNavigationTarget: vi.fn(async () => undefined),
+  assertPageNavigationCompletedSafely: vi.fn(async (_opts: { page: unknown }): Promise<void> => undefined),
+  closeBlockedNavigationTarget: vi.fn(async (_opts: { page: unknown }): Promise<void> => undefined),
   getPageForTargetId: vi.fn(),
-  quarantineTargetWithoutClosing: vi.fn(async () => undefined),
+  quarantineTargetWithoutClosing: vi.fn(async (_opts: { page: { url(): string } }): Promise<void> => undefined),
   refLocator: vi.fn(),
 }));
 
@@ -24,7 +26,7 @@ vi.mock('../_generated/extension/src/browser/pw-session.js', () => ({
   assertPageNavigationCompletedSafely: mocks.assertPageNavigationCompletedSafely,
   closeBlockedNavigationTarget: mocks.closeBlockedNavigationTarget,
   quarantineTargetWithoutClosing: mocks.quarantineTargetWithoutClosing,
-  createObservedDialogAbortSignalForPage: () => ({ signal: undefined, cleanup: vi.fn() }),
+  createObservedDialogAbortSignalForPage: ({ parentSignal }: { parentSignal?: AbortSignal }) => ({ signal: parentSignal ?? new AbortController().signal, cleanup: vi.fn() }),
   ensurePageState: vi.fn(),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => undefined),
   getPageForTargetId: mocks.getPageForTargetId,
@@ -47,9 +49,112 @@ import {
   setInputFilesViaPlaywright,
 } from '../_generated/extension/src/browser/pw-tools-core.interactions.js';
 
+// Regression: fixed reads used the 250ms interaction grace window. This unit
+// tier verifies the real read helper's policy/result/cleanup boundary; the live
+// browser regression verifies isolated-world execution and iframe detection.
+describe('fixed DOM reads', () => {
+  const options = { cdpUrl: 'http://127.0.0.1:18800', targetId: 'page-1',
+    spec: { kind: 'login-wall' }, ssrfPolicy: { hostnameAllowlist: ['allowed.example'] },
+    browserProxyMode: 'explicit-browser-proxy' as const };
+  const url = 'https://allowed.example/';
+  function pageFixture(afterEvaluate?: () => void) {
+    const detach = vi.fn(async () => {});
+    const frame = { id: 'frame-1', loaderId: 'document-1' };
+    const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'Page.getFrameTree') return { frameTree: { frame: { ...frame } } };
+      if (method === 'Page.createIsolatedWorld') {
+        expect(params).toEqual({ frameId: 'frame-1', worldName: 'cindy-dom-read' });
+        return { executionContextId: 17 };
+      }
+      expect(method).toBe('Runtime.evaluate');
+      expect(params).toMatchObject({ contextId: 17, returnByValue: true, timeout: 20000 });
+      const value = runInNewContext(String(params?.expression), {
+        location: { href: url },
+        document: { querySelectorAll: () => [], querySelector: (selector: string) => selector === 'input[type=password]' ? {} : null },
+      });
+      afterEvaluate?.();
+      return { result: { value } };
+    });
+    const page = { url: () => url, context: () => ({ newCDPSession: async () => ({ send, detach }) }) };
+    mocks.getPageForTargetId.mockResolvedValue(page);
+    return { page, send, detach, frame };
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.assertPageNavigationCompletedSafely.mockResolvedValue(undefined);
+  });
+  it('returns fixed login detection with both policy checks and releases the CDP session', async () => {
+    const { detach } = pageFixture();
+    await expect(readBrowserDom(options)).resolves.toEqual({ url, value: { password: true, code: false } });
+    expect(mocks.assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(2);
+    expect(mocks.assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith(expect.objectContaining({
+      ssrfPolicy: options.ssrfPolicy, browserProxyMode: options.browserProxyMode,
+    }));
+    expect(detach).toHaveBeenCalledOnce();
+  });
+  it.each(['before', 'after'])('does not return content when navigation policy rejects %s the read', async (phase) => {
+    const { send, detach } = pageFixture();
+    if (phase === 'after') mocks.assertPageNavigationCompletedSafely.mockResolvedValueOnce(undefined);
+    mocks.assertPageNavigationCompletedSafely.mockRejectedValueOnce(new Error('Navigation blocked'));
+    await expect(readBrowserDom(options)).rejects.toThrow('Navigation blocked');
+    expect(send).toHaveBeenCalledTimes(phase === 'before' ? 0 : 3);
+    expect(detach).toHaveBeenCalledTimes(phase === 'before' ? 0 : 1);
+  });
+  it('rejects caller-supplied code instead of treating it as a read-only assertion', async () => {
+    const { send } = pageFixture();
+    await expect(readBrowserDom({ ...options, spec: { kind: 'login-wall', fn: '() => location.reload()' } })).rejects.toThrow();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('discards results after navigation or cancellation and detaches in both cases', async () => {
+    const controller = new AbortController();
+    const changed = pageFixture(() => { changed.page.url = () => 'https://allowed.example/next'; });
+    await expect(readBrowserDom(options)).rejects.toThrow('PAGE_CHANGED');
+    expect(changed.detach).toHaveBeenCalledOnce();
+    const cancelled = pageFixture(() => controller.abort(new Error('cancelled')));
+    await expect(readBrowserDom({ ...options, signal: controller.signal })).rejects.toThrow('cancelled');
+    expect(cancelled.detach).toHaveBeenCalledOnce();
+  });
+  it('rejects results from a replaced document even when its URL stays the same', async () => {
+    const changed = pageFixture(() => { changed.frame.loaderId = 'document-2'; });
+    await expect(readBrowserDom(options)).rejects.toThrow('PAGE_CHANGED');
+    expect(changed.detach).toHaveBeenCalledOnce();
+  });
+  it('bounds a stalled protocol read and still releases its session', async () => {
+    vi.useFakeTimers();
+    try {
+      const { send, detach } = pageFixture();
+      const original = send.getMockImplementation()!;
+      send.mockImplementation((method, params) => method === 'Runtime.evaluate'
+        ? new Promise(() => {}) : original(method, params));
+      const assertion = expect(readBrowserDom(options)).rejects.toThrow('DOM read timed out');
+      await vi.advanceTimersByTimeAsync(20000);
+      await assertion;
+      expect(detach).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('Playwright interaction proxy navigation policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each(['() => false', 'false', 'async () => false'])('does not mistake a function/Promise for a satisfied wait: %s', async (fn) => {
+    const waitForFunction = vi.fn(async (predicate: () => unknown, _arg: unknown, options: { timeout: number }) => {
+      expect(options.timeout).toBe(500); // existing minimum wait timeout
+      expect(typeof predicate).toBe('function');
+      const result = predicate();
+      if (!result) throw new Error('Timeout 500ms exceeded');
+    });
+    const page = { url: () => 'https://example.com/', on: vi.fn(), off: vi.fn(), waitForFunction };
+    mocks.getPageForTargetId.mockResolvedValue(page);
+    await expect(executeActViaPlaywright({ cdpUrl: 'http://127.0.0.1:18800', targetId: 'page-1', evaluateEnabled: true,
+      action: { kind: 'wait', fn, timeoutMs: 200 } })).rejects.toThrow(
+      fn.startsWith('async') ? /synchronous predicate/ : /Timeout/,
+    );
+    expect(waitForFunction).toHaveBeenCalledTimes(1);
   });
 
   it('carries explicit proxy mode into main-frame and subframe checks', async () => {

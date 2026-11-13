@@ -10,13 +10,13 @@ import {
 describe('Bot Profile versioning', () => {
   it('removes retired built-in references while preserving other choices and stale-form edits', () => {
     const previous = { toolCapabilityVersion: 1, toolsetMode: 'allowlist',
-      toolsets: ['ios-simulator', 'docs'], tools: ['ios-simulator', 'browser'],
+      toolsets: ['ios-simulator', 'docs'], tools: ['ios-simulator', 'contacts', 'browser'],
       mcpMode: 'allowlist', mcpServers: ['private-mcp'], permissions: 'ask' };
     const next = mergeBotProfileCapabilities({ previous, hasSkills: false,
-      capabilities: { toolsets: ['ios-simulator', 'contacts'] },
+      capabilities: { toolsets: ['ios-simulator', 'contacts', 'lsp'] },
       capabilityBaseline: { toolsets: ['ios-simulator', 'docs'] },
     });
-    expect(next).toEqual({ ...previous, toolsets: ['contacts'], tools: ['browser'] });
+    expect(next).toEqual({ ...previous, toolsets: ['lsp'], tools: ['browser'] });
     expect(previous.toolsets).toEqual(['ios-simulator', 'docs']);
     expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
   });
@@ -130,18 +130,16 @@ it('distinguishes model selections from identity and capability-only refreshes',
 });
 
 
-describe('independent task model configuration', () => {
-  const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
-  it('preserves the complete route without changing the primary model or its selection revision', () => {
+// 2026-11-09: the teammate task model setting is retired. A profile that still carries one (even a
+// damaged one) loads and saves; the value stays as it is for an older computer (cloud carry-over).
+describe('retired task model', () => {
+  it('keeps a stored value opaque without validating it or changing the model selection', () => {
     const before = { modelChainOverride: null, model: 'primary' };
-    const after = normalizeBotProfileModelChain({ ...before, taskModelOverride: route });
-    expect(after).toEqual({ ...before, taskModelOverride: route });
-    expect(botProfileModelSelectionChanged(before, after)).toBe(false);
-    expect(normalizeBotProfileModelChain({ ...after, taskModelOverride: null }).taskModelOverride).toBeNull();
-    expect(normalizeBotProfileModelChain(before)).toEqual(before);
-  });
-  it.each([{ ...route, harness: 'unknown' }, { ...route, model: '' }, { ...route, fastMode: 'true' }])('rejects incomplete task routes: %j', taskModelOverride => {
-    expect(() => normalizeBotProfileModelChain({ taskModelOverride })).toThrow();
+    for (const taskModelOverride of [{ harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }, { harness: 'unknown', model: '' }, 'garbage']) {
+      const after = normalizeBotProfileModelChain({ ...before, taskModelOverride });
+      expect(after).toEqual({ ...before, taskModelOverride });
+      expect(botProfileModelSelectionChanged(before, after)).toBe(false);
+    }
   });
 });
 

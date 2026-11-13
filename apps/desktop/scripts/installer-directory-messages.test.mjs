@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  auditEnglishCopy,
   caseStandardFor,
   findCaseMismatch,
   occursIn,
@@ -11,6 +12,7 @@ import {
   normalizeForPunctuation,
   HALFWIDTH_PUNCT_LOCALES,
   ELLIPSIS_LOCALES,
+  makeEnglishCopyExemptChecker,
 } from '../../../scripts/shared/glossary-rules.mjs';
 
 // Native NSIS dialogs cannot load i18next. Check their separate catalog using
@@ -22,8 +24,11 @@ const source = readFileSync(
 const glossary = JSON.parse(
   readFileSync(new URL('../../../i18n/glossary.json', import.meta.url), 'utf8'),
 );
-const locales = { en: 'en', zh_CN: 'zh-CN', zh_TW: 'zh-TW', ja: 'ja', ko: 'ko' };
-const entries = [...source.matchAll(/^!define (\w+)_(en|zh_CN|zh_TW|ja|ko) "([^"]+)"$/gm)].map(
+// The installer follows the Windows display language. Classical editions (private-use
+// `-x-` tags) are only ever chosen by hand inside the app, so the installer never shows them.
+const installerLocales = glossary.locales.filter((locale) => !locale.includes('-x-'));
+const locales = { en: 'en', zh_CN: 'zh-CN', zh_TW: 'zh-TW', ja: 'ja', ko: 'ko', es: 'es', fr: 'fr', de: 'de', pt_PT: 'pt-PT', pt_BR: 'pt-BR' };
+const entries = [...source.matchAll(/^!define (\w+)_(en|zh_CN|zh_TW|ja|ko|es|fr|de|pt_PT|pt_BR) "([^"]+)"$/gm)].map(
   ([, key, language, value]) => ({ key, locale: locales[language], value }),
 );
 const english = new Map(
@@ -39,9 +44,9 @@ describe('Windows installer directory messages', () => {
           .filter((entry) => entry.key === key)
           .map((entry) => entry.locale)
           .sort(),
-      ).toEqual([...glossary.locales].sort());
+      ).toEqual([...installerLocales].sort());
     }
-    expect(entries.length).toBe(english.size * glossary.locales.length);
+    expect(entries.length).toBe(english.size * installerLocales.length);
   });
 
   it('uses the decided glossary and locale punctuation', () => {
@@ -66,5 +71,14 @@ describe('Windows installer directory messages', () => {
         violations.push(`${locale} ${key}: ellipsis`);
     }
     expect(violations).toEqual([]);
+  });
+
+  it('follows the English copy rules in DESIGN.md §11.1 / §11.2', () => {
+    const { added, stale } = auditEnglishCopy(
+      [...english].map(([key, value]) => ({ key: `desktop:installer.${key}`, value })),
+      { isExempt: makeEnglishCopyExemptChecker(glossary.englishCopyExempt) },
+    );
+    expect(added).toEqual([]);
+    expect(stale).toEqual([]);
   });
 });

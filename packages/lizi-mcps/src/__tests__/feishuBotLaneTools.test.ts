@@ -246,11 +246,13 @@ describe('cindy_feishu_bot 轮次内直通工具', () => {
       const outside = join(outsideDir, 'secret.txt');
       writeFileSync(inside, 'ok');
       writeFileSync(outside, 'secret');
-      symlinkSync(outside, join(workingDir, 'link.txt'));
+      const linkDir = join(workingDir, 'outside-link');
+      // Resolve a real file through a directory link; Windows junctions need no symlink privilege.
+      symlinkSync(outsideDir, linkDir, process.platform === 'win32' ? 'junction' : 'dir');
 
       const im = fakeTransport();
       const guest = await harness(() => scopeOf(im, { requesterIsOwner: false, workingDir }));
-      for (const p of [outside, join(workingDir, 'link.txt'), join(workingDir, 'missing.txt')]) {
+      for (const p of [outside, join(linkDir, 'secret.txt'), join(workingDir, 'missing.txt')]) {
         expect((await guest.call('send_file', { path: p })).payload.errorCode).toBe('PERMISSION_DENIED');
       }
       expect((await guest.call('send_file', { path: 'report.txt' })).payload.errorCode).toBe('PATH_NOT_ABSOLUTE');

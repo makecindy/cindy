@@ -14,7 +14,7 @@ import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import { memberStatusText, ProviderGroupSection } from '../ProviderGroupSection';
 import { ProviderGroupAddDialog } from '../ProviderGroupAddDialog';
 import { __testing as localGroupsTesting, useLocalProviderGroupsState } from '../useLocalProviderGroups';
-import { __testing as groupViewTesting } from '../useProviderGroup';
+import { __testing as groupViewTesting, useProviderGroup } from '../useProviderGroup';
 
 let realLocale: ReturnType<typeof createInstance> | null = null;
 const providerState = vi.hoisted(() => ({ providers: [
@@ -61,7 +61,26 @@ vi.mock('../GroupMemberQuota', async (importOriginal) => ({
     </div>
   ),
 }));
-
+// Display-only leaves for this settings-page test: the icons are SVG drawing only and
+// have no assertions here; Tip keeps its children (and therefore the real button props,
+// labels and events) while dropping the Radix hover machinery. AuthContext is not mounted
+// by this test; the real useOptionalAuthDeviceId returns null outside AuthProvider, so the
+// same null boundary is supplied explicitly without loading the auth application graph.
+vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children?: ReactNode }) => <>{children}</>,
+}));
+vi.mock('lucide-react', () => ({
+  Monitor: () => null,
+  ChevronRight: () => null,
+  MoreHorizontal: () => null,
+  CircleMinus: () => null,
+  Check: () => null,
+  ChevronDown: () => null,
+  ChevronUp: () => null,
+  X: () => null,
+  LoaderCircle: () => null,
+}));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => null }));
 const LOCAL = { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false };
 const MINI = {
   key: 'device:mini:anthropic-1a2b3c4d',
@@ -70,6 +89,7 @@ const MINI = {
   providerId: 'anthropic-1a2b3c4d',
   label: 'Mac mini',
   limit: 4,
+  limitSet: true as const,
   weight: 1,
   paused: false,
 };
@@ -78,6 +98,7 @@ let stored: ProviderGroupConfig | null = null;
 /** 按 member key 覆盖「正在运行」的台数；不设时本机 1、其余 0。 */
 let running: Record<string, number> | null = null;
 const command = vi.fn();
+const changed = vi.hoisted(() => ({ listener: null as null | ((event: { providerId?: string }) => void) }));
 
 function viewOf(config: ProviderGroupConfig | null): ProviderGroupView {
   return {
@@ -105,6 +126,7 @@ beforeEach(() => {
   localGroupsTesting.reset();
   groupViewTesting.reset();
   confirmSpy.mockClear();
+  changed.listener = null;
   command.mockReset();
   vi.mocked(toast.error).mockClear();
   command.mockImplementation(async (cmd: { action: string; config?: ProviderGroupConfig; expectedConfig?: ProviderGroupConfig | null }) => {
@@ -129,7 +151,10 @@ beforeEach(() => {
     }
     throw new Error(`unexpected ${cmd.action}`);
   });
-  Object.assign(window, { electronAPI: { providerGroup: { command, onChanged: () => () => undefined } } });
+  Object.assign(window, { electronAPI: { providerGroup: { command, onChanged: (listener: (event: { providerId?: string }) => void) => {
+    changed.listener = listener;
+    return () => { if (changed.listener === listener) changed.listener = null; };
+  } } } });
 });
 
 afterEach(() => cleanup());
@@ -254,7 +279,9 @@ describe('ProviderGroupSection', () => {
     expect(rows[0].getAttribute('data-member-state')).toBe('available');
     // 运行数在状态行，上限只在下拉里：同一个数字不出现两次。
     expect(within(rows[0]).getByText('providerGroup.member.runningCount:{"count":1}')).toBeTruthy();
-    expect(within(rows[0]).getByText('providerGroup.member.limitOption:{"count":4}')).toBeTruthy();
+    // 2026-11-11：没设置过上限(含旧版默认 4)显示「不限制」；设置过的显示数字。
+    expect(within(rows[0]).getByText('providerGroup.member.limitUnlimited')).toBeTruthy();
+    expect(within(rows[1]).getByText('providerGroup.member.limitOption:{"count":4}')).toBeTruthy();
     expect(within(rows[1]).queryByText(/providerGroup\.member\.runningCount/)).toBeNull();
     expect(rows[1].getAttribute('data-member-state')).toBe('cooling');
     expect(within(rows[1]).getByText(/providerGroup\.member\.status\.coolingUntil/)).toBeTruthy();
@@ -264,6 +291,16 @@ describe('ProviderGroupSection', () => {
     });
     expect(localSwitch).toBeTruthy();
     expect(within(rows[0]).queryByRole('button', { name: 'providerGroup.member.remove' })).toBeNull();
+    // 「⋯」每行都在、都排在开关后面，行尾对齐；本机那个置灰不能点。
+    const moreName = (name: string) => `providerGroup.member.moreAria:{"name":"${name}"}`;
+    const localMore = within(rows[0]).getByRole('button', { name: moreName('providerGroup.member.local') });
+    const remoteMore = within(rows[1]).getByRole('button', { name: moreName('Mac mini') });
+    expect(localMore.getAttribute('aria-disabled')).toBe('true');
+    expect(localMore.hasAttribute('aria-haspopup')).toBe(false);
+    expect(remoteMore.getAttribute('aria-disabled')).toBeNull();
+    for (const [row, more] of [[rows[0], localMore], [rows[1], remoteMore]] as const) {
+      expect(within(row).getByRole('switch').compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
     fireEvent.click(
       within(rows[1]).getByRole('switch', { name: 'providerGroup.member.assignAria:{"name":"Mac mini"}' }),
     );
@@ -286,6 +323,26 @@ describe('ProviderGroupSection', () => {
     // 每行都要报负载：跑 0 个时说「空闲」，不是什么都不显示。
     expect(within(rows[0]).getByText('providerGroup.member.status.idle')).toBeTruthy();
     expect(within(rows[0]).queryByText(/providerGroup\.member\.runningCount/)).toBeNull();
+  });
+
+  // Unit regression: the collapsed row must explain a confirmed exhausted quota
+  // and its reset while retaining ongoing work; quota details used to be the only explanation.
+  it('shows quota exhaustion and its reset in the collapsed row alongside running tasks', async () => {
+    realLocale = createInstance();
+    await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    const view = viewOf(stored);
+    view.members[1] = {
+      ...view.members[1], running: 2,
+      usageLimit: { resetAtMs: Date.now() + (6 * 24 + 1) * 3_600_000 },
+    };
+    command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'list' ? { anthropic: stored } : view);
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    const rows = await screen.findAllByTestId('provider-group-member');
+    expect(await within(rows[1]).findByText('配额已用完 · 6天 1小时后重置')).toBeTruthy();
+    expect(within(rows[1]).getByText('2 个任务运行中')).toBeTruthy();
+    expect(within(rows[1]).queryByText('空闲')).toBeNull();
+    expect(screen.queryByTestId('member-quota')).toBeNull();
   });
 
   it('changes the group strategy and turns automatic switching off', async () => {
@@ -315,7 +372,7 @@ describe('ProviderGroupSection', () => {
     providerState.providers[0].connected = false;
     stored = { strategy: 'usage', autoSwitch: true, members: [LOCAL] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Claude" />);
-    expect(await screen.findByText('能读取 Claude 订阅用量时，先用配额快重置的电脑，再选用量低的，相近时按组策略')).toBeTruthy();
+    expect(await screen.findByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
     expect(screen.getByRole('radio', { name: '最少占用' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByText('给最闲的那台')).toBeTruthy();
     expect(screen.queryByRole('radio', { name: '用量均衡' })).toBeNull();
@@ -334,7 +391,7 @@ describe('ProviderGroupSection', () => {
     stored = { strategy: 'order', autoSwitch: true, members };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('能读取 Claude 订阅用量时，先用配额快重置的电脑，再选用量低的，相近时按组策略')).toBeTruthy();
+    expect(screen.getByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
     expect(screen.getByRole('radio', { name: '按顺序' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.queryByRole('radio', { name: '用量均衡' })).toBeNull();
   });
@@ -480,11 +537,24 @@ describe('ProviderGroupSection', () => {
     }));
   });
 
-  it('shows the quota hint for a subscription group', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
-    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+  // unit：用户要求订阅通用说明；旧测试只覆盖 Anthropic，遗漏了 OpenAI 页面显示 Claude 专属提示。
+  // 最小输入是 OpenAI 单成员组，经真实组件验证本机和远程管理都显示通用说明。
+  it.each([
+    { kind: 'local', deviceId: undefined },
+    { kind: 'remote', deviceId: 'owner-computer' },
+  ])('shows a generic subscription quota hint for a $kind OpenAI group', async ({ deviceId }) => {
+    realLocale = createInstance();
+    await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
+    stored = { strategy: 'least', autoSwitch: true, members: [{ ...LOCAL, providerId: 'openai' }] };
+    if (deviceId) command.mockResolvedValue(viewOf(stored));
+    render(<ProviderGroupSection
+      providerId="openai"
+      providerName="OpenAI"
+      deviceId={deviceId}
+      initialConfig={stored}
+    />);
     await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('providerGroup.strategy.quotaFirst')).toBeTruthy();
+    expect(screen.getByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
   });
 });
 
@@ -573,5 +643,105 @@ describe('memberStatusText', () => {
     // 周上限：10 月 15 日才恢复，不能只写 16:00。
     expect(memberStatusText(t, cooling(new Date(2026, 9, 15, 16, 0).getTime()), 'en-US', now))
       .toBe('providerGroup.member.status.coolingUntil:{"time":"Oct 15 16:00"}');
+  });
+
+  it('does not invent a quota reset and keeps an elapsed observation pending', () => {
+    const now = Date.UTC(2026, 9, 22);
+    expect(memberStatusText(t, { ...cooling(now + 60_000), usageLimit: { resetAtMs: null } }, 'en', now))
+      .toBe('providerGroup.member.status.quotaExhausted');
+    expect(memberStatusText(t, { ...cooling(now + 60_000), usageLimit: { resetAtMs: now - 1 } }, 'en', now))
+      .toBe('providerGroup.member.status.quotaExhausted · quotaCard.resetPending');
+  });
+});
+
+describe('ProviderGroupSection status source', () => {
+  it('does not present a stale source as live member status', async () => {
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    const stale = viewOf(stored);
+    // Unit: a stale quota verdict must not leak through the shared status helper (#8647).
+    stale.members[1] = { ...stale.members[1], usageLimit: { resetAtMs: null } };
+    stale.providerContinuity = { stale: true, remainingMs: 60_000 };
+    command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'get' ? stale : { anthropic: stored });
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    const rows = await screen.findAllByTestId('provider-group-member');
+    expect(rows.every((row) => row.getAttribute('data-member-state') === 'loading')).toBe(true);
+    expect(screen.queryByText('providerGroup.member.status.quotaExhausted')).toBeNull();
+    expect(screen.queryByText('providerGroup.member.runningCount:{"count":1}')).toBeNull();
+  });
+
+  it('drops live member status after a failed reload', async () => {
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    await screen.findByText('providerGroup.member.runningCount:{"count":1}');
+    command.mockImplementation(async (cmd: { action: string }) => {
+      if (cmd.action === 'list') return { anthropic: stored };
+      if (cmd.action === 'get') throw new Error('directory unavailable');
+      throw new Error(`unexpected ${cmd.action}`);
+    });
+    await act(async () => { changed.listener?.({ providerId: 'anthropic' }); });
+    await waitFor(() => expect(screen.queryByText('providerGroup.member.runningCount:{"count":1}')).toBeNull());
+    expect(screen.getAllByTestId('provider-group-member').every((row) => row.getAttribute('data-member-state') === 'loading')).toBe(true);
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：useProviderGroup 的转发预算 + ProviderGroupSection 成员行；
+   *   到期后 running/state 不得继续作为实时状态显示。
+   * - Bug/规则依据：provider-groups.md「短暂失联时的目录与已有任务」最多 30 分钟，任一墙钟或单调时钟到期即结束。
+   * - 现有覆盖缺口：既有 stale-source / failed-reload 用例只覆盖服务端 stale 标记与失败，不覆盖时间到期和重开缓存。
+   * - 最小失败输入：providerContinuity {stale:false, remainingMs:1000}，且下一轮 15s 刷新尚未发生。
+   * - tier：unit（jsdom + fake timers）。
+   */
+  it('retires the live member status when the forwarded view budget ends', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+      const view = viewOf(stored);
+      view.providerContinuity = { stale: false, remainingMs: 1_000 };
+      const currentView = view;
+      let resolveReopen!: (value: ProviderGroupView) => void;
+      command.mockImplementation(async (cmd: { action: string }) => {
+        if (cmd.action === 'list') return { anthropic: stored };
+        if (cmd.action === 'get') return currentView;
+        throw new Error(`unexpected ${cmd.action}`);
+      });
+      const { result, rerender, unmount } = renderHook(() => useProviderGroup('anthropic'));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      expect(result.current.view?.providerContinuity).toMatchObject({ stale: false, remainingMs: 1_000 });
+      expect(result.current.expired).toBe(false);
+      const wallBase = Date.now();
+      // Timer is deliberately not advanced: a parent re-render observes the wall
+      // deadline first, and must latch it without setState/notify.
+      vi.setSystemTime(wallBase + 2_000);
+      await act(async () => { rerender(); });
+      expect(result.current.expired).toBe(true);
+      // A later wall rollback cannot revive the observed source.
+      vi.setSystemTime(wallBase - 1_000);
+      await act(async () => { rerender(); });
+      expect(result.current.expired).toBe(true);
+      // The rollback happens after the observation and before the reopen; only
+      // the shared cached entry can keep this source retired. The reopening get
+      // stays pending so no new authoritative result can mask the latch.
+      unmount();
+      command.mockImplementation((cmd: { action: string }) => {
+        if (cmd.action === 'list') return Promise.resolve({ anthropic: stored });
+        if (cmd.action === 'get') return new Promise<ProviderGroupView>((resolve) => { resolveReopen = resolve; });
+        throw new Error(`unexpected ${cmd.action}`);
+      });
+      const reopened = renderHook(() => useProviderGroup('anthropic'));
+      await act(async () => { await Promise.resolve(); });
+      expect(reopened.result.current.view?.providerContinuity?.stale).toBe(true);
+      expect(reopened.result.current.expired).toBe(true);
+      // Only a new authoritative result resets the expiry latch.
+      await act(async () => {
+        resolveReopen({ ...view, providerContinuity: { stale: false, remainingMs: 1_000 } });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(reopened.result.current.expired).toBe(false);
+      reopened.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

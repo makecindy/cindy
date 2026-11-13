@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, isInaccessible, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
@@ -37,6 +37,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.timeAndRateValue')
         return `${options.duration} 速度：${options.rate} token/秒`;
       if (key === 'todaySpend.sessionCostLabel') return `本任务 ${options.cost}`;
+      if (key === 'todaySpend.codex.sessionTokensLine') return `本任务 Token ${options.tokens}`;
       if (key === 'todaySpend.tooltip.sessionUsed') return `本任务已用 ${options.cost}`;
       if (key === 'todaySpend.codex.sessionValueLabel') return `本任务价值 ${options.cost}`;
       if (key === 'quotaCard.costLine') return `本轮消耗：${options.cost}`;
@@ -55,7 +56,7 @@ vi.mock('react-i18next', () => ({
 
 import { useTranslation } from 'react-i18next';
 import { QuotaHoverCard as UsageCard, type QuotaHoverCardProps } from '../QuotaHoverCard';
-import { buildClaudeUsageCard } from '../usageCardModel';
+import { buildClaudeUsageCard, buildKimiUsageCard } from '../usageCardModel';
 
 // Exercise the Claude adapter and the shared card together, retaining all existing edge cases.
 function QuotaHoverCard({
@@ -91,6 +92,37 @@ function weeklyAtProgress(utilization: number, progress: number) {
 }
 
 describe('QuotaHoverCard', () => {
+  // F13 unit: a failed quota read must replace the waiting copy, retain usable
+  // counters, and expose a working retry action (not covered by quota warnings).
+  it('shows a retryable read failure without clearing the other usage sections', () => {
+    const retry = vi.fn();
+    const account = {
+      windows: [],
+      emptyText: 'Waiting for quota',
+      refreshFailure: { retry, retrying: false },
+    };
+    const props = {
+      account,
+      sessionUsage: { tokensText: '5,678' },
+      turnUsage: { totalTokensText: '1,234' },
+    };
+    const view = render(<UsageCard {...props} />);
+    expect(screen.queryByText('Waiting for quota')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('quotaCard.codexRefreshFailed');
+    expect(screen.getByTestId('quota-session-usage').textContent).toContain('5,678');
+    expect(screen.getByTestId('quota-turn-usage').textContent).toContain('1,234');
+    fireEvent.click(screen.getByRole('button', { name: 'quotaCard.retryQuota' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    view.rerender(<UsageCard {...props} account={{ ...account, refreshFailure: { retry, retrying: true } }} />);
+    const busyButton = screen.getByRole('button', { name: 'quotaCard.retryingQuota' }) as HTMLButtonElement;
+    expect(busyButton.disabled).toBe(true);
+    fireEvent.click(busyButton);
+    expect(retry).toHaveBeenCalledTimes(1);
+    view.rerender(<UsageCard {...props} account={{ windows: [] }} />);
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'quotaCard.retryQuota' })).toBeNull();
+  });
+
   it.each([undefined, null, 0, NaN, Infinity, 1e20])(
     'renders embedded windows without a reset time (reset=%s)',
     (resetsAt) => {
@@ -144,9 +176,41 @@ describe('QuotaHoverCard', () => {
     const title = screen.getByText(longTitle);
     expect(title.classList.contains('truncate')).toBe(true);
     expect(title.getAttribute('title')).toBe(longTitle);
-    const countdown = screen.getByText('1小时 5分钟后重置');
+    const countdown = screen.getByTitle('1小时 5分钟后重置');
     expect(countdown.classList.contains('truncate')).toBe(true);
     expect(countdown.getAttribute('title')).toBe('1小时 5分钟后重置');
+  });
+
+  it('keeps full embedded quota and reset wording available to screen readers', () => {
+    render(
+      <UsageCard
+        variant="embedded"
+        nowMs={NOW_MS}
+        account={{
+          windows: [
+            {
+              key: 'a',
+              title: '5 小时',
+              window: { utilization: 4, resetsAt: (NOW_MS + 65 * 60_000) / 1000 },
+            },
+            {
+              key: 'b',
+              title: '周限',
+              window: { utilization: 10, resetsAt: (NOW_MS - 60_000) / 1000 },
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByText('96%').getAttribute('title')).toBe('剩余 96%');
+    expect(screen.getByRole('progressbar', { name: '5 小时' }).getAttribute('aria-valuetext')).toBe(
+      '剩余 96%',
+    );
+    expect(screen.queryByText('剩余 96%')).toBeNull();
+    expect(isInaccessible(screen.getByText('1小时 5分钟'))).toBe(true);
+    expect(isInaccessible(screen.getByText('1小时 5分钟后重置'))).toBe(false);
+    // An elapsed window has no duration to show, so it keeps the pending notice.
+    expect(screen.getByText('等待重置数据更新')).toBeTruthy();
   });
 
   it('hides duplicate identity without windows and only makes the popover region focusable', () => {
@@ -216,11 +280,11 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('周限')).toBeTruthy();
     expect(screen.getByText('Fable 周限')).toBeTruthy();
     expect(screen.getByText('Opus 周限')).toBeTruthy();
-    expect(screen.getByText('剩余 99%')).toBeTruthy();
-    expect(screen.getByText('剩余 96%')).toBeTruthy();
-    expect(screen.getByText('剩余 100%')).toBeTruthy();
-    expect(screen.getByText('剩余 24%')).toBeTruthy();
-    expect(screen.getByText('7小时 5分钟后重置')).toBeTruthy();
+    expect(screen.getByText('99%')).toBeTruthy();
+    expect(screen.getByText('96%')).toBeTruthy();
+    expect(screen.getByText('100%')).toBeTruthy();
+    expect(screen.getByText('24%')).toBeTruthy();
+    expect(screen.getByText('7小时 5分钟')).toBeTruthy();
     expect(screen.queryByText('17:05 重置')).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
   });
@@ -1004,4 +1068,18 @@ describe('QuotaHoverCard', () => {
     );
     expect(screen.queryByTestId('quota-pace')).toBeNull();
   });
+});
+
+// Unit/jsdom: the Kimi adapter and real card must agree on remaining direction
+// and avoid rendering a contradictory empty-state message below a valid quota.
+it('renders returned Kimi windows without a fabricated empty state or token total', () => {
+  function KimiCard() {
+    const { t } = useTranslation();
+    return <UsageCard account={buildKimiUsageCard({ kind: 'kimi-coding-quota', fetchedAt: NOW_MS, windows: [{ id: 'limit_5h', usedPercent: 23, resetsAt: null }, { id: 'limit_month_code', usedPercent: 0, resetsAt: null }] }, t)} nowMs={NOW_MS} />;
+  }
+  render(<KimiCard />);
+  expect(screen.getByText('剩余 77%')).toBeTruthy();
+  expect(screen.getByText('剩余 100%')).toBeTruthy();
+  expect(screen.queryByText('quotaCard.noWindows')).toBeNull();
+  expect(screen.getAllByRole('progressbar')).toHaveLength(2);
 });

@@ -50,7 +50,7 @@ describe('Ghost panel media IPC bridge', () => {
 
 });
 
-describe.each(['preload.ts', 'ghostPanelWindowPreload.ts', 'sidebarWindowPreload.ts'])('%s media bridge', (filename) => {
+describe.each(['preload.ts', 'sidebarWindowPreload.ts'])('%s media bridge', (filename) => {
   it('forwards the confirmed install approval while preserving calls without it', async () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true });
     const setEnabled = loadResolvePanelMedia(invoke, filename, 'setEnabled');

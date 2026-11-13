@@ -1,7 +1,11 @@
 import { renderHistoryView, type HistoryViewController, type HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
 import type { AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
-import { buildMobileMessageRenderItems, type MobileMessageRenderItem, type MobileWorkChildItem } from './messageRenderModel';
+import { buildMobileMessageRenderItems, insertMobileForkOriginItem, type MobileForkOrigin, type MobileMessageRenderItem, type MobileWorkChildItem } from './messageRenderModel';
 import type { RemoteMessage } from './types';
+import { buildMobileStreamingRenderWindow, committedMobileStreamingPrefixItemCount,
+  type MobileStreamingRenderPrefixCache } from './messageRenderStreamingCache';
+import { reconcileMobileMessageRenderItems } from './messageRenderReconcile';
+import { countMobileRenderItemDiffs } from './messagePresentation';
 
 export function buildMobileHistoryRenderItems(options: {
   view: HistoryViewController<RemoteMessage>;
@@ -10,6 +14,7 @@ export function buildMobileHistoryRenderItems(options: {
   streaming: boolean;
   sessionId: string;
   sessionSource?: string | null;
+  pendingQuestionIds?: ReadonlySet<string>;
   pendingHandoff?: ReadonlySet<string>;
   staleTail?: ReadonlySet<string>;
   localUserClientIds?: ReadonlySet<string>;
@@ -26,6 +31,7 @@ export function buildMobileHistoryRenderItems(options: {
       isSessionStreaming: streaming,
       sessionId: options.sessionId,
       sessionSource: options.sessionSource,
+      pendingQuestionIds: options.pendingQuestionIds,
       preserveSourceOrder: true,
     }, options.taskUpdates),
     structure: {
@@ -45,4 +51,63 @@ export function buildMobileHistoryRenderItems(options: {
         : item.type === 'subagent_group' ? { ...item, childItems: children, deferred } : item,
     },
   });
+}
+
+/** The screen's full render window, shared by history takeover and raw fallback. */
+export function buildMobileSessionRenderWindow({
+  history, raw, previousRenderState, forkOrigin, errorTailClientId, activeErrorClientId,
+}: {
+  history: Parameters<typeof buildMobileHistoryRenderItems>[0];
+  raw: Parameters<typeof buildMobileStreamingRenderWindow>[0];
+  previousRenderState?: {
+    sessionId: string;
+    items: readonly MobileMessageRenderItem[];
+    prefix: MobileStreamingRenderPrefixCache | null;
+  } | null;
+  forkOrigin?: MobileForkOrigin | null;
+  errorTailClientId?: string | null;
+  /** Exact persisted error already owned by the live queue banner. */
+  activeErrorClientId?: string | null;
+}) {
+  // A ready history view owns the displayed sequence. Retire the raw prefix
+  // before a later fallback, and never normalize a transcript we will not show.
+  if (history.snapshot.ready && raw.prefixCache) raw.prefixCache.current = null;
+  const builtWindow = history.snapshot.ready ? null : buildMobileStreamingRenderWindow(raw);
+  const historyItems = builtWindow ? builtWindow.items : buildMobileHistoryRenderItems(history);
+  let items = insertMobileForkOriginItem(
+    historyItems,
+    forkOrigin,
+  );
+  const hasHiddenError = Boolean(errorTailClientId || activeErrorClientId);
+  if (hasHiddenError) {
+    items = items.filter(
+      (item) => !(item.type === 'message' && item.message.role === 'error'
+        && (item.message.source.clientId === errorTailClientId
+          || item.message.source.clientId === activeErrorClientId)),
+    );
+  }
+  const committed = previousRenderState?.sessionId === history.sessionId ? previousRenderState : null;
+  const previous = committed?.items ?? [];
+  const committedPrefix = !builtWindow || forkOrigin || hasHiddenError
+    ? null
+    : builtWindow.prefix;
+  const stablePrefixItemCount = !builtWindow || forkOrigin || hasHiddenError
+    ? 0
+    : committedMobileStreamingPrefixItemCount(
+        builtWindow,
+        committed?.prefix,
+      );
+  const reconciled = reconcileMobileMessageRenderItems(
+    previous,
+    items,
+    stablePrefixItemCount,
+  );
+  return {
+    diffCount: !builtWindow || hasHiddenError
+      ? countMobileRenderItemDiffs(reconciled)
+      : builtWindow.diffCount,
+    items: reconciled,
+    prefix: committedPrefix,
+    stablePrefixItemCount,
+  };
 }

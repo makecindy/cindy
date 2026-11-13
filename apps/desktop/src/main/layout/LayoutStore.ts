@@ -2,7 +2,7 @@ import fs from 'node:fs';
 
 import {
   coerceLayout,
-  createDefaultLayoutPreservingGhostPanels,
+  createDefaultLayout,
   validateLayout,
   type Layout,
 } from '../../shared/layoutTree.js';
@@ -99,9 +99,12 @@ export class LayoutStore {
     return { layout: cloned, persisted };
   }
 
-  /** 重置为默认布局(等价 WoW /resetui):写盘 + 广播。 */
+  /**
+   * 重置为默认布局(等价 WoW /resetui):写盘 + 广播。页签组的 pane 不保留:
+   * 组里仍有页签时由 renderer 按需重新插入(ensureTabGroupPane),位置回到默认。
+   */
   reset(): LayoutMutationResult {
-    const layout = createDefaultLayoutPreservingGhostPanels(this.getLayout());
+    const layout = createDefaultLayout();
     this.cached = layout;
     const persisted = this.persist(layout);
     this.options.onChanged?.(layout);

@@ -2,6 +2,10 @@ import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { localizedModelName } from '@/lib/modelDisplayNames';
 import { Star, Zap } from 'lucide-react';
+import { SpeedIcon } from './SpeedIcon';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem,
+} from '@/components/ui/dropdown-menu';
 import { useTranslation } from 'react-i18next';
 
 import { formatContextWindow, type UnifiedModelEntry } from '@cindy/model-providers';
@@ -30,17 +34,21 @@ export interface ModelConfigFlyoutProps {
   state: ModelConfigFlyoutState;
   /** 来源供应商展示名。 */
   sourceLabel: string;
+  /** Catalog source; only a local catalog may read this computer's preferences/native metadata. */
+  deviceId?: string;
   price: ModelPricePresentation | null;
   /** 档位 → 显示文案(按当前选中引擎取,i18n)。 */
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   /** 刚刚点过 ☆ 的 0.7s 反馈态(规格 §1.5)。 */
   justFavorited?: boolean;
   disabled?: boolean;
+  /** Portaled menus must stay on the configuration flyout's overlay layer. */
+  overlayContentClassName?: string;
   /** Same-engine views show the current harness without offering a cross-engine switch. */
   engineLocked?: boolean;
   onEngineChange: (engine: UnifiedEngine) => void;
   onEffortChange: (effort: Effort) => void;
-  onFastChange: (enabled: boolean) => void;
+  onFastChange: (enabled: boolean | 'ultrafast') => void;
   onResetToRecommended: () => void;
   onAddFavorite: () => void;
   onRemoveFavorite: () => void;
@@ -65,10 +73,12 @@ export function ModelConfigFlyout({
   config,
   state,
   sourceLabel,
+  deviceId,
   price,
   effortLabelOf,
   justFavorited = false,
   disabled = false,
+  overlayContentClassName,
   engineLocked = false,
   onEngineChange,
   onEffortChange,
@@ -80,7 +90,7 @@ export function ModelConfigFlyout({
   const { t } = useTranslation();
   const displayName = localizedModelName(entry.displayName, t);
   const showSlider = config.efforts.length > 1;
-  const contextLimit = useModelContextLimit({
+  const contextLimit = useModelContextLimit(deviceId ? null : {
     providerId: entry.providerId,
     agent: config.engine === 'cc' ? 'claude-code' : config.engine,
     modelId: config.wireModelId ?? entry.modelId,
@@ -157,7 +167,7 @@ export function ModelConfigFlyout({
           <>
             {' · '}
             {t('newChat.modelSelector.meta.context', {
-              value: codexDefaultContext
+              value: codexDefaultContext && !deviceId
                 ? codexContext ? formatContextWindow(codexContext.contextWindow) : t('settings.providers.models.advanced.codexContextUnknown')
                 : formatContextWindow(contextWindow),
             })}
@@ -184,12 +194,42 @@ export function ModelConfigFlyout({
               disabled={disabled}
             />
           )}
-          {config.fastCapable && (
+          {config.fastCapable && config.capability?.supportsUltrafastMode && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  aria-label={t('newChat.modelSelector.speed.label')}
+                  title={t(`newChat.modelSelector.speed.${config.fast === 'ultrafast' ? 'ultrafast' : config.fast ? 'fast' : 'standard'}`)}
+                  className={cn(
+                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors',
+                    config.fast ? 'border-transparent text-[var(--fast-accent)]' : 'border-[var(--model-dropdown-border)] text-[var(--text-tertiary)]',
+                  )}
+                >
+                  <SpeedIcon mode={config.fast} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className={overlayContentClassName}>
+                <DropdownMenuRadioGroup
+                  value={config.fast === 'ultrafast' ? 'ultrafast' : config.fast ? 'fast' : 'standard'}
+                  onValueChange={value => onFastChange(value === 'ultrafast' ? 'ultrafast' : value === 'fast')}
+                >
+                  {(['standard', 'fast', 'ultrafast'] as const).map(speed => (
+                    <DropdownMenuRadioItem key={speed} value={speed}>
+                      {t(`newChat.modelSelector.speed.${speed}`)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {config.fastCapable && !config.capability?.supportsUltrafastMode && (
             <button
               type="button"
               disabled={disabled}
               onClick={() => onFastChange(!config.fast)}
-              aria-pressed={config.fast}
+              aria-pressed={!!config.fast}
               title={t('newChat.modelSelector.unified.fastTip')}
               aria-label={t('newChat.modelSelector.unified.fastTip')}
               data-fast-toggle

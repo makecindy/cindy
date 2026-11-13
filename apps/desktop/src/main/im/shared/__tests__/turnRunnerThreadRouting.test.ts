@@ -8,7 +8,8 @@
  *  4. 出站串 thread: 流式首发 / 排队提示带 threadTs = scopeKey
  *  5. binding(identity+scopeKey)命中 → attached 路由到 desktop session
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 import path from 'node:path';
 
 import type { AgentEvent, Session, SessionSendResult } from '@cindy/maker-core';
@@ -57,6 +58,10 @@ const mocks = vi.hoisted(() => ({
   generateAndPersistFbotTitle: vi.fn(),
   dbSelect: vi.fn(),
   readRemoteRoute: vi.fn(),
+  materializeLocalMarkdownImages: vi.fn(),
+}));
+vi.mock('../localMarkdownImages', () => ({
+  materializeLocalMarkdownImages: mocks.materializeLocalMarkdownImages,
 }));
 vi.mock('../../remoteProviderRoute', () => ({ readImRemoteProviderRoute: mocks.readRemoteRoute }));
 
@@ -71,7 +76,7 @@ vi.mock('../../../localDb/client/current', () => ({
   })),
 }));
 vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
-vi.mock('../../../imageCacheStore', () => ({ resolveSafe: mocks.resolveXdtImageUrl }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ resolveSafe: mocks.resolveXdtImageUrl }));
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
   toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
@@ -248,7 +253,7 @@ function streamingHandleStub() {
     messageId: 'C1|9.9',
     append: vi.fn(),
     replace: vi.fn(),
-    finalize: vi.fn(async (): Promise<void> => undefined),
+    finalize: vi.fn<(text: string) => Promise<void>>(async () => undefined),
     addExtraImageAbsPath: vi.fn(),
     close: vi.fn(),
   };
@@ -286,6 +291,9 @@ beforeEach(() => {
   mocks.bindingGetAttachCardMessageId.mockReturnValue(null);
   mocks.generateAndPersistFbotTitle.mockResolvedValue(null);
   mocks.takePendingInteractionsForSession.mockReturnValue([]);
+  mocks.materializeLocalMarkdownImages.mockImplementation(async ({ text }: { text: string }) => ({
+    text, absPaths: [],
+  }));
   // maker.createSession: 按 id 返回独立 harness(多 session 并行的关键)
   mocks.getMaker.mockReturnValue({
     getSession: vi.fn((id: string) => harnesses.get(id)?.session),
@@ -313,6 +321,11 @@ async function runTurn(scopeKey: string, text = 'hello'): Promise<void> {
     scopeKey,
   });
 }
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('turnRunner thread = session 路由(slack threadScoped)', () => {
   it('顶层消息: 不同 scopeKey 各建独立 session', async () => {
@@ -972,7 +985,8 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith('最终报告'));
     expect(mocks.slackIm.startStreamingText).toHaveBeenCalledExactlyOnceWith('U1', undefined, { threadTs: '100.1' });
 
-    // The mark ends with that turn: the next desktop-typed turn stays in the app.
+    // The mark ends with that turn: a desktop-origin wake stays in the app too.
+    runner.noteChannelTurnSource(h.session, 'provider-wake-local');
     h.emit({ type: 'text', data: { text: '桌面里的回复', isFinal: true } });
     h.emit({ type: 'done', data: {} });
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1103,6 +1117,77 @@ describe('turnRunner 自动任务转播(scheduler turn → 远程控制 thread)'
   const schedulerOrigin = { kind: 'scheduler', scheduleId: 's1', scheduleName: 'PR #118 跟进' };
   const withOrigin = (e: Partial<AgentEvent>): AgentEvent =>
     ({ ...e, turnOrigin: schedulerOrigin }) as AgentEvent;
+
+  // #7125 review, unit: a lone image component used to miss attachment collection.
+  // Exercise background delivery through the runner; only file import is stubbed.
+  it('delivers background image components as chunked-text attachments', async () => {
+    const previousOutput = fakeAdapter.output;
+    fakeAdapter.output = {
+      kind: 'chunked-text', im: mocks.slackIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined),
+    };
+    await runner.disposeAllSessions();
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    try {
+      const h = await attachAndIdle();
+      const imagePath = path.join('/tmp', 'desktop-wd', 'chart.png');
+      const managedPath = path.join('/tmp', 'test-media', 'chart.png');
+      mocks.materializeLocalMarkdownImages.mockResolvedValue({ text: 'Chart', absPaths: [managedPath] });
+      const source = '```cindy-ui\n' + JSON.stringify({
+        version: 1, seq: 1, op: 'create', id: 'image', kind: 'image', props: { src: imagePath, alt: 'Chart' },
+      }) + '\n```';
+      h.emit(withOrigin({ type: 'text', data: { text: source, isFinal: true } }));
+      h.emit(withOrigin({ type: 'done', data: {} }));
+      await vi.waitFor(() => expect(mocks.slackIm.sendFile).toHaveBeenCalledWith(
+        'U1', managedPath, undefined, { threadTs: '300.3' },
+      ));
+      expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith(expect.objectContaining({
+        text: `![Chart](<${imagePath}>)`,
+      }));
+      expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledWith(
+        'U1', expect.stringContaining('Chart'), { threadTs: '300.3' },
+      );
+    } finally {
+      await runner.disposeAllSessions();
+      fakeAdapter.output = previousOutput;
+    }
+  });
+
+  // #6884, unit: the same component fence must be projected for background
+  // streaming/final delivery. Existing relay tests only covered plain Markdown.
+  it.each(['rich-card', 'chunked-text'] as const)('projects background rich answers for %s', async (kind) => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const previousOutput = fakeAdapter.output;
+    if (kind === 'chunked-text') fakeAdapter.output = {
+      kind: 'chunked-text', im: mocks.slackIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined),
+    };
+    await runner.disposeAllSessions();
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    try {
+      const h = await attachAndIdle();
+      const source = '```cindy-ui\n' + JSON.stringify({
+        version: 1, seq: 1, op: 'create', id: 'result', kind: 'text', props: { text: 'Readable background result' },
+      }) + '\n```';
+      h.emit(withOrigin({ type: 'text', data: { text: '```cindy-ui\n{"version":', isFinal: false } }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(JSON.stringify(stub.replace.mock.calls)).not.toContain('cindy-ui');
+      h.emit(withOrigin({ type: 'text', data: { text: source, isFinal: true } }));
+      if (kind === 'rich-card') {
+        await vi.waitFor(() => expect(stub.replace).toHaveBeenCalledWith(expect.stringContaining('Readable background result')));
+      }
+      h.emit(withOrigin({ type: 'done', data: {} }));
+      await vi.waitFor(() => {
+        const text = kind === 'chunked-text' ? mocks.slackIm.sendMarkdownText.mock.calls.at(-1)?.[1]
+          : stub.finalize.mock.calls.at(-1)?.[0];
+        expect(text).toContain('Readable background result');
+        expect(text).not.toContain('cindy-ui');
+        expect(text).not.toContain('"op"');
+      });
+    } finally {
+      await runner.disposeAllSessions();
+      fakeAdapter.output = previousOutput;
+    }
+  });
 
   it('successful background work without a reply removes the progress card and its title', async () => {
     const stub = streamingHandleStub();

@@ -1,6 +1,9 @@
-import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
+import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
+import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
+import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
 /**
  * ModelAdvancedDrawer —— 单模型配置面板。宽屏配置与事实并列，窄屏按同一顺序排成一列。
@@ -21,7 +24,7 @@ import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, ChevronDown, CircleHelp, Minus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CircleHelp, Minus, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -37,6 +40,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
+import { Select, type SelectOption } from '@/components/ui/select';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
 import { MODEL_PROTOCOL_LABEL, MODEL_PROTOCOL_OPTIONS } from '@/lib/modelProtocolLabel';
@@ -47,18 +51,20 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
-import { useModelCatalogImageInput } from '@/hooks/useModelCatalogImageInput';
+import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
+import { parseContextTokenInput } from '../../../shared/modelContextLimit';
+import { ModelCompactionSettings } from './ModelCompactionSettings';
 import { useModelCatalogThinking } from '@/hooks/useModelCatalogThinking';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
   isModelEnabled,
-  setModelVisibility,
+  setModelVisibility, setModelVisibilities,
   isModelVisibilityCustomized,
   resetModelVisibilities,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
 import {
-  clearProviderModelEffort,
+  clearProviderModelEffort, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelEffort,
   useProviderModelMemoryVersion,
@@ -96,12 +102,6 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   pi: 'Pi',
 };
 
-// Editing uses whole decimal K, rounded down to avoid suggesting a value above the upstream
-// maximum. Merely opening/blurring the field never writes this display approximation back.
-function editableContextK(tokens: number): string {
-  return String(Math.max(1, Math.floor(tokens / 1000)));
-}
-
 const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
   'claude-code': (size) => <ClaudeMark size={size} />,
   codex: (size) => <CodexMark size={size} />,
@@ -127,6 +127,15 @@ function approxTokens(tokens: number): string {
   }
   if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
   return String(tokens);
+}
+
+/** Select only shows a value through a matching option. A current state that is not one of
+ *  the choices (varies by engine, undeclared, an unlisted protocol) stays visible as one
+ *  disabled row, like other settings that keep an unavailable saved value. */
+function withCurrentOption(value: string | null | undefined, options: SelectOption[], currentLabel: string) {
+  if (value && options.some((option) => option.value === value)) return { value, options };
+  const current = value || '__current';
+  return { value: current, options: [{ value: current, label: currentLabel, disabled: true }, ...options] };
 }
 
 /** 定义列表的一行:左标签右值 + 细分隔线。 */
@@ -195,6 +204,8 @@ function Section({
 }
 
 interface Props {
+  selectedMemberId?: string;
+  onSelectMember?: (row: UnionModelRow) => void;
   provider: ProviderView;
   row: UnionModelRow | null;
   open: boolean;
@@ -213,7 +224,9 @@ interface Props {
 
 export function ModelAdvancedDrawer({
   provider,
-  row,
+  row: groupRow,
+  selectedMemberId,
+  onSelectMember,
   open,
   onOpenChange,
   pricePresentationOf,
@@ -222,10 +235,17 @@ export function ModelAdvancedDrawer({
   disabled,
   paymentRequired,
 }: Props) {
+  const row = groupRow?.aliasRows?.find((member) => member.id === selectedMemberId)
+    ?? groupRow?.aliasRows?.find((member) => member.id === groupRow.id) ?? groupRow;
+  const memberRows = groupRow?.aliasRows ?? (row ? [row] : []);
+  const memberTargets = memberRows.flatMap((member) => member.avail.flatMap((agent) => {
+    const model = member.byAgent[agent];
+    return model ? [{ agent, modelId: model.id, model }] : [];
+  }));
   const { t, i18n } = useTranslation();
   const selectionAvailable = provider.connected && !provider.suspended;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
-  const [priceDialogOpen, setPriceDialogOpen] = useState(false);
+  const pricePendingRef = useRef(false);
   const [protocolSaving, setProtocolSaving] = useState(false);
   const [imageCapabilitySaving, setImageCapabilitySaving] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -241,6 +261,10 @@ export function ModelAdvancedDrawer({
     const model = row?.byAgent[agent];
     return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' });
   }), [row, provider.source]);
+  const priceRow = useMemo<UnionModelRow | null>(() => row && chatAgents.length ? {
+    ...row, avail: chatAgents,
+    byAgent: Object.fromEntries(chatAgents.map(agent => [agent, row.byAgent[agent]])),
+  } : null, [row, chatAgents]);
   const primaryCandidates = chatAgents?.length ? chatAgents : row?.avail;
   const primaryAgent =
     primaryCandidates?.find((agent) =>
@@ -293,26 +317,7 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
-  // 图片输入能力的本地声明。与上下文上限同一个目标形状；agent 只用于目录成员校验。
-  // 必须覆盖该行全部引擎的 id：运行期真正消费这个能力的只有 Pi，而桥接投影两端 id 不同
-  // （openai 行：codex 用 gpt-5.6-sol、pi 用 chatgpt/gpt-5.6-sol）—— 只写主展示引擎的 id，
-  // Pi 侧读不到（override 按 providerId:modelId 精确匹配），UI 却会显示「已声明」。
-  const imageInputTarget = useMemo(() => {
-    if (!open || !primaryAgent || !primaryModel) return null;
-    const relatedTargets = (row?.avail ?? [])
-      .filter((agent) => agent !== primaryAgent)
-      .flatMap((agent) => {
-        const model = row?.byAgent[agent];
-        return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
-      });
-    return {
-      providerId: provider.id,
-      agent: primaryAgent,
-      modelId: primaryModel.id,
-      ...(relatedTargets.length > 0 ? { relatedTargets } : {}),
-    };
-  }, [open, primaryAgent, primaryModel, provider.id, row]);
-  const imageInput = useModelCatalogImageInput(imageInputTarget);
+  const imageInputOverride = useModelImageInputOverride(open ? contextTarget : null);
   // 思考档位的本地声明。目标形状与图片输入完全一致：必须覆盖该行全部引擎的 id ——
   // 运行期真正消费 thinking 档位的是 Pi，桥接投影两端 id 不同，只写主展示引擎会让声明
   // 对运行期无效、UI 却显示「已声明」。
@@ -366,29 +371,6 @@ export function ModelAdvancedDrawer({
     }
   };
   // 'inherit' = 删除本机 override，回到跟随供应商。失败由 hook 回读真值，这里只负责提示。
-  const setImageInput = async (next: string) => {
-    const value = next === 'inherit' ? null : next === 'true';
-    // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。但各引擎键分叉时
-    // 必须放行 —— 否则“重选当前项”被 no-op 挡掉，分叉永远修不掉（UI 显示一侧、运行期读另一侧）。
-    const already =
-      value === null ? !imageInput.isCustomized : imageInput.isCustomized && value === imageInput.value;
-    if (already && !imageInput.diverged) {
-      return;
-    }
-    const persisted = await imageInput.setValue(value);
-    if (!persisted) {
-      // main 在这条路径上会给出可执行指引（手改文件里有无法保留的条目时要先修文件）：
-      // 把它带进提示，否则用户反复保存失败却看不到唯一的修复方式。
-      const reason = imageInput.errorReason;
-      toast.error(
-        reason
-          ? t('settings.providers.models.advanced.imageInputOverride.saveFailedWithReason', {
-              message: reason,
-            })
-          : t('settings.providers.models.advanced.imageInputOverride.saveFailed'),
-      );
-    }
-  };
   const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
   const imageAgents = canEditProtocol
     ? provider.agents.filter(agent => provider.routing?.[agent]?.imageApi === 'openai-images')
@@ -399,7 +381,7 @@ export function ModelAdvancedDrawer({
     ? imageModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate'
     : 'default';
   const videoAgents = canEditProtocol
-    ? provider.agents.filter(agent => provider.routing?.[agent]?.videoApi === 'xai-videos') : [];
+    ? provider.agents.filter(agent => provider.routing?.[agent]?.videoApi !== undefined) : [];
   const videoAgent = videoAgents.length === 1 ? videoAgents[0] : undefined;
   const videoModel = videoAgent ? row?.byAgent[videoAgent] : undefined;
   const videoCapability = videoModel?.userModelConfig?.mode === 'video_generation'
@@ -425,23 +407,40 @@ export function ModelAdvancedDrawer({
     } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
     finally { setImageCapabilitySaving(false); }
   };
-  const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
+  const setModelApi = async (agent: AgentKind, api: string) => {
     if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
     if (!runtime || !model) return;
-    model.api = api;
-    if (agent === 'pi') model.piApi = api;
-    const wire = providerWireProtocolForApi(api);
-    if (!wire) return;
-    const existingRoute = { ...(model.route ?? {}) };
-    delete existingRoute.requestPath;
-    model.route = {
-      ...existingRoute,
-      baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
-      wireProtocol: wire,
-    };
+    const choice = row.byAgent[agent]?.availableInterfaces?.find(item => item.profileId === api);
+    if (api === 'auto' || choice) {
+      model.interfaceId = api;
+      delete model.api;
+      delete model.piApi;
+      delete model.route;
+    } else {
+      delete model.interfaceId;
+      model.api = api as PiModelApi;
+      if (agent === 'pi') model.piApi = api as PiModelApi;
+      const wire = providerWireProtocolForApi(api);
+      if (!wire) return;
+      // Pi gets the selected API from api/piApi. A same-endpoint generated route
+      // would look explicit after refresh and block a later Messages /v1 fix.
+      // Keep existing routes and endpoints that change for the selected API.
+      const inheritPiEndpoint = agent === 'pi' && !model.route && !runtime.requestPath &&
+        (runtime.wireProtocol === 'openai-chat' || runtime.wireProtocol === 'openai-responses' ||
+          runtime.wireProtocol === 'anthropic-messages' || runtime.wireProtocol === 'google-generative-ai') &&
+        (api === 'anthropic-messages' ||
+          ((api === 'openai-completions' || api === 'openai-responses' || api === 'google-generative-ai') &&
+            providerBaseUrlForApi(runtime.baseUrl, api) === runtime.baseUrl));
+      if (!inheritPiEndpoint) {
+        model.route = {
+          baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
+          wireProtocol: wire,
+        };
+      }
+    }
     setProtocolSaving(true);
     try {
       const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
@@ -462,27 +461,30 @@ export function ModelAdvancedDrawer({
   // 提前收掉，B 在写入期间重新显示旧的 effectiveLimit（本次修改要消除的闪回原地复活）。
   const ctxCommitGen = useRef(0);
   const ctxDirtyRef = useRef(false);
-  const defaultWindow = contextAgent === 'codex' && ctx.codexContext
-    ? ctx.codexContext.contextWindow : contextModel?.contextWindow ?? 0;
+  const defaultWindow =
+    contextAgent === 'codex' && ctx.codexContext
+      ? ctx.codexContext.contextWindow
+      : (contextModel?.contextWindow ?? 0);
   // The editor guard is not a native request-capacity limit. Keep small/local
   // model windows selectable and never derive this floor from a saved override.
   // Local runtimes own their loaded window; their catalog maximum cannot set an editor floor.
-  const modelWindows = chatAgents.map((agent) => row?.byAgent[agent]?.contextWindow)
-    .filter((window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0);
+  const modelWindows = chatAgents
+    .map((agent) => row?.byAgent[agent]?.contextWindow)
+    .filter(
+      (window): window is number =>
+        typeof window === 'number' && Number.isFinite(window) && window > 0,
+    );
   const minimumContextK = isLocalRuntimeBetaProviderId(provider.id)
-    ? 1 : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
-  const routeWindow = supportsMillionContext ? 1_000_000 : primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
-  // 「上游最大上下文」这一行只印上游**确实下发过**的窗口，来源按优先级：
-  //   1) contextWindowMax —— 路由/网关声明的容量；
-  //   2) contextWindowVerified === true 的 contextWindow —— 用户或预设显式配置的窗口；
-  //   3) 都没有 → 未声明。
-  // 第 3 条必须排除「自定义模型缺元数据时的 200K 展示兜底」：那个常量在
-  // user-provider.ts 里明确写着「仅用于展示」、不带 contextWindowVerified —— 把它印成
-  // 上游下发的窗口，会让用户以为容量只有 200K，而运行期窗口取模型级上下文上限
-  // （实测报障：圆环 1.0M、这里 200K）。
-  // 与 routeWindow 的区别：routeWindow 是路由展示用的乐观值（供百万上下文档位等
-  // 比较），declaredWindow 是这一行的**如实声明**口径。
-  const declaredCapacity = primaryModel?.contextWindowMax ?? 0;
+    ? 1
+    : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
+  // A working default (including a heuristic fallback) is not a declared capacity.
+  // Codex's native maximum may already contain the user's override, so it
+  // cannot establish the provider's declared capacity.
+  const routeWindow = supportsMillionContext ? 1_000_000
+    : (contextModel ?? primaryModel)?.contextWindowMax
+      ?? (primaryModel?.contextWindowVerified === true ? primaryModel.contextWindow : 0);
+  // Without a declared capacity, compare working defaults across engines only.
+  const engineWindowReference = routeWindow > 0 ? routeWindow : (primaryModel?.contextWindow ?? 0);
   const declaredWindow =
     declaredCapacity > 0
       ? declaredCapacity
@@ -495,17 +497,18 @@ export function ModelAdvancedDrawer({
     ctxCommitGen.current += 1;
     setCtxCommitting(false);
     setCtxDraft('');
-    setPriceDialogOpen(false);
   }, [open, primaryAgent, primaryModel?.id, provider.id]);
   useEffect(() => {
     if (ctx.loading || ctxDirtyRef.current) return;
-    setCtxDraft(effectiveLimit === null ? '' : editableContextK(effectiveLimit));
+    setCtxDraft(effectiveLimit === null ? '' : String(effectiveLimit));
   }, [ctx.loading, effectiveLimit, open]);
-  const parsedK = Number(ctxDraft.trim());
-  const parsedTokens = parsedK * 1000;
+  const parsedTokens = parseContextTokenInput(ctxDraft);
   const ctxInvalid =
-    ctxDirtyRef.current && ctxDraft.trim() !== '' &&
-    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > maximumContext);
+    ctxDirtyRef.current &&
+    ctxDraft.trim() !== '' &&
+    (parsedTokens === null ||
+      parsedTokens < minimumContextK * 1000 ||
+      parsedTokens > maximumContext);
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading || localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
@@ -523,7 +526,7 @@ export function ModelAdvancedDrawer({
     ctxDirtyRef.current = false;
     ctxCommitGen.current += 1;
     setCtxCommitting(false);
-    setCtxDraft(defaultWindow > 0 ? editableContextK(defaultWindow) : '');
+    setCtxDraft(defaultWindow > 0 ? String(defaultWindow) : '');
     void ctx.reset();
   }, [ctx, defaultWindow, localConfigurationBlocked]);
 
@@ -549,6 +552,27 @@ export function ModelAdvancedDrawer({
           ? 'vision'
           : 'no-vision'
         : classifyVisionCapability(primaryModel.id);
+  const imageInputDefault = modelImageInputDefault(primaryModel, row.id);
+  // An undeclared catalog has no default option: both choices remain explicit overrides.
+  // A failed read retains the chat route's effective fields, independently of media routes.
+  const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error || imageInputOverride.mixed
+    ? modelImageInputDefault({ ...primaryModel, imageInputDefault: undefined }, row.id)
+    : imageInputDefault);
+  const imageInputTargets = contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : [];
+  const imageInputTargetDefaults = imageInputTargets.map(({ agent }) => {
+    const candidate = row.byAgent[agent];
+    return candidate ? modelImageInputDefault(candidate, row.id) : null;
+  });
+  const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
+    imageInputTargetDefaults.every(defaultValue => defaultValue === value);
+  // Different override provenance can still resolve to the same effective capability.
+  const imageInputMixed = imageInputOverride.mixed
+    ? new Set(imageInputTargets.map(({ agent }) => {
+        const candidate = row.byAgent[agent];
+        return candidate ? modelImageInputDefault({ ...candidate, imageInputDefault: undefined }, row.id) : null;
+      })).size > 1
+    : !imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1;
+
   const conversational = isAgentSelectableModel(primaryModel, {
     userProvider: provider.source === 'user',
   });
@@ -575,11 +599,11 @@ export function ModelAdvancedDrawer({
     const model = row.byAgent[agent];
     return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) ? [{ agent, modelId: model.id }] : [];
   });
+  if (groupRow?.aliasRows) visibilityTargets.splice(0, visibilityTargets.length, ...memberTargets.map(({ agent, modelId }) => ({ agent, modelId })));
   const visibilityCustomized = visibilityTargets.some(({ agent, modelId }) =>
     isModelVisibilityCustomized(agent, provider.id, modelId),
   );
   const description = localizedModelDescription(primaryModel, t);
-  const price = pricePresentationOf(primaryAgent, primaryModel);
   const protocols = modelProtocolComparison(provider, row.byAgent);
   const protocolLabel = (api: PiModelApi | null) =>
     api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
@@ -588,17 +612,7 @@ export function ModelAdvancedDrawer({
       ? defaultWindow
       : parsedTokens
     : effectiveLimit;
-  // 只有「上游声明的容量」比它小时才该告警；未声明容量时拿工作默认值当窗口会误报
-  // （自定义连接上 200K 只是兜底，不是任何人的声明）。来源与上方「上游最大上下文」同一套：
-  // contextWindowMax → 已验证的 contextWindow → 未声明，否则「已验证窗口但无 max」的模型
-  // 把限制填到窗口以上也不会告警。
-  const editCapacity = contextModel?.contextWindowMax ?? 0;
-  const editRouteWindow =
-    editCapacity > 0
-      ? editCapacity
-      : contextModel?.contextWindowVerified === true
-        ? (contextModel.contextWindow ?? 0)
-        : 0;
+  const editRouteWindow = routeWindow;
   const overRouteWindow =
     editRouteWindow > 0 &&
     displayedLimit !== null &&
@@ -608,24 +622,34 @@ export function ModelAdvancedDrawer({
   const efforts = EFFORT_ORDER.filter((effort) =>
     chatAgents.some((a) => row.byAgent[a]?.efforts.includes(effort)),
   );
+  const rememberedEffort = (agent: AgentKind, modelId: string) => {
+    const ids = groupRow?.aliasRows
+      ? memberTargets.filter((target) => target.agent === agent).map((target) => target.modelId)
+      : [modelId];
+    const values = [...new Set(ids.map((id) => getProviderModelEffort(agent, provider.id, id))
+      .filter((value) => value !== undefined))];
+    return values.length === 1 ? values[0] : undefined;
+  };
   const commonEfforts = efforts.filter((intent) => chatAgents.every((agent) => {
     const model = row.byAgent[agent];
     return !model?.efforts.length ||
       clampEffortToSupported(intent, model.efforts) ===
-        (getProviderModelEffort(agent, provider.id, model.id) ?? model.defaultEffort);
+        (rememberedEffort(agent, model.id) ?? model.defaultEffort);
   }));
   const preferredEffort = conversational
-    ? getProviderModelEffort(primaryAgent, provider.id, primaryModel.id) ?? primaryModel.defaultEffort
+    ? rememberedEffort(primaryAgent, primaryModel.id) ?? primaryModel.defaultEffort
     : null;
   const effortMixed = efforts.length > 0 && commonEfforts.length === 0;
-  const currentEffort = preferredEffort && commonEfforts.some((effort) => effort === preferredEffort)
-    ? preferredEffort : commonEfforts[0] ?? null;
+  const currentEffort = preferredEffort ?? commonEfforts[0] ?? null;
   const shownEfforts = EFFORT_ORDER.filter((effort) =>
     chatAgents.some((agent) => {
       const model = row.byAgent[agent];
       return model?.efforts.includes(effort) || model?.displayEfforts?.includes(effort);
     }),
   );
+  const ultrafastSupport = chatAgents.includes('codex')
+    ? row.byAgent.codex?.supportsUltrafastMode
+    : false;
   /**
    * 推理强度的存储是 per (agent, provider, model) 的。这里按显示轴同一条哲学
    * **一次写该模型全部可用引擎** —— 用户在这个面板里选的是「这个模型默认想多用力」,
@@ -633,6 +657,14 @@ export function ModelAdvancedDrawer({
    */
   const applyEffort = (effort: Effort) => {
     if (!efforts.includes(effort)) return;
+    if (groupRow?.aliasRows) {
+      const ok = editProviderModelMemoryBatch(memberTargets.filter((target) => target.model.efforts.length).map((target) => ({
+        kind: 'set-effort' as const, agent: target.agent, providerId: provider.id, model: target.modelId,
+        effort: clampEffortToSupported(effort, target.model.efforts) as Effort,
+      })));
+      if (!ok) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+      return;
+    }
     for (const agent of chatAgents) {
       const model = row.byAgent[agent];
       if (!model) continue;
@@ -644,9 +676,107 @@ export function ModelAdvancedDrawer({
 
   const isLocalOllama = provider.id === MANAGED_OLLAMA_PROVIDER_ID;
 
+  const referencePricing = (model: CatalogModel, agent: AgentKind) => {
+    const price = pricePresentationOf(agent, model);
+    // Ordinary Gateway chat models carry effective cost; keep their inferred discount.
+    const discount =
+      (!model.displayPricing && price?.kind === 'priced' ? price.discount : undefined) ??
+      model.costDiscount;
+    return (
+      <Section title={t('settings.providers.models.advanced.pricing')}>
+        {model.displayPricing && model.currency ? (
+          <>
+            {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
+              const quotes = model.displayPricing?.summary?.[role];
+              if (!quotes?.length) return null;
+              const components = quotes.map(quote => displayPricingComponent(quote.component));
+              const component = components.every(value => value === components[0]) ? components[0] : undefined;
+              return (
+                <Row
+                  key={role}
+                  label={component
+                    ? t(`newChat.modelSelector.displayPricing.roles.${component}.${role}`)
+                    : t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
+                >
+                  <span className="flex flex-col items-end gap-1">
+                    {quotes.map((quote, index) => (
+                      <DisplayPricingQuote
+                        key={index}
+                        quote={quote}
+                        currency={model.currency!}
+                        costDiscount={discount}
+                        componentLabel={!component && components[index]
+                          ? t(`newChat.modelSelector.displayPricing.components.${components[index]}`)
+                          : undefined}
+                      />
+                    ))}
+                  </span>
+                </Row>
+              );
+            })}
+          </>
+        ) : price === null ? (
+          <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
+            {t(
+              provider.access?.kind === 'subscription'
+                ? 'settings.providers.models.subscription'
+                : 'settings.providers.models.advanced.noPricing',
+            )}
+          </Row>
+        ) : price.kind === 'free' ? (
+          <Row label={t('settings.providers.models.advanced.pricingLabel')}>
+            {t('newChat.modelSelector.pricing.free')}
+          </Row>
+        ) : (
+          modelPriceDetailRows(price.current, price.original).map((detail) => (
+            <Row
+              key={detail.kind}
+              label={t(`settings.providers.models.advanced.price.${detail.kind}`)}
+            >
+              {/* 有折扣时给**实付价**，标准价划掉跟在后面：只写标准价再另起一行
+              「折扣 40%」等于让人自己乘一遍，而实付才是他要判断的数。 */}
+              {detail.value}
+              {detail.originalValue && (
+                <span className="ml-1.5 text-11 text-[var(--text-tertiary)] line-through">
+                  {detail.originalValue}
+                </span>
+              )}
+              <span className="ml-1 text-11 text-[var(--text-tertiary)]">
+                {t('settings.providers.models.advanced.perMtok')}
+              </span>
+            </Row>
+          ))
+        )}
+        {discount !== undefined && discount > 0 && discount <= 1 && (
+          <Row label={t('settings.providers.models.advanced.discount')}>
+            <span
+              className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
+              style={{
+                color: EFFORT_TIER_COLORS.low,
+                backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+              }}
+            >
+              {`↓${Math.round(discount * 100)}%`}
+            </span>
+          </Row>
+        )}
+        {/* Keep conditions and notes after the primary quotes and their discount. */}
+        {model.displayPricing && model.currency &&
+          !isDisplayPricingTableRedundant(model.displayPricing) && (
+            <div className={model.displayPricing.summary ? 'pt-3' : undefined}>
+              <DisplayPricingDetails model={model} />
+            </div>
+          )}
+      </Section>
+    );
+  };
+
   return (
     <>
-      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Root open={open} onOpenChange={(next) => {
+        if (!next && pricePendingRef.current) return;
+        onOpenChange(next);
+      }}>
         <Dialog.Portal>
           <Dialog.Overlay
             className={cn(
@@ -660,6 +790,10 @@ export function ModelAdvancedDrawer({
             )}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-describedby={undefined}
+            onEscapeKeyDown={(event) => {
+              if (!(event.target instanceof HTMLElement) || !event.target.closest('[data-model-price-editor]')) return;
+              event.preventDefault();
+            }}
             onOpenAutoFocus={(event) => {
               event.preventDefault();
               titleRef.current?.focus();
@@ -667,6 +801,23 @@ export function ModelAdvancedDrawer({
           >
             <header className="flex shrink-0 items-start gap-3 border-b border-[var(--settings-theme-card-border)] px-5 pb-3 pt-4">
               <div className="min-w-0 flex-1">
+                {groupRow?.aliasRows && (
+                  <Select data-settings-search-action="Choose which member model of this alias group the drawer shows"
+                    label={t('settings.providers.models.advanced.modelId')}
+                    size="compact"
+                    width="sm"
+                    className="mb-2"
+                    truncateOptions
+                    value={row.id}
+                    disabled={ctx.loading || protocolSaving}
+                    onValueChange={(id) => {
+                      if (ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
+                      const member = memberRows.find((candidate) => candidate.id === id);
+                      if (member) onSelectMember?.(member);
+                    }}
+                    options={memberRows.map((member) => ({ value: member.id, label: member.id }))}
+                  />
+                )}
                 <Dialog.Title
                   ref={titleRef}
                   tabIndex={-1}
@@ -675,7 +826,7 @@ export function ModelAdvancedDrawer({
                   {localizedModelName(primaryModel.name, t)}
                 </Dialog.Title>
                 <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">
-                  {provider.id === 'xd' ? t('settings.providers.xd.title') : provider.name}
+                  {providerDisplayName(provider, t)}
                 </p>
               </div>
               <Dialog.Close
@@ -702,12 +853,12 @@ export function ModelAdvancedDrawer({
                           {t('settings.providers.models.manage.connectionRequired')}
                         </p>
                       )}
-                      {protocols.reference && protocolLabel(protocols.reference) && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
+                      {protocols.upstreamApis.length > 0 && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.protocol.reference')}
+                          {t('settings.providers.models.advanced.protocol.upstream')}
                         </span>
                         <span className="text-[var(--text-secondary)]">
-                          {protocolLabel(protocols.reference)}
+                          {protocols.upstreamApis.map(api => MODEL_PROTOCOL_LABEL[api as PiModelApi] ?? api).join(' · ')}
                         </span>
                       </div>}
                       {provider.agents.map((agent) => {
@@ -715,13 +866,15 @@ export function ModelAdvancedDrawer({
                         // Missing catalog membership proves no configured route, not upstream incompatibility.
                         const supported = Boolean(model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }));
                         const protocol = protocols.forAgent(agent);
-                        const compatibility = protocol?.mode === 'compatibility';
+                        const compatibility = protocol?.path === 'local';
                         const protocolId = `model-protocol-${agent}`;
                         const notes: string[] = [];
                         if (model) {
                           // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
                           // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
-                          if (!supportsMillionContext && model.contextWindow > 0 && model.contextWindow !== routeWindow) {
+                          // A shared saved budget overrides every engine's working default.
+                          if (!supportsMillionContext && (ctx.limit === null || ctx.mixed) &&
+                              model.contextWindow > 0 && model.contextWindow !== engineWindowReference) {
                             notes.push(approxTokens(model.contextWindow));
                           }
                           if (
@@ -762,31 +915,41 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {canEditProtocol && !model?.catalogPresetId && supported ? (
-                                    <DropdownMenu>
-                                      <DropdownMenuTrigger asChild>
-                                        <button type="button" disabled={protocolSaving}
-                                          aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
-                                          className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                          {protocolLabel(protocol.outbound)} <ChevronDown size={12} className="inline" aria-hidden />
-                                        </button>
-                                      </DropdownMenuTrigger>
-                                      <DropdownMenuContent className="z-[10003]" align="start">
-                                        <DropdownMenuRadioGroup value={protocol.outbound ?? ''}
-                                          onValueChange={value => void setModelApi(agent, value as PiModelApi)}>
-                                          {MODEL_PROTOCOL_OPTIONS.map(([api, label]) => <DropdownMenuRadioItem key={api} value={api}>{label}</DropdownMenuRadioItem>)}
-                                        </DropdownMenuRadioGroup>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
+                                  {/* Presets follow the catalog; any saved explicit choice, including older api/route-only
+                                      ones, keeps its way back to automatic. */}
+                                  {canEditProtocol && supported && (!model?.catalogPresetId || model.userModelConfig?.interfaceId ||
+                                    model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route?.wireProtocol) ? (
+                                    (() => {
+                                      const field = withCurrentOption(
+                                        model?.availableInterfaces?.length ? model.userModelConfig?.interfaceId ?? ((model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route) ? model.selectedInterface?.profileId : 'auto') : protocol.outbound,
+                                        model?.availableInterfaces?.length ? [
+                                          { value: 'auto', label: t('settings.providers.models.advanced.protocol.automatic') },
+                                          ...model.availableInterfaces.map(item => ({ value: item.profileId, label: protocolLabel(item.api) ?? item.api })),
+                                        ] : MODEL_PROTOCOL_OPTIONS.map(([api, label]) => ({ value: api, label })),
+                                        protocolLabel(protocol.outbound) ?? protocol.outbound ?? '',
+                                      );
+                                      return (
+                                        <Select data-settings-search-action="Choose the wire protocol this engine uses for the model"
+                                          label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
+                                          size="compact"
+                                          width="sm"
+                                          className="mt-1"
+                                          value={field.value}
+                                          options={field.options}
+                                          disabled={protocolSaving}
+                                          // Automatic keeps showing the protocol it resolves to.
+                                          triggerAdornment={field.value === 'auto' ? (
+                                            <span className="shrink-0 text-[var(--text-tertiary)]">{protocolLabel(protocol.outbound)}</span>
+                                          ) : undefined}
+                                          onValueChange={value => void setModelApi(agent, value)}
+                                        />
+                                      );
+                                    })()
                                   ) : protocolLabel(protocol.outbound)}
-                                  {/* Missing manufacturer metadata does not make a configured
-                                      outbound protocol unconfirmed. Keep that distinction in
-                                      the manufacturer reference when one is declared. */}
-                                  {(protocol.mode !== 'unknown' || !protocol.outbound) && <>
-                                    {protocolLabel(protocol.outbound) && ' · '}
-                                    {compatibility ? <ModelCompatibilityNotice /> : t(
-                                      `settings.providers.models.advanced.protocol.${protocol.mode}`,
-                                    )}
+                                  {/* Only Cindy's local conversion is called out; phone widths put it on its own line. */}
+                                  {compatibility && <>
+                                    <span className="hidden min-[400px]:inline"> · </span>
+                                    <span className="block min-[400px]:inline"><ModelCompatibilityNotice /></span>
                                   </>}
                                 </p>
                               )}
@@ -825,7 +988,9 @@ export function ModelAdvancedDrawer({
                                 onCheckedChange={async (next) => {
                                   if (!model || !selectionAvailable) return;
                                   if (
-                                    await setModelVisibility(agent, provider.id, model.id, next) === false
+                                    (groupRow?.aliasRows
+                                      ? await setModelVisibilities(provider.id, memberTargets.filter((m) => m.agent === agent), next)
+                                      : await setModelVisibility(agent, provider.id, model.id, next)) === false
                                   ) {
                                     toast.error(
                                       t('settings.providers.models.visibilityWriteFailed'),
@@ -865,6 +1030,14 @@ export function ModelAdvancedDrawer({
                       <SegmentedControl
                         className="mt-1"
                         fullWidth
+                        // Six translated labels exceed a details column. Keep every
+                        // level visible instead of hiding Ultra in horizontal overflow.
+                        style={shownEfforts.length > 4 ? {
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                          borderRadius: 'var(--radius-xl)',
+                        } : undefined}
+                        optionClassName={shownEfforts.length > 4 ? '!min-w-0 px-1' : undefined}
                         height={32}
                         optionHeight={24}
                         aria-label={t('settings.providers.models.advanced.defaultEffort')}
@@ -884,7 +1057,7 @@ export function ModelAdvancedDrawer({
                       )}
                       {chatAgents.some(
                         (a) =>
-                          getProviderModelEffort(a, provider.id, row.byAgent[a]!.id) !== undefined,
+                          rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
                         <Button
                           variant="secondary"
@@ -894,6 +1067,11 @@ export function ModelAdvancedDrawer({
                           type="button"
                           disabled={paymentRequired}
                           onClick={() => {
+                            if (groupRow?.aliasRows) {
+                              if (!editProviderModelMemoryBatch(memberTargets.map((target) => ({ kind: 'clear-effort' as const,
+                                agent: target.agent, providerId: provider.id, model: target.modelId })))) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+                              return;
+                            }
                             for (const a of chatAgents)
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
@@ -923,7 +1101,7 @@ export function ModelAdvancedDrawer({
                                   disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                   onClick={() => {
                                     ctxDirtyRef.current = false;
-                                    setCtxDraft(editableContextK(preset.tokens));
+                                    setCtxDraft(String(preset.tokens));
                                     void ctx.setLimit(preset.tokens);
                                   }}
                                 >{preset.label}</Button>
@@ -953,14 +1131,15 @@ export function ModelAdvancedDrawer({
                                   }
                                 }}
                                 aria-invalid={ctxInvalid || undefined}
-                                inputMode="numeric"
+                                inputMode="text"
+                                maxLength={32}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 aria-label={t(
                                   'settings.providers.models.advanced.contextLimitAria',
                                 )}
-                                className="w-20 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
+                                className="w-28 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
                               />
-                              <span className="text-11 text-[var(--text-tertiary)]">K</span>
+                              <span className="text-11 text-[var(--text-tertiary)]">tokens</span>
                             </span>
                             <span className="min-w-0 flex-1 text-11 tabular-nums text-[var(--text-tertiary)]">
                               {t('settings.providers.models.advanced.contextLimitRoute', {
@@ -971,21 +1150,25 @@ export function ModelAdvancedDrawer({
                               })}
                             </span>
                             {ctx.isCustomized && (
-                              <button
+                              <Button data-settings-search-action="Restore the default context limit for this model"
+                                variant="secondary"
+                                size="sm"
+                                tone="quiet"
+                                compact
                                 type="button"
                                 onClick={resetCtx}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
-                                className="shrink-0 text-11 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                                className="shrink-0"
                               >
                                 {t('settings.providers.models.advanced.restoreDefault')}
-                              </button>
+                              </Button>
                             )}
                           </div>
                           {(ctxInvalid || ctx.error || ctx.mixed) && (
                             <p role="status" className="mt-1.5 text-12 text-[var(--warning-fg)]">
                               {t(
                                 `settings.providers.models.advanced.${ctxInvalid ? 'contextInvalid' : ctx.error ? 'contextWriteFailed' : 'contextMixed'}`,
-                                { min: minimumContextK },
+                                { min: formatExactTokens(minimumContextK * 1000, locale), max: formatExactTokens(maximumContext, locale) },
                               )}
                             </p>
                           )}
@@ -996,6 +1179,11 @@ export function ModelAdvancedDrawer({
                             </p>
                           )}
                         </>
+                      )}
+                      {ctx.compaction && (
+                        <ModelCompactionSettings policy={ctx.compaction}
+                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          onChange={ctx.setCompaction} />
                       )}
                     </Section>
                   )}
@@ -1032,22 +1220,17 @@ export function ModelAdvancedDrawer({
                     {imageModel && (
                       <>
                         <Row label={t('settings.providers.models.advanced.imageCapability.label')}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
-                                aria-label={t('settings.providers.models.advanced.imageCapability.label')}
-                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                {t(`settings.providers.models.advanced.imageCapability.${imageCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent className="z-[10003]" align="start">
-                              <DropdownMenuRadioGroup value={imageCapability} onValueChange={value => void setImageCapability(value)}>
-                                {(['default', 'generate', 'edit'] as const).map(value => (
-                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.imageCapability.${value}`)}</DropdownMenuRadioItem>
-                                ))}
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <Select data-settings-search-action="Declare the image capability of the Images connection model"
+                            label={t('settings.providers.models.advanced.imageCapability.label')}
+                            size="compact"
+                            width="sm"
+                            value={imageCapability}
+                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            onValueChange={value => void setImageCapability(value)}
+                            options={(['default', 'generate', 'edit'] as const).map(value => ({
+                              value, label: t(`settings.providers.models.advanced.imageCapability.${value}`),
+                            }))}
+                          />
                         </Row>
                         <p className="text-12 leading-5 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.imageCapability.hint', { agent: AGENT_LABEL[imageAgent!] })}
@@ -1057,22 +1240,17 @@ export function ModelAdvancedDrawer({
                     {videoModel && (
                       <>
                         <Row label={t('settings.providers.models.advanced.videoCapability.label')}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
-                                aria-label={t('settings.providers.models.advanced.videoCapability.label')}
-                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                {t(`settings.providers.models.advanced.videoCapability.${videoCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent className="z-[10003]" align="start">
-                              <DropdownMenuRadioGroup value={videoCapability} onValueChange={value => void setImageCapability(value, 'video')}>
-                                {(['default', 'generate', 'edit'] as const).map(value => (
-                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.videoCapability.${value}`)}</DropdownMenuRadioItem>
-                                ))}
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <Select data-settings-search-action="Declare the video capability of the video connection model"
+                            label={t('settings.providers.models.advanced.videoCapability.label')}
+                            size="compact"
+                            width="sm"
+                            value={videoCapability}
+                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            onValueChange={value => void setImageCapability(value, 'video')}
+                            options={(['default', 'generate', 'edit'] as const).map(value => ({
+                              value, label: t(`settings.providers.models.advanced.videoCapability.${value}`),
+                            }))}
+                          />
                         </Row>
                         <p className="text-12 leading-5 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.videoCapability.hint', { agent: AGENT_LABEL[videoAgent!] })}
@@ -1080,71 +1258,59 @@ export function ModelAdvancedDrawer({
                       </>
                     )}
                     <Row label={t('settings.providers.models.advanced.imageInput')}>
-                      {/*
-                        三态声明：目录未声明图片能力时，Pi 会在客户端就拒收图片（请求根本不出网），
-                        用户此前没有任何可点的入口去声明它 —— 报错文案让人去开的开关并不存在。
-                        这里把状态与声明合成一个控件：图标+文案保留「目录怎么说」的事实，
-                        下拉写本机目录 override（不改连接配置，preset 连接因此仍跟随官方目录）。
-                      */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            type="button"
-                            // 只在真写入期间禁用。刷新期间(hook 收到 PROVIDER_CHANGED 会重读)
-                            // 值原样保留，禁用它只会造成一次多余的明暗跳变；透明度也不动 ——
-                            // 与同抽屉协议控件一致(disabled 但不改 opacity)。
-                            // xd 的能力由服务端目录决定、组织托管供应商的能力由管理员下发：两者
-                            // 本机都不可覆盖，控件保留但禁用（与同抽屉其他不可改项一致）；
-                            // Main IPC 侧另有 INVALID_PARAMS / PERMISSION_DENIED 拒写兜底。
-                            disabled={
-                              imageInput.saving ||
-                              provider.id === 'xd' ||
-                              isOrganizationManagedProvider(provider)
-                            }
-                            aria-label={t('settings.providers.models.advanced.imageInputOverride.label')}
-                            title={
-                              primaryModel.modalities || primaryModel.supportsImageInput !== undefined
-                                ? t('settings.providers.models.advanced.catalogCapabilities')
-                                : t(`settings.providers.models.advanced.visionSource.${vision}`)
-                            }
-                            className="inline-flex items-center gap-1 rounded-full px-2 py-1 hover:bg-[var(--surface-hover)]"
-                          >
-                            <CapabilityValue
-                              state={
-                                vision === 'vision' ? true : vision === 'no-vision' ? false : undefined
-                              }
-                              label={t(`settings.providers.models.advanced.vision.${vision}`)}
+                      {conversational && !isOrganizationManagedProvider(provider) ? (
+                        (() => {
+                          // 'default' clears the override; 'true' / 'false' save an explicit choice.
+                          // States that are not one of these choices — an older explicit override
+                          // equal to the default, or overrides that differ by engine even when their
+                          // values agree — show as the current row, so every choice stays selectable.
+                          const choiceValue = (supported: boolean) => imageDefaultsMatch(supported) ? 'default' : String(supported);
+                          const staleOverride = imageInputOverride.value !== null && imageDefaultsMatch(imageInputOverride.value);
+                          const field = withCurrentOption(
+                            imageInputMixed || imageInputOverride.mixed || imageInputValue === null || staleOverride
+                              ? null : choiceValue(imageInputValue),
+                            [true, false].map((supported) => {
+                              const label = t(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+                              return {
+                                value: choiceValue(supported),
+                                label: imageDefaultsMatch(supported)
+                                  ? t('settings.providers.models.advanced.imageInputDefault', { value: label }) : label,
+                              };
+                            }),
+                            imageInputMixed
+                              ? t('settings.providers.models.advanced.imageInputMixed')
+                              : imageInputValue === null
+                                ? t('settings.providers.models.advanced.undeclared')
+                                : t(`settings.providers.models.advanced.${imageInputValue ? 'supported' : 'unsupported'}`),
+                          );
+                          return (
+                            <Select data-settings-search-action="Override whether this model accepts image input"
+                              label={t('settings.providers.models.advanced.imageInput')}
+                              size="compact"
+                              width="sm"
+                              value={field.value}
+                              options={field.options}
+                              disabled={imageInputOverride.loading || localConfigurationBlocked}
+                              onValueChange={(value) => void imageInputOverride.setValue(
+                                value === 'default' ? null : value === 'true',
+                              )}
                             />
-                            <span className="text-11 text-[var(--text-tertiary)]">
-                              {imageInput.isCustomized
-                                ? imageInput.value === true
-                                  ? t('settings.providers.models.advanced.imageInputOverride.declaredTrue')
-                                  : t('settings.providers.models.advanced.imageInputOverride.declaredFalse')
-                                : t('settings.providers.models.advanced.imageInputOverride.inherit')}
-                            </span>
-                            <ChevronDown size={12} className="inline" aria-hidden />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent className="z-[10003]" align="end">
-                          <DropdownMenuRadioGroup
-                            value={
-                              imageInput.isCustomized ? String(imageInput.value) : 'inherit'
-                            }
-                            onValueChange={(next) => void setImageInput(next)}
-                          >
-                            <DropdownMenuRadioItem value="inherit">
-                              {t('settings.providers.models.advanced.imageInputOverride.inherit')}
-                            </DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="true">
-                              {t('settings.providers.models.advanced.imageInputOverride.declaredTrue')}
-                            </DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="false">
-                              {t('settings.providers.models.advanced.imageInputOverride.declaredFalse')}
-                            </DropdownMenuRadioItem>
-                          </DropdownMenuRadioGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </Row>
+                          );
+                        })()
+                      ) : <span
+                        title={
+                          capabilityModel.modalities || capabilityModel.supportsImageInput !== undefined
+                            ? t('settings.providers.models.advanced.catalogCapabilities')
+                            : t(`settings.providers.models.advanced.visionSource.${vision}`)
+                        }
+                      >
+                        <CapabilityValue
+                          state={
+                            vision === 'vision' ? true : vision === 'no-vision' ? false : undefined
+                          }
+                          label={t(`settings.providers.models.advanced.vision.${vision}`)}
+                        />
+                      </span>}
                     <Row label={t('settings.providers.models.advanced.thinking')}>
                       {/*
                         思考档位三态声明：目录说「不支持思考」时，Pi 客户端就没有 thinking
@@ -1222,6 +1388,11 @@ export function ModelAdvancedDrawer({
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </Row>
+                    {imageInputOverride.error && (
+                      <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
+                        {t('settings.providers.custom.toast.saveFailed')}
+                      </p>
+                    )}
                     {capabilityModel.modalities &&
                       (['input', 'output'] as const).map((direction) => (
                         <Row
@@ -1245,68 +1416,24 @@ export function ModelAdvancedDrawer({
                         )}
                       />
                     </Row>
+                    <Row label={t('newChat.modelSelector.speed.ultrafast')} muted>
+                      <CapabilityValue
+                        state={ultrafastSupport}
+                        label={t(
+                          `settings.providers.models.advanced.${ultrafastSupport === true ? 'supported' : ultrafastSupport === false ? 'unsupported' : 'undeclared'}`,
+                        )}
+                      />
+                    </Row>
                   </Section>
 
-                  <Section title={t('settings.providers.models.advanced.pricing')}>
-                    {primaryModel.displayPricing && primaryModel.currency ? (
-                      <DisplayPricingDetails model={primaryModel} />
-                    ) : price === null ? (
-                      <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
-                        {t(
-                          provider.access?.kind === 'subscription'
-                            ? 'settings.providers.models.subscription'
-                            : 'settings.providers.models.advanced.noPricing',
-                        )}
-                      </Row>
-                    ) : price.kind === 'free' ? (
-                      <Row label={t('settings.providers.models.advanced.pricingLabel')}>
-                        {t('newChat.modelSelector.pricing.free')}
-                      </Row>
-                    ) : (
-                      modelPriceDetailRows(price.current, price.original).map((detail) => (
-                        <Row
-                          key={detail.kind}
-                          label={t(`settings.providers.models.advanced.price.${detail.kind}`)}
-                        >
-                          {/* 有折扣时给**实付价**，标准价划掉跟在后面：只写标准价再另起一行
-                          「折扣 40%」等于让人自己乘一遍，而实付才是他要判断的数。 */}
-                          {detail.value}
-                          {detail.originalValue && (
-                            <span className="ml-1.5 text-11 text-[var(--text-tertiary)] line-through">
-                              {detail.originalValue}
-                            </span>
-                          )}
-                          <span className="ml-1 text-11 text-[var(--text-tertiary)]">
-                            {t('settings.providers.models.advanced.perMtok')}
-                          </span>
-                        </Row>
-                      ))
-                    )}
-                    {!primaryModel.displayPricing && price?.kind === 'priced' && price.discount !== undefined && (
-                      <Row label={t('settings.providers.models.advanced.discount')}>
-                        <span
-                          className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
-                          style={{
-                            color: EFFORT_TIER_COLORS.low,
-                            backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
-                          }}
-                        >
-                          {`↓${Math.round(price.discount * 100)}%`}
-                        </span>
-                      </Row>
-                    )}
-                    {/* 自定义报价:原「⋯」菜单的一项,搬到它真正相关的段落里。
-                    XD 网关的价格由服务端定,不给覆盖入口(与 IPC 侧的拒绝一致)。 */}
-                    {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && (
-                      <button
-                        type="button"
-                        onClick={() => setPriceDialogOpen(true)}
-                        className="mt-2 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
-                      >
-                        {t('settings.providers.models.priceOverride.menu')}
-                      </button>
-                    )}
-                  </Section>
+                  {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && priceRow ? (
+                    <ModelPriceOverrideDialog provider={provider} row={priceRow} open={open} onOpenChange={onOpenChange}
+                      presentation="inline" referenceDetails={(agent) => {
+                        const model = priceRow.byAgent[agent];
+                        return model ? referencePricing(model, agent) : null;
+                      }}
+                      onPendingChange={(pending) => { pricePendingRef.current = pending; }} />
+                  ) : referencePricing(primaryModel, primaryAgent)}
                   <Section title={t('settings.providers.models.advanced.identity')}>
                     {description && (
                       <p className="mb-2 text-12 leading-relaxed text-[var(--text-secondary)]">{description}</p>
@@ -1340,7 +1467,8 @@ export function ModelAdvancedDrawer({
                   compact
                   type="button"
                   disabled={disabled && !selectionAvailable}
-                  onClick={() => onDisable(row)}
+                  data-settings-search-action="Enable or disable the displayed model group"
+                  onClick={() => { if (!pricePendingRef.current) onDisable(groupRow ?? row); }}
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')
@@ -1353,7 +1481,8 @@ export function ModelAdvancedDrawer({
                     tone="danger"
                     compact
                     type="button"
-                    onClick={() => onDeleteLocal(row)}
+                    data-settings-search-action="Delete the displayed local model"
+                    onClick={() => { if (!pricePendingRef.current) onDeleteLocal(row); }}
                   >
                     <Trash2 size={13} />
                     {t('settings.providers.local.deleteModel')}
@@ -1364,15 +1493,6 @@ export function ModelAdvancedDrawer({
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-
-      {priceDialogOpen && (
-        <ModelPriceOverrideDialog
-          provider={provider}
-          row={row}
-          open={priceDialogOpen}
-          onOpenChange={setPriceDialogOpen}
-        />
-      )}
     </>
   );
 }

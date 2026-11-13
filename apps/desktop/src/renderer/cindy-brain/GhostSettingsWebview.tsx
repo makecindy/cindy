@@ -4,11 +4,18 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LayoutGrid, MoonStar } from 'lucide-react';
 import type { WebviewTag } from 'electron';
+import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
+import type { RemotePluginSettingsDirectory } from '../../shared/remotePluginSettings';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
-import { installedGhostLogicalIdentity, installedGhostWebviewPartitionClaim, pluginStoragePart } from '../../shared/pluginIdentity';
+import {
+  installedGhostLogicalIdentity,
+  installedGhostStoragePart,
+  installedGhostWebviewPartitionClaim,
+  pluginStoragePart,
+} from '../../shared/pluginIdentity';
 import {
   buildGhostPluginSettingsThemeCss,
   buildGhostSettingsThemeCss,
@@ -89,10 +96,10 @@ function AsleepHint({ appearance }: { appearance: 'settings' | 'plugin' }): Reac
   const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-1.5 px-6 py-9">
-      <MoonStar size={20} className="text-[var(--text-tertiary)] opacity-60" />
+      <MoonStar size={20} className="text-[var(--text-tertiary)]" />
       <p
         className={cn(
-          'text-center text-[var(--text-tertiary)] opacity-70',
+          'text-center text-[var(--text-tertiary)]',
           appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
         )}
       >
@@ -125,17 +132,26 @@ function SettingsWebviewBody({
   appearance,
   dataOwnerId,
   hostAccount = false,
+  remoteDeviceId,
 }: {
   ghost: InstalledGhost;
   appearance: 'settings' | 'plugin';
   dataOwnerId: string | null;
   hostAccount?: boolean;
+  remoteDeviceId?: string;
 }): ReactNode {
   const [crashed, setCrashed] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const [directory, setDirectory] = useState<RemotePluginSettingsDirectory | null>(null);
+  const remoteView = useRef<string | null>(null);
+  const answeredDirectory = useRef<string | null>(null);
+  const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const { manifest } = ghost;
-  const settingsHeightKey = pluginStoragePart(installedGhostLogicalIdentity(ghost));
+  const settingsHeightKey =
+    (remoteDeviceId ? remoteDeviceId + ':' : '') +
+    pluginStoragePart(installedGhostLogicalIdentity(ghost));
+  const instanceId = installedGhostStoragePart(ghost);
   const partitionClaim = installedGhostWebviewPartitionClaim(ghost);
   const approvalToken = ghostInstallApprovalToken(ghost.approval);
   const settingsHtml = manifest.settingsHtml;
@@ -154,11 +170,12 @@ function SettingsWebviewBody({
     const host = hostRef.current;
     if (!host) return;
     const webview = document.createElement('webview') as WebviewTag;
-    webview.setAttribute('partition', partitionClaim);
+    if (!remoteDeviceId) webview.setAttribute('partition', partitionClaim);
     webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${settingsHtml}`);
     // 先透明留位,主题与布局注入完成后直接展示真实页面,不覆盖历史画面。
     webview.setAttribute('style', 'display:flex;flex:1 1 auto;width:100%;height:100%;opacity:0;');
     let disposed = false;
+    let remoteViewId: string | undefined;
     let themeTimer: ReturnType<typeof setTimeout> | null = null;
     const measureTimers: Array<ReturnType<typeof setTimeout>> = [];
     // 状态机见 createGhostThemeInjector:换肤误触发去重、dom-ready 无条件重灌。
@@ -256,9 +273,45 @@ function SettingsWebviewBody({
     webview.addEventListener('console-message', onConsoleMessage);
     webview.addEventListener('render-process-gone', onGone);
     const unobserveTheme = observeHostTheme(scheduleInjectTheme);
-    host.appendChild(webview);
+    const unsubscribeDirectory = remoteDeviceId
+      ? window.electronAPI.ghosts.onRemoteSettingsDirectory((value) => {
+          if (
+            !disposed &&
+            value.viewId === remoteViewId &&
+            value.request.expiresAt > Date.now() &&
+            value.request.id !== answeredDirectory.current
+          )
+            setDirectory((previous) =>
+              previous?.request.id === value.request.id ? previous : value,
+            );
+        })
+      : undefined;
+    if (remoteDeviceId) {
+      void window.electronAPI.ghosts
+        .openRemoteSettings({
+          deviceId: remoteDeviceId,
+          instanceId,
+          expectedInstalledApproval: approvalToken,
+        })
+        .then((view) => {
+          if (disposed) {
+            void window.electronAPI.ghosts.closeRemoteSettings(view.id).catch(() => {});
+            return;
+          }
+          remoteViewId = view.id;
+          remoteView.current = view.id;
+          webview.setAttribute('partition', view.partition);
+          webview.setAttribute('src', view.src);
+          host.appendChild(webview);
+        })
+        .catch(() => {
+          if (!disposed) setCrashed(true);
+        });
+    } else host.appendChild(webview);
     return () => {
       disposed = true;
+      remoteView.current = null;
+      unsubscribeDirectory?.();
       injector.dispose();
       if (themeTimer !== null) clearTimeout(themeTimer);
       for (const timer of measureTimers) clearTimeout(timer);
@@ -268,6 +321,8 @@ function SettingsWebviewBody({
       webview.removeEventListener('console-message', onConsoleMessage);
       webview.removeEventListener('render-process-gone', onGone);
       webview.remove();
+      if (remoteViewId)
+        void window.electronAPI.ghosts.closeRemoteSettings(remoteViewId).catch(() => {});
     };
     // version 入依赖:原位更新换版后 webview 重挂载,设置区立刻跑新代码。
   }, [
@@ -283,7 +338,17 @@ function SettingsWebviewBody({
     settingsHeightKey,
     approvalToken,
     hostAccount,
+    remoteDeviceId,
+    instanceId,
   ]);
+  useEffect(() => {
+    if (!directory) return;
+    const timer = setTimeout(
+      () => setDirectory((previous) => (previous === directory ? null : previous)),
+      Math.max(0, directory.request.expiresAt - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [directory]);
 
   if (crashed) {
     return (
@@ -296,16 +361,53 @@ function SettingsWebviewBody({
       />
     );
   }
+  const answerDirectory = async (path: string | null) => {
+    if (directory?.request.id === answeredDirectory.current) return;
+    if (!directory || remoteView.current !== directory.viewId)
+      throw new Error('PLUGIN_PAGE_CLOSED');
+    answeredDirectory.current = directory.request.id;
+    try {
+      await window.electronAPI.ghosts.answerRemoteSettingsDirectory({
+        viewId: directory.viewId,
+        requestId: directory.request.id,
+        path,
+      });
+      setDirectory((previous) => (previous === directory ? null : previous));
+    } catch (error) {
+      answeredDirectory.current = null;
+      throw error;
+    }
+  };
   return (
-    <div
-      ref={hostRef}
-      data-ghost-webview
-      className={cn(
-        'relative flex w-full min-w-0 max-w-full',
-        fixedHeight === undefined && 'overflow-hidden',
+    <>
+      <div
+        ref={hostRef}
+        data-ghost-webview
+        className={cn(
+          'relative flex w-full min-w-0 max-w-full',
+          fixedHeight === undefined && 'overflow-hidden',
+        )}
+        style={{ height: fixedHeight ?? autoHeight }}
+      />
+      {directory && directory.viewId === remoteView.current && remoteDeviceId && (
+        <AddRemoteProjectDialog
+          open
+          initialDeviceId={remoteDeviceId}
+          fixedDeviceId={remoteDeviceId}
+          title={t('settings.ghosts.pick.dialogMessage', { name: manifest.name })}
+          confirmText={t('settings.ghosts.pick.dialogTitle')}
+          errorText={t('settings.ghosts.errors.generic')}
+          onOpenChange={(open) => {
+            if (!open) void answerDirectory(null).catch(() => setDirectory(null));
+          }}
+          onProjectAdded={async (target) => {
+            if (target.kind !== 'device-link' || target.deviceId !== remoteDeviceId)
+              throw new Error('PLUGIN_PAGE_CLOSED');
+            await answerDirectory(target.path);
+          }}
+        />
       )}
-      style={{ height: fixedHeight ?? autoHeight }}
-    />
+    </>
   );
 }
 
@@ -316,6 +418,7 @@ export function GhostSettingsWebview({
   appearance = 'settings',
   account,
   reloadKey = 0,
+  remoteDeviceId,
 }: {
   ghost: InstalledGhost;
   /** Product-facing section title; settings keeps the legacy fallback. */
@@ -324,12 +427,15 @@ export function GhostSettingsWebview({
   appearance?: 'settings' | 'plugin';
   account?: ReactNode;
   reloadKey?: number;
+  remoteDeviceId?: string;
 }): ReactNode {
   const { t } = useTranslation();
   const { mode, dataOwnerId } = useAuth();
   const ownerKey = `${mode}:${dataOwnerId ?? ''}`;
   const { manifest } = ghost;
-  const settingsHeightKey = pluginStoragePart(installedGhostLogicalIdentity(ghost));
+  const settingsHeightKey =
+    (remoteDeviceId ? remoteDeviceId + ':' : '') +
+    pluginStoragePart(installedGhostLogicalIdentity(ghost));
   if (!manifest.settingsHtml) return null;
   return (
     <div
@@ -365,6 +471,7 @@ export function GhostSettingsWebview({
             appearance={appearance}
             dataOwnerId={dataOwnerId}
             hostAccount
+            remoteDeviceId={remoteDeviceId}
           />
         </details>
       ) : ghost.enabled ? (
@@ -373,6 +480,7 @@ export function GhostSettingsWebview({
           ghost={ghost}
           appearance={appearance}
           dataOwnerId={dataOwnerId}
+          remoteDeviceId={remoteDeviceId}
         />
       ) : (
         <AsleepHint appearance={appearance} />

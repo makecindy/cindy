@@ -1,6 +1,33 @@
 # 模型配置与下发：架构及维护入口
 
 > 权威入口：先读本页，再按问题打开专题。Server 为独立仓库，文档不代表已部署。
+> 心动部署的 AI Gateway（模型路由与计费服务端）源码在内部仓库 `xindong/ai-gateway` 与
+> `xindong/litellm`（2026-10-28 确认）；排查网关行为先查这两处。
+
+## 本地模型说明的客户端译文
+
+`packages/model-providers/src/localModelDescriptions.json` 为现有本地模型的英文说明提供
+法语、西语、德语、葡语（葡萄牙／巴西）译文，不是模型目录正本。展示入口统一用
+`localModelDescription`：活动目录的对应语言优先，其次仅按完全一致的英文原文匹配附带译文，
+否则回退英文。更新目录原文后必须重新校对译文，不能按模型 ID 套用旧说明。
+此补齐不改变目录 revision、型号、推荐排序或参数；不代表独立 Server 已下发十语字段。
+
+## Cindy AI 身份图标
+
+名称按登录身份加后缀（2026-10-29 裁决，#7744）：个人账号显示「Cindy AI · 个人」，心动显示
+「Cindy AI · 心动」，其他企业显示「Cindy AI · <企业名>」，保持统一品牌并避免登录身份歧义；
+跨账号分享时的来源后缀见[供应商分享](../product-rules/provider-sharing.md)。
+
+供应商 ID 仍为 `xd`；个人、其他企业和未知身份默认使用 Chrome 插件的 Cindy 剪影。
+来源电脑按既有 `isXdOrgUser` 识别心动身份，临时投影 `logoKind: xd`，渲染原来的
+单色心动 SVG；其他身份投影 `logoKind: cindy`。心动图形跟随主题和选中状态的前景色。
+组织头像 `orgLogoUrl` 不用于模型图标，不新增图片 URL、图片请求或加载失败状态。
+
+同账号远程与手机沿用来源电脑的图标；跨账号分享清除企业图标身份，与名称后缀的
+边界一致。复用既有可选 `logoKind` 与能力协商；旧客户端不认识 `cindy` 时按既有
+provider ID 回退。中转只转发原目录载荷，无新帧、权限或恢复协议。
+显式模型品牌优先，`cindy/xd` 模型品牌使用 Cindy 剪影；不改 Auto 路由或 provider ID。
+企业专用模型图标配置需后续由服务端独立提供，不复用组织头像。
 
 ## 数据流
 
@@ -30,6 +57,7 @@ Catalog (version)
 ├─ providers[]                 内置接入、授权、routing、各引擎 models
 ├─ presets[].runtimes          新建连接的地址、协议和默认资料
 └─ modelRegistry (schemaVersion / updatedAt)
+   ├─ interfaceProfiles[]      V6：产品作用域内的接口模板
    ├─ baseModels[]             公共型号
    ├─ models[]                 接入条目：modelRef → baseModels；perAgent 与 routes 同级
    ├─ nativeApiRules[]         原生协议判定
@@ -53,9 +81,79 @@ Catalog (version)
 | 某个用户的显式设置 | 本机 `model-catalog-overrides.json` 等既有偏好 | 不写回 Server；刷新保留，恢复默认删除 override |
 | 新执行协议、SDK 参数、token 计量 | 本仓对应 host / harness / bridge | 加目录字段不会自动获得执行能力 |
 
+模型高级设置的「图片输入」可选跟随目录、支持、不支持。显式选择按账号、供应商、模型及引擎
+保存到本地覆盖；同一模型行的对话引擎别名一并更新。目录刷新保留选择，恢复默认只删除图片输入
+覆盖，保留其它自定义资料。已有任务的接口快照保留原传输协议，图片声明继续读取本地覆盖。
+这只修正客户端的能力声明，不改变上游服务实际能接收的内容。
+
 结构例外：条目没有 `models[].defaults`；Registry agents / perAgent 只接受 Claude Code、Codex，
 Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）。媒体 route 使用 `agents: []`。
 `contextWindowMax` 是客户端容量投影，不能填进 Registry；容量与工作预算见 [运行时细则](model-catalog-runtime.md)。
+
+### 多接口目录（Registry V6）
+
+一个模型的身份与其接口绑定分开维护。`interfaceProfiles` 正本位于 Server 的
+`source/registry/interface-profiles.json`：`id/providerId/api/baseUrl/inputBaseUrls` 声明接口与精确
+凭证作用域；`requestPath` 为可选相对路径；`defaults` 为通道能力；`compatibility/requires`
+只引用客户端已实现的具名能力。`inputBaseUrls` 必须与目标同源，不能借目录把密钥换域发送。
+`modelIds` 限制旧配置自动采用该模板的成员，显式 `routes[].interfaces` 为新模型绑定已有模板。
+
+`routes[].interfaces[]` 通过 `profileId` 绑定模板，可声明 `wireModelId/defaults/compatibility/requires/retired`；
+`preferredInterfaces` 按 Claude Code、Codex、Pi 分别列优先级。模板被撤回、绑定被撤回或必需能力未知时，
+该绑定不可执行；不能回填离线数据复活。`nativeApis` 是经核实的型号原生协议集合（`null` 明确未知），
+不从 Pi adapter 或代理协议反推。保留 `nativeApi` 作为旧客户端的稳定声明。
+
+三引擎共用 `availableModelInterfaces/providerInterfaceModelRoute`。能力覆盖依次为公共/产品默认、
+接口默认、引擎差异、实报、`forceOverrides`、用户覆盖；数组整体替换，`false/null/[]` 不丢失。
+界面展示当前接口的能力，输入不支持时不自动重放到另一协议。`interfaceId: "auto"` 跟随目录默认；
+显式 profile ID 固定用户选择。旧 `api/piApi/route/requestPath` 保留；仅已声明的旧导入修正规则
+通过 `legacyApis` 迁移。用户配置只保存原始选择，不保存解析后的 API、模板或完整快照。
+高级模型设置沿用既有入口显示自动与可用接口；手机/设备互联仍使用执行端投影，不在控制端重新选路。
+
+任务首次派发把非敏感接口、模型 ID 与能力快照存入 owner-scoped `model-interface-snapshots/`，
+同一任务/来源/引擎/型号在目录刷新与重启后保留接口。旧任务首次恢复按保存的 transport 迁移。
+鉴权、来源是否存在、暂停与撤回仍实时检查；快照不存 Key/headers。删除任务清理其快照；
+归档和关闭不清理。SSH 由执行宿主复用选路结果；新接口若不能由既有远端协议表达，沿用启动前明确报错。
+
+V6 请求使用 `registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1`；旧服务端返回低版本时，
+在同一时间预算内重试一次 V5。缓存按实际 URL 变体隔离；同 revision 的 V5→V6 只有旧形状完全相等
+才视为升级，反向不覆盖 V6。服务端 V5/V4/冻结 legacy 投影不泄漏新字段或新默认接口。
+
+维护步骤：
+
+1. 在 Server 正本修改模型绑定/通道能力/优先级，增加 `updatedAt`，运行 `pnpm --filter model-access-server catalog:generate`。
+2. 更新离线副本时，在客户端运行 `node packages/model-providers/scripts/sync-registry.mjs <Server生成的providers.json>`；
+   运行解析、目录一致性及受影响路由回归。旧 `provider-interface-models.json` 与客户端硬编码接口表已删除。
+3. 新型号绑定已有模板可以只发目录。新增/改变模板端点、鉴权边界或兼容行为走常规服务发布；
+   新执行行为还必须发布客户端。发布门比较组装后的模板，不能通过换分片绕过。
+4. 回撤用新的完整 revision 和 `retired`，不回发旧日期快照。先部署可兼容投影的 Server，再发布客户端，
+   最后调整目录默认；目录发布与真实上游推理验收分别记录。
+
+回归入口：`providerInterfaceRoutes`、`source-registry`、`modelAccessValidator`、Desktop `providerRoute`
+（真实 HTTP 目录→解析→三接口出站、快照冷恢复）、`codexProxyHost`、`piProviderTransport`。
+“客户端已实现”“服务已部署”“账号真实推理通过”是三个独立结论。
+
+Agnes AI 离线副本与 Server 正本同步：四个聊天型号用官方 Messages / Responses / Chat 接口，
+Messages 使用域名根路径（适配器追加 `/v1/messages`），Responses / Chat 保留 `/v1` base，
+模型发现保持 `/v1/models`；不能把三接口机械地写成同一个 base，否则 Messages 会重复 `/v1`。
+Pi 自动默认采用 Chat Completions，Claude Code / Codex 分别保持 Messages / Responses。
+显式接口选择和已运行任务的接口快照保持原值；本次默认调整不代表真实账号的 Chat 思考参数已验证。
+Flash 上限按官方 512K 保守记为 512,000，2.5 Pro / Pro Beta 为 1,000,000，输出 65,536。
+原有连接仅补缺失资料，不重置显式窗口、协议或启用开关。三个图片、两个视频型号本次仅收录
+身份、类型和官方文档，尚未添加 Agnes 专属媒体执行路径；3.0 Pro 的 coming-soon 身份不构成
+可用模型。新增供应商与接口模板由 Server 常规发布流程下发，不走型号变更的自动直提捷径。
+
+### 推荐引擎（`recommendedAgents`）
+
+推荐哪个引擎由 Server 正本 `source/registry/recommended-agents.json` 维护：每条规则是
+`providerId` + `modelId`（精确）或 `modelIdPrefix`（前缀）+ `agent`，精确优先，其次最长前缀。
+`providerId` 用路由来源：Cindy AI 为 `xd`，目录预设为预设 ID，内置订阅为其目录身份。
+依据官方与社区推荐填写，不靠协议推断；只写与默认推断不同的家族即可。客户端按目录推荐选中
+引擎，用户手动换过的引擎按来源与模型记住；推荐的引擎在该来源只能走兼容模式时不采用。
+
+字段只在请求带 `registryRecommendedAgents=1` 时下发：已发布的 V6 解析器拒收未知字段，
+服务端对其余请求剥离此字段，旧客户端拿到的目录不变。客户端升级后离线启动可回退到升级前
+URL 缓存的 V6 快照。
 
 ### Gateway 复杂价目展示
 
@@ -65,10 +163,26 @@ Registry/defaults、ModelPriceQuote 或 token 成本估算，不跨供应商补�
 成功刷新缺字段或价目不可解析时清除旧价目，模型仍正常更新；新增属性忽略，未知单位保留。
 展示字段变化不构成整份目录失败；网络或核心模型协议失败仍沿用既有目录恢复语义。
 
-Desktop 模型详情优先展示结构化价目，缺字段沿用原有价格。`price` 为每 `quantity` 个
-`unit` 的折扣前报价，只在展示时应用一次折扣，保留币种与“约/起价”语义；label、tier、
-notes 仅按纯文本呈现，未知单位不猜换算。列表不新增价格入口，统一从既有模型详情查看，也不从混合单位挑最低价。
-共享目录可传递这些可选展示字段，旧端缺字段仍合法；首期 UI 仅覆盖 Desktop 现有详情入口。
+Desktop 设置页模型详情有 `displayPricing.summary` 时优先按输入、输出、缓存读取、缓存写入
+展示主报价，每个角色允许 1–4 段、各带单位与数量，区间统一用 `maxPrice` 表示。摘要的
+`priceType` 仅允许缺省、`exact` 或 `estimated`；任一段为 `starting_at` 时整份 summary 无效，
+只丢弃摘要，保留价目表。items 的已发布契约不变，仍支持 `starting_at`。summary 缺失或无效时
+沿用原价目表；summary 无效只清除摘要，不丢价目表。补充价目表仅在以下条件全部满足时隐藏：
+有 summary 且没有 notes；所有 item 都没有 tier，priceType 缺省或 exact；item 总数等于
+所有角色报价段数，且每个 item 能按 unit、quantity、price 一一匹配不同的摘要报价，
+匹配报价没有 maxPrice 或 tier。其余情况保留在摘要下方。设置页列表对带 displayPricing 的
+模型不显示价格；选择器、浮层和聊天价格档位逻辑保持原样。详情中的有效折扣仍单列显示。
+摘要的可选 `component` 标明收费项类别，与计价单位独立。格式为 `^[a-z][a-z0-9_]{0,31}$`；
+格式不合法只丢该字段，报价与摘要保留。合法但未知的类别保留在数据中，界面按缺失处理。
+已知类别为 text / image / audio / video：同一角色类别一致时显示「类别 + 方向」，混合类别时
+保留方向名并在各条报价金额前显示已知类别名；不从单位推断类别。唯一键沿用
+unit + quantity + tier，不加入 component；旧端忽略新增字段，协议版本不变。
+摘要的 tier 单独一行使用次要文字，金额、原价区间和单位分别保持完整，同一角色的多段报价逐条换行、靠右对齐，不插入分隔点。
+`price` / `maxPrice` 为每 `quantity` 个 `unit` 的折扣前报价，只在展示时应用一次折扣，保留币种
+与“约”的语义；items 另外保留“起价”语义。角色和已知单位本地化；已发布的 Text / Image / Audio / Video 输入输出、Text 缓存读写、Image 缓存读取及 Duration 输入输出明细 label 本地化，其他 label、tier、notes 原样按纯文本呈现，未知单位不猜换算。
+数量 1 省略，百万按语言简写，其余按本地数字格式显示。共享目录可传递这些可选展示字段，旧端
+缺字段仍合法，不新增能力声明；此 UI 仅覆盖 Desktop 设置页。解析与展示回归见
+`modelDisplayPricing.test.ts`、`DisplayPricingDetails.test.tsx` 与 `ModelAdvancedDrawer.test.tsx`。
 
 ### 覆盖顺序
 
@@ -112,11 +226,21 @@ bridge 共用这一顺序；OpenAI 订阅的 Pi 以公共 Pi 目录为基础，�
 
 Claude 订阅没有 HTTP 清单接口，清单来自内置 Claude Code 的 SDK `supportedModels()`：会话启动时
 捕获；此外 maker 就绪、登录／认领 Claude 登录以及手动刷新时，用本机 CLI 起一个空闲 Query 只读
-清单（不发消息、不产生模型调用）。SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
+清单（不发消息、不产生模型调用）。SDK 提供 `resolvedModel` 时优先使用其中的真实 Claude ID；
+Claude Code 2.1.321 的说明已不含型号版本，不能只靠说明猜型号。旧 SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
 `default`）并把版本写在说明里（如 “Opus 5.5 · …”）；简称按说明拼出 `claude-<系列>-<主>-<次>`。
 Registry 尚未登记的新版本照样显示（资料用未知模型默认值，并记日志提示补登记），**绝不映射到
 相邻旧版本**；说明里读不出版本时才跳过。SDK 的 displayName 只有系列名（如 “Fable”）时不作为
 型号名称，改用 Registry 名称，Registry 未登记则按 ID 推导（`claude-fable-5-2` → “Fable 5.2”）。
+排查新型号缺失时，先核对 Cindy 实际使用的内置 CLI 版本，而不是 PATH 上的 `claude`；
+例如 Fable 5.2 从 Claude Code 2.1.321 起进入清单。还要核对实际子进程环境：
+`DISABLE_TELEMETRY` 不只关闭遥测，也关闭上游 feature-flag 获取，可能令同一内核返回旧清单。
+原生订阅会话及发现探针不默认注入该变量，保留 Claude 官方默认行为；用户显式设置仍原样传递，
+网关及远端路径继续默认禁用。错误上报和 OTEL 导出仍独立默认禁用。
+参见 [Claude Code 环境变量说明](https://code.claude.com/docs/en/env-vars)。
+`configure_model_provider` 的
+`rediscover` 与设置页手动刷新共用 `refreshBuiltinModels`，等待真实发现完成后再返回目录，
+不能走已无发现实现的旧 hook 并报告成功。CLI 清单可见、选择器可见和真实推理成功须分别验证。
 xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
 第三方 API key 连接（MiMo、Kimi Code 等预设及自定义端点）没有 sortOrder，按连接配置里的
 顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的
@@ -126,10 +250,19 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
 
 未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.1 Sol（Codex）、
-Claude 订阅 Opus 5.5（Claude Code）、Cindy AI 下发的 Auto（Pi），最后保留 xAI 回退。
-订阅按认证身份识别独立账号，始终保留实际账号 ID；Auto 必须存在于 Cindy AI 的可用 Pi
-目录，不依赖旧 GLM 默认标记，也不在客户端将其替换成固定型号。草稿发送校准与无人值守
-默认解析复用同一策略，避免初始化选中 Auto 后又被旧标记改回 GLM。
+Claude 订阅 Opus 5.5（Claude Code）、服务端指定的 Cindy Auto（Pi），最后保留 xAI 回退。
+订阅按认证身份识别独立账号，始终保留实际账号 ID。Cindy Auto 由服务端决定：在 Cindy AI 与
+企业号池供应商（`source: organization`）中跟随被标为 Pi 新任务默认的 Auto 系列模型
+（预设 `auto` 或模型组 Auto `auto/<组ID>`），没有标记时（旧服务端）回退 Cindy AI 的预设 `auto`。
+只认 Auto 系列的标记：个人目录仍把旧 GLM 标为 Pi 默认，客户端不采纳，也不把 Auto 替换成固定型号。
+服务端保证每个引擎只标一个默认；管理员恰在两次拉取之间改配置、两类来源短暂各标一个时，
+以 Cindy AI 为准，不取决于来源列表顺序。未手选的普通草稿记着 Cindy AI 或号池来源时，只有
+当前引擎在任一 Cindy 来源中存在服务端标为 `newSessionDefault` 的组 Auto（`auto/<组ID>`），
+且该候选可连接、未停用、符合本地可见性与聊天准入条件，才跨两类来源寻找出厂默认；沿用同一
+候选筛选和排序规则。没有合格的组默认时保留旧的来源范围，避免旧服务端下把号池草稿改走平台。
+草稿本身已记着组 Auto 时仍保留跨来源跟随，以及组 Auto 被撤销后的回退；用户手选、加载期、
+固定来源约束（`requiredProviderId`）和自定义来源的保护不变。
+草稿发送校准与无人值守默认解析复用同一策略，避免初始化选中 Auto 后又被旧标记改回 GLM。
 同一订阅策略先在全部匹配账号中寻找推荐型号，再取该来源按目录排序可见的其他型号；
 无人值守入口没有本地显示开关时按 `defaultEnabled` 判断，不能因缺少推荐型号提前换到下一供应商。
 策略在 `apps/desktop/src/shared/newMakerDefaultTuple.ts`；连接、型号和对应引擎必须实际可用，
@@ -138,6 +271,34 @@ Claude 订阅 Opus 5.5（Claude Code）、Cindy AI 下发的 Auto（Pi），最�
 定时任务、`/learn`、IM 新建任务与分享导入等不由用户当场选模型的入口，
 没指定模型时同样按新建任务口径解析（`apps/desktop/src/shared/draftModelCalibration.ts`
 的 `resolveNewTaskDefaultRoute`），不在代码里写死型号；一个可用来源都没有时明确失败或留空让用户选。
+
+Auto 只按模型 ID 认（`isCindyAutoModelId`）：服务端可以把同一个 Auto 在 Cindy AI 与企业号池
+之间挪动。记住的来源是这两类之一且已不再提供它时，`effectiveSourceIdForModel` 改用当前提供它
+的那一家（同样限于这两类），新建任务提交与手机端 `resolveRecentModelAndProvider` 复用同一规则；
+记住的来源仍列着它（只是断连或停用）、或是用户自己接的供应商时不改道。
+手机端新建任务、恢复或切换引擎、目录校准及提交终检，均必须传入完整供应商目录来识别旧来源，
+即使旧来源已没有可见模型行也不能用行列表反推身份；提交守卫的目录与行必须来自同一份响应。
+Pi 的空来源代表 Cindy AI，先按该身份尝试组 Auto 跟随，再走普通空来源回退。改道目标必须存在于
+当前可见模型行中，不能选中隐藏的目标或误用同名自定义模型。
+
+目录刷新后，仍记着旧来源的进行中任务登记一次「下一条消息前切换」：引擎与模型 ID 不变，只换
+供应商与 Key（`apps/desktop/src/main/maker-ipc/cindyAutoRouteFollow.ts`）。用户点选、跨引擎或跨电脑
+的切换，以及等待生效的换凭证、运行时选择都不覆盖；运行时覆盖本身不算改道——目录刷新按原路由重新加载
+进行中任务时也会写上它，这时它就是当前路由，照常跟随——只有故障切换中（`fallbackHop > 0`）的任务
+不跟随。系统登记的 Auto 换来源（configStaged、同引擎、同一个 Auto、只换来源）在 Auto 再次挪动时按
+当前位置重新核对。首次登记时验证两端都是 Cindy 分发来源，并在内存意图里记录来源身份；
+后续目录删除某个来源时，只要记录仍匹配当前路由和登记目标，就仍可撤销或改登记。没有该记录时
+仍要求目录中的两端均属 Cindy；目录中明确属于自定义来源的两端始终不跟随。伙伴或 IM 配置登记的
+用户自定义来源切换不能被撤销或改登记。重核后：目标仍提供就不动；当前位置又能用、
+或哪里都没有了就撤销登记；去了别的来源就改登记到那里。远程主机与另一台电脑上运行的任务不在本机改道。Auto 没有推理档位（任务里 effort
+为空串）时按 null 登记。Cindy AI 列表或企业号池目录任一边刷新后 Auto ID 有增减，会顺带刷新另一边
+（`cindyAutoModelIdsChanged`），跟随在两边都更新后才看到一致的位置；只刷新一边会把旧位置当成仍有效。
+请求被拒后刷新目录重试不在客户端处理。
+存下来的「来源 + Auto」（伙伴自己的模型链与用户自定义的伙伴默认、IM 渠道默认路由）在使用时套用
+同一规则（`movedCindyAutoSourceId`，Pi 的 null 来源即 Cindy AI），不改写保存的配置；IM 跟随渠道
+默认时把 Auto 的新旧位置视为同一路由，避免跟过去后被误判成用户单独改过。
+伙伴异步读取 Auto 目录后必须复核当前账号；读取期间退出或切换账号时拒绝旧结果，
+包括目录读取失败的回退分支。同账号的目录读取失败仍保留原链，交给既有路由校验。
 
 设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
 按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。
@@ -172,8 +333,9 @@ Claude 订阅 Opus 5.5（Claude Code）、Cindy AI 下发的 Auto（Pi），最�
   所以新出的型号一定可见。客户端发现代码不按型号写死隐藏例外（2026-09-26 起移除了
   `gpt-5.4-mini`、Haiku、bridge `gpt-5.4` 等硬编码）。
 - 保留的是按状态或引擎的规则，不针对具体型号：`deprecated`、`requires_payment` 默认关闭；
-  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与自定义连接的兼容引擎默认关闭，
-  Registry `perAgent` 可显式打开。
+  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与需要 Cindy 本地转换的兼容引擎默认关闭，
+  Registry `perAgent` 可显式打开。上游提供的接口一律视为可直接使用，相应引擎默认开启
+  （2026-10-30 起，Gateway / 聚合渠道的多入口同样如此）。
 - **XD 路由一律使用独立的 `xd/*` 条目**，不与订阅或其他供应商共用条目：服务端生成
   Gateway `/models` 时读取 XD 路由所在条目的名称、排序与 `defaultEnabled`，共用会让订阅侧
   调整连带改动 XD。型号规格经 `modelRef` 继承同一公共型号，不重复维护。
@@ -285,6 +447,11 @@ app-server 的完整 `model/list`，不使用控制端 OpenAI 登录或网关目
 新任务从远端清单解析默认模型及推理强度／Fast；已有任务保留原模型和历史，由用户改选。
 设置页及普通 SSH 创建入口不继承控制端草稿的模型、推理强度或 Fast 记忆，即使型号同名；
 采用远端默认模型及推荐推理强度，Fast 初始关闭，创建后可在任务内手动改选。
+SSH 项目的新任务草稿允许在发送前改选，模型、档位与 Fast 只保留在按主机和账号隔离的
+本次草稿状态中。草稿校准、模型选择器与发送共用同一份远端清单及重试入口；Codex 清单
+只替换 Codex 行，Claude Code / Pi 沿用其既有本机目录与 SSH 准入规则。
+当前引擎不是 Codex 时，打开模型选择器才按需读取 Codex 清单。实现见
+`NewMakerDraftRoute.tsx`、`useSshCodexDraftSelection.ts`，回归见 `sshCodexModels.test.tsx`。
 原样恢复只有在持久化的主机、原生线程、引擎、模型及来源均匹配时才豁免新建目录校验，
 允许恢复后来被隐藏的原模型；模型是否仍可推理由远端 Codex 决定。SSH 模型及档位选择不写入控制端本地模型偏好。
 首次连接成功会补偿挂载时因尚未就绪而失败的目录读取；重复 ready 快照不清空已成功读取的目录。
@@ -318,6 +485,7 @@ app-server 的完整 `model/list`，不使用控制端 OpenAI 登录或网关目
 每组 `prices` 沿用原价格结构与官方证据：币种、每百万 tokens 单价、缓存读/写及 1h 写入、
 标准/Fast 等变体、输入区间 `[minInputTokens, maxInputTokens)`、生效日期区间。
 缺字段保持未知，明确的 0 才表示零单价；缓存存储每小时费用不能写成缓存写入单价。
+客户端估价时按请求拆分缓存写入：上游报告 1h TTL 写入量（Anthropic `cache_creation.ephemeral_1h_input_tokens`）时这部分按 1h 写入价计；报价没有 1h 写入价（如 Gateway）时沿用缓存写入价。设置里的自定义缓存写入价按参考价的 1h/5m 倍率带动 1h 价。
 
 `resolveBaseModelReferencePrice` 按公共 ID/唯一 alias 读取，不依赖供应商名单。
 多市场/币种必须明确选择到唯一有效价格；无匹配或有歧义返回未知。

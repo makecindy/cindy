@@ -1,0 +1,338 @@
+{
+  "date": "2026-10-16",
+  "previousHead": "d5c63e8226e8144af71cea3949c8f027c621eebb",
+  "mergedMain": "febe2e5110f5f9ef5b8e0506314f35274a98b524",
+  "environment": "A current merged working tree to B prior compatible Host; one Mac, isolated profiles, real device-link",
+  "sourceBinding": "Hashes identify reviewed working-tree product source; the containing commit binds the final evidence. B remains the prior compatible implementation.",
+  "runtime": {
+    "catalog": {
+      "environment": "One Mac, two isolated live Electron Hosts, real device-link, no IPC fixtures",
+      "screenshots": [
+        "review-skills-filters-compact-light.png",
+        "review-project-scope-compact-light.png",
+        "review-skills-filters-compact-dark.png",
+        "review-project-scope-compact-dark.png",
+        "review-skills-filters-compact-narrow-dark.png"
+      ],
+      "measurements": [
+        {
+          "mode": "light",
+          "width": 1440,
+          "root": {
+            "x": 0,
+            "y": 46,
+            "width": 1439,
+            "height": 914
+          },
+          "heading": {
+            "x": 307.5,
+            "y": 142,
+            "width": 824,
+            "height": 103
+          },
+          "target": {
+            "x": 931.5,
+            "y": 142,
+            "width": 200,
+            "height": 36
+          },
+          "notice": {
+            "x": 307.5,
+            "y": 225,
+            "width": 824,
+            "height": 20
+          },
+          "filters": {
+            "x": 307.5,
+            "y": 265,
+            "width": 824,
+            "height": 78
+          },
+          "pageOverflow": false,
+          "noticeBorder": "0px"
+        },
+        {
+          "mode": "light",
+          "projectMenuWidth": 320,
+          "pathClipped": true,
+          "fullPathOnHover": true
+        },
+        {
+          "mode": "dark",
+          "width": 1440,
+          "root": {
+            "x": 0,
+            "y": 46,
+            "width": 1439,
+            "height": 914
+          },
+          "heading": {
+            "x": 307.5,
+            "y": 142,
+            "width": 824,
+            "height": 103
+          },
+          "target": {
+            "x": 931.5,
+            "y": 142,
+            "width": 200,
+            "height": 36
+          },
+          "notice": {
+            "x": 307.5,
+            "y": 225,
+            "width": 824,
+            "height": 20
+          },
+          "filters": {
+            "x": 307.5,
+            "y": 265,
+            "width": 824,
+            "height": 78
+          },
+          "pageOverflow": false,
+          "noticeBorder": "0px"
+        },
+        {
+          "mode": "dark",
+          "projectMenuWidth": 320,
+          "pathClipped": true,
+          "fullPathOnHover": true
+        },
+        {
+          "mode": "dark",
+          "width": 640,
+          "root": {
+            "x": 0,
+            "y": 46,
+            "width": 639,
+            "height": 854
+          },
+          "heading": {
+            "x": 44,
+            "y": 190,
+            "width": 551,
+            "height": 127
+          },
+          "target": {
+            "x": 395,
+            "y": 190,
+            "width": 200,
+            "height": 36
+          },
+          "notice": {
+            "x": 44,
+            "y": 297,
+            "width": 551,
+            "height": 20
+          },
+          "filters": {
+            "x": 44,
+            "y": 337,
+            "width": 551,
+            "height": 78
+          },
+          "pageOverflow": false,
+          "noticeBorder": "0px"
+        }
+      ],
+      "sourceSwitching": true,
+      "categorySwitching": true,
+      "searchAndClear": true
+    },
+    "settings": {
+      "environment": "A current merged working tree to B prior compatible Host; one Mac, isolated profiles, real device-link",
+      "screenshots": [
+        "review-plugins-target-light.png",
+        "review-original-settings-light.png",
+        "review-plugin-detail-light.png",
+        "review-original-settings-dark.png",
+        "review-plugin-detail-dark.png"
+      ],
+      "modes": [
+        {
+          "mode": "light",
+          "overflow": false,
+          "inputs": 3,
+          "buttons": 6,
+          "ready": "complete",
+          "localPersonalUsageHidden": true
+        },
+        {
+          "mode": "dark",
+          "overflow": false,
+          "inputs": 3,
+          "buttons": 6,
+          "ready": "complete",
+          "localPersonalUsageHidden": true
+        }
+      ],
+      "artWithoutDeclaredSettings": true,
+      "xdsWithoutDeclaredSettings": true
+    }
+  },
+  "validation": {
+    "desktop": {
+      "files": 89,
+      "uniqueTests": 1712,
+      "finalSubsetFiles": 3,
+      "finalSubsetTests": 80
+    },
+    "deviceLink": {
+      "files": 46,
+      "tests": 930
+    },
+    "typechecks": [
+      "desktop",
+      "@cindy/device-link"
+    ],
+    "lint": {
+      "checkedDesktopFiles": 89,
+      "cleanFiles": 85,
+      "baselineComparisons": [
+        {
+          "file": "apps/desktop/src/main/bootstrap-electron.ts",
+          "baseErrors": 6,
+          "currentErrors": 6,
+          "sameMessages": true
+        },
+        {
+          "file": "apps/desktop/src/main/cindy-brain/index.ts",
+          "baseErrors": 13,
+          "currentErrors": 13,
+          "sameMessages": true
+        },
+        {
+          "file": "apps/desktop/src/main/maker-ipc/register.ts",
+          "baseErrors": 13,
+          "currentErrors": 13,
+          "sameMessages": true
+        },
+        {
+          "file": "apps/desktop/src/main/skillhub/registerIpc.ts",
+          "baseErrors": 1,
+          "currentErrors": 1,
+          "sameMessages": true
+        }
+      ]
+    },
+    "independentReview": "Not performed: requested Sonnet 5.5 unavailable in this Host; owner review only.",
+    "unverified": [
+      "Two physical computers",
+      "Windows/Mobile",
+      "New third-party OAuth",
+      "Real network fault during confirmation",
+      "Remote personal usage read and clear"
+    ]
+  },
+  "sourceSha256": {
+    "apps/desktop/src/main/bootstrap-electron.ts": "9558deff5c324fde89a156b93134a967f97f6a410ecdc71c9e8fb33ac8766c2a",
+    "apps/desktop/src/main/cindy-brain/GhostManager.ts": "a82c354146346e0548246fc707ce55cfae1bc0995afddde5faaf5fc2e15ce5b3",
+    "apps/desktop/src/main/cindy-brain/__tests__/ghostInstanceBoundaries.test.ts": "bd03953da91bf2af8fe5452c3c674b0fefc7e4ce55cecf6e430e5c3dc9bf4f2c",
+    "apps/desktop/src/main/cindy-brain/__tests__/ghostIpcMutationLease.test.ts": "6da95300e6c478736d8504ef769141e451c0f4df8e5d10b0cd0b89a8b124c553",
+    "apps/desktop/src/main/cindy-brain/__tests__/ghostUserDataRelocation.test.ts": "bce2bca9404c503d286e53954fec9174d1efaeabbd50f9cfa4f5a8ac7588fd09",
+    "apps/desktop/src/main/cindy-brain/__tests__/mobilePageRelay.test.ts": "f237a2c01d944bfc4612194163737ac3ccd819bd7c8e22a370ed04b14ccc3af1",
+    "apps/desktop/src/main/cindy-brain/__tests__/remotePluginManagement.test.ts": "09387f8cf71ff0b156d29ca4cddc196df65ed2db6d63f1f1801cb6e17ea05c1f",
+    "apps/desktop/src/main/cindy-brain/__tests__/remotePluginPreferences.test.ts": "485dbe8e7c0108bd392de74d0b760cf76143a3a42c014b28ae05a4be04aa7344",
+    "apps/desktop/src/main/cindy-brain/__tests__/remotePluginProjects.test.ts": "3038e690ad3761e003501e23270d01011610634f7a64b228fb8422f09242fa06",
+    "apps/desktop/src/main/cindy-brain/__tests__/remotePluginSettings.test.ts": "597c8fa9b3291b6a89e99f14cf49c6688e51e05291d521c1de861f3edbbf1333",
+    "apps/desktop/src/main/cindy-brain/__tests__/remoteSettingsBroadcast.test.ts": "c9591e7f37cd4867d4cff6886dd298666f6090cce387794b69434349fc4190b3",
+    "apps/desktop/src/main/cindy-brain/index.ts": "d4a7993c89ca938ff55e9d1537babcddfde7591347e045f38d65db82967937e2",
+    "apps/desktop/src/main/cindy-brain/mobilePageService.ts": "725f07219d4ecba0282bd8534e421147cb4a580748dc46218e10b8bb5ba0ec72",
+    "apps/desktop/src/main/cindy-brain/remotePluginManagement.ts": "81548d0223f229717b518a333c20e5c055c49a70ddc86df279584a167db0031c",
+    "apps/desktop/src/main/cindy-brain/remotePluginPreferences.ts": "ac6f70b17449388c27f83800f3a2f10ac46777ea37c924ca6caa617c2dbe1f19",
+    "apps/desktop/src/main/cindy-brain/remotePluginProjects.ts": "3a0976e5701ec6a53a493f7e76d3af56e23633c2cf81d03c77e84bb22d1d04b6",
+    "apps/desktop/src/main/cindy-brain/remotePluginSettingsController.ts": "6f78b993ed5901355febe73a632c65967c77eb89c0785bde700de5f651785a4b",
+    "apps/desktop/src/main/cindy-brain/remoteSettingsBroadcast.ts": "6bcf3d4d99cd4e4e62716579a96822764a3af9c53dac4d185236be68f9679a33",
+    "apps/desktop/src/main/cindy-brain/runtime/electronSandboxAdapter.ts": "d1b6bd57833740c0812071375645d4dd1386326d0b714d6d5298de7dd976d020",
+    "apps/desktop/src/main/cindy-brain/runtime/mobilePageRelay.ts": "68ba074a9efd301179258aba8d22932f7019fd6f54b0f8fdb88384f04bb26c27",
+    "apps/desktop/src/main/device-link/__tests__/mirrorCacheIpcBoundary.test.ts": "1c7fb425221fa537e3954db8f82e5fe91745a085aa6943ef3aad0a1bcb7e4874",
+    "apps/desktop/src/main/device-link/__tests__/remoteSkillConfirmation.test.ts": "7562b3534197be8380a14b7b167aec8120019105551e1bae150e04aa0df40b51",
+    "apps/desktop/src/main/device-link/ipc.ts": "501dafbe0715984782506be7fd6b2646aa3d41ce0ac7eb294ed7b845d57ee68a",
+    "apps/desktop/src/main/device-link/remoteSkillConfirmation.ts": "d6cddf6b5c02a4af67e0ade9b562faadab85358a195ee01c5cfed37322589260",
+    "apps/desktop/src/main/maker-ipc/register.ts": "66dd21569101ddc4decb85227015b4eeed972338337575d1e950ba5f69019ded",
+    "apps/desktop/src/main/plugin-oauth/__tests__/authentication.test.ts": "26e8012244f6a4d3f489a02092b673e9ad91f38df6ef23969137a75b2fe31676",
+    "apps/desktop/src/main/plugin-oauth/authentication.ts": "bca4f5d0795d0944109d718afda7db1aacb75f09c8e372b36f4ad075d0268b0e",
+    "apps/desktop/src/main/plugin-oauth/cards.ts": "9aac054d0eae1041d0505ba9627a9675258aab9db5fdf3a576113cf77be172a8",
+    "apps/desktop/src/main/plugin-oauth/runtime.ts": "65d27c011914a116cf45a381e61e0643d526defd5b299ef474dd7a98c370f46e",
+    "apps/desktop/src/main/plugin-oauth/transactions.ts": "4d86c20eb7d8c2962b22833acd21dedf8d31a5f39173572b4445f5f605d1e9cf",
+    "apps/desktop/src/main/sidebarSettingsStore.ts": "b13ea5e9c4931619f5f2bd8a07f5098aa13232691e3b3294c640d7d1a10e1541",
+    "apps/desktop/src/main/skillhub/__tests__/installService.test.ts": "f3bf82ff58423aeab9c047037388adb20a825295a42c15a3ac0a814ea2c55f53",
+    "apps/desktop/src/main/skillhub/__tests__/remoteCatalog.test.ts": "247c3d59ca2a224ac1fee81c77f8ddda8567bb6a34c25a52e408c9e4677bbbad",
+    "apps/desktop/src/main/skillhub/__tests__/remoteManagement.test.ts": "972a17514f7ceada0ace9176444edbf421d4bbaeee268369e614babc504e78a3",
+    "apps/desktop/src/main/skillhub/__tests__/scanner.test.ts": "7d62cef443c921407b10d24e7ef1730d52c9a23a746c6a551390ab50893aac2c",
+    "apps/desktop/src/main/skillhub/installService.ts": "13f8b0fc4c4fe4ede40bb866d883b23d266fcf1f7581d3c3c6c4fc03f8ebc664",
+    "apps/desktop/src/main/skillhub/registerIpc.ts": "a1ac542c8b382999920f95079c4f73d8d64b0bd1da00303d062bb8a6a1f4dc38",
+    "apps/desktop/src/main/skillhub/remoteCatalog.ts": "2eac6ec86fcaa356a5acfe19344ffa4937230c055623ba268d95725d31a91dd4",
+    "apps/desktop/src/main/skillhub/remoteManagement.ts": "7a0b19159df8a465a8930e7a4973ba39efe3dcf8a192210f5023b567f9a43a7f",
+    "apps/desktop/src/main/skillhub/remoteManagementHost.ts": "89d444c83a9df37268b7e97f91c45e9ac77508a41155fdacaa233d989f8d627d",
+    "apps/desktop/src/main/skillhub/skillListProjection.ts": "7a7b44c71ae81acb90a05cf50dbc8d62dfefc9e3b35265c331fdac15076cec9a",
+    "apps/desktop/src/main/webview-security.ts": "2d47488733b7dfcda250404396b9df5a8f7401f8284d2c2871a6a9957ecd3e8f",
+    "apps/desktop/src/preload/preload.ts": "826330d9646732cd6d17938e0b84c65c0a8a23ad5ab05e88a2867587e98b1962",
+    "apps/desktop/src/renderer/cindy-brain/GhostSettingsWebview.tsx": "31a1597097707ff0df17656593b7fd39911015f519036dbf3d692dc2178a6cbf",
+    "apps/desktop/src/renderer/cindy-brain/PluginTaskPrefs.tsx": "d84c940e7454467fe8e7fab78cc54f7444b837d555da732565ad76f7be4477e7",
+    "apps/desktop/src/renderer/cindy-brain/__tests__/GhostSettingsWebview.test.tsx": "43fd17f11c16bfe87008e6bb93fdc85d7f724eb9d41b56447e0b3be66892ead1",
+    "apps/desktop/src/renderer/components/settings/SettingsCatalogPanel.tsx": "7d81da3c76b35e0f71dab07bc93c1bf98e7289cc5e490ee09f47dd39d636a86b",
+    "apps/desktop/src/renderer/features/plugin/GhostPluginActions.tsx": "2e8270eea1feacf79d50b8d41b961f4a017a5ca0524800cd3d2d1a114a32fc16",
+    "apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx": "128c9515491b33f4852ab3db4db8e4751a8b15d7109403ac73de95f9ab6eba9f",
+    "apps/desktop/src/renderer/features/plugin/GhostPluginPage.tsx": "0eb6badac9f2bffc9925a7bfb67a02835585891b5dcc746021090470f255fc1a",
+    "apps/desktop/src/renderer/features/plugin/PluginDevicePicker.tsx": "064b9c1c832cb2baa1f83ef780f360f2fe91802630a83b6ff37a77b73ab48139",
+    "apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx": "885538c55246ab2fc7aed380b13ad891f094e852065c933eb935547c5ad74f67",
+    "apps/desktop/src/renderer/features/plugin/PluginScopePicker.tsx": "fef99c7bca31b7f09ff14cdeb804f74f07e15f1bf82db04d2d302dd1e3fd85e8",
+    "apps/desktop/src/renderer/features/plugin/PluginSharedUsage.tsx": "eea2e64871a033c1a6d9b4ca301e0ce65f042ef2b571a900feaa2160421b02b4",
+    "apps/desktop/src/renderer/features/plugin/PluginUsageCard.tsx": "cc785f135c37b66d0579cab24f8f880ea2d40bc759dde3708ad1947f4dfb7888",
+    "apps/desktop/src/renderer/features/plugin/RemotePluginConfiguration.tsx": "2acc505927b8555746b627f4c96df64b6b7aba1edb951d47d1d339d43450e1a7",
+    "apps/desktop/src/renderer/features/plugin/RemotePluginPage.tsx": "bbc9fc2619e7178f8a9b3c6f88ce589a1da8a50f5c61d6982f485d372988143d",
+    "apps/desktop/src/renderer/features/plugin/RemotePluginReadOnlyDetail.tsx": "49aaa2d648a1c1bbed8530517e2da21d342b275f689988347b27c141ba4a6cdb",
+    "apps/desktop/src/renderer/features/plugin/__tests__/GhostPluginCard.test.tsx": "a26c9baff8f29ce70eca5116d5b4c67be93e627d6972820f894226ad1d2b08dc",
+    "apps/desktop/src/renderer/features/plugin/__tests__/GhostPluginDetailSections.test.tsx": "13854990266f48509b282fd864d3def594852de662462a019ca8ce7923a0e7a5",
+    "apps/desktop/src/renderer/features/plugin/__tests__/GhostPluginPage.navigation.test.tsx": "64203b352c18397d6425bed651382c390188beddf5caad37fab699cbebc66d1b",
+    "apps/desktop/src/renderer/features/plugin/__tests__/PluginScopePicker.test.tsx": "62a26d677e60cf461962ddac6e038df9147891e795b6b47018deb8917dfd71f5",
+    "apps/desktop/src/renderer/features/plugin/__tests__/RemotePluginConfiguration.test.tsx": "bf6568c05e0b4629e1f25f14ce494529475d19fe39bca8a46d6ff192b864ac2d",
+    "apps/desktop/src/renderer/features/plugin/__tests__/RemotePluginPage.test.tsx": "627cd19cc981817ace2fe8fb1a510d72efb9d1efc4106b6b6bb48d208022dc25",
+    "apps/desktop/src/renderer/features/plugin/__tests__/remotePluginManagementClient.test.ts": "a55c840e2bb47ab2ec8ba8687ab2ef40d916c82c9cc23aeb87b00887952abb6c",
+    "apps/desktop/src/renderer/features/plugin/__tests__/useCatalogDevice.test.tsx": "25cc6354cafe491e9176c5b57d39110b7e0a6cba3274ab55d7683e441804392f",
+    "apps/desktop/src/renderer/features/plugin/remotePluginManagementClient.ts": "ea40040dc64c99b3f95210502795c9140d07de09d63f096133643ae132a3c0b8",
+    "apps/desktop/src/renderer/features/plugin/useCatalogDevice.tsx": "5a18bcfceb7158ab0d4979046efa52fe7a0679d6c9217af4e66d4228e2d0eef7",
+    "apps/desktop/src/renderer/features/skillhub/RemoteSkillsPage.tsx": "6acc3b8cb0c4eeb0ad90cc14eb9ae2ce6bde052a9bc77aa28c5c2a488929dcee",
+    "apps/desktop/src/renderer/features/skillhub/SkillhubDetailRoute.tsx": "c9597e5db91b1224ecdf3d30a9535324f15f500574f4d54512d01d15c64a1bef",
+    "apps/desktop/src/renderer/features/skillhub/SkillhubDetailView.tsx": "0da1e7bb0be8bf24f25770f180a6fb6b5af0e49afc3eda90d42cb6b6477c9ecd",
+    "apps/desktop/src/renderer/features/skillhub/SkillhubFeatureLayout.tsx": "651e64f0fca0e09296a1daf3a9475725b05738914cdf9a9c95f34d70e2b0448d",
+    "apps/desktop/src/renderer/features/skillhub/SkillhubHomeView.tsx": "3cd8eb8e6d00717e26f3f4be45186bd9cc7c33c5fe3dffc72a9838039f25f487",
+    "apps/desktop/src/renderer/features/skillhub/SkillhubMarketDetailView.tsx": "27a222ef8acacad9610ce725d639765750871c39e5caefa253c081415506c0ac",
+    "apps/desktop/src/renderer/features/skillhub/SkillhubMarketListView.tsx": "0b709d6eadab743fefd45021f37a42364fe00930d86c32ad4122fbd0a8316a93",
+    "apps/desktop/src/renderer/features/skillhub/SkillhubTargetContext.ts": "085199fa242ad0d414aa1b1ebdbfafda499ace37c18eca6c82e8700a05824243",
+    "apps/desktop/src/renderer/features/skillhub/__tests__/RemoteSkillsPage.test.tsx": "415a062e9d41fdf49fbe84b1903d44304959738bea14ba1a683e9d090e415079",
+    "apps/desktop/src/renderer/features/skillhub/components/InstallTargetPicker.tsx": "8ec3dd8264906bb671688dc379e90359600078fa804fab520618bad94f5cfc9c",
+    "apps/desktop/src/renderer/features/skillhub/components/LocalSkillControls.tsx": "a8577c237384b62bd0e9776a3b6ac8f8d14191a801c599242e985585f257822e",
+    "apps/desktop/src/renderer/features/skillhub/hooks/useMarketList.ts": "81cb0e2b351b7db56a7653afe893ce7069ab1821c84fa3a8814e706860686998",
+    "apps/desktop/src/renderer/features/skillhub/hooks/useMarketSkillUpdate.ts": "6c047b33b7040cd1cf09eacef1d8d5070a35a31ecd12be65767469264ef4cf30",
+    "apps/desktop/src/renderer/features/skillhub/hooks/useProjectsForPicker.ts": "404f41f2d528c1710d9c790a00f3305f5318124966510653a2bbe6f416a681dd",
+    "apps/desktop/src/renderer/features/skillhub/hooks/useSkillhub.ts": "88f17211df9a8796571439afcdc129764464d8e1f3039f97cc0f11938fd95542",
+    "apps/desktop/src/renderer/features/skillhub/lib/__tests__/marketRoutes.test.ts": "804631f47abb03252cadcedbcf98da816b5f9480379e680dbc2d0d818bff52ff",
+    "apps/desktop/src/renderer/features/skillhub/lib/marketInfoViewModel.ts": "678050d91a46ec241961b20bc185af105bb7ae9b72257b9dc24e0fb9dd9227d5",
+    "apps/desktop/src/renderer/features/skillhub/remoteSkillsClient.ts": "6f573b6cb71e1454477036c3dffa93ada63997050c58ba4d143521063b467a31",
+    "apps/desktop/src/renderer/vite-env.d.ts": "9dbbdb70e6ea5580be3cb2d16ffa0c787bd447bd8dd0db72bf0477278042d03e",
+    "apps/desktop/src/shared/pluginManagement.ts": "929e13a52bdae4acdb9706adb77eb69fd884ba26f3608aba0bcd4340d6454f8f",
+    "apps/desktop/src/shared/pluginMarket.ts": "f7e3173a6829f5dbe49ded49de09c56c4d7bfd9c83129a17f0c4f02ba89c17b3",
+    "apps/desktop/src/shared/pluginPreferences.ts": "6bfc11ffdc511efd59a2c13e46ed48bfa7681379991d676261b42282f5dd9a59",
+    "apps/desktop/src/shared/remotePluginSettings.ts": "4081adfc8416c0e35b859b5553737580db9c6710aa8729db97cfd6580d549976",
+    "apps/desktop/src/shared/remoteSkills.ts": "d5296fd76cb15143a4618a239be2052c72a612345aa5bb2b1de273ee294ad60b",
+    "packages/device-link/src/__tests__/pluginSettings.test.ts": "ee8d4f912b82bb5846a3d7565a5b1afa3765e353bd0d43c64561c0238a342498",
+    "packages/device-link/src/index.ts": "1b183f7931ab3bbd8718f5c053f7bc45d7da42e7992b3a3e598f4dda823872d6",
+    "packages/device-link/src/pluginOauth.ts": "f152bc0166607a2e4cfebff85771633988f4900245c6e29593cbd3681d4bbda8",
+    "packages/device-link/src/pluginSettings.ts": "4b894ff7360635eda6ef25149a2323570e4d0247f1e9eb85b40a61fbaa4d807a"
+  },
+  "imageSha256": {
+    "review-skills-filters-compact-light.png": "1f707737193ffce19d26b80966362ff34412df660ae27b8f785d0c53d9be2587",
+    "review-project-scope-compact-light.png": "2944c1fd63fdfbcdd6b62ce045d9fc03b673f3a770bec64aeb6b4cef9dd84968",
+    "review-skills-filters-compact-dark.png": "7601e801d55a2783a6956a59f034317edcd851f847a070efc1335a32787d0976",
+    "review-project-scope-compact-dark.png": "f7f4d3eeced0b8970ff9100e6df84ff24ea48633cc56f7d09a2dcc26c59965c2",
+    "review-skills-filters-compact-narrow-dark.png": "1e4d612a3da67d19c54d036d5025c7ebf889148a9a6d6e99793259d17336a2d5",
+    "review-plugins-target-light.png": "f5b6e236f5f3b756fec677104d4e7616e94ef02910ff5482470a6e2718b9b8b5",
+    "review-original-settings-light.png": "197683088a4f94588205b31fa1d8d733952ced616c2f88402ff70d3cb36233b2",
+    "review-plugin-detail-light.png": "ebdfae7e19cc8a2a3eab9bba36c832e452f62af334be6ba6e8b79d32f29c4aad",
+    "review-original-settings-dark.png": "6cae737446a77a3d1c098d480e235888d5e4453c46a5a2d7afff2ef73e43295c",
+    "review-plugin-detail-dark.png": "83ba0eae35bd82036f23a15edb9670bf2564296d063a9fd79f20be11427d3949"
+  }
+}

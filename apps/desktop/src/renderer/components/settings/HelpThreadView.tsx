@@ -105,7 +105,7 @@ export function HelpThreadView() {
             }}
             disabled={pending}
             placeholder={t('settings.help.qnaPlaceholder')}
-            className="min-w-0 flex-1 rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-2 text-13 text-[var(--settings-section-title)] outline-none placeholder:text-[var(--text-tertiary)] disabled:opacity-60"
+            className="min-w-0 flex-1 rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-2 text-13 text-[var(--settings-section-title)] outline-none placeholder:text-[var(--text-placeholder)] disabled:opacity-60"
           />
           <button
             type="button"
@@ -115,7 +115,7 @@ export function HelpThreadView() {
               'shrink-0 rounded-full px-4 py-2 text-12 font-medium transition-colors',
               canSend
                 ? 'bg-[var(--settings-menu-bg-selected)] text-[var(--settings-menu-text-selected)]'
-                : 'bg-[var(--surface-chip)] text-[var(--settings-section-sublabel)] opacity-60',
+                : 'bg-[var(--surface-chip)] text-[var(--text-tertiary)]',
             )}
           >
             {t('settings.help.qnaSend')}
@@ -193,7 +193,7 @@ function HelpMessageRow({
           </Button>
         )}
         {!isNoAnswer && (
-          <div className="mt-2 text-11 leading-[1.5] text-[var(--settings-section-sublabel)] opacity-60">
+          <div className="mt-2 text-11 leading-[1.5] text-[var(--text-tertiary)]">
             {t('settings.help.qnaAiDisclaimer')}
           </div>
         )}

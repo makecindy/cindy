@@ -504,7 +504,7 @@ export interface LightboxImageLayers {
   showPreview: boolean;
   /** 是否渲染转圈(仅在连缩略图都没有、否则就是纯黑时)。 */
   showSpinner: boolean;
-  /** 是否渲染失败终态文案(原图已确证失败且没有重试路径,不能永远转圈)。 */
+  /** 是否渲染整页失败(原图已确证失败且没有可用显示层,不能永远转圈)。 */
   showFailure: boolean;
 }
 
@@ -537,8 +537,8 @@ export function lightboxImageLayers(input: {
   /** 垫底图是否已确认 onError(文件被清理等);失败的垫底不能顶替转圈。 */
   previewFailed?: boolean;
   /**
-   * 原图已确证 onError,且这条路径没有自动重取 / 重试入口(直连 http 图)。
-   * 此时既没有像素也不会再有,必须给失败终态——转圈会一直谎报"还在加载"。
+   * 原图取件已失败 / 不支持,或原生 onError 的自动恢复已结束。
+   * 没有可用原图与预览时给失败终态;保留用户主动重试的入口。
    */
   fullFailedTerminally?: boolean;
 }): LightboxImageLayers {

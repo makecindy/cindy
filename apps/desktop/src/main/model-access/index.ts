@@ -6,12 +6,13 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { createByokRuntime } from './byokRuntime.js';
 import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { isProviderDisabled } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { isExternalOrganizationByokUser } from './organizationManaged.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import {
@@ -25,7 +26,11 @@ import {
   markXdGatewayModelAccessUnknown,
   setXdGatewayModels,
 } from '../maker-host/active-catalog.js';
-import { migrateLegacyNamespacedModelDisableOverrides } from '../maker-host/model-disable-store.js';
+import {
+  migrateLegacyNamespacedModelDisableOverrides,
+  onProviderDisableChange,
+  readModelDisableOverrides,
+} from '../maker-host/model-disable-store.js';
 import { replaceGatewayModelPricing, trackGatewayModelPricingSync } from '../usage/modelPricing.js';
 import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -37,7 +42,7 @@ import {
 } from '../../shared/modelAccess.js';
 import { getModelAccessCredentialsStore } from './credentialsStore.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { installCindyGatewayKeyRejectionReporter } from './gatewayKeyRejection.js';
+import { installCindyGatewayKeyRejectionReporter, noteCindyGatewayKeyReplaced } from './gatewayKeyRejection.js';
 import {
   createCredentialsSync,
   type CredentialsPayload,
@@ -45,6 +50,7 @@ import {
 } from './credentialsSync.js';
 import {
   buildModelsSyncRequest,
+  cindyAutoModelIdsChanged,
   ensureCredentialsReadyForModelsRefresh,
   modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
@@ -102,7 +108,7 @@ function rotateCredentials(): Promise<CredentialsPayload> {
 /**
  * 写 XD key(main 侧自动下发路径),带 codex env-key 重启副作用:
  * env-key spawn 的 codex app-server 把 gateway key 冻在子进程 env 里,写盘后
- * 必须重建才生效。服务端可能已经撤销旧 key，不能因进程忙碌而拒绝保存新 key。
+ * 代理识别已替换的旧 key 后现读新 key；空闲重建仍作兜底。不能因进程忙碌而拒绝保存新 key。
  * 写入同步完成，相关 host 的刷新独立登记，忙碌或启动中的 host 延后到空闲。
  */
 async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
@@ -112,8 +118,10 @@ async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
   if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) {
     return false;
   }
+  const previousKey = store.get('xd');
   const ok = store.set('xd', key);
   if (!ok) return false;
+  noteCindyGatewayKeyReplaced(previousKey, key);
   notifyXdProviderKeyChanged();
   try {
     scheduleCodexGatewayKeyRefresh();
@@ -164,6 +172,11 @@ export const XD_MODELS_FOREGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 let modelsSyncGen = -1;
 /** 旧世代请求在途时新账号的补发标记。 */
 let modelsSyncRerunQueued = false;
+/**
+ * Cindy AI 列表里的 Auto 有增减时刷新企业号池（初始化时接上）。Auto 在两边之间换位置时，
+ * 只刷新一边会让进行中任务的跟随看到不一致的列表；另一边刷新后回头不再有增减，联动自然停止。
+ */
+let onXdCindyAutoModelsChanged: (() => void) | null = null;
 /**
  * 认证世代:登出或 userId / realm 变化时自增(与 credentialsSync 的 epoch 同语义)。
  * 目录请求以发起时世代为闸——旧身份的在途 /models 响应在换号或同账号跨区后
@@ -268,14 +281,22 @@ async function runModelsSync(
     return;
   }
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
+  const cindyAutoChanged = cindyAutoModelIdsChanged(getXdGatewayModels(), models);
+  const refreshPoolIfCindyAutoMoved = () => {
+    if (!cindyAutoChanged || !onXdCindyAutoModelsChanged) return;
+    log.info('Cindy Auto changed in Cindy AI models; refreshing the enterprise pool directory');
+    onXdCindyAutoModelsChanged();
+  };
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
     applyGatewayModels([], { authenticatedUserId, authoritative: true });
     lastModelsSyncSucceededAttempt = myAttempt;
+    refreshPoolIfCindyAutoMoved();
     return;
   }
   log.info(`xd gateway models synced: ${models.length}`);
   applyGatewayModels(models, { authenticatedUserId, authoritative: true });
+  refreshPoolIfCindyAutoMoved();
   try {
     const availability = await listExecutableMediaModels([], {
       includeDisabled: true,
@@ -302,6 +323,7 @@ async function runModelsSync(
 
 /** 触发一次模型目录同步(同世代 single-flight;旧世代在途时为新账号排队补发)。 */
 function scheduleModelsSync(): void {
+  if (isProviderDisabled(readModelDisableOverrides(), 'xd')) return;
   const gen = authGeneration;
   // localDb takeover and /models run independently during startup. Capture the
   // authenticated owner here instead of asking localDb who owns the cache only
@@ -340,6 +362,7 @@ function scheduleModelsSync(): void {
 
 let syncInstance: CredentialsSync | null = null;
 let foregroundRefreshListener: (() => void) | null = null;
+let unsubscribeProviderDisable: (() => void) | null = null;
 
 /**
  * 企业 Provider 目录的刷新形态与 Cindy 自有目录一致:窗口聚焦触发 + 5 分钟节流,
@@ -389,6 +412,7 @@ function scheduleByokSync(byok: ByokRuntime, force = false): void {
 function getSync(): CredentialsSync {
   if (!syncInstance) {
     syncInstance = createCredentialsSync({
+      isProviderEnabled: () => !isProviderDisabled(readModelDisableOverrides(), 'xd'),
       fetchCredentials,
       rotateCredentials,
       readXdKey: () => getProviderSecretStore().get('xd'),
@@ -505,6 +529,10 @@ function mapServerError(err: unknown): never {
  */
 export function initModelAccess(): void {
   const sync = getSync();
+  unsubscribeProviderDisable?.();
+  unsubscribeProviderDisable = onProviderDisableChange((providerId) => {
+    if (providerId === 'xd') sync.handleProviderAccessChange();
+  });
   setQuotaCredentialStatusReader(() => {
     const auth = authManager.getAuthState();
     if (auth.mode !== 'cloud' || !auth.user?.id || auth.user.id !== lastAuthUserId
@@ -518,7 +546,14 @@ export function initModelAccess(): void {
     broadcastReferenceModelPricing,
     createByokCache(byokSnapshotSecretIo),
     scheduleByokCodexHostRefresh,
+    () => {
+      // 号池里的 Auto 有增减：Auto 可能换到了 Cindy AI（或从那里搬来），让 Cindy AI 列表也刷新。
+      if (!lastAuthUserId || getSync().getStatus().state !== 'ok') return;
+      log.info('Cindy Auto changed in the enterprise pool directory; refreshing Cindy AI models');
+      scheduleModelsSync();
+    },
   );
+  onXdCindyAutoModelsChanged = () => scheduleByokSync(byok, true);
 
   const noteAuthState = (
     isAuthenticated: boolean,
@@ -601,6 +636,8 @@ export function initModelAccess(): void {
 
 /** 仅测试:重置单例。 */
 export function resetModelAccessForTest(): void {
+  unsubscribeProviderDisable?.();
+  unsubscribeProviderDisable = null;
   lastByokSyncStartedAt = 0;
   byokCodexHostRefreshQueued = false;
   if (foregroundRefreshListener) {
@@ -608,6 +645,7 @@ export function resetModelAccessForTest(): void {
     foregroundRefreshListener = null;
   }
   installCindyGatewayKeyRejectionReporter(null);
+  onXdCindyAutoModelsChanged = null;
   syncInstance = null;
   modelsSyncInflight = null;
   modelsSyncGen = -1;

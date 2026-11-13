@@ -18,6 +18,8 @@ export interface CompanionMirrorRow {
   content: string;
   agentMeta: string | null;
   createdAt: number;
+  /** Captured by the host reader; null means no live native runtime owns this snapshot. */
+  samplingRuntimeId?: string | null;
 }
 export interface CompanionMirrorCursor { createdAt: number; id: string }
 
@@ -115,21 +117,32 @@ export function mirrorAttachments(row: CompanionMirrorRow): CompanionMirrorAttac
   ].filter(attachment => attachment.url || attachment.path);
 }
 
+/** Pending native items must be revisited even after the normal trailing re-scan expires. */
+function samplingPending(row: CompanionMirrorRow): boolean {
+  const meta = parse(row.agentMeta);
+  return row.role === 'assistant' && !!meta && typeof meta === 'object'
+    && !!(meta as Record<string, unknown>).samplingAttemptPending;
+}
+
 /** Room text of a canonical row, or null when the row is not part of the visible conversation. */
 export function mirrorMessageText(row: CompanionMirrorRow, options: { placeholders?: boolean } = {}): string | null {
   if (row.role !== 'user' && row.role !== 'assistant') return null;
+  if (samplingPending(row)) return null;
   if (row.clientId.startsWith(COMPANION_DIRECT_CLIENT_PREFIX) || row.clientId.startsWith(COMPANION_HISTORY_CLIENT_PREFIX)) return null;
   const parsedMeta = parse(row.agentMeta);
   const meta = parsedMeta && typeof parsedMeta === 'object' ? parsedMeta as Record<string, unknown> : {};
   // Private/coordination replies are hidden in the local timeline as well; so are progress
   // commentary and sub-agent output, which are never a reply (bots.ts canonicalReplyVisibility).
   if (row.role === 'assistant' && (meta.botPrivateReply === true || meta.assistantPhase === 'commentary'
+    // Failed sampling output stays in work history and is not an addressed reply (bots.ts).
+    || (meta.failedSamplingAttempt !== undefined && meta.failedSamplingAttempt !== null)
     || (meta.parentToolUseId ?? null) !== null || (meta.parent_tool_use_id ?? null) !== null
     // Claude sub-agent rows; same predicate as the renderer (a legacy transcript link is not one).
     || (typeof meta.parentUuid === 'string' && !!meta.parentUuid && isSubagentParentToolUseId(meta.parentUuid)))) return null;
   if (row.role === 'user' && HIDDEN_INPUT_KEYS.some(key => meta[key] !== undefined && meta[key] !== null && meta[key] !== false)) return null;
   // A delegated continuation (not something said in this chat) carries this marker as an object.
-  if (row.role === 'user' && meta.autoReviewUserText && typeof meta.autoReviewUserText === 'object') return null;
+  if (row.role === 'user' && meta.autoReviewUserText && typeof meta.autoReviewUserText === 'object'
+    && (meta.autoReviewUserText as { kind?: string }).kind !== 'agent-request') return null;
   // IM input keeps the person's own words apart from the context the host put around them.
   const im = row.role === 'user' && meta.imSource && typeof meta.imSource === 'object' ? meta.imSource as Record<string, unknown> : null;
   const typed = typeof im?.userText === 'string' && im.userText.trim() ? im.userText.trim() : visibleMessageText(row.role, row.content);
@@ -178,6 +191,11 @@ export function createCompanionMirror(deps: {
   latestRows: (sessionId: string, limit: number) => Promise<CompanionMirrorRow[]>;
   /** Uploads the owner's attachments so other devices can open them; absent keeps name placeholders. */
   uploadMedia?: CompanionMediaUpload;
+  /**
+   * The files a companion reply refers to (generated media, files in its work folder) that go to
+   * the room with it; given the reply's visible text. Absent keeps replies text only.
+   */
+  replyAttachments?: (botId: string, sessionId: string, row: CompanionMirrorRow, text: string) => Promise<CompanionMirrorAttachment[]>;
   log?: CompanionLog;
 }) {
   async function ensureRoom(botId: string, actorId: string, name: string): Promise<string> {
@@ -202,17 +220,35 @@ export function createCompanionMirror(deps: {
    * never onto an imported (`cloud-history:`) row and never backwards. Imported ids are
    * remembered so the trailing re-scan does not send them again.
    */
+  const blocksCursor = (row: CompanionMirrorRow) => {
+    if (!samplingPending(row)) return false;
+    // Unknown output stays hidden after shutdown/account switch, but a dead runtime
+    // cannot keep this companion's forward/backfill cursor or hand-over blocked.
+    if (row.samplingRuntimeId === undefined) return true;
+    const pending = (parse(row.agentMeta) as { samplingAttemptPending?: { runtimeId?: string } } | null)?.samplingAttemptPending;
+    return typeof pending?.runtimeId === 'string' && pending.runtimeId === row.samplingRuntimeId;
+  };
+
   async function importRows(botId: string, actorId: string, roomId: string, sessionId: string, rows: CompanionMirrorRow[], advance = true) {
     const parts: Array<{ message: ImportMessage; row: number; last: boolean; bytes: number }> = [];
+    const pendingAt = rows.findIndex(blocksCursor);
+    const safeCount = pendingAt < 0 ? rows.length : pendingAt;
+    const recent = new Set(deps.state.bot(botId)?.mirror?.recent ?? []);
     for (const [index, row] of rows.entries()) {
-      if (!mirrorMessageText(row)) continue;
+      if (recent.has(row.id) || !mirrorMessageText(row)) continue;
       const sourceId = `cindy:${sessionId}:${row.id}`;
       const authorId = row.role === 'user' ? deps.humanActorId() : actorId;
       // The files themselves when they can be uploaded; a file that cannot (too large, gone, an old
       // address form) keeps its name in the text, as before.
       const media: Array<{ type: string; mediaId?: string; caption?: string }> = [];
       const uploaded: string[] = [];
-      for (const file of deps.uploadMedia ? mirrorAttachments(row) : []) {
+      // A reply's files are found from what it says; a failure to look is not a reason to stop mirroring.
+      const replyFiles = row.role === 'assistant' && deps.uploadMedia && deps.replyAttachments
+        ? await deps.replyAttachments(botId, sessionId, row, mirrorMessageText(row, { placeholders: false }) ?? '').catch((error: unknown) => {
+          deps.log?.warn('Companion reply files could not be listed', { code: errorCode(error) });
+          return [];
+        }) : [];
+      for (const file of deps.uploadMedia ? [...mirrorAttachments(row), ...replyFiles] : []) {
         if (file.size > MIRROR_ATTACHMENT_MAX_BYTES) continue;
         try { media.push(...await deps.uploadMedia!(roomId, sourceId, [file], authorId)); uploaded.push(file.name); }
         catch (error) {
@@ -241,7 +277,7 @@ export function createCompanionMirror(deps: {
     }
     const moveTo = (upTo: number) => {
       if (!advance) return;
-      let index = upTo;
+      let index = Math.min(upTo, safeCount - 1);
       while (index >= 0 && rows[index]!.clientId.startsWith(COMPANION_HISTORY_CLIENT_PREFIX)) index -= 1;
       if (index < 0) return;
       const row = rows[index]!;
@@ -280,6 +316,7 @@ export function createCompanionMirror(deps: {
       start = end;
     }
     if (rows.length) moveTo(rows.length - 1);
+    return safeCount;
   }
 
   /** One bounded pass; `drain` (before a hand-over) keeps paging until the backlog is empty. */
@@ -294,8 +331,14 @@ export function createCompanionMirror(deps: {
       const rows = (await deps.latestRows(sessionId, BACKFILL_SCAN)).reverse();
       const eligible = rows.flatMap((row, index) => mirrorMessageText(row) ? [index] : []);
       const from = eligible.length > COMPANION_BACKFILL_LIMIT ? eligible[eligible.length - COMPANION_BACKFILL_LIMIT]! : 0;
-      if (rows.length) await importRows(botId, actorId, roomId, sessionId, rows.slice(from));
-      else deps.state.update(botId, actorId, entry => { entry.mirror = { sessionId, createdAt: 0, id: '' }; });
+      // Seed an empty cursor so accepted rows after a pending item can be remembered,
+      // while that item's position stays eligible for a later pass.
+      deps.state.update(botId, actorId, entry => { entry.mirror = { sessionId, createdAt: 0, id: '' }; });
+      const selected = rows.slice(from);
+      if (selected.length) {
+        const safeCount = await importRows(botId, actorId, roomId, sessionId, selected);
+        if (options.drain && safeCount < selected.length) throw new Error('COMPANION_STILL_CHANGING');
+      }
       // Before a hand-over the older history goes up too: this copy stops mirroring once demoted.
       if (options.drain) await backfillBot(botId, actorId, roomId, sessionId, true);
       return;
@@ -312,7 +355,11 @@ export function createCompanionMirror(deps: {
     for (let page = 0; options.drain || page < MAX_PAGES; page += 1) {
       const rows = await deps.rowsAfter(sessionId, after, PAGE);
       if (!rows.length) break;
-      await importRows(botId, actorId, roomId, sessionId, rows);
+      const safeCount = await importRows(botId, actorId, roomId, sessionId, rows);
+      if (safeCount < rows.length) {
+        if (options.drain) throw new Error('COMPANION_STILL_CHANGING');
+        break;
+      }
       after = rows[rows.length - 1]!;
       if (rows.length < PAGE) break;
     }
@@ -340,9 +387,15 @@ export function createCompanionMirror(deps: {
       const recent = new Set(deps.state.bot(botId)?.mirror?.recent ?? []);
       const pending = rows.filter(row => !recent.has(row.id));
       if (pending.length) await importRows(botId, actorId, roomId, sessionId, pending, false);
-      if (rows.length) after = rows[rows.length - 1]!;
-      const done = rows.length < fetched.length || fetched.length < PAGE;
+      const pendingAt = rows.findIndex(blocksCursor);
+      const safeCount = pendingAt < 0 ? rows.length : pendingAt;
+      if (safeCount) after = rows[safeCount - 1]!;
+      const done = pendingAt < 0 && (rows.length < fetched.length || fetched.length < PAGE);
       deps.state.update(botId, actorId, next => { next.backfill = { sessionId, createdAt: after.createdAt, id: after.id, ...(done ? { done: true } : {}) }; });
+      if (pendingAt >= 0) {
+        if (drain) throw new Error('COMPANION_STILL_CHANGING');
+        return;
+      }
       if (done) return;
     }
   }

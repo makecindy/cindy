@@ -15,6 +15,8 @@ import { ImageOff, LoaderCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
+import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 
 interface ImageMissingPlaceholderProps {
   status?: 'loading' | 'missing' | 'unavailable';
@@ -22,6 +24,8 @@ interface ImageMissingPlaceholderProps {
   className?: string;
   /** Pixel cap to roughly match the original image bounds. */
   maxWidth?: number;
+  /** Remount a readable image after a transient display failure; never regenerate it. */
+  onRetry?: () => void;
 }
 
 export function ImageMissingPlaceholder({
@@ -29,6 +33,7 @@ export function ImageMissingPlaceholder({
   filename,
   className,
   maxWidth = 280,
+  onRetry,
 }: ImageMissingPlaceholderProps) {
   const { t } = useTranslation();
   return (
@@ -45,13 +50,13 @@ export function ImageMissingPlaceholder({
     >
       {status === 'loading' ? (
         <span
-          className="inline-flex animate-spin motion-reduce:animate-none opacity-60"
+          className="inline-flex animate-spin motion-reduce:animate-none text-[var(--text-tertiary)]"
           aria-hidden="true"
         >
           <LoaderCircle className="h-8 w-8" />
         </span>
       ) : (
-        <ImageOff className="h-8 w-8 opacity-60" aria-hidden="true" />
+        <ImageOff className="h-8 w-8 text-[var(--text-tertiary)]" aria-hidden="true" />
       )}
       <div className="text-xs font-medium">
         {t(
@@ -65,10 +70,35 @@ export function ImageMissingPlaceholder({
       {/* v5: 原生 title 替换为 Radix Tooltip(mono) — 文件名走 mono 风格。 */}
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <div className="max-w-full truncate text-11 opacity-75">{filename}</div>
+          <div className="max-w-full truncate text-11 text-[var(--text-tertiary)]">{filename}</div>
         </Tooltip.Trigger>
         <Tooltip.Content variant="mono">{filename}</Tooltip.Content>
       </Tooltip.Root>
+      {status === 'unavailable' && onRetry && (
+        <Button
+          {...{ [SHARE_EXCLUDE_ATTR]: '' }}
+          type="button"
+          variant="secondary"
+          size="sm"
+          aria-label={`${t('commonUi.retry')}: ${filename}`}
+          onKeyDown={(event) => {
+            // Linked images also activate their outer target on Enter/Space.
+            // Keep the button's native keyboard click without activating that link.
+            if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+          }}
+          onAuxClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onRetry();
+          }}
+        >
+          {t('commonUi.retry')}
+        </Button>
+      )}
     </div>
   );
 }

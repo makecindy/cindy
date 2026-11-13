@@ -66,7 +66,7 @@ export interface RemoteExecutorOptions {
    * 在本机弹确认卡问本机用户(供应商分享的受邀者任务)：凭证类操作没有本机批准时用它补问，允许后
    * 默认只放行这一个操作；用户明确选择会话级允许后免除后续的分享凭证确认。缺省时直接拒绝。
    */
-  confirm?(action: ExecutorAction): Promise<ExecutorConfirmation>;
+  confirm?(action: ExecutorAction, signal: AbortSignal): Promise<ExecutorConfirmation>;
   /** 与 confirm 一起提供：git 查看内容、打出 git 配置的命令先在本机核实，读不到凭证时不弹卡。 */
   gitCredentials?: GitCredentialHistory;
   /**
@@ -126,9 +126,8 @@ export class RemoteExecutor {
   private readonly writeHooks: FileWriteHooks;
   private closed = false;
   private permissionGeneration = 0;
+  private credentialConfirmationAbort = new AbortController();
   private credentialConfirmationTail?: Promise<void>;
-  /** 当前占着确认排队位置的请求的放行函数。 */
-  private readonly credentialSlotReleases = new Set<() => void>();
   private readonly unwatchCredentialGrant?: () => void;
 
   constructor(private readonly opts: RemoteExecutorOptions) {
@@ -151,25 +150,25 @@ export class RemoteExecutor {
 
   /** 本机任务的权限档变化时更新上限档位。 */
   setGateMode(mode: ExecutorGateMode): void {
-    this.permissionGeneration += 1;
     this.gate.setMode(mode);
-    this.releaseCredentialQueue();
+    this.cancelPendingConfirmations();
     this.opts.credentialGrant?.forget();
   }
 
   /** 撤销分享凭证的任务授权：与权限档变化一样清掉授权，并作废等待中的确认。 */
   private revokeCredentialGrant(): void {
-    this.permissionGeneration += 1;
     this.gate.setMode(this.gate.getMode());
-    this.releaseCredentialQueue();
+    this.cancelPendingConfirmations();
   }
 
   /**
-   * 等待中的确认已作废(权限档变化或授权撤销)：放开它们占着的排队位置，之后的请求不必等旧卡；
-   * 旧卡之后的回答仍按 generation 丢弃。
+   * 停止、权限变化或撤权时取消已显示和排队中的确认。停止本身不撤销先前有效的任务授权。
    */
-  private releaseCredentialQueue(): void {
-    for (const release of [...this.credentialSlotReleases]) release();
+  cancelPendingConfirmations(): void {
+    this.permissionGeneration += 1;
+    const previous = this.credentialConfirmationAbort;
+    this.credentialConfirmationAbort = new AbortController();
+    previous.abort();
   }
 
   /** 本机用户在确认卡上允许了一个操作。 */
@@ -190,6 +189,9 @@ export class RemoteExecutor {
    */
   async confirm(action: ExecutorAction, signal?: AbortSignal): Promise<boolean> {
     if (this.closed || signal?.aborted || !this.opts.confirm || !this.gate.needsCredentialConsent(action)) return false;
+    signal = signal
+      ? AbortSignal.any([signal, this.credentialConfirmationAbort.signal])
+      : this.credentialConfirmationAbort.signal;
     const permissionGeneration = this.permissionGeneration;
     // 只有要核实的 git 命令才在弹卡前等核实结果；核实通过不弹卡，也不必排在其他确认卡后面。
     const gitCheck = this.gitReadsCheck(action, signal);
@@ -209,7 +211,6 @@ export class RemoteExecutor {
     const settled = new Promise<void>((resolve) => { settle = resolve; });
     const slot = previous ? previous.then(() => settled) : settled;
     this.credentialConfirmationTail = slot;
-    this.credentialSlotReleases.add(settle);
     // 自己的请求取消后立即让出：还在排队就不再等(后面的请求仍等前一张卡)；
     // 卡已弹出就不再挡住后面的请求，这张卡之后的回答会被丢弃。
     let onAbort: (() => void) | undefined;
@@ -222,7 +223,10 @@ export class RemoteExecutor {
       if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;
       // 调用方仍会重新检查普通权限上限；这里只免除已授权的分享凭证确认。
       if (!this.gate.needsCredentialConsent(action)) return true;
-      const allowed = await this.opts.confirm(action).catch(() => false);
+      const allowed = await Promise.race([
+        this.opts.confirm(action, signal).catch(() => false),
+        aborted.then(() => false as const),
+      ]);
       // 等确认期间任务结束、请求被取消或权限已切换：不接受旧确认。
       if ((allowed !== true && allowed !== 'session') || this.closed || signal?.aborted
         || permissionGeneration !== this.permissionGeneration) return false;
@@ -235,7 +239,6 @@ export class RemoteExecutor {
       return true;
     } finally {
       if (onAbort) signal?.removeEventListener('abort', onAbort);
-      this.credentialSlotReleases.delete(settle);
       settle();
       void slot.then(() => {
         if (this.credentialConfirmationTail === slot) this.credentialConfirmationTail = undefined;
@@ -263,6 +266,7 @@ export class RemoteExecutor {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.cancelPendingConfirmations();
     this.unwatchCredentialGrant?.();
     await this.shell.close();
   }

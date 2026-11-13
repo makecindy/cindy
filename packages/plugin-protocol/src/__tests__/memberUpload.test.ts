@@ -52,7 +52,7 @@ describe('member upload contract', () => {
       'failed',
       'expired',
     ]);
-    expect(PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES).toEqual(['pending', 'approved', 'rejected']);
+    expect(PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES).toEqual(['pending', 'approved', 'rejected', 'cancelled']);
     expect(new Set(PLUGIN_MEMBER_UPLOAD_FAILURE_CODES).size).toBe(
       PLUGIN_MEMBER_UPLOAD_FAILURE_CODES.length,
     );

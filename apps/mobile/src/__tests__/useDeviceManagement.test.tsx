@@ -3,6 +3,8 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DeviceView } from '@cindy/device-link';
+import { i18n } from '@/i18n';
+import { apiFetchRaw, registerAccountUnavailableHandler } from '@/api/client';
 import { useDeviceManagement } from '@/device-link/useDeviceManagement';
 import {
   setMobileAuthOwner,
@@ -76,6 +78,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 it('keeps the last device list on refresh failure and can retry', async () => {
@@ -381,3 +385,244 @@ it.each(['rename', 'delete'] as const)(
     expect(mocks.setDeviceIdentity).not.toHaveBeenCalled();
   },
 );
+
+// #7742: exercise the real hook's rejected-delete path. A fresh offline list
+// must not produce the online-device explanation or clear access projections.
+it.each([
+  [false, 'offline', 'deleteRejectedWhileOffline'],
+  [true, 'offline', 'deleteRejectedWhileOffline'],
+  [false, 'online', 'deleteOnline'],
+  [false, 'missing', 'deleteFailed'],
+  [false, 'failure', 'deleteOnline'],
+  [false, 'timeout', 'deleteOnline'],
+] as const)(
+  'explains rejected deletion from the fresh list (%s -> %s)',
+  async (online, outcome, message) => {
+    const target = { ...device, online, name: 'Known Mac' };
+    apiFetch.mockResolvedValueOnce({ devices: [target] });
+    await render();
+    act(() => state.openDelete(target));
+    apiFetch.mockRejectedValueOnce(
+      Object.assign(new Error('online'), { code: 'ALREADY_EXISTS' }),
+    );
+    const refreshed =
+      outcome === 'missing'
+        ? []
+        : [{ ...target, online: outcome === 'online', name: 'unknown' }];
+    const failed = outcome === 'failure' || outcome === 'timeout';
+    if (failed)
+      apiFetch.mockRejectedValueOnce(
+        Object.assign(new Error(outcome), {
+          code:
+            outcome === 'timeout' ? 'REQUEST_TIMEOUT' : 'NETWORK_UNAVAILABLE',
+        }),
+      );
+    else apiFetch.mockResolvedValueOnce({ devices: refreshed });
+    await act(async () => expect(await state.confirmDelete()).toBe(false));
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+    expect(apiFetch).toHaveBeenLastCalledWith(
+      '/api/device-link/devices',
+      expect.objectContaining({
+        baseUrl: 'https://relay.example.invalid',
+        timeoutMs: 5_000,
+      }),
+    );
+    expect(state.deleteError).toBe(i18n.t(`devices.management.${message}`));
+    expect(state.deleteTarget).toEqual(target);
+    expect(state.deleteSaving).toBe(false);
+    expect(state.devices).toEqual(
+      failed
+        ? [target]
+        : refreshed.map((item) => ({ ...item, name: 'Known Mac' })),
+    );
+    expect(mocks.removeDevice).not.toHaveBeenCalled();
+    expect(mocks.clearRevoked).not.toHaveBeenCalled();
+    expect(mocks.setDeviceIdentity).not.toHaveBeenCalled();
+  },
+);
+
+it('keeps the rejected-delete refresh bounded to one request while the dialog is busy', async () => {
+  await render();
+  act(() => state.openDelete(device));
+  const list = deferred<{ devices: DeviceView[] }>();
+  apiFetch
+    .mockRejectedValueOnce(
+      Object.assign(new Error('online'), { code: 'ALREADY_EXISTS' }),
+    )
+    .mockReturnValueOnce(list.promise);
+  let request!: Promise<boolean>;
+  await act(async () => {
+    request = state.confirmDelete();
+  });
+  expect(state.deleteSaving).toBe(true);
+  await act(async () => {
+    expect(await state.confirmDelete()).toBe(false);
+    state.refresh();
+    state.closeDelete();
+  });
+  expect(apiFetch).toHaveBeenCalledTimes(3);
+  expect(state.deleteTarget).toEqual(device);
+  await act(async () => {
+    list.resolve({ devices: [{ ...device, online: false }] });
+    expect(await request).toBe(false);
+  });
+  expect(state.deleteError).toBe(
+    i18n.t('devices.management.deleteRejectedWhileOffline'),
+  );
+  expect(state.deleteSaving).toBe(false);
+});
+
+it.each(['owner change', 'unmount'] as const)(
+  'ignores a rejected-delete refresh after %s',
+  async (change) => {
+    setMobileAuthOwner('account-a');
+    await render();
+    act(() => state.openDelete(device));
+    const list = deferred<{ devices: DeviceView[] }>();
+    apiFetch
+      .mockRejectedValueOnce(
+        Object.assign(new Error('online'), { code: 'ALREADY_EXISTS' }),
+      )
+      .mockReturnValueOnce(list.promise);
+    let request!: Promise<boolean>;
+    await act(async () => {
+      request = state.confirmDelete();
+    });
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+    if (change === 'owner change') setMobileAuthOwner('account-b');
+    else {
+      apiFetch.mockResolvedValue({ devices: [] });
+      await render('account-b');
+    }
+    await act(async () => {
+      list.resolve({
+        devices: [{ ...device, name: 'Old account', online: false }],
+      });
+      expect(await request).toBe(false);
+    });
+    expect(state.devices).toEqual(change === 'owner change' ? [device] : []);
+    expect(state.deleteError).toBeNull();
+    expect(mocks.setDeviceIdentity).not.toHaveBeenCalled();
+    expect(mocks.removeDevice).not.toHaveBeenCalled();
+  },
+);
+
+it('does not refresh after a non-conflict deletion failure', async () => {
+  await render();
+  act(() => state.openDelete(device));
+  apiFetch.mockRejectedValueOnce(new Error('network unavailable'));
+  await act(async () => expect(await state.confirmDelete()).toBe(false));
+  expect(apiFetch).toHaveBeenCalledTimes(2);
+  expect(state.deleteError).toBe('network unavailable');
+});
+
+it('ends the rejected-delete wait after five seconds and ignores a late list through the real API client', async () => {
+  const target = { ...device, online: false };
+  const late = deferred<{
+    ok: boolean;
+    status: number;
+    json(): Promise<unknown>;
+  }>();
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ devices: [target] }),
+    })
+    .mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: { code: 'ALREADY_EXISTS', message: 'online' },
+      }),
+    })
+    .mockReturnValueOnce(late.promise);
+  vi.stubGlobal('fetch', fetch);
+  apiFetch.mockImplementation(apiFetchRaw);
+  await render();
+  act(() => state.openDelete(target));
+  vi.useFakeTimers();
+  let request!: Promise<boolean>;
+  await act(async () => {
+    request = state.confirmDelete();
+  });
+  expect(state.deleteSaving).toBe(true);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(4_999);
+  });
+  expect(state.deleteSaving).toBe(true);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await request).toBe(false);
+  });
+  expect(state.deleteSaving).toBe(false);
+  expect(state.deleteError).toBe(i18n.t('devices.management.deleteOnline'));
+  await act(async () => {
+    late.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ devices: [] }),
+    });
+  });
+  expect(state.devices).toEqual([target]);
+  expect(state.deleteTarget).toEqual(target);
+  expect(mocks.removeDevice).not.toHaveBeenCalled();
+});
+
+it('does not terminate the new account when the rejected-delete refresh returns a stale auth failure', async () => {
+  setMobileAuthOwner('account-a');
+  const late = deferred<{
+    ok: boolean;
+    status: number;
+    json(): Promise<unknown>;
+  }>();
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ devices: [device] }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: { code: 'ALREADY_EXISTS', message: 'online' },
+        }),
+      })
+      .mockReturnValueOnce(late.promise),
+  );
+  apiFetch.mockImplementation(apiFetchRaw);
+  const terminate = vi.fn();
+  const unregister = registerAccountUnavailableHandler(terminate);
+  try {
+    await render();
+    act(() => state.openDelete(device));
+    let request!: Promise<boolean>;
+    await act(async () => {
+      request = state.confirmDelete();
+    });
+    setMobileAuthOwner('account-b');
+    await act(async () => {
+      late.resolve({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          error: {
+            code: 'ACCOUNT_UNAVAILABLE',
+            message: 'account unavailable',
+          },
+        }),
+      });
+      expect(await request).toBe(false);
+    });
+    expect(terminate).not.toHaveBeenCalled();
+    expect(state.devices).toEqual([device]);
+    expect(state.deleteError).toBeNull();
+  } finally {
+    unregister();
+  }
+});

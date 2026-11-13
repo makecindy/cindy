@@ -1,11 +1,12 @@
 /**
- * 「创建 Worker」偏好记忆(与桌面 renderer workerCreationPrefs 同一套规则):
- *  - 记住上次选的 Agent,以及每个 Agent 各自的模型 / 推理强度 / Fast;
- *  - 记住 Worker 权限;初始任务不记(避免把旧任务带到下一次创建);
- *  - 没有记忆时用共享首次默认值(Codex `codex/gpt-5.5`、high、完全访问)。
+ * 「创建 Worker」不分角色的「上次选择」在手机本地的旧记忆：上次选的 Agent、每个 Agent 各自的
+ * 模型 / 推理强度 / Fast、Worker 权限，以及按任务所在电脑隔离的完整模型路线。
  *
- * 与桌面控制端一样存在发起创建的这一端(手机本地,按登录账号隔离),不读写被控端的偏好。
- * 模型来源(provider)不记:桌面控制远程设备时同样不记来源,换设备后跟随被控端默认路由。
+ * 这份记忆现在记在任务所在的电脑上(见 orcaWorkerRoles、useOrcaWorkerForm；用户裁决：不记在手机上)。
+ * 这里只给版本太旧、没有那组通道的电脑兜底：那台电脑能读到时，手机不读也不写这份本地记忆。
+ * 表单内部仍用这里的 OrcaWorkerCreationPrefs 形状承载从电脑读回的内容。
+ *
+ * 没有记忆时用共享首次默认值(Codex `codex/gpt-5.5`、high、完全访问)；初始任务不在这里记。
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -24,10 +25,19 @@ const AGENTS: readonly OrcaWorkerAgentKind[] = ['codex', 'claude-code', 'pi'];
 export interface OrcaWorkerAgentPrefs {
   model: string;
   effort: string;
-  fast: boolean;
+  fast: boolean | 'ultrafast';
+  /** 任务所在电脑记的来源；手机本地的旧记忆没有这一项(缺省 = 不指定来源)。 */
+  providerId?: string | null;
+}
+
+export interface OrcaWorkerModelSelection {
+  agent: OrcaWorkerAgentKind;
+  agentDeviceId: string | null;
+  model: { id: string; providerId: string | null; effort: string | null; fast: boolean | 'ultrafast' };
 }
 
 export interface OrcaWorkerCreationPrefs {
+  modelSelectionByHost?: Record<string, OrcaWorkerModelSelection>;
   lastAgent: OrcaWorkerAgentKind;
   agents: Record<OrcaWorkerAgentKind, OrcaWorkerAgentPrefs>;
   workerPermissionMode: OrcaWorkerPermissionMode;
@@ -61,10 +71,23 @@ export function sanitizeOrcaWorkerCreationPrefs(value: unknown): OrcaWorkerCreat
     return {
       model: typeof item?.model === 'string' && item.model.trim() ? item.model.trim() : fallback.model,
       effort: typeof item?.effort === 'string' && item.effort.trim() ? item.effort.trim() : fallback.effort,
-      fast: item?.fast === true,
+      fast: (item?.fast === 'ultrafast' ? 'ultrafast' : item?.fast === true),
     };
   };
+  const selections = record(raw.modelSelectionByHost);
+  const modelSelectionByHost = Object.fromEntries(Object.entries(selections ?? {}).flatMap(([host, value]) => {
+    const item = record(value);
+    const model = record(item?.model);
+    if (!item || !model || !AGENTS.includes(item.agent as OrcaWorkerAgentKind)
+      || (item.agentDeviceId !== null && (typeof item.agentDeviceId !== 'string' || !item.agentDeviceId.trim()))
+      || typeof model.id !== 'string' || !model.id.trim()
+      || (model.providerId !== null && (typeof model.providerId !== 'string' || !model.providerId.trim()))
+      || (model.effort !== null && typeof model.effort !== 'string')) return [];
+    return [[host, { agent: item.agent as OrcaWorkerAgentKind, agentDeviceId: item.agentDeviceId,
+      model: { id: model.id, providerId: model.providerId, effort: model.effort, fast: (model.fast === 'ultrafast' ? 'ultrafast' : model.fast === true) } }]];
+  })) as Record<string, OrcaWorkerModelSelection>;
   return {
+    ...(selections ? { modelSelectionByHost } : {}),
     lastAgent: AGENTS.includes(raw.lastAgent as OrcaWorkerAgentKind)
       ? raw.lastAgent as OrcaWorkerAgentKind
       : defaults.lastAgent,
@@ -119,7 +142,11 @@ export function saveOrcaWorkerCreationPrefs(scope: string, prefs: OrcaWorkerCrea
 export interface OrcaWorkerSubmittedChoice {
   agent: OrcaWorkerAgentKind;
   permissionMode: OrcaWorkerPermissionMode;
-  model: { id: string; effort: string | null; fast: boolean } | null;
+  /** 普通任务的提交可更新该 host 的完整路线；SSH / 运行设备不传。 */
+  taskHostDeviceId?: string;
+  /** null = 本次提交改用逐 Agent 默认，删除该 host 的旧完整路线；缺省 = 不改。 */
+  selection?: OrcaWorkerModelSelection | null;
+  model: { id: string; effort: string | null; fast: boolean | 'ultrafast' } | null;
 }
 
 /** 把一次提交合并进已有记忆(纯函数)。 */
@@ -127,8 +154,15 @@ export function mergeOrcaWorkerChoice(
   previous: OrcaWorkerCreationPrefs,
   submitted: OrcaWorkerSubmittedChoice,
 ): OrcaWorkerCreationPrefs {
+  let modelSelectionByHost = previous.modelSelectionByHost;
+  if (submitted.taskHostDeviceId && submitted.selection !== undefined) {
+    modelSelectionByHost = { ...modelSelectionByHost };
+    if (submitted.selection) modelSelectionByHost[submitted.taskHostDeviceId] = submitted.selection;
+    else delete modelSelectionByHost[submitted.taskHostDeviceId];
+  }
   return {
     ...previous,
+    ...(modelSelectionByHost ? { modelSelectionByHost } : {}),
     lastAgent: submitted.agent,
     workerPermissionMode: submitted.permissionMode,
     agents: submitted.model

@@ -27,6 +27,170 @@ function setup(invoke = vi.fn<Invoke>(async () => ({ ok: true, result: [] }))) {
 }
 
 describe('desktop scheduler cross-device transport', () => {
+  // PR #8470 / discussion_r4488542876, unit: remote get skipped the local
+  // webhook-status callback. Existing get coverage only used plain schedules.
+  // The adapter must return the receiver URL, report failed reads, and reject
+  // replies from a previous account when ownership changes between the reads.
+  it.each([
+    { receiver: 'cloud', url: 'https://webhook.example/hooks/whk_test', hasSecret: true },
+    null,
+  ])('reads webhook status from the same target when getting a webhook schedule: %s', async (webhookStatus) => {
+    const s = setup();
+    const schedule = { id: 's1', webhookTrigger: { endpointId: 'whk_test' } };
+    s.invoke.mockResolvedValueOnce({ ok: true, result: schedule });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: webhookStatus });
+    expect(await s.remote.invoke('mac', 'get', ['s1'])).toEqual({
+      ok: true,
+      data: webhookStatus ? { ...schedule, webhookStatus } : schedule,
+    });
+    expect(s.invoke.mock.calls.map(([device, channel, args]) => [device, channel, args])).toEqual([
+      ['mac', 'maker:schedule:get', ['s1']],
+      ['mac', 'maker:schedule:webhook-status', ['s1']],
+    ]);
+    expect(s.invoke.mock.calls[1][3]?.preSend).toBe(s.invoke.mock.calls[0][3]?.preSend);
+    expect(s.invoke.mock.calls[1][3]?.preSend).toEqual(expect.any(Function));
+  });
+
+  it('does not request webhook status for a missing schedule', async () => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: null });
+    expect(await s.remote.invoke('mac', 'get', ['missing'])).toEqual({ ok: true, data: null });
+    expect(s.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { outcome: { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } } as InvokeResultPayload, code: 'REMOTE_UNSUPPORTED' },
+    { outcome: new DeviceLinkError('INVOKE_TIMEOUT', 'slow'), code: 'REMOTE_TIMEOUT' },
+  ])('reports a failed webhook status read instead of a complete schedule: $code', async ({ outcome, code }) => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1', webhookTrigger: { endpointId: 'whk_test' } } });
+    s.invoke.mockImplementationOnce(async () => {
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    });
+    const result = await s.remote.invoke('mac', 'get', ['s1']);
+    expect(result).toMatchObject({ ok: false, code });
+    expect(result).not.toHaveProperty('data');
+    expect(s.invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['maker:schedule:get', 'maker:schedule:webhook-status'])(
+    'does not expose webhook results after ownership changes during %s', async (changedDuring) => {
+      const s = setup();
+      s.invoke.mockImplementation(async (_device, channel, _args, options) => {
+        options?.preSend?.();
+        if (channel === changedDuring) s.changeOwner();
+        return { ok: true, result: channel === 'maker:schedule:get'
+          ? { id: 's1', webhookTrigger: { endpointId: 'whk_test' } }
+          : { receiver: 'cloud', url: 'https://webhook.example/hooks/whk_test', hasSecret: true } };
+      });
+      const result = await s.remote.invoke('mac', 'get', ['s1']);
+      expect(result).toMatchObject({ ok: false, code: 'REMOTE_UNAVAILABLE' });
+      expect(result).not.toHaveProperty('data');
+      expect(s.invoke).toHaveBeenCalledTimes(changedDuring === 'maker:schedule:get' ? 1 : 2);
+    },
+  );
+
+  // PR #8470, unit: old peers drop webhookTrigger; unavailable receivers cannot
+  // receive. Existing capability tests only cover directory/model selection.
+  it.each([
+    { op: 'create' as const, supported: true, receiver: 'cloud', trigger: {}, ok: true },
+    { op: 'update' as const, supported: true, receiver: 'cloud', trigger: {}, ok: true },
+    { op: 'update' as const, supported: false, receiver: 'cloud', trigger: {}, ok: false },
+    { op: 'update' as const, supported: true, receiver: 'signed-out', trigger: {}, ok: false },
+    { op: 'create' as const, supported: true, receiver: 'unavailable', trigger: {}, ok: false },
+    { op: 'update' as const, supported: true, receiver: 'signed-out', trigger: null, ok: true },
+  ])('negotiates webhook writes on the target: $op/$supported/$receiver/$trigger', async ({ op, supported, receiver, trigger, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsRemoteScheduleDirectoryCheck: true, supportsScheduleWebhookTrigger: supported }
+      : channel === 'maker:schedule:webhook-receiver' ? receiver : { id: 's1' },
+    }));
+    const patch = { webhookTrigger: trigger };
+    const args = op === 'create' ? [patch] : ['s1', patch];
+    expect((await s.remote.invoke('mac', op, args)).ok).toBe(ok);
+    const channels = s.invoke.mock.calls.map(([, channel]) => channel);
+    expect(channels).toEqual(['maker:get-capabilities',
+      ...(supported && trigger ? ['maker:schedule:webhook-receiver'] : []),
+      ...(ok ? [`maker:schedule:${op}`] : []),
+    ]);
+  });
+
+  it('does not write after ownership changes during the webhook receiver check', async () => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => {
+      if (channel === 'maker:get-capabilities') return { ok: true, result: { supportsScheduleWebhookTrigger: true } };
+      s.changeOwner();
+      return { ok: true, result: 'cloud' };
+    });
+    expect(await s.remote.invoke('mac', 'update', ['s1', { webhookTrigger: {} }])).toMatchObject({ ok: false });
+    expect(s.invoke.mock.calls.map(([, channel]) => channel)).toEqual(['maker:get-capabilities', 'maker:schedule:webhook-receiver']);
+  });
+
+  it('reports a lost webhook preflight reply as a read failure without sending the write', async () => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { supportsScheduleWebhookTrigger: true } });
+    s.invoke.mockRejectedValueOnce(Object.assign(new DeviceLinkError('NOT_CONNECTED', 'dropped'), { inFlight: true }));
+    expect(await s.remote.invoke('mac', 'update', ['s1', { webhookTrigger: {} }]))
+      .toMatchObject({ ok: false, code: 'REMOTE_UNAVAILABLE' });
+    expect(s.invoke.mock.calls.map(([, channel]) => channel)).toEqual(['maker:get-capabilities', 'maker:schedule:webhook-receiver']);
+  });
+  // PR #6830 / discussion_r4385260097, unit: the existing route/null tests omit
+  // explicit engine updates with inherited location. An old host silently drops
+  // modelAgentKind; the public adapter must reject before issuing that write.
+  it.each([
+    { capabilities: {}, patch: { modelAgentKind: 'codex', model: 'gpt-5' }, supported: false },
+    { capabilities: { supportsScheduleModelSelection: false }, patch: { modelAgentKind: 'codex', model: 'gpt-5' }, supported: false },
+    { capabilities: { supportsScheduleAgentDeviceSelection: true }, patch: { modelAgentKind: 'codex', model: 'gpt-5' }, supported: false },
+    { capabilities: { supportsScheduleModelSelection: true }, patch: { modelAgentKind: 'codex', model: 'gpt-5' }, supported: true },
+    { capabilities: { supportsScheduleModelSelection: true }, patch: { modelAgentKind: 'codex', model: 'gpt-5', modelAgentDeviceId: '' }, supported: false },
+    { capabilities: { supportsScheduleModelSelection: true, supportsScheduleAgentDeviceSelection: true }, patch: { modelAgentKind: 'codex', model: 'gpt-5', modelAgentDeviceId: '' }, supported: true },
+  ])('checks explicit engine support before remote writes: $capabilities / $patch', async ({ capabilities, patch, supported }) => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: capabilities });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1' } });
+    const result = await s.remote.invoke('mac', 'update', ['s1', patch]);
+    expect(result).toMatchObject(supported ? { ok: true, data: { id: 's1' } } : { ok: false, code: 'REMOTE_UNSUPPORTED' });
+    expect(s.invoke.mock.calls[0].slice(0, 3)).toEqual(['mac', 'maker:get-capabilities', ['claude-code']]);
+    expect(s.invoke).toHaveBeenCalledTimes(supported ? 2 : 1);
+    if (supported) expect(s.invoke.mock.calls[1].slice(0, 3)).toEqual(['mac', 'maker:schedule:update', ['s1', patch]]);
+  });
+
+  it('does not send an engine update after the account changes during capability lookup', async () => {
+    const s = setup();
+    s.invoke.mockImplementationOnce(async () => {
+      s.changeOwner();
+      return { ok: true, result: { supportsScheduleModelSelection: true } };
+    });
+    expect(await s.remote.invoke('mac', 'update', ['s1', { modelAgentKind: 'codex', model: 'gpt-5' }]))
+      .toMatchObject({ ok: false });
+    expect(s.invoke.mock.calls.map(([, channel]) => channel)).toEqual(['maker:get-capabilities']);
+  });
+
+  // Unit: an old host ignores the new route field; reject before a write can run locally instead.
+  it.each([false, true])('checks remote schedule location support before writing (%s)', async (supported) => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { supportsScheduleAgentDeviceSelection: supported } });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1' } });
+    const result = await s.remote.invoke('mac', 'update', ['s1', { modelAgentDeviceId: 'shared:owner' }]);
+    expect(s.invoke.mock.calls[0].slice(0, 3)).toEqual(['mac', 'maker:get-capabilities', ['claude-code']]);
+    expect(s.invoke).toHaveBeenCalledTimes(supported ? 2 : 1);
+    expect(result.ok).toBe(supported);
+    if (!supported) expect(result).toMatchObject({ code: 'REMOTE_UNSUPPORTED' });
+  });
+  // PR #6830, unit: route clearing needs the same new-host capability as setting
+  // a location, including partial clears that omit the location field entirely.
+  it.each([false, true])('checks support before forwarding null model axes (%s)', async (supported) => {
+    const s = setup();
+    const patch = { modelAgentKind: null, model: null, providerId: null, effort: null };
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { supportsScheduleAgentDeviceSelection: supported } });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1' } });
+    const result = await s.remote.invoke('mac', 'update', ['s1', patch]);
+    expect(result.ok).toBe(supported);
+    expect(s.invoke).toHaveBeenCalledTimes(supported ? 2 : 1);
+    if (supported) expect(s.invoke.mock.calls[1].slice(0, 3)).toEqual(['mac', 'maker:schedule:update', ['s1', patch]]);
+    else expect(result).toMatchObject({ code: 'REMOTE_UNSUPPORTED' });
+  });
   it('reuses the existing remote-control schedule channels with their argument shapes', async () => {
     const s = setup();
     await s.remote.invoke('mac', 'list', [{ status: 'active' }]);
@@ -185,6 +349,24 @@ describe('desktop scheduler cross-device transport', () => {
       'utf8',
     );
     expect(schedule).toContain('`scheduler not ready: ${');
+  });
+
+  it('refuses remote create on a peer that cannot check workingDir', async () => {
+    const s = setup(vi.fn<Invoke>(async () => ({ ok: true, result: {} })));
+    const result = await s.remote.invoke('mac', 'create', [{ name: 'radar', workingDir: '/missing' }]);
+    expect(result).toMatchObject({ ok: false, code: 'REMOTE_UNSUPPORTED' });
+    expect(s.invoke).toHaveBeenCalledTimes(1);
+    expect(s.invoke.mock.calls[0].slice(0, 2)).toEqual(['mac', 'maker:get-capabilities']);
+  });
+
+  it('creates remotely only after the directory-check capability is present', async () => {
+    const s = setup();
+    s.invoke
+      .mockResolvedValueOnce({ ok: true, result: { supportsRemoteScheduleDirectoryCheck: true } })
+      .mockResolvedValueOnce({ ok: true, result: { id: 'created' } });
+    const result = await s.remote.invoke('mac', 'create', [{ name: 'radar' }]);
+    expect(result).toMatchObject({ ok: true, data: { id: 'created' } });
+    expect(s.invoke.mock.calls[1].slice(0, 2)).toEqual(['mac', 'maker:schedule:create']);
   });
 
   it('rejects a malformed list and never sends after the account changes', async () => {

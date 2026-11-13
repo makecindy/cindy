@@ -24,7 +24,7 @@
  * (伙伴的 rail 入口由 CollapsedView 提供)。
  */
 
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   CirclePlus,
   Ellipsis,
@@ -37,11 +37,12 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMainViews';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
+import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { SidebarIconButton, SIDEBAR_RAIL_ICON_BUTTON_CLASS } from './SidebarIconButton';
@@ -56,6 +57,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { NewTag } from './NewTag';
 import { SidebarNavigationCustomize } from './SidebarNavigationCustomize';
 import { useHoverOpenMenu } from './useHoverOpenMenu';
 import {
@@ -126,6 +128,7 @@ function useSidebarNavigationActions(
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasRetirementUnread = useInstalledGhosts().some((ghost) => ghost.retirement?.unread);
   const hasGhostUnread = useAnyGhostUnread() || hasRetirementUnread;
+  const reviewUnread = usePluginReviewUpdates().updates.filter(item => item.unread);
   return {
     automations: {
       label: t('ccAgent.layout.automations'),
@@ -139,8 +142,8 @@ function useSidebarNavigationActions(
       icon: SIDEBAR_NAVIGATION_ITEM_ICONS.plugins,
       onSelect: () => navigateToView('plugins'),
       active: activeKey === 'plugins',
-      showDot: hasGhostUnread,
-      dotTone: hasRetirementUnread ? 'awaiting' : 'done',
+      showDot: hasGhostUnread || reviewUnread.length > 0,
+      dotTone: reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : hasRetirementUnread ? 'awaiting' : 'done',
     },
     search: {
       label: t('sidebar.navigation.items.search'),
@@ -201,21 +204,6 @@ function useSidebarNavigationEntries(): {
     if (dataOwnerId) markSidebarAppArrivalsSeen(dataOwnerId);
   };
   return { order, hidden, isVisible, appFor, unseen, markSeen };
-}
-
-/** Quiet grayscale tag for entries that just joined More. */
-function NewTag({ className }: { className?: string }) {
-  const { t } = useTranslation();
-  return (
-    <span
-      className={cn(
-        'shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-px text-10 font-medium leading-4 text-[var(--text-primary)]',
-        className,
-      )}
-    >
-      {t('sidebar.navigation.new')}
-    </span>
-  );
 }
 
 /**
@@ -368,6 +356,7 @@ export function SidebarRailNavigation({
   };
   const showSearch = entries.isVisible('search') || forceSearch || searchOpen;
   const tiles = entries.order.filter((id) => entries.isVisible(id) || (id === 'search' && showSearch));
+  const pluginNavigation = readPluginUiEntries('sidebar.navigation');
 
   return (
     <>
@@ -398,7 +387,7 @@ export function SidebarRailNavigation({
           />
         );
       })}
-      <GhostPanelRestoreEntry variant="rail" className={SIDEBAR_RAIL_ICON_BUTTON_CLASS} />
+      {pluginNavigation.length > 0 && <PluginUiSlotControls entries={pluginNavigation} appearance="rail" />}
       <SidebarNavigationMoreMenu
         hiddenIds={entries.hidden}
         actions={actions}
@@ -465,6 +454,44 @@ export function SidebarTopNav({
   const showPinned = section !== 'scrollable' && section !== 'rail';
   const showScrollable = section !== 'pinned' && section !== 'rail';
   const pinSearch = section === 'scrollable' && search.query.trim().length > 0;
+  const searchRowRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const row = searchRowRef.current;
+    const scroller = row?.parentElement;
+    if (!pinSearch || !row || !scroller) return;
+
+    // The sidebar and input are translucent. Clip scrolling content at the
+    // search row's bottom instead of painting an opaque rectangle over it.
+    const originalClips = new Map<HTMLElement, string>();
+    const resizeObserver = new ResizeObserver(() => updateClip());
+    const updateClip = () => {
+      const rowRect = row.getBoundingClientRect();
+      let beforeRow = true;
+      for (const sibling of scroller.children) {
+        if (sibling === row) { beforeRow = false; continue; }
+        if (!(sibling instanceof HTMLElement)) continue;
+        if (!originalClips.has(sibling)) {
+          originalClips.set(sibling, sibling.style.clipPath);
+          resizeObserver.observe(sibling);
+        }
+        const overlap = beforeRow && rowRect.top > scroller.getBoundingClientRect().top + 1
+          ? 0 : Math.max(0, rowRect.bottom - sibling.getBoundingClientRect().top);
+        sibling.style.clipPath = overlap > 0 ? `inset(${overlap}px 0 0)` : originalClips.get(sibling)!;
+      }
+    };
+    updateClip();
+    scroller.addEventListener('scroll', updateClip, { passive: true });
+    resizeObserver.observe(row);
+    resizeObserver.observe(scroller);
+    const mutationObserver = new MutationObserver(updateClip);
+    mutationObserver.observe(scroller, { childList: true });
+    return () => {
+      scroller.removeEventListener('scroll', updateClip);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      for (const [element, clip] of originalClips) element.style.clipPath = clip;
+    };
+  }, [pinSearch, customizing]);
   // 其它 Feature 的 rail 过去只借这里补一个伙伴入口;伙伴并入侧栏后 rail 入口由
   // 任务侧栏的 CollapsedView 提供,这里不再渲染内容。
   if (section === 'rail') return <></>;
@@ -496,9 +523,6 @@ export function SidebarTopNav({
       </button>
     );
   };
-  const restoreRow = showScrollable ? (
-    <GhostPanelRestoreEntry variant="row" className={ROW_CLASS} />
-  ) : null;
   const searchRow = showScrollable ? (
     <SidebarInlineSearch
       search={search}
@@ -525,6 +549,8 @@ export function SidebarTopNav({
   const renderRows = (ids: readonly SidebarNavigationEntryId[]) => ids
     .map((id) => <Fragment key={id}>{rowFor(id)}</Fragment>);
   const orderedNavigationRows = renderRows(orderedIds);
+  const pluginNavigation = readPluginUiEntries('sidebar.navigation');
+  const pluginRows = pluginNavigation.length ? <PluginUiSlotControls entries={pluginNavigation} sessionId={null} appearance="navigation" /> : null;
   const customizeRow = showScrollable ? (
     <SidebarNavigationMoreMenu
       hiddenIds={entries.hidden}
@@ -573,7 +599,7 @@ export function SidebarTopNav({
         ) : !showSearch ? (
           <div className="flex flex-col gap-0.5 pr-3 pl-3">
             {orderedNavigationRows}
-            {restoreRow}
+            {pluginRows}
             {customizeRow}
           </div>
         ) : (
@@ -583,10 +609,11 @@ export function SidebarTopNav({
             )}
             <div
               className={cn(
-                'px-3',
+                'shrink-0 px-3',
                 searchIndex > 0 && '-mt-1.5',
-                pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)] pb-2.5',
+                pinSearch && 'sticky top-0 z-30',
               )}
+              ref={searchRowRef}
             >
               {searchRow}
             </div>
@@ -594,8 +621,8 @@ export function SidebarTopNav({
                 results follow them instead of replacing them. */}
             <div className="-mt-1.5 flex flex-col gap-0.5 pr-3 pl-3">
               {rowsAfterSearch}
-              {restoreRow}
-              {customizeRow}
+              {pluginRows}
+                {customizeRow}
             </div>
           </>
         )}
@@ -603,7 +630,7 @@ export function SidebarTopNav({
     );
   }
 
-  // Persistent-view contract: saved navigation order -> {restoreRow} -> More.
+  // Persistent-view contract: saved navigation order -> More.
   return (
     // pt-1(原 2.5):顶行 chrome 收窄到 46px 后,列表整体上提贴近顶行(对齐 Codex)。
     // 分段渲染时(section≠'all')两段各自成块,由调用方分别放进固定区 / 滚动区;
@@ -637,8 +664,8 @@ export function SidebarTopNav({
         ) : (
           orderedNavigationRows
         ))}
-      {showScrollable && !customizing && restoreRow}
       {showScrollable && !customizing && customizeRow}
+      {showScrollable && !customizing && pluginRows}
     </div>
   );
 }

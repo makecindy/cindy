@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +13,7 @@ const CANONICAL_DOCS = [
 ];
 const CONTRIBUTING_DOCS = ["CONTRIBUTING.md", "CONTRIBUTING.en.md"];
 const CHECKED_DOCS = [...CONTRIBUTING_DOCS, ...CANONICAL_DOCS];
+const COMMAND_CHECKED_DOCS = [...CHECKED_DOCS, "apps/desktop/README.md"];
 const WORKSPACES = new Map([
 	["desktop", "apps/desktop/package.json"],
 	["mobile", "apps/mobile/package.json"],
@@ -111,14 +113,21 @@ function localMarkdownLinks(relativePath) {
 }
 
 /**
- * 需要做内链体检的全部文档:根目录规则文件 + `docs/` 下所有 markdown(递归)。
+ * 需要做内链体检的全部文档:根目录与模块 AGENTS + `docs/` 下所有 markdown(递归)。
  *
  * 覆盖面刻意做全 —— 悬空内链最容易出现在深层目录里:文档被删除时,引用它的索引
  * (如 `docs/legal/README.md`、`docs/README.md`)常常漏改。只体检 CHECKED_DOCS 那几篇
  * canonical 文档挡不住这类回归。
  */
 function listLinkCheckedDocs() {
-	const out = ["AGENTS.md", ...CONTRIBUTING_DOCS];
+	// Include newly added, unstaged module rules without traversing node_modules,
+	// runtime binaries or generated build trees. Git is already required by the runner.
+	const agentDocs = execFileSync("git", [
+		"ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
+		"AGENTS.md", ":(glob)apps/**/AGENTS.md", ":(glob)packages/**/AGENTS.md",
+	], { cwd: ROOT, encoding: "utf8" }).split("\0").filter((relativePath) =>
+		relativePath && fs.existsSync(path.join(ROOT, relativePath)));
+	const out = ["AGENTS.md", ...agentDocs, ...CONTRIBUTING_DOCS];
 	const walk = (relativeDir) => {
 		for (const entry of fs.readdirSync(path.join(ROOT, relativeDir), { withFileTypes: true })) {
 			const relativePath = path.join(relativeDir, entry.name);
@@ -132,7 +141,7 @@ function listLinkCheckedDocs() {
 
 test("developer docs only document pnpm commands that exist", () => {
 	const rootPackage = readJson("package.json");
-	for (const relativePath of CHECKED_DOCS) {
+	for (const relativePath of COMMAND_CHECKED_DOCS) {
 		for (const line of shellLines(relativePath)) {
 			assertPnpmCommandExists(line, rootPackage);
 		}
@@ -177,6 +186,37 @@ test("developer documentation links resolve", () => {
 				`broken local link in ${relativePath}: ${target}`,
 			);
 		}
+	}
+});
+
+// 规则依据：docs/dev-rules/protocol-compatibility.md「本页与协议记录的分工」。
+// 失效后果：逐项协议记录重新堆进必读页，通用规则与 Review 清单被埋掉——拆分前该页
+// 555 KB、194 节，文档抬头在第 1290 行，Review 清单在第 3967 行，没有 Agent 能先读完再动手。
+test("protocol compatibility keeps rules on the front page and one record per file", () => {
+	const frontPage = "docs/dev-rules/protocol-compatibility.md";
+	const recordsDir = "docs/dev-rules/protocol-compatibility";
+	const frontPageMaxBytes = 16 * 1024;
+	const frontPageBytes = Buffer.byteLength(readText(frontPage));
+	assert.ok(
+		frontPageBytes <= frontPageMaxBytes,
+		`${frontPage} is the must-read rules page (${frontPageBytes} bytes > ${frontPageMaxBytes}). ` +
+			`Put per-capability protocol records in ${recordsDir}/<area>-<topic>.md instead of appending here.`,
+	);
+	const records = fs.readdirSync(path.join(ROOT, recordsDir));
+	assert.ok(records.length, `${recordsDir} must hold the protocol records`);
+	for (const name of records) {
+		const relativePath = `${recordsDir}/${name}`;
+		assert.match(
+			name,
+			/^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/,
+			`${relativePath}: record files are flat, lower-case <area>-<topic>.md`,
+		);
+		const text = readText(relativePath);
+		const titles = text.replace(/^[ \t]*```[\s\S]*?^[ \t]*```/gm, "").match(/^# .+$/gm) ?? [];
+		assert.ok(
+			text.startsWith("# ") && titles.length === 1,
+			`${relativePath}: one record per file, starting with its level-1 title`,
+		);
 	}
 });
 
@@ -334,6 +374,18 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
 	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
 	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
+	// Database safety gate: Linux skips the bundled sqlite-vec replay. Keep the
+	// conditional real-upgrade job on a supported runner behind the required check.
+	assert.match(runnerChecks, /^          lfs: true$/m);
+	assert.match(runnerChecks, /^          fetch-depth: 0$/m);
+	assert.match(runnerChecks, /^        id: database-changes\n        run: node scripts\/ci-database-tests\.mjs detect$/m);
+	assert.match(runnerChecks, /^        if: steps\.database-changes\.outputs\.required == 'true'\n        run: node scripts\/ci-database-tests\.mjs run$/m);
+	assert.doesNotMatch(runnerChecks, /continue-on-error:/);
+	const events = workflow.slice(workflow.indexOf('\non:'), workflow.indexOf('\npermissions:'));
+	for (const event of ['pull_request', 'merge_group', 'push', 'workflow_dispatch']) {
+		assert.match(events, new RegExp(`^  ${event}:`, 'm'));
+	}
+	assert.doesNotMatch(events, /paths(?:-ignore)?:/);
 
 	const gate = workflowJob(workflow, "windows-unit");
 	assert.ok(gate, "client CI must preserve the stable Windows unit check");
@@ -378,8 +430,16 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
 	assert.match(gate, /^      - verify-checks$/m);
 	assert.match(gate, /^      - linux-unit-shards$/m);
+	assert.match(gate, /^      - host-regressions$/m);
 	assert.match(gate, /^          VERIFY_CHECKS_RESULT: \$\{\{ needs\.verify-checks\.result \}\}$/m);
 	assert.match(gate, /^          LINUX_UNIT_SHARDS_RESULT: \$\{\{ needs\.linux-unit-shards\.result \}\}$/m);
 	assert.match(gate, /^          test "\$VERIFY_CHECKS_RESULT" = "success"$/m);
 	assert.match(gate, /^          test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^          HOST_REGRESSIONS_RESULT: \$\{\{ needs\.host-regressions\.result \}\}$/m);
+	assert.match(gate, /^      - host-changes$/m);
+	assert.match(gate, /^          test "\$HOST_CHANGES_RESULT" = "success"$/m);
+	assert.match(gate, /true:success\|false:skipped/);
+	const host = workflowJob(workflow, "host-regressions");
+	assert.match(host, /^    needs: host-changes$/m);
+	assert.match(host, /^    if: needs\.host-changes\.outputs\.required == 'true'$/m);
 });

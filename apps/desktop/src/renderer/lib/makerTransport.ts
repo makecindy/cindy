@@ -176,7 +176,6 @@ export async function openInputHandoffPicture(
 export interface RoutableMaker {
   predictNextPrompt: FullMaker['predictNextPrompt'];
   listBotDelegations: FullMaker['listBotDelegations'];
-  cancelBotDelegation: FullMaker['cancelBotDelegation'];
   getBotDirectMessageThread: FullMaker['getBotDirectMessageThread'];
   send: FullMaker['send'];
   setModel: FullMaker['setModel'];
@@ -198,6 +197,8 @@ export interface RoutableMaker {
   // —— 完整对等:会话级功能(fork / rewind / context-usage / extra-dirs / close / orca)——
   // 本地分支返回完整 maker 天然带这些;远程分支在 remoteMakerApi 里逐一隧道映射。
   fork: FullMaker['fork'];
+  createSideChat: FullMaker['createSideChat'];
+  listSideChats: FullMaker['listSideChats'];
   forkStripEncrypted: FullMaker['forkStripEncrypted'];
   rewindPreview: FullMaker['rewindPreview'];
   rewindCommit: FullMaker['rewindCommit'];
@@ -230,6 +231,7 @@ export interface RoutableMaker {
     | 'updateContent'
     | 'clearError'
     | 'cancelUsageLimitWait'
+    | 'retryImageDelivery'
     | 'retryLastError'
     | 'clearSession'
     | 'persistTurnErrorDeferred'
@@ -282,7 +284,6 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
   return {
     predictNextPrompt: t('maker:predict-prompt') as FullMaker['predictNextPrompt'],
     listBotDelegations: t('maker:bot-delegations:list') as FullMaker['listBotDelegations'],
-    cancelBotDelegation: t('maker:bot-delegation:cancel') as FullMaker['cancelBotDelegation'],
     getBotDirectMessageThread: t('maker:bot-direct-message-thread:get') as FullMaker['getBotDirectMessageThread'],
     applyTurnChangeSet: t('maker:turn-change-set:apply') as FullMaker['applyTurnChangeSet'],
     send: t('maker:send') as FullMaker['send'],
@@ -309,6 +310,8 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     ) as FullMaker['getPendingInteractions'],
     deleteMessage: t('maker:message:delete') as FullMaker['deleteMessage'],
     fork: t('maker:fork') as FullMaker['fork'],
+    createSideChat: t('maker:side-chat:v1') as FullMaker['createSideChat'],
+    listSideChats: t('maker:side-chat:list:v1') as FullMaker['listSideChats'],
     forkStripEncrypted: t('maker:fork-strip-encrypted') as FullMaker['forkStripEncrypted'],
     rewindPreview: t('maker:rewind:preview') as FullMaker['rewindPreview'],
     rewindCommit: t('maker:rewind:commit') as FullMaker['rewindCommit'],
@@ -345,6 +348,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       updateContent: t('maker:input:update-content') as FullMaker['input']['updateContent'],
       clearError: t('maker:input:clear-error') as FullMaker['input']['clearError'],
       cancelUsageLimitWait: t('maker:input:cancel-usage-limit-wait') as FullMaker['input']['cancelUsageLimitWait'],
+      retryImageDelivery: t('maker:images:retry') as FullMaker['input']['retryImageDelivery'],
       retryLastError: t('maker:input:retry-last-error') as FullMaker['input']['retryLastError'],
       clearSession: t('maker:input:clear-session') as FullMaker['input']['clearSession'],
       // device-link:auth error 重试失败/放弃时在被控端落库,经隧道路由到被控端 main。
@@ -367,10 +371,12 @@ export function agentCapabilitiesForDevice(
 ): Promise<{
   supportsOrcaWorkerPermissionMode?: boolean;
   supportsDeferredOrcaUiAssignment?: boolean;
+  supportsOrcaWorkerUpdate?: boolean;
 }> {
   return invokeRemote(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<{
     supportsOrcaWorkerPermissionMode?: boolean;
     supportsDeferredOrcaUiAssignment?: boolean;
+    supportsOrcaWorkerUpdate?: boolean;
   }>;
 }
 
@@ -382,6 +388,16 @@ export function agentCapabilitiesForDevice(
 export function makerApiFor(sessionId: string): RoutableMaker {
   const deviceId = getSessionDeviceId(sessionId);
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
+/**
+ * 输入框开始打字时请任务所在电脑提前启动 Agent。尽力而为：旧被控端没有该 channel、
+ * 断线或拒绝都只意味着下一次发送照常冷启动，调用方不需要处理结果。
+ */
+export function prewarmSessionFor(sessionId: string, createOpts: unknown): Promise<unknown> {
+  const deviceId = getSessionDeviceId(sessionId);
+  if (deviceId) return invokeRemote(deviceId, 'maker:session:prewarm', [sessionId, createOpts]);
+  return window.electronAPI.maker.prewarmSession?.(sessionId, createOpts) ?? Promise.resolve(undefined);
 }
 
 /**
@@ -476,18 +492,6 @@ export function getSessionFor(sessionId: string): Promise<Session> {
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
   return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
-}
-
-/**
- * 查被控端某会话的权威 turn 运行态(远程走隧道 maker:session-in-turn)。
- * 控制端 stall 看门狗用:卡死 Generating 但久未收 push 时核实被控端是否真的还在跑——
- * 答 false 才安全收尾,绝不误杀真正在跑的慢 turn。
- * 本机会话不走看门狗 → 直接 resolve(false)(调用方已 gate,这里仅防御)。
- */
-export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
-  const deviceId = getSessionDeviceId(sessionId);
-  if (!deviceId) return Promise.resolve(false);
-  return invokeRemote(deviceId, 'maker:session-in-turn', [sessionId]) as Promise<boolean>;
 }
 
 /**
@@ -725,7 +729,8 @@ export async function stopSessionBackgroundTasksFor(sessionId: string): Promise<
  * 与 goal/learn 链路同款);老被控端无此 channel → CHANNEL_NOT_ALLOWED,调用方 catch
  * 后退化为只显示已加载消息 + 实时推送的部分值。
  */
-export function estimatedSessionValueFor(sessionId: string): Promise<{
+export function estimatedSessionValueFor(sessionId: string, options?: { includeBreakdown?: boolean; clientId?: string }): Promise<{
+  costBreakdown?: import('@cindy/maker-shared/usage-cost-details').UsageCostRow[];
   totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
   totalValueUsd?: number;
   entries: Array<{
@@ -736,9 +741,11 @@ export function estimatedSessionValueFor(sessionId: string): Promise<{
   }>;
 }> {
   const deviceId = getStickySessionDeviceId(sessionId);
-  if (!deviceId) return messageService.estimatedSessionValue(sessionId);
+  if (!deviceId) return options ? messageService.estimatedSessionValue(sessionId, options)
+    : messageService.estimatedSessionValue(sessionId);
   return invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
     sessionId,
+    ...(options ? [options] : []),
   ]) as ReturnType<typeof estimatedSessionValueFor>;
 }
 
@@ -984,6 +991,8 @@ export interface RoutableOrcaWorkflows {
   switchFocus: FullOrca['switchFocus'];
   idleWorker: FullOrca['idleWorker'];
   archiveWorker: FullOrca['archiveWorker'];
+  /** 修改 worker 的展示角色名与 team 内唯一标识。 */
+  updateWorker: FullOrca['updateWorker'];
   endTeam: FullOrca['endTeam'];
   getCollaborationSettings: FullOrca['getCollaborationSettings'];
   listExecutionDevices: FullOrca['listExecutionDevices'];
@@ -1028,6 +1037,12 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
       invokeRemote(deviceId, 'maker:worker:archive', [
         { leadSessionId, workerId },
       ])) as FullOrca['archiveWorker'],
+    updateWorker: ((input: {
+      leadSessionId: string;
+      workerId: string;
+      role?: string;
+      label?: string;
+    }) => invokeRemote(deviceId, 'maker:worker:update', [input])) as FullOrca['updateWorker'],
     endTeam: t('maker:team:end') as FullOrca['endTeam'],
     getCollaborationSettings: t(
       'maker:collaboration-settings:get',

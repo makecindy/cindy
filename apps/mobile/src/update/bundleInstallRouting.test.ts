@@ -16,11 +16,27 @@ vi.mock('./androidInstaller', () => ({ androidInstaller: { start: mocks.start } 
 vi.mock('./androidInstallSource', () => ({ isGooglePlayInstallation: mocks.playInstall }));
 vi.mock('./forcedUpdateStore', () => ({ enterForcedUpdate: mocks.forced }));
 vi.mock('./canaryChannelStore', () => ({ resolveUpdateChannelForDevice: () => 'release' }));
-import { openBundleInstall, promptBundleUpdate } from './useBundleUpdatePrompt';
+import { downloadAndroidBundleUpdate, openBundleInstall, promptBundleUpdate } from './useBundleUpdatePrompt';
 const target = { version: '1.2.3', runtimeVersion: 'new', installUrl: 'https://updates.example.invalid/app.apk', itmsUrl: '' };
 beforeEach(() => { vi.clearAllMocks(); mocks.platform.OS = 'android'; mocks.start.mockReturnValue(true); mocks.playInstall.mockReturnValue(false); });
 
 describe('shared bundle install routing', () => {
+  // Unit: startup/resume must select silent Wi-Fi downloading, while manual
+  // discovery and unsupported resume paths keep their existing presentation.
+  it('automatic discovery starts a silent Wi-Fi download without an alert', () => {
+    promptBundleUpdate({ needsUpdate: true, forced: false, target }, true);
+    expect(mocks.start).toHaveBeenCalledWith(
+      { version: target.version, installUrl: target.installUrl },
+      { confirm: true, automatic: true },
+    );
+    expect(mocks.alert).not.toHaveBeenCalled();
+  });
+  it('resume discovery on an older binary stays quiet instead of showing a browser prompt', () => {
+    mocks.start.mockReturnValue(false);
+    downloadAndroidBundleUpdate({ needsUpdate: true, forced: false, target });
+    expect(mocks.alert).not.toHaveBeenCalled();
+    expect(mocks.openURL).not.toHaveBeenCalled();
+  });
   it('ordinary updates open the in-app card directly and wait there for the user to confirm', () => {
     promptBundleUpdate({ needsUpdate: true, forced: false, target: { ...target, releaseNotes: '  Faster sync\n' } });
     expect(mocks.alert).not.toHaveBeenCalled();

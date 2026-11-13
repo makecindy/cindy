@@ -1,3 +1,5 @@
+import type { ProviderGroupHeldWorkerTerminals } from './heldWorkerTerminals.js';
+
 /**
  * 自动换电脑期间先不呈现的那次失败(docs/product-rules/provider-groups.md §6.1「换电脑期间不报错」)。
  *
@@ -33,6 +35,8 @@ export interface ProviderGroupHeldTurnErrorsDeps<Row> {
   persist(sessionId: string, row: Row): void;
   /** 错误确定要呈现：同步到聊天之外的错误表面(Agent Island)。 */
   surface(sessionId: string, detail: HeldTurnErrorDetail): void;
+  /** 当前失败已放出：结算此前由恢复流程按住的产品调用；不得结算续跑成功或已被接手的旧失败。 */
+  settleFailure(sessionId: string): void;
   /** 撤掉协调器那次「先不呈现」的登记；错误仍是当前状态时投影随即带出横幅，返回 true。 */
   releaseHold(sessionId: string, holdId: number): boolean;
   /** 当前登录账号的作用域键。 */
@@ -47,6 +51,8 @@ export interface ProviderGroupHeldTurnErrors {
    * 重复终态 error 返回 true(只留一行)。
    */
   stash(sessionId: string, holdId: number, data: unknown, agentMeta?: unknown): boolean;
+  /** Transfer this failure back to interrupted-turn recovery, without surfacing it. */
+  takeForRecovery(sessionId: string, holdId: number): HeldTurnErrorDetail | null;
   /** 换成了：这次失败不再落库、不再呈现。 */
   discard(sessionId: string, holdId: number): void;
   /** 不再换了：撤掉登记并补落；错误仍是当前状态时一并呈现。重复调用无副作用。 */
@@ -110,6 +116,11 @@ export function createProviderGroupHeldTurnErrors<Row>(
       return true;
     },
 
+    takeForRecovery(sessionId, holdId) {
+      const entry = take(sessionId, holdId);
+      return entry?.owner === deps.ownerKey() ? entry.detail : null;
+    },
+
     discard(sessionId, holdId) {
       take(sessionId, holdId);
       deps.releaseHold(sessionId, holdId);
@@ -119,7 +130,48 @@ export function createProviderGroupHeldTurnErrors<Row>(
       const live = deps.releaseHold(sessionId, holdId);
       const entry = take(sessionId, holdId);
       if (!entry) return;
-      if (persist(sessionId, entry) && live) deps.surface(sessionId, entry.detail);
+      if (persist(sessionId, entry) && live) {
+        deps.surface(sessionId, entry.detail);
+        deps.settleFailure(sessionId);
+      }
+    },
+  };
+}
+
+/** Keep queued continuations responsible for the terminal they have not dispatched yet. */
+export function createProviderGroupHeldRecovery(deps: {
+  errors: Pick<ProviderGroupHeldTurnErrors, 'discard' | 'release'>;
+  terminals: Pick<ProviderGroupHeldWorkerTerminals<unknown>, 'discard' | 'release'>;
+  settleFailure(sessionId: string): void;
+  ownerKey(): string;
+}) {
+  const continuationHolds = new Map<string, { holdId: number; owner: string }>();
+  return {
+    /** A runtime close must wait for this queued send's actual dispatch outcome. */
+    hasPendingContinuation(sessionId: string): boolean {
+      const continuation = continuationHolds.get(sessionId);
+      return continuation !== undefined && continuation.owner === deps.ownerKey();
+    },
+    discard(sessionId: string, holdId: number): void {
+      deps.errors.discard(sessionId, holdId);
+      // Ordinary product callers also own a receipt, even without a Worker terminal.
+      continuationHolds.set(sessionId, { holdId, owner: deps.ownerKey() });
+    },
+    release(sessionId: string, holdId: number): void {
+      deps.errors.release(sessionId, holdId);
+      if (continuationHolds.get(sessionId)?.holdId === holdId) return;
+      deps.terminals.release(sessionId, holdId);
+    },
+    settleContinuation(sessionId: string, dispatched: boolean): void {
+      const continuation = continuationHolds.get(sessionId);
+      if (!continuation) return;
+      continuationHolds.delete(sessionId);
+      const { holdId, owner } = continuation;
+      if (dispatched || owner !== deps.ownerKey()) deps.terminals.discard(sessionId, holdId);
+      else {
+        deps.terminals.release(sessionId, holdId);
+        deps.settleFailure(sessionId);
+      }
     },
   };
 }

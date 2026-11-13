@@ -1,16 +1,23 @@
 {
   "id": "medium-tag-feed",
-  "match": ["medium.com"],
-  "description": "按话题标签拉取 Medium 最新文章(标题/作者/链接/发布时间/摘要)。走 Medium 公开 RSS feed,无需登录;在页面内 fetch RSS 文本并用 DOMParser 解析成结构化 JSON。tag 用话题英文 slug,如 technology、programming、artificial-intelligence。",
-  "inputs": { "tag": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://medium.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "articles",
-      "fn": "async () => { const r = await fetch('https://medium.com/feed/tag/' + encodeURIComponent('{{tag|js}}')); const t = await r.text(); if (!t || t.indexOf('<rss') === -1 && t.indexOf('<item') === -1) throw new Error('Medium RSS 返回异常(标签不存在或被风控),请确认 tag slug 正确后重试'); const doc = new DOMParser().parseFromString(t, 'text/xml'); const items = Array.from(doc.querySelectorAll('item')); const txt = (el, sel) => { const n = el.querySelector(sel); return n ? (n.textContent || '').trim() : ''; }; const strip = (s) => (s || '').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim(); return items.map((it, i) => ({ rank: i + 1, title: txt(it, 'title'), author: (it.getElementsByTagName('dc:creator')[0] || {}).textContent || '', link: (txt(it, 'link') || txt(it, 'guid')).split('?')[0], published: txt(it, 'pubDate'), summary: strip(txt(it, 'description')).slice(0, 200) })); }"
-    }
+  "match": [
+    "medium.com"
   ],
-  "output": "{{articles}}"
+  "description": "Latest Medium articles tagged with a given keyword (RSS feed)",
+  "access": "read",
+  "adapter": "medium/tag",
+  "inputs": {
+    "tag": {
+      "required": true,
+      "type": "str",
+      "description": "Lowercase tag slug (e.g. \"programming\", \"machine-learning\")"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Max articles (1-25 — single RSS page)"
+    }
+  },
+  "steps": []
 }

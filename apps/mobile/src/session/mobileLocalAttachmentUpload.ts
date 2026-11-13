@@ -61,6 +61,8 @@ export interface MobileLocalAttachmentUploadCandidate {
   cleanupLocalUris?: (uris: readonly string[]) => Promise<void>;
   /** 宿主侧溯源 id(相册 asset.id → attachment 映射用),管线不消费。 */
   sourceId?: string;
+  /** Source position within one external share; retained across retries. */
+  incomingShareOrder?: { batchId: string; index: number };
   /**
    * 圈点标注元数据(uri 已是烧录产物时携带;管线不消费,onUploaded 原样回传,
    * 宿主据此给附件打 annotated 标并记录「矢量笔迹 + 原图」的再编辑真相)。
@@ -738,4 +740,20 @@ export function createMobileLocalAttachmentUploadController(
       }
     },
   };
+}
+
+/** Reorder only members of the same share, preserving all unrelated slot positions. */
+export function incomingShareSlotOrder(orders: readonly (MobileLocalAttachmentUploadCandidate['incomingShareOrder'] | undefined)[]): number[] {
+  const result = orders.map((_, index) => index);
+  const groups = new Map<string, number[]>();
+  orders.forEach((order, index) => {
+    if (!order) return;
+    const group = groups.get(order.batchId) ?? [];
+    group.push(index); groups.set(order.batchId, group);
+  });
+  for (const positions of groups.values()) {
+    const sorted = [...positions].sort((a, b) => orders[a]!.index - orders[b]!.index);
+    positions.forEach((position, i) => { result[position] = sorted[i]; });
+  }
+  return result;
 }

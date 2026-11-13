@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   collectMobileMessageGalleryImages,
+  collectMobileMessageAttachmentPayloads,
   galleryImageIndexForPayload,
   lightboxImagesForPayload,
 } from '@/session/messageGallery';
@@ -707,5 +708,21 @@ describe('message gallery', () => {
     } finally {
       durableThumbs.clear();
     }
+  });
+});
+
+// Unified attachment contract: a message-local mixed collection must retain files
+// between media, without importing the neighbouring message's gallery. Unit tier;
+// the previous image-only collector could not represent this input.
+describe('message attachment collection', () => {
+  it('keeps the clicked message files and media in order', () => {
+    const row = messageItem('mixed', { attachments: [
+      { kind: 'image', name: 'photo.png', uri: 'file:///photo.png', previewable: true },
+      { kind: 'file', name: 'report.pdf', path: '/report.pdf', previewable: false },
+      { kind: 'file', name: 'clip.mp4', path: '/clip.mp4', previewable: false },
+    ] });
+    const result = collectMobileMessageAttachmentPayloads(row);
+    expect(result).toHaveLength(3);
+    expect(result.map((payload) => payload.kind === 'file' ? payload.title : payload.kind === 'media' ? payload.media.url : payload.kind)).toEqual(['file:///photo.png', 'report.pdf', 'clip.mp4']);
   });
 });

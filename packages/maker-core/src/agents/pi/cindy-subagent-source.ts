@@ -350,6 +350,55 @@ function parentContextSnapshot(ctx) {
     .map(function (entry) { return entry[1]; }).join('\n\n');
 }
 
+function routeProviders(candidates) {
+  const providers = [];
+  for (const route of candidates) {
+    // 同一个字符串可以既是某条路由的来源 id、又是另一条路由的运行期 provider 名
+    // (ChatGPT 的 openai-codex vs 来源 id 为 openai-codex 的自定义连接)。这种时候
+    // 列能唯一定位的那一个,不要让调用方拿到两个都能命中两条连接的名字。
+    const preferred = route.sourceProviderId || route.provider;
+    const collides = candidates.some(function (other) {
+      return other !== route
+        && (other.provider === preferred || (other.sourceProviderId || other.provider) === preferred);
+    });
+    const label = collides ? route.provider : preferred;
+    if (providers.indexOf(label) < 0) providers.push(label);
+  }
+  return providers;
+}
+
+function modelProviderMap(runtime) {
+  const map = {};
+  for (const [id, routes] of Object.entries(runtime.modelRoutes || {})) {
+    const providers = routeProviders(routes);
+    if (providers.length > 0) map[id] = providers;
+  }
+  return map;
+}
+
+/**
+ * 子任务实际跑的模型(= durable config 里的 displayModel)。与宿主读状态文件时同一
+ * 口径:显式指定的模型 > 解析出的路由模型 > 继承父会话模型。
+ */
+function taskDisplayModel(task, runtime) {
+  return task.model || task.routeModel || runtime.model;
+}
+
+/**
+ * 卡片 chip 的模型:批次里所有子任务跑同一个模型才显示,不一致就不猜 —— 与宿主侧读
+ * 状态文件时的 model:null(多模型批次)同义。
+ */
+function singleTaskDisplayModel(tasks, runtime) {
+  let found;
+  for (const task of tasks) {
+    const model = taskDisplayModel(task, runtime);
+    if (!model) continue;
+    if (found !== undefined && found !== model) return undefined;
+    found = model;
+  }
+  return found;
+}
+
 function resolveTaskModelRoutes(tasks, runtime) {
   const availableModels = Object.keys(runtime.modelRoutes || {}).sort();
   const availableModelHint = availableModels.length > 0
@@ -357,7 +406,7 @@ function resolveTaskModelRoutes(tasks, runtime) {
       + (availableModels.length > 24 ? ', ...' : '') + '.'
     : ' No models are available in this session.';
   for (const task of tasks) {
-    if (!task.model) {
+    if (!task.model && !task.provider) {
       const currentRoutes = runtime.modelRoutes && Array.isArray(runtime.modelRoutes[runtime.model])
         ? runtime.modelRoutes[runtime.model]
         : [];
@@ -370,9 +419,46 @@ function resolveTaskModelRoutes(tasks, runtime) {
       task.routeProxySessionAuth = !!(currentRoute && currentRoute.proxySessionAuth === true);
       continue;
     }
-    const candidates = runtime.modelRoutes && Array.isArray(runtime.modelRoutes[task.model])
-      ? runtime.modelRoutes[task.model]
+    const modelId = task.model || runtime.model;
+    const candidates = runtime.modelRoutes && Array.isArray(runtime.modelRoutes[modelId])
+      ? runtime.modelRoutes[modelId]
       : [];
+    if (task.provider) {
+      // 显式 provider 压过父 provider 与下面的 id 前缀推断。运行期 provider 名和 Cindy
+      // 来源 id 是两个命名空间:同一字符串可能同时命中两条**不同**的连接(ChatGPT 的
+      // openai-codex 与来源 id 为 openai-codex 的自定义连接),所以按路径身份取并集,
+      // 多于一条就拒绝派发 —— 绝不拿“模型名相等”去替调用方选来源(review)。
+      const runtimeMatches = candidates.filter(function (route) {
+        return route.provider === task.provider;
+      });
+      const matches = runtimeMatches.concat(candidates.filter(function (route) {
+        return route.sourceProviderId === task.provider && runtimeMatches.indexOf(route) < 0;
+      }));
+      if (matches.length > 1) {
+        throw new Error(
+          'subagent: provider "' + task.provider + '" matches ' + matches.length
+          + ' connections for model "' + modelId + '". Pass one of: '
+          + routeProviders(matches).join(', ') + '.',
+        );
+      }
+      const route = matches[0];
+      if (!route) {
+        if (candidates.length === 0) {
+          throw new Error(
+            'subagent: model "' + modelId + '" is not available in this session.' + availableModelHint,
+          );
+        }
+        throw new Error(
+          'subagent: provider "' + task.provider + '" does not offer model "' + modelId + '" in this session. '
+          + 'Providers for this model: ' + routeProviders(candidates).join(', ') + '.',
+        );
+      }
+      task.routeProvider = route.provider;
+      task.routeModel = route.model;
+      task.routeSourceProviderId = route.sourceProviderId;
+      task.routeProxySessionAuth = route.proxySessionAuth === true;
+      continue;
+    }
     const explicitSource = task.model.startsWith('xai/')
       ? 'xai'
       : task.model.startsWith('chatgpt/')
@@ -393,11 +479,14 @@ function resolveTaskModelRoutes(tasks, runtime) {
         : candidates.length === 1
           ? candidates[0]
           : null;
+    // 未传 provider 时的**既有**顺序:模型 id 前缀隐含的来源 > 父会话 provider > 唯一候选。
+    // 本 PR 只给显式 provider 加分支,不调整它(review: 正文曾把这段误写成“父来源优先”)。
     if (!route) {
       if (candidates.length > 1) {
         throw new Error(
-          'subagent: model "' + task.model + '" is available from multiple providers; '
-          + 'switch the parent to the intended provider before delegating.',
+          'subagent: model "' + task.model + '" is available from multiple providers: '
+          + routeProviders(candidates).join(', ') + '. Pass provider to choose one, or switch the parent '
+          + 'to the intended provider before delegating.',
         );
       }
       throw new Error(
@@ -616,9 +705,11 @@ async function writeDurableControl(status, action, message, childId, signal) {
 async function managementResult(params, ctx, signal, delivery) {
   const action = params.action;
   if (action === 'capabilities') {
+    const runtime = readRuntimeSnapshot();
     return JSON.stringify({ roles: Object.keys(PROFILES).map(function (agent) {
       return { agent: agent, tools: toolsFor(agent).split(',') };
-    }), models: Object.keys(readRuntimeSnapshot().modelRoutes || {}),
+    }), models: Object.keys(runtime.modelRoutes || {}),
+      modelProviders: modelProviderMap(runtime),
       maxTasks: MAX_TASKS, concurrency: MAX_CONCURRENCY, context: ['fresh', 'fork'],
       actions: ['run', 'list', 'get', 'wait', 'stop', 'steer', 'follow_up', 'resume'] });
   }
@@ -974,7 +1065,7 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
         profilePrompt: task.profilePrompt,
         provider: task.routeProvider || runtime.provider,
         model: task.routeModel || runtime.model,
-        displayModel: task.model || task.routeModel || runtime.model,
+        displayModel: taskDisplayModel(task, runtime),
         sourceProviderId: task.routeSourceProviderId,
         proxySessionAuth: task.routeProxySessionAuth === true,
         thinking: task.thinking || undefined,
@@ -1036,6 +1127,14 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
     mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });
     copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'));
+    // Freeze the same learned rules as models.json for durable children.
+    const childCacheRules = join(childConfigHome, 'pi-cache-compatibility.json');
+    try {
+      copyFileSync(join(configHome, 'pi-cache-compatibility.json'), childCacheRules);
+      chmodSync(childCacheRules, 0o600);
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
     // Parent configHome is ephemeral. Durable children outlive it, so Pi native
     // grep (PI_CODING_AGENT_DIR/bin) and the Cindy find override need a private copy.
     copyManagedRipgrep(configHome, childConfigHome);
@@ -1223,6 +1322,14 @@ function normalizeInvocation(params) {
     if (model.length > MAX_MODEL_CHARS) {
       throw new Error('subagent: model id exceeds ' + MAX_MODEL_CHARS + ' characters');
     }
+    const provider = typeof item.provider === 'string' && item.provider.trim()
+      ? item.provider.trim()
+      : typeof input.provider === 'string' && input.provider.trim()
+        ? input.provider.trim()
+        : '';
+    if (provider.length > MAX_MODEL_CHARS) {
+      throw new Error('subagent: provider id exceeds ' + MAX_MODEL_CHARS + ' characters');
+    }
     const thinking = typeof item.thinking === 'string' && item.thinking.trim()
       ? item.thinking.trim()
       : typeof input.thinking === 'string' && input.thinking.trim()
@@ -1238,6 +1345,7 @@ function normalizeInvocation(params) {
       title: title,
       task: task,
       model: model,
+      provider: provider,
       thinking: thinking,
       customProfile: false,
       customTools: 'read',
@@ -1411,7 +1519,8 @@ export default async function cindySubagent(pi: any) {
     description: 'Delegate work to a PI child with its own context and durable session. '
       + 'Available roles: ' + profileNames() + '. Read-only roles cannot edit. worker uses the parent '
       + 'permission mode; Ask/Auto requests are forwarded to Cindy approval. Pass model/thinking to override the '
-      + 'parent model for a child. Pass async:true for a detached background run that survives parent navigation. '
+      + 'parent model for a child, and provider to choose which provider serves that model (see capabilities '
+      + 'modelProviders). Pass async:true for a detached background run that survives parent navigation. '
       + 'Results are collected before this parent turn settles; notify:false leaves collection explicit. '
       + 'Pass {agent, task} for one, or {tasks:[{agent, task}, ...]} to fan out in parallel. '
       + 'Use action:capabilities/list/get/wait/stop/steer/follow_up/resume for durable runs. Select childId to control one child. Children cannot spawn further subagents.',
@@ -1434,6 +1543,10 @@ export default async function cindySubagent(pi: any) {
         },
         title: { type: 'string', description: 'Optional user-facing name describing the task value.' },
         model: { type: 'string', description: 'Optional exact child model id.' },
+        provider: {
+          type: 'string',
+          description: 'Optional provider id for the child (from capabilities modelProviders). Must serve the chosen model and match exactly one connection. Without it, resolution keeps its existing order: a source implied by a xai/, chatgpt/ or claude- model id, then the parent provider.',
+        },
         thinking: { type: 'string', description: 'Optional thinking level: ' + THINKING_LEVELS },
         async: { type: 'boolean', description: 'Run in Cindy durable background mode.' },
         notify: { type: 'boolean', description: 'Default true: collect async/resume results before the parent finishes. false: use wait/get explicitly.' },
@@ -1463,6 +1576,7 @@ export default async function cindySubagent(pi: any) {
               title: { type: 'string', description: 'Optional user-facing name for this task.' },
               task: { type: 'string' },
               model: { type: 'string' },
+              provider: { type: 'string' },
               thinking: { type: 'string' },
             },
             required: ['agent', 'task'],
@@ -1527,7 +1641,10 @@ export default async function cindySubagent(pi: any) {
         };
         details[MARKER] = 1;
         if (summary) details.summary = summary;
-        if (runtime.model) details.model = runtime.model;
+        // 前台(非 async)卡片的 model 只由这些进度帧喂,所以这里必须报子任务实际模型。
+        // 报 runtime.model 会让指定了别的模型的子代理在卡片上显示成父会话模型。
+        const cardModel = singleTaskDisplayModel(tasks, runtime);
+        if (cardModel) details.model = cardModel;
         try {
           onUpdate({ content: [{ type: 'text', text: status === 'running' ? 'Running subagent…' : status }], details: details });
         } catch (err) {

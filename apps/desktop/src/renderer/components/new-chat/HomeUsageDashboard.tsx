@@ -187,7 +187,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
   }, []);
 
   const accountTodayMoney =
-    typeof claudeQuota?.todaySpend === 'number'
+    claudeQuota?.dailyLimitEnabled !== false && typeof claudeQuota?.todaySpend === 'number'
       ? gatewayMoney(claudeQuota.todaySpend, claudeQuota.currency)
       : null;
   const hasAccountTodaySpend = accountTodayMoney !== null;
@@ -197,7 +197,8 @@ export function HomeUsageDashboard(): React.JSX.Element {
   const showLocalSpendAnomaly =
     layoutHistory.anomaly.isAnomalous &&
     isSameDisplayedTodaySpend(accountTodayMoney, layoutHistory.totals.today);
-  const softDailyLimit = hasMonthly ? (claudeQuota.maxBudget / 30) * DAILY_SOFT_LIMIT_FACTOR : null;
+  const softDailyLimit = hasMonthly && claudeQuota.dailyLimitEnabled !== false
+    ? (claudeQuota.maxBudget / 30) * DAILY_SOFT_LIMIT_FACTOR : null;
   const softDailyLimitMoney =
     softDailyLimit === null || claudeQuota === null
       ? null
@@ -396,7 +397,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
               todayKey={layoutHistory.todayKey}
             />
             {layoutHistory.models.length === 0 && (
-              <div className="mt-1.5 text-10 text-[var(--text-tertiary)] opacity-70">
+              <div className="mt-1.5 text-10 text-[var(--text-tertiary)]">
                 {t('usageDashboard.emptyModels')}
               </div>
             )}

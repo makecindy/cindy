@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
+import { clearAllSessionRuntimeAxes, getSessionEffort, setSessionEffort } from '../../maker-host/session-effort-store.js';
+import { buildDeferredRuntimeSelectionProfile } from '../../../shared/runtimeModelSwitchGate';
 
 import {
   acceptSessionRuntimeAxisMutation,
@@ -18,8 +20,10 @@ import {
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
+  remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
+  resolveSessionRuntimeRefreshEffort,
   sessionRuntimeControlOwnerEpochMatches,
   sessionRuntimeGenerationMatches,
   settlePendingSessionRuntimeMutation,
@@ -28,6 +32,7 @@ import {
 
 afterEach(() => {
   clearAllSessionRuntimeControlStates();
+  clearAllSessionRuntimeAxes();
 });
 
 const current: SessionRuntimeProfile = {
@@ -75,6 +80,43 @@ function provider(
 }
 
 describe('session runtime control state', () => {
+  // Unit #10271: account handoff must not clear Agent-selected model/axes or a
+  // different pending target. Existing recovery APIs reset that state wholesale.
+  it.each(['same-route', 'other-route', 'other-provider', 'no-override', 'stale-owner', 'stale-generation'] as const)(
+    'remaps only the admitted runtime provider with owner/generation fencing (%s)', mode => {
+      const sessionId = 'account-handoff';
+      const profile = { ...current, providerId: mode === 'other-provider' ? 'another-provider' : 'openai-old' };
+      if (mode !== 'no-override') {
+        acceptSessionRuntimeMutation({ sessionId, source: 'fallback', profile, deferred: false });
+        acceptSessionRuntimeMutation({ sessionId, source: 'fallback', deferred: true, thinking: false,
+          profile: { ...profile, effort: 'max', ...(mode === 'other-route' ? { model: 'other-model' } : {}) } });
+      }
+      const owner = captureSessionRuntimeControlOwnerEpoch();
+      const before = getSessionRuntimeControlSnapshot(sessionId);
+      if (mode === 'stale-owner') clearAllSessionRuntimeControlStates();
+      const expected = getSessionRuntimeControlSnapshot(sessionId);
+      const result = remapSessionRuntimeProvider({ sessionId, fromProviderId: 'openai-old', toProviderId: 'openai',
+        expectedOwnerEpoch: owner, expectedGeneration: before.generation + (mode === 'stale-generation' ? 1 : 0) });
+      if (mode === 'stale-owner' || mode === 'stale-generation') {
+        expect(result).toBeNull();
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual(expected);
+      } else if (mode === 'no-override') {
+        expect(result).toBe(before.generation + 1);
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1 });
+        expect(sessionRuntimeGenerationMatches(sessionId, before.generation)).toBe(false);
+      } else if (mode === 'other-provider') {
+        expect(result).toBe(before.generation + 1);
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1,
+          pending: { ...before.pending!, generation: before.generation + 1 } });
+      } else {
+        expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, generation: before.generation + 1,
+          effectiveOverride: { ...profile, providerId: 'openai' }, pending: { ...before.pending!,
+            generation: before.generation + 1, profile: { ...before.pending!.profile,
+              providerId: mode === 'same-route' ? 'openai' : 'openai-old' } } });
+        expect(sessionRuntimeGenerationMatches(sessionId, before.generation)).toBe(false);
+      }
+    });
+
   it('uses one monotonic generation for deferred and settled mutations', () => {
     const sessionId = 'runtime-generation';
     expect(sessionRuntimeGenerationMatches(sessionId, 0)).toBe(true);
@@ -304,6 +346,125 @@ describe('session runtime control state', () => {
       },
     });
     expect(isPendingSessionRuntimeRouteExplicit(sessionId, generation)).toBe(true);
+  });
+
+  it('keeps the Pi thinking intent when an axis-only patch defers the selection', () => {
+    const sessionId = 'runtime-agent-axis-busy-thinking';
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: current,
+      deferred: false,
+    });
+
+    // 用户明确关掉思考：延期期间必须把这个意图留在 pending 里，否则结算重放时
+    // Pi 收不到 thinkingEnabled，档位就会跨模型漂移（原症状）。
+    const generation = deferSessionRuntimeAxisMutation({
+      sessionId,
+      source: 'agent',
+      effectiveProfile: current,
+      pendingPatch: { effort: 'max' },
+      thinking: false,
+    });
+
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      pending: {
+        generation,
+        profile: { ...current, effort: 'max' },
+        thinking: false,
+      },
+    });
+  });
+
+  it('preserves an already staged thinking intent when a later axis patch omits it', () => {
+    const sessionId = 'runtime-agent-axis-keeps-thinking';
+    const pending = { ...current, model: 'gpt-next', providerId: 'xd' };
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: current,
+      deferred: true,
+      thinking: true,
+    });
+
+    const generation = deferSessionRuntimeAxisMutation({
+      sessionId,
+      source: 'agent',
+      effectiveProfile: current,
+      pendingPatch: { effort: 'max' },
+    });
+
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      pending: { generation, thinking: true },
+    });
+  });
+
+  it('inherits a staged thinking intent when a later deferred click cannot resolve one', () => {
+    const sessionId = 'runtime-deferred-inherits-thinking';
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: current,
+      deferred: true,
+      thinking: false,
+    });
+
+    // 同一个目标下的第二次延期点击算不出意图（undefined）：继承上一次明确表达，
+    // 不静默清空。
+    const generation = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: { ...current, effort: 'max' },
+      deferred: true,
+    });
+
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      pending: { generation, thinking: false },
+    });
+
+    // 明确意图仍然以本次为准（不被继承值反向覆盖）。
+    const replaced = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: { ...current, model: 'gpt-next-2' },
+      deferred: true,
+      thinking: true,
+    });
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation: replaced,
+      pending: { generation: replaced, thinking: true },
+    });
+  });
+
+  it('does not inherit a staged thinking intent when the deferred target changes', () => {
+    const sessionId = 'runtime-deferred-target-changed-thinking';
+    acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: current,
+      deferred: true,
+      thinking: false,
+    });
+
+    // 换到另一个模型（旧客户端未带思考字段）：旧模型的开关不适用，不能继承，
+    // 否则结算回放会把模型 B 的思考关掉。
+    const generation = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: { ...current, model: 'gpt-next', providerId: 'xd' },
+      deferred: true,
+    });
+
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation,
+      pending: { generation },
+    });
+    expect(
+      getSessionRuntimeControlSnapshot(sessionId).pending?.thinking,
+    ).toBeUndefined();
   });
 
   it('updates the live override and deferred route when a user changes one runtime axis', () => {
@@ -595,6 +756,63 @@ describe('session runtime fallback selection', () => {
       }),
     ).toBe(false);
     expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual([]);
+  });
+
+  it('admits Ultrafast only for the model copy advertising that tier', () => {
+    const model = provider('openai', [{ id: 'gpt-6-astra', fast: true }]).models.codex![0]!;
+    const request = { model, effort: null, fastMode: 'ultrafast' as const,
+      effortExplicit: false, fastExplicit: true };
+    expect(resolveSessionRuntimeAxes(request)).toEqual({ ok: false, reason: 'fast-unavailable' });
+    expect(resolveSessionRuntimeAxes({ ...request, model: { ...model, supportsUltrafastMode: true } }))
+      .toMatchObject({ ok: true, fastMode: 'ultrafast' });
+    expect(resolveSessionRuntimeAxes({ ...request, fastExplicit: false }))
+      .toMatchObject({ ok: true, fastMode: false });
+  });
+
+  // PR #6872: the store and override are cleared on a fixed-effort user switch,
+  // while the NOT NULL row retains xhigh. Builder-only tests missed this lookup.
+  // Unit tier: use the real store/control lifecycle and observe the refresh profile.
+  it.each([false, true])('refresh preserves a cleared fixed effort (cold=%s)', (cold) => {
+    const sessionId = 'runtime-refresh-fixed';
+    const model = provider('xd', [{ id: 'fixed', efforts: [] }]).models.codex![0]!;
+    if (!cold) {
+      setSessionEffort(sessionId, 'xhigh');
+      acceptSessionRuntimeMutation({ sessionId, source: 'agent', profile: current, deferred: false });
+      setSessionEffort(sessionId, null);
+      recordUserSessionRuntimeMutation(sessionId);
+    }
+    expect(getSessionRuntimeControlSnapshot(sessionId).effectiveOverride).toBeNull();
+    const profile = buildDeferredRuntimeSelectionProfile({
+      agentKind: 'pi', model: model.id, providerId: 'xd', currentFastMode: false,
+      currentEffort: resolveSessionRuntimeRefreshEffort({ model,
+        storedEffort: getSessionEffort(sessionId) as SessionRuntimeProfile['effort'],
+        persistedEffort: 'xhigh' }),
+    });
+    expect(profile.effort).toBeNull();
+  });
+
+  it('keeps live adjustable effort and normalizes cold persisted effort', () => {
+    const model = provider('xd', [{ id: 'adjustable', efforts: ['medium', 'xhigh'] }]).models.codex![0]!;
+    expect(resolveSessionRuntimeRefreshEffort({ model, storedEffort: 'xhigh', persistedEffort: 'medium' }))
+      .toBe('xhigh');
+    expect(resolveSessionRuntimeRefreshEffort({ model, storedEffort: null, persistedEffort: 'ultra' }))
+      .toBe('medium');
+  });
+
+  // #7449: null means unspecified even for a user selection. Unit tier exercises
+  // the production resolver; previous cases covered only non-null/fixed axes.
+  it.each([
+    { defaultEffort: 'max' as const, expected: 'max' },
+    { defaultEffort: null, expected: 'low' },
+  ])('resolves unspecified user effort to $expected (default=$defaultEffort)', ({ defaultEffort, expected }) => {
+    const model = {
+      ...provider('kimi', [{ id: 'k3.1-pro', efforts: ['low', 'max'] }]).models.codex![0]!,
+      defaultEffort,
+    };
+    expect(resolveSessionRuntimeAxes({
+      model, effort: null, fastMode: false, effortExplicit: true, fastExplicit: true,
+      allowFixedEffortPlaceholder: true,
+    })).toEqual({ ok: true, effort: expected, fastMode: false });
   });
 
   it('rejects explicit unsupported axes and normalizes inherited axes', () => {

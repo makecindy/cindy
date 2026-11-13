@@ -1,4 +1,4 @@
-import { unifiedModelEntries, type UnifiedModelEntry } from '@cindy/model-providers';
+import { unifiedModelEntries, withEffectiveModelContextWindows, type UnifiedModelEntry } from '@cindy/model-providers';
 import { isModelVisible } from '@cindy/model-providers/sections';
 import type { AgentKind } from '@cindy/model-providers/types';
 import type { ProviderView } from '@cindy/model-providers/registry';
@@ -9,7 +9,7 @@ export interface MobileModelConfiguration {
   modelId: string;
   agent: AgentKind;
   effort: string;
-  fast: boolean;
+  fast: boolean | 'ultrafast';
 }
 export interface MobileModelFavorite extends MobileModelConfiguration { uid: string }
 export interface MobileModelPreferences {
@@ -21,7 +21,7 @@ export function matchesEntry(entry: UnifiedModelEntry, modelId: string) {
   return entry.modelId === modelId || Object.values(entry.capabilities).some(c => c?.wireModelId === modelId);
 }
 export function mobileUnifiedEntries(providers: readonly ProviderView[], agents: readonly AgentKind[], visibility: Record<string, boolean> | undefined, existing: boolean, keepModel?: {providerId: string | null; modelId: string; agent: AgentKind}) {
-  return unifiedModelEntries({ providers, agents, scope: existing ? 'session' : 'draft', keepModel,
+  return unifiedModelEntries({ providers: providers.map(withEffectiveModelContextWindows), agents, scope: existing ? 'session' : 'draft', keepModel,
     isVisible: (providerId, model, agent) => visibility === undefined || isModelVisible(visibility[`${agent}:${providerId}:${model.id}`], model.defaultEnabled),
   });
 }
@@ -41,7 +41,8 @@ export function resolveMobileModelConfig(entry: UnifiedModelEntry, args: {
   const fast = args.favorite?.fast ?? args.live?.fast ?? args.memory?.getFast(agent, entry.providerId, cap.wireModelId) ?? false;
   return { providerId: entry.providerId, modelId: cap.wireModelId, agent,
     effort: effort && levels.includes(effort) ? effort : cap.defaultEffort ?? levels[0] ?? '',
-    fast: fast && cap.supportsFastMode && args.fastCapable(agent),
+    fast: cap.supportsFastMode && args.fastCapable(agent) &&
+      (fast !== 'ultrafast' || cap.supportsUltrafastMode === true) ? fast : false,
   };
 }
 export function sameConfiguration(a: MobileModelConfiguration, b: MobileModelConfiguration) {

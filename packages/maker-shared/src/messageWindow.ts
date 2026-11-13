@@ -159,7 +159,12 @@ export function evaluateMessageWindowUpdate(args: {
     autoFollowTarget: shouldAutoFollow ? 'content-end' : 'none',
     preserveVisibleAnchor: false,
     shouldAutoFollow,
-    showNewMessageIndicator: tailChanged && !args.wasNearBottom,
+    // 列表被替换成空时没有可跳转的新消息,不能亮红点。
+    showNewMessageIndicator: shouldShowNewMessageIndicator({
+      previousLastKey,
+      nextLastKey,
+      wasNearBottom: args.wasNearBottom,
+    }),
   };
 }
 
@@ -235,3 +240,4 @@ function containsContiguousSlice(full: readonly string[], slice: readonly string
   }
   return false;
 }
+export { historyAfter } from './historyAfter.js';

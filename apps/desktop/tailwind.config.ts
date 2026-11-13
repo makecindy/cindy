@@ -135,58 +135,75 @@ const MOTION_CSS = {
 };
 // END GENERATED DS-8: tailwind
 
+/**
+ * HSL 槽位颜色。槽位值可以自带透明度(`h s% l% / a`,如 CINDY 的墨水文字与交互态,
+ * DESIGN.md §15.6);Tailwind 默认把 `/40` 这类透明度修饰写成 `hsl(var(--x) / 0.4)`,
+ * 遇到自带透明度的值就成了两个斜杠的非法颜色,整条声明作废(边框会退成文字色)。
+ * 带透明度修饰时改用 color-mix 按比例降低不透明度:不透明的值结果与原写法相同;
+ * 不带修饰时输出 `hsl(var(--x))`,与原写法一致。
+ */
+function hslVar(name: string): string {
+  const color = `hsl(var(--${name}))`;
+  const withOpacity = ({ opacityValue }: { opacityValue?: string } = {}) =>
+    opacityValue === undefined || opacityValue.startsWith('var(')
+      ? color
+      : `color-mix(in srgb, ${color} calc(${opacityValue} * 100%), transparent)`;
+  // Tailwind 3 运行时按透明度修饰调用函数颜色,但它的类型只声明了字符串。
+  return withOpacity as unknown as string;
+}
+
 const config: Config = {
   darkMode: 'class',
   content: ['./src/renderer/**/*.{ts,tsx,html}'],
   theme: {
     extend: {
       colors: {
-        background: 'hsl(var(--background))',
-        foreground: 'hsl(var(--foreground))',
+        background: hslVar('background'),
+        foreground: hslVar('foreground'),
         muted: {
-          DEFAULT: 'hsl(var(--muted))',
-          foreground: 'hsl(var(--muted-foreground))',
+          DEFAULT: hslVar('muted'),
+          foreground: hslVar('muted-foreground'),
         },
-        border: 'hsl(var(--border))',
-        input: 'hsl(var(--input))',
-        ring: 'hsl(var(--ring))',
+        border: hslVar('border'),
+        input: hslVar('input'),
+        ring: hslVar('ring'),
         primary: {
-          DEFAULT: 'hsl(var(--primary))',
-          foreground: 'hsl(var(--primary-foreground))',
+          DEFAULT: hslVar('primary'),
+          foreground: hslVar('primary-foreground'),
         },
         secondary: {
-          DEFAULT: 'hsl(var(--secondary))',
-          foreground: 'hsl(var(--secondary-foreground))',
+          DEFAULT: hslVar('secondary'),
+          foreground: hslVar('secondary-foreground'),
         },
         accent: {
-          DEFAULT: 'hsl(var(--accent))',
-          foreground: 'hsl(var(--accent-foreground))',
+          DEFAULT: hslVar('accent'),
+          foreground: hslVar('accent-foreground'),
         },
         popover: {
-          DEFAULT: 'hsl(var(--popover))',
-          foreground: 'hsl(var(--popover-foreground))',
+          DEFAULT: hslVar('popover'),
+          foreground: hslVar('popover-foreground'),
         },
         titlebar: {
-          DEFAULT: 'hsl(var(--titlebar))',
-          border: 'hsl(var(--titlebar-border))',
-          icon: 'hsl(var(--titlebar-icon))',
-          'button-hover': 'hsl(var(--titlebar-button-hover))',
-          'control-hover': 'hsl(var(--titlebar-control-hover))',
+          DEFAULT: hslVar('titlebar'),
+          border: hslVar('titlebar-border'),
+          icon: hslVar('titlebar-icon'),
+          'button-hover': hslVar('titlebar-button-hover'),
+          'control-hover': hslVar('titlebar-control-hover'),
         },
         sidebar: {
-          DEFAULT: 'hsl(var(--sidebar))',
-          border: 'hsl(var(--sidebar-border))',
-          'item-hover': 'hsl(var(--sidebar-item-hover))',
-          'item-active': 'hsl(var(--sidebar-item-active))',
-          'search-bg': 'hsl(var(--sidebar-search-bg))',
-          muted: 'hsl(var(--sidebar-muted))',
-          'action-icon': 'hsl(var(--sidebar-action-icon))',
+          DEFAULT: hslVar('sidebar'),
+          border: hslVar('sidebar-border'),
+          'item-hover': hslVar('sidebar-item-hover'),
+          'item-active': hslVar('sidebar-item-active'),
+          'search-bg': hslVar('sidebar-search-bg'),
+          muted: hslVar('sidebar-muted'),
+          'action-icon': hslVar('sidebar-action-icon'),
         },
-        'content-area': 'hsl(var(--content-area))',
-        'welcome-text': 'hsl(var(--welcome-text))',
+        'content-area': hslVar('content-area'),
+        'welcome-text': hslVar('welcome-text'),
         'search-match': {
-          bg: 'hsl(var(--search-match-bg))',
-          fg: 'hsl(var(--search-match-fg))',
+          bg: hslVar('search-match-bg'),
+          fg: hslVar('search-match-fg'),
         },
       },
       fontFamily: {

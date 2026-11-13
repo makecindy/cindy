@@ -27,12 +27,20 @@ import {
   setDiagnosticsOAuthTokenReader,
   testProviderConnection,
 } from '../provider-diagnostics.js';
+import { probeProviderProtocols } from '../provider-protocol-probe.js';
 import { setCustomProviders } from '../active-catalog.js';
+import {
+  __resetModelVisibilityMirrorForTest,
+  clearModelVisibilityMirror,
+  setModelVisibilityMirror,
+} from '../model-visibility-mirror.js';
 
 afterEach(() => {
   setCustomProviders([]);
   setDiagnosticsKeyReader(() => null);
+  __resetModelVisibilityMirrorForTest();
   probeLog.warn.mockClear();
+  setDiagnosticsOAuthTokenReader(() => null);
 });
 
 describe('classifyProviderError', () => {
@@ -83,6 +91,26 @@ describe('classifyProviderError', () => {
       classifyProviderError({ status: 400, bodyText: 'Extra inputs are not permitted' }).code,
     ).toBe('WIRE_INCOMPATIBLE');
     expect(classifyProviderError({ status: 400, bodyText: 'something odd' }).code).toBe('UNKNOWN');
+  });
+
+  // Regression: Azure/LiteLLM's "exceeds ... context window" was UNKNOWN here
+  // although the Agent already recognized it. Unit: real classifier, no network.
+  it.each([400, 422])('%i recognizes context overflow without requiring a structured code', (status) => {
+    const message = 'Your input exceeds the context window of this model.';
+    for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+      expect(classifyProviderError({ status, bodyText })).toMatchObject({
+        code: 'CONTEXT_TOO_LONG', retryable: false,
+      });
+    }
+  });
+
+  it.each([
+    'Invalid Responses API request: input - Invalid input',
+    'Rate limit exceeded: too many tokens per minute',
+    'Maximum output tokens reached: too many tokens',
+    'Tool argument validation failed: input length exceeds 1000 characters',
+  ])('does not classify unrelated input/token errors as context overflow: %s', (bodyText) => {
+    expect(classifyProviderError({ status: 400, bodyText }).code).not.toBe('CONTEXT_TOO_LONG');
   });
 
   it('403 命中鉴权措辞归 AUTH_INVALID（部分网关 key 无效报 403）', () => {
@@ -229,6 +257,8 @@ describe('buildProbeRequest', () => {
     expect(url).toBe('https://openrouter.ai/api/v1/responses');
     const headers = init.headers as Record<string, string>;
     expect(headers['authorization']).toBe('Bearer sk-or');
+    expect(headers['HTTP-Referer']).toBe('https://cindy.app');
+    expect(headers['X-OpenRouter-Title']).toBe('Cindy');
     expect(headers['x-api-key']).toBeUndefined();
     const body = JSON.parse(String(init.body)) as { model: string; stream: boolean };
     expect(body.model).toBe('z-ai/glm-5.2');
@@ -250,7 +280,7 @@ describe('buildProbeRequest', () => {
     });
     expect(url).toBe(expectedUrl);
     expect(JSON.parse(String(init.body))).toMatchObject({
-      model: 'MiniMax-M3',
+      model: runtime!.models[0]!.id,
       stream: false,
       store: false,
     });
@@ -521,12 +551,12 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     },
   };
 
-  it('从 active-catalog 解析 user 供应商 + 注入 key reader 读 key', () => {
+  it('从 active-catalog 解析 user 供应商 + 注入 key reader 读 key', async () => {
     setCustomProviders([buildUserProvider(config)]);
     setDiagnosticsKeyReader((id, agent) =>
       id === 'my-relay' && agent === 'claude-code' ? 'sk-saved' : null,
     );
-    const spec = resolveSavedProbeSpec('my-relay', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-relay', 'claude-code');
     expect(spec).toMatchObject({
       baseUrl: 'https://relay.example/anthropic',
       modelId: 'glm-5.2',
@@ -535,11 +565,11 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     });
   });
 
-  it('safeStorage 尚无 key 时保留 legacy header-only 凭证', () => {
+  it('safeStorage 尚无 key 时保留 legacy header-only 凭证', async () => {
     setCustomProviders([buildUserProvider(config)]);
     setDiagnosticsKeyReader(() => null);
 
-    const spec = resolveSavedProbeSpec('my-relay', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-relay', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toEqual({
       'x-tenant': 't1',
@@ -569,7 +599,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     setCustomProviders([buildUserProvider(chatConfig)]);
     setDiagnosticsKeyReader(() => 'sk-ds');
     // resolveSavedProbeSpec 必须回带 wireProtocol，否则 buildProbeRequest 回落原生 /responses。
-    expect(resolveSavedProbeSpec('ds-chat', 'codex').wireProtocol).toBe('openai-chat');
+    expect((await resolveSavedProbeSpec('ds-chat', 'codex')).wireProtocol).toBe('openai-chat');
     let seenUrl = '';
     await testProviderConnection(
       { kind: 'saved', providerId: 'ds-chat', agent: 'codex' },
@@ -597,7 +627,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'pi-chat-key');
 
-    expect(resolveSavedProbeSpec('pi-chat', 'pi').wireProtocol).toBe('openai-chat');
+    expect((await resolveSavedProbeSpec('pi-chat', 'pi')).wireProtocol).toBe('openai-chat');
     let seenUrl = '';
     await testProviderConnection(
       { kind: 'saved', providerId: 'pi-chat', agent: 'pi' },
@@ -612,7 +642,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenUrl).toBe('https://pi-chat.example/v1/chat/completions');
   });
 
-  it('Pi saved 探测优先使用单模型协议覆盖', () => {
+  it('Pi saved 探测优先使用单模型协议覆盖', async () => {
     setCustomProviders([
       buildUserProvider({
         id: 'pi-model-override',
@@ -633,7 +663,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       }),
     ]);
 
-    expect(resolveSavedProbeSpec('pi-model-override', 'pi')).toMatchObject({
+    expect((await resolveSavedProbeSpec('pi-model-override', 'pi'))).toMatchObject({
       baseUrl: 'https://pi-override.example/v1',
       modelId: 'messages-model',
       wireProtocol: 'anthropic-messages',
@@ -666,7 +696,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'glm-key');
 
-    expect(resolveSavedProbeSpec('glm-responses-only', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('glm-responses-only', 'codex'))).toMatchObject({
       baseUrl: 'https://open.bigmodel.cn/api/v1',
       modelId: 'glm-5.3',
       wireProtocol: 'openai-responses',
@@ -700,7 +730,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'glm-key');
 
-    expect(resolveSavedProbeSpec('glm-chat-only', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('glm-chat-only', 'codex'))).toMatchObject({
       baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
       modelId: 'glm-5.2',
       wireProtocol: 'openai-chat',
@@ -732,17 +762,17 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       }),
     ]);
     setDiagnosticsKeyReader(() => 'sk-exact');
-    expect(resolveSavedProbeSpec('exact-path', 'codex').requestPath).toBe('/tenant/acme/infer');
+    expect((await resolveSavedProbeSpec('exact-path', 'codex')).requestPath).toBe('/tenant/acme/infer');
   });
 
-  it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', () => {
+  it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', async () => {
     setCustomProviders([buildUserProvider(config)]);
-    expect(() => resolveSavedProbeSpec('nope', 'claude-code')).toThrow(/not found/);
-    expect(() => resolveSavedProbeSpec('xd', 'claude-code')).toThrow(/not a custom provider/);
-    expect(() => resolveSavedProbeSpec('my-relay', 'codex')).toThrow(/no runtime/);
+    await expect(resolveSavedProbeSpec('nope', 'claude-code')).rejects.toThrow(/not found/);
+    await expect(resolveSavedProbeSpec('xd', 'claude-code')).rejects.toThrow(/not a custom provider/);
+    await expect(resolveSavedProbeSpec('my-relay', 'codex')).rejects.toThrow(/no runtime/);
   });
 
-  it('跳过非聊天模型挑第一个聊天模型探测(issue #882 第 3 点,2026-07 review):探测发的是聊天形状请求,挑到 embedding/image 模型会得到与配置无关的假失败结论', () => {
+  it('跳过非聊天模型挑第一个聊天模型探测(issue #882 第 3 点,2026-07 review):探测发的是聊天形状请求,挑到 embedding/image 模型会得到与配置无关的假失败结论', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -770,10 +800,175 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       },
     ]);
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
   });
 
-  it('全是非聊天模型时抛「无聊天模型」错误,而不是静默探测一个 embedding 模型', () => {
+  it('用户明确开启的不是列表第一个聊天模型时,探测用该可见模型(issue #9470)', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({ 'claude-code:my-relay:glm-4.5': true });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-4.5');
+  });
+
+  // 测试价值:生产入口 resolveSavedProbeSpec,可观察结果是探测请求用的 modelId。
+  // Bug #9470 / PR #9571 P1:镜像只存显式开关,关掉写 false、没拨过无条目。
+  // 原兜底只认 === true,会把显式隐藏的第一个坏模型当成探测目标。
+  // 最小失败输入:候选 [glm-5.2, glm-4.5],只把 glm-5.2 标成 false。tier: unit。
+  it('显式隐藏第一个聊天模型、第二个未拨过时,探测跳过隐藏项选第二个', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({ 'claude-code:my-relay:glm-5.2': false });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-4.5');
+  });
+
+  // 全部显式隐藏时仍要能测连接:退回第一个可选模型,不要因为没有可见模型而抛空。
+  it('全部聊天模型都被显式隐藏时,探测仍退回第一个可选模型', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({
+      'claude-code:my-relay:glm-5.2': false,
+      'claude-code:my-relay:glm-4.5': false,
+    });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
+  });
+
+  // 镜像未就绪时 getModelVisibilityOverride 抛 MODEL_VISIBILITY_NOT_READY。
+  // 探测不能因此失败,必须走原来的第一个可选模型。
+  it('可见性镜像未就绪时走兜底且不抛错', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    clearModelVisibilityMirror();
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
+  });
+
+  it('没有显式可见偏好时,探测仍退回第一个聊天模型', async () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({});
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
+  });
+
+  it('全是非聊天模型时抛「无聊天模型」错误,而不是静默探测一个 embedding 模型', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -794,7 +989,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       },
     ]);
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(() => resolveSavedProbeSpec('my-relay', 'claude-code')).toThrow(/no chat models/);
+    await expect(resolveSavedProbeSpec('my-relay', 'claude-code')).rejects.toThrow(/no chat models/);
   });
 
   it('testProviderConnection(saved) 端到端（注入 fetch 断言 URL 与 key）', async () => {
@@ -833,7 +1028,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     setDiagnosticsKeyReader(() => 'sk-should-not-be-used');
     setDiagnosticsOAuthTokenReader((id) => (id === 'my-sub' ? 'at-77' : null));
 
-    const spec = resolveSavedProbeSpec('my-sub', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-sub', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toMatchObject({ authorization: 'Bearer at-77', 'x-tenant': 't1' });
 
@@ -843,7 +1038,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(headers['x-api-key']).toBeUndefined();
   });
 
-  it('none 供应商:saved 探测不读取旧 key,并剥掉配置里残留的鉴权头', () => {
+  it('none 供应商:saved 探测不读取旧 key,并剥掉配置里残留的鉴权头', async () => {
     setCustomProviders([
       buildUserProvider({
         ...config,
@@ -864,7 +1059,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'stale-safe-storage-key');
 
-    const spec = resolveSavedProbeSpec('local-proxy', 'claude-code');
+    const spec = await resolveSavedProbeSpec('local-proxy', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toEqual({ 'x-tenant': 't1' });
   });
@@ -899,7 +1094,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
 });
 
 
-it('probes Google using generateContent instead of falling through to Responses', () => {
+it('probes Google using generateContent instead of falling through to Responses', async () => {
   const request = buildProbeRequest({ agent: 'codex', wireProtocol: 'google-generative-ai',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelId: 'new-gemini', apiKey: 'fixture-key' });
   expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/new-gemini:generateContent');
@@ -951,7 +1146,7 @@ describe('native SDK connection probes', () => {
 });
 
 
-it('keeps the Copilot SDK identity but uses the assigned enterprise host for connection tests', () => {
+it('keeps the Copilot SDK identity but uses the assigned enterprise host for connection tests', async () => {
   const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
   setCustomProviders([buildUserProvider({ id: 'copilot-probe', name: 'Copilot',
     auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
@@ -960,7 +1155,7 @@ it('keeps the Copilot SDK identity but uses the assigned enterprise host for con
   })]);
   setDiagnosticsOAuthTokenReader(() => 'fixture;proxy-ep=proxy.enterprise.githubcopilot.com;');
   try {
-    expect(resolveSavedProbeSpec('copilot-probe', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('copilot-probe', 'codex'))).toMatchObject({
       baseUrl: 'https://api.enterprise.githubcopilot.com', api: 'openai-responses',
       nativeModel: { upstream: row.upstream, execution: { pi: { headers: expect.objectContaining({ 'Copilot-Integration-Id': 'vscode-chat' }) } } },
     });
@@ -1018,4 +1213,280 @@ it('does not replace an explicit Chat probe with the preset’s Google SDK', asy
   expect(await runProviderProbe({ agent: 'pi', baseUrl: 'https://proxy.example/v1', modelId: 'gemini-2.5-flash',
     catalogPresetId: 'google-vertex', wireProtocol: 'openai-chat', apiKey: 'fixture-key' }, fetcher)).toMatchObject({ ok: true });
   expect(fetcher).toHaveBeenCalledOnce();
+});
+
+/** Auto-probe unit tier: real Pi serializers/parsers with injected network responses.
+ * Protects one-click fallback and non-replay after ambiguous execution; legacy single-probe
+ * tests above do not cover sequencing or truncated native streams. Minimal regression:
+ * a valid content delta without finish must never trigger a second paid request.
+ */
+describe('automatic Pi protocol connection test', () => {
+  const spec = { agent: 'pi' as const, baseUrl: 'https://relay.example/v1', modelId: 'test-model',
+    authMethod: 'apiKey' as const, apiKey: 'fake-test-key' };
+  const sse = (events: unknown[]) => new Response(events.map(value => 'data: ' + JSON.stringify(value) + '\n\n').join(''), {
+    headers: { 'content-type': 'text/event-stream' },
+  });
+  const chat = () => sse([
+    { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null }] },
+    { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+  ]);
+  const unsupported = () => new Response(JSON.stringify({ error: { code: 'unsupported_protocol', message: 'protocol not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+
+  it('uses native streaming and stops on the first successful generation', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => chat());
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: true, decision: 'success', selected: { baseUrl: spec.baseUrl, wireProtocol: 'openai-chat' } });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(String(fetcher.mock.calls[0]?.[0])).toContain('/v1/chat/completions');
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
+  });
+
+  it('keeps preset and legacy single-probe callers on their existing route', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+    for (const request of [
+      { kind: 'adhoc' as const, spec: { ...spec, wireProtocol: 'openai-chat' as const } },
+      { kind: 'adhoc' as const, requestId: 'preset-probe', spec: { ...spec, wireProtocol: 'openai-chat' as const, catalogPresetId: 'deepseek' } },
+    ]) {
+      const result = await testProviderConnection(request, fetcher);
+      expect(result.ok).toBe(true);
+      expect(result.attempts).toBeUndefined();
+    }
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['openai-responses', 'anthropic-messages'] as const)('uses the real %s adapter and terminates fallback on success', async wire => {
+    const events = wire === 'openai-responses' ? [
+      { type: 'response.created', response: { id: 'reply' } },
+      { type: 'response.output_item.added', output_index: 0, item: { id: 'msg', type: 'message', role: 'assistant', content: [] } },
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'OK' },
+      { type: 'response.completed', response: { id: 'reply', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
+    ] : [
+      { type: 'message_start', message: { id: 'reply', model: 'test-model', role: 'assistant', type: 'message', content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'OK' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ];
+    // Anthropic's native decoder requires event names in addition to data fields.
+    const response = () => wire === 'anthropic-messages'
+      ? new Response(events.map(value => 'event: ' + value.type + '\ndata: ' + JSON.stringify(value) + '\n\n').join(''), { headers: { 'content-type': 'text/event-stream' } }) : sse(events);
+    const fetcher = vi.fn<typeof fetch>(async url => new URL(String(url)).pathname.endsWith(wire === 'openai-responses' ? '/responses' : '/v1/messages') ? response() : unsupported());
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: true, selected: { wireProtocol: wire } });
+    expect(fetcher).toHaveBeenCalledTimes(wire === 'openai-responses' ? 2 : 3);
+  });
+
+  it('exhausts at most four explicit rejections and returns one aggregate', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => unsupported());
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: false, decision: 'next' });
+    expect(result.attempts).toHaveLength(4);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(new Set(result.attempts?.map(item => item.wireProtocol)).size).toBe(4);
+  });
+
+  it('can select Google after three explicit rejections without following redirects', async () => {
+    const fetcher = vi.fn<typeof fetch>(async (url: Parameters<typeof fetch>[0]) => String(url).includes(':streamGenerateContent')
+      ? sse([{ candidates: [{ content: { parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] }]) : unsupported());
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: true, selected: { wireProtocol: 'google-generative-ai', baseUrl: spec.baseUrl } });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    [401, { error: { message: 'invalid api key' } }, 'AUTH_INVALID'],
+    [402, { error: { message: 'insufficient_quota' } }, 'QUOTA_EXCEEDED'],
+    [429, { error: { message: 'rate limit' } }, 'RATE_LIMITED'],
+    [404, { error: { code: 'model_not_found', message: 'model not found' } }, 'MODEL_NOT_FOUND'],
+  ])('stops on actionable upstream error %i', async (status, body, code) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ok: false, decision: 'blocked', code });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    () => new Response('not found', { status: 404 }),
+    () => new Response('unexpected stream_options parameter', { status: 400 }),
+    () => new Response('<html>login</html>', { headers: { 'content-type': 'text/html' } }),
+    () => sse([]),
+    () => sse([{ choices: [{ index: 0, delta: { content: 'OK' }, finish_reason: null }] }]),
+    () => sse([{ choices: [{ index: 0, delta: { content: 'OK' } }] }, { error: { type: 'server_error', message: 'disconnected' } }]),
+    () => new Response('unavailable', { status: 503 }),
+  ])('does not replay an ambiguous or partially accepted request', async response => {
+    const fetcher = vi.fn<typeof fetch>(async () => response());
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ok: false, decision: 'inconclusive' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('does not attempt candidates after cancellation', async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn<typeof fetch>(async () => { controller.abort(); return unsupported(); });
+    expect(await probeProviderProtocols(spec, true, fetcher, controller.signal)).toMatchObject({ ok: false, decision: 'cancelled' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('does not replay a timed-out request', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => { throw new DOMException('timed out', 'TimeoutError'); });
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ok: false, decision: 'inconclusive', code: 'TIMEOUT' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('no-auth local probes cannot transmit leftover credentials or the SDK placeholder', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => chat());
+    await probeProviderProtocols({ ...spec, authMethod: 'none', baseUrl: 'http://127.0.0.1:4000/v1',
+      headers: { Authorization: 'Bearer private-leftover', 'X-API-Key': 'leftover' } }, true, fetcher);
+    const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
+    expect(headers.has('authorization')).toBe(false);
+    expect(headers.has('x-api-key')).toBe(false);
+  });
+
+  // Protect the real abort path: native SDKs may resolve an error message instead of rejecting.
+  it('classifies the candidate deadline even when the native SDK consumes the abort', async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => ms === 8_000
+      ? deadline.signal : new AbortController().signal);
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      deadline.abort(new DOMException('deadline reached', 'TimeoutError'));
+      throw init!.signal!.reason;
+    });
+    try {
+      expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({
+        ok: false, decision: 'inconclusive', code: 'TIMEOUT',
+      });
+      expect(fetcher).toHaveBeenCalledOnce();
+    } finally { timeout.mockRestore(); }
+  });
+
+  it('caps cumulative auto-detection at 15 seconds across candidates', async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), ms);
+      return controller.signal;
+    });
+    const fetcher = vi.fn<typeof fetch>((_input, init) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(unsupported()), 6_000);
+      init!.signal!.addEventListener('abort', () => {
+        clearTimeout(timer); reject(init!.signal!.reason);
+      }, { once: true });
+    }));
+    try {
+      const pending = probeProviderProtocols(spec, true, fetcher);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await pending;
+      expect(result).toMatchObject({ ok: false, decision: 'inconclusive', code: 'TIMEOUT', latencyMs: 15_000 });
+      expect(result.attempts).toHaveLength(3);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(timeout).toHaveBeenCalledWith(15_000);
+      expect(timeout).toHaveBeenCalledWith(8_000);
+    } finally { timeout.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('keeps explicit single-route tests on their existing time budgets', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      expect(await probeProviderProtocols(spec, false, async () => chat())).toMatchObject({ ok: true });
+      expect(timeout).toHaveBeenCalledWith(60_000);
+      expect(timeout).toHaveBeenCalledWith(20_000);
+      expect(timeout).not.toHaveBeenCalledWith(15_000);
+      expect(timeout).not.toHaveBeenCalledWith(8_000);
+    } finally { timeout.mockRestore(); }
+  });
+
+  it('does not open a connection when cancelled before the first candidate', async () => {
+    const controller = new AbortController(); controller.abort();
+    const fetcher = vi.fn<typeof fetch>();
+    expect(await probeProviderProtocols(spec, true, fetcher, controller.signal)).toMatchObject({
+      ok: false, decision: 'cancelled', attempts: [],
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [403, 'unsupported_protocol', 'blocked', 1],
+    [429, 'unsupported_protocol', 'blocked', 1],
+    [500, 'unsupported_protocol', 'inconclusive', 1],
+    [422, 'insufficient_quota unsupported_protocol', 'blocked', 1],
+    [400, 'model not found unsupported_protocol', 'blocked', 1],
+    [400, 'invalid api key unsupported_protocol', 'blocked', 1],
+    [405, 'method not allowed', 'inconclusive', 1],
+    [415, 'unsupported media type', 'inconclusive', 1],
+    [422, 'invalid request', 'inconclusive', 1],
+    [405, 'endpoint is not supported', 'next', 4],
+    [415, 'unsupported_protocol', 'next', 4],
+    [422, 'route_not_found', 'next', 4],
+  ] as const)('prioritizes terminal errors over protocol wording: %s %s', async (status, message, decision, count) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { message } }), { status }));
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: false, decision });
+    expect(result.attempts).toHaveLength(count);
+    expect(fetcher).toHaveBeenCalledTimes(count);
+  });
+
+  it.each([
+    'data: {broken}\n\n',
+    'data: [DONE]\n\n',
+    'data: ' + JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\n',
+    'data: ' + JSON.stringify({ value: 'x'.repeat(1024 * 1024 + 1) }) + '\n\n',
+  ])('does not replay malformed, empty or oversized accepted streams', async body => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }));
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ok: false, decision: 'inconclusive' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('keeps credentials and upstream diagnostics out of the result envelope', async () => {
+    const secret = 'fake-secret-that-must-not-be-echoed';
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { message: 'invalid api key ' + secret } }), { status: 401 }));
+    const result = await probeProviderProtocols({ ...spec, apiKey: secret }, true, fetcher);
+    expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+});
+
+// #7942: 真实连接探测入口等待凭证，失败时不访问推理端点；假 reader/fetch，无外网。
+it.each(['claude-code', 'codex', 'pi'] as const)('awaits refreshed OAuth credentials for saved connection diagnostics on %s', async agent => {
+  setCustomProviders([buildUserProvider({ id: 'refresh-probe', name: 'Refresh probe',
+    auth: { method: 'oauth', oauth: providerPresetOAuth('moonshot-kimi-code')! },
+    runtimes: { [agent]: { baseUrl: 'https://api.kimi.com/coding', wireProtocol: 'anthropic-messages',
+      models: [{ id: 'fake-model', name: 'Fake model' }] } },
+  })]);
+  let release!: (token: string) => void;
+  setDiagnosticsOAuthTokenReader(() => new Promise<string>(resolve => { release = resolve; }));
+  const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    expect(init?.headers).toMatchObject({ authorization: 'Bearer fake-refreshed' });
+    return new Response('{}');
+  });
+  const pending = testProviderConnection({ kind: 'saved', providerId: 'refresh-probe', agent }, fetchMock);
+  await Promise.resolve();
+  expect(fetchMock).not.toHaveBeenCalled();
+  release('fake-refreshed');
+  expect(await pending).toMatchObject({ ok: true });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockClear();
+  setDiagnosticsOAuthTokenReader(async () => { throw new Error('provider_oauth_refresh_failed'); });
+  expect(await testProviderConnection({ kind: 'saved', providerId: 'refresh-probe', agent }, fetchMock))
+    .toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+// #7942 / PR review: a catalog rebuild is not an OAuth identity change. The
+// production saved probe must still send after an unrelated connection edit,
+// while a changed destination must prevent dispatch. Unit tier, injected I/O.
+it.each([false, true])('checks connection values across catalog rebuilds (target changed=%s)', async targetChanged => {
+  const oauth = { authorizeUrl: 'https://auth.example/authorize', tokenUrl: 'https://auth.example/token', clientId: 'fixture', scopes: 'openid' };
+  const provider = (id: string, baseUrl: string) => buildUserProvider({ id, name: id,
+    auth: { method: 'oauth', oauth }, runtimes: { codex: { baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'fixture-model', name: 'Fixture' }] } },
+  });
+  setCustomProviders([provider('probe-rebuild', 'https://provider.example/v1'), provider('other', 'https://other.example/v1')]);
+  let release!: (value: string) => void;
+  setDiagnosticsOAuthTokenReader(() => new Promise<string>(resolve => { release = resolve; }));
+  const fetcher = vi.fn<typeof fetch>(async () => new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+  const pending = testProviderConnection({ kind: 'saved', providerId: 'probe-rebuild', agent: 'codex' }, fetcher);
+  await Promise.resolve();
+  setCustomProviders([provider('probe-rebuild', targetChanged ? 'https://changed.example/v1' : 'https://provider.example/v1'), provider('other', 'https://other-updated.example/v1')]);
+  release('fake-refreshed');
+  expect(await pending).toMatchObject(targetChanged ? { ok: false, code: 'AUTH_INVALID' } : { ok: true });
+  expect(fetcher).toHaveBeenCalledTimes(targetChanged ? 0 : 1);
 });

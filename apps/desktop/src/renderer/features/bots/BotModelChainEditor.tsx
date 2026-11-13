@@ -2,26 +2,18 @@ import { Button } from '@/components/ui/button';
 import { Fragment, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 
-import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { DefaultOverrideControls } from '@/components/settings/DefaultOverrideControls';
-import {
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-} from '@/components/settings/settingsRowClasses';
-import { cn } from '@/lib/utils';
+import { SettingsRow } from '@/components/ui/settings-rows';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
-import { useAvailableAgents } from '@/hooks/useAvailableAgents';
+import { ModelRouteSelector } from '@/components/new-chat/ModelRouteSelector';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
   BOT_MODEL_CHAIN_MAX,
   type BotHarness,
   type BotModelRoute,
 } from '../../../shared/botModelChain';
-import { getEffectiveBotModelSettings } from './botStore';
 import { useBotTranslation } from './botPronounContext';
 
 function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
@@ -36,11 +28,8 @@ function agentKindFor(vendor: 'cc' | 'codex' | 'pi'): AgentKind {
   return vendor === 'cc' ? 'claude-code' : vendor;
 }
 
-function defaultRoute(vendor: 'cc' | 'codex' | 'pi'): BotModelRoute {
-  return { harness: harnessFor(vendor), ...getEffectiveBotModelSettings(vendor, null) };
-}
-
 export function BotModelChainEditor({
+  'data-setting-id': settingId,
   value,
   onChange: onValueChange,
   disabled = false,
@@ -54,6 +43,7 @@ export function BotModelChainEditor({
   layout = 'inline',
   settingsRows,
 }: {
+  'data-setting-id'?: string;
   value: BotModelRoute[];
   onChange: (next: BotModelRoute[]) => void;
   disabled?: boolean;
@@ -74,31 +64,19 @@ export function BotModelChainEditor({
   settingsRows?: { primaryLabel: string; primaryHint: string };
 }) {
   const { t } = useBotTranslation();
-  const { availableVendors, loaded } = useAvailableAgents(deviceId);
   const catalog = useDeviceProviders(deviceId);
-  const [expanded, setExpanded] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<BotModelRoute | null>(null);
   const routes = value.slice(0, BOT_MODEL_CHAIN_MAX);
   // Picker content may be portaled outside a form's disabled fieldset.
   const onChange = (next: BotModelRoute[]) => {
     if (!disabled) onValueChange(next);
   };
-  // Keep the local roster gate and SSH hiddenVendors contract. Device-link
-  // rosters are advisory until loaded: a failed request must not block editing
-  // the target device's independently loaded provider catalog.
-  const waitingForLocalRoster = !remote && !deviceId && !loaded;
   const visibleVendors = (['pi', 'codex', 'cc'] as const)
-    .filter((vendor) => !hiddenVendors.includes(vendor))
-    .filter(
-      (vendor) =>
-        (remote && !deviceId) ||
-        (deviceId && !loaded) ||
-        (loaded && availableVendors.has(vendor)),
-    );
+    .filter((vendor) => !hiddenVendors.includes(vendor));
   const unifiedAgents = visibleVendors.map(agentKindFor);
 
   const replace = (index: number, patch: Partial<BotModelRoute>) => {
-    if (disabled || waitingForLocalRoster) return;
+    if (disabled) return;
     if (pendingRoute && index === routes.length) {
       const next = { ...pendingRoute, ...patch };
       if (next.model && routes.length < BOT_MODEL_CHAIN_MAX) {
@@ -126,24 +104,22 @@ export function BotModelChainEditor({
     );
     const vendor = unused ?? visibleVendors[0];
     if (!vendor) return;
-    const route = deviceId
-      ? { harness: harnessFor(vendor), model: '', providerId: null, effort: '', fastMode: false }
-      : defaultRoute(vendor);
-    if (route.model) onChange([...routes, route]);
-    else setPendingRoute(route);
+    setPendingRoute({ harness: harnessFor(vendor), model: '', providerId: null, effort: '', fastMode: false });
   };
 
   const picker = (route: BotModelRoute, index: number, wrapperClassName = 'min-w-0 flex-1') => (
     <div className={wrapperClassName}>
-      <ModelSelector
-        disabled={disabled || waitingForLocalRoster}
+      <ModelRouteSelector
+        disabled={disabled}
         deviceId={deviceId}
+        agentDeviceId={route.agentDeviceId}
+        sshRemote={remote && !deviceId}
         vendorKey={vendorFor(route.harness)}
         modelId={route.model}
         effort={route.effort}
         currentProviderId={route.providerId}
         agentIdentity={{ vendorKey: vendorFor(route.harness), state: 'current' }}
-        triggerVariant="toolbar"
+        triggerVariant="settings"
         popoverSide="bottom"
         ariaContext={t('bots.modelChain.routeLabel', { index: index + 1 })}
         excludeSubscriptionDirect={remote && !deviceId}
@@ -160,6 +136,7 @@ export function BotModelChainEditor({
           if (!visibleVendors.includes(selection.engine)) return;
           replace(index, {
             harness: harnessFor(selection.engine),
+            ...(route.agentDeviceId || selection.agentDevice ? { agentDeviceId: selection.agentDevice?.deviceId ?? null } : {}),
             providerId: selection.providerId,
             model: selection.modelId,
             effort: selection.effort ?? '',
@@ -167,8 +144,9 @@ export function BotModelChainEditor({
           });
         }}
         unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
+        unknownModelDescription={t('settings.auxiliaryModels.unavailable')}
       />
-      {deviceId && route.providerId
+      {deviceId && !route.agentDeviceId && route.providerId
         ? (() => {
             const provider = catalog.providers.find((item) => item.id === route.providerId);
             return provider ? (
@@ -187,8 +165,8 @@ export function BotModelChainEditor({
   const fallbackRows = routes.slice(1).map((route, fallbackIndex) => {
     const index = fallbackIndex + 1;
     return (
-      <div key={index} className="flex min-w-0 items-center gap-2">
-        <span className="w-4 shrink-0 text-11">{index}</span>
+      <div key={index} className="flex min-w-0 items-start gap-2">
+        <span className="w-4 shrink-0 pt-1 text-11 leading-5">{index}</span>
         {picker(route, index)}
         <div className="flex shrink-0 gap-1">
           <button
@@ -226,7 +204,7 @@ export function BotModelChainEditor({
   });
   const pendingRow: ReactNode =
     pendingRoute && routes.length < BOT_MODEL_CHAIN_MAX ? (
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-start gap-2">
         {picker(pendingRoute, routes.length)}
         <Button
           variant="secondary"
@@ -252,50 +230,46 @@ export function BotModelChainEditor({
   if (layout === 'settings' && settingsRows) {
     const listItems = [...fallbackRows, ...(pendingRow ? [pendingRow] : [])];
     return (
-      <div className="min-w-0" data-testid="bot-model-chain-editor">
-        <div className={cn(SETTINGS_ROW_CLASS, 'cindy-segmented-row')}>
-          <div className="flex min-w-0 flex-col gap-1">
-            <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {settingsRows.primaryLabel}
-            </p>
-            <p className={SETTINGS_ROW_HINT_CLASS}>{settingsRows.primaryHint}</p>
-          </div>
-          <div className="flex min-w-0 shrink-0 items-center gap-2">
-            {onRestoreDefault ? (
-              <DefaultOverrideControls
-                isCustomized
-                disabled={disabled}
-                onReset={() => {
-                  if (!disabled) onRestoreDefault();
-                }}
-              />
-            ) : null}
-            {picker(primaryRoute, 0, 'min-w-0')}
-          </div>
-        </div>
+      <div className="min-w-0" data-testid="bot-model-chain-editor" data-setting-id={settingId}>
+        <SettingsRow
+          className="cindy-segmented-row"
+          title={settingsRows.primaryLabel}
+          hint={settingsRows.primaryHint}
+          trailing={
+            <div className="flex min-w-0 max-w-full items-start gap-2">
+              {onRestoreDefault ? (
+                <DefaultOverrideControls
+                  isCustomized
+                  disabled={disabled}
+                  onReset={() => {
+                    if (!disabled) onRestoreDefault();
+                  }}
+                />
+              ) : null}
+              {picker(primaryRoute, 0, 'min-w-0')}
+            </div>
+          }
+        />
         {allowFallbacks ? (
           <>
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-            <div className={SETTINGS_ROW_CLASS}>
-              <div className="flex min-w-0 flex-col gap-1">
-                <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-                  {t('bots.modelChain.options', { count: Math.max(0, routes.length - 1) })}
-                </p>
-                <p className={SETTINGS_ROW_HINT_CLASS}>{t('bots.modelChain.description')}</p>
-              </div>
-              <Button
-                variant="secondary"
-                size="md"
-                compact
-                type="button"
-                className="shrink-0"
-                disabled={addDisabled}
-                onClick={add}
-              >
-                <Plus size={14} />
-                {t('bots.modelChain.add')}
-              </Button>
-            </div>
+            <SettingsRow
+              title={t('bots.modelChain.options', { count: Math.max(0, routes.length - 1) })}
+              hint={t('bots.modelChain.description')}
+              trailing={
+                <Button
+                  variant="secondary"
+                  size="md"
+                  compact
+                  type="button"
+                  className="shrink-0"
+                  disabled={addDisabled}
+                  onClick={add}
+                >
+                  <Plus size={14} />
+                  {t('bots.modelChain.add')}
+                </Button>
+              }
+            />
             {listItems.length > 0 ? (
               <div className="space-y-2 px-4 pb-4 text-12 text-[var(--text-tertiary)]">
                 {listItems.map((item, at) => (
@@ -310,55 +284,53 @@ export function BotModelChainEditor({
   }
 
   return (
-    <div className="min-w-0" data-testid="bot-model-chain-editor">
-      <div className="flex min-w-0 items-center gap-3">
+    <div className="min-w-0" data-testid="bot-model-chain-editor" data-setting-id={settingId}>
+      <div className="flex min-w-0 items-start gap-3">
         {label ? (
-          <span className="shrink-0 text-12 text-[var(--text-secondary)]">{label}</span>
+          <span className="shrink-0 pt-1 text-12 leading-5 text-[var(--text-secondary)]">{label}</span>
         ) : null}
         {picker(primaryRoute, 0)}
       </div>
-      {allowFallbacks && <details
+      {allowFallbacks && <div
         className="mt-1 text-12 text-[var(--text-tertiary)]"
-        onToggle={(event) => setExpanded(event.currentTarget.open)}
+        data-testid="bot-model-fallbacks"
       >
-        <summary className="cursor-pointer py-2">
+        <p className="py-2">
           {t('bots.modelChain.options', { count: Math.max(0, routes.length - 1) })}
-        </summary>
-        {expanded ? (
-          <div className="space-y-2 pt-2">
-            {fallbackRows}
-            {pendingRow}
+        </p>
+        <div className="space-y-2 pt-2">
+          {fallbackRows}
+          {pendingRow}
+          <Button
+            variant="secondary"
+            size="md"
+            tone="quiet"
+            compact
+            type="button"
+            disabled={addDisabled}
+            onClick={add}
+          >
+            <Plus size={14} />
+            {t('bots.modelChain.add')}
+          </Button>
+          {onRestoreDefault ? (
             <Button
               variant="secondary"
               size="md"
               tone="quiet"
               compact
               type="button"
-              disabled={addDisabled}
-              onClick={add}
+              disabled={disabled}
+              onClick={() => {
+                if (!disabled) onRestoreDefault();
+              }}
+              className="ml-2"
             >
-              <Plus size={14} />
-              {t('bots.modelChain.add')}
+              {t('bots.model.restoreDefault')}
             </Button>
-            {onRestoreDefault ? (
-              <Button
-                variant="secondary"
-                size="md"
-                tone="quiet"
-                compact
-                type="button"
-                disabled={disabled}
-                onClick={() => {
-                  if (!disabled) onRestoreDefault();
-                }}
-                className="ml-2"
-              >
-                {t('bots.model.restoreDefault')}
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-      </details>}
+          ) : null}
+        </div>
+      </div>}
     </div>
   );
 }

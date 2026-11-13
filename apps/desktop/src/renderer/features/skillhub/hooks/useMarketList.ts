@@ -35,6 +35,7 @@ import type { HubPublishedVisibility } from '../lib/marketVisibility';
 import { filterAvailableMarketItems } from '../lib/marketDetailViewModel';
 
 import { useSkillhub } from './useSkillhub';
+import { useSkillhubBrowseApi, useSkillhubTarget } from '../SkillhubTargetContext';
 import { semverCompare } from '../versionUtils';
 import { publishedLocalIdentity, publishedMarketIdentity, type MarketLocalIdentity } from '../lib/marketLocalCopies';
 
@@ -375,7 +376,9 @@ export function useMarketList(
     initialCategoryFilter?: CategoryFilter;
   },
 ) {
-  const enabled = options?.enabled ?? true;
+  const target = useSkillhubTarget();
+  const api = useSkillhubBrowseApi();
+  const enabled = (options?.enabled ?? true) && (!target || target.ready);
   const owner = getDataOwnerGeneration();
   const { t, i18n: i18next } = useTranslation();
   const [searchQuery, setSearchQueryState] = useState(options?.initialSearchQuery ?? '');
@@ -433,7 +436,7 @@ export function useMarketList(
   const requestIdRef = useRef(0);
 
   const requestMarketPage = useCallback(async (params: FetchMarketPageInput): Promise<MarketPageResult> => {
-    const res = await window.electronAPI.skillhub.listMarket({
+    const res = await api.listMarket({
       cursor: params.cursor,
       limit: MARKET_PAGE_SIZE,
       sort: params.sort,
@@ -452,7 +455,7 @@ export function useMarketList(
       ),
       nextCursor: res.nextCursor ?? null,
     };
-  }, [owner]);
+  }, [owner, api]);
 
   const collectVisiblePage = useCallback(async (
     params: FetchMarketPageInput & { available: boolean },
@@ -702,6 +705,8 @@ const inflightCategories = new Map<
 >();
 
 export function useCategoryList(scope: SkillhubCatalogScope = 'market'): CategoryListState {
+  const target = useSkillhubTarget();
+  const api = useSkillhubBrowseApi();
   const owner = getDataOwnerGeneration();
   const [state, setState] = useState<ScopedCategoryListState>({
     owner,
@@ -710,18 +715,19 @@ export function useCategoryList(scope: SkillhubCatalogScope = 'market'): Categor
   });
 
   useEffect(() => {
+    if (target && !target.ready) return;
     let cancelled = false;
     const ownerInflight =
       inflightCategories.get(owner) ??
       new Map<SkillhubCatalogScope, Promise<CategoryListState>>();
     if (!inflightCategories.has(owner)) inflightCategories.set(owner, ownerInflight);
-    const existing = ownerInflight.get(scope);
-    const inflight = existing ?? window.electronAPI.skillhub.listCategories({ scope, includeEmpty: false })
+    const existing = target ? undefined : ownerInflight.get(scope);
+    const inflight = existing ?? api.listCategories({ scope, includeEmpty: false })
       .then((res) => (res.success
         ? { categories: res.categories ?? [], totalCount: res.totalCount ?? 0, myTotalCount: res.myTotalCount ?? 0 }
         : EMPTY_CATEGORY_STATE))
       .catch(() => EMPTY_CATEGORY_STATE);
-    if (!existing) ownerInflight.set(scope, inflight);
+    if (!existing && !target) ownerInflight.set(scope, inflight);
     void inflight.then((next) => {
       if (ownerInflight.get(scope) === inflight) ownerInflight.delete(scope);
       if (ownerInflight.size === 0 && inflightCategories.get(owner) === ownerInflight) {
@@ -732,7 +738,7 @@ export function useCategoryList(scope: SkillhubCatalogScope = 'market'): Categor
       }
     });
     return () => { cancelled = true; };
-  }, [owner, scope]);
+  }, [owner, scope, api, target?.ready]);
 
   return state.owner === owner && state.scope === scope ? state.value : EMPTY_CATEGORY_STATE;
 }

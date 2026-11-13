@@ -1,3 +1,4 @@
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 /**
  * 伙伴设置 →「消息平台」: 这位伙伴自己的 IM 机器人。
  *
@@ -5,26 +6,37 @@
  * 把凭证填在这里, 这个机器人就是这位伙伴: 主人私聊进伙伴主任务, 群 / 话题 / 外部用户私聊各一条隐藏专线,
  * 同一伙伴的所有渠道共享记忆(规则见 docs/product-rules/cindy-bots-runtime.md)。
  * 与 设置 → IM 机器人 里那份个人 bot 各用各的凭证; 添加时也可以把那份个人 bot 一次性移过来
- * (个人 bot 随之清空)。远端伙伴没有这一页。
+ * (个人 bot 随之清空)。
+ *
+ * 伙伴在另一台电脑上时，同一页读写那台电脑的连接（经伙伴设置目标）：凭证只在保存它的电脑上输入和存放，
+ * 远程页不新建连接（只能把那台电脑设置里已配好的个人 bot 移过来），微信扫码授权与 X 登录授权也在那台电脑上完成。
  */
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
-import { Briefcase, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
 
+import { HookConnectionsSection } from '@/components/settings/HookConnectionsSection';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { Archive, ArrowUpRight, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { Button } from '@/components/ui/button';
+import { Collapse } from '@/components/ui/collapse';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
+import { DiscordChannelAccessSection } from '@/components/settings/DiscordChannelAccessSection';
+import { WechatBotSection } from '@/components/settings/WechatBotSection';
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { formatRelative } from '@/hooks/useRelativeTime';
 import { extractIpcError } from '@/utils/ipcError';
 import type {
   BotImAdoptablePersonalBot,
   BotImChannel,
+  BotIMessageConfig,
   BotImConnectionAddInput,
   BotImConnectionGroup,
   BotImConnectionLane,
@@ -34,11 +46,17 @@ import type {
   BotImGroupActivationMode,
 } from '../../../shared/botImConnection';
 import { useBotTranslation } from './botPronounContext';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
+import { RemoteOfficialXCard } from './RemoteOfficialXCard';
 import type { BotProfile } from './botStore';
 import {
   addBotImConnection,
+  archiveBotImConnectionLane,
+  botImConnectionLaneArchiveSupported,
   adoptPersonalBot,
+  botImConnectionDiscordChannelsSupported,
   botImConnectionGroupsSupported,
+  discordChannelAccessSourceFor,
   botImConnectionLanesSupported,
   listBotImConnectionGroups,
   listBotImConnectionLanes,
@@ -48,10 +66,16 @@ import {
   resetBotImConnectionLane,
   setBotImConnectionGroupActivation,
   useBotImConnections,
+  type BotImConnectionApi,
 } from './botImConnectionClient';
 
 const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
 const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
+// Same application launchers as Settings → IM bots.
+const FEISHU_APP_LAUNCHER_URL: Record<BotImFeishuService, string> = {
+  feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
+  lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
+};
 const DISCORD_OWNER_ID_PATTERN = /^\d{17,20}$/;
 
 const CHANNEL_ICON: Record<BotImChannel, LucideIcon> = {
@@ -60,10 +84,11 @@ const CHANNEL_ICON: Record<BotImChannel, LucideIcon> = {
   wecom: Briefcase,
   dingtalk: Zap,
   discord: Gamepad2,
+  imessage: MessageSquare,
 };
 
 function ChannelIcon({ channel }: { channel: BotImChannel }) {
-  const Icon = CHANNEL_ICON[channel];
+  const Icon = CHANNEL_ICON[channel] ?? MessageSquare;
   return <Icon size={18} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
 }
 
@@ -101,9 +126,23 @@ const STATUS_TEXT: Record<StatusTone, string> = {
 
 export function BotChannelsPage({ bot }: { bot: BotProfile }) {
   const { t } = useBotTranslation();
-  const { payload, loading, apply } = useBotImConnections();
+  // This computer's messaging stack, or the teammate's computer's through the settings target.
+  const target = useBotSettingsTarget();
+  const { im, wechat, x: remoteX } = target.channels;
+  const { payload, loading, apply } = useBotImConnections(im, target);
   const { confirm } = useConfirmDialog();
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; config: BotIMessageConfig } | null>(null);
+  const [groupVersions, setGroupVersions] = useState<Record<string, number>>({});
+  const [loadingEdit, setLoadingEdit] = useState<string | null>(null);
+  const edit = async (id: string) => {
+    if (!im?.getIMessageConfig || loadingEdit) return;
+    setLoadingEdit(id);
+    try { setEditing({ id, config: await im.getIMessageConfig({ id }) }); }
+    catch { toast.error(t('bots.channels.edit.loadFailed')); }
+    finally { setLoadingEdit(null); }
+  };
+  const [wechatExpanded, setWechatExpanded] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
   const mine = (payload?.connections ?? []).filter((item) => item.botId === bot.id);
@@ -133,7 +172,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
     if (!ok) return;
     setRemovingId(view.id);
     try {
-      apply(await removeBotImConnection(view.id));
+      apply(await removeBotImConnection(im, view.id));
     } catch {
       await confirm({
         title: t('bots.channels.removeConfirm.failed'),
@@ -147,6 +186,8 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
 
   return (
     <section className="flex flex-col gap-4 pt-3" aria-label={t('bots.channels.title')}>
+      {remoteX ? <RemoteOfficialXCard bot={bot} api={remoteX} deviceName={target.deviceName ?? ''} /> : null}
+      {!remoteX && target.kind === 'local' && typeof window.electronAPI.hookControl?.setXCompanion === 'function' ? <HookConnectionsSection companion={{ id: bot.id, name: bot.name }} /> : null}
       {loading && !payload ? (
         <div className="flex justify-center py-6 text-[var(--text-tertiary)]">
           <Spinner size={16} />
@@ -191,6 +232,11 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                     </span>
                   </p>
                 </div>
+                {view.channel === 'imessage' && target.channels.canEnterCredentials && im?.getIMessageConfig && im.updateIMessageConfig ? (
+                  <Button type="button" variant="secondary" tone="quiet" size="sm" compact
+                    loading={loadingEdit === view.id} disabled={loadingEdit !== null || removingId !== null}
+                    onClick={() => void edit(view.id)}>{t('bots.channels.edit.button')}</Button>
+                ) : null}
                 <Button
                   type="button"
                   variant="secondary"
@@ -205,11 +251,20 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
-                {view.channel === 'telegram' && view.botContextId && botImConnectionGroupsSupported() ? (
-                  <ConnectionGroups connectionId={view.id} botName={bot.name} />
+                {view.health && view.health.uncertainInputs + view.health.uncertainSends > 0 ? (
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
+                    count: view.health.uncertainInputs + view.health.uncertainSends,
+                  })}</p>
                 ) : null}
-                {view.botContextId && botImConnectionLanesSupported() ? (
-                  <ConnectionLanes connectionId={view.id} botName={bot.name} />
+                {(view.channel === 'telegram' || view.channel === 'imessage') && view.botContextId && botImConnectionGroupsSupported(im) ? (
+                  <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} refreshVersion={groupVersions[view.id] ?? 0} />
+                ) : null}
+                {view.channel === 'discord' && im && botImConnectionDiscordChannelsSupported(im) ? (
+                  <ConnectionDiscordChannels api={im} connectionId={view.id} botName={bot.name} deviceId={target.deviceId} />
+                ) : null}
+                {view.botContextId && botImConnectionLanesSupported(im) ? (
+                  <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}
+                    platform={platformName(view)} deviceId={target.deviceId} />
                 ) : null}
               </li>
             );
@@ -226,14 +281,29 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
           {t('bots.channels.add.button')}
         </Button>
       </div>
+      {wechat ? (
+        <WechatBotSection companion={{ id: bot.id, name: bot.name }} expanded={wechatExpanded}
+          host={{ name: target.deviceName ?? '', api: wechat }}
+          onToggle={() => setWechatExpanded((expanded) => !expanded)} />
+      ) : target.kind === 'local' && typeof window.electronAPI.wechatBot?.setCompanion === 'function' ? (
+        <WechatBotSection companion={{ id: bot.id, name: bot.name }} expanded={wechatExpanded}
+          onToggle={() => setWechatExpanded((expanded) => !expanded)} />
+      ) : null}
       <p className="px-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.externalNote', { name: bot.name })}
       </p>
       <p className="px-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.sharedMemoryNote', { name: bot.name })}
       </p>
+      {editing ? (
+        <BotChannelAddDialog bot={bot} api={im} editing={editing} onApplied={(next) => {
+          apply(next);
+          setGroupVersions((versions) => ({ ...versions, [editing.id]: (versions[editing.id] ?? 0) + 1 }));
+        }}
+          onOpenChange={(open) => { if (!open) setEditing(null); }} />
+      ) : null}
       {adding ? (
-        <BotChannelAddDialog bot={bot} onApplied={apply} onOpenChange={setAdding} />
+        <BotChannelAddDialog bot={bot} api={im} remoteName={target.channels.canEnterCredentials ? undefined : target.deviceName} onApplied={apply} onOpenChange={setAdding} />
       ) : null}
     </section>
   );
@@ -243,17 +313,19 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
  * 一条 Telegram 连接的「群聊」小节: 机器人进过的群 + 每群参与模式(仅 @ / 全响应)。
  * 与 设置 → IM 机器人 的同名设置各管各的 bot; 乐观更新, 保存失败回读正本并提示。
  */
-function ConnectionGroups({ connectionId, botName }: { connectionId: string; botName: string }) {
+function ConnectionGroups({ api, connectionId, botName, refreshVersion }: { api: BotImConnectionApi | null; connectionId: string; botName: string; refreshVersion: number }) {
   const { t } = useBotTranslation();
   const [groups, setGroups] = useState<BotImConnectionGroup[] | null>(null);
   const [error, setError] = useState<'load' | 'save' | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const latest = useRef(0);
+  const apiRef = useRef(api);
+  apiRef.current = api;
 
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    void listBotImConnectionGroups(connectionId)
+    void listBotImConnectionGroups(apiRef.current, connectionId)
       .then((payload) => {
         if (!cancelled) setGroups(payload.groups);
       })
@@ -263,7 +335,7 @@ function ConnectionGroups({ connectionId, botName }: { connectionId: string; bot
     return () => {
       cancelled = true;
     };
-  }, [connectionId, reloadToken]);
+  }, [connectionId, reloadToken, refreshVersion]);
 
   const setMode = useCallback(
     (chatId: string, mode: BotImGroupActivationMode) => {
@@ -272,14 +344,14 @@ function ConnectionGroups({ connectionId, botName }: { connectionId: string; bot
         current ? current.map((g) => (g.chatId === chatId ? { ...g, activation: mode } : g)) : current,
       );
       setError(null);
-      void setBotImConnectionGroupActivation(connectionId, chatId, mode)
+      void setBotImConnectionGroupActivation(apiRef.current, connectionId, chatId, mode)
         .then((payload) => {
           if (revision === latest.current) setGroups(payload.groups);
         })
         .catch(() => {
           if (revision !== latest.current) return;
           setError('save');
-          void listBotImConnectionGroups(connectionId)
+          void listBotImConnectionGroups(apiRef.current, connectionId)
             .then((payload) => {
               if (revision === latest.current) setGroups(payload.groups);
             })
@@ -333,6 +405,24 @@ function ConnectionGroups({ connectionId, botName }: { connectionId: string; bot
   );
 }
 
+/**
+ * 一条 Discord 连接的「服务器频道」小节：白名单按连接各一份，默认不开放；每个频道可单独允许成员，
+ * 成员沿用这位伙伴的既有权限、工具与共享记忆。读写走连接设置（另一台电脑上的伙伴经远程操作）。
+ */
+function ConnectionDiscordChannels({ api, connectionId, botName, deviceId }: {
+  api: BotImConnectionApi; connectionId: string; botName: string; deviceId: string | null | undefined;
+}) {
+  const source = useMemo(() => discordChannelAccessSourceFor(api, connectionId), [api, connectionId]);
+  return (
+    <DiscordChannelAccessSection
+      connected
+      source={source}
+      sourceKey={`${deviceId ?? 'local'}:${connectionId}`}
+      members={{ botName }}
+    />
+  );
+}
+
 /** 状态在后台会变(正在回复 → 空闲): 页面开着时隔一会儿重读一次, 窗口不可见时不读。 */
 const LANES_REFRESH_MS = 20_000;
 
@@ -346,36 +436,49 @@ const LANE_KIND_KEY: Record<BotImConnectionLane['kind'], string> = {
 /**
  * 一条连接的「隐藏任务」小节: 主人私聊(伙伴主任务)、每个群 / 话题与其他人的私聊各一行,
  * 显示状态、最近活动和当前上下文里的消息数; 卡住时可以让某一条重新开始(同一条任务,
- * 记录保留, 下一条消息换干净的上下文)。隐藏任务没有自己的任务页, 所以这里不提供打开。
+ * 记录保留, 下一条消息换干净的上下文)。点击记录打开原任务的普通界面, 不取消隐藏。
  */
-function ConnectionLanes({ connectionId, botName }: { connectionId: string; botName: string }) {
+function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
+  api: BotImConnectionApi | null; connectionId: string; botName: string; platform: string;
+  deviceId?: string;
+}) {
   const { t } = useBotTranslation();
+  const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
+  const [expanded, setExpanded] = useState(false);
+  const contentId = useId();
+  const [archivePendingId, setArchivePendingId] = useState<string | null>(null);
+  const archiveConfirmRef = useRef<HTMLButtonElement>(null);
   const [lanes, setLanes] = useState<BotImConnectionLane[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [resettingId, setResettingId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ tone: 'done' | 'failed'; text: string } | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [now, setNow] = useState(() => Date.now());
-  const resettingRef = useRef(false);
+  const mutatingRef = useRef(false);
+  const loadGeneration = useRef(0);
+  const apiRef = useRef(api);
+  apiRef.current = api;
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      void listBotImConnectionLanes(connectionId)
+      const generation = loadGeneration.current;
+      void listBotImConnectionLanes(apiRef.current, connectionId)
         .then((payload) => {
-          if (cancelled) return;
+          if (cancelled || generation !== loadGeneration.current || mutatingRef.current) return;
           setLanes(payload.lanes);
           setLoadFailed(false);
           setNow(Date.now());
         })
         .catch(() => {
-          if (!cancelled) setLoadFailed(true);
+          if (!cancelled && generation === loadGeneration.current && !mutatingRef.current) setLoadFailed(true);
         });
     };
     load();
     const timer = setInterval(() => {
-      if (!document.hidden && !resettingRef.current) load();
+      if (!document.hidden && !mutatingRef.current) load();
     }, LANES_REFRESH_MS);
     return () => {
       cancelled = true;
@@ -383,38 +486,71 @@ function ConnectionLanes({ connectionId, botName }: { connectionId: string; botN
     };
   }, [connectionId, reloadToken]);
 
+  // Match SessionItem's inline archive confirmation: 4s or an outside click dismisses it.
+  useEffect(() => {
+    if (!archivePendingId) return;
+    if (!expanded) {
+      setArchivePendingId(null);
+      return;
+    }
+    const dismiss = () => setArchivePendingId(null);
+    const timer = setTimeout(dismiss, 4000);
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.target instanceof Node && archiveConfirmRef.current?.contains(event.target)) return;
+      dismiss();
+    };
+    document.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [archivePendingId, expanded]);
+
   const laneName = (lane: BotImConnectionLane) =>
     lane.kind === 'owner-dm' ? t('bots.channels.lanes.ownerName') : lane.name || lane.chatId || '';
 
-  const reset = async (lane: BotImConnectionLane) => {
-    if (resettingRef.current) return;
+  const mutate = async (lane: BotImConnectionLane, action: 'reset' | 'archive') => {
+    if (mutatingRef.current) return;
+    mutatingRef.current = true;
+    loadGeneration.current += 1;
     const name = laneName(lane);
-    const ok = await confirm({
-      title: t('bots.channels.lanes.resetConfirm.title', { lane: name }),
-      description: t(
-        lane.kind === 'owner-dm'
-          ? 'bots.channels.lanes.resetConfirm.ownerDescription'
-          : 'bots.channels.lanes.resetConfirm.description',
-        { name: botName },
-      ),
-      confirmText: t('bots.channels.lanes.resetConfirm.confirm'),
-      cancelText: t('bots.channels.lanes.resetConfirm.cancel'),
-    });
-    if (!ok) return;
-    resettingRef.current = true;
-    setResettingId(lane.sessionId);
-    setNotice(null);
+    const previousLanes = lanes;
     try {
-      const payload = await resetBotImConnectionLane(connectionId, lane.sessionId);
+      if (action === 'reset') {
+        const ok = await confirm({
+          title: t('bots.channels.lanes.resetConfirm.title', { lane: name }),
+          description: t(
+            lane.kind === 'owner-dm'
+              ? 'bots.channels.lanes.resetConfirm.ownerDescription'
+              : 'bots.channels.lanes.resetConfirm.description',
+            { name: botName },
+          ),
+          confirmText: t('bots.channels.lanes.resetConfirm.confirm'),
+          cancelText: t('bots.channels.lanes.resetConfirm.cancel'),
+        });
+        if (!ok) return;
+      }
+      if (action === 'reset') setResettingId(lane.sessionId);
+      else {
+        setArchivePendingId(null);
+        setArchivingId(lane.sessionId);
+        setLanes((current) => current?.filter((row) => row.sessionId !== lane.sessionId) ?? null);
+      }
+      setNotice(null);
+      const payload = await (action === 'reset' ? resetBotImConnectionLane : archiveBotImConnectionLane)(apiRef.current, connectionId, lane.sessionId);
       setLanes(payload.lanes);
       setNow(Date.now());
-      setNotice({ tone: 'done', text: t('bots.channels.lanes.resetDone', { lane: name }) });
+      if (action === 'reset') setNotice({ tone: 'done', text: t('bots.channels.lanes.resetDone', { lane: name }) });
     } catch {
-      setNotice({ tone: 'failed', text: t('bots.channels.lanes.resetFailed') });
+      if (action === 'archive') {
+        setLanes(previousLanes);
+        toast.error(t('bots.channels.lanes.archiveFailed'));
+      } else setNotice({ tone: 'failed', text: t('bots.channels.lanes.resetFailed') });
       setReloadToken((value) => value + 1);
     } finally {
-      resettingRef.current = false;
+      mutatingRef.current = false;
       setResettingId(null);
+      setArchivingId(null);
     }
   };
 
@@ -422,7 +558,19 @@ function ConnectionLanes({ connectionId, botName }: { connectionId: string; botN
   const others = (lanes ?? []).filter((lane) => lane.kind !== 'owner-dm');
   return (
     <div className="mt-3 flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
-      <div className="text-12 font-medium text-[var(--text-primary)]">{t('bots.channels.lanes.title')}</div>
+      <div className="flex items-center justify-between text-12 font-medium text-[var(--text-primary)]">
+        <span>{t('bots.channels.lanes.title', { platform })}</span>
+        <ChromeIconButton
+          className="-my-[5px] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          aria-label={t(expanded ? 'bots.channels.lanes.collapse' : 'bots.channels.lanes.expand', { platform })}
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? <ChevronUp size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+        </ChromeIconButton>
+      </div>
+      <Collapse open={expanded} id={contentId} inert={!expanded} innerClassName="flex flex-col gap-2">
       <p className="text-11 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.lanes.hint', { name: botName })}
       </p>
@@ -459,31 +607,67 @@ function ConnectionLanes({ connectionId, botName }: { connectionId: string; botN
         ].filter((part): part is string => !!part);
         return (
           <div key={lane.sessionId} className="flex items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <span className="min-w-0 truncate text-12 text-[var(--text-primary)]" title={name}>
-                  {name}
+            <button
+              type="button"
+              onClick={() => navigate(standardSessionRoute(lane.sessionId, deviceId))}
+              className="min-w-0 flex-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="min-w-0 truncate text-12 text-[var(--text-primary)]" title={name}>
+                    {name}
+                  </span>
+                  {lane.state === 'running' ? (
+                    <Spinner size={12} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+                  ) : lane.state === 'failed' ? (
+                    <AttentionDot tone="error" />
+                  ) : null}
                 </span>
-                {lane.state === 'running' ? (
-                  <Spinner size={12} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
-                ) : lane.state === 'failed' ? (
-                  <AttentionDot tone="error" />
-                ) : null}
+                <span className="block text-11 leading-[1.5] text-[var(--text-tertiary)]">{meta.join(' · ')}</span>
+            </button>
+            <div className="flex shrink-0 items-center gap-1">
+            {botImConnectionLaneArchiveSupported(api) ? (
+              <div className="relative flex h-7 w-7 shrink-0 items-center justify-end">
+              {archivePendingId === lane.sessionId ? (
+                <Button
+                  ref={archiveConfirmRef}
+                  type="button"
+                  variant="secondary"
+                  tone="danger-surface"
+                  size="xs"
+                  compact
+                  className="absolute right-0 top-1/2 w-max min-w-14 -translate-y-1/2 whitespace-nowrap"
+                  aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
+                  disabled={archivingId !== null || resettingId !== null}
+                  onClick={() => void mutate(lane, 'archive')}
+                >
+                  {t('ccAgent.sidebar.sessionMenu.archived')}
+                </Button>
+              ) : (
+                <ChromeIconButton
+                  className="shrink-0 text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  aria-label={t('bots.channels.lanes.archiveAria', { lane: name })}
+                  tooltip={t('ccAgent.sidebar.sessionMenu.archived')}
+                  disabled={archivingId !== null || resettingId !== null}
+                  onClick={() => setArchivePendingId(lane.sessionId)}
+                >
+                  <Archive size={14} strokeWidth={2} aria-hidden />
+                </ChromeIconButton>
+              )}
               </div>
-              <div className="text-11 leading-[1.5] text-[var(--text-tertiary)]">{meta.join(' · ')}</div>
-            </div>
+            ) : null}
             <Button
               type="button"
               variant="secondary"
               size="md"
               compact
               loading={resettingId === lane.sessionId}
-              disabled={resettingId !== null && resettingId !== lane.sessionId}
+              disabled={archivingId !== null || (resettingId !== null && resettingId !== lane.sessionId)}
               aria-label={t('bots.channels.lanes.resetAria', { lane: name })}
-              onClick={() => void reset(lane)}
+              onClick={() => void mutate(lane, 'reset')}
             >
               {t('bots.channels.lanes.reset')}
             </Button>
+            </div>
           </div>
         );
       })}
@@ -503,11 +687,12 @@ function ConnectionLanes({ connectionId, botName }: { connectionId: string; botN
           {notice.text}
         </p>
       ) : null}
+      </Collapse>
     </div>
   );
 }
 
-const PLATFORMS: ReadonlyArray<BotImChannel> = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'];
+const PLATFORMS: ReadonlyArray<BotImChannel> = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord', 'imessage'];
 
 /** 个人 bot 给人看的身份: Telegram @用户名 / Discord 标签原样, 其它平台的 id 打码。 */
 function adoptableIdentity(item: BotImAdoptablePersonalBot): string | undefined {
@@ -558,18 +743,27 @@ function SourceOption({
 
 function BotChannelAddDialog({
   bot,
+  api,
+  remoteName,
+  editing,
   onApplied,
   onOpenChange,
 }: {
   bot: BotProfile;
+  api: BotImConnectionApi | null;
+  /** Set for a teammate on another computer: credentials are typed and stored on that computer only. */
+  remoteName?: string;
+  editing?: { id: string; config: BotIMessageConfig };
   onApplied: (next: BotImConnectionListPayload) => void;
   onOpenChange: (open: boolean) => void;
 }) {
   const { t } = useBotTranslation();
-  const [channel, setChannel] = useState<BotImChannel>('telegram');
+  const [channel, setChannel] = useState<BotImChannel>(editing ? 'imessage' : 'telegram');
   const [token, setToken] = useState('');
   const [ownerUserId, setOwnerUserId] = useState('');
   const [service, setService] = useState<BotImFeishuService>('feishu');
+  const [guideOpen, setGuideOpen] = useState(false);
+  const guideId = useId();
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
   // 企业微信 / 钉钉 / Discord 各自的两格: 字段名跟平台的叫法走, 互不串用。
@@ -579,6 +773,7 @@ function BotChannelAddDialog({
   const [dingtalkAppSecret, setDingtalkAppSecret] = useState('');
   const [discordToken, setDiscordToken] = useState('');
   const [discordOwnerUserId, setDiscordOwnerUserId] = useState('');
+  const [imessage, setIMessage] = useState({ serverUrl: editing?.config.serverUrl ?? '', password: '', ownerAddress: editing?.config.ownerAddress ?? '', chatGuids: editing?.config.chatGuids.join(', ') ?? '', listenHost: editing?.config.listenHost ?? '', listenPort: String(editing?.config.listenPort ?? 18747) });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -587,14 +782,19 @@ function BotChannelAddDialog({
   const [adoptable, setAdoptable] = useState<BotImAdoptablePersonalBot[]>([]);
   const [source, setSource] = useState<'existing' | 'manual'>('existing');
   const existing = adoptable.find((item) => item.channel === channel) ?? null;
-  const useExisting = existing !== null && source === 'existing';
+  const credentialsHere = remoteName === undefined;
+  const useExisting = existing !== null && (source === 'existing' || !credentialsHere);
+  const manualFeishu = channel === 'feishu' && credentialsHere && !useExisting;
+  const serviceName = t('bots.channels.platform.' + service);
 
+  const apiRef = useRef(api);
+  apiRef.current = api;
   const refreshAdoptable = useCallback(() => {
-    void listAdoptablePersonalBots()
+    void listAdoptablePersonalBots(apiRef.current)
       .then((next) => setAdoptable(next.bots))
       .catch(() => setAdoptable([]));
   }, []);
-  useEffect(refreshAdoptable, [refreshAdoptable]);
+  useEffect(() => { if (!editing) refreshAdoptable(); }, [refreshAdoptable, editing]);
 
   useEffect(() => {
     setError(null);
@@ -604,7 +804,11 @@ function BotChannelAddDialog({
   const filled = (...values: string[]) => values.every((value) => value.trim().length > 0);
   const canSubmit = useExisting
     ? true
-    : channel === 'telegram'
+    : !credentialsHere
+      ? false
+      : channel === 'imessage'
+      ? filled(imessage.serverUrl, imessage.ownerAddress, imessage.chatGuids, imessage.listenHost, imessage.listenPort) && (!!editing || filled(imessage.password))
+      : channel === 'telegram'
       ? filled(token, ownerUserId)
       : channel === 'feishu'
         ? filled(appId, appSecret)
@@ -616,6 +820,9 @@ function BotChannelAddDialog({
 
   const buildInput = (): BotImConnectionAddInput | string => {
     switch (channel) {
+      case 'imessage': return { botId: bot.id, channel, ...imessage, groupAliases: [bot.name],
+        chatGuids: imessage.chatGuids.split(/[,\n]/).map(value => value.trim()).filter(Boolean),
+        listenPort: Number(imessage.listenPort) };
       case 'telegram': {
         const trimmedToken = token.trim();
         const trimmedOwner = ownerUserId.trim();
@@ -663,13 +870,17 @@ function BotChannelAddDialog({
     setBusy(true);
     setError(null);
     try {
-      const next = input ? await addBotImConnection(input) : await adoptPersonalBot({ botId: bot.id, channel });
+      const next = editing && input?.channel === 'imessage'
+        ? await apiRef.current!.updateIMessageConfig!({ id: editing.id, config: input })
+        : input ? await addBotImConnection(apiRef.current, input) : await adoptPersonalBot(apiRef.current, { botId: bot.id, channel });
       onApplied(next);
       onOpenChange(false);
     } catch (failure) {
       const ipc = extractIpcError(failure);
       const message = ipc?.message ?? '';
-      if (message.includes('PERSONAL_BOT_NOT_CONFIGURED')) {
+      if (editing) {
+        setError(t('bots.channels.edit.failed'));
+      } else if (message.includes('PERSONAL_BOT_NOT_CONFIGURED')) {
         // 个人 bot 在别处被清掉了: 刷新后这个平台回到填写凭证。
         refreshAdoptable();
         setError(t('bots.channels.add.errors.personalBotGone'));
@@ -708,16 +919,18 @@ function BotChannelAddDialog({
         >
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
-              {t('bots.channels.add.title', { name: bot.name })}
+              {editing ? t('bots.channels.edit.title') : t('bots.channels.add.title', { name: bot.name })}
             </Dialog.Title>
             <Dialog.Description className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-              {t('bots.channels.add.description')}
+              {editing ? t('bots.channels.edit.description') : manualFeishu
+                ? t('bots.channels.add.feishu.description', { service: serviceName, name: bot.name })
+                : t('bots.channels.add.description')}
             </Dialog.Description>
 
-            <div
+            {!editing ? <div
               role="radiogroup"
               aria-label={t('bots.channels.add.platformLabel')}
-              className="mt-4 grid grid-cols-3 gap-2"
+              className="mt-4 grid grid-cols-2 gap-2 min-[400px]:grid-cols-3"
             >
               {PLATFORMS.map((item, index) => {
                 const checked = item === channel;
@@ -731,7 +944,7 @@ function BotChannelAddDialog({
                     disabled={busy}
                     onClick={() => setChannel(item)}
                     className={cn(
-                      'flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 text-13 outline-none transition-colors',
+                      'flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-full border px-3 text-13 outline-none transition-colors',
                       'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
                       'disabled:cursor-not-allowed',
                       checked
@@ -744,7 +957,7 @@ function BotChannelAddDialog({
                   </button>
                 );
               })}
-            </div>
+            </div> : null}
 
             {/* 两字段 + 两行提示的高度；切换平台时对话框不随提示行数上下跳。 */}
             <div className="mt-4 flex min-h-48 flex-col gap-3 overflow-y-auto">
@@ -761,18 +974,37 @@ function BotChannelAddDialog({
                     detail={adoptableIdentity(existing)}
                     onSelect={() => setSource('existing')}
                   />
-                  <SourceOption
-                    checked={!useExisting}
-                    disabled={busy}
-                    title={t('bots.channels.add.source.manual')}
-                    onSelect={() => setSource('manual')}
-                  />
+                  {credentialsHere ? (
+                    <SourceOption
+                      checked={!useExisting}
+                      disabled={busy}
+                      title={t('bots.channels.add.source.manual')}
+                      onSelect={() => setSource('manual')}
+                    />
+                  ) : null}
                 </div>
               ) : null}
               {useExisting ? (
                 <p className="px-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
                   {t('bots.channels.add.source.moveNote', { name: bot.name })}
                 </p>
+              ) : !credentialsHere ? (
+                // Tokens and secrets are typed where they are stored; they never travel to another computer.
+                <p className="px-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
+                  {t('bots.remoteSettings.finishOnHost', { device: remoteName })}
+                </p>
+              ) : channel === 'imessage' ? (
+                <>
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.hint')}</p>
+                  {(Object.keys(imessage) as Array<keyof typeof imessage>).map(key => (
+                    <FormField key={key} label={t(`bots.channels.add.imessage.${key}Label`)}>
+                      {control => <Input {...control} mono secret={key === 'password'} value={imessage[key]}
+                        onChange={value => setIMessage(previous => ({ ...previous, [key]: value }))}
+                        placeholder={editing && key === 'password' ? t('bots.channels.edit.keepPassword') : t(`bots.channels.add.imessage.${key}Placeholder`)} autoComplete="off"
+                        spellCheck={false} disabled={busy} secretTipContentClassName="z-[10001]" />}
+                    </FormField>
+                  ))}
+                </>
               ) : channel === 'telegram' ? (
                 <>
                   <FormField label={t('bots.channels.add.telegram.tokenLabel')}>
@@ -811,21 +1043,57 @@ function BotChannelAddDialog({
                 </>
               ) : channel === 'feishu' ? (
                 <>
-                  <FormField label={t('bots.channels.add.feishu.serviceLabel')}>
-                    {(control) => (
-                      <Select
-                        id={control.id}
-                        label={t('bots.channels.add.feishu.serviceLabel')}
-                        value={service}
-                        options={[
-                          { value: 'feishu', label: t('bots.channels.platform.feishu') },
-                          { value: 'lark', label: t('bots.channels.platform.lark') },
-                        ]}
-                        onValueChange={(next) => setService(next === 'lark' ? 'lark' : 'feishu')}
-                        disabled={busy}
-                      />
-                    )}
-                  </FormField>
+                  <SegmentedControl
+                    aria-label={t('bots.channels.add.feishu.serviceLabel')}
+                    value={service}
+                    options={[
+                      { value: 'feishu', label: t('bots.channels.platform.feishu') },
+                      { value: 'lark', label: t('bots.channels.platform.lark') },
+                    ]}
+                    onValueChange={setService}
+                    disabled={busy}
+                  />
+                  <section className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-3">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-13 leading-[1.5]">
+                      <p className="font-medium text-[var(--text-primary)]">
+                        {t('bots.channels.add.feishu.createPrompt', { service: serviceName })}
+                      </p>
+                      <a
+                        href={FEISHU_APP_LAUNCHER_URL[service]}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void window.electronAPI.openExternal?.(FEISHU_APP_LAUNCHER_URL[service]);
+                        }}
+                        className="inline-flex items-center gap-0.5 text-[var(--text-secondary)] underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      >
+                        {t('bots.channels.add.feishu.createLink', { service: serviceName })}
+                        <ArrowUpRight size={13} aria-hidden="true" className="shrink-0" />
+                      </a>
+                    </div>
+                    <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
+                      {t('bots.channels.add.feishu.credentialsHint')}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      tone="quiet"
+                      size="sm"
+                      className="w-fit justify-start gap-1 px-1 text-[var(--text-secondary)]"
+                      aria-expanded={guideOpen}
+                      aria-controls={guideId}
+                      onClick={() => setGuideOpen((open) => !open)}
+                    >
+                      <ChevronRight size={12} aria-hidden="true" className={cn('shrink-0 transition-transform motion-reduce:transition-none', guideOpen && 'rotate-90')} />
+                      {t('bots.channels.add.feishu.stepsLabel')}
+                    </Button>
+                    <Collapse open={guideOpen} id={guideId}>
+                      <ol className="list-decimal space-y-2 pl-5 text-12 leading-[1.5] text-[var(--text-secondary)]">
+                        <li>{t('bots.channels.add.feishu.stepCreate')}</li>
+                        <li>{t('bots.channels.add.feishu.stepCredentials')}</li>
+                        <li>{t('bots.channels.add.feishu.stepConnect', { service: serviceName })}</li>
+                      </ol>
+                    </Collapse>
+                  </section>
                   <FormField label={t('bots.channels.add.feishu.appIdLabel')}>
                     {(control) => (
                       <Input
@@ -988,7 +1256,11 @@ function BotChannelAddDialog({
                 loading={busy}
                 disabled={!canSubmit || busy}
               >
-                {t(busy ? 'bots.channels.add.connecting' : 'bots.channels.add.confirm')}
+                {busy
+                  ? t('bots.channels.add.connecting')
+                  : editing ? t('bots.channels.edit.save') : manualFeishu
+                    ? t('bots.channels.add.feishu.confirm', { service: serviceName })
+                    : t('bots.channels.add.confirm')}
               </Button>
             </div>
           </form>

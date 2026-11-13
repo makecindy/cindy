@@ -4,6 +4,7 @@ import {
   buildMessageSourceNote,
   describeMessageSourceSender,
   isCrossDeviceSourceSessionId,
+  parseSourceSessionTarget,
   messageSourceIdEntries,
   formatSourceRef,
   promptSafeSourceName,
@@ -45,6 +46,13 @@ describe('promptSafeSourceName', () => {
 });
 
 describe('formatSourceRef', () => {
+  // #7631: the task badge and model note identify a local app, never a plugin.
+  it('keeps local application attribution and IDs consistent for display and handoff', () => {
+    const sourcePlugin = { pluginId: 'local-app:com.taptap.pc', name: 'TapTap' };
+    expect(messageSourceIdEntries({ sourcePlugin })).toEqual([{ kind: 'localApp', id: 'com.taptap.pc' }]);
+    expect(buildMessageSourceNote(messageSourceSenderFromMeta({ sourcePlugin })))
+      .toBe('[消息来源] 本条由本机应用「TapTap」(app_id: com.taptap.pc) 发送，不是用户本人输入。');
+  });
   it('pairs every name with its id', () => {
     expect(formatSourceRef('发布检查', 'session_id', 's-1')).toBe('「发布检查」(session_id: s-1)');
   });
@@ -170,6 +178,12 @@ describe('messageSourceIdEntries', () => {
     ]);
   });
 
+  it('does not attribute an auto-bridge batch to its first Worker', () => {
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderLabel: '', senderSessionId: 'w-1', autoBridge: true, autoBridgeBatchCount: 2 } })).toEqual([]);
+    // 单条仍定位发送方 Worker。
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderLabel: 'Backend', senderSessionId: 'w-1' } })).toEqual([{ kind: 'session', id: 'w-1' }]);
+  });
+
   it('returns nothing for hook channels, redacted sources and local input', () => {
     expect(messageSourceIdEntries({ origin: { kind: 'scheduler', scheduleId: 'hook:c' } })).toEqual([]);
     expect(messageSourceIdEntries({ origin: { kind: 'scheduler' } })).toEqual([]);
@@ -218,6 +232,18 @@ describe('buildMessageSourceNote', () => {
   it('returns null for local user input', () => {
     expect(buildMessageSourceNote(undefined)).toBeNull();
   });
+
+  // bot-group-chat.md「群里的 Cindy」(2026-11-12): only the requester's own computer runs a request to
+  // the group's Cindy, so the note says it is this owner's request, unlike every other relayed source.
+  // The bubble label reads the same stamp; its member ID is the label's ID.
+  it('states that a request to the group Cindy is the owner speaking in the group', () => {
+    const meta = { origin: { kind: 'session', senderSessionId: '', displayText: 'x',
+      groupRequest: { groupId: 'g-1', groupName: '产品群\n', speakerId: 'm-1', speakerName: 'Chris' } } };
+    const sender = messageSourceSenderFromMeta(meta)!;
+    expect(buildMessageSourceNote(sender)).toBe('[消息来源] 本条由「Chris」(member_id: m-1)在群聊「产品群」(group_id: g-1)里交给群里的 Cindy，'
+      + '发言人就是本机主人；附带的群聊新消息是群里其他人说的话，只作背景。这一轮最后的回答会作为群里 Cindy 的回复发回群里。');
+    expect(messageSourceIdEntries(meta)).toEqual([{ kind: 'member', id: 'm-1' }]);
+  });
 });
 
 describe('buildClientDeviceNote', () => {
@@ -260,5 +286,14 @@ describe('isCrossDeviceSourceSessionId', () => {
     for (const local of [undefined, '', 'task-1', '::task-1', 'dev-A::']) {
       expect(isCrossDeviceSourceSessionId(local)).toBe(false);
     }
+  });
+});
+
+// Routing must preserve the explicit device, while redacted/malformed sources stay inert.
+describe('parseSourceSessionTarget', () => {
+  it('splits a stamped source and preserves same-host legacy ids', () => {
+    expect(parseSourceSessionTarget('dev-A::task-1')).toEqual({ deviceId: 'dev-A', sessionId: 'task-1' });
+    expect(parseSourceSessionTarget('task-1')).toEqual({ sessionId: 'task-1' });
+    for (const id of [undefined, '', '::task-1', 'dev-A::']) expect(parseSourceSessionTarget(id)).toBeNull();
   });
 });

@@ -1,3 +1,9 @@
+import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { usePluginUiWindowCandidates, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
+import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -20,7 +26,6 @@ import { getSplitSessionIds, useSplitGroup } from '@/features/cc-agent/splitGrou
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
-import { GhostPanelBubbleLayer } from '@/cindy-brain/GhostPanelBubbleLayer';
 import {
   migrateLegacySidebarCollapsed,
   readPanelCollapsed,
@@ -30,17 +35,23 @@ import { BuiltinPanelBridgeProvider } from '@/panels/BuiltinPanelBridge';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { UpdateNoticeDialog } from '@/components/UpdateNoticeDialog';
 import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictDialogHost';
-import { InterruptedTasksResumeDialog } from '@/features/cc-agent/InterruptedTasksResumeDialog';
+import { StartupRecoveryDialogs } from '@/components/log-support/StartupRecoveryDialogs';
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { TaskRemoteDesktopButton } from '@/features/remote-desktop/TaskRemoteDesktopButton';
+import {
+  TASK_LIVE_SCREEN_LIMIT,
+  TaskLiveScreenButtons,
+  useAutoOpenTaskLiveScreens,
+} from '@/features/remote-desktop/TaskLiveScreenButtons';
+import { useTaskLiveScreens } from '@/features/remote-desktop/useTaskLiveScreens';
+import { installLiveScreenRelay } from '@/features/remote-desktop/liveScreenRelay';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { useAgentIslandRemoteSessionsSync } from '@/features/device-link/agentIslandRemoteSessions';
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { ScheduleSessionIndexOwner } from '@/features/scheduler/components/ScheduleSessionIndexOwner';
-import { AppBadgeAttentionSync } from '@/components/layout/AppBadgeAttentionSync';
 import { usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -52,11 +63,27 @@ import {
   ensureHydrated,
   getBucket,
   getTabSnapshot,
+  importReturnedTabState,
+  removeTabLocally,
   importTabSnapshot,
+  refreshSessionFromDb,
   resetCachesForHostTransition,
+  setActiveTab,
 } from '@/features/right-sidebar/store';
 import { browserWebviewPool } from '@/features/right-sidebar/lib/browserWebviewPool';
-import { markAllPtyDetached } from '@/features/right-sidebar/plugins/terminal/lib/xtermPool';
+import {
+  findGlobalTab,
+  rememberPluginWindowPlacement,
+  setActiveGlobalTabId,
+  type PluginViewTabState,
+} from '@/features/right-sidebar/globalTabs';
+import { TabGroupHostProvider, type TabGroupHostValue } from '@/features/right-sidebar/tabGroupHost';
+import { useTabGroupPanes } from '@/features/right-sidebar/tabGroupPanes';
+import { TabDragController } from '@/features/right-sidebar/TabDragController';
+import {
+  markAllPtyDetached,
+  markPtyDetached,
+} from '@/features/right-sidebar/plugins/terminal/lib/xtermEntries';
 import {
   bootstrapRsbWindowState,
   getRsbWindowUiState,
@@ -76,8 +103,14 @@ import { useSidebarResize } from '@/hooks/useSidebarResize';
 import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { useSidebarPeek } from '@/hooks/useSidebarPeek';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { useRetainedRightSidebarMount } from '@/hooks/useRetainedRightSidebarMount';
 import { useRightSidebarResize } from '@/hooks/useRightSidebarResize';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
+import {
+  GlobalVoiceCallHost,
+  RemoteVoiceCallSurface,
+  VoiceCallFloatingSlot,
+} from '@/features/bots/voice/GlobalVoiceCall';
 import { useUpdateNotice } from '@/hooks/useUpdateNotice';
 import { syncNotificationsEnabledToMain } from '@/hooks/useNotificationSettings';
 import {
@@ -85,6 +118,8 @@ import {
   toggleAgentIslandSoundEnabled,
 } from '@/hooks/useAgentIslandSettings';
 import { requestNewWorkerFromShortcut } from '@/features/cc-agent/lib/newWorkerShortcut';
+import { useSessionBrowseHistory } from '@/features/cc-agent/useSessionBrowseHistory';
+import { useAuth } from '@/contexts/AuthContext';
 // chat-data-localization F1 V0.4 / M-FE6
 import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
@@ -94,6 +129,7 @@ import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
+import { FloatingUpdateBanner } from '@/components/sidebar/UpdateBanner';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
@@ -107,17 +143,19 @@ import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchComma
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { ensureBotProfilesLoaded, getBotProfiles } from '@/features/bots/botStore';
-import { botRouteForOwnedSession, createSessionEntryNavigator, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
+import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
+import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
+import { readRemoteBots } from '@/features/bots/useRemoteBots';
 import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryLocationCommits';
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
 import { requestProviderShareJoin } from '@/features/provider-share/joinIntent';
 import { ProviderShareGlobalHost } from '@/features/provider-share/ProviderShareGlobalHost';
+import { RelayShareGlobalHost } from '@/features/relay-share/RelayShareGlobalHost';
+import { applyScreenshotComposeRequest } from '@/features/region-screenshot/screenshotTaskHandoff';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
   isAgentIslandVisibleSessionOwnedByBotRoute,
-  resolveAgentIslandVisibleSessionFromRouteTarget,
   resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionIdFromPath,
 } from '@/lib/agentIslandVisibleSessionRoute';
@@ -226,7 +264,7 @@ function SidebarPinSpacer({ width }: { width: number }) {
   return (
     <div
       aria-hidden
-      className="h-full shrink-0 transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0"
+      className="h-full shrink-0 transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0"
       style={{ width: animatedWidth }}
     />
   );
@@ -238,6 +276,7 @@ export function MainLayout() {
   usePendingAlertAttention();
   const splitGroup = useSplitGroup();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
+  const [performanceTraceStatusHost, setPerformanceTraceStatusHost] = useState<HTMLDivElement | null>(null);
   const [sharedTaskInvitation, setSharedTaskInvitation] = useState<{ link: string; id: number } | null>(null);
   const invitationSequence = useRef(0);
   const [shareImportRequest, setShareImportRequest] = useState<{
@@ -290,9 +329,22 @@ export function MainLayout() {
   // 实例）会经 Outlet context 的 setRightSidebarAvailable 置 true，卸载时置 false。
   // 据此决定是否渲染右栏面板：离开聊天视图 → 面板卸载，不会卡在展开态且无入口关闭。
   const [rightSidebarAvailable, setRightSidebarAvailable] = useState(false);
+  // 经过不声明右栏的路由时保持挂载并强制折叠，避免销毁内置浏览器 guest（#6485）。
+  const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
+    useRetainedRightSidebarMount({
+      available: rightSidebarAvailable,
+      loaded: rsbWindow.loaded,
+      detached: rsbDetached,
+    });
   // 当前 cc-agent session id —— 由 CCAgentSessionView 的路由主实例(ownsRoute=true)经 outlet context
   // 推上来,Shell 据此从 module-level store 拉对应桶的 tab 列表持久化数据。null = 不在聊天会话内。
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
+  const sidebarBotProfiles = useBotProfiles();
+  const sidebarBot = rightSidebarSessionId
+    ? findBotProfileForSession(sidebarBotProfiles, rightSidebarSessionId) : undefined;
+  const sidebarBotOwner = sidebarBot && rightSidebarSessionId
+    ? { botId: sidebarBot.id, canonical: canonicalBotSessionId(sidebarBot) === rightSidebarSessionId }
+    : null;
   const [rightSidebarSubagentsAvailable, setRightSidebarSubagentsAvailable] = useState<
     boolean | undefined
   >(undefined);
@@ -335,6 +387,10 @@ export function MainLayout() {
     remoteHostId: string | null;
     deviceLinkDeviceId?: string | null;
   }>({ workdir: '', remoteHostId: null, deviceLinkDeviceId: undefined });
+  const rightSidebarWorkdirInfoRef = useRef(rightSidebarWorkdirInfo);
+  rightSidebarWorkdirInfoRef.current = rightSidebarWorkdirInfo;
+  const rightSidebarSubagentsAvailableRef = useRef(rightSidebarSubagentsAvailable);
+  rightSidebarSubagentsAvailableRef.current = rightSidebarSubagentsAvailable;
   const setRightSidebarWorkdir = useCallback(
     (workdir: string, remoteHostId: string | null = null, deviceLinkDeviceId?: string | null) =>
       // 同值 bailout(返回 prev 引用):恢复"字符串 state 同值不重渲染"的旧语义。
@@ -358,9 +414,25 @@ export function MainLayout() {
     !isSharedTaskPeer(rightSidebarWorkdirInfo.deviceLinkDeviceId)
       ? rightSidebarWorkdirInfo.deviceLinkDeviceId
       : null;
-  // Windows 内容区右上的右栏唤起 chip:仅面板收起或分离时在场。
+  // 那台电脑的插件为当前任务开着的设备（例如模拟器）：画面和操作都在该插件自己的任务页里，
+  // 所以本机装着同一个插件时，设备出现就在右侧栏自动打开它的任务页（与任务在本机时同一个
+  // 页面）；没装时提示去安装。远程桌面入口旁另给一个找回入口。旧版电脑或读不到时都没有。
+  // 主窗口替插件页面持有到那台电脑的画面连接并转交画面；自己不画任何东西。
+  useEffect(() => installLiveScreenRelay(), []);
+  const taskLiveScreens = useTaskLiveScreens(remoteDesktopDeviceId, rightSidebarSessionId);
+  const liveScreenEntries = useAutoOpenTaskLiveScreens(
+    remoteDesktopDeviceId ? rightSidebarSessionId : null,
+    taskLiveScreens,
+  );
+  const taskLiveScreenEntries =
+    remoteDesktopDeviceId && rightSidebarSessionId ? liveScreenEntries : [];
+  // Windows chip 栈按入口个数让位：远程桌面 1 个 + 设备画面若干，每个 28px + 4px 间距。
+  const remoteTaskEntriesWidth = remoteDesktopDeviceId
+    ? (1 + Math.min(taskLiveScreenEntries.length, TASK_LIVE_SCREEN_LIMIT)) * 32
+    : 0;
+  // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
   const showWindowsRightSidebarTrigger =
-    rightSidebarAvailable && rsbWindow.loaded && (rsbDetached || isRightSidebarCollapsed);
+    rightSidebarAvailable && rsbWindow.loaded;
   const rowRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   // B1a(去方位化):左侧占位块(pinning spacer + Sidebar)的 wrapper。
@@ -420,6 +492,15 @@ export function MainLayout() {
 
   const isSettingsRoute = location.pathname === '/settings';
 
+  // 任务浏览栈与它的快捷键监听挂在常驻壳层:设置页会整个卸载左上按钮簇
+  // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
+  // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
+  // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
+  const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+  const browseHistory = useSessionBrowseHistory({
+    ownerKey: `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`,
+  });
+
   // 完全隐藏态 hover 临时浮出(peek)状态机 —— hover 折叠按钮抽屉滑出预览,
   // 点击/⌘B 固定展开(pin)。rail 态(isCollapsed=false)不触发。见 useSidebarPeek。
   const sidebarPeek = useSidebarPeek({
@@ -457,6 +538,8 @@ export function MainLayout() {
     if (!document.hasFocus()) return;
     if (isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute(location.pathname)) return;
     if (isAgentIslandVisibleSessionOwnedByBotRoute(location.pathname)) return;
+    // The task view confirms metadata and rendered history before acknowledging a single task.
+    if (typeof visibleSessions === 'string') return;
     void window.electronAPI.agentIsland?.setVisibleSession?.(
       visibleSessions,
     );
@@ -469,7 +552,9 @@ export function MainLayout() {
   // 会话切换上报(订阅槽① did-session-switched 数据源):路由变化即报当前
   // 台前会话,平台无关、无 agent-island 门控(它是 mac-only + 焦点门,借用会
   // 让 Windows / 后台窗口漏报)。去重与投递资格全在 main,这里只做纯上报。
+  // 伙伴会话路由由校验过归属的伙伴页面自己上报(useBotPluginFocusedSession)。
   useEffect(() => {
+    if (isAgentIslandVisibleSessionOwnedByBotRoute(location.pathname)) return;
     window.electronAPI?.ghosts?.noteSessionFocused?.(
       resolveAgentIslandVisibleSessionIdFromPath(location.pathname),
     );
@@ -517,16 +602,23 @@ export function MainLayout() {
   const currentPathRef = useRef(`${location.pathname}${location.search}`);
   currentPathRef.current = `${location.pathname}${location.search}`;
   const navigateToOrdinarySession = useCallback(
-    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true) => {
-      // device-link 远程会话本地无 row:resolveSessionRoute 内部的 sessionService.get
-      // 会 miss → 远程 Orca lead/worker 被当普通会话路由,CCAgentSessionView 再
-      // redirect 到 orca 路由时会丢 searchJump 锚点。传入远程镜像的 session 对象,
-      // 让 Orca 路由一步到位(Codex review P2,与 SessionLinkChip 同款处理)。
+    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true, deviceId?: string) => {
+      // 已知镜像可提前解析 Orca 角色；明确指定电脑时，先由任务入口恢复并校验
+      // 来源，避免读到本机同 ID。Worker 后续转到 Lead 时保留 device 和 searchJump。
       const remoteSession =
-        remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) => s.id === sessionId) ?? null;
-      void resolveSessionRoute(sessionId, remoteSession).then((target) => {
+        remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
+          s.id === sessionId && (!deviceId || s.deviceLinkDeviceId === deviceId)) ?? null;
+      const route = deviceId
+        ? Promise.resolve(remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId)?.route
+          ?? `/cc-agent/${encodeURIComponent(sessionId)}`)
+        : resolveSessionRoute(sessionId, remoteSession);
+      void route.then((target) => {
         if (!isLatest()) return;
-        const visibleSession = resolveAgentIslandVisibleSessionFromRouteTarget(target);
+        if (deviceId && target !== '/cc-agent') {
+          const url = new URL(target, 'https://cindy.invalid');
+          url.searchParams.set('device', deviceId);
+          target = `${url.pathname}${url.search}`;
+        }
         if (messageClientId) {
           // 带消息锚点:即使已在目标路由也要 navigate——新的 location.state 才能
           // 触发 CCAgentSessionView 的 searchJump 消费 effect(定位 + 高亮)。
@@ -544,17 +636,7 @@ export function MainLayout() {
         } else if (currentPathRef.current !== target) {
           navigate(target);
         }
-        // 通知点击跳转专用的 visible-session 上报:故意只 gate isAgentIslandSupported(),
-        // 不像上面的 syncAgentIslandVisibleSession / OrcaSplitView 那样加 document.hasFocus()
-        // 或 orca-split / workdir-browse 归属守卫。原因:通知触发跳转时主窗口 focus 往往还
-        // 没稳定(见 main 端 isAgentIslandPendingFocusAck 放宽),本路径是唯一能在这段 focus
-        // 竞态里把灵动岛收起的上报来源。若把 orca / files 路由交还各自 owner 组件,它们都带
-        // document.hasFocus() 守卫、竞态期不会上报,首个权限卡片会退回"必须先点窗口才收起"
-        // 的旧 bug。worker deep link 直接按 route query 上报 [Lead, Worker]，普通会话
-        // 上报单个 session；窗口 focus 稳定后 owner 组件继续维护同一份可见集合。
-        if (isAgentIslandSupported()) {
-          void window.electronAPI.agentIsland?.setVisibleSession?.(visibleSession);
-        }
+
       });
     },
     [navigate],
@@ -564,12 +646,25 @@ export function MainLayout() {
   // One navigator for the layout's lifetime: its sequence must span re-renders so a
   // late lookup for an earlier notification cannot override a newer click.
   const [navigateToSession] = useState(() => createSessionEntryNavigator({
-    readKnownBotRoute: (sessionId) => botRouteForOwnedSession(getBotProfiles(), sessionId),
+    captureOwner: () => {
+      const owner = getDataOwnerGeneration();
+      return () => isDataOwnerGenerationCurrent(owner);
+    },
+    isRemoteDevice: async (deviceId) => deviceId !== await window.electronAPI.getDeviceId(),
+    readKnownBotRoute: (sessionId) => botRouteForOwnedSession(getBotProfiles(), sessionId)
+      ?? remoteBotRouteForSession(readRemoteBots(), sessionId),
     resolveBotRoute: (sessionId) => resolveBotRouteForSessionEntry(sessionId, {
       readProfiles: getBotProfiles,
       loadProfiles: ensureBotProfilesLoaded,
     }),
-    openBotRoute: (route, islandEntryId) => {
+    openBotRoute: (route, islandEntryId, messageClientId, sessionId) => {
+      if (messageClientId && sessionId) {
+        sessionEntryDepsRef.current.navigate(route, { state: {
+          ...(islandEntryId ? islandEntryRouteState(islandEntryId) : {}),
+          searchJump: { kind: 'conversation-search', sessionId, messageId: messageClientId, messageIdKind: 'clientId', messageClientId },
+        } });
+        return;
+      }
       // 只读历史由自己的归属门禁在显示后处置被点的卡:点击编号随路由状态交过去,已在该页也要重新交一次。
       if (islandEntryId) {
         sessionEntryDepsRef.current.navigate(route, {
@@ -583,8 +678,8 @@ export function MainLayout() {
     // 群专线没有可处置报错的横幅:目标地址提交后请 main
     // 处置这次点击的那张卡(main 只认最近一次点击与当时的卡片身份,见 BotSessionEntryTarget)。
     consumeAlert: requestIslandEntryAlertDisposal,
-    openOrdinary: (sessionId, messageClientId, isLatest) =>
-      sessionEntryDepsRef.current.navigateToOrdinarySession(sessionId, messageClientId, isLatest),
+    openOrdinary: (sessionId, messageClientId, isLatest, deviceId) =>
+      sessionEntryDepsRef.current.navigateToOrdinarySession(sessionId, messageClientId, isLatest, deviceId),
   }));
   navigateToSessionRef.current = navigateToSession;
   // 已提交的地址交给入口导航器:灵动岛卡片的处置等到目标地址真正提交后才发。
@@ -661,17 +756,28 @@ export function MainLayout() {
   const handleDeepLinkPayload = useCallback(
     (
       payload:
-        | { type: 'session'; id: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
-        | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing'; connect?: string; intent?: 'topup' },
+        | { type: 'plugin'; pluginId: string }
+        | { type: 'local-plugin-share'; snapshotId: string }
+        | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
+      if (payload.type === 'chat-message') {
+        const search = new URLSearchParams({ messageId: payload.messageId });
+        if (payload.threadRootId) search.set('threadRootId', payload.threadRootId);
+        if (payload.conversationKind === 'direct') search.set('conversationKind', 'direct');
+        navigate(`/bots/groups/${encodeURIComponent(payload.groupId)}?${search}`);
+        return;
+      }
       if (payload.type === 'chat-invite') {
         requestChatInvite(payload.token);
         return;
@@ -685,11 +791,32 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'shared-task-join') {
-        setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
+        setSharedTaskInvitation({ link: payload.link ?? buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
+        return;
+      }
+      if (payload.type === 'local-plugin-share') {
+        navigate(`/plugins?share=${encodeURIComponent(payload.snapshotId)}`);
+        return;
+      }
+      if (payload.type === 'plugin') {
+        navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
+        return;
+      }
+      if (payload.type === 'installed-plugin') {
+        // The link carries the plugin's own id; the plugin page selects by instance key
+        // (`_root__my-browser`), so resolve it against what is installed.
+        const resolved = payload.ghostId
+          ? resolvePluginInstanceQuery(readInstalledGhostsSnapshot(), payload.ghostId)
+          : null;
+        navigate(
+          resolved?.status === 'unique'
+            ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(resolved.ghost))}`
+            : '/plugins',
+        );
         return;
       }
       if (payload.type === 'session') {
-        navigateToSession(payload.id, payload.messageClientId, payload.islandEntryId);
+        navigateToSession(payload.id, payload.messageClientId, payload.islandEntryId, payload.deviceId);
         return;
       }
       if (payload.type === 'project') {
@@ -723,7 +850,9 @@ export function MainLayout() {
             ? `&connect=${encodeURIComponent(payload.connect)}`
             : '';
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}`);
+        // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
+        const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
       }
     },
     [navigate, navigateToSession, openShareImport],
@@ -748,11 +877,11 @@ export function MainLayout() {
         void pullChatInvitations();
         return;
       }
-      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join') {
+      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join' && payload.type !== 'plugin' && payload.type !== 'local-plugin-share') {
         handleDeepLinkPayload(payload);
         return;
       }
-      // Main retains imports through login. Both this wake-up and the mount pull
+      // Main retains these intents through login. Both this wake-up and the mount pull
       // use the same atomic take, so either ordering navigates only once.
       void pullChatInvitations();
     });
@@ -766,6 +895,23 @@ export function MainLayout() {
     void pullChatInvitations();
   }, [handleDeepLinkPayload, pullChatInvitations]);
 
+  // 全局截图「问 Cindy / 翻译 / 解释 / 提取文字」: 挂载时与每次唤醒时各取一次,
+  // main 侧 take 是原子的, 两条路径不会重复处理同一张截图。
+  useEffect(() => {
+    const compose = window.electronAPI.regionScreenshotCompose;
+    if (!compose) return;
+    const pull = () => {
+      void compose
+        .take()
+        .then((request) => {
+          if (request) applyScreenshotComposeRequest(request, navigate);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    return compose.onWake(pull);
+  }, [navigate]);
+
   const handleToggleSidebar = useCallback(() => {
     setIsSidebarCollapsed((prev) => {
       const next = !prev;
@@ -776,7 +922,7 @@ export function MainLayout() {
   }, []);
 
   // RightSidebar 的命令式句柄。toggle 按钮 onClick 时主动调 requestAnimateNextChange()
-  // 告诉 RightSidebar "这次 prop 变化走 250ms 动画"。其它任何 isCollapsed 变化路径
+  // 告诉 RightSidebar "这次 prop 变化走 200ms 动画"。其它任何 isCollapsed 变化路径
   // (sessionId 切换 / 草稿切换 / init)都不调,RightSidebar 默认走"直接同步"无动画。
   const rightSidebarRef = useRef<RightSidebarHandle>(null);
 
@@ -836,7 +982,7 @@ export function MainLayout() {
 
   // 关掉右侧栏最后一个 tab 时自动收起(由 RightSidebarShell 在 tab 数 >0→0 时回调)。
   // detached 子窗口形态不在此处理(那时主窗根本不渲染内嵌 Shell,也收不到此回调)。
-  // 走 requestAnimateNextChange 让收起有 250ms 动画,与用户手动折叠观感一致(规则 7)。
+  // 走 requestAnimateNextChange 让收起有 200ms 动画,与用户手动折叠观感一致(规则 7)。
   // sessionId 用 ref 取最新值,避免回调闭包捕获旧 session。
   const handleRightSidebarEmptied = useCallback(() => {
     if (rsbDetached) return;
@@ -963,6 +1109,16 @@ export function MainLayout() {
   const handleMaximizeRightSidebar = useCallback(() => {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
+  // 左 / 上 / 下边页签组:按「组里有没有可见页签」注册 / 注销 pane,并保证树里有它。
+  useTabGroupPanes({
+    sessionId: rightSidebarSessionId,
+    enabled: rsbWindow.loaded && !rsbDetached && !isSettingsRoute,
+    // 离开聊天页(如 /plugins)时在聊天页出现过的组停放而不卸载,webview 不重载(#8081)。
+    onChatRoute: rightSidebarAvailable,
+    remoteHostId: rightSidebarWorkdirInfo.remoteHostId,
+    deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
+    subagentsAvailable: rightSidebarSubagentsAvailable,
+  });
   useEffect(() => {
     if (!isRightSidebarMaximized) return;
     const handler = (e: KeyboardEvent) => {
@@ -1005,12 +1161,15 @@ export function MainLayout() {
       remoteHostId: rightSidebarWorkdirInfo.remoteHostId,
       deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
       subagentsAvailable: rightSidebarSubagentsAvailable,
+      botOwner: sidebarBotOwner,
       available: rightSidebarAvailable,
     });
   }, [
     rightSidebarSessionId,
     rightSidebarWorkdirInfo,
     rightSidebarSubagentsAvailable,
+    sidebarBot?.id,
+    sidebarBotOwner?.canonical,
     rightSidebarAvailable,
   ]);
 
@@ -1019,7 +1178,7 @@ export function MainLayout() {
   useEffect(() => {
     if (isSecondaryWindow()) return;
     return window.electronAPI.rightSidebarWindow.onCommand((command) => {
-      if (command.sessionId !== rightSidebarSessionIdRef.current) return;
+      if (command.type !== 'open-plugin-view' && command.sessionId !== rightSidebarSessionIdRef.current) return;
       void executeSidebarCommand(command).catch((err) => {
         applicationMenuLog.warn('execute attached sidebar command failed', err);
       });
@@ -1076,14 +1235,140 @@ export function MainLayout() {
     void bootstrapRsbWindowState();
   }, []);
 
-  // 4) 「在新窗口打开」入口(mac 浮层 / win TabBar 按钮共用):开偏好 + 弹出。
-  const handleDetachRightSidebar = useCallback(() => {
+  // 4) 「在独立窗口中打开」页签(Shell 顶栏按钮作用于当前页签 / 页签右键菜单):
+  //    只把这一个页签弹出到自己的窗口,侧边栏继续留在主窗显示其余页签。
+  //    弹出前释放本窗对该页签的独占资源:浏览器 webview 归还池(弹出窗口会重新
+  //    物化并向 main 重新登记),终端标记 PTY 未附着(弹出窗口 re-attach 抢走 sink,
+  //    交回后本窗必须再 attach 一次)。不可持久化会话附整桶内存快照。
+  const handleDetachRightSidebarTab = useCallback((
+    tabId: string,
+    targetWindowId?: string,
+    position?: { x: number; y: number },
+  ) => {
     if (isSecondaryWindow()) return;
-    writeCollapsedFor(rightSidebarSessionId, false);
-    const snapshot = getTabSnapshot(rightSidebarSessionId);
-    const handoff = snapshot ? { snapshots: [snapshot] } : undefined;
-    void window.electronAPI.rightSidebarWindow.setDetached(true, handoff).catch(() => undefined);
-  }, [rightSidebarSessionId]);
+    const api = window.electronAPI.sidebarTabWindow;
+    if (!api?.open) return;
+    const target = {
+      ...(targetWindowId ? { targetWindowId } : {}),
+      ...(position ? { position } : {}),
+    };
+    const info = rightSidebarWorkdirInfoRef.current;
+    const context = {
+      workdir: info.workdir || null,
+      remoteHostId: info.remoteHostId,
+      deviceLinkDeviceId: info.deviceLinkDeviceId,
+      subagentsAvailable: rightSidebarSubagentsAvailableRef.current,
+    };
+    // 全局页签(插件视图)不属于任何任务:无桶快照,也没有任务级资源要释放。
+    const globalTab = findGlobalTab(tabId);
+    if (globalTab) {
+      // 插件视图弹过窗口:记住,下次从左侧栏入口点开直接进窗口(开成功后才记,开失败不留错误记忆)。
+      const instanceId = (globalTab.state as PluginViewTabState | null)?.instanceId;
+      void api
+        .open({ tabId, sessionId: null, context, handoff: null, ...target })
+        .then(() => {
+          if (instanceId) rememberPluginWindowPlacement(instanceId, true);
+        })
+        .catch((err) => {
+          applicationMenuLog.warn('pop out global sidebar tab failed', { tabId, err });
+        });
+      return;
+    }
+    const sessionId = rightSidebarSessionIdRef.current;
+    if (!sessionId) return;
+    const tab = getBucket(sessionId).tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    // 窗口真的建出来之后才释放主窗里的浏览器 webview / 标记终端已分离:
+    // 开窗失败(main 抛错)时页面状态原样留在侧栏,不被销毁重载。
+    void api
+      .open({ tabId, sessionId, context, handoff: getTabSnapshot(sessionId), ...target })
+      .then(() => {
+        if (tab.kind === 'web-browser') browserWebviewPool.release(tabId);
+        if (tab.kind === 'terminal') markPtyDetached(tabId);
+      })
+      .catch((err) => {
+        applicationMenuLog.warn('pop out sidebar tab failed', { sessionId, tabId, err });
+      });
+  }, []);
+
+  // 边页签组(左 / 上 / 下)的宿主上下文:与右侧栏拿到的会话上下文同一份。
+  const tabGroupHost = useMemo<TabGroupHostValue>(
+    () => ({
+      sessionId: rightSidebarSessionId,
+      workdir: rightSidebarWorkdirInfo.workdir,
+      remoteHostId: rightSidebarWorkdirInfo.remoteHostId,
+      deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
+      subagentsAvailable: rightSidebarSubagentsAvailable,
+      isMac,
+      onDetachTab: isSecondaryWindow() ? undefined : handleDetachRightSidebarTab,
+      // 左栏完全收起 / rail 态时,窗口左上的红绿灯 / ChromeActions 会压到最左面板顶栏。
+      sidebarCollapsed: isSidebarCollapsed,
+      hasRailChromeActions,
+    }),
+    [
+      handleDetachRightSidebarTab,
+      hasRailChromeActions,
+      isMac,
+      isSidebarCollapsed,
+      rightSidebarSessionId,
+      rightSidebarSubagentsAvailable,
+      rightSidebarWorkdirInfo,
+    ],
+  );
+
+  // 5) 页签从弹出窗口回到侧边栏(合并 / 关窗 / 崩溃):刷新它的数据副本并选中。
+  //    可持久化会话按 SQLite 强制刷新该页签(弹出期间的改动都在 DB);不可持久化
+  //    会话用交回的内存态覆盖。终端同样要重新 attach PTY。侧边栏若因「最后一个页签
+  //    被弹出」而收起,接回时展开。
+  useEffect(() => {
+    if (isSecondaryWindow()) return;
+    const api = window.electronAPI.sidebarTabWindow;
+    if (!api?.onTabReturned) return;
+    return api.onTabReturned(({ sessionId, tabId, snapshot, reason }) => {
+      // 页签在弹出窗口里被关掉:不是交回。丢掉本窗口缓存里的副本,免得窗口归属一清它又出现。
+      if (reason === 'closed') {
+        if (sessionId !== null) removeTabLocally(sessionId, tabId);
+        return;
+      }
+      // 全局页签回来:数据一直在全局存储里,只需选中它并确保侧栏展开。
+      if (sessionId === null) {
+        const globalTab = findGlobalTab(tabId);
+        if (globalTab) {
+          setActiveGlobalTabId(tabId);
+          // 用户主动合并回来 = 不再记「在独立窗口里」;崩溃回来保留记忆。
+          const instanceId = (globalTab.state as PluginViewTabState | null)?.instanceId;
+          if (instanceId && reason === 'merge') rememberPluginWindowPlacement(instanceId, false);
+        }
+        if (isRightSidebarCollapsedRef.current && !rsbDetachedRef.current) {
+          writeCollapsedFor(rightSidebarSessionIdRef.current, false);
+          setIsRightSidebarCollapsed(false);
+        }
+        return;
+      }
+      markPtyDetached(tabId);
+      const refreshed = snapshot
+        ? Promise.resolve(importReturnedTabState(snapshot))
+        : refreshSessionFromDb(sessionId, { forceTabIds: [tabId] });
+      void refreshed
+        .catch((err) => {
+          applicationMenuLog.warn('refresh returned sidebar tab failed', { sessionId, tabId, err });
+        })
+        .then(() => {
+          if (rightSidebarSessionIdRef.current !== sessionId) return;
+          void setActiveTab(sessionId, tabId).catch((err) => {
+            applicationMenuLog.warn('activate returned sidebar tab failed', {
+              sessionId,
+              tabId,
+              err,
+            });
+          });
+          if (isRightSidebarCollapsedRef.current && !rsbDetachedRef.current) {
+            writeCollapsedFor(sessionId, false);
+            setIsRightSidebarCollapsed(false);
+          }
+        });
+    });
+  }, []);
 
   const handlePageZoomIn = useCallback(() => {
     void window.electronAPI.pageZoomIn();
@@ -1149,6 +1434,9 @@ export function MainLayout() {
           break;
         case 'open-issues':
           navigate('/issues');
+          break;
+        case 'open-performance-trace':
+          openPerformanceTrace();
           break;
         case 'new-maker':
           // 与侧栏同口径：继承当前任务电脑，同机保留草稿项目。
@@ -1430,6 +1718,24 @@ export function MainLayout() {
     { stopImmediate: true },
   );
 
+  // Session/tool-pane declarations update Shell state during navigation. Keep
+  // unrelated updates from invalidating the entire routed conversation again.
+  const { settings: pluginSettings, sidebarSections: pluginSidebarSections,
+    titlebarEntries: pluginTitlebarEntries, onGhostsChanged: handleInstalledGhostsChange } = usePluginUiWindowCandidates();
+  const outletContext = useMemo(() => ({
+    sidebarWidth,
+    pluginSettings,
+    rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
+    onToggleRightSidebar: handleOpenRightSidebar,
+    rightSidebarSide,
+    setRightSidebarAvailable,
+    setRightSidebarSessionId: declareRightSidebarSessionId,
+    setRightSidebarWorkdir,
+  }), [
+    sidebarWidth, pluginSettings, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
+    rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir,
+  ]);
+
   return (
     // Shell wraps its entire subtree (Sidebar + <Outlet /> inside <main>) in
     // the feature-sidebar slot provider. Any Feature Layout rendered through
@@ -1450,10 +1756,12 @@ export function MainLayout() {
     <FeatureSidebarSlotProvider
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
+      <FirstRunGuide />
       <ScheduleSessionIndexOwner />
-      {!isSecondaryWindow() && <AppBadgeAttentionSync />}
+      {!isSecondaryWindow() && <PerformanceTrace statusContainer={performanceTraceStatusHost} />}
       <div
         ref={rowRef}
+        data-plugin-ui-element="workspace"
         className={cn(
           'relative flex h-screen bg-content-area text-foreground',
           isDragging && 'select-none cursor-col-resize',
@@ -1464,12 +1772,14 @@ export function MainLayout() {
             flex + shrink-0 与 aside 原有的 flex child 行为一致,不改变布局;
             peek 期 aside 变 fixed 出流,wrapper 宽度自然等于流内 spacer 宽。 */}
         {!isSettingsRoute && (
-          <div ref={sidebarBlockRef} className="flex shrink-0">
+          <div ref={sidebarBlockRef} className="flex shrink-0" data-plugin-ui-element="sidebar">
             {/* pinning 冻结期的流内占位:抽屉保持 fixed 不动,由本 spacer 跑 0→W 的
-                250ms 宽度动画把主区推开;动画结束(peekState 回 idle)后同一帧内
+                200ms 宽度动画把主区推开;动画结束(peekState 回 idle)后同一帧内
                 spacer 卸载、aside 摘掉 fixed 落回流内 —— 两者矩形一致,交换无跳变。 */}
             {sidebarPeek.peekState === 'pinning' && <SidebarPinSpacer width={sidebarWidth} />}
             <Sidebar
+              pluginSections={pluginSidebarSections}
+              pluginSessionId={rightSidebarSessionId}
               isCollapsed={isSidebarCollapsed}
               // peek 抽屉恒以展开态呈现(预览完整列表),rail 视觉在 peek 期强制关闭。
               isRail={sidebarPeek.isPeekVisible ? false : isRailMode}
@@ -1493,6 +1803,7 @@ export function MainLayout() {
           <ChromeActions
             isSidebarCollapsed={isSidebarCollapsed}
             onToggleSidebar={handleToggleSidebar}
+            browseHistory={browseHistory}
             peekTriggerProps={sidebarPeek.triggerProps}
           />
         )}
@@ -1522,15 +1833,20 @@ export function MainLayout() {
                 // Windows 浮动入口每个占 28px + 4px 间距；分屏工具条使用同一占位，
                 // 避免远程桌面 / 面板入口盖住关闭分屏等操作。mac 与左侧入口无需右端让位。
                 style={{
+                  ['--content-top-left-actions-inset' as string]:
+                    !isMac && rightSidebarSide === 'left'
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
+                      : '0px',
                   ['--content-top-right-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'right'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                 }}
               >
                 {/* showCollapsedActions: 完全隐藏(isSidebarCollapsed)**和** rail 态(isRailMode)
-                    都要为浮动 ChromeActions 簇预留 68px 占位 —— rail 下侧栏仅 64px,chrome 簇
-                    贴在 rail 右缘(见上方 sidebarWidth),不留占位会压住会话标题左侧。 */}
+                    都要为浮动 ChromeActions 簇预留占位(CHROME_ACTIONS_GEOMETRY.clusterWidth + 8)
+                    —— rail 下侧栏仅 64px,chrome 簇贴在 rail 右缘(见上方 sidebarWidth),
+                    不留占位会压住会话标题左侧。 */}
                 {/* rail 态在 sidebarVisible 口径里视同"不可见"(codex review): 否则 mac 无
                     headerContent 路由下 ContentHeader 会因 sidebarVisible=true 提前 return null,
                     我们为 rail 浮动 chrome 预留的 spacer 不渲染、按钮悬空。 */}
@@ -1538,18 +1854,41 @@ export function MainLayout() {
                   sidebarVisible={!isSettingsRoute && !isSidebarCollapsed && !isRailMode}
                   showCollapsedActions={!isSettingsRoute && (isSidebarCollapsed || isRailMode)}
                   isSidebarRail={hasRailChromeActions && !rightSidebarOwnsRailChromeActions}
+                  // 展开态侧栏可拖到 180(比按钮簇右缘 202 窄):那一段的按钮悬在 header
+                  // 拖拽区上,由 ContentHeader 按侧栏宽补挖 no-drag。
+                  sidebarWidth={sidebarWidth}
                   // M2(2026-07-09 口径修订):mac 右上浮层随面板在场常驻(折叠
                   // toggle 永远钉窗口右上角),ContentHeader 右端占位不再分侧别。
                   rightSidebarAvailable={rightSidebarAvailable}
                   // mac:远程桌面入口落在顶栏右端,紧挨窗口右上角的右栏开关(右栏展开时
                   // 仍在聊天区顶栏右端)。Windows 走下方内容区 chip 栈。
                   trailing={
-                    isMac && remoteDesktopDeviceId ? (
-                      <TaskRemoteDesktopButton
-                        key={remoteDesktopDeviceId}
-                        deviceId={remoteDesktopDeviceId}
-                        className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
-                      />
+                    pluginTitlebarEntries.length > 0 || (isMac && remoteDesktopDeviceId) ? (
+                      <>
+                        {pluginTitlebarEntries.length > 0 && (
+                          <PluginUiSlotControls
+                            entries={pluginTitlebarEntries}
+                            sessionId={rightSidebarSessionId}
+                            appearance="titlebar"
+                          />
+                        )}
+                        {isMac && remoteDesktopDeviceId && (
+                          <>
+                            {rightSidebarSessionId && (
+                              <TaskLiveScreenButtons
+                                sessionId={rightSidebarSessionId}
+                                entries={taskLiveScreenEntries}
+                                className="mr-1"
+                              />
+                            )}
+                            <TaskRemoteDesktopButton
+                              key={remoteDesktopDeviceId}
+                              deviceId={remoteDesktopDeviceId}
+                              className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
+                            />
+                          </>
+                        )}
+                      </>
                     ) : undefined
                   }
                 >
@@ -1564,8 +1903,8 @@ export function MainLayout() {
                       shrink-0 在 main 的 flex 列里独占一行把内容推下(不遮盖)。放在
                       FadeSwitcher 之外 —— 它是全局状态提示,不参与路由切换动画。 */}
                   <CredentialStoreBanner />
-                  {/* Windows chip 栈:远程桌面入口贴着右栏唤起 chip(唤起 chip 在面板一侧);
-                      右栏展开时唤起 chip 不在,远程桌面入口留在同一角。 */}
+                  {!isSecondaryWindow() && <div ref={setPerformanceTraceStatusHost} className="shrink-0" />}
+                  {/* Windows 的显示侧栏和远程桌面入口始终留在聊天区同一角。 */}
                   {!isMac && (showWindowsRightSidebarTrigger || remoteDesktopDeviceId) && (
                     <div
                       data-testid="right-sidebar-fixed-trigger"
@@ -1581,55 +1920,67 @@ export function MainLayout() {
                       }
                     >
                       {remoteDesktopDeviceId && (
-                        <TaskRemoteDesktopButton
-                          key={remoteDesktopDeviceId}
-                          deviceId={remoteDesktopDeviceId}
-                        />
+                        <>
+                          {rightSidebarSessionId && (
+                            <TaskLiveScreenButtons
+                              sessionId={rightSidebarSessionId}
+                              entries={taskLiveScreenEntries}
+                            />
+                          )}
+                          <TaskRemoteDesktopButton
+                            key={remoteDesktopDeviceId}
+                            deviceId={remoteDesktopDeviceId}
+                          />
+                        </>
                       )}
                       {showWindowsRightSidebarTrigger && (
                         <RightSidebarToggle
-                          action="show"
-                          collapsed
-                          onToggle={handleOpenRightSidebar}
+                          action="toggle"
+                          collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
+                          onToggle={handleToggleRightSidebar}
                           side={rightSidebarSide}
                         />
                       )}
                     </div>
                   )}
+                  <VoiceCallFloatingSlot />
                   <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
-                    <Outlet
-                      context={{
-                        sidebarWidth,
-                        // detached 时主窗口没有内嵌侧栏，始终按折叠态布局；子窗口开闭
-                        // 不改变主窗口浮动控件的占位语义。
-                        rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
-                        onToggleRightSidebar: handleOpenRightSidebar,
-                        // B2b:面板所在侧,聊天视图据此决定展开入口落左上还是右上。
-                        rightSidebarSide,
-                        setRightSidebarAvailable,
-                        setRightSidebarSessionId: declareRightSidebarSessionId,
-                        setRightSidebarWorkdir,
-                      }}
-                    />
+                    <Outlet context={outletContext} />
                   </FadeSwitcher>
                 </ContentHeaderSlot>
+                {/* 开关属于聊天区；窗口向右扩宽时留在原地，再次点击收起侧栏。 */}
+                {isMac && rightSidebarAvailable && rsbWindow.loaded && (
+                  <div
+                    data-testid="right-sidebar-fixed-trigger"
+                    className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+                    style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                  >
+                    <RightSidebarToggle
+                      action="toggle"
+                      collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
+                      onToggle={handleToggleRightSidebar}
+                      side={rightSidebarSide}
+                    />
+                  </div>
+                )}
               </main>
             ),
-            // 右侧边栏 —— 工具面板。在场性沿用原语义:路由声明 rightSidebarAvailable
-            // (仅全屏聊天视图在场)+ detached(在新窗口显示)时内嵌不渲染
+            // 右侧边栏 —— 工具面板。首次在场沿用原语义:路由声明 rightSidebarAvailable
+            // (仅全屏聊天视图在场),此后保持挂载(不可用时强制折叠);detached(在新窗口显示)时内嵌不渲染
             // (webview 池 / 终端等资源不能双实例,内容由子窗口 renderer 独占)。
             rightTabs:
-              rightSidebarAvailable && rsbWindow.loaded && !rsbDetached ? (
+              rightSidebarMounted ? (
                 <RightSidebar
                   ref={rightSidebarRef}
-                  isCollapsed={isRightSidebarCollapsed}
+                  // 路由不声明右栏时仅派生强制折叠，不写入 isRightSidebarCollapsed，
+                  // 也不落按会话记忆的折叠偏好。
+                  isCollapsed={isRightSidebarCollapsed || rightSidebarForceCollapsed}
                   // width 只在非 maximize 受控,且只是兜底 —— RSB 优先消费
                   // 引擎 PaneWidthContext 的实时值;maximize 时 RightSidebar 内部走
                   // flex-1 自己撑满(2026-07-01 bug 修)。拖宽把手 = 引擎分割线。
                   width={rightSidebarWidth}
                   isMac={isMac}
-                  // Windows 展开态的折叠入口归属工具面板自身,放回 TabBar 右端;
-                  // 收起后聊天区角上才显示展开入口。mac 仍走窗口右上浮层。
+                  // 关闭按钮属于工具面板；显示入口始终留在聊天区。
                   onCloseSidebar={handleCloseRightSidebar}
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
@@ -1644,9 +1995,8 @@ export function MainLayout() {
                   remoteHostId={rightSidebarWorkdirInfo.remoteHostId}
                   deviceLinkDeviceId={rightSidebarWorkdirInfo.deviceLinkDeviceId}
                   subagentsAvailable={rightSidebarSubagentsAvailable}
-                  onDetach={isSecondaryWindow() ? undefined : handleDetachRightSidebar}
-                  // M2:面板贴左时 detach / maximize 由 Shell 顶栏右端自渲染
-                  // (面板自属控件跟面板走);折叠 toggle 恒在窗口右上浮层,不下沉。
+                  onDetachTab={isSecondaryWindow() ? undefined : handleDetachRightSidebarTab}
+                  // 面板自属的分离、最大化和关闭按钮随面板停靠位置移动。
                   panelSide={rightSidebarSide}
                   onAllTabsClosed={handleRightSidebarEmptied}
                 />
@@ -1655,7 +2005,16 @@ export function MainLayout() {
         >
           {/* 面板稳态宽度由 LayoutRoot 输出 CSS 百分比/clamp，BrowserWindow live resize
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
-          <LayoutRoot suppressNonChatPanels={isSettingsRoute} />
+          <TabGroupHostProvider value={tabGroupHost}>
+            <LayoutRoot
+              onInstalledGhostsChange={handleInstalledGhostsChange}
+              suppressNonChatPanels={isSettingsRoute}
+              sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
+              rightTabsCollapsed={
+                !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
+              }
+            />
+          </TabGroupHostProvider>
         </BuiltinPanelBridgeProvider>
         {/* 拖面板换位(B3 转正;M3 起 mac 同步开闸——mac 顶栏全部保留窗口拖拽,
             手势天然只剩长按窗体)。总开关只管全局语境(内容区路由在场、非
@@ -1669,14 +2028,20 @@ export function MainLayout() {
           sidebarBlockRef={sidebarBlockRef}
           enabled={rightSidebarAvailable && !isRightSidebarMaximized}
         />
+        {/* 页签拖到别的组 / 聊天区边缘(页签条内部的重排仍归 SortableList)。 */}
+        <TabDragController
+          sessionId={rightSidebarSessionId}
+          enabled={rightSidebarAvailable && !isRightSidebarMaximized && !isSettingsRoute}
+          onPopOut={
+            isSecondaryWindow()
+              ? undefined
+              : (tabId, point) => handleDetachRightSidebarTab(tabId, undefined, point)
+          }
+        />
         {/* 意识面板「点图看大图」承接端:main 拦下面板 /preview/ 导航过闸后
             推送到本窗口,这里弹标准 ImageLightbox(整窗一份,纯监听无 UI)。
             sessionId = 当前聊天会话 → lightbox 里「发送到对话」可用。 */}
         <GhostMediaLightboxHost sessionId={rightSidebarSessionId ?? undefined} />
-        {/* 最小化插件面板的浮动气泡层(portal 到 body,z-[9900];点击气泡
-            恢复停靠,拖动换位并持久化)。设置页等接管态也保持在场——气泡是
-            被最小化面板的唯一恢复入口。 */}
-        <GhostPanelBubbleLayer />
         {/* Windows 顶层浮层 chrome：窗口控制按钮(min/max/close)，所有路由常驻
             （含设置页），永远钉在窗口角，开/关右栏都不动 —— 解决「右栏作为 <main>
             sibling 会把窗口按钮挤左」的问题。no-drag（按钮可点），周围窗口拖拽区由
@@ -1686,43 +2051,20 @@ export function MainLayout() {
         {!isMac && (
           <div
             className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             <WindowControls />
           </div>
         )}
-        {/* mac 右栏折叠按钮 —— 同样 hoist 到顶层浮层，钉窗口右上角（right-0 top-0）、
-            浮在右栏之上，与左栏折叠按钮（ChromeActions，钉左上角）左右对称。
-            右栏打开时落在右栏顶部 toolbar 横贯条的右端、关闭时落在 main 的
-            ContentHeader 右端 —— 无论开/关都「始终在窗口最右」（用户 2026-06-15
-            诉求）。仅全屏聊天视图在场时渲染（rightSidebarAvailable）；mac 那侧本就
-            没有窗口控制按钮，这个位置空着正好。no-drag 保证可点，ContentHeader /
-            右栏 toolbar 条已为它留出等宽占位。 */}
-        {/* M2(mac 交换态适配,2026-07-09 Lizi 口径修订):浮层只要面板在场就渲染,
-            折叠 toggle **永远钉窗口右上角**(即当前最右侧 pane 顶栏的右上角),与
-            左上角的左栏折叠按钮(ChromeActions)对称、不跟面板跑;detach/maximize
-            是面板自属控件,贴右(或 maximize 撑满)时在浮层里(视觉落在面板顶栏
-            右端),贴左时跟面板走进 Shell 顶栏右端(见 RightSidebarShell)。 */}
-        {isMac &&
-          rightSidebarAvailable &&
-          rsbWindow.loaded &&
-          (rsbDetached || isRightSidebarCollapsed) && (
-            <div
-              className="absolute right-0 top-0 z-50 flex h-[46px] items-center gap-1 pr-2"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            >
-              {/* 固定唤起入口只负责显示 / 聚焦。detach / maximize / 收起属于面板自身，
-                在 RightSidebarShell 的顶栏内渲染，不再与本入口混用。 */}
-              <RightSidebarToggle
-                size="toolbar"
-                action="show"
-                collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
-                onToggle={handleOpenRightSidebar}
-                side={rightSidebarSide}
-              />
-            </div>
-          )}
+
       </div>
+      {/* 手动检查的结果在设置页、隐藏侧栏和窄轨模式也必须可见；复用原横幅及重启确认。 */}
+      <FloatingUpdateBanner
+        enabled={isSettingsRoute || isSidebarCollapsed || isRailMode}
+        ownsPrerequisiteDialogs={isSettingsRoute}
+        onOpenVersionNotice={openVersionNotice}
+      />
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (
         <UpdateNoticeDialog
@@ -1734,15 +2076,19 @@ export function MainLayout() {
           onDismiss={dismissNotice}
         />
       )}
-      {/* 意外退出后重启:列出被中断的任务供一键继续;更新说明弹窗关闭后再出现。 */}
+      {/* 重启提示按更新说明、中断任务恢复、意外退出诊断的顺序出现。 */}
       {!isSecondaryWindow() && (
-        <InterruptedTasksResumeDialog suspended={Boolean(releaseNotes && noticeOpen)} />
+        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen)} />
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
       {/* 副窗支持管理页手动审批；自动提醒与受邀申请仍只由主窗口处理。 */}
       <ProviderShareGlobalHost manualOnly={isSecondaryWindow()} />
+      {/* 中转加入申请:同样主窗口自动弹,副窗口只显示中转页手动打开的那条。 */}
+      <RelayShareGlobalHost manualOnly={isSecondaryWindow()} />
       {!isSecondaryWindow() && <ChatInviteHost />}
+      {/* 通话属于应用而不是任务页:切任务、换页面都不卸载;副窗只显示并转发操作。 */}
+      {isSecondaryWindow() ? <RemoteVoiceCallSurface /> : <GlobalVoiceCallHost />}
       {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
         onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}

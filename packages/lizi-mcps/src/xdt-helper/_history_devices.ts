@@ -55,6 +55,7 @@ export function historyPayload(
 export function qualifyHistoryPayload(
   value: Record<string, unknown>,
   deviceId: string,
+  sessionUrl?: (sessionId: string) => string,
 ): Record<string, unknown> {
   if (value.ok !== true) return value;
   const qualify = (id: string) => `${deviceId}::${id}`;
@@ -64,6 +65,7 @@ export function qualifyHistoryPayload(
       sessions: value.sessions.map((s: Record<string, unknown>) => ({
         ...s,
         id: qualify(String(s.id)),
+        ...(sessionUrl ? { sessionUrl: sessionUrl(qualify(String(s.id))) } : {}),
         ...(typeof s.parentSessionId === "string"
           ? { parentSessionId: qualify(s.parentSessionId) }
           : {}),
@@ -76,7 +78,10 @@ export function qualifyHistoryPayload(
     ...(sessions
       ? {
           sessions: Object.fromEntries(
-            Object.entries(sessions).map(([id, meta]) => [qualify(id), meta]),
+            Object.entries(sessions).map(([id, meta]) => [qualify(id), {
+              ...(meta as Record<string, unknown>),
+              ...(sessionUrl ? { sessionUrl: sessionUrl(qualify(id)) } : {}),
+            }]),
           ),
         }
       : {}),
@@ -245,6 +250,7 @@ export async function queryHistoryDevices(
                     queryArgs,
                   ),
                   device.deviceId,
+                  deps.history.sessionUrl,
                 );
             assertCurrent();
             return { ...result, ...device };

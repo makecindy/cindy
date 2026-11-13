@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
 vi.mock("react-native", () => ({
-  Keyboard: { dismiss: vi.fn() },
   Platform: { OS: "android" },
   NativeModules: {},
   UIManager: { getViewManagerConfig: () => ({}) },
@@ -14,11 +13,11 @@ vi.mock("@/theme", () => ({ useTheme: () => ({ colors: {} }) }));
 vi.mock("@/platform/chrome/AnchoredPullDownMenu", () => ({ AnchoredPullDownMenu: () => null }));
 
 import { usesNativePullDownMenu } from "@/platform/chrome/NativePullDownMenu";
-import { Keyboard } from "react-native";
 import { buildPullDownMenuSections, resolvePullDownSubmenu } from "@/platform/chrome/pullDownMenuModel";
 import {
   buildHomeDisplayPullDownActions,
   buildHomeScopePullDownActions,
+  homeScopeCollections,
   openHomeRemoteCollection,
   parseHomeScopePullDownAction,
 } from "@/session/homeChromeMenus";
@@ -72,7 +71,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
         filter({ available: false, deviceId: "win", id: "device:win", label: "Win", state: "offline" }),
       ],
       "All tasks",
-      [{ id: "teammates", title: "Teammates" }],
+      [{ id: "teammates", title: "Buddies" }],
     );
     const sections = buildPullDownMenuSections(actions);
     expect(sections).toHaveLength(1);
@@ -80,7 +79,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     expect(android).toEqual(actions);
     expect(android.map((action) => [action.id, action.title, action.state])).toEqual([
       ["all", "All tasks", "off"],
-      ["scope.collection:teammates", "Teammates", undefined],
+      ["scope.collection:teammates", "Buddies", undefined],
       ["device:mac", "My Mac", "on"],
       ["device:win", "Win", "off"],
     ]);
@@ -105,6 +104,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
       ["filter", "devices.list.menu.summaryNone", true],
       ["view", "devices.list.menu.view.list", true],
       ["taskInfo", "devices.list.menu.taskInfo.time", true],
+      ["teammates", "", true],
     ]);
     const sort = resolvePullDownSubmenu(actions, ["sort"]);
     expect(sort?.subactions?.map((action) => [action.id, action.state])).toEqual([
@@ -125,10 +125,11 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     );
     expect(androidHeader).toContain("actions={homeScopePullDownActions}");
     expect(androidHeader).toContain("onAction={handleHomeScopeAction}");
-    expect(androidHeader).toContain("actions={homeDisplayPullDownActions}");
+    expect(androidHeader).toContain("actions={stableDisplayActions}");
     // 自绘范围面板只在包里没有 MenuView 时兜底;显示菜单兜底用同一份菜单模型的自绘下拉。
     expect(androidHeader).toContain("onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}");
-    expect(androidHeader).toContain("<HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction}>");
+    // Display selection is exercised through the rendered platform component in
+    // nativeGlassControls.test.tsx; do not freeze its JSX prop list here.
     const iosHeader = home.slice(home.indexOf("<HomeNativeStackHeader"), home.indexOf("/>", home.indexOf("<HomeNativeStackHeader")));
     expect(iosHeader).toContain("scopeActions={homeScopePullDownActions}");
     // iOS 系统顶栏的菜单项属于顶栏选项:传结构稳定的同一份菜单,后台同步不重建顶栏(会关掉菜单)。
@@ -137,43 +138,34 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     const nativeHeader = readSource("src/platform/chrome/HomeNativeStackHeader.tsx");
     expect(nativeHeader).toContain("export const HomeNativeStackHeader = memo(");
     // 三层菜单(分组 → 选项)只能走 Stack.Toolbar.Menu;MenuView 的 iOS 原生层只转两层。
-    expect(nativeHeader).toContain('<Stack.Toolbar.Menu icon="ellipsis"');
+    // 图标/提醒点的选择由 HomeNativeStackHeader.test.tsx 渲染验证。
+    expect(nativeHeader).toContain('<Stack.Toolbar.Menu');
   });
 
-  it("opens Teammates from both scope menus through the teammate home path", () => {
-    vi.mocked(Keyboard.dismiss).mockClear();
+  it("never offers Teammates as a scope: they are the home's own section", () => {
     const collections = [
-      { id: "teammates", title: "Teammates", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
+      { id: "teammates", title: "Buddies", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
       { id: "tools", title: "Tools", resourceKind: "tool", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
     ];
-    const actions = buildHomeScopePullDownActions([], "All", collections);
-    const teammateAction = actions.find(action => action.id === "scope.collection:teammates")!;
-    const genericAction = actions.find(action => action.id === "scope.collection:tools")!;
-    const setMode = vi.fn(); const push = vi.fn(); const onModeChange = vi.fn();
-    for (const action of [teammateAction, genericAction]) {
-      const parsed = parseHomeScopePullDownAction(action.id);
-      const collection = parsed.kind === "collection" ? collections.find(item => item.id === parsed.collectionId) : undefined;
-      expect(collection).toBeDefined();
-      openHomeRemoteCollection({ collection: collection!, teammateCollectionId: "teammates", embedded: true, setMode, push, onModeChange, dismissKeyboard: Keyboard.dismiss });
-    }
-    expect(setMode).toHaveBeenCalledExactlyOnceWith("teammates");
-    expect(push).toHaveBeenNthCalledWith(1, "/devices");
-    expect(push).toHaveBeenNthCalledWith(2, expect.objectContaining({ pathname: "/resources/[collectionId]", params: expect.objectContaining({ collectionId: "tools", targets: JSON.stringify(collections[1].targets) }) }));
-    expect(onModeChange).not.toHaveBeenCalled();
-    expect(Keyboard.dismiss).toHaveBeenCalledOnce();
-    onModeChange.mockImplementation(() => expect(Keyboard.dismiss).toHaveBeenCalledTimes(2));
-    openHomeRemoteCollection({ collection: collections[0], teammateCollectionId: "teammates", embedded: false, setMode, push, onModeChange, dismissKeyboard: Keyboard.dismiss });
-    expect(onModeChange).toHaveBeenCalledExactlyOnceWith("teammates");
-    expect(push).toHaveBeenCalledTimes(2);
+    const offered = homeScopeCollections(collections, "teammates");
+    const actions = buildHomeScopePullDownActions([], "All", offered);
+    expect(actions.map(action => action.id)).not.toContain("scope.collection:teammates");
+    const parsed = parseHomeScopePullDownAction("scope.collection:tools");
+    const collection = parsed.kind === "collection" ? offered.find(item => item.id === parsed.collectionId) : undefined;
+    const push = vi.fn();
+    openHomeRemoteCollection(collection!, push);
+    expect(push).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pathname: "/resources/[collectionId]",
+      params: expect.objectContaining({ collectionId: "tools", targets: JSON.stringify(collections[1].targets) }) }));
   });
 
-  it("routes settings pickers and local-log options through the pull-down on Android", () => {
+  it("routes settings pickers through the pull-down on Android", () => {
     const settings = readSource("app/settings.tsx");
     // 只按 MenuView 是否可用分流,不按平台:Android 与 iOS 同走系统下拉,自绘 sheet / Alert 仅作回退。
     expect(settings).not.toMatch(/Platform\.OS\s*===\s*['"]ios['"]/);
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}");
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}");
-    expect(settings).toContain("onPress={usesNativePullDownMenu() ? undefined : () => Alert.alert(t('settings.localLogs.options')");
-    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(3);
+    expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}");
+    expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}");
+    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(4);
   });
 });

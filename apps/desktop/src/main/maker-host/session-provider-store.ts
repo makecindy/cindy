@@ -15,7 +15,7 @@
  */
 
 const bySession = new Map<string, string | null>();
-const hostedBindings = new Map<string, symbol>();
+const hostedBindings = new Map<string, { allowsModel?: (providerId: string, model: string) => boolean }>();
 
 /** Canonical provider id used by runtime routing and every persistence adapter. */
 export function normalizeSessionProviderId(
@@ -37,11 +37,15 @@ export function setSessionProvider(sessionId: string, providerId: string | null)
  * 每次运行持有独立登记：重连后的新运行、普通写入或账号清理都会令旧登记失效，
  * 迟到的换源/回滚/收尾不能覆盖新运行或重新写回已清掉的来源。
  */
-export function bindHostedSessionProvider(sessionId: string, providerId: string): {
+export function bindHostedSessionProvider(
+  sessionId: string,
+  providerId: string,
+  allowsModel?: (providerId: string, model: string) => boolean,
+): {
   setProvider(providerId: string): void;
   release(): void;
 } {
-  const binding = Symbol();
+  const binding = { allowsModel };
   hostedBindings.set(sessionId, binding);
   bySession.set(sessionId, normalizeSessionProviderId(providerId) ?? null);
   return {
@@ -54,6 +58,17 @@ export function bindHostedSessionProvider(sessionId: string, providerId: string)
       clearSessionProvider(sessionId);
     },
   };
+}
+
+/** Only remote owner tasks carry this gate; ordinary local sessions retain their routing behavior. */
+export function hasHostedSessionModelAccess(sessionId: string | null | undefined): boolean {
+  return !!sessionId && !!hostedBindings.get(sessionId)?.allowsModel;
+}
+
+/** Model is the exact catalog identity, resolved from the request's actual provider and wire model. */
+export function hostedSessionModelAllowed(sessionId: string, providerId: string, model: string): boolean {
+  try { return hostedBindings.get(sessionId)?.allowsModel?.(providerId, model) ?? true; }
+  catch { return false; }
 }
 
 /**

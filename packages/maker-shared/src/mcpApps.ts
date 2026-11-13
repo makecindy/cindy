@@ -2,6 +2,11 @@
 export const MCP_APPS_INVOKE = 'maker:mcp-apps:v1';
 export const MCP_APP_CARD = 'mcp-app';
 export const MCP_APP_LINK_GRANT_MS = 30_000;
+/** An entry identity, not an arbitrary resource or a page-supplied permission. */
+export interface PluginUiSource {
+  instanceId: string;
+  viewId: string;
+}
 export interface McpAppLinkAuthorization {
   authorized: true;
   validForMs: number;
@@ -15,9 +20,10 @@ export function isMcpAppLinkAuthorizationCurrent(value: unknown, elapsedMs: numb
     grant.validForMs <= MCP_APP_LINK_GRANT_MS && elapsedMs >= 0 && elapsedMs < grant.validForMs;
 }
 /** Host-to-controller actions never enter the App's standard JSON-RPC transport. */
-export type McpAppHostEvent<T> =
+/** Current Hosts always set generation; absent means a legacy Host without document fencing. */
+export type McpAppHostEvent<T> = { generation?: number } & (
   | { seq: number; message: T; openLink?: never }
-  | { seq: number; openLink: { id: string; url: string }; message?: never };
+  | { seq: number; openLink: { id: string; url: string }; message?: never });
 export interface McpAppRecord {
   version: 1;
   serverId: string;
@@ -41,6 +47,8 @@ export interface McpAppRecord {
   cancelled?: string;
 }
 export interface McpAppDocument {
+  /** Executor-owned SDK bytes for this View; absent on older hosts. Never persisted in cards. */
+  sdk?: { source: string; addons?: { 'cindy/view-state'?: { source: string; reactSource: string } } };
   viewId: string;
   transport?: undefined;
   html: string;
@@ -53,6 +61,11 @@ export interface McpAppDocument {
     baseUriDomains?: string[];
   };
 }
+
+/** A same-origin module supplied by the execution computer, not the viewing device. */
+export const HOST_APP_SDK_PATH = '/__cindy/sdk/ext-apps/app.js';
+export const CINDY_VIEW_STATE_SDK_PATH = '/__cindy/sdk/cindy/view-state.js';
+export const CINDY_VIEW_STATE_REACT_SDK_PATH = '/__cindy/sdk/cindy/view-state-react.js';
 /** Desktop UI metadata only; credential-backed App content stays in Main. */
 export interface McpAppSandboxView {
   viewId: string;
@@ -129,7 +142,7 @@ export function projectMcpAppContent(content: unknown, marked = false): unknown 
 /** Trusted proxy. No privileged host API; relay only the actual inner window. */
 export const MCP_APP_SANDBOX_SCRIPT = `
 const frame=document.createElement('iframe');
-frame.setAttribute('sandbox','allow-scripts');
+frame.setAttribute('sandbox','allow-scripts allow-forms');
 frame.setAttribute('allow',"camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
 frame.style.cssText='border:0;width:100%;height:100%;display:block';
 let loaded=false;
@@ -158,7 +171,7 @@ window.addEventListener('message',event=>{
     resource.protocol===proxy.protocol&&resource.host===proxy.host)return;
    // URL.origin can be null for Electron's registered custom scheme.
    resourceOrigin=resource.protocol+'//'+resource.host;
-   frame.setAttribute('sandbox','allow-scripts allow-same-origin');frame.src=resource.href;
+   frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms');frame.src=resource.href;
   }
   else{frame.srcdoc=message.params.html;}
   loaded=true;

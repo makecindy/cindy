@@ -100,6 +100,133 @@ describe('listInstalledSkills — symlink 跟随', () => {
     }
   });
 
+  it('includes one namespace level and stops at the third level', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-skills-idx-nested-'));
+    const root = path.join(tmpHome, '.agents', 'skills');
+    const nested = path.join(root, '@scope', 'nested');
+    const lower = path.join(root, '@scope', 'lower');
+    const tooDeep = path.join(root, '@scope', 'group', 'too-deep');
+    const backup = path.join(root, '@scope', 'backup.bak.1', 'ignored');
+    for (const skillDir of [nested, tooDeep, backup]) {
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nname: ${path.basename(skillDir)}\ndescription: nested\n---\nBody`,
+        'utf8',
+      );
+    }
+    fs.mkdirSync(lower, { recursive: true });
+    fs.writeFileSync(
+      path.join(lower, 'skill.md'),
+      '---\nname: lower\ndescription: lower-case manifest\n---\nBody',
+      'utf8',
+    );
+
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
+    try {
+      const { listInstalledSkills } = await import('../skillsIndex');
+      const { entries } = await listInstalledSkills();
+      expect(entries.map((entry) => entry.name).sort()).toEqual(['lower', 'nested']);
+      expect(entries.find((entry) => entry.name === 'nested')?.absolutePath).toBe(nested);
+    } finally {
+      homeSpy.mockRestore();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('does not list a nested Skill when a direct Skill has the same leaf name', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-skills-idx-dup-'));
+    const root = path.join(tmpHome, '.agents', 'skills');
+    // '@scope' sorts before 'same-name', so the nested Skill is discovered first
+    // unless direct Skills are collected before namespaces.
+    const nested = path.join(root, '@scope', 'same-name');
+    const direct = path.join(root, 'same-name');
+    for (const skillDir of [nested, direct]) {
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nname: ${path.basename(path.dirname(skillDir)) === '@scope' ? 'nested' : 'direct'}\ndescription: dup\n---\nBody`,
+        'utf8',
+      );
+    }
+
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
+    try {
+      const { listInstalledSkills } = await import('../skillsIndex');
+      const { entries } = await listInstalledSkills();
+
+      expect(entries.map((entry) => entry.absolutePath)).toEqual([direct]);
+    } finally {
+      homeSpy.mockRestore();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('sorts nested Skills deterministically before truncating at the cap', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-skills-idx-cap-'));
+    const root = path.join(tmpHome, '.agents', 'skills');
+    // Two namespaces, created in reverse name order so readdir order cannot be
+    // relied on; 101 entries exercises SKILLS_INDEX_MAX = 100.
+    const names: string[] = [];
+    for (let index = 100; index >= 0; index -= 1) {
+      const name = `skill-${String(index).padStart(3, '0')}`;
+      names.push(name);
+      const dir = path.join(root, index % 2 === 0 ? 'zz-ns' : 'aa-ns', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: cap\n---\nBody`,
+        'utf8',
+      );
+    }
+
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
+    try {
+      const { listInstalledSkills } = await import('../skillsIndex');
+      const { entries, truncatedCount } = await listInstalledSkills();
+
+      expect(entries).toHaveLength(100);
+      expect(truncatedCount).toBe(1);
+      expect(entries.map((entry) => entry.name)).toEqual(names.sort().slice(0, 100));
+    } finally {
+      homeSpy.mockRestore();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('does not descend through a symlinked namespace', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-skills-idx-link-ns-'));
+    const root = path.join(tmpHome, '.agents', 'skills');
+    const externalNamespace = path.join(tmpHome, 'external-ns');
+    const nested = path.join(externalNamespace, 'nested');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(
+      path.join(nested, 'SKILL.md'),
+      '---\nname: linked-nested\ndescription: must not be listed\n---\nBody',
+      'utf8',
+    );
+    fs.mkdirSync(root, { recursive: true });
+    fs.symlinkSync(externalNamespace, path.join(root, 'linked-ns'), 'junction');
+
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
+    try {
+      const { listInstalledSkills } = await import('../skillsIndex');
+      const { entries } = await listInstalledSkills();
+      expect(entries).toEqual([]);
+    } finally {
+      homeSpy.mockRestore();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   it('redacts frontmatter metadata while scanning installed skills', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');

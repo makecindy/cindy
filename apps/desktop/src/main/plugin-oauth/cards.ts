@@ -33,6 +33,15 @@ export function initializePluginOauthCards(deps: {
     actionId: string;
     onCommitted(): void;
   }): ((value: PluginConnectionInput) => boolean) | null;
+  settings?: {
+    bind(action: PluginOauthAction): OauthCardBinding | null;
+    bindAuthorization(action: PluginOauthAction): OauthCardBinding | null;
+    runAuthorization(action: PluginOauthAction): boolean;
+    request(
+      peer: string,
+      request: import('@cindy/device-link').PluginSettingsRequest,
+    ): Promise<unknown>;
+  };
 }): void {
   const findCardAction = (action: PluginOauthAction) => {
     const found = deps.bridge
@@ -82,7 +91,9 @@ export function initializePluginOauthCards(deps: {
     if (!step || !remote?.submitInput) return false;
     const presentation = inputHandoffPresentation(step.snapshot);
     // A screenshot step travels only inside this sealed offer, to the device that asked for it.
-    const picture = presentation.picture ? step.service.picture(action.requestId, action.expectedRevision) : null;
+    const picture = presentation.picture
+      ? step.service.picture(action.requestId, action.expectedRevision)
+      : null;
     if (presentation.picture && !picture) return false;
     void (async () => {
       let submission: InputHandoffSubmission | undefined;
@@ -94,8 +105,13 @@ export function initializePluginOauthCards(deps: {
           ...(picture ? { picture } : {}),
         });
         remote.assertCurrent();
-        if (submission.expectedRevision !== action.expectedRevision) throw new Error('INPUT_HANDOFF_STALE');
-        const accepted = await step.service.submit(action.requestId, submission, remote.peer ? { deviceId: remote.peer } : undefined);
+        if (submission.expectedRevision !== action.expectedRevision)
+          throw new Error('INPUT_HANDOFF_STALE');
+        const accepted = await step.service.submit(
+          action.requestId,
+          submission,
+          remote.peer ? { deviceId: remote.peer } : undefined,
+        );
         remote.finish(accepted);
       } catch {
         remote.finish(false);
@@ -110,11 +126,14 @@ export function initializePluginOauthCards(deps: {
       owner: deps.owner,
       available: deps.available,
       bind: async (action) =>
+        deps.settings?.bind(action) ??
+        deps.settings?.bindAuthorization(action) ??
         findCardAction(action)?.binding ??
         findHandoffStep(action)?.binding ??
         (await deps.bots()?.bindRemoteOauth(action)) ??
         null,
       run: async (action) => {
+        if (deps.settings?.bindAuthorization(action)) return deps.settings.runAuthorization(action);
         if (findHandoffStep(action)) return runHandoffStep(action);
         const card = findCardAction(action);
         if (card) {
@@ -193,6 +212,9 @@ export function initializePluginOauthCards(deps: {
         }
         return (await deps.bots()?.resolveRemoteOauth(action)) ?? false;
       },
+      settingsRequest: (peer, request) =>
+        deps.settings?.request(peer, request) ??
+        Promise.reject(new Error('PLUGIN_PAGE_UNAVAILABLE')),
     },
     deps.identity,
     deps.loadKey,

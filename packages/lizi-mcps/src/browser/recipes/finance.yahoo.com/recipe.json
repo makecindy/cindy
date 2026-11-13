@@ -1,12 +1,17 @@
 {
   "id": "yahoo-finance-quote",
-  "match": ["finance.yahoo.com"],
-  "description": "查询某只股票/ETF/指数的实时行情(价格、涨跌、当日高低、成交量、52周高低、货币与交易所)。走 Yahoo 公开的 v8 chart JSON 接口,无需登录;接口主机是纯 JSON 域,直接 navigate 取数即可。symbol 用交易代码(如 AAPL、MSFT、^GSPC、BTC-USD)。",
-  "inputs": { "symbol": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://query1.finance.yahoo.com/v8/finance/chart/{{symbol}}?interval=1d&range=1d" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "evaluate", "as": "quote", "fn": "() => { const raw = document.body.innerText || ''; let d; try { d = JSON.parse(raw); } catch(e) { throw new Error('Yahoo 行情接口返回非 JSON(可能被风控或接口变更),请稍后重试或换 query2.finance.yahoo.com'); } const c = d && d.chart && d.chart.result && d.chart.result[0]; if (!c) { const err = d && d.chart && d.chart.error; throw new Error('未取到行情' + (err ? (': ' + (err.description || err.code)) : '(代码可能不存在)')); } const m = c.meta || {}; const prev = m.previousClose != null ? m.previousClose : m.chartPreviousClose; const price = m.regularMarketPrice; const change = (price != null && prev != null) ? (price - prev) : null; const pct = (change != null && prev) ? ((change / prev) * 100) : null; return { symbol: m.symbol, name: m.shortName || m.longName || m.symbol, price: price, change: change != null ? Number(change.toFixed(2)) : null, changePercent: pct != null ? Number(pct.toFixed(2)) : null, previousClose: prev, dayHigh: m.regularMarketDayHigh, dayLow: m.regularMarketDayLow, volume: m.regularMarketVolume, fiftyTwoWeekHigh: m.fiftyTwoWeekHigh, fiftyTwoWeekLow: m.fiftyTwoWeekLow, currency: m.currency, exchange: m.fullExchangeName || m.exchangeName }; }" }
+  "match": [
+    "finance.yahoo.com"
   ],
-  "output": "{{quote}}"
+  "description": "Yahoo Finance 股票行情",
+  "access": "read",
+  "adapter": "yahoo-finance/quote",
+  "inputs": {
+    "symbol": {
+      "required": true,
+      "type": "str",
+      "description": "Stock ticker (e.g. AAPL, MSFT, TSLA)"
+    }
+  },
+  "steps": []
 }

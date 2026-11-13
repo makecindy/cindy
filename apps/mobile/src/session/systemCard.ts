@@ -30,6 +30,8 @@ export type MobileSystemCardType =
   | SystemCardType
   | 'goal-complete'
   | 'goal-resumed'
+  // 新任务「让插件选」的结果(桌面落库 agentMeta.pluginModelRoute,读侧派生)。
+  | 'plugin-model-route'
   | 'context-rebuild'
   | 'auto-resume'
   | 'learn'
@@ -105,7 +107,7 @@ export function buildMobileSystemCardData(
 ): Record<string, unknown> {
   // goal / auto-resume / agent-switch 卡的数据由桌面落库行派生,learn 卡的数据由
   // 发送侧 buildLearnCardData 直接组装,都不走本地 slash 命令的数据组装。
-  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch' || type === 'input-handoff' || type === 'mcp-app') return {};
+  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'plugin-model-route' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch' || type === 'input-handoff' || type === 'mcp-app') return {};
   return buildSystemCardData(type, {
     ...options,
     localCommands: MOBILE_LOCAL_SYSTEM_COMMANDS,
@@ -120,6 +122,20 @@ export function formatMobileSystemCard(
   if (type === 'compact') return formatCompactCard(data);
   if (type === 'context-rebuild') return formatContextRebuildCard(data);
   if (type === 'goal-complete') return formatGoalCompleteCard(data);
+  if (type === 'plugin-model-route') {
+    const plugin = typeof data?.pluginName === 'string' ? data.pluginName : '';
+    const modelName = typeof data?.modelName === 'string' ? data.modelName : '';
+    const effort = typeof data?.effort === 'string' && data.effort ? data.effort : '';
+    const model = effort ? `${modelName} · ${i18n.t(`models.options.effortLevels.${effort}`, { defaultValue: effort })}` : modelName;
+    const why = data?.why === 'failed' || data?.why === 'unavailable-route' ? data.why : 'no-opinion';
+    return {
+      title: data?.outcome === 'routed'
+        ? i18n.t('message.systemCard.pluginModelRoute.routed', { plugin, model })
+        : i18n.t(`message.systemCard.pluginModelRoute.kept.${why}`, { plugin, model }),
+      ...(data?.outcome === 'routed' && typeof data.reason === 'string' && data.reason ? { body: data.reason } : {}),
+      rows: [],
+    };
+  }
   if (type === 'goal-resumed') {
     // 两种续跑原因共用这张卡, 但说法必须分开(与桌面 GoalResumedCard 同口径):
     // 上游过载那条只是干等了 60s、**没有**任何容量探测, 说「用量已恢复」是假信息;
@@ -208,6 +224,7 @@ type AgentSwitchTranslate = (key: string, options?: Record<string, unknown>) => 
  * 远程 Agent:边界行带 toAgentDeviceId 键 = 这次切换把 Agent 换到了另一台电脑上运行
  * (null = 被控电脑本机),标题改说位置;引擎同时换了再以「 · 目标引擎」带上。没换电脑
  * 返回 null,调用方沿用「已从 X 切换到 Y」。名称是切换时的快照,缺名时按位置给通用说法。
+ * 用户确认为了先用那台的配额换过去的(switchReason: 'quota-rebalance')最后写明原因,与桌面一致。
  */
 export function formatAgentSwitchLocationLabel(
   data: Record<string, unknown> | undefined,
@@ -215,14 +232,17 @@ export function formatAgentSwitchLocationLabel(
 ): string | null {
   const location = readAgentSwitchLocationTarget(data);
   if (!location) return null;
-  const label = location.kind === 'named'
+  const place = location.kind === 'named'
     ? translate('message.systemCard.agentSwitchLocation', { device: location.name })
     : translate(location.kind === 'thisComputer'
       ? 'message.systemCard.agentSwitchLocationThisComputer'
       : 'message.systemCard.agentSwitchLocationOtherComputer');
   const from = mobileAgentLabelFromUnknown(data?.fromAgentKind);
   const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
-  return from === to ? label : `${label} · ${to}`;
+  const label = from === to ? place : `${place} · ${to}`;
+  return data?.switchReason === 'quota-rebalance'
+    ? `${label} · ${translate('message.systemCard.agentSwitchLocationQuotaRebalance')}`
+    : label;
 }
 
 /**
@@ -237,7 +257,8 @@ function formatAgentSwitchCard(data: Record<string, unknown> | undefined): Syste
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const rows = toModel ? [{ label: i18n.t('message.systemCard.modelLabel'), value: toModel }] : [];
   // Phase 2:resumed = 目标引擎续接了自己的停泊原生会话(增量交接)。
-  if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
+  if (data?.nativeHistory === 'fallback') rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.renderer.sessionFallbackPill') });
+  else if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
   return {
     title: formatAgentSwitchLocationLabel(data, (key, options) => i18n.t(key, options))
       ?? i18n.t('message.systemCard.agentSwitch', { from, to }),

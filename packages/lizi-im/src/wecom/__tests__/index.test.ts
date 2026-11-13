@@ -619,6 +619,18 @@ describe("WecomIM routing and ownership", () => {
     expect(im.getStatus()).toEqual({ kind: "connecting" });
   });
 
+  it("clears an old authentication failure after recovery", async () => {
+    const { host } = createHost();
+    const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    await im.init();
+    client.emit("error", new Error("Authentication failed: old failure"));
+    client.emit("authenticated");
+    client.emit("error", new Error("network unavailable"));
+    expect(im.getStatus()).toEqual({ kind: "error", reason: "network unavailable" });
+    await im.dispose();
+  });
+
   it.each([
     {
       channel: "wecomBot:set-config",

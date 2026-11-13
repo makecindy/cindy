@@ -260,7 +260,7 @@ describe('history reentry', () => {
 
   it('ordinary screen focus uses activation rather than destructive reset', () => {
     const source = readFileSync(new URL('../../app/sessions/[sessionId].tsx', import.meta.url), 'utf8');
-    const focus = source.slice(source.indexOf('const historyView = useRemoteHistoryView'), source.indexOf('const rawMessages = useSessionMessages'));
+    const focus = source.slice(source.indexOf('const unfilteredHistoryView = useRemoteHistoryView'), source.indexOf('const historyHandoff ='));
     expect(focus).toContain('historyView.view.setActive(true)');
     expect(focus).not.toContain('.reset()');
     expect(source).toContain('options.replaceMessages && historyView.view.getSnapshot().ready');

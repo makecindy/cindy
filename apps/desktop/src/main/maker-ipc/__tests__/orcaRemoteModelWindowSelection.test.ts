@@ -6,6 +6,8 @@ import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWind
 import { createContextOverflowRollover } from '../contextOverflowRollover';
 import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, projectPendingAgentSwitchIntent,
   type MakerSessionAgentSwitchHandlerDeps, type PendingAgentSwitchIntent } from '../sessionAgentSwitchHandler';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import type { createSharedTaskPendingSelectionGuard } from '../sharedTaskSetting';
 
 // Run the production remote-selection adapter, send boundary and window rollover
 // together. Only device I/O, native processes and persistent writes are replaced.
@@ -40,10 +42,11 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
   const rebuild = vi.fn();
   const pending = createPendingAgentSwitchRegistry();
   const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+  const drainPersistQueue = vi.fn(async () => {});
   const rollover = createContextOverflowRollover({
     getSessionRow: async () => ({ ...row, contextTokens: state.tokens, contextWindow: 1000000 }),
     getLiveSession: () => live, rehydrateColdPiRuntimeForWindowVerification: async () => { live = runtime; },
-    drainPersistQueue: async () => {}, closeSession: close, commitRebuild: rebuild,
+    drainPersistQueue, closeSession: close, commitRebuild: rebuild,
     listMessages: async () => [{ role: 'user', content: 'history', clientId: 'u1', createdAt: 1 }],
     findLatestRebuildMeta: async () => null, setPendingHandoff: vi.fn(),
     replayUserMessage: async () => ({ accepted: true }),
@@ -56,7 +59,9 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
   } as unknown as ProviderView]);
   const persist = vi.fn(async () => {});
   const throwIpcError = (code: string, message: string): never => { throw new Error(`[${code}] ${message}`); };
+  const accept = vi.fn(() => 1);
   const bindings = {
+    acceptSessionRuntimeMutation: accept, broadcastSessionPatched: vi.fn(),
     maker: { getSession: () => live, closeSession: close }, agentSwitchPending: pending,
     hasSessionProvider: () => false, getSessionProvider: () => 'provider', normalizeSessionProviderId: (id: unknown) => id,
     dbToMakerAgentKind: () => agentKind, isSessionInTurn: () => false,
@@ -64,6 +69,9 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
     resolveVerifiedContextWindow, contextOverflowRolloverHolder: rollover,
     agentSwitchDeps: { onPendingSwitchChanged: vi.fn() }, projectPendingAgentSwitchIntent,
     wakeSessionInputAfterCredentialSwitch: vi.fn(), persistSessionFields: persist,
+    updateScheduledPreference: vi.fn(async () => {}),
+    reconcileBotModelRoute: { acceptTaskChoice: vi.fn(async () => {}) },
+    isDeviceLinkInvoke: () => false, markRemoteSettingPersistedInsideHandler: vi.fn(),
     setSessionProvider: vi.fn(), setSessionEffort: vi.fn(), setSessionFastMode: vi.fn(), getSessionEffort: () => 'high',
     recordUserSessionRuntimeMutation: () => 1, broadcastSessionRuntimeProjection: async () => {},
     withRehydrateCloseSuppressed: async (_id: string, run: () => unknown) => run(), throwIpcError, log,
@@ -72,10 +80,13 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
   const assertRuntimeOwnerCurrent = vi.fn();
   const selectSameAgentModel = compile(selectionAdapter, { throwIpcError,
     applySessionRuntimeSelection: (sessionId: string, model: string, providerId: unknown,
-      selection: { effort: string; fastMode: boolean; confirmedContextWindow?: number }, internalOptions: unknown) => applyRemote({
+      selection: { effort: string; fastMode: boolean; confirmedContextWindow?: number },
+      internalOptions: { pendingSelectionAccess?: ReturnType<typeof createSharedTaskPendingSelectionGuard> }) => applyRemote({
       sessionId, model, providerId, atomicSelection: selection, internalOptions, runtimeStatus: row,
-      confirmedContextWindow: selection.confirmedContextWindow, assertRuntimeOwnerCurrent,
-      assertSharedTaskCurrent: { admit: vi.fn() }, supersededByOwnerBoundary: () => false,
+      confirmedContextWindow: selection.confirmedContextWindow,
+      assertRuntimeOwnerCurrent: () => { internalOptions.pendingSelectionAccess?.(); assertRuntimeOwnerCurrent(); },
+      assertSharedTaskCurrent: internalOptions.pendingSelectionAccess ?? { admit: vi.fn() },
+      supersededByOwnerBoundary: () => { internalOptions.pendingSelectionAccess?.(); return false; },
     }),
   });
   const deps = { pendingSwitches: pending, getLiveSession: () => live, selectSameAgentModel, log } as unknown as MakerSessionAgentSwitchHandlerDeps;
@@ -83,12 +94,15 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
     sameAgentSelection: true, targetAgentKind: agentKind, model: 'new', providerId: 'provider', effort: 'high', fastMode: false,
     ...(confirmedContextWindow !== undefined ? { confirmedContextWindow } : {}),
   } satisfies PendingAgentSwitchIntent, false);
-  return { state, stage, send: () => applyPendingAgentSwitchIfIdle(deps, 's1'),
-    readProviders, pending, runtime, close, rebuild, persist, rollover, assertRuntimeOwnerCurrent };
+  const fallback = () => applyRemote({ sessionId: 's1', model: 'new', providerId: 'other',
+    atomicSelection: { effort: 'high', fastMode: true }, internalOptions: { source: 'fallback' }, runtimeStatus: row,
+    assertRuntimeOwnerCurrent, assertSharedTaskCurrent: { admit: vi.fn() }, supersededByOwnerBoundary: () => false });
+  return { state, stage, fallback, accept, send: () => applyPendingAgentSwitchIfIdle(deps, 's1'),
+    readProviders, pending, runtime, close, rebuild, persist, rollover, drainPersistQueue, assertRuntimeOwnerCurrent };
 }
 
 describe('Orca remote-Agent window protection at send', () => {
-  const cases = (['cc', 'codex', 'pi'] as const).flatMap(agent => ['lead', 'worker'].flatMap(role =>
+  const cases = (['cc', 'pi'] as const).flatMap(agent => ['lead', 'worker'].flatMap(role =>
     [false, true].map(cold => ({ agent, role, cold }))));
   it.each(cases)('rechecks pressure for $agent $role cold=$cold and retains an unconfirmed intent', async ({ agent, role, cold }) => {
     const h = setup(agent, role, cold);
@@ -114,6 +128,25 @@ describe('Orca remote-Agent window protection at send', () => {
       expect(h.runtime.setModel).not.toHaveBeenCalled();
     }
   });
+
+  // Unit: remote Orca dispatch must preserve Codex native history even when the
+  // fresh target window is smaller than the current turn or an old acknowledgement.
+  // Covers the production send adapter for both roles and cold/live runtimes.
+  it.each(['lead', 'worker'].flatMap(role => [false, true].map(cold => ({ role, cold }))))(
+    'keeps native Codex history for $role cold=$cold despite target pressure', async ({ role, cold }) => {
+      const h = setup('codex', role, cold);
+      await h.stage(1000000);
+      h.state.tokens = 190000;
+      await h.send();
+      expect(h.readProviders).toHaveBeenCalledWith('executor', 'codex', 'new', 'provider');
+      expect(h.pending.get('s1')).toBeUndefined();
+      expect(h.persist).toHaveBeenCalledOnce();
+      expect(h.close).not.toHaveBeenCalled();
+      expect(h.rebuild).not.toHaveBeenCalled();
+      if (cold) expect(h.runtime.setModel).not.toHaveBeenCalled();
+      else expect(h.runtime.setModel).toHaveBeenCalledExactlyOnceWith('new', { providerId: 'provider', effort: 'high' });
+    },
+  );
 
   it('does not treat an unverified catalog window or its old acknowledgement as permission to rebuild', async () => {
     const h = setup();
@@ -150,7 +183,7 @@ describe('Orca remote-Agent window protection at send', () => {
   });
 
   it('does not substitute a stale acknowledged window for the fresh execution-device catalog', async () => {
-    const h = setup();
+    const h = setup('cc');
     await h.stage(1000000);
     h.state.tokens = 190000;
     await expect(h.send()).rejects.toThrow('select the model again');
@@ -182,4 +215,80 @@ describe('Orca remote-Agent window protection at send', () => {
     expect(h.runtime.setModel).not.toHaveBeenCalled();
     expect(h.persist).not.toHaveBeenCalled();
   });
+});
+
+function guestContext() {
+  let current = true;
+  return {
+    context: { controllerDeviceId: 'guest-device', channel: 'maker:input:enqueue', sharedTask: {
+      author: { sharedTaskId: 'shared', sessionId: 's1', memberId: 'guest', accountId: 'guest', displayName: 'Guest' },
+      isCurrent: () => current,
+      authorize: (operation: string) => current && operation === 'input.send',
+    } },
+    revoke: () => { current = false; },
+  };
+}
+
+// #7825 review regression, unit: the production remote adapter must reject
+// revoked guest sends before setModel/close/persistence and retain the owner choice.
+// The local runtime preflight tests do not exercise either remote admission site.
+// Standalone: 12.29s (11.88s collecting the existing adapter/rollover dependency
+// graph, 149ms executing tests); no module resets, real I/O or timed waits added.
+describe('shared-task remote selection admission', () => {
+  it.each([
+    { role: null, rebuild: false },
+    { role: null, rebuild: true },
+    { role: 'worker', rebuild: false },
+  ])('rejects removal during remote model preflight (role=$role rebuild=$rebuild)', async ({ role, rebuild }) => {
+    const h = setup('codex', role);
+    const guest = guestContext();
+    await h.stage();
+    h.runtime.requiresModelSwitchRebuild.mockImplementationOnce(async () => {
+      guest.revoke();
+      return rebuild;
+    });
+    await expect(runDeviceLinkInvokeContext(guest.context, h.send)).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.pending.get('s1')?.model).toBe('new');
+    expect(h.runtime.setModel).not.toHaveBeenCalled();
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+    await h.send();
+    expect(h.pending.get('s1')).toBeUndefined();
+    expect(h.persist).toHaveBeenCalledOnce();
+  });
+
+  it('retains a cold pending choice when membership is revoked during window verification', async () => {
+    const h = setup('codex', 'worker', true);
+    const guest = guestContext();
+    await h.stage();
+    h.drainPersistQueue.mockImplementationOnce(async () => { guest.revoke(); });
+    await expect(runDeviceLinkInvokeContext(guest.context, h.send)).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.pending.get('s1')?.model).toBe('new');
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.rebuild).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it('finishes an admitted window rebuild when membership is revoked during close', async () => {
+    const h = setup('cc', null);
+    const guest = guestContext();
+    await h.stage(200000);
+    h.state.tokens = 190000;
+    const close = h.close.getMockImplementation()!;
+    h.close.mockImplementationOnce(async () => { await close(); guest.revoke(); });
+    await runDeviceLinkInvokeContext(guest.context, h.send);
+    expect(h.rebuild).toHaveBeenCalledOnce();
+    expect(h.persist).toHaveBeenCalledWith('s1', expect.objectContaining({ model: 'new' }));
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+});
+
+it('applies same-location fallback to the remote runtime and retains its execution location', async () => {
+  const h = setup('codex', null);
+  expect(await h.fallback()).toMatchObject({ deferred: false, superseded: false });
+  expect(h.runtime.setModel).toHaveBeenCalledWith('new', { providerId: 'other', effort: 'high' });
+  expect(h.runtime.setFastMode).toHaveBeenCalledWith(true);
+  expect(h.persist).toHaveBeenCalledWith('s1', expect.objectContaining({ model: 'new', providerId: 'other' }));
+  expect(h.accept).toHaveBeenCalledWith(expect.objectContaining({ source: 'fallback',
+    profile: expect.objectContaining({ agentDeviceId: 'executor', providerId: 'other', model: 'new' }) }));
 });

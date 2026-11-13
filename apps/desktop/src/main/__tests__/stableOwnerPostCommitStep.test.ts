@@ -77,11 +77,16 @@ function pipeline() {
     source.indexOf('function syncPluginMarketForActiveOwner('),
     source.indexOf('function parseOptionalDeviceLinkDeviceId('),
   );
+  const scheduleState = source.slice(
+    source.indexOf('let disposeSkillhubAutoSyncAuthListener:'),
+    source.indexOf('let startupDatabaseSizeWarningStatus:'),
+  );
   let scope = 'cloud:first:1';
   let owner: string | null = 'first';
   const market = deferred<'completed'>();
   const builtin = vi.fn(async () => 'completed' as const);
   const syncMarket = vi.fn(() => market.promise);
+  const foreground = vi.fn(async () => 'completed' as const);
   const oauth = vi.fn(async () => true);
   const refreshUsage = vi.fn(async () => undefined);
   const warn = vi.fn();
@@ -101,15 +106,14 @@ function pipeline() {
     getActiveAppSession: () => ({ dataOwnerId: owner }),
     runStableOwnerPostCommitTask: builtin,
     syncDefaultMarketPlugins: syncMarket,
+    refreshForegroundMarketPlugins: foreground,
     refreshPluginUsageBindings: refreshUsage,
     reconcileGhostOauthAccountsForActiveOwner: oauth,
   };
   const compiled = transpileModule(
     `
     ${setup}
-    let pluginMarketSyncInFlightScope = null;
-    let lastPluginMarketSyncScope = null;
-    let lastPluginMarketSyncAt = 0;
+    ${scheduleState}
     ${sync}
     return { syncPluginMarketForActiveOwner };
   `,
@@ -121,6 +125,7 @@ function pipeline() {
     coordinator,
     market,
     syncMarket,
+    foreground,
     builtin,
     oauth,
     refreshUsage,
@@ -133,13 +138,57 @@ function pipeline() {
 }
 
 describe('production background pipeline', () => {
+  // PR #6667: foreground metadata checks must not reset the full-maintenance
+  // clock or take its writer slot. Fake time verifies the real bootstrap entry
+  // without waiting or introducing any plugin/disk work on focus.
+  it('keeps periodic maintenance due during continuous foreground checks', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const run = pipeline();
+    run.market.resolve('completed');
+    run.syncPluginMarketForActiveOwner(0, 'periodic');
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 6; i += 1) {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      run.syncPluginMarketForActiveOwner(30_000, 'foreground');
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(run.foreground).toHaveBeenCalledTimes(6);
+    expect(run.syncMarket).toHaveBeenCalledTimes(1);
+    run.syncPluginMarketForActiveOwner(30 * 60_000, 'periodic');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.syncMarket).toHaveBeenCalledTimes(2);
+    expect(run.syncMarket).toHaveBeenLastCalledWith('periodic');
+  });
+
+  it.each(['resume', 'periodic'] as const)('does not let a pending foreground check suppress %s maintenance', async (trigger) => {
+    vi.useFakeTimers();
+    const run = pipeline();
+    const foreground = deferred<'completed'>();
+    run.foreground.mockImplementation(() => foreground.promise);
+    run.syncPluginMarketForActiveOwner(30_000, 'foreground');
+    await vi.advanceTimersByTimeAsync(0);
+    run.syncPluginMarketForActiveOwner(30_000, trigger);
+    run.syncPluginMarketForActiveOwner(30_000, trigger);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.syncMarket).toHaveBeenCalledExactlyOnceWith(trigger);
+    expect(run.foreground).toHaveBeenCalledOnce();
+    foreground.resolve('completed');
+    run.market.resolve('completed');
+    await vi.advanceTimersByTimeAsync(0);
+    run.syncPluginMarketForActiveOwner(30_000, trigger);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.syncMarket).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('continues OAuth after market timeout and shares its pending writer with wakeup/periodic retries', async () => {
     vi.useFakeTimers();
     const run = pipeline();
     const result = run.coordinator.ensure('startup');
     await vi.advanceTimersByTimeAsync(180_000);
     await expect(result).resolves.toBe('failed');
-    expect(run.refreshUsage).toHaveBeenCalledTimes(1);
+    expect(run.refreshUsage).not.toHaveBeenCalled();
     expect(run.oauth).toHaveBeenCalledTimes(1);
     run.syncPluginMarketForActiveOwner();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -185,10 +234,8 @@ describe('production background pipeline', () => {
     builtin.resolve('completed');
     await vi.advanceTimersByTimeAsync(0);
     run.switchOwner(null);
-    const usageRefreshesBeforeSignOut = run.refreshUsage.mock.calls.length;
     await expect(run.coordinator.ensure('signed-out')).resolves.toBe('completed');
-    expect(usageRefreshesBeforeSignOut).toBeGreaterThan(0);
-    expect(run.refreshUsage).toHaveBeenCalledTimes(usageRefreshesBeforeSignOut);
+    expect(run.refreshUsage).not.toHaveBeenCalled();
     expect(run.syncMarket).toHaveBeenCalledTimes(1);
     expect(run.oauth).toHaveBeenCalledTimes(1);
   });

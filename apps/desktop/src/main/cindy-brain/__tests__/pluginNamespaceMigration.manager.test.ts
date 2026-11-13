@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
 import { PluginMarketLedger } from '../../plugin-market/ledger.js';
+import { StableOwnerPostCommitCoordinator } from '../../stableOwnerPostCommit.js';
 import { GhostManager, type GhostManagerOptions } from '../GhostManager.js';
 import { resolveGhostFirstPartyPrivilege } from '../ghostFirstPartyPrivilege.js';
 import {
@@ -21,7 +22,8 @@ import {
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess.js';
 import { writeTestCindyPackage } from './cindyPackageFixture.js';
 import { installedGhostStoragePart, pluginStoragePart } from '../../../shared/pluginIdentity.js';
-import { pluginInstanceRegistryPath } from '../pluginInstanceRegistry.js';
+import { pluginInstanceRegistryPath, type PluginInstanceRecord } from '../pluginInstanceRegistry.js';
+import { buildUnconfirmedConfirmationEvidence } from '../pluginInstanceConfirmation.js';
 
 let workDir: string;
 let rootDir: string;
@@ -173,6 +175,87 @@ async function stampLegacyOrganizationInstall(id = 'hello', withSkill = false): 
 }
 
 describe('GhostManager namespace migration census', () => {
+  // Unit regression: a persisted pending row outside the census was skipped by
+  // both migration and confirmation. Recover only from positive market facts;
+  // keep the physical instance, approval, enabled state and skill snapshot.
+  it.each(['market', 'missing', 'forge-stamped', 'write-failed', 'binding-before-lock', 'binding-before-commit'])('handles an orphan pending record without inventing migration eligibility (evidence=%s)', async (evidence) => {
+    const positive = evidence === 'market';
+    const bindingChanged = evidence.startsWith('binding-');
+    await plantLegacyInstall('hello', true, evidence === 'forge-stamped' ? 'agent-forge' : undefined);
+    const approved = receiptStore().read('hello');
+    if (approved.state !== 'approved') throw new Error('expected approved install');
+    await receiptStore(mutateSnapshot).write({ ...approved.receipt, packageSha256: 'a'.repeat(64) }, {
+      skillSourceDir: path.join(rootDir, 'hello'),
+    });
+    manager.ensureNamespaceMigrationCensus();
+    manager.list();
+    const registryPath = path.join(workDir, 'ghosts-install-state', 'plugin-instances.v2.json');
+    const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+    registry.census.pendingRelIds = [];
+    if (bindingChanged) registry.instances.hello.pluginId = 'plugin-a';
+    fs.writeFileSync(registryPath, JSON.stringify(registry));
+    if (evidence === 'forge-stamped') {
+      const current = receiptStore().read('hello');
+      if (current.state !== 'approved') throw new Error('expected approved install');
+      await receiptStore(mutateSnapshot).write({ ...current.receipt, namespace: 'acme' }, {
+        skillSourceDir: path.join(rootDir, 'hello'),
+      });
+    }
+    let evidenceReads = 0;
+    manager = createManager({
+      mutateSnapshot,
+      classifyPendingNamespace: () => ({ kind: 'commit', namespace: 'acme', basis: 'market-organization' }),
+      readUnconfirmedConfirmationEvidence: () => {
+        evidenceReads += 1;
+        // Simulate a binding replacement at either async commit boundary.
+        // A matching old package must not confirm the replacement plugin.
+        if (bindingChanged && evidenceReads === (evidence === 'binding-before-lock' ? 1 : 2)) {
+          const changed = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+          changed.instances.hello.pluginId = 'plugin-b';
+          fs.writeFileSync(registryPath, JSON.stringify(changed));
+        }
+        return {
+          marketRecords: positive || evidence === 'write-failed' || bindingChanged ? [{ namespace: 'acme', organizationId: 'org-acme', scope: 'organization' as const, installed: true, packageSha256: 'a'.repeat(64) }] : undefined,
+          packageSha256: 'a'.repeat(64),
+          forgeSelfTest: evidence === 'forge-stamped',
+          currentOrganization: { organizationId: 'org-acme', orgSlug: 'acme' },
+        };
+      },
+    });
+    // Waiting for positive evidence must preserve the install without making
+    // the startup coordinator repeatedly scan the entire plugin market.
+    const scheduleRetry = vi.fn();
+    const startup = new StableOwnerPostCommitCoordinator({
+      snapshot: () => ({ scopeKey: 'owner:1', dataOwnerId: 'owner', stable: true }),
+      warn: vi.fn(), scheduleRetry,
+    });
+    const maintenance = vi.fn(async () => {
+      await manager.reconcilePendingRootNamespaces(true);
+      return 'completed' as const;
+    });
+    startup.setTask(maintenance);
+    const failedWrite = evidence === 'write-failed'
+      ? vi.spyOn(GhostInstallReceiptStore.prototype, 'write').mockRejectedValueOnce(new Error('receipt write failed'))
+      : null;
+    try {
+      await expect(startup.ensure('startup')).resolves.toBe(failedWrite ? 'failed' : 'completed');
+      if (failedWrite) expect(scheduleRetry).toHaveBeenCalledOnce();
+      else {
+        await startup.ensure('stable-again');
+        expect(scheduleRetry).not.toHaveBeenCalled();
+      }
+    } finally {
+      failedWrite?.mockRestore();
+    }
+    expect(maintenance).toHaveBeenCalledOnce();
+    const installed = manager.list()[0];
+    expect(installed).toMatchObject({ enabled: true, namespaceState: positive ? 'confirmed' : 'pending' });
+    expect(installedGhostStoragePart(installed)).toBe('hello');
+    expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
+    expect(await manager.verifyApprovedSkillSnapshot(installed)).toBe(true);
+    if (positive) expect(installed.namespace).toBe('acme');
+  });
+
   it.each([false, true])('repairs the same release in a migrated bare directory without changing storage identity (enabled=%s)', async (enabled) => {
     const archive = vi.fn();
     manager = createManager({ mutateSnapshot, onArchiveSourceState: archive });
@@ -743,6 +826,40 @@ describe('GhostManager namespace migration census', () => {
     expect(resumed.mock.results[0]?.value).toBe('pending');
   });
 
+  // A background list may precede the resume callback by several awaits. A
+  // cached enabled projection must not restart a resident disabled meanwhile.
+  // Unit: one pending legacy resident; existing tests use only fresh sync lists.
+  it('rechecks enabled state before resuming from a prepared background list', async () => {
+    await plantLegacyInstall('hello');
+    const resumed = vi.fn();
+    manager = createManager({
+      canResumePendingResidentOffline: () => true,
+      onResumePendingResidentOffline: resumed,
+    });
+    manager.ensureNamespaceMigrationCensus();
+    const installed = await manager.listAsync();
+    expect(installed[0]).toMatchObject({ enabled: true, namespaceState: 'pending' });
+    await manager.setEnabled('hello', false);
+    manager.resumePendingResidentsOffline(installed);
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  // Census publication changes namespace eligibility without a content
+  // transaction. A per-refresh view must observe that new registry (unit).
+  it('invalidates a background refresh when the census changes without an install mutation', async () => {
+    await plantLegacyInstall('hello');
+    const read = vi.spyOn(GhostInstallReceiptStore.prototype, 'readAsync');
+    try {
+      const refresh = manager.createBackgroundRefresh();
+      expect((await refresh.registry()).census).toBeNull();
+      expect(manager.ensureNamespaceMigrationCensus()).not.toBeNull();
+      expect((await refresh.registry()).census).not.toBeNull();
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it('does not assign an organization namespace to a plugin planted after the census', async () => {
     await fs.promises.mkdir(rootDir, { recursive: true });
     expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toEqual([]);
@@ -1076,6 +1193,167 @@ describe('GhostManager namespace migration census', () => {
     expect(fs.existsSync(path.join(rootDir, '_ns', '_root', 'hello'))).toBe(false);
     expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello'))).toBe(false);
   });
+
+  // Unit, #9896 / plugin-security-and-authoring §1.1: an old client can remove
+  // receipt.namespace while the registry retains the original instance. Existing
+  // legacy-update cases kept that field and did not exercise a selected instance.
+  // Keep a same-name root beside the legacy organization to catch cross-ns writes.
+  it('updates the selected legacy organization after a receipt rewrite without touching a same-name root', async () => {
+    await stampLegacyOrganizationInstall();
+    await manager.setEnabled('hello', false);
+    await manager.install(await makeCindy('hello'), { namespace: null });
+    const store = receiptStore(mutateSnapshot);
+    const approved = store.read('hello');
+    if (approved.state !== 'approved') throw new Error('expected approved legacy install');
+    const { namespace, ...oldClientReceipt } = approved.receipt;
+    expect(namespace).toBe('acme');
+    await store.write(oldClientReceipt, { relId: 'hello', skillSourceDir: path.join(rootDir, 'hello') });
+    const legacy = manager.list().find(ghost => ghost.namespace === 'acme')!;
+    const sibling = manager.list().find(ghost => ghost.namespace === null)!;
+    expect(legacy.namespaceState).toBe('unconfirmed');
+    expect(manager.readDeliveryNamespace(installedGhostStoragePart(legacy))).toBeUndefined();
+    const rootApproval = sibling.approval;
+    const pkg = await writeTestCindyPackage(path.join(workDir, 'next.cindy'), { ...manifest(), version: '2.0.0' });
+
+    expect(await manager.update(pkg, {
+      namespace: 'acme', expectedInstalledInstanceId: installedGhostStoragePart(legacy),
+      expectedInstalledApproval: ghostInstallApprovalToken(legacy.approval),
+    })).toMatchObject({ ghost: { namespace: 'acme', dir: path.join(rootDir, 'hello'), enabled: false,
+      instanceKey: installedGhostStoragePart(legacy), manifest: { version: '2.0.0' } } });
+    expect(manager.list().find(ghost => ghost.namespace === null)).toMatchObject({
+      dir: sibling.dir, approval: rootApproval, manifest: { version: '1.0.0' },
+    });
+    expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello'))).toBe(false);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { namespace: 'acme' } });
+  });
+
+  // Unit: package placement alone leaves runtime namespace unavailable. Confirm
+  // only the selected update after its market route commits; other rows stay put.
+  it.each(['matching', 'wrong-organization', 'wrong-package', 'replacement', 'unapproved-replacement'] as const)(
+    'confirms only the updated instance after fresh %s market evidence', async evidence => {
+      const originalPluginId = 'c' + 'e'.repeat(24);
+      const replacementPluginId = 'c' + 'f'.repeat(24);
+      const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+      const readEvidence = vi.fn((record: PluginInstanceRecord) => {
+        const lookup = ledger.lookupInstallationsForNamespaceMigration(record.ghostId);
+        return buildUnconfirmedConfirmationEvidence({
+          record, rows: lookup.kind === 'found' ? lookup.records : [],
+          currentOrganization: { organizationId: evidence === 'wrong-organization' ? 'org-other' : 'org-acme', orgSlug: 'acme' },
+          packageSha256: manager.approvedInstallEvidence(record.instanceKey)?.packageSha256 ?? null,
+          forgeSelfTest: false,
+        });
+      });
+      manager = createManager({ mutateSnapshot, readUnconfirmedConfirmationEvidence: readEvidence,
+        marketIdentityForInstance: instance => instance.ghostId === 'hello'
+          ? { pluginId: originalPluginId, source: 'market' } : null });
+      await stampLegacyOrganizationInstall();
+      await manager.install(await makeCindy('other'), { namespace: 'acme' });
+      const store = receiptStore(mutateSnapshot);
+      for (const relId of ['hello', '_ns/acme/other']) {
+        const approval = store.read(relId);
+        if (approval.state !== 'approved') throw new Error('expected approved install');
+        const { namespace: _namespace, ...rewritten } = approval.receipt;
+        await store.write(rewritten, { relId, requireSkillSnapshot: false });
+      }
+      const selected = manager.list().find(ghost => ghost.manifest.id === 'hello')!;
+      const unrelated = manager.list().find(ghost => ghost.manifest.id === 'other')!;
+      const result = await manager.update(await makeCindy('hello'), {
+        namespace: 'acme', expectedInstalledInstanceId: installedGhostStoragePart(selected),
+        expectedInstalledApproval: ghostInstallApprovalToken(selected.approval),
+      });
+      if (!('ghost' in result)) throw new Error('expected successful update');
+      expect(result.ghost.namespaceState).toBe('unconfirmed');
+      const waiting = await manager.confirmUpdatedInstanceNamespace(result.ghost);
+      expect(waiting.namespaceState).toBe('unconfirmed');
+      const approval = store.read('hello');
+      if (approval.state !== 'approved') throw new Error('expected updated receipt');
+      ledger.upsertInstallation({
+        pluginId: evidence.includes('replacement') ? replacementPluginId : originalPluginId,
+        ghostId: 'hello', releaseId: 'release-next', version: '1.0.0',
+        namespace: 'acme', scope: 'organization', organizationId: 'org-acme', source: 'market',
+        installed: true, sha256: evidence === 'wrong-package' ? 'ab'.repeat(32) : approval.receipt.packageSha256!,
+        updatedAt: '2026-11-12T00:00:00.000Z',
+      });
+      const confirmed = await manager.confirmUpdatedInstanceNamespace(waiting,
+        evidence === 'replacement' ? replacementPluginId : undefined);
+      const shouldConfirm = evidence === 'matching' || evidence === 'replacement';
+      expect(confirmed).toMatchObject({
+        dir: selected.dir, instanceKey: installedGhostStoragePart(selected),
+        namespaceState: shouldConfirm ? 'confirmed' : 'unconfirmed',
+      });
+      expect(manager.readDeliveryNamespace(installedGhostStoragePart(selected)))
+        .toBe(shouldConfirm ? 'acme' : undefined);
+      const registry = JSON.parse(fs.readFileSync(pluginInstanceRegistryPath(path.join(workDir, 'ghosts-install-state')), 'utf8'));
+      expect(registry.instances[installedGhostStoragePart(selected)].pluginId)
+        .toBe(evidence === 'replacement' ? replacementPluginId : originalPluginId);
+      expect(manager.findInstalledInstance(installedGhostStoragePart(unrelated))).toEqual(unrelated);
+      expect(readEvidence.mock.calls.every(([record]) => record.instanceKey === installedGhostStoragePart(selected))).toBe(true);
+    },
+  );
+
+  it.each(['different-namespace', 'different-plugin', 'missing-instance', 'stale-approval'] as const)(
+    'rejects a selected update with %s instead of falling through to a same-name installation', async scenario => {
+      await stampLegacyOrganizationInstall();
+      await manager.install(await makeCindy('hello'), { namespace: null });
+      await manager.install(await makeCindy('other'), { namespace: null });
+      const before = manager.list();
+      const root = before.find(ghost => ghost.manifest.id === 'hello' && ghost.namespace === null)!;
+      const organization = before.find(ghost => ghost.namespace === 'acme')!;
+      const other = before.find(ghost => ghost.manifest.id === 'other')!;
+      const target = scenario === 'different-namespace' ? installedGhostStoragePart(organization)
+        : scenario === 'different-plugin' ? installedGhostStoragePart(other)
+          : scenario === 'missing-instance' ? 'missing' : installedGhostStoragePart(root);
+      const pkg = await writeTestCindyPackage(path.join(workDir, 'next.cindy'), { ...manifest(), version: '2.0.0' });
+      expect(await manager.update(pkg, { namespace: null, expectedInstalledInstanceId: target,
+        expectedInstalledApproval: scenario === 'stale-approval' ? 'stale' : ghostInstallApprovalToken(root.approval),
+      })).toMatchObject({ rejection: { code: 'state-changed' } });
+      expect(manager.list()).toEqual(before);
+    },
+  );
+
+  it('rejects a selected update when the receipt explicitly contradicts the retained namespace', async () => {
+    await stampLegacyOrganizationInstall();
+    const store = receiptStore(mutateSnapshot);
+    const approval = store.read('hello');
+    if (approval.state !== 'approved') throw new Error('expected approved legacy install');
+    await store.write({ ...approval.receipt, namespace: null }, { relId: 'hello', requireSkillSnapshot: false });
+    const before = manager.list();
+    const legacy = before[0]!;
+    expect(legacy).toMatchObject({ namespace: 'acme', namespaceState: 'unconfirmed' });
+
+    expect(await manager.update(await makeCindy('hello'), {
+      namespace: 'acme', expectedInstalledInstanceId: installedGhostStoragePart(legacy),
+      expectedInstalledApproval: ghostInstallApprovalToken(legacy.approval),
+    })).toMatchObject({ rejection: { code: 'state-changed' } });
+    expect(manager.list()).toEqual(before);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { namespace: null } });
+  });
+
+  it.each([undefined, null, 'acme'] as const)(
+    'keeps a selected pending update unlabeled rather than claiming namespace %s', async namespace => {
+      await plantLegacyInstall('hello');
+      const before = manager.list();
+      const legacy = before[0]!;
+      expect(legacy.namespaceState).toBe('pending');
+      const pkg = await writeTestCindyPackage(path.join(workDir, 'next.cindy'), { ...manifest(), version: '2.0.0' });
+      const result = await manager.update(pkg, {
+        ...(namespace !== undefined ? { namespace } : {}),
+        expectedInstalledInstanceId: installedGhostStoragePart(legacy),
+        expectedInstalledApproval: ghostInstallApprovalToken(legacy.approval),
+      });
+      if (namespace === undefined) {
+        expect(result).toMatchObject({ ghost: { dir: legacy.dir, manifest: { version: '2.0.0' } } });
+        expect(manager.list()[0]).toMatchObject({ namespaceState: 'pending' });
+        const receipt = receiptStore().read('hello');
+        expect(receipt).toMatchObject({ state: 'approved', receipt: { manifest: { version: '2.0.0' } } });
+        if (receipt.state !== 'approved') throw new Error('expected approved legacy install');
+        expect(receipt.receipt).not.toHaveProperty('namespace');
+      } else {
+        expect(result).toMatchObject({ rejection: { code: 'state-changed' } });
+        expect(manager.list()).toEqual(before);
+      }
+    },
+  );
 
   it('does not let an absent new root instance mutate a same-name legacy root', async () => {
     await plantLegacyInstall('hello');

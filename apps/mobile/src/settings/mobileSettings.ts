@@ -17,15 +17,14 @@ export interface MobileSettingsOverviewInput {
 
 export interface MobileSettingsRow {
   copyValue?: string;
-  detail?: string;
   id: string;
   label: string;
   value: string;
 }
 
 export interface MobileSettingsSection {
-  /** true 表示该分组默认折叠(如「调试 / 开发者」),普通用户不必直面。 */
-  collapsible?: boolean;
+  /** 分组下方的说明(iOS Section footer);行内不再放说明文字。 */
+  footer?: string;
   id: 'about' | 'debug';
   rows: MobileSettingsRow[];
   title: string;
@@ -53,7 +52,7 @@ export interface MobileSettingsOverview {
 /**
  * 把账号 / 设备 / 连接 / 调试信息整理成设置页的展示模型(纯函数,便于单测)。
  * 分两层:`header` 承载用户最常看的身份 + 连接状态;`sections` 把「关于这台手机」与
- * 默认折叠的「调试 / 开发者」分开,避免一墙 ID / hash 与真正可操作项平铺等权重。
+ * 二级页「开发者」用的标识信息分开,避免一墙 ID / hash 与真正可操作项平铺等权重。
  * App 版本 / OTA 运行信息不在此处 —— 由设置页的「版本」行直接读 expo-constants / expo-updates。
  */
 export function buildMobileSettingsOverview(input: MobileSettingsOverviewInput): MobileSettingsOverview {
@@ -73,6 +72,7 @@ export function buildMobileSettingsOverview(input: MobileSettingsOverviewInput):
     },
     sections: [
       {
+        footer: i18n.t('settings.about.deviceNameDetail'),
         id: 'about',
         title: i18n.t('settings.about.sectionTitle'),
         rows: compactRows([
@@ -80,7 +80,6 @@ export function buildMobileSettingsOverview(input: MobileSettingsOverviewInput):
             id: 'about.deviceName',
             label: i18n.t('settings.about.deviceName'),
             value: deviceName,
-            detail: i18n.t('settings.about.deviceNameDetail'),
           },
           {
             id: 'about.platform',
@@ -92,35 +91,41 @@ export function buildMobileSettingsOverview(input: MobileSettingsOverviewInput):
       {
         id: 'debug',
         title: i18n.t('settings.debug.sectionTitle'),
-        collapsible: true,
-        rows: compactRows([
-          {
-            id: 'debug.userId',
-            label: i18n.t('settings.debug.userId'),
-            value: input.userId?.trim() || i18n.t('settings.debug.notSynced'),
-            copyValue: input.userId?.trim() || undefined,
-          },
-          {
-            id: 'debug.deviceId',
-            label: i18n.t('settings.debug.deviceId'),
-            value: input.deviceId?.trim() || i18n.t('settings.debug.initializing'),
-            copyValue: input.deviceId?.trim() || undefined,
-          },
-          {
-            id: 'debug.authBaseUrl',
-            label: i18n.t('settings.debug.authServer'),
-            value: input.authBaseUrl,
-            copyValue: input.authBaseUrl,
-          },
-          {
-            id: 'debug.authRegion',
-            label: i18n.t('settings.debug.authRegion'),
-            value: input.authRegion === 'global' ? 'Global' : 'CN',
-          },
-        ]),
+        rows: buildMobileDebugRows(input),
       },
     ],
   };
+}
+
+export type MobileDebugRowsInput = Pick<MobileSettingsOverviewInput, 'authBaseUrl' | 'authRegion' | 'deviceId' | 'userId'>;
+
+/** 二级页「开发者」的「标识信息」分组:账号 / 设备 ID 可复制,外加登录服务器与区域。 */
+export function buildMobileDebugRows(input: MobileDebugRowsInput): MobileSettingsRow[] {
+  return compactRows([
+    {
+      id: 'debug.userId',
+      label: i18n.t('settings.debug.userId'),
+      value: input.userId?.trim() || i18n.t('settings.debug.notSynced'),
+      copyValue: input.userId?.trim() || undefined,
+    },
+    {
+      id: 'debug.deviceId',
+      label: i18n.t('settings.debug.deviceId'),
+      value: input.deviceId?.trim() || i18n.t('settings.debug.initializing'),
+      copyValue: input.deviceId?.trim() || undefined,
+    },
+    {
+      id: 'debug.authBaseUrl',
+      label: i18n.t('settings.debug.authServer'),
+      value: input.authBaseUrl,
+      copyValue: input.authBaseUrl,
+    },
+    {
+      id: 'debug.authRegion',
+      label: i18n.t('settings.debug.authRegion'),
+      value: input.authRegion === 'global' ? 'Global' : 'CN',
+    },
+  ]);
 }
 
 export function relayStatusTone(status: DeviceLinkStatus): 'ready' | 'busy' | 'off' {

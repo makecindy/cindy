@@ -112,6 +112,7 @@ export function isRendererAccessibleSafeStorageKey(storageKey: string): boolean 
     // Imported environments contain private credentials/checkpoints. All generic
     // read/store/remove calls must leave this entire namespace to Main.
     && !normalized.startsWith('bot_environment_')
+    && !normalized.startsWith('ghost_alias_migration_')
   );
 }
 
@@ -197,59 +198,11 @@ export function providerOAuthStorageKey(providerId: string): string {
  */
 export const GHOST_SECRET_PREFIX = 'ghost_secret_';
 
-/**
- * 官方意识凭证 → 历史机器级 provider key 的别名表(老用户兼容)。
- *
- * cindy-web-search 的两条凭证与「工具密钥」时代的 Brave / Tavily key 是**同一
- * 把钥匙**,直接映射到同一存储键(.enc 同一文件):
- * - 老用户在工具密钥页填过的 key,对意识立即生效,零迁移零重填
- *   (lizi_web_search MCP 已于 2026-07-13 退役,意识页是这两把 key 的唯一入口);
- * - 卸载意识不删这两个键(removeGhostSecrets 只扫 ghost_secret_ 前缀,别名键
- *   天然不在扫描面内)——它们是用户填的机器级 key,归属机器不归属意识,
- *   重装意识即恢复可用;换账号仍随 clearAll 清扫(在 PROVIDER_SECRET_IDS 里)。
- * 仅限官方意识登记(key 必须是官方保留前缀 id,见
- * GHOST_OFFICIAL_ID_PREFIXES):第三方意识一律走 ghost_secret_ 命名空间;
- * packaged 版本的用户装入通道对官方前缀 id 拒装(cindy-brain/index.ts
- * rejectReservedGhostId),抢注官方 id 蹭别名的路被封死。
- */
-const GHOST_SECRET_STORAGE_ALIASES: Record<string, Record<string, string>> = {
-  'cindy-web-search': {
-    brave_api_key: STORAGE_KEYS.brave,
-    tavily_api_key: STORAGE_KEYS.tavily,
-  },
-  // xd-mivo(前身 cindy-mivo)与「工具密钥」时代的 Mivo key 同一把钥匙
-  // (mivo_api_key .enc),老用户填过即对意识生效,零迁移零重填——改名也
-  // 不丢:别名映射到底层同一存储键,与 ghostId 无关。
-  'xd-mivo': {
-    mivo_api_key: STORAGE_KEYS.mivo,
-  },
-};
-
-/**
- * 意识凭证的 safeStorage 存储键名(缺省 `ghost_secret_<ghostId>_<secretKey>`;
- * 官方别名见 GHOST_SECRET_STORAGE_ALIASES)。
- *
- * 值由用户在该意识设置页填入(renderer 经通用 safeStorage IPC 写),main 只在
- * 代理 fetch 注入时读——凭证明文永不进沙箱、不进管子消息、不进日志。
- * ghostId 规则 /^[a-z0-9][a-z0-9-]{0,31}$/、secretKey 规则 /^[a-z][a-z0-9_]{0,31}$/
- * (validateGhostManifest 已把关),此处按惯例在键名构造点再断言一次。
- */
-function ghostSecretAliasOwner(ghostId: string, allowMivoAlias: boolean): string {
-  // Only the legacy bare id may hold the historical Mivo key. A namespaced
-  // xd-mivo instance is a different install and must not share it.
-  if (allowMivoAlias && ghostId === 'xd-mivo') return 'xd-mivo';
-  return ghostId;
-}
-
-export function ghostSecretStorageKey(ghostId: string, secretKey: string, allowMivoAlias = false): string {
-  assertSafeKeyPart(ghostId, 'ghostId');
+/** Plugin credentials always belong to the exact physical installation. */
+export function ghostSecretStorageKey(instanceKey: string, secretKey: string): string {
+  assertSafeKeyPart(instanceKey, 'instanceKey');
   assertSafeKeyPart(secretKey, 'secretKey');
-  const aliasOwner = ghostSecretAliasOwner(ghostId, allowMivoAlias);
-  const alias = ghostId === 'xd-mivo' && !allowMivoAlias
-    ? undefined
-    : GHOST_SECRET_STORAGE_ALIASES[aliasOwner]?.[secretKey];
-  if (alias) return alias;
-  return `${GHOST_SECRET_PREFIX}${ghostId}_${secretKey}`;
+  return `${GHOST_SECRET_PREFIX}${instanceKey}_${secretKey}`;
 }
 
 /**

@@ -16,7 +16,7 @@ import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { createMakeDoctorCommand } from '../cindy-make/doctorCommand.js';
@@ -49,6 +49,7 @@ export interface DesktopCommandTriggeredPayload {
     | 'cmd'
     | 'issue'
     | 'review'
+    | 'side'
     | 'jump-session'
     | 'goal'
     | 'workflows'
@@ -343,6 +344,7 @@ export interface BuiltinDesktopCommandDeps {
   getLearnController: () => LearnController | null;
   /** Learn Skill 的设备/profile 开关；SSH 兼容入口与 Skill 使用同一开关。 */
   isLearnEnabled: () => boolean;
+  isLearnEnabledForListing?: () => boolean;
   /**
    * device-link 隧道 invoke(控制端 → 被控端)。ctx.deviceId 存在(远程会话)时,
    * /goal /learn /cmd 的业务体经它路由到被控端执行 —— 与 renderer 的
@@ -393,7 +395,7 @@ export function registerBuiltinDesktopCommands(
           }),
         allowInstallTest: () => !app.isPackaged,
         searchUpstream: async (request, signal) => {
-          const { outboundFetch } = await import('../maker-host/outbound-fetch.js');
+          const { outboundFetch } = await import('../maker-host/outbound-fetch.desktop.js');
           const runtime = await resolveMakeRuntime(
             { packaged: app.isPackaged, version: app.getVersion() },
             signal,
@@ -516,6 +518,12 @@ export function registerBuiltinDesktopCommands(
     description:
       'Clears the current session context in place — wipes its messages and state without creating or switching to a new session. The session stays in the sidebar.',
     execute: (ctx) => broadcastDesktopCommand(buildPayload('clear', ctx)),
+  });
+
+  registry.register({
+    name: 'side',
+    get description() { return t('chat.sideChat.commandDescription'); },
+    execute: (ctx) => sendDesktopCommandToSender(ctx, buildPayload('side', ctx)),
   });
 
   registry.register({
@@ -703,6 +711,8 @@ export function registerBuiltinDesktopCommands(
     // preference. Keep the compatibility route and let remote learn:start
     // enforce the controlled host's effective setting.
     isVisible: (ctx) => Boolean(ctx?.deviceId) || deps.isLearnEnabled(),
+    isVisibleForListing: (ctx) => Boolean(ctx?.deviceId)
+      || (deps.isLearnEnabledForListing ?? deps.isLearnEnabled)(),
     execute: async (ctx) => {
       const arg = (ctx.args ?? '').trim();
       if (!arg && !ctx.sessionId) {

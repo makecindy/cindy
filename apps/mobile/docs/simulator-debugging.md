@@ -5,6 +5,10 @@ or Windows Android Emulator. It exists because Expo Go, a development client,
 and an installed distribution build look similar during manual testing but prove
 different things.
 
+For task content that stays blank or frozen despite completed history updates,
+use the [native task-entry replay](blank-task-reproduction.md) to distinguish
+message delivery, list visibility and a stale navigation snapshot.
+
 On Windows, the explicit Mainland China one-command entry starts or reuses the
 `cindy-api36` AVD, waits for Android to finish booting, configures `adb reverse`,
 and then keeps the current worktree's Metro in the foreground:
@@ -20,12 +24,58 @@ Windows Android Studio SDK location; they do not need to be on `PATH`. The
 command does not rebuild the native app, so install the matching development
 package first when switching build identity.
 
+Windows Android identity checks use the following command (replace the serial and
+port with the selected emulator and Metro):
+
+```sh
+pnpm mobile:sim:whoami -- --mock --udid emulator-5554 --port 8082 --json
+```
+
+They read the resolved `android.package`, installed version/debug flag and the APK's
+`assets/fingerprint`, compare it with the Android Expo Updates fingerprint, and reuse
+the Metro worktree/source/environment checks. Failed adb reads remain failures;
+APK fingerprint timeouts/unreadable results keep a distinct `native.reason` and
+ask you to repair adb/fingerprint reads and retry, without recommending a rebuild.
+If extracting the fingerprint exits unsuccessfully, a successful archive listing
+that lacks the exact `assets/fingerprint` entry identifies a missing fingerprint
+and recommends rebuilding. Failed listings remain probe failures.
+Multiple online emulators require an explicit serial. Physical phones are not selected.
+`--viewer` remains iOS-only: Android window and page verification requires a real screenshot.
+`mobile:sim:up` is still iOS-only; Windows uses `start` and `rebuild` separately.
+
 The three commands share Metro worktree, source, region and environment checks.
 `whoami` success proves identity consistency, not that the app has loaded a bundle
 or displayed a page (`pageVerified` remains false). `rebuild` reports installation
 separately from a launch request, and exits nonzero if launch is blocked, including
 when Metro is absent. `--build-only` does not require Metro. A successful launch
 request still requires fresh bundle logs and visible page verification.
+
+### Which iOS Simulator
+
+The repository does not pin a simulator; each developer chooses locally. By default
+(`CINDY_MOBILE_SIMULATOR=auto`) `whoami`, `rebuild` and `open` use Cindy's own simulator — the
+official Baguette plugin's private device set at
+`~/Library/Application Support/BaguetteCindy/devices`, shown in Cindy's sidebar — and fall back
+to the system (Xcode) simulator only when Cindy's is not installed or its plugin setting has
+paused running. With nothing booted in Cindy's simulator they report `cindy-idle` with its
+reusable devices instead of picking a system device; boot one through the plugin. `--udid` uses
+whichever of those sets holds that device. Using the system simulator while Cindy's is available
+reports `system-while-cindy-available` (`simulatorNotice` in `whoami --json`). Keep a personal
+choice outside the repository, e.g. in your shell profile:
+
+| `CINDY_MOBILE_SIMULATOR` | Effect |
+|---|---|
+| `auto` (default) | Cindy while it is available, otherwise system |
+| `cindy` | Only Cindy's simulator; error when unavailable |
+| `system` | Only the system simulator |
+| absolute path | Only that CoreSimulator device set |
+
+Devices outside the system set have no external window: `mobile:sim:open` refuses them and
+`whoami --viewer` reports the viewer as unavailable; view Cindy's devices in its sidebar.
+`rebuild` builds those with the generic Simulator destination (xcodebuild only sees the system
+set) and installs with `simctl --set`. Cindy's simulator shuts devices down after its idle
+setting (15 minutes by default; plugin input renews it, scripts do not). Native E2E (Maestro)
+still uses the system simulator.
 
 For the macOS external viewer, use `pnpm mobile:sim:open -- --udid <booted-udid>`.
 It resolves the app inside the selected Xcode toolchain (including `DEVELOPER_DIR`),
@@ -39,6 +89,100 @@ Use `mobile:sim:whoami -- --viewer --json` when handing off an external window.
 explicitly leaves visible-window acceptance to a screenshot/manual check. Without
 `--viewer`, a missing external viewer does not fail embedded/headless identity checks.
 
+## 截图与当前版本测试
+
+**默认入口：`pnpm mobile:sim:up`（只看界面加 `-- --mock`）。** 它按下面的流程完成第 1–6 步中除目检外的
+部分，并遵守同样的授权范围：不 `--clean`、不卸载、不新建或删除设备，不停止其他任务的 Metro（`--takeover`
+除外）。
+
+| 选择 | 规则 |
+|---|---|
+| 设备 | `--udid` → `--device <名称>` 或个人设置的 `CINDY_MOBILE_SIM_DEVICE` → 连着本 worktree Metro 的已开机 iPhone → 唯一一台候选（装了 App 且没有 Metro 在服务的已开机 iPhone，或装了 App 的关机 iPhone）。候选有多台时不猜，报 `DEVICE_CHOICE_NEEDED` 并列出候选，由用户指定；一台都没有时报 `NO_REUSABLE_DEVICE`，由 `next` 给出新建方法 |
+| Metro | 复用本 worktree 身份一致的 Metro；身份过期就重启自己的；`8081` 属于其他任务时用 `8082`–`8086` 的空闲端口，并把设备指过去 |
+| 原生包 | `native-matched` 就复用，否则运行 `rebuild`（先查缓存）；探测失败报 `NATIVE_PROBE_FAILED`，不当作需要重装 |
+| App | 启动后等 Metro 日志出现这次的 `iOS Bundled`，没等到就重新启动。`bundleVerified: false` 表示这个 Metro 没有日志（例如在日志功能之前启动），无法确认 |
+| 前台 | 读设备日志里 App 最新的运行状态，不在前台就切回前台（开机后系统偶尔会把它挤到后台）。`foreground: null` 表示日志里没有状态，未确认 |
+
+失败时结果 JSON 的 `code` 说明原因，`next` 说明下一步：`UNSUPPORTED_PLATFORM`、`BAD_ARGS`、
+`SIMULATOR_UNAVAILABLE`、`UNKNOWN_DEVICE`、`DEVICE_CHOICE_NEEDED`、`NO_REUSABLE_DEVICE`、`BOOT_FAILED`、`METRO_PROBE_FAILED`、
+`METRO_PORTS_BUSY`、`METRO_START_FAILED`、`NATIVE_PROBE_FAILED`、`IOS_BUILD_TOOLS_UNAVAILABLE`、
+`REBUILD_FAILED`、`LAUNCH_FAILED`、`BUNDLE_FAILED`、`BUNDLE_NOT_SEEN`、`APP_NOT_FOREGROUND`、`IDENTITY_FAILED`。Metro 日志由
+`mobile:sim:start` 写在系统临时目录（结果的 `metroLog`），验证后照常运行 `next` 里给出的 `mobile:sim:logcheck`；
+编译失败时，编译日志的路径在 `next` 里。
+
+只有 `up` 失败、或需要单独控制某一步时，才手动执行下面的流程。
+
+“给我看这次手机改动的截图”与启动当前版本测试共用此流程。本节是 Agent 做手机模拟器测试的
+唯一流程正本，不另设个人 Skill；开发者个人只保留常用机型、模拟器后端等偏好。
+
+**授权范围。** 当前任务里用户要求“启动/切换/运行手机模拟器让我测”或要截图，即授权本任务：
+启动匹配的模拟器、安装兼容开发包、普通 `rebuild`、启动/reload App、用 `--takeover` 重启本任务
+自己的或 worktree 已删除的孤儿 `8081` Metro，以及按
+[Parallel devices](#parallel-devices-another-task-owns-8081) 另开设备与端口。`8081` 属于其他仍
+存在的 worktree 时默认走并行设备；只有用户在当前任务里明确要求接管，才用 `--takeover` 停掉它
+（会打断那边的测试）。授权在本任务后续执行中持续有效，不因回合结束重新索要；其他任务、引用的历史
+对话或 Agent 自己判断“应该测一下”都不构成授权，只调查原因时不启动设备。“不要动当前版本/
+不要关模拟器”等保护要求优先。测试请求**不**包含：`--clean`、卸载或清登录态、重置/删除/关闭
+不是本任务创建的模拟器、重启 Desktop 或 device-link、修改账号/凭证/私有端点/区域身份配置、
+安装系统工具或下载 runtime、控制私人真机；需要时只问缺的那一项。普通截图优先 `--mock`。
+
+1. 固定本任务的 worktree：本次明确给出的路径/分支 → 本任务已确认并实际编辑的 worktree →
+   当前工作目录。会话初始目录可能仍是主 checkout；无法唯一确定时询问，不根据其他任务、最近
+   的 Metro、模拟器画面或“看起来最新”的提交猜。读取 `git status --short --branch`，所有
+   `mobile:sim:*` 在目标根目录运行。使用任务明确指定的机型，未指定时才使用个人选择；区域
+   未指定时为 Global（`cn` 只能显式指定）。先枚举设备，选择精确 UDID；已有设备必须符合本次
+   机型要求，不能因另一型号已经启动就把它当作目标，也不使用已知被其他任务占用的设备。机型
+   和个人选择都没有时可复用唯一已启动设备，否则询问。后续命令保持相同 region、UDID、模拟器
+   后端和 mock 开关。
+   Cindy 模拟器经已安装的 `cindy-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
+   操作，只用 `environment` 列出的已安装 runtime，同机型有可复用设备时不重复创建。`auto` 只在
+   插件未安装或 `RUNTIME_DISABLED` 时回退系统模拟器；固定 `cindy` 时报告不可用，不替用户重新
+   启用插件。Cindy 模拟器的设备全部关机或都被其他任务占用，不是回退理由：通过插件复用或新建
+   一台。Agent 不自行设置 `CINDY_MOBILE_SIMULATOR=system`，也不用 `simctl create` 在系统模拟器
+   里建设备，除非用户明确要求或插件不可用。任务跨回合、rebase 或换提交后继续测试时，按当前
+   流程和个人选择重新选设备，不因上次用过就沿用。
+2. 先运行 `mobile:sim:whoami`，再决定是否需要启动设备、接管 Metro 或准备原生包。
+   `simulatorNotice` 非空时先按其提示处理；`native.reason` 为 `target-not-unique` 表示还没有
+   唯一目标、未检查安装情况，先确定 `--udid`，不要因此 `rebuild`。
+   只检查 UI 时对 `whoami/start/rebuild` 都加 `--mock`。命令保留退出码；`pnpm` 的前后日志
+   不属于 JSON，解析时从 stdout 末尾向前找最后一行合法 JSON 对象，不用 `grep | tail` 吞掉失败。
+3. 若 `native-matched`，复用已安装包；缺包、不兼容或包本身无可验证指纹时运行普通
+   `mobile:sim:rebuild`。它先查询 `~/Library/Caches/xdt-maker/sim-app-cache` 中的匹配条目，
+   校验 bundle ID、架构和嵌入指纹，未命中才检查构建工具并编译。`SIM_CACHE` 给出查询位置与
+   `cache-entry-missing`、`cache-bundle-mismatch`、`cache-architecture-mismatch`、
+   `cache-native-mismatch` 等原因；有旧产物不等于兼容，未安装也不等于必须完整编译。
+   不从任意目录捡 `.app` 绕过校验，日常不传 `--clean` 或 `--force-build`。
+4. `SIM_BUILD_PREFLIGHT` 失败时按 [环境说明](../../../docs/dev-rules/environment-setup.md#macosios-模拟器构建工具链)
+   修复具体工具。`whoami` 的 `probeErrors`、阶段失败或 `native.reason` 指向探测/计算故障时，
+   先处理该故障，不能把“检查失败”当作“需要重建”。后台构建保留日志和退出码，用宿主的进程
+   完成通知/状态查看推进，不用固定数分钟的 `sleep` 判断完成，不因等待较久重复启动构建。
+5. 复用匹配的 Metro；需要接管且已获授权时只用 `mobile:sim:start -- --takeover`，不手工
+   `kill`、不清登录态、不改端口来规避身份检查。`8081` 属于其他任务、又不接管时，按
+   [Parallel devices](#parallel-devices-another-task-owns-8081) 给本任务单独的设备和端口，
+   后续 `whoami` 同时传 `--udid` 和 `--port`。Metro 持续运行并保留日志。安装和启动是独立
+   结果：`rebuild` 可能已经安装成功但因 Metro 未就绪而以非零退出；此时准备 Metro 后启动正确
+   App，不必再次编译。只有 Metro 属于目标 worktree 后才 launch/reload App。
+6. 按下方身份合同确认 `whoami healthy: true`、`native-matched` 和本次新的 `iOS Bundled …`，
+   再进入真实目标页面。Cindy 模拟器用插件查看器（确认 `previewOpened`），系统外部窗口用
+   `mobile:sim:open` 并以 `whoami --viewer` 检查；两者都需要实际截图/目检页面，窗口进程不等于画面。
+
+截图和 `mobile-identity.json`、本次 bundle 日志放进同一任务产物目录，记录页面/场景、设备
+UDID、方向、主题及未验证项。交付时简要说明模拟器后端（Cindy 或系统）与机型、设备/方向/主题、
+区域与 bundle ID、worktree/分支、是否复用 Metro、身份与页面验证结果，并附实际图片；后端或机型
+不是默认选择时写明原因；失败时指出具体失败层级和下一步，不把
+device-link 故障说成模拟器故障。旧 checkout 缺少本流程所需入口（`--udid`、`--mock`、
+`--takeover`、原生身份检查、查看器）时报告具体差距，不手工绕过。布局问题按本次要求覆盖横竖屏与深浅色；截图必须来自目标
+版本的实际界面。身份未通过就报告未完成；仅缺目检则报告“版本及 bundle 已验证，画面未目检”。
+本节不授权上传截图到公开平台。
+
+`whoami` 会向 stderr 输出阶段开始与耗时，JSON 的 `checks` / `elapsedMs` 可定位慢在
+配置、Git 源码身份、设备、原生指纹、Metro 还是查看器。Expo config 的单次检查上限 30s，
+simctl/安装信息查询 15s，Git 子命令 30s，Metro 的主要进程查询 5s，原生指纹 120s；
+这些是单步上限，不是总运行时间承诺。失败后按阶段排查，不降低原生/源码身份要求。
+已找到监听 PID 后，命令、cwd、源码环境或 Windows 进程快照查询失败也会写入
+`probeErrors`（`METRO_PROCESS_TIMEOUT` / `METRO_PROCESS_UNAVAILABLE`，附端口与阶段）；
+身份检查未完成时不提示“没发现 Metro”或建议另启一个 Metro。
+
 ## Current Source Verification Contract
 
 Before anyone claims "the simulator is already showing the new version", they
@@ -51,17 +195,24 @@ apply". Treat the following as a contract, not optional steps:
   client* is installed. A pure JS/UI change (most edits) never bumps it. So a
   matching build number is necessary-but-not-sufficient.
 - **JS freshness = which Metro the app is connected to.** With multiple mobile
-  worktrees open, several Metro servers run at once and the app silently
-  connects to whichever it last used (often `8081`, which is frequently a
-  *different* branch). "The app opened" ≠ "it loaded my bundle".
+  worktrees open, several Metro servers run at once. Each device loads from its
+  own `RCT_jsLocation` if that Metro answers, otherwise silently from `8081`
+  (frequently a *different* branch) — see
+  [Multi-worktree Metro and parallel devices](#multi-worktree-metro-and-parallel-devices).
+  "The app opened" ≠ "it loaded my bundle".
 - **Evidence required before trusting the simulator:**
   1. The `__DEV__` build label at the top of the new-session screen shows
      `branch@commit+dirty-fingerprint · vX (build) · <metro host:port>`, and the
      fingerprint is **your current worktree**. (Injected by `mobile:sim:start`; see below.)
   2. `pnpm mobile:sim:whoami` exits nonzero unless a booted development client,
-     the current worktree's `8081` Metro, and the exact source fingerprint all
-     agree; the label's port must map to your worktree.
+     the current worktree's Metro on the expected port (`8081`, or `--port`), and
+     the exact source fingerprint all agree, including `native.healthy: true` /
+     `native-matched`; the label's port must map to your worktree. `whoami` does
+     not read the device's `RCT_jsLocation`, so the label is what proves which
+     Metro the app actually used.
   3. The Metro terminal printed a fresh `iOS Bundled …` after your edit.
+  4. After exercising the path, `pnpm mobile:sim:logcheck` passes or its findings
+     are reported. See [Logs](#logs).
 
 ### Tools (use these instead of ad-hoc `lsof`/`PlistBuddy`/deep-link dances)
 
@@ -72,7 +223,8 @@ pnpm mobile:sim:start:cn   # Mainland China; on Windows also starts cindy-api36
 pnpm mobile:sim:start -- --region=cn # 中国大陆版 JS region；先 rebuild 对应 native app
 pnpm mobile:sim:whoami     # doctor: booted install + which port = which worktree
 pnpm mobile:sim:whoami -- --region=cn # inspect the cn native app + Metro ownership
-pnpm mobile:sim:rebuild    # rebuild + reinstall the Global native dev app (native changes only)
+pnpm mobile:sim:rebuild    # install a compatible cached dev app, or build it on a cache miss
+pnpm mobile:sim:logcheck   # errors and new warnings since the latest bundle (--port for others)
 ```
 
 `mobile:sim:start` and `mobile:sim:rebuild` default to `global`; the China
@@ -111,20 +263,95 @@ live in the **root** `package.json` (`mobile:sim:*`), not
 `apps/mobile/package.json`, because the latter's `scripts` field IS a fingerprint
 input — adding a script there would bump the mobile runtime version.
 
-### Multi-worktree Metro pitfall
+### Multi-worktree Metro and parallel devices
 
-- The debug app has **no `expo-dev-client` dependency**, so it only ever loads
-  its compiled default packager port (`8081`) — a `xdmaker://expo-development-client/?url=…`
-  deep link or a `--dev-client` "No apps connected" state will NOT switch it.
-  Starting Metro on any other port leaves the app loading a stale `8081` bundle.
-- Therefore `mobile:sim:start` **insists on `8081`** (never auto-bumps): if `8081`
-  is held by *another* worktree it refuses and tells you to stop that Metro first
-  (you can only run one mobile dev session at a time); if it's this worktree's own
-  Metro it just says "already running". Use `mobile:sim:whoami` to see who owns
-  each port. Override with `-- --port <p>` only if you'll point the app there yourself.
-- If `8081` belongs to this worktree but its injected fingerprint no longer equals
-  the current worktree, `mobile:sim:start` refuses instead of claiming Metro is
-  reusable. Stop it and start Metro again after the amend/rebase/reset or edit.
+How the iOS debug app picks its Metro (React Native `RCTBundleURLProvider`):
+
+1. It reads `RCT_jsLocation` (`host:port`) from the app's user defaults. These
+   are stored per simulator and per bundle ID. If that Metro answers, the app
+   loads from it.
+2. Otherwise it **silently** falls back to the compiled default `localhost:8081`
+   (`RCT_METRO_PORT`). This also happens when `RCT_jsLocation` points at a Metro
+   that has stopped.
+
+The app has **no `expo-dev-client` dependency**: a `xdmaker://expo-development-client/?url=…`
+deep link or a `--dev-client` "No apps connected" state will NOT switch it.
+
+Consequences:
+
+- Starting Metro on another port changes nothing until a device is pointed at it.
+- Because the setting is per device, several simulators can run different
+  worktrees at the same time, each on its own port.
+- Both fallbacks are silent: a stopped Metro sends the device back to whichever
+  worktree owns `8081`, and a leftover `RCT_jsLocation` keeps a device on an old
+  port after you expect `8081`. `whoami` checks the Metro on the port you pass,
+  not where the device points; the build label's `host:port` is the proof.
+
+`mobile:sim:start` port policy:
+
+- It defaults to `8081` and never auto-bumps. It reuses a Metro only when
+  worktree, source, region and environment all match. If `8081` belongs to this
+  worktree but its injected fingerprint no longer equals the current worktree, it
+  refuses instead of claiming Metro is reusable.
+- An authorized `--takeover` stops only a confirmed Cindy Metro on `8081` (and
+  refreshes this worktree's own Metro after an amend/rebase/reset or edit);
+  unknown/non-Metro owners are refused. Use `mobile:sim:whoami` to inspect ownership.
+- An explicit `--port <p>` starts Metro only. It refuses an occupied port, cannot
+  be combined with `--takeover`, and does not point any device; follow the
+  parallel steps below. Never use it to make the identity check pass for a device
+  that still loads `8081`.
+
+#### Parallel devices (another task owns `8081`)
+
+When `8081` serves another task and you are not authorized to take it over, give
+this task its own device and port instead of waiting or taking over:
+
+1. Use a device no other task is using, in the backend this task already selected:
+   for Cindy's simulator create or reuse one through the `cindy-simulator` plugin;
+   only for the system simulator use `xcrun simctl create`. Either set can
+   `xcrun simctl clone` a shut-down device to keep its login (for Cindy's, add the
+   `--set` below). One device follows one Metro; never repoint a device another task
+   is testing on.
+2. Boot it and wait until ready: `xcrun simctl boot <UDID> && xcrun simctl bootstatus <UDID> -b`
+   (for a device in Cindy's simulator, add `--set "$HOME/Library/Application Support/BaguetteCindy/devices"`
+   after `simctl`). `rebuild` only accepts a booted device and exits before
+   installing otherwise.
+3. Install the matching native app on it:
+   `pnpm mobile:sim:rebuild -- --region=<region> --udid <UDID>`. While `8081`
+   belongs to another worktree it installs, then exits nonzero with
+   `launch blocked`; that is expected, do not rebuild again.
+4. Start this worktree's Metro on a free port and keep it running:
+   `pnpm mobile:sim:start -- --region=<region> --port 8082` (same `--mock` choice
+   as the other commands). `whoami` scans `8081`–`8086` plus the explicit
+   `--port`, so any other free port also works.
+5. Point the device and relaunch the app (`<bundleId>` is `bundleId` in the
+   `whoami` JSON). For a device in Cindy's simulator, add
+   `--set "$HOME/Library/Application Support/BaguetteCindy/devices"` after `simctl`:
+
+   ```bash
+   xcrun simctl spawn <UDID> defaults write <bundleId> RCT_jsLocation localhost:8082
+   xcrun simctl terminate <UDID> <bundleId>; xcrun simctl launch <UDID> <bundleId>
+   ```
+
+6. Verify all of: `pnpm mobile:sim:whoami -- --region=<region> --udid <UDID> --port 8082`
+   passes; `xcrun simctl spawn <UDID> defaults read <bundleId> RCT_jsLocation`
+   prints `localhost:8082`; the `8082` Metro log shows a new `iOS Bundled …` after
+   the launch; and the build label shows `:8082` with this worktree's fingerprint.
+7. Clean up when done: stop this Metro, then on that device run
+   `defaults delete <bundleId> RCT_jsLocation` (via `simctl spawn`, as above)
+   and relaunch. Delete devices you created if they are no longer needed. Do not
+   leave a device pointed at a port nobody owns.
+
+Before reusing any device, run `defaults read … RCT_jsLocation`. "Does not exist"
+means it follows `8081`.
+
+Android has the same per-app idea under a different name: React Native reads
+the app's `debug_http_host` preference (dev menu → Change bundle location). Without
+it, a stock emulator connects to `10.0.2.2:8081`, which is the host's `8081`
+directly, so `adb reverse` alone does not repoint it. The Windows
+`mobile:sim:start -- --port <p>` only adds `adb reverse tcp:<p> tcp:<p>`.
+Parallel Android runs are not yet a verified recipe here; prove each one with
+a new `Android Bundled …` in your Metro's log and the build label.
 
 ### Native build gotcha
 
@@ -217,7 +444,8 @@ pnpm mobile:sim:whoami -- --region=cn     # China Mainland
 `mobile:sim:whoami` resolves the selected identity from `app.config.js` plus the
 gitignored `scripts/self-host-regions.json`, then prints the installed version
 and build number from that app's `Info.plist`. It is a doctor command: no booted
-device, no selected native app, no current-worktree `8081` Metro, or a source
+device, no selected native app, no current-worktree Metro on the expected port
+(`8081` unless `--port`), or a source
 fingerprint mismatch makes it exit nonzero. Expected version values come from
 `apps/mobile/app.json`:
 
@@ -229,7 +457,9 @@ The native build number only proves native installation. `whoami` also compares
 the installed `EXUpdates.bundle/fingerprint` with the current worktree's Expo
 Updates fingerprint, using the same development environment and workflow as the
 native build. A missing/unreadable fingerprint (`native-unknown`) or difference
-(`native-mismatch`) fails the check even when Metro is correct. Run ordinary
+(`native-mismatch`) fails the check even when Metro is correct. For a read or
+calculation failure, fix the probe and retry before deciding whether to rebuild.
+For a genuinely missing fingerprint or a mismatch, run ordinary
 `mobile:sim:rebuild` without `--clean`; it rejects incompatible cached artifacts
 and checks the built and installed app before handing it off. For example,
 switching worktrees with different `@expo/ui` versions can otherwise silently
@@ -239,9 +469,8 @@ For JavaScript freshness, the Metro terminal must show a new bundle/reload after
 the source change. Matching native fingerprints does not prove page rendering.
 
 If a freshly built app exits before loading JavaScript with `UIScene life cycle
-is required`, check the SDK 57 scene backport: `expo >= 57.0.23` and
-`expo-build-properties` with `ios.enableSceneSupport: true`. The repository enables
-this official path for Xcode 27 / iOS 27. Prebuild should generate an
+is required`, check that SDK 58 prebuild has regenerated the scene lifecycle. Scene support
+is now the default; the SDK 57 `ios.enableSceneSupport` opt-in was removed. Prebuild should generate an
 `EXExpoAppSceneDelegate` manifest for the main app and make AppDelegate conform to
 `ExpoReactNativeFactoryProvider`; it must no longer create the legacy window.
 This native migration changes the runtime fingerprint and requires a new native
@@ -285,14 +514,42 @@ errors, auth errors, and Expo runtime warnings:
 pnpm --filter mobile start -- --dev-client --host lan
 ```
 
+`mobile:sim:start` also writes Metro's output to a new private directory under the
+system temp directory for each launch (the path is printed at start and recorded
+with that Metro's port ownership), and deletes it when that Metro exits. The raw
+output can contain credentials, so it never goes into the worktree and is not kept
+after the run. Every simulator verification ends with:
+
+```bash
+pnpm mobile:sim:logcheck   # add -- --port 8082 for a parallel device
+```
+
+It reads only the output after the latest entry bundle, so reload the app and
+exercise the path first.
+
+| Exit | Meaning | Required action |
+| ---- | ------- | --------------- |
+| `0` | No errors. New warnings may be listed. | Include every listed warning in your report. |
+| `1` | An `ERROR` or failed bundle. | Fix it, or report why it is unrelated to your change. Never claim a clean verification. |
+| `2` | Cannot tell: Metro belongs to another worktree or stopped, this launch has no usable log, or nothing bundled. | Fix the setup and rerun. This is not a pass. |
+
+`scripts/sim-logcheck-known-warnings.json` lists warnings we are not fixing now,
+each with a reason. Add an entry only with that reason, and remove it once the
+warning is fixed. Errors cannot be listed. One Metro's log mixes every device
+connected to it, so give each task its own device and port (see
+[Parallel devices](#parallel-devices-another-task-owns-8081)).
+
 Use the simulator system log for native crashes or native auth/session issues:
 
 ```bash
 xcrun simctl spawn booted log stream --style compact --predicate 'process == "Cindy"'
 ```
 
-The in-app "Open debugger to view warnings" banner means a JavaScript warning is
-active. Read Metro before changing UI code.
+React Native shows no per-warning banner here: without a debugger attached, the
+first warning only triggers a fixed "Open debugger to view warnings" banner.
+`src/debug/quietDevLogs.ts` hides that banner because it covers the UI, so a clean
+screen does not mean there are no warnings. Warnings still reach Metro and the
+debugger, and error banners still appear. Read Metro before changing UI code.
 
 For device-link network symptoms, collect:
 
@@ -319,6 +576,30 @@ App 为 active 的等待时间，`wallElapsedMs` 单独保留包含后台与离�
 旧版本仅有 `elapsedMs`，其中可能包含后台时间，不能直接解读成用户等待或界面卡死。
 实现与回归见 `src/debug/useContentRecoveryDiagnostics.ts`、`scrollDebugSampler.ts`
 及相邻测试，键盘回归见 `src/__tests__/composerKeyboard.test.tsx`、`sheetKeyboardSubscription.test.tsx`。
+
+### 真机排查与并存测试版
+
+真机上的问题（缓存、推送、后台恢复等）先取证据再动手：读设备日志、核对正在运行的版本、
+构建并安装测试版后用日志验证。不要把「可以用真机测」理解成在电脑上镜像手机画面逐步点按：
+镜像只能看画面，看不到版本和日志，2026-10-17 曾因此耗掉整轮时间。
+
+需要在真机上与正式 Cindy 并存安装测试版时，用另一个 bundle ID，不覆盖用户的正式 App
+（心动团队用 `com.xd.cindytest`，该 App ID 已有自动签名描述文件；临时新建的 ID 签名不可靠）：
+
+- 用临时 `self-host-regions.json` 覆盖 `iosBundleId`，通过 `CINDY_SELF_HOST_REGIONS_FILE`
+  指给构建，并同时设置 `CINDY_USE_LOCAL_REGION_CONFIG=1`：`app.config.js` 只有这个开关
+  （`mobile:sim:*` 脚本会自动设置）或自建发布线的 `EXPO_PUBLIC_XDT_OTA_SELFHOST=1` 打开时才读这份
+  文件，漏了开关会静默回落到内置包名，与正式版同 ID 冲突；后者还会改变原生 OTA 策略，测试包不要用。
+  `EXPO_PUBLIC_APP_VARIANT=beta` 与 `EXPO_PUBLIC_BETA_DEV` 只给显示名加「Beta (标记)」后缀，一眼
+  分得清，不改 bundle ID。安装前用 `plutil -extract CFBundleIdentifier raw -o - <.app>/Info.plist`
+  核对产物的 bundle ID 确实是测试 ID。
+- 测试 App ID 没有 app group，`CindyNotificationService` 扩展也没有通信通知能力：只在生成的
+  `ios/` 里删掉对应 entitlement（`com.apple.security.application-groups` 与
+  `com.apple.developer.usernotifications.communication`；分享扩展、通知头像在测试版不可用），
+  不改仓库里的配置。
+- Xcode 27 需要 `SWIFT_ENABLE_EXPLICIT_MODULES=NO CLANG_ENABLE_EXPLICIT_MODULES=NO`
+  （与 `scripts/build-ios.mjs` 相同），否则 WechatOpenSDK 模块解析失败。
+- 安装：`xcrun devicectl device install app --device <udid> <.app>`。
 
 ### 从开发版 iPhone 读取历史 Debug 文件
 
@@ -463,4 +744,19 @@ Run this checklist:
 - Run `pnpm --filter mobile typecheck` when TypeScript changed.
 - Run the narrow relevant test when there is one.
 - Manually touch the exact path that regressed in the simulator.
+- Run `pnpm mobile:sim:logcheck` afterward and report its result.
 - Tell the tester which simulator/device, runtime, and build were used.
+
+### Generic simulator builds and native library slices
+
+`sim-rebuild.mjs` passes `ARCHS=<simArch>` even for the generic iOS Simulator
+destination used by Cindy-managed devices. Agent-Net builds the simulator slice
+for the host architecture, and the simulator cache is keyed by that same architecture.
+Without this setting, Xcode can request both `arm64 x86_64`; CocoaPods then skips
+copying `CindyAgentNetNative.xcframework` because no slice contains both, and Swift
+reports `Unable to resolve module dependency: CindyAgentNetNative`. Do not patch
+generated Pods or remove the Swift import.
+
+Keep the full `xcodebuild` output (redirect it to a task log when needed), rather
+than using `-quiet`: the full build report identifies the failed target and missing
+module; the quiet log can instead lead with `exit code 0 but produced no further output`.

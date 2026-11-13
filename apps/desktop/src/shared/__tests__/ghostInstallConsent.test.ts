@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   validateGhostManifest,
+  ghostControlPointActive,
   type GhostInstallApproval,
   type GhostManifest,
   type InstalledGhost,
@@ -37,6 +38,42 @@ function installed(
 }
 
 describe('plugin install consent', () => {
+  // Static system text is itself reviewed capability content: changing it must
+  // trigger update consent, even when the capability name stays the same.
+  it('shows static system fragments and asks again when their content changes', () => {
+    const fragments = [{ id: 'style', text: 'Original static instructions', order: 10, scope: 'selected-task' }];
+    const base = manifest({ systemPrompt: fragments });
+    const old = { ...installed(base), approvedControlPoints: ['system-prompt' as const] };
+    expect(ghostControlPointActive(old, 'system-prompt')).toBe(true);
+    expect(ghostControlPointActive(installed(base), 'system-prompt')).toBe(false);
+    const next = manifest({ systemPrompt: [{ ...fragments[0], text: 'Changed static instructions' }] });
+    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+      added: [expect.objectContaining({ key: 'system-prompt', detail: expect.stringContaining('Changed static instructions') })],
+    });
+    expect(evaluateGhostInstallConsent(old, base)).toBeNull();
+  });
+  it('requires consent when an ordinary plugin switches a saved PAT to shared gh login', () => {
+    const secret = { key: 'github_pat', label: 'GitHub', inject: {
+      header: 'Authorization', format: 'Bearer {value}', hosts: ['api.github.com'],
+    } };
+    const base = manifest({ settingsHtml: 'settings.html', network: { hosts: ['api.github.com'], secrets: [secret] } });
+    const next = manifest({ settingsHtml: 'settings.html', network: { hosts: ['api.github.com'], secrets: [{ ...secret, source: 'gh-cli' }] } });
+    expect(evaluateGhostInstallConsent(installed(base), next)).toMatchObject({ kind: 'update',
+      added: expect.arrayContaining([expect.objectContaining({ key: 'network:secret:github_pat' })]),
+    });
+  });
+  // Contract: auto execution is an explicit permission, including declarations
+  // preserved by an older Host without a grant. Existing tests covered only tools.
+  it('asks for auto execution until it has an explicit approval baseline', () => {
+    const next = manifest({ tools: [{ name: 'forecast', description: 'Read the forecast', approval: 'auto' }] });
+    const old = installed(next);
+    const facts = evaluateGhostInstallConsent(old, next);
+    expect(facts).toMatchObject({ kind: 'update', added: [expect.objectContaining({ key: 'tool-auto:forecast' })] });
+    expect(evaluateGhostInstallConsent({ ...old, approvedAutoTools: ['forecast'] }, next)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(manifest()), manifest({
+      tools: [{ name: 'forecast', description: 'Read the forecast', approval: 'each-call' }],
+    }))).toBeNull();
+  });
   it('always asks on first install and lists every non-tool permission', () => {
     const facts = evaluateGhostInstallConsent(null, manifest());
     expect(facts).toMatchObject({ kind: 'install', ghostId: 'weather-chip', version: '1.0.0' });
@@ -49,6 +86,40 @@ describe('plugin install consent', () => {
     const current = installed(manifest());
     expect(evaluateGhostInstallConsent(current, manifest({ version: '1.1.0' }))).toBeNull();
     expect(ghostUpdateNeedsConsent(current, manifest({ version: '1.1.0' }))).toBe(false);
+  });
+
+  // Unit regression for #6404: an existing tool must not hide new mailbox
+  // capabilities from the production install/update consent boundary.
+  it('projects mail, reader hosts and read-state writes into install and update consent', () => {
+    const base = manifest();
+    const compose = manifest({ mail: true });
+    const reader = manifest({ mail: true, mailReader: { tool: 'forecast', hosts: ['mail.example.test'] } });
+    const full = manifest({ mail: true, mailReader: { tool: 'forecast', hosts: ['mail.example.test'], markRead: true } });
+    const additions = (previous: GhostManifest, next: GhostManifest) => {
+      const facts = evaluateGhostInstallConsent(installed(previous), next);
+      expect(facts?.kind).toBe('update');
+      if (facts?.kind !== 'update') throw new Error('expected update facts');
+      return facts.added.map(item => item.key);
+    };
+    expect(additions(base, compose)).toEqual(['mail']);
+    expect(additions(compose, reader)).toEqual(['mail-reader:forecast', 'mail-reader:host:mail.example.test']);
+    expect(additions(reader, full)).toEqual(['mail-reader:mark-read']);
+    expect(additions(reader, manifest({ mail: true,
+      tools: [{ name: 'forecast', description: 'Read the forecast' }, { name: 'reader', description: 'Read mail' }],
+      mailReader: { tool: 'reader', hosts: ['mail.example.test'] },
+    }))).toEqual(['mail-reader:reader']);
+    const facts = evaluateGhostInstallConsent(null, full);
+    if (facts?.kind !== 'install') throw new Error('expected install facts');
+    expect(facts.permissions.map(item => item.key)).toEqual(expect.arrayContaining([
+      'mail', 'mail-reader:forecast', 'mail-reader:host:mail.example.test', 'mail-reader:mark-read',
+    ]));
+    const reordered = manifest({ mail: true, mailReader: { tool: 'forecast', hosts: ['other.example.test', 'mail.example.test'] } });
+    expect(additions(reader, reordered)).toEqual(['mail-reader:host:other.example.test']);
+    expect(evaluateGhostInstallConsent(installed(reordered), manifest({ mail: true,
+      mailReader: { tool: 'forecast', hosts: ['mail.example.test', 'other.example.test', 'mail.example.test'] },
+    }))).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(full), reader)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(full), base)).toBeNull();
   });
 
   it('keeps an update silent when it only removes permissions or changes tools', () => {

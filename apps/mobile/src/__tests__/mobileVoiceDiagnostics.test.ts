@@ -13,7 +13,10 @@ import { serializeMobileDebugRecord } from '@/debug/mobileDebugRecord';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileVoiceControllerSession } from '@/session/mobileVoiceController';
 import { ApiError } from '@/api/client';
-import { classifyMobileVoiceFailure } from '@/session/mobileVoiceDiagnostics';
+import {
+  classifyMobileVoiceFailure,
+  createMobileVoiceTimelineRecorder,
+} from '@/session/mobileVoiceDiagnostics';
 
 const SPOKEN = '周五下午三点和财务对预算';
 const REFINED = '周五下午 3 点和财务核对预算。';
@@ -89,6 +92,7 @@ beforeEach(() => {
 afterEach(() => {
   setMobileDebugSink(undefined);
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const messages = () =>
@@ -97,6 +101,51 @@ const messages = () =>
   );
 
 describe('mobile voice diagnostics', () => {
+  it.each(['text', 'empty', 'rate_limit'] as const)('recovers an empty mobile recording and diagnoses the result: %s', async (outcome) => {
+    vi.useFakeTimers();
+    let emit: (event: AsrEvent) => void = () => {};
+    let recovered = false;
+    const recover = vi.fn(async () => {
+      if (outcome === 'rate_limit') throw new ApiError('RATE_LIMITED', 429, 'PRIVATE_SERVER_MESSAGE');
+      recovered = true;
+    });
+    const onError = vi.fn();
+    const onDraftChanged = vi.fn();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), initialDraft: '', startAudio: startAudibleAudio,
+      refiner: null,
+      asr: {
+        onEvent(callback) { emit = callback; },
+        async start() { emit({ type: 'connected', at: Date.now() }); },
+        async stop() {}, appendAudio() {}, recover,
+        async flushAudio() {
+          if (recovered && outcome === 'text') emit({ type: 'stable', text: SPOKEN, at: Date.now() });
+        },
+      },
+      onError, onDraftChanged,
+    });
+    await session.start();
+    const stopping = session.stop().then(() => undefined, (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1100);
+    const stopError = await stopping;
+    expect(recover).toHaveBeenCalledTimes(1);
+    const logged = messages();
+    expect(logged.find((record) => record.args[0] === 'asr recovery attempted')?.args[1])
+      .toMatchObject({ trigger: 'empty_transcript', attempt: 1 });
+    if (outcome === 'text') {
+      expect(stopError).toBeUndefined();
+      expect(onError).not.toHaveBeenCalled();
+      expect(JSON.stringify(onDraftChanged.mock.calls)).toContain(SPOKEN);
+    } else {
+      expect(stopError).toBeInstanceOf(Error);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(logged.find((record) => record.args[0] === 'run failed')?.args[1])
+        .toMatchObject({ reason: outcome === 'empty' ? 'empty_transcript' : 'rate_limited' });
+    }
+    expect(records.join('\n')).not.toContain(SPOKEN);
+    expect(records.join('\n')).not.toContain('PRIVATE_SERVER_MESSAGE');
+  });
+
   it('records the run stages and summaries in the voice scope without any dictated text', async () => {
     const session = createMobileVoiceControllerSession({
       credential: credential(),
@@ -239,6 +288,33 @@ describe('mobile voice diagnostics', () => {
       ),
     ).toBe('timeout');
     expect(classifyMobileVoiceFailure(new Error(SPOKEN))).toBe('other');
+  });
+
+  it('logs a speculative refinement held back for the final text', () => {
+    const record = createMobileVoiceTimelineRecorder({ provider: 'litellm-volcengine-sauc-asr' });
+    record({ type: 'start_clicked', runId: 'run-12345678', at: 1 });
+    record({
+      type: 'speculative_refine_skipped',
+      runId: 'run-12345678',
+      at: 2,
+      stage: 'pause',
+      reason: 'final_request_reserved',
+      requestLimit: 2,
+      requestsStarted: 1,
+    });
+    expect(messages().at(-1)).toMatchObject({
+      scope: 'voice',
+      args: [
+        'speculative refinement skipped',
+        {
+          runId: '12345678',
+          stage: 'pause',
+          reason: 'final_request_reserved',
+          requestLimit: 2,
+          requestsStarted: 1,
+        },
+      ],
+    });
   });
 
   it('logs a silent recording ending without ASR finalization', async () => {

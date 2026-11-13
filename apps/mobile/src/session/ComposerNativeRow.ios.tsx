@@ -27,9 +27,10 @@ export function ComposerNativeRow({
   optionsLabel,
   disabled: unavailable,
   testID,
+  modifiers,
 }: ComposerNativeRowProps) {
   return (
-    <HStack spacing={0}>
+    <HStack spacing={0} modifiers={modifiers}>
       <Button
         onPress={onPress}
         testID={testID}

@@ -23,6 +23,7 @@
  */
 
 import path from 'node:path';
+import { installNativeTrackpad } from './nativeTrackpad';
 
 import { app, session, type BrowserWindow, type Session, type WebContents } from 'electron';
 import { CURRENT_APP_ID } from '../shared/brandRegion';
@@ -47,10 +48,13 @@ import {
   handleGhostPreviewNavigation,
   noteGhostUserGesture,
   resolveGhostWebviewAttach,
+  attachGhostPageModelPicker,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
+import { REMOTE_PLUGIN_SETTINGS_PARTITION } from '../shared/remotePluginSettings.js';
+import { resolveRemoteSettingsAttach } from './cindy-brain/remotePluginSettingsController.js';
 import {
   attributeRsbNativePopupSurface,
   createRsbNativePopupSurface,
@@ -205,6 +209,8 @@ export function authorizeGhostWebviewAttach(
   params.partition = resolved.partition;
   webPreferences.partition = resolved.partition;
   applyGhostWebviewHardening(webPreferences, params);
+  // A single page-scoped picker method; never reuse the logic page or main-window bridge.
+  webPreferences.preload = path.join(__dirname, 'ghostPagePreload.js');
   return {
     id: resolved.ghost.manifest.id,
     instanceId,
@@ -662,9 +668,15 @@ function isRoutablePopupUrl(url: string): boolean {
  * hostContents 过时 —— 旧 renderer 的 Shell 已退订,fanOut 不缓冲,消息发过去
  * 就是丢弃。发送时刻动态解析当前 host 才能落到活着的订阅者。
  */
-let popupHostResolver: (() => WebContents | null) | null = null;
+let popupHostResolver: ((capturedHost: WebContents) => WebContents | null) | null = null;
 
-export function setRsbPopupHostResolver(resolver: (() => WebContents | null) | null): void {
+/**
+ * 解析函数收到捕获时的 hostContents:弹出到独立窗口的页签,其 guest 就挂在那扇窗口的 renderer
+ * 上,popup 必须回到同一个 renderer(原生 popup surface 的 owner 校验也认它),解析函数据此放行。
+ */
+export function setRsbPopupHostResolver(
+  resolver: ((capturedHost: WebContents) => WebContents | null) | null,
+): void {
   popupHostResolver = resolver;
 }
 
@@ -677,7 +689,7 @@ function sendBrowserPopup(
   let current: WebContents | null = null;
   if (popupHostResolver) {
     try {
-      current = popupHostResolver();
+      current = popupHostResolver(hostContents);
     } catch {
       current = null;
     }
@@ -754,6 +766,8 @@ export function installDeferredPopupRouter(
  *   - http(s) 与 about:blank popup 都让 Chromium 创建真实 child WebContents;
  *   - `createWindow` 接管 Electron 预创建的 `options.webContents`,把**同一个**
  *     browsing context 放进 main-owned WebContentsView,再路由成 RSB tab;
+ *   - 点击链接触发的新窗口可能没有 child WebContents;这时直接将 HTTP(S) 地址路由为
+ *     RSB tab,避免把缺省 guest 当成致命错误;
  *   - 不能另建 `<webview>`:那会让 opener 手里的 WindowProxy 指向已关闭的旧
  *     context,破坏 OAuth/SSO 对 closed/location/close 的依赖。
  *   - 推消息走 channel `rsb:browser-popup`,renderer 端通过 preload 的 fanOut 订阅。
@@ -767,6 +781,7 @@ export function installBrowserGuestHandlers(
   hostContents: WebContents,
   guestContents: WebContents,
 ): void {
+  installNativeTrackpad(hostContents, guestContents);
   guestContents.setWindowOpenHandler((details) => {
     if (!isRoutablePopupUrl(details.url) && !isInitialBlankPopupUrl(details.url)) {
       return { action: 'deny' };
@@ -787,7 +802,17 @@ export function installBrowserGuestHandlers(
           options as typeof options & { webContents?: WebContents }
         ).webContents;
         if (!popupContents) {
-          throw new Error('Electron did not provide popup WebContents to createWindow');
+          if (isRoutablePopupUrl(details.url)) {
+            routeBrowserPopup(hostContents, guestContents.id, {
+              url: details.url,
+              disposition: details.disposition,
+            });
+          }
+          // Electron invokes this callback for link-triggered new windows even
+          // when Chromium did not create a child WebContents. In that path it
+          // ignores the returned WebContents, so return the opener after routing
+          // the URL instead of crashing the main process.
+          return guestContents;
         }
         const surfaceId = createRsbNativePopupSurface(hostContents, popupContents);
         if (!surfaceId) {
@@ -819,7 +844,7 @@ export function installBrowserGuestHandlers(
     event.preventDefault();
     let target: WebContents | null = null;
     try {
-      target = popupHostResolver?.() ?? null;
+      target = popupHostResolver?.(hostContents) ?? null;
     } catch {
       target = null;
     }
@@ -964,9 +989,23 @@ export function installWebviewHardener(): void {
     // 不装浏览器的 popup 路由与快捷键转发)。
     let pendingGhostAttach: ReturnType<typeof authorizeGhostWebviewAttach> = null;
     let pendingCaptchaAttach = false;
+    let pendingRemoteSettings: ReturnType<typeof resolveRemoteSettingsAttach> = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       pendingCaptchaAttach = false;
+      pendingRemoteSettings = null;
       pendingGhostAttach = null;
+      if (typeof params.partition === 'string' && params.partition.startsWith(REMOTE_PLUGIN_SETTINGS_PARTITION)) {
+        const view = resolveRemoteSettingsAttach(contents, params.partition, params.src);
+        if (!view) { e.preventDefault(); return; }
+        params.partition = view.partition;
+        webPreferences.partition = view.partition;
+        applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params);
+        webPreferences.experimentalFeatures = false;
+        webPreferences.navigateOnDragDrop = false;
+        delete webPreferences.enableBlinkFeatures;
+        pendingRemoteSettings = view;
+        return;
+      }
       // 意识面板分支:声明了意识分区的 webview 必须验明正身——
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
       // (绝不回落到浏览器分区,那会让 cindy-ghost:// 内容跑进错误 session)。
@@ -1017,6 +1056,12 @@ export function installWebviewHardener(): void {
       );
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
+      if (pendingRemoteSettings) {
+        const view = pendingRemoteSettings;
+        pendingRemoteSettings = null;
+        try { view.current(); view.attach(guestContents); } catch { guestContents.close(); }
+        return;
+      }
       if (pendingCaptchaAttach) {
         pendingCaptchaAttach = false;
         // 挑战页零弹窗;顶层导航只允许停留在托管挑战页白名单内(Turnstile 的
@@ -1032,6 +1077,12 @@ export function installWebviewHardener(): void {
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
+        attachGhostPageModelPicker(contents, guestContents, authorized.instanceId,
+          () => authorized.isCurrent());
+        installNativeTrackpad(contents, guestContents, () => {
+          if (!isGhostGuestOwnerActive(authorized.owner)) return false;
+          return authorized.isCurrent();
+        });
         // 意识面板零弹窗、零跳转:window.open 全拒,导航锁死在自己协议同源内。
         // 两个声明式例外(都是拦下导航、主机代办,面板侧依旧零桥):
         //   - /preview/ 预览链接 → 主窗口弹 lightbox(cindy-brain/previewGate.ts);

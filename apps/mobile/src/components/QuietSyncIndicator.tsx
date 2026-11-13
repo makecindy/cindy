@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Animated, Easing } from 'react-native';
 import { LoaderCircle } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { iconSize, iconStroke, useTheme } from '@/theme';
 import { motionDuration } from '@/theme/tokens';
 import { useDelayedConnectionNotice } from './ConnectionNoticeOverlay';
@@ -10,12 +10,12 @@ import { useDelayedConnectionNotice } from './ConnectionNoticeOverlay';
 /** Same working glyph and cadence as the task list; no idle placeholder. */
 export function QuietSyncIndicator({ active, immediate = false }: { active: boolean; immediate?: boolean }) {
   const visible = useDelayedConnectionNotice(active, immediate);
-  const reduceMotion = useReduceMotionEnabled();
+  const animate = useLoopingAnimation(visible);
   const { colors } = useTheme();
   const { t } = useTranslation();
   const rotation = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    if (!visible || reduceMotion !== false) return;
+    if (!animate) return;
     const loop = Animated.loop(Animated.timing(rotation, {
       toValue: 1,
       duration: motionDuration.spinnerCycle,
@@ -25,7 +25,7 @@ export function QuietSyncIndicator({ active, immediate = false }: { active: bool
     }));
     loop.start();
     return () => { loop.stop(); rotation.setValue(0); };
-  }, [visible, reduceMotion, rotation]);
+  }, [animate, rotation]);
   if (!visible) return null;
   const rotate = rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
   return <Animated.View

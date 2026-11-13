@@ -1,0 +1,14 @@
+{
+  "site": "apps.apple.com",
+  "auth": "公开信息，无需登录。",
+  "recipes": [
+    "app-store-search"
+  ],
+  "notes": "按 country 区分地区商店；固定最多 20 条。页面内读取 Apple 官方 Search API，避免直接打开 API URL 触发下载。评分/价格不是所有地区共用。",
+  "source": "Cindy",
+  "verifiedAt": "2026-10-23",
+  "aliases": [
+    "app-store",
+    "appstore"
+  ]
+}

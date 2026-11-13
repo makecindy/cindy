@@ -1,5 +1,107 @@
 # Remote desktop
 
+## Hidden capture/data host diagnostics
+
+`Desktop capture` is the hidden host used by desktop capture, files, direct peers,
+and recording. Its presence does not by itself mean a screen is being captured.
+App activation must target the registered main window, never the first entry from
+`BrowserWindow.getAllWindows()`. Provider-share receipt only queues the approval
+UI/notification; clicking the notification or opening an invitation activates main.
+
+For an unexpectedly visible host, local `main-*.log` entries under
+`desktop-capture:window` identify its mode, window ID/native handle and bounds.
+`js-call` entries include sanitized source positions for visibility/focus calls;
+`native-event` entries report Electron events and do **not** claim an originating
+call stack. A per-window budget caps these records at 32 plus a limit notice.
+Correlate them with `provider-share` approval receipt and notification lifecycle
+records (local sequence, `show` versus `click`) to investigate no-click reports.
+These diagnostics omit notification text, share links, credentials and absolute
+stack paths, and do not expand the log-upload allowlist. They observe visibility
+without hiding or destroying a host that may carry an active connection.
+
+## Idle protection
+
+Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop
+Security panel. Each controller remembers its setting per computer: 1, 5 (default),
+10, 15, 30 minutes, or Never. The host must advertise `idleLock`; older hosts and
+platforms without native screen locking show this setting as unsupported.
+This is separate from the default-on lock-on-exit and privacy-screen preferences.
+
+The host counts elapsed time since actual remote input or manual clipboard actions.
+Heartbeats, video frames, automatic clipboard sync and release-key cleanup do not
+reset it. Viewing a static desktop or video without input still counts as idle.
+When the deadline expires, the host revokes input, requests native locking and
+ends the remote desktop. It rejects automatic recovery until a new explicit start.
+Lock failures are logged; the viewer reports disconnection without claiming that
+an unconfirmed native lock succeeded. Single-window input handoffs are excluded.
+
+Desktop controller lock/suspend retires its viewer immediately and requests a host
+lock. With idle protection enabled, Mobile backgrounding without PiP also ends the
+connection and requests a lock; temporary inactive states (such as biometric prompts)
+do not. PiP keeps the same host idle deadline. Neither path automatically reopens the
+remote desktop when the controller returns. The lock request is retained for any
+in-flight start reply. Background PiP failure or preparation timeout follows the
+same protected exit. Automatic Mobile recovery
+does not use a saved password; deliberate reconnects may still auto-unlock.
+If the exit request cannot arrive, the host's existing 12-second heartbeat expiry
+locks the protected lease. A transient
+media reconnect preserves the live host lease and its idle deadline until resume;
+failed recovery reaches heartbeat expiry instead of renewing the idle budget.
+Only this desktop lease ends: other Device Link tasks and channels remain intact.
+
+## Keep working while away (macOS, 2026-11-06)
+
+Settings → App behavior → **Keep working while away** (macOS 14+, default off) reuses
+the privacy masks without a remote viewer. While it is on, Main holds
+`prevent-display-sleep` whether or not anything is running (the way a playing video
+does), so the display never idle-sleeps into the lock screen and a task sent later from
+a phone still finds a usable desktop. Real display sleep is not offered: macOS stops
+compositing windows for screenshots while the display is off, which would blind the
+Agent. When the owner has been away for the chosen time (30 s, 1, 2 or 5 minutes), or
+by default the system's own display-sleep time (`pmset` `displaysleep`, or an earlier
+screen saver; 10 minutes when both are Never), every display
+gets a black mask whose status line fades out after six seconds, so the screen reads as
+off; Agents keep working behind it: masks ignore mouse events and the
+`--away-guard` helper passes injected input. Owner absence is the HID idle time minus
+`cindy_computer`'s own dispatch, so Agent clicks never count as the owner.
+
+The helper consumes all physical input; only a deliberate press (key down, mouse
+button down, a modifier going down, or a real scroll of 30+ points within a second)
+turns into the fixed system lock shortcut. Releases, pointer drift, Caps Lock and stray
+scroll ticks are swallowed without locking, because idle mice, wireless receivers and
+some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
+Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
+is up. Covering every Space briefly makes Electron a background app, so Main brings the
+Cindy window that was focused back to the front after unlock. Away masks are
+non-activating panels that skip Electron's Dock-hiding process transform (it left Cindy
+a background-only app), and they are 99% opaque: a fully opaque full-screen window makes
+macOS mark the windows behind as occluded and Electron apps stop painting, so an Agent
+read stale screenshots even though its clicks landed. Settings → "Try it" covers the
+displays three seconds after the click; touching locks as usual, and an untouched
+preview uncovers after two minutes without locking (the owner was just using the Mac). It also locks on
+stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a locked
+screen rather than an uncovered desktop. Main locks before removing masks when the
+setting is turned off, a display is added (including while the masks are still going
+up), or a mask window fails, and removes them only once the lock is confirmed. If it
+cannot lock (e.g. Accessibility was revoked), the masks stay up with a "press
+Control-Command-Q" note, the display assertion is released and the masks go when macOS
+locks. Agent input skips the person-at-the-Mac check only after every mask is up and
+the helper is consuming physical input. Remote desktop sessions do not end the cover:
+the remote viewer captures through it, and a session alone (view-only, plugin screens)
+does not prove anyone protects this screen. An already-locked screen just drops the masks. A Cindy started on a locked screen reads
+the lock from the console session (`ioreg`), because Electron's idle-state probe never
+reports `locked` on macOS and the guard would otherwise keep the display on behind it.
+
+Fail-safe direction: missing Accessibility for the input helper, masks that cannot
+start, or an unreadable idle time release the display assertion, so macOS sleeps and
+locks exactly as it would without Cindy; mask setup is not retried for 60 seconds.
+After the owner unlocks, absence is measured from the unlock, so the screen is never
+covered again immediately after an unlock (Codex Locked use regression). Nothing
+in this path unlocks the screen, edits authorization rules or stores a password; a
+screen that was already locked when the setting was turned on stays locked. Logic lives in
+`apps/desktop/src/main/remote-desktop/awayGuard.ts` (unit-tested state machine) and
+`awayGuardService.ts`; shared-userData passive instances do not run it.
+
 ## Desktop viewer
 
 The desktop interaction hierarchy follows a canvas-first approach: device and
@@ -113,6 +215,15 @@ policy at start and on heartbeats, then locks locally on stop, signaling loss or
 lease expiry. Live-lease resume/takeover and display changes do not lock; recovery
 after expiry waits for the already-triggered lock to finish.
 See [native credential behavior](remote-desktop-credentials.md) for password storage.
+Desktop and Mobile default privacy screen and lock-on-exit to enabled when no
+saved override exists; stored explicit choices remain unchanged. Desktop now
+retains explicit privacy-screen and lock-on-exit choices even when they match the
+current default; choosing the default idle duration still clears that override.
+Older desktop versions removed such values, so a historical manual opt-out that was not stored
+cannot be distinguished from an untouched default and follows the new default.
+Mobile already stores explicit `false` and preserves it. These defaults do not
+enable automatic unlock, clipboard sync or host mute, or bypass host capability
+checks; a privacy request is not shown as active until the host confirms it.
 Video quality changes are coalesced while negotiation is pending. The toolbar
 shows receive rate and clears stale network samples, while resolution discovery
 shows loading/failure and offers retry and native-resolution labels.
@@ -131,7 +242,10 @@ rebinding to a different owner or target does not wait on that old barrier.
 The window reuses the existing resource-usage auxiliary-window controller and
 factory for hidden prewarming, two-phase readiness, hide/reuse and bounded crash
 recovery. Prewarming loads only the shell and never connects to or captures a
-computer. Closing/minimizing retires its lease, clears pixels and stops polling;
+computer. It is skipped unless the session can use device-link or the saved
+session mode is `cloud` (auth may still be verifying at startup), so local and
+signed-out profiles keep no spare viewer; after a later sign-in the first viewer
+opens cold. Closing/minimizing retires its lease, clears pixels and stops polling;
 ordinary focus loss releases held input while retaining viewing. A crashed or
 automatically restored viewer uses `resume`, preserving a host's explicit stop.
 An account boundary destroys the viewer windows. The host's single-viewer lease
@@ -284,6 +398,15 @@ attempt and 2,048 characters per candidate. Fields and cursors are validated on
 both sides. Duplicate candidates are applied once. A timed-out exchange does
 not tear down healthy video; polling is bounded to 30 seconds. SDP, candidate
 addresses, credentials and desktop content are not added to logs.
+
+The iOS viewer offers with `max-bundle`, so video, audio and the input channel
+gather candidates on one transport. The default balanced policy gathers a full
+set per media type: a phone with Wi-Fi, cellular and several IPv6 addresses
+produced 108 host candidates for one attempt, close to the 128 limit that ends
+the attempt without a retry. With max-bundle the same networks yield about a
+third of that. Desktop answerers already accept the offered BUNDLE group, so
+older Desktops need no change; the setting is native and ships with a new app
+build.
 
 | Phase                      | Bound                                                   |
 | -------------------------- | ------------------------------------------------------- |
@@ -497,10 +620,61 @@ On macOS, a drag without `delivery_mode` uses `background` when the driver
 advertises that parameter. A background refusal is returned without an automatic
 foreground retry. Explicit `foreground` remains available, but agents must
 coordinate desktop use with the person before requesting it. Legacy drivers
-without the parameter retain their native behavior. Background delivery itself
+without the parameter retain their native behavior. Before each foreground
+primitive (including each text chunk), Cindy requires at least three seconds of
+system input inactivity, or its existing active away-cover input shield. It does
+not subtract Agent input from that clock: a person moving the mouse during or
+just after a CUA action is indistinguishable from synthetic input. A failed or
+invalid idle probe also refuses foreground delivery with `USER_INPUT_ACTIVE`;
+background operations remain available. This can pause consecutive foreground
+actions or stop typing after a completed prefix; it never automatically replays
+that prefix. Presence detection retains its separate Agent-event heuristic.
+This is a dispatch-boundary guard, not native cancellation: an action already
+inside CUA may finish, and physical input during that action cannot yet stop it.
+Background delivery itself
 does not guarantee focus isolation: the driver may temporarily change application
 or window focus. Cindy does not currently verify restoration of the original
 focused window or text field, and does not force focus back after an action.
+
+## X11 keyboard and mouse control
+
+X11 hosts retain Electron's existing screen-capture path and use the bundled
+Linux input helper's XTest backend. The native `--x11 --check` probe opens the
+current desktop's authenticated X connection and checks XTest without injecting
+input. No root service, `xhost` change or remote X listener is installed. A
+Wayland session with `DISPLAY` set is still Wayland; XWayland never enables this
+backend. Missing display credentials or XTest support does not advertise control.
+
+The existing host opt-ins, peer revocation, expiring control lease, serialized
+batch acknowledgements and input ownership apply unchanged. Pointer coordinates
+are normalized within the selected monitor, then mapped to X root pixels. Uniform
+DPI scaling and negative monitor origins are supported; mixed scaling is rejected
+rather than guessed. Changed monitor geometry releases control before further
+input. Keys follow the Linux Xorg evdev keycode layout. Mouse buttons and both
+wheel axes are supported, with accumulated small wheel deltas.
+
+Unicode text uses an unused, unpressed X keycode with a temporary symbol mapping;
+the exact mapping is restored before acknowledgement. It does not overwrite the
+clipboard. Text batches contain at most 64 code points to bound the paced native
+input within the heartbeat deadline. This sends input to the focused X client;
+application/IME handling is separate from native event delivery. EOF, SIGTERM
+and the six-second heartbeat deadline release held keys and buttons. X11 capture,
+lock-screen support and other optional features are not broadened by this backend.
+
+Unsupported keyboard/mouse control has a distinct localized error on desktop
+and mobile; it no longer suggests toggling permissions or fixing the network.
+Wire operations and payloads are unchanged: official and self-hosted relays keep
+forwarding the same opaque input requests. Older viewers can use the X11 host
+without a new capability field; only the host needs the native backend update.
+
+Explicit native integration (requires `Xvfb` and the built input helper):
+`python3 apps/desktop/native/remote-desktop/linux-input/x11-test.py <helper>`.
+It creates its own authenticated X server and tests pointer coordinates, mouse
+buttons, wheel, Unicode symbols, mapping restoration, malformed-batch atomicity,
+and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
+the user's desktop. Host/unit tests separately cover geometry, opt-in, ownership,
+and the unsupported-input message. Full Air-to-GX102 UI validation remains a
+separate acceptance step after installing a build containing this change.
 
 ## Wayland capture lifetime
 
@@ -543,7 +717,7 @@ be truncated by Chromium’s Wayland text handling even with a correct keysym. O
 compositors keep their existing view-only portal path.
 
 Linux native builds require `cc`, `pkg-config`, `wayland-scanner`, and development
-headers for `wayland-client`, `xkbcommon`, `json-c`, `libturbojpeg`, and `libpng`; packaged builds include
+headers for `wayland-client`, `xkbcommon`, `json-c`, `x11`, `xtst`, `libturbojpeg`, and `libpng`; packaged builds include
 the helpers and require the corresponding shared libraries. In development it is
 compiled into the existing userData native cache. Missing support keeps viewing
 available and does not advertise control. Native parser checks (no compositor or
@@ -560,7 +734,7 @@ phone/network latency benchmark or a guarantee of 30/60 fps. Desktop types,
 related unit tests and native memory/bounds checks pass. Phone-side smoothness
 and packaged Linux startup still require validation.
 
-Other Linux Wayland environments (including XWayland applications) expose
+Other Linux Wayland environments expose
 one portal-selected surface. Electron's PipeWire source is not a physical monitor
 enumeration and may have an empty `display_id`; see the
 [Electron Linux caveat](https://www.electronjs.org/docs/latest/api/desktop-capturer#linux)
@@ -568,6 +742,18 @@ and [source contract](https://www.electronjs.org/docs/latest/api/structures/desk
 The host advertises one view-only display slot. Its initial 1280×720 geometry is a
 viewport placeholder; video/JPEG dimensions describe the selected surface. The
 existing viewer fallback supplies its localized display name.
+
+That path needs Electron itself on Wayland. Electron picks Ozone Wayland only when
+`XDG_SESSION_TYPE=wayland`, and `--ozone-platform` overrides that choice. Started
+from a shell without that variable inside a Wayland compositor, Cindy runs on XWayland.
+Capture then reads XWayland's root window, which holds no desktop pixels: viewers
+see a black screen with only the pointer and no portal request is made (#9712).
+Hyprland's native capture does not depend on Electron's backend. Otherwise, on the
+first video offer of each run, the host logs one `remote-desktop:display-backend`
+warning listing the Wayland signals it saw (`XDG_SESSION_TYPE=wayland`,
+`WAYLAND_DISPLAY` set, a `wayland-N` socket in the runtime directory). That exact
+scope is in the log-upload allowlist. The UI does not show this state, and the
+supported compositors are unchanged.
 
 A lease creates one isolated capture window and starts one system picker. Local
 consent may take up to two minutes, independently of each bounded video RPC.
@@ -609,7 +795,7 @@ video without another picker, then stop sharing and verify capture terminates.
 
 macOS uses a signed Swift helper; Windows uses a Rust helper with Win32 SendInput.
 Forge builds and packages them through the existing tools signing paths. Linux
-Hyprland uses the Wayland virtual input helper described above; other Linux
+Hyprland uses the Wayland virtual input helper described above; X11 uses its XTest backend. Other Linux
 paths remain view-only. No helper bypasses OS security boundaries:
 Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.
@@ -965,13 +1151,99 @@ Remaining platform adapters are explicitly separate:
 The macOS pre-login and Linux service adapters remain unimplemented. The remote business protocol and shared relay are unchanged. Recovery
 affects only this desktop lease/video track, not other connected peers.
 
-### Windows system service (implementation awaiting Windows runtime validation)
+### macOS zero frames: check `replayd` before blaming Cindy
 
-Packaged Windows builds include a native SCM service, a Main-only Node-API pipe
+Every macOS capture path runs through the system `replayd` service. When the host
+offer fails after about 4 seconds, the push-frame window reports
+`DESKTOP_VIDEO_UNAVAILABLE` (empty first frame) and an `SCStream` starts
+successfully but delivers 0 frames, suspect a wedged `replayd` first. On
+2026-10-15 a Mac Studio (macOS 27.0.1) had one that had been running for 7 days
+and was flooding the log with `SCRemoteQueue_EnqueueSampleBuffer: Cannot Enqueue
+on an invalid remoteQueue` / `Client terminated the queue`; every
+ScreenCaptureKit capture started and produced nothing. Check with a minimal SCK
+capture or `/usr/bin/log stream --predicate 'process == "replayd"'` (`log` is a
+zsh builtin, use the absolute path). `kill -9` the user-session `replayd` —
+SIGTERM is ignored and launchd restarts it — after which the first frame arrives
+in about 0.3 s. A healthy `replayd` also delivers frames in the locked session
+with window exclusion. An earlier revision of PR #6112 added a lock-screen
+fallback and an unlock-restart chain on measurements taken while `replayd` was
+wedged; both were dropped before merge, and the merged PR only fixes first-frame
+reliability and records the wedged `replayd` as the direct cause. Do not conclude
+"the system API does not work in state X" before confirming the matching system
+service is healthy.
+
+### Windows system service
+
+Windows builds include a native SCM service, a Main-only Node-API pipe
 transport, a session-scoped SYSTEM GDI capture worker and the SendInput helper.
 The settings page installs/removes the service through Windows administrator
-consent. Only a protected all-users Program Files installation is eligible;
-per-user/development installations retain the ordinary desktop path.
+consent. Any packaged installation is eligible, including Cindy's default
+per-user one. Source-mode development runs build the same two host helpers in
+the per-user userData cache for the running Electron architecture, then use the
+same protected staging path; their
+Electron process is accepted only for the exact PID approved by that setup's
+administrator prompt.
+
+#### Where the service executable comes from
+
+The service must not start an executable that ordinary processes can replace,
+or any process running as the user would reach SYSTEM permanently and without a
+prompt. Requiring an all-users Program Files installation was one way to get
+that, at the cost of an administrator prompt on every update, so setup takes the
+other route: while the user is already confirming the administrator prompt, the
+elevated setup child copies `cindy-windows-desktop-host.exe` and
+`cindy-windows-desktop-input.exe` into
+`%ProgramFiles%\Cindy Remote Desktop\<installation id>\`, creates that directory
+owned by Administrators and writable only by Administrators and SYSTEM, and
+registers the service against the copy. The copies are read from the
+installation through a handle opened without write or delete sharing, so the
+bytes that are checked are the bytes that land.
+
+The installation id is a hash of the installation directory, so two
+installations — Cindy and CindyDev, or two copies of one edition — never share a
+service, a pipe or a staged executable. Every participant derives that id from
+the installation directory rather than from its own path, because they run from
+different places: `naming.rs` holds the single derivation, and
+`naming::tests::staged_copy_and_installation_agree_on_one_service_name` pins the
+two sides together.
+
+Setup always stops the service, restages and restarts, so an upgraded Cindy does
+not keep running the previous version's copy. Removal deletes the service, the
+staged directory, and a service registered under the pre-staging name.
+
+The UAC transition does not launch the helper from that user-writable
+directory. It starts the absolute-path Windows PowerShell binary from
+`System32` with `-NoProfile -NonInteractive -EncodedCommand`; the script checks
+the Program Files parent and staging directory for administrator/SYSTEM-only
+ACLs and reparse points, copies the helper there, and starts only that protected
+copy. The unelevated helper holds read-only handles on both bundled helpers
+until the elevated copy and setup finish, so a same-user writer cannot swap the
+bytes during the transition or inject an adjacent `VCRUNTIME140.dll`.
+
+What staging removes is the standing risk: the executable the service starts
+afterwards is out of reach of ordinary processes.
+
+Because Cindy's own uninstaller runs per user without administrator rights, it
+cannot delete the staged directory or the service registration. Removing them is
+the settings page's "remove service" action, which asks for administrator
+consent. A leftover registration is inert — the service is demand-start and
+exits with the Cindy process it was authorized for.
+
+Both Windows helpers and the Main-only Node-API transport statically link the
+MSVC C runtime through `native/remote-desktop/.cargo/config.toml`. Packaging and
+source-mode builds explicitly load this configuration, and source-mode cache
+invalidation includes it. Neither the uninstaller nor the protected service
+bootstrap requires a machine-wide Visual C++ redistributable installation.
+Check the two EXEs and the `.node` artifact's PE imports and Electron loading
+when changing this build configuration.
+
+This applies to newly built versions. An older installed version still runs
+its own uninstaller during replacement; recovery for those versions is outside
+this change. On a clean Windows machine without the VC++ runtime, release
+validation must cover a fresh install, replacement of this fixed version, and
+direct uninstall, both with and without a registered remote desktop service.
+
+#### Authorization and validation
 
 Authorization records a live process handle for the Cindy process explicitly
 approved through the elevated setup helper. Executable path alone is insufficient:
@@ -979,11 +1251,50 @@ plugin utility processes share Cindy.exe. The service starts on demand and exits
 Restarting Cindy or the service requires fresh administrator approval. This is a current limitation, not unattended
 post-reboot support. No authorization secrets or screenshots are persisted.
 
-The broker validates file/directory ownership, writable ACLs, reparse points,
-SCM identity, peer PIDs and active console session. It retains installation
-handles for its lifetime. Workers are fixed-purpose children in kill-on-close jobs
+Registration is accepted only from an elevated process whose image has the same
+contents as the running service's own image: the setup bootstrap runs from the
+protected staging directory and the service from its protected host copy, so
+their paths differ by design and identical contents is what shows they are one
+build. Which
+installation may then drive the service comes from `install.txt` in the
+protected directory — an administrator-written value rather than a path handed
+over the pipe — and it is accepted only if it hashes back to the directory's own
+name, so a rewritten record cannot redirect the service elsewhere. That path is
+user-writable, so the Cindy.exe check against it is a consistency check; what
+actually gates the service is the approved process handle and the active console
+session.
+
+Packaged setup checks that the host and input helpers have a valid Authenticode
+signature from the same signer as the running Cindy executable. Source-mode
+development setup uses an explicit unsigned development trust boundary; it is
+intended for a developer-controlled checkout and does not claim publisher
+provenance. In both modes the broker validates file/directory ownership, writable
+ACLs, reparse points, SCM identity, peer PIDs and active console session over the
+staged directory and
+its parents up to Program Files, and retains those handles for its lifetime.
+Workers are fixed-purpose children in kill-on-close jobs
 with local-only, bounded, timed pipes. Uninstall/upgrade waits for the service to
 stop before removing binaries. Upgrade clears the authorization.
+
+#### Diagnosing a failed setup
+
+Every setup step has a fixed code — `stage-write`, `service-create`,
+`authorize-connect` and so on — carrying the OS error number and nothing else:
+no path, account name or other machine content. The elevated child is hidden, so
+its console output never reaches the parent; it returns its step as its exit
+code instead, and the parent reports it as `elevate-child/<step>`. A failure in
+the generated bootstrap script itself — a check it refuses or an error it raises
+— is `elevate-child/elevate-bootstrap`, so it cannot be mistaken for a rejected
+argument list. Main logs the code under `remote-desktop:windows` and the
+settings page shows it beside the failure, so a report says which step failed
+rather than only that setup failed.
+`windowsLockScreenSetup.test.ts` covers that path end to end in Main.
+
+The service drops and recreates its listening pipe instance after every accept
+timeout, and reports RUNNING just before the first instance exists.
+`WaitNamedPipeW` returns immediately when no instance exists at all, so
+`Pipe::client` retries within its three-second budget rather than failing on a
+connection that merely landed in one of those gaps.
 
 Desktop transitions terminate the old input helper, including pending batches
 and long text input; Main then recovers only the remote desktop lease. Ctrl+Alt+Del
@@ -992,9 +1303,10 @@ Windows policy decides whether software SAS is allowed; Cindy never changes it.
 Capture follows the input desktop and validates the selected monitor's geometry.
 The GDI compatibility stream is capped at a 1280-pixel long edge and 180 KB JPEG.
 
-Validation available on macOS: Windows-target Rust compilation checks and Desktop
-TypeScript checking. Still required on Windows 10/11: signed package linking and
-installation, administrator consent/cancellation, lock/unlock, UAC, policy-enabled
+Validation so far: native release build and unit tests on Windows 11, Desktop
+TypeScript checking, and the Main-side setup tests above. Still required on
+Windows 10/11: signed package linking and installation, administrator
+consent/cancellation, lock/unlock, UAC, policy-enabled
 SAS, mixed-DPI displays, worker cleanup, upgrade/uninstall, and plugin rejection.
 Windows display-mode changes and pre-login/unattended post-reboot control are not
 implemented. A Linux pre-login service remains deferred. Do not present this as fully validated
@@ -1126,6 +1438,20 @@ position corrections only outside active touchpad movement. Late messages from
 old RTC generations are discarded. Hidden cursors are not drawn. Unsupported
 cursor images fall back to the existing position indicator without killing video.
 Both Light and Dark use the source raster rather than tinting it.
+
+On a portrait half-fold, the upper region shows the desktop and the lower region
+holds the touchpad or keyboard controls. Landscape half-folds use the ordinary
+full-width landscape viewer. The keyboard toolbar remains below the hinge rather
+than moving into the video region when the system keyboard leaves little room.
+The lower touchpad owns relative cursor movement for its entire contact, including
+pauses, regardless of the video surface's touch/pointer preference. Host position
+feedback resumes after a full 200ms grace period measured from lift (or a later
+local input), even when the finger paused before lifting. New contacts preserve
+edge coordinates; only viewport changes request cursor re-entry. Gesture
+cancellation, control loss and leaving the pad clear that ownership. The local
+React Native/WebView bridge carries contact start/end; the remote input protocol
+is unchanged. Regression coverage lives in Mobile's `viewer.test.ts` and
+`screen.test.tsx` under `src/remote-desktop/__tests__/`.
 
 Desktop viewers use the local system pointer instead of drawing this raster.
 An optional `shape` hint selects a bounded standard cursor keyword (text, hand,

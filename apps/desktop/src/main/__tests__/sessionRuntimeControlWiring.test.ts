@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { createEffortChangeCoordinator, enqueueEffortChange } from '../../renderer/components/new-chat/effortChangeQueue';
+import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
+import { withFastModePolicy } from '../../../../../packages/maker-core/src/agents/shared/fast-mode-policy';
+import { commitRuntimeAxisAfterPersistence } from '../maker-ipc/runtimeSelectionAxes';
 
 const mainRoot = resolve(__dirname, '..');
 const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
@@ -31,6 +36,10 @@ const makerSendSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const queuedInputOriginSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -40,12 +49,241 @@ function handlerBody(source: string, channel: string, nextChannel: string): stri
   return source.slice(start, end);
 }
 
+// Run the production axis closures without importing the Electron bootstrap.
+// Guard tier: verifies the lifecycle/persistence contract shared by Desktop and
+// Device Link. The previous tests only checked that terminal guards existed;
+// an archived row plus a remote effort/Fast write is the minimal regression.
+const axisHandlers = new Map<string, string>();
+const registerAst = ts.createSourceFile('register.ts', registerSource, ts.ScriptTarget.Latest, true);
+// Compile only the production predicate; importing its runtime module here
+// would load the entire harness dependency chain into this fast guard suite.
+const switchAst = ts.createSourceFile('sessionAgentSwitchHandler.ts', readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionAgentSwitchHandler.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+const userIntentPredicate = switchAst.statements.find((node): node is ts.FunctionDeclaration =>
+  ts.isFunctionDeclaration(node) && node.name?.text === 'isUserPendingAgentSwitchIntent')!;
+const isUserPendingAgentSwitchIntent = new Function(ts.transpileModule(
+  `return (intent) => ${userIntentPredicate.body!.getText(switchAst)};`,
+  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+).outputText)();
+function collectAxisHandlers(node: ts.Node): void {
+  if (ts.isVariableDeclaration(node) && node.initializer &&
+      ['applyEffort', 'applyFastMode', 'persistEffort', 'persistFastMode', 'stagePendingUserRuntimeAxis'].includes(node.name.getText(registerAst))) {
+    axisHandlers.set(node.name.getText(registerAst), ts.transpileModule(
+      `return ${node.initializer.getText(registerAst)};`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+    ).outputText);
+  }
+  ts.forEachChild(node, collectAxisHandlers);
+}
+collectAxisHandlers(registerAst);
+// Cross-file persistence contract: the real Renderer adapter must leave the
+// decision to Main even before its pending-intent projection reaches this UI.
+const rendererStoreAst = ts.createSourceFile('store.ts', readFileSync(
+  resolve(mainRoot, '../renderer/lib/makerChatStore.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+const rendererInputAst = ts.createSourceFile('ChatInput.tsx', readFileSync(
+  resolve(mainRoot, '../renderer/components/new-chat/ChatInput.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const fastSetter = rendererStoreAst.statements.find((node): node is ts.FunctionDeclaration =>
+  ts.isFunctionDeclaration(node) && node.name?.text === 'setFastMode')!;
+let effortPipeline = '';
+function findEffortPipeline(node: ts.Node): void {
+  if (ts.isCallExpression(node) && node.expression.getText(rendererInputAst) === 'enqueueEffortChange')
+    effortPipeline = node.arguments[3].getText(rendererInputAst);
+  ts.forEachChild(node, findEffortPipeline);
+}
+findEffortPipeline(rendererInputAst);
+
+describe.each([
+  ['applyEffort', 'persistEffort', 'effort', 'high'],
+  ['applyFastMode', 'persistFastMode', 'fastMode', true],
+] as const)('archived settings: %s', (handler, persistName, field, value) => {
+  function setup(status: 'archived' | 'deleted', remote = true) {
+    const row = { status, effort: 'low', fastMode: false } as Record<string, unknown>;
+    const pending = new Map();
+    const persist = vi.fn(async () => { row[field] = value; });
+    const response = remote ? {} : undefined;
+    const query = { from: () => query, where: () => query, limit: async () => [row] };
+    const getSession = vi.fn(() => { throw new Error('archived runtime must remain untouched'); });
+    const bindings = {
+      sessionId: 'archived-task', effort: 'high', enabled: true,
+      sessions: {}, eq: vi.fn(), getDbClient: () => ({ drizzle: { select: () => query } }),
+      remoteResponse: response, persistSessionFields: persist, agentSwitchPending: pending,
+      readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'next-provider', agentDeviceId: null } }),
+      getSessionProvider: () => 'next-provider',
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => true }),
+      // These archived fixtures have no saved automation model scope.
+      updateSavedScheduledAxis: vi.fn(async () => false),
+      updateScheduledPreference: vi.fn(async () => {}),
+      assertOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
+      markRemoteSettingPersistedInsideHandler: vi.fn(), maker: { getSession },
+      isUserPendingAgentSwitchIntent, projectPendingAgentSwitchIntent: (intent: unknown) => intent,
+      wakeSessionInputAfterCredentialSwitch: vi.fn(),
+      getActiveCatalog: () => ({}),
+      getDesktopProviderService: () => ({ listProviders: async () => [{ id: 'next-provider', connected: true }] }),
+      readUsableAgentDeviceProviders: async () => [{ id: 'next-provider', connected: true }],
+      effectiveSourceIdForModel: () => 'next-provider', findCatalogModel: () => ({}),
+      resolveSessionRuntimeAxes: (axes: object) => ({ ok: true, ...axes }),
+      agentSwitchDeps: { getSessionRow: async () => row,
+        selectSameAgentModel: async (id: string, intent: unknown) => { pending.set(id, intent); },
+        onPendingSwitchChanged: vi.fn() },
+      throwIpcError: (code: string, message: string) => { throw new Error(`[${code}] ${message}`); },
+    };
+    const persistAxis = new Function(...Object.keys(bindings), axisHandlers.get(persistName)!)(...Object.values(bindings));
+    const stagePendingUserRuntimeAxis = new Function(...Object.keys(bindings), axisHandlers.get('stagePendingUserRuntimeAxis')!)(...Object.values(bindings));
+    const runBindings = { ...bindings, [persistName]: persistAxis, stagePendingUserRuntimeAxis };
+    const run = new Function(...Object.keys(runBindings), axisHandlers.get(handler)!)(...Object.values(runBindings));
+    return { run, row, persist, response, getSession, pending, changed: bindings.agentSwitchDeps.onPendingSwitchChanged };
+  }
+
+  it('acknowledges the saved axis while the task stays archived and the runtime stays untouched', async () => {
+    const h = setup('archived');
+    await expect(h.run()).resolves.toBe(h.response);
+    expect(h.row).toMatchObject({ status: 'archived', [field]: value });
+    expect(h.persist).toHaveBeenCalledOnce();
+    expect(h.getSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['same-agent', 'cross-engine', 'relocation'] as const)('updates the selected %s model instead of the old route', async kind => {
+    const h = setup('archived');
+    const intent = { targetAgentKind: kind === 'cross-engine' ? 'pi' : 'codex', model: 'next-model',
+      providerId: 'next-provider', effort: 'low', fastMode: false, confirmedContextWindow: 200000,
+      ...(kind === 'same-agent' ? { sameAgentSelection: true } : {}),
+      ...(kind === 'relocation' ? { targetAgentDeviceId: 'other-device' } : {}),
+    };
+    h.pending.set('archived-task', intent);
+    await h.run();
+    expect(h.pending.get('archived-task')).toEqual({ ...intent, [field]: value });
+    if (kind !== 'same-agent') expect(h.changed).toHaveBeenCalledWith('archived-task',
+      expect.objectContaining({ model: 'next-model', [field]: value }));
+    expect(h.row).toMatchObject({ status: 'archived', effort: 'low', fastMode: false });
+    expect(h.persist).not.toHaveBeenCalled();
+    expect(h.getSession).not.toHaveBeenCalled();
+  });
+
+  it.each([{ configStaged: true }, { runtimeSource: 'agent' }])('keeps automatic intent %j separate from user axis writes', async source => {
+    const h = setup('archived');
+    const intent = { sameAgentSelection: true, model: 'automatic-model', ...source };
+    h.pending.set('archived-task', intent);
+    await h.run();
+    expect(h.pending.get('archived-task')).toBe(intent);
+    expect(h.row).toMatchObject({ status: 'archived', [field]: value });
+    expect(h.persist).toHaveBeenCalledOnce();
+    expect(h.getSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects a deleted task before saving anything', async () => {
+    const h = setup('deleted');
+    await expect(h.run()).rejects.toThrow('PRECONDITION_FAILED');
+    expect(h.persist).not.toHaveBeenCalled();
+    expect(h.getSession).not.toHaveBeenCalled();
+  });
+
+  it('reports a persistence failure without applying the axis to a runtime', async () => {
+    const h = setup('archived');
+    h.persist.mockRejectedValueOnce(new Error('sqlite rejected'));
+    await expect(h.run()).rejects.toThrow('sqlite rejected');
+    expect(h.row).toMatchObject({ status: 'archived', effort: 'low', fastMode: false });
+    expect(h.getSession).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('commits local Renderer changes through Main (pending intent: %s)', async hasIntent => {
+    const h = setup('archived', false);
+    if (hasIntent) h.pending.set('archived-task', { targetAgentKind: 'pi', model: 'next', effort: 'low', fastMode: false });
+    const compile = (expression: string, bindings: Record<string, unknown>) => new Function(...Object.keys(bindings),
+      ts.transpileModule(`return (${expression});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(bindings));
+    const bindings = { sessionService: { update: h.persist }, window: { electronAPI: { maker: {
+      setEffort: h.run, setFastMode: h.run,
+    } } }, log: { warn: vi.fn() }, getStickySessionDeviceId: () => undefined, setState: vi.fn(),
+      activeModel: undefined, fastMode: false, onEffortDidChange: vi.fn() };
+    if (field === 'fastMode') await compile(fastSetter.getText(rendererStoreAst), bindings)('archived-task', true);
+    else {
+      const coordinator = createEffortChangeCoordinator();
+      await enqueueEffortChange(coordinator, 'archived-task', 'high', compile(effortPipeline, bindings));
+      await coordinator.awaitRuntimeSettled('archived-task');
+    }
+    if (hasIntent) {
+      expect(h.pending.get('archived-task')).toMatchObject({ [field]: value });
+      expect(h.persist).not.toHaveBeenCalled();
+      h.pending.clear(); // restart before send loses only the volatile selection
+      expect(h.row).toEqual({ status: 'archived', effort: 'low', fastMode: false });
+    } else {
+      expect(h.persist).toHaveBeenCalledOnce();
+      expect(h.row).toMatchObject({ [field]: value });
+    }
+    expect(h.getSession).not.toHaveBeenCalled();
+  });
+});
+
+// Review R11: run the production IPC closure with the real runtime policy
+// wrapper. Policy-only tests cannot catch an IPC branch that bypasses it.
+// Guard tier shares this file's compiled Electron closure fixture; the minimal
+// sequence is deny -> allow -> explicit enable on an active Claude task.
+describe('active Claude subscription Fast setting', () => {
+  it.each([
+    { id: 'anthropic', auth: { method: 'oauth', native: 'claude' } },
+    { id: 'openai', auth: { method: 'oauth', native: 'codex' } },
+    { id: 'custom-api', auth: { method: 'apiKey' } },
+  ])('updates the live subscription handle while preserving API behavior ($id)', async provider => {
+    let allowed = true;
+    let fast: boolean | 'ultrafast' = true;
+    let enforce!: () => Promise<void>;
+    const onFastModeChanged = vi.fn();
+    const handle = withFastModePolicy({
+      setFastMode: async (next: boolean | 'ultrafast') => { fast = next; },
+      getFastMode: () => fast,
+      close: async () => {},
+    } as Parameters<typeof withFastModePolicy>[0], {
+      isAllowed: () => allowed,
+      subscribe: listener => { enforce = listener; return () => {}; },
+      onFastModeChanged,
+    });
+    const profile = { providerId: provider.id, agentDeviceId: null };
+    const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active' }] };
+    const persistFastMode = vi.fn(async () => {});
+    const bindings = {
+      sessionId: 'active-claude-task', enabled: true, sessions: {}, eq: vi.fn(),
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      agentSwitchPending: new Map(), readSessionRuntimeProfiles: async () => ({ effective: profile }),
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => allowed }), supportsSubscriptionFastPolicy,
+      getSessionProvider: () => provider.id,
+      getActiveCatalog: () => ({ providers: [provider as ProviderView] }),
+      assertOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
+      isUserPendingAgentSwitchIntent, updateSavedScheduledAxis: async () => false,
+      resolvePendingRuntimeAxisPatch: async (_id: string, patch: object) => ({ ...patch }),
+      recordUserSessionRuntimeAxisMutation: vi.fn(), setSessionFastMode: vi.fn(),
+      maker: { getSession: () => ({ agentKind: 'claude-code', setFastMode: handle.setFastMode, getFastMode: handle.getFastMode }) },
+      persistFastMode, commitRuntimeAxisAfterPersistence, pendingCredentialSwitchHolder: null,
+      remoteResponse: undefined, log: { debug: vi.fn() },
+    };
+    const run = new Function(...Object.keys(bindings), axisHandlers.get('applyFastMode')!)(...Object.values(bindings));
+    try {
+      allowed = false;
+      await enforce();
+      expect(handle.getFastMode!()).toBe(false);
+      allowed = true;
+      await enforce();
+      expect(handle.getFastMode!()).toBe(false); // relaxation alone must never enable
+      onFastModeChanged.mockClear();
+      await run();
+      expect(persistFastMode).toHaveBeenCalledOnce();
+      if (provider.auth.method === 'oauth') {
+        expect(handle.getFastMode!()).toBe(true);
+        expect(onFastModeChanged).toHaveBeenCalledWith(true);
+      } else {
+        expect(handle.getFastMode!()).toBe(false);
+        expect(onFastModeChanged).not.toHaveBeenCalled();
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+});
+
 describe('session runtime control wiring', () => {
   it('replays Windows attention after the main window is shown independently of inventory loading', () => {
     const body = handlerBody(
       bootstrapSource,
       "mainWindow.once('ready-to-show'",
-      'void runComputerUseSmokeIfRequested();',
+      'void runComputerUseSmokeIfRequested(',
     );
     const shown = body.indexOf('showMainWindowAndRestoreFullscreen(');
     const badge = body.indexOf('refreshWindowsAppBadge();');
@@ -56,13 +294,17 @@ describe('session runtime control wiring', () => {
       /if \(!app.isPackaged \|\| isCindyVersionLaunchPending\(\)\)\s+markDesktopDevWindowReady\(mainWindow.webContents.getOSProcessId\(\)\);/,
     );
   });
-  it('advertises host-side model-window protection to remote controllers', () => {
+  it('advertises host-side model-window protection and Orca relocation to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
       'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
     );
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+    // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
+    expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
+    // Same for an execution-device Worker whose Lead is on another computer.
+    expect(capabilities).toContain('supportsOrcaRemoteWorkerAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {
@@ -77,11 +319,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('persisted?.autoResume === true');
     expect(registerSource).toContain('persisted?.origin !== undefined');
 
-    const steerDispatch = handlerBody(
-      registerSource,
-      'const steerToAgentAccepted = async (',
-      'registerMakerSessionSendHandler(',
-    );
+    const steerDispatch = readFileSync(resolve(mainRoot, 'maker-ipc/makerSteerTransaction.ts'), 'utf8');
+    expect(registerSource).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
     expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
     expect(registerSource).toContain(
@@ -96,9 +335,9 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
-    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
-    expect(makerSendSource).toContain('persistedContent: explicitUserItem.persistedContent');
-    expect(makerSendSource).toContain(
+    expect(queuedInputOriginSource).toContain('clientId: explicitUserItem.clientId');
+    expect(queuedInputOriginSource).toContain('persistedContent: explicitUserItem.persistedContent');
+    expect(queuedInputOriginSource).toContain(
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
@@ -114,14 +353,14 @@ describe('session runtime control wiring', () => {
       'stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, editor.isMobile), remote, true)',
     );
     expect(updateText).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
-    expect(updateText).toContain('stampQueuedEditProvenance(updated, remote, editor)');
+    expect(updateText).toContain('stampQueuedEditProvenance(sid, updated, remote, editor)');
     const updateContent = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
       'MAKER_INVOKE.INPUT_MOVE,',
     );
     expect(updateContent).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
-    expect(updateContent).toContain('stampQueuedEditProvenance(updated, remote, editor)');
+    expect(updateContent).toContain('stampQueuedEditProvenance(sid, updated, remote, editor)');
     const enqueue = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_ENQUEUE,',
@@ -209,7 +448,7 @@ describe('session runtime control wiring', () => {
       'setAppSessionCommitBoundaryHook(() => {',
       '// ── Custom protocol registration',
     );
-    expect(body).toContain('ghostPanelWindowsController.closeForOwnerChange();');
+    expect(body).toContain('sidebarTabWindowsController.destroyAllWindows();');
     expect(body.indexOf('clearAllSessionAttention();')).toBeGreaterThan(-1);
     expect(body.indexOf('clearAllSessionAttention();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
@@ -387,7 +626,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
-  it('accepts local user null effort at the selection gate; ranked models still fail in catalog', () => {
+  it('passes user null effort through catalog normalization before model side effects', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -395,7 +634,7 @@ describe('session runtime control wiring', () => {
     );
     const confirmation = setModel.indexOf('const confirmedContextWindow =');
     const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
-    const fixedEffortValidation = setModel.indexOf('atomicSelection.effort === null');
+    const axisResolution = setModel.indexOf('const axes = resolveSessionRuntimeAxes({');
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
 
@@ -407,12 +646,11 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain(
       "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
-    expect(setModel).toContain('catalogModel.efforts.length > 0');
-    expect(setModel).toContain(
-      "internalOptions.source === 'user' &&\n          atomicSelection.effort === null &&\n          catalogModel.efforts.length > 0",
-    );
-    expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
-    expect(fixedEffortValidation).toBeLessThan(prepare);
+    // #7449: a null wire axis must reach catalog normalization, otherwise the
+    // pending selection fails again on every queued-send retry.
+    expect(setModel).not.toContain('`effort "null" is unavailable for model "${model}"`');
+    expect(axisResolution).toBeGreaterThan(selectionValidation);
+    expect(axisResolution).toBeLessThan(prepare);
     expect(prepare).toBeLessThan(apply);
     expect(setModel).toContain(
       '!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow',
@@ -499,7 +737,6 @@ describe('session runtime control wiring', () => {
       normalWakeGuard,
     );
 
-    expect(setModel).toContain('atomicSelection.effort === null');
     expect(setModel).toContain('isDeviceLinkInvoke() ||');
     expect(setModel).toContain("(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')");
     expect(setModel).toContain('!rebuildLiveOrcaWorker && !atomicSelection');
@@ -515,6 +752,19 @@ describe('session runtime control wiring', () => {
     expect(persistSelection).toBeGreaterThan(patchFast);
     expect(normalWakeGuard).toBeGreaterThan(persistSelection);
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
+  });
+
+  it('persists a send-time renamed model inside the shared route transaction', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('persistRenamedSessionModel: true');
+    const persistGate = setModel.indexOf('internalOptions.persistRenamedSessionModel === true');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);', persistGate);
+    expect(persistGate).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(persistGate);
   });
 
   it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
@@ -771,7 +1021,10 @@ describe('session runtime control wiring', () => {
     );
   });
 
-  it('rejects terminal tasks inside the shared route lock before runtime mutations', () => {
+  // Guard tier: archive/delete and settings share the route lock. A picker may
+  // stage an archived task, but automatic changes and send-time application must
+  // still stop before recreating runtime state. The old guard rejected all three.
+  it('allows only user picker staging on archived tasks inside the shared route lock', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -784,6 +1037,12 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain(
       'internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked)',
     );
+    const archiveAdmission = setModel.slice(setModel.indexOf('const canStageArchivedSelection'), terminalGuard);
+    expect(archiveAdmission).toContain("runtimeStatus.status === 'archived'");
+    expect(archiveAdmission).toContain("internalOptions.source === 'user'");
+    expect(archiveAdmission).toContain('!internalOptions.applyingUserSelectionOnSend');
+    expect(setModel).toContain("runtimeStatus.status !== 'active' && !canStageArchivedSelection");
+    expect(setModel).toContain("(!runtimeStatus.remoteHostId || canStageArchivedSelection)");
   });
 
   it('stages user routes before every runtime mutation and prevents remote persistence of the source route', () => {
@@ -808,6 +1067,49 @@ describe('session runtime control wiring', () => {
     );
   });
 
+  it('carries the Pi thinking intent through every staged selection replay', () => {
+    const body = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const early = body.slice(body.indexOf('// A picker click'), body.indexOf('const axisPatch:'));
+    // 点选暂存：intent 必须带上思考意图，否则发送时回放会丢档位。
+    expect(early).toContain('{ thinking: atomicSelection.thinking }');
+    // 发送回放 / deferred 结算另两条重建链也不能丢。
+    expect(registerSource).toContain('{ thinking: intent.thinking }');
+    expect(registerSource).toContain('{ thinking: pending.thinking }');
+    expect(
+      registerSource.split('{ thinking: atomicSelection.thinking }').length,
+    ).toBeGreaterThanOrEqual(3);
+    // 回合中延期（deferLockedSelection）的两条登记都要暂存思考意图：只靠结算侧回放
+    // pending.thinking 不够，登记时不写就恒为 undefined，原症状会在「回合中切模」
+    // 场景原样复现。
+    const defer = body.slice(
+      body.indexOf('const deferLockedSelection = async () =>'),
+      body.indexOf('if (runtimeStatus.remoteHostId && isSessionInTurn(sessionId)) {'),
+    );
+    expect(defer).toContain('acceptSessionRuntimeMutation({');
+    expect(defer).toContain('deferSessionRuntimeAxisMutation({');
+    expect(
+      defer.split('{ thinking: atomicSelection.thinking }').length - 1,
+    ).toBeGreaterThanOrEqual(2);
+    // 非 Pi 引擎绝不能收到 thinkingEnabled（只有 Pi 的 set_model 会消费它）。
+    expect(registerSource).toContain(
+      "runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined",
+    );
+    // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
+    // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
+    const rememberThinking = registerSource.slice(
+      registerSource.indexOf('rememberThinkingIntent: ({'),
+      registerSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    );
+    expect(rememberThinking).toContain(
+      'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
+    );
+    expect(rememberThinking).toContain('DRAFT_PREF_APPLY');
+  });
+
   it('only relinks retained cross-host writers without rewriting native history', () => {
     const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
     expect(body).toContain('requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer(');
@@ -827,7 +1129,10 @@ describe('session runtime control wiring', () => {
     );
   });
 
-  it('rejects terminal tasks before effort or Fast mutations recreate runtime state', () => {
+  // Regression: desktop persisted effort before the rejected runtime IPC, while
+  // Mobile rejected the whole action. Archived axes must acknowledge persistence
+  // without restoring the runtime stores cleared by archive cleanup.
+  it('saves archived effort and Fast without recreating runtime state, and rejects deleted tasks', () => {
     const effort = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
@@ -838,15 +1143,25 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
-    for (const [body, commit] of [
-      [effort, 'commit: commitEffort'],
-      [fast, 'commit: commitFastMode'],
+    for (const [body, commit, persist] of [
+      [effort, 'commit: commitEffort', 'persistEffort'],
+      [fast, 'commit: commitFastMode', 'persistFastMode'],
     ] as const) {
       const terminalGuard = body.indexOf("runtimeStatus.status !== 'active'");
       expect(terminalGuard).toBeGreaterThan(-1);
       expect(terminalGuard).toBeLessThan(body.indexOf(commit));
       expect(body.indexOf('.select({ status: sessions.status })')).toBeLessThan(terminalGuard);
       expect(body).toContain('return withSendToSessionLock(sessionId');
+      expect(body).toContain("runtimeStatus.status !== 'active' && runtimeStatus.status !== 'archived'");
+      const archiveStart = body.indexOf("if (runtimeStatus.status === 'archived')");
+      expect(archiveStart).toBeGreaterThan(body.indexOf('if (isUserPendingAgentSwitchIntent(userIntent))'));
+      const archiveEnd = body.indexOf('const livePatch:', archiveStart);
+      const archive = body.slice(archiveStart, archiveEnd);
+      expect(archive).toContain(`await ${persist}();`);
+      expect(archive).toContain('return remoteResponse;');
+      expect(archive).not.toContain('setSession');
+      expect(archive).not.toContain('recordUserSessionRuntime');
+      expect(archiveStart).toBeLessThan(body.indexOf('const sess = maker.getSession'));
     }
   });
 
@@ -882,7 +1197,7 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
-    expect(registerSource).toContain('autoResumeBookkeeping.hasSchedule(session.id)');
+    expect(registerSource).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
     expect(registerSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
@@ -1152,6 +1467,21 @@ describe('session runtime control wiring', () => {
     const liveUsageRead = setModel.indexOf('getSessionLastLiveUsage(sessionId)');
     expect(liveUsageRead).toBeGreaterThan(-1);
     expect(liveUsageRead).toBeLessThan(pressurePreflight);
+    // 预算必须在预检之前读到，且预检比较的目标窗口必须带预算：否则小预算任务会拿
+    // 目录默认大窗证明「有余量」，跳过冷启动核实和切换后的最终窗口校验，既有上下文
+    // 直接落进过载窗口（Greptile P1，2026-09-22）。
+    const budgetRead = setModel.indexOf('await readStoredSessionContextWindowBudget(sessionId)');
+    const targetWindowResolve = setModel.indexOf('const coldPiTargetContextWindow');
+    expect(budgetRead).toBeGreaterThan(-1);
+    expect(budgetRead).toBeLessThan(targetWindowResolve);
+    expect(targetWindowResolve).toBeLessThan(pressurePreflight);
+    expect(
+      setModel.slice(targetWindowResolve, pressurePreflight).includes('sessionContextWindowBudget'),
+    ).toBe(true);
+    // 预算只读一次，预检与后续的缩窗闸门共用同一个值（同一锁内不可能变化）。
+    expect(
+      setModel.split('await readStoredSessionContextWindowBudget(sessionId)').length - 1,
+    ).toBe(1);
     expect(setModel).toContain('set-model: skipped cold Pi window verification');
     expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
     // 终态活进程核验必须同步跳过，否则只是换成 'Pi target runtime could not be verified'。
@@ -1467,5 +1797,45 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain(
       'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
+  });
+});
+
+// Guard tier: the scheduled startup owner assertion protects an asynchronous account switch.
+// Start before the automation preference holder: the buggy snapshot lived just
+// above the bootstrap holder assignment, so a block anchored on that assignment
+// would have skipped the exact line the guard is meant to catch.
+const WIRING_START = 'prepareScheduledModelPreferencesHolder = async';
+const WIRING_ANCHOR = 'scheduledSessionBootstrapHolder = createScheduledSessionBootstrap(';
+const WIRING_END = 'let recoverRenamedSessionModelOnSend';
+
+describe('scheduled session bootstrap wiring', () => {
+  function wiringBlock(): string {
+    const start = registerSource.indexOf(WIRING_START);
+    expect(start).toBeGreaterThan(-1);
+    const end = registerSource.indexOf(WIRING_END, start);
+    expect(end).toBeGreaterThan(start);
+    return registerSource.slice(start, end);
+  }
+
+  it('builds the automation bootstrap holder from the per-fire factory', () => {
+    expect(wiringBlock()).toContain(WIRING_ANCHOR);
+  });
+
+  it('forwards the owner assertion into the startup funnel', () => {
+    // Losing this forwarder would silently downgrade the guard to the single
+    // entry check, so an account switch inside the funnel could create the task
+    // under the new owner instead of aborting.
+    expect(wiringBlock()).toContain(
+      'bootstrapSession(options as MakerSessionCreateOpts, assertAccess)',
+    );
+  });
+
+  it('never snapshots the data owner for automations at registration time', () => {
+    // A snapshot evaluated once while the handlers register is the bug: the app
+    // session commit that restores the account can land later, so it stays stale
+    // and every automation fails until the app restarts. Assert on the wiring
+    // block, not on a variable name: any `const`/`let` shape that captures the
+    // scope here reintroduces the same failure.
+    expect(wiringBlock()).not.toContain('captureDataOwnerBroadcastScope');
   });
 });

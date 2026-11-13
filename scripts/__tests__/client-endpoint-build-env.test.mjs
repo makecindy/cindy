@@ -66,6 +66,8 @@ test('Mobile bundling 进程环境只在 CindyDev 保留 Release 清单基址', 
   const repoRoot = writeRepoFixtures();
   const staleBaseEnv = {
     KEEP_ME: '1',
+    NODE_ENV: 'development',
+    BABEL_ENV: 'development',
     EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL:
       'https://stale-release.example.invalid/app',
   };
@@ -76,6 +78,9 @@ test('Mobile bundling 进程环境只在 CindyDev 保留 Release 清单基址', 
     repoRoot,
   });
   assert.equal(cn.KEEP_ME, '1');
+  assert.equal(cn.NODE_ENV, 'production');
+  assert.equal(cn.BABEL_ENV, 'production');
+  assert.equal(staleBaseEnv.NODE_ENV, 'development');
   assert.equal(
     Object.hasOwn(
       cn,
@@ -89,6 +94,8 @@ test('Mobile bundling 进程环境只在 CindyDev 保留 Release 清单基址', 
     baseEnv: staleBaseEnv,
     repoRoot,
   });
+  assert.equal(dev.NODE_ENV, 'production');
+  assert.equal(dev.BABEL_ENV, 'production');
   assert.equal(
     dev.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL,
     'https://hotfix-cn.example.invalid/app',

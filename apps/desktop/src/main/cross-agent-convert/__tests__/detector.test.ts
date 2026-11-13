@@ -38,15 +38,12 @@ describe('isMissingOrEmptyTextFile / isNonEmptyTextFile', () => {
 });
 
 describe('detect — agents-md kind', () => {
-  it('claude-code session: AGENTS.md non-empty + CLAUDE.md missing → 1 item to-claude', async () => {
+  it('claude-code session: AGENTS.md alone does not prompt or create CLAUDE.md', async () => {
     await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# agents');
     const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
-    expect(r.items).toHaveLength(1);
-    expect(r.items[0]).toMatchObject({
-      kind: 'agents-md',
-      direction: 'to-claude',
-      label: 'AGENTS.md → CLAUDE.md',
-    });
+    expect(r.items).toEqual([]);
+    await expect(fs.stat(path.join(tmpDir, 'CLAUDE.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8')).toBe('# agents');
   });
 
   it('codex session: CLAUDE.md non-empty + AGENTS.md missing → 1 item to-codex', async () => {
@@ -73,11 +70,13 @@ describe('detect — agents-md kind', () => {
     expect((await detect({ workingDir: tmpDir, agentKind: 'claude-code' })).items).toHaveLength(0);
   });
 
-  it('CLAUDE.md 是空文件 + AGENTS.md 非空 → 仍然推（codex 语义：目标 trim 为空算缺失）', async () => {
+  it('empty CLAUDE.md + non-empty AGENTS.md does not prompt or overwrite either file', async () => {
     await fs.writeFile(path.join(tmpDir, 'CLAUDE.md'), '\n  ');
     await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# real');
     const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
-    expect(r.items).toHaveLength(1);
+    expect(r.items).toEqual([]);
+    expect(await fs.readFile(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe('\n  ');
+    expect(await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8')).toBe('# real');
   });
 
   it('empty workingDir → 0 items', async () => {
@@ -224,6 +223,49 @@ describe('detect — hooks', () => {
     await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
     await fs.mkdir(path.join(tmpDir, '.codex', 'hooks'), { recursive: true });
     await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), '{}');
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeUndefined();
+  });
+
+  it('to-claude: source has only hooks.json (no hooks/ dir) and target has hooks config → no item', async () => {
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeUndefined();
+  });
+
+  it('to-claude: source has only hooks.json and target lacks hooks → 1 item', async () => {
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
+  });
+
+  it('to-claude: target has legacy nested settings.hooks.hooks → item so the repair can run', async () => {
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { hooks: { Stop: [] } } }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
+  });
+
+  it('to-codex: target has legacy flat hooks.json → item so the wrapper upgrade can run', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ Stop: [] }));
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
+  });
+
+  it('to-codex: target already has wrapped hooks.json → no item', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [] } }));
     const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
     expect(r.items.find((i) => i.kind === 'hooks')).toBeUndefined();
   });

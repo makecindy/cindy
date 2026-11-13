@@ -9,16 +9,20 @@
  * 打开后引导用户立即重启(app.relaunch),关闭则仅提示重启后生效。
  */
 
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
+import { SettingsRow } from '@/components/ui/settings-rows';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 export function BetaChannelCell() {
+  const setting = useSettingDefinition(additionalSettings.betaChannel);
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const { state, setEnableBeta } = useBetaChannelSettings();
@@ -81,27 +85,19 @@ export function BetaChannelCell() {
   );
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {t('settings.betaChannel.title')}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.betaChannel.description')}
-          </p>
-        </div>
-
+    <SettingsRow
+      {...setting.anchorProps}
+      title={setting.title}
+      hint={setting.description}
+      trailing={
         <Switch
+          {...setting.controlProps}
           checked={state.enableBeta}
           disabled={pending || state.loading}
           onCheckedChange={(v) => void handleToggle(v)}
           aria-label={t('settings.betaChannel.toggleAria')}
         />
-      </div>
-    </div>
+      }
+    />
   );
 }

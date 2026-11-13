@@ -20,13 +20,16 @@ it.skipIf(!binary).each([false, true])('native full-access welcome refuses rogue
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-text-only-native-'));
   const sentinel = path.join(root, 'tool-executed');
   let disabled = true;
-  const observed: Array<{ tools: unknown[]; tool_choice?: unknown }> = [];
-  const modelOutput = (body: { input: Array<{ type?: string }>; model: string; tools: unknown[] }) => {
+  let greeting = true;
+  const observed: Array<{ tools: unknown[]; tool_choice?: unknown; generate?: boolean }> = [];
+  const modelOutput = (body: { input: Array<{ type?: string }>; model: string; tools: unknown[]; generate?: boolean }) => {
     observed.push(body);
     const hasResult = body.input.some(item => item.type === 'function_call_output');
-    const output = hasResult ? [{ type: 'message', role: 'assistant', id: 'msg', content: [{ type: 'output_text', text: 'Done', annotations: [] }] }]
+    const output = body.generate === false ? [] : greeting || hasResult ? [{ type: 'message', role: 'assistant', id: 'msg', content: [{ type: 'output_text', text: greeting ? 'Hello' : 'Done', annotations: [] }] }]
       : [{ type: 'function_call', id: 'fc', name: 'exec_command', call_id: 'call', arguments: JSON.stringify({ cmd: `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync('tool-executed','yes')"` }) }];
-    return [...output.map(item => ({ type: 'response.output_item.done', output_index: 0, item })),
+    return [{ type: 'rate_limits.updated', rate_limits: [] },
+      ...output.map(item => ({ type: 'response.output_item.done', output_index: 0, item })),
+      { type: 'response.future_metadata', metadata: { status: 'ok' } },
       { type: 'response.completed', response: { id: 'resp', object: 'response', status: 'completed', model: body.model, output, usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 } } }];
   };
   const server = createServer(async (req, res) => {
@@ -69,16 +72,25 @@ it.skipIf(!binary).each([false, true])('native full-access welcome refuses rogue
     });
     unregister = registerCodexTextOnlyPolicy(thread.id, () => disabled);
     let done = 0;
-    const subscription = host.subscribeThread(thread.id, { turnCompleted: () => { done++; } });
+    const statuses: string[] = [];
+    const subscription = host.subscribeThread(thread.id, { turnCompleted: params => { done++; statuses.push(params.turn.status); } });
     try {
       await host.request('turn/start', { threadId: thread.id, input: [{ type: 'text', text: 'Say hello.' }] });
       await expect.poll(() => done, { timeout: 20000 }).toBe(1);
+      expect(statuses).toEqual(['completed']);
+      // Native WebSocket startup also sends generate:false to prewarm the route.
+      expect(observed.filter(body => body.generate !== false)).toHaveLength(1);
+      for (const body of observed) expect(body).toMatchObject({ tools: [], tool_choice: 'none' });
+      await expect(fs.stat(sentinel)).rejects.toThrow();
+      greeting = false; observed.length = 0;
+      await host.request('turn/start', { threadId: thread.id, input: [{ type: 'text', text: 'Try a tool during a text-only turn.' }] });
+      await expect.poll(() => done, { timeout: 20000 }).toBe(2);
       expect(observed.length).toBeGreaterThan(0);
       for (const body of observed) { expect(body.tools).toEqual([]); expect(body.tool_choice).toBe('none'); }
       await expect(fs.stat(sentinel)).rejects.toThrow();
       observed.length = 0; disabled = false;
       await host.request('turn/start', { threadId: thread.id, input: [{ type: 'text', text: 'Run the requested command.' }] });
-      await expect.poll(() => done, { timeout: 20000 }).toBe(2);
+      await expect.poll(() => done, { timeout: 20000 }).toBe(3);
       expect(observed[0]!.tools.length).toBeGreaterThan(0);
       expect(await fs.readFile(sentinel, 'utf8')).toBe('yes');
       if (websocket) expect(upgrades).toBeGreaterThan(0);

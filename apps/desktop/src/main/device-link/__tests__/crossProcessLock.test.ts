@@ -128,6 +128,60 @@ describe('advisory lock cancellation', () => {
 });
 
 describe('接管陈旧锁', () => {
+  // #9247: releasing the previous gate directory can race the next owner's
+  // publication. Both public lock tiers must absorb that transient ENOENT and
+  // remove their canonical owner record before returning.
+  it.each([
+    ['advisory', 'directory', withAdvisoryCrossProcessLock],
+    ['advisory', 'record', withAdvisoryCrossProcessLock],
+    ['strict', 'directory', withCrossProcessLock],
+    ['strict', 'record', withCrossProcessLock],
+  ] as const)('retries a transient reclaim %s %s failure', async (_tier, phase, withLock) => {
+    const lock = path.join(dir, 'lock');
+    const gateDir = `${lock}.reclaim.d`;
+    const originalMkdir = fsp.mkdir;
+    const originalOpen = fsp.open;
+    let gatePublicationAttempts = 0;
+    const mkdirSpy = vi.spyOn(fsp, 'mkdir').mockImplementation((async (
+      target: unknown,
+      options?: unknown,
+    ) => {
+      if (phase === 'directory' && target === gateDir) {
+        gatePublicationAttempts += 1;
+        if (gatePublicationAttempts === 1) {
+          throw Object.assign(new Error('reclaim directory disappeared'), { code: 'ENOENT' });
+        }
+      }
+      return (originalMkdir as (...args: unknown[]) => Promise<unknown>)(target, options);
+    }) as typeof fsp.mkdir);
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation((async (...args: Parameters<typeof fsp.open>) => {
+      const target = args[0];
+      if (
+        phase === 'record'
+        && typeof target === 'string'
+        && path.dirname(target) === gateDir
+        && args[1] === 'wx'
+      ) {
+        gatePublicationAttempts += 1;
+        if (gatePublicationAttempts === 1) {
+          throw Object.assign(new Error('reclaim directory disappeared'), { code: 'ENOENT' });
+        }
+      }
+      return originalOpen(...args);
+    }) as typeof fsp.open);
+
+    try {
+      await expect(
+        withLock(lock, { label: 'transient-reclaim-dir' }, async (status) => status),
+      ).resolves.toEqual({ held: true });
+      expect(gatePublicationAttempts).toBe(2);
+      expect(fs.existsSync(lock)).toBe(false);
+    } finally {
+      mkdirSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+  });
+
   it('删得掉 → 接管成功,task 拿到 held=true', async () => {
     const lock = path.join(dir, 'lock');
     await writeStaleLock(lock);
@@ -1023,6 +1077,73 @@ describe('接管陈旧锁', () => {
       openSpy.mockRestore();
     }
   });
+
+  // #5918: a temporary read failure must not strand this live process's own
+  // held record. Existing release-failure tests only cover write/rename errors.
+  // Exercise the public strict entry with real files and EACCES at the read
+  // boundary; recovery must still reject an unverifiable or successor record.
+  it.each(['publication', 'release'] as const)(
+    'recovers its own strict lock after a temporary %s read failure',
+    async (phase) => {
+      const lock = path.join(dir, 'lock');
+      const originalOpen = fsp.open;
+      let unreadable = phase === 'publication';
+      const openSpy = vi.spyOn(fsp, 'open').mockImplementation((async (...args: Parameters<typeof fsp.open>) => {
+        if (args[0] === lock && typeof args[1] === 'number' && unreadable) {
+          throw Object.assign(new Error('temporary read denied'), { code: 'EACCES' });
+        }
+        return originalOpen(...args);
+      }) as typeof fsp.open);
+      try {
+        const first = await withCrossProcessLock(lock, { label: 'read-recovery', waitMs: 0 }, async (status) => {
+          unreadable = true;
+          return status;
+        });
+        expect(first).toEqual(phase === 'publication' ? { held: false, reason: 'busy' } : { held: true });
+        expect(JSON.parse(await fsp.readFile(lock, 'utf8')).state).toBe('held');
+        unreadable = false;
+
+        await expect(withCrossProcessLock(lock, { label: 'read-recovery', waitMs: 0 }, async (status) => status))
+          .resolves.toEqual({ held: true });
+        expect(fs.existsSync(lock)).toBe(false);
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(['successor', 'malformed'] as const)(
+    'preserves a %s record when retrying an unreadable release',
+    async (replacement) => {
+      const lock = path.join(dir, 'lock');
+      const originalOpen = fsp.open;
+      let unreadable = false;
+      const openSpy = vi.spyOn(fsp, 'open').mockImplementation((async (...args: Parameters<typeof fsp.open>) => {
+        if (args[0] === lock && typeof args[1] === 'number' && unreadable) {
+          throw Object.assign(new Error('temporary read denied'), { code: 'EACCES' });
+        }
+        return originalOpen(...args);
+      }) as typeof fsp.open);
+      try {
+        await withCrossProcessLock(lock, { label: 'read-recovery', waitMs: 0 }, async (status) => {
+          expect(status).toEqual({ held: true });
+          unreadable = true;
+        });
+        const record = JSON.parse(await fsp.readFile(lock, 'utf8'));
+        const bytes = replacement === 'malformed'
+          ? '{'
+          : JSON.stringify({ ...record, nonce: '00000000-0000-4000-8000-000000000002' });
+        await fsp.writeFile(lock, bytes);
+        unreadable = false;
+
+        await expect(withCrossProcessLock(lock, { label: 'read-recovery', waitMs: 0 }, async (status) => status))
+          .resolves.toEqual({ held: false, reason: 'busy' });
+        expect(await fsp.readFile(lock, 'utf8')).toBe(bytes);
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
 
   it('keeps strict acquisition available when current-process identity commands fail', async () => {
     const identity = await __testing.readProcessIdentity(

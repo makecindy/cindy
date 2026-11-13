@@ -65,13 +65,16 @@ function writeMarker(marker: Partial<RunMarker> & { pid: number }): string {
   return file;
 }
 
-function makeStore(opts: { pid?: number; alivePids?: number[]; now?: () => Date } = {}) {
+function makeStore(
+  opts: { pid?: number; alivePids?: number[]; now?: () => Date; bootTimeMs?: number | null } = {},
+) {
   return new RunMarkerStore({
     dir: tmpDir,
     pid: opts.pid ?? 111,
     version: '0.0.2',
     now: opts.now,
     isPidAlive: (pid) => (opts.alivePids ?? []).includes(pid),
+    bootTimeMs: () => opts.bootTimeMs ?? null,
     warn: () => {},
   });
 }
@@ -204,6 +207,37 @@ describe('analyzePreviousRuns classification', () => {
     expect(reports).toEqual([]);
   });
 
+  // issue #10071:Windows 更新在 Modern Standby 里直接重启,冻结的进程收不到 session-end,
+  // 标记停在 running,下次启动误报「上次意外退出」。
+  it('suspend → system rebooted while still asleep → ended-asleep, not abnormal', () => {
+    let t = new Date('2026-11-11T01:01:04.000Z');
+    const prev = makeStore({ pid: 930, now: () => t });
+    prev.begin();
+    t = new Date('2026-11-11T19:11:23.000Z');
+    prev.heartbeat();
+    prev.markSuspended();
+
+    const reports = makeStore({ bootTimeMs: Date.parse('2026-11-12T01:00:00.000Z') }).analyzePreviousRuns();
+    expect(reports).toMatchObject([{ kind: 'ended-asleep', marker: { pid: 930 } }]);
+  });
+
+  it.each([
+    ['已唤醒(收到 resume)', { resumed: true, heartbeatAt: '2026-11-11T19:11:23.000Z', boot: '2026-11-12T01:00:00.000Z' }],
+    ['睡下后心跳还在走(进程醒过)', { resumed: false, heartbeatAt: '2026-11-11T20:00:00.000Z', boot: '2026-11-12T01:00:00.000Z' }],
+    ['系统没有重启过', { resumed: false, heartbeatAt: '2026-11-11T19:11:23.000Z', boot: '2026-11-01T00:00:00.000Z' }],
+  ])('%s → still abnormal', (_label, c) => {
+    let t = new Date('2026-11-11T19:11:23.000Z');
+    const prev = makeStore({ pid: 931, now: () => t });
+    prev.begin();
+    prev.markSuspended();
+    if (c.resumed) prev.markResumed();
+    t = new Date(c.heartbeatAt);
+    prev.heartbeat();
+
+    const reports = makeStore({ bootTimeMs: Date.parse(c.boot) }).analyzePreviousRuns();
+    expect(reports[0].kind).toBe('abnormal');
+  });
+
   it('mixed markers classified independently', () => {
     writeMarker({ pid: 905, state: 'running' });
     writeMarker({ pid: 906, state: 'exited' });
@@ -212,6 +246,63 @@ describe('analyzePreviousRuns classification', () => {
     const reports = makeStore({ alivePids: [907] }).analyzePreviousRuns();
     const byKind = Object.fromEntries(reports.map((r) => [r.marker?.pid, r.kind]));
     expect(byKind).toEqual({ 905: 'abnormal', 906: 'clean', 907: 'still-running' });
+  });
+});
+
+// 实测 Windows 用户日志:10-14 写下的标记 pid 被别的进程复用,连续 9 天每次启动都报
+// 「another instance appears to be running」,误导「旧进程残留」的排查,真实退出结论也丢了。
+describe('resolveReusedPids', () => {
+  const markerStartedAt = '2026-07-07T10:00:00.000Z';
+  const startTimesOf = (entries: Array<[number, number]>) => async () => new Map(entries);
+  const reusedAt = Date.parse('2026-07-16T08:00:00.000Z');
+
+  it('PID 已被更晚启动的进程占用 → 按标记状态补出退出结论并清掉标记', async () => {
+    const file = writeMarker({ pid: 2184, state: 'running', startedAt: markerStartedAt });
+    const store = makeStore({ alivePids: [2184] });
+    const stillRunning = store.analyzePreviousRuns();
+
+    const resolved = await store.resolveReusedPids(stillRunning, startTimesOf([[2184, reusedAt]]));
+
+    expect(resolved).toEqual([
+      expect.objectContaining({ kind: 'abnormal', pidReusedSince: '2026-07-16T08:00:00.000Z' }),
+    ]);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it.each([
+    ['PID 已被复用', [[2186, reusedAt]] as Array<[number, number]>],
+    ['启动时刻读不到', [] as Array<[number, number]>],
+    [
+      '占用者仍是旧实例本身',
+      [[2186, Date.parse(markerStartedAt) - 1_000]] as Array<[number, number]>,
+    ],
+  ])('核对前旧实例已正常退出(%s)→ 按重读的 exited 标记判 clean 并清掉标记', async (_label, entries) => {
+    writeMarker({ pid: 2186, state: 'running', startedAt: markerStartedAt });
+    const store = makeStore({ alivePids: [2186] });
+    const stillRunning = store.analyzePreviousRuns();
+    const file = writeMarker({ pid: 2186, state: 'exited', exitCode: 0, startedAt: markerStartedAt });
+
+    const resolved = await store.resolveReusedPids(stillRunning, startTimesOf(entries));
+
+    expect(resolved).toEqual([expect.objectContaining({ kind: 'clean' })]);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it.each([
+    ['启动时刻读不到', [] as Array<[number, number]>],
+    [
+      '占用者早于标记启动(就是写标记的实例)',
+      [[2185, Date.parse(markerStartedAt) - 1_000]] as Array<[number, number]>,
+    ],
+  ])('%s → 保持 still-running,标记保留', async (_label, entries) => {
+    const file = writeMarker({ pid: 2185, state: 'running', startedAt: markerStartedAt });
+    const store = makeStore({ alivePids: [2185] });
+
+    const resolved = await store.resolveReusedPids(store.analyzePreviousRuns(), startTimesOf(entries));
+
+    expect(resolved).toEqual([expect.objectContaining({ kind: 'still-running' })]);
+    expect(resolved[0].pidReusedSince).toBeUndefined();
+    expect(fs.existsSync(file)).toBe(true);
   });
 });
 

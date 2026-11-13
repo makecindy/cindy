@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { __resetAvailableAgentsCacheForTest, useAvailableAgents } from '@/hooks/useAvailableAgents';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/localCatalogSnapshot', () => ({ refreshLocalCatalogSnapshot: vi.fn() }));
@@ -27,22 +29,9 @@ vi.mock('@/state/newMakerDraft', () => ({
 vi.mock('@/lib/modelDefinitions', () => ({
   getDefaultModelForVendor: () => ({ id: '', defaultEffort: 'medium' }),
 }));
-vi.mock('../BotModelChainEditor', () => ({
-  BotModelChainEditor: ({ value, onChange }: {
-    value: BotModelRoute[];
-    onChange: (value: BotModelRoute[]) => void;
-  }) => (
-    <div>
-      <output data-testid="chain">{JSON.stringify(value)}</output>
-      <button onClick={() => onChange(value.map((route) => ({ ...route, effort: 'high' })))}>
-        Change effort
-      </button>
-    </div>
-  ),
-}));
 
 const gateway: BotModelRoute = {
-  harness: 'pi', providerId: 'xd', model: 'z-ai/glm-5.3-flash', effort: 'medium', fastMode: false,
+  harness: 'pi', providerId: 'xd', model: 'auto', effort: 'medium', fastMode: false,
 };
 const openai: BotModelRoute = {
   harness: 'codex', providerId: 'openai', model: 'gpt-5.6-sol', effort: 'medium', fastMode: false,
@@ -53,6 +42,7 @@ function providers(gatewayConnected: boolean, openaiConnected: boolean): Provide
     id: route.providerId,
     name: route.providerId,
     source: 'builtin',
+    auth: { method: index === 0 ? 'managed' : 'oauth' },
     connected: index === 0 ? gatewayConnected : openaiConnected,
     agents: [route.harness],
     routing: { [route.harness]: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
@@ -65,12 +55,8 @@ function providers(gatewayConnected: boolean, openaiConnected: boolean): Provide
   })) as unknown as ProviderView[];
 }
 
-function shownChain(): BotModelRoute[] {
-  return JSON.parse(screen.getByTestId('chain').textContent ?? '[]');
-}
-
+const listeners = new Set<() => void>();
 async function setup(options: { customized?: boolean; empty?: boolean; pending?: boolean } = {}) {
-  const listeners = new Set<() => void>();
   const initial = options.empty ? [] : [gateway];
   let resolveSettings!: (state: { modelChain: BotModelRoute[]; isCustomized: boolean }) => void;
   const getModelChainSettings = vi.fn(() => options.pending
@@ -97,15 +83,17 @@ async function setup(options: { customized?: boolean; empty?: boolean; pending?:
   const snapshots = await import('@/lib/providersSnapshotStore');
   const publish = (next: ProviderView[]) => act(() => {
     snapshots.commitProvidersSnapshot(snapshots.beginProvidersRefresh(), {
-      dataOwnerId: null, ownerGeneration: 0, providers: next, providerOrder: next.map((item) => item.id),
+      dataOwnerId: null, ownerGeneration: getDataOwnerGeneration().generation, providers: next, providerOrder: next.map((item) => item.id),
     });
   });
   publish(providers(!options.empty, false));
   const store = await import('../botStore');
+  void store.ensureBotProfilesLoaded();
   await waitFor(() => expect(getModelChainSettings).toHaveBeenCalledOnce());
   if (!options.pending) await waitFor(() => expect(list).toHaveBeenCalledOnce());
-  const { BotsGlobalSettingsSection } = await import('../BotsGlobalSettingsSection');
-  render(<BotsGlobalSettingsSection />);
+  // The global editor is retired. Keep exercising the real roster hook used
+  // by teammate creation/settings and the retained default/override store.
+  renderHook(() => useAvailableAgents());
   await waitFor(() => expect(listAvailableAgents).toHaveBeenCalledOnce());
   const agents = await import('@/hooks/useAvailableAgents');
   await waitFor(() => expect(agents.getCachedAvailableVendors()).toEqual(new Set(['pi', 'codex'])));
@@ -119,16 +107,29 @@ async function setup(options: { customized?: boolean; empty?: boolean; pending?:
   };
 }
 
-beforeEach(() => { vi.resetModules(); window.localStorage.clear(); });
+beforeEach(() => {
+  window.localStorage.clear();
+  setDataOwnerGeneration(null);
+  __resetAvailableAgentsCacheForTest();
+});
 afterEach(() => cleanup());
 
 describe('live derived Bot defaults', () => {
   beforeEach(() => { visibility.enabled = true; visibility.version = 0; Object.assign(selection, gateway); });
-  it('does not replace Cindy selection when another connection becomes available', async () => {
+  // Unit regression: removing the global editor must not drop coverage of
+  // defaults, saved overrides, or stale hydration after provider/roster changes.
+  // A provider connection change is the minimal input; assert the chain used
+  // by teammate creation/restoration through the production store.
+  it('ignores new-task selections in derived defaults and new teammate creation', async () => {
     const api = await setup();
-    api.publish(providers(false, true));
-    expect(shownChain()).toEqual([]);
-    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
+    Object.assign(selection, { ...openai, effort: 'high', fastMode: true });
+    api.publish(providers(true, false));
+    expect(api.store.getEffectiveBotModelChain()).toEqual([gateway]);
+    let bot!: Awaited<ReturnType<typeof api.store.addBotProfileAndWait>>;
+    await act(async () => { bot = await api.store.addBotProfileAndWait({ name: 'Independent', description: '' }); });
+    expect(bot.capabilities.modelChain).toEqual([gateway]);
+    expect(bot.capabilities).toMatchObject({ effort: 'medium', fastMode: false, providerId: 'xd' });
+    expect(api.setModelChainSettings).not.toHaveBeenCalled();
   });
 
   it('expires a hydrated default after model toggles change without a catalog change', async () => {
@@ -139,60 +140,57 @@ describe('live derived Bot defaults', () => {
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
   });
 
-  it('updates the mounted global editor after a connection change and saves effort on the new route', async () => {
+  it('updates derived defaults after a connection change and preserves a saved override', async () => {
     const api = await setup();
-    expect(shownChain()).toEqual([gateway]);
-    Object.assign(selection, openai); // Cindy selected this route; connection changes alone must not select it.
+    expect(api.store.getEffectiveBotModelChain()).toEqual([gateway]);
     api.publish(providers(false, true));
-    expect(shownChain()).toEqual([openai]);
-    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]); // Restore-default consumer.
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText('Change effort'));
+    await act(async () => {
+      await api.store.setBotGlobalModelChain(api.store.getEffectiveBotModelChain()
+        .map((route) => ({ ...route, effort: 'high' })));
+    });
     await waitFor(() => expect(api.setModelChainSettings).toHaveBeenCalledWith({
       modelChain: [{ ...openai, effort: 'high' }],
     }));
     api.publish(providers(true, false));
-    expect(shownChain()).toEqual([{ ...openai, effort: 'high' }]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([{ ...openai, effort: 'high' }]);
   });
 
   it('recovers a hydrated empty chain after connecting and returns to empty after disconnecting', async () => {
     const api = await setup({ empty: true });
-    expect(shownChain()).toEqual([]);
-    Object.assign(selection, openai); // Cindy selected this route; connection changes alone must not select it.
+    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
     api.publish(providers(false, true));
-    expect(shownChain()).toEqual([openai]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     api.publish(providers(false, false));
-    expect(shownChain()).toEqual([]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
   });
 
   it('recomputes defaults when engines are removed or installed without a provider update', async () => {
     const api = await setup();
     api.publish(providers(true, true));
-    expect(shownChain()).toEqual([gateway]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     await api.changeAgents(['codex']);
-    expect(shownChain()).toEqual([]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     await api.changeAgents([]);
-    expect(shownChain()).toEqual([]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
     await api.changeAgents(['pi', 'codex']);
-    expect(shownChain()).toEqual([gateway]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
   });
 
   it('preserves a hydrated explicit global override across provider and engine changes', async () => {
     const api = await setup({ customized: true });
-    Object.assign(selection, openai); // Cindy selected this route; connection changes alone must not select it.
+    Object.assign(selection, openai);
     api.publish(providers(false, true));
     await api.changeAgents(['codex']);
-    expect(shownChain()).toEqual([gateway]);
     expect(api.store.getEffectiveBotModelChain()).toEqual([gateway]);
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
   });
 
   it('does not revive an obsolete default when its hydration response arrives after a source change', async () => {
     const api = await setup({ pending: true });
-    Object.assign(selection, openai); // Cindy selected this route; connection changes alone must not select it.
     api.publish(providers(false, true));
     await act(async () => api.resolveSettings({ modelChain: [gateway], isCustomized: false }));
-    expect(shownChain()).toEqual([openai]);
     expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
   });
 
@@ -203,16 +201,15 @@ describe('live derived Bot defaults', () => {
     let reset!: Promise<void>;
     await act(async () => { reset = api.store.resetBotGlobalModelChain(); });
     expect(api.resetModelChainSettings).toHaveBeenCalledOnce();
-    Object.assign(selection, openai); // Cindy selected this route; connection changes alone must not select it.
     api.publish(providers(false, true));
     await act(async () => {
       finishReset({ modelChain: [gateway], isCustomized: false });
       await reset;
     });
-    expect(shownChain()).toEqual([openai]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
     expect(api.store.isBotGlobalModelChainCustomized()).toBe(false);
     api.publish(providers(false, false));
-    expect(shownChain()).toEqual([]);
+    expect(api.store.getEffectiveBotModelChain()).toEqual([]);
     expect(api.setModelChainSettings).not.toHaveBeenCalled();
   });
 
@@ -220,9 +217,7 @@ describe('live derived Bot defaults', () => {
     const api = await setup();
     await act(async () => { await api.store.addBotProfileAndWait({ name: 'Helper', description: '' }); });
     expect(api.getModelChainSettings).toHaveBeenCalledTimes(2);
-    Object.assign(selection, openai); // Cindy selected this route; connection changes alone must not select it.
     api.publish(providers(false, true));
     expect(api.store.getEffectiveBotModelChain()).toEqual([openai]);
-    expect(shownChain()).toEqual([openai]);
   });
 });

@@ -15,6 +15,7 @@ import {
   ghostPermissionItems,
   ghostPermissionProjectionKey,
   type GhostManifest,
+  type GhostTrustLevel,
   type GhostPermissionItem,
   type InstalledGhost,
 } from './ghost.js';
@@ -58,13 +59,17 @@ export type GhostInstallConsentFacts =
 
 /** Main 投给确认界面的一次确认请求。 */
 export interface GhostInstallConsentRequest {
-  /** Host-only first-use capability confirmation; does not install/update a package. */
-  purpose?: 'task-capability';
+  /** Host-selected presentation; capability confirmations do not install/update a package. */
+  purpose?: 'task-capability' | 'share-replace' | 'ui-capability';
   requestId: string;
+  /** Host-verified trust shown on the local installation dialog. */
+  trust?: GhostTrustLevel;
   initiator: GhostInstallConsentInitiator;
   origin: GhostInstallConsentOrigin;
   /** 自定义市场名称（用户添加来源时起的名字，按原样展示）。 */
   originLabel?: string;
+  /** Host-generated installation identity and account impact, never package-provided. */
+  target?: { namespace: string | null; sourceChanged: boolean; otherCopies: number; organizationIdentityUnavailable?: true };
   facts: GhostInstallConsentFacts;
 }
 
@@ -87,6 +92,7 @@ function withoutTools(items: readonly GhostPermissionItem[]): GhostPermissionIte
 export function evaluateGhostInstallConsent(
   installed: InstalledGhost | null | undefined,
   next: GhostManifest,
+  force = false,
 ): GhostInstallConsentFacts | null {
   if (!installed) {
     return {
@@ -99,7 +105,7 @@ export function evaluateGhostInstallConsent(
   }
   const diff = diffInstalledGhostPermissionItems(installed, next);
   const added = withoutTools(diff.added);
-  if (added.length === 0 && !diff.builtinOauthClientChanged) return null;
+  if (!force && added.length === 0 && !diff.builtinOauthClientChanged) return null;
   return {
     kind: 'update',
     ghostId: next.id,

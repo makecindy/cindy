@@ -1,6 +1,8 @@
+import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import {
   tryMobilePeerFile,
   peerMediaUri,
+  peerMediaPlayback,
   releasePeerMedia,
 } from "./peerFileRegistry";
 import { withTransientRemoteRetry } from "./remoteRetry";
@@ -38,6 +40,8 @@ import {
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   ORCA_EXECUTION_DEVICES_CHANNEL,
+  ORCA_WORKER_ROLES_APPLY,
+  ORCA_WORKER_ROLES_GET,
   isSharedTaskPeer,
   readDeviceFile,
   FILE_PEER_MAX_BYTES,
@@ -46,19 +50,21 @@ import {
   assertFileReadActive,
   validFileVersion,
   type DeviceFileResult,
+  type OrcaWorkerRolesMutation,
 } from "@cindy/device-link";
 import { errorText, mediaExtOf, nextFileTrace } from "@/debug/fileDiagnostics";
 import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import type {
   HistoryViewPage,
   HistoryDetailPage,
-  HistoryWorkSummary,
+  HistoryWorkReference,
 } from "@cindy/maker-shared/message-window";
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatusPayload,
   MobileCodexRateLimitResetResult,
   MobileCodexRateLimitsResult,
+  CodexResetAutoUseSettings,
   MobileSessionAgentSwitchIntent,
   MobileSessionAgentSwitchResult,
   MobileVoiceDictionaryLearningRequest,
@@ -115,7 +121,7 @@ export interface CreateSessionOptions {
   model: string;
   effort?: string;
   permissionMode?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   workspaceKind?: "project" | "dialogue";
   extraDirs?: string[];
   /**
@@ -386,7 +392,7 @@ export interface MobileSessionModelPref {
   providerId: string;
   model: string;
   effort?: string;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
 }
 
 /**
@@ -404,7 +410,7 @@ export type MobileNewMakerDraftPref =
       modelId: string;
       active: false;
       effort?: string;
-      fast?: boolean;
+      fast?: boolean | 'ultrafast';
     }
   | {
       agent: MobileAgentKind;
@@ -414,7 +420,7 @@ export type MobileNewMakerDraftPref =
       active: true;
       markModelChoice: boolean;
       effort?: string;
-      fast?: boolean;
+      fast?: boolean | 'ultrafast';
     };
 
 /**
@@ -518,6 +524,13 @@ export interface MobileMakerTransport {
     modelVisibilityOverrides?: Record<string, boolean>;
   }>;
   getSession(sessionId: string): Promise<RemoteSession>;
+  /**
+   * 输入框开始打字时请被控端提前启动该任务的 Agent。尽力而为：旧被控端返回
+   * CHANNEL_NOT_ALLOWED，调用方忽略即可。
+   */
+  prewarmSession(sessionId: string, createOpts: unknown): Promise<unknown>;
+  createSideChat(sessionId: string): Promise<RemoteSession>;
+  listSideChats(sessionId: string): Promise<Array<{ id: string }>>;
   searchConversations(
     request: ConversationSearchRequest,
   ): Promise<ConversationSearchResponse>;
@@ -551,12 +564,12 @@ export interface MobileMakerTransport {
   ): Promise<HistoryViewPage<RemoteMessage>>;
   readWorkDetails(
     sessionId: string,
-    ref: HistoryWorkSummary,
+    ref: HistoryWorkReference,
     after?: string,
   ): Promise<HistoryDetailPage<RemoteMessage>>;
   setHistoryExpanded(
     sessionId: string,
-    refs: readonly HistoryWorkSummary[],
+    refs: readonly HistoryWorkReference[],
   ): Promise<void>;
   aroundMessages(
     sessionId: string,
@@ -583,7 +596,7 @@ export interface MobileMakerTransport {
     sessionId: string,
     model: string,
     providerId?: string,
-    selection?: { effort: string | null; fastMode: boolean },
+    selection?: { effort: string | null; fastMode: boolean | 'ultrafast' },
   ): Promise<{ deferred?: boolean; superseded?: boolean } | undefined>;
   /**
    * 登记跨 Agent 切换意图；真正切换在下一条消息发送时由 desktop main 执行。
@@ -596,7 +609,7 @@ export interface MobileMakerTransport {
     model: string,
     providerId: string | null,
     effort?: string,
-    fastMode?: boolean,
+    fastMode?: boolean | 'ultrafast',
     options?: { agentDeviceId?: string | null },
   ): Promise<MobileSessionAgentSwitchResult>;
   /** 读取 desktop main 的权威 pending intent，用于重连 / 重进页面恢复。 */
@@ -608,7 +621,7 @@ export interface MobileMakerTransport {
   /** 计划模式一级开关(#494 新协议,capabilities.planMode.supported 时可用);
    *  被控端武装 live 会话并持久化 planModeEnabled,一次性消耗后经 sessions:patched 回流。 */
   setPlanMode(sessionId: string, enabled: boolean): Promise<void>;
-  setFastMode(sessionId: string, enabled: boolean): Promise<void>;
+  setFastMode(sessionId: string, enabled: boolean | 'ultrafast'): Promise<void>;
   setExtraDirs(sessionId: string, dirs: string[]): Promise<void>;
   /** 被控端视角的模型单价表(只读;老被控端 CHANNEL_NOT_ALLOWED → 调用方隐藏价格)。 */
   getModelPricing(): Promise<MobileModelPricingMap | null>;
@@ -623,9 +636,11 @@ export interface MobileMakerTransport {
   ): Promise<unknown>;
   getSessionEstimatedValue(
     sessionId: string,
-  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
+    options?: { includeBreakdown?: boolean; clientId?: string },
+  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number; costBreakdown?: unknown }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
+  setCodexResetAutoUse(patch: Partial<CodexResetAutoUseSettings> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
   /**
    * 被控端订阅账号余量快照(只读,cached-first;Claude 5h/周/分模型窗口、SuperGrok 周用量)。
    * 默认账号不传 providerId;独立账号的回包必须回显同一 providerId,否则按旧被控端处理。
@@ -755,7 +770,8 @@ export interface MobileMakerTransport {
   rewindCommit(
     sessionId: string,
     clientId: string,
-    opts?: { allowFileRestore?: boolean },
+    /** requireLatestUser:编辑最后一条消息专用,被控端权威核对目标仍是最新用户消息。 */
+    opts?: { allowFileRestore?: boolean; requireLatestUser?: boolean },
   ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
@@ -780,6 +796,12 @@ export interface MobileMakerTransport {
     acknowledgeDone(leadSessionId: string, workerId: string): Promise<unknown>;
     archiveWorker(leadSessionId: string, workerId: string): Promise<unknown>;
     getCollaborationSettings(): Promise<unknown>;
+    /**
+     * 创建 Worker 的角色清单与每个角色记的任务、权限、模型：只存在任务所在的电脑上，手机不留副本。
+     * 旧电脑没有这两个通道(CHANNEL_NOT_ALLOWED)，调用方按「只有内置角色、不记忆」处理。
+     */
+    getWorkerRoles(): Promise<unknown>;
+    applyWorkerRoles(mutation: OrcaWorkerRolesMutation): Promise<unknown>;
   };
   /**
    * 会话未读已读回执:手机端真实展示会话内容后,清掉被控端该会话的未读态
@@ -862,6 +884,7 @@ export interface MobileMakerTransport {
       opts?: { keepQueue?: boolean; pauseQueue?: boolean },
     ): Promise<InputProjection>;
     resume(sessionId: string): Promise<InputProjection>;
+    retryImageDelivery(sessionId: string, imageId: string): Promise<void>;
     retryLastError(sessionId: string): Promise<InputProjection>;
     clearError(sessionId: string): Promise<InputProjection>;
     /** 取消账号限额重置后的自动继续;老被控端没有该通道时会被拒(调用方只在投影带等待时显示入口)。 */
@@ -964,7 +987,7 @@ export interface MobileOrcaEnableOptions {
   label?: string;
   model?: string;
   effort?: string;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
   providerId?: string;
   delegateTask?: string;
   executionDeviceId?: string;
@@ -989,7 +1012,7 @@ export interface MobileOrcaCreateWorkerInput {
   agent: OrcaWorkerAgentKind;
   model?: string;
   effort?: string;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
   providerId?: string;
   workerPermissionMode: OrcaWorkerPermissionMode;
   initialTask?: string;
@@ -1149,6 +1172,10 @@ export function createMobileMakerTransport({
             retain: async (result) => { await opts?.retainBackground?.(withDownload(result), fileIsCurrent); },
           },
           stream,
+          peerStream: opts?.playback && !isSharedTaskPeer(deviceId) ? async metadata => {
+            const { openPeerMediaStream } = await import("./peerMediaStream");
+            return openPeerMediaStream(deviceId, url, metadata, fileIsCurrent, opts?.signal);
+          } : undefined,
           inline: () => fetch(true),
           revalidate: () => fetch(true, true),
           inlineCache: opts?.thumbnail ? undefined : {
@@ -1168,6 +1195,8 @@ export function createMobileMakerTransport({
           peerResultIsTransient: true,
           isCurrent,
           discard: (result) => {
+            const playback = peerMediaPlayback(result);
+            if (playback) { void playback.close(); return; }
             const uri = peerMediaUri(result);
             if (uri) releasePeerMedia(uri);
             else if (
@@ -1181,7 +1210,7 @@ export function createMobileMakerTransport({
           prepare: () =>
             stage("prepare", () => fetch(!opts?.thumbnail, !opts?.thumbnail), describeResult),
           peer: (metadata) =>
-            metadata.size <= FILE_PEER_MAX_BYTES
+            !isSharedTaskPeer(deviceId) && metadata.size <= FILE_PEER_MAX_BYTES
               ? stage(
                   "direct",
                   () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined,
@@ -1191,7 +1220,9 @@ export function createMobileMakerTransport({
               : Promise.resolve(null),
           fallback: () => {
             try { opts?.onProgress?.(0, 0); } catch { /* Observer only; upload bytes are unavailable. */ }
-            return stage("upload", fallback ?? (() => fetch(false)), describeResult);
+            // Workdir export jobs are same-account only. Shared media fetch
+            // rechecks task access and stages bytes in the shared-task scope.
+            return stage("upload", !isSharedTaskPeer(deviceId) && fallback ? fallback : () => fetch(false), describeResult);
           },
         }),
       (result) => ({
@@ -1225,6 +1256,10 @@ export function createMobileMakerTransport({
         },
       ]),
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
+    prewarmSession: (sessionId, createOpts) =>
+      call("maker:session:prewarm", [sessionId, createOpts]),
+    createSideChat: (sessionId) => call("maker:side-chat:v1", [sessionId]),
+    listSideChats: (sessionId) => call("maker:side-chat:list:v1", [sessionId]),
     searchConversations: (request) =>
       call("local-db:conversations:search", [request]),
     patchSessionMeta: (sessionId, patch) =>
@@ -1249,6 +1284,8 @@ export function createMobileMakerTransport({
     aroundMessagesByClientId: (sessionId, clientId, opts) =>
       call("local-db:messages:around-client-id", [sessionId, clientId, opts]),
     send: async (sessionId, message, createOpts, sendOpts) => {
+      const delivery = pendingGhostCardFormDelivery(JSON.stringify([deviceId, sessionId]));
+      if (delivery && !await delivery) throw new Error((await import('@/i18n')).i18n.t('plugins.formSyncFailed'));
       const content = typeof message === 'string' ? message : message.content;
       const first = Array.isArray(content) ? content[0] : undefined;
       const head = typeof content === 'string' ? content
@@ -1339,8 +1376,8 @@ export function createMobileMakerTransport({
         throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
-    getSessionEstimatedValue: (sessionId) =>
-      call("local-db:messages:estimatedSessionValue", [sessionId]),
+    getSessionEstimatedValue: (sessionId, options) =>
+      call("local-db:messages:estimatedSessionValue", [sessionId, ...(options ? [options] : [])]),
     getCodexRateLimits: async (providerId) => {
       const result = await call<MobileCodexRateLimitsResult>(
         "maker:usage:codex-rate-limits",
@@ -1352,6 +1389,12 @@ export function createMobileMakerTransport({
         result.providerId !== providerId
       )
         throw new Error("PRECONDITION_FAILED: Account scope unsupported");
+      return result;
+    },
+    setCodexResetAutoUse: async (patch, accountKey, providerId) => {
+      const result = await call<MobileCodexRateLimitsResult>('maker:usage:codex-reset-auto-use', [patch, accountKey, providerId ?? 'openai']);
+      if (result.providerId !== (providerId ?? 'openai') || result.autoUse?.accountKey !== accountKey)
+        throw new Error('PRECONDITION_FAILED: Account scope changed');
       return result;
     },
     getSubscriptionUsage: async (kind, providerId) => {
@@ -1468,6 +1511,8 @@ export function createMobileMakerTransport({
       archiveWorker: (leadSessionId, workerId) =>
         call("maker:worker:archive", [{ leadSessionId, workerId }]),
       getCollaborationSettings: () => call("maker:collaboration-settings:get"),
+      getWorkerRoles: () => call(ORCA_WORKER_ROLES_GET),
+      applyWorkerRoles: (mutation) => call(ORCA_WORKER_ROLES_APPLY, [mutation]),
     },
     clearSessionAttention: (sessionId, intent) =>
       call("notification:clear-session-attention", [sessionId, intent]),
@@ -1526,6 +1571,7 @@ export function createMobileMakerTransport({
       },
       stop: (sessionId, opts) => call("maker:input:stop", [sessionId, opts]),
       resume: (sessionId) => call("maker:input:resume", [sessionId]),
+      retryImageDelivery: (sessionId, imageId) => call("maker:images:retry", [sessionId, imageId]),
       retryLastError: (sessionId) =>
         call("maker:input:retry-last-error", [sessionId]),
       clearError: (sessionId) => call("maker:input:clear-error", [sessionId]),
@@ -1600,7 +1646,7 @@ export function createMobileMakerTransport({
           workdir,
         });
         assertFileReadActive(signal);
-        if (!caps.fileRead) {
+        if (!caps.fileRead && !isSharedTaskPeer(deviceId)) {
           mobileDebugLog("debug", "files", "file export without direct read", {
             reason: "host-lacks-file-read",
           });

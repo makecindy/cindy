@@ -21,6 +21,7 @@ import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
   projectWorkingDirFromSkillPath,
+  shouldProjectToClaudeSkills,
 } from '../maker-host/shared-global-skills.js';
 import { computeFolderHash } from './folderHash';
 import {
@@ -549,7 +550,8 @@ export async function importLocalSkill(params: ImportLocalParams): Promise<Impor
     }
 
     // Global default path: Claude discovery symlink (same as market install).
-    if (!params.installPath) {
+    // #9282: 未 opt-in 且本地没有 ~/.claude 时不主动创建 Claude 侧链接。
+    if (!params.installPath && await shouldProjectToClaudeSkills()) {
       const claudeLink = path.join(os.homedir(), '.claude', 'skills', name);
       try {
         await ensureSymlinkToShared(claudeLink, finalDir);

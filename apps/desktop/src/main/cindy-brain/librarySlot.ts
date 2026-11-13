@@ -207,6 +207,8 @@ export interface GhostLibrarySlotDeps {
   getDiskFreeBytes?(root: string): Promise<number | null>;
   workerScriptPath(): string;
   betterSqliteModulePath(): string;
+  /** Host-selected Electron ABI binding; never supplied by the plugin. */
+  betterSqliteNativeBinding?(): string | undefined;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -584,6 +586,39 @@ export class GhostLibrarySlot {
     }
   }
 
+  /** Host file selection / network download share the normal Library session and epoch. */
+  async importStream(ghostId: string, input: {
+    path: string;
+    source: AsyncIterable<Uint8Array>;
+    totalBytes?: number;
+    assertCurrent(): void;
+    onProgress?(bytes: number, total?: number): void;
+  }) {
+    if (!this.checkEligibility(ghostId)) {
+      return { ok: false as const, errorCode: 'PERMISSION_DENIED', message: '插件未声明或未获准使用 Library' };
+    }
+    const target = this.captureRequestTarget(ghostId);
+    const preparing = this.deps.prepareRequest?.(ghostId);
+    if (preparing) await preparing;
+    // Release verifies a canonical copy before deleting staging. Host imports
+    // must not overwrite that copy between its final hash and deletion.
+    return this.runGhostExclusive(ghostId, async () => {
+      input.assertCurrent();
+      this.assertRequestCurrent(ghostId, target);
+      const session = await this.getOrCreateSession(ghostId, target.ownerScopeKey, target);
+      const assertCurrent = () => {
+        input.assertCurrent();
+        this.assertRequestCurrent(ghostId, target, session);
+      };
+      assertCurrent();
+      const result = await session.vault.importStream({ ...input, assertCurrent });
+      assertCurrent();
+      if (!result.ok) return result;
+      return { ...result, ref: `library:${result.path}`,
+        libraryGeneration: session.generation, libraryIdentity: session.identity };
+    });
+  }
+
   /** Stale custom resolution after the user parent vanished or was replaced must not open/mkdir. */
   private async confirmLiveCustomRoot(
     resolution: LibraryLocationResolution,
@@ -666,6 +701,7 @@ export class GhostLibrarySlot {
     const sql = this.deps.createSqlService({
       workerScriptPath: this.deps.workerScriptPath,
       betterSqliteModulePath: this.deps.betterSqliteModulePath,
+      betterSqliteNativeBinding: this.deps.betterSqliteNativeBinding,
       log: this.deps.log,
     });
     const record = 'record' in resolution ? resolution.record : undefined;

@@ -24,7 +24,7 @@ const leaf = () => null;
 const child = vi.fn(({ item }: any) => React.createElement('span', null, item.key));
 const source = ['ToolActionRow', 'WorkGroupCard'].map(name => rendererFunction(name).getText(rendererSource)).join(String.fromCharCode(10));
 const components = executeRenderer<Record<string, React.ComponentType<any>>>(source + '; return { ToolActionRow, WorkGroupCard };', {
-  useState: React.useState, useRef: React.useRef, useEffect: React.useEffect, useMemo: React.useMemo,
+  useState: React.useState, useRef: React.useRef, useEffect: React.useEffect, useLayoutEffect: React.useLayoutEffect, useMemo: React.useMemo,
   useTranslation, useFoldableExpandedState, summarizeWorkGroupPresentation,
   mobilePresentationLocalizer, buildMessageHierarchyLayout, buildMessageContentLayout, readToolProcessMedia,
   View, Text: View, Pressable: View, useTheme: () => ({ colors: lightColors }),
@@ -32,6 +32,7 @@ const components = executeRenderer<Record<string, React.ComponentType<any>>>(sou
   ChevronDown: leaf, ChevronRight: leaf, Layers: leaf, ToolRowStatusIcon: leaf,
   CompactActivityIndicator: leaf, WorkGroupElapsed: leaf, PluginInvocationHeader: leaf,
   Rail: View, RenderItemView: child, ExpandedWorkThinkingRow: child,
+  MessageContentOpenButton: View,
   projectMobileWorkActivities: () => ({ isPureExploration: false, toolActivitiesByChildKey: new Map() }),
   FoldablePanel: ({ children, collapsedBody, controlledExpanded, onControlledToggle, testID }: any) =>
     React.createElement('div', null,
@@ -52,7 +53,8 @@ beforeEach(async () => {
 });
 describe('message detail lifecycle', () => {
   it('keeps folded work lazy and retains projected lines until expanded details arrive', () => {
-    const setVisible = vi.fn();
+    const release = vi.fn();
+    const setVisible = vi.fn(() => release);
     const item: any = { type: 'work_group', key: 'work', children: [{ type: 'message', key: 'detail' }],
       isStreaming: true, durationMs: 0, deferred: { owner: 'host', key: 'work', setVisible,
         awaitingDetails: true, lines: [{ key: 'line', kind: 'thinking', text: 'Reading' }] } };
@@ -60,12 +62,12 @@ describe('message detail lifecycle', () => {
     try {
       expect(child).not.toHaveBeenCalled(); expect(h.host.textContent).toContain('Reading');
       act(() => h.host.querySelector('button')!.click());
-      expect(setVisible).toHaveBeenCalledWith(true, false);
+      expect(setVisible).toHaveBeenLastCalledWith(true, true);
       expect(h.host.textContent).toContain('Reading'); expect(child).not.toHaveBeenCalled();
       h.update({ item: { ...item, deferred: { ...item.deferred, awaitingDetails: false } }, actions: {} });
       expect(h.host.textContent).toContain('detail'); expect(h.host.textContent).not.toContain('Reading');
     } finally { h.unmount(); }
-    expect(setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it('reveals generic tool input when structured detail is absent and remembers row folding', () => {
@@ -82,5 +84,25 @@ describe('message detail lifecycle', () => {
     } finally { h.unmount(); }
     h = mount('ToolActionRow', props);
     try { expect(h.host.textContent).toContain('original input summary'); } finally { h.unmount(); }
+  });
+
+  // The group supplies its full-input action separately from the clipped row
+  // detail. Exercise the real row's disclosure and button, not a JSX scan.
+  it('offers the group full-input action only inside the expanded tool row', () => {
+    const onOpenInput = vi.fn();
+    const props = { actions: {}, onOpenInput, contentLayout: {},
+      row: { label: 'Bash', detail: 'x'.repeat(200), status: 'done', hasError: false },
+      tool: { key: 'bash', body: 'input summary' } };
+    const h = mount('ToolActionRow', props);
+    const inputButton = () => h.host.querySelector<HTMLButtonElement>('[data-testid="message.toolInputPayloadButton"]');
+    try {
+      expect(inputButton()).toBeNull();
+      act(() => h.host.querySelector('button')!.click());
+      expect(inputButton()).not.toBeNull();
+      act(() => inputButton()!.click());
+      expect(onOpenInput).toHaveBeenCalledOnce();
+      h.update({ ...props, onOpenInput: undefined });
+      expect(inputButton()).toBeNull();
+    } finally { h.unmount(); }
   });
 });

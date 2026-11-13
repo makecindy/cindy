@@ -1,8 +1,12 @@
+import { creationOperation, remoteSessionCreationSchema, type RemoteSessionCreation, type RemoteSessionCreated } from '../../shared/remoteSessionCreation.js';
+import type { CapturedAgentRequest } from '../maker-ipc/forwardedRequest.js';
+import type { ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import {
   DeviceLinkError,
   DL_SESSION_HANDOFF_CHANNEL,
   type InvokeResultPayload,
 } from '@cindy/device-link';
+import { issueRemoteTaskActionReceipt, releaseRemoteTaskActionReceipt } from '../maker-ipc/remoteTaskActionReceipt.js';
 
 /**
  * send_to_session 的跨电脑发送端：把消息交给目标电脑，由它用本机 send_to_session 的
@@ -16,18 +20,22 @@ export interface QualifiedSessionTarget {
 
 export interface RemoteSessionHandoffRequest {
   sessionId: string;
+  action?: 'create';
+  create?: RemoteSessionCreation;
   message: string;
   sender: { sessionId: string; title?: string };
+  requestSource?: ForwardedRequestSource;
+  taskActionReceipt?: string;
 }
 
 export type RemoteSessionHandoffResult =
-  | {
+  | ({
       ok: true;
       agentKind: 'claude-code' | 'codex' | 'pi';
-      wakeKind: 'resumed' | 'already-active' | 'queued';
+      wakeKind: 'resumed' | 'already-active' | 'queued' | 'created';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
-    }
+    } & Partial<RemoteSessionCreated>)
   | { ok: false; errorCode: RemoteSessionHandoffErrorCode; message: string };
 
 export type RemoteSessionHandoffErrorCode =
@@ -41,7 +49,11 @@ export type RemoteSessionHandoffErrorCode =
   | 'REMOTE_DEVICE_OFFLINE'
   | 'REMOTE_DISABLED'
   | 'REMOTE_UNAVAILABLE'
-  | 'DELIVERY_UNKNOWN';
+  | 'DELIVERY_UNKNOWN'
+  | 'CREATED_NOT_DELIVERED'
+  | 'WORKTREE_UNAVAILABLE'
+  | 'BUDGET_MODEL_REQUIRES_API_MODE'
+  | 'PROVIDER_ROUTE_UNAVAILABLE';
 
 /**
  * 目标电脑明确拒绝、消息没有进入目标任务的错误码（与本机 send_to_session 同名同义）。
@@ -54,6 +66,9 @@ const TARGET_REJECTIONS = new Set<string>([
   'UNSUPPORTED_CAPABILITY',
   'INVALID_ARGS',
   'HOST_NOT_READY',
+  'WORKTREE_UNAVAILABLE',
+  'BUDGET_MODEL_REQUIRES_API_MODE',
+  'PROVIDER_ROUTE_UNAVAILABLE',
 ]);
 const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
 const WAKE_KINDS = new Set(['resumed', 'already-active', 'queued']);
@@ -115,6 +130,7 @@ function transportFailure(
 }
 
 export function createRemoteSessionHandoff(deps: {
+  captureRequest?: (sessionId: string, supplement: string, target?: { sessionId?: string }) => Promise<CapturedAgentRequest>;
   captureAccess(): () => void;
   invoke(
     deviceId: string,
@@ -129,6 +145,7 @@ export function createRemoteSessionHandoff(deps: {
       message: string;
       /** 在账号记录之后读取，使来源查询也落在同一道 owner 检查之内。 */
       sender(): Promise<RemoteSessionHandoffRequest['sender']>;
+      create?(): Promise<RemoteSessionCreation>;
     },
   ): Promise<RemoteSessionHandoffResult> => {
     const notSent = (): RemoteSessionHandoffResult => ({
@@ -139,30 +156,82 @@ export function createRemoteSessionHandoff(deps: {
     // 同一份账号记录覆盖整次调用：读来源之前记录，发送前与收到回执后各核对一次。
     let assertCurrent: () => void;
     let sender: RemoteSessionHandoffRequest['sender'];
+    let captured: CapturedAgentRequest | undefined;
+    let creation: RemoteSessionCreation | undefined;
     try {
       assertCurrent = deps.captureAccess();
       sender = await request.sender();
+      if (request.create) creation = remoteSessionCreationSchema.parse(await request.create());
+      captured = await deps.captureRequest?.(sender.sessionId, request.message, { sessionId: target.sessionId });
       assertCurrent();
     } catch {
       return notSent();
     }
     let response: InvokeResultPayload;
+    let taskActionReceipt: string | undefined;
+    let mutationStarted = false;
+    const releaseReceipt = () => {
+      if (taskActionReceipt) releaseRemoteTaskActionReceipt(taskActionReceipt);
+    };
+    const finishTransportFailure = (code: string, message: string, responseReceived = false) => {
+      // The remote DB can overload while reading a receipt after its write.
+      const actual = code === 'IPC_ERROR' ? encodedIpcCode(message) : code;
+      const result = transportFailure(responseReceived && actual === 'BACKPRESSURE' ? 'UNKNOWN' : code, message);
+      if (result.errorCode !== 'DELIVERY_UNKNOWN') releaseReceipt();
+      return result;
+    };
+    const capabilityProbeFailure = (code: string, message: string) => {
+      const failure = transportFailure(code, message);
+      return creation && failure.errorCode === 'DELIVERY_UNKNOWN'
+        ? { ok: false as const, errorCode: 'REMOTE_UNAVAILABLE' as const, message: 'Could not check the destination capability. No creation request was sent.' }
+        : failure;
+    };
     try {
+      // Old Hosts cannot recheck queued authority. Probe before sending any content.
+      const support = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL,
+        [{ action: 'task-action-capability', sessionId: target.sessionId }], { preSend: assertCurrent });
+      if (!support.ok) return capabilityProbeFailure(support.error.code, support.error.message);
+      const capability = support.result as { taskActionVersion?: unknown; plainRequestBody?: unknown; ordinaryCreateVersion?: unknown } | null;
+      if (capability?.taskActionVersion !== 1)
+        return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
+      if (creation && capability.ordinaryCreateVersion !== 1)
+        return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Update the destination computer to support ordinary task creation. No task was created.' };
+      assertCurrent();
+      // Older hosts verify the quoted 用户原话 / Agent补充 envelope; keep it for them unchanged.
+      const delivered = capability.plainRequestBody === 1 || !captured?.legacy ? captured : { ...captured, ...captured.legacy };
+      const body = delivered?.message ?? request.message;
+      const source = delivered?.autoReviewUserText.request;
+      taskActionReceipt = issueRemoteTaskActionReceipt({ ...target, senderSessionId: sender.sessionId, message: body, ...(creation ? { operation: creationOperation(creation) } : {}) }, assertCurrent);
       const wire: RemoteSessionHandoffRequest = {
         sessionId: target.sessionId,
-        message: request.message,
+        ...(creation ? { action: 'create' as const, create: creation } : {}),
+        message: body,
+        // A plain body sends only a checked hand-off; its provenance stays on this computer.
+        ...(source && (source.plainBody ? source.delegatedText !== undefined : source.userText != null)
+          ? { requestSource: source } : {}),
         sender,
+        taskActionReceipt,
       };
+      mutationStarted = true;
       response = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL, [wire], {
         preSend: assertCurrent,
       });
+      // Queued/unknown deliveries retain their receipt; completed or proven-unsent
+      // attempts release it so offline retries cannot exhaust the live receipt cap.
+      if (response.ok && (response.result as { ok?: boolean; wakeKind?: string } | null)?.ok === true
+        && ['resumed', 'already-active'].includes((response.result as { wakeKind: string }).wakeKind)) releaseReceipt();
     } catch (error) {
+      if (creation && !mutationStarted) {
+        return error instanceof DeviceLinkError ? capabilityProbeFailure(error.code, error.message)
+          : capabilityProbeFailure('IPC_ERROR', error instanceof Error ? error.message : '');
+      }
       // inFlight = 请求帧已发出、只是回执丢了：对端可能已执行，不能报「没有发出」。
       if (error instanceof DeviceLinkError) {
-        return transportFailure(error.inFlight ? 'UNKNOWN' : error.code, error.message);
+        if (error.inFlight === false) releaseReceipt();
+        return finishTransportFailure(error.inFlight ? 'UNKNOWN' : error.code, error.message);
       }
       // 发送前的本机拒绝（另一实例持有连接、本机关闭了对该设备的控制等）以 [CODE] 前缀抛出。
-      return transportFailure('IPC_ERROR', error instanceof Error ? error.message : '');
+      return finishTransportFailure('IPC_ERROR', error instanceof Error ? error.message : '');
     }
     try {
       assertCurrent();
@@ -170,15 +239,20 @@ export function createRemoteSessionHandoff(deps: {
       // 请求已发出、账号随后切换：回执属于上一个账号，不读取也不返回其中的任务信息。
       return transportFailure('UNKNOWN', '');
     }
-    if (!response.ok) return transportFailure(response.error.code, response.error.message);
+    if (!response.ok) return finishTransportFailure(response.error.code, response.error.message, true);
     const result = response.result as Record<string, unknown> | null;
     if (!result || typeof result !== 'object' || Array.isArray(result))
       return transportFailure('UNKNOWN', '');
     if (result.ok === false) {
+      if (creation && result.errorCode === 'CREATED_NOT_DELIVERED') {
+        releaseReceipt();
+        return { ok: false, errorCode: 'CREATED_NOT_DELIVERED', message: 'The task was created but message delivery was not confirmed. Inspect its history and queue before sending again.' };
+      }
       // 其它错误（如目标电脑的内部错误）可能发生在消息已记入目标任务之后，不能说没有发出。
       if (typeof result.errorCode !== 'string' || !TARGET_REJECTIONS.has(result.errorCode)) {
         return transportFailure('UNKNOWN', '');
       }
+      releaseReceipt();
       return {
         ok: false,
         errorCode: result.errorCode as RemoteSessionHandoffErrorCode,
@@ -191,14 +265,25 @@ export function createRemoteSessionHandoff(deps: {
     if (
       result.ok !== true ||
       !AGENT_KINDS.has(String(result.agentKind)) ||
-      !WAKE_KINDS.has(String(result.wakeKind))
+      !(creation ? result.wakeKind === 'created' && result.targetSessionId === target.sessionId : WAKE_KINDS.has(String(result.wakeKind)))
     ) {
       return transportFailure('UNKNOWN', '');
     }
     return {
+      ...(creation ? {
+        targetSessionId: target.sessionId,
+        projectDir: typeof result.projectDir === 'string' ? result.projectDir : null,
+        workspaceKind: result.workspaceKind === 'project' ? 'project' as const : 'dialogue' as const,
+        workingDir: typeof result.workingDir === 'string' ? result.workingDir : '',
+        worktreePath: typeof result.worktreePath === 'string' ? result.worktreePath : null,
+        model: typeof result.model === 'string' ? result.model : undefined,
+        providerId: typeof result.providerId === 'string' ? result.providerId : null,
+        effort: remoteSessionCreationSchema.shape.effort.safeParse(result.effort).data ?? null,
+        fastMode: remoteSessionCreationSchema.shape.fast.safeParse(result.fastMode).data ?? false,
+      } : {}),
       ok: true,
       agentKind: result.agentKind as 'claude-code' | 'codex' | 'pi',
-      wakeKind: result.wakeKind as 'resumed' | 'already-active' | 'queued',
+      wakeKind: result.wakeKind as 'resumed' | 'already-active' | 'queued' | 'created',
       targetTitle: typeof result.targetTitle === 'string' ? result.targetTitle : null,
       targetLastUserSendAt:
         typeof result.targetLastUserSendAt === 'string' ? result.targetLastUserSendAt : null,

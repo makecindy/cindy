@@ -1,9 +1,14 @@
-import { ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
+import { createPiAuthAdapter } from './pi-auth.js';
+import { buildPiNativeProvidersFromConfigs, piNativeKeyEnvVar, wireProtocolToPiApi, resolvePiBundledModelById, urlOrigin, officialPiRouteMatches, piModelCatalog, officialPiModels, PI_NATIVE_APIS, piSubscriptionHeaders, PI_PROVIDER_HEADER, anthropicRootForV1Endpoint, catalogThinkingLevelMap, catalogCostForPiNative, type PiBundledModelCatalog, type PiBundledModelInfo, type PiCatalogModel } from './pi-native-catalog.js';
+export { buildPiNativeProvidersFromConfigs, type PiBundledModelCatalog, type PiBundledModelInfo, piNativeKeyEnvVar, resolvePiBundledModelById } from './pi-native-catalog.js';
+import { modelWithInterface } from '@cindy/model-providers';
+import { sessionModelInterface } from './session-model-interface.js';
+import { PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { listCindyManagedSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
-import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
-import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
+import { readCachedGenericOAuthAccessToken } from './generic-oauth.desktop.js';
+import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
 import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
@@ -32,7 +37,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
-import { readModelContextLimit } from './model-context-limit-store.js';
+import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
 
@@ -70,9 +75,9 @@ import type {
 } from '@cindy/model-providers';
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { spawnPiSubagentRunner } from '../cindy-brain/piSubagentRunnerHost.js';
-import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
+import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.desktop.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import {
   MANAGED_OLLAMA_PROVIDER_ID,
@@ -95,13 +100,15 @@ import {
   isAnthropicCompatProxyHandleReady,
 } from './anthropic-compat-proxy-host.js';
 import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
-import { hasGrokOAuthLogin } from './grok-oauth-login.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { hasGrokOAuthLogin } from './grok-oauth-login.desktop.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
+import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
-import { readPiCompactionPct } from './compaction-settings-store.js';
+import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
@@ -120,6 +127,7 @@ import {
 } from './pi-gateway-model-catalog.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { resolvePiRuntimeModelDescriptor, resolveModelDefaultContextWindow, resolveModelContextProviderId } from './catalog-to-descriptors.js';
+import { readPiNativeCompatOverride } from './pi-native-compat-overrides-store.js';
 import {
   resolveManagedPiNativePackagePaths,
   resolveManagedPiPackageResources,
@@ -134,25 +142,9 @@ const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_PROVIDER_AUTH_PLACEHOLDER_KEY = 'cindy-pi-provider-auth-placeholder';
 const PI_OPENAI_PROXY_KEY_ENV = 'CINDY_PI_OPENAI_PROXY_KEY';
-const PI_PROVIDER_HEADER = 'x-cindy-pi-provider-id';
 
-export interface PiBundledModelInfo {
-  id: string;
-  api: PiNativeApi;
-  baseUrl?: string;
-  name: string;
-  reasoning: boolean;
-  thinkingLevelMap?: PiNativeModelSpec['thinkingLevelMap'];
-  input: Array<'text' | 'image'>;
-  contextWindow: number;
-  maxTokens: number;
-  cost?: PiNativeModelSpec['cost'];
-  headers?: Record<string, string>;
-  compat?: Record<string, unknown>;
-  samplingParams?: Record<string, unknown>;
-}
 
-export type PiBundledModelCatalog = ReadonlyMap<string, ReadonlyMap<string, PiBundledModelInfo>>;
+
 export type PiListedModelIds = ReadonlyMap<string, ReadonlySet<string>>;
 
 const piBundledModelsByBinary = new Map<string, Promise<PiBundledModelCatalog | null>>();
@@ -165,14 +157,7 @@ export function listedPiModelIds(
 ): PiListedModelIds | undefined {
   return catalog ? listedIdsByCatalog.get(catalog) : undefined;
 }
-const PI_NATIVE_APIS = new Set<PiNativeApi>([
-  'anthropic-messages',
-  'openai-responses',
-  'openai-completions',
-  'google-generative-ai',
-  'openai-codex-responses',
-  'bedrock-converse-stream', 'azure-openai-responses', 'google-vertex', 'mistral-conversations',
-]);
+
 
 /**
  * PI's native ChatGPT adapter extracts account_id from its API key before it
@@ -180,11 +165,13 @@ const PI_NATIVE_APIS = new Set<PiNativeApi>([
  * authenticated loopback proxy replaces it with the real host-owned token and
  * account id before forwarding upstream.
  */
-function piOpenaiProxyPlaceholderJwt(): string {
+function piOpenaiProxyPlaceholderJwt(providerId = 'openai'): string {
   const encode = (value: unknown): string =>
     Buffer.from(JSON.stringify(value)).toString('base64url');
   return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
-    'https://api.openai.com/auth': { chatgpt_account_id: 'cindy-pi-proxy' },
+    // Pi caches sockets by native session + account id, without comparing headers.
+    // Separate logical accounts must therefore have separate placeholder identities.
+    'https://api.openai.com/auth': { chatgpt_account_id: providerId === 'openai' ? 'cindy-pi-proxy' : `cindy-pi-proxy:${providerId}` },
   })}.`;
 }
 
@@ -198,13 +185,6 @@ function appendEndpointPath(endpoint: string, suffix: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
-function piSubscriptionHeaders(providerId: string): Record<string, string> {
-  return {
-    'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
-    'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
-    [PI_PROVIDER_HEADER]: providerId,
-  };
-}
 
 export function parsePiListModels(stdout: string): ReadonlyMap<string, ReadonlySet<string>> {
   const byProvider = new Map<string, Set<string>>();
@@ -508,47 +488,7 @@ export async function readPiBundledModels(
   return catalog;
 }
 
-function catalogCostForPiNative(cost: ModelCost | undefined): PiNativeModelSpec['cost'] {
-  if (
-    !cost ||
-    (typeof cost.input !== 'number' &&
-      typeof cost.output !== 'number' &&
-      typeof cost.cacheRead !== 'number' &&
-      typeof cost.cacheWrite !== 'number')
-  ) {
-    return undefined;
-  }
-  return {
-    input: cost.input ?? 0,
-    output: cost.output ?? 0,
-    cacheRead: cost.cacheRead ?? 0,
-    cacheWrite: cost.cacheWrite ?? 0,
-    ...(cost.tiers ? { tiers: cost.tiers.map(tier => ({
-      inputTokensAbove: tier.inputTokensAbove,
-      input: tier.input ?? cost.input ?? 0,
-      output: tier.output ?? cost.output ?? 0,
-      cacheRead: tier.cacheRead ?? cost.cacheRead ?? 0,
-      cacheWrite: tier.cacheWrite ?? cost.cacheWrite ?? 0,
-    })) } : {}),
-  };
-}
 
-/**
- * CatalogModel 只保存 Cindy 可选择的 effort 档位，Pi 原生目录还可能把档位映射到
- * 另一条 wire 值（例如 minimal -> low）。叠加服务端能力时保留同源 bundled 映射；
- * 服务端新增的档位没有原生映射才按同名值发送。
- */
-function catalogThinkingLevelMap(
-  efforts: readonly string[],
-  bundled: PiNativeModelSpec['thinkingLevelMap'] | undefined,
-): NonNullable<PiNativeModelSpec['thinkingLevelMap']> {
-  return Object.fromEntries(
-    PI_REASONING_EFFORTS.map((effort) => [
-      effort,
-      efforts.includes(effort) ? (bundled?.[effort] ?? effort) : null,
-    ]),
-  );
-}
 
 /**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
@@ -723,8 +663,12 @@ export function buildPiSubscriptionNativeProviders(
       retainedProviderId === account.id ? retainedOpenAiModel : null,
     ).providers.find((provider) => provider.sourceProviderId === brand);
     if (!projected) continue;
+    const openaiKeyEnv = brand === 'openai'
+      ? `CINDY_PI_KEY_OPENAI_PROXY_${Buffer.from(account.id).toString('hex').toUpperCase()}` : undefined;
+    if (openaiKeyEnv) env[openaiKeyEnv] = piOpenaiProxyPlaceholderJwt(account.id);
     providers.push({
       ...projected,
+      ...(openaiKeyEnv ? { apiKeyEnvVar: openaiKeyEnv } : {}),
       id: `${brand === 'openai' ? 'openai-codex' : brand}-${account.id}`,
       sourceProviderId: account.id,
       name: account.name,
@@ -764,89 +708,7 @@ export function resolvePiBinaryPath(): string | null {
 
 // ── AuthAdapter(XD 网关 key)─────────────────────────────────────────────────
 
-class DesktopPiAuthAdapter implements AuthAdapter {
-  async getState(options?: AuthAdapterOptions): Promise<AuthState> {
-    const providerId = options?.providerId?.trim() || null;
-    if (providerId && subscriptionAccountKind(providerId)) return subscriptionAccountState(providerId);
-    // Claude 订阅只供内置 Claude Code CLI 使用,Pi 会话不能选它(旧会话在此明确拒绝)。
-    if (providerId === 'anthropic') {
-      return { authenticated: false, errorReason: 'anthropic_oauth_unavailable' };
-    }
-    if (providerId && isOpenAiSubscriptionProviderId(providerId)) {
-      return desktopCodexAuthAdapter.getState({ credentialMode: 'oauth-bearer', providerId });
-    }
-    if (providerId === 'xai') {
-      return hasGrokOAuthLogin()
-        ? { authenticated: true, identity: 'SuperGrok', authSource: 'oauth' }
-        : { authenticated: false, errorReason: 'xai_oauth_unavailable' };
-    }
-    if (providerId) {
-      const storageProviderId = storedCustomProviderId(providerId);
-      try {
-        const custom = mergeByokNativeConfigs(
-          await listCustomProvidersWithSecureHeaders(),
-          getActiveCatalog().providers,
-        ).find(
-          (provider) => provider.id === storageProviderId && provider.runtimes.pi,
-        );
-        if (custom) {
-          const method = custom.auth?.method ?? 'apiKey';
-          if (method === 'none') {
-            // AuthState 只有 oauth/api-key 两种“子进程凭证族”；keyless native provider
-            // 归入 provider-key 族即可，实际 models.json 使用固定 dummy key。
-            return { authenticated: true, identity: custom.name, authSource: 'api-key' };
-          }
-          if (method === 'apiKey') {
-            const hasHeaderCredential = Object.keys(custom.runtimes.pi?.headers ?? {}).length > 0;
-            return readCustomProviderKey(storageProviderId, 'pi') || hasHeaderCredential
-              ? { authenticated: true, identity: custom.name, authSource: 'api-key' }
-              : { authenticated: false, errorReason: 'pi_native_api_key_unavailable' };
-          }
-          if (method === 'oauth' && custom.auth?.method === 'oauth' && custom.auth.oauth) {
-            return readCachedGenericOAuthAccessToken(storageProviderId, custom.auth.oauth)
-              ? { authenticated: true, identity: custom.name, authSource: 'oauth' }
-              : { authenticated: false, errorReason: 'pi_native_oauth_unavailable' };
-          }
-          return { authenticated: false, errorReason: 'pi_native_oauth_unsupported' };
-        }
-      } catch (err) {
-        log.warn('pi auth: custom provider lookup failed', {
-          providerId,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    const key = readClaudeApiKey();
-    if (!key) {
-      return { authenticated: false, errorReason: 'cindy_gateway_key_unavailable' };
-    }
-    return { authenticated: true, identity: 'Cindy AI', authSource: 'api-key' };
-  }
-
-  async triggerLogin(): Promise<AuthState> {
-    // pi 无独立登录面;网关 key 随 Cindy 账号凭据同步下发。
-    return this.getState();
-  }
-
-  async logout(): Promise<void> {
-    // 网关 key 生命周期归账号体系管,pi 侧无可清理凭证。
-  }
-
-  async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
-    // 共用 cindy provider 的订阅 OAuth 路由用占位符(真凭证由 compat proxy 注入)。
-    if (options?.providerId && (PI_OAUTH_SUBSCRIPTION_PROVIDERS.has(options.providerId)
-      || isOpenAiSubscriptionProviderId(options.providerId))) {
-      return { [PI_API_KEY_ENV]: PI_PROVIDER_AUTH_PLACEHOLDER_KEY };
-    }
-    const key = readClaudeApiKey();
-    // xAI/BYOM 不依赖 Cindy 登录。models.json 始终包含 gateway `cindy` 块，
-    // 有网关 key 就保留给会话内切回 Cindy/XD；无 key 时才用不可用占位值。
-    // xAI 原生块自身使用 PI_XAI_PROXY_API_KEY_ENV，不再与网关块争用此变量。
-    return { [PI_API_KEY_ENV]: key ?? PI_PROVIDER_AUTH_PLACEHOLDER_KEY };
-  }
-}
-
-export const desktopPiAuthAdapter: AuthAdapter = new DesktopPiAuthAdapter();
+export const desktopPiAuthAdapter: AuthAdapter = createPiAuthAdapter({ subscriptionAccountKind, subscriptionAccountState, isOpenAiSubscriptionProviderId, desktopCodexAuthAdapter, hasGrokOAuthLogin, listCustomProvidersWithSecureHeaders, readCustomProviderKey, readCachedGenericOAuthAccessToken, readClaudeApiKey });
 
 // ── RuntimeConfig ────────────────────────────────────────────────────────────
 
@@ -864,15 +726,15 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     // 代输入: sudo / ssh / git password prompts of this task go to the owner.
     taskShellEnv: inputHandoffTaskShellEnv,
     // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
-    systemPrompt: composePiSystemPrompt(hostSystemPrompt, piSystemPrompt),
-    answerDeliveryPrompt: ANSWER_DELIVERY_PROMPT,
+    systemPrompt: composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt),
+    answerDeliveryPrompt: PI_ANSWER_DELIVERY_PROMPT,
     // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
     // 下发绝对路径而非 PATH，避免 Windows 从不受信工作目录优先命中同名 rg.exe。
     managedExecutablePaths: { ripgrep: ripgrepPath },
     userDataPath: app.getPath('userData'),
   };
   Object.defineProperty(config, 'piAutoCompactThresholdPct', {
-    get: () => readPiCompactionPct(),
+    get: () => DEFAULT_MODEL_COMPACTION_PCT,
     enumerable: true,
     configurable: false,
   });
@@ -946,21 +808,6 @@ export interface BuildPiAgentOpts {
   getRemotePiAgentProxyEnv?: AgentDeps['getRemotePiAgentProxyEnv'];
 }
 
-/** Cindy wire protocol → pi models.json api 形态。 */
-function wireProtocolToPiApi(wp: ProviderWireProtocol): PiNativeApi {
-  switch (wp) {
-    case 'google-generative-ai':
-      return 'google-generative-ai';
-    case 'anthropic-messages':
-      return 'anthropic-messages';
-    case 'openai-responses':
-      return 'openai-responses';
-    case 'openai-chat':
-      return 'openai-completions';
-    default:
-      throw new Error(`Unsupported PI wire protocol: ${String(wp)}`);
-  }
-}
 
 /**
  * Inspect the protocol already known by the exact bundled PI build. This helper
@@ -982,53 +829,10 @@ export function resolvePiBundledApiByModelId(
   return resolved;
 }
 
-function urlOrigin(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
-}
 
-/**
- * Pick the bundled PI entry belonging to the same upstream origin. This keeps
- * both protocol and endpoint together: copying a Claude-compatible preset URL
- * while borrowing PI's OpenAI protocol would be just another broken hybrid.
- */
-export function resolvePiBundledModelById(
-  catalog: PiBundledModelCatalog | undefined,
-  modelId: string,
-  sourceBaseUrl?: string,
-): PiBundledModelInfo | undefined {
-  const candidates: PiBundledModelInfo[] = [];
-  for (const models of catalog?.values() ?? []) {
-    const model = models.get(modelId);
-    if (model) candidates.push(model);
-  }
-  if (candidates.length === 0) return undefined;
-  const sourceOrigin = urlOrigin(sourceBaseUrl);
-  if (!sourceOrigin) return undefined;
-  const sameOrigin = candidates.filter((model) => urlOrigin(model.baseUrl) === sourceOrigin);
-  const exactBaseUrl = sameOrigin.filter((model) => model.baseUrl === sourceBaseUrl);
-  if (exactBaseUrl.length === 1) return exactBaseUrl[0];
-  return sameOrigin.length === 1 ? sameOrigin[0] : undefined;
-}
 
-/** env 变量名(该 provider 的 api key):CINDY_PI_KEY_<ID>,ID 规整成 [A-Z0-9_]。 */
-export function piNativeKeyEnvVar(providerId: string): string {
-  return `CINDY_PI_KEY_${providerId.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
-}
 
-interface PiCatalogModel extends PiNativeModelSpec {
-  provider: string;
-  baseUrl: string;
-}
 
-const piModelCatalog = providerCatalogForPi() as unknown as {
-  generatedAt: string;
-  providers: Record<string, PiCatalogModel[]>;
-};
 
 /** Keep Cindy's historical xai/ ids while Pi's official native provider uses bare model ids. */
 export function piNativeModelId(providerId: string, model: string): string {
@@ -1122,41 +926,8 @@ export function pruneAnthropicCompatForGateway(
   return next;
 }
 
-function officialPiModels(providerId: string): PiNativeModelSpec[] | null {
-  const models = piModelCatalog.providers[providerId];
-  if (!models) return null;
-  return models.map((model) => ({
-    id: model.id,
-    name: model.name,
-    ...(model.headers && Object.keys(model.headers).length > 0 ? { headers: model.headers } : {}),
-    api: model.api,
-    reasoning: model.reasoning,
-    thinkingLevelMap: model.thinkingLevelMap,
-    input: model.input,
-    cost: model.cost,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    compat: model.compat,
-    samplingParams: model.samplingParams,
-  }));
-}
 
-function officialPiRouteMatches(
-  providerId: string,
-  baseUrl: string,
-  wireProtocol: ProviderWireProtocol | undefined,
-): boolean {
-  const models = piModelCatalog.providers[providerId];
-  if (!models?.length) return false;
-  const baseUrls = new Set(models.map((model) => model.baseUrl.replace(/\/+$/, '')));
-  const apis = new Set(models.map((model) => model.api));
-  return (
-    baseUrls.size === 1 &&
-    baseUrls.has(baseUrl.trim().replace(/\/+$/, '')) &&
-    apis.size === 1 &&
-    (wireProtocol === undefined || apis.has(wireProtocolToPiApi(wireProtocol)))
-  );
-}
+
 
 function configuredPiModel(model: {
   id: string;
@@ -1188,311 +959,6 @@ function configuredPiModel(model: {
   };
 }
 
-/**
- * 纯映射:自定义 provider 配置(含 pi runtime)→ pi 原生 provider spec + env。
- * key 读取经 `readKey` 注入(便于单测)。规则:
- *  - 无 pi runtime → 跳过;
- *  - oauth → authenticated loopback forwarding; host injects refreshed credentials per request;
- *  - apiKey 形态但 key / 自定义 headers 都没有 → 跳过(避免半可用);
- *  - none(keyless,本机 Ollama 等)→ apiKeyEnvVar 留空,models.json 写 dummy key;
- *  - 自定义 header 值全部搬进子进程 env,models.json 只保留 `$ENV` 引用。
- * 直连用户端点,不过 anthropic-compat 代理(设计原则:pi 主导,禁双重转义)。
- */
-export function buildPiNativeProvidersFromConfigs(
-  configs: Array<{
-    id: string;
-    name: string;
-    auth?: { method?: string; oauth?: unknown };
-    runtimes: {
-      pi?: {
-        baseUrl: string;
-        wireProtocol?: ProviderWireProtocol;
-        requestPath?: string;
-        headers?: Record<string, string>;
-        piCatalogProviderId?: string;
-        catalogPresetId?: string;
-        models: Array<{
-          id: string;
-          name?: string;
-          contextWindow?: number;
-          supportsImageInput?: boolean;
-          reasoning?: boolean;
-          reasoningEfforts?: PiReasoningEffort[];
-          api?: PiModelApi;
-          piApi?: PiModelApi;
-          route?: {
-            baseUrl: string;
-            wireProtocol: ProviderWireProtocol;
-            requestPath?: string;
-          };
-        }>;
-      };
-    };
-  }>,
-  readKey: (providerId: string, agent: string) => string | null,
-  onSkip?: (id: string, reason: string) => void,
-  bundledModelsByProvider?: PiBundledModelCatalog,
-  resolvedCatalog?: Catalog,
-  oauthProxyEndpoint?: string,
-): PiNativeProvidersResult {
-  const providers: PiNativeProviderSpec[] = [];
-  const env: Record<string, string> = {};
-  // 派生 env 名去重:CINDY_PI_KEY_<ID> 会把 `-`/`_` 归一,不同合法 id(my-vllm / my_vllm)
-  // 可能塌缩到同名 → 后写覆盖 → 一个 provider 的 key 被发往另一个端点(凭证串号)。撞名时
-  // 追加 _2/_3 保证每个 provider 拿到独立 env 名。
-  const usedEnvVars = new Set<string>();
-  const uniqueEnvVar = (id: string): string => {
-    const base = piNativeKeyEnvVar(id);
-    if (!usedEnvVars.has(base)) {
-      usedEnvVars.add(base);
-      return base;
-    }
-    for (let n = 2; ; n++) {
-      const candidate = `${base}_${n}`;
-      if (!usedEnvVars.has(candidate)) {
-        usedEnvVars.add(candidate);
-        return candidate;
-      }
-    }
-  };
-  for (const cfg of configs) {
-    const rt = cfg.runtimes.pi;
-    if (!rt) continue;
-    const authMethod = cfg.auth?.method ?? 'apiKey';
-    if (authMethod === 'oauth' && (!cfg.auth?.oauth || !oauthProxyEndpoint)) {
-      onSkip?.(cfg.id, 'oauth proxy not ready for pi native');
-      continue;
-    }
-    const managedOllama = matchesManagedOllamaFingerprint({
-      id: cfg.id,
-      authMethod,
-      runtimes: cfg.runtimes,
-    });
-    const runtimeApi =
-      rt.wireProtocol === undefined ? undefined : wireProtocolToPiApi(rt.wireProtocol);
-    // Protocol authority, in order: per-model override, explicit endpoint default,
-    // strictly same-origin PI bundled knowledge, then an explicitly matched official
-    // PI catalog. Missing protocol is not Chat: one unresolved model makes the whole
-    // provider unusable so PI cannot silently send it to a guessed endpoint shape.
-    const bundledModels = rt.models.map((model) => {
-      // 显式 runtime 协议决定端点形状，但不应阻止同源 Pi 目录补齐图片、输出上限等能力。
-      // 只有 per-model piApi 明确改写协议时才不借用；协议冲突也必须隔离。
-      if (model.piApi) return undefined;
-      const bundled = resolvePiBundledModelById(bundledModelsByProvider, model.id, rt.baseUrl);
-      if (!bundled || !runtimeApi || bundled.api === runtimeApi) return bundled;
-      return undefined;
-    });
-    const official =
-      rt.piCatalogProviderId &&
-      officialPiRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
-        ? officialPiModels(rt.piCatalogProviderId)
-        : null;
-    const officialById = new Map((official ?? []).map((model) => [model.id, model]));
-    // The pinned binary predates Astra. Exact public API endpoint/protocol matches
-    // may use our catalog addition even when the user entered the endpoint by hand.
-    // Never lend subscription capabilities to an API key or another endpoint.
-    const openaiAddition = !rt.piCatalogProviderId &&
-      runtimeApi === 'openai-responses' &&
-      officialPiRouteMatches('openai', rt.baseUrl, rt.wireProtocol)
-        ? officialPiModels('openai')?.find((model) => model.id === 'gpt-6-astra')
-        : undefined;
-    const standardModels = rt.models.map(model => {
-      if (model.route?.requestPath || rt.requestPath) return undefined;
-      const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
-        model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol),
-        !model.api && !model.piApi && !model.route)
-        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi) : undefined)
-        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
-          model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol), rt.catalogPresetId);
-      if (!row || !PI_NATIVE_APIS.has(row.execution.pi.api as PiNativeApi)) return undefined;
-      return {
-        id: row.id, name: row.name, baseUrl: row.upstream,
-        ...row.execution.pi, api: row.execution.pi.api as PiModelApi,
-        contextWindow: row.contextWindow, maxTokens: row.maxOutput,
-        input: (row.modalities?.input ?? ['text']).filter((value): value is 'text' | 'image' => value === 'text' || value === 'image'),
-        reasoning: row.reasoning,
-        cost: row.cost?.input !== undefined && row.cost.output !== undefined
-          ? { input: row.cost.input, output: row.cost.output,
-              cacheRead: row.cost.cacheRead ?? 0, cacheWrite: row.cost.cacheWrite ?? 0 }
-          : undefined,
-      };
-    });
-    const metadataModels = rt.models.map(
-      (model, index) => standardModels[index] ?? bundledModels[index] ?? officialById.get(model.id) ??
-        (model.id === openaiAddition?.id && !model.route &&
-          (!model.piApi || model.piApi === openaiAddition.api) ? openaiAddition : undefined),
-    );
-    const modelApis = rt.models.map(
-      (model, index) =>
-        model.api ?? model.piApi ??
-        (model.route ? wireProtocolToPiApi(model.route.wireProtocol) : undefined) ??
-        resolvedCatalog?.providers.find(provider => provider.id === cfg.id)?.models.pi?.find(item => item.id === model.id)?.api ??
-        standardModels[index]?.api ??
-        runtimeApi ??
-        metadataModels[index]?.api,
-    );
-    const unresolvedModelIndex = modelApis.findIndex((api) => api === undefined);
-    if (unresolvedModelIndex >= 0) {
-      onSkip?.(
-        cfg.id,
-        `pi protocol not configured for model '${rt.models[unresolvedModelIndex]!.id}'`,
-      );
-      continue;
-    }
-    const providerApi = runtimeApi ?? modelApis[0];
-    if (!providerApi) {
-      onSkip?.(cfg.id, 'pi protocol not configured for provider default');
-      continue;
-    }
-    const headers =
-      rt.headers && Object.keys(rt.headers).length > 0
-        ? Object.fromEntries(
-            Object.entries(rt.headers).map(([name, value]) => {
-              const envVar = uniqueEnvVar(`${cfg.id}_HEADER_${name}`);
-              env[envVar] = value;
-              return [name, `$${envVar}`];
-            }),
-          )
-        : undefined;
-    let apiKeyEnvVar: string | undefined;
-    if (authMethod === 'apiKey') {
-      const key = readKey(cfg.id, 'pi');
-      if (!key && !headers) {
-        onSkip?.(cfg.id, 'apiKey provider missing pi key and custom headers');
-        continue;
-      }
-      if (key) {
-        apiKeyEnvVar = uniqueEnvVar(cfg.id);
-        env[apiKeyEnvVar] = key;
-      }
-    }
-    if (rt.models.some((model, index) => {
-      const api = modelApis[index]!;
-      if (api !== 'google-vertex' && api !== 'bedrock-converse-stream') return false;
-      if (api === 'google-vertex' && apiKeyEnvVar) return false;
-      return !hostCredentialEndpointAllowed(api, model.route?.baseUrl ?? rt.baseUrl);
-    })) {
-      onSkip?.(cfg.id, 'native SDK requires an approved cloud endpoint');
-      continue;
-    }
-    const adapterIds = new Set(rt.models.flatMap((model, index) => {
-      const api = modelApis[index];
-      // The native ChatGPT subscription transport owns its authentication separately.
-      if (!api || api === 'openai-codex-responses') return [];
-      const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, api)
-        ?? providerPresetModelRecord(rt.catalogPresetId, model.id, api)
-        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, api, rt.catalogPresetId);
-      const adapter = row ? providerModelAdapterId(row, rt.catalogPresetId) : undefined;
-      return adapter ? [adapter] : [];
-    }));
-    providers.push({
-      ...(adapterIds.size === 1 ? { adapterProvider: [...adapterIds][0] } : {}),
-      id: runtimeCustomProviderId(cfg.id),
-      name: cfg.name,
-      // The proxy already retains the supplier base path (e.g. /api/v1).
-      // OpenAI SDKs append /chat/completions or /responses themselves.
-      baseUrl: authMethod === 'oauth' ? oauthProxyEndpoint! : rt.baseUrl,
-      api: providerApi,
-      apiKeyEnvVar,
-      ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-      ...(authMethod === 'oauth' ? { headers: piSubscriptionHeaders(cfg.id) } : {}),
-      models: rt.models.map((configuredModel, index) => {
-        // Public/default/discovery/user precedence was resolved by the active catalog.
-        // Carry those facts to the serializer instead of reintroducing SDK precedence.
-        // Endpoint, protocol and credentials remain exclusively connection-owned.
-        const resolved = resolvedCatalog?.providers.find(p => p.id === cfg.id)
-          ?.models.pi?.find(model => model.id === configuredModel.id);
-        const m = resolved ? {
-          ...configuredModel,
-          name: resolved.name,
-          contextWindow: resolved.contextWindow,
-          supportsImageInput: resolved.supportsImageInput ?? configuredModel.supportsImageInput,
-          reasoning: resolved.efforts.length > 0,
-          reasoningEfforts: resolved.efforts.filter((effort): effort is PiReasoningEffort =>
-            (PI_REASONING_EFFORTS as readonly string[]).includes(effort)),
-        } : configuredModel;
-        const supportedEfforts = new Set(m.reasoningEfforts ?? []);
-        const modelApi = modelApis[index]!;
-        const bundledModel = metadataModels[index];
-        const explicitRoute = resolvePiModelRoute(m, {
-          baseUrl: rt.baseUrl,
-          wireProtocol: rt.wireProtocol,
-        });
-        const explicitRouteApi = explicitRoute
-          ? wireProtocolToPiApi(explicitRoute.wireProtocol)
-          : undefined;
-        // bundled/official rows may lend protocol-compatible capabilities, but never routing.
-        // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
-        // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
-        const modelBaseUrl =
-          m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
-        const spec = {
-          id: m.id,
-          ...(resolved?.supportsFastMode !== undefined ? { supportsFastMode: resolved.supportsFastMode } : {}),
-          ...(m.api || m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
-          ...(authMethod === 'oauth'
-            ? { baseUrl: oauthProxyEndpoint! }
-            : modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
-          name: m.name ?? bundledModel?.name,
-          // 下发文件明确写出的上下文优先；本地 Pi 目录只补缺失值。
-          contextWindow: m.contextWindow ?? bundledModel?.contextWindow,
-          ...(resolved?.maxOutput !== undefined || bundledModel?.maxTokens !== undefined
-            ? { maxTokens: resolved?.maxOutput ?? bundledModel?.maxTokens } : {}),
-          ...(m.supportsImageInput !== undefined
-            ? { input: (m.supportsImageInput ? ['text', 'image'] : ['text']) as Array<'text' | 'image'> }
-            : bundledModel?.input ? { input: [...bundledModel.input] } : {}),
-          ...(m.reasoning !== undefined || m.reasoningEfforts !== undefined
-            ? {
-                reasoning: m.reasoning ?? (m.reasoningEfforts?.length ?? 0) > 0,
-                ...(m.reasoningEfforts !== undefined
-                  ? { thinkingLevelMap: { ...catalogThinkingLevelMap(m.reasoningEfforts, bundledModel?.thinkingLevelMap), ...(resolved?.reasoningRequired ? { off: null } : {}) } }
-                  : {}),
-              }
-            : bundledModel
-            ? {
-                reasoning: bundledModel.reasoning,
-                ...(bundledModel.reasoning && bundledModel.thinkingLevelMap
-                  ? { thinkingLevelMap: { ...bundledModel.thinkingLevelMap } }
-                  : {}),
-              }
-            : m.reasoning === true
-              ? {
-                  reasoning: true,
-                  thinkingLevelMap: Object.fromEntries(
-                    PI_REASONING_EFFORTS.map((effort) => [
-                      effort,
-                      supportedEfforts.has(effort) ? effort : null,
-                    ]),
-                  ),
-                }
-              : {}),
-          ...(resolved?.cost ? { cost: catalogCostForPiNative(resolved.cost) }
-            : bundledModel?.cost ? { cost: { ...bundledModel.cost } } : {}),
-          ...(bundledModel?.headers ? { headers: { ...bundledModel.headers } } : {}),
-          ...(bundledModel?.compat
-            ? { compat: structuredClone(bundledModel.compat) }
-            : !bundledModel && modelApi === 'openai-completions'
-              ? // 未知自定义 Chat Completions 端点保守回落(#3832):火山引擎等
-                // OpenAI 兼容网关只接受 system/assistant/user/tool,而 Pi 的
-                // detectCompat 对陌生端点默认 supportsDeveloperRole=true,会把
-                // system 指令按 role=developer 发出 → 整个模型不可用。system
-                // role 在所有 OpenAI 兼容端点均可用,故无同源 bundled 元数据时
-                // 默认收敛为 system;有 bundled 元数据的端点维持 Pi 原生判定。
-                { compat: { supportsDeveloperRole: false } }
-              : {}),
-          ...(bundledModel?.samplingParams
-            ? { samplingParams: structuredClone(bundledModel.samplingParams) }
-            : {}),
-        };
-        return managedOllama && shouldApplyQwen38Overlay(m.id)
-          ? applyQwen38NativeOverlay(spec)
-          : spec;
-      }),
-    });
-  }
-  return { providers, env };
-}
 
 /**
  * Combine host subscriptions with user providers without changing persisted
@@ -1671,6 +1137,16 @@ export function resolvePiCindyGatewayModelApi(
   return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
 }
 
+// #7296: these exact CindyAI Chat routes accept an empty reasoning_content fallback.
+// Keep this Gateway policy independent of whether a Pi catalog version lists the model.
+const PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS = new Set([
+  'deepseek/deepseek-v4.1-flash',
+  'deepseek/deepseek-flash',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash-vision-exp',
+  'deepseek/deepseek-v4-flash',
+]);
+
 export function resolvePiCindyGatewayModelSpec(
   _selectedProviderId: string | null | undefined,
   modelId: string,
@@ -1688,6 +1164,13 @@ export function resolvePiCindyGatewayModelSpec(
   const compatibleBundled = bundled?.api === api ? bundled : undefined;
   const compatibleProbed = probed?.api === api ? probed : undefined;
   let compat = compatibleProbed?.compat ?? compatibleBundled?.compat;
+  if (
+    api === 'openai-completions' &&
+    PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS.has(modelId) &&
+    compat?.requiresReasoningContentOnAssistantMessages === undefined
+  ) {
+    compat = { ...compat, requiresReasoningContentOnAssistantMessages: true };
+  }
   if (api === 'anthropic-messages') compat = pruneAnthropicCompatForGateway(compat);
   // Gateway routing needs Pi's native session identity on every Chat/Messages request.
   // This is a Gateway transport policy, not a change to direct BYOM/subscription providers.
@@ -1733,6 +1216,7 @@ export function resolvePiCindyGatewayModelSpec(
 
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
 export async function resolvePiNativeProviders(ctx: {
+  sessionId?: string;
   workingDir: string;
   remoteHostId?: string | null;
   providerId?: string | null;
@@ -1823,12 +1307,23 @@ export async function resolvePiNativeProviders(ctx: {
       }
     }
   }
+  const sessionCatalog = getActiveCatalog();
+  const pinnedCatalog = ctx.sessionId && ctx.purpose !== 'preview' ? { ...sessionCatalog,
+    providers: sessionCatalog.providers.map(provider => provider.id !== ctx.providerId ? provider : {
+      ...provider, models: { ...provider.models, pi: provider.models.pi?.map(model => {
+        if (model.id !== ctx.model) return model;
+        const selected = sessionModelInterface(ctx.sessionId!, provider.id, 'pi', model, sessionCatalog.modelRegistry,
+          ctx.resumeSessionId ? provider.routing.pi?.wireProtocol : undefined);
+        return modelWithInterface(model, selected);
+      }) },
+    }),
+  } : sessionCatalog;
   const custom = buildPiNativeProvidersFromConfigs(
     mergeByokNativeConfigs(configs, getActiveCatalog().providers),
     readCustomProviderKey,
     (id, reason) => log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
     bundledModels ?? undefined,
-    getActiveCatalog(),
+    pinnedCatalog,
     !isRemote && compatProxyReady ? getClaudeEndpoint() : undefined,
   );
   // Remote PI cannot use the local native overlay. Preserve upstream's exact
@@ -1901,6 +1396,12 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   return new PiAgent({
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
+    // 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
+    resolvePiNativeCompatStorePath: remoteHostId => remoteHostId
+      ? '$HOME/.xdt-server/v1/pi-agent-home/pi-native-compat-overrides.json'
+      : path.join(app.getPath('userData'), 'pi-native-compat-overrides.json'),
+    resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
+      readPiNativeCompatOverride(providerId, modelId, routeKey),
     getManagedSkills: listCindyManagedSkills,
     scanLocalCustomizations,
     resolveModelContextLimit: (providerId, modelId) => {
@@ -1908,6 +1409,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);
       return source ? readModelContextLimit('pi', source, modelId)
         ?? resolveModelDefaultContextWindow(catalog, 'pi', source, modelId) : null;
+    },
+    resolveModelCompactionPct: (providerId, modelId) => {
+      const source = resolveModelContextProviderId(getActiveCatalog(), 'pi', providerId, modelId);
+      return resolveModelCompactionPct(getActiveCatalog(), 'pi', source, modelId);
     },
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
@@ -1950,6 +1455,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
         : undefined,
     ),
     onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled,
+    formatPiStartupCloudFileHint: (file) => t('logic.errors.piStartupCloudFile').replace('{{path}}', () => file),
     getPiExtensionUiStrings: () => ({
       confirm: t('settings.piPackages.extensionDialogConfirm'),
       cancel: t('settings.piPackages.cancel'),

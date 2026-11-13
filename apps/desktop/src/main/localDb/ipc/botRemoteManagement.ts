@@ -4,15 +4,26 @@ import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
 import { resolveAvailableTaskModels } from '../../maker-ipc/appDefaultModelControl.js';
 import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import { createBotRemoteSettingsResource } from './botRemoteSettingsResource.js';
-import { createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, setBotProfileAvatar, updateBotProfile } from './bots.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
+import { botProjectRepository, createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, readBotSettingsProfile, searchBotHistory, setBotProfileAvatar, updateBotProfile } from './bots.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../../appSessionState.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
-import { listBotSkillsForBot, readBotSkillForBot, saveBotSkillForSession, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
+import { listBotSkillsForBot, readBotSkillForBot, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
+import {
+  deleteBotSkillForSettings, readBotCoreSkill, readBotSkillForSettings, saveBotSkillForSettings, setBotSkillEnabledForSettings,
+} from './botSkillSettingsIpc.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
+import { buildTeammateGuide } from '../../maker-ipc/teammateGuide.js';
 import { createBotRemoteEditors } from './botRemoteEditors.js';
 import { decodeBotAvatarImage } from './botAvatarSelection.js';
 import { runRegisteredBotLifecycleAction } from '../../maker-ipc/botLifecycleService.js';
 import { listBotSettingsCapabilities, validateBotCapabilityAdditions } from '../../maker-host/index.js';
+import { isProviderSharePeer, isSharedTaskPeer } from '@cindy/device-link';
+import { readDeviceLinkSettings } from '../../device-link/settings-store.desktop.js';
+import { readRemoteBotSessionAccess } from './botRemoteSessionAccess.js';
+import { createBotRemoteSettingsHost } from './botRemoteSettingsHost.js';
+import { createBotRemoteSettingsOps } from './botRemoteSettingsOps.js';
+import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
+import { teammateWorkspaceDir } from '../../maker-ipc/botProjectMemory.js';
 
 async function validateModelChain(chain: BotModelRoute[]) {
   const scope = activeOwnerScopeKey();
@@ -20,6 +31,9 @@ async function validateModelChain(chain: BotModelRoute[]) {
   if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
   if (resolved.some(route => !route)) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
 }
+
+/** Loaded on use, like the other page-only services below. */
+const scheduleIpc = () => import('../../maker-ipc/schedule.js');
 
 /** Composition only: profile transactions, skill reads and lifecycle stay with their existing owners. */
 const deps = {
@@ -43,6 +57,18 @@ const settings = createBotRemoteSettingsResource({ ...deps,
   lifecycle: (botId, action, confirmName, guard) => runRegisteredBotLifecycleAction({ botId, action, confirmName, keepTaskHistory: true, worktreeDisposition: 'retain' }, guard),
 });
 const getEditor = createBotRemoteEditors({ ...deps,
+  projects: {
+    list: async botId => (await botLinkedProjectAccess(botId)).read(),
+    set: async (botId, id, linked) => (await botLinkedProjectAccess(botId)).set(id, linked),
+  },
+  // The teammate project's automations, through the same scheduler calls as the Automations page.
+  automations: {
+    workspace: botId => teammateWorkspaceDir(ownerScopedUserDataPath(), botId),
+    list: async () => (await scheduleIpc()).scheduleHostAccess.list(),
+    inflight: async id => (await scheduleIpc()).scheduleHostAccess.inflight(id),
+    pause: async id => (await scheduleIpc()).pauseScheduleClearingUnread(id),
+    resume: async id => (await scheduleIpc()).scheduleHostAccess.resume(id),
+  },
   async modelDefaults() {
     const owner = deps.owner();
     const chain = await readEffectiveBotModelChain({});
@@ -79,7 +105,7 @@ const getEditor = createBotRemoteEditors({ ...deps,
       source = await getBotRemoteResourceSource(input.id);
     }
     deps.assertOwner(owner);
-    if (source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Teammate unavailable');
+    if (source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Buddy unavailable');
     if (!source.canonicalSessionId && (!source.invitation || source.invitation.stage === 'ready')) await createBotCanonicalSession({ botId: source.id, expectedCanonicalSessionId: null, expectedProfileVersion: source.currentVersion });
     deps.assertOwner(owner);
   },
@@ -89,19 +115,20 @@ const getEditor = createBotRemoteEditors({ ...deps,
     await setBotProfileAvatar(botId, image, version, expectedAvatar);
   },
   skill: readBotSkillForBot,
+  // Same save as the local settings page, so an imported skill keeps its own frontmatter.
   async saveSkill(botId, skill) {
     const owner = deps.owner();
-    const { source } = await deps.read(botId);
+    await saveBotSkillForSettings(botId, { slug: skill.slug, name: skill.name, description: skill.description, body: skill.body }, { remote: true });
     deps.assertOwner(owner);
-    if (!source.canonicalSessionId) throwIpcError('PRECONDITION_FAILED', 'Teammate unavailable');
-    const result = await saveBotSkillForSession({ callerSessionId: source.canonicalSessionId, ...skill });
-    if (!result.ok) throwIpcError('PRECONDITION_FAILED', 'Skill could not be saved; refresh before retrying');
   },
   async removeSkill(botId, slug) {
     const owner = deps.owner(); const { source } = await deps.read(botId); deps.assertOwner(owner);
     await deleteBotSkillForBot(botId, slug); deps.assertOwner(owner);
     if (source.canonicalSessionId) await requestBotRuntimeEpochRefresh(source.canonicalSessionId, 'resource');
   },
+  // Same move-and-refresh as the local settings page.
+  setSkillEnabled: (botId, slug, enabled) => setBotSkillEnabledForSettings(botId, slug, enabled, { remote: true }),
+  coreGuide: () => buildTeammateGuide(),
   async capabilities(callerSessionId, kind) {
     return listBotSettingsCapabilities({ callerSessionId, kind });
   },
@@ -119,7 +146,7 @@ async function getInvitation(context: RemoteResourceHostContext, botId: string) 
   const resource = botRemoteResourceFromSource(source);
   if (source.invitation?.stage !== 'failed' || source.status !== 'active') return resource;
   const revision = `${source.currentVersion}:${source.invitation.stage}:${source.status}`;
-  return settings.bindResource(context, { ...resource, revision, actions: [{ id: 'retry-invitation', label: { fallback: 'Try Again', translations: { 'zh-CN': '重试', 'zh-TW': '重試', ja: '再試行', ko: '다시 시도' } } }] }, async () => {
+  return settings.bindResource(context, { ...resource, revision, actions: [{ id: 'retry-invitation', label: { fallback: 'Try Again', translations: { 'zh-CN': '重试', 'zh-TW': '重試', ja: '再試行', ko: '다시 시도' , "es":"Volver a intentar","fr":"Réessayer","de":"Erneut versuchen","pt-PT":"Tentar novamente","pt-BR":"Tentar novamente","zh-Hant-x-lzh":"再試","zh-Hans-x-lzh":"再试"} } }] }, async () => {
     const current = await getBotRemoteResourceSource(botId); deps.assertOwner(owner);
     return `${current.currentVersion}:${current.invitation?.stage}:${current.status}`;
   }, async request => {
@@ -129,4 +156,83 @@ async function getInvitation(context: RemoteResourceHostContext, botId: string) 
     return { effects: [{ kind: 'refresh-collection', collectionId: 'teammates' }] };
   });
 }
-export const botRemoteManagement = { ...settings, getEditor, getInvitation };
+/** The messaging stack is only needed by a remote Desktop's channels page. */
+const imRuntime = () => import('../../im/shared/botImConnectionRuntime.js');
+
+/** Loaded on use: the voice stack is large and only a voice page of a remote Desktop needs it. */
+async function settingsVoice() {
+  const api = (await import('../../voice-conversation/index.js')).getVoiceSettingsHostApi();
+  if (!api) throwIpcError('PRECONDITION_FAILED', 'Voice conversation is unavailable.');
+  return api!;
+}
+
+/**
+ * The teammate settings pages of a remote Desktop (`management:settings`): the same pages, with every read and
+ * write executed here by the services the local IPC handlers call.
+ */
+const settingsHost = createBotRemoteSettingsHost({
+  owner: deps.owner,
+  isOwnerCurrent: owner => !isAppSessionBoundaryPending() && owner === activeOwnerScopeKey(),
+  // Same gate as the Skill / plugin management: a same-account controller the owner still allows.
+  controllerAllowed: peer => {
+    const current = readDeviceLinkSettings();
+    return !isSharedTaskPeer(peer) && !isProviderSharePeer(peer) && current.remoteControlEnabled && !current.revokedControllers.includes(peer);
+  },
+  botVisible: async botId => (await readRemoteBotSessionAccess(botId, 'bot')) === 'visible',
+  ops: createBotRemoteSettingsOps({
+    projectRepository: botProjectRepository,
+    readProfile: readBotSettingsProfile,
+    updateProfile: input => updateBotProfile(input, undefined, validateBotCapabilityAdditions),
+    async setAvatar(botId, avatarImageBase64) {
+      const image = decodeBotAvatarImage(avatarImageBase64);
+      if (!image) throwIpcError('INVALID_PARAMS', 'Avatar required');
+      return setBotProfileAvatar(botId, image!);
+    },
+    retryInvitation: botId => updateBotProfile({ id: botId, retryInvitation: true }),
+    lifecycle: (request, guard) => runRegisteredBotLifecycleAction(request, guard),
+    defaultModelChain: () => readEffectiveBotModelChain({}),
+    memory: {
+      list: (botId, query) => getBotMemoryService().list(botId, query),
+      read: (botId, filename) => getBotMemoryService().read(botId, filename),
+      update: input => getBotMemoryService().update(input),
+      delete: input => getBotMemoryService().delete(input),
+    },
+    canonicalSessionId: async botId => (await getBotRemoteSettingsSource(botId)).source.canonicalSessionId ?? null,
+    capabilities: (callerSessionId, kind) => listBotSettingsCapabilities({ callerSessionId, kind }),
+    personalSkills: listBotSkillsForBot,
+    skills: {
+      core: readBotCoreSkill,
+      read: (botId, slug) => readBotSkillForSettings(botId, slug, { remote: true }),
+      save: (botId, input) => saveBotSkillForSettings(botId, input, { remote: true }),
+      setEnabled: (botId, slug, enabled) => setBotSkillEnabledForSettings(botId, slug, enabled, { remote: true }),
+      delete: (botId, slug) => deleteBotSkillForSettings(botId, slug, { remote: true }),
+    },
+    searchHistory: searchBotHistory,
+    channels: {
+      im: {
+        list: async () => (await imRuntime()).buildBotImConnectionListPayload(),
+        remove: async (id) => (await imRuntime()).removeBotImConnection(id),
+        listGroups: async (id) => (await imRuntime()).listBotImConnectionGroups(id),
+        setGroupActivation: async (id, chatId, mode) => (await imRuntime()).setBotImConnectionGroupMode(id, chatId, mode),
+        listDiscordChannels: async (id) => (await imRuntime()).listBotImDiscordChannels(id),
+        setDiscordChannelAccess: async (id, access) => (await imRuntime()).setBotImDiscordChannelAccess(id, access),
+        listLanes: async (id) => (await imRuntime()).listBotImConnectionLanesForSettings(id),
+        resetLane: async (id, sessionId) => (await imRuntime()).resetBotImConnectionLaneForSettings(id, sessionId),
+        listAdoptable: async () => (await import('../../im/shared/botImPersonalAdoption.js')).listAdoptablePersonalBots(),
+        adopt: async (input) => (await import('../../im/shared/botImPersonalAdoption.js')).adoptPersonalBot(input),
+      },
+      wechat: async () => (await import('../../im/index.js')).getWechatSettingsApi(),
+      x: {
+        summary: async () => (await import('../../hook-control/ipc.js')).readXCompanionSummary(),
+        setCompanion: async (botId, expected) => (await import('../../hook-control/ipc.js')).changeXCompanionBinding(botId, expected),
+      },
+    },
+    voice: {
+      models: async () => (await settingsVoice()).models(),
+      voices: async selection => (await settingsVoice()).voices(selection),
+      preference: async botId => (await settingsVoice()).preference(botId),
+      setPreference: async (botId, selection, playback) => (await settingsVoice()).setPreference(botId, selection, playback),
+    },
+  }),
+});
+export const botRemoteManagement = { ...settings, getEditor, getInvitation, settingsHost };

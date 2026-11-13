@@ -1,3 +1,4 @@
+import type { OutputLimitDetails } from '@cindy/maker-shared';
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
@@ -33,6 +34,8 @@ export type RemoteMessageRole =
   | 'agent_switch';
 
 export interface RemoteSession {
+  /** Explicit host project membership; older hosts fall back to workingDir. */
+  projectDir?: string | null;
   tags?: import('@cindy/maker-shared').TaskTag[];
   id: string;
   userId: string;
@@ -45,7 +48,7 @@ export interface RemoteSession {
   providerId?: string | null;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   /** Temporary host runtime route; optional for older controlled Desktop versions. */
   runtimeGeneration?: number;
   runtimeBaseline?: RemoteSessionRuntimeProfile;
@@ -83,6 +86,8 @@ export interface RemoteSession {
   /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
   source?: string;
+  companion?: import("./teammateTaskSource").TaskCompanion;
+  taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
   orcaRole?: 'lead' | 'worker' | string | null;
   /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
   orcaRemoteLead?: {
@@ -97,6 +102,7 @@ export interface RemoteSession {
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   userSendAt: string | null;
+  lastActivityAt?: string | null;
   createdAt: string;
   updatedAt: string;
   deviceLinkDeviceId?: string;
@@ -122,7 +128,7 @@ export interface RemoteSessionRuntimeProfile {
   model: string;
   providerId: string | null;
   effort: string | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface RemoteSessionRuntimePending {
@@ -151,6 +157,8 @@ export interface RemoteMessage {
     | 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch'
     /** 代输入结束留痕(由隐藏续接行派生,无输入值)。 */
     | 'input-handoff'
+    /** 新任务「让插件选」的结果(由 agentMeta.pluginModelRoute 派生)。 */
+    | 'plugin-model-route'
     | 'mcp-app';
 }
 
@@ -239,13 +247,15 @@ export interface QueuedRemoteMessage {
   userName?: string;
   /** Interface language of this phone. The desktop stamps it only for a remote turn. */
   uiLanguage?: string;
+  /** Classical output style chosen next to the language; used only with a Chinese uiLanguage. */
+  classicalStyle?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;
     model: string;
     effort?: string;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     displayReasoning?: string;
     resumeSessionId?: string;
     makerMemoryEnabled?: boolean;
@@ -290,8 +300,11 @@ export interface InputProjection {
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
+  /** Explicit failed-turn continuation eligibility; absent on older hosts. */
+  errorCanContinue?: boolean;
   autoResumePending?: Record<string, unknown> | null;
   /** Current vendor-turn owner for an auto-resume continuation, when supported by the host. */
   continuationTurnClientId?: string | null;

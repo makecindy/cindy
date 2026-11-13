@@ -2,6 +2,33 @@ import { describe, expect, it } from 'vitest';
 
 import { createBrowserControlRuntime, planDispatch } from '../runtime.js';
 import { createUnavailableBrowserRuntime } from '../unavailable.js';
+import { resolveActionTargetIds } from '../shim/browser-action-targets.js';
+
+// Historical Play/AWS labels failed after tab selection had resolved their ID.
+// Unit tier: exercise the same normalization used by the real /act route;
+// the history replay script covers its wiring against real Chrome.
+describe('resolved action target identity', () => {
+  it.each([undefined, 'google-play-review-status', 'raw-tab-id'])(
+    'executes an action on the selected tab when its target is %s', (targetId) => {
+      expect(resolveActionTargetIds({ kind: 'wait', timeMs: 1, targetId }, 'google-play-review-status', 'raw-tab-id'))
+        .toEqual({ kind: 'wait', timeMs: 1, targetId: 'raw-tab-id' });
+    },
+  );
+
+  it('normalizes nested batches without allowing a different target or mutating the request', () => {
+    const action = {
+      kind: 'batch' as const,
+      targetId: 'aws-ce',
+      actions: [{ kind: 'batch' as const, actions: [{ kind: 'wait' as const, timeMs: 1, targetId: 'aws-ce' }] }],
+    };
+    expect(resolveActionTargetIds(action, 'aws-ce', 'raw-id')).toMatchObject({
+      targetId: 'raw-id', actions: [{ targetId: 'raw-id', actions: [{ targetId: 'raw-id' }] }],
+    });
+    expect(action.actions[0].actions[0].targetId).toBe('aws-ce');
+    action.actions[0].actions[0].targetId = 'different-tab';
+    expect(() => resolveActionTargetIds(action, 'aws-ce', 'raw-id')).toThrow('targetId must match');
+  });
+});
 
 describe('createUnavailableBrowserRuntime', () => {
   it('reports BROWSER_RUNTIME_NOT_CONFIGURED for any action', async () => {

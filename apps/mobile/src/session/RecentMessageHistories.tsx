@@ -1,9 +1,11 @@
+import type { ViewInstance } from 'react-native';
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useSegments } from 'expo-router';
+import { useGlobalSearchParams, useSegments } from 'expo-router';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { PaneViewportProvider, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { useTheme } from '@/theme';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
 import { NativeHistoryHost, NativeHistorySlot, needsResidentHistoryUpgrade } from './NativeResidentHistory';
 import { useResidentHomeListContextBridge } from './ResidentHomeList';
@@ -15,7 +17,7 @@ type Frame = { left: number; top: number; width: number; height: number };
 type Entry = { key: string; owner: string; children: ReactNode; frame: Frame;
   focused: boolean; ready: boolean; topInset: number; bottomInset: number; interactive: boolean };
 const Context = createContext<{
-  host: React.RefObject<View | null>;
+  host: React.RefObject<ViewInstance | null>;
   namespace: string;
   publish(entry: Entry): void;
   release(owner: string): void;
@@ -27,7 +29,7 @@ const Context = createContext<{
  * native content container docks into the route without moving React ownership. */
 export function RecentMessageHistoriesProvider({ children }: { children: ReactNode }) {
   const { colors } = useTheme();
-  const host = useRef<View>(null);
+  const host = useRef<ViewInstance>(null);
   const namespace = useId();
   const [overlays, setOverlays] = useState<Map<string, ReactNode>>(() => new Map());
   const setOverlay = useCallback((owner: string, content: ReactNode) => {
@@ -40,6 +42,9 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
   const tasks = useSyncExternalStore(subscribeRecentTasks, getRecentTasks, getRecentTasks);
   const [entries, setEntries] = useState<Map<string, Entry>>(() => new Map());
   const segments = useSegments() as string[];
+  const sheetParams = useGlobalSearchParams<{ sideChat?: string; sideChatParentId?: string; deviceId?: string }>();
+  const coveredTaskKey = sheetParams.sideChat === '1' && sheetParams.sideChatParentId
+    ? recentTaskKey({ deviceId: sheetParams.deviceId, sessionId: sheetParams.sideChatParentId }) : null;
   const onTaskRoute = segments[0] === 'sessions' && segments[1] === '[sessionId]';
   const allowed = useMemo(() => new Set(tasks.map(task => recentTaskKey(task.params))), [tasks]);
   const publish = useCallback((entry: Entry) => {
@@ -104,7 +109,7 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
           accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
           style={[styles.clip, { left: entry.frame.left, top: entry.frame.top + top,
             width: entry.frame.width, height: entry.frame.height - top - bottom,
-            backgroundColor: colors.surface, opacity: active ? 1 : 0 }]}>
+            backgroundColor: colors.surface, opacity: active || key === coveredTaskKey ? 1 : 0 }]}>
           <View collapsable={false} style={{ position: 'absolute', top: -top, width: entry.frame.width, height: entry.frame.height }}>
             {content}
           </View>
@@ -128,7 +133,7 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
   const navigation = useContext(NavigationContext);
   const route = useContext(NavigationRouteContext);
   const viewport = usePaneViewport();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<ViewInstance>(null);
   const [frame, setFrame] = useState<Frame | null>(null);
   const revision = useRef(0);
   const measure = useCallback(() => {
@@ -142,6 +147,18 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
     });
   }, [host]);
   useLayoutEffect(() => { measure(); return () => { ++revision.current; }; }, [measure, focused, viewport.width, viewport.height]);
+  useLayoutEffect(() => {
+    // This is the requested native surface state, not proof of UIKit attachment.
+    // Keep children/message bodies and full task/device identities out of logs.
+    const task = getRecentTasks().find(task => recentTaskKey(task.params) === activeKey);
+    mobileDebugLog('debug', 'recovery', 'message history surface', {
+      hostRef: task?.params.deviceId.slice(0, 8), sessionRef: task?.params.sessionId.slice(0, 8),
+      owner, focused, ready, interactive,
+      nativeSlot: !!NativeHistorySlot, inlineFallback: needsResidentHistoryUpgrade,
+      measured: frame !== null, width: frame?.width, height: frame?.height,
+      left: frame?.left, top: frame?.top, topInset, bottomInset,
+    });
+  }, [activeKey, owner, focused, ready, interactive, frame, topInset, bottomInset]);
   useLayoutEffect(() => () => release(owner), [release, owner]);
   useLayoutEffect(() => {
     if (!frame || needsResidentHistoryUpgrade) return;
@@ -186,12 +203,22 @@ export function MessageHistoryOverlay({ children, enabled = true }: { children: 
   const focused = useIsFocused();
   const navigation = useContext(NavigationContext);
   const route = useContext(NavigationRouteContext);
+  const sheetParams = useGlobalSearchParams<{ sideChat?: string; sideChatParentId?: string; deviceId?: string }>();
+  const covered = sheetParams.sideChat === '1' && !!sheetParams.sideChatParentId
+    && recentTaskKey(route?.params ?? {}) === recentTaskKey({
+      deviceId: sheetParams.deviceId, sessionId: sheetParams.sideChatParentId,
+    });
   useLayoutEffect(() => {
     if (NativeHistorySlot || needsResidentHistoryUpgrade) return;
-    setOverlay(owner, enabled && focused ? <NavigationContext.Provider value={navigation}>
-      <NavigationRouteContext.Provider value={route}>{residentChildren}</NavigationRouteContext.Provider>
+    setOverlay(owner, enabled && (focused || covered) ? <NavigationContext.Provider value={navigation}>
+      <NavigationRouteContext.Provider value={route}>
+        <View style={StyleSheet.absoluteFill} pointerEvents={focused ? 'box-none' : 'none'}
+          accessibilityElementsHidden={!focused} importantForAccessibility={focused ? 'auto' : 'no-hide-descendants'}>
+          {residentChildren}
+        </View>
+      </NavigationRouteContext.Provider>
     </NavigationContext.Provider> : null);
-  }, [setOverlay, owner, enabled, focused, navigation, route, residentChildren]);
+  }, [setOverlay, owner, enabled, focused, covered, navigation, route, residentChildren]);
   useLayoutEffect(() => () => setOverlay(owner, null), [setOverlay, owner]);
   return !enabled || NativeHistorySlot || needsResidentHistoryUpgrade ? children : null;
 }

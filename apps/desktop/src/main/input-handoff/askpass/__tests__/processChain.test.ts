@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { verifyAskpassChain, type ProcessFacts, type ProcessProbe } from '../processChain.js';
+import { verifyAskpassChain, verifyAskpassRecoveryChain, type ProcessFacts, type ProcessProbe } from '../processChain.js';
 
 const USER = 501;
 const SOCK = '/tmp/cindy-ih-x/s';
@@ -64,7 +64,7 @@ describe('askpass asker check', () => {
       { pid: 250, ppid: 200, uid: USER, args: `${core}/git remote-https origin https://git.example/r.git` },
       { pid: 200, ppid: 1, uid: USER, args: 'git push origin main' },
     ]);
-    expect(verdict).toEqual({ ok: true, asker: { program: 'git', command: 'git push origin main' } });
+    expect(verdict).toEqual({ ok: true, asker: { program: 'git', command: 'git push origin main', gitOrigin: 'https://git.example' } });
   });
 
   it('refuses when the asking process is not the helper', async () => {
@@ -76,5 +76,47 @@ describe('askpass asker check', () => {
       { ...curl(200), exe: '/Users/someone/bin/curl' },
       { pid: 200, ppid: 1, uid: 0, args: 'sudo -A true' },
     ])).toEqual({ ok: false, reason: 'helper' });
+  });
+});
+
+describe('metadata-only askpass recovery preflight', () => {
+  const helperPath = '/tmp/cindy-ih-x/askpass';
+  const shell = { pid: 100, ppid: 200, uid: USER, args: `/bin/sh ${helperPath} Username for GitHub`, exe: '/bin/bash' };
+  const git = { pid: 200, ppid: 1, uid: USER, args: 'git-remote-https origin https://github.com/owner/repo.git',
+    exe: '/usr/lib/git-core/git-remote-https' };
+
+  it('verifies the shell for guidance but never for credential delivery', async () => {
+    const p = probe([shell, git]);
+    expect(await verifyAskpassRecoveryChain(p, 100, helperPath, USER))
+      .toMatchObject({ ok: true, asker: { program: 'git', gitOrigin: 'https://github.com' } });
+    expect(await verifyAskpassChain(p, 100, SOCK, USER)).toEqual({ ok: false, reason: 'helper' });
+  });
+
+  it.each([
+    { ...shell, args: `/bin/sh -c ${helperPath}` },
+    { ...shell, args: `/bin/sh ${helperPath}-other` },
+    { ...shell, exe: '/tmp/sh' },
+    { ...shell, uid: USER + 1 },
+  ])('rejects a different helper invocation', async (invalid) => {
+    expect(await verifyAskpassRecoveryChain(probe([invalid, git]), 100, helperPath, USER))
+      .toEqual({ ok: false, reason: 'helper' });
+  });
+
+  it('offers guidance to bundled Git without allowing it to receive a credential', async () => {
+    const bundled = { ...git, exe: '/opt/agent-runtime/git-core/git-remote-https' };
+    expect(await verifyAskpassRecoveryChain(probe([shell, bundled]), 100, helperPath, USER))
+      .toMatchObject({ ok: true, asker: { program: 'git', gitOrigin: 'https://github.com' } });
+    expect(await verifyAskpassChain(probe([{ ...curl(200), exe: '/usr/bin/curl' }, bundled]), 100, SOCK, USER))
+      .toEqual({ ok: false, reason: 'parent' });
+  });
+
+  it('rejects a direct agent invocation and credential dump', async () => {
+    for (const parent of [
+      { ...git, args: 'node agent.js', exe: '/usr/local/bin/node' },
+      { ...git, args: 'git credential fill', exe: '/usr/bin/git' },
+    ]) {
+      expect(await verifyAskpassRecoveryChain(probe([shell, parent]), 100, helperPath, USER))
+        .toEqual({ ok: false, reason: 'parent' });
+    }
   });
 });

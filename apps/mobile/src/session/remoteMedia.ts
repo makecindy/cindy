@@ -1,4 +1,6 @@
 import { peerMediaUri, peerMediaExpiry, releasePeerMedia } from "@/device-link/peerFileRegistry";
+import { peerMediaPlayback } from '@/device-link/peerFileRegistry';
+import { isLocalAgentNetMediaReceipt } from '@/device-link/agentNetLocalMediaReceipt';
 import type { NormalizedToolMedia } from "@/session/messageNormalize";
 import {
   isPayloadDesktopLocalMediaUrl,
@@ -36,9 +38,14 @@ export interface MobileRemoteMediaFetchResult {
 export interface MobileRemoteMediaPresignResult {
   getUrl: string;
   expiresAt: string;
+  /** Local-only receipt; accepted only with the native adapter's object identity. */
+  protectLocalFile?(): () => void;
 }
 
 export interface MobileResolvedRemoteMedia {
+  isAvailable?(): boolean;
+  /** Local-only consumer lease; never serialized over device-link. */
+  protectLocalFile?(): () => void;
   url: string;
   /** inline 缩略图 / 本地磁盘缓存命中没有在世 OSS 对象,为空串(退屏清理跳过 DELETE)。 */
   ossKey: string;
@@ -51,6 +58,8 @@ export interface MobileResolvedRemoteMedia {
 }
 
 export interface MobileRemoteMediaFetchOptions {
+  /** Local player intent, never serialized into a media:fetch request. */
+  playback?: boolean;
   /** Await Host version validation; still reuse bytes for that confirmed version. */
   revalidate?: boolean;
   /** Local callbacks: only connect on a cache miss or during background revalidation. */
@@ -69,6 +78,10 @@ export interface MobileRemoteMediaFetchOptions {
 
 export interface MobileRemoteMediaResolverDeps {
   findLocalImage?(url: string): Promise<{ uri: string; mimeType: string; size: number } | null>;
+  /** Retain completed video bytes before releasing the peer's short-lived staging file. */
+  retainLocalVideo?(media: MobileResolvedRemoteMedia): Promise<MobileResolvedRemoteMedia>;
+  /** Full images may use peer transport only when the viewer owns a durable copy. */
+  retainLocalImage?(media: MobileResolvedRemoteMedia): Promise<MobileResolvedRemoteMedia>;
   fetchRemoteMedia(
     url: string,
     opts?: MobileRemoteMediaFetchOptions,
@@ -119,6 +132,7 @@ export type ResolveRemoteMediaFn = (
     front?: boolean;
     signal?: AbortSignal;
     forceRefresh?: boolean;
+    /** 不新建取件;与 front 同用可提升已有排队项。 */
     cachedOnly?: boolean;
   },
 ) => Promise<MobileResolvedRemoteMedia>;
@@ -177,12 +191,12 @@ export function localCopyResolvedMedia(
 }
 
 export function isResolvedRemoteMediaFresh(
-  media: Pick<MobileResolvedRemoteMedia, "expiresAt">,
+  media: Pick<MobileResolvedRemoteMedia, "expiresAt" | "isAvailable">,
   now = Date.now(),
 ): boolean {
   const expiresAt = Date.parse(media.expiresAt);
   return (
-    Number.isFinite(expiresAt) && expiresAt - now > EXPIRY_SAFETY_WINDOW_MS
+    media.isAvailable?.() !== false && Number.isFinite(expiresAt) && expiresAt - now > EXPIRY_SAFETY_WINDOW_MS
   );
 }
 
@@ -191,6 +205,23 @@ export async function resolveMobileRemoteMedia(
   deps: MobileRemoteMediaResolverDeps,
   opts?: MobileRemoteMediaResolveOptions,
 ): Promise<MobileResolvedRemoteMedia> {
+  const retainCopy = media.kind === 'video' ? deps.retainLocalVideo
+    : media.kind === 'image' && !opts?.thumbnail ? deps.retainLocalImage : undefined;
+  // Complete-file reads can use authenticated peer transport. Playback must own
+  // a durable copy first: peer staging files expire after five minutes.
+  const stream = retainCopy ? false : opts?.stream;
+  const retain = async (resolved: MobileResolvedRemoteMedia, fallback?: MobileResolvedRemoteMedia) => {
+    if (!retainCopy) return resolved;
+    try { return await retainCopy(resolved); }
+    catch (error) {
+      if (media.kind !== 'image') throw error;
+      if (fallback) return fallback;
+      // A full disk must not break an otherwise viewable image. Fall back once
+      // to the existing retained URL path, without exposing expiring peer files.
+      return resolveMobileRemoteMedia(media, { ...deps, retainLocalImage: undefined }, { ...opts, stream: true });
+    }
+    finally { releasePeerMedia(resolved.url); }
+  };
   if (media.kind === 'image' && !opts?.skipCache) {
     // Shared by task history, group chat and file viewers. Keeping this here
     // avoids fixing thumbnails in one screen while original-image reads still go online.
@@ -207,19 +238,22 @@ export async function resolveMobileRemoteMedia(
     throw new Error(i18n.t("composer.attachments.notFetchableMedia"));
   }
   const fetchOpts = {
-    ...(opts?.revalidate ? { revalidate: true } : {}),
+    ...(media.kind === 'video' && opts?.stream !== false ? { playback: true } : {}),
+    // Old peer caches may carry octet-stream for a video. Revalidate metadata,
+    // not bytes: a matching version still reuses the downloaded local file.
+    ...(opts?.revalidate || media.kind === 'video' ? { revalidate: true } : {}),
     ...(opts?.beforeFetch ? { beforeFetch: opts.beforeFetch } : {}),
-    ...(opts?.stream === false ? { retainBackground: async (result: MobileRemoteMediaFetchResult, isCurrent?: () => boolean) => {
+    ...(stream === false ? { retainBackground: async (result: MobileRemoteMediaFetchResult, isCurrent?: () => boolean) => {
       if (!result.ossKey || isCurrent?.() === false) return;
       try {
         const signed = await deps.presignGet(result.ossKey);
         const copy = await result.cacheDownload?.(signed.getUrl);
         const uri = copy && peerMediaUri(copy);
         if (uri) releasePeerMedia(uri);
-      } finally { if (isCurrent?.() !== false) opts.discardBackgroundOssKey?.(result.ossKey); }
+      } finally { if (isCurrent?.() !== false) opts?.discardBackgroundOssKey?.(result.ossKey); }
     } } : {}),
     ...(opts?.onProgress ? { onProgress: opts.onProgress } : {}),
-    ...(opts?.stream !== undefined ? { stream: opts.stream } : {}),
+    ...(stream !== undefined ? { stream } : {}),
     ...(opts?.onOssKey ? { onDiscardOssKey: opts.onOssKey } : {}),
     ...(opts?.signal ? { signal: opts.signal } : {}),
     ...(opts?.skipCache ? { skipCache: true } : {}),
@@ -229,16 +263,36 @@ export async function resolveMobileRemoteMedia(
     media.url,
     Object.keys(fetchOpts).length > 0 ? fetchOpts : undefined,
   );
+  const playback = peerMediaPlayback(fetched);
+  if (playback) {
+    let consumers = 0;
+    return {
+    url: playback.url, ossKey: '', size: fetched.size, mimeType: fetched.mimeType,
+    previewable: true, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+    isAvailable: () => playback.isOpen(),
+    protectLocalFile: () => {
+      const releaseIdleProtection = playback.retain?.();
+      consumers++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        releaseIdleProtection?.();
+        if (--consumers === 0) void playback.close();
+      };
+    },
+  };
+  }
   const local = peerMediaUri(fetched);
   if (local)
-    return {
+    return retain({
       url: local,
       ossKey: "",
       size: fetched.size,
       mimeType: fetched.mimeType,
       expiresAt: peerMediaExpiry(fetched)!,
       previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
-    };
+    });
   // inline 回包:字节已随 invoke 帧到手,无 OSS 对象,跳过 presign。
   // 缩略图给 data:image;小音视频若仍以内联回包到达,也走 data URI,由播放器直接打开。
   // 图片宿主(会话屏)会把字节落盘并换成 file://。
@@ -277,27 +331,29 @@ export async function resolveMobileRemoteMedia(
     mobileDebugLog("warn", "files", "remote media presign invalid", { kind: media.kind });
     throw new Error(i18n.t("composer.attachments.mediaUrlInvalid"));
   }
-  const downloaded = await fetched.cacheDownload?.(signed.getUrl);
-  const downloadedUri = downloaded && peerMediaUri(downloaded);
-  if (downloadedUri) return {
-    url: downloadedUri, ossKey: fetched.ossKey, mimeType: fetched.mimeType, size: fetched.size,
-    expiresAt: peerMediaExpiry(downloaded!)!,
-    previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
-  };
-  if (media.kind !== "image")
-    mobileDebugLog("debug", "files", "remote media presigned", {
-      kind: media.kind,
-      ms: Date.now() - presignStartedAt,
-      size: fetched.size,
-    });
-  return {
+  const signedMedia: MobileResolvedRemoteMedia = {
     url: signed.getUrl,
+    ...(isLocalAgentNetMediaReceipt(signed) ? { protectLocalFile: signed.protectLocalFile } : {}),
     ossKey: fetched.ossKey,
     mimeType: fetched.mimeType,
     size: fetched.size,
     expiresAt: signed.expiresAt,
     previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
   };
+  const downloaded = await fetched.cacheDownload?.(signed.getUrl);
+  const downloadedUri = downloaded && peerMediaUri(downloaded);
+  if (downloadedUri) return retain({
+    url: downloadedUri, ossKey: fetched.ossKey, mimeType: fetched.mimeType, size: fetched.size,
+    expiresAt: peerMediaExpiry(downloaded!)!,
+    previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
+  }, signedMedia);
+  if (media.kind !== "image")
+    mobileDebugLog("debug", "files", "remote media presigned", {
+      kind: media.kind,
+      ms: Date.now() - presignStartedAt,
+      size: fetched.size,
+    });
+  return signedMedia;
 }
 
 export function formatRemoteMediaSize(bytes: number): string {
@@ -353,7 +409,7 @@ function isValidPresignResult(value: MobileRemoteMediaPresignResult): boolean {
   return (
     !!value &&
     typeof value.getUrl === "string" &&
-    value.getUrl.startsWith("http") &&
+    (value.getUrl.startsWith("http") || (isLocalAgentNetMediaReceipt(value) && value.getUrl.startsWith('file://'))) &&
     typeof value.expiresAt === "string" &&
     Number.isFinite(Date.parse(value.expiresAt))
   );

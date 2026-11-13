@@ -14,6 +14,30 @@
 子代理详情的可选 `resultReady` 透传到本机与设备互联控制卡：显式 `false` 时中间输出不阻止
 插话，`true` 时改为排队；旧宿主或 runner 缺少该字段时，界面保留按输出判断的回退。
 
+### 损坏状态的账号边界恢复
+
+`status.json` 仍是展示和控制的主记录。账号边界读取不到状态时，可以使用同目录的
+完整终态 `result.json` 作为独立结束回执：必须匹配 `config.json` 的 runId、taskId、
+parentSessionId、runDir 和全部 child/session/agent 身份，并确认所有子任务均为终态。
+该回执可能在仅尝试终止子进程后就写出，不能单独证明进程退出。恢复还必须通过独立 OS
+进程清单确认 run UUID 对应的 runner 与所有 native session ID 对应的 Pi 子进程均已消失，
+包括 runner 已退出但子进程仍存活的情况。清单查询失败、超时、截断，或无法确认本账号
+进程可见性时保留未知；Windows 使用系统的当前用户过滤取得 PID 集合，再逐项核验 CIM
+命令行；若进程在两次查询之间消失或命令行不可读，必须再由 OS 独立确认该 PID 已退出。
+仍存活但不可读或存活查询失败通常不放行。唯一系统角色例外是通过只读
+`GetProcessInformation(ProcessProtectionLevelInfo)` 确认的 `ANTIMALWARE_LIGHT` 进程：
+其代码完整性由 Windows 强制约束，不是 Cindy 启动的普通 Node/Electron/Pi 进程。
+不按 `DefenderSessionHelper.exe` 等文件名豁免；无保护、第三方 `PPL_APP`、未知级别或查询失败仍拒绝。
+该判据遵循 [Windows 保护进程合同](https://learn.microsoft.com/en-us/windows/win32/services/protecting-anti-malware-services-)；
+查询只申请 `PROCESS_QUERY_LIMITED_INFORMATION`，随后关闭句柄。
+另排除本次启动的 `tasklist` 查询进程自身 PID，避免它正常退出后使清单永久不完整。
+查询是只读核验，不向清单里的 PID 发信号。先读取本轮所有 parent-session root 的候选回执，
+再共享一次清单查询，避免历史 root 逐个查询耗尽总回收预算；下次扫描或升级终止阶段重新读取。
+续跑使用新 run UUID；复用 native session ID 的活跃子进程仍保守视为未结束。
+可读的运行态不被结果附件覆盖。缺少、损坏、超限、链接文件、身份不符或不完整的回执仍
+保持未知并阻止账号交接，不能仅凭宿主退出、文件陈旧或 stop 无回执放行。恢复只读取证据，
+不修改或删除原状态、结果和对话文件。
+
 ## 对标与取舍
 
 对照社区 [pi-subagents 工具契约](https://github.com/nicobailon/pi-subagents/blob/main/docs/tool-reference.md)、
@@ -24,7 +48,7 @@
 
 | 环节 | 原有缺口 | 本次实现 |
 | --- | --- | --- |
-| 能力发现 | 角色名在工具说明里，模型难以系统查询 | `capabilities` 返回角色、工具、可选型号与并发限制 |
+| 能力发现 | 角色名在工具说明里，模型难以系统查询 | `capabilities` 返回角色、工具、可选型号（含各自可用的 provider）与并发限制 |
 | 启动 | runId 仅在 details，模型收到笼统启动回执 | 文本回执带 runId/taskId |
 | 控制 | 模型只能针对整个 run；写入邮箱就宣称成功 | `childId` 定向，等待 runner receipt，拒绝与不确定分别报告 |
 | 等待 | 只能反复 get | `wait` 最长 60 秒，超时不终止子代理 |

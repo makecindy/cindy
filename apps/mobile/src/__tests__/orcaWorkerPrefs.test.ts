@@ -41,7 +41,10 @@ describe('Worker creation preferences', () => {
       lastAgent: 'nope',
       agents: { pi: { model: 'my-model', effort: '', fast: 'yes' } },
       workerPermissionMode: 'auto',
+      // unit：sanitize 旧记录缺少位置/来源时丢弃完整路线；原有覆盖仅检查逐 Agent 字段。
+      modelSelectionByHost: { host: { agent: 'pi', model: { id: 'model', effort: 'high' } } },
     });
+    expect(prefs.modelSelectionByHost).toEqual({});
     expect(prefs.lastAgent).toBe('codex');
     expect(prefs.agents.pi).toEqual({ model: 'my-model', effort: 'high', fast: false });
     expect(prefs.agents.codex.model).toBe('codex/gpt-5.5');

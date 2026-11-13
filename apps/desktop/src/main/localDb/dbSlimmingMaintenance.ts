@@ -711,6 +711,23 @@ function compactWorkingCopy(
             WHERE id IN (SELECT id FROM temp.db_slimming_targets)`,
         );
       }
+      // Archived tasks stay visible after their history is purged, so they need the same
+      // cleared_at boundary as active tasks. Without it the renderer cannot tell
+      // "history cleared by maintenance" from "history failed to load" and shows a blank
+      // pane instead of the cleared placeholder (#3709). This runs before the
+      // includeActiveTasks block so archived tasks are stamped even when active tasks are
+      // excluded, and it only touches the archived targets in the current scan window.
+      if (sessionColumns.has('cleared_at')) {
+        activeDb
+          .prepare(
+            `UPDATE sessions
+                SET cleared_at = MAX(COALESCE(cleared_at, 0), ?)
+              WHERE id IN (
+                SELECT id FROM temp.db_slimming_targets WHERE status = 'archived'
+              )`,
+          )
+          .run(Math.floor(request.scannedAt));
+      }
       if (request.includeActiveTasks === true) {
         if (tableExists(activeDb, 'session_goals')) {
           activeDb.exec(

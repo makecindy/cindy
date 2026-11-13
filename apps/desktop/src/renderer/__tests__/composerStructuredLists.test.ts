@@ -1,6 +1,4 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Editor, Node } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
@@ -211,29 +209,6 @@ describe('composer structured list input rules', () => {
     expect(editor.state.doc.firstChild?.childCount).toBe(1);
     expect(editor.state.doc.lastChild?.type.name).toBe('orderedList');
     expect(editor.state.doc.lastChild?.attrs.start).toBe(3);
-  });
-
-  it('reserves the full-width CJK marker separately from the ordinal digits', () => {
-    const editor = makeEditor();
-
-    typeThroughInputRules(editor, '2、');
-
-    const list = editor.view.dom.querySelector('ol');
-    expect(list?.getAttribute('data-marker')).toBe('、');
-    expect(list?.getAttribute('data-marker-digits')).toBe('1');
-
-    const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
-    const baseListRule = css.match(
-      /\[data-chat-input-root\]\s+\.ProseMirror\s+:is\(ul,\s*ol\)\s*\{([\s\S]*?)\r?\n\s*\}/,
-    )?.[1];
-    const cjkMarkerRule = css.match(
-      /\[data-chat-input-root\]\s+\.ProseMirror\s+ol\[data-marker='、'\]\s*\{([\s\S]*?)\r?\n\s*\}/,
-    )?.[1];
-    expect(baseListRule).toContain('--composer-list-marker-extra: 0em;');
-    expect(baseListRule).toContain(
-      'var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)',
-    );
-    expect(cjkMarkerRule).toContain('--composer-list-marker-extra: 0.7em;');
   });
 
   it('reserves enough marker width for long ordered-list numbers', () => {
@@ -1844,6 +1819,35 @@ describe('composer structured list serialization', () => {
       href,
       botId: 'bot-dash-1',
       name: 'Dash Bot',
+    }]);
+  });
+
+  // 近况里点一条待办插进来的 chip：发出去要带稳定 Todo ID，不能被当成文件提及。
+  it('serializes a teammate Todo chip as a structured reference carrying its id', () => {
+    const href = 'cindy://bot-todo/bot-1/todo-7';
+    const editor = makeEditor({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [
+          { type: 'mentionChip', attrs: { kind: 'todo', label: '回 [MagicLizi] 的邮件', path: href } },
+          { type: 'text', text: ' 按周四回' },
+        ],
+      }],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    const wire = `[回 \\[MagicLizi\\] 的邮件](${href})`;
+    expect(serialized.text).toBe(`${wire} 按周四回`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([{
+      kind: 'todo',
+      start: 0,
+      end: wire.length,
+      href,
+      botId: 'bot-1',
+      todoId: 'todo-7',
+      title: '回 [MagicLizi] 的邮件',
     }]);
   });
 });

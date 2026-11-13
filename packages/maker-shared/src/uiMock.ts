@@ -1,0 +1,566 @@
+import { UI_MOCK_SHOWCASE_PROJECTS, UI_MOCK_SHOWCASE_TASKS } from './uiMockShowcase';
+import { UI_MOCK_BIDI_TASK } from './uiMockBidi';
+export { UI_MOCK_SHOWCASE_PROJECTS };
+
+/**
+ * UI mock data shared by Desktop and Mobile dev builds.
+ *
+ * One catalog of demo projects and tasks, written in the raw Desktop row shape
+ * (the same rows Mobile receives over device-link). Desktop seeds them into an
+ * isolated sandbox database; Mobile's visual mock serves them without login.
+ * Dev tooling only: production code must not import this module.
+ * See docs/dev-rules/ui-mock-data.md.
+ */
+/** Every seeded id starts with this prefix, except the Mobile state ids below. */
+export const UI_MOCK_ID_PREFIX = 'ui-mock-';
+
+/** Synthetic Pi diagnostics for the same context panel on Desktop and Mobile. */
+export const UI_MOCK_PI_CONTEXT_USAGE = {
+  model: 'pi-context-demo', totalTokens: 8192, maxTokens: 200000, rawMaxTokens: 200000,
+  percentage: 4.096, categories: [], gridRows: [], memoryFiles: [], mcpTools: [], agents: [],
+  isAutoCompactEnabled: true, apiUsage: null,
+  textEstimate: {
+    method: 'text-heuristic',
+    items: [
+      { source: 'delivery', tokens: 227 }, { source: 'host', tokens: 460 },
+      { source: 'plugins', tokens: 1100 }, { source: 'memoryRules', tokens: 900 },
+      { source: 'memoryIndex', tokens: 180 }, { source: 'native', tokens: 740 },
+      { source: 'skills', tokens: 1480 }, { source: 'project', tokens: 240 },
+      { source: 'tools', tokens: 2860 }, { source: 'messages', tokens: 320 },
+    ],
+  },
+};
+
+/** GitHub 插件 PR 卡片的演示卡位(手机 mock 按这些 id 返回卡片内容)。 */
+export const UI_MOCK_PR_CARD_IDS = {
+  ask: `${UI_MOCK_ID_PREFIX}pr-card-ask`,
+  draft: `${UI_MOCK_ID_PREFIX}pr-card-draft`,
+  following: `${UI_MOCK_ID_PREFIX}pr-card-following`,
+  merged: `${UI_MOCK_ID_PREFIX}pr-card-merged`,
+} as const;
+
+function prCardCall(card: keyof typeof UI_MOCK_PR_CARD_IDS, args: Record<string, unknown>): UiMockMessage {
+  return {
+    role: 'tool',
+    name: 'mcp__cindy__ghost_call',
+    input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args },
+    result: JSON.stringify({ ok: true, xdt_card_id: UI_MOCK_PR_CARD_IDS[card], xdt_card_turn_end: true }),
+  };
+}
+
+export interface UiMockProject {
+  /** Directory name; Desktop creates it under the sandbox, Mobile shows it as a remote path. */
+  name: string;
+  /** Small text files so file browsers and previews have something to open. */
+  files: Record<string, string>;
+}
+
+export type UiMockMessage =
+  | { role: 'user'; text: string }
+  | { role: 'assistant'; text: string }
+  | { role: 'thinking'; text: string }
+  | { role: 'error'; text: string }
+  | { role: 'tool'; name: string; input: Record<string, unknown>; result: string }
+  /** New task "Let a plugin choose": the one-line note under the first message. */
+  | { role: 'plugin-route'; note: Record<string, unknown> };
+
+export interface UiMockTask {
+  id: string;
+  title: string;
+  /** Project directory name, or null for a dialogue task. */
+  project: string | null;
+  agentKind: 'cc' | 'codex' | 'pi';
+  model: string;
+  effort: 'low' | 'medium' | 'high' | 'xhigh';
+  status: 'active' | 'archived';
+  source: 'desktop' | 'scheduler';
+  pinned?: boolean;
+  fastMode?: boolean;
+  /** Last activity, relative to the time the data is built. */
+  minutesAgo: number;
+  messages: UiMockMessage[];
+}
+
+export const UI_MOCK_PROJECTS: readonly UiMockProject[] = [
+  ...UI_MOCK_SHOWCASE_PROJECTS,
+  {
+    name: 'cindy-demo',
+    files: {
+      'README.md': '# Cindy Demo\n\nA small demo project used by the UI mock data.\n',
+      'src/login.tsx': 'export function Login() {\n  return <form className="login" />;\n}\n',
+      'src/settings.tsx': 'export function Settings() {\n  return <section className="settings" />;\n}\n',
+      'package.json': '{\n  "name": "cindy-demo",\n  "private": true\n}\n',
+    },
+  },
+  {
+    name: 'design-system',
+    files: {
+      'README.md': '# Design System\n\nTokens and components for the demo.\n',
+      'tokens.json': '{\n  "space": [4, 8, 12, 16, 24]\n}\n',
+    },
+  },
+];
+
+const RICH_ANSWER = [
+  '## 结论',
+  '',
+  '登录页在窄窗口下的错位来自**固定宽度的表单容器**，改为随窗口收缩即可。',
+  '',
+  '| 窗口宽度 | 修改前 | 修改后 |',
+  '| --- | --- | --- |',
+  '| 320 | 横向溢出 | 正常 |',
+  '| 768 | 正常 | 正常 |',
+  '',
+  '```tsx',
+  'export function Login() {',
+  '  return <form className="login w-full max-w-sm" />;',
+  '}',
+  '```',
+  '',
+  '1. 去掉 `width: 420px`',
+  '2. 加上 `max-width`，保留居中',
+  '3. 补一张深色模式截图',
+  '',
+  '> 只改样式，不影响登录流程。',
+].join('\n');
+
+/**
+ * Task ids starting with `visual-` keep Mobile's runtime state overlays
+ * (running, waiting for permission, queued) working; Desktop shows them as
+ * ordinary tasks because those states live in the agent runtime, not the database.
+ */
+export const UI_MOCK_TASKS: readonly UiMockTask[] = [
+  ...UI_MOCK_SHOWCASE_TASKS,
+  UI_MOCK_BIDI_TASK,
+  {
+    id: 'ui-mock-remote-resume-rejected',
+    title: '远程任务无法恢复',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '继续整理演示项目的发布说明。' },
+      { role: 'assistant', text: '已完成变更清单，接下来整理验证步骤。' },
+      { role: 'user', text: '请继续。' },
+      { role: 'error', text: 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer' },
+    ],
+  },
+  {
+    id: 'visual-issue-confirm',
+    title: '反馈手机上的问题',
+    project: 'cindy-demo',
+    agentKind: 'cc', model: 'claude-sonnet-5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '手机上反馈问题时，确认卡提示只能回电脑处理。' },
+      { role: 'assistant', text: '已整理好反馈，请检查标题、正文和公开署名，确认后提交。' },
+    ],
+  },
+  {
+    id: 'ui-mock-inline-math',
+    title: '行内公式语义验收',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-5.5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '检查行内公式的符号、参数和上下标。' },
+      { role: 'assistant', text: String.raw`单字符参数：$e\in\mathcal E$。
+
+花括号参数：$e\in\mathcal{E}$。
+
+符号边界：$\mathrm{\alpha}x$；嵌套样式：$\mathbf{\mathcal{E}}$。
+
+分数与根号：$\frac\mathrm{12}2$，$\sqrt\mathrm{2}$。
+
+上下标：$x^{\mathrm{12}}+y_\mathrm i$。
+
+字面花括号：$e\in\mathrm{\{E\}}$。
+
+块级公式对照：
+
+$$e\in\mathcal{E},\quad x^{12}+y_i$$` },
+    ],
+  },
+  {
+    id: 'visual-running',
+    title: '重构登录页布局',
+    project: 'cindy-demo',
+    agentKind: 'codex',
+    model: 'gpt-5.5',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '登录页在窄窗口下会错位，帮我看看。' },
+      { role: 'thinking', text: '先读登录页组件和样式。' },
+      { role: 'tool', name: 'Read', input: { file_path: 'src/login.tsx' }, result: 'export function Login() { … }' },
+      { role: 'assistant', text: '正在调整表单容器的宽度，稍后给出改前／改后对比。' },
+    ],
+  },
+  {
+    id: 'visual-pending',
+    title: '清理旧的构建缓存',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 3,
+    messages: [
+      { role: 'user', text: '构建目录太大了，清理一下旧缓存。' },
+      { role: 'assistant', text: '需要删除 `.cache/build`，等你确认后继续。' },
+    ],
+  },
+  {
+    id: 'visual-queue',
+    title: '补充设置页的深色模式截图',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-opus-5',
+    effort: 'high',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 6,
+    messages: [
+      { role: 'user', text: '给设置页补一组深色模式截图。' },
+      { role: 'assistant', text: '浅色模式已经截好，深色模式排在下一条消息之后处理。' },
+    ],
+  },
+  {
+    id: 'visual-prompt-recommendation',
+    title: '整理本周发布说明',
+    project: null,
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 12,
+    messages: [
+      { role: 'user', text: '把这周合并的改动整理成发布说明。' },
+      { role: 'assistant', text: '已按「新功能／修复／体验改进」分组，共 12 条。需要我再写一段英文版吗？' },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}rich-answer`,
+    title: '登录页窄窗口错位排查',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-opus-5',
+    effort: 'high',
+    status: 'active',
+    source: 'desktop',
+    pinned: true,
+    minutesAgo: 25,
+    messages: [
+      { role: 'user', text: '为什么登录页在 320 宽度下会横向滚动？给我结论和改法。' },
+      { role: 'thinking', text: '检查容器宽度、媒体查询和全局样式。' },
+      {
+        role: 'tool',
+        name: 'Bash',
+        input: { command: 'rg -n "width: 420px" src' },
+        result: 'src/login.tsx:2:  width: 420px;',
+      },
+      {
+        role: 'tool',
+        name: 'Edit',
+        input: { file_path: 'src/login.tsx', old_string: 'width: 420px', new_string: 'max-width: 24rem' },
+        result: 'The file src/login.tsx has been updated.',
+      },
+      { role: 'assistant', text: RICH_ANSWER },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}pr-card`,
+    title: 'PR 卡片各状态',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 40,
+    messages: [
+      { role: 'user', text: '登录页改完先别发，用 PR 卡片问我。' },
+      {
+        role: 'tool',
+        name: 'Edit',
+        input: { file_path: 'src/login.tsx', old_string: 'width: 420px', new_string: 'max-width: 24rem' },
+        result: 'The file src/login.tsx has been updated.',
+      },
+      prCardCall('ask', { repo: 'cindy-demo/web', head: 'fix/login-width', base: 'main', commits: 1, files_total: 1 }),
+      { role: 'assistant', text: '表单改成随窗口收缩，已提交到 fix/login-width。要不要发出去，在卡片里选。' },
+      { role: 'user', text: '发成草稿。' },
+      prCardCall('draft', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42' }),
+      { role: 'assistant', text: '草稿 PR #42 已创建，任务标题也改好了。' },
+      { role: 'user', text: '转成正式，并自动跟进到合并。' },
+      prCardCall('following', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42', following: true }),
+      { role: 'assistant', text: '已转为正式 PR，后台每 10 分钟检查一次，有变化再叫我。' },
+      { role: 'user', text: '合并了吗？' },
+      prCardCall('merged', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42' }),
+      { role: 'assistant', text: '#42 已合并，跟进已结束。' },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}long-title`,
+    title: '一个特别长的任务标题，用来检查列表、标题栏和通知里的截断与换行是否正常显示，并确认悬停时能看到完整内容',
+    project: 'design-system',
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 60,
+    messages: [
+      { role: 'user', text: '检查超长标题的显示。' },
+      { role: 'assistant', text: '列表里截断为一行，标题栏显示完整内容的前半部分。' },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}english`,
+    title: 'Investigate flaky upload test',
+    project: 'design-system',
+    agentKind: 'codex',
+    model: 'gpt-5.5',
+    effort: 'xhigh',
+    status: 'active',
+    source: 'desktop',
+    fastMode: true,
+    minutesAgo: 180,
+    messages: [
+      { role: 'user', text: 'The upload test fails about once every twenty runs. Find out why.' },
+      {
+        role: 'tool',
+        name: 'Bash',
+        input: { command: 'pnpm vitest run upload --repeat 20' },
+        result: '19 passed, 1 failed: timeout waiting for progress event',
+      },
+      {
+        role: 'assistant',
+        text: 'The progress listener is attached after the request starts, so a fast upload can finish before it subscribes. Attaching it first fixes the race.',
+      },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}dialogue`,
+    title: '帮我写一封请假邮件',
+    project: null,
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'low',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 60 * 26,
+    messages: [
+      { role: 'user', text: '下周三想请一天假，帮我写封邮件给经理。' },
+      {
+        role: 'assistant',
+        text: '主题：下周三请假一天\n\n王经理您好：\n\n我想在下周三（10 月 29 日）请假一天处理个人事务，手头的工作会在周二前交接好。\n\n谢谢！',
+      },
+    ],
+  },
+  {
+    id: 'visual-automation-running',
+    title: '[Schedule] 每日依赖检查',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'active',
+    source: 'scheduler',
+    minutesAgo: 2,
+    messages: [
+      { role: 'user', text: '检查依赖是否有安全更新。' },
+      { role: 'assistant', text: '正在检查 128 个依赖。' },
+    ],
+  },
+  {
+    id: 'visual-automation-unread',
+    title: '[Schedule] 每周用量报告',
+    project: null,
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'active',
+    source: 'scheduler',
+    minutesAgo: 60 * 30,
+    messages: [
+      { role: 'user', text: '汇总本周的模型用量。' },
+      { role: 'assistant', text: '本周共 42 个任务，用量比上周少 8%。' },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}archived`,
+    title: '已归档：迁移旧的图标资源',
+    project: 'design-system',
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'archived',
+    source: 'desktop',
+    minutesAgo: 60 * 24 * 9,
+    messages: [
+      { role: 'user', text: '把旧图标换成新的图标库。' },
+      { role: 'assistant', text: '已替换 36 个图标，旧资源已删除。' },
+    ],
+  },
+  {
+    id: 'ui-mock-plugin-route-routed',
+    title: '插件模型：选了模型',
+    project: null,
+    agentKind: 'codex',
+    model: 'gpt-6-astra',
+    effort: 'high',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 2,
+    messages: [
+      { role: 'user', text: '写一个判断回文的函数。' },
+      { role: 'plugin-route', note: { pluginName: '决策闸门', outcome: 'routed', modelName: 'GPT-6-Astra', effort: 'high', reason: '写代码 98%' } },
+      { role: 'assistant', text: '好的，函数已写好。' },
+    ],
+  },
+  {
+    id: 'ui-mock-plugin-route-failed',
+    title: '插件模型：插件没回应',
+    project: null,
+    agentKind: 'codex',
+    model: 'gpt-6.1-sol',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 3,
+    messages: [
+      { role: 'user', text: '写一个求阶乘的函数。' },
+      { role: 'plugin-route', note: { pluginName: '决策闸门', outcome: 'kept', modelName: 'GPT-6.1-Sol', why: 'failed' } },
+      { role: 'assistant', text: '好的，函数已写好。' },
+    ],
+  },
+];
+
+export interface UiMockSessionRow {
+  id: string;
+  title: string;
+  /** Absolute project path, or null for dialogue tasks (each platform assigns its own). */
+  workingDir: string | null;
+  workspaceKind: 'project' | 'dialogue';
+  agentKind: UiMockTask['agentKind'];
+  model: string;
+  effort: UiMockTask['effort'];
+  permissionMode: 'ask';
+  fastMode: boolean;
+  status: UiMockTask['status'];
+  source: UiMockTask['source'];
+  /** Unix ms. */
+  pinnedAt: number | null;
+  userSendAt: number;
+  createdAt: number;
+  updatedAt: number;
+  preview: string;
+  messageCount: number;
+}
+
+export type UiMockMessageRole = 'user' | 'assistant' | 'thinking' | 'error' | 'tool_use' | 'tool_result';
+
+export interface UiMockMessageRow {
+  id: string;
+  clientId: string;
+  sessionId: string;
+  role: UiMockMessageRole;
+  /** Decoded content; Desktop stores `JSON.stringify(content)`. */
+  content: unknown;
+  toolUseId: string | null;
+  agentMeta?: Record<string, unknown>;
+  /** Unix ms. */
+  createdAt: number;
+}
+
+export interface UiMockRows {
+  sessions: UiMockSessionRow[];
+  messages: UiMockMessageRow[];
+}
+
+const MINUTE_MS = 60_000;
+
+/**
+ * Build session and message rows. `projectRoot` is the parent directory of the
+ * demo projects; times are relative to `now` so lists always look recent.
+ */
+export function buildUiMockRows({ now, projectRoot }: { now: number; projectRoot: string }): UiMockRows {
+  let end = projectRoot.length;
+  while (end > 0 && (projectRoot[end - 1] === '/' || projectRoot[end - 1] === '\\')) end -= 1;
+  const root = projectRoot.slice(0, end);
+  const separator = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+  const sessions: UiMockSessionRow[] = [];
+  const messages: UiMockMessageRow[] = [];
+  for (const task of UI_MOCK_TASKS) {
+    const updatedAt = now - task.minutesAgo * MINUTE_MS;
+    const rows = taskMessageRows(task, updatedAt);
+    messages.push(...rows);
+    sessions.push({
+      id: task.id,
+      title: task.title,
+      workingDir: task.project ? `${root}${separator}${task.project}` : null,
+      workspaceKind: task.project ? 'project' : 'dialogue',
+      agentKind: task.agentKind,
+      model: task.model,
+      effort: task.effort,
+      permissionMode: 'ask',
+      fastMode: task.fastMode ?? false,
+      status: task.status,
+      source: task.source,
+      pinnedAt: task.pinned ? updatedAt : null,
+      userSendAt: rows[0]?.createdAt ?? updatedAt,
+      createdAt: (rows[0]?.createdAt ?? updatedAt) - MINUTE_MS,
+      updatedAt,
+      preview: previewOf(task),
+      messageCount: rows.length,
+    });
+  }
+  return { sessions, messages };
+}
+
+function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
+  const rows: UiMockMessageRow[] = [];
+  const count = task.messages.reduce((total, message) => total + (message.role === 'tool' ? 2 : 1), 0);
+  let at = endsAt - (count - 1) * 1_000;
+  const push = (role: UiMockMessageRole, content: unknown, toolUseId: string | null = null, agentMeta?: Record<string, unknown>) => {
+    const id = `${UI_MOCK_ID_PREFIX}${task.id}-${rows.length + 1}`;
+    rows.push({ id, clientId: id, sessionId: task.id, role, content, toolUseId, ...(agentMeta ? { agentMeta } : {}), createdAt: at });
+    at += 1_000;
+  };
+  task.messages.forEach((message, index) => {
+    switch (message.role) {
+      case 'user':
+        push('user', { text: message.text, images: [], files: [] });
+        break;
+      case 'assistant':
+        push('assistant', message.text);
+        break;
+      case 'plugin-route':
+        push('assistant', '', null, { pluginModelRoute: message.note });
+        break;
+      case 'thinking':
+        push('thinking', { kind: 'thinking', text: message.text, durationMs: 1_500, isRedacted: false });
+        break;
+      case 'error':
+        push('error', { message: message.text });
+        break;
+      case 'tool': {
+        const toolUseId = `${UI_MOCK_ID_PREFIX}${task.id}-tool-${index + 1}`;
+        push('tool_use', { toolUseId, toolName: message.name, input: message.input }, toolUseId);
+        push('tool_result', message.result, toolUseId);
+        break;
+      }
+    }
+  });
+  return rows;
+}
+
+function previewOf(task: UiMockTask): string {
+  const last = [...task.messages].reverse().find((message) => message.role === 'assistant' || message.role === 'user');
+  const text = last && 'text' in last ? last.text : task.title;
+  return text.replace(/[#>*`|\-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+}

@@ -4,7 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, radius, spacing } from '@/theme';
 import { TaskTagsPanel } from './TaskTags';
-import { SessionDetailsNative } from './SessionDetailsNative';
+import { ComposerSheet } from './ComposerSheet';
+import { NativeTaskTagsExpanded } from './TaskTagsNative';
+import { taskTagsPageTitle, useTaskTagsNativePage } from './taskTagsNativePage';
 import { SheetModal } from './SheetModal';
 import type { RemoteSession } from './types';
 
@@ -47,6 +49,8 @@ export function TaskTagsSheet({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const tagPage = useTaskTagsNativePage();
+  const ios = Platform.OS === 'ios';
   const panel = (
     <TaskTagsPanel
       key={`${deviceId ?? session.canonicalDeviceId ?? session.deviceLinkDeviceId}:${session.id}`}
@@ -56,19 +60,31 @@ export function TaskTagsSheet({
       expanded
       showDone={false}
       onExpandedChange={() => {}}
+      renderExpanded={ios ? (state) => (
+        <NativeTaskTagsExpanded state={state} onSortingChange={tagPage.onSortingChange} />
+      ) : undefined}
+      onPageChange={ios ? tagPage.onPageChange : undefined}
     />
   );
-  if (Platform.OS === 'ios') {
+  if (ios) {
+    const page = tagPage.page ?? 'list';
     return (
-      <SessionDetailsNative
+      <ComposerSheet
         visible={visible}
-        title={t('taskTags.title')}
+        title={taskTagsPageTitle(page, t)}
+        // This sheet opens from task details, so the list's back arrow closes it and lets
+        // the parent reopen; the editor pages step back within the sheet.
+        onBack={page === 'list' ? onClose : tagPage.back}
+        backDisabled={page === 'list' ? false : tagPage.backDisabled}
         backLabel={t('taskTags.back')}
         onClose={onClose}
         onClosed={onClosed}
+        nativeContent
+        nativeEditMode={tagPage.sorting}
+        testID="taskTags.sheet"
       >
         {panel}
-      </SessionDetailsNative>
+      </ComposerSheet>
     );
   }
   return (

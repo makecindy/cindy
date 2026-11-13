@@ -12,6 +12,7 @@ import {
   confirmInstanceNamespace,
   confirmUnconfirmedInstance,
   marketRowMatchesUnconfirmedInstance,
+  upsertInstance,
   type InstanceConfirmationEvidence,
   type InstanceConfirmationMarketRecord,
   type PluginInstanceRecord,
@@ -19,6 +20,7 @@ import {
 } from './pluginInstanceRegistry.js';
 
 interface ConfirmationMarketRow {
+  pluginId?: string | null;
   installed?: boolean;
   namespace?: string | null;
   scope?: 'public' | 'personal' | 'organization';
@@ -49,6 +51,7 @@ export function buildUnconfirmedConfirmationEvidence(input: {
   currentOrganization: { organizationId: string; orgSlug: string | null } | null;
   packageSha256: string | null;
   forgeSelfTest: boolean;
+  legacyManifestVerified?: boolean;
 }): InstanceConfirmationEvidence {
   return {
     marketRecords: input.rows === undefined
@@ -61,6 +64,7 @@ export function buildUnconfirmedConfirmationEvidence(input: {
     currentOrganization: input.currentOrganization,
     packageSha256: input.packageSha256,
     forgeSelfTest: input.forgeSelfTest,
+    ...(input.legacyManifestVerified ? { legacyManifestVerified: true } : {}),
   };
 }
 
@@ -68,8 +72,10 @@ interface UnconfirmedConfirmationHost {
   readEvidence?(record: PluginInstanceRecord): InstanceConfirmationEvidence | null | undefined;
   isBlocked(): boolean;
   sync(): PluginInstanceRegistry;
+  prepare?(): Promise<PluginInstanceRegistry>;
   ownerContextKey(): string;
   readApproval(relId: string): GhostInstallReceiptReadResult;
+  orphanPendingNamespace?(record: PluginInstanceRecord, approval: GhostInstallReceiptReadResult): { namespace: string | null } | undefined;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
   runExclusive<T>(body: () => Promise<T>): Promise<T>;
   contentPath(relId: string): string;
@@ -78,19 +84,42 @@ interface UnconfirmedConfirmationHost {
 }
 
 /** Confirm unconfirmed rows only when the caller supplies positive evidence. */
-export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationHost): Promise<void> {
+export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationHost, instanceKey?: string, replacementPluginId?: string): Promise<{ unresolvedPending: number; mutationFailures: number }> {
   const readEvidence = host.readEvidence;
-  if (!readEvidence || host.isBlocked()) return;
-  const registry = host.sync();
-  if (host.isBlocked()) return;
+  if (host.isBlocked()) return { unresolvedPending: 0, mutationFailures: 0 };
   const ownerContextKey = host.ownerContextKey();
-  for (const record of Object.values(registry.instances)) {
-    if (host.ownerContextKey() !== ownerContextKey) return;
-    if (!record.active || record.namespaceState !== 'unconfirmed') continue;
-    const evidenceSnapshot = namespaceCommitReceiptSnapshot(host.readApproval(record.contentRelId));
+  const registry = host.prepare ? await host.prepare() : host.sync();
+  if (host.isBlocked() || host.ownerContextKey() !== ownerContextKey) {
+    return { unresolvedPending: 0, mutationFailures: 0 };
+  }
+  const selected = instanceKey === undefined ? undefined : registry.instances[instanceKey];
+  const records = instanceKey === undefined ? Object.values(registry.instances) : selected ? [selected] : [];
+  const orphans = new Set(records.filter((record) =>
+    record.active && record.namespaceState === 'pending' && registry.census !== null &&
+    !registry.census.pendingRelIds.includes(record.contentRelId),
+  ).map((record) => record.instanceKey));
+  if (!readEvidence) return { unresolvedPending: orphans.size, mutationFailures: 0 };
+  let mutationFailures = 0;
+  for (const record of records) {
+    if (host.ownerContextKey() !== ownerContextKey) return { unresolvedPending: 0, mutationFailures: 0 };
+    const orphan = orphans.has(record.instanceKey);
+    if (!record.active || (record.namespaceState !== 'unconfirmed' && !orphan)) continue;
+    const initialApproval = host.readApproval(record.contentRelId);
+    const evidenceSnapshot = namespaceCommitReceiptSnapshot(initialApproval);
+    const target = orphan ? host.orphanPendingNamespace?.(record, initialApproval) : record;
+    if (!target) continue;
+    // This is a candidate for evidence checking, not a persisted state change or
+    // an expansion of the frozen upgrade allowlist. Receipt fields alone never confirm it.
+    let candidate: PluginInstanceRecord = orphan
+      ? { ...record, namespace: target.namespace, namespaceState: 'unconfirmed' } : record;
+    // Main may bind a newly committed market route after explicit source replacement.
+    // The original record is still rechecked below; namespace/owner/package evidence is unchanged.
+    if (record.instanceKey === instanceKey && replacementPluginId !== undefined) {
+      candidate = { ...candidate, pluginId: replacementPluginId, source: 'market' };
+    }
     let evidence: InstanceConfirmationEvidence | null | undefined;
     try {
-      evidence = readEvidence(record);
+      evidence = readEvidence(candidate);
     } catch (error) {
       host.log?.warn('unconfirmed instance evidence unavailable', {
         instanceKey: record.instanceKey,
@@ -99,7 +128,9 @@ export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationH
       continue;
     }
     if (!evidence) continue;
-    const decision = confirmUnconfirmedInstance(record, evidence);
+    // Forge self-tests only restore an already-known namespace. An orphan has
+    // no such history and cannot acquire the census-only Forge exception.
+    const decision = confirmUnconfirmedInstance(candidate, orphan ? { ...evidence, forgeSelfTest: false } : evidence);
     if (!decision) continue;
     try {
       await host.runExclusive(async () => {
@@ -109,12 +140,21 @@ export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationH
           evidenceSnapshot, namespaceCommitReceiptSnapshot(approval),
         )) return;
         if (approval.state !== 'approved' || approval.receipt.id !== record.ghostId) return;
+        const currentRecord = host.sync().instances[record.instanceKey];
+        if (!currentRecord?.active || currentRecord.pluginId !== record.pluginId || currentRecord.namespaceState !== record.namespaceState ||
+            currentRecord.namespace !== record.namespace || currentRecord.receiptRevision !== record.receiptRevision ||
+            currentRecord.packageSha256 !== record.packageSha256) return;
+        const freshEvidence = readEvidence(candidate);
+        if (!freshEvidence || confirmUnconfirmedInstance(candidate,
+          orphan ? { ...freshEvidence, forgeSelfTest: false } : freshEvidence,
+        )?.namespace !== decision.namespace) return;
         let revision = approval.receipt.revision;
         let packageSha256 = approval.receipt.packageSha256 ?? record.packageSha256;
         const stamped = hasDeliveryNamespace(approval.receipt) &&
           (approval.receipt.namespace ?? null) === decision.namespace;
         if (!stamped) {
           await host.writeReceipt(record.contentRelId, { ...approval.receipt, namespace: decision.namespace });
+          if (host.ownerContextKey() !== ownerContextKey) return;
           const written = host.readApproval(record.contentRelId);
           if (written.state !== 'approved' || !hasDeliveryNamespace(written.receipt) ||
               (written.receipt.namespace ?? null) !== decision.namespace) return;
@@ -123,17 +163,27 @@ export async function confirmUnconfirmedInstances(host: UnconfirmedConfirmationH
         }
         const current = host.sync();
         if (host.isBlocked()) return;
-        const confirmed = confirmInstanceNamespace(current, record.instanceKey, decision.namespace, {
+        const live = current.instances[record.instanceKey];
+        if (!live?.active || live.pluginId !== record.pluginId || live.namespaceState !== record.namespaceState || live.namespace !== record.namespace ||
+            live.receiptRevision !== revision || live.packageSha256 !== packageSha256) return;
+        let confirmed = confirmInstanceNamespace(current, record.instanceKey, decision.namespace, {
           revision, packageSha256,
         });
         if (confirmed === current) return;
+        if (candidate.pluginId !== record.pluginId) {
+          confirmed = upsertInstance(confirmed, { ...confirmed.instances[record.instanceKey]!,
+            pluginId: candidate.pluginId, source: candidate.source });
+        }
         host.writeRegistry(confirmed);
+        orphans.delete(record.instanceKey);
       });
     } catch (error) {
+      mutationFailures += 1;
       host.log?.warn('unconfirmed instance confirmation skipped', {
         instanceKey: record.instanceKey,
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
+  return { unresolvedPending: orphans.size, mutationFailures };
 }

@@ -14,6 +14,7 @@
 import {
   extractUsageLimitRecoveryHint,
   isBillingDepletionError,
+  isClaudeUsageLimitMessage,
   type UsageLimitRecoveryParseOptions,
 } from '../../shared/usageLimitRecovery.js';
 
@@ -36,7 +37,7 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
   if (d.errorStatus === 429 || d.errorStatus === 529) return true;
   // Codex / 兜底:文本匹配。
   const msg = typeof d.message === 'string' ? d.message : '';
-  return /rate.?limit|usage.?limit|quota|too\s*many\s*requests/i.test(msg);
+  return isClaudeUsageLimitMessage(msg) || /rate.?limit|usage.?limit|quota|too\s*many\s*requests/i.test(msg);
 }
 
 /**
@@ -94,7 +95,8 @@ export function classifyTurnOverload(data: unknown): boolean {
   if (d.errorStatus === 529) return true;
   const msg = typeof d.message === 'string' ? d.message : '';
   // `at capacity` 要求精确短语,避免误伤业务文案里的 capacity(缓存/队列容量)。
-  return /\bat capacity\b/i.test(msg) || /\boverloaded_error\b/.test(msg);
+  // 大小写不敏感: 上游可能把短语放在句首(如 `Currently overloaded`)。
+  return /\bat capacity\b|\boverloaded_error\b|\bcurrently overloaded\b/i.test(msg);
 }
 
 /**

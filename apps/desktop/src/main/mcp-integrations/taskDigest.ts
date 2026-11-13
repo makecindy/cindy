@@ -33,6 +33,13 @@ export interface TaskDigestExchange {
   lastAssistantLine: string | null;
 }
 
+/** 要换模型的那次失败:相位与观察层记下的错误(摘要文案 + 稳定原因)。 */
+export interface TaskDigestFailure {
+  phase: 'errored' | 'usage-limit';
+  error: string | null;
+  errorReason: string | null;
+}
+
 export interface TaskDigestDeps {
   now(): number;
   /** 观察层状态行;本机裸 id,另一台电脑 deviceId::sessionId。 */
@@ -43,8 +50,17 @@ export interface TaskDigestDeps {
     readLastExchange(sessionId: string): Promise<TaskDigestExchange>;
     queuedCount(sessionId: string): Promise<number | null>;
     prStatus(sessionId: string): Promise<string | null>;
-    /** 调用方伙伴候选链里下一条可用路线(跳过当前与已试过的);非伙伴调用方返回 null。 */
-    suggestRoute(params: { callerSessionId?: string; targetSessionId: string; current: TaskDigestRoute }): Promise<TaskDigestRoute | null>;
+    /**
+     * 出错 / 撞上用量上限时,调用方伙伴候选链里下一条可用路线(跳过当前与已试过的)。
+     * 换模型解决不了这次失败、任务当前路线不在候选链里、或换过去装不下当前上下文时返回 null;
+     * 非伙伴调用方返回 null。
+     */
+    suggestRoute(params: {
+      callerSessionId?: string;
+      targetSessionId: string;
+      current: TaskDigestRoute;
+      failure: TaskDigestFailure;
+    }): Promise<TaskDigestRoute | null>;
   };
   remote?: {
     deviceName(deviceId: string): Promise<string | null>;
@@ -89,14 +105,57 @@ function minutesSince(now: number, since: number | null | undefined): number | n
 /** 一句 PR 状态:最多三个,「PR #12 open,3 条评审未解决」。 */
 export function formatPrStatuses(
   results: ReadonlyArray<
-    | { ok: true; prNumber: number; repo: string; status: string; unresolvedCount: number | null }
-    | { ok: false; prNumber: number; repo: string }
+    | {
+        ok: true;
+        provider?: 'github' | 'gitlab';
+        host?: string;
+        owner?: string;
+        prNumber: number;
+        repo: string;
+        status: string;
+        unresolvedCount: number | null;
+        checks?: {
+          total: number;
+          failed: number;
+          pending: number;
+          passed: number;
+          skipped: number;
+        } | null;
+        observedAt?: number;
+      }
+    | {
+        ok: false;
+        provider?: 'github' | 'gitlab';
+        host?: string;
+        owner?: string;
+        prNumber: number;
+        repo: string;
+      }
   >,
 ): string | null {
   const parts = results.slice(0, 3).map((pr) => {
-    if (!pr.ok) return `PR ${pr.repo}#${pr.prNumber} 状态未知`;
+    const label =
+      pr.provider === 'gitlab'
+        ? `MR ${pr.host}/${pr.owner ? `${pr.owner}/` : ''}${pr.repo}!${pr.prNumber}`
+        : `PR ${pr.repo}#${pr.prNumber}`;
+    if (!pr.ok) return `${label} 状态未知`;
     const unresolved = pr.unresolvedCount ? `,${pr.unresolvedCount} 条评审未解决` : '';
-    return `PR ${pr.repo}#${pr.prNumber} ${pr.status}${unresolved}`;
+    const c = pr.checks;
+    const ci = !c
+      ? 'CI 未知'
+      : c.failed
+        ? `CI ${c.failed} 失败`
+        : c.pending
+          ? `CI ${c.pending} 进行中`
+          : !c.total
+            ? '无检查'
+            : c.passed === c.total
+              ? 'CI 通过'
+              : `CI ${c.passed} 通过/${c.skipped} 跳过`;
+    const age = pr.observedAt
+      ? `,${Math.max(0, Math.floor((Date.now() - pr.observedAt) / 60000))} 分钟前`
+      : '';
+    return `${label} ${pr.status}${unresolved},${ci}${age}`;
   });
   return parts.length ? parts.join(';') : null;
 }
@@ -165,8 +224,15 @@ export function createTaskDigestReader(deps: TaskDigestDeps) {
       settle(() => deps.local.queuedCount(key), null),
     ]);
     const current = activity?.route ?? facts.route;
-    const suggestedRoute = current
-      ? await settle(() => deps.local.suggestRoute({ callerSessionId: args.callerSessionId, targetSessionId: key, current }), null)
+    const phase = watched?.phase ?? fallbackDigestPhase(activity);
+    // 换模型只用来救出错和用量上限(跟进规则也只在这两种相位用它);其余相位不给建议。
+    const suggestedRoute = current && (phase === 'errored' || phase === 'usage-limit')
+      ? await settle(() => deps.local.suggestRoute({
+        callerSessionId: args.callerSessionId,
+        targetSessionId: key,
+        current,
+        failure: { phase, error: watched?.error ?? null, errorReason: watched?.errorReason ?? null },
+      }), null)
       : null;
     return {
       ok: true,
@@ -263,7 +329,7 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
           model,
           provider_id: text(record.providerId),
           effort: text(record.effort),
-          fast: record.fastMode === true,
+          fast: (record.fastMode === 'ultrafast' ? 'ultrafast' : record.fastMode === true),
         }
       : null,
   };

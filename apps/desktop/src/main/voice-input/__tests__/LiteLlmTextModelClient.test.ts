@@ -297,6 +297,36 @@ describe('LiteLlmTextModelClient', () => {
     expect(reportKeyRejectedMock).not.toHaveBeenCalled();
   });
 
+  it('keeps the first target URL when the auth retry resolves a newer session', async () => {
+    // An ASR reconnect replaced the managed session between the two attempts;
+    // the retry must still go to the session the request was counted against.
+    const requestTargetProvider = vi.fn(async (options?: { forceRefresh?: boolean }) => ({
+      url: `https://voice.example.com/api/voice/sessions/${options?.forceRefresh ? 'session-2' : 'session-1'}/refine`,
+      authorization: options?.forceRefresh ? 'Bearer fresh-token' : 'Bearer stale-token',
+    }));
+    undiciFetchMock
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(makeChatCompletionSseResponse([
+        { choices: [{ delta: { content: '{"text":"refined"}' } }] },
+      ]));
+
+    const client = new LiteLlmTextModelClient({ requestTargetProvider });
+    await expect(client.requestJson<{ text: string }>({
+      model: 'm',
+      schemaName: 's',
+      system: 'sys',
+      user: {},
+    })).resolves.toEqual({ text: 'refined' });
+
+    expect(undiciFetchMock.mock.calls.map((call) => call[0])).toEqual([
+      'https://voice.example.com/api/voice/sessions/session-1/refine',
+      'https://voice.example.com/api/voice/sessions/session-1/refine',
+    ]);
+    expect(undiciFetchMock.mock.calls[1]?.[1]).toMatchObject({
+      headers: expect.objectContaining({ Authorization: 'Bearer fresh-token' }),
+    });
+  });
+
   it('uses stream-idle timeout instead of total request duration', async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
@@ -335,5 +365,37 @@ describe('LiteLlmTextModelClient', () => {
     await vi.advanceTimersByTimeAsync(12_000);
     await expect(promise).resolves.toEqual({ text: '长文本完成' });
     expect(snapshots).toEqual(['长', '长文本', '长文本完成']);
+  });
+
+  // #10105: existing coverage only sends useful deltas. Heartbeats must not
+  // keep requestJson pending indefinitely. Unit tier; real client, fake stream/time.
+  it('times out a managed stream that only sends heartbeats and empty deltas', async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    let stream!: ReadableStreamDefaultController;
+    let signal!: AbortSignal;
+    undiciFetchMock.mockImplementation(async (_url: string, init: { signal: AbortSignal }) => {
+      signal = init.signal;
+      return new Response(new ReadableStream({
+        start(controller) {
+          stream = controller;
+          signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true });
+        },
+      }), { headers: { 'Content-Type': 'text/event-stream' } });
+    });
+    const client = new LiteLlmTextModelClient({
+      requestTargetProvider: async () => ({ url: 'https://voice.example.com/refine', authorization: 'Bearer test-token' }),
+      timeoutMs: 5_000,
+    });
+    const outcome = client.requestJson({ model: 'm', schemaName: 's', system: 'sys', user: {} })
+      .then(() => 'completed', (error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      stream.enqueue(encoder.encode(': heartbeat\n\ndata: {"choices":[{"delta":{"content":""}}]}\n\n'));
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(signal.aborted).toBe(true);
+    await expect(outcome).resolves.toContain('timed out');
   });
 });

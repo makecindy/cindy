@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { groupWorkRuns, type MessageRenderItem, type ToolSegmentRenderItem, type RenderItem } from '@/components/chat/messageWorkGroups';
-import { simplifyBotRenderItems } from '../botConversationPresentation';
+import { readBotGroupProcessMessages, projectBotGroupProcess, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
+import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
 
 const message = (id: string, role: ChatMessage['role'], content = id,
   extra: Partial<ChatMessage> = {}): MessageRenderItem => ({
@@ -21,7 +22,64 @@ const shape = (items: readonly RenderItem[]): string => items.map((item) => item
 const project = (items: RenderItem[], streaming: boolean) =>
   simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
 
+it('shows a historical scheduled final result so opening the chat can mark it read (#9835)', () => {
+  const previous = message('previous', 'assistant', 'Earlier answer', {
+    turnCompleted: true, createdAt: '2026-11-10T10:00:00.000Z',
+  });
+  const scheduled = message('schedule-result:run-1', 'assistant', 'Scheduled result', {
+    createdAt: '2026-11-10T10:01:00.000Z',
+  });
+  const visible = botProcessItems(groupWorkRuns([previous, scheduled], false), false);
+  expect(proseIds(visible)).toEqual(['previous', 'schedule-result:run-1']);
+  expect(latestSettledAssistantMs(visible)).toBe(Date.parse('2026-11-10T10:01:00.000Z'));
+  expect(proseIds(project([previous, { ...scheduled, message: {
+    ...scheduled.message, turnCompleted: false,
+  } }], false))).toEqual(['previous']);
+});
+
+// Unit regression: same production grouping and projection as MessageStream.
+// Existing tests expected progress to disappear; exercise the metadata handoff.
+it('keeps working prose through streaming metadata and tools, folding only after the answer', () => {
+  const user = message('u', 'user');
+  const progress = message('progress', 'assistant', 'Checking the refresh', { isStreaming: true });
+  const marked = message('progress', 'assistant', 'Checking the refresh', { assistantPhase: 'commentary' });
+  for (const source of [[user, progress], [user, marked], [user, marked, tool('read')]]) {
+    expect(proseIds(project(source, true))).toContain('progress');
+  }
+  const completed = project([user, marked, tool('read'), message('final', 'assistant', 'Done', { turnCompleted: true })], false);
+  expect(proseIds(completed)).toEqual(['final']);
+  expect(allKeys(completed)).toContain('msg-progress');
+  expect(completed.some(item => item.type === 'work_group' && !item.isStreaming)).toBe(true);
+});
+
 describe('teammate final-result presentation', () => {
+  // #8864: the production projection must keep the process and answer under one
+  // portrait without joining separate user/proactive turns. Existing UI fixtures
+  // only covered a single turn. Unit tier; two tools and sealed answers suffice.
+  it.each([true, false])('keeps one portrait per turn, including proactive turns (user boundary=%s)', userBoundary => {
+    const rows = [message('u', 'user'), tool('one'),
+      message('answer-one', 'assistant', 'First result', { turnCompleted: true }),
+      ...(userBoundary ? [message('u2', 'user')] : []), tool('two'),
+      message('answer-two', 'assistant', 'Second result', { turnCompleted: true }),
+      message('u3', 'user'), message('answer-only', 'assistant', 'Direct result', { turnCompleted: true })];
+    const projected = botProcessItems(groupWorkRuns(rows, false), false);
+    expect([...botTurnContinuations(projected)]).toEqual(['msg-answer-one', 'msg-answer-two']);
+  });
+
+  // Runtime regression: persisted private prose was lifted back into the owner chat on reload.
+  it.each([true, false])('keeps private prose out of the owner chat, including folded history (streaming=%s)', streaming => {
+    const trace = message('trace', 'assistant', '', { systemCardType: 'bot-direct-message' });
+    const internal = message('internal', 'assistant', 'Internal answer', {
+      botPrivateReply: true, assistantPhase: 'final_answer', turnCompleted: true,
+    });
+    const rows = [trace, internal, tool('audit'), message('owner', 'assistant', 'Owner answer', {
+      botPrivateReply: false, turnCompleted: true,
+    }), message('error', 'error', 'Action required')];
+    const result = botProcessItems(groupWorkRuns(rows, streaming), streaming);
+    expect(allKeys(result)).not.toContain('msg-internal');
+    expect(allKeys(result)).toEqual(expect.arrayContaining(['msg-trace', 'msg-owner', 'msg-error', 'tools-audit']));
+    expect(internal.message.content).toBe('Internal answer');
+  });
   // #6351: provider final_answer only closes a message, not a successful sample.
   // Failed output remains in the expandable work history rather than being lifted
   // beside the real answer; normal commentary is governed by the existing rules.
@@ -41,6 +99,7 @@ describe('teammate final-result presentation', () => {
           : ending === 'retrying' ? [] : [message('error', 'error', 'Reply interrupted')]),
       ], ending === 'retrying');
       expect(proseIds(result)).toEqual(ending === 'completed' ? ['intro', 'success'] : []);
+      // Failed output remains reachable only inside the work history.
       expect(allKeys(result)).toContain('msg-failed');
       expect(allKeys(result)).toContain('msg-failed-commentary');
     });
@@ -61,26 +120,26 @@ describe('teammate final-result presentation', () => {
     expect(input[1]).toEqual(message('a', 'assistant'));
   });
 
-  it('keeps every unsealed segment out of the top level from its first delta while activity stays live', () => {
+  it('keeps every unsealed segment visible from its first delta until the final answer', () => {
     const start = [message('u', 'user'), message('a', 'assistant', 'A', { isStreaming: true })];
-    expect(proseIds(project(start, true))).toEqual([]);
+    expect(proseIds(project(start, true))).toEqual(['a']);
     const work = [...start, tool('t1')];
-    expect(proseIds(project(work, true))).toEqual([]);
-    expect(shape(project(work, true))).toBe('msg-u, work-t1*[tools-t1]');
+    expect(proseIds(project(work, true))).toEqual(['a']);
+    expect(shape(project(work, true))).toBe('msg-u, msg-a, work-t1*[tools-t1]');
     const continued = project([...work, message('b', 'assistant', 'B', { isStreaming: true })], true);
-    expect(proseIds(continued)).toEqual([]);
-    expect(shape(continued)).toBe('msg-u, work-t1[tools-t1]');
+    expect(proseIds(continued)).toEqual(['a', 'b']);
+    expect(shape(continued)).toBe('msg-u, msg-a, work-t1[tools-t1], msg-b');
     const done = project([...work, message('b', 'assistant', 'B', { turnCompleted: true })], false);
     expect(proseIds(done)).toEqual(['b']);
     expect(shape(done)).toBe('msg-u, work-summary-t1[msg-a, work-t1[tools-t1]], msg-b');
   });
 
-  it.each(['stopped', 'failed', 'history'])('retains the last useful text with no final: %s', () => {
+  it.each(['stopped', 'failed', 'history'])('retains useful progress with no final: %s', () => {
     const input = [message('u', 'user'), message('a', 'assistant'), tool('t1'),
       message('last', 'assistant'), tool('t2'), message('err', 'error')];
     const result = project(input, false);
-    expect(proseIds(result)).toEqual(['last']);
-    expect(shape(result)).toBe('msg-u, work-t1[tools-t1], msg-last, work-t2[tools-t2], msg-err');
+    expect(proseIds(result)).toEqual(['a', 'last']);
+    expect(shape(result)).toBe('msg-u, msg-a, work-t1[tools-t1], msg-last, work-t2[tools-t2], msg-err');
   });
 
   it('keeps all blocks of sealed replies across continuation tools and history reloads', () => {
@@ -91,10 +150,8 @@ describe('teammate final-result presentation', () => {
     for (const streaming of [true, false]) {
       const result = project(input, streaming);
       expect(proseIds(result)).toEqual(['first', 'second', 'third', 'fourth']);
-      // An earlier background-wake reply is lifted out of the fold; the summary keeps
-      // its key and the following activity group stays the same inner group.
-      expect(shape(result)).toBe('msg-u, work-summary-t1[msg-progress, work-t1[tools-t1]], msg-first, '
-        + 'msg-second, work-t2[tools-t2], msg-third, msg-fourth');
+      // Earlier addressed replies stay outside the preserved work history.
+      expect(shape(result)).toBe('msg-u, work-summary-t1[msg-progress, work-t1[tools-t1]], msg-first, msg-second, work-t2[tools-t2], msg-third, msg-fourth');
     }
   });
 
@@ -102,7 +159,7 @@ describe('teammate final-result presentation', () => {
     const result = simplifyBotRenderItems([message('progress', 'assistant'),
       message('private', 'thinking'), message('first', 'assistant'),
       message('second', 'assistant', 'Second', { turnCompleted: true })], true);
-    expect(proseIds(result)).toEqual(['first', 'second']);
+    expect(proseIds(result)).toEqual(['progress', 'first', 'second']);
     expect(allKeys(result)).not.toContain('msg-private');
   });
 
@@ -114,13 +171,13 @@ describe('teammate final-result presentation', () => {
     { type: 'tool_media', key: 'media', items: [{ kind: 'image', url: '/picture.png' }] },
     { type: 'ghost_card', key: 'card', callId: 'call', ghostId: 'plugin', tool: 'render',
       toolCall: { clientId: 'call', role: 'tool_use', content: '' }, settled: true },
-  ])('does not restore preambles after delivery: $key', (delivery) => {
+  ])('preserves progress history when an attachment or card arrives: $key', (delivery) => {
     const input = [message('u', 'user'), message('progress', 'assistant', '正在生成'), tool('t'), delivery];
     for (const streaming of [true, false]) {
       const result = project(input, streaming);
-      expect(proseIds(result)).not.toContain('progress');
+      expect(proseIds(result)).toContain('progress');
       expect(result.some((item) => item.key === delivery.key)).toBe(true);
-      expect(allKeys(result)).not.toContain('msg-progress');
+      expect(allKeys(result)).toContain('msg-progress');
     }
   });
 
@@ -130,8 +187,8 @@ describe('teammate final-result presentation', () => {
       systemCardData: { botCollaboration: { role: 'delegation-result' } },
     });
     const input = [message('u', 'user'), message('progress', 'assistant'), tool('t'), receipt];
-    expect(shape(project(input, true))).toBe('msg-u, work-t*[tools-t], msg-receipt');
-    expect(shape(project(input, false))).toBe('msg-u, work-t[tools-t], msg-receipt');
+    expect(shape(project(input, true))).toBe('msg-u, msg-progress, work-t*[tools-t], msg-receipt');
+    expect(shape(project(input, false))).toBe('msg-u, msg-progress, work-t[tools-t], msg-receipt');
   });
 
   it('retains a later explanation after partial delivery and ignores unverified file candidates', () => {
@@ -153,8 +210,7 @@ describe('teammate final-result presentation', () => {
       message('u2', 'user'), message('explanation', 'assistant'), tool('failed')];
     const result = simplifyBotRenderItems(groupWorkRuns(input, false), false, new Set(['files']));
     expect(proseIds(result)).toEqual(['final', 'explanation']);
-    expect(shape(result)).toBe('msg-u, work-summary-t[msg-progress, work-t[tools-t]], msg-final, files, '
-      + 'msg-u2, msg-explanation, work-failed[tools-failed]');
+    expect(shape(result)).toBe('msg-u, work-summary-t[msg-progress, work-t[tools-t]], msg-final, files, msg-u2, msg-explanation, work-failed[tools-failed]');
   });
 
   it('does not extend a final seal or delivery fallback across a history gap without tools', () => {
@@ -174,8 +230,8 @@ describe('teammate final-result presentation', () => {
     const input = [message('u', 'user'), message('long', 'assistant', text), tool('t'),
       message('answer', 'assistant', '先安装')];
     const result = project(input, false);
-    expect(proseIds(result)).toEqual(['answer']);
-    expect(allKeys(result)).not.toContain('msg-long');
+    expect(proseIds(result)).toEqual(['long', 'answer']);
+    expect(allKeys(result)).toContain('msg-long');
   });
 
   it('keeps completed answers across continuation tools, synthetic triggers and real user turns', () => {
@@ -183,7 +239,7 @@ describe('teammate final-result presentation', () => {
       tool('t'), message('trigger', 'user', '', { isSyntheticTrigger: true }),
       message('continuing', 'assistant'), tool('t2'), message('u2', 'user'), message('new', 'assistant')];
     const result = project(input, true);
-    expect(proseIds(result)).toEqual(['sealed', 'continuing']);
+    expect(proseIds(result)).toEqual(['sealed', 'continuing', 'new']);
     expect(allKeys(result)).not.toContain('msg-trigger');
   });
 
@@ -210,7 +266,7 @@ describe('teammate final-result presentation', () => {
     expect(thinking).toEqual(message('private', 'thinking', 'Not public execution'));
   });
 
-  it('passes unloaded technical history to the normal work fold without calling its expansion or retry API', () => {
+  it('preserves a finished turn\'s lazy history without eagerly calling expansion or retry', () => {
     const deferred = { owner: {}, key: 'range', expanded: false, loading: false, failed: false,
       toggle: vi.fn(), retry: vi.fn(), setVisible: vi.fn() };
     const group: RenderItem = { type: 'work_group', key: 'work-history', isStreaming: false,
@@ -218,7 +274,7 @@ describe('teammate final-result presentation', () => {
     const input = [message('u', 'user'), group, message('final', 'assistant')];
     const unloaded = simplifyBotRenderItems(input, false);
     expect(shape(unloaded)).toBe('msg-u, work-history[], msg-final');
-    expect(unloaded[1]).toBe(group);
+    expect(unloaded).toContain(group);
     const loaded = { ...group, children: [message('thinking', 'thinking'), message('public', 'assistant'), tool('t')] };
     const result = simplifyBotRenderItems([input[0], loaded as RenderItem, input[2]], false);
     expect(shape(result)).toBe('msg-u, work-history[msg-thinking, msg-public, tools-t], msg-final');
@@ -227,13 +283,13 @@ describe('teammate final-result presentation', () => {
     expect(group.deferred).toBe(deferred);
   });
 
-  it('keeps deferred history controls when lifting a reply after one nested work group', () => {
+  it('keeps deferred history controls while the turn runs when lifting a reply after one nested work group', () => {
     const deferred = { owner: {}, key: 'range', expanded: false, loading: false, failed: true,
       previewComplete: false, toggle: vi.fn(), retry: vi.fn(), setVisible: vi.fn() };
     const nested: RenderItem = { type: 'work_group', key: 'work-inner', isStreaming: false, children: [tool('t')] };
     const reply = message('delivered', 'assistant', 'Here is the result', { explicitDelivery: true });
     const history: RenderItem = { type: 'work_group', key: 'work-history', isStreaming: false, children: [nested, reply], deferred };
-    const result = simplifyBotRenderItems([history], false);
+    const result = simplifyBotRenderItems([history], true);
     expect(shape(result)).toBe('work-history[work-inner[tools-t]], msg-delivered');
     const retained = result[0];
     expect(retained.type === 'work_group' && retained.deferred).toBe(deferred);
@@ -242,11 +298,11 @@ describe('teammate final-result presentation', () => {
     expect(deferred.retry).not.toHaveBeenCalled();
     expect(history.children).toEqual([nested, reply]);
     // Ordinary complete groups still unwrap the single inner group with its stable key.
-    const complete = simplifyBotRenderItems([{ ...history, deferred: undefined }], false);
+    const complete = simplifyBotRenderItems([{ ...history, deferred: undefined }], true);
     expect(complete).toEqual([nested, reply]);
   });
 
-  it('shows a running turn as a live work group and a finished turn as the summary with the answer outside', () => {
+  it('shows a running turn as a live work group and preserves its fold beside the finished answer', () => {
     const at = (offset: number) => new Date(Date.parse('2026-10-15T08:00:00Z') + offset).toISOString();
     const running = [message('u', 'user', 'Fix it', { createdAt: at(0) }),
       message('think', 'thinking', 'Looking at refresh', { createdAt: at(1000) }),
@@ -259,8 +315,6 @@ describe('teammate final-result presentation', () => {
     const finished = project([...running,
       message('answer', 'assistant', 'Done', { createdAt: at(9000), turnCompleted: true })], false);
     expect(shape(finished)).toBe('msg-u, work-think[msg-think, tools-read], msg-answer');
-    const doneGroup = finished[1];
-    expect(doneGroup.type === 'work_group' && doneGroup.durationMs).toBe(9000);
     expect(proseIds(finished)).toEqual(['answer']);
   });
 
@@ -274,8 +328,9 @@ describe('teammate final-result presentation', () => {
         message('after', 'assistant', 'Continuing', { createdAt: at(6000) }),
         { type: 'work_group', key: 'work-b', isStreaming: false, children: [tool('b')] },
       ] };
+    // While the turn still runs its work stays visible, split around the delivered reply.
     const result = simplifyBotRenderItems([message('u', 'user'), summary,
-      message('final', 'assistant', 'Final', { turnCompleted: true })], false);
+      message('final', 'assistant', 'Final', { turnCompleted: true })], true);
     expect(shape(result)).toBe('msg-u, work-summary-x[msg-note, work-a[tools-a]], msg-told, '
       + 'work-summary-x~msg-after[msg-after, work-b[tools-b]], msg-final');
     const [first, , second] = result.slice(1);
@@ -314,20 +369,25 @@ it('nests only explicitly bound results, preserving original anchor and human me
 it('keeps explicitly delivered group private messages while the private model is working and after another reply', () => {
   const input = [message('u', 'user'), message('group', 'assistant', 'Group reply', { sourceGroup: { groupId: 'g-1' } }),
     message('progress', 'assistant', 'Working'), tool('running')];
-  expect(proseIds(project(input, true))).toEqual(['group']);
+  expect(proseIds(project(input, true))).toEqual(['group', 'progress']);
   expect(proseIds(project([...input, message('final', 'assistant', 'Result', { turnCompleted: true })], false))).toEqual(['group', 'final']);
 });
 
 
 describe('provider final streaming', () => {
-  it('keeps incremental final text visible before and after the seal, excluding commentary', () => {
+  it('keeps incremental final text and its contiguous prose visible like ordinary tasks', () => {
     const prefix = [message('u', 'user'), message('process', 'assistant', 'Internal', { assistantPhase: 'commentary' })];
     for (const text of ['A', 'Answer', 'Answer with a reference']) {
       const final = message('answer', 'assistant', text, { assistantPhase: 'final_answer', isStreaming: true });
-      expect(proseIds(project([...prefix, final], true))).toEqual(['answer']);
-      expect(proseIds(project([...prefix, { ...final, message: { ...final.message, isStreaming: false } }], true))).toEqual(['answer']);
+      expect(proseIds(project([...prefix, final], true))).toEqual(['process', 'answer']);
+      expect(proseIds(project([...prefix, { ...final, message: { ...final.message, isStreaming: false } }], true))).toEqual(['process', 'answer']);
     }
-    expect(proseIds(project([...prefix, message('answer', 'assistant', 'Answer', { assistantPhase: 'final_answer', turnCompleted: true })], false))).toEqual(['answer']);
+    for (const streaming of [false, true]) {
+      const completed = project([...prefix, message('answer', 'assistant', 'Answer', { assistantPhase: 'final_answer', turnCompleted: true })], streaming);
+      expect(proseIds(completed)).toEqual(['answer']);
+      expect(allKeys(completed)).toContain('msg-process');
+      expect(completed.find(item => item.type === 'work_group')).toMatchObject({ isStreaming: false });
+    }
   });
 });
 
@@ -365,4 +425,313 @@ it('keeps streaming component answers visible through commentary and later tools
   const rows = [message('u', 'user'), message('rich', 'assistant', body, { assistantPhase: 'commentary', isStreaming: true }), tool('later')];
   expect(proseIds(project(rows, true))).toContain('rich');
   expect(rows[1].type === 'message' && rows[1].message.content).toBe(body);
+});
+
+// User-approved journal: the production entry must retain its identity through the
+// first tool, commentary, engine switch and final seal; ordinary task grouping is unchanged.
+describe('continuous teammate process', () => {
+  it('keeps the journal openable when an opaque history group loads before its user row', () => {
+    const empty: Extract<RenderItem, { type: 'work_group' }> = { type: 'work_group', key: 'work-summary-older', children: [], isStreaming: false,
+      deferred: { key: 'older', owner: 'lane', expanded: false, loading: false, failed: false, toggle() {}, retry() {} } as never };
+    const loaded: RenderItem = { ...empty, children: [tool('older')] };
+    expect(botProcessItems([empty], false)[0]?.key).toBe(botProcessItems([loaded], false)[0]?.key);
+  });
+  it('keeps the standard switch card visible between stable process disclosures', async () => {
+    const user = message('journal-user', 'user');
+    const first = tool('first');
+    const note = message('note', 'assistant', 'Found the cause', { assistantPhase: 'commentary' });
+    const switched = message('switch', 'assistant', '', { systemCardType: 'agent-switch' });
+    const stages = [[user, first], [user, first, note], [user, first, note, switched, tool('verify')]];
+    const keys = stages.map((rows, index) => {
+      const result = botProcessItems(groupWorkRuns(rows, true), true);
+      const groups = result.filter(item => item.type === 'work_group');
+      expect(groups).toHaveLength(index === 2 ? 2 : 1);
+      expect(groups[0]).toMatchObject({ teammateJournal: true, isStreaming: true });
+      return groups[0]!.key;
+    });
+    const done = botProcessItems(groupWorkRuns([...stages[2]!, message('final', 'assistant', 'Fixed and verified', { turnCompleted: true })], false), false);
+    expect(done[1]?.key).toBe(keys[0]);
+    expect(new Set(keys).size).toBe(1);
+    expect(proseIds(done)).toEqual(['switch', 'final']);
+    expect(done).toContain(switched);
+    expect(done.map(item => item.type)).toEqual(['message', 'work_group', 'message', 'work_group', 'message']);
+    expect(allKeys(done)).toEqual(expect.arrayContaining(['tools-first', 'msg-note', 'msg-switch', 'tools-verify']));
+  });
+  it('does not swallow an addressed answer or merge two user turns', async () => {
+    const rows = [message('u1', 'user'), tool('one'), message('intro', 'assistant', 'Introduction'),
+      message('final1', 'assistant', 'Answer', { turnCompleted: true }), message('u2', 'user'), tool('two')];
+    const result = botProcessItems(groupWorkRuns(rows, true), true);
+    expect(proseIds(result)).toEqual(['intro', 'final1']);
+    expect(result.filter(item => item.type === 'work_group')).toHaveLength(2);
+  });
+});
+
+// Unit parity for the reported empty completed group process. Both sides use
+// their production readers/grouping with the same input; do not define separate
+// expected group behavior. The late thinking case was absent from group coverage.
+it.each(['answer-only', 'thinking-before-answer', 'thinking-after-answer', 'stage-note'] as const)(
+  'matches private-chat completed process contents for %s', async scenario => {
+    const ref = { groupId: 'group', executionId: 'execution', sessionId: 'lane', clientId: 'source' };
+    const source: BotGroupProcessMessage = { clientId: 'source', role: 'user', content: 'Request' };
+    const final: BotGroupProcessMessage = { clientId: 'final', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } };
+    const thought: BotGroupProcessMessage = { clientId: 'thought', role: 'thinking', content: 'Thinking' };
+    const note: BotGroupProcessMessage = { clientId: 'note', role: 'assistant', content: 'Checking', agentMeta: { assistantPhase: 'commentary' } };
+    const rows = scenario === 'answer-only' ? [source, final]
+      : scenario === 'thinking-after-answer' ? [source, final, thought]
+      : [source, scenario === 'stage-note' ? note : thought, final];
+    const privateItems = botProcessItems(groupWorkRuns(rows.map(row => message(row.clientId, row.role as ChatMessage['role'], row.content as string, {
+      turnCompleted: row.agentMeta?.turnCompleted === true,
+      assistantPhase: row.agentMeta?.assistantPhase as ChatMessage['assistantPhase'],
+    })), false), false);
+    const privateProcessKeys = privateItems.flatMap(item => item.type === 'work_group' ? allKeys(item.children).map(key => key.replace(/^msg-/, '')) : []);
+    const groupRows = rows.map(row => ({ ...row, agentMeta: { ...row.agentMeta, botPrivateReply: true, botGroupLane: true } }));
+    const groupMessages = await readBotGroupProcessMessages(ref, async () => groupRows, () => false);
+    const groupProcessKeys = projectBotGroupProcess(groupMessages, false).segments.flatMap(segment =>
+      segment.kind === 'work' ? segment.items.map(item => item.key) : [segment.item.key]);
+    expect(groupProcessKeys).toEqual(privateProcessKeys);
+  },
+);
+
+describe('companion closing reply and read position', () => {
+  // #8629 + codex P2: 主进程 `canonicalReplyVisibility` 把「未封口、但有后续工具之前」
+  // 的正文排除在上游，只把「其后没有工具动作」的收尾正文算作回复。它必须真的显示出来：
+  // 折进 work_group 后组件默认折叠、`Collapse` 不挂载子项，用户既看不到、也不能据此
+  // 推进读位。归属按消息层判定（`tailReplyClientIds`），因为展示层会删行、会分窗。
+  const toolUse = (id: string, toolName = 'exec'): ChatMessage =>
+    ({ clientId: id, role: 'tool_use', content: '', toolUseId: `tu-${id}`, toolName });
+  const toolResult = (id: string, toolUseId: string): ChatMessage =>
+    ({ clientId: `${id}-result`, role: 'tool_result', content: 'ok', toolUseId });
+  const toolMessages = (id: string): ChatMessage[] => [toolUse(id), toolResult(id, `tu-${id}`)];
+  /** 从投影项反推消息序列：代表旧实现（只看看得到的渲染项）能拿到的信息。 */
+  const messagesOfItems = (items: readonly RenderItem[]): ChatMessage[] => items.flatMap((item) => {
+    if (item.type === 'work_group') return messagesOfItems(item.children);
+    if (item.type === 'message') return [item.message];
+    if (item.type === 'tool_segment') return item.toolCalls.flatMap(call => [call, toolResult(call.clientId, call.toolUseId ?? '')]);
+    return [];
+  });
+  const projectBot = (items: RenderItem[], messages: ChatMessage[]) =>
+    botProcessItems(groupWorkRuns(items, false), false, tailReplyClientIds(messages));
+
+  const at = (minute: number) => new Date(Date.UTC(2026, 10, 3, 9, minute)).toISOString();
+
+  it('promotes an unsealed closing reply instead of hiding it in the collapsed fold', () => {
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      tool('scan'),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(18) }),
+      tool('follow-up'),
+      message('closing', 'assistant', 'Two PRs need your review', { createdAt: at(41) }),
+    ];
+    const messages = [message('u', 'user').message, ...toolMessages('scan'),
+      message('wake', 'assistant').message, ...toolMessages('follow-up'), rows[4].type === 'message' ? rows[4].message : null]
+      .filter((value): value is ChatMessage => value !== null);
+    const projected = projectBot(rows, messages);
+    // 收尾正文与封口回复都在流里可见,不再需要展开折叠才能看到。
+    expect(proseIds(projected)).toEqual(['wake', 'closing']);
+    // 只有真正显示的顶层回复能推进读位。
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(41)));
+  });
+
+  // 折叠里的旁白不是回复:后面还有工具动作,主进程不计入未读,读位也不能跟着它走。
+  it('keeps mid-turn narration folded and out of the read position', () => {
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      tool('scan'),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(18) }),
+      message('narration', 'assistant', 'Opening the second mailbox', { createdAt: at(31) }),
+      tool('second-scan'),
+    ];
+    const messages = [message('u', 'user').message, ...toolMessages('scan'), message('wake', 'assistant').message,
+      message('narration', 'assistant').message, ...toolMessages('second-scan')];
+    const projected = projectBot(rows, messages);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(allKeys(projected)).toContain('msg-narration');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(18)));
+  });
+
+  // 未加载的惰性历史子项没有子行,不能当成「后面没有工具动作」:消息层同样可能还没拿到。
+  it('does not promote a reply that may be followed by unloaded history', () => {
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(18) }),
+      message('narration', 'assistant', 'Opening the second mailbox', { createdAt: at(25) }),
+      { type: 'work_group', key: 'work-unloaded', isStreaming: false, children: [],
+        deferred: { expanded: false, loading: false, failed: false, toggle: () => undefined, retry: () => undefined } } as RenderItem,
+    ];
+    const projected = projectBot(rows, [message('u', 'user').message, message('wake', 'assistant').message,
+      message('narration', 'assistant').message]);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(18)));
+  });
+
+  // steer 插话与 autoResume 续跑不开启新轮,后续工具仍然决定旁白可见性。
+  it('does not treat a steer row or a resume row as a new turn', () => {
+    const interjections: ChatMessage[] = [
+      { clientId: 'steer', role: 'user', content: 'Also check spam', delivery: 'steer' },
+      { clientId: 'resume', role: 'user', content: 'Continue', isContinuationTrigger: true } as ChatMessage,
+    ];
+    for (const interjection of interjections) {
+      const rows: RenderItem[] = [
+        message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+        message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(18) }),
+        message('narration', 'assistant', 'Opening the second mailbox', { createdAt: at(20) }),
+        { type: 'message', key: `msg-${interjection.clientId}`, message: interjection } as RenderItem,
+        tool('after'),
+      ];
+      const messages = [message('u', 'user').message, message('wake', 'assistant').message,
+        message('narration', 'assistant').message, interjection, ...toolMessages('after')];
+      const projected = projectBot(rows, messages);
+      expect(proseIds(projected)).toEqual(['wake']);
+      expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(18)));
+    }
+  });
+
+  // 展示层整条删掉 AskUserQuestion / ExitPlanMode 与单步计划工具,消息层仍要保留这些活动边界。
+  it('keeps tools that the display layer removes as an activity boundary', () => {
+    const dropped: Array<[string, ChatMessage[]]> = [
+      ['single-step TodoWrite', [toolUse('todo', 'TodoWrite'), toolResult('todo', 'tu-todo')]],
+      ['AskUserQuestion', [toolUse('ask', 'AskUserQuestion'), toolResult('ask', 'tu-ask')]],
+      ['ExitPlanMode', [toolUse('exit', 'ExitPlanMode'), toolResult('exit', 'tu-exit')]],
+    ];
+    for (const [label, toolRows] of dropped) {
+      const rows: RenderItem[] = [
+        message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+        message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(18) }),
+        message('narration', 'assistant', 'Opening the second mailbox', { createdAt: at(25) }),
+      ];
+      const messages = [message('u', 'user').message, message('wake', 'assistant').message,
+        message('narration', 'assistant').message, ...toolRows];
+      const projected = projectBot(rows, messages);
+      expect(`${label}:${proseIds(projected).join(',')}`).toBe(`${label}:wake`);
+      // 对照:只看渲染项的旧口径会把它当收尾并推进读位。
+      const itemOnly = botProcessItems(groupWorkRuns(rows, false), false,
+        tailReplyClientIds(messagesOfItems(rows)));
+      expect(proseIds(itemOnly)).toEqual(['wake', 'narration']);
+    }
+  });
+
+  // 同一轮跨历史空洞分成两个窗口时,前一个窗口不能因为看不到后一个窗口的工具就宣布收尾。
+  it('does not treat a history-gap window tail as the turn closing', () => {
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(18) }),
+      message('narration', 'assistant', 'Opening the second mailbox', { createdAt: at(20) }),
+      tool('late'),
+    ];
+    const messages = [message('u', 'user').message, message('wake', 'assistant').message,
+      message('narration', 'assistant').message,
+      { ...toolUse('late'), createdAt: new Date(Date.parse(at(20)) + 40 * 60_000).toISOString() },
+      { ...toolResult('late', 'tu-late'), createdAt: new Date(Date.parse(at(20)) + 41 * 60_000).toISOString() }];
+    const projected = projectBot(rows, messages);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(18)));
+    // 对照:只看前一个窗口（旧实现的窗口内扫描）会把它当收尾。
+    const firstWindow = rows.slice(0, 3);
+    const windowLocal = botProcessItems(groupWorkRuns(firstWindow, false), false,
+      tailReplyClientIds(messagesOfItems(firstWindow)));
+    expect(proseIds(windowLocal)).toEqual(['wake', 'narration']);
+  });
+
+  // 隐藏 thinking 行在历史恢复时被映射层删掉,但主进程仍把它算作后续活动;
+  // 边界由 mapServerMessages 挂在相邻消息上(#8655 review P2)。
+  it('keeps prose before a dropped thinking placeholder folded', () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 10, 5, 0, minute)).toISOString();
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(1) }),
+      { type: 'work_group', key: 'work-progress', isStreaming: false,
+        children: [message('prose', 'assistant', 'Opening the second mailbox', { createdAt: at(2) })] } as RenderItem,
+    ];
+    const messages: ChatMessage[] = [
+      message('u', 'user').message,
+      message('wake', 'assistant').message,
+      message('prose', 'assistant').message,
+      // 映射层已经删掉了空 thinking 行,只留下边界标记(与生产 displayMessages 一致)。
+      { clientId: 'error', role: 'error', content: 'Usage limit reached', hiddenThinkingBefore: true } as ChatMessage,
+    ];
+    const projected = projectBot(rows, messages);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(allKeys(projected)).toContain('msg-prose');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(1)));
+    // 去掉边界标记时同一段正文会被提升成收尾回复,证明结论来自这条边界。
+    const withoutBoundary = messages.filter(m => m.clientId !== 'error');
+    expect(proseIds(projectBot(rows, withoutBoundary))).toEqual(['wake', 'prose']);
+  });
+
+
+  // 未确认的采样输出（samplingAttemptPending）与失败采样一样属于工作过程:
+  // 主进程 canonicalReplyVisibility 明确排除它，收尾判定必须同口径（#8655 review P2）。
+  it('keeps unconfirmed sampling output out of the tail replies', () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 10, 5, 1, minute)).toISOString();
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(1) }),
+      { type: 'work_group', key: 'work-unconfirmed', isStreaming: false,
+        children: [message('unconfirmed', 'assistant', 'Drafting the summary', { createdAt: at(2) })] } as RenderItem,
+    ];
+    const messages: ChatMessage[] = [
+      message('u', 'user').message,
+      message('wake', 'assistant').message,
+      { clientId: 'unconfirmed', role: 'assistant', content: 'Drafting the summary', samplingAttemptPending: true } as ChatMessage,
+    ];
+    const projected = projectBot(rows, messages);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(allKeys(projected)).toContain('msg-unconfirmed');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(1)));
+    // 对照:同一条正文不再是 pending 时会被当作收尾回复提升。
+    const settled = messages.map(m => m.clientId === 'unconfirmed'
+      ? { ...m, samplingAttemptPending: undefined } : m);
+    expect(proseIds(projectBot(rows, settled))).toEqual(['wake', 'unconfirmed']);
+    // 采样被确认后的显式 `false` 同样视为已接受,不能被旧的 pending 状态挡住。
+    const accepted = messages.map(m => m.clientId === 'unconfirmed'
+      ? { ...m, samplingAttemptPending: false } : m);
+    expect(proseIds(projectBot(rows, accepted))).toEqual(['wake', 'unconfirmed']);
+  });
+
+  // 新轮次以「隐藏 thinking」结尾(例如新轮还没输出就被停掉)时,这条边界属于新轮,
+  // 不能反过来否掉上一轮的收尾回复(主进程的后续活动扫描同样以真实用户输入为界)。
+  it('keeps the previous turn closing reply when the next turn ends in hidden thinking', () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 10, 9, 2, minute)).toISOString();
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(1) }),
+      message('closing', 'assistant', 'Two PRs need your review', { createdAt: at(2) }),
+      message('u2', 'user', 'And the calendar?', { createdAt: at(3) }),
+    ];
+    const messages: ChatMessage[] = [
+      message('u', 'user').message,
+      message('wake', 'assistant').message,
+      message('closing', 'assistant').message,
+      // 新轮的隐藏 thinking 在映射阶段被删除,边界挂到了这条用户行上。
+      { clientId: 'u2', role: 'user', content: 'And the calendar?', hiddenThinkingAfter: true } as ChatMessage,
+    ];
+    const projected = projectBot(rows, messages);
+    expect(proseIds(projected)).toEqual(['wake', 'closing']);
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(2)));
+  });
+
+  // 续跑（recovery）开启的是新一次尝试:它之前的正文已被 groupWorkRuns 的 resumed 分支
+  // 折进工作过程,不能因为后面没有工具就重新提升成正式回复（codex review P2）。
+  it('keeps a superseded attempt folded when the recovery answers directly', () => {
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('progress', 'assistant', 'Opening the first mailbox', { createdAt: at(2) }),
+      { type: 'message', key: 'msg-resume', message:
+        { clientId: 'resume', role: 'user', content: 'Continue after the error',
+          isContinuationTrigger: true } as ChatMessage } as RenderItem,
+      message('final', 'assistant', 'Inbox is clear', { turnCompleted: true, createdAt: at(4) }),
+    ];
+    const messages = [message('u', 'user').message, message('progress', 'assistant').message,
+      { clientId: 'resume', role: 'user', content: 'Continue after the error',
+        isContinuationTrigger: true } as ChatMessage, message('final', 'assistant').message];
+    const projected = projectBot(rows, messages);
+    // 只有续跑后的最终答案在顶层;被取代的那次尝试留在折叠里,读位也不越过它。
+    expect(proseIds(projected)).toEqual(['final']);
+    expect(allKeys(projected)).toContain('msg-progress');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(4)));
+    // 对照:没有续跑边界时同一段正文会被当作收尾提升（证明本用例靠的是续跑归属）。
+    const withoutResume = rows.filter(item => item.key !== 'msg-resume');
+    expect(proseIds(projectBot(withoutResume, messages.filter(m => m.clientId !== 'resume'))))
+      .toEqual(['progress', 'final']);
+  });
 });

@@ -4,13 +4,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { useSharedTaskTasks } from '../useSharedTaskTasks';
+import { notifySharedTaskMembershipChanged, useSharedTaskTasks } from '../useSharedTaskTasks';
 
 const state = vi.hoisted(() => ({
   account: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), invoke: vi.fn(),
   subscribe: vi.fn(), unsubscribe: vi.fn(), setSessions: vi.fn(), removeDevice: vi.fn(),
   disconnected: vi.fn(), bind: vi.fn(), reset: vi.fn(),
-  rawSessions: vi.fn(),
+  rawSessions: vi.fn(), status: undefined as undefined | ((state: { status: string }) => void),
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ isAuthenticated: true, dataOwnerId: 'guest', dataOwnerRecoveryEpoch: 0 }) }));
 vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { findById: vi.fn() } }));
@@ -36,6 +36,7 @@ beforeEach(() => {
   Object.assign(window, { electronAPI: { sharedTask: { account: state.account }, deviceLink: {
     openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke,
     subscribe: state.subscribe, unsubscribe: state.unsubscribe,
+    onStatusChanged: (listener: typeof state.status) => { state.status = listener; return () => { state.status = undefined; }; },
   } } });
   root = createRoot(document.createElement('div'));
 });
@@ -100,7 +101,7 @@ it('retries a failed disabled membership leave on the next authority poll', asyn
   await render();
   expect(state.closeLink).not.toHaveBeenCalled();
   expect(state.setSessions).not.toHaveBeenCalled();
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
   expect(state.account.mock.calls.filter(([command]) => command.action === 'leave')).toHaveLength(2);
   expect(state.closeLink).toHaveBeenCalledExactlyOnceWith(peer);
   expect(state.setSessions).not.toHaveBeenCalled();
@@ -126,4 +127,26 @@ it('does not clean up a new account after a late disabled membership leave respo
   expect(state.closeLink).not.toHaveBeenCalled();
   expect(state.removeDevice).not.toHaveBeenCalled();
   expect(state.setSessions).not.toHaveBeenCalled();
+});
+
+it('rereads the guest directory on join, reconnect and return instead of a fixed 5 s poll', async () => {
+  state.invoke.mockResolvedValue({ id: task.sessionId, source: 'desktop' });
+  const lists = () => state.account.mock.calls.filter(([command]) => command.action === 'list').length;
+  await render();
+  await act(async () => vi.advanceTimersByTimeAsync(29_999));
+  expect(lists()).toBe(1);
+  await act(async () => { notifySharedTaskMembershipChanged(); });
+  expect(lists()).toBe(2);
+  await act(async () => { state.status?.({ status: 'online' }); });
+  expect(lists()).toBe(3);
+  // Event-driven reads ask Main to skip its short list reuse; timed reads do not.
+  expect(state.account.mock.calls.filter(([command]) => command.action === 'list').map(([command]) => command.fresh))
+    .toEqual([undefined, true, true]);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+  await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+  await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+  expect(lists()).toBe(3);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+  await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+  expect(lists()).toBe(4);
 });

@@ -1,12 +1,86 @@
-import type { SettingsSearchModule } from './settingsSearchTypes';
+import { TAB_LABEL_KEY } from '@/lib/tabLabels';
+import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes';
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
+export const remoteControlSettings = defineSettings({
+  relay: {
+    id: 'remoteControl.relay',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-relay',
+    titleKey: 'settings.remoteControl.relay.route.title',
+    sectionKey: 'settings.sections.remoteControl',
+    aliases: [
+      'relay',
+      'self-hosted relay',
+      'connection route',
+      '中转',
+      '自建中转',
+      '中转服务',
+      '连接线路',
+    ],
+  },
+  devices: {
+    id: 'remoteControl.devices',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-devices',
+    titleKey: 'settings.remoteControl.sections.myDevices',
+    sectionKey: 'settings.sections.remoteControl',
+    aliases: ['device link', 'devices', '设备互联', '我的设备', '设备列表'],
+  },
+  v2: {
+    id: 'remoteControl.v2',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-v2',
+    titleKey: 'settings.remoteControl.v2.switch.title',
+    descriptionKey: 'settings.remoteControl.v2.switch.hint',
+    sectionKey: 'settings.remoteControl.v2.sectionTitle',
+    aliases: ['Agent-Net', 'agent net', 'device-link', 'topology', 'new connection', '拓扑', '新版连接', '连接拓扑'],
+  },
+  onlyEncrypted: {
+    id: 'remoteControl.onlyEncrypted',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-only-encrypted',
+    fallbackTargetId: 'settings-search-target-remote-v2',
+    titleKey: 'settings.remoteControl.v2.onlyEncrypted',
+    descriptionKey: 'settings.remoteControl.v2.onlyEncryptedHint',
+    sectionKey: 'settings.remoteControl.v2.sectionTitle',
+    aliases: ['Agent-Net only', 'encrypted connections', '仅使用 Agent-Net', '加密连接'],
+  },
+  ownModelAccess: {
+    id: 'remoteControl.ownModelAccess',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-own-model-access',
+    // 只在允许同账号设备控制本机后出现；没出现时落到「我的设备」。
+    fallbackTargetId: 'settings-search-target-remote-devices',
+    titleKey: 'settings.devices.ownModelAccess.title',
+    descriptionKey: 'settings.devices.ownModelAccess.hint',
+    sectionKey: 'settings.sections.remoteControl',
+    aliases: ['use models from my other computers', 'borrow models', 'other computers', '本机模型', '借用模型', '其他电脑用模型', '用本机模型'],
+  },
+  ssh: {
+    id: 'remoteControl.ssh',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-ssh',
+    titleKey: 'settings.remoteControl.sections.ssh',
+    sectionKey: 'settings.sections.remoteControl',
+    aliases: ['SSH', 'SSH host', 'SSH hosts', 'SSH主机', 'remote host', '远程主机', '主机'],
+  },
+  remoteControl: {
+    id: 'remoteControl',
+    tab: 'remote-control',
+    targetId: 'settings-panel-remote-control',
+    titleKey: TAB_LABEL_KEY['remote-control'],
+    sectionKey: 'settings.sections.remoteControl',
+  },
+});
+
 export default {
   id: 'remote-control',
   order: 2,
-  entries: [
-    { id: 'remoteControl.devices', isVisible: ({ mode }) => mode === 'cloud', tab: 'remote-control', targetId: 'settings-search-target-remote-devices', titleKey: 'settings.remoteControl.sections.myDevices', sectionKey: 'settings.sections.remoteControl', aliases: ['device link', 'devices', '设备互联', '我的设备'] },
-    { id: 'remoteControl.ssh', tab: 'remote-control', targetId: 'settings-search-target-remote-ssh', titleKey: 'settings.remoteControl.sections.ssh', sectionKey: 'settings.sections.remoteControl', aliases: ['SSH', 'SSH host', 'SSH hosts', 'SSH主机', 'remote host', '远程主机', '主机'] },
-    { id: 'remoteControl', tab: 'remote-control', targetId: 'settings-panel-remote-control', titleKey: 'settings.tabs.remoteControl', sectionKey: 'settings.sections.remoteControl' },
-  ],
+  entries: Object.values(remoteControlSettings),
 } satisfies SettingsSearchModule;

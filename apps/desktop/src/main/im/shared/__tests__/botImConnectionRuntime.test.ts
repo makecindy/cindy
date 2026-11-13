@@ -5,6 +5,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
+import { once } from 'node:events';
+import { createHash } from 'node:crypto';
+import { BlueBubblesIM, LocalWebhookReceiver, type IMHost } from '@cindy/im';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,19 +16,21 @@ import type { BotImConnectionRecord } from '../../../../shared/botImConnection';
 
 const h = vi.hoisted(() => ({
   root: '',
+  ipcHandlers: new Map<string, (event: unknown, payload: unknown) => unknown>(),
   secrets: new Map<string, string>(),
   botStatus: 'active' as string | null,
   archived: [] as string[],
   archiveCalls: [] as unknown[],
   sent: [] as Array<{ channel: string; payload: unknown }>,
   ownerKey: 'owner-a',
+  drainWechat: vi.fn(async (update: () => void, isCurrent: () => boolean) => { if (isCurrent()) update(); }),
   /** 每次 Telegram setConfig 落盘前调用(测并发添加 / 建连期间切账号)。 */
   beforeTelegramSetConfig: null as (() => Promise<void> | void) | null,
 }));
 
 vi.mock('electron', () => ({
   app: { getPath: () => h.root },
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: vi.fn((name: string, handler: (event: unknown, payload: unknown) => unknown) => h.ipcHandlers.set(name, handler)) },
   BrowserWindow: {
     getAllWindows: () => [
       { isDestroyed: () => false, webContents: { send: (channel: string, payload: unknown) => h.sent.push({ channel, payload }) } },
@@ -81,16 +87,30 @@ vi.mock('../../../security/trustedAppRenderer', () => ({ assertTrustedAppRendere
 
 import {
   addBotImConnection,
+  getBotIMessageConfig,
+  updateBotIMessageConfig,
+  buildBotImConnectionListPayload,
   configureBotImConnectionRuntime,
+  registerBotImConnectionIpc,
+  setWechatCompanionBinding,
+  getBotFeishuTransport,
   listBotImConnectionGroups,
   removeBotImConnection,
   setBotImConnectionGroupMode,
+  listBotImDiscordChannels,
+  setBotImDiscordChannelAccess,
   removeBotImConnectionsForBot,
   startBotImConnections,
   stopBotImConnections,
   __testing,
 } from '../botImConnectionRuntime';
-import { listBotImConnections, secretKeyPrefixFor } from '../botImConnectionStore';
+import { addBotImConnectionRecord, listBotImConnections, secretKeyPrefixFor } from '../botImConnectionStore';
+import * as connectionStore from '../botImConnectionStore';
+import { companionConnectionRouteKeyPrefix } from '../imBotBindingRoute';
+import { blueBubblesStateStorage } from '../../imessage/storage';
+import { __testing as laneTesting } from '../botImLaneRuntime';
+import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
+import { readWechatChannelSettings, writeWechatCompanionBinding, writeWechatWorkingDir } from '../../wechat/channelSettings';
 import {
   adoptPersonalBot,
   configureBotImPersonalAdoption,
@@ -240,6 +260,19 @@ function fakeDiscord(prefix: string, opts: { connect: boolean }) {
       return () => handlers.delete(handler);
     },
     getOwnerUserId: () => h.secrets.get(`${prefix}discord-owner-user-id`) ?? '',
+    listGuilds: () => [
+      {
+        id: '200000000000000001',
+        name: 'Guild',
+        channels: [
+          {
+            id: '300000000000000001',
+            name: 'general',
+            permissions: { view: true, send: true, readHistory: true, embed: true, attachFiles: true, sendInThreads: true },
+          },
+        ],
+      },
+    ],
     setConfig: vi.fn(async (payload: { token: string; ownerUserId: string }) => {
       if (!opts.connect) {
         set({ kind: 'error', reason: 'Invalid token', code: 'auth' });
@@ -278,6 +311,73 @@ let connectOutcome = true;
 let telegramConflictAfterConnect = false;
 
 describe('bot im connection runtime', () => {
+  // Electron IPC 安全规则 §5：新增归档入口不能绕过 sender/payload 校验；旧测试只覆盖连接生命周期。
+  // unit：注册真实 handler，以非法 sessionId 作为最小输入，拒绝后无归档写入。
+  it('validates archive IPC payload before entering the lane runtime', async () => {
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    expect(handler).toBeTypeOf('function');
+    expect(() => handler({}, { id: 'a1b2c3d4e5f6', sessionId: '../outside' })).toThrow(/INVALID_PARAMS/);
+    expect(() => handler({}, { id: 'invalid', sessionId: 'session' })).toThrow(/INVALID_PARAMS/);
+    expect(h.archiveCalls).toEqual([]);
+  });
+
+  // PR #6959: the real IPC handler must encode storage failures without leaking
+  // filesystem paths, while retaining domain/owner errors. Existing coverage
+  // only rejects synchronous invalid inputs. Unit: inject failure at archive
+  // persistence after real connection/link ownership checks, without Electron.
+  it.each([
+    { failure: new Error('ARCHIVE_CAPACITY_REACHED'), code: 'PRECONDITION_FAILED', message: 'ARCHIVE_CAPACITY_REACHED' },
+    { failure: new Error('OWNER_CHANGED'), code: 'PRECONDITION_FAILED', message: 'OWNER_CHANGED' },
+    { failure: new Error("EACCES: permission denied, open '/private/owners/secret/bot-im-connections.json'"), code: 'INTERNAL', message: 'LANE_ARCHIVE_FAILED' },
+    { failure: new Error('EPERM: operation not permitted, rename C:\\Users\\private-owner\\bot-im-connections.json'), code: 'INTERNAL', message: 'LANE_ARCHIVE_FAILED' },
+  ])('normalizes archive persistence failure to $code ($message)', async ({ failure, code, message }) => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'telegram' });
+    await connectionStore.updateBotImConnectionRecord(record.id, { botContextId: '777' });
+    laneTesting.setStore({
+      listLinks: async () => [{ sessionId: 'session-1', role: 'canonical', routeKey: null }],
+      readActivity: vi.fn(),
+      readArchiveActivity: vi.fn(async () => ({ messageId: null, hasNewActivity: false })),
+    });
+    const archive = vi.spyOn(connectionStore, 'archiveBotImTaskRow').mockRejectedValueOnce(failure);
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: record.id, sessionId: 'session-1' })).rejects.toMatchObject({
+      code, message: `[${code}] ${message}`,
+    });
+    expect(archive).toHaveBeenCalledOnce();
+    expect(listBotImConnections()[0]?.archivedTaskRows).toBeUndefined();
+  });
+
+  it('preserves the archive IPC not-found error', async () => {
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: 'a1b2c3d4e5f6', sessionId: 'session-1' })).rejects.toMatchObject({
+      code: 'NOT_FOUND', message: '[NOT_FOUND] CONNECTION_NOT_FOUND',
+    });
+  });
+
+  it('preserves the archive IPC owner-change rejection before persistence', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'telegram' });
+    await connectionStore.updateBotImConnectionRecord(record.id, { botContextId: '777' });
+    laneTesting.setStore({
+      listLinks: async () => {
+        h.ownerKey = 'owner-b';
+        return [{ sessionId: 'session-1', role: 'canonical', routeKey: null }];
+      },
+      readActivity: vi.fn(),
+      readArchiveActivity: vi.fn(async () => ({ messageId: null, hasNewActivity: false })),
+    });
+    const archive = vi.spyOn(connectionStore, 'archiveBotImTaskRow');
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: record.id, sessionId: 'session-1' })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] OWNER_CHANGED',
+    });
+    expect(archive).not.toHaveBeenCalled();
+    expect(listBotImConnections()[0]?.archivedTaskRows).toBeUndefined();
+  });
+
   beforeEach(() => {
     h.root = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-im-runtime-'));
     h.secrets.clear();
@@ -292,7 +392,9 @@ describe('bot im connection runtime', () => {
     connectOutcome = true;
     telegramConflictAfterConnect = false;
     adoptionTesting.reset();
+    h.drainWechat.mockClear();
     configureBotImConnectionRuntime({
+      removeWechatCompanionBinding: h.drainWechat,
       create: (record) => {
         const prefix = secretKeyPrefixFor(record.id);
         const orchestrator = fakeOrchestrator();
@@ -321,6 +423,48 @@ describe('bot im connection runtime', () => {
     });
   });
 
+  // #6439: persisted connections can fail init and remain in instances. Exercise
+  // the real store/start/select lifecycle (unit) instead of a selector replica.
+  it('skips failed and ownerless Feishu connections without changing the resolved recipient', async () => {
+    const states = [
+      { kind: 'error', owner: 'ou_failed' },
+      { kind: 'connected', owner: null },
+      { kind: 'connected', owner: 'ou_target' },
+      { kind: 'connected', owner: 'ou_other' },
+    ];
+    const records: BotImConnectionRecord[] = [];
+    for (let index = 0; index < states.length; index += 1) {
+      records.push(await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'feishu' }, { now: () => index }));
+    }
+    configureBotImConnectionRuntime({
+      removeWechatCompanionBinding: h.drainWechat,
+      create: (record) => {
+        const state = states[records.findIndex((candidate) => candidate.id === record.id)]!;
+        return {
+          kind: 'feishu',
+          im: {
+            init: async () => { if (state.kind === 'error') throw new Error('startup failed'); },
+            dispose: async () => undefined,
+            onStatusChange: () => () => undefined,
+            getStatus: () => ({ kind: state.kind }),
+            getOwnerOpenId: () => state.owner,
+          } as never,
+          orchestrator: fakeOrchestrator() as never,
+        };
+      },
+      settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
+      listKnownGroups: async () => [],
+    });
+    await startBotImConnections();
+    expect(getBotFeishuTransport('bot-mia')?.getOwnerOpenId()).toBe('ou_target');
+    states[2]!.kind = 'error';
+    // A later tool phase must not retry a resolved target through another owner.
+    expect(getBotFeishuTransport('bot-mia', 'ou_target')).toBeNull();
+    expect(getBotFeishuTransport('unrelated-bot')).toBeNull();
+    await stopBotImConnections();
+    expect(getBotFeishuTransport('bot-mia')).toBeNull();
+  });
+
   it('lists known groups with their per-connection activation and toggles it live', async () => {
     const added = await addBotImConnection({
       botId: 'bot-mia',
@@ -342,9 +486,185 @@ describe('bot im connection runtime', () => {
     expect(listBotImConnections()[0]?.groupActivation).toBeUndefined();
   });
 
+  it('keeps each Discord connection\'s channel allowlist separate, closed by default, and only for Discord connections', async () => {
+    const guild = '200000000000000001';
+    const channel = '300000000000000001';
+    const mia = await addBotImConnection({ botId: 'bot-mia', channel: 'discord', token: 'MTAw.discord.token', ownerUserId: '123456789012345678' });
+    const zed = await addBotImConnection({ botId: 'bot-zed', channel: 'discord', token: 'MTAw.other.token', ownerUserId: '123456789012345679' });
+    const telegram = await addBotImConnection({
+      botId: 'bot-mia', channel: 'telegram', token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef', ownerUserId: '42',
+    });
+
+    // 存量 / 新连接：没有字段 = 不开放任何频道。
+    expect(listBotImDiscordChannels(mia.connection.id)).toMatchObject({
+      connectionId: mia.connection.id, online: true, access: { channels: [] },
+      guilds: [{ id: guild, channels: [{ id: channel, permissions: { send: true } }] }],
+    });
+
+    const saved = await setBotImDiscordChannelAccess(mia.connection.id, {
+      channels: [{ guildId: guild, channelId: channel, allowMembers: true }, { guildId: 'junk', channelId: channel }],
+    });
+    expect(saved.access).toEqual({ channels: [{ guildId: guild, channelId: channel, allowMembers: true }] });
+    // 传输层的白名单 getter 读的是连接记录正本；运行中的实例记录同步更新，另一条连接不受影响。
+    expect(connectionStore.readBotImConnection(mia.connection.id)?.discordChannelAccess).toEqual(saved.access);
+    expect(__testing.instances.get(mia.connection.id)?.record.discordChannelAccess).toEqual(saved.access);
+    expect(listBotImDiscordChannels(zed.connection.id).access).toEqual({ channels: [] });
+
+    // 服务器级设置与白名单形状版本：旧电脑读不到 accessVersion，远程页据此拒绝编辑。
+    const guildLevel = await setBotImDiscordChannelAccess(mia.connection.id, {
+      channels: [],
+      guilds: [{ guildId: guild, enabled: true, mode: 'all', allowMembers: true }],
+    });
+    expect(guildLevel).toMatchObject({ accessVersion: 2, access: { guilds: [{ guildId: guild, mode: 'all', allowMembers: true }] } });
+
+    // 清空白名单后字段不落盘。
+    await setBotImDiscordChannelAccess(mia.connection.id, { channels: [] });
+    expect(connectionStore.readBotImConnection(mia.connection.id)?.discordChannelAccess).toBeUndefined();
+
+    // 其它渠道的连接、不存在的连接都不能写 / 读。
+    await expect(setBotImDiscordChannelAccess(telegram.connection.id, { channels: [{ guildId: guild, channelId: channel }] }))
+      .rejects.toThrow(/NOT_FOUND/);
+    expect(() => listBotImDiscordChannels(telegram.connection.id)).toThrow(/NOT_FOUND/);
+    expect(connectionStore.readBotImConnection(telegram.connection.id)?.discordChannelAccess).toBeUndefined();
+
+    // 删除连接后白名单随记录一起消失。
+    await setBotImDiscordChannelAccess(zed.connection.id, { channels: [{ guildId: guild, channelId: channel }] });
+    await removeBotImConnection(zed.connection.id);
+    expect(connectionStore.readBotImConnection(zed.connection.id)).toBeNull();
+    expect(() => listBotImDiscordChannels(zed.connection.id)).toThrow(/NOT_FOUND/);
+  });
+
+  // Runtime acceptance found both IPC and stored settings restricted to numeric Telegram IDs.
+  // Tier 1: real IPC + settings persistence must retain an actual BlueBubbles group identifier.
+  it('persists an iMessage group mode through the settings IPC', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'imessage' });
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:set-group-activation')!;
+    const chatId = 'any;+;acceptance-group';
+    await handler({}, { id: record.id, chatId, mode: 'always' });
+    expect(connectionStore.readBotImConnection(record.id)?.groupActivation).toEqual({ [chatId]: 'always' });
+    await handler({}, { id: record.id, chatId, mode: 'mention' });
+    expect(connectionStore.readBotImConnection(record.id)?.groupActivation).toBeUndefined();
+    expect(() => handler({}, { id: record.id, chatId: 'any;-;private', mode: 'always' })).toThrow(/INVALID_PARAMS/);
+  });
+
   afterEach(async () => {
+    vi.restoreAllMocks();
+    laneTesting.setStore(null);
     await stopBotImConnections();
     fs.rmSync(h.root, { recursive: true, force: true });
+  });
+
+  // Tier 1, #9250/r4506188541: use the production add/rollback, transport and
+  // journal. Existing fake transports cannot expose a 202 during first connect.
+  it.each(['input-failure', 'connect-failure'])('handles iMessage first-add %s without losing durable ingress', async scenario => {
+    const chat = { guid: 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
+    let callback = '', available = false, now = 1000;
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url!, 'http://127.0.0.1');
+      const send = (data: unknown) => res.end(JSON.stringify({ status: 200, data }));
+      if (url.pathname.endsWith('/server/info')) {
+        if (scenario === 'connect-failure') { res.writeHead(401).end(); return; }
+        send({ server_version: '1.9.9' }); return;
+      }
+      if (url.pathname.startsWith('/api/v1/chat/')) { send(chat); return; }
+      if (url.pathname === '/api/v1/webhook') {
+        if (req.method === 'POST') {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(Buffer.from(chunk));
+          callback = JSON.parse(Buffer.concat(chunks).toString()).url;
+          expect((await fetch(callback, { method: 'POST', body: JSON.stringify({ type: 'new-message', data: { guid: 'first-add-message' } }) })).status).toBe(202);
+          send(null); return;
+        }
+        send([{ id: 1, url: callback }]); return;
+      }
+      if (url.pathname.startsWith('/api/v1/webhook/')) { send(null); return; }
+      if (url.pathname === '/api/v1/message/query') { send([]); return; }
+      if (url.pathname === '/api/v1/message/first-add-message') {
+        if (!available) { res.writeHead(503).end(); return; }
+        send({ guid: 'first-add-message', text: 'first work', dateCreated: 1001, isFromMe: false,
+          chats: [chat], handle: { address: 'owner@example.test', service: 'iMessage' } }); return;
+      }
+      res.writeHead(404).end();
+    });
+    server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    let transport!: BlueBubblesIM;
+    let storage!: ReturnType<typeof blueBubblesStateStorage>;
+    const host: IMHost = {
+      secrets: { read: key => h.secrets.get(key) ?? null, write: (key, value) => { h.secrets.set(key, value); return true; },
+        readResult: key => h.secrets.has(key) ? { kind: 'value', value: h.secrets.get(key)! } : { kind: 'missing' },
+        remove: key => { h.secrets.delete(key); }, isAvailable: () => true },
+      ipc: { handle() {}, broadcast() {}, throwIpcError(_code, message): never { throw new Error(message); } },
+      paths: { feishuMediaDir: h.root }, httpPostForm: async () => ({ status: 200, body: {} }),
+    };
+    configureBotImConnectionRuntime({
+      removeWechatCompanionBinding: h.drainWechat,
+      create: record => {
+        storage = blueBubblesStateStorage(record.id);
+        transport = new BlueBubblesIM(host, { secretPrefix: secretKeyPrefixFor(record.id), storage,
+          contextId: () => connectionStore.readBotImConnection(record.id)?.botContextId ?? null,
+          receiver: () => new LocalWebhookReceiver('127.0.0.1', 0), resolvePeers: async () => ['127.0.0.1'], now: () => now });
+        transport.onMessage(event => { event.delivery!.awaitPersistence(); event.delivery!.accept(); });
+        return { kind: 'imessage', im: transport, orchestrator: fakeOrchestrator() as never };
+      },
+      settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
+      listKnownGroups: async () => [],
+    });
+    try {
+      const adding = addBotImConnection({ botId: 'bot-mia', channel: 'imessage', serverUrl: origin,
+        password: 'test-only', ownerAddress: 'owner@example.test', chatGuids: [chat.guid], listenHost: '127.0.0.1', listenPort: 18747 });
+      if (scenario === 'connect-failure') {
+        await expect(adding).rejects.toThrow(/CONNECT_FAILED/);
+        expect(listBotImConnections()).toEqual([]);
+        expect(h.secrets.size).toBe(0);
+      } else {
+        const result = await adding;
+        expect(listBotImConnections().map(row => row.id)).toEqual([result.connection.id]);
+        expect(h.secrets.get(`${secretKeyPrefixFor(result.connection.id)}bluebubbles-password`)).toBe('test-only');
+        expect(storage.read()!.inbox['first-add-message'].state).toBe('pending');
+        expect(transport.getStatus().kind).toBe('error');
+        available = true; now += 30_000;
+        await transport.reconcile();
+        expect(storage.read()!.inbox['first-add-message'].state).toBe('accepted');
+        expect(transport.getStatus().kind).toBe('connected');
+        expect(listBotImConnections()[0]?.id).toBe(result.connection.id);
+        expect(listBotImConnections()[0]?.botContextId).toBe(`imessage-${result.connection.id}`);
+        // Tier 1, PR #10241/r4552139485: simulate a pre-edit legacy connection
+        // whose persisted identity is the hash of A; editing A -> B must retain it.
+        const legacyContextId = createHash('sha256').update(origin).digest('hex').slice(0, 24);
+        await connectionStore.updateBotImConnectionRecord(result.connection.id, { botContextId: legacyContextId });
+        const config = getBotIMessageConfig(result.connection.id);
+        expect(config).not.toHaveProperty('password');
+        const updated = await updateBotIMessageConfig(result.connection.id, { ...config, serverUrl: origin.replace('127.0.0.1', 'localhost'), password: '', listenPort: 18748 });
+        expect(updated.connections[0]?.id).toBe(result.connection.id);
+        expect(updated.connections[0]?.botId).toBe('bot-mia');
+        expect(getBotIMessageConfig(result.connection.id).listenPort).toBe(18748);
+        expect(h.secrets.get(`${secretKeyPrefixFor(result.connection.id)}bluebubbles-password`)).toBe('test-only');
+        expect(storage.read()!.inbox['first-add-message'].state).toBe('accepted');
+        await expect(updateBotIMessageConfig(result.connection.id, { ...config, listenPort: 1 })).rejects.toThrow(/INVALID_PARAMS/);
+        expect(getBotIMessageConfig(result.connection.id).listenPort).toBe(18748);
+        expect(h.archiveCalls).toEqual([]);
+        expect(updated.connections[0]?.botContextId).toBe(legacyContextId);
+        // Re-adding A for another companion must not reuse the legacy lane prefix.
+        const originalTransport = transport;
+        const second = await addBotImConnection({ botId: 'bot-other', channel: 'imessage', ...config, password: 'test-only' });
+        expect(second.connection.botContextId).toBe(`imessage-${second.connection.id}`);
+        expect(second.connection.botContextId).not.toBe(legacyContextId);
+        await removeBotImConnection(second.connection.id);
+        expect(h.archiveCalls).toEqual([{ routeKeyPrefix: companionConnectionRouteKeyPrefix('imessage', second.connection.botContextId!) }]);
+        expect(connectionStore.readBotImConnection(result.connection.id)?.botContextId).toBe(legacyContextId);
+        expect(originalTransport.getStatus().kind).toBe('connected');
+        // Reopen the retained connection from disk, preserving its existing identity.
+        await stopBotImConnections();
+        await startBotImConnections();
+        expect(transport.botContextId).toBe(legacyContextId);
+        expect(transport.getStatus().kind).toBe('connected');
+      }
+    } finally {
+      await stopBotImConnections();
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 
   it('adds a Telegram connection, hands the credentials to its own transport and records the platform id', async () => {
@@ -436,6 +756,103 @@ describe('bot im connection runtime', () => {
     expect([...h.secrets.keys()]).toEqual([]);
     expect(listBotImConnections()).toEqual([]);
     expect(removed.connections).toEqual([]);
+  });
+
+  // Tier 1, PR #10241/r4557400252: real edit/add entries and the import profile
+  // lock must make progress in lock -> queue order, without timer-based sleeps.
+  it('does not hold the connection queue while waiting for an import profile lock', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'imessage' });
+    const config = { serverUrl: 'http://127.0.0.1:1234', ownerAddress: 'owner@example.test',
+      chatGuids: ['any;-;owner@example.test'], listenHost: '127.0.0.1', listenPort: 18747 };
+    h.secrets.set(`${secretKeyPrefixFor(record.id)}bluebubbles-config`, JSON.stringify(config));
+    let release!: () => void, entered!: () => void;
+    const locked = new Promise<void>(resolve => { entered = resolve; });
+    const resumeImport = new Promise<void>(resolve => { release = resolve; });
+    const importing = withBotProfileLocks(['bot-mia'], async () => {
+      entered();
+      await resumeImport;
+      return addBotImConnection({ botId: 'bot-mia', channel: 'telegram',
+        token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' });
+    });
+    await locked;
+    // Invalid input is sufficient: validation must still run after the lock and
+    // queue, and the failed edit must not poison either one for later connections.
+    const editing = expect(updateBotIMessageConfig(record.id, { ...config, listenPort: 1 })).rejects.toThrow('BLUEBUBBLES_INVALID_CONFIG');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    release();
+    const [imported] = await Promise.all([importing, editing]);
+    expect(imported.connection.botId).toBe('bot-mia');
+    const next = await addBotImConnection({ botId: 'bot-other', channel: 'telegram',
+      token: '654321:ZYXWVUTSRQPONMLKJIHGFEDCBA', ownerUserId: '4242' });
+    expect(next.connection.botId).toBe('bot-other');
+  });
+
+  // #6492 r4318509719, unit: existing cleanup tests miss an initially unbound
+  // teammate being deleted during transport drain. Use the real binding/store
+  // entry and the same profile lock as botLifecycleService, with controlled gates.
+  it('does not resurrect a deleted teammate when its first WeChat binding is draining', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const draining = new Promise<void>((resolve) => { entered = resolve; });
+    const drained = new Promise<void>((resolve) => { release = resolve; });
+    const binding = setWechatCompanionBinding('bot-mia', async (commit) => {
+      entered();
+      await drained;
+      commit();
+    });
+    await draining;
+    const deletion = withBotProfileLocks(['bot-mia'], async () => {
+      h.botStatus = 'deleting';
+      await removeBotImConnectionsForBot('bot-mia');
+      h.botStatus = null;
+    });
+    // Run until deletion either completes or waits on the binding's profile lock.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    release();
+    await Promise.all([binding, deletion]);
+    expect(readWechatChannelSettings().companionBotId).toBeUndefined();
+    const apply = vi.fn(async (commit: () => void) => { commit(); });
+    await expect(setWechatCompanionBinding('bot-mia', apply)).rejects.toThrow('BOT_INACTIVE');
+    expect(apply).not.toHaveBeenCalled();
+    // A different active teammate can claim the shared connection afterwards.
+    h.botStatus = 'active';
+    await setWechatCompanionBinding('bot-other', apply);
+    expect(readWechatChannelSettings().companionBotId).toBe('bot-other');
+  });
+
+  // Regression #6492: a WeChat-only teammate has no connection-store records.
+  // unit tier: real deletion cleanup and settings store; keep shared auth and unrelated owners.
+  it('clears only the deleted teammate’s WeChat assignment and broadcasts without removing authorization', async () => {
+    writeWechatWorkingDir(h.root);
+    writeWechatCompanionBinding('bot-mia');
+    h.secrets.set('wechat_credentials_test', 'retained-test-credential');
+    h.secrets.set('wechat_data_key_v1', 'retained-test-key');
+    const before = readWechatChannelSettings();
+    const secrets = new Map(h.secrets);
+    await removeBotImConnectionsForBot('bot-other');
+    expect(readWechatChannelSettings()).toEqual(before);
+    expect(h.sent).toEqual([]);
+
+    h.drainWechat.mockRejectedValueOnce(new Error('DRAIN_FAILED'));
+    await expect(removeBotImConnectionsForBot('bot-mia')).rejects.toThrow('DRAIN_FAILED');
+    expect(readWechatChannelSettings()).toEqual(before);
+    expect(h.sent).toEqual([]);
+    await removeBotImConnectionsForBot('bot-mia');
+    expect(h.drainWechat).toHaveBeenCalledTimes(2);
+    expect(readWechatChannelSettings()).toEqual({ version: 1, workingDir: before.workingDir, workingDirAvailable: true });
+    expect(h.secrets).toEqual(secrets);
+    expect(h.sent).toEqual([{ channel: 'wechatBot:channel-settings-changed', payload: readWechatChannelSettings() }]);
+  });
+
+  // Owner recall must discover only the selected teammate's persisted connections,
+  // including disconnected ones, without changing the settings page's all-bot view.
+  it('projects only the requested teammate connections after transports stop', async () => {
+    const a = await addBotImConnection({ botId: 'bot-mia', channel: 'telegram', token: '1:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' });
+    await addBotImConnection({ botId: 'bot-other', channel: 'telegram', token: '2:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' });
+    await stopBotImConnections();
+    expect(buildBotImConnectionListPayload('bot-mia').connections.map(r => r.id)).toEqual([a.connection.id]);
+    expect(buildBotImConnectionListPayload('absent').connections).toEqual([]);
+    expect(buildBotImConnectionListPayload().connections).toHaveLength(2);
   });
 
   it('starts recorded connections on login, keeps records across stop, and drops them with the teammate', async () => {

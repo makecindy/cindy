@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  appOn: vi.fn(),
   ipcOn: vi.fn(),
   ipcHandle: vi.fn(),
   allWindows: [] as Array<unknown>,
@@ -18,6 +19,11 @@ const mocks = vi.hoisted(() => ({
   removeWallpaper: vi.fn(),
   ensureVideo: vi.fn(),
   fromWebContents: vi.fn(),
+  refreshTheme: vi.fn(),
+  selectTheme: vi.fn(),
+  themeOn: vi.fn(),
+  themeOff: vi.fn(),
+  systemDark: false,
 }));
 
 vi.mock('../appSessionState.js', () => ({
@@ -34,6 +40,8 @@ vi.mock('../wallpaper-video.js', () => ({
 }));
 
 vi.mock('electron', () => ({
+  nativeTheme: { on: mocks.themeOn, removeListener: mocks.themeOff, get shouldUseDarkColors() { return mocks.systemDark; } },
+  app: { on: mocks.appOn },
   BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: mocks.fromWebContents },
   ipcMain: { on: mocks.ipcOn, handle: mocks.ipcHandle },
 }));
@@ -53,9 +61,12 @@ vi.mock('../appearance-settings-store.js', () => ({
   writeAppearanceSettingsPatch: mocks.writeAppearanceSettingsPatch,
   resetAppearanceSettings: mocks.resetAppearanceSettings,
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
+  appearanceService: { select: mocks.selectTheme, refresh: mocks.refreshTheme },
+  readSelectedThemeFont: vi.fn(() => null),
 }));
 
-import { registerAppearanceSettingsIpc, __testing } from '../appearance-settings-ipc.js';
+import { registerAppearanceSettingsIpc, installWindowZoomRestoration, updateAppearanceFromSettings, refreshAppearanceTheme, publishAppearanceFromOwner, __testing } from '../appearance-settings-ipc.js';
+import { pluginAppearanceRevision } from '../cindy-brain/pluginAppearanceRevision.js';
 import {
   normalizeAppearanceSettings,
   WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
@@ -67,10 +78,88 @@ const persisted = {
   codeFamily: 'JetBrains Mono',
   uiSize: 15,
   codeSize: 14,
+  terminalFamily: 'Menlo',
+  terminalSize: 17,
   windowZoom: 1.1,
 };
 
 describe('appearance settings IPC authorization', () => {
+  // Unit performance contract: no default refresh publication/subscription;
+  // package refresh publishes once per changed window, with no new OS listener.
+  it('keeps refresh inactive without a package and publishes only changed package defaults', async () => {
+    const windows = Array.from({ length: 4 }, () => ({ isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: vi.fn() } }));
+    mocks.allWindows.push(...windows); mocks.trustedReadWindow.mockReturnValue(true);
+    mocks.refreshTheme.mockReturnValue(undefined);
+    expect(refreshAppearanceTheme()).toBeUndefined();
+    expect(mocks.themeOn).not.toHaveBeenCalled();
+    expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
+    const selected = normalizeAppearanceSettings({ uiSize: 18 });
+    mocks.readAppearanceSettings.mockReturnValue(selected);
+    mocks.refreshTheme.mockResolvedValue(selected);
+    await refreshAppearanceTheme();
+    expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
+    const changed = normalizeAppearanceSettings({ ...selected, uiSize: 19 });
+    mocks.refreshTheme.mockResolvedValue(changed);
+    await refreshAppearanceTheme();
+    const { customWallpaperUrl: _privateUrl, ...publicSettings } = changed;
+    for (const win of windows) expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith('appearance-settings:changed', publicSettings);
+    expect(mocks.themeOn).not.toHaveBeenCalled();
+    expect(mocks.themeOff).not.toHaveBeenCalled();
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
+  // Unit: the package-only preparation endpoint must never become another
+  // builtin selection owner; returning to builtin uses its existing null form.
+  it('prepares only local packages and clears their in-memory layer without writing selection', async () => {
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:select-theme')![1];
+    for (const selection of [{ mode: 'dark', familyId: 'cindy' }, { mode: 'invalid', familyId: 'paper-local' }]) {
+      await expect(handler({}, selection)).rejects.toThrow('Invalid theme package selection');
+    }
+    expect(mocks.selectTheme).not.toHaveBeenCalled();
+    mocks.selectTheme.mockResolvedValue(persisted);
+    const selection = { mode: 'dark', familyId: 'paper-local' };
+    await expect(handler({}, selection)).resolves.toEqual(persisted);
+    expect(mocks.selectTheme).toHaveBeenLastCalledWith(selection);
+    await expect(handler({}, null)).resolves.toEqual(persisted);
+    expect(mocks.selectTheme).toHaveBeenLastCalledWith(null);
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+    expect(mocks.ipcHandle.mock.calls.some(([name]) => name === 'appearance-settings:migrate-theme')).toBe(false);
+  });
+  // Theme defaults must survive a single-row reset. Unit: the real trusted IPC
+  // deletes only the named overrides, while unknown or state-owner fields fail.
+  it('resets individual font and wallpaper overrides without pinning static defaults', async () => {
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:reset-fields')![1];
+    mocks.writeAppearanceSettingsPatch.mockResolvedValue(persisted);
+    await expect(handler({}, ['terminalFamily', 'terminalFontResource'])).resolves.toEqual(persisted);
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledExactlyOnceWith({
+      terminalFamily: undefined, terminalFontResource: undefined,
+    });
+    for (const field of ['themeSelection', 'customWallpaperUrl', 'unknown']) {
+      await expect(handler({}, [field])).rejects.toThrow('Invalid appearance reset');
+    }
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledTimes(1);
+  });
+  it.each(['select-theme', 'reset-fields'])('keeps %s unavailable to untrusted windows', async channel => {
+    mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted app renderer'); });
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === `appearance-settings:${channel}`)?.[1];
+    await expect(handler({}, { mode: 'dark', familyId: 'cindy' })).rejects.toThrow('untrusted app renderer');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
+  // PR #9496: the legacy parameter format skipped ifRevision. Exercise the real
+  // settings owner with a newer value appearing while its atomic update waits. tier: unit.
+  it('rejects a stale plugin revision inside the original settings write lock', async () => {
+    const previous = normalizeAppearanceSettings({ uiSize: 15 });
+    const latest = normalizeAppearanceSettings({ uiSize: 20 });
+    mocks.readAppearanceSettings.mockReturnValue(previous);
+    mocks.updateAppearanceSettingsAtomic.mockImplementation(async updater => {
+      mocks.readAppearanceSettings.mockReturnValue(latest);
+      return { ...latest, ...updater(latest) };
+    });
+    await expect(updateAppearanceFromSettings({ uiSize: 18 }, { ifRevision: pluginAppearanceRevision(previous) }))
+      .rejects.toThrow('MCP_APP_APPEARANCE_CHANGED');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+    expect(mocks.readAppearanceSettings()).toEqual(latest);
+  });
   it('validates literal visibility and accepts null only to reset its override', () => {
     for (const wallpaperBlur of [0, 8, 20, null]) {
       expect(__testing.parsePatch({ wallpaperBlur })).toEqual({ wallpaperBlur });
@@ -88,6 +177,14 @@ describe('appearance settings IPC authorization', () => {
     expect(__testing.parsePatch({ wallpaperVisibility: -1 })).toEqual({ wallpaperVisibility: 0 });
     for (const wallpaperVisibility of ['0.5', true, NaN, Infinity, {}]) {
       expect(() => __testing.parsePatch({ wallpaperVisibility })).toThrow('INVALID_PARAMS');
+    }
+    for (const desktopVisibility of [0, 0.37, 1, null]) {
+      expect(__testing.parsePatch({ desktopVisibility })).toEqual({ desktopVisibility });
+    }
+    expect(__testing.parsePatch({ desktopVisibility: 2 })).toEqual({ desktopVisibility: 1 });
+    expect(__testing.parsePatch({ desktopVisibility: -1 })).toEqual({ desktopVisibility: 0 });
+    for (const desktopVisibility of ['0.5', true, NaN, Infinity, {}]) {
+      expect(() => __testing.parsePatch({ desktopVisibility })).toThrow('INVALID_PARAMS');
     }
   });
   it.each(['video', 'image'])(
@@ -200,6 +297,7 @@ describe('appearance settings IPC authorization', () => {
   });
 
   beforeEach(() => {
+    mocks.refreshTheme.mockReset(); mocks.selectTheme.mockReset(); mocks.themeOn.mockClear(); mocks.themeOff.mockClear(); mocks.systemDark = false;
     mocks.owner = 'owner-a:1';
     mocks.boundaryPending = false;
     mocks.importWallpaper.mockReset();
@@ -211,6 +309,110 @@ describe('appearance settings IPC authorization', () => {
     mocks.assertTrustedAppRendererEvent.mockReset();
     mocks.readAppearanceSettings.mockReset().mockReturnValue(persisted);
     mocks.fromWebContents.mockReset().mockReturnValue({ isDestroyed: () => false });
+    mocks.writeAppearanceSettingsPatch.mockReset().mockResolvedValue(persisted);
+    mocks.updateAppearanceSettingsAtomic.mockReset();
+  });
+
+  // #7486: the file can retain 90% while an activated window displays 100%.
+  // Existing IPC tests only covered preference writes, not native focus recovery.
+  // Exercise the registered Electron event with a stateful window; unit tier.
+  it('restores a drifted app window on focus without rewriting preferences or stable zoom', () => {
+    const settings = { ...persisted, windowZoom: 0.9 };
+    mocks.readAppearanceSettings.mockReturnValue(settings);
+    let zoom = 1;
+    const setZoomFactor = vi.fn((value: number) => { zoom = value; });
+    const win = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, getZoomFactor: () => zoom, setZoomFactor },
+    };
+    markAppContentWindow(win as never);
+    const focus = mocks.appOn.mock.calls.find(([name]) => name === 'browser-window-focus')?.[1];
+    expect(focus).toBeTypeOf('function');
+    focus({}, win);
+    expect(zoom).toBe(0.9);
+    focus({}, win);
+    expect(setZoomFactor).toHaveBeenCalledOnce();
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+    expect(mocks.updateAppearanceSettingsAtomic).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the app zoom to unregistered or destroyed focus targets', () => {
+    const focus = mocks.appOn.mock.calls.find(([name]) => name === 'browser-window-focus')?.[1];
+    expect(focus).toBeTypeOf('function');
+    const setZoomFactor = vi.fn();
+    const win = {
+      isDestroyed: vi.fn(() => false),
+      webContents: { isDestroyed: vi.fn(() => false), getZoomFactor: () => 1, setZoomFactor },
+    };
+    focus({}, win);
+    markAppContentWindow(win as never);
+    win.webContents.isDestroyed.mockReturnValue(true);
+    focus({}, win);
+    win.isDestroyed.mockReturnValue(true);
+    focus({}, win);
+    expect(setZoomFactor).not.toHaveBeenCalled();
+  });
+
+  // In-page hash navigation (conversation switching) never fires
+  // `did-finish-load`, so Chromium restores the new URL's stale per-URL zoom
+  // level and the window appears to shrink until the next full load.
+  it('re-applies the saved zoom after an in-page navigation restores a stale level', () => {
+    const settings = { ...persisted, windowZoom: 1.5 };
+    mocks.readAppearanceSettings.mockReturnValue(settings);
+    let zoom = 1;
+    const setZoomFactor = vi.fn((value: number) => {
+      zoom = value;
+    });
+    const on = vi.fn();
+    const win = {
+      isDestroyed: () => false,
+      webContents: {
+        isDestroyed: () => false,
+        getZoomFactor: () => zoom,
+        setZoomFactor,
+        on,
+      },
+    };
+    markAppContentWindow(win as never);
+    installWindowZoomRestoration(win as never);
+
+    const navigate = on.mock.calls.find(([name]) => name === 'did-navigate-in-page')?.[1];
+    expect(navigate).toBeTypeOf('function');
+    navigate({}, 'file:///app/index.html#/cc-agent/next', true);
+    expect(zoom).toBe(1.5);
+
+    // A second navigation that already shows the saved level stays untouched.
+    navigate({}, 'file:///app/index.html#/cc-agent/next-2', true);
+    expect(setZoomFactor).toHaveBeenCalledOnce();
+  });
+
+  it('ignores in-page navigations from sub-frames and destroyed windows', () => {
+    const settings = { ...persisted, windowZoom: 1.5 };
+    mocks.readAppearanceSettings.mockReturnValue(settings);
+    const setZoomFactor = vi.fn();
+    const on = vi.fn();
+    const win = {
+      isDestroyed: vi.fn(() => false),
+      webContents: {
+        isDestroyed: vi.fn(() => false),
+        getZoomFactor: () => 1,
+        setZoomFactor,
+        on,
+      },
+    };
+    markAppContentWindow(win as never);
+    installWindowZoomRestoration(win as never);
+    const navigate = on.mock.calls.find(([name]) => name === 'did-navigate-in-page')?.[1];
+
+    navigate({}, 'file:///app/index.html#/iframe', false);
+    expect(setZoomFactor).not.toHaveBeenCalled();
+
+    navigate({}, 'file:///app/index.html#/cc-agent/next', true);
+    expect(setZoomFactor).toHaveBeenCalledOnce();
+
+    win.webContents.isDestroyed.mockReturnValue(true);
+    navigate({}, 'file:///app/index.html#/cc-agent/next-2', true);
+    expect(setZoomFactor).toHaveBeenCalledOnce();
   });
 
   it('同步启动读取只向已授权的外观 reader 返回持久快照', () => {
@@ -346,4 +548,34 @@ describe('appearance settings IPC authorization', () => {
       await expect(setHandler({}, { wallpaperId })).rejects.toThrow('wallpaperId is not supported');
     },
   );
+  const getSetHandler = () => mocks.ipcHandle.mock.calls.find(
+    ([channel]) => channel === 'appearance-settings:set-patch',
+  )?.[1] as (event: unknown, patch: unknown) => Promise<unknown>;
+
+  it('accepts only terminal font fields while preserving the existing write authorization', async () => {
+    const event = {};
+    await getSetHandler()(event, { terminalFamily: '  Menlo  ', terminalSize: 30 });
+    expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalledWith(event);
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledExactlyOnceWith({
+      terminalFamily: 'Menlo', terminalSize: 24,
+    });
+  });
+
+  it.each([
+    { terminalFamily: 1 }, { terminalFamily: 'x'.repeat(257) },
+    { terminalSize: '13' }, { terminalSize: NaN }, { terminalSize: Infinity },
+    { terminalTheme: 'dark' }, { customizedKeys: ['terminalFamily'] }, null, [],
+  ])('rejects malformed or unapproved terminal appearance patch %j before writing', async (patch) => {
+    await expect(getSetHandler()({}, patch)).rejects.toThrow('[INVALID_PARAMS]');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
+
+  it('does not grant read-only windows or untrusted senders terminal settings write access', async () => {
+    mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
+      throw new Error('untrusted app renderer');
+    });
+    await expect(getSetHandler()({}, { terminalFamily: 'Menlo', terminalSize: 16 }))
+      .rejects.toThrow('untrusted app renderer');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
 });

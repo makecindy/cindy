@@ -3,7 +3,7 @@ import os from 'node:os';
 import { ipcMain } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { isPluginMarketPassthroughErrorCode } from './api.js';
 import {
   isGhostInstallApprovalToken,
@@ -32,11 +32,15 @@ import {
   type PluginMarketSnapshotOptions,
 } from './service.js';
 
+import { preparePluginShare } from './sharing.js';
+import { installLocalPluginShare, readLocalPluginShare, prepareLocalPluginShare, releaseLocalPluginShare, releaseLocalPluginSharesForCaller } from './localSharing.js';
+
 const log = createLogger('plugin-market-ipc');
 let registered = false;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
 const UPDATE_CONSENT_HOLDS_CHANGED_CHANNEL = 'plugin-market:update-consent-holds-changed';
 const localIconRequestGate = new LocalIconRequestGate();
+const localShareWindows = new Set<number>();
 
 function signalRemovalNoticeAvailable(): void {
   if (!service().hasPendingRemovalNotice()) return;
@@ -60,7 +64,7 @@ async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOpti
 /**
  * Reuse the market snapshot reconciliation outside the Plugins page so
  * default-install plugins are provisioned and stable-source updates are applied
- * as soon as an app owner is ready. The Plugins page remains a later retry path.
+ * as soon as an app owner is ready. Resume and periodic maintenance retry it.
  */
 export type DefaultMarketPluginSyncOutcome = 'completed' | 'deferred' | 'failed';
 
@@ -89,10 +93,13 @@ export function defaultMarketPluginSyncOutcome(
   return 'failed';
 }
 
-export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyncOutcome> {
+export async function syncDefaultMarketPlugins(
+  trigger: PluginMarketSnapshotOptions['trigger'] = 'background',
+): Promise<DefaultMarketPluginSyncOutcome> {
   try {
     let reconciliationOutcome: 'completed' | 'failed' | null = null;
     const snapshot = await snapshotAndSignalRemovalNotice({
+      trigger,
       onDefaultReconciliationOutcome: (outcome) => {
         reconciliationOutcome = outcome;
       },
@@ -113,6 +120,16 @@ export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyn
       error: error instanceof Error ? error.message : String(error),
     });
     return 'failed';
+  }
+}
+
+/** Signal foreground removals without requesting another snapshot or disk scan. */
+export async function refreshForegroundMarketPlugins(): Promise<'completed' | 'failed'> {
+  try {
+    return await service().refreshCatalogForForeground();
+  } finally {
+    // A removal can succeed before a later maintenance step fails.
+    signalRemovalNoticeAvailable();
   }
 }
 
@@ -147,10 +164,24 @@ export function registerPluginMarketIpc(): void {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
       snapshotAndSignalRemovalNotice({
-        deferReconciliation: true,
+        discoveryOnly: true,
         onConsentHoldsChanged: signalUpdateConsentHoldsChanged,
       }),
     );
+  });
+  ipcMain.handle('plugin-market:query', (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const query = requireObject(input, 'query');
+    return invokePluginMarket(() => service().query(query));
+  });
+  ipcMain.handle('plugin-market:recommendations', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return invokePluginMarket(() => service().recommendations());
+  });
+  ipcMain.handle('plugin-market:lookup', (event, ghostIds: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(ghostIds)) throwIpcError('INVALID_PARAMS', 'Invalid Plugin identities');
+    return invokePluginMarket(() => service().lookup(ghostIds));
   });
   ipcMain.handle('plugin-market:consume-removal-notice', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -159,8 +190,43 @@ export function registerPluginMarketIpc(): void {
   ipcMain.handle('plugin-market:detail', (event, pluginId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
-      service().detail(requireString(pluginId, 'pluginId')),
+      service().detail(requireString(pluginId, 'pluginId'), { includeReadme: true }),
     );
+  });
+  ipcMain.handle('plugin-market:prepare-share', (event, pluginId: unknown, options: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return preparePluginShare(pluginId, options);
+  });
+  ipcMain.handle('plugin-market:local-share-detail', (event, snapshotId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return invokePluginMarket(() => readLocalPluginShare(requireString(snapshotId, 'snapshotId')));
+  });
+  ipcMain.handle('plugin-market:install-local-share', (event, snapshotId: unknown, expected: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return invokePluginMarket(async () => ({
+      ghost: await installLocalPluginShare(requireString(snapshotId, 'snapshotId'), expected, createWindowGhostInstallConsentPrompt(event.sender)),
+    }));
+  });
+  ipcMain.handle('plugin-market:prepare-local-share', (event, instanceId: unknown, operationId: unknown, options: unknown, expected: unknown, uploadConfirmed: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof uploadConfirmed !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid upload confirmation');
+    const caller = event.sender.id;
+    if (!localShareWindows.has(caller)) {
+      localShareWindows.add(caller);
+      event.sender.once('destroyed', () => {
+        localShareWindows.delete(caller);
+        void releaseLocalPluginSharesForCaller(caller);
+      });
+    }
+    return prepareLocalPluginShare(caller, requireString(instanceId, 'instanceId'), requireString(operationId, 'operationId'),
+      requireObject(options) as unknown as import('../../shared/share.js').ShareOptions,
+      requireObject(expected) as unknown as import('../../shared/share.js').LocalPluginShareBinding, uploadConfirmed);
+  });
+  ipcMain.handle('plugin-market:release-local-share', (event, operationId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = requireString(operationId, 'operationId');
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(id)) throwIpcError('INVALID_PARAMS', 'Invalid local share operation');
+    return releaseLocalPluginShare(event.sender.id, id);
   });
   ipcMain.handle('plugin-market:local-icons', (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

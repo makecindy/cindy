@@ -1,7 +1,6 @@
+import { reconcileDeletedTaskViewState } from '../../mcp-apps/viewStateStore.js';
 import { registerCompanionImport } from '../../bot-import/registration.js';
 import { registerTaskTagsIpc } from './taskTags';
-import { registerRoutineRemoteResources } from '../../routines/remote.js';
-import { registerRoutinesIpc } from '../../routines/service.js';
 /**
  * chat-data-localization F2/F5：聚合注册所有 localDb IPC handlers + ensure-ready。
  *
@@ -11,38 +10,46 @@ import { registerRoutinesIpc } from '../../routines/service.js';
  * lifecycle 统一编排（避免与 feishuBot.dispose 等其它清理 race）。
  */
 
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
+import path from 'node:path';
 
 import { closeDb, ensureReady, getCurrentUserId } from '../index';
 import { getCurrentDbClientUserId, tryGetDbClient } from '../client/current';
 import {
   registerSessionIpc,
   type RegisterSessionIpcOpts,
+  setSessionWorktreeBindingLookup,
   setSessionWorktreeRecycle,
 } from './sessions';
 import { registerMessageIpc } from './messages';
 import { registerOrcaWorkflowIpc } from './orcaTeams';
-import { registerSessionImportIpc } from './session-import';
+import { registerSessionImportIpc } from '../../session-import/ipc';
 import { registerSessionShareIpc } from './session-share';
 import { registerRecentWorkdirsIpc } from './recentWorkdirs';
 import { registerProjectAliasesIpc } from './projectAliases';
-import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
+import { registerRightSidebarTabsIpc } from './rightSidebarTabs.desktop';
 import { registerSubagentRunsIpc } from './subagentRuns';
-import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
+import { enqueueDurableWrite } from '../../messagePersistBroadcaster.desktop';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
-import { registerSearchIpc } from './search';
+import { registerSearchIpc } from './search.desktop';
 import { registerRemoteHistoryIpc } from './history';
 import { registerHistoryQueryIpc } from './historyQuery';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';
+import { registerBotSkillSettingsIpc } from './botSkillSettingsIpc';
 import { botRemoteManagement } from './botRemoteManagement';
 import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
 import { createOwnerEnsureCoordinator } from './ownerEnsureCoordinator';
+import { replyToEnsureReady, type EnsureReadyReply } from '../ensureReadyReply.js';
 import { reconcileSessionMediaRefsForDeletedSessions } from '../../cindy-media/sessionCleanup';
-import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal';
+import { reconcileGeneratedImageRecovery } from '../../cindy-media/generatedImageRecovery';
+import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal.desktop';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock';
+import { LOCAL_DATA_OWNER_ID } from '../../appSessionState';
+import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
+import { isUiMockDataEnabled, seedUiMockData } from '../uiMockSeed';
 
 const log = createLogger('registerAll');
 const MEDIA_REF_COMPENSATION_BUSY_RETRY_MS = 12_000;
@@ -70,6 +77,7 @@ function startMediaRefCompensationReconcile(
     }, MEDIA_REF_COMPENSATION_BUSY_RETRY_MS);
     retry.unref?.();
   };
+  void reconcileGeneratedImageRecovery().catch(() => log.warn('native image cleanup reconciliation deferred'));
   void run(true).catch((error) => {
     log.warn('media reference compensation reconcile failed', {
       userId,
@@ -90,8 +98,12 @@ export interface RegisterLocalDbIpcOpts {
   beforeEnsureReady?: (userId: string) => void | Promise<void>;
   /** Record worktree recycle intent before a terminal session status is persisted. */
   requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[]) => Promise<void>;
+  /** 当前 worktree 绑定（worktreeStore 是 source of truth，DB 只存反范式快照）。 */
+  lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  /** Apply a persisted task-level context window budget to the live runtime. */
+  applyContextWindowBudget?: RegisterSessionIpcOpts['applyContextWindowBudget'];
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
   withSessionLock?: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   /**
@@ -115,6 +127,7 @@ export interface RegisterLocalDbIpcOpts {
 
 export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   setSessionWorktreeRecycle(opts.requestWorktreeRecycle ?? null);
+  setSessionWorktreeBindingLookup(opts.lookupSessionWorktreeBinding ?? null);
   setSessionRouteLockImplementation(opts.withSessionLock ?? null);
   const runEnsureReady = createOwnerEnsureCoordinator({
     isOwnerCurrent: opts.isOwnerCurrent ?? (() => true),
@@ -134,9 +147,26 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
         tryGetDbClient() === client &&
         getCurrentDbClientUserId() === userId &&
         (opts.isOwnerCurrent?.(userId) ?? true);
+      if (isUiMockDataEnabled() && userId === LOCAL_DATA_OWNER_ID) {
+        // Dev `--mock` sandbox: seed before the renderer lists tasks. Never block startup.
+        try {
+          const added = await seedUiMockData({
+            db: client.drizzle,
+            projectRoot: path.join(app.getPath('userData'), 'ui-mock', 'projects'),
+            dialogueDir: ensureDialogueWorkspaceDir,
+          });
+          log.info('ui mock data seeded', { added });
+        } catch (error) {
+          log.warn('ui mock data seed failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (!isReadyOwnerCurrent()) return;
+      }
       // Resume saved invitations after the database and account boundary are ready.
       await recoverActiveTeammateInvitations();
       if (!isReadyOwnerCurrent()) return;
+      void reconcileDeletedTaskViewState(client, isReadyOwnerCurrent);
       startMediaRefCompensationReconcile(userId, client, isReadyOwnerCurrent);
       const withSessionLock = opts.withSessionLock;
       const db = client.drizzle;
@@ -176,69 +206,24 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       await opts.discardStaleOwner?.(userId);
     },
   });
-  ipcMain.handle('local-db:ensure-ready', async (_e, userId: unknown) => {
-    const startedAt = performance.now();
-    log.info(
-      JSON.stringify({
-        event: 'localDb.ipc.ensure-ready.recv',
-        userId: typeof userId === 'string' ? userId : `<${typeof userId}>`,
-      }),
-    );
-    if (typeof userId !== 'string' || !userId) {
-      log.warn(
-        JSON.stringify({
-          event: 'localDb.ipc.ensure-ready.reject',
-          reason: 'invalid userId',
-        }),
-      );
-      const result = {
-        ready: false,
-        error: { code: 'DB_INIT_FAILED', message: 'invalid userId' },
-      } as const;
-      recordDesktopDevLocalDbStartupResult(result);
-      return result;
-    }
-    let result;
-    try {
-      result = await runEnsureReady(userId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error(
-        JSON.stringify({
-          event: 'localDb.ipc.ensure-ready.failed',
-          userId,
-          error: message,
-        }),
-      );
-      result = {
-        ready: false,
-        error: { code: 'DB_INIT_FAILED', message },
-      } as const;
-    }
-    recordDesktopDevLocalDbStartupResult(result);
-    log.info(
-      JSON.stringify({
-        event: 'localDb.ipc.ensure-ready.done',
-        userId,
-        ready: result.ready,
-        elapsedMs: Math.round(performance.now() - startedAt),
-        ...(result.ready ? {} : { error: result.error }),
-      }),
-    );
-    return result;
-  });
+  ipcMain.handle('local-db:ensure-ready', (_e, userId: unknown) =>
+    replyToEnsureReady(userId, {
+      run: (id) => runEnsureReady(id) as Promise<EnsureReadyReply>,
+      record: recordDesktopDevLocalDbStartupResult as (result: EnsureReadyReply) => void,
+      log,
+    }));
 
   registerSessionIpc(getCurrentDbClientUserId, {
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
+    applyContextWindowBudget: opts.applyContextWindowBudget,
   });
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
   registerHistoryQueryIpc();
   registerBotIpc();
+  registerBotSkillSettingsIpc();
   registerCompanionImport();
-  registerRoutinesIpc();
-  registerRoutineRemoteResources(botRemoteManagement);
   registerBotRemoteResourceProvider(botRemoteManagement);
   registerSessionImportIpc();
   registerSessionShareIpc();

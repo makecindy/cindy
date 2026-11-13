@@ -1,3 +1,5 @@
+import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
+import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
@@ -24,10 +26,9 @@ import {
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
-  readCachedGenericOAuthAccessToken,
-  refreshGenericOAuthIfNeeded,
-} from './generic-oauth.js';
-import { outboundFetch } from './outbound-fetch.js';
+  readGenericOAuthAccessToken,
+} from './generic-oauth.desktop.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
 const FETCH_TIMEOUT_MS = 10_000;
@@ -35,8 +36,43 @@ const FETCH_TIMEOUT_MS = 10_000;
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
 
+// Share only an in-flight Hinoki HTTP read, not parsed models or agent-bound
+// provenance receipts. Every caller keeps its own parsing/error policy below.
+const hinokiReads = new WeakMap<typeof fetch, Map<string, {
+  response: Promise<Response>;
+  consumers: number;
+}>>();
+
+async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
+  if (url !== 'https://inference.hinoki.security/v1/models') return fetchImpl(url, init);
+  let reads = hinokiReads.get(fetchImpl);
+  if (!reads) { reads = new Map(); hinokiReads.set(fetchImpl, reads); }
+  // The existing process-local HMAC includes all effective headers (including
+  // credentials) without retaining plaintext keys in the map key. Never share
+  // across redirect policies or injected transport/credential-owner closures.
+  const signature = `${modelSourceRequestSignature(url, init)}:${init.redirect ?? 'follow'}`;
+  let read = reads.get(signature);
+  if (!read) {
+    read = { response: Promise.resolve().then(() => fetchImpl(url, init)), consumers: 0 };
+    reads.set(signature, read);
+  }
+  read.consumers++;
+  try {
+    return (await read.response).clone();
+  } finally {
+    if (--read.consumers === 0) {
+      reads.delete(signature);
+      // Each consumer owns a clone. Release the unused original branch without
+      // awaiting stream tee cancellation, which waits for the clones to finish.
+      void read.response.then(response => response.body?.cancel().catch(() => undefined), () => undefined);
+    }
+  }
+}
+
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
+  /** Add-flow callers distinguish an empty directory from an invalid response. */
+  allowEmpty?: boolean;
   agent: AgentKind;
   /** 上游 wire protocol；用于区分 Codex 原生 OpenAI 与 Anthropic Messages 桥。 */
   wireProtocol?: ProviderWireProtocol;
@@ -87,26 +123,32 @@ export async function fetchSavedOAuthProviderModels(
   if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
     return { ok: false, code: 'AUTH_INVALID' };
   }
+  let token: string | null;
   try {
-    await refreshGenericOAuthIfNeeded(storageProviderId, oauth);
+    token = await readGenericOAuthAccessToken(storageProviderId, oauth);
   } catch {
-    return { ok: false, code: 'UNKNOWN' };
+    return { ok: false, code: 'AUTH_INVALID' };
   }
   // A token refresh can outlive logout, account switching, or edits to this connection.
   // Never use the old endpoint snapshot with credentials from the new owner/configuration.
   if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
-  const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
+  const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
     agent,
-    baseUrl: route.upstream,
-    modelsUrl: route.modelsUrl ?? oauth.modelsDiscoveryUrl,
+    baseUrl: resolveCopilotAccountUrl(route.upstream, token),
+    modelsUrl: modelsUrl ? resolveCopilotAccountUrl(modelsUrl, token) : modelsUrl,
     wireProtocol: route.wireProtocol,
     authMethod: 'oauth',
     apiKey: token,
     headers,
     redirect: 'error',
-  }, fetchImpl);
+  }, async (url, init) => {
+    // Pagination and the separate speech catalog may run after the first reply.
+    // Revoke the captured credentials before another request if ownership changed.
+    if (!isCurrent()) throw new Error('Provider model refresh is no longer current');
+    return fetchImpl(url, init);
+  });
   return isCurrent() ? result : { ok: false, code: 'AUTH_INVALID' };
 }
 
@@ -129,7 +171,7 @@ function withoutCredentialHeaders(
   const normalized: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers ?? {})) {
     const lower = name.toLowerCase();
-    if (lower !== 'authorization' && lower !== 'x-api-key' && lower !== 'x-goog-api-key') normalized[lower] = value;
+    if (lower !== 'authorization' && lower !== 'x-api-key' && lower !== 'xi-api-key' && lower !== 'x-goog-api-key') normalized[lower] = value;
   }
   return normalized;
 }
@@ -157,11 +199,13 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const googleCatalog = (!explicit || /^https:\/\/generativelanguage\.googleapis\.com\/v1(?:beta)?\/openai\/models\/?$/.test(explicit)) && baseUrl.origin === 'https://generativelanguage.googleapis.com'
     && /^\/v1(?:beta)?(?:\/openai)?\/?$/.test(baseUrl.pathname);
   const googleProtocol = googleCatalog || spec.wireProtocol === 'google-generative-ai';
-  const discoveryUrl = googleCatalog
+  const configuredDiscoveryUrl = googleCatalog
     ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
     : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
       ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
+  const copilot = copilotModelsRequest(configuredDiscoveryUrl);
+  const discoveryUrl = copilot?.url ?? configuredDiscoveryUrl;
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
@@ -173,7 +217,21 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const discoveryEndpoint = new URL(discoveryUrl);
   const longcatOpenAiCatalog = discoveryEndpoint.origin === 'https://api.longcat.chat'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/openai/v1/models';
-  if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog) {
+  if (copilot) {
+    Object.assign(headers, copilot.headers);
+    delete headers['anthropic-version'];
+    delete headers['anthropic-beta'];
+    delete headers['x-api-key'];
+    if (spec.apiKey) headers.authorization = `Bearer ${spec.apiKey}`;
+  } else if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
+    && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/v1/models') {
+    // ElevenLabs discovery uses xi-api-key, independently of the chat runtime slot.
+    delete headers.authorization;
+    delete headers['x-api-key'];
+    delete headers['anthropic-version'];
+    delete headers['anthropic-beta'];
+    if (spec.apiKey) headers['xi-api-key'] = spec.apiKey;
+  } else if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog) {
     // Discovery is provider-specific, not the generation harness's wire format.
     // OpenRouter's Anthropic view rewrites IDs and defaults to only 20 results.
     // LongCat explicitly shares its OpenAI catalog with the Messages runtime.
@@ -265,7 +323,7 @@ export async function fetchProviderModels(
   const { url, init } = request;
   let res: Response;
   try {
-    res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
   } catch (err) {
     const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
     return { ok: false, code: cls.code, detail: cls.detail };
@@ -310,7 +368,37 @@ export async function fetchProviderModels(
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
   });
-  if (!models || models.length === 0) {
+  // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
+  // that success distinct in every consumer (wizard, edit and saved refresh),
+  // without treating an error envelope as an empty catalog or an account grant.
+  const emptyCatalogAllowed = url === 'https://ollama.com/v1/models'
+    || url === 'https://inference.hinoki.security/v1/models';
+  const catalogError = emptyCatalogAllowed && json !== null && typeof json === 'object'
+    && 'error' in json && json.error != null && json.error !== '';
+  // The parser can drop invalid members; only an originally empty data array is empty success.
+  const rawCatalogEmpty = emptyCatalogAllowed && json !== null && typeof json === 'object'
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0;
+  // Magpie's enabled-model catalog can be empty. Identify the gateway rather
+  // than guessing from a user-editable port/name; never send credentials to hello.
+  let magpieEmpty = false;
+  const endpoint = new URL(url);
+  if (models?.length === 0 && !spec.allowEmpty && !emptyCatalogAllowed
+    && endpoint.pathname === '/v1/models' && !endpoint.search
+    && json !== null && typeof json === 'object' && !Array.isArray(json)
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0
+    && (!('error' in json) || json.error == null || json.error === '')
+    && (!('error_code' in json) || json.error_code === 0)) {
+    try {
+      const hello = await fetchImpl(new URL('/api/hello', endpoint).toString(), {
+        method: 'GET', redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (hello.ok) {
+        const identity = JSON.parse(await readLimitedBody(hello, 16 * 1024));
+        magpieEmpty = identity?.name === 'magpie' && !identity.error;
+      } else await hello.body?.cancel();
+    } catch { /* An unconfirmed gateway keeps the existing conservative result. */ }
+  }
+  if (!models || catalogError || (models.length === 0 && (emptyCatalogAllowed ? !rawCatalogEmpty : !spec.allowEmpty && !magpieEmpty))) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,
@@ -319,5 +407,5 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models };
+  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
 }

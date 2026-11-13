@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   INVOKE_TIMEOUT_OVERRIDES_MS,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+  ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
+  ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
   REMOTE_INVOKE_ALLOWLIST,
   parseOrcaRemoteWorkerOpenRequest,
   parseOrcaRemoteWorkerReleaseRequest,
+  parseOrcaRemoteWorkerBridgeRequest,
+  parseOrcaRemoteWorkerModelsRequest,
 } from '../index.js';
 
 const base = {
@@ -18,11 +22,32 @@ const base = {
   lead: { leadSessionId: 'lead-1', leadTitle: '整理产品访谈报告', workerLabel: '转写' },
 };
 
+// Optional Host input correlation must survive the wire without breaking older requests.
+// Review bug: a report for A cleared queued B. Unit tier: real parser, one bridge request;
+// existing open/release tests do not cover this input-specific settlement metadata.
+describe('parseOrcaRemoteWorkerBridgeRequest', () => {
+  const request = { sessionId: 'remote-1', leadSessionId: 'lead-1', tool: 'send_to_lead', args: { worker_id: 'worker-1' } };
+  it('accepts legacy requests and copies bounded input correlation', () => {
+    expect(parseOrcaRemoteWorkerBridgeRequest(request)).toEqual(request);
+    const ids = ['a', 'a', 'b'];
+    const parsed = parseOrcaRemoteWorkerBridgeRequest({ ...request, reportedInputClientIds: ids });
+    ids.push('c');
+    expect(parsed.reportedInputClientIds).toEqual(['a', 'b']);
+  });
+  it.each([null, 'a', ['../x'], Array.from({ length: 65 }, (_, i) => `input-${i}`)])(
+    'rejects invalid input correlation %j', (ids) => {
+      expect(() => parseOrcaRemoteWorkerBridgeRequest({ ...request, reportedInputClientIds: ids })).toThrow(/INVALID_PARAMS/);
+    },
+  );
+});
+
 describe('orca remote worker channels', () => {
   // Shared-task guests are refused by the desktop shared-task gate (not in its channel list).
   it('registers caps / open / release on the same-account allowlist', () => {
     for (const channel of [
       ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+      ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
+      ORCA_REMOTE_WORKER_MODELS_CHANNEL,
       ORCA_REMOTE_WORKER_OPEN_CHANNEL,
       ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
     ]) {
@@ -38,6 +63,11 @@ describe('orca remote worker channels', () => {
 });
 
 describe('parseOrcaRemoteWorkerOpenRequest', () => {
+  // Unit protocol regression: the execution computer must receive the selected
+  // model computer. Previously the parser silently dropped that route.
+  it.each([null, 'provider-pc', 'share:approved'])('preserves the independent Agent location %s', agentDeviceId => {
+    expect(parseOrcaRemoteWorkerOpenRequest({ ...base, agentDeviceId })).toMatchObject({ agentDeviceId });
+  });
   it('keeps known fields, trims text and drops unknown fields', () => {
     expect(
       parseOrcaRemoteWorkerOpenRequest({
@@ -70,8 +100,18 @@ describe('parseOrcaRemoteWorkerOpenRequest', () => {
     ['missing worker label', { ...base, lead: { ...base.lead, workerLabel: '' } }],
     ['working dir with newline', { ...base, workingDir: '/tmp/a\nb' }],
     ['non-boolean fastMode', { ...base, fastMode: 'yes' }],
+    ['invalid model computer', { ...base, agentDeviceId: '../elsewhere' }],
   ])('rejects %s', (_name, input) => {
     expect(() => parseOrcaRemoteWorkerOpenRequest(input)).toThrow(/\[INVALID_PARAMS\]/);
+  });
+});
+
+describe('execution host model discovery', () => {
+  it('preserves remote scopes and rejects malformed inputs before discovery', () => {
+    expect(parseOrcaRemoteWorkerModelsRequest({})).toEqual({});
+    expect(parseOrcaRemoteWorkerModelsRequest({ agent: 'pi', agentDeviceId: 'provider-pc' })).toEqual({ agent: 'pi', agentDeviceId: 'provider-pc' });
+    expect(() => parseOrcaRemoteWorkerModelsRequest({ agentDeviceId: 42 })).toThrow(/INVALID_PARAMS/);
+    expect(() => parseOrcaRemoteWorkerModelsRequest({ agent: 'unknown' })).toThrow(/INVALID_PARAMS/);
   });
 });
 

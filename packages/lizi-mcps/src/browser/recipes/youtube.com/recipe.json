@@ -1,16 +1,42 @@
 {
   "id": "youtube-search",
-  "match": ["youtube.com", "www.youtube.com"],
-  "description": "在 YouTube 按关键词搜视频(标题/频道/播放量/时长/发布时间/链接)。先 navigate 到搜索结果页,YouTube 会把结果写进页面的 window.ytInitialData 引导数据;再 evaluate 从中解析,避免盲扫 DOM。一般无需登录(走持久浏览器会话可拿到个性化结果)。query 是搜索关键词。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.youtube.com/results?search_query={{query|url}}" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "videos",
-      "fn": "async () => { const data = window.ytInitialData; if (!data) throw new Error('未拿到 YouTube ytInitialData(页面未加载完或被风控),请在持久浏览器里正常访问 youtube.com 后重试'); const sections = (((((data.contents || {}).twoColumnSearchResultsRenderer || {}).primaryContents || {}).sectionListRenderer || {}).contents) || []; const out = []; for (const sec of sections) { const items = ((sec.itemSectionRenderer || {}).contents) || []; for (const it of items) { const v = it.videoRenderer; if (!v) continue; out.push({ title: (v.title && v.title.runs && v.title.runs[0] && v.title.runs[0].text) || '', channel: (v.ownerText && v.ownerText.runs && v.ownerText.runs[0] && v.ownerText.runs[0].text) || '', views: (v.viewCountText && (v.viewCountText.simpleText || (v.shortViewCountText && v.shortViewCountText.simpleText))) || '', duration: (v.lengthText && v.lengthText.simpleText) || 'LIVE', published: (v.publishedTimeText && v.publishedTimeText.simpleText) || '', url: 'https://www.youtube.com/watch?v=' + v.videoId }); } } return out; }"
-    }
+  "match": [
+    "youtube.com",
+    "www.youtube.com"
   ],
-  "output": "{{videos}}"
+  "description": "Search YouTube videos, Shorts, channels, and playlists",
+  "access": "read",
+  "adapter": "youtube/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search query"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Max results (max 50)"
+    },
+    "type": {
+      "required": false,
+      "type": "str",
+      "default": "",
+      "description": "Filter type: shorts, video, channel, playlist"
+    },
+    "upload": {
+      "required": false,
+      "type": "str",
+      "default": "",
+      "description": "Upload date: hour, today, week, month, year"
+    },
+    "sort": {
+      "required": false,
+      "type": "str",
+      "default": "",
+      "description": "Sort by: relevance, date, views, rating"
+    }
+  },
+  "steps": []
 }

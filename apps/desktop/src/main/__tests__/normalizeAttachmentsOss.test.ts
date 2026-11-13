@@ -31,9 +31,11 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 const copyFromPath = vi.hoisted(() => vi.fn());
+const extractChatFolder = vi.hoisted(() => vi.fn());
+vi.mock('../file-browser/chat-folder-transfer.js', () => ({ extractChatFolder }));
 const removeFile = vi.hoisted(() => vi.fn(async () => {}));
 const resolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../imageCacheStore.js', () => ({
+vi.mock('../imageCacheStore.desktop.js', () => ({
   copyFromPath,
   removeFile,
   resolveSafe,
@@ -50,7 +52,7 @@ const deleteZeroRefBlobRecord = vi.hoisted(() => vi.fn(async () => false));
 vi.mock('../cindy-media/ledger.js', () => ({ removeRefById, deleteZeroRefBlobRecord }));
 const blobResolveSafe = vi.hoisted(() => vi.fn());
 const deleteBlobFile = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../cindy-media/blobStore.js', () => ({
+vi.mock('../cindy-media/blobStore.desktop.js', () => ({
   deleteBlobFile,
   resolveSafe: blobResolveSafe,
   mimeForExt: (ext: string) =>
@@ -71,7 +73,7 @@ const downloadToFile = vi.hoisted(() => vi.fn(async () => {}));
 const copyPeerAttachment = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../device-link/peerAttachmentStore', () => ({ copyPeerAttachment }));
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../device-link/mediaTransfer.js', () => ({ downloadToFile, removeRemote }));
+vi.mock('../device-link/mediaTransfer.desktop.js', () => ({ downloadToFile, removeRemote }));
 
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -82,10 +84,11 @@ import {
   normalizeUserMessage,
   materializeQueuedOssAttachmentsDeferred,
   collectQueuedAttachmentRefs,
-} from '../maker-ipc/normalizeAttachments';
+} from '../maker-ipc/normalizeAttachments.desktop';
 import { QueuedAttachmentOwnershipRegistry } from '../maker-ipc/queuedAttachmentOwnership';
 import { buildAttachmentOssRef } from '../../shared/attachmentOssRef';
 import { buildPeerAttachmentRef } from '@cindy/device-link';
+import { CHAT_FOLDER_MIME } from '../../shared/chatFolderAttachment';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
 
@@ -249,7 +252,7 @@ describe('normalizeUserMessage — device-link 出方向 OSS 引用物化', () =
     expect(downloadToFile).toHaveBeenCalledTimes(1);
     const [ossKeyArg, destArg] = downloadToFile.mock.calls[0] as unknown as [string, string];
     expect(ossKeyArg).toBe('cindy/device-link/u/x.png');
-    expect(destArg).toMatch(/cindy-attachments[\\/]v2-[^\\/]+[\\/]sess-1[\\/].+\.png$/);
+    expect(destArg).toMatch(/cindy-attachments(?:-\d+)?[\\/]v2-[^\\/]+[\\/]sess-1[\\/].+\.png$/);
     const block = (out as {
       content: Array<{ type: string; path?: string; mimeType?: string; pathOrigin?: string }>;
     })
@@ -308,6 +311,37 @@ describe('normalizeUserMessage — device-link 出方向 OSS 引用物化', () =
 });
 
 describe('materializeQueuedOssAttachmentsDeferred — 出方向 files[] + persistedContent 一次性物化', () => {
+  // PR #6551: folder imports must use the same acceptance/rollback ownership as files.
+  // Minimal input: one archive referenced by both the agent payload and history (unit).
+  it.each([false, true])('owns a folder through ordinary attachment materialization (extraction fails: %s)', async fails => {
+    const ref = buildAttachmentOssRef({
+      ossKey: 'oss/folder.bin', mimeType: CHAT_FOLDER_MIME,
+      originalName: 'docs', size: 100, sha256: ATTACHMENT_SHA256,
+    });
+    copyFromPath.mockResolvedValue({ url: 'xdt-image://sess-1/archive.bin' });
+    resolveSafe.mockReturnValue({ absPath: '/cache/sess-1/archive.bin' });
+    if (fails) extractChatFolder.mockRejectedValueOnce(new Error('INCOMPLETE_FOLDER'));
+    else extractChatFolder.mockResolvedValueOnce('/cache/sess-1/archive.bin.contents');
+    const materializing = materializeQueuedOssAttachmentsDeferred('sess-1', {
+      files: [{ path: ref, mimeType: CHAT_FOLDER_MIME }],
+      persistedContent: JSON.stringify({ files: [{ name: 'docs', path: ref }] }),
+    });
+    if (fails) {
+      await expect(materializing).rejects.toThrow();
+      expect(removeFile).toHaveBeenCalledWith('xdt-image://sess-1/archive.bin');
+    } else {
+      const result = await materializing;
+      const item = result.item as { files: Array<{ path: string }>; persistedContent: string };
+      expect(item.files[0].path).toBe('/cache/sess-1/archive.bin.contents');
+      expect(JSON.parse(item.persistedContent).files[0].path).toBe(item.files[0].path);
+      expect(downloadToFile).toHaveBeenCalledOnce();
+      expect(extractChatFolder).toHaveBeenCalledOnce();
+      expect(removeFile).not.toHaveBeenCalled();
+      expect(result.materializedParts?.[0].refs).toContain(item.files[0].path);
+      await result.cleanupBeforeAcceptance?.();
+      expect(removeFile).toHaveBeenCalledWith('xdt-image://sess-1/archive.bin');
+    }
+  });
   it('files[] 与 persistedContent 共用同一 OSS 引用 → 只下载/入库一次,删 OSS 一次;图片入总仓、非媒体走老缓存', async () => {
     // 同一张图,控制端给 files[].url/path 与 persistedContent.images[].url 用了同一个 OSS 引用串。
     const imgRef = buildAttachmentOssRef({

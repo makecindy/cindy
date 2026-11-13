@@ -22,10 +22,28 @@ import {
 } from '@cindy/model-providers';
 
 import { desktopMakerLogger } from './logger-adapter.js';
-import { createOverrideSettingsFile } from './override-settings-file.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from './override-settings-file.js';
+import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 
 const log = desktopMakerLogger.child('model-disable-store');
+
+const providerDisableListeners = new Set<(providerId: string) => void>();
+
+/** Notify account services after the authoritative provider override is persisted. */
+export function onProviderDisableChange(listener: (providerId: string) => void): () => void {
+  providerDisableListeners.add(listener);
+  return () => { providerDisableListeners.delete(listener); };
+}
+
+function notifyProviderDisableChange(providerId: string): void {
+  for (const listener of providerDisableListeners) {
+    try {
+      listener(providerId);
+    } catch {
+      log.warn('provider disable observer failed', { providerId });
+    }
+  }
+}
 
 interface ModelAccessPrefs {
   disabledModels: Record<string, true>;
@@ -188,6 +206,7 @@ export function setProviderDisabled(providerId: string, disabled: boolean): void
   }
   store.writePatch({ disabledProviders });
   log.info('provider access override written', { providerId, disabled });
+  notifyProviderDisableChange(providerId);
 }
 
 /**
@@ -247,4 +266,8 @@ export function clearProviderDisableOverrides(providerId: string): void {
   if (!changed) return;
   store.writePatch({ disabledProviders, disabledModels });
   log.info('provider disable overrides cleared on delete', { providerId });
+  if (current.disabledProviders[providerId]) notifyProviderDisableChange(providerId);
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const modelDisablePortableSettings = portableOverrideSettings(store);

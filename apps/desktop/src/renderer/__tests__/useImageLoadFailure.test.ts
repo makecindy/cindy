@@ -18,6 +18,7 @@ it.each(['INTERNAL', 'PERMISSION_DENIED', 'INVALID_PARAMS'])(
     await act(async () => {});
     expect(read).toHaveBeenCalledTimes(1);
     expect(result.current.status).toBe('unavailable');
+    expect(result.current.canRetry).toBe(false);
   },
 );
 
@@ -37,6 +38,7 @@ it.each(['cindy-media://blobs/a.png', 'xdt-image://images/a.png'])(
     const { result } = renderHook(() => useImageLoadFailure(src));
     act(() => result.current.onError());
     await waitFor(() => expect(result.current.status).toBe('missing'));
+    expect(result.current.canRetry).toBe(false);
     expect(read).toHaveBeenCalledWith({ url: src });
     expect(fetch).not.toHaveBeenCalled();
   },
@@ -143,4 +145,22 @@ it('ignores the pre-retry missing result but diagnoses the retried image', async
   act(() => result.current.onError());
   await waitFor(() => expect(result.current.status).toBe('missing'));
   expect(read).toHaveBeenCalledTimes(2);
+});
+
+// #8208, unit: existing tests distinguish missing/readable bytes but do not
+// expose a way to remount a readable image after a transient browser failure.
+it('allows an explicit retry only after confirming the managed bytes are still readable', async () => {
+  const read = vi.fn().mockResolvedValue({ base64: 'aW1hZ2U=', mimeType: 'image/png' });
+  vi.stubGlobal('electronAPI', { readCachedImageAsBase64: read });
+  const { result } = renderHook(() => useImageLoadFailure('cindy-media://blobs/a.png'));
+  act(() => result.current.onError());
+  expect(result.current.canRetry).toBe(false);
+  await waitFor(() => expect(result.current.canRetry).toBe(true));
+  expect(result.current.status).toBe('unavailable');
+  expect(read).toHaveBeenCalledTimes(1);
+  act(() => result.current.retry());
+  expect(result.current.status).toBeNull();
+  expect(result.current.canRetry).toBe(false);
+  // Retrying only clears this image's display state; it does not poll the reader.
+  expect(read).toHaveBeenCalledTimes(1);
 });

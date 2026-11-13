@@ -55,6 +55,7 @@ import { isDurableCreationDraft, type DurableOutboxRecord } from './durableOutbo
 import { isExplicitRemoteNotFoundError } from './newSessionWorktree';
 import { mergeAttachmentsWithinLimit } from './attachments';
 import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachmentUpload';
+import { noteLocalSend } from './localSendMotion';
 import {
   forgetPendingPrecreatedWorktree,
   parseDiscardPrecreatedAck,
@@ -334,6 +335,8 @@ export function startNewSessionCreation(params: NewSessionCreationParams): void 
     firstMessageClientId,
     { attachments: [...params.attachments] },
   ), firstMessageSessionRefs);
+  // 首条消息也是本机刚发出的:与会话页同一登记,入场动效、跟随与 0.6 秒状态延迟一致。
+  noteLocalSend(firstMessageClientId);
   remoteSessionStore.setInputProjectionOptimistically(params.sessionId, buildOptimisticProjection(params.sessionId, queued));
   const task: InternalTask = {
     owner: getMobileAuthOwner(),

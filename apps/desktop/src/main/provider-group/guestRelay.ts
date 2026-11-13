@@ -25,6 +25,7 @@ import type { ProviderGroupOwnerScope } from './runtime.js';
 export const PROVIDER_GROUP_GUEST_INCAPABLE_MS = 10 * 60_000;
 
 export interface ProviderGroupGuestRelayDeps {
+  bindFastPolicy?: RemoteAgentGroupRelayDeps['bindFastPolicy'];
   /** 当前账号的分配器与负载(每次选电脑开头取一次)。 */
   scope(): ProviderGroupOwnerScope;
   readGroup(providerId: string): ProviderGroupConfig | null;
@@ -72,6 +73,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
   }
 
   return {
+    ...(deps.bindFastPolicy ? { bindFastPolicy: deps.bindFastPolicy } : {}),
     sharedStatus: (providerId, guestController) => {
       const reshareKey = guestController ? reshareKeyForGuest(guestController) : undefined;
       return readSharedGroupStatus({

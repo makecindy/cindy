@@ -34,11 +34,16 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { getModelVisibilityOverride } from './model-visibility-mirror.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createMakerLogger } from './logger-adapter.js';
-import { outboundFetch } from './outbound-fetch.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { buildRouteDecision, providerRoutingForModel } from './provider-route.js';
+import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress, buildRouteDecision, providerRoutingForModel } from './provider-route.js';
+
+import type { ProviderConnectionTestInput, ProviderConnectionTestResult } from '../../shared/providerConnectionTest.js';
+import { probeProviderProtocols } from './provider-protocol-probe.js';
 
 const log = createMakerLogger('provider-probe');
 
@@ -70,21 +75,8 @@ export interface ProviderProbeSpec {
 }
 
 /** 测试入参：已保存供应商（key 从 safeStorage 读）或表单态 adhoc。 */
-export type ProviderTestInput =
-  | { kind: 'saved'; providerId: string; agent: AgentKind }
-  | { kind: 'adhoc'; spec: ProviderProbeSpec };
-
-/** 结构化测试结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
-export interface ProviderTestResult {
-  ok: boolean;
-  /** 失败分类码（ok=true 时缺省）。 */
-  code?: ProviderErrorCode;
-  /** HTTP 状态码（网络层失败时缺省）。 */
-  status?: number;
-  latencyMs: number;
-  /** 上游原始信息摘要（详情展开用，UI 主文案走 i18n）。 */
-  detail?: string;
-}
+export type ProviderTestInput = ProviderConnectionTestInput;
+export type ProviderTestResult = ProviderConnectionTestResult;
 
 // ── key 读取注入（同 provider-route 模式，避免纯逻辑单测触电 safeStorage）─────────
 type KeyReader = (providerId: string, agent: AgentKind) => string | null;
@@ -135,9 +127,9 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers = withOpenCodeGoSessionHeader(
-    mustStripCredentialHeaders
+    withProviderAppAttribution(spec.baseUrl, mustStripCredentialHeaders
       ? withoutCredentialHeaders(spec.headers)
-      : normalizedHeaders(spec.headers),
+      : normalizedHeaders(spec.headers)),
     { providerId: spec.catalogPresetId ?? '', catalogPresetId: spec.catalogPresetId, upstream: spec.baseUrl },
   ) ?? {};
   headers['content-type'] = 'application/json';
@@ -345,7 +337,7 @@ async function runProviderProbeUnlogged(
     throw new TypeError('no-auth provider probes require a loopback URL');
   }
   const start = Date.now();
-  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api);
+  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api, spec.baseUrl);
   const row = spec.nativeModel
     ?? providerModelRecord(spec.modelId, spec.baseUrl, spec.api ?? spec.wireProtocol)
     ?? (presetRow && (spec.api || !spec.wireProtocol || providerWireProtocolForApi(presetRow.execution.pi.api) === spec.wireProtocol)
@@ -460,7 +452,7 @@ async function runProviderProbeUnlogged(
  * 解析 saved 入参 → 探测 spec。仅支持自定义(user)供应商 —— 内置 OAuth / 网关来源的连接态
  * 由各自鉴权通道保证，不在此探测。解析失败抛 Error（handler 映射 INVALID_PARAMS）。
  */
-export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): ProviderProbeSpec {
+export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Promise<ProviderProbeSpec> {
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) throw new Error(`provider '${providerId}' not found`);
   if (provider.source !== 'user')
@@ -471,9 +463,27 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // 探测发的是聊天形状的最小请求(见下方 requestPath/body 组装);挑第一个非聊天模型
   // (image/embedding/...)会把探测发给一个本来就不接受聊天请求的端点,得到的失败结论
   // 和"这个供应商配置是坏的"完全无关(2026-07 review,与 issue #882 第 3 点同一类问题)。
-  const model = (provider.models[agent] ?? []).find((m) =>
-    isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
-  );
+  // 列表第一个聊天模型若与上游协议不兼容,也会把整个供应商误报为连不上(issue #9470)。
+  // 用户明确打开的模型优先。镜像只存显式开关:true 是打开,false 是关掉,没拨过则无条目。
+  // 兜底先排除显式隐藏,再按原顺序取第一个可选模型;全部显式隐藏时仍退回第一个可选模型,
+  // 避免测试连接因「没有可见模型」变成空失败。镜像未就绪或读取失败时忽略可见性,走原兜底。
+  const candidates = provider.models[agent] ?? [];
+  const selectable = (m: (typeof candidates)[number]): boolean =>
+    isAgentSelectableModel(m, { userProvider: provider.source === 'user' });
+  let explicitlyShown: (typeof candidates)[number] | undefined;
+  let notHidden: (typeof candidates)[number] | undefined;
+  try {
+    for (const candidate of candidates) {
+      if (!selectable(candidate)) continue;
+      const override = getModelVisibilityOverride(agent, providerId, candidate.id);
+      if (override === true && !explicitlyShown) explicitlyShown = candidate;
+      if (override !== false && !notHidden) notHidden = candidate;
+    }
+  } catch {
+    explicitlyShown = undefined;
+    notHidden = undefined;
+  }
+  const model = explicitlyShown ?? notHidden ?? candidates.find(selectable);
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
   // probe must keep the SDK route instead of treating that exclusion as failure.
@@ -500,7 +510,19 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // `x-api-key: <token>`,而真实 oauth-token 路由明确删除 x-api-key;优先按 x-api-key
   // 鉴权的端点会把 access_token 当 API key 校验得到 401,探测结论就与真实会话相反了。
   if (routing.authStrategy === 'oauth-token') {
-    const oauthToken = oauthProbeTokenReader(providerId);
+    const revision = getProviderRouteCredentialRevision(providerId);
+    const connectionSignature = JSON.stringify({ auth: provider.auth, routing, route: model.route, api: modelApi });
+    const oauthToken = await oauthProbeTokenReader(providerId);
+    const currentProvider = getActiveCatalog().providers.find(p => p.id === providerId);
+    const currentModel = currentProvider?.models[agent]?.find(m => m.id === model.id);
+    const currentSignature = currentProvider && currentModel
+      ? JSON.stringify({ auth: currentProvider.auth, routing: currentProvider.routing[agent], route: currentModel.route, api: currentModel.api ?? currentModel.piApi })
+      : null;
+    if (isProviderRouteMutationInProgress(providerId)
+      || getProviderRouteCredentialRevision(providerId) !== revision
+      || currentProvider?.source !== 'user' || currentSignature !== connectionSignature) {
+      throw new Error('provider_oauth_login_changed');
+    }
     return {
       agent,
       baseUrl: buildRouteDecision(modelRouting, null, agent, null, oauthToken)?.upstreamOverride ?? baseUrl,
@@ -550,11 +572,11 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   };
 }
 
-// OAuth 探测 token 读取器（注入，同 keyReader 模式；生产 = readCachedGenericOAuthAccessToken）。
-type OAuthProbeTokenReader = (providerId: string) => string | null;
+// OAuth 探测 token 读取器（注入，同 keyReader 模式；生产 = readGenericOAuthAccessToken）。
+type OAuthProbeTokenReader = (providerId: string) => string | null | Promise<string | null>;
 let oauthProbeTokenReader: OAuthProbeTokenReader = () => null;
 
-/** host 启动期接通 generic-oauth 的同步 token 缓存读取（探测用）。 */
+/** host 启动期接通 generic-oauth 的异步 token 读取（探测也等待必要刷新）。 */
 export function setDiagnosticsOAuthTokenReader(reader: OAuthProbeTokenReader): void {
   oauthProbeTokenReader = reader;
 }
@@ -563,8 +585,22 @@ export function setDiagnosticsOAuthTokenReader(reader: OAuthProbeTokenReader): v
 export async function testProviderConnection(
   input: ProviderTestInput,
   fetchImpl: typeof fetch = outboundFetch,
+  signal?: AbortSignal,
 ): Promise<ProviderTestResult> {
-  const spec =
-    input.kind === 'saved' ? resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
+  const started = Date.now();
+  let spec: ProviderProbeSpec;
+  try {
+    spec = input.kind === 'saved' ? await resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
+  } catch (error) {
+    if (error instanceof Error && ['provider_oauth_refresh_failed', 'provider_oauth_login_changed'].includes(error.message)) {
+      return { ok: false, code: 'AUTH_INVALID', latencyMs: Date.now() - started };
+    }
+    throw error;
+  }
+  const portable = !spec.api || ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(spec.api);
+  // Keep preset/saved SDK-specific authentication and legacy callers on their existing path.
+  if (input.kind === 'adhoc' && input.requestId && spec.agent === 'pi' && portable && !spec.catalogPresetId) {
+    return logProbeFailure(spec, await probeProviderProtocols(spec, input.strategy === 'auto' && !spec.catalogPresetId && !spec.api && !spec.requestPath, fetchImpl, signal));
+  }
   return runProviderProbe(spec, fetchImpl);
 }

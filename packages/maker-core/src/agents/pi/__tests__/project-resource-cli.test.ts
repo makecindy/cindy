@@ -67,6 +67,26 @@ describe('collectPiProjectResourceCliPaths', () => {
     expect(collectPiProjectResourceCliPaths(repo).skills).toEqual([realpathSync(skillDir)]);
   });
 
+  it('collects nested namespace skills and prunes generated trees', () => {
+    const repo = makeRepo();
+    const piNested = path.join(repo, '.pi', 'skills', '@scope', 'pi-nested');
+    const agentsNested = path.join(repo, '.agents', 'skills', '@scope', 'agents-nested');
+    const tooDeep = path.join(repo, '.pi', 'skills', '@scope', 'group', 'too-deep');
+    const pruned = path.join(repo, '.pi', 'skills', 'dist', 'hidden');
+    for (const skillDir of [piNested, agentsNested, tooDeep, pruned]) {
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(path.join(skillDir, 'SKILL.md'), '# nested\n');
+    }
+
+    const collected = collectPiProjectResourceCliPaths(repo);
+
+    expect(collected.skills).toEqual([
+      realpathSync(agentsNested),
+      realpathSync(piNested),
+    ].sort((a, b) => a.localeCompare(b)));
+    expect(collected.skills).not.toContain(realpathSync(tooDeep));
+  });
+
   it('skips escaped symlinks and settings files', () => {
     const repo = makeRepo();
     const outside = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'pi-project-cli-out-')));
@@ -85,6 +105,35 @@ describe('collectPiProjectResourceCliPaths', () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it('keeps a direct Skill whose folder name matches a pruned directory', () => {
+    const repo = makeRepo();
+    const directDist = path.join(repo, '.pi', 'skills', 'dist');
+    const nested = path.join(repo, '.pi', 'skills', 'node_modules', 'ignored');
+    for (const skillDir of [directDist, nested]) {
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(path.join(skillDir, 'SKILL.md'), '# direct\n');
+    }
+
+    expect(collectPiProjectResourceCliPaths(repo).skills).toEqual([realpathSync(directDist)]);
+  });
+
+  it('does not walk a symlinked namespace inside the repo', () => {
+    const repo = makeRepo();
+    const externalNamespace = path.join(repo, 'external-ns');
+    const nestedSkill = path.join(externalNamespace, 'nested');
+    mkdirSync(nestedSkill, { recursive: true });
+    writeFileSync(path.join(nestedSkill, 'SKILL.md'), '# linked\n');
+    const link = path.join(repo, '.pi', 'skills', 'linked-ns');
+    mkdirSync(path.dirname(link), { recursive: true });
+    try {
+      symlinkSync(externalNamespace, link, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch {
+      return;
+    }
+
+    expect(collectPiProjectResourceCliPaths(repo).skills).toEqual([]);
   });
 
   it('does not walk .agents/skills past the nearest git root', () => {
@@ -125,7 +174,7 @@ describe('pi project resource path order and spawn argv budget', () => {
     );
     expect(estimateSpawnArgvLength(args)).toBeGreaterThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
     expect(estimateSpawnArgvLength(args)).toBeLessThan(PI_POSIX_SPAWN_ARGV_BUDGET);
-    expect(() => assertPiSpawnArgvFitsPlatform(args, 'win32')).toThrow(/too many Pi skills/);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'win32')).toThrow(/launch command line exceeds/);
     expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).not.toThrow();
   });
 
@@ -135,7 +184,50 @@ describe('pi project resource path order and spawn argv budget', () => {
       (_, index) => `/Users/very/long/cindy/project/.pi/skills/skill-${String(index).padStart(4, '0')}/with/nested/folders`,
     );
     expect(estimateSpawnArgvLength(args)).toBeGreaterThan(PI_POSIX_SPAWN_ARGV_BUDGET);
-    expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).toThrow(/too many Pi skills/);
-    expect(() => assertPiSpawnArgvFitsPlatform(args, 'linux')).toThrow(/too many Pi skills/);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).toThrow(/launch command line exceeds/);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'linux')).toThrow(/launch command line exceeds/);
+  });
+
+  it.each(['win32', 'linux'] as const)('reports prompt-dominated failures without exposing arguments (%s)', (platform) => {
+    const args = ['--append-system-prompt', 'private-prompt'.repeat(12_000), '--api-key', 'private-key'];
+    const length = estimateSpawnArgvLength(args, platform);
+    const promptLength = estimateSpawnArgvLength(args.slice(0, 2), platform);
+    const budget = platform === 'win32' ? PI_WINDOWS_SPAWN_ARGV_BUDGET : PI_POSIX_SPAWN_ARGV_BUDGET;
+    const unit = platform === 'win32' ? 'UTF-16 code units' : 'UTF-8 bytes';
+    expect(() => assertPiSpawnArgvFitsPlatform(args, platform)).toThrow(
+      `Pi launch command line exceeds the ${platform} budget: estimated ${length} ${unit}, limit ${budget} `
+      + `(prompt arguments: ${promptLength}; resource arguments: 0; other arguments: ${length - promptLength}).`,
+    );
+  });
+
+  it('reports resource-dominated failures without suggesting that prompts caused them', () => {
+    const args = ['--skill', 'private-skill'.repeat(2_500), '--model', 'private-model'];
+    const length = estimateSpawnArgvLength(args, 'win32');
+    const resourceLength = estimateSpawnArgvLength(args.slice(0, 2), 'win32');
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'win32')).toThrow(
+      `Pi launch command line exceeds the win32 budget: estimated ${length} UTF-16 code units, limit 30000 `
+      + `(prompt arguments: 0; resource arguments: ${resourceLength}; other arguments: ${length - resourceLength}).`,
+    );
+  });
+
+  // POSIX 侧按 UTF-8 字节：按字符数估会让一段中文提示词「看起来没超」，
+  // 实际字节已超（汉字 3 字节/字），守卫就会漏过。
+  it('measures the POSIX command line in UTF-8 bytes', () => {
+    const cjk = '技'.repeat(50_000);
+    expect(cjk.length).toBeLessThan(PI_POSIX_SPAWN_ARGV_BUDGET);
+    expect(estimateSpawnArgvLength(['--append-system-prompt', cjk], 'linux'))
+      .toBeGreaterThan(PI_POSIX_SPAWN_ARGV_BUDGET);
+    expect(() => assertPiSpawnArgvFitsPlatform(['--append-system-prompt', cjk], 'linux'))
+      .toThrow(/launch command line exceeds/);
+  });
+
+  // Windows 侧必须按 UTF-16 字符：CreateProcess 的 32767 上限是字符数，不是字节。
+  // 用字节估会把中文路径放大三倍，把本来能起的会话拒了。
+  it('measures the Windows command line in characters, not UTF-8 bytes', () => {
+    const cjkPath = `C:\\Users\\用户名\\项目\\.pi\\skills\\${'技'.repeat(200)}`.repeat(100);
+    expect(cjkPath.length).toBeLessThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(Buffer.byteLength(cjkPath, 'utf8')).toBeGreaterThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(estimateSpawnArgvLength([cjkPath], 'win32')).toBeLessThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(() => assertPiSpawnArgvFitsPlatform([cjkPath], 'win32')).not.toThrow();
   });
 });

@@ -11,6 +11,22 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('list_available_models tool', () => {
+  // Unit: choosing a remote Worker must discover from its work host rather
+  // than the Lead's model computer; unsupported peers retain their error code.
+  it.each([['execution_device_id', 'agent_device_id'], ['device', 'provider_device_id']])('forwards locations via %s/%s and preserves version errors', async (workKey, modelKey) => {
+    const listAvailableModels = vi.fn(async () => ({ ok: false as const,
+      errorCode: 'UNSUPPORTED_CAPABILITY', message: 'update work host' }));
+    const registry = new XdtHelperToolRegistry();
+    registerListAvailableModelsTool(registry, {
+      getSessionContext: () => ({ sessionId: 'lead-1' }), listAvailableModels,
+    });
+    const result = parse(await registry.call('list_available_models', {
+      [workKey]: 'worker-pc', [modelKey]: 'model-pc', agent: 'codex',
+    }));
+    expect(listAvailableModels).toHaveBeenCalledWith({ callerSessionId: 'lead-1',
+      executionDeviceId: 'worker-pc', agentDeviceId: 'model-pc', agent: 'codex' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+  });
   it('returns provider-aware routes without removing the existing model fields', async () => {
     const listAvailableModels = vi.fn(async () => ({
       ok: true as const,
@@ -76,8 +92,8 @@ describe('list_available_models tool', () => {
     expect(listAvailableModels).toHaveBeenCalledWith({ agent: 'codex', agentDeviceId: null });
     expect(result.agent_device_id).toBe('local');
     expect(result.locations).toEqual([
-      { agent_device_id: 'device-b', name: 'Mac mini' },
-      { agent_device_id: 'share:s1', name: 'Claude · Alex' },
+      { provider_device_id: 'device-b', agent_device_id: 'device-b', name: 'Mac mini' },
+      { provider_device_id: 'share:s1', agent_device_id: 'share:s1', name: 'Claude · Alex' },
     ]);
 
     await registry.call('list_available_models', { agent_device_id: 'device-b' });

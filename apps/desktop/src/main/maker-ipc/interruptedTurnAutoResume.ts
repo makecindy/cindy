@@ -1,3 +1,4 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * interrupted-turn 自动续跑 —— 「上游把一个已经干到一半的 turn 打断了」这类
  * terminal error 的识别与重连决策。
@@ -26,6 +27,7 @@
 
 import { hasUserVisibleText } from '../../shared/visibleText.js';
 import type { AgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
+import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
 
 import {
   isNetworkishErrorMessage,
@@ -45,10 +47,13 @@ export interface InterruptedTurnErrorSignals {
   errorStatus?: number;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
+  outputLimit?: OutputLimitDetails;
   /** translator 判定的账号用量 / 限流错误。 */
   usageLimit?: boolean;
   /** 上游给出的限额重置时刻(unix ms)。 */
   usageResetAt?: number;
+  /** Main-only: verified group exhaustion before dispatch; never borrow the old route's quota. */
+  providerGroupUsageLimit?: ProviderGroupUsageLimit;
   /** Codex app-server 的结构化错误 tag(如 `usageLimitExceeded`)。 */
   codexErrorInfo?: string;
 }
@@ -143,6 +148,20 @@ export function isAcceptedTurnContinuationOnlyReason(reason: unknown): boolean {
   );
 }
 
+/** The agent serving this route on another computer is gone (remote-agent controller / host). */
+export function isRemoteAgentRouteLostReason(reason: unknown): boolean {
+  return reason === 'remote_agent_closed' || reason === 'remote_agent_lost';
+}
+
+/**
+ * Resumes that may only CONTINUE and must follow the Session through its own unexpected close:
+ * accepted-turn stalls, plus a lost remote agent (the Session dies with it, and the turn's tools may
+ * already have run there). Only a Bot candidate route is ever granted the latter resume.
+ */
+export function isContinuationOnlyAutoResumeReason(reason: unknown): boolean {
+  return isAcceptedTurnContinuationOnlyReason(reason) || isRemoteAgentRouteLostReason(reason);
+}
+
 /**
  * continuation-only 自动续跑已批准后，provider/Session 可能因为 stall abort 复核、
  * terminal-error drain、或 Codex interrupt ACK 失败而 unexpected close。这时必须保住
@@ -177,6 +196,23 @@ export function shouldPreserveWaitingContinuationOnlyAutoResume(input: {
   if (input.coordinatorAttemptToken !== token) return false;
   // autoRetryLastError 在入队前就清掉 autoResumePending；不能靠它判断交棒窗口。
   return input.hasLiveSchedule || input.hasQueuedAutoResume;
+}
+
+/** Keep only the exact fallback callback across a runtime rebuild or cross-harness switch. */
+export function shouldPreserveRuntimeFallbackAutoResume(input: {
+  closeReason: unknown;
+  leasedAttemptToken: number | undefined;
+  guardIsCurrentAttempt: boolean;
+  bookIsCurrentAttempt: boolean;
+  coordinatorAttemptToken: number | null | undefined;
+  isAutoResumePending: boolean;
+  hasLiveSchedule: boolean;
+}): boolean {
+  return (input.closeReason === 'requested' || input.closeReason === 'runtime-refresh' || input.closeReason === 'agent-switch')
+    && input.leasedAttemptToken !== undefined
+    && input.guardIsCurrentAttempt && input.bookIsCurrentAttempt
+    && input.coordinatorAttemptToken === input.leasedAttemptToken
+    && input.isAutoResumePending && input.hasLiveSchedule;
 }
 
 export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): boolean {

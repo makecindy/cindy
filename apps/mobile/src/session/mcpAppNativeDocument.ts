@@ -2,6 +2,9 @@ import { Directory, File, Paths } from "expo-file-system";
 import { getRandomBytes } from "expo-crypto";
 import {
   mcpAppSandboxDocument,
+  HOST_APP_SDK_PATH,
+  CINDY_VIEW_STATE_SDK_PATH,
+  CINDY_VIEW_STATE_REACT_SDK_PATH,
   type McpAppDocument,
 } from "@cindy/maker-shared/mcp-apps";
 import native from "../../modules/cindy-html-preview/src/CindyHtmlPreviewModule";
@@ -79,24 +82,44 @@ export async function prepareMcpAppNativeDocument(
       }
     })());
   try {
+    const sdkSource = typeof document.sdk?.source === "string" ? document.sdk.source : undefined;
     const resource = new File(directory, "0");
     resource.create();
-    resource.write(document.html);
+    const entries: string[][] = [["initialize.html", "2", "text/html"], ["resource.html", "0", "text/html"]];
+    if (sdkSource !== undefined) {
+      const sdk = new File(directory, "3");
+      sdk.create();
+      sdk.writeSync(sdkSource);
+      entries.push([HOST_APP_SDK_PATH.slice(1), "3", "text/javascript"]);
+    }
+    const candidate = document.sdk?.addons?.['cindy/view-state'];
+    const addon = sdkSource !== undefined && typeof candidate?.source === 'string' && typeof candidate?.reactSource === 'string'
+      ? candidate : undefined;
+    if (addon) {
+      const core = new File(directory, "4"); core.create(); core.writeSync(addon.source);
+      const react = new File(directory, "5"); react.create(); react.writeSync(addon.reactSource);
+      entries.push([CINDY_VIEW_STATE_SDK_PATH.slice(1), "4", "text/javascript"], [CINDY_VIEW_STATE_REACT_SDK_PATH.slice(1), "5", "text/javascript"]);
+    }
     const bootstrap = new File(directory, "2");
     bootstrap.create();
-    bootstrap.write(MCP_APP_STORAGE_BOOTSTRAP);
+    bootstrap.writeSync(MCP_APP_STORAGE_BOOTSTRAP);
     started.push(resourceToken);
     const resourceUrl = await start(
       root,
       "initialize.html",
       resourceToken,
       document.csp,
-      [["initialize.html", "2", "text/html"], ["resource.html", "0", "text/html"]],
+      entries,
     );
+    const html = (await import("@cindy/maker-shared/mcp-app-sdk")).withHostAppSdk(
+      document.html, new URL(HOST_APP_SDK_PATH, resourceUrl).href,
+      addon ? { coreUrl: new URL(CINDY_VIEW_STATE_SDK_PATH, resourceUrl).href, reactUrl: new URL(CINDY_VIEW_STATE_REACT_SDK_PATH, resourceUrl).href } : undefined,
+    );
+    resource.writeSync(html);
     const resourceOrigin = new URL(resourceUrl).origin;
     const proxy = new File(directory, "1");
     proxy.create();
-    proxy.write(mcpAppSandboxDocument(bridgeKey, resourceUrl));
+    proxy.writeSync(mcpAppSandboxDocument(bridgeKey, resourceUrl));
     const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src ${resourceOrigin}; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
     started.push(proxyToken);
     const proxyUrl = await start(root, "proxy.html", proxyToken, csp, [

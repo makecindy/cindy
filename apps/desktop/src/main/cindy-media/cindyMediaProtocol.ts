@@ -17,7 +17,7 @@
 
 import { protocol, type CustomScheme } from 'electron';
 
-import * as blobStore from './blobStore';
+import * as blobStore from './blobStore.desktop';
 import * as ledger from './ledger';
 import { buildRangedFileResponse, buildRangedMediaResponse } from './rangeResponse';
 import { createLogger } from '../logger';

@@ -26,6 +26,8 @@ export interface ImChannelNoteSource {
   /**
    * 发言人是不是主人。私聊缺省就是主人(不写); 伙伴自有 bot 对外开放后外部用户的
    * 私聊置 false —— 说明里写明发言人并点出不是主人, 模型才不会把陌生人当成主人。
+   * 群里 Main 核验过的主人发言置 true, 说明点出是主人(与 Telegram / 钉钉 `[发言人]`
+   * 行的「主人」同源); 否则伙伴只能把群里的主人当普通成员。
    */
   senderIsOwner?: boolean;
   /**
@@ -57,15 +59,18 @@ export function buildImChannelNote(channel: string, source: ImChannelNoteSource)
   );
   const where = source.chatKind === 'group' ? `${label}群${chatRef}` : `${label}私聊${chatRef}`;
   const guestDm = source.chatKind === 'direct' && source.senderIsOwner === false;
+  const groupOwner = source.chatKind === 'group' && source.senderIsOwner === true;
   const senderRef =
     source.chatKind === 'group' || guestDm
       ? formatSourceRef(source.senderName, 'user_id', source.senderId)
       : '';
   const sender = senderRef
-    ? `，发言人${senderRef}${guestDm ? '，不是主人' : ''}`
+    ? `，发言人${senderRef}${guestDm ? '，不是主人' : groupOwner ? '，是主人' : ''}`
     : guestDm
       ? '，发言人不是主人'
-      : '';
+      : groupOwner
+        ? '，发言人是主人'
+        : '';
   const tools = source.toolsHint?.trim() ? `${source.toolsHint.trim()}` : '';
   return `[渠道说明] 系统追加，不是用户消息。本条来自${where}${sender}。${tools}`.replace(/ {2,}/g, ' ');
 }
@@ -151,6 +156,7 @@ export function imChannelNoteSourceFromEvent(
   );
   return {
     ...group,
+    ...(event.speaker.isOwner === true ? { senderIsOwner: true } : {}),
     ...(senderId ? { senderId } : {}),
     ...(senderName ? { senderName } : {}),
   };

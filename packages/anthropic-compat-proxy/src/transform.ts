@@ -1,5 +1,7 @@
 /** Compatibility implementation is owned by the shared package; preserve this import contract. */
 export {
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   createVllmResponsesCompatibilityRule,
   stripToolUseProviderSpecificFieldsFromBody,
   stripNonCanonicalResponsesItemIdsFromBody,
@@ -9,6 +11,7 @@ export {
   createResponsesItemIdLengthRecoveryRule,
   stripToolUseProviderSpecificFields,
   stripEncryptedContentFromBody,
+  stripResponsesReasoningContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripEmptyThinkingFromBody,
   stripEmptyTextFromBody,
@@ -23,9 +26,11 @@ export {
   stripNonAnthropicFields,
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
+  createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createDuplicateToolUseIdRecoveryRule,

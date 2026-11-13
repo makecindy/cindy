@@ -1,0 +1,3 @@
+interface:
+  display_name: "Cindy Plugin Creator"
+  short_description: "Create or update a Cindy plugin"

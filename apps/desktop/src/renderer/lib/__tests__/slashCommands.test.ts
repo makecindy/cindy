@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../shared/cindyBuiltInSkills';
 
 import {
+  addPluginSkillSetupCommands,
   commandsForHelpCard,
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
@@ -12,12 +13,14 @@ import {
   loadAllCommands,
   mergeCommands,
   nextAvailableSlashCommandIndex,
+  pluginSkillSetupName,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
   rewriteAgentSkillInvocationForDispatch,
   rewritePiSkillAliasFromCommand,
   rewritePiSkillMessageForSend,
+  rewriteBuiltInSkillDraftForSend,
   slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -48,6 +51,20 @@ function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedComma
   });
 }
 
+// Unit: repeated palette consumers previously logged each identical conflict.
+// Existing merge tests checked precedence but not repeated renderer log IPC.
+it('warns once per conflict while preserving command precedence across rebuilds', () => {
+  const logToMain = vi.fn();
+  vi.stubGlobal('window', { electronAPI: { logToMain } });
+  const preferred = skill({ name: 'conflict-diagnostic-test' });
+  const desktop: UnifiedCommand = { kind: 'desktop', name: preferred.name, description: 'fallback' };
+  for (let i = 0; i < 3; i++) expect(mergeCommands([desktop], [], [preferred])).toEqual([preferred]);
+  const warnings = () => logToMain.mock.calls.filter(([level]) => level === 'warn');
+  expect(warnings()).toHaveLength(1);
+  expect(mergeCommands([], [{ kind: 'agent-builtin', name: preferred.name, description: 'builtin' }], [preferred])).toEqual([preferred]);
+  expect(warnings()).toHaveLength(2);
+});
+
 describe('loadAllCommands Learn fallback', () => {
   it.each([
     ['the Skill query fails', { success: false }],
@@ -65,6 +82,53 @@ describe('loadAllCommands Learn fallback', () => {
     stubCommandLists({ success: true, skills: [learnSkill] });
 
     await expect(loadAllCommands('claude-code', null)).resolves.toEqual([learnSkill]);
+  });
+});
+
+// Unit: the creator's click-time name is not its final invocation identity.
+// Resolve through the production IPC catalog after engine/task-computer changes.
+describe('routed built-in draft dispatch', () => {
+  const intent = { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' };
+  it('resolves a Pi draft to the official Claude alias on the final task computer', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    const invoke = vi.fn(async (_device, channel) => channel === 'maker:list-agent-skills'
+      ? { success: true, skills: [
+          skill({ name: 'cindy-plugin-creator' }),
+          skill({ name: 'cindy:cindy-plugin-creator', runtimeCommandName: 'cindy:cindy-plugin-creator', builtIn: true }),
+        ] }
+      : { success: true, commands: [] });
+    Object.assign(window.electronAPI, { deviceLink: { invoke } });
+    await expect(rewriteBuiltInSkillDraftForSend({
+      message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'claude-code',
+      deviceId: 'task-computer', workingDir: '/project',
+    })).resolves.toBe('/cindy:cindy-plugin-creator Make a plugin');
+    expect(invoke).toHaveBeenCalledWith('task-computer', 'maker:list-agent-skills', ['claude-code', { workingDir: '/project', forceReload: true }]);
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+  it('refuses a missing built-in and an SSH draft instead of sending a user Skill', async () => {
+    stubCommandLists({ success: true, skills: [skill({ name: 'cindy-plugin-creator' })] });
+    const request = { message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'pi' as const };
+    await expect(rewriteBuiltInSkillDraftForSend(request)).resolves.toBeNull();
+    vi.mocked(window.electronAPI.maker.listAgentSkills).mockClear();
+    await expect(rewriteBuiltInSkillDraftForSend({ ...request, remoteHostId: 'ssh-host' })).resolves.toBeNull();
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+  it('refreshes a handed-off identity when project skills change after preflight', async () => {
+    const catalog = { success: true, skills: [skill({ name: intent.name, builtIn: true })] };
+    stubCommandLists(catalog);
+    const request = { message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'claude-code' as const, workingDir: '/project' };
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBe(request.message);
+    catalog.skills = [skill({ name: intent.name }), skill({ name: `cindy:${intent.name}`, builtIn: true })];
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBe('/cindy:cindy-plugin-creator Make a plugin');
+    catalog.skills = [skill({ name: intent.name })];
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBeNull();
+  });
+  it('respects an explicitly edited command instead of restoring the routed Skill', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    await expect(rewriteBuiltInSkillDraftForSend({
+      message: '/custom My changed request', intent, agentKind: 'pi',
+    })).resolves.toBe('/custom My changed request');
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
   });
 });
 
@@ -656,5 +720,46 @@ describe('Claude managed skill dispatch', () => {
   it('rewrites the short Cindy command to its native plugin command, preserving arguments', () => {
     const command = skill({ name: 'learn', runtimeCommandName: 'cindy:learn', builtIn: true });
     expect(rewriteAgentSkillInvocationForDispatch('/learn keep this workflow', command)).toBe('/cindy:learn keep this workflow');
+  });
+});
+
+describe('plugin Skill setup rows', () => {
+  const entry = { skillName: 'pr', description: 'Needs the GitHub plugin', meta: 'Not installed' };
+
+  it('appends a selectable setup row after every real command when the Skill is absent', () => {
+    const commands = mergeCommands(
+      [{ kind: 'desktop', name: 'help', description: 'Help' }],
+      [],
+      [skill({ name: 'zeta' }), skill({ name: 'repo', scope: 'repo', runtimeStatus: 'discovered' })],
+    );
+    const result = addPluginSkillSetupCommands(commands, [entry]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'help', 'repo', 'pr']);
+    const row = result[3];
+    expect(row).toMatchObject({ kind: 'desktop', description: entry.description, meta: entry.meta });
+    expect(isSlashCommandUnavailable(row)).toBe(false);
+    expect(pluginSkillSetupName(row)).toBe('pr');
+    expect(pluginSkillSetupName(result[0])).toBeUndefined();
+    // Filtering keeps the same row object, so selection still recognizes it.
+    expect(pluginSkillSetupName(filterSlashCommands(result, 'pr')[0])).toBe('pr');
+  });
+
+  it('never shadows a command of the same name, available or not', () => {
+    const real = [skill({ name: 'PR' })];
+    expect(addPluginSkillSetupCommands(real, [entry])).toBe(real);
+    const unavailable = [skill({ name: 'pr', scope: 'repo', runtimeStatus: 'discovered' })];
+    expect(addPluginSkillSetupCommands(unavailable, [entry])).toBe(unavailable);
+    const none: UnifiedCommand[] = [];
+    expect(addPluginSkillSetupCommands(none, [])).toBe(none);
+  });
+
+  it('lets an enable row replace the Skill linked from an install the project has switched off', () => {
+    const linked = [skill({ name: 'pr' }), skill({ name: 'zeta' })];
+    const result = addPluginSkillSetupCommands(linked, [{ ...entry, replacesInstalled: true }]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'pr']);
+    expect(pluginSkillSetupName(result[1])).toBe('pr');
+  });
+
+  it('does not mark an ordinary desktop command of the same shape', () => {
+    expect(pluginSkillSetupName({ kind: 'desktop', name: 'pr', description: 'x' })).toBeUndefined();
   });
 });

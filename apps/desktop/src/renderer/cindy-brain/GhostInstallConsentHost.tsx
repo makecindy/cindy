@@ -2,8 +2,8 @@
  * 插件安装／更新确认框（docs/dev-rules/plugin-security-and-authoring.md §3.1）。
  *
  * Main 在用户从插件页、拖入或双击 `.cindy` 发起安装后，检查完真实包、在任何安装锁之外
- * 把确认请求投给发起安装的这个窗口；首次安装展示全部权限，更新只在权限变多时出现并
- * 高亮变化。无论确认、取消还是被 Main 收起（超时、账号切换），答案都会回给 Main。
+ * 把确认请求投给发起安装的这个窗口；首次安装展示全部权限，更新高亮权限变化，分享覆盖
+ * 另需明确确认替换。无论确认、取消还是被 Main 收起（超时、账号切换），答案都会回给 Main。
  * 落位前 Main 还会在锁内用同一份包复核，确认框本身不是授权事实。
  */
 import { useEffect, type ReactNode } from 'react';
@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { permissionItemIcon } from '@/features/plugin/lib/permissionItemIcon';
+import { permissionItemDetail } from '../../shared/ghostPermissionDetail';
 import { cn } from '@/lib/utils';
 import type { GhostPermissionItem } from '../../shared/ghost';
 import type {
@@ -50,9 +51,7 @@ function ConsentPermissionRow({
 }) {
   const { t } = useTranslation();
   const Icon = permissionItemIcon(item);
-  const hostDetail = item.detailKey
-    ? t(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs)
-    : null;
+  const hostDetail = permissionItemDetail(item, t);
   return (
     <li className={cn('flex items-start gap-2.5 py-1.5', change === 'removed' && 'opacity-60')}>
       <Icon
@@ -101,7 +100,9 @@ function ConsentSection({ title, children }: { title: string; children: ReactNod
   );
 }
 
-export function GhostInstallConsentContent({ facts, capabilityOnly = false }: { facts: GhostInstallConsentFacts; capabilityOnly?: boolean }) {
+export function GhostInstallConsentContent({ facts, capabilityOnly = false, replacement = false, sourceChanged = false }: {
+  facts: GhostInstallConsentFacts; capabilityOnly?: boolean; replacement?: boolean; sourceChanged?: boolean;
+}) {
   const { t } = useTranslation();
   if (facts.kind === 'install') {
     return (
@@ -128,8 +129,11 @@ export function GhostInstallConsentContent({ facts, capabilityOnly = false }: { 
   return (
     <div>
       <p className="text-13 leading-5 text-[var(--confirm-desc)]">
-        {capabilityOnly ? null : t('settings.ghosts.installConsent.updateDescription')}
+        {capabilityOnly ? null : t(replacement ? 'sharing.localReplaceNotice' : 'settings.ghosts.installConsent.updateDescription')}
       </p>
+      {replacement ? <p className="mt-2 text-13 leading-5 text-[var(--confirm-desc)]">
+        {t(sourceChanged ? 'settings.ghosts.installConsent.sourceChanged' : 'sharing.localReplaceRetainsState')}
+      </p> : null}
       {facts.builtinOauthClientChanged ? (
         <p className="mt-2 text-13 leading-5 text-[var(--confirm-desc)]">
           {t('settings.ghosts.installConsent.oauthClientChanged')}
@@ -201,12 +205,14 @@ export function GhostInstallConsentHost() {
             // 账号已切换的旧请求不渲染任何插件事实，直接按取消回给 Main。
             if (ownerStamp !== undefined && !isDataOwnerPushStampCurrent(ownerStamp)) return;
             const { facts } = request;
-            const capabilityOnly = request.purpose === 'task-capability';
+            const capabilityOnly = request.purpose === 'task-capability' || request.purpose === 'ui-capability';
+            const replacement = request.purpose === 'share-replace' && facts.kind === 'update';
             const source = ghostInstallConsentSourceLabel(t, request);
             confirmed = await confirm(
               {
                 title:
-                  capabilityOnly ? facts.name : facts.kind === 'install'
+                  capabilityOnly ? facts.name : replacement
+                    ? t('sharing.localReplaceTitle', { name: facts.name }) : facts.kind === 'install'
                     ? t('settings.ghosts.installConsent.installTitle', { name: facts.name })
                     : t('settings.ghosts.installConsent.updateTitle', { name: facts.name }),
                 description:
@@ -220,12 +226,24 @@ export function GhostInstallConsentHost() {
                         to: facts.version,
                         source,
                       }),
-                content: <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly} />,
+                content: <>
+                  {(!request.trust || request.trust === 'unverified') && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
+                    <p className="mb-3 text-13 font-medium text-[var(--confirm-title)]">{t('mcpApps.pluginTrust.unverified')}</p>}
+                  {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
+                    <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
+                    {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}
+                    {request.target.sourceChanged && !replacement && <p>{t('settings.ghosts.installConsent.sourceChanged')}</p>}
+                    {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
+                  </div>}
+                  <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly}
+                    replacement={replacement} sourceChanged={request.target?.sourceChanged} />
+                </>,
                 maxWidth: 460,
                 contentSelectable: true,
                 describeContent: true,
                 confirmText:
-                  capabilityOnly ? t('settings.ghosts.connections.confirmAllow') : facts.kind === 'install'
+                  capabilityOnly ? t('settings.ghosts.connections.confirmAllow') : replacement
+                    ? t('sharing.localReplaceButton') : facts.kind === 'install'
                     ? t('settings.ghosts.installConsent.confirmInstall')
                     : t('settings.ghosts.installConsent.confirmUpdate'),
                 cancelText: t('settings.ghosts.installConsent.cancel'),

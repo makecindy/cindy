@@ -87,7 +87,7 @@ describe('Cindy device roster', () => {
       {},
       'Local',
     );
-    expect(option.label).toBe('host/name');
+    expect(option.label).toBe('another computer');
     expect(option.route).toBe('/bots/remote/host%2Fname/cindy-default');
   });
 });

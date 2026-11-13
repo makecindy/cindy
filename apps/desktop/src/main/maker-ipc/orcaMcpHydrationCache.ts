@@ -19,6 +19,7 @@ export function readOrcaRoleFromVendorOptions(
 // orcaRole/vendorOptions.orcaRole; otherwise this cache will skip the later DB
 // lookup. Current normal entrypoints do pass the role and are covered by tests.
 export function markKnownNonOrcaIfApplicable(sessionId: string, o: OrcaRoleCreateOpts): void {
+  if (o.vendorOptions?.orcaRemoteWorker === true) return;
   const role = readOrcaRoleFromVendorOptions(o.vendorOptions);
   if (role === 'lead' || role === 'worker') return;
   if (o.orcaRole === 'lead' || o.orcaRole === 'worker') return;
@@ -27,7 +28,7 @@ export function markKnownNonOrcaIfApplicable(sessionId: string, o: OrcaRoleCreat
 
 export function markOrcaMcpHydratedIfNeeded(sessionId: string, o: OrcaRoleCreateOpts): void {
   const role = readOrcaRoleFromVendorOptions(o.vendorOptions);
-  if (role !== 'lead' && role !== 'worker') return;
+  if (role !== 'lead' && role !== 'worker' && o.vendorOptions?.orcaRemoteWorker !== true) return;
   orcaMcpHydratedSessionIds.add(sessionId);
   knownNonOrcaSessionIds.delete(sessionId);
 }

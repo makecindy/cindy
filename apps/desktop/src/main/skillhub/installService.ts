@@ -9,7 +9,8 @@
  *
  * 安装目标：
  *   - 未传 installPath → 默认 `~/.agents/skills/<name>/`（双引擎共享）
- *     + 额外创建 `~/.claude/skills/<name>` symlink
+ *     + 额外创建 `~/.claude/skills/<name>` symlink（#9282：仅当允许 Claude 投影，
+ *       即 opt-in 或本地已有 `~/.claude`）
  *   - 传入项目级 `.agents/skills/<name>` → 直接使用，并创建 Claude 兼容链接
  *   - 其它自定义 installPath（完整路径）→ 直接使用，main 不做语义拼接
  *
@@ -68,6 +69,7 @@ import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
   projectWorkingDirFromSkillPath,
+  shouldProjectToClaudeSkills,
 } from '../maker-host/shared-global-skills.js';
 import {
   clearIgnoredAutoSyncSkill,
@@ -515,7 +517,7 @@ function safeJoin(dest: string, relPath: string): string | null {
 
 // ── 主入口：install ─────────────────────────────────────────────────────────
 
-export async function install(p: InstallParams, onProgress: ProgressCb): Promise<InstallResult> {
+export async function install(p: InstallParams, onProgress: ProgressCb, remoteGuard?: { current(): boolean; beforeCommit(): Promise<boolean> }): Promise<InstallResult> {
   const userId = getCurrentUserId();
   if (!userId) {
     onProgress({ phase: 'failed', name: p.name, errorCode: 'AUTH_REQUIRED', message: '未登录' });
@@ -560,6 +562,7 @@ export async function install(p: InstallParams, onProgress: ProgressCb): Promise
   const checkAbort = (): boolean => {
     if (
       signal.aborted ||
+      (remoteGuard !== undefined && !remoteGuard.current()) ||
       !getAppCapabilities().canUseSkillHubCloud ||
       getCurrentDataOwnerId() !== installOwnerId
     ) {
@@ -719,6 +722,12 @@ export async function install(p: InstallParams, onProgress: ProgressCb): Promise
       return { success: false, errorCode: 'CANCELLED', message: '已取消' };
     }
 
+    // A remote approval is tied to the scanned physical instance/content. Recheck
+    // after download/extraction while the original mutation leases are held.
+    if (remoteGuard && !(await remoteGuard.beforeCommit())) {
+      await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      return { success: false, errorCode: 'CANCELLED', message: '已取消' };
+    }
     // 6) final switch: staging → final。只有此时才移动/删除旧目录。
     // 物理 Skill 自身可能还是一层用户链接；替换后再 realpath 已看不到旧 registry key。
     const preSwitchPhysicalRealDir = !pathTextEquals(
@@ -938,7 +947,8 @@ export async function install(p: InstallParams, onProgress: ProgressCb): Promise
     }
 
     // best-effort:让同一份 Skill 同时出现在两个 Agent 的 discovery root。
-    if (!p.installPath) {
+    // #9282:未 opt-in 且本地没有 ~/.claude 时不主动创建 Claude 侧链接。
+    if (!p.installPath && await shouldProjectToClaudeSkills()) {
       const claudeLink = path.join(os.homedir(), '.claude', 'skills', p.name);
       try {
         await ensureSymlinkToShared(claudeLink, finalDir);
@@ -990,6 +1000,7 @@ export async function uninstall(
   absolutePath: string,
   target?: LocalSkillTarget,
   canMutate: () => boolean = () => true,
+  beforeCommit?: () => boolean | Promise<boolean>,
 ): Promise<UninstallResult> {
   // 防御：resolve 后验证路径是精确的 skill 根目录（只允许一层 slug，防 traversal）
   let resolved: string;
@@ -1062,6 +1073,9 @@ export async function uninstall(
       };
     }
 
+    if (beforeCommit && !(await beforeCommit())) {
+      return { success: false, errorCode: 'INTERNAL', message: 'Skill source changed; refresh and retry' };
+    }
     const cloudUserId = getCurrentUserId();
     return await uninstallLocked(
       absolutePath,

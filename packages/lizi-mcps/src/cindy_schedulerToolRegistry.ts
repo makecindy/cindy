@@ -142,6 +142,11 @@ export class SchedulerToolRegistry {
               errorCode: 'INVALID_ARGS',
               data: {
                 tool: name,
+                // received: 回显收到的顶层 keys — 只回 schema 时模型看不出自己是多包了一层信封
+                // (keys=["args"]) 还是拍平了 (keys=参数字段), 实测 2026-10-31 三个会话因此连续盲试。
+                received: rawArgs && typeof rawArgs === 'object'
+                  ? Object.keys(rawArgs as Record<string, unknown>)
+                  : [],
                 validation_errors: parsed.error.issues,
                 schema: jsonSchema,
                 hint: '请按 schema 修正参数后重试',

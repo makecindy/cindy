@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { posix, resolve } from 'node:path';
+import { join, posix, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import { mobileClientBundleEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
 import { resolvePnpmInvocation, usablePnpmExecPath } from '../../../../scripts/shared/pnpm-invocation.mjs';
 import { extractMobileDevRegionArgs, withLocalMobileRegionConfig } from '../../scripts/lib/mobile-dev-region.mjs';
-import { extractSimWhoamiUdidArgs, bootedSimulatorLinesForTarget, resolveMobileSimulatorBundleId } from '../../scripts/lib/sim-whoami.mjs';
+import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs, simulatorBackendNotice } from '../../scripts/lib/sim-whoami.mjs';
+import { inspectIOSBuildTools, withUserGemPodOnPath, COCOAPODS_SETUP_HINT } from '../../scripts/sim-pod-install.mjs';
 
 const source = readFileSync(resolve(process.cwd(), 'scripts/sim-rebuild.mjs'), 'utf8');
 const start = source.indexOf('const iosDir =');
@@ -14,26 +15,40 @@ const mobileDir = '/repo/apps/mobile';
 const cacheRoot = '/home/test/Library/Caches/xdt-maker/sim-app-cache';
 const cacheDir = `${cacheRoot}/ios-arm64-fingerprint`;
 const builtApp = `${mobileDir}/ios/build/Build/Products/Debug-iphonesimulator/Cindy.app`;
+// 实现按宿主平台 join/delimiter 拼 PATH,测试输入与断言同样如此。
+const userGemDir = join('/home/test', '.gem', 'ruby', '2.6.0');
+const userGemBin = join(userGemDir, 'bin');
 const udid = '11111111-1111-1111-1111-111111111111';
 
 // Execute the real CLI workflow with in-memory filesystem and process boundaries.
 // simPodInstall and simNativeIdentity suites cover their real implementations separately.
 async function rebuild(options: {
   args?: string[]; platform?: 'darwin' | 'win32'; cached?: boolean; cachedArch?: string;
-  fingerprintFailure?: boolean; metroHealthy?: boolean; builtArch?: string;
+  fingerprintFailure?: boolean; metroHealthy?: boolean; builtArch?: string; cindyBooted?: boolean;
+  unavailableTool?: string; toolFailure?: string; nativeMismatch?: boolean; podOnlyInUserGem?: boolean;
 } = {}) {
+  const cindySet = { name: 'cindy', path: '/home/test/Library/Application Support/BaguetteCindy/devices' };
   const env = { EXPO_PUBLIC_APP_VARIANT: 'beta', npm_execpath: '/tools/pnpm.cjs' };
   const processStub = {
     argv: ['node', 'sim-rebuild.mjs', ...(options.args ?? [])], env,
     platform: options.platform ?? 'darwin', arch: 'arm64', execPath: '/node', exitCode: 0,
     exit(code: number) { throw new Error(`exit:${code}`); },
   };
-  const execFileSync = vi.fn((command: string, args: string[], _opts: object) => {
+  const execFileSync = vi.fn((command: string, args: string[], opts: object) => {
+    if (options.podOnlyInUserGem && command === 'ruby') return userGemDir;
+    if (options.podOnlyInUserGem && command === 'pod' && !(opts as { env?: { PATH?: string } }).env?.PATH?.includes(userGemBin)) {
+      throw Object.assign(new Error('spawn pod ENOENT'), { code: 'ENOENT' });
+    }
+    if (command === options.unavailableTool) throw Object.assign(new Error('private child output'), { code: options.toolFailure ?? 'ENOENT' });
+    if (command === 'pod') return '1.16.2';
     if (command === 'plutil') return args[1] === 'CFBundleIdentifier' ? 'com.xd.cindy' : 'Cindy';
     if (command === 'lipo') return args[1].startsWith(cacheRoot) ? (options.cachedArch ?? 'arm64') : (options.builtArch ?? 'arm64');
     if (command === '/node' && args.includes('config')) return JSON.stringify({ android: { package: 'com.xd.cindy' } });
     if (command === 'xcrun' && args.includes('get_app_container')) return '/installed/Cindy.app';
-    if (command === 'xcrun' && args.includes('booted')) return `iPhone (${udid}) (Booted)`;
+    if (command === 'xcrun' && args.includes('list')) {
+      const inCindySet = args.includes(cindySet.path);
+      return inCindySet === Boolean(options.cindyBooted) ? `iPhone (${udid}) (${args.includes('booted') ? 'Booted' : 'Shutdown'})` : '';
+    }
     if (['pnpm', '/node', 'xcodebuild', 'cmd.exe', '/sdk/adb', 'xcrun'].includes(command)) return '';
     throw new Error(`unexpected executable ${command}`);
   });
@@ -55,18 +70,22 @@ async function rebuild(options: {
     mobileDir, worktreeRoot: '/repo', join: posix.join, resolve: posix.resolve, homedir: () => '/home/test',
     process: processStub, console: { log, error: log, warn: log }, execFileSync, spawnSync,
     mobileClientBundleEnv, extractMobileDevRegionArgs, withLocalMobileRegionConfig,
-    extractSimWhoamiUdidArgs, bootedSimulatorLinesForTarget,
+    extractSimWhoamiUdidArgs, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs,
+    simulatorBackendNotice: (input: object) => simulatorBackendNotice({ cindyAvailable: true, ...input } as never),
+    resolveSimulatorDeviceSets: () => [cindySet, { name: 'system', path: null }],
     resolveMobileSimulatorBundleId: (region: string) => resolveMobileSimulatorBundleId(region, { execFile: () => JSON.stringify({ ios: { bundleIdentifier: 'com.xd.cindy' } }) }),
     resolvePnpmInvocation: (args: string[], opts: object) => resolvePnpmInvocation(args, { ...opts, platform: processStub.platform, execPath: '/node' }),
     usablePnpmExecPath, ensureMobileLocalRegionConfig: () => ({}), formatMobileLocalConfigStatus: () => '',
     ensureMobileEnv: () => ({ created: false, addedKeys: [] }), formatMobileEnvStatus: () => '',
-    computeSimulatorNativeFingerprint: () => 'native-fingerprint', inspectSimulatorNativeIdentity: () => ({ healthy: true }),
+    computeSimulatorNativeFingerprint: () => 'native-fingerprint', inspectSimulatorNativeIdentity: ({ appPath }: { appPath: string }) => ({ healthy: !(options.nativeMismatch && appPath.startsWith(cacheRoot)), code: 'native-mismatch' }),
+    inspectIOSBuildTools: (opts: object) => inspectIOSBuildTools({ ...opts, run: execFileSync }), COCOAPODS_SETUP_HINT,
+    withUserGemPodOnPath: (opts: object) => withUserGemPodOnPath({ ...opts, run: execFileSync as never, exists: () => true }),
     computeFingerprintReport: (_dir: string, opts: { run: (input: object) => { hash: string } }) => {
       if (options.fingerprintFailure) throw new Error('fingerprint unavailable');
       return { platforms: { ios: opts.run({ binPath: '/fingerprint/cli.js', projectDir: mobileDir, platform: 'ios' }).hash } };
     },
     parseFingerprintCliOutput: JSON.parse, podInstallBounded,
-    existsSync: () => true, mkdirSync: vi.fn(), rmSync, cpSync, writeFileSync, utimesSync,
+    existsSync: (path: string) => path === `${cacheDir}/meta.json` ? Boolean(options.cached) : true, mkdirSync: vi.fn(), rmSync, cpSync, writeFileSync, utimesSync,
     readFileSync: (path: string) => {
       if (!options.cached || path !== `${cacheDir}/meta.json`) throw new Error('cache miss');
       return JSON.stringify({ scheme: 'Cindy' });
@@ -75,6 +94,7 @@ async function rebuild(options: {
     statSync: (path: string) => ({ isDirectory: () => true, mtimeMs: now - (path.endsWith('/old') ? 3_600_000 : cacheEntries.indexOf(posix.basename(path)) * 1000) }),
     resolveAndroidSdkTools, ensureWindowsAndroidEmulator, resolveJavaRuntimeEnv,
     probeMetroOwnership: () => ({ cwd: mobileDir, source: 'same', region: 'global', envFingerprint: 'same-env' }),
+    applySimMockArg: (args: string[]) => args,
     readSimEnvironment: () => ({ envFingerprint: 'same-env' }), gitSourceIdentity: () => 'same',
     classifySimMetroListener: (input: object) => input, validateSimMetroIdentity,
   });
@@ -84,6 +104,49 @@ async function rebuild(options: {
 }
 
 describe('sim-rebuild workflow', () => {
+  // Regression 2026-10-29: missing CocoaPods was discovered only after writing ios/.
+  // The real CLI runs with in-memory process/filesystem boundaries (unit); existing
+  // cache tests did not cover unavailable tools or cache rejection diagnostics.
+  it.each(['ENOENT', 'ETIMEDOUT', 'EACCES'])('stops before prebuild when CocoaPods is unavailable (%s)', async (toolFailure) => {
+    const result = await rebuild({ args: ['--build-only'], unavailableTool: 'pod', toolFailure });
+    expect(result.error).toEqual(new Error('exit:1'));
+    expect(result.execFileSync.mock.calls.some(([, args]) => args.includes('prebuild'))).toBe(false);
+    expect(result.podInstallBounded).not.toHaveBeenCalled();
+    expect(result.cpSync).not.toHaveBeenCalled();
+    const receipt = result.log.mock.calls.flat().join('\n');
+    expect(receipt).toContain('IOS_BUILD_TOOLS_UNAVAILABLE');
+    expect(receipt).toContain('environment-setup.md');
+    expect(receipt).not.toContain('private child output');
+  });
+
+  it('builds with a CocoaPods that is only in the user gem directory', async () => {
+    const result = await rebuild({ args: ['--build-only'], podOnlyInUserGem: true });
+    expect(result.error).toEqual(new Error('exit:0'));
+    expect(result.log.mock.calls.flat().join('\n')).not.toContain('IOS_BUILD_TOOLS_UNAVAILABLE');
+    expect(result.podInstallBounded).toHaveBeenCalledOnce();
+    const [{ env }] = result.podInstallBounded.mock.calls[0] as unknown as [{ env: { PATH: string } }];
+    // 测试进程桩的 env 没有 PATH,所以结果就是用户 gem 目录本身。
+    expect(env.PATH).toBe(userGemBin);
+  });
+
+  it('installs a compatible cache without requiring CocoaPods', async () => {
+    const result = await rebuild({ cached: true, unavailableTool: 'pod', args: ['--udid', udid] });
+    expect(result.error).toBeUndefined();
+    expect(result.execFileSync).toHaveBeenCalledWith('xcrun', ['simctl', 'install', udid, `${cacheDir}/Cindy.app`], expect.any(Object));
+    expect(result.execFileSync.mock.calls.some(([cmd]) => cmd === 'pod' || cmd === 'xcodebuild')).toBe(false);
+  });
+
+  it.each([
+    [{ cached: false }, 'cache-entry-missing'],
+    [{ cached: true, cachedArch: 'x86_64' }, 'cache-architecture-mismatch'],
+    [{ cached: true, nativeMismatch: true }, 'cache-native-mismatch'],
+  ])('explains why an existing artifact cannot be reused: %j', async (options, code) => {
+    const result = await rebuild({ ...options, args: ['--build-only'], unavailableTool: 'pod' });
+    expect(result.error).toEqual(new Error('exit:1'));
+    expect(result.log.mock.calls.flat().join('\n')).toContain(code);
+    expect(result.execFileSync.mock.calls.some(([, args]) => args.includes('prebuild'))).toBe(false);
+  });
+
   it.each([false, true])('reuses valid cache and writes force-built artifacts back (force=%s)', async (force) => {
     const result = await rebuild({ cached: true, args: ['--build-only', ...(force ? ['--force-build', '--udid', udid] : [])] });
     expect(result.error).toEqual(new Error('exit:0'));
@@ -105,7 +168,9 @@ describe('sim-rebuild workflow', () => {
       expect(result.utimesSync.mock.calls[0][1].getTime()).toBeGreaterThan(0);
       expect(result.cpSync).not.toHaveBeenCalled();
     }
-    expect(result.execFileSync.mock.calls.some(([cmd]) => cmd === 'xcrun')).toBe(false);
+    // build-only never touches the device; with --udid it only reads the device list to find the owning set.
+    expect(result.execFileSync.mock.calls.some(([cmd, args]) => cmd === 'xcrun'
+      && ['install', 'launch', 'uninstall', 'get_app_container'].some((action) => args.includes(action)))).toBe(false);
   });
 
   it.each(['fingerprint-failure', 'cached-architecture-mismatch'])('falls back to a full build for %s', async (reason) => {
@@ -116,19 +181,56 @@ describe('sim-rebuild workflow', () => {
     expect(result.cpSync).toHaveBeenCalledTimes(reason === 'fingerprint-failure' ? 0 : 1);
   });
 
+  it('builds generically and installs into Cindy\'s simulator when its device is booted', async () => {
+    const result = await rebuild({ cindyBooted: true, args: ['--udid', udid] });
+    expect(result.error).toBeUndefined();
+    expect(result.execFileSync).toHaveBeenCalledWith('xcodebuild', expect.arrayContaining(['-destination', 'generic/platform=iOS Simulator']), expect.any(Object));
+    for (const action of ['install', 'get_app_container', 'launch']) {
+      const call = result.execFileSync.mock.calls.find(([cmd, args]) => cmd === 'xcrun' && args.includes(action));
+      expect(call?.[1].slice(0, 3)).toEqual(['simctl', '--set', '/home/test/Library/Application Support/BaguetteCindy/devices']);
+    }
+  });
+
+  it('uses the generic destination for a build-only UDID that lives in Cindy\'s set, even when shut down', async () => {
+    const result = await rebuild({ cindyBooted: true, args: ['--build-only', '--force-build', '--udid', udid] });
+    expect(result.error).toEqual(new Error('exit:0'));
+    expect(result.execFileSync).toHaveBeenCalledWith('xcodebuild', expect.arrayContaining(['-destination', 'generic/platform=iOS Simulator']), expect.any(Object));
+  });
+
+  it('refuses to pick a system device while Cindy is idle', async () => {
+    const result = await rebuild();
+    expect(result.error).toMatchObject({ message: 'exit:1' });
+    expect(result.log).toHaveBeenCalledWith(expect.stringContaining('cindy-simulator'));
+    expect(result.execFileSync.mock.calls.some(([command]) => command === 'xcodebuild')).toBe(false);
+  });
+
+  it('uses a system device named by --udid and flags it while Cindy is available', async () => {
+    const result = await rebuild({ args: ['--udid', udid] });
+    expect(result.log).toHaveBeenCalledWith(expect.stringContaining('正在使用系统模拟器'));
+    expect(result.error).toBeUndefined();
+    expect(result.execFileSync).toHaveBeenCalledWith('xcodebuild', expect.arrayContaining(['-destination', `platform=iOS Simulator,id=${udid}`]), expect.any(Object));
+    expect(result.execFileSync).toHaveBeenCalledWith('xcrun', ['simctl', 'launch', udid, 'com.xd.cindy'], expect.any(Object));
+  });
+
   it('rejects incompatible build architecture before installing on the simulator', async () => {
-    const result = await rebuild({ builtArch: 'x86_64' });
+    const result = await rebuild({ builtArch: 'x86_64', args: ['--udid', udid] });
     expect(result.error).toMatchObject({ message: expect.stringContaining('Simulator 产物架构错误') });
     expect(result.execFileSync.mock.calls.some(([, args]) => args.includes('install'))).toBe(false);
   });
 
-  it.each([true, false])('checks Metro after Windows installation and before launch (healthy=%s)', async (healthy) => {
+  // Unit regression: SDK 58 defaults CMAKE_OBJECT_PATH_MAX to 1024, exceeding
+  // the bundled Windows Ninja's path limit. Execute the real CLI workflow and
+  // inspect its external Gradle invocation; the existing Windows install cases
+  // did not require opting out of that default. App codegen also needs the
+  // short-staging init script because its fixed target prefix exceeds the
+  // remaining path budget. platform=win32 is sufficient.
+  it.each([true, false])('keeps Windows CMake path shortening and checks Metro before launch (healthy=%s)', async (healthy) => {
     const result = await rebuild({ platform: 'win32', metroHealthy: healthy });
     expect(result.error).toEqual(new Error(`exit:${healthy ? 0 : 1}`));
     expect(result.resolveAndroidSdkTools).toHaveBeenCalledWith(expect.objectContaining({ platform: 'win32', requireTools: true }));
     expect(result.resolveJavaRuntimeEnv).toHaveBeenCalledWith(expect.objectContaining({ ANDROID_SDK_ROOT: '/sdk', ANDROID_HOME: '/sdk', CINDY_USE_LOCAL_REGION_CONFIG: '1' }));
     expect(result.execFileSync).toHaveBeenCalledWith('/node', ['/tools/pnpm.cjs', 'exec', 'expo', 'prebuild', '--platform', 'android', '--no-install'], expect.any(Object));
-    expect(result.execFileSync).toHaveBeenCalledWith('cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat assembleDebug'], expect.objectContaining({ cwd: `${mobileDir}/android`, env: result.javaEnv, windowsVerbatimArguments: true }));
+    expect(result.execFileSync).toHaveBeenCalledWith('cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat assembleDebug -Pexpo.android.cmakeObjectPathMax=0 --init-script ..\\scripts\\sim-windows-native.gradle'], expect.objectContaining({ cwd: `${mobileDir}/android`, env: result.javaEnv, windowsVerbatimArguments: true }));
     const install = result.execFileSync.mock.calls.findIndex(([, args]) => args.includes('install'));
     const launch = result.execFileSync.mock.calls.findIndex(([, args]) => args.includes('monkey'));
     expect(install).toBeGreaterThanOrEqual(0);

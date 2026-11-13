@@ -1,16 +1,75 @@
 {
   "id": "linuxdo-latest",
-  "match": ["linux.do"],
-  "description": "读取 linux.do(Discourse 论坛)最新话题列表(标题/回复数/点赞/浏览/链接)。先落到 linux.do 域,再在页面内同源 fetch /latest.json——公开内容免登录即可读,登录态会带上 cookie 并规避 Cloudflare 拦截。",
-  "inputs": {},
-  "steps": [
-    { "action": "navigate", "url": "https://linux.do" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "topics",
-      "fn": "async () => { const r = await fetch('/latest.json', { credentials: 'include' }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('linux.do 返回非 JSON(被 Cloudflare 拦或需登录),请在持久浏览器里正常访问/登录该站后重试'); } const list = (d && d.topic_list && d.topic_list.topics) ? d.topic_list.topics : []; return list.map(x => ({ title: x.fancy_title || x.title, replies: Math.max(0, (x.posts_count || 1) - 1), likes: x.like_count || 0, views: x.views || 0, created: x.created_at, url: 'https://linux.do/t/topic/' + x.id })); }"
-    }
+  "match": [
+    "linux.do"
   ],
-  "output": "{{topics}}"
+  "description": "linux.do 话题列表（需登录；支持全站、标签、分类）",
+  "access": "read",
+  "adapter": "linux-do/feed",
+  "inputs": {
+    "view": {
+      "required": false,
+      "type": "str",
+      "default": "latest",
+      "description": "View type",
+      "choices": [
+        "latest",
+        "hot",
+        "top"
+      ]
+    },
+    "tag": {
+      "required": false,
+      "type": "str",
+      "description": "Tag name, slug, or id"
+    },
+    "category": {
+      "required": false,
+      "type": "str",
+      "description": "Category name, slug, id, or parent/name path"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of items (per_page)"
+    },
+    "order": {
+      "required": false,
+      "type": "str",
+      "default": "default",
+      "description": "Sort order",
+      "choices": [
+        "default",
+        "created",
+        "activity",
+        "views",
+        "posts",
+        "category",
+        "likes",
+        "op_likes",
+        "posters"
+      ]
+    },
+    "ascending": {
+      "required": false,
+      "type": "boolean",
+      "default": false,
+      "description": "Sort ascending (default: desc)"
+    },
+    "period": {
+      "required": false,
+      "type": "str",
+      "description": "Time period (only for --view top)",
+      "choices": [
+        "all",
+        "daily",
+        "weekly",
+        "monthly",
+        "quarterly",
+        "yearly"
+      ]
+    }
+  },
+  "steps": []
 }

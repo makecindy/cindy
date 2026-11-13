@@ -144,6 +144,7 @@ export function useDetectCwd(
 }
 
 interface BranchesState {
+  remoteDefaultBranch?: string;
   branches: string[];
   current: string | null;
   loading: boolean;
@@ -176,8 +177,8 @@ export function branchesStateForTarget(
   ) {
     return { branches: [], current: null, loading: true, failed: false };
   }
-  const { branches, current, loading, failed } = snapshot;
-  return { branches, current, loading, failed };
+  const { branches, current, loading, failed, remoteDefaultBranch } = snapshot;
+  return { branches, current, loading, failed, remoteDefaultBranch };
 }
 
 /**
@@ -232,6 +233,7 @@ export function useBranches(
         if (cancelled) return;
         setSnapshot({
           target: requestTarget,
+          remoteDefaultBranch: res.remoteDefaultBranch,
           branches: res.branches ?? [],
           current: res.current ?? null,
           loading: false,

@@ -59,6 +59,32 @@ function project(
 }
 
 describe('sidebar project sorting', () => {
+  // #7469, unit: grouping reuse must survive both production sorting stages.
+  // Existing ordering assertions did not catch needless project replacement.
+  it('retains an unchanged project through sidebar and main-list sorting but applies a changed order', () => {
+    const older = session({ id: 'older', updatedAt: '2026-01-01T00:00:00Z' });
+    const newer = session({ id: 'newer', updatedAt: '2026-01-02T00:00:00Z' });
+    const node = project({ workingDir: '/repo', displayName: 'repo', sessions: [newer, older] });
+    const sorted = sortProjectsForSidebar([node], 'recency', []);
+    expect(sorted[0]).toBe(node);
+    const entries = buildMainListEntries({
+      projects: sorted, dialogues: [], unclassified: [], groupBy: 'project',
+      groupDialogue: false, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(entries[0].kind).toBe('project');
+    if (entries[0].kind !== 'project') throw new Error('Missing project');
+    expect(entries[0].project).toBe(node);
+    const reversed = { ...node, sessions: [older, newer] };
+    const changed = buildMainListEntries({
+      projects: [reversed], dialogues: [], unclassified: [], groupBy: 'project',
+      groupDialogue: false, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(changed[0].kind).toBe('project');
+    if (changed[0].kind !== 'project') throw new Error('Missing project');
+    expect(changed[0].project.sessions).toEqual([newer, older]);
+    expect(reversed.sessions).toEqual([older, newer]);
+  });
+
   it('applies manual project order with unranked projects after ranked projects', () => {
     const sorted = sortProjectsForSidebar(
       [
@@ -171,6 +197,31 @@ it.each(['activity', 'custom'] as const)('keeps collapsed and expanded project o
 function projectKeys(projects: readonly { projectKey: string }[]): string[] {
   return projects.map((item) => item.projectKey);
 }
+
+// PR #6983 拆分：原面板缺少同一项目内 priority 状态排序覆盖。
+// 生产入口 sortProjectsForSidebar；最小失败输入是较新空闲任务 + 较旧运行任务。
+// unit tier；同时覆盖状态结束后的重排、手动项目顺序与输入不可变。
+it('sorts project-panel children by priority without changing manual project order', () => {
+  const idle = session({ id: 'idle', userSendAt: '2026-03-01T00:00:00Z' });
+  const running = session({ id: 'running', userSendAt: '2026-01-01T00:00:00Z' });
+  const waiting = session({ id: 'waiting', userSendAt: '2026-02-01T00:00:00Z' });
+  const first = project({ workingDir: '/first', displayName: 'first', sessions: [idle, running, waiting] });
+  const second = project({ workingDir: '/second', displayName: 'second' });
+  const context: MainListPriorityContext = {
+    runningSessionIds: new Set(['running']),
+    attentionSessionIds: new Set(['waiting']),
+    waitingSessionIds: new Set(['waiting']),
+  };
+  const sorted = sortProjectsForSidebar(
+    [first, second], 'priority', [first.projectKey, second.projectKey], 'custom', '', context,
+  );
+  expect(sorted.map((item) => item.projectKey)).toEqual([first.projectKey, second.projectKey]);
+  expect(sorted[0].sessions.map((item) => item.id)).toEqual(['waiting', 'running', 'idle']);
+  expect(first.sessions.map((item) => item.id)).toEqual(['idle', 'running', 'waiting']);
+  expect(sortProjectsForSidebar(
+    [first], 'priority', [], 'activity', '', { ...context, runningSessionIds: new Set() },
+  )[0].sessions.map((item) => item.id)).toEqual(['waiting', 'idle', 'running']);
+});
 
 function expandedProjectKeys(
   projects: ProjectNode[],

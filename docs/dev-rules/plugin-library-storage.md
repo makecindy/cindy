@@ -27,7 +27,7 @@
 | 管子协议类型（`library-request`） | `apps/desktop/src/shared/ghost.ts`（`GhostPipeLibraryRequest/Result`） |
 | 面板 `/library/` 投影 | `cindy-brain/runtime/electronSandboxAdapter.ts`（`serveGhostLibraryFile`） |
 | 装配 / 生命周期挂点 / 设置面 IPC | `cindy-brain/index.ts`（`getGhostLibrarySlot`、`relocateGhostLibraryTo`、`getGhostLibraryOverview`） |
-| 作者手册章节 | `cindy-brain/forge.ts` 的 `FORGE_GUIDE` §4.10.1 |
+| 作者手册章节 | 内置 `cindy-plugin-creator/references/plugin-files-and-library.md` §4.10.1（兼容导出为 `FORGE_GUIDE`） |
 
 ## 落盘布局（owner-scoped，全部经 `ownerScopedUserDataPath`）
 

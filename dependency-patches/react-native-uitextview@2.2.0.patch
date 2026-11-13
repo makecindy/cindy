@@ -1,14 +1,14 @@
 diff --git a/ios/RNUITextView.mm b/ios/RNUITextView.mm
-index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65958a3fd5 100644
 --- a/ios/RNUITextView.mm
 +++ b/ios/RNUITextView.mm
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
  #import "RNUITextView.h"
++#import "RNUITextViewParagraph.h"
 +#import <os/log.h>
  #import "RNUITextViewShadowNode.h"
  #import "RNUITextViewComponentDescriptor.h"
  #import "RNUITextViewChild.h"
-@@ -22,6 +23,35 @@ @implementation RNUITextView{
+@@ -22,6 +24,36 @@
    RNUITextViewShadowNode::ConcreteState::Shared _state;
    UITapGestureRecognizer * _outsideTapRecognizer;
    BOOL _suppressSelectionChange;
@@ -41,10 +41,12 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +  __weak UIScrollView *_selectionDragScrollView;
 +  // Title of the custom edit-menu action (menuActionLabel prop). Empty = no item.
 +  NSString *_menuActionLabel;
++  NSString *_sideChatMenuActionLabel;
  }
- 
+-
++
  + (ComponentDescriptorProvider)componentDescriptorProvider
-@@ -65,6 +95,18 @@ - (instancetype)initWithFrame:(CGRect)frame
+@@ -65,6 +97,18 @@
                                                                      action:@selector(handleOutsideTap:)];
      _outsideTapRecognizer.cancelsTouchesInView = NO;
      _outsideTapRecognizer.delegate = self;
@@ -61,26 +63,61 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +    _selectionTouchObserver.delegate = self;
 +    [_textView addGestureRecognizer:_selectionTouchObserver];
    }
- 
+-
++
    return self;
-@@ -77,6 +119,7 @@ - (void)didMoveToWindow
-     [self.window addGestureRecognizer:_outsideTapRecognizer];
-   } else {
-     [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
+@@ -73,10 +117,34 @@
+ - (void)didMoveToWindow
+ {
+   [super didMoveToWindow];
+-  if (self.window) {
+-    [self.window addGestureRecognizer:_outsideTapRecognizer];
+-  } else {
+-    [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
++  [self syncOutsideTapRecognizer];
++  if (!self.window) {
 +    [self invalidateSelectionDisplayLink];
++  }
++}
++
++- (BOOL)hasActiveTextSelection
++{
++  const NSRange range = _textView.selectedRange;
++  if (!_textView.selectable || range.location == NSNotFound || range.length == 0) {
++    return NO;
++  }
++  const NSUInteger length = _textView.text.length;
++  return range.location <= length && range.length <= length - range.location;
++}
++
++- (void)syncOutsideTapRecognizer
++{
++  // A table can mount hundreds of text views. Only a view with a selection
++  // needs to observe touches outside itself; idle cells must not each hit-test
++  // the window and schedule a selection-clear block for every ordinary tap.
++  UIWindow *target = [self hasActiveTextSelection] ? self.window : nil;
++  if (_outsideTapRecognizer.view == target) {
++    return;
++  }
++  [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
++  if (target) {
++    [target addGestureRecognizer:_outsideTapRecognizer];
    }
  }
- 
-@@ -94,21 +137,27 @@ - (void)prepareForRecycle
+-
++
+@@ -94,21 +162,28 @@
    // Reset the frame to zero so that when it properly lays out on the next use
    _textView.frame = CGRectZero;
    _textView.attributedText = nil;
++  [self syncOutsideTapRecognizer];
 +  _lastAppliedAttributedString = facebook::react::AttributedString{};
 +  _hasAppliedText = NO;
 +  _textApplyGeneration += 1;
 +  [self invalidateSelectionDisplayLink];
  }
- 
+-
++
  - (void)layoutSubviews
  {
    [super layoutSubviews];
@@ -91,12 +128,14 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 -  if (!CGRectEqualToRect(_textView.frame, _view.frame)) {
 -    [self setNeedsDisplay];
 -  }
+-}
+-
+-- (void)drawRect:(CGRect)rect
 +  // Apply synchronously whenever the host frame moves out from under the text
 +  // view (rotation, parent relayout) so it resizes and onTextLayout re-fires.
 +  [self applyStateIfNeeded];
- }
- 
--- (void)drawRect:(CGRect)rect
++}
++
 +// Applies the current Fabric state to the backing UITextView synchronously.
 +// Called from finalizeUpdates (inside the mount transaction) and layoutSubviews,
 +// instead of the previous setNeedsDisplay/drawRect indirection: waiting for the
@@ -107,14 +146,17 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
  {
    if (!_state) {
      return;
-@@ -116,19 +165,23 @@ - (void)drawRect:(CGRect)rect
- 
+@@ -116,19 +191,23 @@
+-
++
    const auto &props = *std::static_pointer_cast<RNUITextViewProps const>(_props);
- 
+-
++
 -  const auto attrString = _state->getData().attributedString;
 -  const auto convertedAttrString = RCTNSAttributedStringFromAttributedString(attrString);
 +  const auto &attrString = _state->getData().attributedString;
- 
+-
++
    // Setting attributedText clears any active text selection, and re-assigning
    // the frame triggers a layout flush that has the same effect. Bail out
    // entirely when nothing actually changed so a JS-side state update made in
@@ -127,18 +169,22 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
    if (!textChanged && !frameChanged) {
      return;
    }
-+  const auto convertedAttrString = RCTNSAttributedStringFromAttributedString(attrString);
++  const auto convertedAttrString = RNUITextViewParagraphString(attrString);
    if (textChanged) {
 +    _lastAppliedAttributedString = attrString;
 +    _hasAppliedText = YES;
      // Reassigning attributedText clears any active selection. Save it and
      // restore after, while suppressing the synthetic textViewDidChangeSelection
      // events the clear-then-restore would otherwise produce — those would
-@@ -145,27 +198,56 @@ - (void)drawRect:(CGRect)rect
+@@ -144,28 +223,59 @@
+   if (frameChanged) {
      _textView.frame = _view.frame;
    }
- 
+-
 -  __block std::vector<std::string> lines;
++  // Applying text can clear or restore selection while JS events are suppressed.
++  [self syncOutsideTapRecognizer];
++
 +  os_log_debug(OS_LOG_DEFAULT, "[RNUITextView] apply tag=%ld len=%lu textChanged=%d frameChanged=%d",
 +               (long)self.tag, (unsigned long)convertedAttrString.length, textChanged, frameChanged);
 +
@@ -161,18 +207,19 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 -    // 18, so cap explicitly.
 -    if (maxLines > 0 && lines.size() >= (size_t)maxLines) {
 -      *stop = YES;
-+  _textApplyGeneration += 1;
-+  const NSUInteger applyGeneration = _textApplyGeneration;
-+  dispatch_async(dispatch_get_main_queue(), ^{
-+    if (self->_eventEmitter == nullptr) {
-+      return;
-     }
+-    }
 -  }];
 -
 -  if (_eventEmitter != nullptr) {
 -    std::dynamic_pointer_cast<const facebook::react::RNUITextViewEventEmitter>(_eventEmitter)
 -    ->onTextLayout(facebook::react::RNUITextViewEventEmitter::OnTextLayout{static_cast<int>(self.tag), lines});
 -  };
++  _textApplyGeneration += 1;
++  const NSUInteger applyGeneration = _textApplyGeneration;
++  dispatch_async(dispatch_get_main_queue(), ^{
++    if (self->_eventEmitter == nullptr) {
++      return;
++    }
 +    // Staleness guard (review P1): by the time this deferred block runs, the same view may
 +    // have been re-applied (streaming update) or recycled. The generation counter marks the
 +    // block as superseded even when the newer text has the same length (same-length rewrites
@@ -208,20 +255,36 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +    };
 +  });
  }
- 
+-
++
  - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &)oldProps
-@@ -181,6 +263,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+@@ -179,6 +289,14 @@
+-
++
+   if (oldViewProps.selectable != newViewProps.selectable) {
      _textView.selectable = newViewProps.selectable;
-   }
- 
++  }
++
 +  if (oldViewProps.menuActionLabel != newViewProps.menuActionLabel) {
 +    _menuActionLabel = [NSString stringWithUTF8String:newViewProps.menuActionLabel.c_str()];
 +  }
 +
++  if (oldViewProps.sideChatMenuActionLabel != newViewProps.sideChatMenuActionLabel) {
++    _sideChatMenuActionLabel = [NSString stringWithUTF8String:newViewProps.sideChatMenuActionLabel.c_str()];
+   }
+-
++
    if (oldViewProps.allowFontScaling != newViewProps.allowFontScaling) {
-     if (@available(iOS 11.0, *)) {
-       _textView.adjustsFontForContentSizeCategory = newViewProps.allowFontScaling;
-@@ -215,7 +301,15 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+@@ -209,13 +327,22 @@
+   }
+-
++
+   [super updateProps:props oldProps:oldProps];
++  [self syncOutsideTapRecognizer];
+ }
+-
++
+ // See RCTParagraphComponentView
  - (void)updateState:(const facebook::react::State::Shared &)state oldState:(const facebook::react::State::Shared &)oldState
  {
    _state = std::static_pointer_cast<const RNUITextViewShadowNode::ConcreteState>(state);
@@ -236,9 +299,36 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +  // screen, so a recycled view never renders a blank frame first.
 +  [self applyStateIfNeeded];
  }
- 
+-
++
  // MARK: - UIGestureRecognizerDelegate
-@@ -297,4 +391,10 @@
+@@ -229,7 +356,7 @@
+ {
+   if (gestureRecognizer == _outsideTapRecognizer) {
+     UIWindow *window = touch.window;
+-    if (!window) {
++    if (!window || window != self.window || ![self hasActiveTextSelection]) {
+       return NO;
+     }
+     UIView *hitView = [window hitTest:[touch locationInView:nil] withEvent:nil];
+@@ -243,11 +370,13 @@
+   // Defer past the current event loop turn so any in-flight edit-menu action
+   // (Copy / Define / Look Up / …) reads the live selection before we clear it.
+   UITextView *textView = _textView;
++  __weak RNUITextView *weakSelf = self;
+   dispatch_async(dispatch_get_main_queue(), ^{
+     UITextRange *range = textView.selectedTextRange;
+     if (range != nil && !range.isEmpty) {
+       textView.selectedTextRange = nil;
+     }
++    [weakSelf syncOutsideTapRecognizer];
+   });
+ }
+-
++
+@@ -296,6 +425,12 @@
+-
++
  - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
  {
 +  // Long presses also report movement and release. Dispatch the action only
@@ -249,7 +339,19 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +
    const auto location = [self getLocationOfPress:sender];
    const auto child = [self getTouchChild:location];
-@@ -328,6 +428,230 @@ - (void)textViewDidChangeSelection:(UITextView *)textView
+-
++
+@@ -308,6 +443,8 @@
+-
++
+ - (void)textViewDidChangeSelection:(UITextView *)textView
+ {
++  // Native cleanup must also work without a JS listener and during text updates.
++  [self syncOutsideTapRecognizer];
+   if (_suppressSelectionChange) {
+     return;
+   }
+@@ -328,6 +465,249 @@
        static_cast<int>(selectedRange.location),
        static_cast<int>(selectedRange.location + selectedRange.length),
      });
@@ -267,32 +369,51 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +  editMenuForTextInRange:(NSRange)range
 +        suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0))
 +{
-+  if (_menuActionLabel.length == 0 || range.length == 0) {
++  if (range.length == 0) {
 +    return [UIMenu menuWithChildren:suggestedActions];
 +  }
 +  __weak RNUITextView *weakSelf = self;
-+  UIAction *customAction = [UIAction actionWithTitle:_menuActionLabel
-+                                               image:nil
-+                                          identifier:nil
-+                                             handler:^(__kindof UIAction *action) {
++  void (^performAction)(BOOL) = ^(BOOL sideChat) {
 +    RNUITextView *strongSelf = weakSelf;
 +    if (strongSelf == nil || strongSelf->_eventEmitter == nullptr) {
 +      return;
 +    }
-+    std::dynamic_pointer_cast<const facebook::react::RNUITextViewEventEmitter>(strongSelf->_eventEmitter)
-+      ->onMenuAction(facebook::react::RNUITextViewEventEmitter::OnMenuAction{
++    // Use the live range after any handle adjustment, not the menu's original range.
++    const NSRange selection = strongSelf->_textView.selectedRange;
++    if (selection.location == NSNotFound || selection.length == 0 ||
++        NSMaxRange(selection) > strongSelf->_textView.text.length) {
++      return;
++    }
++    auto emitter = std::dynamic_pointer_cast<const facebook::react::RNUITextViewEventEmitter>(strongSelf->_eventEmitter);
++    if (sideChat) {
++      emitter->onSideChatMenuAction(facebook::react::RNUITextViewEventEmitter::OnSideChatMenuAction{
 +        static_cast<int>(strongSelf.tag),
-+        static_cast<int>(range.location),
-+        static_cast<int>(range.location + range.length),
++        static_cast<int>(selection.location),
++        static_cast<int>(NSMaxRange(selection)),
 +      });
-+    // Clear the selection once the action is consumed; defer past menu dismissal
-+    // so the system teardown never races a live selection mutation.
++    } else {
++      emitter->onMenuAction(facebook::react::RNUITextViewEventEmitter::OnMenuAction{
++        static_cast<int>(strongSelf.tag),
++        static_cast<int>(selection.location),
++        static_cast<int>(NSMaxRange(selection)),
++      });
++    }
++    // Clear after dismissal so the system teardown never races a selection mutation.
 +    UITextView *innerTextView = strongSelf->_textView;
 +    dispatch_async(dispatch_get_main_queue(), ^{
 +      innerTextView.selectedTextRange = nil;
++      [weakSelf syncOutsideTapRecognizer];
 +    });
-+  }];
-+  NSMutableArray<UIMenuElement *> *children = [NSMutableArray arrayWithObject:customAction];
++  };
++  NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
++  if (_menuActionLabel.length > 0) {
++    [children addObject:[UIAction actionWithTitle:_menuActionLabel image:nil identifier:nil
++      handler:^(__kindof UIAction *action) { performAction(NO); }]];
++  }
++  if (_sideChatMenuActionLabel.length > 0) {
++    [children addObject:[UIAction actionWithTitle:_sideChatMenuActionLabel image:nil identifier:nil
++      handler:^(__kindof UIAction *action) { performAction(YES); }]];
++  }
 +  [children addObjectsFromArray:suggestedActions];
 +  return [UIMenu menuWithChildren:children];
 +}
@@ -478,16 +599,81 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..51594cc1c7587feb5dbc3ce00e745e65
 +  }
 +  return nil;
  }
- 
+-
++
  Class<RCTComponentViewProtocol> RNUITextViewCls(void)
+diff --git a/ios/RNUITextViewParagraph.h b/ios/RNUITextViewParagraph.h
+new file mode 100644
+--- /dev/null
++++ b/ios/RNUITextViewParagraph.h
+@@ -0,0 +1,10 @@
++#pragma once
++
++#include <memory>
++#include <react/renderer/attributedstring/AttributedString.h>
++
++std::shared_ptr<void> RNUITextViewParagraphBox(const facebook::react::AttributedString &source);
++#ifdef __OBJC__
++#import <Foundation/Foundation.h>
++NSAttributedString *RNUITextViewParagraphString(const facebook::react::AttributedString &source);
++#endif
+diff --git a/ios/RNUITextViewParagraph.mm b/ios/RNUITextViewParagraph.mm
+new file mode 100644
+--- /dev/null
++++ b/ios/RNUITextViewParagraph.mm
+@@ -0,0 +1,37 @@
++#import "RNUITextViewParagraph.h"
++#import <UIKit/UIKit.h>
++#import <react/renderer/textlayoutmanager/RCTAttributedTextUtils.h>
++#import <react/utils/ManagedObjectWrapper.h>
++#include <cmath>
++
++NSAttributedString *RNUITextViewParagraphString(
++    const facebook::react::AttributedString &source) {
++  NSMutableAttributedString *result =
++      [RCTNSAttributedStringFromAttributedString(source) mutableCopy];
++  NSUInteger offset = 0;
++  for (const auto &fragment : source.getFragments()) {
++    NSString *text = [[NSString alloc] initWithBytes:fragment.string.data()
++        length:fragment.string.size() encoding:NSUTF8StringEncoding];
++    const NSRange range = NSMakeRange(offset, text.length);
++    offset += text.length;
++    for (const auto &effect : fragment.textAttributes.textEffects) {
++      if (effect.name != "uitextview-paragraph-indent" || range.length == 0) continue;
++      const double head = effect.props["head"].asDouble();
++      const double first = effect.props["first"].asDouble();
++      if (!std::isfinite(head) || !std::isfinite(first)) continue;
++      // Preserve each fragment's typography (e.g. headings / inline code).
++      [result enumerateAttribute:NSParagraphStyleAttributeName inRange:range options:0
++          usingBlock:^(NSParagraphStyle *style, NSRange part, BOOL *) {
++        NSMutableParagraphStyle *paragraph = style ? [style mutableCopy] : [NSMutableParagraphStyle new];
++        paragraph.headIndent = MAX(0, head);
++        paragraph.firstLineHeadIndent = MAX(0, first);
++        [result addAttribute:NSParagraphStyleAttributeName value:paragraph range:part];
++      }];
++    }
++  }
++  return result;
++}
++
++std::shared_ptr<void> RNUITextViewParagraphBox(const facebook::react::AttributedString &source) {
++  return facebook::react::wrapManagedObject(RNUITextViewParagraphString(source));
++}
 diff --git a/ios/RNUITextViewShadowNode.cpp b/ios/RNUITextViewShadowNode.cpp
-index 8b39111b9b945527e48ab3d93e5619427385e4ac..3b8260260b9363fd7797ab502fc25f75d899a086 100644
 --- a/ios/RNUITextViewShadowNode.cpp
 +++ b/ios/RNUITextViewShadowNode.cpp
-@@ -28,15 +28,32 @@ Size RNUITextViewShadowNode::measureContent(
+@@ -1,4 +1,5 @@
+ #include "RNUITextViewShadowNode.h"
++#import "RNUITextViewParagraph.h"
+ #include "RNUITextViewChildShadowNode.h"
+ #include <react/renderer/components/view/ViewShadowNode.h>
+-
++
+@@ -28,15 +29,40 @@
        paragraphAttributes.ellipsizeMode = EllipsizeMode::Clip;
      }
- 
+-
++
 -    auto baseTextAttributes = TextAttributes::defaultTextAttributes();
 -    baseTextAttributes.backgroundColor = baseProps.backgroundColor;
 -    baseTextAttributes.allowFontScaling = baseProps.allowFontScaling;
@@ -504,8 +690,16 @@ index 8b39111b9b945527e48ab3d93e5619427385e4ac..3b8260260b9363fd7797ab502fc25f75
 +    textLayoutContext.pointScaleFactor = layoutContext.pointScaleFactor;
 +    const auto textLayoutManager = std::make_shared<const TextLayoutManager>(getContextContainer());
 +        
++    bool hasParagraphIndent = false;
++    for (const auto &fragment : _attributedString.getFragments()) {
++      hasParagraphIndent |= !fragment.textAttributes.textEffects.empty();
++    }
++    // Native paragraph indents must participate in height measurement too.
++    auto measuredString = hasParagraphIndent
++        ? AttributedStringBox{RNUITextViewParagraphBox(_attributedString)}
++        : AttributedStringBox{_attributedString};
 +    return textLayoutManager->measure(
-+      AttributedStringBox{_attributedString},
++      measuredString,
 +      paragraphAttributes,
 +      textLayoutContext,
 +      layoutConstraints
@@ -522,7 +716,20 @@ index 8b39111b9b945527e48ab3d93e5619427385e4ac..3b8260260b9363fd7797ab502fc25f75
      auto baseAttributedString = AttributedString{};
      const auto &children = getChildren();
      for (size_t i = 0; i < children.size(); i++) {
-@@ -119,24 +136,27 @@ Size RNUITextViewShadowNode::measureContent(
+@@ -50,6 +76,12 @@
+         textAttributes.backgroundColor = props.backgroundColor;
+         textAttributes.fontSize = props.fontSize * fontSizeMultiplier;
+         textAttributes.lineHeight = props.lineHeight * fontSizeMultiplier;
++        if (props.paragraphIndent > 0 || props.paragraphFirstLineIndent > 0) {
++          textAttributes.textEffects.push_back(TextEffectInfo{
++            "uitextview-paragraph-indent",
++            folly::dynamic::object("head", props.paragraphIndent * fontSizeMultiplier)
++                ("first", props.paragraphFirstLineIndent * fontSizeMultiplier)});
++        }
+         textAttributes.foregroundColor = props.color;
+         textAttributes.textShadowColor = props.shadowColor;
+         textAttributes.textShadowOffset = props.shadowOffset;
+@@ -119,24 +151,27 @@
        }
      }
      
@@ -540,7 +747,8 @@ index 8b39111b9b945527e48ab3d93e5619427385e4ac..3b8260260b9363fd7797ab502fc25f75
 -    ).size;
 +    return baseAttributedString;
  }
- 
+-
++
  void RNUITextViewShadowNode::layout(LayoutContext layoutContext) {
    ensureUnsealed();
 +  Float fontSizeMultiplier = 1.0;
@@ -564,23 +772,34 @@ index 8b39111b9b945527e48ab3d93e5619427385e4ac..3b8260260b9363fd7797ab502fc25f75
  }
  }
 diff --git a/ios/RNUITextViewShadowNode.h b/ios/RNUITextViewShadowNode.h
-index 27797444bfb990b51c5d63d170d362596a384415..b9ba5de9e034f40005e7a555a7a6cdeca6b5cb2c 100644
 --- a/ios/RNUITextViewShadowNode.h
 +++ b/ios/RNUITextViewShadowNode.h
-@@ -43,6 +43,8 @@ public:
+@@ -43,6 +43,8 @@
        const LayoutConstraints& layoutConstraints) const override;
- 
+-
++
  private:
 +  AttributedString buildAttributedString(Float fontSizeMultiplier) const;
 +
    mutable AttributedString _attributedString;
  };
  } // namespace facebook::React
+diff --git a/lib/commonjs/RNUITextViewChildNativeComponent.ts b/lib/commonjs/RNUITextViewChildNativeComponent.ts
+--- a/lib/commonjs/RNUITextViewChildNativeComponent.ts
++++ b/lib/commonjs/RNUITextViewChildNativeComponent.ts
+@@ -36,6 +36,8 @@
+   fontWeight?: WithDefault<NativeFontWeight, 'normal'>
+   fontFamily?: string
+   letterSpacing?: Float
++  paragraphIndent?: Float
++  paragraphFirstLineIndent?: Float
+   lineHeight?: Float
+   textDecorationLine?: WithDefault<TextDecorationLine, 'none'>
+   textDecorationStyle?: WithDefault<TextDecorationStyle, 'solid'>
 diff --git a/lib/commonjs/RNUITextViewNativeComponent.ts b/lib/commonjs/RNUITextViewNativeComponent.ts
-index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81ec290410 100644
 --- a/lib/commonjs/RNUITextViewNativeComponent.ts
 +++ b/lib/commonjs/RNUITextViewNativeComponent.ts
-@@ -32,6 +32,12 @@ interface NativeProps extends ViewProps {
+@@ -32,6 +32,14 @@
    allowFontScaling?: WithDefault<boolean, true>
    ellipsizeMode?: WithDefault<EllipsizeMode, 'tail'>
    selectable?: boolean
@@ -590,10 +809,12 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * unset renders no custom item. iOS 16+ only (editMenuForTextInRange).
 +   */
 +  menuActionLabel?: string
++  /** Optional second action, placed after menuActionLabel. */
++  sideChatMenuActionLabel?: string
    onTextLayout?: BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
-@@ -48,6 +54,12 @@ interface NativeProps extends ViewProps {
+@@ -48,6 +56,13 @@
     * ```
     */
    onSelectionChange?: BubblingEventHandler<SelectionChangeEvent>
@@ -603,14 +824,210 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * the selection after emitting.
 +   */
 +  onMenuAction?: BubblingEventHandler<SelectionChangeEvent>
++  onSideChatMenuAction?: BubblingEventHandler<SelectionChangeEvent>
  }
- 
+-
++
  export default codegenNativeComponent<NativeProps>('RNUITextView', {
+diff --git a/lib/commonjs/Text.js b/lib/commonjs/Text.js
+--- a/lib/commonjs/Text.js
++++ b/lib/commonjs/Text.js
+@@ -1,111 +1,76 @@
+ "use strict";
+-
+-Object.defineProperty(exports, "__esModule", {
+-  value: true
+-});
++var __importDefault = (this && this.__importDefault) || function (mod) {
++    return (mod && mod.__esModule) ? mod : { "default": mod };
++};
++Object.defineProperty(exports, "__esModule", { value: true });
+ exports.UITextView = UITextView;
+-var _react = _interopRequireDefault(require("react"));
+-var _reactNative = require("react-native");
+-var _RNUITextViewChildNativeComponent = _interopRequireDefault(require("./RNUITextViewChildNativeComponent"));
+-var _RNUITextViewNativeComponent = _interopRequireDefault(require("./RNUITextViewNativeComponent"));
+-var _util = require("./util.js");
+-var _jsxRuntime = require("react/jsx-runtime");
+-function _interopRequireDefault(e) { return e && e.__esModule ? e : { default: e }; }
+-const TextAncestorContext = /*#__PURE__*/_react.default.createContext([false, _reactNative.StyleSheet.create({})]);
++const jsx_runtime_1 = require("react/jsx-runtime");
++const react_1 = __importDefault(require("react"));
++const react_native_1 = require("react-native");
++const RNUITextViewChildNativeComponent_1 = __importDefault(require("./RNUITextViewChildNativeComponent"));
++const RNUITextViewNativeComponent_1 = __importDefault(require("./RNUITextViewNativeComponent"));
++const util_1 = require("./util");
++const TextAncestorContext = react_1.default.createContext([
++    false,
++    react_native_1.StyleSheet.create({}),
++]);
+ const textDefaults = {
+-  allowFontScaling: true,
+-  selectable: true
++    allowFontScaling: true,
++    selectable: true,
+ };
+-const useTextAncestorContext = () => _react.default.useContext(TextAncestorContext);
+-
+-/**
+- * Event fired by `onSelectionChange`. `start`/`end` are 0-based UTF-16 indices
+- * into the rendered string. `start === end` means the selection was cleared.
+- */
+-
+-function UITextViewChild({
+-  style,
+-  children,
+-  ...rest
+-}) {
+-  const [isAncestor, rootStyle] = useTextAncestorContext();
+-
+-  // Flatten the styles, and apply the root styles when needed
+-  const flattenedStyle = _react.default.useMemo(() => (0, _util.flattenStyles)(rootStyle, style), [rootStyle, style]);
+-  if (!isAncestor) {
+-    return /*#__PURE__*/(0, _jsxRuntime.jsx)(TextAncestorContext.Provider, {
+-      value: [true, flattenedStyle],
+-      children: /*#__PURE__*/(0, _jsxRuntime.jsx)(_RNUITextViewNativeComponent.default, {
+-        ...textDefaults,
+-        ...rest,
+-        // ellipsizeMode={rest.ellipsizeMode ?? rest.lineBreakMode ?? 'tail'}
+-        style: [flattenedStyle]
+-        // @ts-expect-error Weirdness
+-        ,
+-        onPress: undefined,
+-        onLongPress: undefined,
+-        children: _react.default.Children.toArray(children).map((c, index) => {
+-          if (/*#__PURE__*/_react.default.isValidElement(c)) {
+-            return c;
+-          } else if (typeof c === 'string' || typeof c === 'number') {
+-            return (
+-              /*#__PURE__*/
+-              // @ts-expect-error @TODO fix this type
+-              (0, _jsxRuntime.jsx)(_RNUITextViewChildNativeComponent.default, {
+-                style: flattenedStyle,
+-                text: c.toString(),
+-                ...rest
+-              }, index)
+-            );
+-          }
+-          return null;
+-        })
+-      })
+-    });
+-  } else {
+-    return /*#__PURE__*/(0, _jsxRuntime.jsx)(_jsxRuntime.Fragment, {
+-      children: _react.default.Children.toArray(children).map((c, index) => {
+-        if (/*#__PURE__*/_react.default.isValidElement(c)) {
+-          return c;
+-        } else if (typeof c === 'string' || typeof c === 'number') {
+-          return (
+-            /*#__PURE__*/
+-            // @ts-expect-error @TODO fix this type
+-            (0, _jsxRuntime.jsx)(_RNUITextViewChildNativeComponent.default, {
+-              style: flattenedStyle,
+-              text: c.toString(),
+-              ...rest
+-            }, index)
+-          );
+-        }
+-        return null;
+-      })
+-    });
+-  }
++const useTextAncestorContext = () => react_1.default.useContext(TextAncestorContext);
++const ParagraphIndentContext = react_1.default.createContext({});
++function UITextViewChild({ style, children, ...rest }) {
++    const [isAncestor, rootStyle] = useTextAncestorContext();
++    const inheritedIndent = react_1.default.useContext(ParagraphIndentContext);
++    const paragraphIndent = react_1.default.useMemo(() => ({
++        paragraphIndent: rest.paragraphIndent ?? inheritedIndent.paragraphIndent,
++        paragraphFirstLineIndent: rest.paragraphFirstLineIndent ?? inheritedIndent.paragraphFirstLineIndent,
++    }), [rest.paragraphIndent, rest.paragraphFirstLineIndent, inheritedIndent]);
++    // Flatten the styles, and apply the root styles when needed
++    const flattenedStyle = react_1.default.useMemo(() => (0, util_1.flattenStyles)(rootStyle, style), [rootStyle, style]);
++    if (!isAncestor) {
++        return ((0, jsx_runtime_1.jsx)(ParagraphIndentContext.Provider, { value: paragraphIndent, children: (0, jsx_runtime_1.jsx)(TextAncestorContext.Provider, { value: [true, flattenedStyle], children: (0, jsx_runtime_1.jsx)(RNUITextViewNativeComponent_1.default, { ...textDefaults, ...rest,
++                    // ellipsizeMode={rest.ellipsizeMode ?? rest.lineBreakMode ?? 'tail'}
++                    style: [flattenedStyle],
++                    // @ts-expect-error Weirdness
++                    onPress: undefined, onLongPress: undefined, children: react_1.default.Children.toArray(children).map((c, index) => {
++                        if (react_1.default.isValidElement(c)) {
++                            return c;
++                        }
++                        else if (typeof c === 'string' || typeof c === 'number') {
++                            return (
++                            // @ts-expect-error @TODO fix this type
++                            (0, jsx_runtime_1.jsx)(RNUITextViewChildNativeComponent_1.default, { style: flattenedStyle, text: c.toString(), ...rest, ...paragraphIndent }, index));
++                        }
++                        return null;
++                    }) }) }) }));
++    }
++    else {
++        return ((0, jsx_runtime_1.jsx)(ParagraphIndentContext.Provider, { value: paragraphIndent, children: react_1.default.Children.toArray(children).map((c, index) => {
++                if (react_1.default.isValidElement(c)) {
++                    return c;
++                }
++                else if (typeof c === 'string' || typeof c === 'number') {
++                    return (
++                    // @ts-expect-error @TODO fix this type
++                    (0, jsx_runtime_1.jsx)(RNUITextViewChildNativeComponent_1.default, { style: flattenedStyle, text: c.toString(), ...rest, ...paragraphIndent }, index));
++                }
++                return null;
++            }) }));
++    }
+ }
+ function UITextViewInner(props) {
+-  const [isAncestor] = useTextAncestorContext();
+-
+-  // Even if the uiTextView prop is set, we can still default to using
+-  // normal selection (i.e. base RN text) if the text doesn't need to be
+-  // selectable
+-  if ((!props.selectable || !props.uiTextView) && !isAncestor) {
+-    return /*#__PURE__*/(0, _jsxRuntime.jsx)(_reactNative.Text, {
+-      ...props
+-    });
+-  }
+-  return /*#__PURE__*/(0, _jsxRuntime.jsx)(UITextViewChild, {
+-    ...props
+-  });
++    const [isAncestor] = useTextAncestorContext();
++    // Explicit native layout also supports non-selectable streaming paragraphs.
++    if (!props.uiTextView && !isAncestor) {
++        return (0, jsx_runtime_1.jsx)(react_native_1.Text, { ...props });
++    }
++    return (0, jsx_runtime_1.jsx)(UITextViewChild, { ...props });
+ }
+ function UITextView(props) {
+-  if (_reactNative.Platform.OS !== 'ios') {
+-    return /*#__PURE__*/(0, _jsxRuntime.jsx)(_reactNative.Text, {
+-      ...props
+-    });
+-  }
+-  return /*#__PURE__*/(0, _jsxRuntime.jsx)(UITextViewInner, {
+-    ...props
+-  });
++    if (react_native_1.Platform.OS !== 'ios') {
++        return (0, jsx_runtime_1.jsx)(react_native_1.Text, { ...props });
++    }
++    return (0, jsx_runtime_1.jsx)(UITextViewInner, { ...props });
+ }
+-//# sourceMappingURL=Text.js.map
+\ No newline at end of file
+diff --git a/lib/module/RNUITextViewChildNativeComponent.ts b/lib/module/RNUITextViewChildNativeComponent.ts
+--- a/lib/module/RNUITextViewChildNativeComponent.ts
++++ b/lib/module/RNUITextViewChildNativeComponent.ts
+@@ -36,6 +36,8 @@
+   fontWeight?: WithDefault<NativeFontWeight, 'normal'>
+   fontFamily?: string
+   letterSpacing?: Float
++  paragraphIndent?: Float
++  paragraphFirstLineIndent?: Float
+   lineHeight?: Float
+   textDecorationLine?: WithDefault<TextDecorationLine, 'none'>
+   textDecorationStyle?: WithDefault<TextDecorationStyle, 'solid'>
 diff --git a/lib/module/RNUITextViewNativeComponent.ts b/lib/module/RNUITextViewNativeComponent.ts
-index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81ec290410 100644
 --- a/lib/module/RNUITextViewNativeComponent.ts
 +++ b/lib/module/RNUITextViewNativeComponent.ts
-@@ -32,6 +32,12 @@ interface NativeProps extends ViewProps {
+@@ -32,6 +32,14 @@
    allowFontScaling?: WithDefault<boolean, true>
    ellipsizeMode?: WithDefault<EllipsizeMode, 'tail'>
    selectable?: boolean
@@ -620,10 +1037,12 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * unset renders no custom item. iOS 16+ only (editMenuForTextInRange).
 +   */
 +  menuActionLabel?: string
++  /** Optional second action, placed after menuActionLabel. */
++  sideChatMenuActionLabel?: string
    onTextLayout?: BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
-@@ -48,6 +54,12 @@ interface NativeProps extends ViewProps {
+@@ -48,6 +56,13 @@
     * ```
     */
    onSelectionChange?: BubblingEventHandler<SelectionChangeEvent>
@@ -633,14 +1052,221 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * the selection after emitting.
 +   */
 +  onMenuAction?: BubblingEventHandler<SelectionChangeEvent>
++  onSideChatMenuAction?: BubblingEventHandler<SelectionChangeEvent>
  }
- 
+-
++
  export default codegenNativeComponent<NativeProps>('RNUITextView', {
+diff --git a/lib/module/Text.js b/lib/module/Text.js
+--- a/lib/module/Text.js
++++ b/lib/module/Text.js
+@@ -1,106 +1,70 @@
+-"use strict";
+-
++import { jsx as _jsx } from "react/jsx-runtime";
+ import React from 'react';
+-import { Platform, StyleSheet, Text as RNText } from 'react-native';
++import { Platform, StyleSheet, Text as RNText, } from 'react-native';
+ import RNUITextViewChildNativeComponent from './RNUITextViewChildNativeComponent';
+ import RNUITextViewNativeComponent from './RNUITextViewNativeComponent';
+-import { flattenStyles } from "./util.js";
+-import { jsx as _jsx, Fragment as _Fragment } from "react/jsx-runtime";
+-const TextAncestorContext = /*#__PURE__*/React.createContext([false, StyleSheet.create({})]);
++import { flattenStyles } from './util';
++const TextAncestorContext = React.createContext([
++    false,
++    StyleSheet.create({}),
++]);
+ const textDefaults = {
+-  allowFontScaling: true,
+-  selectable: true
++    allowFontScaling: true,
++    selectable: true,
+ };
+ const useTextAncestorContext = () => React.useContext(TextAncestorContext);
+-
+-/**
+- * Event fired by `onSelectionChange`. `start`/`end` are 0-based UTF-16 indices
+- * into the rendered string. `start === end` means the selection was cleared.
+- */
+-
+-function UITextViewChild({
+-  style,
+-  children,
+-  ...rest
+-}) {
+-  const [isAncestor, rootStyle] = useTextAncestorContext();
+-
+-  // Flatten the styles, and apply the root styles when needed
+-  const flattenedStyle = React.useMemo(() => flattenStyles(rootStyle, style), [rootStyle, style]);
+-  if (!isAncestor) {
+-    return /*#__PURE__*/_jsx(TextAncestorContext.Provider, {
+-      value: [true, flattenedStyle],
+-      children: /*#__PURE__*/_jsx(RNUITextViewNativeComponent, {
+-        ...textDefaults,
+-        ...rest,
+-        // ellipsizeMode={rest.ellipsizeMode ?? rest.lineBreakMode ?? 'tail'}
+-        style: [flattenedStyle]
+-        // @ts-expect-error Weirdness
+-        ,
+-        onPress: undefined,
+-        onLongPress: undefined,
+-        children: React.Children.toArray(children).map((c, index) => {
+-          if (/*#__PURE__*/React.isValidElement(c)) {
+-            return c;
+-          } else if (typeof c === 'string' || typeof c === 'number') {
+-            return (
+-              /*#__PURE__*/
+-              // @ts-expect-error @TODO fix this type
+-              _jsx(RNUITextViewChildNativeComponent, {
+-                style: flattenedStyle,
+-                text: c.toString(),
+-                ...rest
+-              }, index)
+-            );
+-          }
+-          return null;
+-        })
+-      })
+-    });
+-  } else {
+-    return /*#__PURE__*/_jsx(_Fragment, {
+-      children: React.Children.toArray(children).map((c, index) => {
+-        if (/*#__PURE__*/React.isValidElement(c)) {
+-          return c;
+-        } else if (typeof c === 'string' || typeof c === 'number') {
+-          return (
+-            /*#__PURE__*/
+-            // @ts-expect-error @TODO fix this type
+-            _jsx(RNUITextViewChildNativeComponent, {
+-              style: flattenedStyle,
+-              text: c.toString(),
+-              ...rest
+-            }, index)
+-          );
+-        }
+-        return null;
+-      })
+-    });
+-  }
++const ParagraphIndentContext = React.createContext({});
++function UITextViewChild({ style, children, ...rest }) {
++    const [isAncestor, rootStyle] = useTextAncestorContext();
++    const inheritedIndent = React.useContext(ParagraphIndentContext);
++    const paragraphIndent = React.useMemo(() => ({
++        paragraphIndent: rest.paragraphIndent ?? inheritedIndent.paragraphIndent,
++        paragraphFirstLineIndent: rest.paragraphFirstLineIndent ?? inheritedIndent.paragraphFirstLineIndent,
++    }), [rest.paragraphIndent, rest.paragraphFirstLineIndent, inheritedIndent]);
++    // Flatten the styles, and apply the root styles when needed
++    const flattenedStyle = React.useMemo(() => flattenStyles(rootStyle, style), [rootStyle, style]);
++    if (!isAncestor) {
++        return (_jsx(ParagraphIndentContext.Provider, { value: paragraphIndent, children: _jsx(TextAncestorContext.Provider, { value: [true, flattenedStyle], children: _jsx(RNUITextViewNativeComponent, { ...textDefaults, ...rest,
++                    // ellipsizeMode={rest.ellipsizeMode ?? rest.lineBreakMode ?? 'tail'}
++                    style: [flattenedStyle],
++                    // @ts-expect-error Weirdness
++                    onPress: undefined, onLongPress: undefined, children: React.Children.toArray(children).map((c, index) => {
++                        if (React.isValidElement(c)) {
++                            return c;
++                        }
++                        else if (typeof c === 'string' || typeof c === 'number') {
++                            return (
++                            // @ts-expect-error @TODO fix this type
++                            _jsx(RNUITextViewChildNativeComponent, { style: flattenedStyle, text: c.toString(), ...rest, ...paragraphIndent }, index));
++                        }
++                        return null;
++                    }) }) }) }));
++    }
++    else {
++        return (_jsx(ParagraphIndentContext.Provider, { value: paragraphIndent, children: React.Children.toArray(children).map((c, index) => {
++                if (React.isValidElement(c)) {
++                    return c;
++                }
++                else if (typeof c === 'string' || typeof c === 'number') {
++                    return (
++                    // @ts-expect-error @TODO fix this type
++                    _jsx(RNUITextViewChildNativeComponent, { style: flattenedStyle, text: c.toString(), ...rest, ...paragraphIndent }, index));
++                }
++                return null;
++            }) }));
++    }
+ }
+ function UITextViewInner(props) {
+-  const [isAncestor] = useTextAncestorContext();
+-
+-  // Even if the uiTextView prop is set, we can still default to using
+-  // normal selection (i.e. base RN text) if the text doesn't need to be
+-  // selectable
+-  if ((!props.selectable || !props.uiTextView) && !isAncestor) {
+-    return /*#__PURE__*/_jsx(RNText, {
+-      ...props
+-    });
+-  }
+-  return /*#__PURE__*/_jsx(UITextViewChild, {
+-    ...props
+-  });
++    const [isAncestor] = useTextAncestorContext();
++    // Explicit native layout also supports non-selectable streaming paragraphs.
++    if (!props.uiTextView && !isAncestor) {
++        return _jsx(RNText, { ...props });
++    }
++    return _jsx(UITextViewChild, { ...props });
+ }
+ export function UITextView(props) {
+-  if (Platform.OS !== 'ios') {
+-    return /*#__PURE__*/_jsx(RNText, {
+-      ...props
+-    });
+-  }
+-  return /*#__PURE__*/_jsx(UITextViewInner, {
+-    ...props
+-  });
++    if (Platform.OS !== 'ios') {
++        return _jsx(RNText, { ...props });
++    }
++    return _jsx(UITextViewInner, { ...props });
+ }
+-//# sourceMappingURL=Text.js.map
+\ No newline at end of file
+diff --git a/lib/typescript/commonjs/src/Text.d.ts b/lib/typescript/commonjs/src/Text.d.ts
+--- a/lib/typescript/commonjs/src/Text.d.ts
++++ b/lib/typescript/commonjs/src/Text.d.ts
+@@ -11,6 +11,8 @@
+     };
+ };
+ type UITextViewProps = TextProps & {
++    paragraphIndent?: number;
++    paragraphFirstLineIndent?: number;
+     uiTextView?: boolean;
+     /**
+      * Fired when the native text selection changes. Only fires on iOS when
+diff --git a/lib/typescript/module/src/Text.d.ts b/lib/typescript/module/src/Text.d.ts
+--- a/lib/typescript/module/src/Text.d.ts
++++ b/lib/typescript/module/src/Text.d.ts
+@@ -11,6 +11,8 @@
+     };
+ };
+ type UITextViewProps = TextProps & {
++    paragraphIndent?: number;
++    paragraphFirstLineIndent?: number;
+     uiTextView?: boolean;
+     /**
+      * Fired when the native text selection changes. Only fires on iOS when
+diff --git a/src/RNUITextViewChildNativeComponent.ts b/src/RNUITextViewChildNativeComponent.ts
+--- a/src/RNUITextViewChildNativeComponent.ts
++++ b/src/RNUITextViewChildNativeComponent.ts
+@@ -36,6 +36,8 @@
+   fontWeight?: WithDefault<NativeFontWeight, 'normal'>
+   fontFamily?: string
+   letterSpacing?: Float
++  paragraphIndent?: Float
++  paragraphFirstLineIndent?: Float
+   lineHeight?: Float
+   textDecorationLine?: WithDefault<TextDecorationLine, 'none'>
+   textDecorationStyle?: WithDefault<TextDecorationStyle, 'solid'>
 diff --git a/src/RNUITextViewNativeComponent.ts b/src/RNUITextViewNativeComponent.ts
-index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81ec290410 100644
 --- a/src/RNUITextViewNativeComponent.ts
 +++ b/src/RNUITextViewNativeComponent.ts
-@@ -32,6 +32,12 @@ interface NativeProps extends ViewProps {
+@@ -32,6 +32,14 @@
    allowFontScaling?: WithDefault<boolean, true>
    ellipsizeMode?: WithDefault<EllipsizeMode, 'tail'>
    selectable?: boolean
@@ -650,10 +1276,12 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * unset renders no custom item. iOS 16+ only (editMenuForTextInRange).
 +   */
 +  menuActionLabel?: string
++  /** Optional second action, placed after menuActionLabel. */
++  sideChatMenuActionLabel?: string
    onTextLayout?: BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
-@@ -48,6 +54,12 @@ interface NativeProps extends ViewProps {
+@@ -48,6 +56,13 @@
     * ```
     */
    onSelectionChange?: BubblingEventHandler<SelectionChangeEvent>
@@ -663,14 +1291,28 @@ index 1c571b4ac58cf8155769e789d103f99b6146b6dd..6827cd47b34f22fecba2f885a1b41a81
 +   * the selection after emitting.
 +   */
 +  onMenuAction?: BubblingEventHandler<SelectionChangeEvent>
++  onSideChatMenuAction?: BubblingEventHandler<SelectionChangeEvent>
  }
- 
+-
++
  export default codegenNativeComponent<NativeProps>('RNUITextView', {
 diff --git a/src/Text.tsx b/src/Text.tsx
-index 840d76af5a001021b23fb83de18899f8156e1001..71c4e31e7cf288c7bc81e1d7de5e2970c5f6e018 100644
 --- a/src/Text.tsx
 +++ b/src/Text.tsx
-@@ -39,6 +39,16 @@ type UITextViewProps = TextProps & {
+@@ -30,7 +30,10 @@
+   nativeEvent: {target: number; start: number; end: number}
+ }
+-
++
+-type UITextViewProps = TextProps & {
++type ParagraphIndent = {paragraphIndent?: number; paragraphFirstLineIndent?: number}
++const ParagraphIndentContext = React.createContext<ParagraphIndent>({})
++
++type UITextViewProps = TextProps & ParagraphIndent & {
+   uiTextView?: boolean
+   /**
+    * Fired when the native text selection changes. Only fires on iOS when
+@@ -39,10 +42,27 @@
     * off this event should debounce.
     */
    onSelectionChange?: (event: SelectionChangeEvent) => void
@@ -679,11 +1321,85 @@ index 840d76af5a001021b23fb83de18899f8156e1001..71c4e31e7cf288c7bc81e1d7de5e2970
 +   * text selection (iOS 16+). Empty/unset renders no custom item.
 +   */
 +  menuActionLabel?: string
++  sideChatMenuActionLabel?: string
 +  /**
 +   * Fired when the user taps the custom edit-menu action. Payload carries the
 +   * selected range at tap time; the native side clears the selection after.
 +   */
 +  onMenuAction?: (event: SelectionChangeEvent) => void
++  onSideChatMenuAction?: (event: SelectionChangeEvent) => void
  }
- 
+-
++
  function UITextViewChild({style, children, ...rest}: UITextViewProps) {
+   const [isAncestor, rootStyle] = useTextAncestorContext()
++  const inheritedIndent = React.useContext(ParagraphIndentContext)
++  const paragraphIndent = React.useMemo(() => ({
++    paragraphIndent: rest.paragraphIndent ?? inheritedIndent.paragraphIndent,
++    paragraphFirstLineIndent: rest.paragraphFirstLineIndent ?? inheritedIndent.paragraphFirstLineIndent,
++  }), [rest.paragraphIndent, rest.paragraphFirstLineIndent, inheritedIndent])
+-
++
+   // Flatten the styles, and apply the root styles when needed
+   const flattenedStyle = React.useMemo(
+@@ -52,6 +72,7 @@
+-
++
+   if (!isAncestor) {
+     return (
++      <ParagraphIndentContext.Provider value={paragraphIndent}>
+       <TextAncestorContext.Provider value={[true, flattenedStyle]}>
+         <RNUITextViewNativeComponent
+           {...textDefaults}
+@@ -72,6 +93,7 @@
+                   style={flattenedStyle}
+                   text={c.toString()}
+                   {...rest}
++                  {...paragraphIndent}
+                 />
+               )
+             }
+@@ -79,10 +101,11 @@
+           })}
+         </RNUITextViewNativeComponent>
+       </TextAncestorContext.Provider>
++      </ParagraphIndentContext.Provider>
+     )
+   } else {
+     return (
+-      <>
++      <ParagraphIndentContext.Provider value={paragraphIndent}>
+         {React.Children.toArray(children).map((c, index) => {
+           if (React.isValidElement(c)) {
+             return c
+@@ -94,13 +117,14 @@
+                 style={flattenedStyle}
+                 text={c.toString()}
+                 {...rest}
++                {...paragraphIndent}
+               />
+             )
+           }
+-
++
+           return null
+         })}
+-      </>
++      </ParagraphIndentContext.Provider>
+     )
+   }
+ }
+@@ -108,10 +132,8 @@
+ function UITextViewInner(props: UITextViewProps) {
+   const [isAncestor] = useTextAncestorContext()
+-
++
+-  // Even if the uiTextView prop is set, we can still default to using
+-  // normal selection (i.e. base RN text) if the text doesn't need to be
+-  // selectable
+-  if ((!props.selectable || !props.uiTextView) && !isAncestor) {
++  // Explicit native layout also supports non-selectable streaming paragraphs.
++  if (!props.uiTextView && !isAncestor) {
+     return <RNText {...props} />
+   }
+   return <UITextViewChild {...props} />

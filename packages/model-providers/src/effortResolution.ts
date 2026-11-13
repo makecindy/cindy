@@ -105,6 +105,25 @@ export function resolveRequestedEffort(args: {
 }
 
 /**
+ * 远程（device-link）切模时的**展示档**：目录未知时不要展示占位档。
+ *
+ * `resolveRequestedEffort` 在目录为空时给 UI 占位 `'low'`（模型不可调档）。但远程切模时
+ * 目录为空还有第二种解释：被控端 `provider:list` 尚未回流、旧被控端不支持该通道、或控制端
+ * 镜像只聚合 cc+codex（pi 常查空）。此时把占位档当真实选择会直接渲染成「低」。
+ * 目录未知就展示会话当前档，等投影回流后自然收敛。
+ *
+ * 注意：这是显示/记忆语义，**不要**把返回值当显式档发给被控端——被控端对显式档
+ * 按目标目录硬校验（`effort-unavailable`），当前档不在目标目录里会让整个切模失败。
+ */
+export function resolveRemoteSwitchEffort(args: {
+  efforts: readonly Effort[];
+  requested: Effort;
+  currentEffort: Effort;
+}): Effort {
+  return args.efforts.length > 0 ? args.requested : args.currentEffort;
+}
+
+/**
  * 点选时交给 SET_MODEL 的原子快照。
  *
  * `resolveEffort` 在无档模型上会给 UI 占位 `'low'`。那一档不能写进运行时:
@@ -116,8 +135,8 @@ export function composeAtomicModelSelection(args: {
   efforts: readonly Effort[];
   effort: Effort;
   fastSupported: boolean;
-  requestedFast: boolean;
-}): { effort: Effort | null; fastMode: boolean } {
+  requestedFast: boolean | 'ultrafast';
+}): { effort: Effort | null; fastMode: boolean | 'ultrafast' } {
   return {
     effort: args.efforts.length === 0 ? null : args.effort,
     fastMode: args.fastSupported && args.requestedFast,

@@ -71,9 +71,9 @@ class BrowserWebviewPoolImpl {
   private pinned = new Set<string>();
 
   /**
-   * pool 的"停车区" off-screen 容器 —— 没挂到任何 tab body slot 的 wrapper
-   * 暂存在这里。位置 `left:-9999px;top:0;` 让节点接入 document 但用户看不见，
-   * 供初始 guest 物化；移入/移出这里不保证原 guest 或页面状态保留。
+   * pool 的不可见"停车区" —— 没挂到任何 tab body slot 的 wrapper 暂存在这里。
+   * 保持正常尺寸并留在宿主的合成范围内，供后台 guest 布局、接收输入和截图；
+   * 移入/移出这里不保证原 guest 或页面状态保留。
    *
    * lazy 创建:首次 acquire 时才挂到 document.body。
    */
@@ -86,9 +86,11 @@ class BrowserWebviewPoolImpl {
     }
     const div = document.createElement('div');
     div.id = POOL_CONTAINER_ID;
-    // off-screen but attached：供尚无 body slot 的 wrapper 物化 guest。
-    // 接入 document 不代表跨父节点搬动能保留同一个 webContents。
-    div.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;pointer-events:none;';
+    // A 1×1 viewport breaks layout and hit testing; an off-screen guest can
+    // also fail native capturePage with UnknownVizError. Keep it transparent
+    // at the host origin without hiding or detaching its rendering surface.
+    div.style.cssText = 'position:fixed;left:0;top:0;width:1280px;height:720px;opacity:0;z-index:-1;pointer-events:none;display:grid;grid-template-columns:1280px;grid-template-rows:720px;';
+    div.setAttribute('aria-hidden', 'true');
     document.body.appendChild(div);
     this.container = div;
     return div;
@@ -112,6 +114,8 @@ class BrowserWebviewPoolImpl {
     const container = this.ensureContainer();
     const wrapper = document.createElement('div');
     wrapper.dataset.poolTabId = tabId;
+    // Park every guest in the same cell so later pages do not stack outside
+    // the host's compositor bounds. Grid placement is inert in a visible slot.
     // wrapper 自身负责把 webview 填满它 —— caller slot 给 wrapper 多大宽高,
     // webview 跟着拉伸。display:flex 让 webview 100% 填充。
     // background 用主题 surface token(规则 16:走 token,不写 hex pair):
@@ -119,7 +123,7 @@ class BrowserWebviewPoolImpl {
     // 设 surface 色让过渡帧贴近主题(light → 浅,dark → 深),guest 加载后由
     // 网页内容覆盖。Mac 实测也会有半帧灰过渡,顺手统一处理。
     wrapper.style.cssText =
-      'position:relative;width:100%;height:100%;display:flex;background-color:var(--surface);';
+      'position:relative;width:100%;height:100%;display:flex;background-color:var(--surface);grid-area:1 / 1;';
     const webview = document.createElement('webview') as WebviewTag;
     // 强制 partition —— main 端 hardener 也会兜底,但这里显式写,debug 时更明显。
     webview.setAttribute('partition', BROWSER_PARTITION);

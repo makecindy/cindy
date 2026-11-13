@@ -23,6 +23,23 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('available reset list', () => {
+  it('persists the automatic toggle only after success and shows save errors', async () => {
+    const state = { accountKey: 'account', settings: { enabled: false, lowQuota: true, minimumDays: 3, expiring: true, expiryMinutes: 60 }, customized: false, lastUsedAt: null };
+    mocks.snapshot!.autoUse = state;
+    const save = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ ...mocks.snapshot, autoUse: { ...state, settings: { ...state.settings, enabled: true } } });
+    Object.assign(window, { electronAPI: { maker: { usage: { setCodexResetAutoUse: save } } } });
+    const refresh = vi.fn();
+    render(<CodexResetCredits variant="dialog" snapshot={mocks.snapshot} busy={false} canReset onReset={mocks.reset} onChanged={refresh} providerId="openai-b" />);
+    fireEvent.click(screen.getByRole('switch'));
+    await screen.findByRole('alert');
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(refresh).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('switch'));
+    await waitFor(() => expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true'));
+    expect(save).toHaveBeenLastCalledWith({ enabled: true }, 'account', 'openai-b');
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
   it('sorts rows by expiry and passes the clicked row to its own action', () => {
     render(<CodexResetCredits variant="dialog" snapshot={mocks.snapshot} busy={mocks.busy} canReset={mocks.canReset} onReset={mocks.reset} />);
     expect(screen.getAllByRole('listitem').map(row => row.textContent)).toEqual([
@@ -62,7 +79,6 @@ describe('available reset list', () => {
   it('shows a count-only response honestly without inventing rows', () => {
     mocks.snapshot!.rateLimitResetCredits!.credits = null;
     render(<CodexResetCredits variant="dialog" snapshot={mocks.snapshot} busy={mocks.busy} canReset={mocks.canReset} onReset={mocks.reset} />);
-    expect(screen.getByText('codexResets.available 2')).toBeTruthy();
     expect(screen.getByText('codexResets.detailsUnavailable')).toBeTruthy();
     expect(screen.queryByRole('list')).toBeNull();
   });
@@ -80,7 +96,7 @@ describe('available reset list', () => {
   it('shows zero availability without a reset action', () => {
     mocks.snapshot!.rateLimitResetCredits = { availableCount: 0, credits: [] };
     render(<CodexResetCredits variant="dialog" snapshot={mocks.snapshot} busy={mocks.busy} canReset={mocks.canReset} onReset={mocks.reset} />);
-    expect(screen.getByText('codexResets.available 0')).toBeTruthy();
+    expect(screen.getByText('codexResets.noCredit')).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
   });
 

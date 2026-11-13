@@ -41,6 +41,8 @@ const log = createLogger('maker-ipc/session-auto-title');
 export interface SessionAutoTitleRequest {
   sessionId: string;
   text: string;
+  /** Readable placeholder when generation also consumes supplementary material. */
+  placeholderText?: string;
   agentKind: AgentKind;
   /**
    * text 是否为用户真正写下的文字。false = 本地合成的描述(附件文件名 / 被引用
@@ -201,7 +203,7 @@ async function runUnsynchronized(
     return { applied: false, done: true };
   }
 
-  const placeholder = normalizeAutoTitle(seedText);
+  const placeholder = normalizeAutoTitle(request.placeholderText?.trim() || seedText);
   if (!placeholder) return { applied: false, done: false };
 
   // 合成占位只允许覆写「建会话时的裸默认标题」。已经是 fork 占位或上一条附件写下的

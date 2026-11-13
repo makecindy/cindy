@@ -1,12 +1,29 @@
 {
   "id": "wikipedia-search",
-  "match": ["wikipedia.org"],
-  "description": "用 Wikipedia 公开 MediaWiki API 搜索条目,返回 JSON(标题/摘要片段)。读接口而非扒页面。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={{query|url}}&srlimit=20&format=json&utf8=1" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "wikipedia.org"
   ],
-  "output": "{{json}}"
+  "description": "Search Wikipedia articles",
+  "access": "read",
+  "adapter": "wikipedia/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search keyword"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 10,
+      "description": "Max results"
+    },
+    "lang": {
+      "required": false,
+      "type": "str",
+      "default": "en",
+      "description": "Language code (e.g. en, zh, ja)"
+    }
+  },
+  "steps": []
 }

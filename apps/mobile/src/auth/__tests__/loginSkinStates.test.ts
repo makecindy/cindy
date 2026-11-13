@@ -90,6 +90,21 @@ function control(tree: any, id: string): any {
 }
 
 describe('production login state renderers', () => {
+  // Browser launch can fail or remain pending without a native surface. The real
+  // wait renderer must expose the failure and let its owner abandon that epoch.
+  it.each(['failure', 'pending'])('keeps the browser %s recoverable through the production wait renderer', (kind) => {
+    const reset = vi.fn();
+    const errorNode = React.createElement('LoginErrorText', { testID: 'login.error' }, 'Browser unavailable');
+    const rendered = productionRender('renderBrowserRedirect', { step: 'browser-redirect', label: 'SSO' }, {
+      auth: { loginState: { step: 'browser-redirect', label: 'SSO' }, isBusy: true }, reset, errorNode,
+    });
+    if (kind === 'failure') expect(control(rendered.tree, 'login.error')).toBeDefined();
+    const cancel = control(rendered.tree, 'login.cancelBrowserButton');
+    expect(cancel.disabled).not.toBe(true);
+    cancel.onPress();
+    expect(reset).toHaveBeenCalledOnce();
+  });
+
   it.each(['phone', 'email', 'apple', 'google', 'sso'])('routes the actual %s entry through its consent authority', (entry) => {
     const requireConsent = vi.fn();
     const state = { step: 'identifier', providers: { social: ['apple', 'google'], phone: true, email: true } };

@@ -1,12 +1,29 @@
 {
   "id": "bloomberg-feed",
-  "match": ["bloomberg.com"],
-  "description": "拉取 Bloomberg 某个频道的最新头条列表(标题、摘要、链接、配图)。走 Bloomberg 公开 RSS 源,无需登录、不碰付费墙——只拿头条元数据,不抓正文(正文是付费内容)。section 必须是真实频道 slug:markets/technology/economics/politics/industries/businessweek/bview(本配方拼成 feeds.bloomberg.com/<section>/news.rss)。综合首页是另一个独立源 feeds.bloomberg.com/news.rss(无 section 路径),不能通过本配方的 section 入参得到——section 不要填 news(会拼出不存在的 /news/news.rss)。",
-  "inputs": { "section": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://feeds.bloomberg.com/{{section}}/news.rss" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "evaluate", "as": "items", "fn": "() => { const raw = document.body.innerText || (document.documentElement && document.documentElement.textContent) || ''; if (!/<item[\\s>]/i.test(raw)) throw new Error('Bloomberg RSS 返回内容不含条目(频道名可能不对,section 须是真实 slug:markets/technology/economics/politics/industries/businessweek/bview;不要填 news——综合首页是独立源 feeds.bloomberg.com/news.rss),也可能临时不可用'); const dec = s => String(s || '').replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, '$1').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '\"').replace(/&#39;/g, \"'\").replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim(); const tag = (block, name) => { const m = block.match(new RegExp('<' + name + '(?:\\\\s[^>]*)?>([\\\\s\\\\S]*?)<\\\\/' + name + '>', 'i')); return m ? dec(m[1]) : ''; }; const out = []; const re = /<item\\b[^>]*>([\\s\\S]*?)<\\/item>/gi; let m; while ((m = re.exec(raw)) && out.length < 20) { const b = m[1]; const title = tag(b, 'title'); const link = tag(b, 'link') || tag(b, 'guid'); if (!title || !link) continue; out.push({ title, summary: tag(b, 'description'), link, pubDate: tag(b, 'pubDate') }); } return out; }" }
+  "match": [
+    "bloomberg.com"
   ],
-  "output": "{{items}}"
+  "description": "拉取 Bloomberg 某个频道的最新头条列表(标题、摘要、链接、配图)。走 Bloomberg 公开 RSS 源,无需登录、不碰付费墙——只拿头条元数据,不抓正文(正文是付费内容)。section 必须是真实频道 slug:markets/technology/economics/politics/industries/businessweek/bview(本配方拼成 feeds.bloomberg.com/<section>/news.rss)。综合首页是另一个独立源 feeds.bloomberg.com/news.rss(无 section 路径),不能通过本配方的 section 入参得到——section 不要填 news(会拼出不存在的 /news/news.rss)。",
+  "inputs": {
+    "section": {
+      "required": true
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://feeds.bloomberg.com/{{section}}/news.rss"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
+    {
+      "action": "evaluate",
+      "as": "items",
+      "fn": "() => { const raw = document.body.innerText || (document.documentElement && document.documentElement.textContent) || ''; if (!/<item[\\s>]/i.test(raw)) throw new Error('Bloomberg RSS 返回内容不含条目(频道名可能不对,section 须是真实 slug:markets/technology/economics/politics/industries/businessweek/bview;不要填 news——综合首页是独立源 feeds.bloomberg.com/news.rss),也可能临时不可用'); const dec = s => String(s || '').replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, '$1').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '\"').replace(/&#39;/g, \"'\").replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim(); const tag = (block, name) => { const m = block.match(new RegExp('<' + name + '(?:\\\\s[^>]*)?>([\\\\s\\\\S]*?)<\\\\/' + name + '>', 'i')); return m ? dec(m[1]) : ''; }; const out = []; const re = /<item\\b[^>]*>([\\s\\S]*?)<\\/item>/gi; let m; while ((m = re.exec(raw)) && out.length < 20) { const b = m[1]; const title = tag(b, 'title'); const link = tag(b, 'link') || tag(b, 'guid'); if (!title || !link) continue; out.push({ title, summary: tag(b, 'description'), link, pubDate: tag(b, 'pubDate') }); } return out; }"
+    }
+  ],
+  "output": "{{items}}",
+  "access": "read"
 }
