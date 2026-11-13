@@ -876,3 +876,58 @@ export function moveWorkspacePrefsToRenamed(
   writeStore(fp, next);
   return [...touched];
 }
+
+/**
+ * 清掉按这些项目名称存的全部偏好(项目已从侧栏移除, 或名称转给了别的目录)。
+ * 共用那一份直接删行; 各渠道的行收成「待清空」的全空行, 推给服务端后消失。
+ * 返回有行被清的渠道(调用方据此触发镜像)。
+ */
+export function clearWorkspacePrefsFor(names: readonly string[]): HookPrefsChannel[] {
+  if (names.length === 0) return [];
+  const fp = filePath();
+  const store = readStore(fp);
+  const released = new Set(names);
+  const touched = new Set<HookPrefsChannel>();
+  let changed = false;
+  const entries: WorkspacePrefsEntry[] = [];
+  for (const entry of store.entries) {
+    if (!released.has(entry.workspace)) {
+      entries.push(entry);
+      continue;
+    }
+    if (entry.channel === SHARED_PREFS_CHANNEL) {
+      changed = true;
+      continue;
+    }
+    if (isBlankRow(entry)) {
+      entries.push(entry);
+      continue;
+    }
+    changed = true;
+    touched.add(entry.channel);
+    entries.push({
+      channel: entry.channel,
+      teamId: entry.teamId,
+      workspace: entry.workspace,
+      model: null,
+      effort: null,
+      agentKind: null,
+      permissionMode: null,
+      rev: rowRev(entry) + 1,
+      dirty: true,
+    });
+  }
+  // 归属标记一并去掉: 这个名称以后若有新项目用, 从头算。
+  const sharedOrigin = { ...store.sharedOrigin };
+  for (const name of released) {
+    if (sharedOrigin[name] !== undefined) {
+      delete sharedOrigin[name];
+      changed = true;
+    }
+  }
+  if (!changed) return [];
+  const next: StoreFile = { ...store, sharedOrigin, entries };
+  if (Object.keys(sharedOrigin).length === 0) delete next.sharedOrigin;
+  writeStore(fp, next);
+  return [...touched];
+}

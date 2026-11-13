@@ -232,10 +232,10 @@ function hookDefaultInputs(
         : getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const workdirProviderId = workdirRoute?.providerId ?? null;
-  // 官方 Telegram hook 与个人 Bot 是两个独立入口。个人 Bot 使用
-  // channel='telegram'；官方群继续读取 global，避免任一设置卡静默
-  // 改写另一入口的新会话路由。
-  const imDefaults = readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined);
+  // 官方机器人与个人 Bot 是两个独立入口。个人 Bot 各用自己渠道的那份(如 channel='telegram');
+  // 官方机器人(含 Slack)统一读 global —— 没单独配置过的项目在哪个官方机器人里都按同一份
+  // 默认跑, 也避免任一个人 Bot 的设置卡静默改写官方入口的新任务路由。
+  const imDefaults = readImDefaultSettings();
   return { channel: prefsChannel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults };
 }
 

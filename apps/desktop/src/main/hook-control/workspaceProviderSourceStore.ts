@@ -203,3 +203,17 @@ export function moveWorkspaceProviderSourcesToRenamed(
   writeFileEntries(fp, entries);
   return entries;
 }
+
+/** 清掉按这些项目名称存的全部模型来源(所有渠道与共用那份); 有变化时返回新的全量条目, 否则 null。 */
+export function clearWorkspaceProviderSourcesFor(
+  names: readonly string[],
+): WorkspaceProviderSourceEntry[] | null {
+  if (names.length === 0) return null;
+  const fp = filePath();
+  const entries = readFileEntries(fp);
+  const released = new Set(names);
+  const kept = entries.filter((entry) => !released.has(entry.workspace));
+  if (kept.length === entries.length) return null;
+  writeFileEntries(fp, kept);
+  return kept;
+}

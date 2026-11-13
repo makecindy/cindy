@@ -680,7 +680,7 @@ describe('hook task model selection on next send', () => {
     expect(target.fingerprint).toBe(policy.fingerprint());
     // 所有官方机器人共用一套项目配置: 读的是共用的那一份, 不是 Telegram 自己的行。
     expect(h.getWorkspacePref).toHaveBeenCalledWith('shared', null, 'repo');
-    expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
   });
 
   // 规则: 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts)。升级后某个渠道还没连上过
@@ -3974,7 +3974,29 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     );
 
     expect(outcome.status).toBe('ok');
-    expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+  });
+
+  // 规则(2026-11-13 用户裁决): 所有官方机器人共用一套配置, 没单独配置过的项目在哪个官方机器人里
+  // 都按同一份默认跑。官方 Slack 以前另读一份自己的默认(早已没有设置入口), 现在与其它三个一致。
+  // 最小失败输入: 一条来自 Slack 的新任务。tier: unit。
+  it('官方 Slack 新任务读的也是 global 默认设置, 不再另读 slack 那一份', async () => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': { providerId: null, model: 'test-model', effort: 'high' },
+        codex: { providerId: null, model: 'gpt-5.6', effort: 'high' },
+      },
+    });
+    h.listProviders.mockResolvedValueOnce([connectedProvider('xd', [catalogModel('test-model')])]);
+    const outcome = await createMakerHookSessionRunner({ log }).run(
+      baseReq({ source: { im: 'slack', userText: 'hello' } }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+    expect(h.readImDefaultSettings).not.toHaveBeenCalledWith('slack');
   });
 
   it('新建: 当前无任何已连接来源时保持无 providerId(no-break)', async () => {

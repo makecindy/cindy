@@ -8,7 +8,7 @@
  */
 
 import type { ProjectCatalogEntry } from './projectWorkspaces.js';
-import { planProjectWorkspaces } from './projectWorkspaces.js';
+import { planProjectWorkspaces, releasedProjectNames } from './projectWorkspaces.js';
 import type { SlackHookStore } from './store.js';
 
 export interface ProjectCatalogSnapshot {
@@ -30,7 +30,12 @@ export interface ProjectWorkspaceSyncDeps {
    */
   registerDirectory(directory: string): Promise<void>;
   /** 一次整理结束(无论有没有变化)。 */
-  onSynced(result: { changed: boolean; mappingChanged: boolean }): void;
+  onSynced(result: {
+    changed: boolean;
+    mappingChanged: boolean;
+    /** 不再指着原来那个目录的名称(项目被移除, 或名称转给了别的目录)。 */
+    releasedNames: string[];
+  }): void;
   debounceMs?: number;
   log: { warn(msg: string): void };
 }
@@ -81,8 +86,14 @@ export function createProjectWorkspaceSync(deps: ProjectWorkspaceSyncDeps): Proj
       retired: state.retiredWorkspaces ?? {},
       projects: catalog.projects,
     });
+    const releasedNames = plan.changed
+      ? releasedProjectNames(
+          { workspaces: state.workspaces, retired: state.retiredWorkspaces ?? {} },
+          { workspaces: plan.workspaces, retired: plan.retired },
+        )
+      : [];
     if (plan.changed) store.applyProjectWorkspaces(plan);
-    deps.onSynced({ changed: plan.changed, mappingChanged: plan.mappingChanged });
+    deps.onSynced({ changed: plan.changed, mappingChanged: plan.mappingChanged, releasedNames });
   }
 
   function run(): Promise<void> {

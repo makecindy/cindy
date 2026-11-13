@@ -283,3 +283,22 @@ export function retiredAliasPairs(
   }
   return pairs;
 }
+
+/**
+ * 这次整理之后「不再指着原来那个目录」的名称: 项目从侧栏移除了(名称随之消失), 或名称转给了
+ * 另一个目录。按这些名称存的模型 / 权限配置属于原来的项目, 调用方据此清掉 —— 否则日后同名的
+ * 新项目会悄悄继承上一个项目的权限档。改名不算: 旧名称留作查找, 仍指着同一个目录。
+ */
+export function releasedProjectNames(
+  before: { workspaces: Readonly<Record<string, string>>; retired: Readonly<Record<string, string>> },
+  after: { workspaces: Readonly<Record<string, string>>; retired: Readonly<Record<string, string>> },
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const keyOf = (directory: string): string =>
+    projectKeyComparisonKey(`local:${directory}`, platform) ?? directory;
+  const previous = lookupWorkspaces(before.workspaces, before.retired);
+  const next = lookupWorkspaces(after.workspaces, after.retired);
+  return Object.entries(previous)
+    .filter(([name, directory]) => !Object.hasOwn(next, name) || keyOf(next[name]!) !== keyOf(directory))
+    .map(([name]) => name);
+}

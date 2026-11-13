@@ -47,12 +47,14 @@ import {
   requireString,
 } from '../utils/ipcValidate.js';
 import {
+  clearWorkspaceProviderSourcesFor,
   moveWorkspaceProviderSourcesToRenamed,
   listWorkspaceProviderSources,
   setWorkspaceProviderSource,
 } from './workspaceProviderSourceStore.js';
 import {
   applyIncomingServerWorkspacePrefs,
+  clearWorkspacePrefsFor,
   listWorkspacePrefs,
   markWorkspacePrefsMigrated,
   isSharedPrefsAdopted,
@@ -62,7 +64,11 @@ import {
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
 import { lookupWorkspaces, retiredAliasPairs } from './projectWorkspaces.js';
-import { readImDefaultSettingsState, resetImDefaultSettingsGlobal } from '../im/defaultSettingsStore.js';
+import {
+  readImDefaultSettingsState,
+  resetImDefaultSettingsChannel,
+  resetImDefaultSettingsGlobal,
+} from '../im/defaultSettingsStore.js';
 import {
   OFFICIAL_PREFS_CHANNELS,
   absorbChannelChange,
@@ -489,6 +495,25 @@ function applyRetiredProjectNames(): void {
   }
 }
 
+/**
+ * 项目从侧栏移除(或它的名称转给了别的目录)后, 清掉按这个名称存的模型、权限与来源。
+ * 不清的话, 日后同名的新项目会悄悄继承上一个项目的配置, 包括「完全访问」。
+ */
+function forgetReleasedProjectSettings(names: readonly string[]): void {
+  if (names.length === 0) return;
+  try {
+    const sources = clearWorkspaceProviderSourcesFor(names);
+    if (sources !== null) broadcastWorkspaceProviderSources(sources);
+    const channels = clearWorkspacePrefsFor(names);
+    broadcastSharedPrefs();
+    for (const channel of channels) void mirrorWorkspacePrefs(channel);
+  } catch (err) {
+    log.warn(
+      `clearing settings of removed IM projects failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 /** 官方 IM 机器人可选的项目跟随侧栏项目(见 projectWorkspaces.ts)。 */
 const projectWorkspaceSync = createProjectWorkspaceSync({
   getStore: () => store,
@@ -502,8 +527,9 @@ const projectWorkspaceSync = createProjectWorkspaceSync({
       throw new Error(`${registered.errorCode}: ${registered.message}`);
     }
   },
-  onSynced: ({ changed, mappingChanged }) => {
+  onSynced: ({ changed, mappingChanged, releasedNames }) => {
     if (!store || !manager) return;
+    forgetReleasedProjectSettings(releasedNames);
     applyRetiredProjectNames();
     // 名称清单变了要让服务端知道: 在线时重发 hello(它以最新一帧为准); 不在线时
     // 下次建连的 hello 自带新清单, 不需要为此重建连接。
@@ -1435,9 +1461,12 @@ export function startHookControlAccount(): void {
   // 旧版「新对话配置」留在盘上的全局默认: 升级时清一次(见 clearLegacyGlobalDefaultsOnce)。
   try {
     const cleared = clearLegacyGlobalDefaultsOnce({
-      isCustomized: () => readImDefaultSettingsState().isCustomized,
+      // 官方 Slack 以前另读一份自己的默认(同样早已没有设置入口), 一并清掉。
+      isCustomized: () =>
+        readImDefaultSettingsState().isCustomized || readImDefaultSettingsState('slack').isCustomized,
       reset: () => {
         resetImDefaultSettingsGlobal();
+        resetImDefaultSettingsChannel('slack');
       },
     });
     if (cleared) log.info('legacy global IM defaults cleared on upgrade');

@@ -32,6 +32,7 @@ import {
 } from '../sharedProjectPrefs';
 import {
   applyIncomingServerWorkspacePrefs,
+  clearWorkspacePrefsFor,
   getWorkspacePref,
   isSharedPrefsAdopted,
   listWorkspacePrefs,
@@ -40,7 +41,11 @@ import {
   reconcileWorkspacePrefsForMirror,
   setWorkspacePref,
 } from '../workspacePrefsStore';
-import { getWorkspaceProviderSource, setWorkspaceProviderSource } from '../workspaceProviderSourceStore';
+import {
+  clearWorkspaceProviderSourcesFor,
+  getWorkspaceProviderSource,
+  setWorkspaceProviderSource,
+} from '../workspaceProviderSourceStore';
 
 describe('sharedProjectPrefs', () => {
   beforeEach(() => {
@@ -299,6 +304,37 @@ describe('sharedProjectPrefs', () => {
     expect(clearLegacyGlobalDefaultsOnce({ isCustomized: () => false, reset })).toBe(false);
     expect(clearLegacyGlobalDefaultsOnce({ isCustomized: () => true, reset })).toBe(false);
     expect(reset).not.toHaveBeenCalled();
+  });
+
+  // 规则(2026-11-13 用户裁决): 项目移除后清掉按它的名称存的全部配置 —— 共用那份、各渠道给
+  // 服务端看的行(收成待清空, 推上去后服务端也清)、以及模型来源; 别的项目不受影响。
+  // 最小失败输入: 两个项目都有配置, 移除其中一个。tier: unit。
+  it('移除的项目: 共用配置、各渠道行与模型来源一并清掉, 其它项目不动', () => {
+    setSharedProjectPref('gone', { model: 'm1', permissionMode: 'bypassPermissions' });
+    setSharedProjectPref('kept', { model: 'm2' });
+    setWorkspaceProviderSource('shared', null, 'gone', 'p1');
+    setWorkspaceProviderSource('telegram', null, 'gone', 'p-old');
+    setWorkspaceProviderSource('shared', null, 'kept', 'p2');
+    markWorkspacePrefsMigrated('telegram');
+    adoptChannelPrefs('telegram');
+    projectSharedOntoChannel('telegram', [null]);
+
+    expect(clearWorkspaceProviderSourcesFor(['gone'])?.map((entry) => entry.workspace)).toEqual(['kept']);
+    expect(clearWorkspacePrefsFor(['gone'])).toEqual(['telegram']);
+
+    expect(listSharedProjectPrefs().map((row) => row.workspace)).toEqual(['kept']);
+    expect(getSharedProjectPref('gone')).toMatchObject({ model: null, permissionMode: null });
+    expect(getWorkspacePref('telegram', null, 'gone')).toMatchObject({ model: null, permissionMode: null });
+    expect(getWorkspacePref('telegram', null, 'kept').model).toBe('m2');
+    // 渠道那一行等着把「清空」推给服务端。
+    const pending = reconcileWorkspacePrefsForMirror('telegram', [
+      { workspace: 'gone', model: 'm1', effort: null, agentKind: null, permissionMode: 'bypassPermissions' },
+      { workspace: 'kept', model: 'm2', effort: null, agentKind: null, permissionMode: null },
+    ]).map((candidate) => candidate.prefs.workspace);
+    expect(pending).toContain('gone');
+    // 没有可清的时候不产生写入。
+    expect(clearWorkspacePrefsFor(['gone'])).toEqual([]);
+    expect(clearWorkspaceProviderSourcesFor(['gone'])).toBeNull();
   });
 
   // 持久化: 侧栏给项目改名时, 共用那份跟着挪到新名称下, 旧名称下不留行。

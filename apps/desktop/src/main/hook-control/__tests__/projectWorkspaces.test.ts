@@ -238,11 +238,45 @@ describe('createProjectWorkspaceSync', () => {
       workspaces: { cindy: '/code/cindy' },
       retiredWorkspaces: { xdmaker: '/code/cindy' },
     });
-    expect(onSynced).toHaveBeenLastCalledWith({ changed: true, mappingChanged: true });
+    // 改名不算把名称让出去: 旧名称仍指着同一个目录。
+    expect(onSynced).toHaveBeenLastCalledWith({ changed: true, mappingChanged: true, releasedNames: [] });
 
     await sync.run();
     expect(registered).toEqual(['/code/cindy']);
-    expect(onSynced).toHaveBeenLastCalledWith({ changed: false, mappingChanged: false });
+    expect(onSynced).toHaveBeenLastCalledWith({ changed: false, mappingChanged: false, releasedNames: [] });
+  });
+
+  // 规则(2026-11-13 用户裁决): 项目从侧栏移除后, 按它的名称存的模型 / 权限要清掉, 否则日后同名的
+  // 新项目会悄悄继承上一个项目的权限档(评审指出)。这里锁住「哪些名称算让出去了」:
+  // 移除的项目(含它留作查找的旧名称)、以及同一次整理里转给另一个目录的名称; 仍在的项目不算。
+  // 最小失败输入: 一个改过名的项目被移除, 同时来了一个与它同名的新项目。tier: unit。
+  it('项目移除或名称转给别的目录时, 把这些名称报给调用方去清配置', async () => {
+    const mem = memoryStore({
+      projectCatalogMigrated: true,
+      workspaces: { app: '/code/app', docs: '/code/docs' },
+      retiredWorkspaces: { 'old-app': '/code/app' },
+    });
+    const onSynced = vi.fn();
+    const sync = createProjectWorkspaceSync({
+      getStore: () => mem.store,
+      // /code/app 被移除; 另一个目录也叫 app。
+      loadCatalog: async () => ({
+        projects: [
+          { path: '/code/docs', name: 'docs' },
+          { path: '/work/app', name: 'app' },
+        ],
+        isCurrent: () => true,
+        isRemoved: () => false,
+      }),
+      registerDirectory: async () => {},
+      onSynced,
+      log: { warn: () => {} },
+    });
+
+    await sync.run();
+    expect(mem.state().workspaces).toMatchObject({ app: '/work/app', docs: '/code/docs' });
+    const released = onSynced.mock.lastCall?.[0].releasedNames as string[];
+    expect([...released].sort()).toEqual(['app', 'old-app']);
   });
 
   // PR #10291 review: 登记失败被吞掉后迁移照样记成完成, 清单随即按项目列表重排, 没登记上的
