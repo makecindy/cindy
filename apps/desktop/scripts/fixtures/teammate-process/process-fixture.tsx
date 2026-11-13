@@ -150,7 +150,11 @@ function Subject({ done, retry, artifactCase, refresh, disclosure, switched, col
     <div className="self-end p-2" data-ui-page-control><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button>
       {disclosure && <><Button data-testid="fixture-update" onClick={() => setRevision(value => value + 1)}>Update</Button><Button data-testid="fixture-send" onClick={() => tryRequestFollowLatest({ sourceSessionId: 'disclosure-fixture', currentSessionId: 'disclosure-fixture', startGeneration: readSendFollowCancelGeneration('disclosure-fixture') })}>Follow latest</Button></>}
     </div>
-    <MessageStream workingDir="" historyLoaded sessionId={disclosure ? 'disclosure-fixture' : undefined} messages={[...(disclosure ? disclosureHistory : []), ...(finished ? [...rows, { ...text('final_answer', `任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。${revision ? `\n\n补充记录 ${revision}。` : ''}`, 'final_answer'), turnCompleted: true }] : rows)]}
+    <MessageStream workingDir="" historyLoaded sessionId={disclosure ? 'disclosure-fixture' : undefined} messages={[
+      ...(disclosure ? disclosureHistory : []), ...rows,
+      ...(finished ? [{ ...text('final_answer', `任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。${revision ? `\n\n补充记录 ${revision}。` : ''}`, 'final_answer'), turnCompleted: true }]
+        : unread ? [{ ...text('final_answer', '任务与 PR 的进展正在整理。', 'final_answer'), isStreaming: true }] : []),
+    ]}
       botUnreadBoundaryAt={unread ? 1 : null}
       assistantAvatar={<span data-testid="fixture-partner-avatar"><BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" /></span>} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
   </div>;
