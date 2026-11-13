@@ -1122,7 +1122,7 @@ const GITHUB_HOST = /^(?:www\.)?github\.com$/i;
 
 function fromHostAndPath(host: string, port: string | undefined, rawPath: string): GroupRepository | null {
   const hostname = host.toLowerCase();
-  if (!HOST.test(hostname) || (port !== undefined && !/^[0-9]{1,5}$/.test(port))) return null;
+  if (!HOST.test(hostname) || (port !== undefined && !(/^[0-9]{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65535))) return null;
   const path = rawPath.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
   const parts = path.split('/');
   if (parts.length < 2 || parts.some(part => !SEGMENT.test(part) || part === '.' || part === '..')) return null;
