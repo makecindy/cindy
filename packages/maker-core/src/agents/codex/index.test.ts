@@ -11760,6 +11760,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       { format: 'nested allowed statuses', message: 'Error running remote compact task: {"code":"400","status":400,"cause":{"status_code":422}}', partial: false, completedOnly: false },
       { format: 'nested retry rate limit', message: 'Error running remote compact task: {"code":"400","status":429,"cause":{"status_code":400}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
       { format: 'nested shared retry rate limit', message: 'Error running remote compact task: {"code":"400","cause":{"code":"429"},"message":"request rejected (429)"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
+      { format: 'wrapped rate limit with exhausted retries', message: 'Error running remote compact task: {"code":"400","type":"rate_limit_error"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
       { format: 'additional details', message: 'Error running remote compact task', additionalDetails: '{"error":{"code":"400"}}', partial: false, completedOnly: false },
       { format: 'completion without error notification', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: true },
     ])('recovers LiteLLM 400 from $format without replaying completed work', async ({ partial, completedOnly, ...sample }) => {
@@ -11830,6 +11831,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","message":"Invalid model name"}' },
       { message: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'badRequest' },
       { message: '{"code":"400"}', codexErrorInfo: 'cyberPolicy' },
+      { message: '{"code":"400","type":"rate_limit_error"}' },
+      { message: '{"code":"400","type":"rate_limit_error"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","type":"connection_error"}' },
+      { message: '{"code":"400","type":"connection_error"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","type":"connection_error"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
       { message: '{"code":"400","type":"authentication_error"}' },
       { message: '{"code":"400","type":"unauthorized"}' },
       { message: '{"code":"400","message":"Unauthorized"}', codexErrorInfo: 'badRequest' },
@@ -11885,6 +11891,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'other' as const },
       { message: 'Error running remote compact task', additionalDetails: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'badRequest' as const },
       { message: '{"code":"400"}', codexErrorInfo: 'cyberPolicy' as const },
+      { message: '{"code":"400","type":"rate_limit_error"}', codexErrorInfo: 'other' as const },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","type":"connection_error"}', codexErrorInfo: 'badRequest' as const },
       { message: '{"code":"400","cause":{"code":"429","upstream":{"code":"529"}}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
     ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
       const { host, handle, events } = await start();

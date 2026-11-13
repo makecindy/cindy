@@ -11045,7 +11045,10 @@ assertRouteCurrent();
       const authenticationFailure = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|\bpermission_error\b|api key not valid|令牌|鉴权失败/i.test(text);
       // Billing depletion is terminal even when no generic quota marker exists.
       const billingDepletion = /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i.test(text);
+      // A standard rate-limit type alone does not prove daemon retries ended.
+      const unexhaustedRateLimit = !compactRateLimit && /\brate_limit_error\b/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
+        || /\bconnection_error\b/i.test(text)
         || responseStatuses.some(status => status === 408 || status === 504)
         // Preserve the provider classifier's network/timeout code contract.
         || /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ETIMEDOUT|ABORT_ERR|TimeoutError|AbortError)\b/i.test(text)
@@ -11056,6 +11059,7 @@ assertRouteCurrent();
         && !authenticationFailure
         && !matchesDeterministicUsageExhaustionText(text)
         && !billingDepletion
+        && !unexhaustedRateLimit
         && !paymentRequired
         && !forbiddenResponse
         && ((rejectedRequest && !signals.usageLimit) || compactRateLimit)
