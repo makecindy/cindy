@@ -24,9 +24,7 @@ import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy
  * 推给用户(这也是 maker-core 侧 claude translator 只透过载类的同一条理由)。
  * 将来要放开某一类, 在这里按 kind 补一条文案即可, 不要直接外发原文。
  *
- * 文案硬编码中文, 与 hook-control/interactions.ts 的卡片按钮、dispatcher.ts 的
- * NOTICE_* 同规 —— 渠道侧文案不进 renderer 的 locale 文件
- * (见 docs/dev-rules/engineering-conventions.md §5)。
+ * 文案走 imText(`imBot.text.shared.*`), 跟随主人的 Cindy 界面语言, 发送时现取。
  */
 
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
@@ -40,6 +38,7 @@ import {
 } from '@cindy/maker-core';
 
 import { isQuotaExhaustedErrorMessage } from '../../../shared/providerErrors.js';
+import { imText } from './imText';
 
 /**
  * Auto 档「自动审批不可用」-> 渠道说明。
@@ -51,20 +50,17 @@ import { isQuotaExhaustedErrorMessage } from '../../../shared/providerErrors.js'
  * 个人微信每轮都挂逐条确认策略,三个 Harness 都不允许在该策略下使用完全访问;
  * 微信提示不建议切档,只要求直接确认。
  *
- * 判据走 maker-core 的单点函数,不在这里匹配英文原文或自己拼 `[CODE]` 前缀;文案硬编码
- * 中文、不进 renderer locale(与本文件其它渠道文案同规)。
+ * 判据走 maker-core 的单点函数,不在这里匹配英文原文或自己拼 `[CODE]` 前缀;文案与桌面端
+ * 同名提示同句, 跟随界面语言。
  */
 function autoReviewUnavailableNotice(message: string, channel?: string): string | null {
   if (isAutoReviewUnavailableNotice(message)) {
-    if (channel === 'wechat') {
-      return '自动审批暂时无法给出判断，需要审批的操作已改为由你确认。'
-        + '个人微信不能使用「完全访问」，请直接确认这次操作。';
-    }
-    return '自动审批暂时无法给出判断，需要审批的操作已改为由你确认。'
-      + '想少被打断，可以把任务切到「完全访问」，但风险更高。';
+    return channel === 'wechat'
+      ? imText('imBot.text.shared.retry.autoReviewUnavailableWechat')
+      : imText('imBot.text.shared.retry.autoReviewUnavailable');
   }
   if (isAutoReviewConfirmUndeliveredNotice(message)) {
-    return '自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。';
+    return imText('imBot.text.shared.retry.autoReviewConfirmUndelivered');
   }
   return null;
 }
@@ -79,7 +75,10 @@ export function turnRetryNotice(data: unknown, options?: { channel?: string }): 
   if (autoReviewNotice) return autoReviewNotice;
   const rateLimitProgress = parseTerminalRateLimitRetryProgress(message, reason);
   if (rateLimitProgress) {
-    return `请求受到限流，正在自动重试（${rateLimitProgress.attempt}/${rateLimitProgress.maxAttempts}）…`;
+    return imText('imBot.text.shared.retry.rateLimitRetrying', {
+      attempt: rateLimitProgress.attempt,
+      maxAttempts: rateLimitProgress.maxAttempts,
+    });
   }
   return overloadRetryNotice(data);
 }
@@ -106,8 +105,11 @@ export function overloadRetryNotice(data: unknown): string | null {
   const progress = parseOverloadRetryProgress(message);
   // 次数缺省(上游没带 attempt/max_retries)时不编造分母, 只说明正在重试。
   return progress
-    ? `模型服务繁忙，正在自动重试（${progress.attempt}/${progress.maxAttempts}）…`
-    : '模型服务繁忙，正在自动重试…';
+    ? imText('imBot.text.shared.retry.overloadRetrying', {
+      attempt: progress.attempt,
+      maxAttempts: progress.maxAttempts,
+    })
+    : imText('imBot.text.shared.retry.overloadRetryingNoCount');
 }
 
 /**
@@ -129,19 +131,15 @@ export function overloadFailureNotice(
   // 条件不满足, 那些情况下一次自动重试都没发生过(review #844 codex P1)。真重试过时
   // 用户已经在退避窗口里看过「正在自动重试（N/M）」那一行, 终态只需要给下一步。
   // 与桌面端 ErrorBanner 的 overloadBusy 文案同口径。
-  return (
-    '⚠️ 模型服务繁忙：上游暂时没有可用容量。' +
-    '请直接在这里重发这条消息重试，或在 Cindy 里换一个模型。' +
-    '（在桌面端点「重试」也能继续任务，但结果不会回到这条消息里。）'
-  );
+  return imText('imBot.text.shared.retry.overloadFailed');
 }
 
 /**
  * 终态 tool-loop 保护 -> 渠道可读的安全说明。
  *
  * maker-core 同时保留了稳定 reason 和受限 toolLoop 结构, 但 message 仍可能带有
- * `missing_required_field` 等内部分类。IM 渠道没有 renderer 的 i18n 映射, 所以这里
- * 只根据白名单后的 kind/count 生成安全文案, 绝不把原始 loopHint 外发。
+ * `missing_required_field` 等内部分类。这里只根据白名单后的 kind/count 生成安全文案,
+ * 绝不把原始 loopHint 外发。
  */
 function toolLoopFailureNotice(data: unknown): string | null {
   if (!data || typeof data !== 'object') return null;
@@ -150,26 +148,29 @@ function toolLoopFailureNotice(data: unknown): string | null {
 
   const details = parseToolLoopErrorDetails(record.toolLoop);
   if (!details) {
-    return '模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。';
+    return imText('imBot.text.shared.toolLoop.generic');
   }
 
+  // 次数取自循环检测阈值, 不会是 1, 所以用普通变量 n 而不走复数分支。
   switch (details.kind) {
     case 'consecutive':
-      return `模型重复调用同一个工具 ${details.count} 次，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。`;
+      return imText('imBot.text.shared.toolLoop.consecutive', { n: details.count });
     case 'pingpong':
-      return `模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 ${details.count} 次调用后停止了本轮。可以发送新消息继续。`;
+      return imText('imBot.text.shared.toolLoop.pingpong', { n: details.count });
     case 'rotation':
-      return `模型持续轮转调用多个工具，Cindy 检测到本轮已有 ${details.count} 次调用后停止了本轮。可以发送新消息继续。`;
+      return imText('imBot.text.shared.toolLoop.rotation', { n: details.count });
     case 'contract':
-      return `模型连续触发了无效的工具调用，Cindy 已在 ${details.count} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。`;
+      return imText('imBot.text.shared.toolLoop.contract', { n: details.count });
   }
 }
 
 /**
- * 额度类失败说明的固定开头。hook 主日志只记失败类别(原文可能带用户内容),
+ * 额度类失败说明的固定开头(当前界面语言)。hook 主日志只记失败类别(原文可能带用户内容),
  * dispatcher 据此把这类失败记成 provider-quota-exhausted, 而不是 unclassified。
  */
-export const QUOTA_FAILURE_NOTICE_PREFIX = '⚠️ 供应商额度不足';
+export function quotaFailureNoticePrefix(): string {
+  return imText('imBot.text.shared.quota.prefix');
+}
 
 const SPEND_CAP_RE = /\bspend(?:ing)?[-_ ]?cap\b/i;
 const USAGE_LIMIT_RE = /\busage\s+limit\b/i;
@@ -237,8 +238,8 @@ export interface QuotaFailureNoticeOptions {
 
 function quotaRecoveryHint(options: QuotaFailureNoticeOptions): string {
   return options.surface === 'personal' && options.supportsModelCommand
-    ? '发 /model 为当前任务更换供应商或模型，再重发这条消息。'
-    : '在 Cindy 里打开这个任务，更换供应商或模型，再回到这里重发这条消息。';
+    ? imText('imBot.text.shared.quota.recoveryModelCommand')
+    : imText('imBot.text.shared.quota.recoveryOpenTask');
 }
 
 export function quotaFailureNotice(
@@ -247,21 +248,27 @@ export function quotaFailureNotice(
 ): string | null {
   if (!isQuotaExhaustionFailure(data)) return null;
   const { message, codexErrorInfo } = terminalErrorRecord(data);
-  const reason = SPEND_CAP_RE.test(message)
-    ? '已达到工作区所有者设置的花费上限'
+  const headlineKey = SPEND_CAP_RE.test(message)
+    ? 'imBot.text.shared.quota.headlineSpendCap'
     : codexErrorInfo === 'usageLimitExceeded' || USAGE_LIMIT_RE.test(message)
-      ? '账号用量已达上限'
-      : '账号余额或配额不足';
+      ? 'imBot.text.shared.quota.headlineUsageLimit'
+      : 'imBot.text.shared.quota.headlineBalance';
   const display = (value: string | null | undefined): string =>
     redactSensitiveText(value?.replace(/\s+/g, ' ').trim() ?? '').slice(0, 100);
   const label = display(options.providerLabel);
-  const who = label ? `「${label}」` : '当前供应商';
+  const who = label
+    ? imText('imBot.text.shared.quota.namedProvider', { name: label })
+    : imText('imBot.text.shared.quota.currentProvider');
+  const bot = display(options.botLabel) || imText(options.surface === 'official'
+    ? 'imBot.text.shared.quota.officialBot'
+    : 'imBot.text.shared.quota.personalBot');
   return [
-    `${QUOTA_FAILURE_NOTICE_PREFIX}：${who}${reason}，这个任务暂时无法继续。`,
-    `来源：${display(options.botLabel) || (options.surface === 'official' ? '官方 bot' : '个人 bot')}` +
-      (options.modelLabel ? ` · 模型：${display(options.modelLabel)}` : ''),
-    ...(options.taskLabel ? [`任务：${display(options.taskLabel)}`] : []),
-    ...(SPEND_CAP_RE.test(message) ? ['请联系工作区管理员调整花费上限，或更换供应商。'] : []),
+    imText(headlineKey, { prefix: quotaFailureNoticePrefix(), who }),
+    options.modelLabel
+      ? imText('imBot.text.shared.quota.sourceWithModel', { bot, model: display(options.modelLabel) })
+      : imText('imBot.text.shared.quota.source', { bot }),
+    ...(options.taskLabel ? [imText('imBot.text.shared.quota.task', { task: display(options.taskLabel) })] : []),
+    ...(SPEND_CAP_RE.test(message) ? [imText('imBot.text.shared.quota.spendCapHint')] : []),
     quotaRecoveryHint(options),
   ].join('\n');
 }
@@ -282,16 +289,20 @@ export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOpt
     const details = parseOutputLimitDetails((data as { outputLimit?: unknown }).outputLimit);
     const usage = details
       ? details.reasoningTokens === undefined
-        ? `本次模型请求已输出 ${details.outputTokens} tokens。`
-        : `本次模型请求已输出 ${details.outputTokens} tokens，其中 ${details.reasoningTokens} tokens 用于思考。`
+        ? imText('imBot.text.shared.outputLimit.usage', { outputTokens: details.outputTokens })
+        : imText('imBot.text.shared.outputLimit.usageWithReasoning', {
+          outputTokens: details.outputTokens,
+          reasoningTokens: details.reasoningTokens,
+        })
       : '';
     const guidance = details && isReasoningDominatedOutputLimit(details)
-      ? '思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。'
-      : '模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。';
-    return usage + guidance;
+      ? imText('imBot.text.shared.outputLimit.reasoningDominated')
+      : imText('imBot.text.shared.outputLimit.generic');
+    // 句间是否留空格随语言而定(中日文不留), 由 join 文案决定。
+    return usage ? imText('imBot.text.shared.outputLimit.join', { usage, guidance }) : guidance;
   }
   if (data && typeof data === 'object' && 'reason' in data && data.reason === 'silent-stop-exhausted') {
-    return '模型连续多次返回空响应，自动续跑已暂停。';
+    return imText('imBot.text.shared.outputLimit.silentStopExhausted');
   }
   const { message, errorStatus, codexErrorInfo } = terminalErrorRecord(data);
   return (

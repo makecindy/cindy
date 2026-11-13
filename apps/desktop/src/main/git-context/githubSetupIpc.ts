@@ -67,6 +67,16 @@ export function openGithubSignIn(): boolean {
   return true;
 }
 
+const connectedListeners = new Set<() => void>();
+/**
+ * Called whenever this computer's GitHub sign-in may have changed (Cindy's sign-in finished, the
+ * GitHub plugin's token changed). Main-side waiters re-read the connection themselves.
+ */
+export function onGithubConnectionChanged(listener: () => void): () => void {
+  connectedListeners.add(listener);
+  return () => { connectedListeners.delete(listener); };
+}
+
 /** Local app UI only. These channels intentionally have no device-link grant:
  * authorizing this machine's GitHub identity is not a shared-task capability. */
 export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
@@ -75,6 +85,9 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
   const changed = () => {
     getSharedGhCliTokenSource().invalidate();
     invalidateStatuses();
+    for (const listener of [...connectedListeners]) {
+      try { listener(); } catch { /* a waiter's failure never blocks the sign-in */ }
+    }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('git-context:github-connected');
     }
@@ -97,11 +110,34 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
   const unsubscribes = ['cindy-github', cindyGithubRootInstance()].map(id => getGhostSetupChangeBus().subscribe(id, (event) => {
     if (event.source === 'secret') changed();
   }));
+  const githubApp = async (action: 'status' | 'connect' | 'disconnect' | 'install') => {
+    const { getScheduleWebhookHost } = await import('../scheduler-host/webhook/runtime.js');
+    const host = getScheduleWebhookHost();
+    if (!host) return { available: false };
+    if (action === 'status') return host.githubStatus();
+    if (action === 'disconnect') { await host.disconnectGithub(); return host.githubStatus(); }
+    const owner = activeOwnerScopeKey();
+    const url = action === 'connect' ? await host.connectGithub() : (await host.githubStatus()).installUrl;
+    if (owner !== activeOwnerScopeKey()) throwIpcError('INVALID_PARAMS', 'Account changed');
+    if (typeof url !== 'string') throwIpcError('INVALID_PARAMS', 'GitHub connection unavailable');
+    const parsed = new URL(url);
+    if (parsed.origin !== 'https://github.com' || parsed.username || parsed.password
+      || !(parsed.pathname === '/login/oauth/authorize' || /^\/apps\/[a-z0-9-]+\/installations\/new$/.test(parsed.pathname))) {
+      throwIpcError('INVALID_PARAMS', 'Invalid GitHub connection URL');
+    }
+    const { shell } = await import('electron');
+    await shell.openExternal(parsed.toString());
+    return { opened: true };
+  };
   for (const [channel, handle] of [
     [
       'git-context:github-setup:connection',
       readGithubConnection,
     ],
+    ['git-context:github-app:status', () => githubApp('status')],
+    ['git-context:github-app:connect', () => githubApp('connect')],
+    ['git-context:github-app:install', () => githubApp('install')],
+    ['git-context:github-app:disconnect', () => githubApp('disconnect')],
     ['git-context:github-star:check', star.check],
     ['git-context:github-star:add', star.star],
     ['git-context:github-setup:status', () => setup.snapshot()],

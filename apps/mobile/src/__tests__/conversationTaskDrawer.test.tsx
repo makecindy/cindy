@@ -1,3 +1,5 @@
+const haptic = vi.hoisted(() => vi.fn());
+vi.mock('@/platform/haptics', () => ({ playHaptic: haptic }));
 vi.mock('@/session/TaskDrawerPresentation', () => ({ useTaskDrawerPresentation: () => null, TaskDrawerPresentation: () => null }));
 // @vitest-environment jsdom
 import { act, useState } from 'react';
@@ -13,7 +15,7 @@ let root: ReturnType<typeof createRoot>, node: HTMLDivElement, drawer: ReturnTyp
 function Probe({ persistent = false, enabled = true }: { persistent?: boolean; enabled?: boolean }) {
   drawer = useConversationTaskDrawer({ enabled, persistent, width: 400 }); return null;
 }
-beforeEach(() => { (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; node = document.createElement('div'); root = createRoot(node); });
+beforeEach(() => { haptic.mockClear(); (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; node = document.createElement('div'); root = createRoot(node); });
 afterEach(() => act(() => root.unmount()));
 it('defers the first destination until the drawer is gone, rejecting subsequent taps', () => {
   act(() => root.render(<Probe />)); act(() => drawer.openSessionListDrawer());
@@ -66,7 +68,8 @@ vi.mock('@/platform/AdaptiveWindowContext', () => ({ PaneViewportProvider: ({ ch
   useAdaptiveWindow: () => ({ width: 669, height: 951, insets: { top: 88, bottom: 34, left: 0, right: 0 },
     regularWidth: true, reservedRegionsSupported: true, regions: [], barEdge: 'none' }) }));
 vi.mock('@/session/RecentMessageHistories', () => ({ MessageHistoryOverlay: ({ children }: any) => children }));
-vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: () => null }));
+vi.mock('@/session/SessionPaneDivider', () => ({ useSessionPaneDivider: () => ({ gesture: {}, edge: null, rowInset: 0 }),
+  PaneEdgeInsetProvider: ({ children }: any) => children, usePaneEdgeInset: () => 0 }));
 vi.mock('@/session/useSessionHeaderHeight', () => ({ useSessionHeaderHeight: () => 88 }));
 vi.mock('@/session/ResidentHomeList', () => ({ useSessionSidebarWidthPreference: () => ({ width: 386, setWidth() {} }),
   useSessionPaneLayout: () => ({ persistent: state.persistent, sidebarWidth: 386, detail: { x: 0, y: 0, width: 669 }, resizeBounds: null }) }));
@@ -84,4 +87,35 @@ it('the group route wires the shared gesture and keeps one drawer while docking'
   state.persistent = false;
   act(() => root.render(<BotGroupPaneLayout><span>conversation</span></BotGroupPaneLayout>));
   expect(state.gesture.enabled).toBe(true); expect(state.pane.open).toBe(false);
+});
+
+// Unit: user-requested open feedback must not fire for aborted pulls, repeated
+// opens, or automatic persistent layout. Existing tests only check drawer state.
+it('gives one haptic for a button opening, not duplicate taps or closing', () => {
+  act(() => root.render(<Probe />));
+  act(() => { drawer.openSessionListDrawer(); drawer.openSessionListDrawer(); });
+  expect(haptic.mock.calls).toEqual([['commit']]);
+  act(() => drawer.closeSessionListDrawer());
+  act(() => drawer.handleSessionListDrawerClosed());
+  expect(haptic).toHaveBeenCalledTimes(1);
+  act(() => drawer.openSessionListDrawer());
+  expect(haptic).toHaveBeenCalledTimes(2);
+});
+it('only gives pull feedback after the gesture commits an opening', () => {
+  act(() => root.render(<Probe />));
+  act(() => state.gesture.onOpen());
+  expect(haptic).not.toHaveBeenCalled();
+  act(() => { state.gesture.onCancel(); state.gesture.onSettle(false); });
+  act(() => drawer.handleSessionListDrawerClosed());
+  expect(haptic).not.toHaveBeenCalled();
+  act(() => state.gesture.onOpen());
+  act(() => state.gesture.onSettle(true));
+  expect(haptic.mock.calls).toEqual([['commit']]);
+});
+it('keeps disabled and persistent layouts silent', () => {
+  act(() => root.render(<Probe enabled={false} />));
+  act(() => drawer.openSessionListDrawer());
+  act(() => root.render(<Probe persistent />));
+  act(() => drawer.openSessionListDrawer());
+  expect(haptic).not.toHaveBeenCalled();
 });

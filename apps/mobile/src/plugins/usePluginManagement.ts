@@ -75,6 +75,7 @@ export function usePluginManagement(
   }, [controller, online, visible, foreground]);
   useEffect(() => {
     if (!deviceId || !controller || !online || !visible || !foreground) return;
+    const release = displayReads?.retain(deviceId);
     // A reconnect can replace the read epoch without changing this chat's identity.
     if (displayReads) void controller.refresh();
     const stop = startFocusedTopicSubscription({ deviceId, owner: `plugin-management:${scope}`,
@@ -85,7 +86,7 @@ export function usePluginManagement(
         void controller.refresh();
       }
     });
-    return () => { off(); stop(); };
+    return () => { release?.(); off(); stop(); };
   }, [deviceId, controller, online, visible, foreground, onRemoteResourceChanged, subscribe, unsubscribe, connectionEpoch, scope, displayReads]);
   return publishedScope === scope
     ? { state, controller }

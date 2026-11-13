@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createLiziMcpProviders } from '../providers.js';
 import { runWithLiziMcpSessionContext } from '../session-context.js';
+import type { LiziMcpSessionContext } from '../types.js';
 
 // 捕获 createBrowserMcpServer 收到的 deps(含 wrap 后的 getRuntime),
 // 不真的起 McpServer。
@@ -46,6 +47,31 @@ function buildWrappedRuntime(factoryCtx: {
 }
 
 describe('cindy_browser provider — __mcpSessionId 注入', () => {
+  // Unit, #9825 / 4546519902: a plugin has no task bucket. The existing task
+  // attribution cases missed RSB's UI-focus fallback for this new caller.
+  it.each([
+    ['plugin', 'rsb-webview'], ['plugin', 'external'], ['plugin', 'user-browser'],
+    ['agent', 'rsb-webview'],
+  ] as const)('%s under %s does not acquire an unrelated task identity', async (caller, backend) => {
+    const innerCall = vi.fn(async (request: unknown) => ({ ok: true, request }));
+    const provider = createLiziMcpProviders({ browser: {
+      getRuntime: () => ({ call: innerCall }) as never, getBackendKind: () => backend,
+    } }).find(item => item.name === 'cindy_browser')!;
+    const context: LiziMcpSessionContext = { agentKind: 'claude-code', workingDir: '',
+      ...(caller === 'plugin' ? { hostCaller: { kind: 'plugin', pluginId: 'browser-test', dataOwnerId: 'owner', ownerGeneration: 1 } } : {}) };
+    context.getSessionContext = () => context;
+    if (caller === 'plugin') provider.toHostTools!(context); else provider.toClaudeSdkConfig(context);
+    const result = await runWithLiziMcpSessionContext({ agentKind: 'codex', workingDir: '', sessionId: 'unrelated-task' },
+      () => capturedDeps[0]!.getRuntime().call({ action: 'status' }));
+    if (caller === 'plugin' && backend === 'rsb-webview') {
+      expect(result).toMatchObject({ ok: false, errorCode: 'BROWSER_RUNTIME_ACTION_FAILED' });
+      expect(innerCall).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ ok: true });
+      expect(innerCall).toHaveBeenCalledExactlyOnceWith({ action: 'status' });
+    }
+  });
+
   // #6826: file broker must receive the calling task at tool-call time, just
   // like the runtime. Prior tests only checked browser requests. Unit tier;
   // empty Codex factory followed by two different task contexts is minimal.

@@ -19,6 +19,7 @@
  *      - `exited`          → 正常退出(info)
  *      - `shutdown-begin`  → 开始了 shutdown 但没跑完就死了(warn)
  *      - `running`         → 无任何退出记录 = native crash / 外部 kill / hang(error)
+ *        (例外:停在睡眠中、之后系统重启过 → 系统结束了进程,info,不报崩溃)
  *    per-pid 文件天然容忍 dev 多实例共库与 packaged 单例锁 loser 实例——pid 还活着
  *    的标记跳过不动,不会把并存实例误判成崩溃,也不会互相踩写。
  *
@@ -39,6 +40,7 @@
 
 import { app, crashReporter } from 'electron';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createLogger } from './logger';
@@ -85,6 +87,8 @@ export interface RunMarker {
   disposedAt?: string;
   exitCode?: number;
   exitedAt?: string;
+  /** 系统挂起(睡眠)的时刻;收到 resume 后清掉。缺失 = 最后一次已知状态是醒着。 */
+  suspendedAt?: string;
 }
 
 export type PreviousRunReportKind =
@@ -92,6 +96,7 @@ export type PreviousRunReportKind =
   | 'crash-exit' // exited + exitCode !== 0 — 经过 lifecycle 的崩溃退出
   | 'shutdown-incomplete' // shutdown-begin — 开始 shutdown 但没跑完
   | 'abnormal' // running — 无任何退出记录(crash / kill / hang)
+  | 'ended-asleep' // running 且停在睡眠中,之后系统重启过 — 系统结束了进程,不是崩溃
   | 'still-running' // pid 还活着 — 并存实例,跳过
   | 'corrupt'; // 标记文件解析失败(多半是崩溃瞬间写了一半)
 
@@ -103,12 +108,32 @@ export interface PreviousRunReport {
   pidReusedSince?: string;
 }
 
+/**
+ * 进程停在睡眠中、随后系统重启过:Windows 更新常在 Modern Standby 里直接重启,被冻结的
+ * 进程收不到 session-end,标记停在 running(issue #10071)。三条都满足才这样认定:
+ * 睡下后没收到 resume、睡下后心跳没再走(进程确实没醒过)、系统启动时刻晚于睡下时刻。
+ */
+function endedWhileAsleep(marker: RunMarker, bootTimeMs: number | null): boolean {
+  if (marker.state !== 'running' || !marker.suspendedAt || bootTimeMs === null) return false;
+  const suspendedAtMs = Date.parse(marker.suspendedAt);
+  const heartbeatAtMs = Date.parse(marker.heartbeatAt);
+  if (!Number.isFinite(suspendedAtMs) || !Number.isFinite(heartbeatAtMs)) return false;
+  const interval = marker.heartbeatIntervalMs > 0 ? marker.heartbeatIntervalMs : HEARTBEAT_INTERVAL_MS;
+  return heartbeatAtMs <= suspendedAtMs + interval && bootTimeMs > suspendedAtMs;
+}
+
 /** pid 已不属于写标记的实例时,按标记最后状态给出它的退出结论。 */
-function classifyEndedRun(marker: RunMarker): PreviousRunReportKind {
+function classifyEndedRun(marker: RunMarker, bootTimeMs: number | null): PreviousRunReportKind {
   if (marker.state === 'exited') {
     return marker.exitCode != null && marker.exitCode !== 0 ? 'crash-exit' : 'clean';
   }
-  return marker.state === 'shutdown-begin' ? 'shutdown-incomplete' : 'abnormal';
+  if (marker.state === 'shutdown-begin') return 'shutdown-incomplete';
+  return endedWhileAsleep(marker, bootTimeMs) ? 'ended-asleep' : 'abnormal';
+}
+
+function defaultBootTimeMs(): number | null {
+  const uptimeSec = os.uptime();
+  return Number.isFinite(uptimeSec) && uptimeSec > 0 ? Date.now() - uptimeSec * 1000 : null;
 }
 
 export interface RunMarkerStoreDeps {
@@ -119,6 +144,8 @@ export interface RunMarkerStoreDeps {
   now?: () => Date;
   /** 探活钩子,默认 process.kill(pid, 0);测试注入 */
   isPidAlive?: (pid: number) => boolean;
+  /** 本次系统启动时刻(epoch ms),读不到返回 null;默认由 os.uptime() 推算。测试注入 */
+  bootTimeMs?: () => number | null;
   warn?: (msg: string, err?: unknown) => void;
 }
 
@@ -142,6 +169,7 @@ export class RunMarkerStore {
   private readonly version: string;
   private readonly now: () => Date;
   private readonly isPidAlive: (pid: number) => boolean;
+  private readonly bootTimeMs: () => number | null;
   private readonly warn: (msg: string, err?: unknown) => void;
   private current: RunMarker | null = null;
   private writeFailureLogged = false;
@@ -152,6 +180,7 @@ export class RunMarkerStore {
     this.version = deps.version;
     this.now = deps.now ?? (() => new Date());
     this.isPidAlive = deps.isPidAlive ?? defaultIsPidAlive;
+    this.bootTimeMs = deps.bootTimeMs ?? defaultBootTimeMs;
     this.warn = deps.warn ?? ((msg, err) => log.warn(msg, err));
   }
 
@@ -197,6 +226,20 @@ export class RunMarkerStore {
   heartbeat(): void {
     if (!this.current) return;
     this.current.heartbeatAt = this.now().toISOString();
+    this.persist();
+  }
+
+  /** 系统即将挂起:记下时刻。进程若在睡眠中被系统重启结束,下次启动据此不报崩溃。 */
+  markSuspended(): void {
+    if (!this.current) return;
+    this.current.suspendedAt = this.now().toISOString();
+    this.persist();
+  }
+
+  /** 系统已唤醒:清掉挂起时刻,之后的死亡照常按崩溃判断。 */
+  markResumed(): void {
+    if (!this.current?.suspendedAt) return;
+    delete this.current.suspendedAt;
     this.persist();
   }
 
@@ -258,7 +301,7 @@ export class RunMarkerStore {
         reports.push({ kind: 'still-running', file, marker });
         continue;
       }
-      reports.push({ kind: classifyEndedRun(marker), file, marker });
+      reports.push({ kind: classifyEndedRun(marker, this.bootTimeMs()), file, marker });
       this.remove(file);
     }
     return reports;
@@ -290,7 +333,7 @@ export class RunMarkerStore {
       if (!marker || marker.pid !== report.marker.pid) return [];
       if (marker.state === 'exited') {
         this.remove(report.file);
-        return [{ kind: classifyEndedRun(marker), file: report.file, marker }];
+        return [{ kind: classifyEndedRun(marker, this.bootTimeMs()), file: report.file, marker }];
       }
       const ownerStartedAtMs = startTimes.get(marker.pid);
       const markerStartedAtMs = Date.parse(marker.startedAt);
@@ -304,7 +347,7 @@ export class RunMarkerStore {
       this.remove(report.file);
       return [
         {
-          kind: classifyEndedRun(marker),
+          kind: classifyEndedRun(marker, this.bootTimeMs()),
           file: report.file,
           marker,
           pidReusedSince: new Date(ownerStartedAtMs).toISOString(),
@@ -429,6 +472,13 @@ function logPreviousRunReports(reports: PreviousRunReport[]): boolean {
         );
         break;
       }
+      case 'ended-asleep':
+        log.info(
+          `[exit-diagnosis] previous run was asleep when the system restarted or shut down ` +
+            `(e.g. an OS update restart from standby): pid=${m!.pid} v=${m!.version} ` +
+            `suspendedAt=${m!.suspendedAt} lastHeartbeatAt=${m!.heartbeatAt}`,
+        );
+        break;
       case 'abnormal': {
         hadAbnormal = true;
         // 心跳跑在 main event loop:若进程死前 event loop 已被卡死(hang),
@@ -577,6 +627,16 @@ export function getPreviousRunReports(): readonly PreviousRunReport[] {
 /** lifecycle.beginShutdown → 记录 shutdown 入口。init 前调用是 no-op。 */
 export function noteShutdownBegin(reason: string): void {
   _store?.markShutdownBegin(reason);
+}
+
+/** powerMonitor 'suspend' → 记录挂起时刻。init 前调用是 no-op。 */
+export function noteSystemSuspend(): void {
+  _store?.markSuspended();
+}
+
+/** powerMonitor 'resume' → 清掉挂起时刻。 */
+export function noteSystemResume(): void {
+  _store?.markResumed();
 }
 
 /** runQuitDisposers 全链完成 → 记录 disposedAt。 */

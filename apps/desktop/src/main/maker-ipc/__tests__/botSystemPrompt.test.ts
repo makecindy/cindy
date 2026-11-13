@@ -38,7 +38,7 @@ describe('稳定层:能力必须写进提示词', () => {
     main.capabilities.botModeEnabled = true;
     main.capabilities.sessionControlEnabled = true;
     const stable = buildBotStableTier(main);
-    expect(stable).toContain('你能看、能管主人的任务');
+    expect(stable).toContain('你能看、能管用户的任务');
     // No teammate-only principal or risk rule (2026-11-08); ordinary permissions apply.
     expect(stable).not.toContain('同意后继续本次调用');
     expect(stable).not.toContain('NEEDS_OWNER_REQUEST');
@@ -50,9 +50,9 @@ describe('稳定层:能力必须写进提示词', () => {
     main.capabilities.automationEnabled = true;
     expect(buildBotStableTier(main)).toContain('schedule_create');
 
-    expect(buildBotStableTier(input())).not.toContain('你能看、能管主人的任务');
+    expect(buildBotStableTier(input())).not.toContain('你能看、能管用户的任务');
     main.capabilities.botModeEnabled = false;
-    expect(buildBotStableTier(main)).not.toContain('你能看、能管主人的任务');
+    expect(buildBotStableTier(main)).not.toContain('你能看、能管用户的任务');
     expect(buildBotStableTier(main)).not.toContain('schedule_create');
   });
 

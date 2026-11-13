@@ -17,6 +17,7 @@ import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
+import { isBotCandidateUnavailable } from '../botCandidateRecovery.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
 import { canRecoverUndeliveredOrcaReport } from '../../../shared/sharedTaskRecovery.js';
 import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
@@ -2299,14 +2300,29 @@ describe('agent-chosen control steering', () => {
     expect(h.steerToAgent).not.toHaveBeenCalled();
     expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(true);
   });
-  it('notifies the host when an ordinary UI steer is accepted', async () => {
+  // Regression: task/Worker rows use the same UI queue controls as user input.
+  // Exercise real ordering and dispatch; the renderer must not replace their source.
+  it.each([
+    undefined,
+    { kind: 'session' as const, senderSessionId: 'worker', displayText: 'q' },
+    { kind: 'orca' as const, senderSessionId: 'worker', senderLabel: 'Worker' },
+  ])('reorders and steers a UI queue row while retaining its origin (%j)', async origin => {
     const h = createHarness();
     h.setRunning(true);
     await h.coordinator.ensureQueueRestored(sid);
-    h.coordinator.enqueue(sid, makeItem('queued', 'q'));
+    h.coordinator.enqueue(sid, makeItem('human', 'user instruction'));
+    h.coordinator.enqueue(sid, makeItem('queued', 'q', { origin }));
+    h.coordinator.move(sid, 'queued', 0);
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['queued', 'human']);
     const [queued] = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
     expect(await h.coordinator.steer(sid, queued!, { removeFromQueue: true })).toBe(true);
     expect(h.onSteerAccepted).toHaveBeenCalledOnce();
+    expect(h.onSteerAccepted).toHaveBeenCalledWith(sid, expect.objectContaining({
+      clientId: 'queued', text: 'q', origin,
+    }));
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['human']);
   });
 });
 
@@ -2728,6 +2744,22 @@ describe('AgentInputCoordinator send transaction', () => {
     h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done');
     expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(false);
   });
+
+  // 2026-11-11 acceptance: a task a companion opened from the owner's group request asked the
+  // owner to repeat it. The group round is a hidden host envelope beside the owner's verified
+  // words (chatServer leaves them empty for other members and companions).
+  it.each([['the owner', 'Add a line to README.md', true], ['another member', '', false]] as const)(
+    'lets a group round started by %s speak for the owner request', async (_who, ownerWords, expected) => {
+      const h = createHarness(), sid = `group-lane-${expected}`;
+      h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+      h.coordinator.enqueue(sid, makeItem(BOT_GROUP_CLIENT_ID.memberTurn('room', 'execution', 'bot'),
+        `${UI_ACTION_TRIGGER_PREFIX}[group envelope]`, { agentOmitsTriggerPrefix: true, autoReviewUserText: ownerWords }));
+      await flush();
+      expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(expected);
+      // Never fresh owner input (app update and other owner-only Host actions).
+      expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+      expect(h.coordinator.getAcceptedInputProvenance(sid)?.authoredText).toBe(ownerWords);
+    });
 
   it('keeps a Worker Lead directive distinct from accepted human input', async () => {
     const h = createHarness(), sid = 'worker-input-origin';
@@ -8481,7 +8513,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       getSessionActivitySnapshot: vi.fn(), getSessionRuntimeDetails: vi.fn(), setSessionRuntime: vi.fn(),
       assertExternalInputAllowed: async () => undefined,
       createQueuedMessage: async ({ queuedMessageId, message, callerSessionId }) => makeItem(queuedMessageId, message, {
-        origin: { kind: 'session', senderSessionId: callerSessionId, displayText: message },
+        ...(callerSessionId ? { origin: { kind: 'session' as const, senderSessionId: callerSessionId, displayText: message } } : {}),
       }),
       steerQueuedMessage: (id, item, expected) => h.coordinator.steer(id, item, {
         fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
@@ -8555,7 +8587,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       getSessionActivitySnapshot: vi.fn(), getSessionRuntimeDetails: vi.fn(), setSessionRuntime: vi.fn(),
       assertExternalInputAllowed: async () => undefined,
       createQueuedMessage: async ({ queuedMessageId, message, callerSessionId }) => makeItem(queuedMessageId, message, {
-        origin: { kind: 'session', senderSessionId: callerSessionId, displayText: message },
+        ...(callerSessionId ? { origin: { kind: 'session' as const, senderSessionId: callerSessionId, displayText: message } } : {}),
       }),
       steerQueuedMessage: (id, item, expected) => h.coordinator.steer(id, item, {
         fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
@@ -16902,6 +16934,12 @@ describe('provider group computer switch hold', () => {
     const guestSwitch = createProviderGroupGuestSwitch(() => now);
     const h = createHarness({ providerGroupSwitchCandidate: (id, signals) => group.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null });
     h.onResumableTurnError.mockReturnValue(null);
+    // A teammate quota error is now eligible for its model chain too. Exercise
+    // the actual group service/continuation with that competing recovery enabled.
+    if (!reason && !reconnect) {
+      h.setResumableTurnErrorCandidate(isBotCandidateUnavailable);
+      h.setResumableTurnErrorTakeover({ attempt: 1, maxAttempts: 5, sessionTotal: 1 });
+    }
     let closedBeforeEligibility = false;
     // Model saves can win at progress lookup, in the queue or at pre-vendor
     // preparation. Existing wait-token tests missed the latter two boundaries.
@@ -17236,25 +17274,24 @@ describe('provider group computer switch hold', () => {
 
   // Unit regression through onTurnEvent: an overload and a switch candidate used
   // to spend the generic retry budget instead of handing off (including a guest's
-  // short-lived switch offer). Existing hold cases only used non-resumable limits.
+  // short-lived switch offer). #10090: teammate quota recovery must not preempt
+  // group switching either; both persisted and pending-persist paths must agree.
   // Cover both a settled user row and an error arriving before that row persists.
-  it.each([false, true])('prioritizes a group switch over overload retry (pending persist: %s)', async pendingPersist => {
-    const sid = `group-overload-${pendingPersist}`;
+  it.each([false, true].flatMap(pendingPersist => (['overload', 'usage-limit'] as const).map(cause => ({ pendingPersist, cause }))))('prioritizes group $cause recovery (pending persist: $pendingPersist)', async ({ pendingPersist, cause }) => {
+    const sid = `group-${cause}-${pendingPersist}`;
+    const signals = cause === 'usage-limit' ? { usageLimit: true } : { reason: 'upstream-overload', codexErrorInfo: 'serverOverloaded' };
     const candidate = vi.fn<NonNullable<AgentInputCoordinatorDeps['providerGroupSwitchCandidate']>>(
-      () => 'overload',
+      () => cause,
     );
     const h = createHarness({ providerGroupSwitchCandidate: candidate });
     h.setResumableTurnErrorTakeover({ attempt: 1, maxAttempts: 5, sessionTotal: 1 });
-    h.setResumableTurnErrorCandidate(isInterruptedTurnError);
+    h.setResumableTurnErrorCandidate(signals => isInterruptedTurnError(signals) || isBotCandidateUnavailable(signals));
     const persisted = deferred<Record<string, never>>();
     if (pendingPersist) mocks.createMessage.mockImplementationOnce(() => persisted.promise);
     h.coordinator.enqueue(sid, makeItem('q-capacity', 'finish the task'));
     await flush();
     h.setRunning(false);
-    h.coordinator.onTurnEvent(sid, 'error', 'Selected model is at capacity. Please try a different model.', {
-      reason: 'upstream-overload',
-      codexErrorInfo: 'serverOverloaded',
-    });
+    h.coordinator.onTurnEvent(sid, 'error', cause === 'usage-limit' ? 'Usage limit reached' : 'model at capacity', signals);
     if (pendingPersist) {
       expect(h.coordinator.isAutoResumeDeferred(sid)).toBe(true);
       expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
@@ -17264,14 +17301,14 @@ describe('provider group computer switch hold', () => {
 
     expect(h.coordinator.getProjection(sid)).toMatchObject({
       error: null,
-      autoResumePending: { groupSwitchPending: { cause: 'overload' } },
+      autoResumePending: { groupSwitchPending: { cause } },
       recovery: { kind: 'active-turn' },
     });
     expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
     expect(h.onResumableTurnError).not.toHaveBeenCalled();
     expect(h.onUsageLimitedTurnError).toHaveBeenCalledExactlyOnceWith(
       sid,
-      expect.objectContaining({ reason: 'upstream-overload', codexErrorInfo: 'serverOverloaded' }),
+      expect.objectContaining(signals),
       expect.objectContaining({ clientId: 'q-capacity' }),
       expect.any(Number),
     );
@@ -17304,10 +17341,11 @@ describe('provider group computer switch hold', () => {
   // Unit regression for #6671 review: use the real remote-binding candidate and
   // async configuration check. The old test's constant candidate never covered
   // autoSwitch=false; usage-limit fallback cannot recover upstream-overload.
-  it.each([false, true])('restores overload retry after the remote group declines (pending persist: %s)', async pendingPersist => {
-    const sid = 'remote-group-disabled';
+  it.each([false, true].flatMap(pendingPersist => (['overload', 'usage-limit'] as const).map(cause => ({ pendingPersist, cause }))))('restores $cause recovery after the remote group declines (pending persist: $pendingPersist)', async ({ pendingPersist, cause }) => {
+    const sid = `remote-group-disabled-${cause}`;
+    const signals = cause === 'usage-limit' ? { usageLimit: true } : { reason: 'upstream-overload' };
     let group!: ReturnType<typeof createProviderGroupService>;
-    const h = createHarness({ providerGroupSwitchCandidate: (id, signals) => group.mayHandleTurnError(id, signals) ? 'overload' : null });
+    const h = createHarness({ providerGroupSwitchCandidate: (id, signals) => group.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null });
     const fallback = vi.fn();
     const remoteRead = vi.fn(async () => ({ strategy: 'least', autoSwitch: false, members: [] }));
     group = createProviderGroupService({
@@ -17320,7 +17358,7 @@ describe('provider group computer switch hold', () => {
     } as unknown as ProviderGroupServiceDeps);
     const takeover = { attempt: 1, maxAttempts: 5, sessionTotal: 1 };
     h.setResumableTurnErrorTakeover(takeover);
-    h.setResumableTurnErrorCandidate(isInterruptedTurnError);
+    h.setResumableTurnErrorCandidate(signals => isInterruptedTurnError(signals) || isBotCandidateUnavailable(signals));
     const persisted = deferred<Record<string, never>>();
     if (pendingPersist) mocks.createMessage.mockImplementationOnce(() => persisted.promise);
     const adopted = vi.fn();
@@ -17333,7 +17371,7 @@ describe('provider group computer switch hold', () => {
     h.coordinator.enqueue(sid, makeItem('capacity', 'finish the task'));
     await flush();
     h.setRunning(false);
-    h.coordinator.onTurnEvent(sid, 'error', 'model at capacity', { reason: 'upstream-overload' });
+    h.coordinator.onTurnEvent(sid, 'error', cause === 'usage-limit' ? 'Usage limit reached' : 'model at capacity', signals);
     if (pendingPersist) persisted.resolve({});
     await flush();
     await handling;
@@ -17346,7 +17384,7 @@ describe('provider group computer switch hold', () => {
     expect(h.projections.every(projection => projection.error === null)).toBe(true);
     const token = h.onUsageLimitedTurnError.mock.calls[0]![3];
     // A duplicate/late callback no longer owns that failed turn.
-    expect(h.coordinator.resumeAfterProviderGroupDeclined(sid, token, { reason: 'upstream-overload' }, adopted)).toBe(false);
+    expect(h.coordinator.resumeAfterProviderGroupDeclined(sid, token, signals, adopted)).toBe(false);
     expect(adopted).toHaveBeenCalledTimes(1);
   });
 

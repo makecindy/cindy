@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AppearanceSection } from '../AppearanceSection';
 
 const themeState = vi.hoisted(() => ({ familyId: 'cindy' }));
+const themeCreation = vi.hoisted(() => ({ navigate: vi.fn(), prepareDraft: vi.fn(), error: vi.fn() }));
+
+vi.mock('react-router-dom', () => ({ useNavigate: () => themeCreation.navigate }));
+vi.mock('@/lib/themeCreatorDraft', () => ({
+  prefillThemeCreatorDraft: (prompt: string) => themeCreation.prepareDraft(prompt),
+}));
+vi.mock('@/lib/toast', () => ({ toast: { error: themeCreation.error, success: vi.fn() } }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -104,6 +111,26 @@ vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null, FontFamily
 vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 
 describe('AppearanceSection accessibility', () => {
+  // Unit: the appearance action must take the user to an editable task draft;
+  // existing mode/font coverage never exercised a creation entry.
+  it('opens the theme creation draft from the named theme action', async () => {
+    themeCreation.navigate.mockClear();
+    themeCreation.prepareDraft.mockResolvedValue('prepared');
+    render(<AppearanceSection />);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.createTheme.label' }));
+    await waitFor(() => expect(themeCreation.navigate).toHaveBeenCalledWith('/cc-agent/new'));
+  });
+
+  it('keeps the user in appearance settings when the creation Skill is unavailable', async () => {
+    themeCreation.navigate.mockClear();
+    themeCreation.error.mockClear();
+    themeCreation.prepareDraft.mockResolvedValue('unavailable');
+    render(<AppearanceSection />);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.createTheme.label' }));
+    await waitFor(() => expect(themeCreation.error).toHaveBeenCalledWith('settings.appearance.createTheme.unavailable'));
+    expect(themeCreation.navigate).not.toHaveBeenCalled();
+  });
+
   it('labels the UI, code and terminal font-size number inputs', () => {
     render(<AppearanceSection />);
     const visibility = screen.getByRole('slider', {
