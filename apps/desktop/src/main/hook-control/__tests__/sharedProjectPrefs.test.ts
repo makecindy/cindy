@@ -241,6 +241,28 @@ describe('sharedProjectPrefs', () => {
     expect(listWorkspacePrefs('slack').filter((row) => row.model === 'm')).toHaveLength(260);
   });
 
+  // 时序(评审指出): 「从哪个渠道并入」的标记要跟着项目改名走, 旧名称下不得留。
+  // 最小失败输入: (a) Telegram 并入后项目改名, 飞书才到 —— 飞书仍应按顺序顶替;
+  // (b) 改名后用户改了模型, 又改回原名, 飞书才到 —— 用户改的不得被当成原样并入而顶替。
+  it('项目改名后合并顺序照旧; 改名期间用户改过的配置改回原名后不会被顶替', () => {
+    setWorkspacePref('telegram', null, 'app', { model: 'tg-app' });
+    setWorkspacePref('telegram', null, 'tool', { model: 'tg-tool' });
+    markWorkspacePrefsMigrated('telegram');
+    adoptReadyChannels();
+
+    moveWorkspacePrefsToRenamed([{ from: 'app', to: 'main' }, { from: 'tool', to: 'kit' }]);
+    setSharedProjectPref('kit', { model: 'picked-by-user' });
+    moveWorkspacePrefsToRenamed([{ from: 'kit', to: 'tool' }]);
+
+    setWorkspacePref('feishu', null, 'main', { model: 'feishu-main' });
+    setWorkspacePref('feishu', null, 'tool', { model: 'feishu-tool' });
+    markWorkspacePrefsMigrated('feishu');
+    adoptReadyChannels();
+
+    expect(getSharedProjectPref('main').model).toBe('feishu-main');
+    expect(getSharedProjectPref('tool').model).toBe('picked-by-user');
+  });
+
   // 持久化: 侧栏给项目改名时, 共用那份跟着挪到新名称下, 旧名称下不留行。
   it('项目改名时共用那份跟到新名称', () => {
     setSharedProjectPref('old-name', { model: 'm1' });

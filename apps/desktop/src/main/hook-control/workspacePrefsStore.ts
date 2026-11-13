@@ -75,6 +75,11 @@ interface StoreFile {
 const FILE_NAME = 'hook-workspace-prefs.json';
 const FIELD_MAX = 128;
 export const HOOK_WORKSPACE_PREFS_MAX_ENTRIES = 256;
+/**
+ * 「从哪个渠道原样并入」标记的条数上限。标记既覆盖有偏好行的项目也覆盖只选过来源的项目,
+ * 所以不能套用偏好行的上限; 这里只是防文件被写坏的保险, 与项目清单的上限(4096)同量级。
+ */
+const SHARED_ORIGIN_MAX = 4096;
 
 function filePath(): string {
   return ownerScopedImUserDataPath(FILE_NAME);
@@ -182,7 +187,7 @@ function readStore(fp: string): StoreFile {
           HOOK_WORKSPACE_ALIAS_RE.test(workspace) &&
           isChannel(channel) &&
           channel !== SHARED_PREFS_CHANNEL &&
-          Object.keys(sharedOrigin).length < HOOK_WORKSPACE_PREFS_MAX_ENTRIES
+          Object.keys(sharedOrigin).length < SHARED_ORIGIN_MAX
         ) {
           sharedOrigin[workspace] = channel;
         }
@@ -770,8 +775,21 @@ export function moveWorkspacePrefsToRenamed(
   let entries = store.entries;
   const touched = new Set<HookPrefsChannel>();
   let movedAny = false;
+  // 「从哪个渠道原样并入」的标记跟着配置走: 挪到新名称下(新名称已经有自己的共用配置时不带,
+  // 那份不是并入来的), 旧名称下一律去掉 —— 留着的话, 项目日后改回旧名称时, 它会重新贴到
+  // 用户已经改过的配置上。
+  const sharedOrigin = { ...store.sharedOrigin };
   for (const { from, to } of renames) {
     if (from === to || !HOOK_WORKSPACE_ALIAS_RE.test(to)) continue;
+    const origin = sharedOrigin[from];
+    if (origin !== undefined) {
+      const targetConfigured = entries.some(
+        (entry) => sameKey(entry, SHARED_PREFS_CHANNEL, null, to) && !isBlankRow(entry),
+      );
+      if (!targetConfigured && sharedOrigin[to] === undefined) sharedOrigin[to] = origin;
+      delete sharedOrigin[from];
+      movedAny = true;
+    }
     for (const row of entries.filter((entry) => entry.workspace === from && !isBlankRow(entry))) {
       const target = entries.find((entry) => sameKey(entry, row.channel, row.teamId, to));
       const keepTarget =
@@ -814,6 +832,8 @@ export function moveWorkspacePrefsToRenamed(
   if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }
-  writeStore(fp, { ...store, entries });
+  const next: StoreFile = { ...store, sharedOrigin, entries };
+  if (Object.keys(sharedOrigin).length === 0) delete next.sharedOrigin;
+  writeStore(fp, next);
   return [...touched];
 }
