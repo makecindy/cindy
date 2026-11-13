@@ -153,7 +153,7 @@ export function companionProcessItems(items: readonly MobileMessageRenderItem[],
     isProgress: item => item.type === 'message' && item.message.kind === 'assistant' && !item.message.systemCardType
       && !addressed.has(item) && (item.message.source.agentMeta?.assistantPhase === 'commentary'
         || (liveItems.has(item))),
-    isRecovery: item => item.type === 'message' && ['agent-switch', 'auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
+    isRecovery: item => item.type === 'message' && ['auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
     start: time,
     end: item => item.type === 'work_group' && item.startedAtMs !== undefined
       ? item.startedAtMs + (item.durationMs ?? 0) : time(item),

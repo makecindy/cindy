@@ -10,7 +10,7 @@ import http from 'node:http';
 import process from 'node:process';
 import { setTimeout, clearTimeout } from 'node:timers';
 import { build } from 'esbuild';
-import { startMockAppServer, createMockAppServer } from './mcp-apps-mock.mjs';
+import { startMockAppServer, createMockAppServer, viewStateAppHtml, viewStateHelperHtml } from './mcp-apps-mock.mjs';
 import { hostSdkFixture } from './mcp-apps-host-sdk-fixture.mjs';
 import { pluginUiFixture } from './plugin-ui-fixture.mjs';
 import { authorFixture } from './plugin-author-fixture.mjs';
@@ -20,6 +20,8 @@ import { createRawAppServer } from './mcp-apps-raw-fixture.mjs';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'cindy-mcp-app-sandbox-'));
 const independent = process.argv.includes('--raw');
+const helperMode = process.argv.find(arg => arg.startsWith('--state-helpers='))?.split('=')[1];
+const viewStateMode = process.argv.includes('--view-state') || !!helperMode;
 const authorMode = process.argv.find(arg => arg.startsWith('--author='))?.split('=')[1];
 const handoffMode = process.argv.includes('--handoff');
 const hostSdk = process.argv.includes('--host-sdk');
@@ -56,6 +58,7 @@ const endpoint = await startMockAppServer({
     : createMockAppServer,
 });
 try {
+  if (viewStateMode) await writeFile(path.join(temporary, 'view-state.html'), helperMode ? await viewStateHelperHtml(helperMode) : await viewStateAppHtml());
   if (pluginView) await writeFile(path.join(temporary, 'fixture.txt'), 'host-only-file');
   if (pluginView) {
     const fixture = handoffMode ? await handoffFixture() : hostSdk ? hostSdkFixture(allowed) : authorMode ? await authorFixture(authorMode, temporary) : await pluginUiFixture(independent, independent ? allowed : undefined, true);
@@ -112,6 +115,7 @@ try {
       { name: 'host-sdk-raw', setup(builder) {
         builder.onResolve({ filter: /ext-apps\/app-with-deps\?raw$/ }, () => ({ path: createRequire(import.meta.url).resolve('@modelcontextprotocol/ext-apps/app-with-deps'), namespace: 'sdk-raw' }));
         builder.onLoad({ filter: /.*/, namespace: 'sdk-raw' }, async args => ({ contents: await readFile(args.path, 'utf8'), loader: 'text' }));
+        builder.onResolve({ filter: /viewStateSdk(?:React)?\.js\?raw$/ }, args => ({ path: path.resolve(scriptDir, '../src/main/mcp-apps', args.path.split('/').pop().replace('?raw', '')), namespace: 'sdk-raw' }));
       } },
       {
         name: 'test-only-owner',
@@ -199,6 +203,17 @@ try {
             call:(grant,args)=>executePlugin(grant.tool,args,grant.onProgress)})}};
       }
       connection=new AppConnection(config);const client=await connection.getClient();
+      const viewStateMode=process.env.CINDY_MCP_APP_TEST_VIEW_STATE==='1';
+      let savedState=null, readFails=false, legacyPage=false, omitAddons=false;
+      const helperMode=process.env.CINDY_MCP_APP_TEST_HELPERS;
+      if(viewStateMode){
+        const resource=connection.resource.bind(connection);
+        connection.resource=async(...args)=>{
+          const response=await resource(...args);
+          if(!legacyPage)response.result.contents[0].text=readFileSync(process.env.CINDY_MCP_APP_TEST_DIR+'/view-state.html','utf8');
+          return response;
+        };
+      }
       let sdkUpstreamSignal; const sdkIds=[];
       if(process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1'){
         const call=client.callTool.bind(client);
@@ -214,7 +229,12 @@ try {
       let record={version:1,serverId:'example',serverRevision:appServerRevision(config),resourceUri:tool._meta.ui.resourceUri,tool:cardTool,arguments:args,result:authorMode==='loader'?pluginAppResult(result):result};
       if(authorMode==='loader'){assert.ok(result._meta.view.html.includes('<style>'));assert.deepEqual(Object.keys(pluginModelResult(result)),['content']);}
       let turns=0, receivedImages=[], pageApprovals=0, approvalGate, sdkApprovalSignal, sdkReleaseApproval;
-      host=new McpAppsHost({downloadFile:pluginMode?input=>saveAppDownload({...input,showSaveDialog:async name=>process.env.CINDY_MCP_APP_TEST_DIR+'/saved-'+name}):undefined,pluginFiles:handoffMode?createPluginFileAccess({libraryPath:async()=>null,libraryMime:()=>'application/octet-stream',
+      host=new McpAppsHost({
+        viewState:viewStateMode?()=>({
+          read:async()=>{if(readFails)throw new Error('fixture storage unavailable');return structuredClone(savedState);},
+          save:async snapshot=>{savedState=snapshot.json===null?null:JSON.parse(snapshot.json);},
+        }):undefined,
+        downloadFile:pluginMode?input=>saveAppDownload({...input,showSaveDialog:async name=>process.env.CINDY_MCP_APP_TEST_DIR+'/saved-'+name}):undefined,pluginFiles:handoffMode?createPluginFileAccess({libraryPath:async()=>null,libraryMime:()=>'application/octet-stream',
         openHandoff:async(instance,ref)=>{const opened=await handoffStore.open(instance,ref);return opened&&{file:opened.file,size:opened.info.size,mimeType:opened.info.mimeType};}}):pluginMode?{
         describe:async(_instance,uri)=>{if(authorVault&&uri.startsWith('library:')){const file=await authorVault.stat({path:uri.slice('library:'.length)});return file.ok&&file.kind==='file'?{mimeType:'text/plain',size:file.bytes}:null;}if(uri===loaderImageUri)return {mimeType:'image/png',size:loaderImage.length};return uri==='library:fixture.txt'?{mimeType:'text/plain',size:14}:uri==='cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png'?{mimeType:'image/png',size:8}:null;},
         read:async(_instance,uri,request)=>{
@@ -224,6 +244,10 @@ try {
           return buildRangedFileResponse({file,totalSize:14,mimeType:'text/plain',rangeHeader:request.headers.get('range'),cacheControl:'no-store',signal:request.signal});
         }
       }:undefined,owner:()=>globalThis.mcpTestOwner,config:()=>config,readCard:async()=>record,writeCard:async(_s,_c,value)=>{record=value;},authorizeTool:async(_s,_t,args,signal)=>{pageApprovals++;if(args.text==='old-document'){sdkApprovalSignal=signal;await new Promise(resolve=>sdkReleaseApproval=resolve);}if(approvalGate)await approvalGate;},sendMessage:async(_s,_r,_c,_guard,files)=>{turns++;receivedImages=files??[];},disposeDocument:removeMcpAppDocument});
+      if(helperMode){
+        const open=host.open.bind(host);
+        host.open=async(...args)=>{const doc=await open(...args);if(omitAddons&&doc.sdk)doc.sdk={source:doc.sdk.source};return doc;};
+      }
       if(process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1'){
         const dispatch=host.dispatch.bind(host);
         host.dispatch=(caller,session,id,message)=>{if(message.method==='tools/call'&&message.params.name==='echo')sdkIds.push({text:message.params.arguments.text,id:message.id});return dispatch(caller,session,id,message);};
@@ -289,6 +313,75 @@ try {
       const inner=()=>window.webContents.mainFrame.framesInSubtree.find(frame=>frame.url.includes('-view/resource'));
       assert.equal(await window.webContents.executeJavaScript(
         "window.testHost.invoke({op:'message',viewId:window.testController.document.viewId,message:{jsonrpc:'2.0',id:'forged',method:'tools/list'}}).then(()=>false,()=>true)"),true);
+      if(viewStateMode){
+        // Integration tier: host/DB unit tests cannot detect official SDK schema loss or
+        // sandbox forwarding regressions. Minimal cases: one save/remount, one failed
+        // read, and the unchanged old form calling its ordinary tool on the new host.
+        const ready=async()=>{
+          await wait(()=>inner()?.executeJavaScript('typeof window.stateProbe!=="undefined"'));
+          return inner().executeJavaScript('window.stateProbe.ready');
+        };
+        const reopen=async()=>{
+          const oldId=await window.webContents.executeJavaScript('window.testController.document.viewId');
+          await window.webContents.executeJavaScript('window.testController.close()');
+          await window.loadFile(process.env.CINDY_MCP_APP_TEST_DIR+'/host.html');
+          await wait(()=>window.webContents.executeJavaScript('window.testState.initialized===true'));
+          assert.notEqual(await window.webContents.executeJavaScript('window.testController.document.viewId'),oldId);
+        };
+        stage='view state save receipt';
+        const initial=await ready();
+        assert.equal(initial.capabilities.experimental['cindy/view-state'].maxBytes,65536);
+        assert.equal(initial.context['cindy/view-state'],null);
+        let saved={version:1,page:3,filter:'unread'};
+        assert.deepEqual(await inner().executeJavaScript('window.stateProbe.save('+JSON.stringify(saved)+')'),{});
+        assert.deepEqual(savedState,saved,'success must follow storage commit');
+        if(helperMode==='react'){
+          stage='same button event edits then flushes';
+          await inner().executeJavaScript('window.stateProbe.sameEvent()');
+          saved={...saved,page:5};
+          assert.deepEqual(savedState,saved,'same-event flush must confirm both functional updates');
+          await wait(()=>inner().executeJavaScript('document.querySelector("output").textContent==='+JSON.stringify(JSON.stringify(saved))));
+          console.log('STATE_HELPER_SAME_EVENT_VERDICT=passed (button click, two updates, confirmed latest value)');
+        }
+        stage='view state first render after remount';
+        await reopen();
+        const restored=await ready();
+        assert.deepEqual(restored.context['cindy/view-state'],saved);
+        assert.equal(await inner().executeJavaScript('document.querySelector("output").textContent'),JSON.stringify(saved));
+        assert.equal(await inner().executeJavaScript('window.stateProbe.renders.every(value=>value==='+JSON.stringify(JSON.stringify(saved))+')'),true,'no default render before restoration');
+        stage='view state failed read';
+        readFails=true;
+        await reopen();
+        const unavailable=await ready();
+        assert.equal(Object.hasOwn(unavailable.capabilities.experimental??{},'cindy/view-state'),false);
+        assert.equal(Object.hasOwn(unavailable.context,'cindy/view-state'),false);
+        assert.deepEqual(savedState,saved,'failed read must preserve saved bytes');
+        if(helperMode){
+          stage='helper unsupported host';
+          const local={version:1,page:9,filter:'local'};
+          assert.equal(await inner().executeJavaScript('stateProbe.save('+JSON.stringify(local)+').then(()=>false,()=>true)'),true);
+          await wait(()=>inner().executeJavaScript('document.querySelector("output").textContent==='+JSON.stringify(JSON.stringify(local))));
+          assert.deepEqual(savedState,saved);
+          stage='helper missing on old viewer'; readFails=false;omitAddons=true;
+          await reopen();const absent=await ready();assert.equal(absent.loaded,false);
+          assert.equal(await inner().executeJavaScript('stateProbe.save('+JSON.stringify(local)+').then(()=>false,()=>true)'),true);
+          await wait(()=>inner().executeJavaScript('document.querySelector("output").textContent==='+JSON.stringify(JSON.stringify(local))));
+          assert.deepEqual(savedState,saved);
+          omitAddons=false;
+        }
+        stage='legacy page on state-capable host';
+        readFails=false;legacyPage=true;
+        await reopen();
+        await wait(()=>inner()?.executeJavaScript('document.querySelector("#title")?.value==="AI draft"'));
+        assert.equal(await inner().executeJavaScript('document.querySelector("#body").value'),'Review before creating');
+        // Resolve on the actual tool result changing the DOM; no fixed-duration wait.
+        const status=await inner().executeJavaScript('new Promise(resolve=>{const status=document.querySelector("#status");const observer=new MutationObserver(()=>{if(status.textContent.includes("已创建模拟申请")){observer.disconnect();resolve(status.textContent);}});observer.observe(status,{childList:true});document.querySelector("#submit").click();})');
+        assert.match(status,/已创建模拟申请 1/);
+        assert.equal(pageApprovals,1);
+        assert.deepEqual(savedState,saved,'legacy page must not change saved state');
+        console.log('MCP App view state browser checks passed: save receipt, first-render restoration, failed-read capability omission, legacy tool call');
+        return;
+      }
       if (process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1') {
         stage='host SDK first generated page';
         await wait(()=>inner()?.executeJavaScript('window.pageState?.ready===true'));
@@ -740,6 +833,8 @@ try {
     CINDY_MCP_APP_TEST_URL: endpoint.url,
     CINDY_MCP_APP_TEST_RAW: independent ? '1' : '0',
     CINDY_MCP_APP_TEST_HOST_SDK: hostSdk ? '1' : '0',
+    CINDY_MCP_APP_TEST_VIEW_STATE: viewStateMode ? '1' : '0',
+    CINDY_MCP_APP_TEST_HELPERS: helperMode ?? '',
     CINDY_MCP_APP_TEST_BOM: bom ? '1' : '0',
     CINDY_MCP_APP_TEST_REMOTE: remoteView ? '1' : '0',
     CINDY_MCP_APP_TEST_METRICS: measureMetrics ? '1' : '0',

@@ -1,4 +1,5 @@
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 /**
  * 话题（Thread）面板：与主时间线同一套消息行（BotGroupTimelineItem）与密度规则——根消息、
@@ -28,6 +29,7 @@ import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
   botGroupMemberDisplayName,
   botGroupOwnedBotNames,
@@ -191,6 +193,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const locale = i18n.language;
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
   const readLocatedMention = useReadLocatedMention(group.id);
@@ -456,7 +459,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const members = group.members;
   const mentionLabels = useMemo(
-    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
+    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...BOT_GROUP_BOT_BROADCAST_LABELS, ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
     [members, t],
   );
   const memberById = useMemo(() => new Map(members.map((member) => [member.botId, member])), [members]);
@@ -621,7 +624,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const renderRow = (message: BotGroupTimelineMessage, continued: boolean) => {
     const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
-    const authorName = (member && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
+    const authorName = (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
     const owned = message.authorKind === 'user' && message.isSelf === false ? botGroupOwnedBotNames(member, members).join(separator) : '';
     const shared = message.id !== root?.id && !message.pending ? sharedState(message.id) : null;
     const onReveal = shared?.shareId ? () => revealShare(shared.shareId!) : undefined;
@@ -630,6 +633,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       : { key: 'post-to-main', label: t(key('thread.postToMain')), disabled: posting.has(message.id), icon: <MessageSquareShare size={14} strokeWidth={2} className="shrink-0" />, onSelect: () => void postToMain(message.id, false) };
     return (
       <BotGroupTimelineItem
+        pluginUi={pluginUi}
         message={message}
         continued={continued}
         authorName={authorName}

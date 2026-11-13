@@ -67,16 +67,25 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   `maker:setup-transfer` 协议、计划与应用规则或一次性配置清单，或新增一类可迁移的设置前，必须先读
   `docs/product-rules/new-device-setup-migration.md`：密钥只在原电脑的人允许后一次性加密复制，
   OAuth 登录与私钥不复制，写入只走本机原有安装器与设置存储，不覆盖本机已改过的设置。
+- 修改开始引导（首次登录后的综合引导）的出现条件、步骤与顺序、各步骤复用的能力，或它与旧版数据
+  迁移的衔接前，必须先读 `docs/product-rules/first-run-guide.md`：引导只发现和带路、不代做，
+  Global 与中国大陆版流程一致，旧版数据迁移的区域边界是数据归属、不得顺手放开。
 - 修改共享任务、跨账号访客邀请、共享上下文或共享成员权限前，必须先读
   `docs/product-rules/shared-task-mode.md`；复用 device-link，同账号远控行为不变。
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
   必须先读 `docs/product-rules/im-permission-confirmation.md`；Desktop、Mobile 与共享
   packages 共用同一最终决定，渠道收到回答不代表执行已恢复。
+- 新增或修改手机通知上的按钮（回答提问、回复、允许一次、拒绝）、哪些通知带按钮、按钮点击在后台的执行、没送到时的提示，
+  或登录凭证在钥匙串里的可读时机前，必须先读 `docs/product-rules/notification-actions.md`：按钮是 App 之外的
+  作答入口，看不全、说不清或高风险的操作不能在通知上批准，答复只作用于通知描述的那一条请求。
 - 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
   单窗口实时画面、设备码识别，或任何经手主人填写值的路径）前，必须先读
   `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
 - 新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前，必须先读
   `docs/product-rules/schedule-webhook-trigger.md`：事件只是门铃，正文不进任务，密钥不进任务记录。
+- 新增或修改模型组（把模型供应商里已有的来源合成路线与模式）的配置、选路、选择器入口、任务里的说明，
+  或要让它在新任务以外的地方生效前，必须先读 `docs/product-rules/model-groups.md`：模型供应商页原样保留、
+  模型组只做加法，只决定新任务用哪个已连接的模型，排序与供应商组共用同一把尺子。
 - 修改账号用量上限的判定、重置时刻来源，或普通任务／目标模式撞上限额后的等待与自动继续前，
   必须先读 `docs/product-rules/usage-limit-auto-continue.md`。
 - 新增或修改自动发送／远程发送消息的路径、消息来源标签，或发给模型的来源说明前，必须先读
@@ -147,9 +156,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   或变成不可逆流程；显式用户命令即授权。Cindy 只能增加可跳过的提示和更顺畅的 GUI，不能让
   Cindy Pi 比同版本原生 Pi 更难用。完整裁决见 `docs/dev-rules/pi-harness.md`「Pi 上游 GUI
   非退化红线」。
-- 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接，
-  或身份卡、管子协议、打包与编写手册前，必须先读
-  `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
+- 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接、
+  插件市场分页读取、安装扫描、实例核对、使用统计或远程插件状态读取，或身份卡、管子协议、
+  打包与编写手册前，必须先读 `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
   插件系统改动（含批准状态 schema、指纹格式、manifest 校验、安装布局、包格式）都必须
   向下兼容——用户升级后什么都不做，已装、已批准、已启用的插件必须照旧可用，**绝不允许
   要求用户重新安装、重新确认权限或重新配置**。做不到就必须自带从旧版数据的自动迁移；
@@ -168,11 +177,11 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   `docs/dev-rules/plugin-library-storage.md`。
 - 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
   `docs/dev-rules/cindy-updater.md`。
-- 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、跨平台（macOS／
-  Windows）行为，或任何 UI 文案的 i18n 落地前，必须先读
-  `docs/dev-rules/engineering-conventions.md`。
+- 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、客户端本地或远程数据读取／
+  扫描、变化通知后的刷新、界面频繁触发的持久化写入、缓存与轮询性能、跨平台（macOS／Windows）
+  行为，或任何 UI 文案的 i18n 落地前，必须先读 `docs/dev-rules/engineering-conventions.md`。
 - 新增一处每个功能都要来登记的列表、台账、注册表或版本号前，先读
-  `docs/dev-rules/engineering-conventions.md` §8：不规定「加在开头／末尾」，不让多个 PR
+  `docs/dev-rules/engineering-conventions.md` §9：不规定「加在开头／末尾」，不让多个 PR
   改同一行；一项一个文件、按键排序或从内容推导。
 - 新增或改写任一测试前，必须先读
   `docs/dev-rules/engineering-conventions.md` §3.2「新增测试的价值门槛」。测试必须通过

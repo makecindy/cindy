@@ -119,7 +119,7 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
   // 测试价值(#9537 review): 同一路由组件在 :sessionId 间复用,deviceId 变了组件没换。
   // 换对端时必须先清掉上一家的判定 —— 新探测还没回来之前,新对端不能顶着上一家的代理
   // 提示;探测被拒(IPC 失败)同样要清,否则上一家的判定会一直留在界面上。
-  it('换对端先清空上一家的判定;探测被拒时也不保留旧判定', async () => {
+  it('换对端先清空上一家的判定,新探测回来之前不挂旧提示', async () => {
     let resolveProbe: ((v: DeviceLinkProxyVerdict | null) => void) | null = null;
     const getProxyVerdict = vi.fn(
       () => new Promise<DeviceLinkProxyVerdict | null>((resolve) => { resolveProbe = resolve; }),
@@ -140,9 +140,33 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
     await act(async () => {});
     expect(hook.result.current).toBeNull();
 
-    // 探测被拒:判定保持清空,不回退成 peer-a 的旧值。
-    const rejectProbe = resolveProbe;
-    await act(async () => { rejectProbe?.(Promise.reject(new Error('probe failed')) as never); });
+    // peer-b 的探测回来后才展示 peer-b 自己的判定。
+    await act(async () => { resolveProbe?.({ kind: 'proxy', proxy: 'http://10.0.0.1:8080' }); });
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://10.0.0.1:8080' });
+  });
+
+  it('探测被拒时清空旧判定,不把上一次的提示留在界面上', async () => {
+    let calls = 0;
+    const getProxyVerdict = vi.fn(async (): Promise<DeviceLinkProxyVerdict | null> => {
+      calls += 1;
+      if (calls === 1) return { kind: 'proxy', proxy: 'http://127.0.0.1:7890' };
+      throw new Error('probe failed');
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { getProxyVerdict } },
+    });
+    const hook = renderHook(
+      ({ deviceId }: { deviceId?: string }) => useOutboundProxyVerdict(true, deviceId),
+      { initialProps: { deviceId: 'peer-a' as string | undefined } },
+    );
+    await act(async () => {});
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+
+    // 先离开再回到同一对端:第二次探测被拒,界面上不得再留第一次的提示。
+    hook.rerender({ deviceId: undefined });
+    await act(async () => {});
+    hook.rerender({ deviceId: 'peer-a' });
     await act(async () => {});
     expect(hook.result.current).toBeNull();
   });

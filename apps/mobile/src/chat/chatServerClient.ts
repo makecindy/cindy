@@ -3,7 +3,8 @@ import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shar
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-preset';
-import { parseChatInvitationToken } from '@cindy/device-link';
+import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/device-link';
+import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
 import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -462,13 +463,15 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length,
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
-    hasMoreBefore: page.before !== null, round: { status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
+    hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
+        && ((!e.requester_id && !members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId
+        || active.some(m => m.id === e.bot_id && m.kind === 'bot' && m.ownerActorId === selfId))), status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
         && execution.requester_id !== selfId && !members.some(member => member.id === execution.bot_id && member.ownerActorId === selfId)) }, supportsAttachments: true };
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
-  openHistory?: (human: string) => Promise<ChatHistory>) {
+  openHistory?: (human: string) => Promise<ChatHistory>, inviteShares?: ChatInviteShares) {
   const threadFailures = new Map<string, { attempts: number; at: number }>();
   const retryDelays = [30_000, 60_000, 120_000, 240_000, 480_000];
   let historyCache: Promise<ChatHistory> | undefined;
@@ -631,16 +634,22 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     },
     /** A reusable or expiring join link; only an owner or admin may create one. */
     async createInvite(roomId: string, managerId: string, operationId: string): Promise<ChatInviteLink> {
+      if (!inviteShares) throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
       const invite = await request<{ token?: unknown; expiresAt?: unknown; reusable?: unknown }>(`/conversations/${chatId(roomId)}/invite-links`, 'POST', { operationId }, chatId(managerId));
       const expiresAt = typeof invite?.expiresAt === 'string' && Number.isFinite(Date.parse(invite.expiresAt)) ? invite.expiresAt : invite?.expiresAt === null ? null : undefined;
       const reusable = typeof invite?.reusable === 'boolean' ? invite.reusable : undefined;
       if (typeof invite?.token !== 'string' || !INVITE_TOKEN.test(invite.token) || expiresAt === undefined || (expiresAt === null && reusable !== true)) throw new Error('CHAT_RESPONSE_INVALID');
-      return { link: `cindy://chat-invite/${invite.token}`, expiresAt, ...(reusable !== undefined ? { reusable } : {}) };
+      const link = await inviteShares.create(roomId, invite.token, managerId);
+      return { link, expiresAt, ...(reusable !== undefined ? { reusable } : {}) };
     },
     async revokeInvite(roomId: string, managerId: string, link: string, operationId: string) {
-      const token = link.replace(/^cindy:\/\/chat-invite\//, '');
-      if (!INVITE_TOKEN.test(token)) throw new Error('INVALID_INVITE_LINK');
-      await request(`/conversations/${chatId(roomId)}/invite-links/revoke`, 'POST', { token, operationId }, chatId(managerId));
+      const shareId = parseChatInvitationShareId(link);
+      if (shareId && !inviteShares) throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
+      const token = shareId ? await inviteShares!.resolve(shareId) : parseChatInvitationToken(link);
+      if (!token || !INVITE_TOKEN.test(token)) throw new Error('INVALID_INVITE_LINK');
+      const result = await request<{ revoked?: unknown }>(`/conversations/${chatId(roomId)}/invite-links/revoke`, 'POST', { token, operationId }, chatId(managerId));
+      if (result?.revoked !== true) throw new Error('CHAT_RESPONSE_INVALID');
+      if (shareId) await inviteShares!.revoked(shareId);
     },
     async syncListState(force = false) {
       await identity();

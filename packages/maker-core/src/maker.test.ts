@@ -121,6 +121,23 @@ describe('Maker agent status', () => {
     });
   });
 
+  // Unit regression: offline startup registers agents with a lazy runtime getter.
+  // Status must report the missing install instead of rejecting the IPC.
+  it('reports a registered agent whose lazy runtime is not installed as binary-missing', async () => {
+    const agent = createAgent(async () => undefined, 'claude-code');
+    Object.assign(agent, {
+      getBinaryPath: () => { throw new Error('Claude Code is not installed'); },
+      getAuthState: async () => ({ authenticated: true }),
+    });
+    const maker = new Maker({ agents: { 'claude-code': agent }, storage: createStorage(), logger: createLogger() });
+    await expect(maker.getAgentStatus('claude-code')).resolves.toEqual({
+      binaryReady: false,
+      binaryPath: null,
+      authReady: true,
+      identity: undefined,
+    });
+  });
+
   it('registers an optional agent after construction idempotently', () => {
     const maker = new Maker({
       agents: {},
@@ -2002,17 +2019,24 @@ describe('Maker start-option lifecycle hooks', () => {
     expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
   });
 
-  it.each((['codex', 'claude-code', 'pi'] as const).flatMap((kind) =>
-    [new TypeError('startup RPC failed'), 'non-Error startup failure'].map((error) => ({ kind, error }))))(
-    'releases only the confirmed-stopped $kind startup and permits a fresh task: $error', async ({ kind, error: startupError }) => {
+  // Unit #10271: the scheduler needs actual exit evidence for one admitted-account retry.
+  // Existing cases only checked cause unwrapping; opt-in must retain the real wrapper
+  // without forwarding the host setting to adapters or changing ordinary callers.
+  it.each([
+    ...(['codex', 'claude-code', 'pi'] as const).flatMap((kind) =>
+      [new TypeError('startup RPC failed'), 'non-Error startup failure'].map((error) => ({ kind, error, preserve: false }))),
+    ...[new TypeError('startup RPC failed'), 'non-Error startup failure'].map(error => ({ kind: 'codex' as const, error, preserve: true })),
+  ])(
+    'releases only the confirmed-stopped $kind startup and permits a fresh task (preserve: $preserve): $error', async ({ kind, error: startupError, preserve }) => {
       const otherStartup = {} as CreateSessionOptions;
       const leased = new Set<CreateSessionOptions>([otherStartup]);
       const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
         if (!runtimeMayBeAlive) leased.delete(options);
       });
       const onStartCleanupSucceeded = vi.fn();
+      const stoppedError = new AgentStartupStoppedError(startupError);
       const startSession = vi.fn()
-        .mockRejectedValueOnce(new AgentStartupStoppedError(startupError))
+        .mockRejectedValueOnce(stoppedError)
         .mockResolvedValueOnce(createHandle({ id: 'fresh-sdk-session' }));
       const maker = new Maker({
         agents: { [kind]: createAgent(startSession, kind) },
@@ -2024,7 +2048,9 @@ describe('Maker start-option lifecycle hooks', () => {
       });
       await expect(maker.createSession({
         id: 'confirmed-exit', agentKind: kind, workingDir: '/repo', model: 'test-model',
-      })).rejects.toBe(startupError);
+        preserveStartupStoppedError: preserve,
+      })).rejects.toBe(preserve ? stoppedError : startupError);
+      expect(startSession.mock.calls[0]![0]).not.toHaveProperty('preserveStartupStoppedError');
       expect(onStartFailed).toHaveBeenCalledOnce();
       expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
         stage: 'agent-start', error: startupError, runtimeMayBeAlive: false,

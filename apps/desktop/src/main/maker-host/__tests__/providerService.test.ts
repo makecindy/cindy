@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField, remoteInvocationModels } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField, remoteInvocationModels, type ModelDisableOverrides } from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
@@ -12,6 +12,24 @@ import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  // Unit, #10223: successful catalog transport does not mean every native read
+  // succeeded. Publish retry evidence only for disconnected rows, so healthy or
+  // intentionally disconnected providers do not produce background recovery.
+  it.each([
+    { connected: false, unavailable: true, expected: true },
+    { connected: false, unavailable: false, expected: undefined },
+    { connected: true, unavailable: true, expected: undefined },
+  ])('projects native read evidence (connected=$connected, unavailable=$unavailable)', async ({ connected, unavailable, expected }) => {
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => connected, xai: () => false },
+      subscriptionReadUnavailable: id => id === 'openai' && unavailable,
+    });
+    const providers = await svc.listProviders();
+    expect(providers.find(p => p.id === 'openai')?.subscriptionReadUnavailable).toBe(expected);
+    expect(providers.find(p => p.id === 'anthropic')).not.toHaveProperty('subscriptionReadUnavailable');
+  });
+
   // Unit: the real list projection must brand only XD's exact enterprise provider,
   // including mixed Auto/concrete model lists, and re-read membership after account changes.
   it('projects enterprise branding from current membership without applying local display preferences', async () => {
@@ -367,6 +385,30 @@ describe('createProviderService', () => {
     const provider = (await providersPromise).find(({ id }) => id === anthropic.id);
     expect(getFullCatalog).toHaveBeenCalledTimes(1);
     expect(provider?.models['claude-code']).toEqual([discoveredModel]);
+  });
+
+  // Unit regression: imported account members must pass through the same access
+  // overrides as raw members. Existing override tests had no catalog projection.
+  it('applies model disable overrides to projected account membership', async () => {
+    const openai = BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!;
+    const model = { id: 'pool-model', name: 'Pool model', contextWindow: 200_000,
+      efforts: [], defaultEffort: null };
+    const catalog = { ...BUNDLED_CATALOG, providers: [{ ...openai, models: { codex: [] } }] };
+    let disabled = true;
+    const svc = createProviderService({
+      getCatalog: () => catalog,
+      projectCatalog: source => ({ ...source, providers: source.providers.map(provider => ({
+        ...provider, models: { codex: [model] },
+      })) }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => true, xai: () => false },
+      getModelAccess: (): ModelDisableOverrides => ({ disabledModels: disabled ? { 'openai:pool-model': true } : {} }),
+    });
+    expect(checkModelRoute(await svc.listProviders({ catalog }), 'codex', model.id, 'openai'))
+      .toEqual({ kind: 'reject', reason: 'explicit-source-disabled' });
+    disabled = false;
+    expect(checkModelRoute(await svc.listProviders({ getCatalog: () => catalog }), 'codex', model.id, 'openai'))
+      .toEqual({ kind: 'pass' });
+    expect(catalog.providers[0].models.codex).toEqual([]);
   });
 
   it('supports async connection readers (codex oauth)', async () => {

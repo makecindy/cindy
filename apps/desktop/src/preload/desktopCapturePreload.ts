@@ -62,8 +62,8 @@ if (location.search === '?mode=recording') {
       };
     },
     reply: (id, ok, value) => ipcRenderer.invoke(FILE_PEER_LOCAL.REPLY, id, ok, value),
-    read: (connection, ticket, offset) =>
-      ipcRenderer.invoke(FILE_PEER_LOCAL.READ, connection, ticket, offset),
+    read: (connection, ticket, offset, maxBytes) =>
+      ipcRenderer.invoke(FILE_PEER_LOCAL.READ, connection, ticket, offset, maxBytes),
     write: (sink, offset, base64) =>
       ipcRenderer.invoke(FILE_PEER_LOCAL.WRITE, sink, offset, base64),
     invoke: (connection, payload, body) =>

@@ -1,9 +1,12 @@
 import fs from 'node:fs';
 import ts from 'typescript';
-import { confirmedAutoTools } from '../ghostInstallConsent.js';
+import { confirmedAutoTools, confirmedHostToolGroups, confirmedEventTopics, confirmedHostUiPermissions } from '../ghostInstallConsent.js';
 import { setPluginEnabled } from '../pluginEnableService.js';
 import { createGhostExecutionPipe } from '../executionPipe.js';
+import { setTaskChangeListener } from '../../localDb/taskEvents.js';
 import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
+import { ghostInstallApprovalToken } from '../../../shared/ghost.js';
+import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
 import {
   parsePluginStoragePart,
   parsePluginInstallRelId,
@@ -17,7 +20,11 @@ import {
 } from '../../../shared/pluginIdentity.js';
 
 const productionIdentityDeps = {
+  ghostInstallApprovalToken,
+  withPluginSchedulerApproval,
+  requestPluginHostToolCall: async () => ({ isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"HOST_NOT_READY"}' }] }),
   createGhostExecutionPipe,
+  setTaskChangeListener,
   setPluginEnabled,
   parsePluginStoragePart,
   parsePluginInstallRelId,
@@ -25,6 +32,9 @@ const productionIdentityDeps = {
   LOCAL_PLUGIN_NAMESPACE,
   isOrganizationPluginNamespace,
   confirmedAutoTools,
+  confirmedHostToolGroups,
+  confirmedEventTopics,
+  confirmedHostUiPermissions,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,
   installedGhostPhysicalRelId,
@@ -55,12 +65,16 @@ const source = fs.readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true);
 
 export function createGhostProductionCallbacks<Result>(options: {
+  source?: URL;
   functions?: string[];
   variables?: string[];
   callbacks?: Record<string, readonly [callee: string, channel?: string]>;
   initialize?: string;
   transformCallback?: (source: string) => string;
 }): (deps: Record<string, unknown>) => Result {
+  const productionAst = options.source
+    ? ts.createSourceFile(options.source.pathname, fs.readFileSync(options.source, 'utf8'), ts.ScriptTarget.Latest, true)
+    : ast;
   const { functions = [], variables = [], callbacks = {} } = options;
   const names = [...functions, ...variables, ...Object.keys(callbacks)];
   if (new Set(names).size !== names.length) throw new Error('Duplicate production export names');
@@ -71,26 +85,26 @@ export function createGhostProductionCallbacks<Result>(options: {
   };
   const visit = (node: ts.Node): void => {
     if (ts.isFunctionDeclaration(node) && node.name && functions.includes(node.name.text)) {
-      record(node.name.text, node.getText(ast).replace(/^export /, ''));
+      record(node.name.text, node.getText(productionAst).replace(/^export /, ''));
     }
-    if (ts.isVariableDeclaration(node) && variables.includes(node.name.getText(ast))) {
-      record(node.name.getText(ast), 'const ' + node.getText(ast) + ';');
+    if (ts.isVariableDeclaration(node) && variables.includes(node.name.getText(productionAst))) {
+      record(node.name.getText(productionAst), 'const ' + node.getText(productionAst) + ';');
     }
     if (ts.isCallExpression(node)) {
       for (const [name, [callee, channel]] of Object.entries(callbacks)) {
-        if (node.expression.getText(ast) !== callee) continue;
+        if (node.expression.getText(productionAst) !== callee) continue;
         const firstArgument = node.arguments[0];
         if (channel !== undefined && (!firstArgument || !ts.isStringLiteral(firstArgument) ||
             firstArgument.text !== channel)) continue;
         const callback = node.arguments[channel === undefined ? 0 : 1];
         if (!callback) throw new Error('Production callback missing: ' + name);
-        const text = callback.getText(ast);
+        const text = callback.getText(productionAst);
         record(name, 'const ' + name + ' = ' + (options.transformCallback?.(text) ?? text) + ';');
       }
     }
     ts.forEachChild(node, visit);
   };
-  visit(ast);
+  visit(productionAst);
   const missing = names.filter((name) => !declarations.has(name));
   if (missing.length) throw new Error('Production declarations missing: ' + missing.join(', '));
   const compiled = ts.transpileModule(
@@ -100,7 +114,7 @@ export function createGhostProductionCallbacks<Result>(options: {
   return (deps) => {
     const merged = { ...productionIdentityDeps, ...instanceLookupDeps(deps), ...deps };
     return new Function(
-      'deps', 'const {' + Object.keys(merged).join(',') + '} = deps;' + compiled +
+      'deps', 'const {' + Object.keys(merged).filter(name => !names.includes(name)).join(',') + '} = deps;' + compiled +
         ';return {' + names.join(',') + '};',
     )(merged) as Result;
   };

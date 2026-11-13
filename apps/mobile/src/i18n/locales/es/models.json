@@ -13,14 +13,14 @@
     "agentSwitchHint": "Después de elegir un modelo, el siguiente mensaje cambia a {{agent}}",
     "crossAgentEmptyHint": "Primero conecta una fuente de modelos para {{agent}} en el dispositivo remoto",
     "permissionModeAccessibility": "Modo de permiso: {{mode}}",
-    "selectProviderModelAccessibility": "Seleccione {{model}} de {{provider}}",
-    "selectModelAccessibility": "Seleccione {{model}}",
+    "selectProviderModelAccessibility": "Selecciona {{model}} de {{provider}}",
+    "selectModelAccessibility": "Selecciona {{model}}",
     "configureAccessibility": "Configurar {{model}}",
     "budgetDisabledHint": "Este modelo necesita una clave API configurada primero en el dispositivo remoto",
     "priceLine": "Entrada {{input}} · Salida {{output}} / millón de tokens",
     "priceTitle": "Por 1 millón de tokens",
     "priceAmounts": "Entrada {{input}} · Salida {{output}}",
-    "discountedVsStandard": "Con descuento · {{percent}}% de descuento estándar",
+    "discountedVsStandard": "Con descuento · {{percent}}% menos que el precio estándar",
     "contextSuffix": "Contexto de {{size}}",
     "fastTag": "Rápido"
   },
@@ -46,16 +46,16 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "Este modelo no se ajusta a la conversación actual.",
+    "title": "La conversación actual no cabe en este modelo",
     "remoteTitle": "Este cambio de modelo remoto no es compatible",
-    "description": "Esta conversación ya utiliza {{used}}, más de lo que el nuevo modelo puede contener ({{total}}, aproximadamente {{pct}}%). Si cambia, Cindy hará un breve resumen y continuará. Tu historial de chat permanece; simplemente no se transmitirá todo palabra por palabra.",
-    "remoteDescription": "Esta tarea remota ya utiliza {{used}} / {{total}} del contexto del modelo más pequeño (aproximadamente {{pct}}%), por lo que Cindy no puede cambiar de forma segura. Mantenga el modelo actual o comience una nueva tarea antes de elegir este modelo.",
+    "description": "Esta conversación ya usa {{used}}, más de lo que admite el nuevo modelo ({{total}}, aproximadamente {{pct}}%). Si cambias, Cindy hará un breve resumen y continuará. El historial de la conversación se conserva, pero no se pasará todo palabra por palabra.",
+    "remoteDescription": "Esta tarea remota ya utiliza {{used}} / {{total}} del contexto del modelo más pequeño (aproximadamente {{pct}}%), por lo que Cindy no puede cambiar de forma segura. Mantén el modelo actual o inicia una nueva tarea antes de elegir este modelo.",
     "cancel": "Mantener este modelo",
     "confirm": "Cambiar y continuar"
   },
   "switchOutcome": {
     "applied": "El cambio de proveedor de modelo ya está en vigor.",
-    "failed": "Error en el cambio de proveedor de modelo. Elija el modelo nuevamente."
+    "failed": "Error en el cambio de proveedor de modelo. Elige el modelo de nuevo."
   },
   "agentSwitch": {
     "browseAccessibility": "Explorar modelos {{agent}}",
@@ -68,15 +68,15 @@
     "titleOther": "¿Ejecutar el Agent en “{{device}}”?",
     "titleHost": "¿Ejecutar el Agent en “{{host}}” nuevamente?",
     "titleHostUnnamed": "¿Ejecutar nuevamente el Agent en la computadora de la sesión?",
-    "message": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envía el siguiente mensaje.",
-    "messageNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envía el siguiente mensaje.",
+    "message": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envías el siguiente mensaje.",
+    "messageNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envías el siguiente mensaje.",
     "confirm": "Cambiar de computadora",
     "cancel": "Dejar como está"
   },
   "unified": {
     "accountUnassigned": "Cuenta sin asignar",
-    "accountCount_one": "Cuenta {{count}}",
-    "accountCount_other": "cuentas {{count}}",
+    "accountCount_one": "{{count}} cuenta",
+    "accountCount_other": "{{count}} cuentas",
     "accountFallback": "Cuenta {{index}}",
     "accountCount_many": "cuentas {{count}}",
     "favoriteConfiguration": "Guardar esta configuración en Favoritos",
@@ -85,10 +85,10 @@
     "usingRecommended": "Con la configuración recomendada",
     "customized": "Personalizado",
     "resetScopeHint": "Restaurar valores recomendados restablece el Harness, la intensidad de razonamiento y el modo rápido. No modifica los favoritos guardados.",
-    "saveFavoriteHint": "Guarde estas configuraciones para acceder rápidamente desde Favoritos.",
+    "saveFavoriteHint": "Guarda esta configuración para acceder rápidamente a ella desde Favoritos.",
     "removeFavoriteHint": "Al eliminar el acceso directo, la configuración actual no cambia.",
     "editFavorite": "Editar favorito original",
-    "editFavoriteHint": "Los cambios se aplican a este favorito sólo después de guardarlos. La configuración en uso permanece sin cambios.",
+    "editFavoriteHint": "Los cambios se aplican a este favorito solo después de guardarlos. La configuración en uso permanece sin cambios.",
     "saveFavorite": "Guardar favorito",
     "cancelEdit": "Cancelar edición",
     "originalFavoriteKept": "Configuración actualizada. El favorito original no ha cambiado.",
@@ -97,8 +97,8 @@
     "favoriteRemoved": "Favorito eliminado. La configuración actual no se modifica.",
     "favoriteSaved": "Configuración agregada a Favoritos.",
     "favoriteUpdated": "Favorito actualizado. La configuración en uso no ha cambiado.",
-    "favoriteChanged": "Este favorito fue cambiado o eliminado. Cancele la edición y vuelva a abrirla para volver a intentarlo.",
-    "favoriteExists": "Esta configuración ya está en Favoritos. Cancele la edición para usarlo.",
+    "favoriteChanged": "Este favorito se modificó o se eliminó. Cancela la edición y vuelve a abrirlo para intentarlo de nuevo.",
+    "favoriteExists": "Esta configuración ya está en Favoritos. Cancela la edición para usarla.",
     "favorites": "Favoritos",
     "all": "Todos los modelos",
     "recommended": "Recomendado",
@@ -110,9 +110,9 @@
     "groupBadge_other": "Grupo de proveedores · {{count}} computadoras",
     "harness": "Harness",
     "restoreRecommended": "Restaurar valores recomendados",
-    "saveFailed": "No se pudo guardar. Por favor inténtalo de nuevo.",
+    "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
     "configure": "Configurar",
-    "syncFailed": "Los favoritos no se pudieron sincronizar. Vuelva a abrir el selector para volver a intentarlo; Es posible que la computadora remota necesite una actualización.",
+    "syncFailed": "No se pudieron sincronizar los favoritos. Vuelve a abrir el selector para reintentarlo; es posible que la computadora remota necesite una actualización.",
     "timeUnit": {
       "day": "d",
       "hour": "h",
@@ -123,7 +123,7 @@
     "quotaAverage": "Media restante {{percent}} %",
     "quotaUpdating": "Cuota pendiente de actualizar",
     "quotaResetSoon": "Se restablece pronto",
-    "quotaResetIn": "Se reinicia en {{duration}}",
+    "quotaResetIn": "Se restablece en {{duration}}",
     "quotaAverageHint": "Cuota semanal · Mismo peso por cuenta",
     "quotaResetHint": "Al ritmo actual, puede quedar cuota al restablecerse: amarillo si faltan hasta 24 horas y rojo si faltan hasta 6 horas."
   }

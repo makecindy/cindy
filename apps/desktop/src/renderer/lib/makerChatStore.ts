@@ -70,6 +70,7 @@ import {
   isGatewayProxyTokenInvalidError,
   redactSensitiveText,
   parseAgentErrorCode,
+  localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import {
   formatRemoteError,
@@ -383,6 +384,8 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
+  const subscriptionGuidance = localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language);
+  if (subscriptionGuidance) return subscriptionGuidance;
   const recovery = sharedTaskRecoveryReason(msg);
   if (recovery) return i18n.t(`sharedTaskRecovery.reason.${recovery}`);
   const limitKey = remoteAgentLimitErrorKey(msg);
@@ -395,6 +398,9 @@ export function decodeRemoteErrorMessage(msg: string): string {
 
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
 export function remoteErrorMessageForBanner(msg: string): string {
+  // Subscription guidance has its own keys and reset metadata. Keep the raw
+  // error so live/tail banners can translate it after locale changes.
+  if (localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language)) return msg;
   const key = remoteErrorI18nKey(msg);
   return key && i18n.exists(key) ? msg : decodeRemoteErrorMessage(msg);
 }
@@ -1028,7 +1034,7 @@ export interface PendingGhostGrantConfirm {
    * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
   lane:
-    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
+    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'fs_delete' | 'workspace' | 'forge_source' | 'outside_workdir';
   sourceTool?: string;
   operation?: 'read' | 'write';
   items: Array<{
@@ -7571,9 +7577,9 @@ function handleStatusUpdate(
     };
   }
 
-  // Turn-complete updates (Done + !isRunning) carry authoritative values from
-  // getContextUsage() when contextWindow is known. Interrupted compact can end
-  // with a placeholder 0/0 snapshot; do not let that erase the last real value.
+  // Completion and mid-turn compaction carry authoritative context snapshots.
+  // Startup and generation statuses can keep reporting unknown zero until
+  // message_end; only a confirmed snapshot may clear the last known value.
   const isTurnComplete = !update.isRunning && update.status === 'Done';
   // Detect new turn start: isRunning flips from false → true.
   const isTurnStart = update.isRunning && !state.agentStatus.isRunning;
@@ -7587,11 +7593,14 @@ function handleStatusUpdate(
       : state.agentStatus.tokenUsage;
   const hasContextSnapshot =
     typeof update.contextWindow === 'number' &&
+    Number.isFinite(update.contextWindow) &&
     update.contextWindow > 0 &&
     typeof update.contextTokens === 'number' &&
+    Number.isFinite(update.contextTokens) &&
     update.contextTokens >= 0;
   const ct =
-    (isTurnComplete && hasContextSnapshot) || (update.contextTokens && update.contextTokens > 0)
+    ((isTurnComplete || update.contextSnapshotAuthoritative === true) && hasContextSnapshot)
+      || (update.contextTokens && update.contextTokens > 0)
       ? update.contextTokens
       : state.agentStatus.contextTokens;
   const cw =
@@ -7604,7 +7613,7 @@ function handleStatusUpdate(
       ? update.costUsd
       : state.agentStatus.costUsd;
 
-  // Context values are pushed by agentManager after each turn complete via getContextUsage().
+  // Runtime status carries context usage without waiting for the turn to finish.
 
   return {
     ...state,
@@ -18060,6 +18069,7 @@ function parseGhostGrantConfirmRequest(request: {
     lane !== 'save_dir' &&
     lane !== 'reveal_path' &&
     lane !== 'fs_write' &&
+    lane !== 'fs_delete' &&
     lane !== 'workspace' &&
     lane !== 'forge_source' &&
     lane !== 'outside_workdir'

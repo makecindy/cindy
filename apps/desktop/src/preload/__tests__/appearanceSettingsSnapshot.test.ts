@@ -87,7 +87,7 @@ describe.each(['main', 'sidebar'] as const)('%s preload appearance snapshot', (k
 
     if (kind === 'sidebar') {
       expect(Object.keys(bridge).sort()).toEqual([
-        'ensureWallpaperImage', 'ensureWallpaperVideo', 'getSync', 'onChanged',
+        'ensureWallpaperImage', 'ensureWallpaperVideo', 'getSync', 'loadPluginFont', 'onChanged',
         'onWallpaperDownloadProgress',
       ]);
       // Plugin picker regression: a parallel profile without a migration-complete marker needs
@@ -106,9 +106,18 @@ describe.each(['main', 'sidebar'] as const)('%s preload appearance snapshot', (k
       expect(exposed.maker.claimLegacyModelVisibilityOwner().canWriteOwnerScoped).toBe(false);
     } else {
       expect(Object.keys(bridge).sort()).toEqual([
-        'ensureWallpaperImage', 'ensureWallpaperVideo', 'get', 'getSync', 'importWallpaper',
-        'onChanged', 'onWallpaperDownloadProgress', 'removeWallpaper', 'reset', 'setPatch',
+        'ensureWallpaperImage', 'ensureWallpaperVideo', 'get', 'getSync', 'importWallpaper', 'loadPluginFont',
+        'onChanged', 'onWallpaperDownloadProgress', 'removeWallpaper', 'reset', 'resetFields', 'selectTheme', 'setPatch',
       ]);
+      // Full themes add only trusted app-content mutations; sidebar above stays
+      // read-only. Exercise the real preload routing, not a handwritten bridge.
+      const selection = { mode: 'dark', familyId: 'theme-local' };
+      await exposed.appearanceSettings.selectTheme(selection);
+      expect(mocks.invoke).toHaveBeenLastCalledWith('appearance-settings:select-theme', selection);
+      await exposed.appearanceSettings.selectTheme(null);
+      expect(mocks.invoke).toHaveBeenLastCalledWith('appearance-settings:select-theme', null);
+      await exposed.appearanceSettings.resetFields(['terminalSize']);
+      expect(mocks.invoke).toHaveBeenLastCalledWith('appearance-settings:reset-fields', ['terminalSize']);
     }
   });
 });

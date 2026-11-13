@@ -1,3 +1,4 @@
+vi.mock('@/platform/haptics', () => ({ playHaptic: vi.fn() }));
 vi.mock('@/session/TaskDrawerPresentation', () => ({ useTaskDrawerPresentation: () => null }));
 // @vitest-environment jsdom
 import * as React from 'react';
@@ -31,7 +32,6 @@ vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => true }));
 vi.mock('@/platform/gestureHandler', () => ({ GestureDetector: ({ children }: any) => children }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => geometry(), PaneViewportProvider: ({ children }: any) => children }));
 vi.mock('@/session/useSessionHeaderHeight', () => ({ useSessionHeaderHeight: () => 44 }));
-vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: () => null }));
 vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useLocalSearchParams: () => ({ groupId: 'g1', deviceId: 'mac', deviceName: 'Mac' }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/session/ResidentHomeList', () => ({ useSessionSidebarWidthPreference: () => ({ width: null, setWidth() {} }), useSessionPaneLayout: () => sessionPaneLayout(geometry()) }));

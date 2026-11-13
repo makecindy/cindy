@@ -332,12 +332,27 @@ describe('same-harness native relocation', () => {
     expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining('你好'), undefined);
   });
 
-  it('keeps cross-harness switching on the existing handoff path', async () => {
+  // #9973, unit: ordinary and Orca Lead switches must deliver early constraints
+  // through the real switch transaction; the previous short fixture could not lose its middle.
+  it.each([null, 'lead'] as const)('keeps early constraints in the cross-harness handoff (role=%s)', async (orcaRole) => {
     const relocateNativeHistory = vi.fn();
-    const { deps } = makeDeps({ relocateNativeHistory, getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project' })) });
+    const initial = `${'background '.repeat(25)}Review only; do not modify files.${'context '.repeat(25)}`;
+    const history = [
+      { role: 'user', content: initial, createdAt: 1 },
+      ...Array.from({ length: 4 }, (_, i) => [
+        { role: 'user', content: `Progress ${i}`, createdAt: 2 + i * 2 },
+        { role: 'assistant', content: 'Checking', createdAt: 3 + i * 2 },
+      ]).flat(),
+    ];
+    const { deps } = makeDeps({ relocateNativeHistory,
+      getSessionRow: vi.fn(async () => makeRow({ workingDir: '/project', orcaRole })),
+      listMessagesForHandoff: vi.fn(async () => history),
+    });
     await performSessionAgentSwitch(deps, { ...validParams, agentDeviceId: 'mini', applyNow: true });
     expect(relocateNativeHistory).not.toHaveBeenCalled();
     expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ sdkSessionId: null }));
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ handoff: expect.stringContaining(initial) }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining(initial), undefined);
   });
 
   it('restores the source before opening a native copy whose fallback boundary could not be saved', async () => {
@@ -2077,18 +2092,24 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
   it.each([
     { orcaRole: null, orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' }) },
     { orcaRole: null, orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker', releasedAt: 1 }) },
-  ])('execution-device Worker rejects user relocation while preserving harness/model selection: %j', async (identity) => {
+  ])('execution-device Worker moves its Agent like a normal task (2026-11-12): %j', async (identity) => {
     const row = { ...identity, model: 'anthropic/claude-opus-5-5[1m]' };
     const { agentDeviceId: _omit, ...withoutLocation } = backToTaskComputer;
+    // The user's choice is only staged; it lands at the next send with a full handoff.
     const userMove = relocationHarness(row);
-    await expect(performSessionAgentSwitch(userMove.deps, { ...backToTaskComputer, agentDeviceId: 'office-pc' }))
-      .rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
-    const staged = relocationHarness(row);
-    await expect(performSessionAgentSwitch(staged.deps, {
-      ...backToTaskComputer,
-      agentDeviceId: 'office-pc',
-      providerGroupRelocation: true,
-    })).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+    await expect(performSessionAgentSwitch(userMove.deps, { ...backToTaskComputer, agentDeviceId: 'share:s-1' }))
+      .resolves.toMatchObject({ deferred: true, switched: false });
+    expect(userMove.assertAgentDeviceRouteUsable).toHaveBeenCalled();
+    expect(userMove.pending.get('s1')).toMatchObject({ targetAgentDeviceId: 'share:s-1' });
+    expect(userMove.calls).toEqual([]);
+    await applyPendingAgentSwitchIfIdle(userMove.deps, 's1');
+    expect(userMove.findParkedEngineSession).not.toHaveBeenCalled();
+    expect(userMove.calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
+    expect(userMove.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentDeviceId: 'share:s-1',
+      sdkSessionId: null,
+    }));
+    expect(userMove.pending.get('s1')).toBeUndefined();
     const otherModel = relocationHarness(row);
     await expect(performSessionAgentSwitch(otherModel.deps, {
       ...withoutLocation,
@@ -2101,15 +2122,13 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       targetAgentKind: 'codex',
       applyNow: true,
       })).resolves.toMatchObject({ switched: true });
-    expect(userMove.calls).toEqual([]);
-    expect(staged.calls).toEqual([]);
   });
 
   // PR #6830 merge regression, unit: the scheduled entry materialized inherited
-  // null and turned a same-computer Harness switch into a forbidden Worker move.
-  // Earlier tests entered the handoff directly. Exercise both production entries;
-  // an actual location change must still fail before runtime or database mutation.
-  it.each([undefined, null, 'office-pc'])('scheduled execution-device Worker keeps its location boundary: %j', async (agentDeviceId) => {
+  // null and turned a same-computer Harness switch into a Worker move. Exercise
+  // both production entries; since 2026-11-12 an explicit location change on an
+  // execution-device Worker is applied like any other task.
+  it.each([undefined, null, 'office-pc'])('scheduled execution-device Worker applies the saved location: %j', async (agentDeviceId) => {
     const h = relocationHarness({ agentDeviceId: null, orcaRole: null,
       orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' }),
     });
@@ -2127,15 +2146,13 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       }),
       applyModel,
     });
-    if (agentDeviceId) {
-      await expect(result).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
-      expect(h.calls).toEqual([]);
-      expect(applyModel).not.toHaveBeenCalled();
-    } else {
-      await expect(result).resolves.toMatchObject({ agentKind: 'codex', agentDeviceId: null });
-      expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'codex' }));
-      expect(applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', agentDeviceId: null }));
-    }
+    const expected = agentDeviceId ?? null;
+    await expect(result).resolves.toMatchObject({ agentKind: 'codex', agentDeviceId: expected });
+    // The DB write only carries agentDeviceId when the location actually changes.
+    expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', ...(agentDeviceId ? { agentDeviceId } : {}),
+    }));
+    expect(applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', agentDeviceId: expected }));
   });
 
   it('协同 Lead 离开远程电脑:关闭旧远程会话遇链路错误仍提交新位置', async () => {
@@ -2470,9 +2487,15 @@ describe('换到供应商组那一项：由组选一台能用的电脑(provider-
     expect(pending.get('s1')).toBeUndefined();
   });
 
-  it.each(['lead', 'worker'])('协同任务 %s:组选回当前位置时按交接重建,不走需要点选窗口确认的原地换模型', async (orcaRole) => {
+  it.each(['lead', 'worker', 'remote-worker'])('协同任务 %s:组选回当前位置时按交接重建,不走需要点选窗口确认的原地换模型', async (role) => {
+    // PR #10230 unit: a remote Worker with null orcaRole must rebuild when
+    // its selected group returns to the current provider, clearing the intent.
+    const orcaRole = role === 'remote-worker' ? null : role;
+    const orcaRemoteLead = role === 'remote-worker'
+      ? JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' })
+      : null;
     const pending = createPendingAgentSwitchRegistry();
-    const row = makeRow({ agentKind: 'cc', model: 'claude-fable-5', providerId: 'xd', agentDeviceId: null, orcaRole });
+    const row = makeRow({ agentKind: 'cc', model: 'claude-fable-5', providerId: 'xd', agentDeviceId: null, orcaRole, orcaRemoteLead });
     const selectSameAgentModel = vi.fn(async () => ({ deferred: false }));
     const commitBinding = vi.fn(async () => undefined);
     const { deps } = makeDeps({
