@@ -3095,8 +3095,9 @@ describe('disabled task account recovery before send', () => {
   });
   // Unit: an already-hosted default subscription can predate the first pool configuration.
   // Existing live-handle coverage creates the pool before startup, so it misses the legacy path.
-  it.each((['openai', 'anthropic'] as const).flatMap(provider => [false, true].map(implicit => ({ provider, implicit }))))(
-    'honors first-time pause on a live unpooled $provider task (implicit=$implicit)', async ({ provider, implicit }) => {
+  it.each((['openai', 'anthropic'] as const).flatMap(provider => [false, true].flatMap(implicit =>
+    [false, true].map(clearProvider => ({ provider, implicit, clearProvider })))))(
+    'honors first-time pause on a live unpooled $provider task (implicit=$implicit, clear=$clearProvider)', async ({ provider, implicit, clearProvider }) => {
     delete h.pools[provider];
     const send = vi.fn(async () => {});
     const agent = withSubscriptionAccounts({ kind: provider === 'openai' ? 'codex' : 'claude-code',
@@ -3106,6 +3107,8 @@ describe('disabled task account recovery before send', () => {
       deviceHosted: { workingDir: '/controller' },
     } as StartSessionOptions);
     await handle.send({ type: 'user', content: 'before' });
+    // Clearing the explicit source still uses the native default login.
+    if (clearProvider) await handle.setModel!(provider === 'openai' ? 'gpt-6' : 'claude-sonnet', { providerId: null });
     await runSubscriptionAccountCommand({ action: 'configure', providerId: provider, accountId: 'default', paused: true });
     await expect(handle.send({ type: 'user', content: 'paused' })).rejects.toThrow('disabled');
     expect(send).toHaveBeenCalledTimes(1);

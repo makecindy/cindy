@@ -221,7 +221,7 @@ function guardAccountSwitch(
   return new Proxy(handle, {
     get(target, property) {
       if (property === 'send' && legacyDefaultProvider &&
-          (providerId === initial.providerId || providerId === legacyDefaultProvider))
+          (providerId === initial.providerId || (providerId ?? legacyDefaultProvider) === legacyDefaultProvider))
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           assertOwnerCurrent(owner);
           // The first pool setting can be saved after this default-account runtime started.
