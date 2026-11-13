@@ -51,6 +51,19 @@ vi.mock('../../remote-ssh/index.js', () => ({ getRemoteSshPoolHydrated: vi.fn() 
 import { beginAppSessionBoundary, commitActiveAppSession, getActiveAppSession } from '../../appSessionState';
 import { createRemoteTerminalRuntime } from '../../terminal/remoteTerminalRuntime';
 
+// Keep the real registered close hook, registry and empty renderer pool map. No
+// terminal body is mounted: this window never owned the popup's newly created PTY.
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn(() => undefined) }));
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('../../../renderer/features/right-sidebar/plugins/terminal/lib/xtermPool', () => ({
+  getXterm: (id: string) => xtermEntries.get(id),
+}));
+import '../../../renderer/features/right-sidebar/plugins/terminal';
+import { getTabKind } from '../../../renderer/features/right-sidebar/registry';
+import { xtermEntries } from '../../../renderer/features/right-sidebar/plugins/terminal/lib/xtermEntries';
+import { finishClosing } from '../../../renderer/features/right-sidebar/lib/tabClosingSignal';
+
 function owner(): WebContents {
   return { isDestroyed: () => false, once: vi.fn(), send: vi.fn() } as unknown as WebContents;
 }
@@ -109,6 +122,8 @@ beforeEach(() => {
 afterEach(() => {
   getDesktopHostTerminalService().disposeScoped();
   for (const session of manager.list()) manager.dispose(session.id);
+  finishClosing(params.id);
+  vi.unstubAllGlobals();
 });
 async function prepare(sourceEvent = source, extra: Record<string, unknown> = {}) {
   return invoke(TERMINAL_INVOKE.DESCRIBE_REMOTE, sourceEvent, { id: params.id, ...context, ...extra });
@@ -125,6 +140,9 @@ describe('terminal local compatibility', () => {
     invalidate();
     expect(manager.has('local')).toBe(true);
     expect(pty.kill).not.toHaveBeenCalled();
+    invoke(TERMINAL_INVOKE.DISPOSE, event(source.sender, false), 'local', { sessionId: 'task' });
+    expect(pty.kill).toHaveBeenCalledOnce();
+    expect(manager.has('local')).toBe(false);
   });
   it.each(['auto', 'zsh', null] as const)('preserves explicit shellPref (%s)', shellPref => {
     invoke(TERMINAL_INVOKE.CREATE, source, { id: 'local', cwd: homedir(), shellPref });
@@ -138,6 +156,45 @@ describe('terminal local compatibility', () => {
 });
 
 describe('remote ticket IPC', () => {
+  // PRRT_kwDOTgdRUs628hbI: previous IPC tests first created in the main window,
+  // and renderer tests mocked dispose. This unit joins the production close hook
+  // to real IPC/service/manager: a popup alone creates SSH, with no main entry or
+  // device index. A local saved identity can close; unknown Device Link cannot.
+  it.each([null, 'device'] as const)('closes popup-only SSH by saved identity (device: %s)', async deviceId => {
+    const popup = event();
+    const popupContext = { sessionId: context.sessionId, deviceId };
+    vi.mocked(remote.describe).mockResolvedValue({ ...description, context: popupContext });
+    const { ticket } = await invoke(TERMINAL_INVOKE.DESCRIBE_REMOTE, popup, { id: params.id, ...popupContext });
+    invoke(TERMINAL_INVOKE.CREATE, popup, { ...params, remote: { ...popupContext, ticket } });
+    expect(manager.isOwned(params.id, popup.sender)).toBe(true);
+    expect(xtermEntries.size).toBe(0);
+    const destroyed = event();
+    vi.spyOn(destroyed.sender, 'isDestroyed').mockReturnValue(true);
+    for (const [caller, closingContext] of [
+      [source, { ...popupContext, sessionId: 'other-task' }],
+      [source, { ...popupContext, deviceId: 'other-device' }],
+      [event(source.sender, false), popupContext],
+      [destroyed, popupContext],
+    ] as const) {
+      expect(() => invoke(TERMINAL_INVOKE.DISPOSE, caller, params.id, closingContext)).toThrow(/PERMISSION_DENIED/);
+    }
+    account = 'account:2';
+    expect(() => invoke(TERMINAL_INVOKE.DISPOSE, source, params.id, popupContext)).toThrow(/PERMISSION_DENIED/);
+    account = 'account:1';
+    expect(manager.has(params.id)).toBe(true);
+    expect(pty.kill).not.toHaveBeenCalled();
+    const dispose = vi.fn(async (id: string, closingContext?: unknown) => invoke(TERMINAL_INVOKE.DISPOSE, source, id, closingContext));
+    vi.stubGlobal('window', { electronAPI: { terminal: { dispose } } });
+    const plugin = getTabKind('terminal')!;
+    const result = await plugin.onBeforeClose!(plugin.defaultState(), { tabId: params.id, sessionId: context.sessionId });
+    expect(result).toBe(deviceId ? false : undefined);
+    expect(manager.has(params.id)).toBe(Boolean(deviceId));
+    expect(pty.kill).toHaveBeenCalledTimes(deviceId ? 0 : 1);
+    expect(dispose).toHaveBeenCalledWith(params.id, { sessionId: context.sessionId });
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+    expect(remote.describe).toHaveBeenCalledOnce();
+  });
+
   // Merge regression: IPC and managed commands now share one production registry.
   // Previous cases never mixed their lifetimes. Minimal input: SSH + UI + a scoped
   // program, then remote invalidation; unit with fake spawn and real service/handlers.

@@ -519,15 +519,17 @@ describe('TerminalTabBody local restart fallback', () => {
 describe('TerminalTabBody remote ownership', () => {
   // Production close hook / unit tier: main-window closeAll must identify a PTY
   // owned by a popped-out renderer. Existing close tests only covered cancellation,
-  // not the IPC identity contract. Missing origin must defer to main's owner check,
-  // rather than invent a local context. Minimal inputs: remote origin or undefined.
+  // not the IPC identity contract. With no pool entry or device index, the task
+  // identity is a candidate for main to match against its saved PTY identity.
   it.each(['device-1', undefined])('passes disposal identity when closing a terminal (origin: %s)', async (deviceId) => {
     vi.mocked(getSessionDeviceId).mockReturnValue(deviceId);
+    xtermEntries.clear();
+    vi.mocked(getXterm).mockReturnValue(undefined);
     const plugin = getTabKind('terminal')!;
     await plugin.onBeforeClose!(plugin.defaultState(), { tabId: 'terminal-1', sessionId: 'session-1' });
     expect(window.electronAPI.terminal.dispose).toHaveBeenCalledWith('terminal-1', deviceId ? {
       sessionId: 'session-1', deviceId,
-    } : undefined);
+    } : { sessionId: 'session-1' });
     expect(getSessionDeviceId).toHaveBeenCalledWith('session-1');
   });
 
@@ -558,12 +560,12 @@ describe('TerminalTabBody remote ownership', () => {
 
   // P1-2 / unit: a temporarily absent device index must not replace the original
   // pooled remote context with local null. Covers the close hook's input contract.
-  it('uses the retained remote origin when the device index is temporarily absent', async () => {
+  it.each([undefined, 'other-device'])('prefers the retained remote origin over the current device index (%s)', async deviceId => {
     vi.mocked(window.electronAPI.terminal.create).mockResolvedValue({ shellId: 'sh', shellDisplayName: 'SSH', pid: 1 });
     const ctx = makeContext({ deviceLinkDeviceId: 'device-1' });
     render(<TerminalTabBody state={{ created: true, exited: null, title: '', shellId: '', shellDisplayName: '' }} ctx={ctx} active />);
     await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalled());
-    vi.mocked(getSessionDeviceId).mockReturnValue(undefined);
+    vi.mocked(getSessionDeviceId).mockReturnValue(deviceId);
     const plugin = getTabKind('terminal')!;
     await plugin.onBeforeClose!(plugin.defaultState(), { tabId: 'terminal-1', sessionId: 'session-1' });
     expect(window.electronAPI.terminal.dispose).toHaveBeenCalledWith('terminal-1', { sessionId: 'session-1', deviceId: 'device-1' });

@@ -105,9 +105,10 @@ const plugin: TabKindPlugin<TerminalState> = {
       const original = getXterm(ctx.tabId);
       const retainedContext = original?.remoteContext;
       const deviceId = getSessionDeviceId(ctx.sessionId);
-      // Missing mirror metadata does not mean local. Prefer the original launch
-      // origin; otherwise let main validate the current owner by terminal ID.
-      const context = retainedContext ?? (deviceId ? { sessionId: ctx.sessionId, deviceId } : undefined);
+      // Prefer the retained origin; otherwise send the tab's task identity for
+      // main to match against its saved PTY. Missing device metadata cannot grant
+      // another window authority over a PTY whose saved identity includes a device.
+      const context = retainedContext ?? (deviceId ? { sessionId: ctx.sessionId, deviceId } : { sessionId: ctx.sessionId });
       await window.electronAPI.terminal.dispose(ctx.tabId, context);
       // Snapshot restoration transfers close-listener ownership to the live
       // entry. A removed/replaced lifetime must not consume this late release.
