@@ -77,6 +77,12 @@ interface StoreFile {
   sharedOrigin?: Record<string, SharedPrefOrigin>;
   /** 旧版官方机器人「新对话配置」(全局那份)已在升级时清过一次, 之后不再碰它。 */
   legacyGlobalDefaultsCleared?: boolean;
+  /**
+   * 还有渠道没并入共用配置的这段时间里让出来的项目名称(项目被移除, 或名称转给了别的目录)。
+   * 那些渠道的旧偏好此刻还在服务端, 本机清不到; 等它们连上、导入、并入时凭这份名单跳过,
+   * 免得上一个项目的模型和权限并进同名的新项目。四个渠道都并入后这份名单就没用了, 随即删掉。
+   */
+  releasedNames?: string[];
   entries: WorkspacePrefsEntry[];
 }
 
@@ -200,12 +206,22 @@ function readStore(fp: string): StoreFile {
         }
       }
     }
+    const releasedNames = Array.isArray(r.releasedNames)
+      ? [
+          ...new Set(
+            r.releasedNames.filter(
+              (name): name is string => typeof name === 'string' && HOOK_WORKSPACE_ALIAS_RE.test(name),
+            ),
+          ),
+        ].slice(0, SHARED_ORIGIN_MAX)
+      : [];
     return {
       version: 1,
       migrated,
       ...(Object.keys(sharedAdopted).length > 0 ? { sharedAdopted } : {}),
       ...(Object.keys(sharedOrigin).length > 0 ? { sharedOrigin } : {}),
       ...(r.legacyGlobalDefaultsCleared === true ? { legacyGlobalDefaultsCleared: true } : {}),
+      ...(releasedNames.length > 0 ? { releasedNames } : {}),
       entries,
     };
   } catch {
@@ -326,10 +342,7 @@ export function noteSharedPrefEdited(workspace: string): void {
 }
 
 function editedOrigin(store: StoreFile): SharedPrefOrigin | null {
-  const pending = (['slack', 'telegram', 'x', 'feishu'] as const).some(
-    (channel) => store.sharedAdopted?.[channel] !== true,
-  );
-  return pending ? SHARED_PREF_EDITED : null;
+  return adoptionPending(store) ? SHARED_PREF_EDITED : null;
 }
 
 function withSharedOrigin(store: StoreFile, workspace: string, origin: SharedPrefOrigin | null): StoreFile {
@@ -360,7 +373,21 @@ export function markSharedPrefsAdopted(channel: HookPrefsChannel): void {
   const fp = filePath();
   const store = readStore(fp);
   if (store.sharedAdopted?.[channel] === true) return;
-  writeStore(fp, { ...store, sharedAdopted: { ...store.sharedAdopted, [channel]: true } });
+  const next: StoreFile = { ...store, sharedAdopted: { ...store.sharedAdopted, [channel]: true } };
+  // 四个渠道都并入了: 再没有迟到的旧偏好要挡, 让出名称的名单随之作废。
+  if (!adoptionPending(next)) delete next.releasedNames;
+  writeStore(fp, next);
+}
+
+/** 这段时间里让出来的项目名称(见 StoreFile.releasedNames)。 */
+export function listReleasedProjectNames(): string[] {
+  return readStore(filePath()).releasedNames ?? [];
+}
+
+function adoptionPending(store: StoreFile): boolean {
+  return (['slack', 'telegram', 'x', 'feishu'] as const).some(
+    (channel) => store.sharedAdopted?.[channel] !== true,
+  );
 }
 
 export function listWorkspacePrefs(channel: HookPrefsStoreChannel): HookWorkspacePrefs[] {
@@ -925,9 +952,16 @@ export function clearWorkspacePrefsFor(names: readonly string[]): HookPrefsChann
       changed = true;
     }
   }
+  // 还有渠道没并入: 它们的旧偏好还在服务端, 这里清不到, 先把名称记下, 并入时跳过。
+  const releasedNames = adoptionPending(store)
+    ? [...new Set([...(store.releasedNames ?? []), ...released])].slice(-SHARED_ORIGIN_MAX)
+    : [];
+  if (releasedNames.length !== (store.releasedNames ?? []).length) changed = true;
   if (!changed) return [];
   const next: StoreFile = { ...store, sharedOrigin, entries };
   if (Object.keys(sharedOrigin).length === 0) delete next.sharedOrigin;
+  if (releasedNames.length > 0) next.releasedNames = releasedNames;
+  else delete next.releasedNames;
   writeStore(fp, next);
   return [...touched];
 }

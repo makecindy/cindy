@@ -28,6 +28,7 @@ import {
   isLegacyGlobalDefaultsCleared,
   isSharedPrefsAdopted,
   isWorkspacePrefsMigrated,
+  listReleasedProjectNames,
   listWorkspacePrefs,
   markLegacyGlobalDefaultsCleared,
   markSharedPrefsAdopted,
@@ -123,7 +124,11 @@ export function adoptChannelPrefs(channel: HookPrefsChannel): boolean {
   rows.sort((a, b) => Number((a.teamId ?? null) !== null) - Number((b.teamId ?? null) !== null));
   sources.sort((a, b) => Number(a.teamId !== null) - Number(b.teamId !== null));
   const workspaces = new Set([...rows.map((row) => row.workspace), ...sources.map((entry) => entry.workspace)]);
+  // 这个渠道并入之前就让出来的名称(项目已移除, 或名称转给了别的目录): 它带来的是上一个项目的
+  // 配置, 不并入 —— 连权限档也不参与收紧。渠道行随后由投影清掉, 推给服务端。
+  const released = new Set(listReleasedProjectNames());
   for (const workspace of workspaces) {
+    if (released.has(workspace)) continue;
     const projectRows = rows.filter((row) => row.workspace === workspace);
     const row = projectRows[0];
     const route =

@@ -337,6 +337,27 @@ describe('sharedProjectPrefs', () => {
     expect(clearWorkspaceProviderSourcesFor(['gone'])).toBeNull();
   });
 
+  // 时序(评审指出): 项目移除时, 还没连上过的渠道的旧偏好还在服务端, 本机清不到。之后同名的
+  // 新项目出现, 那个渠道才第一次连上并入 —— 上一个项目的模型和权限不得并进新项目。
+  // 最小失败输入: Telegram 已并入 -> 移除 app -> 飞书带着 app 的旧行第一次并入。tier: unit。
+  it('移除项目之后才并入的渠道, 不会把上一个项目的配置带进同名的新项目', () => {
+    setWorkspacePref('telegram', null, 'app', { model: 'tg-app' });
+    markWorkspacePrefsMigrated('telegram');
+    adoptReadyChannels();
+    clearWorkspacePrefsFor(['app']);
+
+    setWorkspacePref('feishu', null, 'app', { model: 'old-feishu-app', permissionMode: 'ask' });
+    setWorkspacePref('feishu', null, 'other', { model: 'feishu-other' });
+    markWorkspacePrefsMigrated('feishu');
+    expect(adoptReadyChannels()).toEqual(['feishu']);
+
+    expect(getSharedProjectPref('app')).toMatchObject({ model: null, permissionMode: null });
+    expect(getSharedProjectPref('other').model).toBe('feishu-other');
+    // 渠道那行随后被对齐清掉, 等着推给服务端。
+    expect(projectSharedOntoChannel('feishu', [null])).toBe(true);
+    expect(getWorkspacePref('feishu', null, 'app').model).toBeNull();
+  });
+
   // 持久化: 侧栏给项目改名时, 共用那份跟着挪到新名称下, 旧名称下不留行。
   it('项目改名时共用那份跟到新名称', () => {
     setSharedProjectPref('old-name', { model: 'm1' });
