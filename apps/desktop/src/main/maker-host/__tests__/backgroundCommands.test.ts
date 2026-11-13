@@ -317,16 +317,29 @@ it('重启后孤儿日志:巡检把不在册的超限日志截回上限(体量�
     ['-e', "setInterval(() => process.stdout.write('x'.repeat(512 * 1024)), 50)"],
     { stdio: ['ignore', fd, fd] },
   );
-  // 新服务实例 = 重启后的空注册表;孤儿巡检应把越限日志压回上限量级。
-  const capture = vi.fn();
-  buildService(capture);
+  // 新服务实例 = 重启后的空注册表;巡检由本用例 start() 启动(因果必须自建,
+  // 不能賍同文件其它用例泄漏的模块级 poll)。
+  const service = buildService(vi.fn());
+  service.start({
+    sessionId: 'sess-orphan',
+    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    cwd: logDir,
+  });
+  // 先让日志真超过上限,否则起步阶段的小文件就能满足下界断言、截断根本没被验证。
+  await vi.waitFor(
+    async () => {
+      const { size } = await stat(orphanLog);
+      expect(size).toBeGreaterThan(BACKGROUND_COMMAND_LOG_CAP_BYTES);
+    },
+    { timeout: 20_000, interval: 500 },
+  );
   await vi.waitFor(
     async () => {
       const { size } = await stat(orphanLog);
       // 10MB/s 写者 × 1s 巡检:上界 = cap + 一个巡检周期的越冲,不可能写穿。
       expect(size).toBeLessThan(BACKGROUND_COMMAND_LOG_CAP_BYTES + 15 * 1024 * 1024);
     },
-    { timeout: 30_000, interval: 500 },
+    { timeout: 20_000, interval: 500 },
   );
   writer.kill();
   closeSync(fd);
