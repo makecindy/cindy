@@ -78,7 +78,7 @@ import { createHostModelAccess } from './agent/model-access.js';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
 import { closeClaudeCliProxyBridge } from '../../desktop/src/main/maker-host/claude-cli-proxy-bridge.js';
-import { setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
+import { markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
@@ -439,6 +439,7 @@ const listProviders = createProviderCatalog({
     setXdGatewayModels(models, options);
     agentGraph?.refreshModels();
   },
+  markModelsUnknown: () => markXdGatewayModelAccessUnknown(),
   fetchModels: async () => {
     const baseUrl = readAuthEndpoints((account.realm ?? resolveHostRegion()) as 'cn' | 'global').modelAccessApiBaseUrl;
     if (!baseUrl) throw new Error('Model access endpoint is unavailable');
