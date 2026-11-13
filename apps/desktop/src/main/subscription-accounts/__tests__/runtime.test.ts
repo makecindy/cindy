@@ -3133,6 +3133,27 @@ describe('disabled task account recovery before send', () => {
     expect(send).toHaveBeenCalledTimes(1);
     await handle.close();
   });
+  // A successful in-place source switch must track the newly selected subscription,
+  // including callers retaining the handle's send function across that switch.
+  it.each(['anthropic', 'custom-api'])('honors first-time pause after switching from %s to OpenAI', async initial => {
+    delete h.pools.openai;
+    delete h.pools.anthropic;
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => ({
+      id: 'switch-subscription', send, setModel: async () => {}, close: async () => {},
+    }) } as unknown as BaseAgent, { getState: async () => ({ authenticated: true, authSource: 'oauth' }) });
+    const handle = await agent.startSession({ ...(initial === 'anthropic' ? {} : { providerId: initial }) } as StartSessionOptions);
+    const sendNext = handle.send.bind(handle);
+    await sendNext({ type: 'user', content: 'before' });
+    await handle.setModel!('gpt-6', { providerId: 'openai' });
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: true });
+    await expect(sendNext({ type: 'user', content: 'paused' })).rejects.toThrow('disabled');
+    expect(send).toHaveBeenCalledTimes(1);
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: false });
+    await sendNext({ type: 'user', content: 'enabled' });
+    expect(send).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
   it('does not apply a later subscription pause to a handle already switched to an API provider', async () => {
     delete h.pools.openai;
     const send = vi.fn(async () => {});

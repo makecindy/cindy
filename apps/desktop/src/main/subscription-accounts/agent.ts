@@ -220,16 +220,17 @@ function guardAccountSwitch(
   };
   return new Proxy(handle, {
     get(target, property) {
-      if (property === 'send' && legacyDefaultProvider &&
-          (providerId === initial.providerId || (providerId ?? legacyDefaultProvider) === legacyDefaultProvider))
+      if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
-          assertOwnerCurrent(owner);
           // The first pool setting can be saved after this default-account runtime started.
           // Do not create a pool on startup, but honor its live pause/removal once it exists.
-          const pool = readPool(legacyDefaultProvider);
-          const account = pool?.accounts.find(a => a.id === 'default');
-          if (pool && (pool.disconnected || !account || account.paused))
-            throw new Error('The task subscription account is disabled; retry to switch accounts');
+          if (legacyDefaultProvider) {
+            assertOwnerCurrent(owner);
+            const pool = readPool(legacyDefaultProvider);
+            const account = pool?.accounts.find(a => a.id === 'default');
+            if (pool && (pool.disconnected || !account || account.paused))
+              throw new Error('The task subscription account is disabled; retry to switch accounts');
+          }
           return target.send(...args);
         };
       if (property === 'requiresModelSwitchRebuild')
@@ -251,8 +252,14 @@ function guardAccountSwitch(
         return async (...args: Parameters<NonNullable<AgentSessionHandle['setModel']>>) => {
           if (await crossesPool(args[0], args[1]))
             throw new Error('Subscription provider switch requires rebuilding the session');
+          const nextProviderId = args[1]?.providerId !== undefined ? args[1].providerId : providerId;
+          const next = await providerFor(agent, { ...initial, model: args[0], providerId: nextProviderId }, auth, true);
+          assertOwnerCurrent(owner);
+          // Unknown historical accounts in an existing pool must retain their legacy route.
+          const nextDefault = next && (!readPool(next) || next === legacyDefaultProvider) ? next : undefined;
           const result = await target.setModel!(...args);
-          if (args[1]?.providerId !== undefined) providerId = args[1].providerId;
+          providerId = nextProviderId;
+          legacyDefaultProvider = nextDefault;
           return result;
         };
       const value = Reflect.get(target, property, target);
