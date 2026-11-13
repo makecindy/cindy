@@ -13,6 +13,7 @@ import {
   piCatalogProviderIdAfterRouteEdit,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
+  shouldPruneMissingModels,
   updateCustomProvider,
 } from '../customProviders';
 import type {
@@ -804,6 +805,23 @@ describe('appendDiscoveredCustomProviderModels', () => {
       // 非法值不落盘,回落保守默认
       { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' } },
     ]);
+  });
+
+  // #10338 unit: real parse -> fetch status -> refresh merge. A valid Magpie row
+  // plus whitespace must not authorize pruning or discard the absent row's overrides.
+  it.each([{ id: '   ' }, '\t\n'])('preserves old model settings when Magpie includes blank ID %j', async invalid => {
+    const existing = [{ id: 'old', name: 'My name', contextWindow: 64000, defaultEnabled: false, supportsImageInput: false, reasoning: true, reasoningEfforts: ['low'] as const }];
+    const result = await fetchProviderModels({ agent: 'pi', baseUrl: 'http://127.0.0.1:3425/v1' }, async () => new Response(JSON.stringify({ data: [
+      { id: 'new', owned_by: 'source', magpie_label: 'New · Source' }, invalid,
+    ] }), { status: 200 }));
+    expect(result.ok).toBe(true);
+    expect(result.gatewayKind).toBe('magpie');
+    expect(result.catalogComplete).toBe(false);
+    const merged = appendDiscoveredCustomProviderModels(existing.map(m => ({ ...m, reasoningEfforts: [...m.reasoningEfforts] })), result.models!, undefined,
+      shouldPruneMissingModels(result) ? { pruneMissing: true } : undefined);
+    expect(merged.models.map(m => m.id)).toEqual(['new', 'old']);
+    expect(merged.models[1]).toEqual(existing[0]);
+    expect(merged.removedIds ?? []).toEqual([]);
   });
 
   it('prunes removed models and reports removedIds when pruneMissing is true', () => {

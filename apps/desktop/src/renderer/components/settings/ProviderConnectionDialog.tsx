@@ -214,6 +214,7 @@ interface ModelPickerState {
   query: string;
   /** 本次同步刷新已从服务端剔除的旧模型 ID（确认时不从 previousModels 加回）。 */
   prunedIds?: Set<string>;
+  emptyCatalogSignature?: string;
 }
 type DialogChildLayer =
   | { kind: 'preset-menu' }
@@ -626,6 +627,8 @@ export function ProviderConnectionDialog({
     codex: false,
     pi: false,
   });
+  // A picker-confirmed empty catalog is valid only for this connection/request.
+  const confirmedEmptyCatalogs = useRef<Partial<Record<DialogAgentKind, string>>>({});
   // 仅供当前表单展示；复用请求签名，使端点或凭证变化后不显示旧结果。
   const [modelFetchSummary, setModelFetchSummary] = useState<Partial<Record<DialogAgentKind, {
     signature: string;
@@ -1834,6 +1837,8 @@ export function ProviderConnectionDialog({
             selected,
             query: '',
             ...(prunedIds?.size ? { prunedIds } : {}),
+            ...(pruneMissing && result.models.length === 0
+              ? { emptyCatalogSignature: `${initial?.id}:${requestSig}` } : {}),
           },
         });
         // 弹层锁定所属 runtime：把背景 Tab 同步切回请求的 runtime（标题也带 runtime 名），
@@ -1959,6 +1964,9 @@ export function ProviderConnectionDialog({
             : {}),
         });
       }
+    }
+    if (merged.length === 0 && picker.emptyCatalogSignature) {
+      confirmedEmptyCatalogs.current[picker.agent] = picker.emptyCatalogSignature;
     }
     patch(picker.agent, (x) => ({ ...x, models: merged }));
     setChildLayer((current) =>
@@ -2092,8 +2100,41 @@ export function ProviderConnectionDialog({
         );
         return;
       }
-      // OAuth 形态模型可留空——授权成功后自动发现并持久化（与内置订阅统一）。
-      if (models.length === 0 && authMode !== 'oauth') {
+      // OAuth discovers after authorization. Magpie may legitimately have no
+      // enabled models; only a confirmed complete response permits saving empty.
+      let confirmedEmpty = false;
+      if (models.length === 0 && authMode !== 'oauth' && editing) {
+        const signature = `${initial?.id}:${providerModelFetchRequestSignature(rf, authMode)}`;
+        confirmedEmpty = confirmedEmptyCatalogs.current[a] === signature;
+        const baseline = savedBaselineFor(a);
+        // Empty stored configs have no model row carrying gateway provenance.
+        // Revalidate only the unchanged saved endpoint/auth mode; Main retains
+        // ownership of saved headers. Neither a preset nor an old source is proof.
+        if (!confirmedEmpty && initial?.runtimes[a]?.models.length === 0 && baseline &&
+            modelFetchCanReuseSavedCredentials(rf, baseline, authMode)) {
+          savingRef.current = true;
+          setSaving(true);
+          try {
+            const headers = Object.fromEntries(rf.headers.filter(h => h.name.trim())
+              .map(h => [h.name.trim(), h.value.trim()]));
+            const result = await window.electronAPI.maker.fetchProviderModels({
+              agent: a, baseUrl: rf.baseUrl.trim(), modelsUrl: rf.modelsUrl.trim() || null,
+              authMethod: authMode, wireProtocol: rf.wireProtocol,
+              apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
+              headers: authMode === 'none' ? stripCredentialHeaders(headers) : headers,
+              savedProviderId: initial.id,
+            });
+            const currentSignature = `${initial.id}:${providerModelFetchRequestSignature(rtRef.current[a], authModeRef.current)}`;
+            confirmedEmpty = currentSignature === signature && result.ok &&
+              result.models?.length === 0 && shouldPruneMissingModels(result);
+          } catch { /* A failed recheck must retain the existing empty-save guard. */ }
+          finally {
+            savingRef.current = false;
+            setSaving(false);
+          }
+        }
+      }
+      if (models.length === 0 && authMode !== 'oauth' && !confirmedEmpty) {
         setManualOpen(true);
         setActiveTab(a);
         reportFieldError(

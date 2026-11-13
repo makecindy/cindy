@@ -2994,9 +2994,9 @@ describe('model summary and explicit model selection', () => {
   const selectedLabel = 'settings.providers.custom.fetch.selectedCount';
   const availableLabel = 'settings.providers.custom.fetch.availableCount';
   const fetchButton = () => screen.getByRole('button', { name: fetchLabel });
-  async function openSummary(hasModel = false) {
-    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
-    const initial: CustomProviderConfig = { id: 'summary-fixture', name: 'Summary', auth: { method: 'none' }, runtimes: {
+  async function openSummary(hasModel = false, method: 'none' | 'apiKey' = 'none') {
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(method === 'apiKey' ? 'fake-key' : null);
+    const initial: CustomProviderConfig = { id: 'summary-fixture', name: 'Summary', auth: { method }, runtimes: {
       codex: { baseUrl: 'http://127.0.0.1:1234/v1', models: hasModel ? [fetched[0]] : [] },
     } };
     window.electronAPI.maker.fetchProviderModels = vi.fn().mockResolvedValue({ ok: true, models: fetched });
@@ -3070,8 +3070,8 @@ describe('model summary and explicit model selection', () => {
     expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull();
   });
 
-  it('removes canceled Magpie models after confirming the model picker without reviving them', async () => {
-    const fetch = vi.mocked(await openSummary(true));
+  it.each(['none', 'apiKey'] as const)('saves canceled Magpie models and reopens the empty catalog with %s auth', async method => {
+    const fetch = vi.mocked(await openSummary(true, method));
     expect(screen.getByText(`${selectedLabel}:1`)).toBeTruthy();
     // 1) 服务端只剩 summary-1（原 summary-0 已在 Magpie 取消）
     fetch.mockResolvedValueOnce({
@@ -3100,5 +3100,66 @@ describe('model summary and explicit model selection', () => {
     fireEvent.click(within(emptyPicker).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());
     expect(screen.getByText(`${selectedLabel}:0`)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    const saved = customProviderMocks.updateCustomProvider.mock.calls[0][0] as CustomProviderConfig;
+    expect(saved.runtimes.codex?.models).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(2); // Saving the confirmed picker needs no extra request.
+    cleanup();
+    customProviderMocks.updateCustomProvider.mockClear();
+    render(<ProviderConnectionDialog initial={saved} onClose={vi.fn()} onSaved={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    fetch.mockResolvedValueOnce({ ok: true, gatewayKind: 'magpie', catalogComplete: true, models: [] });
+    fireEvent.change(screen.getByDisplayValue('Summary'), { target: { value: 'Renamed Magpie' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    expect(customProviderMocks.updateCustomProvider.mock.calls[0][0]).toMatchObject({ name: 'Renamed Magpie', runtimes: { codex: { models: [] } } });
+  });
+
+  // #10338: actual Save after reopening an empty stored catalog, with API key or
+  // no auth. Earlier coverage stopped at picker counts and missed outer validation.
+  it.each(['none', 'apiKey'] as const)('saves a reopened empty Magpie connection with %s auth', async method => {
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('fake-key');
+    const initial: CustomProviderConfig = { id: 'empty-magpie', name: 'Empty Magpie', auth: { method }, runtimes: {
+      codex: { baseUrl: 'http://127.0.0.1:3425/v1', models: [] },
+    } };
+    window.electronAPI.maker.fetchProviderModels = vi.fn().mockResolvedValue({ ok: true, gatewayKind: 'magpie', catalogComplete: true, models: [] });
+    render(<ProviderConnectionDialog initial={initial} onClose={vi.fn()} onSaved={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    if (method === 'apiKey') {
+      await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.apiKeyEditPlaceholder'), { target: { value: 'new-fake-key' } });
+    }
+    fireEvent.change(screen.getByDisplayValue('Empty Magpie'), { target: { value: 'Renamed empty' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    expect(customProviderMocks.updateCustomProvider.mock.calls[0][0]).toMatchObject({ name: 'Renamed empty', runtimes: { codex: { models: [] } } });
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(expect.objectContaining({ savedProviderId: initial.id, authMethod: method, apiKey: method === 'apiKey' ? 'new-fake-key' : null }));
+    if (method === 'apiKey') expect(customProviderMocks.updateCustomProvider.mock.calls[0][1]).toEqual({ codex: 'new-fake-key' });
+  });
+
+  it('invalidates the confirmed empty Magpie catalog after changing endpoint', async () => {
+    const fetch = vi.mocked(await openSummary(true));
+    fetch.mockResolvedValueOnce({ ok: true, gatewayKind: 'magpie', catalogComplete: true, models: [] });
+    fireEvent.click(fetchButton());
+    const picker = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
+    fireEvent.click(within(picker).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
+    fireEvent.change(screen.getByDisplayValue('http://127.0.0.1:1234/v1'), { target: { value: 'http://127.0.0.1:4321/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await screen.findByText('settings.providers.custom.errors.modelRequired');
+    expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { ok: true, catalogComplete: true, models: [] },
+    { ok: true, gatewayKind: 'magpie', catalogComplete: false, models: [] },
+    { ok: false },
+  ])('keeps empty catalog save protection for an unconfirmed response %j', async result => {
+    const fetch = vi.mocked(await openSummary());
+    fetch.mockResolvedValueOnce(result as never);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await screen.findByText('settings.providers.custom.errors.modelRequired');
+    expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled();
   });
 });

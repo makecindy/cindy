@@ -124,7 +124,7 @@ export function parseModelsListResponseWithStatus(
                     ? (item as { model_id: string }).model_id
                     : google ? google.name.slice('models/'.length) : null
           : null;
-    if (!id) {
+    if (!id || !id.trim()) {
       droppedInvalidItems = true;
       continue;
     }
