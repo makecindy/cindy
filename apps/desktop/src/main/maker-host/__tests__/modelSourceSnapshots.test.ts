@@ -203,21 +203,23 @@ describe('model source automatic revalidation', () => {
     const configs = Array.from({ length: 8 }, (_, i) => ({ ...savedGateway(), id: `gateway-${i}` }));
     const releases: Array<() => void> = [];
     let active = 0; let peak = 0; let current = true; let released = false;
-    const fetchModels = vi.fn(async () => {
+    const networkRead = vi.fn(async () => {
       active++; peak = Math.max(peak, active);
       if (!released) await new Promise<void>(resolve => releases.push(resolve));
       active--; return null;
     });
-    const revalidate = createModelSourceRevalidator({ fetchModels, save: async () => false, now: () => 0,
+    const revalidate = createModelSourceRevalidator({
+      fetchModels: (_config, _agent, isCurrent, schedule) => schedule(async () => isCurrent() ? networkRead() : null),
+      save: async () => false, now: () => 0,
       credentialRevision: () => 0, isMutating: () => false });
     const first = revalidate(configs, 'scope', () => current);
     const shared = revalidate(configs, 'scope', () => current);
     await Promise.resolve(); await Promise.resolve();
-    expect(fetchModels).toHaveBeenCalledTimes(4);
+    expect(networkRead).toHaveBeenCalledTimes(4);
     current = !invalidate; released = true;
     releases.splice(0).forEach(release => release());
     await Promise.all([first, shared]);
-    expect(fetchModels).toHaveBeenCalledTimes(invalidate ? 4 : 8);
+    expect(networkRead).toHaveBeenCalledTimes(invalidate ? 4 : 8);
     expect(peak).toBe(4);
   });
 

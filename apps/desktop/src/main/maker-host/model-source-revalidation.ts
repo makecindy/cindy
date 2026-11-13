@@ -4,9 +4,10 @@ import { isCurrentModelSource, modelSourceRequestSignature } from './model-sourc
 const AGENTS = ['claude-code', 'codex', 'pi'] as const;
 const FAILURE_RETRY_MS = 5 * 60_000;
 const MAX_PARALLEL_DISCOVERIES = 4;
+type DiscoveryScheduler = <T>(work: () => Promise<T>) => Promise<T>;
 
 interface ModelSourceRevalidationDeps {
-  fetchModels(config: CustomProviderConfig, agent: AgentKind, isCurrent: () => boolean): Promise<DiscoveredModel[] | null | { retryAt: number }>;
+  fetchModels(config: CustomProviderConfig, agent: AgentKind, isCurrent: () => boolean, schedule: DiscoveryScheduler): Promise<DiscoveredModel[] | null | { retryAt: number }>;
   save(id: string, previous: CustomProviderConfig, next: CustomProviderConfig): Promise<boolean>;
   credentialRevision(id: string): number;
   isMutating(id: string): boolean;
@@ -20,7 +21,7 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
   // Shared across overlapping loads and owner changes, including pagination.
   let running = 0;
   const waiting: Array<() => void> = [];
-  async function discover(work: () => ReturnType<ModelSourceRevalidationDeps['fetchModels']>) {
+  async function discover<T>(work: () => Promise<T>): Promise<T> {
     if (running >= MAX_PARALLEL_DISCOVERIES) await new Promise<void>(resolve => waiting.push(resolve));
     else running++;
     try { return await work(); } finally {
@@ -86,8 +87,10 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
       let read = reads.get(config.id);
       if (!read || read.signature !== signature) {
         const promise = Promise.all(eligible.map(async ({ agent, retainDeadline }) => {
-          const result = await Promise.resolve().then(() => discover(async () =>
-            isCurrent() ? deps.fetchModels(config, agent, isCurrent) : null)).catch(() => null);
+          // The HTTP layer coalesces identical requests before taking a slot;
+          // queued sibling runtimes must join the same read rather than refetch.
+          const result = await Promise.resolve().then(() =>
+            isCurrent() ? deps.fetchModels(config, agent, isCurrent, discover) : null).catch(() => null);
           if (!Array.isArray(result)) {
             const deadline = Math.max(deps.now() + FAILURE_RETRY_MS, result?.retryAt ?? 0);
             retainDeadline(deadline);

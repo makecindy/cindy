@@ -232,6 +232,31 @@ describe('manual model refresh for saved OAuth providers', () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  // #9882, unit: the real OAuth wrapper must preserve a late failure deadline
+  // without accepting stale model data. Revalidator mocks missed this wrapper.
+  // Minimal input: generation expires during a 429/503 read; manual reads and
+  // successful stale responses retain their existing AUTH_INVALID-only result.
+  it.each([
+    { status: 429, recovery: true },
+    { status: 503, recovery: true },
+    { status: 429, recovery: false },
+    { status: 200, recovery: true },
+  ])('handles late OAuth $status with recovery=$recovery', async ({ status, recovery }) => {
+    seedBlob('scoped-account', { access_token: 'fake-oauth-access' });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    let current = true;
+    try {
+      const result = await fetchSavedOAuthProviderModels(savedProvider('nous'), 'pi', 'scoped-account', () => current,
+        async () => {
+          current = false;
+          return new Response(JSON.stringify({ data: ['stale-model'] }), { status, headers: { 'retry-after': '900' } });
+        }, undefined, { requireComplete: true, sourceRecovery: recovery });
+      expect(result).toEqual({ ok: false, code: 'AUTH_INVALID',
+        ...(recovery && status !== 200 ? { retryAt: nowMs + 900_000 } : {}),
+      });
+    } finally { clock.mockRestore(); }
+  });
+
   it('renews an expiring login before fetching the model list', async () => {
     const provider = savedProvider('nous');
     seedBlob('scoped-account', { access_token: 'fake-expired', refresh_token: 'fake-refresh', expires_at: nowMs + 1000 });

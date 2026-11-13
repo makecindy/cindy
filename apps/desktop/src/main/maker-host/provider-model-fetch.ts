@@ -101,6 +101,8 @@ export interface ProviderModelsFetchSpec {
   sourceRecovery?: boolean;
   /** Main-only owner/generation/provider/credential revision, for in-flight sharing. */
   sourceRecoveryScope?: string;
+  /** Main-only: acquire a discovery slot after identical recovery reads join. */
+  scheduleSourceRecovery?: <T>(work: () => Promise<T>) => Promise<T>;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
@@ -126,7 +128,7 @@ export async function fetchSavedOAuthProviderModels(
   isCurrent: () => boolean,
   fetchImpl: typeof fetch = outboundFetch,
   headers?: Record<string, string>,
-  options: Pick<ProviderModelsFetchSpec, 'requireComplete' | 'sourceRecovery' | 'sourceRecoveryScope'> = {},
+  options: Pick<ProviderModelsFetchSpec, 'requireComplete' | 'sourceRecovery' | 'sourceRecoveryScope' | 'scheduleSourceRecovery'> = {},
 ): Promise<ProviderModelsFetchResult> {
   const oauth = provider?.auth.oauth;
   const route = provider?.routing[agent];
@@ -160,7 +162,12 @@ export async function fetchSavedOAuthProviderModels(
     if (!isCurrent()) throw new Error('Provider model refresh is no longer current');
     return fetchImpl(url, init);
   });
-  return isCurrent() ? result : { ok: false, code: 'AUTH_INVALID' };
+  if (isCurrent()) return result;
+  // Never accept stale models. A failed recovery can still carry a server
+  // deadline; the revalidator separately checks owner, request and credentials.
+  return { ok: false, code: 'AUTH_INVALID',
+    ...(options.sourceRecovery && !result.ok && result.retryAt ? { retryAt: result.retryAt } : {}),
+  };
 }
 
 /** origin 不含 userinfo；先独立验证地址，错误中不带原始 URL 或解析器异常。 */
@@ -335,14 +342,17 @@ export async function fetchProviderModels(
   } catch {
     return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
   }
-  if (!spec.sourceRecovery || !spec.sourceRecoveryScope) return fetchProviderModelsRequest(spec, fetchImpl, request);
+  const read = () => fetchProviderModelsRequest(spec, fetchImpl, request);
+  const scheduleRead = () => spec.sourceRecovery && spec.scheduleSourceRecovery
+    ? spec.scheduleSourceRecovery(read) : read();
+  if (!spec.sourceRecovery || !spec.sourceRecoveryScope) return scheduleRead();
   // Only background results are agent-independent; Settings receipts never share.
   // Hash the effective wire request, not runtime metadata, and retain it only in flight.
   const signature = modelSourceRequestSignature(JSON.stringify([spec.sourceRecoveryScope, request.url,
     request.init.method, request.init.redirect, spec.allowEmpty, spec.requireComplete, spec.responseByteLimit]), request.init);
   let pending = sourceRecoveryReads.get(signature);
   if (!pending) {
-    pending = fetchProviderModelsRequest(spec, fetchImpl, request);
+    pending = scheduleRead();
     sourceRecoveryReads.set(signature, pending);
   }
   try { return await pending; } finally {
@@ -382,7 +392,9 @@ async function fetchProviderModelsRequest(
     if ((res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
       await res.body?.cancel().catch(() => undefined);
       ordinaryUrl.searchParams.delete('client_version');
-      return fetchProviderModels({ ...spec, modelsUrl: ordinaryUrl.toString() }, fetchImpl);
+      // This is still the same discovery: retain its slot through fallback,
+      // just as for pagination. Re-entering the scheduler can deadlock all slots.
+      return fetchProviderModelsRequest(spec, fetchImpl, { url: ordinaryUrl.toString(), init });
     }
     let bodyText = '';
     try {

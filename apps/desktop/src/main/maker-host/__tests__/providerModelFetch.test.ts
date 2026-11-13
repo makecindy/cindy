@@ -6,6 +6,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { acceptsModelSourceSnapshot, isCurrentModelSource, modelSourceRequestSignature } from '../model-source-snapshots.js';
+import { createModelSourceRevalidator } from '../model-source-revalidation.js';
+import type { CustomProviderConfig } from '@cindy/model-providers';
 
 import {
   buildModelsFetchRequest,
@@ -52,6 +54,51 @@ it.each(['https://api.individual.githubcopilot.com.evil.test', 'https://custom.e
 });
 
 describe('import discovery limits', () => {
+  // #9882, unit: real revalidator -> discovery -> injected HTTP. Isolated fetch
+  // tests missed slot contention before coalescing. Two connections, each with
+  // three identical runtime requests, must issue one read each when B finishes
+  // before A. A deferred response controls ordering without a real timer.
+  it('coalesces identical runtime requests before competing for discovery slots', async () => {
+    const config = (id: string): CustomProviderConfig => ({ id, name: id, auth: { method: 'apiKey' },
+      runtimes: Object.fromEntries((['claude-code', 'codex', 'pi'] as const).map(agent => [agent, {
+        baseUrl: `https://${id}.example/v1`, wireProtocol: 'openai-chat', models: [{ id: 'one', name: 'One',
+          discoveredSource: { kind: 'magpie', providerId: 'old', snapshotId: 'previous-process:receipt' },
+        }],
+      }])),
+    });
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>(resolve => { releaseSlow = resolve; });
+    let fastSaved!: () => void;
+    const fastDone = new Promise<void>(resolve => { fastSaved = resolve; });
+    const requests: string[] = [];
+    const fetcher: typeof fetch = async url => {
+      const host = new URL(String(url)).hostname;
+      requests.push(host);
+      if (host === 'slow.example') await slow;
+      return fakeResponse(200, JSON.stringify({ data: ['one'] }));
+    };
+    const revalidate = createModelSourceRevalidator({
+      credentialRevision: () => 0, isMutating: () => false, now: () => 0,
+      save: async id => { if (id === 'fast') fastSaved(); return true; },
+      fetchModels: async (saved, agent, isCurrent, scheduleSourceRecovery) => {
+        const result = await fetchProviderModels(spec({ agent, baseUrl: saved.runtimes[agent]!.baseUrl,
+          wireProtocol: 'openai-chat', sourceRecovery: true, requireComplete: true,
+          sourceRecoveryScope: saved.id, scheduleSourceRecovery,
+        }), (url, init) => {
+          if (!isCurrent()) throw new Error('stale test owner');
+          return fetcher(url, init);
+        });
+        return result.ok ? result.models ?? null : null;
+      },
+    });
+    const pending = revalidate([config('slow'), config('fast')], 'scope', () => true);
+    try {
+      await fastDone;
+      expect(requests.filter(host => host === 'fast.example')).toHaveLength(1);
+    } finally { releaseSlow(); await pending; }
+    expect(requests.filter(host => host === 'slow.example')).toHaveLength(1);
+  });
+
   // #9882, unit: real fetch + streamed pages. Per-page limits previously allowed
   // arbitrarily large aggregate traffic up to the page-count cap. Small injected
   // limits exercise exact exhaustion, multi-byte accounting and stream cancel.
@@ -820,12 +867,25 @@ it('does not rewrite private Google-compatible discovery or an explicit catalog'
   }
 });
 
-it.each([404, 405])('falls back from an unavailable manifest (%i) on the same authenticated endpoint', async status => {
+// #9882 independent review, unit: real discovery fallback must finish within
+// its held slot. Existing fallback tests had no scheduler. Reject reentrant
+// scheduling immediately to expose queue deadlock without a real timeout.
+it.each([
+  { status: 404, recovery: false }, { status: 405, recovery: false },
+  { status: 404, recovery: true }, { status: 405, recovery: true },
+])('falls back from manifest $status with recovery=$recovery on the same authenticated endpoint', async ({ status, recovery }) => {
+  let held = false;
+  const scheduleSourceRecovery = async <T>(work: () => Promise<T>): Promise<T> => {
+    if (held) throw new Error('discovery slot already held');
+    held = true;
+    try { return await work(); } finally { held = false; }
+  };
   const fetcher = vi.fn()
     .mockResolvedValueOnce(fakeResponse(status, '{}'))
     .mockResolvedValueOnce(fakeResponse(200, '{"data":[{"id":"grok-4.7","reasoningEfforts":["low","high"]}]}'));
   const result = await fetchProviderModels(spec({ baseUrl: 'https://relay.example/proxy/v1',
     modelsUrl: 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test',
+    sourceRecovery: recovery, sourceRecoveryScope: `manifest-${status}`, scheduleSourceRecovery,
   }), fetcher);
   expect(result).toMatchObject({ ok: true, models: [{ id: 'grok-4.7', discoveredMetadata: { efforts: ['low', 'high'] } }] });
   expect(fetcher).toHaveBeenCalledTimes(2);

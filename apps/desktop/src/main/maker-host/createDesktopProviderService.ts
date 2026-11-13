@@ -657,7 +657,7 @@ const revalidateModelSources = createModelSourceRevalidator({
       return false;
     }
   },
-  async fetchModels(config, agent, isCurrent) {
+  async fetchModels(config, agent, isCurrent, scheduleSourceRecovery) {
     const runtime = config.runtimes[agent];
     if (!runtime || runtime.headersState === 'unknown' || !isCurrent()) return null;
     const sourceRecoveryScope = JSON.stringify([activeOwnerScopeKey(), config.id, getProviderRouteCredentialRevision(config.id)]);
@@ -666,7 +666,7 @@ const revalidateModelSources = createModelSourceRevalidator({
       return outboundFetch(url, init);
     };
     if (config.auth?.method === 'oauth') {
-      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true, sourceRecovery: true, sourceRecoveryScope });
+      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true, sourceRecovery: true, sourceRecoveryScope, scheduleSourceRecovery });
       return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
     }
     const authMethod = config.auth?.method ?? 'apiKey';
@@ -674,7 +674,7 @@ const revalidateModelSources = createModelSourceRevalidator({
     if (authMethod === 'apiKey' && !apiKey && !Object.keys(runtime.headers ?? {}).length) return null;
     const result = await fetchProviderModels({
       agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol,
-      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true, sourceRecovery: true, sourceRecoveryScope,
+      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true, sourceRecovery: true, sourceRecoveryScope, scheduleSourceRecovery,
     }, guardedFetch);
     return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
   },
