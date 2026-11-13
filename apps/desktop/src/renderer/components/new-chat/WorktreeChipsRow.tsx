@@ -231,8 +231,13 @@ export function WorktreeChipsRow({
   // 资格不满足时 OFF 不能开启；已 ON 必须仍能显式关闭，发送侧同时保留输入并阻塞创建。
 
   const effectiveWorktreeEnabled = enabled && !advancedHidden && !worktreeDisabled;
-  // 未勾选时也读取实际当前分支；菜单打开与窗口重新聚焦时刷新。
-  const branches = useBranches(baseRepo, deviceLinkDeviceId);
+  // 分支列表懒加载 latch:worktree 未开时不预拉,首次点开分支 chip 菜单才拉,
+  // 之后保持订阅(baseRepo 变化由 hook 自身依赖触发重拉)。
+  const [branchListWanted, setBranchListWanted] = useState(false);
+  const branches = useBranches(
+    effectiveWorktreeEnabled || branchListWanted ? baseRepo : null,
+    deviceLinkDeviceId,
+  );
   const suggested = useSuggestName(effectiveWorktreeEnabled ? baseRepo : null, deviceLinkDeviceId);
 
   const lastNameRef = useRef('');
@@ -289,11 +294,6 @@ export function WorktreeChipsRow({
   const branchLabel = effectiveWorktreeEnabled
     ? sourceBranch || defaultSourceBranch || actualBranch
     : actualBranch;
-  useEffect(() => {
-    const refresh = () => branches.refetch();
-    window.addEventListener('focus', refresh);
-    return () => window.removeEventListener('focus', refresh);
-  }, [branches.refetch]);
   // 确认不合格(2026-08-07 裁决)→ 整条控件隐藏,勾选记忆保留、发送侧放行普通会话;
   // 探测中/失败(confirmedIneligible === null)时已 ON 仍显示,由上层 fail closed。
   const showBranchChip =
@@ -345,6 +345,7 @@ export function WorktreeChipsRow({
           onPick={handleBranchPick}
           onOpenRequested={() => {
             void checkout.refresh();
+            setBranchListWanted(true);
             branches.refetch();
             // 上次拉取失败的话,重新打开菜单就自动重试一次,不逼用户去点重试项。
             if (branches.failed && !branches.loading) branches.refetch();

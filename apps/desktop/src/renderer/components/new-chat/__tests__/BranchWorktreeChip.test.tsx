@@ -465,6 +465,26 @@ it('keeps remote refresh available while worktree is off and disables it during 
   );
   await act(async () => resolve({ status: { ...checkoutStatus, current: 'feature' } }));
 });
+it('lazy-loads branches on menu open and does not refetch them on focus', async () => {
+  const checkout = setupCheckout();
+  const listBranches = vi.mocked(window.electronAPI.worktreeListBranches);
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  expect(listBranches).not.toHaveBeenCalled();
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'));
+  });
+  expect(listBranches).not.toHaveBeenCalled();
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  await waitFor(() => expect(listBranches).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'));
+  });
+  expect(listBranches).toHaveBeenCalledTimes(1);
+  expect(checkout).toHaveBeenCalled();
+});
 it('shows actual checkout when off and the remembered source when on; toggles never mutate Git', async () => {
   const checkout = setupCheckout();
   render(<CheckoutRow />);
