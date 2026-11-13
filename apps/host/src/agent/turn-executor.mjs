@@ -17,6 +17,7 @@ import { createHostEventPersistence } from './event-persistence.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
 import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
+import { beginTurnChangeSetAtDispatch } from '../../../desktop/src/main/turn-change-set/dispatchBoundary.ts';
 import { setSessionProvider, clearSessionProvider, getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { setSessionEffort } from '../../../desktop/src/main/maker-host/session-effort-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
@@ -73,7 +74,10 @@ export function createTurnExecutor(deps) {
   // savepoint once the engine is idle and closes both, so a late done or error of the stopped
   // turn takes nothing from the next turn's baseline.
   function settleGitBaseline(sessionId, turn, kind) {
-    const git = turn.gitBaseline ??= { aborted: false, ended: false };
+    const git = turn.gitBaseline;
+    // Only this turn's accepted dispatch can own a baseline. Host-originated
+    // adapters may deliver terminals without having opened one.
+    if (!git) return;
     const snapshot = deps.getGitSnapshot?.();
     if (kind === 'end') {
       if (git.ended) return;
@@ -87,6 +91,14 @@ export function createTurnExecutor(deps) {
       if (!git.aborted && !git.ended) void snapshot?.onTurnEnd(sessionId);
       git.aborted = git.ended = true;
     }
+  }
+
+  function startGitBaseline(sessionId, signal) {
+    const turn = turns.get(sessionId);
+    const snapshot = deps.getGitSnapshot?.();
+    if (!turn || !snapshot) return;
+    turn.gitBaseline = { aborted: false, ended: false };
+    return snapshot.onTurnStart(sessionId, signal);
   }
 
   function finish(sessionId, turn, error, event) {
@@ -162,7 +174,7 @@ export function createTurnExecutor(deps) {
       // Desktop records Codex's native turn diff from the event stream (register.ts)
       // and closes the turn change record at the turn's end (sessionEventPreparation.ts).
       noteTurnDiffEvent(sessionId, event, session.remoteHostId !== null);
-      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
+      if (turn.changeRecordStarted && event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
         const rawTurn = event.data?.raw;
         // Desktop settles a silent-stop done once its guard declines to resume
         // (settleSilentStopDone); the Host has no auto-resume, so it settles now.
@@ -170,7 +182,7 @@ export function createTurnExecutor(deps) {
         else void finalizeTurnChangeSet(sessionId, typeof rawTurn?.id === 'string' ? rawTurn.id : null,
           rawTurn && rawTurn.status !== 'completed' ? 'partial' : 'complete');
       }
-      if (isTerminalTurnErrorEvent(event)) void finalizeTurnChangeSet(sessionId, null, 'partial');
+      if (turn.changeRecordStarted && isTerminalTurnErrorEvent(event)) void finalizeTurnChangeSet(sessionId, null, 'partial');
       const stream = history.event(session, event);
       // As the desktop (sessionEventDelivery.ts): a turn that ended on a rejected Cindy AI Key
       // reports the current key, which resynchronizes the credentials.
@@ -378,8 +390,8 @@ export function createTurnExecutor(deps) {
     readTaskSource: async id => (await readExecutionSession(id)).source ?? null,
     // Desktop register.ts: a direct (non-queued) user turn takes the Git baseline
     // before dispatch and drops it when the turn is not dispatched.
-    beforeDispatchDirectUserTurn: (id, signal) => deps.getGitSnapshot?.()?.onTurnStart(id, signal),
-    onUndispatchedDirectUserTurn: id => deps.getGitSnapshot?.()?.onTurnAbort(id),
+    beforeDispatchDirectUserTurn: startGitBaseline,
+    onUndispatchedDirectUserTurn: id => { const turn = turns.get(id); if (turn) settleGitBaseline(id, turn, 'abort'); },
     readHostDeviceIdentity: deps.readHostDeviceIdentity,
     planRepeatableWireNotes: (id, notes, options) => wireNotes.plan(id, notes, options),
     log,
@@ -519,6 +531,22 @@ export function createTurnExecutor(deps) {
 
   return {
     send,
+    async beforeDispatchUserTurn(id, item, signal) {
+      const turn = turns.get(id);
+      const live = deps.getMaker()?.getSession(id);
+      if (live) {
+        await beginTurnChangeSetAtDispatch(live, item.clientId);
+        turn.changeRecordStarted = true;
+      }
+      turn.check();
+      await startGitBaseline(id, signal);
+    },
+    onUndispatchedUserTurn(id) {
+      const turn = turns.get(id);
+      if (!turn) return;
+      if (turn.changeRecordStarted) clearPendingTurnChangeSets(id);
+      settleGitBaseline(id, turn, 'abort');
+    },
     wireHostSession(session) {
       deps.assertCurrent();
       if (deps.getMaker()?.getSession(session.id) !== session) throw new Error('Host Session was replaced');

@@ -11,8 +11,6 @@ import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-i
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
-import { beginTurnChangeSetAtDispatch } from '../../../desktop/src/main/turn-change-set/dispatchBoundary.ts';
-import { clearPendingTurnChangeSets } from '../../../desktop/src/main/turn-change-set/store.ts';
 
 const attachmentLog = createLogger('host-attachments');
 
@@ -223,16 +221,9 @@ export function createInputQueue(deps) {
       },
       // Desktop register.ts (AgentInputCoordinator hooks): after the user row is durable
       // and before vendor dispatch, open the turn change record, then the Git baseline.
-      beforeDispatchUserTurn: async (id, item, signal) => {
-        const live = deps.getMaker()?.getSession(id);
-        if (live) await beginTurnChangeSetAtDispatch(live, item.clientId);
-        await deps.getGitSnapshot?.()?.onTurnStart(id, signal);
-      },
+      beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
       // A durable turn that never reached the vendor: drop the record, then the baseline.
-      onUndispatchedUserTurn: (id) => {
-        clearPendingTurnChangeSets(id);
-        deps.getGitSnapshot?.()?.onTurnAbort(id);
-      },
+      onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
