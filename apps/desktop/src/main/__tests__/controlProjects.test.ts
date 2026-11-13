@@ -112,6 +112,21 @@ describe('/ctr control project/session picker', () => {
     const labels = (await listProjectsForControl({ projectsOnly: true })).map((row) => row.displayName);
     expect(labels.every((label) => label.length <= 30)).toBe(true);
     expect(new Set(labels).size).toBe(2);
+    // 截断点落在完整字符上: 不留下半个表情(孤立的代理项)。
+    expect(labels.every((label) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(label))).toBe(true);
+
+    // 只在第 30 个 UTF-16 单元之后才不同的两个名字, 截断后按钮一样, 同样要区分。
+    const long = 'a-very-long-project-name-that-keeps-going';
+    setControlProjectCatalogSource(async () => ({
+      projects: [
+        { path: '/work/a/api', name: `${long}-one`, lastUsedAtMs: 2 },
+        { path: '/work/b/server', name: `${long}-two`, lastUsedAtMs: 1 },
+      ],
+      isRemoved: () => false,
+    }));
+    const longLabels = (await listProjectsForControl({ projectsOnly: true })).map((row) => row.displayName);
+    expect(longLabels.every((label) => label.length <= 30)).toBe(true);
+    expect(new Set(longLabels).size).toBe(2);
 
     // PR #10291 review: 上限只用于卡片展示; 按按钮标记找回项目时要能查到全部。
     setControlProjectCatalogSource(async () => ({

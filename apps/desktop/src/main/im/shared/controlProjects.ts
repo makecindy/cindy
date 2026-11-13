@@ -203,31 +203,56 @@ export async function listProjectsForControl(
 /** 卡片按钮的 label 上限(cardBuilders 按它截断)。 */
 const BUTTON_LABEL_MAX = 30;
 
+/** 从头按 UTF-16 预算截取, 切点落在完整字符上(不把表情这类代理对切成两半)。 */
+function fitStart(text: string, budget: number): string {
+  let out = '';
+  for (const ch of text) {
+    if (out.length + ch.length > budget) break;
+    out += ch;
+  }
+  return out;
+}
+
+/** 同上, 保留末尾。 */
+function fitEnd(text: string, budget: number): string {
+  let out = '';
+  for (const ch of Array.from(text).reverse()) {
+    if (out.length + ch.length > budget) break;
+    out = ch + out;
+  }
+  return out;
+}
+
 /**
- * 显示名相同的项目(侧栏里起了同一个名字的两个项目)补上能区分的后缀: 目录名, 仍相同再加
- * 上级目录, 最后用序号。卡片按钮上只有显示名, 两个一模一样的按钮背后是不同目录, 用户会
- * 在不知情的情况下切进错的项目。后缀保证落在按钮 label 的截断长度之内。
+ * 卡片上看起来一样的项目补上能区分的后缀: 目录名, 仍相同再加上级目录, 最后用序号。
+ * 卡片按钮上只有显示名, 两个一模一样的按钮背后是不同目录, 用户会在不知情的情况下切进错的
+ * 项目。
+ *
+ * 「看起来一样」按最终渲染的按钮文字判: cardBuilders 把显示名截到 BUTTON_LABEL_MAX 个 UTF-16
+ * 单元, 所以只在第 30 个单元之后才不同的两个名字也算相同。补完后缀的名字不超过这个长度,
+ * 截断不会再把后缀切掉。
  */
 function disambiguateDisplayNames(projects: ControlProject[]): void {
+  const rendered = (label: string): string => label.slice(0, BUTTON_LABEL_MAX);
   const groups = new Map<string, ControlProject[]>();
   for (const project of projects) {
-    const group = groups.get(project.displayName) ?? [];
+    const key = rendered(project.displayName);
+    const group = groups.get(key) ?? [];
     group.push(project);
-    groups.set(project.displayName, group);
+    groups.set(key, group);
   }
-  const used = new Set(projects.map((project) => project.displayName));
-  // 长度按 UTF-16 单元算, 与 cardBuilders 截断按钮文字用的 `.length` 同一种算法 ——
-  // 按字符数预留的话, 表情这类占两个单元的字符会让后缀被截掉。
+  const used = new Set<string>();
+  for (const [key, group] of groups) if (group.length === 1) used.add(key);
   const withSuffix = (name: string, suffix: string): string =>
-    `${name.slice(0, Math.max(1, BUTTON_LABEL_MAX - suffix.length))}${suffix}`;
-  for (const [name, group] of groups) {
+    `${fitStart(name, Math.max(2, BUTTON_LABEL_MAX - suffix.length))}${suffix}`;
+  for (const group of groups.values()) {
     if (group.length < 2) continue;
-    used.delete(name);
     group.forEach((project, index) => {
+      const name = project.displayName;
       const segs = project.workingDir.split('/').filter(Boolean);
       const candidates = [
-        withSuffix(name, ` · ${(segs[segs.length - 1] ?? '').slice(0, 12)}`),
-        withSuffix(name, ` · ${segs.slice(-2).join('/').slice(-16)}`),
+        withSuffix(name, ` · ${fitStart(segs[segs.length - 1] ?? '', 12)}`),
+        withSuffix(name, ` · ${fitEnd(segs.slice(-2).join('/'), 16)}`),
       ];
       let label = candidates.find((candidate) => !used.has(candidate));
       for (let n = index + 1; label === undefined; n += 1) {
