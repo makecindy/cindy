@@ -9,6 +9,14 @@ const MAX_ATTEMPTS = 16;
 
 /** Keys another replica committed; `before` holds this replica's previous value of each. */
 export interface RelayStoreChange { networks: Set<string>; global: Set<string>; before: Map<string, unknown>; }
+/**
+ * The shared state could not be read or written (backend unreachable, or every retry lost to other
+ * replicas). Not an authorization result: callers answer 503 so clients retry instead of treating
+ * the credential as revoked.
+ */
+export class RelayStateUnavailableError extends Error {
+  constructor(readonly code: 'STATE_UNAVAILABLE' | 'STATE_CONTENDED', options?: { cause?: unknown }) { super(code, options); }
+}
 
 function normalize(key: string, value: unknown): unknown {
   if (!key.startsWith(NETWORK) || !value || typeof value !== 'object') return value;
@@ -80,10 +88,13 @@ export class ClusterStore implements RelayStore {
   async transaction<T>(update: (state: State) => T | Promise<T>): Promise<T> {
     const operation = this.queue.then(async () => {
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        // The replica that just committed starts its next commit a round trip ahead of the one that lost;
+        // without a growing, jittered pause the loser keeps losing for as long as the winner keeps writing.
+        if (attempt) await new Promise(resolve => setTimeout(resolve, Math.min(100, 2 ** attempt) * (0.5 + Math.random())));
         const run = await this.attempt(update);
         if (run.done) return run.result;
       }
-      throw new Error('AGENT_NET_STATE_CONTENDED');
+      throw new RelayStateUnavailableError('STATE_CONTENDED');
     });
     this.queue = operation.catch(() => undefined);
     return operation;
@@ -91,10 +102,16 @@ export class ClusterStore implements RelayStore {
   async settled(): Promise<void> { await this.queue; }
   /** Refresh under the shared attachment lock, before checking offsets or touching its bytes. */
   mediaOperation<T>(networkId: string, mediaId: string, work: () => Promise<T>): Promise<T> {
+    let started = false;
     return this.backend.withMediaLock(NETWORK + networkId, mediaId, async (latest) => {
       if (latest.key !== NETWORK + networkId || latest.value !== undefined && !valid(latest.key, latest.value)) throw new Error('INVALID_AGENT_NET_STATE');
       this.apply([latest], true);
+      started = true;
       return work();
+    }).catch((error: unknown) => {
+      // Failing to take the lock is an outage; errors from the work itself (offset checks, I/O) pass through.
+      if (!started) throw new RelayStateUnavailableError('STATE_UNAVAILABLE', { cause: error });
+      throw error;
     });
   }
   close(): void { this.unsubscribe(); this.listeners.clear(); }
@@ -167,7 +184,9 @@ export class ClusterStore implements RelayStore {
       writes.push(current.value === undefined ? { key } : { key, value: current.value });
     }
     if (!writes.length) return { done: true, result: structuredClone(result) };
-    const committed = await this.backend.commit({ origin: this.origin, expected, writes });
+    let committed;
+    try { committed = await this.backend.commit({ origin: this.origin, expected, writes }); }
+    catch (error) { throw new RelayStateUnavailableError('STATE_UNAVAILABLE', { cause: error }); }
     if (!committed.ok) { this.apply(committed.latest, true); return { done: false }; }
     this.apply(writes.map(write => ({ ...write, version: committed.versions[write.key] })), false);
     return { done: true, result: structuredClone(result) };

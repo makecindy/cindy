@@ -95,7 +95,7 @@ function InputHandoffDialogHeader({
       <span className="flex size-12 items-center justify-center rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
         <Icon size={22} aria-hidden />
       </span>
-      <Dialog.Title className="mt-1 text-18 font-semibold leading-snug text-[var(--text-primary)] [overflow-wrap:anywhere]">
+      <Dialog.Title className="mt-1 text-18 font-medium leading-snug text-[var(--text-primary)] [overflow-wrap:anywhere]">
         {snapshot.purpose}
       </Dialog.Title>
       <InputHandoffPlace label={place.label} secure={place.secure} />

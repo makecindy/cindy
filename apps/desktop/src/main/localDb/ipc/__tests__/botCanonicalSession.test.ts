@@ -253,6 +253,7 @@ import {
   archiveBotChannelLanes,
   createBotCanonicalSession,
   ensureBotChannelLaneSession,
+  ensureBotGroupLaneSession,
   findBotChannelLaneSession,
   registerBotIpc,
   createBotProfile,
@@ -2392,6 +2393,20 @@ describe('Bot canonical Session lifecycle', () => {
       expectedCanonicalSessionId: null,
       expectedProfileVersion: 1,
     });
+    // All group lanes, including private digests, are visible owner tasks.
+    h.sqlite!.exec("CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT); INSERT INTO bot_group_members VALUES ('room','bot-1')");
+    vi.mocked(emitSessionCreated).mockClear();
+    const group = await ensureBotGroupLaneSession({ botId: 'bot-1', groupId: 'room', title: 'Group' });
+    const thread = await ensureBotGroupLaneSession({ botId: 'bot-1', groupId: 'room', title: 'Topic',
+      chatAccess: { mode: 'owner', revision: 1 }, threadRootId: 'root' });
+    const digest = await ensureBotGroupLaneSession({ botId: 'bot-1', groupId: 'room', title: 'Private digest',
+      chatAccess: { mode: 'owner', revision: 1 }, personalDigest: true });
+    if (!group.ok || !thread.ok || !digest.ok) throw new Error('Fixture lane creation failed');
+    expect(emitSessionCreated).toHaveBeenCalledTimes(3);
+    expect(emitSessionCreated).toHaveBeenCalledWith(digest.sessionId);
+    expect(emitSessionCreated).toHaveBeenCalledWith(group.sessionId);
+    expect(emitSessionCreated).toHaveBeenCalledWith(thread.sessionId);
+    h.sqlite!.prepare("UPDATE sessions SET status='archived' WHERE id=?").run(group.sessionId);
     h.searchConversations.mockResolvedValue({
       query: 'release',
       results: [],
@@ -2411,10 +2426,11 @@ describe('Bot canonical Session lifecycle', () => {
       expect.objectContaining({
         query: 'release',
         limit: 12,
-        filters: expect.objectContaining({ sessionIds: [created.session.id] }),
+        filters: expect.objectContaining({ sessionIds: expect.arrayContaining([created.session.id, group.sessionId, thread.sessionId, digest.sessionId]) }),
       }),
       { sessionSources: null },
     );
+    expect(h.searchConversations.mock.lastCall?.[0].filters.sessionIds).toHaveLength(4);
   });
 
   it('creates one IM channel lane per route key, notifies the task list and keeps it out of private history search', async () => {

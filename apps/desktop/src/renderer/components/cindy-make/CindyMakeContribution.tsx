@@ -216,7 +216,7 @@ export function CindyMakeContributionDialog({
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
         >
-          <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">
+          <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
             {t(`${key}.dialog.title`)}
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-13 leading-relaxed text-[var(--confirm-desc)]">

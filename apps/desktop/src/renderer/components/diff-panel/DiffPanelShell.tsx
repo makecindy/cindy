@@ -247,7 +247,7 @@ export function DiffPanelShell({
           )}
         >
           <div className="flex items-baseline gap-2 min-w-0">
-            <h2 className="text-sm font-semibold shrink-0">{title}</h2>
+            <h2 className="text-sm font-medium shrink-0">{title}</h2>
             {rightHeader}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
