@@ -1676,6 +1676,23 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
+  // Incident 2026-11-13 (component): a typed name two members share used to address both.
+  // One @ names one identity, so the draft stays and asks for a pick from the list.
+  it('holds a typed name that two members share until one is picked from the list', async () => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@Ann hello');
+    await click('botGroup.composer.send');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.mentionAmbiguous(name=Ann)');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    expect(h.row.value).toBe('@Ann hello');
+    await type('@');
+    await click('botGroup.mention.abu');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
   it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
     h.chat.server = true;
     const data = group({ openPlan: null });

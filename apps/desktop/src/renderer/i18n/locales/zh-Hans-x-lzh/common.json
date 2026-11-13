@@ -11320,6 +11320,7 @@
         "memberLimit": "群议须 2–6 位同伴",
         "memberUnavailable": "有同伴今不可用，易一位再试",
         "mentionUnavailable": "所点名之成员已不可用，请重择后再遣",
+        "mentionAmbiguous": "名「{{name}}」者非一，请于 @ 列中择之",
         "notFound": "此群议已不存",
         "hostNotReady": "Cindy 尚在准备，请稍后再试",
         "planOpen": "方分工中，毕或止后，方可另筹",

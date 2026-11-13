@@ -359,6 +359,9 @@ export function BotGroupComposer({
    */
   const sendThreadReply = async () => {
     if (!canSend || sendingRef.current || getBotGroupThreadReplyAttempt(draftKey)?.sending || !sendReply) return;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = mention.ambiguous(text);
+    if (ambiguousName) { setError(t('bots.groupChat.errors.mentionAmbiguous', { name: ambiguousName })); return; }
     groupMask?.participate();
     const files = attachmentState.attachments;
     const attachmentSignature = botGroupAttachmentSignature(files);
@@ -483,6 +486,12 @@ export function BotGroupComposer({
     if (!canSend || sendingRef.current || textRef.current !== text || attachmentsRef.current !== attachmentState.attachments) return;
     if (!botGroupApi()) {
       toast.error(t('bots.groupChat.composer.sendFailed'));
+      return;
+    }
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = mention.ambiguous(text);
+    if (ambiguousName) {
+      toast.error(t('bots.groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
       return;
     }
     groupMask?.participate();

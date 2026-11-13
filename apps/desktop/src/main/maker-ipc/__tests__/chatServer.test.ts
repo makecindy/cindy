@@ -1665,9 +1665,14 @@ describe('Chat Server result delivery and refresh', () => {
   // (owner and, where known, description); the reply's @ names go out as the completion's mentions.
   it.each([true, false])('sends the teammates a reply names with @ (server support: %s)', async supported => {
     const luna = '20000000-0000-4000-8000-000000000002';
+    // Incident 2026-11-13 (integration): a companion that shares only the short name of the
+    // group's own Cindy must not be woken by 「@Cindy」; one @ names one identity.
+    const ownerCindy = '20000000-0000-4000-8000-000000000003', groupCindy = '20000000-0000-4000-8000-000000000004';
     const members = [
       { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
       { id: luna, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      { id: ownerCindy, kind: 'bot', name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      { id: groupCindy, kind: 'bot', assistant: true, name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', role: 'member', guestAccess: 'none', accessRevision: 1, avatar: null },
       { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
     ];
     fixture.handle.mockImplementation(route => {
@@ -1683,8 +1688,8 @@ describe('Chat Server result delivery and refresh', () => {
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
     expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
     expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
-    await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this? @Bot is done.' });
-    if (supported) expect(deliveries()[0][2].mentions).toEqual([luna]);
+    await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this? @Bot is done. @Cindy, anything to add?' });
+    if (supported) expect(deliveries()[0][2].mentions).toEqual([luna, groupCindy]);
     else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
   });
 

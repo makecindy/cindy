@@ -1167,9 +1167,11 @@ describe('chat interaction controls', () => {
       type(input, '@Ann ', 4);
       fireEvent.keyDown(input, { key: 'Escape' });
       fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
-      // A retyped name is a manual @: both namesakes, as in the main composer.
-      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['ann-chris', 'ann-dana'] });
+      // A retyped name is a manual @. Two members share it, so it names neither: the reply is
+      // held with its draft until one is picked, as in the main composer (incident 2026-11-13).
+      expect((await screen.findByRole('alert')).textContent).toContain('bots.groupChat.errors.mentionAmbiguous');
+      expect(mocks.reply).not.toHaveBeenCalled();
+      expect(input.value).toBe('@Ann ');
     });
 
     it('moves the caret past the space when a re-pick leaves the text unchanged, and does not pull it back later', () => {
@@ -1231,7 +1233,7 @@ describe('chat interaction controls', () => {
 
     // One retry rule (bot-group-chat.md): a failed reply is retried with the same clientId only when the
     // text and its targets are unchanged. Each row edits the draft between attempts without changing the text.
-    // Comparing only the text fails rows 1 and 4; comparing the pick records fails row 3; re-resolving
+    // Comparing only the text fails row 1; comparing the pick records fails row 3; re-resolving
     // against the live roster fails the roster-refresh test above.
     const pickAt = (input: HTMLTextAreaElement, caret: number, option: number) => {
       // As a user would: click back into the box with the caret after the name, then pick.
@@ -1247,8 +1249,6 @@ describe('chat interaction controls', () => {
       { row: 'pick the same teammate for a typed mention', draft: (input: HTMLTextAreaElement) => type(input, '@Bo '),
         // The typed query `Bo` also matches the untranslated 所有人 key here, so Bo is the second option.
         edit: (input: HTMLTextAreaElement) => pickAt(input, 3, 1), text: '@Bo ', first: ['bo'], second: ['bo'], reused: true },
-      { row: 'pick one namesake for a typed mention', draft: (input: HTMLTextAreaElement) => type(input, '@Ann '),
-        edit: (input: HTMLTextAreaElement) => pickAt(input, 4, 1), text: '@Ann ', first: ['ann-chris', 'ann-dana'], second: ['ann-dana'], reused: false },
     ])('retries a failed reply after "$row" with reused clientId = $reused', async ({ draft, edit, text, first, second, reused }) => {
       const input = renderThread();
       mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' });

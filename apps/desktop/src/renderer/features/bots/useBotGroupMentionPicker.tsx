@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils';
 import type { BotGroupMemberView } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -288,5 +289,8 @@ export function useBotGroupMentionPicker({
     /** Resolve who the text addresses, using the picks; `roster` defaults to the current members. */
     resolve: (value: string, roster: readonly BotGroupMemberView[] = members) =>
       resolveBotGroupMentions(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
+    /** Typed names several members share: they name nobody, so sending asks to pick from the list. */
+    ambiguous: (value: string) =>
+      ambiguousBotGroupMentionLabels(value, { members: mentionMembers, allLabels: resolveLabels, allBotLabels, tracked }),
   };
 }
