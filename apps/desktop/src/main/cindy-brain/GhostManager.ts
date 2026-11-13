@@ -112,6 +112,8 @@ import {
 } from './pluginInstanceRegistryService.js';
 import {
   assertManagedPluginParentSync,
+  approvedHostToolGroupsField,
+  approvedEventTopicsField,
   createGhostInstallReceipt,
   effectiveInstallOrigin,
   legacyFirstPartyEligibilityAfterUpdate,
@@ -124,6 +126,7 @@ import {
 } from './ghostInstallReceipt.js';
 import { parseInstalledGhostManifest } from '../installedGhostManifest.js';
 import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
+import { pluginDeclaresCapability, pluginHostToolGroup, type PluginTaskCapability } from './taskCapability.js';
 import {
   decodeGhostManualMarkdown,
   ghostManualLogicalPathForEntry,
@@ -3091,6 +3094,8 @@ export class GhostManager {
           ...approvedAutoToolsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+          ...approvedHostToolGroupsField(receipt.approvedHostToolGroups, receipt.manifest),
+          ...approvedEventTopicsField(receipt.approvedEventTopics, receipt.manifest),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -3299,21 +3304,27 @@ export class GhostManager {
   }
 
   /** Called only after Host permission UI confirms this exact installed revision. */
-  async approveTaskCapability(id: string, revision: string, isCurrent: () => boolean, capability: 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions' = 'tasks'): Promise<boolean> {
+  async approveTaskCapability(id: string, revision: string, isCurrent: () => boolean, capability: PluginTaskCapability = 'tasks'): Promise<boolean> {
     return this.runExclusiveMutation(async () => {
       const relId = this.approvalRelIdFor(id);
       if (!relId) return false;
       const approval = this.readApproval(relId);
       if (!isCurrent() || approval.state !== 'approved' || approval.receipt.revision !== revision ||
-          (capability === 'observe' || capability === 'companions' ? approval.receipt.manifest.agent?.[capability] !== true : approval.receipt.manifest.agent?.tasks !== true) ||
+          !pluginDeclaresCapability(approval.receipt.manifest, capability) ||
           (capability === 'targets' && (approval.receipt.manifest.agent?.targets !== true || approval.receipt.taskCapabilityApproved !== true)) ||
           (capability === 'delegation' && (approval.receipt.manifest.agent?.delegation !== true || approval.receipt.manifest.agent?.targets !== true || approval.receipt.targetCapabilityApproved !== true || approval.receipt.taskCapabilityApproved !== true)) ||
           !findInstalledGhostByInstanceId(this.list(), id)?.enabled) return false;
       const field = capability === 'companions' ? 'companionsCapabilityApproved' : capability === 'observe' ? 'observeCapabilityApproved' : capability === 'delegation' ? 'delegationCapabilityApproved' : capability === 'targets' ? 'targetCapabilityApproved' : 'taskCapabilityApproved';
-      if (approval.receipt[field] !== true) {
+      const group = pluginHostToolGroup(capability);
+      const topic = capability === 'event:message' ? 'message' : capability === 'event:task-state' ? 'task-state' : undefined;
+      if (topic ? !approval.receipt.approvedEventTopics?.includes(topic) : group ? !approval.receipt.approvedHostToolGroups?.includes(group) : approval.receipt[field] !== true) {
         const expired = new Error('Task capability approval owner changed');
         try {
-          await this.receiptStore.write({ ...approval.receipt, [field]: true }, {
+          await this.receiptStore.write({ ...approval.receipt, ...(topic
+            ? { approvedEventTopics: [...approval.receipt.approvedEventTopics ?? [], topic] }
+            : group
+            ? { approvedHostToolGroups: [...approval.receipt.approvedHostToolGroups ?? [], group] }
+            : { [field]: true }) }, {
             relId,
             assertCurrent: () => { if (!isCurrent()) throw expired; },
           });
@@ -4047,6 +4058,8 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4083,6 +4096,8 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4264,6 +4279,8 @@ export class GhostManager {
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.approvedHostUi?.length ? { approvedHostUi: opts.approvedHostUi } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
+          approvedHostToolGroups: opts?.approvedHostToolGroups,
+          approvedEventTopics: opts?.approvedEventTopics,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4398,6 +4415,8 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4433,6 +4452,8 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4753,6 +4774,14 @@ export class GhostManager {
         approvedAutoTools: [
           ...(opts.approvedAutoTools ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedAutoTools ?? [] : []),
+        ],
+        approvedHostToolGroups: [
+          ...(opts.approvedHostToolGroups ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHostToolGroups ?? [] : []),
+        ],
+        approvedEventTopics: [
+          ...(opts.approvedEventTopics ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedEventTopics ?? [] : []),
         ],
         ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
@@ -5176,6 +5205,8 @@ export class GhostManager {
         approvedControlPoints: [...new Set([...(approvedManifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(approvedManifest)])],
         approvedHostUi: current.state === 'approved' ? current.receipt.approvedHostUi : undefined,
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
+        approvedHostToolGroups: current.state === 'approved' ? current.receipt.approvedHostToolGroups : undefined,
+        approvedEventTopics: current.state === 'approved' ? current.receipt.approvedEventTopics : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

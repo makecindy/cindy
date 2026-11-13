@@ -9,7 +9,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./computer": "./src/computer/index.ts",
-    "./inline-images": "./src/shared/inlineImages.ts"
+    "./inline-images": "./src/shared/inlineImages.ts",
+    "./history-cursor": "./src/xdt-helper/_history_cursor.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

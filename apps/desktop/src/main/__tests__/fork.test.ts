@@ -26,6 +26,7 @@ import { RemoteAgentPoller, RemoteAgentRunClient } from '../remote-agent/control
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import { projectSessionContextWindow } from '../../shared/sessionContextWindow';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
+import { admitTaskAction } from '../maker-ipc/taskActionAuthorization.js';
 import {
   pruneSessionContextWindowBudget,
   readSessionContextWindowBudget,
@@ -330,6 +331,20 @@ describe('disabled Cindy Make fork boundaries', () => {
 });
 
 describe('forkSessionAtMessage', () => {
+  // Unit, Host tool lifecycle: an install/owner revoked while native fork awaits must not
+  // create a database task. Existing UI tests have no asynchronous authorization scope.
+  it('rejects an expired caller after native fork and before creating the task', async () => {
+    selectQueue.push([makeSourceRow({})], [makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 })],
+      [makeMessageRow({ id: 'assistant', role: 'assistant', createdAt: 2500, agentMeta: JSON.stringify({ uuid: 'prior' }) })]);
+    let current = true;
+    const decision = await admitTaskAction({ server: 'cindy_helper', tool: 'fork_session', sessionId: 'caller', args: {} },
+      { key: 'approved', ownerInput: true, delegated: false, assertCurrent: async () => { if (!current) throw new Error('PERMISSION_DENIED'); } });
+    if (!decision.ok || !decision.run) throw new Error('expected admission');
+    forkSdkSessionMock.mockImplementationOnce(async () => { current = false; return { newSdkSessionId: 'native-fork', uuidMap: new Map() }; });
+    await expect(decision.run(() => forkSessionAtMessage('src-session', 'target-user'))).rejects.toThrow('PERMISSION_DENIED');
+    expect(txCalls).toEqual([]);
+  });
+
   it('inherits the task context-window budget (preference entry, not a session column)', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     const priorAssistant = makeMessageRow({

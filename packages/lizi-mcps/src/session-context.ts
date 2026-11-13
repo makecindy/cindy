@@ -23,6 +23,7 @@ function withoutSessionAttribution<T extends LiziMcpSessionContext>(fallback: T)
     sessionInstanceId: undefined,
     remoteHostId: undefined,
     vendorOptions: undefined,
+    hostCaller: undefined,
   };
 }
 
@@ -44,6 +45,7 @@ export function resolveLiziMcpSessionContext<T extends LiziMcpSessionContext>(
   // consult the ambient ALS store.
   if (
     fallback.sessionId ||
+    fallback.hostCaller ||
     fallback.sessionInstanceId ||
     fallback.workingDir ||
     fallback.remoteHostId ||

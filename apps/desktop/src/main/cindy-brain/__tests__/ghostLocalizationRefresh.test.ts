@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { refreshGhostLocalizationIfChanged } from '../ghostLocalizationRefresh';
+import { GhostTaskEventIndex } from '../taskEventIndex.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 
@@ -8,6 +9,7 @@ const GHOSTS = ['plugin-a', 'plugin-b'];
 
 // Unit: exercise the production refresh routing. The localization helper alone
 // cannot catch a caller accidentally scheduling installation work on every push.
+// Roster changes also rebuild the task-event index; locale-only projection must not.
 const refreshCallbacks = createGhostProductionCallbacks<{
   refreshGhostLocalization(locale: string): void;
   broadcastGhostsChanged(ghosts: InstalledGhost[]): void;
@@ -16,8 +18,10 @@ const refreshCallbacks = createGhostProductionCallbacks<{
 
 function routing() {
   const ghosts = [{ manifest: { id: 'plugin-a' }, enabled: true }] as InstalledGhost[];
+  const taskEventIndex = new GhostTaskEventIndex();
   const installation = {
     apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), skills: vi.fn(), index: vi.fn(),
+    taskEvents: vi.spyOn(taskEventIndex, 'replace'),
   };
   const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn();
   const list = vi.fn(() => ghosts);
@@ -25,6 +29,7 @@ function routing() {
   let disabled = false;
   const callbacks = refreshCallbacks({
     managerSingleton: manager, getGhostManager: () => manager,
+    taskEventIndex, getGhostOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
     currentGhostAppContext: () => ({ context: { region: 'global' } }), getResolvedMainLocale: () => 'en',
     refreshGhostLocalizationIfChanged, sendToGhostLogic: contextChanged,
     refreshPluginApps: installation.apps, getGhostSetupManifestTracker: () => ({ note: installation.manifest }),

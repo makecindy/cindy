@@ -80,7 +80,7 @@ export function redactSensitiveTextDeep(input: unknown): unknown {
 }
 
 export interface NonSecretErrorSignals {
-  errorStatus?: 401 | 429 | 529;
+  errorStatus?: 401 | 403 | 429 | 529;
   usageLimit: boolean;
 }
 
@@ -118,16 +118,22 @@ export function matchesDeterministicUsageExhaustionText(input: string): boolean 
  */
 export function extractNonSecretErrorSignals(input: string): NonSecretErrorSignals {
   const statusMatch =
-    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
+    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
       input,
-    ) ?? /\brequest\s+rejected\s*\(\s*(401|429|529)\s*\)/i.exec(input);
+    ) ?? /\brequest\s+rejected\s*\(\s*(401|403|429|529)\s*\)/i.exec(input);
   const usageLimit =
     /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
       input,
     );
 
+  // Do not promote an unstructured permission denial into the newly supported
+  // provider 403 signal. Callers still preserve an explicit SDK errorStatus.
+  const errorStatus = statusMatch
+    && !(statusMatch[1] === '403' && /permission denied/i.test(input))
+    ? Number(statusMatch[1]) as NonSecretErrorSignals['errorStatus']
+    : undefined;
   return {
-    ...(statusMatch ? { errorStatus: Number(statusMatch[1]) as 401 | 429 | 529 } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
     usageLimit,
   };
 }

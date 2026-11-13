@@ -95,7 +95,7 @@ export type SendToRemoteSessionCallback = (params: {
   deviceId: string;
   sessionId: string;
   message: string;
-  dispatcherSessionId: string;
+  dispatcherSessionId?: string;
 }) => Promise<
   ControlResult<
     {
@@ -323,7 +323,7 @@ export function registerSendToSessionTool(
         if (!deps.sendToRemoteSession) {
           return errorPayload("REMOTE_UNSUPPORTED", "当前宿主不支持给其它电脑上的任务发消息。");
         }
-        if (!ctx.sessionId) {
+        if (!ctx.sessionId && ctx.hostCaller?.kind !== 'plugin') {
           return errorPayload("LEAD_NOT_SUPPORTED", "当前调用未绑定任务,无法标明消息来源。");
         }
         const remote = await deps.sendToRemoteSession({

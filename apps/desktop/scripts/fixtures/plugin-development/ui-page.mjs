@@ -13,9 +13,30 @@ export default {
     authoring: { about: 'Choose the exact local or market instance before submission', viewport: { width: 360, height: 900 } },
     market: { about: 'Market details do not offer in-place file updates' },
     permissions: { about: 'Explicit auto-tool and native-host permission rows', viewport: { width: 360, height: 900 } },
+    'host-tools': { about: 'Independent Host tool group permissions and approval retry' },
+    'remote-source': { about: 'Remote plugin provenance without a misleading local detail link', viewport: { width: 360, height: 240 } },
+    'host-tool-permissions': { about: 'Install consent for the five Host tool groups', viewport: { width: 360, height: 900 } },
   },
   async check(page, ui) {
-    if (ui.case === 'permissions') return;
+    if (ui.case === 'remote-source') {
+      assert.equal(await page.getByRole('button').count(), 0);
+      return;
+    }
+    if (ui.case === 'permissions' || ui.case === 'host-tool-permissions') return;
+    if (ui.case === 'host-tools') {
+      for (const group of ['history', 'control', 'handoff', 'settings', 'scheduler']) {
+        assert.equal(await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t(`settings.ghosts.perm.hostTools_${group}`) }), exact: true }).count(), 1);
+      }
+      for (const key of ['subscribeMessage', 'subscribeTaskState']) {
+        assert.equal(await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t(`settings.ghosts.perm.${key}`) }), exact: true }).count(), 1);
+      }
+      await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t('settings.ghosts.perm.subscribeTaskState') }), exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('host-group-approval');
+      await page.getByRole('button', { name: await ui.t('settings.ghosts.detail.viewAllPermissions'), exact: true }).click();
+      await page.getByRole('dialog').getByText(await ui.t('settings.ghosts.perm.hostTools_schedulerDetail'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('scheduler-permission');
+      return;
+    }
     if (ui.case === 'authoring') {
       const local = page.getByRole('region', { name: await ui.t('settings.ghosts.contribution.localVersion'), exact: true });
       await local.getByRole('combobox').click();

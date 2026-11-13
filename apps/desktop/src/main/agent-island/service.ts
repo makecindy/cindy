@@ -174,7 +174,8 @@ import { getActiveAppSession } from '../appSessionState.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
+import { hasTaskChangeListener, publishTaskChange } from '../localDb/taskEvents.js';
 import {
   beginProtectedFolderCheck,
   detectProtectedFolderEperm,
@@ -2174,6 +2175,17 @@ export class AgentIslandService {
       const previous = this.sessionActivitySubscriptionCursor.get(sessionId) ?? null;
       const current = next.get(sessionId) ?? null;
       if (previous && current && sessionActivitySnapshotsEqual(previous, current)) continue;
+      // The plugin topic contains lifecycle edges only. Activity/progress and
+      // display changes stay on existing consumers, without plugin timers.
+      if (hasTaskChangeListener('state') && (!previous || !current
+        || previous.phase !== current.phase || previous.currentTurnActive !== current.currentTurnActive
+        || previous.turnGeneration !== current.turnGeneration || previous.startedAtMs !== current.startedAtMs
+        || previous.recordStatus !== current.recordStatus || previous.gracefulStopState !== current.gracefulStopState
+        || previous.interactionKind !== current.interactionKind)) {
+        publishTaskChange({ kind: 'state', sessionId, state: {
+          activity: current ? canonicalSessionActivity(current) : null, changedAtMs,
+        } }, getSafeDataOwnerPushStamp());
+      }
       for (const listener of this.sessionActivityListeners) {
         try {
           listener({

@@ -37,6 +37,12 @@ import {
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
+import { GhostTaskEventIndex } from '../taskEventIndex.js';
+import { decodeCursor } from '@cindy/mcps/history-cursor';
+import type { Message } from '../../../renderer/lib/ccAgent.types.js';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import { messageCreateToRow, messageToCamel } from '../../localDb/mapper.js';
 import { createRuntimePluginControl } from '../runtimeControl.js';
 import { createRuntimeContextProviders } from '../runtimeContext.js';
 import type { RuntimePluginSettings } from '../../../shared/pluginRuntime.js';
@@ -289,6 +295,193 @@ function ghost(
     enabled,
   } as InstalledGhost;
 }
+
+// Unit through the production gateway: unknown declarations preserved by old Hosts
+// must not start delivering message content after an upgrade without explicit consent.
+it('does not deliver a newly recognized message topic without its receipt approval', () => {
+  const g = ghost('reader', { topics: ['message'] });
+  g.approval = { state: 'approved', revision: 'r1' };
+  const { gw, sent, running } = makeGateway({ listGhosts: () => [g] });
+  running.add('reader');
+  gw.publish('message' as never, 'did-message-created' as never, { sessionId: 'task' });
+  expect(sent).toHaveLength(0);
+});
+
+// Unit: production content index -> gateway. Existing metadata tests never exercise saved
+// message content, attachment path removal or an install replaced during cold-start delivery.
+describe('indexed task content and state events', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
+  afterEach(() => vi.useRealTimers());
+  const owner = { dataOwnerId: 'owner', ownerGeneration: 1 };
+  const row = { id: 'message', role: 'assistant', createdAt: '2026-11-10T00:00:00.000Z', rowid: 4,
+    content: { text: 'saved reply', images: [{ url: '/private/image.png', name: 'image.png' }],
+      files: [{ path: '/private/file.txt', name: 'file.txt' }], reasoning: 'private thinking' } } as Message;
+  const subscriber = (): InstalledGhost => ({ ...ghost('reader', { topics: ['message', 'task-state'] }),
+    approval: { state: 'approved', revision: 'r1' }, approvedEventTopics: ['message', 'task-state'] });
+
+  // Unit, #9801 scope reduction: lifecycle events reuse immediate delivery and
+  // the existing cold queue; they add no timer and must not fold a finished turn.
+  it('delivers running, completed and running immediately in order without a timer', () => {
+    const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    for (const phase of ['running', 'completed', 'running'])
+      index.publish({ kind: 'state', sessionId: 'task', state: { activity: { phase } } }, owner, () => gw);
+    expect(sent.map(item => (item.payload as any).data.state.activity.phase)).toEqual(['running', 'completed', 'running']);
+    expect(sent.map(item => (item.payload as any).seq)).toEqual([1, 2, 3]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('uses the existing 100-event cold queue and dropped marker without a timer', async () => {
+    const g = subscriber();
+    let finishWake!: () => void;
+    const wake = vi.fn(() => new Promise<void>(resolve => { finishWake = resolve; }));
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g, wake });
+    for (let n = 0; n < 103; n++) gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task', messageId: `${n}` });
+    expect(sent).toHaveLength(0); expect(wake).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    running.add('reader'); finishWake();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(100); expect(sent[0]!.payload).toMatchObject({ seq: 4, dropped: 3 });
+    gw.dropGhost('reader'); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])('delivers saved content with a usable history cursor and attachment positions (serialized=%s)', async serialized => {
+    const g = subscriber() as InstalledGhost;
+    const { gw, sent } = makeGateway({ findGhostForDelivery: () => g });
+    const index = new GhostTaskEventIndex();
+    index.replace([g], owner);
+    index.publish({ kind: 'message', sessionId: 'task', message: { ...row,
+      content: serialized ? JSON.stringify(row.content) : row.content } }, owner, () => gw);
+    index.publish({ kind: 'state', sessionId: 'task', state: { status: 'archived' } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent.map(item => item.payload.name)).toEqual(['did-message-created', 'did-task-state-changed']);
+    const payload = sent[0]!.payload;
+    if (!('data' in payload)) throw new Error('expected content event');
+    const data = payload.data as { content: unknown; historyCursor: string };
+    expect(data.content).toEqual({ text: 'saved reply', attachments: [{ attachment_index: 0, name: 'image.png' }, { attachment_index: 1, name: 'file.txt' }] });
+    expect(decodeCursor(data.historyCursor)).toEqual({ createdAt: Date.parse(row.createdAt), id: 'message', rowid: 4 });
+  });
+
+  // Unit, #9801 / 4537623634: ordinary JSON is message content, not an attachment
+  // envelope. Existing cases only used attachment objects. Exercise the real
+  // mapper and index -> gateway with both unmapped text and decoded row values.
+  it.each(['123', 'false', 'null', '"quoted"', '{ "answer": 42 }',
+    '[1, true, {"answer":42}]', '[{"type":"record","answer":42}]',
+    '{"text":"kept","answer":42}', '{"images":[],"answer":42}'])(
+    'preserves ordinary JSON message content: %s', body => {
+      const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+      running.add('reader');
+      const decoded = messageToCamel(messageCreateToRow('message', 'task', {
+        clientId: 'json-message', role: 'assistant', content: body,
+      }, Date.parse(row.createdAt)) as Parameters<typeof messageToCamel>[0]);
+      const index = new GhostTaskEventIndex(); index.replace([g], owner);
+      for (const content of [body, decoded.content])
+        index.publish({ kind: 'message', sessionId: 'task', message: { ...row, content } }, owner, () => gw);
+      expect(sent.map(item => (item.payload as { data: { content: unknown } }).data.content))
+        .toEqual([body, decoded.content]);
+    },
+  );
+
+  it('keeps native message blocks free of attachment paths and reasoning', () => {
+    const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publish({ kind: 'message', sessionId: 'task', message: { ...row, content: [
+      { type: 'text', text: 'saved reply' }, { type: 'image', source: { url: '/private/image.png' } },
+      { type: 'thinking', thinking: 'private reasoning' },
+    ] } }, owner, () => gw);
+    expect(sent[0]!.payload).toMatchObject({ data: { content: { text: 'saved reply' } } });
+    expect(JSON.stringify(sent)).not.toContain('private');
+  });
+
+  it.each(['no-subscriber', 'unapproved', 'owner-change', 'removed'] as const)('does no discovery or projection after %s', scenario => {
+    const index = new GhostTaskEventIndex();
+    const g = subscriber() as InstalledGhost;
+    if (scenario === 'unapproved') g.approvedEventTopics = undefined;
+    index.replace(scenario === 'no-subscriber' ? [] : [g], owner);
+    if (scenario === 'removed') index.replace([], owner);
+    const gateway = vi.fn();
+    index.publish({ kind: 'message', sessionId: 'task', get message(): Message { throw new Error('must not project'); } },
+      scenario === 'owner-change' ? { ...owner, ownerGeneration: 2 } : owner, gateway);
+    expect(gateway).not.toHaveBeenCalled();
+  });
+
+  // A committed-position read must not deliver a previous owner's or removed
+  // subscription's message after its asynchronous DB response arrives.
+  it.each(['owner', 'database', 'subscription'] as const)('drops a late cursor lookup after %s changes', async change => {
+    let finish!: (row: { rowid: number }) => void;
+    const queryOne = vi.fn(() => new Promise<{ rowid: number }>(resolve => { finish = resolve; }));
+    const index = new GhostTaskEventIndex(), gateway = vi.fn();
+    setCurrentDbClient({ queryOne } as unknown as DbClient, owner.dataOwnerId);
+    index.replace([subscriber()], owner);
+    try {
+      index.publish({ kind: 'message', sessionId: 'task', message: { ...row, rowid: undefined } }, owner, gateway);
+      expect(queryOne).toHaveBeenCalledOnce();
+      if (change === 'owner') index.replace([subscriber()], { ...owner, ownerGeneration: 2 });
+      else if (change === 'database') setCurrentDbClient({} as DbClient, 'next-owner');
+      else index.replace([], owner);
+      finish({ rowid: 4 });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(gateway).not.toHaveBeenCalled();
+    } finally { clearCurrentDbClient(); }
+  });
+
+  // Unit, §1.2: cursor lookup predates queueing. A new approved installation
+  // must not become the recipient of the previous installation's pending read.
+  it('keeps cursor lookup recipients bound to their original installation', async () => {
+    let finish!: (row: { rowid: number }) => void;
+    const queryOne = () => new Promise<{ rowid: number }>(resolve => { finish = resolve; });
+    const original = subscriber();
+    let live = original;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => live });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([original], owner);
+    setCurrentDbClient({ queryOne } as unknown as DbClient, owner.dataOwnerId);
+    try {
+      index.publish({ kind: 'message', sessionId: 'task', message: { ...row, rowid: undefined } }, owner, () => gw);
+      live = { ...original, approval: { state: 'approved', revision: 'r2' } };
+      index.replace([live], owner); finish({ rowid: 4 });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(sent).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { clearCurrentDbClient(); }
+  });
+
+  // State-only permission must never deliver tool/activity prose or title-derived labels.
+  it('keeps state-only subscriptions free of action summaries and workflow text', async () => {
+    const g = { ...subscriber(), approvedEventTopics: ['task-state'] } as InstalledGhost;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publish({ kind: 'state', sessionId: 'task', state: { changedAtMs: 10, activity: {
+      sessionId: 'task', phase: 'running', attention: false, currentActionSummary: 'private command arguments',
+      workflow: { key: 'title:private', label: 'private task title' },
+    } } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent[0]!.payload).toMatchObject({ data: { state: { changedAtMs: 10, activity: { sessionId: 'task', phase: 'running', attention: false } } } });
+    expect(JSON.stringify(sent)).not.toContain('private');
+  });
+
+  it.each(['revision', 'uninstalled', 'revoked', 'disabled'] as const)('drops buffered content when %s changes before wake completes', async change => {
+    const g = subscriber() as InstalledGhost;
+    let live: InstalledGhost | null = g;
+    let wake!: () => void;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => live,
+      wake: () => new Promise<void>(resolve => { wake = resolve; }) });
+    gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task', content: 'secret' });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    live = change === 'uninstalled' ? null : { ...g,
+      ...(change === 'revision' ? { approval: { state: 'approved', revision: 'r2' } } : {}),
+      ...(change === 'revoked' ? { approvedEventTopics: [] } : {}),
+      ...(change === 'disabled' ? { enabled: false } : {}),
+    };
+    running.add('reader'); wake();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toEqual([]);
+  });
+});
 
 function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
   const sent: Array<{ ghostId: string; payload: GhostPipeEventPush }> = [];

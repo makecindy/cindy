@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 
@@ -50,6 +51,50 @@ function harness(bot = true) {
 }
 
 describe('Bot candidate recovery', () => {
+  // #10119 review: use the production enrichment before the production recovery callbacks.
+  it('does not turn a text-only permission denial into a provider failure after enrichment', () => {
+    const message = 'Permission denied: HTTP 403';
+    const signals = { message, ...extractNonSecretErrorSignals(message) };
+    const h = harness();
+    expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(false);
+    expect(h.onResumableTurnError('s', signals, h.item)).toBeNull();
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.guard).not.toHaveBeenCalled();
+    expect(h.resume).not.toHaveBeenCalled();
+  });
+
+  // #9836: legacy/statusless provider envelopes must reach the real recovery callbacks.
+  it.each(['switched', 'exhausted', 'failed'] as const)('handles the reported provider 403 after fallback %s', async (outcome) => {
+    const signals = { message: 'HTTP 403: The caller does not have permission' };
+    const ordinary = harness(false);
+    expect(ordinary.isResumableTurnErrorCandidate(signals, ordinary.item)).toBe(false);
+    const h = harness();
+    h.fallback.mockResolvedValue({ session: null, outcome });
+    expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(true);
+    expect(h.onResumableTurnError('s', signals, h.item)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledTimes(outcome === 'switched' ? 1 : 0);
+    if (outcome !== 'switched') expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
+  });
+
+  it.each([
+    { message: 'The caller does not have permission' },
+    { message: 'HTTP 403: Forbidden' },
+  ])('recognizes statusless provider access failure %j', signals => {
+    expect(isBotCandidateUnavailable(signals)).toBe(true);
+  });
+
+  it.each([
+    { reason: 'user_denied', message: 'HTTP 403: The caller does not have permission' },
+    { message: 'User denied approval: HTTP 403' },
+    { message: 'Permission denied: HTTP 403' },
+    { message: 'HTTP 4030' },
+    { message: 'tok-403-x' },
+  ])('keeps control failures and opaque numbers out of recovery %j', signals => {
+    expect(isBotCandidateUnavailable(signals)).toBe(false);
+  });
+
   // Claude assistant envelopes may carry only a stable SDK tag, without an HTTP status.
   it.each([
     ['authentication_failed', true], ['rate_limit', true], ['server_error', true],

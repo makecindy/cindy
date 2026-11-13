@@ -41,6 +41,20 @@ describe('get_chat_history remote errors', () => {
 });
 
 describe('get_chat_history cursor pagination', () => {
+  // Unit, lifecycle #15: the storage row id differs from the UI/native anchor.
+  // Existing cursor cases never expose a message, so they cannot catch losing clientId.
+  it.each([undefined, 'native-anchor'])('preserves optional message clientId %s for history operations', async clientId => {
+    const row = { id: 'storage-row', clientId, sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
+      role: 'user', content: 'question', toolUseId: null, agentMeta: null, createdAt: 1000, rewindAt: null };
+    const history = { listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
+      getMessages: vi.fn(async () => ({ ok: true as const, page: { items: [row], nextCursor: null, hasMore: false } })) };
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history });
+    const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] })) as { messages: Array<{ id: string; clientId?: string }> };
+    expect(result.messages[0]).toMatchObject({ id: 'storage-row', ...(clientId ? { clientId } : {}) });
+    if (!clientId) expect(result.messages[0]).not.toHaveProperty('clientId');
+  });
+
   it('carries rowid through the public nextCursor round-trip', async () => {
     const getMessages = vi
       .fn()
