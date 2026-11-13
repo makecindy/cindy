@@ -1,5 +1,22 @@
 # 供应商内多订阅账号（2026-11-07，未发布）
 
+## 每个 OpenAI 账号的额度重置（2026-11-13）
+
+账号管理视图可选追加 `codexResetProviderId`，仅供现有额度重置读／写 IPC 选择目标。
+新增原生账号使用 `openai-account:<accountId>`，执行端按当前 owner 的已存账号解析目录，
+不接受调用者提供路径；默认账号仍为 `openai`，迁移账号保留原连接 ID、设置与兑换锁。
+读取、手动兑换和自动规则保存沿用原参数和回包；旧客户端忽略新字段，新客户端连接旧宿主时
+读取不支持目标则隐藏额外控件，不回退到默认账号。可选字段不进入模型路线或匿名分享配额。
+沿用同账号 owner 门禁，访客不能授权扣卡；没有新增 channel、allowlist、能力位或中转行为，
+官方及自建中转继续透传原 JSON，无需服务端升级。自动检查运行于执行电脑；手机本轮未增加账号级重置 UI。
+回归入口为 `subscription-accounts/__tests__/runtime.test.ts`、`SubscriptionAccountsSection.test.tsx`
+和 `useCodexRateLimits.test.ts`；没有进行真实双设备互通或上游扣卡验收。
+
+`subscription-accounts:changed` 可选追加 `resetAccountId`：只标记该账号的重置数据已刷新，
+额外账号的重置读取仅响应自身 ID。普通任务运行数通知继续只带供应商 ID，不触发整池 CLI 重读。
+旧控制端忽略此可选字段；新端面对旧通知仍保留挂载与手动刷新，不借用其它账号的数据。
+已登录账号的重置入口独立于用量卡：额度暂时未知时仍可读取重置卡与自动规则。
+
 2026-11-11 旧独立 Codex 连接归并：供应商视图可选追加 `subscriptionPoolAlias: true`，表示本机设置与新来源栏在 OpenAI 内管理此账号；原供应商 ID、执行与鉴权语义保留。旧控制端忽略字段，继续显示独立连接。新版 owner 控制端在模型清单展示层隐藏重复来源，但明确指定的旧任务／自动任务仍保留原 ID 并通过原连接校验。整个 OpenAI 池没有开放远程调用或没有覆盖旧连接全部已开放模型时，远程目录不带旧连接的归并标记，避免移除原已开放入口；跨账号分享一律剥离标记，不让被分享的单账号变成整个池。没有新 channel、能力协商、隧道帧或服务端字段，官方与自建中转均按原协议透传。
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
@@ -33,7 +50,8 @@ Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号�
 `default` 或 `new`，后者始终创建独立目录。沿用原 channel 和 owner 校验；旧客户端的
 `read` / `add` 行为不变。旧宿主拒绝新 action 时显示重试错误，禁止退回含糊的 `add` 而
 静默接入旧账号。官方及自建中转均透传这些 action，无新增服务端字段。
-`subscription-accounts:changed` 仅推送供应商 id，路由到既有 `sessions` topic 后由当前管理页重读。
+`subscription-accounts:changed` 普通变化仅推送供应商 id，重置数据刷新可附加上述 `resetAccountId`，
+路由到既有 `sessions` topic 后由当前管理页重读。
 `read` 的账号视图以 `usage`（该账号自身的 Claude 窗口快照或 Codex 桶及余额）取代未发布的单条 `quota`。
 同账号 `manage-share` 的 `quota-account` 在池内有多个可分配账号时额外返回 `accounts`（匿名数组），
 顶层仍是首个账号：旧组主只读顶层，新组主遇到无 `accounts` 的旧成员按单账号显示。
@@ -59,7 +77,7 @@ Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额�
 官方及自建中转仅透传原 invoke，无帧、allowlist 或服务器变更。
 
 任务的账号显示（2026-11-11）：`maker:subscription-accounts` 追加只读 action `session`
-（`providerId`、`sessionId?`、`nativeSessionId?`，至少一个 id，各 ≤256 字符），沿用同一 owner 校验，共享任务访客不可用，
+（`providerId`、`sessionId?`、`nativeSessionId?`，通常至少一个 id，各 ≤256 字符；旧来源的无原生会话查询见下文），沿用同一 owner 校验，共享任务访客不可用，
 不进入管理命令执行器，Helper 不暴露。执行端按「任务 → 原生会话」顺序读持久绑定，回 `{ providerId, state }`：
 `legacy`（无账号池、只有默认账号或池前旧任务，调用方沿用原 reader）、`unassigned`（下一轮才选账号）、
 `unavailable`（绑定的账号已移出或供应商已断开）、`bound`（附 `account`：`isDefault`、池内序号、身份、套餐、状态与该账号
@@ -80,8 +98,9 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 ## 远程任务的账号换号判断（2026-11-12）
 
 `session` 查询可选追加 `model`（非空字符串，最多 512 字符）。新版执行端在 `bound` 回包的 `account` 上可选追加
-`blocked: true`：绑定账号此刻接不了这个模型（记着该模型的真实失败、可信快照显示耗尽或已退出登录），且不是暂停账号或归并的
-旧独立连接；字段缺省表示可用或未知。`blocked` 回包同时追加可选布尔字段 `switchAvailable`：执行端排除绑定账号后，
+`blocked: true`：绑定账号此刻接不了这个模型（记着该模型的真实失败、可信快照显示耗尽或已退出登录），且不是暂停账号；
+2026-11-13 起归并来的账号同样回报（执行端新开会话也会把任务换离它），字段格式不变，旧控制端收到后照原规则交接，
+早于该日的执行端仍不回报归并账号、行为不变。字段缺省表示可用或未知。`blocked` 回包同时追加可选布尔字段 `switchAvailable`：执行端排除绑定账号后，
 按真实选号入口只读检查另一个账号的认证、模型额度／冷却、并发名额和新路线权限，不预约、不修改绑定；读不到时为 `false`，
 owner 变化仍拒绝。可选准入从查询开始共用 2 秒预算，原账号读取已耗尽预算时不启动额外探测，
 原账号读取的既有超时保持不变；探测迟到仅完成既有 owner 隔离的快照读取，不改绑定或预约名额。
@@ -94,6 +113,17 @@ owner 变化仍拒绝。可选准入从查询开始共用 2 秒预算，原账�
 沿用原 channel、owner 校验与在途 owner 栅栏，
 无新 channel、allowlist、能力位、帧或服务端字段，官方与自建中转按原 invoke 透传，无需升级。
 回归入口：`subscription-accounts/__tests__/runtime.test.ts`（执行端回报、控制端新旧回包、真实组服务 → 路由 → 账号池）。
+
+2026-11-13 补齐仍保存旧连接 ID 的同账号远程任务：`session` 查询可选追加 `legacyProviderId`（仅 OpenAI、非空且不超过 256 字符），
+尚未建立原生会话时可只传该旧来源与模型，不必伪造任务或原生 ID；旧执行端会拒绝这种新查询，控制端保留原路径。
+执行电脑按自己的归并映射与已有原生绑定核对，不能用控制电脑的映射猜。仅宿主派生的同账号远程上下文，且原来源和归并后 OpenAI 的远程／
+模型权限及另一个账号的实际准入均通过时，在原回包顶层追加可选 `replacementProviderId: openai`；暂停与移出账号也可回报，后者仍为
+`state: unavailable`。该字段只表示可带上下文交接到归并来源，不带账号标识、目录或凭证，不预约或修改绑定。
+新控制端仅在明确收到该字段时交接、把保存来源改为 OpenAI，再由同一执行电脑的新启动按池选号；普通 `blocked` / `switchAvailable`
+不足以改变旧连接来源。旧执行端忽略请求的新字段且不回报替代来源，新控制端保留原路径；旧控制端忽略新回包字段。
+标准 OpenAI／Anthropic 路线沿用既有查询。候选旧来源每次发送只读一次执行端账号查询，未归并 ID 在映射检查即返回；无新轮询或重试。
+沿用原 channel、owner 和在途 owner 栅栏，无新增 allowlist、能力位、relay 帧或端点；官方与自建中转均为原 invoke 载荷透传，无需升级。
+回归入口为 `runtime.test.ts` 的执行端准入 → 回包解析 → 控制端交接 → 新 Agent 启动，以及 `ipc.test.ts` 的字段校验和目标来源权限。
 
 ## 已绑定任务启动失败的提示
 

@@ -89,7 +89,7 @@
   "quote": {
     "label": "{{name}} 인용: {{summary}}",
     "deleted": "원본 메시지가 삭제되었습니다",
-    "attachments": "{{name}} 등 {{total}}개",
+    "attachments": "{{name}} 등 파일 {{total}}개",
     "unavailable": "이 메시지를 찾을 수 없습니다."
   },
   "notice": {
@@ -106,7 +106,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}}이(가) 대기 시간 내에 처리를 시작하지 못해 이번 요청이 종료되었습니다.",
-        "advice": "파트너의 소유자에게 해당 컴퓨터에서 Cindy가 정상 실행 중이고 네트워크에 연결되어 있는지 확인해 달라고 요청하세요.",
+        "advice": "동료의 소유자에게 해당 컴퓨터에서 Cindy가 정상 실행 중이고 네트워크에 연결되어 있는지 확인해 달라고 요청하세요.",
         "details": "Cindy와 네트워크가 정상으로 돌아오면 메시지를 다시 보내세요."
       }
     },
@@ -148,7 +148,7 @@
       },
       "QUOTA_EXCEEDED": {
         "summary": "{{name}}이(가) 답변하지 못했습니다. 모델 사용량 한도에 도달했습니다.",
-        "advice": "사용 한도를 확인하거나 다른 모델을 선택하세요.",
+        "advice": "할당량을 확인하거나 다른 모델을 선택하세요.",
         "details": "제공자의 할당량을 확인하거나 다른 사용 가능한 모델을 선택하세요."
       },
       "NETWORK_ERROR": {
@@ -171,7 +171,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동반자 소유자가 이 그룹에서 다시 요청해 주세요.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
-      "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요."
+      "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요.",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}님, Cindy가 대신 일하게 하려면 내 Cindy를 연결하세요(지금 온라인인 Cindy가 없습니다)."
     }
   },
   "plan": {
@@ -210,8 +211,8 @@
     "stepExecuting": "실행 중",
     "stepSkipped": "건너뜀",
     "skippingTurn": "건너뛰는 중…",
-    "queueWaiting": "계속 대기 중",
-    "skipTurnLabel": "건너뛰기 {{name}}",
+    "queueWaiting": "계속하기를 기다리는 중",
+    "skipTurnLabel": "{{name}} 건너뛰기",
     "stepSpoken": "완료",
     "allTurns_one": "전체 {{count}}명",
     "allTurns_other": "전체 {{count}}명",
@@ -348,7 +349,7 @@
     "attachmentFailed": "첨부 파일을 열지 못했습니다. 다시 시도해 주세요.",
     "attachmentPreviewLoading": "첨부 파일을 불러오는 중…",
     "attachmentPreviewFailed": "이 첨부 파일을 미리 볼 수 없습니다. 다시 시도하세요.",
-    "attachmentPreviewTooLarge": "파일이 10MB를 초과해 모바일에서 미리 볼 수 없습니다.",
+    "attachmentPreviewTooLarge": "파일이 10 MB를 초과해 모바일에서 미리 볼 수 없습니다.",
     "attachmentPreviewBinary": "이 첨부 파일은 읽을 수 있는 텍스트가 아니어서 미리 볼 수 없습니다.",
     "attachmentPreviewTruncated": "미리보기는 최대 10,000줄, 100,000자까지 표시합니다.",
     "attachmentPreviewEmpty": "이 파일은 비어 있습니다.",
@@ -436,8 +437,8 @@
     },
     "title": "AI 대신 답장 모드",
     "settings": "AI 대신 답장 설정",
-    "companion": "내 파트너",
-    "choose": "파트너 선택",
+    "companion": "내 동료",
+    "choose": "동료 선택",
     "enabled": "자동 대신 답장",
     "triggerLabel": "작동 방식",
     "resumeAfter": "부재 후 재개",
@@ -466,8 +467,8 @@
       "off": "자동 대신 답장 꺼짐",
       "offline": "답장 일시 중지 · 컴퓨터 오프라인",
       "waiting": "수동 시작 대기",
-      "unbound": "파트너 미선택",
-      "enabled": "파트너가 대신 답장할 준비가 됐어요"
+      "unbound": "동료 미선택",
+      "enabled": "동료가 대신 답장할 준비가 됐어요"
     },
     "trigger": {
       "always": "항상 활성화",
@@ -481,10 +482,10 @@
     "minutes": "{{count}}분",
     "presence": "직접 참여 중 · 부재 {{minutes}}분 후 재개",
     "scheduledWait": "{{time}}에 시작",
-    "attribution": "{{name}}가 {{owner}} 대신 답장했어요",
+    "attribution": "{{name}}이(가) {{owner}} 대신 답장했어요",
     "digestNow": "지금 정리",
     "digestWorking": "정리 중…",
-    "digestSent": "파트너 채팅으로 보냈어요",
+    "digestSent": "동료 채팅으로 보냈어요",
     "digestFailed": "정리하지 못했어요. 다시 시도하세요.",
     "digestEmpty": "새로 정리할 내용이 없어요",
     "access": {
@@ -528,7 +529,7 @@
     "leaveRowHintAlone": "새 메시지를 받지 않고 기록도 볼 수 없어요",
     "leaveBlocked": "나가려면 먼저 그룹 소유자를 넘겨주세요",
     "searchMembers": "멤버 검색",
-    "membersNoMatch": "‘{{query}}’와 일치하는 멤버가 없어요",
+    "membersNoMatch": "‘{{query}}’와(과) 일치하는 멤버가 없어요",
     "you": "나",
     "companionOf": "{{name}}의 파트너",
     "teammateTag": "동반자",
@@ -543,7 +544,7 @@
     "ownFolder": "그룹 전용 폴더",
     "archive": "그룹 보관",
     "unarchive": "그룹 보관 해제",
-    "archiveHint": "그룹을 보관하면 모든 멤버의 새 메시지와 파트너 실행이 중지돼요. 기록은 유지돼요. 그룹을 검색해 기록을 보거나 보관을 해제할 수 있어요.",
+    "archiveHint": "그룹을 보관하면 모든 멤버의 새 메시지와 동료 실행이 중지돼요. 기록은 유지돼요. 그룹을 검색해 기록을 보거나 보관을 해제할 수 있어요.",
     "unarchiveHint": "보관을 해제하면 모든 멤버의 메시지와 파트너 실행이 재개돼요.",
     "archiveRowHint": "모두에게 그룹을 멈추고 기록은 남겨요",
     "unarchiveRowHint": "메시지와 동반자 작업을 다시 시작해요",
@@ -574,7 +575,7 @@
     "transfer": "소유권 이전",
     "transferTitle": "{{name}}에게 소유권을 이전할까요?",
     "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다.",
-    "removeTitle": "{{name}}을 그룹에서 내보낼까요?",
+    "removeTitle": "{{name}}을(를) 그룹에서 내보낼까요?",
     "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 파트너도 나갑니다.",
     "confirm": "확인",
     "inviteTitle": "그룹에 초대",
@@ -599,7 +600,7 @@
     "joinDescription": "초대 링크 또는 초대 코드를 붙여넣고 계속하세요.",
     "inviteLink": "초대 링크",
     "pasteLink": "초대 링크 붙여넣기",
-    "invitedBy": "{{name}}님의 초대",
+    "invitedBy": "{{name}} 님의 초대",
     "accept": "수락하고 참여",
     "previewInvite": "계속",
     "loadingInvite": "초대를 불러오는 중…",

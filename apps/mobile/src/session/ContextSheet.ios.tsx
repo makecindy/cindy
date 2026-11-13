@@ -53,6 +53,10 @@ const DismissAction = createContext<(action: () => void) => void>((action) =>
   action(),
 );
 
+export function useContextSheetDismissAction() {
+  return useContext(DismissAction);
+}
+
 export function ContextSheet(props: ContextSheetProps) {
   const { t } = useTranslation();
   const pending = useRef<(() => void) | null>(null);

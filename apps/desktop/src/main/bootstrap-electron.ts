@@ -887,7 +887,10 @@ import {
   setGoalStopObserver,
   setGoalAskAnswerObserver,
   withSendToSessionLock,
+  pendingRequestForAlert,
 } from './maker-ipc/register.js';
+import { buildPermissionAlert, buildQuestionAlert } from './device-link/mobileNotify.js';
+import { getPermissionAlertQuestion } from './sessionNotificationCopy.js';
 import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
 import {
   createLocalProjectFromTaskHandlers,
@@ -1236,6 +1239,7 @@ import {
   resolveGhostControlPointPlugin,
   diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
+  pluginLiveScreenViews,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -2796,15 +2800,17 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
-const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
-  isResourceUsageOpenSender({
-    sender,
-    mainWindow: mainWindowRef,
-    senderWindow: BrowserWindow.fromWebContents(sender),
-    isSecondaryAppWindow,
-  }),
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(
+  (sender) =>
+    isResourceUsageOpenSender({
+      sender,
+      mainWindow: mainWindowRef,
+      senderWindow: BrowserWindow.fromWebContents(sender),
+      isSecondaryAppWindow,
+    }),
+  (sender) => !!mainWindowRef && !mainWindowRef.isDestroyed() && mainWindowRef.webContents === sender,
 );
-remoteDesktopViewerWindows.register();
+remoteDesktopViewerWindows.register(pluginLiveScreenViews);
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
 registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);
@@ -5042,6 +5048,13 @@ const registerIpcHandlers = () => {
   initNotificationService({
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
     shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
+    pendingInteractionAlert: (sessionId) => {
+      const request = pendingRequestForAlert(sessionId);
+      if (!request) return undefined;
+      const permission = buildPermissionAlert(request, getPermissionAlertQuestion);
+      const question = permission ? undefined : buildQuestionAlert(request);
+      return permission || question ? { ...(permission ? { permission } : {}), ...(question ? { question } : {}) } : undefined;
+    },
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });

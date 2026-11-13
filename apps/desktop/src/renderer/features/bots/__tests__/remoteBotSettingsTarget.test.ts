@@ -44,6 +44,18 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+// #10216 unit: the real remote adapter only exposes retry when both operations
+// are advertised, and routes the write to the buddy's host through settings.
+it('offers repository recovery only on supporting hosts and sends explicit retry', async () => {
+  expect(create().target.projectRepository).toBeUndefined();
+  const { target } = create([...ALL_OPS, 'project.repository', 'project.retryRepository']);
+  expect(target.pages.has('advanced')).toBe(true);
+  host.invoke.mockResolvedValue(ok('ready'));
+  expect(await target.projectRepository!('bot-1', true)).toBe('ready');
+  expect(sent()).toMatchObject({ input: { op: 'project.retryRepository' }, resourceRef: { id: 'bot-1' } });
+  expect(host.invoke.mock.calls[0][0]).toBe('mac');
+});
+
 it('applies the host profile after an autosave and sends only what changed', async () => {
   const { target, profiles } = create();
   host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));

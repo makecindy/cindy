@@ -3,6 +3,7 @@ import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import { PluginShareButton } from './PluginShareButton';
 import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
+import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 import { Button } from '@/components/ui/button';
 import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
@@ -937,7 +938,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
           key: item.key,
           title: t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
           descriptions: [
-            item.detailKey ? t('settings.ghosts.perm.' + item.detailKey, item.detailArgs) : '',
+            permissionItemDetail(item, t) ?? '',
             item.detail ?? '',
           ].filter(Boolean),
           icon: permissionItemIcon(item),

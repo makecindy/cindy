@@ -43,9 +43,9 @@
   "tooManyConnectionsTitle": "连接数已达上限",
   "tooManyConnectionsHint": "当前账号同时在线的设备过多，请断开其它设备后重试。",
   "versionMismatchTitle": "版本不匹配",
-  "versionMismatchHint": "当前 App 版本与服务端协议不一致，请升级到最新版本。",
+  "versionMismatchHint": "当前 App 版本与服务端协议不一致，请升级到最新版本后重试。",
   "unstableTitle": "连接反复断开",
-  "unstableHint": "连接不稳定，请检查网络并等待连接恢复",
+  "unstableHint": "连接不稳定，请检查网络并等待连接恢复。",
   "relay": {
     "label": {
       "online": "Relay 已连接",
