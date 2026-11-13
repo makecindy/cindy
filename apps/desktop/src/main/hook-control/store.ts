@@ -137,6 +137,11 @@ export interface HookConnectionConfig {
 }
 
 const MAX_WORKSPACES = 64;
+/**
+ * 旧名称表只防坏文件撑爆内存, 不是业务上限: 丢掉一条旧名称, 它就可能被分给别的项目
+ * (见 projectWorkspaces.ts), 所以正常数据永远不该碰到这个数。
+ */
+const MAX_RETIRED_WORKSPACES = 4096;
 const OBJECT_META_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const ACCOUNT_FINGERPRINT_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -440,11 +445,11 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     };
   }
 
-  function parseWorkspaces(raw: unknown): Record<string, string> {
+  function parseWorkspaces(raw: unknown, max: number = MAX_WORKSPACES): Record<string, string> {
     const workspaces: Record<string, string> = {};
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-        if (Object.keys(workspaces).length === MAX_WORKSPACES) break;
+        if (Object.keys(workspaces).length === max) break;
         if (!isSafeWorkspaceAlias(k) || typeof v !== 'string') continue;
         const trimmed = v.trim();
         if (trimmed && path.isAbsolute(trimmed)) workspaces[k] = trimmed;
@@ -503,7 +508,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
               accounts[fingerprint] = parseAccount(account);
           }
         }
-        const retiredAliases = parseWorkspaces(row.retiredAliases);
+        const retiredAliases = parseWorkspaces(row.retiredAliases, MAX_RETIRED_WORKSPACES);
         return {
           version: 2,
           urlOverride,
@@ -700,7 +705,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         }
       }
       current.document.workspaces = workspaces;
-      const retired = parseWorkspaces(plan.retired);
+      const retired = parseWorkspaces(plan.retired, MAX_RETIRED_WORKSPACES);
       if (Object.keys(retired).length > 0) current.document.retiredAliases = retired;
       else delete current.document.retiredAliases;
       pruneStaleDefaultWorkspaces(current.document);

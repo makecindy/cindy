@@ -119,6 +119,27 @@ describe('planProjectWorkspaces', () => {
     expect(back.retired).toEqual({ main: '/a/app' });
   });
 
+  // PR #10291 review(第四轮): 名称归属只看清单里的前 64 个项目, 项目一掉出窗口, 它的名称就
+  // 分给了同名的别的项目; 旧名称表按 64 条截断同理。最小失败输入: 65 个项目, 第 65 个叫 app,
+  // 窗口里新来一个也叫 app 的项目; 以及一个项目攒了 70 个旧名称。
+  it('掉出清单窗口的项目仍占着自己的名称, 回到窗口时原样拿回; 旧名称不按条数丢弃', () => {
+    const filler = Array.from({ length: 64 }, (_, index) => ({ path: `/f/p${index}`, name: `p${index}` }));
+    const old = { path: '/a/app', name: 'app' };
+    const first = plan({ app: '/a/app' }, [{ path: '/b/app', name: 'app' }, ...filler.slice(1), old]);
+    expect(first.workspaces.app).toBeUndefined();
+    expect(first.workspaces['b/app']).toBe('/b/app');
+    expect(first.retired.app).toBe('/a/app');
+
+    const back = plan(first.workspaces, [old, ...filler.slice(2), { path: '/b/app', name: 'app' }], first.retired);
+    expect(back.workspaces.app).toBe('/a/app');
+    expect(back.workspaces['b/app']).toBe('/b/app');
+
+    const many = Object.fromEntries(Array.from({ length: 70 }, (_, index) => [`old${index}`, '/a/app']));
+    const kept = plan({ app: '/a/app' }, [old, { path: '/c/x', name: 'old0' }], many);
+    expect(Object.keys(kept.retired)).toHaveLength(70);
+    expect(kept.workspaces['c/old0']).toBe('/c/x');
+  });
+
   // PR #10291 review: 纯数字的旧名称(如 2025)原先被排除在查找之外, 服务端按它派发就被拒。
   it('纯数字的旧名称照样能找到目录', () => {
     const result = plan({ '2025': '/code/reports' }, [{ path: '/code/reports', name: 'reports' }]);
