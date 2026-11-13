@@ -7070,7 +7070,11 @@
         "remoteSessionEnded": "L'appareil distant a mis fin à cette session"
       },
       "control": "Contrôler",
-      "standbyHint": "Une autre instance de Cindy sur cet ordinateur utilise la connexion à distance. Fermez-la et cette instance prendra automatiquement le relais."
+      "standbyHint": "Une autre instance de Cindy sur cet ordinateur utilise la connexion à distance. Fermez-la et cette instance prendra automatiquement le relais.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Bêta",

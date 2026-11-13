@@ -7003,7 +7003,11 @@
         "remoteSessionEnded": "The remote device ended this session"
       },
       "control": "Control",
-      "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically."
+      "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",

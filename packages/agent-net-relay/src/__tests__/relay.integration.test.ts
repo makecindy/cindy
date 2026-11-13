@@ -145,6 +145,28 @@ function nextPacket(uplink: AgentNetUplink): Promise<[string, Uint8Array]> {
 }
 
 describe('independent V2 relay', () => {
+  // App metadata is deliberately not certificate authority. Real WS/HTTP/store:
+  // reject malformed labels, allow future labels and retain them after restart.
+  // Existing presence integration only sent platform/appVersion. Tier: integration.
+  it('validates self-reported App labels without restricting unknown Apps or old clients', async () => {
+    const f = await fixture();
+    for (const app of [null, 42, {}, '', '-bad', 'bad app', 'a'.repeat(65)]) {
+      const uplink = await f.client.connect(); f.uplinks.push(uplink);
+      const closed = once(uplink, 'close');
+      uplink.presence(false, [], { app: app as string });
+      expect((await closed)[0]).toBe(1008);
+      expect((await f.client.directory())[0].app).toBeUndefined();
+    }
+    const app = 'A'.repeat(55) + '._:@/-001'; // 64 chars; same alphabet as ID_PATTERN.
+    const uplink = await f.client.connect(); f.uplinks.push(uplink);
+    uplink.presence(false, [], { platform: 'darwin', app });
+    await vi.waitFor(async () => expect((await f.client.directory())[0].app).toBe(app));
+    await f.restart();
+    expect((await f.client.directory())[0]).toMatchObject({ online: false, app });
+    const legacy = await f.client.connect(); f.uplinks.push(legacy);
+    legacy.presence(false, [], { platform: 'darwin' });
+    await vi.waitFor(async () => expect((await f.client.directory())[0]).toMatchObject({ online: true, platform: 'darwin', app }));
+  });
   // Executor endorsements carry certificates. The old fixed grant-count limit
   // could publish a >1 MiB directory and disconnect every existing Host peer.
   // Real admission/storage/HTTP integration; unit signature tests lack this budget.
@@ -398,9 +420,14 @@ describe('independent V2 relay', () => {
     a.send('member', opaque);
     expect(await received).toEqual(['owner', opaque]);
     a.presence(false, [], { platform: 'win32', deviceName: 'My workstation' });
-    b.presence(true, ['remote-control', 'files', 'tasks'], { platform: 'ios', appVersion: 'unit', busy: true, deviceName: 'My phone' });
+    b.presence(true, ['remote-control', 'files', 'tasks'], { platform: 'ios', app: 'cindy-friend', appVersion: 'unit', busy: true, deviceName: 'My phone' });
     await vi.waitFor(async () => expect((await f.client.directory()).find((d) => d.certificate.deviceId === 'member')).toMatchObject({
-      online: true, remoteControlEnabled: true, platform: 'ios', appVersion: 'unit', busy: true }));
+      online: true, remoteControlEnabled: true, platform: 'ios', app: 'cindy-friend', appVersion: 'unit', busy: true }));
+    // App identity is metadata, independent of capabilities and certificate fields.
+    // Integration: both SDK uplink serialization and durable relay storage are real.
+    b.close();
+    await vi.waitFor(async () => expect((await f.client.directory()).find(d => d.certificate.deviceId === 'member'))
+      .toMatchObject({ online: false, app: 'cindy-friend', capabilities: [] }));
     // V1 lets a paired member edit aliases, while removal remains owner-only.
     await m.client.request('PATCH', '/devices/owner', { name: 'Work desk' });
     expect((await f.client.directory()).find(d => d.certificate.deviceId === 'owner')).toMatchObject({ name: 'Work desk', selfName: 'My workstation' });
@@ -409,7 +436,7 @@ describe('independent V2 relay', () => {
     await f.restart();
     const client = new AgentNetClient(f.relay.url, m.identity, m.certificate, f.rootPublicKey);
     expect((await client.directory()).map((d) => d.online)).toEqual([false, false]);
-    expect((await client.directory()).find(d => d.certificate.deviceId === 'member')).toMatchObject({ platform: 'ios', appVersion: 'unit', busy: false });
+    expect((await client.directory()).find(d => d.certificate.deviceId === 'member')).toMatchObject({ platform: 'ios', app: 'cindy-friend', appVersion: 'unit', busy: false });
     expect((await client.directory()).find(d => d.certificate.deviceId === 'owner')).toMatchObject({ name: 'Work desk', selfName: 'My workstation' });
     expect(await client.request('PATCH', '/devices/owner', { name: null })).toMatchObject({ name: 'My workstation' });
     const recoveredOwner = await f.client.connect(); const recoveredMember = await client.connect(); f.uplinks.push(recoveredOwner, recoveredMember);

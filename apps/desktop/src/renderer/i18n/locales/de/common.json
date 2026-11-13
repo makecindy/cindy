@@ -7003,7 +7003,11 @@
         "remoteSessionEnded": "Das entfernte Gerät hat diese Sitzung beendet"
       },
       "control": "Steuern",
-      "standbyHint": "Eine andere Cindy-Instanz auf diesem Computer verwendet die Remote-Verbindung. Schließe sie, damit diese Instanz automatisch übernimmt."
+      "standbyHint": "Eine andere Cindy-Instanz auf diesem Computer verwendet die Remote-Verbindung. Schließe sie, damit diese Instanz automatisch übernimmt.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
