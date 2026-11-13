@@ -6737,7 +6737,7 @@
         "sectionTitle": "Experimental Agent network",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Shows the connection topology and recent activity. Connections are encrypted when both devices enable Agent-Net and have paired through Agent-Net. Other devices use the existing connection. Applies only to this computer."
+          "hint": "Experimental feature. Not recommended for use at this time. Shows the connection topology and recent activity. Connections are encrypted when both devices enable Agent-Net and have paired through Agent-Net. Other devices use the existing connection. Applies only to this computer."
         },
         "empty": "No other devices yet. Sign in to the same account on another computer or phone and it will appear here.",
         "stats": {

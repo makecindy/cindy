@@ -6804,7 +6804,7 @@
         "sectionTitle": "Red experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Muestra la topología de conexiones y la actividad reciente. La conexión se cifra cuando ambos dispositivos activan Agent-Net y se han vinculado mediante Agent-Net. Los demás dispositivos usan la conexión habitual. Solo afecta a esta computadora."
+          "hint": "Función experimental. Por ahora no se recomienda su uso. Muestra la topología de conexiones y la actividad reciente. La conexión se cifra cuando ambos dispositivos activan Agent-Net y se han vinculado mediante Agent-Net. Los demás dispositivos usan la conexión habitual. Solo afecta a esta computadora."
         },
         "empty": "Aún no hay otros dispositivos. Inicia sesión con la misma cuenta en otra computadora o teléfono y aparecerá aquí.",
         "stats": {

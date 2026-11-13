@@ -6737,7 +6737,7 @@
         "sectionTitle": "Experimentelles Agent-Netzwerk",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Zeigt die Verbindungstopologie und die letzte Aktivität. Verbindungen sind verschlüsselt, wenn Agent-Net auf beiden Geräten aktiviert ist und die Geräte über Agent-Net gekoppelt wurden. Andere Geräte verwenden die bisherige Verbindung. Gilt nur für diesen Computer."
+          "hint": "Experimentelle Funktion. Die Nutzung wird derzeit nicht empfohlen. Zeigt die Verbindungstopologie und die letzte Aktivität. Verbindungen sind verschlüsselt, wenn Agent-Net auf beiden Geräten aktiviert ist und die Geräte über Agent-Net gekoppelt wurden. Andere Geräte verwenden die bisherige Verbindung. Gilt nur für diesen Computer."
         },
         "empty": "Noch keine anderen Geräte. Melde dich auf einem anderen Computer oder Telefon mit demselben Konto an, dann erscheint es hier.",
         "stats": {

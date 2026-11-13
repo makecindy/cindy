@@ -6940,15 +6940,20 @@ function RunningStatusBar({
     generationDurationMs,
   ]);
 
-  // Keep authoritative text for the accessible popover label. Interpolation
-  // belongs to the displayed counter leaf, so rate-only/hidden rows do no RAF work.
-  const tokenCountText = t('chat.runningStatus.tokenCount', {
-    tokens: formatRunningTokenCount(tokenUsage),
-  });
   // Host speed counts and times generation itself; usage counters stay the fallback.
   const rateOutputTokens = tokenSpeed?.tokens ?? outputTokens;
   const rateDurationMs = tokenSpeed?.elapsedMs ?? generationDurationMs;
   const rateReliable = tokenSpeed ? true : generationReliable;
+  const displayTokens = tokenUsage > 0
+    ? tokenUsage
+    : tokenSpeed?.streaming && rateOutputTokens > 0
+      ? rateOutputTokens
+      : 0;
+  // Keep authoritative text for the accessible popover label. Interpolation
+  // belongs to the displayed counter leaf, so rate-only/hidden rows do no RAF work.
+  const tokenCountText = t('chat.runningStatus.tokenCount', {
+    tokens: formatRunningTokenCount(displayTokens),
+  });
   const rateHistory = useRunningTokenRateHistory({
     sessionKey,
     startedAt,
@@ -6967,7 +6972,7 @@ function RunningStatusBar({
     outputTokens: rateOutputTokens,
     generationDurationMs: rateDurationMs,
     generationReliable: rateReliable,
-    tokenUsage,
+    tokenUsage: Math.max(tokenUsage, displayTokens),
     latestRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
@@ -7086,12 +7091,13 @@ function RunningStatusBar({
                   backgroundTasksRunning ||
                   (tokenSpeed && !tokenSpeed.streaming)
                     ? null
-                    : usageMeta.kind === 'tokens'
-                      ? tokenCountText
-                      : rateText
+                    : rateText ?? (displayTokens > 0 ? tokenCountText : null)
                 }
-                isTokenCount={usageMeta.kind === 'tokens'}
-                tokenUsage={tokenUsage}
+                isTokenCount={
+                  usageMeta.kind === 'tokens' ||
+                  (usageMeta.kind === 'rate' && rateText === null && displayTokens > 0)
+                }
+                tokenUsage={displayTokens}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
                 outputTokens={rateOutputTokens}
                 history={rateHistory}

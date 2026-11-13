@@ -227,6 +227,31 @@ Windows）。把默认处理程序设为 stock `Electron.app` 后，冷启动它
 - 浏览器点击、冷启动和运行中唤起须用 packaged macOS / Windows 验证。运行 dev 时直接
   点击系统链接仍交给原有安装版，不能把它当作当前 checkout 的验收。
 
+Windows 提权实例的深链交接使用 `windowsDeepLinkHandoff.ts` 和同包 Windows shell
+原生模块（历史产物名仍为 `cindy-windows-taskbar.node`）。普通实例保留 Electron 单实例
+入口；普通权限的第二进程向提权实例补交同一次启动的链接，接收端按启动 ID 去重，并复用
+原有深链解析、登录前保留和窗口聚焦。退出的第二进程不再执行冷启动 argv。
+管道按当前 Windows 用户、登录会话与单实例锁域隔离，拒绝远程客户端；双方验证对端的账号、
+登录会话与可执行文件。监听端启动时检查自身提权；发送端从同一已连接管道的显式 owner 核对账号，
+并结合内核提供的进程身份，不读取 Electron 限制访问的高权限进程令牌。消息最多 32 KiB、各次 IO 有超时，邀请和密钥不落盘或进日志。
+不关闭沙箱，不开放命令行、任意文件或进程执行入口。只有打包版启用这条补偿路径。
+
+交接模块只负责传输与同次启动去重；链接解析、登录前保留和导航继续由 `deepLink.ts` 统一处理，
+业务和浏览器不另建交接或恢复流程。主实例冷启动取得 Electron 锁到同步建立管道之间仍有
+极短窗口，此时到达的第二次启动不保证补交；按 [Review 边界](../../REVIEW.md#4-重点看机器查不到的部分)
+登记这一限制，不为它给普通成功路径增加等待或重放机制。
+
+原生集成验证可在 Windows 提权开发终端运行：先用 Cargo 构建
+`apps/desktop/native/windows-taskbar/Cargo.toml`，再运行
+`node apps/desktop/scripts/check-windows-deep-link-handoff.mjs --addon=<产物 DLL 或 node 文件>`，
+再加 `--electron` 跑真实 Electron 进程矩阵（其高权限 token 查询限制不能由 Node 矩阵代替）。
+管道 owner 的拒绝边界在同一提权终端运行
+`cargo test --manifest-path apps/desktop/native/windows-taskbar/Cargo.toml -- --include-ignored`；
+该 integration 用例用可连接但 owner 不匹配的真实管道，验证发送前拒绝。
+脚本用独立权限夹具构造普通发送端与提权接收端，通过生产交接代码检查交接、
+去重和锁域隔离；不修改安装版、正式 profile 或系统协议关联。它不代替打包版从浏览器点击
+共享邀请、OAuth 返回，以及最小化/托盘状态下前台唤起的验收。
+
 已被旧开发版覆盖关联时，先正常关闭那份旧 dev。保存正式版中的工作后，从安装位置
 （macOS 通常为 `/Applications/Cindy.app`，按实际区域/版本选择）正常退出并重新启动
 对应的打包版，再重试链接；打包版启动会重新注册其协议。仅切换到已经运行的窗口不会
