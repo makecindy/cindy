@@ -16,6 +16,13 @@ import {
   isPluginInstanceKey,
   resolvePluginInstanceQuery,
 } from '../../../shared/pluginIdentity.js';
+import {
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
+} from '../ghostAvailability.js';
 
 const productionIdentityDeps = {
   requestPluginHostToolCall: async () => ({ isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"HOST_NOT_READY"}' }] }),
@@ -37,6 +44,12 @@ const productionIdentityDeps = {
   installedGhostStoragePart,
   isPluginInstanceKey,
   resolvePluginInstanceQuery,
+  // The lookups index.ts delegates to (ghostAvailability.ts).
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
   libraryRestartRequiredReason: (): string | null => null,
 };
 
