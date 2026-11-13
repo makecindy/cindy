@@ -62,7 +62,7 @@ export function useCompanionAutomations(input: {
     if (!on && confirmation) {
       const text = (value?: RemoteText) => value === undefined ? undefined : resolveRemoteText(value, locale);
       Alert.alert(text(confirmation.title) ?? '', text(confirmation.body), [
-        { text: resolveRemoteText({ fallback: 'Cancel', translations: { 'zh-CN': '取消', 'zh-TW': '取消', ja: 'キャンセル', ko: '취소' } }, locale), style: 'cancel' },
+        { text: resolveRemoteText({ fallback: 'Cancel', translations: { 'zh-CN': '取消', 'zh-TW': '取消', ja: 'キャンセル', ko: '취소', es: 'Cancelar', fr: 'Annuler', de: 'Abbrechen', 'pt-PT': 'Cancelar', 'pt-BR': 'Cancelar', 'zh-Hant-x-lzh': '罷', 'zh-Hans-x-lzh': '罢' } }, locale), style: 'cancel' },
         { text: text(confirmation.confirmLabel) ?? 'OK', style: 'destructive', onPress: () => void apply(id, on) },
       ]);
       return;

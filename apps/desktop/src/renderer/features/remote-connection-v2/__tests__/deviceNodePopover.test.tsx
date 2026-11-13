@@ -1,15 +1,14 @@
 // @vitest-environment jsdom
 /**
  * 拓扑卡片只展示连接信息(用户裁决 2026-11-07:拓扑图只管拓扑,改名、开关、删除留在「我的设备」)。
- * 规则:卡片上没有任何开关、删除或「管理设备…」(其它设备不列在「我的设备」里);这台电脑的卡片的「管理设备…」
- * 把本机交给页面去定位本机卡片;
+ * 规则:所有卡片都不放开关、删除或「管理设备…」;本机设置已在同一页上方。
  * 远程桌面只给在线、能被控、两边都允许控制的电脑;忙碌的状态字是心动橙。改坏了拓扑卡片会重新长出配置,
- * 或者「管理设备…」定位错设备。
- * 覆盖缺口:卡片此前没有组件测试。最小失败输入:见各用例。
- * tier:unit(jsdom 组件)。实测耗时:<2s。
+ * 或者重新长出同页重复的管理入口(用户反馈 2026-11-12)。
+ * 覆盖缺口:旧用例要求本机卡片提供管理按钮。最小失败输入:有本机连接信息的 HubNodePopover。
+ * tier:unit(jsdom 组件)。实测耗时见本 PR 验证记录。
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -17,6 +16,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { DeviceNodePopover, HubNodePopover } from '../DeviceNodePopover';
+import { RemoteSwitchBatch } from '../RemoteSwitchBatch';
 import type { TopologyModel, TopologyNode } from '../topologyModel';
 
 function node(partial: Partial<TopologyNode> = {}): TopologyNode {
@@ -44,7 +44,50 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
 
 const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.title' });
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+// 2026-11-12 用户裁决：单台与批量入口都须保留目标的仅加密选择。真实组件+状态探测，tier:unit。
+it.each([
+  ['strict-card', true, null, null, 'encryptionRequired'],
+  ['strict-controller-card', false, 'ENCRYPTION_REQUIRED', null, 'disableBlocked.controller-encryption-required'],
+  ['v2-relay-card', false, null, 'V2_ONLY_RELAY', 'disableBlocked.agent-net-only-relay'],
+] as const)('explains why %s cannot switch back from its device card', async (id, onlyEncrypted, controllerBlock, disableBlocked, key) => {
+  const command = vi.fn(async () => ({ state: {}, peer: { ok: true, controllerBlock, result: { enabled: true, onlyEncrypted, disableBlocked, blocked: null } } }));
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  render(<DeviceNodePopover node={node({ id, encrypted: true })} relayName="Cindy" onRemoteDesktop={vi.fn()} onSwitch={vi.fn()} />);
+  expect(await screen.findByText('settings.remoteControl.v2.peerSwitch.' + key)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.toDeviceLink' })).toBeNull();
+});
+
+it('probes switch-back candidates and excludes the strict target before choosing the canary', async () => {
+  vi.useFakeTimers();
+  let disabled = false;
+  const command = vi.fn(async (input: { deviceId: string; request: { action: string } }) => {
+    if (input.request.action === 'set') disabled = true;
+    return { state: {}, peer: { ok: true, result: { enabled: !disabled, encrypted: !disabled, onlyEncrypted: input.deviceId === 'strict-batch', blocked: null, confirmWithinMs: null } } };
+  });
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  render(<RemoteSwitchBatch nodes={[node({ id: 'strict-batch', encrypted: true }), node({ id: 'allowed-batch', encrypted: true })]} entries={new Map()} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.toDeviceLink' })));
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.skipReason.encryption-required')).toBeTruthy();
+  expect(screen.getAllByText('settings.remoteControl.v2.peerSwitch.batch.ready')).toHaveLength(1);
+  expect(command.mock.calls.map(([input]) => input.request.action)).toEqual(['status', 'status']);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.run' })));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(command.mock.calls.filter(([input]) => input.request.action === 'set').map(([input]) => input.deviceId)).toEqual(['allowed-batch']);
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.state.done')).toBeTruthy();
+});
+
+// #10095 discussion_r4546067865：最后一台候选进入切换状态后，已打开的进度浮层仍须保留。
+// 真实组件入口；现有设备卡片用例未覆盖批量浮层。最小输入：一台候选变成 running。tier:unit。
+it('keeps the open batch panel mounted when its last candidate starts switching', async () => {
+  const n = node({ id: 'batch-progress', encrypted: false });
+  const view = render(<RemoteSwitchBatch nodes={[n]} entries={new Map()} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.toAgentNet' })));
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.confirmTitleAgentNet')).toBeTruthy();
+  view.rerender(<RemoteSwitchBatch nodes={[n]} entries={new Map([[n.id, { kind: 'running', target: 'agent-net', step: 'request' }]])} />);
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.confirmTitleAgentNet')).toBeTruthy();
+});
 
 describe('DeviceNodePopover', () => {
   // The UI must distinguish certified V2, legacy relay exposure and an old host's unknown status.
@@ -111,18 +154,11 @@ describe('HubNodePopover', () => {
     relay: { name: 'Cindy', selfHosted: false, rttMs: 20, flow: null },
   } as unknown as TopologyModel;
 
-  it('只展示与中转的连接、连接问题与待机说明;「管理设备…」交出本机', () => {
-    const onManage = vi.fn();
-    render(<HubNodePopover model={model} linkStatus="online" issue="连接已失效" standby selfDeviceId="self" onManage={onManage} />);
+  it('只展示与中转的连接、连接问题与待机说明,不重复提供同页管理入口', () => {
+    render(<HubNodePopover model={model} linkStatus="online" issue="连接已失效" standby />);
     expect(screen.queryAllByRole('switch')).toHaveLength(0);
     expect(screen.getByText('连接已失效')).toBeTruthy();
     expect(screen.getByText('settings.devices.standbyHint')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.popover.manage' }));
-    expect(onManage).toHaveBeenCalledWith('self');
-  });
-
-  it('设备目录还没拉到(没有本机 id)时不给「管理设备…」', () => {
-    render(<HubNodePopover model={model} linkStatus="online" issue={null} standby={false} selfDeviceId={null} onManage={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: 'settings.remoteControl.v2.popover.manage' })).toBeNull();
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 });

@@ -198,7 +198,7 @@ describe('PermissionSelector triggerVariant', () => {
   it('普通会话的超窄态也收成图标，field 形态不受影响', () => {
     const { unmount } = renderSelector({ iconOnly: true });
     const compactTrigger = getTrigger();
-    expect(compactTrigger.className).toContain('w-[34px]');
+    // Actual icon spacing is measured in the permission-composer browser fixture.
     expect(compactTrigger.textContent).toBe('');
     expect(compactTrigger.getAttribute('aria-label')).toContain('默认权限');
 

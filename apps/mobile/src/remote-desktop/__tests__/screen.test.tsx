@@ -1318,6 +1318,52 @@ describe("remote desktop controls", () => {
       expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     },
   );
+  it.each([
+    { code: "INVOKE_TIMEOUT", outcome: "grant" },
+    { code: "DESKTOP_INPUT_BUSY", outcome: "timeout" },
+  ])(
+    "requires fresh PiP authorization after a settled view-only restore: $code/$outcome",
+    async ({ code, outcome }) => {
+      const present = await viewOnlyPip("ios");
+      const original = fixture.invoke.getMockImplementation()!;
+      let finish!: () => void;
+      fixture.invoke.mockImplementation((...args) => {
+        const req = args[2][0];
+        if (req.op === "presentation") {
+          if (!req.enabled) return Promise.reject(new Error(code));
+          return new Promise((resolve) => { finish = () => resolve({}); });
+        }
+        return original(...args);
+      });
+      await present("presentation", { active: false });
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+      const heartbeats = requests().filter((r) => r.op === "heartbeat").length;
+      await act(async () => {
+        AppState.currentState = "inactive";
+        fixture.appState!("inactive");
+        AppState.currentState = "background";
+        fixture.appState!("background");
+      });
+      await present("presentation", { active: true });
+      // No clock advance: enter again before the original heartbeat can retry.
+      expect(requests().filter((r) => r.op === "heartbeat")).toHaveLength(heartbeats);
+      expect(requests().filter((r) => r.op === "presentation" && r.enabled)).toEqual([
+        { op: "presentation", lease: "lease", enabled: true },
+        { op: "presentation", lease: "lease", enabled: true },
+      ]);
+      expect(sent().filter((m) => m.type === "pipPolicy").at(-1)).toMatchObject({
+        preparing: true, authorized: false,
+      });
+      if (outcome === "grant") await act(async () => finish());
+      await act(async () => vi.advanceTimersByTimeAsync(4100));
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(
+        outcome === "grant" ? 0 : 1,
+      );
+      if (outcome === "timeout") await act(async () => finish());
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+    },
+  );
   it("keeps one view-only restore in flight across duplicate PiP events and heartbeats", async () => {
     const present = await viewOnlyPip("ios");
     const original = fixture.invoke.getMockImplementation()!;

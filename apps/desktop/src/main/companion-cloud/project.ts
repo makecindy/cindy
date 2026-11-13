@@ -90,8 +90,8 @@ export async function applyProjectRules(input: {
   input.assertCurrent();
   await input.io.writeRules(workingDir, input.content);
   // Each computer keeps its own history: the arrival is one more version in it.
-  await input.io.snapshot(workingDir, 'Rules from the teammate\'s main computer').catch(error => {
-    input.log?.warn('Teammate rules arrived without a project version', { code: errorCode(error) });
+  await input.io.snapshot(workingDir, 'Rules from the buddy\'s main computer').catch(error => {
+    input.log?.warn('Buddy rules arrived without a project version', { code: errorCode(error) });
   });
 }
 
@@ -119,7 +119,7 @@ export async function mergeProjectRules(input: {
   input.assertCurrent();
   await input.io.writeRules(workingDir, `${current.trimEnd()}\n\n## From ${input.from}\n\n${added}\n`);
   await input.io.snapshot(workingDir, `Rules merged from ${input.from}`).catch(error => {
-    input.log?.warn('Merged teammate rules without a project version', { code: errorCode(error) });
+    input.log?.warn('Merged buddy rules without a project version', { code: errorCode(error) });
   });
 }
 
@@ -164,7 +164,7 @@ export async function applyProjectAutomations(input: {
     }
     const arrived = readAutomation(id, value);
     if (!arrived) {
-      input.log?.warn('Teammate automation skipped: unreadable definition');
+      input.log?.warn('Buddy automation skipped: unreadable definition');
       continue;
     }
     const config = localRoute(arrived.config, input.selfDeviceId);
@@ -175,7 +175,7 @@ export async function applyProjectAutomations(input: {
     if (!here || canonicalJson(here.config) !== canonicalJson(config)) {
       try { await io.upsertAutomation(workingDir, config); } catch (error) {
         if ((error as { code?: unknown } | null)?.code !== 'INVALID_PARAMS') throw error;
-        input.log?.warn('Teammate automation skipped: invalid definition');
+        input.log?.warn('Buddy automation skipped: invalid definition');
         continue;
       }
     }

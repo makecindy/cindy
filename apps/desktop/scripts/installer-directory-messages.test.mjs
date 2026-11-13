@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  auditEnglishCopy,
   caseStandardFor,
   findCaseMismatch,
   occursIn,
@@ -11,6 +12,7 @@ import {
   normalizeForPunctuation,
   HALFWIDTH_PUNCT_LOCALES,
   ELLIPSIS_LOCALES,
+  makeEnglishCopyExemptChecker,
 } from '../../../scripts/shared/glossary-rules.mjs';
 
 // Native NSIS dialogs cannot load i18next. Check their separate catalog using
@@ -69,5 +71,14 @@ describe('Windows installer directory messages', () => {
         violations.push(`${locale} ${key}: ellipsis`);
     }
     expect(violations).toEqual([]);
+  });
+
+  it('follows the English copy rules in DESIGN.md §11.1 / §11.2', () => {
+    const { added, stale } = auditEnglishCopy(
+      [...english].map(([key, value]) => ({ key: `desktop:installer.${key}`, value })),
+      { isExempt: makeEnglishCopyExemptChecker(glossary.englishCopyExempt) },
+    );
+    expect(added).toEqual([]);
+    expect(stale).toEqual([]);
   });
 });

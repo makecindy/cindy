@@ -56,12 +56,14 @@ function MemberRow({ member, group, owner, manager, busy, actions }: {
   const bot = member.actorKind === 'bot';
   const paused = bot && member.status === 'paused';
   const mine = bot && member.isOwned === true;
+  // The group's own Cindy is turned on and off in group management, never managed as a member.
+  const assistant = member.assistant === true;
   // Owners manage everyone but themselves; admins manage everyone but the owner.
-  const manageable = manager && !member.isSelf && !!member.actorId && (owner || member.role !== 'owner');
+  const manageable = manager && !assistant && !member.isSelf && !!member.actorId && (owner || member.role !== 'owner');
   // Ownership goes to a person, including yourself when your teammate holds it.
   const transferable = owner && !!member.actorId && member.actorKind === 'human' && member.role !== 'owner';
   const menuable = !group.dissolvedAt && (manageable || transferable || (mine && !!member.actorId));
-  const hint = bot
+  const hint = assistant ? t(key('assistantHint')) : bot
     ? `${t(key('teammateTag'))} · ${t(paused ? key('paused') : ACCESS_LABELS[member.guestAccess ?? 'chat'])}`
     : t(key(member.role ?? 'member'));
   // The wrapper carries the card divider: the row inside is always its first child.

@@ -899,6 +899,32 @@ describe('RightSidebarShell empty state', () => {
     view.unmount();
   });
 
+  // Merge regression: resource-backed task UI needs no classic taskView, but
+  // taskView.remote must never make the resource body run for a remote task.
+  it('mounts approved resource task UI only for a confirmed local task', async () => {
+    const ui = await import('@/cindy-brain/PluginUiView');
+    const resource = vi.spyOn(ui, 'PluginUiView').mockImplementation(() => createElement('div', { 'data-testid': 'resource-task-body' }));
+    try {
+      const { ghostHostUiApprovalTokens } = await import('../../../../shared/ghost');
+      const ghost = { enabled: true, dir: '/fixture/planner', uiCapabilityApproved: true,
+        approval: { state: 'approved', revision: 'one' }, manifest: { id: 'planner', name: 'Planner', mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'task' }] },
+        } }, approvedHostUi: [] as string[] };
+      ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest as never);
+      installedGhostsMock.list = [ghost];
+      tabsIpc.list.mockResolvedValueOnce({ tabs: [{ id: 'resource', kind: 'plugin-task', state: { instanceId: 'planner', resourceViewId: 'board' } }], activeTabId: 'resource' });
+      const props = { sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, deviceLinkDeviceId: null as string | null, isMac: true };
+      const view = render(createElement(RightSidebarShell, props));
+      await waitFor(() => expect(screen.getByTestId('resource-task-body')).toBeTruthy());
+      expect(document.querySelector('webview')).toBeNull();
+      Object.assign(ghost.manifest, { taskView: { html: 'task.html', remote: true } });
+      view.rerender(createElement(RightSidebarShell, { ...props, deviceLinkDeviceId: 'other-device' }));
+      await waitFor(() => expect(screen.queryByTestId('resource-task-body')).toBeNull());
+      expect(document.querySelector('webview')).toBeNull();
+    } finally { resource.mockRestore(); }
+  });
+
   // #6861:冷启动归属未知不能收起插件任务页或改写恢复的选择;正文只在确认本机后加载。
   // 真实 Shell → 可用性投影 → plugin-task → GhostWebviewBody;旧覆盖只测已解析的清单。
   // 最小输入:持久化任务页 + undefined→null/远端;另带普通页检测选中位丢失。tier:unit。
