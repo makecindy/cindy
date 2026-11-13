@@ -400,6 +400,9 @@ export class MemoryStorage {
       );
     }
     if (matches.length === 1) return matches[0];
+    // 只剥离一次 .md 后的 slug 才是落盘名; 二次后缀等脏输入在这里拦下,
+    // 否则会写出 parseFilename 认不出的分片 (#10274 review)
+    validateSlug(name, this.config.maxSlugLen);
     return buildFilename(type, name);
   }
 

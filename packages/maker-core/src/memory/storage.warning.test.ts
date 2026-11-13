@@ -213,6 +213,11 @@ describe('MemoryStorage · 分片地址解析', () => {
     expect((await storage.read('project_dup.md')).body).toBe('v1');
   });
 
+  it('重复 .md 后缀会被拒绝, 不写出 parseFilename 认不出的分片', async () => {
+    await expect(storage.write(opts('note.md.md'))).rejects.toThrow(/invalid-slug/);
+    expect(await missing('project_note.md.md')).toBe(true);
+  });
+
   it('索引文件名内嵌的 type 与传入 type 不符时拒绝, 不新建', async () => {
     await expect(storage.write(opts('feedback_foo.md'))).rejects.toThrow(/invalid-type/);
     expect(await missing('project_feedback_foo.md')).toBe(true);
