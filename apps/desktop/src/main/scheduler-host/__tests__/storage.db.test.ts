@@ -17,7 +17,7 @@ import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
 import { recordScheduleRunCostDirect } from '../runCostLedger';
-import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage';
+import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
   return {
@@ -133,6 +133,7 @@ const SCHEDULER_DDL = [
       job_config TEXT,
       execution_mode TEXT NOT NULL DEFAULT 'agent',
       script_config TEXT,
+      webhook_trigger TEXT,
       source TEXT DEFAULT 'user',
       project_config_id TEXT,
       legacy_session_fallback INTEGER NOT NULL DEFAULT 0,
@@ -193,11 +194,14 @@ const SCHEDULER_DDL = [
       cost_attribution TEXT NOT NULL DEFAULT 'legacy',
       result_text TEXT,
       pre_run_hook_result TEXT,
+      trigger_source TEXT,
       read_at INTEGER,
       heartbeat_at INTEGER
     )
   `,
   'CREATE INDEX idx_schedule_runs_schedule ON schedule_runs(schedule_id, fired_at)',
+  `CREATE INDEX idx_schedule_runs_unread_terminal ON schedule_runs(schedule_id, status, fired_at)
+    WHERE read_at IS NULL AND status IN ('success', 'failed', 'aborted', 'interrupted')`,
   `
     CREATE TABLE schedule_session_latest_runs (
       session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -360,6 +364,25 @@ function enableLegacySessionFallback(
 }
 
 describe('DrizzleScheduleStorage (in-memory)', () => {
+  // Automation speed-menu regression: the UI fixture checks visibility and
+  // submitted values, but its JSON save boundary cannot prove SQLite retains
+  // Ultrafast rather than coercing it to a boolean. DB tier, real public CRUD.
+  // Windows standalone: 11.47s total, 412ms tests; the existing storage/schema
+  // imports account for 10.76s collection (loaded once, no per-case reset).
+  it('round-trips edited Fast and Ultrafast speeds through scheduler storage', async () => {
+    const harness = createStorageHarness();
+    try {
+      await harness.storage.insert(baseSchedule({ agentKind: 'codex', model: 'gpt-6.1-sol' }));
+      for (const fastMode of [true, 'ultrafast', false] as const) {
+        await harness.storage.update('sch-1', { fastMode });
+        const reopened = new DrizzleScheduleStorage(() => harness.db);
+        expect(await reopened.get('sch-1')).toMatchObject({ fastMode });
+      }
+    } finally {
+      harness.close();
+    }
+  });
+
   // discussion_r4419060204: public UPDATE must reject an old completion after
   // another writer changes its nullable/non-null trigger watermark. DB tier.
   it.each([undefined, 100])('guards recovery schedule writes against a changed watermark (%s)', async (lastFiredAt) => {
@@ -607,6 +630,88 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(runs.some((run) => run.runId === 'latest-read')).toBe(true);
       expect(runs.filter((run) => run.runId.startsWith('unread-'))).toHaveLength(200);
       expect(runs).toHaveLength(201);
+    } finally {
+      harness.close();
+    }
+  });
+
+  // #10011, DB tier: the existing cap test only checks returned rows. One extra
+  // eligible row must not have its hook parsed by listSidebarIndexRuns. Delegate
+  // the instrumented function to native SQLite so JSON semantics stay unchanged.
+  it('limits hook evaluation to the newest eligible unread runs across schedules', async () => {
+    const harness = createStorageHarness();
+    const nativeJson = new Database(':memory:');
+    try {
+      for (const [id, source] of [
+        ['public', 'user'], ['project', 'project'], ['legacy', 'user'], ['routine', 'bot'],
+      ] as const) {
+        await harness.storage.insert(baseSchedule({ id, source }));
+      }
+      harness.sqlite.prepare("UPDATE schedules SET source = NULL WHERE id = 'legacy'").run();
+      const insert = harness.sqlite.prepare(`INSERT INTO schedule_runs
+        (id, schedule_id, fired_at, status, read_at, pre_run_hook_result) VALUES (?, ?, ?, ?, ?, ?)`);
+      const runIds = Array.from({ length: 201 }, (_, i) => `bounded-${String(i).padStart(3, '0')}`);
+      const statuses = ['success', 'failed', 'aborted', 'interrupted'] as const;
+      harness.sqlite.transaction(() => {
+        for (const [i, id] of runIds.entries()) {
+          insert.run(id, ['public', 'project', 'legacy'][i % 3], Math.floor(i / 2),
+            statuses[i % 4], null, JSON.stringify({ runId: id, decision: 'allow' }));
+          // Newer private history must not consume the public 200-row budget.
+          insert.run(`routine-${i}`, 'routine', 1000 + i, 'success', null, null);
+        }
+        insert.run('read', 'public', 2000, 'success', 2001, null);
+        insert.run('skipped', 'public', 2002, 'skipped', null, null);
+      })();
+      const evaluatedHooks = new Set<string>();
+      const jsonValid = nativeJson.prepare<[string | null], { valid: number }>('SELECT json_valid(?) AS valid');
+      harness.sqlite.function('json_valid', { deterministic: true }, (value: string | null) => {
+        if (value !== null) evaluatedHooks.add(value);
+        return jsonValid.get(value)!.valid;
+      });
+
+      const runs = await harness.storage.listSidebarIndexRuns();
+      // Equal fired_at values at the cutoff are resolved by id, not insertion or
+      // schedule order. The returned unread rows remain oldest first.
+      expect(runs.map((run) => run.runId)).toEqual(runIds.slice(1));
+      expect(new Set(runs.map((run) => run.status))).toEqual(new Set(statuses));
+      expect(new Set(runs.map((run) => run.scheduleId))).toEqual(new Set(['public', 'project', 'legacy']));
+      expect(evaluatedHooks).toEqual(new Set(runIds.slice(1).map((runId) =>
+        JSON.stringify({ runId, decision: 'allow' }))));
+    } finally {
+      harness.close();
+      nativeJson.close();
+    }
+  });
+
+  // The in-task banner reads this projection; without missingPlugin it can only say
+  // "checks blocked" when a plugin uninstall removed the check script.
+  it('projects the missing plugin of a blocked check into the sidebar index', async () => {
+    const harness = createStorageHarness();
+    try {
+      harness.sqlite.exec(`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at)
+        VALUES ('sess-missing-plugin', 'PR follow-up', 'desktop', 'dialogue', 1, 1)
+      `);
+      await harness.storage.insert(baseSchedule({ id: 'sch-missing-plugin' }));
+      await harness.storage.insertRun({
+        id: 'blocked-missing-plugin',
+        scheduleId: 'sch-missing-plugin',
+        sessionId: 'sess-missing-plugin',
+        status: 'failed',
+        firedAt: 1,
+        errorMsg: 'pre-run hook failed: plugin "GitHub" (cindy-github) is not installed',
+        preRunHookResult: {
+          status: 'failed', decision: 'block', exitCode: 1, durationMs: 1, stdout: '', stderr: 'MODULE_NOT_FOUND',
+          stdoutTruncated: false, stderrTruncated: false, timedOut: false, aborted: false,
+          missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' },
+        },
+      });
+      const [run] = await harness.storage.listSidebarIndexRuns();
+      expect(run).toMatchObject({
+        runId: 'blocked-missing-plugin',
+        failureKind: 'precheck',
+        missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' },
+      });
     } finally {
       harness.close();
     }
@@ -913,6 +1018,17 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     } finally {
       harness.close();
     }
+  });
+
+  // #8886 / db: a stale expiry scan must not undo another instance's extension.
+  it('matches expireAt before applying a guarded status update', async () => {
+    const harness = createStorageHarness();
+    try {
+      const original = await harness.storage.insert(baseSchedule({ expireAt: 1_800_000_000_000 }));
+      await harness.storage.update(original.id, { expireAt: original.expireAt! + 60_000 });
+      expect(await harness.storage.update(original.id, { status: 'expired', nextFireAt: undefined }, original)).toBeNull();
+      expect((await harness.storage.get(original.id))?.status).toBe('active');
+    } finally { harness.close(); }
   });
 
   it('claimDueFire: CAS 命中时置空 next_fire_at 并返回行;不命中不动行', async () => {

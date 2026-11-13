@@ -64,7 +64,7 @@ export interface PersonalBotTransport {
 export interface BotImPersonalAdoptionDeps {
   /** 账号 IM 连接已起(登录后); 没起时不列也不移。 */
   isReady(): boolean;
-  personal: Record<BotImChannel, PersonalBotTransport>;
+  personal: Partial<Record<BotImChannel, PersonalBotTransport>>;
   /** 个人 Telegram bot 的群参与模式(设置卡「群聊」小节)。 */
   telegramGroupActivation(): Record<string, 'mention' | 'always'> | undefined;
 }
@@ -113,6 +113,7 @@ interface PersonalCredentials {
 /** 读个人 bot 的凭证, 拼成添加平台的同一份入参; 没配齐为 null。 */
 function readPersonalCredentials(channel: BotImChannel, botId: string): PersonalCredentials | null {
   switch (channel) {
+    case 'imessage': return null;
     case 'telegram': {
       const token = read(PERSONAL_KEYS.telegram.token);
       const ownerUserId = read(PERSONAL_KEYS.telegram.owner);
@@ -171,7 +172,7 @@ export function listAdoptablePersonalBots(): BotImAdoptablePersonalBotsPayload {
     if (findBotImConnectionByIdentity(channel, credentials.identityValue)) continue;
     let identity: string | null = null;
     try {
-      identity = deps.personal[channel].identity();
+      identity = deps.personal[channel]?.identity() ?? null;
     } catch {
       identity = null;
     }
@@ -223,6 +224,7 @@ export async function adoptPersonalBot(input: BotImAdoptPersonalBotInput): Promi
     await assertBotImConnectionAddable(credentials.input, { adoptingSettingsBot: true });
     const snapshot = snapshotPersonalSecrets(input.channel);
     const personal = current.personal[input.channel];
+    if (!personal) throwIpcError('PRECONDITION_FAILED', 'PERSONAL_BOT_NOT_CONFIGURED');
     await personal.stop();
     let result: BotImConnectionAddResult;
     try {

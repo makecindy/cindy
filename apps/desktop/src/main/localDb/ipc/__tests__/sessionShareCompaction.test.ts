@@ -50,7 +50,7 @@ vi.mock('../../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => h.owner,
   isAppSessionBoundaryPending: () => false,
 }));
-vi.mock('../../../cindy-media/refCompensationJournal.js', () => ({
+vi.mock('../../../cindy-media/refCompensationJournal.desktop.js', () => ({
   captureMediaRefCompensationScope: () => ({ assertStillValid: h.assertStillValid }),
 }));
 vi.mock('../../toolResultCompaction.js', () => ({

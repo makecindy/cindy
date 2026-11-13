@@ -186,7 +186,8 @@ export function ResourceUsageWindowRoot() {
     <ThemeProvider>
       <FontSettingsProvider>
         <LocaleProvider>
-          <WallpaperSettingsProvider>
+          {/* No native backdrop bridge in this window: keep its opaque themed canvas. */}
+          <WallpaperSettingsProvider desktopBackground={false}>
             <ConfirmDialogProvider>
               <ResourceUsageWindowLayout />
               <ToastContainer />

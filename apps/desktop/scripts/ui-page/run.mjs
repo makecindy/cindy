@@ -158,20 +158,23 @@ function compareOverlay(ref) {
 
 function overviewHtml(rows) {
   const esc = (value) => String(value).replace(/[&<>"]/g, (char) => `&#${char.charCodeAt(0)};`);
+  const stages = [...new Set(rows.flatMap(row => row.pairs.flat().map(image => image.label)))];
   return `<!doctype html><meta charset="utf-8"><style>
     body{margin:0;padding:16px;font:12px -apple-system,system-ui,sans-serif;background:#f4f4f5;color:#18181b}
-    .row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;margin-bottom:20px}
-    .label{width:180px;flex-shrink:0;line-height:1.5}.failed{color:#b91c1c;font-weight:600}
+    .row{display:grid;grid-template-columns:repeat(${stages.length},minmax(0,1fr));gap:12px;align-items:start;margin-bottom:24px}
+    .label{grid-column:1/-1;line-height:1.5}.failed{color:#b91c1c;font-weight:600}
     figure{margin:0;background:#fff;border:1px solid #d4d4d8;border-radius:6px;padding:6px}
-    figcaption{margin-bottom:4px;color:#52525b}img{display:block;max-width:640px;max-height:440px}
+    figcaption{margin-bottom:4px;color:#52525b}img{display:block;width:100%;height:440px;object-fit:contain;object-position:top center}.empty{visibility:hidden}
   </style>${rows
     .map(
       (row) =>
-        `<div class="row"><div class="label"><b>${esc(row.title)}</b><br>${esc(row.subtitle)}<br><span class="${row.status === 'failed' ? 'failed' : ''}">${esc(row.status)}${row.warnings ? ` · ${row.warnings} warnings` : ''}</span></div>${row.images
-          .map(
-            (image) =>
-              `<figure><figcaption>${esc(image.label)}</figcaption><img src="/__evidence/${image.src}"></figure>`,
-          )
+        `<div class="row"><div class="label"><b>${esc(row.title)}</b><br>${esc(row.subtitle)}<br><span class="${row.status === 'failed' ? 'failed' : ''}">${esc(row.status)}${row.warnings ? ` · ${row.warnings} warnings` : ''}</span></div>${stages
+          .map((stage) => {
+            const image = row.pairs.flat().find(image => image.label === stage);
+            return image
+              ? `<figure><figcaption>${esc(image.label)}</figcaption><img src="/__evidence/${image.src}"></figure>`
+              : '<figure class="empty" aria-hidden="true"></figure>';
+          })
           .join('')}</div>`,
     )
     .join('')}`;
@@ -179,6 +182,9 @@ function overviewHtml(rows) {
 
 const KEEP_RUNS = 20;
 const OVERVIEW_ROWS = 6;
+// Scenario-only buttons (finish, remount…) stay clickable but are not part of the product UI,
+// so captures leave them out without moving the layout.
+const HIDE_CONTROLS = '[data-ui-page-control]{visibility:hidden!important}';
 
 /** The default evidence folder keeps the most recent runs only. */
 async function pruneEvidence(outputRoot, current) {
@@ -198,7 +204,7 @@ async function pruneEvidence(outputRoot, current) {
 }
 
 /**
- * Runs every variant of every selected page in one owned runtime, then exits.
+ * Runs every variant with owned, isolated runtime state, then exits.
  * Preview mode keeps the single variant open and rebuilds on source changes.
  */
 export async function runPlan(plan, options, externalSignal) {
@@ -233,12 +239,14 @@ export async function runPlan(plan, options, externalSignal) {
     // Not a git checkout; evidence still records digests.
   }
   const controller = new AbortController();
-  let browser, app, electronPage, stopping;
-  // Nothing to close yet (still launching): the finally block stops whatever launch returns.
+  let browser, app, electronPage, stopping, launching;
+  // A relaunch can outlive its variant. Keep ownership until it settles so cleanup
+  // cannot remove a live process's profile or leave a late runtime unclosed.
   const stopRuntime = () =>
-    !app && !browser
+    !app && !browser && !launching
       ? Promise.resolve()
       : (stopping ??= (async () => {
+          await launching?.catch(() => {});
           if (app) {
             const child = app.process();
             const force = setTimeout(() => {
@@ -271,7 +279,7 @@ export async function runPlan(plan, options, externalSignal) {
     }
   };
 
-  // The route handler serves whatever variant is current (Electron reuses one window).
+  // The Chromium route handler serves the current variant's in-memory bundle.
   const current = { bundle: null, context: null, blocked: [], overview: '' };
   const routePage = async (context) => {
     await context.route('**/*', (route) => {
@@ -341,7 +349,7 @@ export async function runPlan(plan, options, externalSignal) {
     }
     if (options.compare) summary.compare = { ref: options.compare };
 
-    await measure('launchMs', async () => {
+    const launchRuntime = (size) => measure('launchMs', async () => {
       if (options.engine === 'electron') {
         const env = Object.fromEntries(
           Object.entries(process.env).filter(([key]) =>
@@ -350,12 +358,11 @@ export async function runPlan(plan, options, externalSignal) {
             ),
           ),
         );
-        const first = plan.pages[0].variants[0].viewport;
         // Playwright's Electron launcher always installs signal handlers that exit(130) before
         // the CLI can write the summary and remove scratch data; the CLI owns interrupts instead.
         const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
         const ownListeners = new Map(signals.map((name) => [name, process.listeners(name)]));
-        app = await _electron.launch({
+        launching = _electron.launch({
           executablePath: require('electron'),
           args: [fileURLToPath(new URL('./electron.cjs', import.meta.url))],
           timeout: options.timeout,
@@ -364,14 +371,23 @@ export async function runPlan(plan, options, externalSignal) {
             CINDY_UI_PROFILE: path.join(scratch, 'profile'),
             CINDY_UI_BUNDLE_DIR: path.join(scratch, 'bundle'),
             CINDY_UI_EVIDENCE_DIR: evidence,
-            CINDY_UI_WIDTH: String(first.width),
-            CINDY_UI_HEIGHT: String(first.height),
+            CINDY_UI_WIDTH: String(size.width),
+            CINDY_UI_HEIGHT: String(size.height),
             CINDY_UI_PREVIEW: options.mode === 'preview' ? '1' : '0',
           },
+        }).then((runtime) => {
+          app = runtime;
+          summary.cleanup.runtimeClosed = false;
         });
-        for (const name of signals)
-          for (const listener of process.listeners(name))
-            if (!ownListeners.get(name).includes(listener)) process.off(name, listener);
+        try {
+          await launching;
+        } finally {
+          launching = undefined;
+          for (const name of signals)
+            for (const listener of process.listeners(name))
+              if (!ownListeners.get(name).includes(listener)) process.off(name, listener);
+        }
+        controller.signal.throwIfAborted();
         electronPage = await app.firstWindow({ timeout: options.timeout });
         // Electron serves the test origin itself (electron.cjs) and cancels any other request.
         electronPage.on('requestfailed', (request) => {
@@ -394,23 +410,20 @@ export async function runPlan(plan, options, externalSignal) {
         summary.versions = { chrome: browser.version(), executablePath };
       }
     });
+    await launchRuntime(plan.pages[0].variants[0].viewport);
 
     let usedElectronWindow = false;
     const freshElectronPage = async (size) => {
       if (usedElectronWindow) {
-        // A new target clears both Chromium emulation and Playwright's cached
-        // viewport/fullscreen state, even after a failed scenario. Reuse the same
-        // isolated process/session and the host's one secure window factory.
-        const ready = app.waitForEvent('window', { timeout: options.timeout });
-        await app.evaluate(({ app, BrowserWindow }, viewport) => {
-          const old = BrowserWindow.getAllWindows();
-          app.emit('ui-check:create-window', viewport);
-          for (const window of old) window.destroy();
-        }, size);
-        electronPage = await ready;
-        electronPage.on('requestfailed', (request) => {
-          if (new URL(request.url()).origin !== origin) current.blocked.push(request.url());
-        });
+        // Electron windows share Playwright's browser context. Replacing only
+        // the window leaves context clocks/init scripts installed, including in
+        // later sandboxed iframes. A fresh runtime isolates every variant, even
+        // after a failed scenario; bundles and evidence stay available on disk.
+        await measure('closeMs', stopRuntime);
+        app = undefined;
+        electronPage = undefined;
+        stopping = undefined;
+        await launchRuntime(size);
       }
       usedElectronWindow = true;
       // Windows may clamp a newly created native window to the display work area.
@@ -434,14 +447,14 @@ export async function runPlan(plan, options, externalSignal) {
           // Same density as a Retina Mac and as the Electron runner, so crops are comparable.
           deviceScaleFactor: 2,
           serviceWorkers: 'block',
-          reducedMotion: 'reduce',
+          reducedMotion: options.motion ? 'no-preference' : 'reduce',
           colorScheme: variant.theme,
           locale: variant.locale,
         });
         await routePage(context);
         page = await context.newPage();
       }
-      await page.emulateMedia({ colorScheme: variant.theme, reducedMotion: 'reduce' });
+      await page.emulateMedia({ colorScheme: variant.theme, reducedMotion: options.motion ? 'no-preference' : 'reduce' });
       const errors = [];
       const onError = (error) => errors.push(error.message);
       const onConsole = (message) => {
@@ -554,7 +567,12 @@ export async function runPlan(plan, options, externalSignal) {
           throw new Error(`variant stopped before capture ${name}`);
         const file = path.join(dir, `${name}.png`);
         const target = captureOptions.locator ?? opened.page;
-        await target.screenshot({ path: path.join(evidence, file), timeout: 5000, scale: 'css' });
+        await target.screenshot({
+          path: path.join(evidence, file),
+          timeout: 5000,
+          scale: 'css',
+          style: HIDE_CONTROLS,
+        });
         result.screenshots.push(file.split(path.sep).join('/'));
         if (options.focus && !captureOptions.locator) await captureFocus(name);
         if (audit) await auditPage();
@@ -582,6 +600,7 @@ export async function runPlan(plan, options, externalSignal) {
           clip,
           scale: 'device',
           timeout: 5000,
+          style: HIDE_CONTROLS,
         });
         const metrics = await element.evaluate((el) => {
           const style = getComputedStyle(el);
@@ -664,10 +683,12 @@ export async function runPlan(plan, options, externalSignal) {
           new Promise((_, reject) => {
             timer = setTimeout(() => {
               timedOut = true;
-              reject(new Error(`variant timed out after ${options.timeout}ms`));
+              const error = new Error(`variant timed out after ${options.timeout}ms`);
+              reject(error);
               // Unblock pending Playwright calls. Chromium: close this variant's context.
               // Electron: leave the page; only a hung renderer costs the shared window.
-              if (opened?.context) void opened.context.close().catch(() => {});
+              if (launching || (app && !electronPage)) controller.abort(error);
+              else if (opened?.context) void opened.context.close().catch(() => {});
               else if (app)
                 void Promise.race([
                   electronPage.goto('about:blank'),
@@ -719,7 +740,7 @@ export async function runPlan(plan, options, externalSignal) {
             summary.strandedScenarios = [...(summary.strandedScenarios ?? []), variant.id];
           // A stranded scenario still owns callbacks into shared runner/report state.
           // Stop rather than allow it to contaminate the following variants.
-          if (!settled && app && !interrupted) {
+          if (!settled && (app || launching) && !interrupted) {
             const error = new Error(
               `${variant.id} was still running after its timeout; stopped the run so it cannot affect later variants`,
             );
@@ -801,11 +822,11 @@ export async function runPlan(plan, options, externalSignal) {
             subtitle: `${variant.theme} · ${variant.locale} · ${variant.viewport.width}×${variant.viewport.height}`,
             status: after.status,
             warnings: after.warnings.length,
-            // Before/after of the same capture sit side by side.
-            images: (after.focus.length
+            // Before/after of the same capture sit side by side and wrap as one unit.
+            pairs: (after.focus.length
               ? after.focus.map((item) => item.file)
               : after.screenshots
-            ).flatMap((src) => {
+            ).map((src) => {
               const name = path.basename(src, '.png');
               const pair = (
                 before?.focus.length ? before.focus.map((item) => item.file) : before?.screenshots
@@ -871,7 +892,7 @@ export async function runPlan(plan, options, externalSignal) {
       summary.cleanup.error = error.message;
     }
     if (!browser && !app) summary.cleanup.runtimeClosed = true;
-    summary.timings.closeMs = Math.round(performance.now() - closingAt);
+    summary.timings.closeMs = (summary.timings.closeMs ?? 0) + Math.round(performance.now() - closingAt);
     summary.timings.totalMs = Math.round(performance.now() - startedAt);
     summary.finishedAt = new Date().toISOString();
     await writeFile(path.join(evidence, 'summary.json'), JSON.stringify(summary, null, 2));

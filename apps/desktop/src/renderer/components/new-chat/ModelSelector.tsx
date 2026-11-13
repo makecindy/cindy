@@ -76,6 +76,8 @@ import {
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
+import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
+import { matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
@@ -100,6 +102,7 @@ import {
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { effectiveRunLocation, RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
 import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
@@ -153,6 +156,7 @@ import {
   sourcesForModel,
   unifiedModelEntries,
   visibleModelUnion,
+  withEffectiveModelContextWindows,
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
@@ -218,6 +222,8 @@ export { categorize, CATEGORY_LABEL_KEY, type ModelCategory } from './sourceSwit
 export interface ModelMemoryAccessors {
   /** False for engines without a memory store; edits then use the configuration callback. */
   supportsAgent?: (agent: AgentKind) => boolean;
+  /** Optional atomic alias-group edits; absent on older remote hosts. */
+  editMany?: (ops: readonly import('@/state/providerModelMemory').ProviderModelMemoryEdit[]) => boolean;
   getEffort: (agent: AgentKind, providerId: string, modelId: string) => Effort | undefined;
   setEffort: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   /** 真正选中 / 使用模型时同时更新该来源 lastModel;只编辑非选中行不调用。 */
@@ -740,8 +746,14 @@ export type ModelSelectorSource =
 export type ModelSelectorProps = ModelSelectorBaseProps & ModelSelectorSource;
 
 export interface ModelSelectorBaseProps {
+  /** Nonzero request from a terminal-error recovery action; selection still uses the normal transaction. */
+  openRequest?: number;
+  onOpenRequestConsumed?: (nonce: number) => void;
+  'data-setting-id'?: string;
   /** 语义同 ModelSelectorContentProps.pluginModels。 */
   pluginModels?: PluginModelsPickerProps;
+  /** 语义同 ModelSelectorContentProps.modelGroups。 */
+  modelGroups?: ModelGroupsPickerProps;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
@@ -797,6 +809,8 @@ export interface ModelSelectorBaseProps {
   sourceDisconnected?: boolean;
   /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
   actualRoute?: boolean;
+  /** Task whose existing subscription binding should be displayed, when browsing its host. */
+  subscriptionTaskId?: string;
   /** 语义同 ModelSelectorContentProps.taskStarted。 */
   taskStarted?: boolean;
   /** Fast Mode 状态 + 回调(从工具栏搬进 Edit 配置列)。不传 → 配置列不显示 Fast 开关。 */
@@ -959,6 +973,8 @@ export type ModelSelectorContentProps = ModelSelectorContentBaseProps & ModelSel
 export interface ModelSelectorContentBaseProps {
   /** 新任务的「让插件选」；只有草稿传(已有任务、伙伴对话不传)。 */
   pluginModels?: PluginModelsPickerProps;
+  /** 新任务的模型组(用户建的模式与路线)；只有草稿传。 */
+  modelGroups?: ModelGroupsPickerProps;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
   sshCodex?: SshCodexCatalog;
@@ -1000,6 +1016,8 @@ export interface ModelSelectorContentBaseProps {
    * (PR #744 review 第十轮)。
    */
   actualRoute?: boolean;
+  /** Task whose existing subscription binding should be displayed, when browsing its host. */
+  subscriptionTaskId?: string;
   /**
    * 任务已经运行过(有 Agent 回复)。供应商组在任务第一次运行时选好电脑(provider-groups.md §6),
    * 之后组那一项的用量按任务实际运行的那台显示;草稿与还没运行过的任务不传。
@@ -1234,6 +1252,7 @@ const NO_MODEL_SELECTION = { providerId: null, modelId: '' } as const;
 
 function ModelSelectorContentView({
   pluginModels,
+  modelGroups,
   providersOverride,
   providersOverrideState,
   sshCodex,
@@ -1254,6 +1273,7 @@ function ModelSelectorContentView({
   excludeChatBridgedCodex,
   onDismiss,
   actualRoute = false,
+  subscriptionTaskId,
   taskStarted = false,
   maxVisibleModelRows,
   overlayContentClassName,
@@ -1291,6 +1311,7 @@ function ModelSelectorContentView({
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
+  const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
   // ── 远程 Agent:面板在本机目录与其他电脑的目录之间切换浏览 ─────────────────────
   // 打开时停在草稿当前的落点(Agent 在哪台电脑就先列哪台);左侧栏点到另一台电脑的供应商时,
   // 下面整套目录(能力 / 供应商 / 可见性 / 用量 / 收藏)都随 deviceId 换成那台电脑的。
@@ -1419,7 +1440,7 @@ function ModelSelectorContentView({
   const pi = useAgentCapabilities('pi', catalogDeviceId);
   // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
-  const { hasSavedKey } = useApiKey();
+  const { hasSavedKey, canReadKey } = useApiKey();
   // 供应商来源:本机会话用本机 useProviders;device-link 远程会话用**被控端**供应商目录
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
@@ -1431,7 +1452,7 @@ function ModelSelectorContentView({
     () =>
       remoteAgentBrowsing
         ? remoteAgentProviders(remoteProviders.providers)
-        : remoteProviders.providers,
+        : remoteProviders.providers.map(withEffectiveModelContextWindows),
     [remoteAgentBrowsing, remoteProviders.providers],
   );
   const sshCodexProviders = sshCodex?.providers;
@@ -1448,8 +1469,9 @@ function ModelSelectorContentView({
   // 订阅用量跟随目录归属:本机目录读本机账号,远程目录读被控端镜像(与会话用量 chip 共用缓存);
   // 外部注入的目录(providersOverride)与 SSH 混合目录归属不明,不显示任何账号用量。
   const providerUsageScope = useMemo<ProviderUsageScope | null>(
-    () => (deviceId ? { deviceId } : mixedCatalog ? null : { deviceId: null }),
-    [deviceId, mixedCatalog],
+    () => !deviceId && mixedCatalog ? null : ({ deviceId: deviceId ?? null,
+      taskId: (!remoteAgent || !remoteBrowse) ? subscriptionTaskId : undefined }),
+    [deviceId, mixedCatalog, subscriptionTaskId, remoteAgent, remoteBrowse],
   );
   // Old device-link hosts expose capabilities only. Never substitute local routes.
   const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
@@ -1745,6 +1767,37 @@ function ModelSelectorContentView({
   /** 正在浏览归的组那一项所在的目录：那一项里的模型显示为正在用的，选中时留在此刻运行的那台。 */
   const browsingBoundGroupEntry =
     stayInGroup && boundEntry !== null && (remoteBrowse?.deviceId ?? null) === boundEntry.deviceId;
+  /**
+   * 同账号借用(供应商「运行于」)：同一个供应商在本机和自己的其他电脑上都能用时只列一处——本机能用且没改选
+   * 就是本机那一项，否则是「运行于」那台电脑那一项。只管本机任务、同账号电脑、不在供应商组里的供应商；
+   * 当前任务此刻正在用的那一项始终保留，免得选中项消失。
+   */
+  const runLocationFold = useMemo(() => {
+    const hiddenRemote = new Set<string>();
+    const hiddenLocal = new Set<string>();
+    if (!remoteAgentDevices || homeDeviceId) return { hiddenRemote, hiddenLocal };
+    for (const provider of localProviders.providers) {
+      if (localProviderGroups[provider.id]) continue;
+      const candidates = remoteAgentDevices.flatMap((device) => {
+        if (isProviderShareAgentDeviceId(device.deviceId)) return [];
+        const offered = remoteDeviceCatalogs.get(device.deviceId)?.providers.find((entry) => entry.id === provider.id);
+        return offered?.connected && !offered.suspended && offered.remoteInvocationEnabled === true
+          && !(offered as { group?: unknown }).group
+          ? [{ deviceId: device.deviceId, name: device.name }]
+          : [];
+      });
+      if (candidates.length === 0) continue;
+      const location = effectiveRunLocation(provider as typeof provider & { runLocation?: string }, candidates);
+      for (const candidate of candidates) {
+        const inUse = candidate.deviceId === remoteAgentDeviceId && provider.id === currentProviderId;
+        if (candidate.deviceId !== location && !inUse) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, provider.id));
+      }
+      const localInUse = !remoteAgentDeviceId && provider.id === currentProviderId;
+      if (location !== RUN_LOCATION_LOCAL && !localInUse) hiddenLocal.add(provider.id);
+    }
+    return { hiddenRemote, hiddenLocal };
+  }, [remoteAgentDevices, homeDeviceId, localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
+    remoteAgentDeviceId, currentProviderId]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -1763,12 +1816,15 @@ function ModelSelectorContentView({
         includePaymentRequired: true,
         scope: 'draft',
       });
-      const providerIds = [...new Set(entries.map((entry) => entry.providerId))];
-      return providerIds.length > 0
+      // 「运行于」收起的供应商只是不占左栏；那台电脑上的收藏仍按完整目录解析，不因收起消失。
+      const providerIds = [...new Set(entries.map((entry) => entry.providerId))].filter(
+        (providerId) => !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)),
+      );
+      return entries.length > 0
         ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
         : [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups]);
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold]);
   // 目录还在读或读取失败的其他电脑(分享不算):收藏区里它们的收藏置灰列出,不当作模型已下架。
   const remoteAgentUnavailableDeviceIds = useMemo(
     () =>
@@ -1786,7 +1842,7 @@ function ModelSelectorContentView({
     if (!hasRemoteAgent) return undefined;
     void visibilityVersion;
     const entries = unifiedModelEntries({
-      providers: homeProviders,
+      providers: homeProviders.filter((provider) => !runLocationFold.hiddenLocal.has(provider.id)),
       isVisible: homeDeviceId
         ? (providerId, model, agent) =>
             isDeviceModelVisible(homeModelVisibilityOverrides, agent, providerId, model)
@@ -1802,6 +1858,7 @@ function ModelSelectorContentView({
     homeModelVisibilityOverrides,
     localProviders.providerOrder,
     visibilityVersion,
+    runLocationFold,
   ]);
   // 供应商组在分组标题与左栏提示里带上台数(provider-groups.md §10)：「Anthropic · 供应商组 · 2 台电脑」。
   // 只算任务所在电脑就是本机时本机建的组；被控电脑上的任务看那台的目录，不在这里标。远程 Agent 面板正在浏览
@@ -2157,6 +2214,9 @@ function ModelSelectorContentView({
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
       if (isCustomRoutedProvider(provider)) return false;
+      // Auxiliary windows cannot inspect local credentials and use Main's catalog verdict.
+      // Full renderers retain the existing key gate when a stale catalog still says connected.
+      if (provider?.id === 'xd' && canReadKey === false) return !provider.connected;
       return isCodexGatewayWireModel(id) && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
@@ -2977,6 +3037,8 @@ function ModelSelectorContentView({
     // flat 行仍保持 providerId=null 的选择语义，但当前行的状态展示要读取会话实际来源：
     // 否则拍平后既看不到 Subscription，也无法判断该 (agent,provider,model) 是否已隐藏。
     const statusProvider = provider ?? (isSelected ? currentModelProvider : undefined);
+    const displayName = localizedModelName(model.displayName, t);
+    const showModelId = isCustomRoutedProvider(statusProvider) && model.id !== displayName;
     const isSubscriptionModel = statusProvider?.access?.kind === 'subscription';
     const selectedCatalogModel =
       statusProvider && currentAgentKind
@@ -3079,7 +3141,7 @@ function ModelSelectorContentView({
             aria-disabled={disabled ? true : undefined}
             aria-label={
               paymentRequired
-                ? `${localizedModelName(model.displayName, t)} · ${t('newChat.modelSelector.paymentRequired.unlock')}`
+                ? [displayName, showModelId ? model.id : null, t('newChat.modelSelector.paymentRequired.unlock')].filter(Boolean).join(' · ')
                 : undefined
             }
             title={disabledReason ?? undefined}
@@ -3129,100 +3191,107 @@ function ModelSelectorContentView({
             data-state={isEditingThis ? 'open' : isSelected ? 'checked' : undefined}
             className={cn(
               COMPOSER_MENU_ROW,
-              'group/row flex w-full cursor-pointer items-center justify-between px-3 py-2',
+              'group/row flex w-full cursor-pointer flex-col px-3 py-2',
               // Model menu exception (DESIGN §4): the chosen row keeps its whole-row fill.
               isSelected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
               constrainedListMaxHeight !== undefined && 'min-h-9',
               (disabled || paymentRequired) && 'opacity-50',
             )}
           >
-            <span className="flex min-w-0 flex-1 items-center gap-2.5">
-              {provider && (
-                <ModelIconMark
-                  icon={model.icon}
-                  providerId={provider.id}
-                  name={provider.name}
-                  routing={provider.routing}
-                  logoKind={provider.logoKind}
-                  colorClass="text-[var(--text-secondary)]"
-                  withMargin={false}
-                  dense
-                />
-              )}
-              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <div className="flex w-full items-center justify-between">
+              <span className="flex min-w-0 flex-1 items-center gap-2.5">
+                {provider && (
+                  <ModelIconMark
+                    icon={model.icon}
+                    providerId={provider.id}
+                    name={provider.name}
+                    routing={provider.routing}
+                    logoKind={provider.logoKind}
+                    colorClass="text-[var(--text-secondary)]"
+                    withMargin={false}
+                    dense
+                  />
+                )}
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate font-medium leading-5">
-                    {localizedModelName(model.displayName, t)}
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span className="truncate font-medium leading-5">
+                      {displayName}
+                    </span>
+                    {rowEffort && (
+                      <span
+                        aria-label={effortLabelFor(model, rowEffort)}
+                        title={effortLabelFor(model, rowEffort)}
+                        className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]"
+                      >
+                        {compactEffortLabelFor(model, rowEffort)}
+                      </span>
+                    )}
+                    {rowFastOn && (
+                      <Zap
+                        size={13}
+                        className="shrink-0 text-[var(--text-tertiary)]"
+                        aria-label={t('newChat.modelSelector.meta.fastBadge')}
+                      />
+                    )}
                   </span>
-                  {rowEffort && (
-                    <span
-                      aria-label={effortLabelFor(model, rowEffort)}
-                      title={effortLabelFor(model, rowEffort)}
-                      className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]"
-                    >
-                      {compactEffortLabelFor(model, rowEffort)}
+                  {(paymentRequired ||
+                    isHiddenSelectedModel ||
+                    showSubscriptionTag ||
+                    showPromotionTag) && (
+                    <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
+                      {paymentRequired && (
+                        <span
+                          data-payment-required-unlock
+                          className="invisible shrink-0 select-none text-11 font-medium text-[var(--text-secondary)] group-hover/row:visible group-focus-within/row:visible"
+                        >
+                          {t('newChat.modelSelector.paymentRequired.unlock')}
+                        </span>
+                      )}
+                      {paymentRequired && (
+                        <span
+                          data-payment-required-badge
+                          className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
+                        >
+                          <Lock size={11} />
+                          {t('newChat.modelSelector.paymentRequired.badge')}
+                        </span>
+                      )}
+                      {isHiddenSelectedModel && (
+                        <span
+                          data-model-hidden-label
+                          className="shrink-0 select-none text-11 font-normal text-[var(--text-tertiary)]"
+                        >
+                          {t('newChat.modelSelector.hidden')}
+                        </span>
+                      )}
+                      {showSubscriptionTag && (
+                        <span
+                          aria-label={t('settings.providers.models.subscription')}
+                          title={t('settings.providers.models.subscription')}
+                          className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]"
+                        >
+                          {t('newChat.modelSelector.meta.subscriptionBadgeCompact', {
+                            defaultValue: t('settings.providers.models.subscription'),
+                          })}
+                        </span>
+                      )}
+                      {showPromotionTag && rowPromotionLabel && (
+                        <ModelPromotionBadge>{rowPromotionLabel}</ModelPromotionBadge>
+                      )}
                     </span>
                   )}
-                  {rowFastOn && (
-                    <Zap
-                      size={13}
-                      className="shrink-0 text-[var(--text-tertiary)]"
-                      aria-label={t('newChat.modelSelector.meta.fastBadge')}
-                    />
-                  )}
                 </span>
-                {(paymentRequired ||
-                  isHiddenSelectedModel ||
-                  showSubscriptionTag ||
-                  showPromotionTag) && (
-                  <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
-                    {paymentRequired && (
-                      <span
-                        data-payment-required-unlock
-                        className="invisible shrink-0 select-none text-11 font-medium text-[var(--text-secondary)] group-hover/row:visible group-focus-within/row:visible"
-                      >
-                        {t('newChat.modelSelector.paymentRequired.unlock')}
-                      </span>
-                    )}
-                    {paymentRequired && (
-                      <span
-                        data-payment-required-badge
-                        className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
-                      >
-                        <Lock size={11} />
-                        {t('newChat.modelSelector.paymentRequired.badge')}
-                      </span>
-                    )}
-                    {isHiddenSelectedModel && (
-                      <span
-                        data-model-hidden-label
-                        className="shrink-0 select-none text-11 font-normal text-[var(--text-tertiary)]"
-                      >
-                        {t('newChat.modelSelector.hidden')}
-                      </span>
-                    )}
-                    {showSubscriptionTag && (
-                      <span
-                        aria-label={t('settings.providers.models.subscription')}
-                        title={t('settings.providers.models.subscription')}
-                        className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]"
-                      >
-                        {t('newChat.modelSelector.meta.subscriptionBadgeCompact', {
-                          defaultValue: t('settings.providers.models.subscription'),
-                        })}
-                      </span>
-                    )}
-                    {showPromotionTag && rowPromotionLabel && (
-                      <ModelPromotionBadge>{rowPromotionLabel}</ModelPromotionBadge>
-                    )}
-                  </span>
-                )}
               </span>
-            </span>
-            {isSelected && (
-              <span className="ml-2 flex shrink-0 items-center">
-                <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
-              </span>
+              {isSelected && (
+                <span className="ml-2 flex shrink-0 items-center">
+                  <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
+                </span>
+              )}
+            </div>
+            {showModelId && (
+              <div className="w-0 min-w-full break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                {model.id}
+              </div>
             )}
           </div>
         </PopoverAnchor>
@@ -3616,9 +3685,19 @@ function ModelSelectorContentView({
           {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           {sshCodexNotice && <div className="shrink-0 p-2">{sshCodexNotice}</div>}
           <UnifiedModelPanel
-            {...(pluginModels ? {
-              pinnedTop: <PluginModelsSection picker={pluginModels} query={query} onPicked={() => onDismiss?.()} />,
-              pinnedTopHasRows: matchPluginModels(pluginModels.models, query).length > 0,
+            {...(pluginModels || (modelGroups && query.trim()) ? {
+              // 搜索时模型组里命中的行也列在最上方；不搜索时它们只在「模型组」一格里。
+              pinnedTop: (
+                <>
+                  {pluginModels && <PluginModelsSection picker={pluginModels} query={query} onPicked={() => onDismiss?.()} />}
+                  {modelGroups && query.trim() && <ModelGroupsPickerSection picker={modelGroups} query={query} onPicked={() => onDismiss?.()} searchOnly />}
+                </>
+              ),
+              pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
+                || (!!modelGroups && !!query.trim() && matchModelGroupRows(modelGroupRows, query) > 0),
+            } : {})}
+            {...(modelGroups ? {
+              modelGroupsView: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} />,
             } : {})}
             {...(!remoteAgent && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
               ? {
@@ -3635,6 +3714,10 @@ function ModelSelectorContentView({
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
             providers={providers}
+            // 「运行于」另一台的本机供应商只从模型分组收起；本机收藏仍按完整目录解析。
+            {...(!deviceId && runLocationFold.hiddenLocal.size > 0
+              ? { listHiddenProviderIds: runLocationFold.hiddenLocal }
+              : {})}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}
             scope={unifiedScope}
@@ -3653,8 +3736,8 @@ function ModelSelectorContentView({
             // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
             panelWidthFluid={fluidWidth}
             // 选中插件模型时选中的是插件那一行，普通模型行不再同时显示选中底色。
-            selected={pluginModels?.active ? NO_MODEL_SELECTION : panelSelection}
-            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active ? selectedFavoriteUid : null}
+            selected={pluginModels?.active || modelGroups?.active ? NO_MODEL_SELECTION : panelSelection}
+            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active && !modelGroups?.active ? selectedFavoriteUid : null}
             liveAgentKind={
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
             }
@@ -4083,7 +4166,10 @@ function ModelSelectorContentView({
 }
 
 export function ModelSelector({
+  openRequest = 0,
+  onOpenRequestConsumed,
   pluginModels,
+  modelGroups,
   providersOverride,
   providersOverrideState,
   sshCodex,
@@ -4133,9 +4219,11 @@ export function ModelSelector({
   unknownModelLabel,
   unknownModelDescription,
   ariaContext,
+  'data-setting-id': settingId,
   currentProviderId,
   sourceDisconnected = false,
   actualRoute = false,
+  subscriptionTaskId,
   taskStarted = false,
   onProviderChange,
   onNavigateToProviders,
@@ -4210,6 +4298,14 @@ export function ModelSelector({
     },
     [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh],
   );
+
+  const consumedOpenRequest = useRef(0);
+  useEffect(() => {
+    if (!openRequest || consumedOpenRequest.current === openRequest || disabled) return;
+    consumedOpenRequest.current = openRequest;
+    handleOpenChange(true);
+    onOpenRequestConsumed?.(openRequest);
+  }, [openRequest, disabled, handleOpenChange, onOpenRequestConsumed]);
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
@@ -4561,14 +4657,21 @@ export function ModelSelector({
   const withAgentDeviceLabel = (label: string): string =>
     agentDeviceLabel ? `${label} · ${agentDeviceLabel}` : label;
   const activePluginModel = pluginModels?.active ?? null;
+  const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
+  const activeModelGroupRow = modelGroups?.active
+    ? modelGroupRows.find((row) =>
+        row.selection.type === modelGroups.active?.type && row.selection.id === modelGroups.active.id) ?? null
+    : null;
   const triggerTitleBase = withAgentDeviceLabel(pendingSelectionTitle
     ? `${pendingSelectionTitle}${showSourceDisconnected ? ` · ${sourceIssueLabel}` : ''}`
     : showSourceDisconnected ? baseAriaLabel : displayIdentityLabel);
   const triggerTitle = activePluginModel
     ? `${activePluginModel.name} · ${activePluginModel.pluginName}`
-    : triggerTitleBase;
+    : activeModelGroupRow
+      ? [activeModelGroupRow.name, activeModelGroupRow.hint].filter(Boolean).join(' · ')
+      : triggerTitleBase;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
-  const accessibleLabel = activePluginModel ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
+  const accessibleLabel = activePluginModel || activeModelGroupRow ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
   const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
@@ -4610,7 +4713,7 @@ export function ModelSelector({
           'ml-1 shrink-0',
           isCreateAgentVariant
             ? 'text-[var(--create-agent-control-icon)]'
-            : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+            : 'text-[var(--composer-pill-icon)]',
         )}
       />
     </span>
@@ -4653,6 +4756,7 @@ export function ModelSelector({
 
   const trigger = (
     <button
+      data-setting-id={settingId}
       type="button"
       disabled={switching || disabled}
       // 阻 mousedown 抢焦点 —— 否则点 pill 会先把光标从输入框挪走,选完模型后
@@ -4686,7 +4790,7 @@ export function ModelSelector({
                   ? 'w-[148px] min-w-[72px]'
                   : 'min-w-[72px] max-w-[min(320px,100%)]',
               'border border-transparent bg-transparent',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
             ),
         // device-link 远程切换 in-flight:置灰 + 禁用点击(复用本文件 disabled 行的 opacity-50 习惯)。
         (switching || disabled) && 'pointer-events-none opacity-50',
@@ -4701,6 +4805,13 @@ export function ModelSelector({
           <PluginModelIcon model={activePluginModel} size={14} />
           <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13', isUltraCompactToolbar && 'hidden')}>
             {activePluginModel.name}
+          </span>
+        </>
+      ) : activeModelGroupRow ? (
+        <>
+          <ModelGroupIcon size={14} />
+          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13', isUltraCompactToolbar && 'hidden')}>
+            {activeModelGroupRow.name}
           </span>
         </>
       ) : noSource ? (
@@ -4917,7 +5028,7 @@ export function ModelSelector({
                 'ml-0.5 shrink-0',
                 isCreateAgentVariant
                   ? 'text-[var(--create-agent-control-icon)]'
-                  : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+                  : 'text-[var(--composer-pill-icon)]',
               )}
             />
           )}
@@ -4940,7 +5051,7 @@ export function ModelSelector({
           'shrink-0',
           isCreateAgentVariant
             ? 'text-[var(--create-agent-control-icon)]'
-            : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
+            : 'text-[var(--composer-pill-icon)]' /* spec 2026-07-17, token by 一哥 */,
           isFieldTrigger && 'ml-auto',
         )}
       />
@@ -4976,6 +5087,7 @@ export function ModelSelector({
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpenWithoutAutoRefresh(false)}
       actualRoute={actualRoute}
+      subscriptionTaskId={subscriptionTaskId}
       taskStarted={taskStarted}
       maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
@@ -4996,6 +5108,7 @@ export function ModelSelector({
       onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
       onUnifiedSelect={onUnifiedSelect}
       {...(pluginModels ? { pluginModels } : {})}
+      {...(modelGroups ? { modelGroups } : {})}
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}
@@ -5058,9 +5171,8 @@ export function ModelSelector({
         collisionPadding={8}
         className={cn(
           // field 形态面板宽度绑定 trigger(DESIGN.md §4 Select & Dropdown 宽度铁则,
-          // 与隔壁权限字段同规则),且压掉共享 PopoverContent 的 shadow-md(§4 面板无
-          // 阴影);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
-          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)] shadow-none' : 'w-auto',
+          // 与隔壁权限字段同规则);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
+          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)]' : 'w-auto',
           'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',

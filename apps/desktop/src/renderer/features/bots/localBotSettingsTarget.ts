@@ -14,11 +14,8 @@ import {
   getEffectiveBotModelChain,
   retryBotInvitation,
   runBotLifecycleAction,
-  setBotSchedulerBotId,
-  resetBotAutonomySettings,
   subscribeBotGlobalModel,
   updateBotProfile,
-  useBotAutonomySettings,
   useBotProfiles,
 } from './botStore';
 import { botImConnectionApi } from './botImConnectionClient';
@@ -26,7 +23,7 @@ import type { BotCapabilityEntry, BotCapabilityKind, BotSettingsTarget } from '.
 
 const api = () => window.electronAPI.localDb.bots;
 // `projects` lists folders on this computer: a remote teammate's target never offers it.
-const ALL_PAGES = ['profile', 'personality', 'memory', 'projects', 'model', 'voice', 'capabilities', 'channels', 'routines', 'history', 'advanced'] as const;
+const ALL_PAGES = ['profile', 'personality', 'memory', 'projects', 'automations', 'model', 'voice', 'capabilities', 'channels', 'history', 'advanced'] as const;
 
 /** Runtime / MCP facts that change which references a teammate can use. */
 const CATALOG_PATCH_KEYS = [
@@ -71,13 +68,21 @@ async function loadCatalog(
   const [personalResult, skillResult, toolsetResult] = results;
   const next: Partial<Record<BotCapabilityKind, BotCapabilityEntry[]>> = {};
   if (skillResult.status === 'fulfilled' && skillResult.value.success) {
-    // Match resolveBotSkillReferences: the last entry for a name wins.
+    // Match the runtime: the last entry for a name wins, except that an active
+    // Cindy official Skill keeps the name and disables its namesakes.
     // Map retains first-seen display order without changing discovery data.
-    const skillsByName = new Map((skillResult.value.skills ?? []).map((item) => [item.name, item]));
+    const discovered = skillResult.value.skills ?? [];
+    const skillsByName = new Map<string, (typeof discovered)[number]>();
+    for (const item of discovered) {
+      const kept = skillsByName.get(item.name);
+      if (kept?.cindyOfficial && kept.enabled !== false && kept.runtimeStatus !== 'failed' && !item.cindyOfficial) continue;
+      skillsByName.set(item.name, item);
+    }
     next.skill = [...skillsByName.values()].map((item) => ({
       id: item.name,
       name: item.name,
       description: item.description,
+      cindyOfficial: item.cindyOfficial,
       available: item.enabled !== false && item.runtimeStatus !== 'failed',
     }));
   }
@@ -176,20 +181,5 @@ export const localBotSettingsTarget: BotSettingsTarget = {
     get previewApi() {
       return window.electronAPI.voiceConversation;
     },
-  },
-  routines: {
-    list: (...args) => window.electronAPI.routines.list(...args),
-    save: (...args) => window.electronAPI.routines.save(...args),
-    remove: (...args) => window.electronAPI.routines.remove(...args),
-    runNow: (...args) => window.electronAPI.routines.runNow(...args),
-    history: (...args) => window.electronAPI.routines.history(...args),
-    sources: () => window.electronAPI.routines.sources(),
-    deliveryTargets: (botId) => window.electronAPI.routines.deliveryTargets?.(botId) ?? Promise.resolve([]),
-    onChanged: (listener) => window.electronAPI.routines.onChanged(listener),
-  },
-  autonomy: {
-    useSettings: () => useBotAutonomySettings(),
-    setSchedulerBotId: (botId) => setBotSchedulerBotId(botId),
-    reset: () => resetBotAutonomySettings(),
   },
 };

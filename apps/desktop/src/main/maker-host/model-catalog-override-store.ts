@@ -25,7 +25,10 @@ import {
   sanitizeModelCatalogOverrides,
   type ModelCatalogOverrides,
 } from './model-plane/localCatalogOverrides.js';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import {
+  ownerGeneration,
+  ownerScopedPath as ownerScopedUserDataPath,
+} from '../ownerContext.js';
 import type { ModelPriceOverrideTarget } from '../../shared/modelPriceOverride.js';
 
 const log = desktopMakerLogger.child('model-catalog-overrides');
@@ -86,7 +89,7 @@ function createStore(filePath: () => string, scopeKey?: () => string) {
 
 const store = createStore(
   () => ownerScopedUserDataPath('model-catalog-overrides.json'),
-  () => String(getActiveAppSession().generation),
+  () => String(ownerGeneration()),
 );
 
 /** 当前 override 快照(注入 active-catalog 合并;mtime 守卫让手改文件下次读取生效)。 */
@@ -113,7 +116,7 @@ export async function writeModelImageInputOverride(
   refresh: () => Promise<void>,
 ): Promise<void> {
   const file = ownerScopedUserDataPath('model-catalog-overrides.json');
-  const generation = getActiveAppSession().generation;
+  const generation = ownerGeneration();
   const keys = new Set(targets.map(keyOf));
   let previous: ModelCatalogOverrides['patches'] = {};
   let written: ModelCatalogOverrides['patches'] = {};
@@ -165,7 +168,7 @@ export async function writeModelImageInputOverride(
       }
       return { patches };
     });
-    if (getActiveAppSession().generation === generation) {
+    if (ownerGeneration() === generation) {
       try {
         await refresh();
       } catch {

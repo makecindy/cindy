@@ -1,3 +1,4 @@
+import { worktreeRecycleCardSettings } from './WorktreeRecycleCard.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -44,8 +45,8 @@ export function WorktreeRecycleCard() {
   return (
     <div className="mt-6 rounded-xl border border-[var(--border-default)] p-4">
       <div className="flex items-center justify-between gap-4">
-        <h3 id="settings-search-settings-worktreeRecycle-title" className="text-sm font-medium text-[var(--text-primary)]">{t('settings.worktreeRecycle.title')}</h3>
-        <Button variant="secondary" size="md" onClick={() => { void refresh(); }}>{t('settings.worktreeRecycle.refresh')}</Button>
+        <h3 id={worktreeRecycleCardSettings.worktreeRecycleTitle.targetId} className="text-sm font-medium text-[var(--text-primary)]">{t(worktreeRecycleCardSettings.worktreeRecycleTitle.titleKey)}</h3>
+        <Button data-setting-id={worktreeRecycleCardSettings.worktreeRecycleTitle.id} variant="secondary" size="md" onClick={() => { void refresh(); }}>{t('settings.worktreeRecycle.refresh')}</Button>
       </div>
       {failed ? <ErrorNotice role="alert" className="mt-3" message={t('settings.worktreeRecycle.loadFailed')} />
         : rows === null ? null : rows.length === 0 ? <p className="mt-3 text-sm text-[var(--text-secondary)]">{t('settings.worktreeRecycle.empty')}</p>
@@ -59,8 +60,8 @@ export function WorktreeRecycleCard() {
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button variant="secondary" size="md" disabled={busy !== null} onClick={() => { void control(row, 'retry'); }}>{t('settings.worktreeRecycle.retry')}</Button>
-                <Button variant="secondary" size="md" disabled={busy !== null || row.state === 'kept'} onClick={() => { void control(row, 'keep'); }}>{t('settings.worktreeRecycle.keep')}</Button>
+                <Button data-settings-search-action="Retry recycling or keep the selected worktree" variant="secondary" size="md" disabled={busy !== null} onClick={() => { void control(row, 'retry'); }}>{t('settings.worktreeRecycle.retry')}</Button>
+                <Button data-settings-search-action="Retry recycling or keep the selected worktree" variant="secondary" size="md" disabled={busy !== null || row.state === 'kept'} onClick={() => { void control(row, 'keep'); }}>{t('settings.worktreeRecycle.keep')}</Button>
               </div>
             </li>)}
           </ul>}

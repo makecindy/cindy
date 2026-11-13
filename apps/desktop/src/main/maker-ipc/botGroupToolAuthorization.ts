@@ -1,5 +1,5 @@
 import type { MessageSourceGroup } from '@cindy/maker-shared/message-source';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 /** A group link identifies a lane, not an authorization. Only its live Chat Server
  * execution may supply authority; persisted route keys cannot recreate a grant. */
@@ -11,7 +11,11 @@ export interface GroupToolAuthority {
   validate(): Promise<void>;
   isCurrent(): boolean;
   onDenied?(error: GroupToolAuthorizationError): Promise<void>;
+  /** This execution opened an ordinary task (`send_to_session` create); the group shows its card. */
+  onTaskCreated?(task: GroupTaskCreated): void;
 }
+/** `deviceId` is the computer running the task; null for this computer. */
+export interface GroupTaskCreated { taskId: string; deviceId: string | null; title: string }
 const authorities = new Map<string, GroupToolAuthority>();
 
 export class GroupToolAuthorizationError extends Error {
@@ -56,4 +60,10 @@ export async function authorizeGroupTool(sessionId: string, botId: string, opera
     await authorizeGroupTool(sessionId, botId, operation);
     assertCurrent();
   } };
+}
+
+/** A group lane opened a task while its execution is live: hand it to that execution's card. */
+export function reportGroupTaskCreated(sessionId: string, task: GroupTaskCreated): void {
+  const authority = authorities.get(sessionId);
+  if (authority?.isCurrent() && authority.mode !== 'chat') authority.onTaskCreated?.(task);
 }

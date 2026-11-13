@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import type { SQL } from 'drizzle-orm';
 import type { McpAppsHostDeps } from '../host.js';
+import type { AppServerConfig } from '../connection.js';
+import type { GhostHostUi } from '@cindy/plugin-protocol';
+import path from 'node:path';
+import { configurePluginSettings } from '../../app-settings/plugins.js';
 const state = vi.hoisted(() => ({
   owner: null as object | null,
   deps: undefined as McpAppsHostDeps | undefined,
@@ -23,6 +27,8 @@ const state = vi.hoisted(() => ({
   invoke: vi.fn(),
   open: vi.fn(),
   dispatch: vi.fn(),
+  action: vi.fn(),
+  plugin: undefined as { host: GhostHostUi; config: AppServerConfig } | undefined,
   revisionKey: vi.fn(() => 'a'.repeat(64)),
   remote: undefined as { controllerDeviceId: string; sharedTask?: object } | undefined,
   handle: undefined as
@@ -42,12 +48,14 @@ vi.mock('../host.js', () => ({
   McpAppsHost: class {
     open = state.open;
     dispatch = state.dispatch;
+    callPluginAction = state.action;
     constructor(deps: McpAppsHostDeps) {
       state.deps = deps;
     }
   },
 }));
-vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn() }));
+vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => state.plugin }));
+vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn(), replacePluginAppServers: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ getMcpAppRevisionKey: state.revisionKey }));
 vi.mock('../sandboxProtocol.js', () => ({
   supplyMcpAppDocument: vi.fn(),
@@ -66,6 +74,9 @@ vi.mock('../../localDb/client/current.js', () => ({
 vi.mock('../../localDb/ipc/messages.js', () => ({
   broadcastMessageRow: state.broadcast,
   createMessage: (...args: unknown[]) => state.create(...args),
+}));
+vi.mock('../../git-context/prRefsStore.js', () => ({
+  recomputePrRefsForSession: vi.fn(async () => {}),
 }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ owner: state.owner }),
@@ -95,6 +106,8 @@ beforeEach(() => {
   pagePermissionGrants.clearServers();
   vi.mocked(readAppServer).mockReturnValue({ id: 'example', url: 'https://example.com/mcp', transport: 'http' });
   state.remote = undefined;
+  state.plugin = undefined;
+  state.action.mockReset();
   state.predicates = [];
   state.duringUpdate = () => {};
   state.beforePublish = () => {};
@@ -150,6 +163,85 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // Unit: a selected local file goes through the original Host handoff, not tool JSON.
+  // Existing completion cases have no files; a MIME/extension mismatch must not call it.
+  it('matches added attachments and passes the path only in the Main-owned grant', async () => {
+    state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment',
+      tool: 'parse', accept: { extensions: ['.pdf'] } }] }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = { op: 'plugin-action', instanceId: 'local__demo', id: 'parse', requestId: 'file',
+      input: { attachment: { name: 'input.pdf', uri: path.resolve('input.pdf'), size: 5, mimeType: 'application/pdf' } } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    expect(await state.handle!(event, null, input)).toEqual({ handled: false });
+    expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
+      expect.objectContaining({ attachments: [path.resolve('input.pdf')] }), 'parse',
+      { attachment: { name: 'input.pdf', size: 5, mimeType: 'application/pdf' } }]);
+    state.action.mockClear();
+    await expect(state.handle!(event, null, { ...input, input: { attachment: { ...input.input.attachment,
+      name: 'input.exe', mimeType: 'application/octet-stream' } } })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+  });
+  // New provider contract, unit: production Main handler must bind trigger/query,
+  // cancellation to the renderer and all settings writes to the physical instance.
+  // Existing card persistence/policy tests do not exercise native provider requests.
+  it('validates completion input and scopes cancellation to the requesting renderer', async () => {
+    state.plugin = { host: { contributions: [{ id: 'lookup', title: 'Lookup', position: 'composer.completion',
+      trigger: '@', tool: 'lookup', arguments: { scope: 'declared' } }] },
+      config: { id: 'plugin-source', url: '', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const action = { op: 'plugin-action', instanceId: 'local__demo', id: 'lookup', requestId: 'one', input: { trigger: '@', query: 'issue' } };
+    await expect(state.handle!(event, null, { ...action, input: { trigger: '/', query: 'issue' } })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+    let signal: AbortSignal | undefined;
+    state.action.mockImplementation(async (_caller, _session, _source, _tool, _args, nextSignal: AbortSignal) => {
+      signal = nextSignal;
+      return new Promise((_resolve, reject) => nextSignal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+    });
+    const pending = state.handle!(event, null, action);
+    // IPC intentionally hides arbitrary plugin errors behind its public code.
+    const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
+    await vi.waitFor(() => expect(state.action).toHaveBeenCalledOnce());
+    expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
+      expect.objectContaining({ id: 'lookup', serverId: 'plugin-source' }), 'lookup', { scope: 'declared', trigger: '@', query: 'issue' }]);
+    await state.handle!({ sender: { id: 2 } }, null, { op: 'plugin-action-cancel', requestId: 'one' });
+    expect(signal!.aborted).toBe(false);
+    await state.handle!(event, null, { op: 'plugin-action-cancel', requestId: 'one' });
+    await rejected;
+    expect(signal!.aborted).toBe(true);
+  });
+  it('routes registered settings through the original service and refuses a revoked source', async () => {
+    const settings = [{ id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: true }];
+    state.plugin = { host: { settings }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    let stored: Record<string, unknown> = { private: 'keep' };
+    configurePluginSettings({ entries: () => [{ instance: 'local__demo', title: 'Demo', settings, assertCurrent() {
+      if (!state.plugin) throw new Error('revoked');
+    } }], read: () => stored, write: (_instance, value) => { stored = value; } });
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = { op: 'plugin-settings', instanceId: 'local__demo', operation: 'update', patch: { enabled: false } };
+    expect(await state.handle!(event, null, input)).toMatchObject({ section: 'plugins.local__demo', state: { value: { enabled: false } } });
+    expect(stored).toEqual({ private: 'keep', enabled: false });
+    state.plugin = undefined;
+    await expect(state.handle!(event, null, input)).rejects.toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+    expect(stored).toEqual({ private: 'keep', enabled: false });
+  });
+  // Unit regression: cancel can arrive at the first await, before tool dispatch.
+  // The existing cancellation case waits for dispatch and misses this window.
+  it.each(['composer.completion', 'composer.attachment'] as const)('cancels %s before its first asynchronous source check finishes', async position => {
+    state.plugin = { host: { contributions: [{ id: 'provider', title: 'Provider', position, tool: 'provider',
+      ...(position === 'composer.completion' ? { trigger: '@' as const } : { accept: { extensions: ['.pdf'] } }) }] },
+      config: { id: 'plugin-source', url: '', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = position === 'composer.completion' ? { trigger: '@', query: 'record' }
+      : { attachment: { name: 'input.pdf', uri: path.resolve('input.pdf'), size: 5, mimeType: 'application/pdf' } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    const pending = state.handle!(event, null, { op: 'plugin-action', instanceId: 'local__demo', id: 'provider', requestId: 'early', input });
+    const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
+    await state.handle!(event, null, { op: 'plugin-action-cancel', requestId: 'early' });
+    await rejected;
+    expect(state.action).not.toHaveBeenCalled();
+  });
   it('injects the persistent vault key lazily instead of using a transient Host key', () => {
     expect(state.revisionKey).not.toHaveBeenCalled();
     expect(state.deps!.revisionKey!()).toBe('a'.repeat(64));
@@ -333,7 +425,8 @@ it.each(['allow', 'block', 'ask'] as const)('routes page approval through Auto (
     { clientId: 'card', serverId: 'custom', title: 'Planner' });
   if (verdict === 'block') await expect(result).rejects.toThrow('MCP_APP_TOOL_DENIED');
   else await result;
-  expect(review).toHaveBeenCalledWith('task', 'custom', 'form', { value: 3 });
+  expect(review).toHaveBeenCalledWith('task', 'custom', 'form', { value: 3 }, undefined,
+    { name: record.tool.name, description: undefined, inputSchema: record.tool.inputSchema });
   expect(request).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
   if (verdict === 'ask') expect(request).toHaveBeenCalledWith('task', expect.objectContaining({ metadata: expect.objectContaining({ mcpApp: { clientId: 'card', serverId: 'custom', title: 'Planner', scope: 'once' } }) }), expect.any(AbortSignal));
 });
@@ -452,7 +545,8 @@ it.each([
 // a page grant, while Full Access, media policy and Auto produce distinct outcomes.
 describe('plugin page ghost_call approval policy', () => {
   const source = { clientId: 'card', serverId: 'plugin-example', title: 'Page' };
-  const tool = { name: 'save', inputSchema: { type: 'object' as const } };
+  const tool = { name: 'save', description: 'Save a local draft; does not send messages.',
+    inputSchema: { type: 'object' as const, properties: { value: { type: 'number' } } } };
   function bind(ghostId = 'notes', namespace?: string | null) {
     vi.mocked(readAppServer).mockReturnValue({ id: source.serverId, url: '', transport: 'in-process', plugin: {
       ghostId, ...(namespace !== undefined ? { namespace } : {}), instance: '_root__' + ghostId, revision: 'approved', packageSha256: 'hash', directory: '/fixture', title: 'Page',
@@ -511,13 +605,16 @@ describe('plugin page ghost_call approval policy', () => {
     expect(review).toHaveBeenCalledTimes(mode === 'media-auto' ? 1 : 0);
     expect(request).toHaveBeenCalledTimes(mode === 'bypassPermissions' ? 0 : 1);
   });
-  it.each([undefined, null, 'example'])('reviews the original ghost_call identity and page origin in Auto: %s', async namespace => {
+  // Unit regression: the real page authorizer dropped plugin tool contracts, so
+  // Auto could not distinguish a draft from a send. A named tool with a description
+  // and schema must reach review with its original identity; prior coverage omitted both.
+  it.each([undefined, null, 'example'])('reviews the original ghost_call identity, page origin and tool definition in Auto: %s', async namespace => {
     bind('notes', namespace); state.session.permissionMode = 'auto';
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
     registerMcpAppsIpc(async () => {}, request, review);
     await call();
     expect(review).toHaveBeenCalledWith('task', 'cindy', 'ghost_call',
-      { ghost_id: 'notes', ...(namespace !== undefined ? { namespace } : {}), tool: 'save', args: { value: 3 } }, expect.stringContaining('由插件交互页面发起'));
+      { ghost_id: 'notes', ...(namespace !== undefined ? { namespace } : {}), tool: 'save', args: { value: 3 } }, expect.stringContaining('由插件交互页面发起'), tool);
     expect(request).not.toHaveBeenCalled();
   });
 });

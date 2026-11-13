@@ -19,6 +19,7 @@ import {
   Plug,
   Settings2,
   Sparkles,
+  Waypoints,
   Wrench,
   Users,
 } from 'lucide-react';
@@ -26,6 +27,8 @@ import {
 import { cn } from '@/lib/utils';
 import { TAB_LABEL_KEY, type SettingsTab, type VisibleSettingsTab } from '@/lib/tabLabels';
 import { SettingsSearchBox } from './SettingsSearchBox';
+import type { SettingsSearchDocument } from './settingsSearchCatalog';
+import type { PluginSettingsPage } from './pluginSettingsNavigation';
 
 const NAV_ITEM_CLASS = 'flex h-9 items-center gap-2.5 rounded-full px-3 text-sm transition-colors';
 const NAV_ITEM_IDLE_CLASS =
@@ -69,6 +72,7 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   usage: ChartColumn,
   personalization: Sparkles,
   providers: Boxes,
+  'model-groups': Waypoints,
   'voice-input': Mic,
   shortcuts: Keyboard,
   'agent-island': AgentIslandNavIcon,
@@ -90,6 +94,10 @@ interface SettingsSidebarNavProps {
   activeTab: SettingsTab;
   onSelectTab: (tab: SettingsTab) => void;
   onSelectSearchResult?: (result: { tab: SettingsTab; sectionId: string }) => void;
+  pluginPages?: readonly PluginSettingsPage[];
+  pluginSearchDocuments?: readonly SettingsSearchDocument[];
+  selectedPluginPage?: string;
+  onSelectPluginPage?: (page: PluginSettingsPage) => void;
 }
 
 /** Settings left nav. Every item is an in-panel tab with a matching lucide mark. */
@@ -99,15 +107,19 @@ export function SettingsSidebarNav({
   activeTab,
   onSelectTab,
   onSelectSearchResult,
+  pluginPages,
+  pluginSearchDocuments,
+  selectedPluginPage,
+  onSelectPluginPage,
 }: SettingsSidebarNavProps) {
   const { t } = useTranslation();
 
   return (
     <>
-      <SettingsSearchBox visibleTabIds={tabIds} searchContext={searchContext} onSelect={onSelectSearchResult} />
+      <SettingsSearchBox visibleTabIds={tabIds} searchContext={searchContext} additionalDocuments={pluginSearchDocuments} onSelect={onSelectSearchResult} />
       <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
         {tabIds.map((tabId) => {
-          const selected = activeTab === tabId;
+          const selected = activeTab === tabId && !selectedPluginPage;
           const Icon = TAB_ICON[tabId];
           return (
             <button
@@ -135,6 +147,16 @@ export function SettingsSidebarNav({
             </button>
           );
         })}
+        {!!pluginPages?.length && <>
+          <div className="px-3 pt-5 pb-1 text-12 text-[var(--text-secondary)]">{t('pluginUi.settings')}</div>
+          {pluginPages.map(page => <button data-settings-search-action="Open plugin settings indexed from the approved manifest" key={page.id} type="button" role="tab"
+            id={`settings-tab-${page.id}`} aria-selected={selectedPluginPage === page.id}
+            aria-controls={page.id} onClick={() => onSelectPluginPage?.(page)}
+            className={cn(NAV_ITEM_CLASS, selectedPluginPage === page.id ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}>
+            <Plug size={15} strokeWidth={1.8} className="shrink-0" aria-hidden="true" />
+            <span className="truncate leading-none" title={page.title}>{page.title}</span>
+          </button>)}
+        </>}
       </nav>
     </>
   );

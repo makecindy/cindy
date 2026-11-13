@@ -59,6 +59,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 import retainedDeepSeek from './fixtures/deepseek-retained-catalog.json';
 import { toast } from '@/lib/toast';
 import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
+import { openFirstRunGuide, closeFirstRunGuide, parkFirstRunGuideForConnection, updateFirstRunGuideConnections, getFirstRunGuideState } from '@/features/first-run-guide/firstRunGuideStore';
 import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
 import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
 import { speechModels } from '../../main/voice-conversation/models';
@@ -243,6 +244,15 @@ const claudeOnlyPreset = {
   },
 };
 
+// Identified handoffs and the "use API key" path show the preset form before the preset
+// catalog loads; Next stays disabled until then, and React drops a click on a disabled
+// button. Wait for the enabled button, as a user would, instead of racing the catalog.
+async function clickNext() {
+  const next = await screen.findByRole('button', { name: 'settings.providers.wizard.next' });
+  await waitFor(() => expect(next.hasAttribute('disabled')).toBe(false));
+  fireEvent.click(next);
+}
+
 function renderWizard(presetId: string) {
   return render(
     React.createElement(AddProviderWizard, {
@@ -308,6 +318,12 @@ it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'gi
 beforeEach(() => {
   testI18n.language = 'zh-CN';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    subscriptionAccounts: { command: vi.fn(async () => ({
+      providerId: 'anthropic', configured: false, strategy: 'least', accounts: [{
+        id: 'default', status: 'signed-out', directory: '/default',
+        running: 0, paused: false, limit: 4, weight: 1,
+      }],
+    })) },
     maker: {
       llamaCppEnsure: vi.fn(async () => undefined),
       llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
@@ -342,6 +358,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeFirstRunGuide();
   cleanup();
   vi.clearAllMocks();
 });
@@ -352,6 +369,43 @@ afterEach(() => {
 describe('Magpie sources through preset discovery', () => {
   const baseUrl = 'http://127.0.0.1:3425/v1';
   const source = (agent: AgentKind) => ({ kind: 'magpie' as const, providerId: `supplier-${agent}`, snapshotId: `receipt-${agent}` });
+
+  // New preset entry: existing vLLM coverage cannot catch missing Magpie selection,
+  // its API-key form or the differing Messages/Responses/Chat runtime addresses.
+  it('saves the shipped Magpie preset with edited addresses and distinct complete route IDs', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'magpie')!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    const ids = ['channel-a/foo', 'channel-b/foo'];
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({
+      ok: true, models: ids.map(id => ({ id, name: 'Foo', discoveredSource: source(agent),
+        discoverySnapshotId: `receipt-${agent}`, opaqueModelId: true })),
+    }));
+    renderWizard('magpie');
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-magpie-key' } });
+    const endpoints = document.querySelectorAll('input[type="url"]');
+    expect(endpoints).toHaveLength(3);
+    ['http://127.0.0.1:4425', 'http://127.0.0.1:4425/v1', 'http://127.0.0.1:4425/v1'].forEach((value, index) =>
+      fireEvent.change(endpoints[index], { target: { value } }));
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const rows = await screen.findAllByText('Foo');
+    expect(rows).toHaveLength(2);
+    rows.forEach(row => fireEvent.click(row));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [saved, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      expect(saved.runtimes[agent]).toMatchObject({ catalogPresetId: 'magpie',
+        baseUrl: 'http://127.0.0.1:4425' + (agent === 'claude-code' ? '' : '/v1'),
+        wireProtocol: preset.runtimes[agent]!.wireProtocol });
+      expect(saved.runtimes[agent]!.models.map(model => model.id)).toEqual(ids);
+      expect(keys![agent]).toBe('fake-magpie-key');
+    }
+    const entries = unifiedModelEntries({ providers: [{ ...buildUserProvider(saved), connected: true }] });
+    expect(entries.map(entry => entry.modelId)).toEqual(ids);
+    for (const entry of entries) for (const agent of entry.candidates) {
+      expect(entry.capabilities[agent]!.wireModelId).toBe(entry.modelId);
+    }
+  });
 
   it('retains full IDs and engine-owned receipts through the editable vLLM entry', async () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'vllm')!;
@@ -398,7 +452,7 @@ describe('Magpie sources through preset discovery', () => {
     const onReturnCustom = vi.fn();
     render(<AddProviderWizard providers={[]} detected={{ agent: 'pi', apiKey: '', keys: {}, config, preset }}
       onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByText('settings.providers.wizard.next'));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     if (action === 'finish') {
@@ -618,9 +672,7 @@ it('keeps a supplemental interface pin when returning an identified draft to the
     config: { id: 'draft', name: 'Pin handoff', runtimes: { 'claude-code': { baseUrl, models: preset.runtimes['claude-code'].models } } },
     catalog: { ok: true, models: [{ id: 'supplemental', name: 'Supplemental' }] },
   }} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-  const next = await screen.findByRole('button', { name: 'settings.providers.wizard.next' });
-  await waitFor(() => expect(next.hasAttribute('disabled')).toBe(false));
-  fireEvent.click(next);
+  await clickNext();
   fireEvent.click(await screen.findByText('Supplemental'));
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
@@ -647,9 +699,7 @@ it.each([
   render(<AddProviderWizard providers={[]} detected={{ preset, agent: 'pi', apiKey: 'fake-key',
     config: original, catalog: { ok: true, models: [{ id, name: 'Explicit vision' }] },
   }} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-  const next = screen.getByRole('button', { name: 'settings.providers.wizard.next' });
-  await waitFor(() => expect(next.hasAttribute('disabled')).toBe(false));
-  fireEvent.click(next);
+  await clickNext();
   const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
   await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
   let config;
@@ -900,7 +950,7 @@ describe('AddProviderWizard — preset 直达', () => {
     );
     // 填 key 后进入第三步(拉取被 mock 为失败)。
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
-    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await clickNext();
     await waitFor(() =>
       expect(screen.getByText('settings.providers.wizard.fetchFailed')).not.toBeNull(),
     );
@@ -930,7 +980,7 @@ describe('AddProviderWizard — preset 直达', () => {
       expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
     );
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
-    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await clickNext();
     await waitFor(() => expect(screen.getByText('Claude Opus 5')).not.toBeNull());
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
 
@@ -1622,6 +1672,79 @@ it('preserves each runtime preset media type when discovery is unavailable', asy
   expect(config.runtimes.codex?.models[0]).toMatchObject(video);
 });
 
+describe('OpenHubs complete account inventory', () => {
+  const ids = ['deepseek-v4-flash', 'kimi-k3.1-pro', 'glm-5.3'];
+  it.each(['empty', 'partial', 'full', 'failed', 'filtered', 'other-origin'] as const)
+  ('reconciles %s discovery using the account inventory rather than a model whitelist', async kind => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!);
+    if (kind === 'filtered') for (const runtime of Object.values(preset.runtimes)) runtime!.modelsUrl += '?type=chat';
+    if (kind === 'other-origin') {
+      for (const runtime of Object.values(preset.runtimes)) {
+        runtime!.baseUrl = 'https://relay.example/v1';
+        runtime!.modelsUrl = 'https://relay.example/v1/models';
+      }
+    }
+    window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry }));
+    const discovered = kind === 'full'
+      ? Array.from({ length: 104 }, (_, i) => ({ id: `account-model-${i}`, name: `Account Model ${i}` }))
+      : kind === 'partial' ? [{ id: ids[0], name: 'DeepSeek V4 Flash' }, { id: 'new-model', name: 'New Account Model' }] : [];
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => kind === 'failed'
+      ? { ok: false, code: 'UPSTREAM_UNREACHABLE' as const }
+      : { ok: true, models: discovered });
+    renderWizard('openhubs');
+    await screen.findByDisplayValue('OpenHubs');
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'fake-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(3));
+    const expected = ['empty', 'partial', 'full'].includes(kind) ? discovered.map(model => model.id) : ids;
+    await waitFor(() => {
+      for (const model of preset.runtimes.pi!.models) {
+        expect(!!screen.queryByText(model.name!)).toBe(expected.includes(model.id));
+      }
+      for (const model of discovered) expect(screen.queryByText(model.name)).toBeTruthy();
+      expect(finish.hasAttribute('disabled')).toBe(kind === 'empty' || kind === 'full');
+    });
+    if (kind === 'partial' || kind === 'full') fireEvent.click(screen.getByText(discovered.at(-1)!.name));
+    const request = vi.mocked(window.electronAPI.maker.fetchProviderModels).mock.calls[0][0];
+    expect(request.allowEmpty === true).toBe(!['filtered', 'other-origin'].includes(kind));
+    if (expected.length) {
+      fireEvent.click(finish);
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+      const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+      expect(Object.keys(config.runtimes)).toEqual(['claude-code', 'codex', 'pi']);
+      for (const runtime of Object.values(config.runtimes)) expect(runtime!.models.map(model => model.id)).toEqual(expected);
+      expect(config.runtimes.pi!.models.map(model => model.id)).toEqual(expected);
+      expect(config.runtimes.pi).toMatchObject({ catalogPresetId: 'openhubs', wireProtocol: 'openai-chat' });
+      if (kind === 'partial' || kind === 'full') {
+        const provider = buildUserProvider(config, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+          expect(provider.models[agent]!.find(model => model.id === discovered.at(-1)!.id))
+            .toMatchObject({ api: agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-completions', defaultEnabled: true });
+        }
+      }
+    }
+  });
+  it('preserves a hand-entered OpenHubs model when the complete inventory is empty', async () => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!);
+    const model = { id: 'private-alias', name: 'My OpenHubs model', contextWindow: 4096 };
+    const runtime = { ...preset.runtimes.pi!, models: [model] };
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [] }));
+    render(<AddProviderWizard providers={[]} detected={{
+      agent: 'pi', apiKey: 'fake-key', keys: { pi: 'fake-key' }, preset,
+      config: { id: 'draft', name: 'OpenHubs', runtimes: { pi: runtime } }, catalog: { ok: true, models: [] },
+    }} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    await clickNext();
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    expect(screen.getByText(model.name)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('DeepSeek V4 Flash')).toBeNull());
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models).toEqual([expect.objectContaining(model)]);
+  });
+});
+
 it('imports the same discovered OpenRouter identity, capabilities and prices into all three engines', async () => {
   const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!);
   for (const runtime of Object.values(preset.runtimes)) {
@@ -1747,20 +1870,29 @@ it.each(['finish', 'back', 'close'] as const)('logs in without a key and handles
     onProviderOAuthProgress: vi.fn(() => () => undefined),
     listProviders: vi.fn(async () => ({ providers: [{ ...buildUserProvider(created), connected: true }] })),
   });
+  // #9997: auth success precedes model selection; only the real dialog completion returns.
+  openFirstRunGuide({ manual: false, migration: false, legacyMigrated: false });
+  parkFirstRunGuideForConnection([]);
   const view = renderWizard('openrouter');
   fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
   await screen.findByText('Test model');
   expect(screen.getByText('settings.providers.wizard.recommended')).toBeTruthy();
+  act(() => updateFirstRunGuideConnections([created.id]));
+  expect(getFirstRunGuideState().parked).toBe(true);
   expect(created.auth).toMatchObject({ method: 'oauth', oauth: { tokenUrl: 'https://openrouter.ai/api/v1/auth/keys' } });
   if (action !== 'finish') {
     if (action === 'back') fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
     else view.unmount();
     await waitFor(() => expect(deleteCustomProvider).toHaveBeenCalledWith(created.id));
     expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(getFirstRunGuideState().parked).toBe(true);
+    closeFirstRunGuide();
     return;
   }
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
   await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledWith(expect.objectContaining({ id: created.id, auth: created.auth }), {}));
+  await waitFor(() => expect(getFirstRunGuideState().parked).toBe(false));
+  closeFirstRunGuide();
   const deletedBefore = vi.mocked(deleteCustomProvider).mock.calls.length;
   view.unmount();
   expect(vi.mocked(deleteCustomProvider).mock.calls.length).toBe(deletedBefore);
@@ -1950,7 +2082,7 @@ describe('identified provider handoff', () => {
     const baseUrl = edited ? 'https://new-relay.example/team/v1' : detected.config.runtimes.pi.baseUrl;
     if (edited) vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue(detected.catalog);
     if (edited) fireEvent.change(await screen.findByDisplayValue(detected.config.runtimes.pi.baseUrl), { target: { value: baseUrl } });
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     if (!edited) expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
@@ -1968,7 +2100,7 @@ describe('identified provider handoff', () => {
       ...detected.config.runtimes.pi, models: [{ ...model, defaultEnabled: false }, { id: 'keep', name: 'Keep' }],
     } } } };
     render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     if (!checked) fireEvent.click(screen.getByText('Upstream name'));
@@ -1984,7 +2116,7 @@ describe('identified provider handoff', () => {
     } } } };
     const onReturnCustom = vi.fn();
     render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     if (!checked) fireEvent.click(screen.getByText('Upstream name'));
@@ -2006,7 +2138,7 @@ describe('identified provider handoff', () => {
       config: { ...detected.config, runtimes: { codex: { ...runtime, models: [{ id: 'private-alias', name: 'Model' }] } } },
     };
     render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     fireEvent.click(finish);
@@ -2021,7 +2153,7 @@ describe('identified provider handoff', () => {
       catalog: { ok: true, models: [{ id: 'public-only', name: 'Public' }] },
     };
     render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     expect(screen.getByText('My model')).toBeTruthy();
@@ -2039,7 +2171,7 @@ describe('identified provider handoff', () => {
     };
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'directory-only', name: 'Directory' }] });
     render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     fireEvent.click(finish);
@@ -2060,7 +2192,7 @@ describe('identified provider handoff', () => {
       { id: 'codex-exclusive', name: 'Only Codex', discoveredMetadata: { contextWindow: 50000 } },
     ] });
     render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     fireEvent.click(await screen.findByText('Only Codex'));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));

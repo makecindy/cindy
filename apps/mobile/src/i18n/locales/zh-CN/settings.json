@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "推送诊断",
+    "read": "读取推送状态",
+    "busy": "读取中…",
+    "failed": "无法读取推送状态，请重试。",
+    "copyFailed": "无法复制令牌。",
+    "copied": "令牌已复制。",
+    "bundle": "应用 ID",
+    "build": "构建号",
+    "environment": "APNs 环境",
+    "permission": "系统权限",
+    "alerts": "横幅提醒",
+    "lockScreen": "锁定屏幕",
+    "notificationCenter": "通知中心",
+    "copy": "复制 APNs 令牌",
+    "hide": "隐藏结果",
+    "unknown": "未知",
+    "on": "已开启",
+    "off": "已关闭",
+    "hint": "仅点击后读取。APNs 令牌只在本页显示，不写入诊断记录，也不由此工具上传；离开页面或切到后台后隐藏。复制仅用于 Apple 推送控制台；已复制的内容仍留在剪贴板。",
+    "permissions": {
+      "granted": "已允许",
+      "denied": "已拒绝",
+      "undetermined": "尚未请求",
+      "provisional": "静默送达"
+    }
+  },
   "localLogs": {
     "upload": "上传日志",
     "uploadResult": {
@@ -60,7 +87,7 @@
     "options": {
       "system": "跟随系统",
       "zh-CN": "简体中文",
-      "zh-TW": "繁体中文",
+      "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
       "ko": "한국어",
@@ -73,7 +100,7 @@
     },
     "classical": {
       "label": "简繁与文风",
-      "hint": "AI 按所选文风作答；选“照常作答”时界面仍为文言，回答随你的语言",
+      "hint": "AI 按所选文风作答；选「照常作答」时界面仍为文言，回答随你的语言",
       "scriptAriaLabel": "文言简繁",
       "styleAriaLabel": "AI 作答文风",
       "script": {
@@ -101,7 +128,7 @@
     "updateMethodUnavailable": "开发版不支持 App 内更新。",
     "checkAction": "检查更新",
     "testFlightCheckAction": "检查内容更新",
-    "checking": "检查中",
+    "checking": "检查中…",
     "checkingAccessibility": "正在检查更新",
     "testFlightCheckingAccessibility": "正在检查内容更新",
     "testFlightUpdateManaged": "新测试版请在 TestFlight 中安装。",
@@ -113,7 +140,7 @@
     "bundleUpdateFound": "发现整包更新",
     "upToDate": "已是最新版本",
     "bundleUpToDateNoOta": "已是最新，此版本不支持热更新。",
-    "downloadedRestarting": "更新已下载，正在重启",
+    "downloadedRestarting": "更新已下载，正在重启…",
     "downloadedRestartRequired": "更新已下载，完全退出并重新打开 App 后生效。",
     "bundleCheckFailed": "无法检查整包更新，请稍后重试",
     "checkFailedDetail": "检查更新失败：{{detail}}",
@@ -135,11 +162,20 @@
     "permissionDenied": "通知权限未开启，请在系统设置中允许 Cindy 发送通知。",
     "unregisterQueued": "已关闭，联网后自动完成注销。",
     "preview": "显示消息内容预览",
-    "background": "在后台保持消息连接",
-    "backgroundActive": "正在后台接收消息",
+    "background": "后台通知",
+    "backgroundActive": "正在后台接收通知",
     "backgroundStop": "停止接收",
-    "backgroundHint": "后台连接不依赖 Google，会显示常驻通知；可随时在通知栏停止。",
-    "googleUnavailable": "Google 推送暂不可用。可开启后台消息连接接收消息。"
+    "backgroundHint": "Cindy 会在 Google 推送可能不可用时自动保持后台连接，连接期间会显示常驻通知。",
+    "googleUnavailable": "Google 推送暂不可用，将按通知设置使用后台连接。",
+    "backgroundModes": {
+      "auto": "自动",
+      "on": "始终开启",
+      "off": "关闭"
+    },
+    "actionReplyPlaceholder": "输入回复",
+    "actionNotDelivered": "没有送到电脑，请打开 Cindy 处理。",
+    "actionReplyNotDelivered": "回复没有发出，请打开 Cindy 重新发送：{{text}}",
+    "actionRequestEnded": "这条请求已被处理或已过期。"
   },
   "about": {
     "sectionTitle": "关于这台手机",
@@ -182,7 +218,7 @@
     "confirmBody": "切换会退出当前账号并重启 App。",
     "cancel": "取消",
     "switchAction": "切换",
-    "switching": "切换中",
+    "switching": "切换中…",
     "switchFailed": "切换服务器环境失败，请重试。"
   },
   "updateInfo": {
@@ -203,7 +239,7 @@
     "otaVersion": "热更版本"
   },
   "legal": {
-    "sectionTitle": "备案信息",
+    "sectionTitle": "法律信息",
     "privacyPolicy": "隐私政策",
     "userAgreement": "用户协议",
     "view": "查看",
@@ -221,7 +257,7 @@
     "logoutConfirmRunning": "仍有任务正在运行。退出后任务会继续在电脑上运行，但这台手机将不再接收和控制这些任务；这台手机上保存的账号和本地远程镜像也会被清除。",
     "logoutHint": "退出会清除这台手机上的全部账号和远程镜像，不影响电脑上的任务。",
     "logout": "退出登录",
-    "loggingOut": "退出中",
+    "loggingOut": "退出中…",
     "loggingOutAccessibility": "正在退出登录"
   },
   "copyRow": {
@@ -287,7 +323,7 @@
       }
     },
     "strictness": {
-      "label": "灵敏度",
+      "label": "严格程度",
       "hint": "越严格越能挡住旁人的声音，但嘈杂时也更容易剪掉你的话。",
       "restoreDefault": "恢复默认",
       "options": {
@@ -351,5 +387,44 @@
     "title": "开发者",
     "identity": "标识信息",
     "updateInfo": "更新信息"
+  },
+  "handheld": {
+    "sectionTitle": "掌机",
+    "label": "掌机模式",
+    "entryHint": "在游戏掌机上用手柄操作 Cindy，长按语音键直接说话。",
+    "on": "已开启",
+    "off": "未开启",
+    "openAccessibility": "打开掌机模式设置",
+    "title": "掌机模式",
+    "hint": "开启后可以只用手柄操作：十字键或左摇杆移动焦点，A 确认，B 返回。",
+    "saveFailed": "设置没能保存，这次打开期间仍然有效。",
+    "reset": "恢复默认",
+    "voiceKey": {
+      "title": "语音键",
+      "hint": "长按这个键开始说话，松开停止，文字会留在输入框里。在首页长按会直接新建任务。选 A、B、L1、R1 会占用它们原来的确认、返回和翻页。",
+      "capture": "按手柄上的键来设置",
+      "capturing": "请按下要用的键…"
+    },
+    "display": {
+      "title": "屏幕",
+      "secondary": "显示在副屏",
+      "hint": "开启后 Cindy 会移到副屏（比如双屏掌机的下屏）；关闭掌机模式时回到主屏。",
+      "none": "这台设备只有一块屏幕，Cindy 会自动适配它的尺寸。",
+      "current": "当前屏幕",
+      "single": "主屏"
+    },
+    "controls": {
+      "title": "手柄操作",
+      "gamepad": "手柄",
+      "noGamepad": "未检测到",
+      "moveKeys": "十字键 / 左摇杆",
+      "move": "移动焦点",
+      "confirm": "确认",
+      "back": "返回",
+      "voice": "长按说话",
+      "scrollKeys": "右摇杆",
+      "scroll": "滚动",
+      "page": "翻页"
+    }
   }
 }

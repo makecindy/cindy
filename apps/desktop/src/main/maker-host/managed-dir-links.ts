@@ -53,7 +53,18 @@ export async function removeManagedLink(linkPath: string): Promise<boolean> {
   try {
     const stat = await fsp.lstat(linkPath);
     if (!stat.isSymbolicLink()) return false;
-    await fsp.rm(linkPath, { recursive: true, force: true });
+    const originalTarget = await fsp.readlink(linkPath);
+    try {
+      await fsp.unlink(linkPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EISDIR')) throw err;
+      // Windows directory junctions can reject unlink. rmdir is non-recursive;
+      // recheck the entry before using it so a replaced real directory is not removed.
+      const current = await fsp.lstat(linkPath);
+      if (!current.isSymbolicLink() || (await fsp.readlink(linkPath)) !== originalTarget) throw err;
+      await fsp.rmdir(linkPath);
+    }
     return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;

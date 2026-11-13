@@ -1,4 +1,5 @@
-import { dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
+import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../device-link/notificationDismissalHost.js';
+import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
@@ -27,7 +28,7 @@ import {
   clearSessionAttention as clearAppBadgeSessionAttention,
   hasSessionAttention as hasAppBadgeSessionAttention,
 } from '../appBadgeService.js';
-import { openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
+import { buildSessionDeepLink, openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
 import { groupChatIslandId, type AgentIslandGroupChatInput } from './groupChat.js';
 import {
   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
@@ -38,6 +39,9 @@ import {
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_ENABLED_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_LIVE_ACTIVITY_CHANNEL,
+  AGENT_ISLAND_GET_LIVE_ACTIVITY_SUPPORT_CHANNEL,
+  AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -56,9 +60,11 @@ import {
   getAgentIslandMinimumContentWidth,
   isAgentIslandMascotSkin,
   isAgentIslandSoundChoice,
+  computeAgentIslandSystemIslandDefaultCenterXRatio,
   isAgentIslandSoundId,
   isAgentIslandSupportedPlatform,
   isSilentAgentIslandSoundChoice,
+  hasAgentIslandNotificationSound,
   normalizeAgentIslandDisplayTarget,
   normalizeAgentIslandSoundChoice,
   normalizeAgentIslandSoundSettings,
@@ -68,6 +74,7 @@ import {
   type AgentIslandDisplayOption,
   type AgentIslandDisplayState,
   type AgentIslandPillSnapshot,
+  type AgentIslandQuotaItem,
   type AgentIslandRemoteSessionInput,
   type AgentIslandCompanionSnapshot,
   type AgentIslandSessionActivity,
@@ -84,6 +91,8 @@ import { getSessionRowSnapshot, patchSessionMetaInDb } from '../localDb/ipc/sess
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { confirmIslandArchive } from './archiveConfirmation.js';
+import { AgentIslandLiveActivity, agentIslandLiveActivityStateFromPill } from './liveActivity.js';
+import { playAgentIslandSoundWithAfplay } from './soundFallback.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { bindingStore } from '../im/binding.js';
 import { setAgentIslandCompanionChangeSink } from '../localDb/agentIslandSessionPatch.js';
@@ -95,7 +104,7 @@ import {
   type AgentIslandCompanionIdentity,
 } from './companionIdentity.js';
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t, tCount } from '../i18n.desktop.js';
 import { isAppContentWindow, isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import {
   acknowledgeAgentIslandSessionRead,
@@ -224,9 +233,10 @@ interface AgentIslandUserPromptDebugMeta {
 }
 
 export interface AgentIslandServiceDeps {
-  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   getMainWindow: () => BrowserWindow | null;
   nativeHost?: AgentIslandNativeRenderer;
+  /** macOS Live Activity mirror of the island state; production passes one on macOS. */
+  liveActivity?: AgentIslandLiveActivity | null;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
   /**
@@ -237,6 +247,11 @@ export interface AgentIslandServiceDeps {
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
   /** 其它设备任务的状态跃迁。灵动岛开启时由岛面展示;关闭时才交给这里发桌面通知。 */
   onDeviceSessionEvent?: (event: AgentIslandDeviceSessionEvent) => void;
+  /**
+   * Plays event sounds while Agent Notch is off (its helper is suspended) but the Live
+   * Activity carries the alerts. Defaults to `afplay` with the helper's sound files.
+   */
+  playSoundWithoutHelper?: (sound: AgentIslandSoundChoice) => void;
 }
 
 interface AgentIslandNativeRenderer {
@@ -275,10 +290,18 @@ let serviceSingleton: AgentIslandService | null = null;
 export function initAgentIslandService(deps: AgentIslandServiceDeps): AgentIslandService | null {
   if (serviceSingleton) return serviceSingleton;
   const supportsNativeIsland = isAgentIslandSupportedPlatform(process.platform, getOsRelease());
+  const liveActivity = deps.liveActivity
+    ?? (supportsNativeIsland && process.platform === 'darwin' ? new AgentIslandLiveActivity({ appName: BRAND_NAME }) : null);
   serviceSingleton = new AgentIslandService({
     ...deps,
     nativeHost: deps.nativeHost ?? (supportsNativeIsland ? undefined : HEADLESS_AGENT_ISLAND_NATIVE_HOST),
+    liveActivity,
+    playSoundWithoutHelper: deps.playSoundWithoutHelper ?? (liveActivity ? playAgentIslandSoundWithAfplay : undefined),
   });
+  if (liveActivity) {
+    app.on('browser-window-focus', () => liveActivity.notifyWindowVisible());
+    app.on('will-quit', () => liveActivity.dispose());
+  }
   setAgentIslandCompanionChangeSink({
     companionChanged: (botId) => serviceSingleton?.handleCompanionProfileChanged(botId),
     groupChanged: (groupId) => serviceSingleton?.handleBotGroupChanged(groupId),
@@ -415,6 +438,8 @@ export class AgentIslandService {
   private nativePreferredDisplayId: number | null = null;
   private soundSettings: AgentIslandSoundSettings = createDefaultAgentIslandDisplayConfig().soundSettings;
   private mascotSkin: AgentIslandMascotSkin = DEFAULT_AGENT_ISLAND_MASCOT_SKIN;
+  private quota: AgentIslandQuotaItem[] = [];
+  private readonly enabledListeners = new Set<(enabled: boolean) => void>();
   private displayTarget: AgentIslandDisplayTarget = DEFAULT_AGENT_ISLAND_DISPLAY_TARGET;
   private lastSoundDisplayState: AgentIslandDisplayState | null = null;
   private readonly soundCooldownUntilByEvent = new Map<AgentIslandSoundEvent, number>();
@@ -473,7 +498,7 @@ export class AgentIslandService {
   constructor(private readonly deps: AgentIslandServiceDeps) {
     this.sessionActivityRelay = new SessionActivityRelay((payload) => {
       tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
-    }, { isCompletionHandledByTeammate: deps.isCompletionHandledByTeammate });
+    });
     // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
@@ -655,7 +680,10 @@ export class AgentIslandService {
       for (const visibleSessionId of getVisibleSessionIdsForReadAck(nextSessionId)) {
         // passive:仅凭「路由停在该会话 + 窗口聚焦」不足以证明用户看到了报错,
         // 未读 error 会话在 state 层对被动 ack 免疫(见 acknowledgeAgentIslandSessionRead)。
-        changed = acknowledgeAgentIslandSessionRead(this.state, visibleSessionId, now, { source: 'passive' }) === 'cleared' || changed;
+        if (acknowledgeAgentIslandSessionRead(this.state, visibleSessionId, now, { source: 'passive' }) === 'cleared') {
+          if (!isAgentIslandDeviceSession(this.state, visibleSessionId)) retireReadMobileNotifications(visibleSessionId);
+          changed = true;
+        }
       }
       if (changed) {
         this.publish();
@@ -691,6 +719,30 @@ export class AgentIslandService {
     ipcMain.handle(AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL, (_event, rawSettings: unknown) => {
       this.setSoundSettings(normalizeAgentIslandSoundSettings(rawSettings));
       return { ok: true };
+    });
+
+    ipcMain.handle(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL, (event, enabled: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
+      }
+      this.state.subtleReminders = enabled;
+      this.publish();
+      return { ok: true };
+    });
+
+    ipcMain.handle(AGENT_ISLAND_SET_LIVE_ACTIVITY_CHANNEL, (event, enabled: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
+      }
+      this.deps.liveActivity?.setEnabled(enabled);
+      return { ok: true };
+    });
+
+    ipcMain.handle(AGENT_ISLAND_GET_LIVE_ACTIVITY_SUPPORT_CHANNEL, (event) => {
+      assertTrustedAppRendererEvent(event);
+      return { ok: true, supported: this.deps.liveActivity?.isSupported() === true };
     });
 
     ipcMain.handle(AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL, (_event, rawSkin: unknown) => {
@@ -730,7 +782,7 @@ export class AgentIslandService {
       if (!sound || isSilentAgentIslandSoundChoice(sound)) {
         return { ok: true };
       }
-      this.nativeHost.playSound?.(sound);
+      this.playSoundChoice(sound);
       return { ok: true };
     });
 
@@ -769,17 +821,60 @@ export class AgentIslandService {
       this.hiddenPublished = true;
       // Windows / headless 永远走这条:岛 UI 关着,但远程未读 TTL 仍要自己触发。
       this.publish();
+      this.notifyEnabledChange();
       return;
     }
     if (enabled) {
       this.syncAppContentFocusState(now);
     }
     this.publish();
+    this.notifyEnabledChange();
+  }
+
+  /** Called with the new value whenever the island is switched on or off. */
+  subscribeEnabled(listener: (enabled: boolean) => void): () => void {
+    this.enabledListeners.add(listener);
+    return () => this.enabledListeners.delete(listener);
+  }
+
+  private notifyEnabledChange(): void {
+    const enabled = this.isEnabled();
+    for (const listener of this.enabledListeners) {
+      try { listener(enabled); } catch (error) {
+        log.warn('agent island enabled listener failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
+  /** Remaining quota from the menu bar overview, already ordered and filtered. */
+  setQuota(items: readonly AgentIslandQuotaItem[]): void {
+    if (sameAgentIslandQuota(this.quota, items)) return;
+    this.quota = [...items];
+    if (this.isEnabled()) this.publish();
   }
 
   /** Main-process consumers use this to avoid duplicating Agent Island completion UI. */
   isEnabled(): boolean {
     return this.enabledSynced && this.enabled;
+  }
+
+  /**
+   * Whether a finished task or a request for input already alerts the user here, so the
+   * OS notification for it can be skipped: Agent Notch, or the Live Activity while it
+   * can actually show. Failures keep their OS notification when only the Live Activity
+   * is on; it has no error presentation.
+   */
+  ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
+    // Keep the OS notification when this event has no enabled Cindy sound.
+    if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
+    if (this.isEnabled()) return true;
+    return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
+  }
+
+  /** Direct main callers and teammate replies use the same per-event sound policy. */
+  shouldSilenceTaskNotification(kind: 'done' | 'needs-reply' | 'error'): boolean {
+    if (!this.isEnabled() && this.deps.liveActivity?.ownsAlerts() !== true) return false;
+    return hasAgentIslandNotificationSound(this.soundSettings, kind);
   }
 
   refreshLocalization(): void {
@@ -830,8 +925,9 @@ export class AgentIslandService {
     }
     for (const sessionId of result.baselineSessionIds) this.baselineSoundSessionIds.add(sessionId);
     if (result.changed) this.publish();
-    if (this.isEnabled()) return;
+    // ownsTaskAlert covers the island itself; only events it will not sound for reach the OS.
     for (const event of result.events) {
+      if (this.ownsTaskAlert(event.kind)) continue;
       try {
         this.deps.onDeviceSessionEvent?.(event);
       } catch (error) {
@@ -962,10 +1058,6 @@ export class AgentIslandService {
     });
   }
 
-  waitForCompletionNotification(sessionId: string): Promise<boolean> | undefined {
-    return this.sessionActivityRelay.waitForCompletionNotification(sessionId);
-  }
-
   resetRuntimeState(): void {
     this.clearPublishTimer();
     this.clearStreamingPreviewPublishTimer();
@@ -975,6 +1067,8 @@ export class AgentIslandService {
       this.clearSilencedRunTimer(runId);
     }
     resetAgentIslandState(this.state);
+    // Sign-out / account switch: the system Live Activity must not keep the old account's tasks.
+    this.deps.liveActivity?.sync(null);
     this.companionChats.clear();
     this.publishAttentionCount(0);
     this.islandEntryAlert = null;
@@ -1009,6 +1103,10 @@ export class AgentIslandService {
     this.enabled = false;
     this.enabledSynced = this.headless;
     this.hiddenPublished = true;
+    // The previous account's quota must not survive into the next one: drop it and let the
+    // quota bridge release the overview, so turning the island back on reads the new account.
+    this.quota = [];
+    this.notifyEnabledChange();
     if (this.nativeHost.suspend) {
       this.nativeHost.suspend();
     } else {
@@ -1132,9 +1230,6 @@ export class AgentIslandService {
       }
     }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
-    if (isCompletionDoneEvent(event) && event.type === 'status') {
-      this.sessionActivityRelay.awaitCompletionTerminal(hydrated.sessionId);
-    }
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
       // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
@@ -1150,9 +1245,6 @@ export class AgentIslandService {
     });
     if (suppressCompletionAttention) {
       this.mutedCompletionSoundSessionIds.add(hydrated.sessionId);
-    }
-    if (isCompletionDoneEvent(event) && event.type === 'done') {
-      this.sessionActivityRelay.completeTerminal(hydrated.sessionId);
     }
     if (!changed) return;
     this.ensureMetadata(hydrated.sessionId);
@@ -1363,6 +1455,7 @@ export class AgentIslandService {
   }
 
   handleInteractionDismissed(sessionId: string, requestId: string): void {
+    retireAnsweredMobileNotifications(sessionId, requestId);
     this.permissionRequests.delete(requestId);
     const now = Date.now();
     applyAgentIslandInteractionDismissed(this.state, sessionId, requestId, now);
@@ -1429,6 +1522,7 @@ export class AgentIslandService {
     for (const requestId of permissionRequestIdsFromAgentEvent(event)) {
       const entry = this.permissionRequests.get(requestId);
       if (entry?.sessionId === sessionId) {
+        retireAnsweredMobileNotifications(sessionId, requestId);
         this.permissionRequests.delete(requestId);
       }
     }
@@ -1581,6 +1675,7 @@ export class AgentIslandService {
             log.debug(`session read ack: session=${sessionId} source=${source} state=not-found; no local row, withheld`);
             return;
           }
+          retireReadMobileNotifications(sessionId);
           this.sessionActivityRelay.ensureSessionTerminalClear(sessionId);
           log.debug(`session read ack: session=${sessionId} source=${source} state=not-found; local row found, terminal clear ensured`);
         })
@@ -1594,7 +1689,7 @@ export class AgentIslandService {
     // 收尾包兜底必须在 publish() **之前**。ensure 只在 relay 没有该会话条目时补发;
     // 已有 entry(live 或刚发出的未读终态)不动,由 publish() 把账本投影出去。
     this.sessionActivityRelay.ensureSessionTerminalClear(sessionId);
-    if (ack === 'cleared') this.publish();
+    if (ack === 'cleared') { retireReadMobileNotifications(sessionId); this.publish(); }
     log.debug(`session read ack: session=${sessionId} source=${source} state=${ack}`);
   }
 
@@ -1845,7 +1940,16 @@ export class AgentIslandService {
     const cooldownUntil = this.soundCooldownUntilByEvent.get(event) ?? 0;
     if (cooldownUntil > now) return;
     this.soundCooldownUntilByEvent.set(event, now + soundCooldownMsForAgentIslandEvent(event));
-    this.nativeHost.playSound?.(sound);
+    this.playSoundChoice(sound);
+  }
+
+  /** The suspended helper would respawn just to play a sound; play it directly instead. */
+  private playSoundChoice(sound: AgentIslandSoundChoice): void {
+    if (this.isEnabled() || !this.deps.playSoundWithoutHelper) {
+      this.nativeHost.playSound?.(sound);
+      return;
+    }
+    this.deps.playSoundWithoutHelper(sound);
   }
 
   private markSilencedScheduleRun(runId: string, sessionId: string): void {
@@ -1972,6 +2076,15 @@ export class AgentIslandService {
   /** Current public activity only; avoids scanning historical Bot Session links. */
   getSessionActivitySnapshots(): SessionActivitySnapshot[] {
     return this.buildSessionActivityPayload().map(canonicalSessionActivity);
+  }
+
+  /** Complete owned-host list, including unread results past the island's display TTL. */
+  getNotificationRequestIds(sessionId: string): string[] {
+    return [...(this.state.sessions.get(sessionId)?.pendingInteractionIds ?? [])];
+  }
+
+  getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
+    return buildAllSessionActivitySnapshots(this.state);
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */
@@ -2134,15 +2247,44 @@ export class AgentIslandService {
     // Sounds follow real runtime transitions. Chat read/visibility filters only own
     // the rendered unread projection and must neither mute a fresh turn nor replay history.
     const soundDisplayState = withAgentIslandConfig(
-      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin,
+      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota,
     );
     const chatDisplayState = this.companionChats.size > 0
       ? withAgentIslandConfig(
         buildAgentIslandDisplayState(this.state, now, this.companionChatProjections()),
-        this.soundSettings, this.mascotSkin,
+        this.soundSettings, this.mascotSkin, this.quota,
       )
       : soundDisplayState;
+    // The system Live Activity works whether or not our own island is shown.
+    const { pillSnapshot } = chatDisplayState;
+    const priorityId = pillSnapshot.priorityId;
+    const prioritySession = priorityId ? this.state.sessions.get(priorityId) : undefined;
+    const priorityDeviceId = prioritySession?.sourceDeviceId
+      ?? (priorityId ? this.companionChats.get(priorityId)?.input.deviceId : undefined);
+    // Group summaries are not session ids; retain app-level opening for those cards.
+    const taskUrl = priorityId && !prioritySession?.groupChat
+      ? buildSessionDeepLink(priorityId, { deviceId: priorityDeviceId })
+      : undefined;
+    this.deps.liveActivity?.sync(agentIslandLiveActivityStateFromPill(
+      pillSnapshot,
+      this.mascotSkin,
+      {
+        needsInput: t('agentIsland.native.needsInput'),
+        running: t('agentIsland.native.running'),
+        completed: t('agentIsland.native.completed'),
+        error: t('agentIsland.native.error'),
+        runningCount: (count) => tCount('agentIsland.native.liveActivityRunning', count),
+        alsoRunningCount: (count) => tCount('agentIsland.native.liveActivityAlsoRunning', count),
+        waitingCount: (count) => tCount('agentIsland.native.liveActivityWaiting', count),
+      },
+      chatDisplayState.sessions.find((session) => session.sessionId === pillSnapshot.priorityId)?.companion,
+      taskUrl,
+    ));
     if (!this.enabled) {
+      // Agent Notch is off: its event sounds still accompany the Live Activity's alerts.
+      if (this.deps.liveActivity?.ownsAlerts()) {
+        this.playSoundForDisplayTransition(this.lastSoundDisplayState, soundDisplayState, now);
+      }
       this.mutedCompletionSoundSessionIds.clear();
       this.baselineSoundSessionIds.clear();
       this.clearStreamingPreviewPublishTimer();
@@ -2543,6 +2685,20 @@ export class AgentIslandService {
   }
 
   private getLayoutPreferenceForDisplay(display: Display): AgentIslandLayoutPreference {
+    const preference = this.getStoredLayoutPreferenceForDisplay(display);
+    if (Number.isFinite(preference.centerXRatio)) return preference;
+    // The screen center belongs to the macOS Dynamic Island on those displays; start
+    // beside it. Dragging records the user's own position as usual.
+    if (this.screenMetricsForDisplay(display)?.hasSystemIsland) {
+      return {
+        ...preference,
+        centerXRatio: computeAgentIslandSystemIslandDefaultCenterXRatio(display.bounds.width),
+      };
+    }
+    return preference;
+  }
+
+  private getStoredLayoutPreferenceForDisplay(display: Display): AgentIslandLayoutPreference {
     const preference = this.layoutPreferencesByDisplayId.get(display.id);
     if (!preference) return {};
     if (hasPersistedLayoutIdentity(preference)) return preference;
@@ -3073,13 +3229,26 @@ function withAgentIslandConfig(
   displayState: AgentIslandDisplayState,
   soundSettings: AgentIslandSoundSettings,
   mascotSkin: AgentIslandMascotSkin,
+  quota: readonly AgentIslandQuotaItem[] = [],
 ): AgentIslandDisplayState {
   return {
     ...displayState,
+    ...(quota.length > 0 ? { quota: [...quota] } : {}),
     strings: buildAgentIslandStrings(),
     soundSettings: cloneAgentIslandSoundSettings(soundSettings),
     mascotSkin,
   };
+}
+
+function sameAgentIslandQuota(a: readonly AgentIslandQuotaItem[], b: readonly AgentIslandQuotaItem[]): boolean {
+  return a.length === b.length && a.every((item, index) => {
+    const other = b[index]!;
+    return item.id === other.id && item.logoSvg === other.logoSvg && item.text === other.text
+      && item.level === other.level && item.stale === other.stale
+      && item.accessibilityLabel === other.accessibilityLabel && item.lowest === other.lowest
+      && item.compactText === other.compactText
+      && item.width === other.width && item.textWidth === other.textWidth;
+  });
 }
 
 function collapseManualExpandedStateForInactiveDisplay(displayState: AgentIslandDisplayState): AgentIslandDisplayState {

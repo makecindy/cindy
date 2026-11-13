@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, globSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -7,6 +7,7 @@ import esbuild from 'esbuild';
 import postcss from 'postcss';
 import tailwind from 'tailwindcss';
 import loadConfig from 'tailwindcss/loadConfig.js';
+import picomatch from 'picomatch';
 
 export const desktop = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 export const root = path.resolve(desktop, '../..');
@@ -139,7 +140,7 @@ function boundaries(stubs, replaced, overlay) {
 }
 
 const sourcePath = (file) =>
-  path.resolve(root, file.replace(/^ui-url:/, '').replace(/ with \{[^}]*\}$/, ''));
+  path.resolve(root, file.replace(/^ui-(?:url|inline):/, '').replace(/ with \{[^}]*\}$/, ''));
 
 // Vite ?url imports emit the original bytes as an asset, even for JavaScript
 // (PDF workers / AudioWorklets). Resolve through esbuild for package exports,
@@ -148,16 +149,23 @@ function urlAssets(overlay) {
   return {
     name: 'ui-page-url-assets',
     setup(build) {
-      build.onResolve({ filter: /\?url$/ }, async (args) => {
-        const resolved = await build.resolve(args.path.slice(0, -4), {
+      build.onResolve({ filter: /\?(?:url|inline)$/ }, async (args) => {
+        const inline = args.path.endsWith('?inline');
+        const resolved = await build.resolve(args.path.replace(/\?(?:url|inline)$/, ''), {
           kind: args.kind,
           importer: args.importer,
           resolveDir: args.resolveDir,
         });
         return resolved.errors.length || resolved.external
           ? resolved
-          : { path: resolved.path, namespace: 'ui-url', warnings: resolved.warnings };
+          : { path: resolved.path, namespace: inline ? 'ui-inline' : 'ui-url', warnings: resolved.warnings };
       });
+      // Vite's CSS ?inline returns a string for the card's sandbox document.
+      build.onLoad({ filter: /.*/, namespace: 'ui-inline' }, async (args) => ({
+        contents: overlay?.get(args.path) ?? await readFile(args.path),
+        loader: 'text',
+        watchFiles: [args.path],
+      }));
       build.onLoad({ filter: /.*/, namespace: 'ui-url' }, async (args) => ({
         contents: overlay?.get(args.path) ?? await readFile(args.path),
         loader: 'file',
@@ -197,6 +205,44 @@ function entryContents(definition) {
   return {
     entry,
     contents: `import ${JSON.stringify(path.join(harness, 'preamble.ts'))};\nimport ${JSON.stringify(entry)};\n`,
+  };
+}
+
+// Match the eager, default-export Vite glob used by the settings catalog. Keep
+// real modules as imports, so coverage, fingerprints and --compare see them.
+function eagerGlobModules(overlay) {
+  return {
+    name: 'ui-page-eager-glob',
+    setup(build) {
+      build.onLoad({ filter: /\.[jt]sx?$/, namespace: 'file' }, async ({ path: file }) => {
+        if (file.includes(`${path.sep}node_modules${path.sep}`)) return;
+        let contents = overlay?.get(file) ?? await readFile(file, 'utf8');
+        if (!contents.includes('import.meta.glob')) return;
+        const dir = path.dirname(file);
+        const imports = [];
+        const watchDirs = [];
+        contents = contents.replace(
+          /import\.meta\.glob(?:<\w+>)?\(\s*(['"])(\.\/[^'"]+)\1\s*,\s*\{\s*eager:\s*true,\s*import:\s*(['"])default\3\s*,?\s*\}\s*\)/g,
+          (_, _quote, pattern) => {
+            const matches = picomatch(pattern.slice(2));
+            const files = overlay?.atRef
+              ? [...overlay.atRef].filter(candidate => matches(path.relative(dir, candidate).split(path.sep).join('/')))
+              : globSync(pattern, { cwd: dir }).map(candidate => path.resolve(dir, candidate));
+            watchDirs.push(dir);
+            return `{${files.sort().map(candidate => {
+              const key = './' + path.relative(dir, candidate).split(path.sep).join('/');
+              const binding = `__ui_eager_glob_${imports.length}`;
+              // Relative imports pass through the revision overlay's resolver,
+              // including modules that no longer exist in the current worktree.
+              imports.push(`import ${binding} from ${JSON.stringify(key)};`);
+              return `${JSON.stringify(key)}: ${binding}`;
+            }).join(',')}}`;
+          },
+        );
+        if (contents.includes('import.meta.glob')) throw new Error(`Unsupported UI page glob in ${file}; use a literal relative eager default-export glob`);
+        return { contents: imports.join('\n') + '\n' + contents, loader: loaderFor(file), resolveDir: dir, watchDirs };
+      });
+    },
   };
 }
 
@@ -262,7 +308,7 @@ export async function scanPage(definition) {
   const workerInputs = new Set();
   const { contents } = entryContents(definition);
   const result = await esbuild.build({
-    ...common(definition, [workerModules(definition, undefined, workerInputs, []), boundaries(stubTable(definition), replaced)]),
+    ...common(definition, [workerModules(definition, undefined, workerInputs, []), eagerGlobModules(), boundaries(stubTable(definition), replaced)]),
     stdin: { contents, resolveDir: root, sourcefile: 'ui-page-entry.ts', loader: 'ts' },
     entryNames: 'page',
   });
@@ -289,7 +335,7 @@ export async function buildPage(definition, overlay) {
   const workerOutputs = [];
   const { contents, entry } = entryContents(definition);
   const result = await esbuild.build({
-    ...common(definition, [workerModules(definition, overlay, workerInputs, workerOutputs), boundaries(stubTable(definition), replaced, overlay)], overlay),
+    ...common(definition, [workerModules(definition, overlay, workerInputs, workerOutputs), eagerGlobModules(overlay), boundaries(stubTable(definition), replaced, overlay)], overlay),
     stdin: { contents, resolveDir: root, sourcefile: 'ui-page-entry.ts', loader: 'ts' },
     entryNames: 'page',
   });

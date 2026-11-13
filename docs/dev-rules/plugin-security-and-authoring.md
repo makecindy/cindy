@@ -2,8 +2,8 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改插件（`.cindy`）的运行时、沙箱、权限、能力声明、面板供片、
-> 网络／凭证／文件交接，插件作者可见的身份卡、管子协议、打包与编写手册，或批准状态、
-> 安装布局、指纹格式等**存量安装读得到的任何东西**之前
+> 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对与使用统计，插件作者可见的
+> 身份卡、管子协议、打包与编写手册，或批准状态、安装布局、指纹格式等**存量安装读得到的任何东西**之前
 
 本文治理 Cindy 中运行的插件——以 `ghost.json` 为身份卡的 `.cindy` 包。它约束三件
 互为支撑的事：**运行时权限安全**（宿主如何隔离并授权插件）、**存量插件兼容**（升级
@@ -13,7 +13,8 @@
 媒体字节交接另见 [`media-storage-and-protocols.md`](media-storage-and-protocols.md)，插件在
 产品中的定位见 [`../product-rules/core-product-principles.md`](../product-rules/core-product-principles.md)。
 
-> **术语**：产品与对外措辞统一为「插件」，`.cindy` 即插件包；不再使用旧的概念称呼。
+> **术语**：产品与对外措辞统一为「插件」；以 `ghost.json` 为身份卡的 `.cindy` 是插件包。
+> `.cindy` 后缀也用于主题等文件类型，不能单凭后缀认作插件；不再使用旧的概念称呼。
 > 代码标识仍沿用历史 `Ghost` / `cindy-brain` 命名（目录 `cindy-brain/`、`GhostRuntime`、
 > `ghost.json`、`cindy-ghost://`、`ghost_forge_guide` 等），与产品术语「插件」指同一事物；
 > 引用代码时照实使用这些标识，不因措辞改写。
@@ -49,7 +50,23 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 
 ## 1. 插件形态与代码术语
 
-- `.cindy` 是以 `ghost.json` 为身份卡的插件包，现行唯一形态为 `kind: 'chip'`。
+- 插件 `.cindy` 包以 `ghost.json` 为身份卡，现行唯一形态为 `kind: 'chip'`。
+- 桌面文件导入先经 `main/cindy-files/` 识别类型：根或单层包装目录内有 `ghost.json`
+  时完整交回原插件安装／批准／更新流程，不要求旧包补字段、改包或重装。
+  其余包读取 `cindy.json` 的通用 `formatVersion` 与 `type`；当前支持版本 1/2 的
+  `theme`（`themes` 为包内 JSON 路径）。未知类型或格式版本明确提示当前版本不支持，
+  不降级交给插件解析器。v1 装载颜色／明暗家族／品牌图片；v2 另含字体、壁纸、
+  正文样式、密度与动效，全部为数据，不执行代码、不新增插件 kind、不申请插件能力。
+  主题选择经公共 AppearanceService 合成默认值，明确用户设置／已批准固定能力覆盖优先，
+  不因选择主题清空用户覆盖。主题与资源在用户主题目录
+  的 `.packages/<包字节 SHA-256>/` 中原子发布；安装记录按主题 ID 原子切换当前引用，
+  同 ID 默认更新完整主题与素材，运行时本地 ID／family 保持稳定，其他主题保留。
+  Agent 的 `import_theme_package` 复用该安装器与原任务文件／行动授权，刷新当前窗口的
+  主题列表并分别返回安装与刷新结果；选择仍走现有 preferences，不启动其他应用。
+  该工具拒绝插件包；插件不提供／注册主题，既有固定外观能力仍走原声明、批准与来源校验，
+  实际写入与主题复用同一个外观所有者和 Presenter。制作主题不另产伴随外观插件。
+  散装主题 JSON 保持原样，同 ID 导入包成为有效本地内容；制作契约见
+  `apps/desktop/resources/system-skills/cindy-theme-creator/references/package-format.md`。
 - 代码目录与运行时使用 `cindy-brain` / `Ghost` 命名，**不得重新引入已退役的 cartridge
   声明型兼容层**。
 - 插件 ID 或 `cindy-` / `filo-` / `xd-` 前缀不授予能力，也不阻止本地开发安装。
@@ -158,7 +175,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   扩展不按字段类型拦截，密码／支付／验证码输入框与其它输入框一样可以被执行端操作，其余风险交给
   任务权限档位与自动审核（2026-10-30 决定，共同规则见 [Browser Use](browser-use.md)）。这不放宽
   [代输入](../product-rules/input-handoff.md)边界：登录密码、验证码等需要主人填写的值仍由
-  `ask_owner` 交给主人，主人填的值只交给宿主执行、不进模型上下文、工具结果与日志，任务权限档位和
+  `request_input_handoff` 交给主人，主人填的值只交给宿主执行、不进模型上下文、工具结果与日志，任务权限档位和
   自动审核不能代替这条边界。Chrome 调试接口（PDF、读 Cookie、抓包等配方）
   做不了：Chrome 不允许把 `debugger` 声明为可选权限，`chrome.permissions.request` 直接拒绝
   （2026-11-01 实测并写入扩展回归测试），只能声明为必需权限，而那会新增安装提示、让更新后的
@@ -257,6 +274,26 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 3. 权限即授权边界
 
+通知发现与刷新范围：`GhostManager.listNotificationCandidatesAsync()` 只保留当前 owner
+下已启用、声明 `subscribe.topics` 的候选索引。安装、更新、启停、卸载和 owner 切换
+使索引失效；安装目录、批准记录和 `.disabled` 的外部变化由文件监听失效，监听不可用时
+退回现扫，并以 60 秒有效期兜底漏报。索引不是批准缓存：投递仍按实例键读取当前批准、
+核对批准版本和 topic；不唤醒无关插件，也不因插件尚未运行而漏掉已启用的订阅者。
+任务生命周期事件在预检查时取得一次候选及其 owner，资格查询后复用这次发现结果投递；
+监听不可用时每个事件仍现扫一次，不跨事件缓存，投递前仍检查当前 owner、实例批准、启用与 topic。
+无任务事件订阅者时仍推进带代次与 Lead 复核的焦点记录，避免停用期间切换任务导致
+重新启用后漏发切回通知；该路径跳过投递资格检查、插件唤醒和事件投递。
+订阅发现异常时释放当前代次的原始焦点与主任务去重记录，允许同一焦点重试和切回通知；
+迟到的旧代次失败不得清除新焦点。任务资格暂不可用时仍只释放原始焦点，保留同 Lead 去重。
+
+安装事实变化触发插件应用、浏览器扩展、未读与 Skill 对账。语言、OAuth 等展示变化
+只更新相关展示投影；语言变化还须更新插件 App 注册表中的本地化名称和工具说明，
+保证随后生成的卡片使用新语言，但不触发浏览器扩展、未读、Skill 或订阅索引对账。
+项目禁用只发本机 `ghosts:workdir-prefs-changed`，携带 Host 归一后的
+目录键和禁用列表，保留 setup 唤醒及远端既有插件资源失效通知。Renderer 的展示快照
+不替代调用时的目录策略检查。上述优化不改变 manifest、批准记录或跨端协议，不要求
+存量插件重新安装或确认权限。
+
 - 先判断**谁在执行**，再判断授权边界：
   - 当前 Agent 在途 `ghost_call` 是否执行插件工具，由该会话既有的 Agent 授权决定。
     普通网络和工作目录操作以 Host 下发的严格在途 `callId` 绑定会话；随包代码与
@@ -271,19 +308,58 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   仍按特殊用途／私有地址拒绝。
 - **控制节点（2026-10-31）**：Host 预埋的 `will-` 拦截点目录在 `shared/ghost.ts`
   `GHOST_CONTROL_POINTS`，新增节点 = 加目录项 + 在对应流程按任务配置调用 `screenGhostControlPoint`，
-  插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务 / 例行任务的
-  `preRunPlugin`），不是装了就管所有任务；插件只能收紧（allow 只表示不反对，不能替用户批准）；
+  插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务的
+  `preRunPlugin`；伙伴例行任务 2026-11-08 起已转为项目自动化），不是装了就管所有任务；插件只能收紧（allow 只表示不反对，不能替用户批准）；
   出错处理（没装、停用、超时、崩溃、熔断）由用户按任务设置，插件不能自报；只有 receipt
   `approvedControlPoints` 记录的节点可被任务选用——批准来自安装/更新确认里实际显示过的权限行，
   旧 receipt 缺字段视为未批准但插件照常可用，提前声明 Host 当时不认识的节点不会随 Host 升级
   静默生效，下一次更新会把它作为新增权限复核。随包种子与服务端默认安装视为已批准声明的节点。
-  `will-start-task`（新任务选模型）是唯一能回 `route` 的节点：只在本机新任务第一条消息发出前、
+  **伙伴例行任务退役（2026-11-08，存量兼容）**：`will-routine-run` 与 manifest `routineEvents` 照常解析、
+  安装和保留批准记录，但不再触发；`routineEvents` 不再让插件常驻；`routine-request` 管子（`cindy.routines.request`）
+  的 status / publish 照旧校验与限额后返回稳定的空操作（publish 为 `accepted: 0`），不报错。插件与用户无需重装或重新确认。
+  `will-start-task`（新任务选模型）能回 `route`：只在本机新任务第一条消息发出前、
   用户在模型选择器里选了这个插件发布的模型时询问一次，任务中途和伙伴任务都不问（换模型会让提示缓存失效）。
   Gateway 只保留 route 的 `agentKind` / `model` / `providerId` / `effort` 四个字段；Main 再按当前已连接、
   可用于新任务的模型核验（档位不合法先去掉档位），不合格、超时或出错都沿用用户原选的模型。
 - **插件提供的模型（2026-11-01）**：清单 `models.types` 声明能力，列表经 `PUT /models` 运行时发布，存在插件自己的
   `/kv` 之外，读时重新校验。`route` 模型必须声明 `will-start-task`，节点批准后才显示；选择器只读落盘列表，
   不调用插件，文案全部来自插件。`route` 模型不进执行目录。
+- **任务运行时控制点**：`will-start-turn` 在 App 正常发送入口为 Claude Code／Codex／Pi 新轮开始前选模，
+  复用任务原有模型控制服务；`will-model-request` 仅本机 Pi 支持，使用原生虚拟模型与
+  `before_provider_request`，分 `select` 和 `payload` 两阶段。后者可变更参数和请求正文，
+  只要求结果仍是合法请求；认证头、连接凭证不进入数据。权限行、批准、停用、超时与熔断复用
+  原控制点；用户在任务菜单的「任务插件」多选并逐插件指定出错策略。无人选时不查询消息、
+  模型目录或唤醒插件；流式事件不扫描插件。异步结果在应用前复核账号、任务选择及安装批准。
+  日志只记录来源插件和阶段，不记录请求正文。
+  新增节点时限分别为 turn 1s、context 2s、memory 1.5s、model-request 的 select＋payload
+  每请求合计 1s；turn/context/model 三点共用每轮 5s，工具续轮不重置；同轮插话不另行询问提供者或建立预算。并行重叠等待按墙钟计一次，
+  包括插件唤醒；宿主 readRoute／applyRoute／Agent 进程恢复、模型 HTTP 和工具执行不计入。
+  耗尽按任务中各插件 onFailure 处理，不擅自放行。共享 memory_search 不参与 App 每轮累计预算，
+  每次检索的插件等待独立最多 1.5s；一个 App 轮的插件总等待不包含记忆，每次额外检索最多再加 1.5s。
+  资料和记忆并行询问后按选择顺序归并，
+  路由与正文变换串行；未选择任务不创建预算或定时器。旧控制点时限不变。
+- **运行时资料与记忆**：`will-compose-context` 返回有界静态资料块，复用普通附带资料通道，
+  不进 system prompt、不改主人原话、不进入自动审核的用户授权来源。`sessionContext` 仍只供工具参数。
+  仅 App 正常发起的新轮次把未装饰的当前原文交给资料提供者，引用历史只交给模型，
+  授权来源保留原内容和附件边界；IM、hook 和同轮插话不接入轮前准备／资料收集，
+  不经这些入口装配或更新静态片段、安装逐请求回调。既有 App 轮次内的 Pi 请求控制不变，
+  已有会话内容不因入口变化被清空。原生非模型命令不添加资料。
+  `will-search-memory` 接在现有 `cindy_memory.memory_search`，不加工具或第二个记忆库，沿用
+  原有启用与账号守卫；这是共享工具，按任务选择生效，不受发送入口限定。只投当前查询，Host 给完整条目标注插件来源，交替合并并遵守总 limit；
+  超时／停用／非法结果保留 Cindy 原结果。记忆节点只能配置 allow-on-failure，不允许插件阻断记忆检索。
+  多插件记忆按选择顺序填充，全局最多 50 条且 content 合计不超过 32768 字符，超出截断；
+  memory_search 的 data 与被截短的插件条目以可选 truncated:true 标明。普通资料含来源与
+  分隔符的装配总量不超过 32768 字符，不把多插件的单批上限累加成无界上下文。
+- **任务系统提示词片段**：清单 `systemPrompt` 只允许静态文本，显式声明整数顺序与
+  `scope: "selected-task"`，可按引擎过滤。安装／更新确认独立展示完整原文，内容或顺序变化
+  进入原有新增权限比较；沿用 `approvedControlPoints` 中的 `system-prompt`，不新增授权账本。
+  只读任务选中的插件，装配到既有固定前缀之后，未选时保持原提示词字节不变且不启动插件。
+  Claude Code／Codex 复用现有任务级系统通道；本机／SSH Pi 通过宿主内部 Symbol 与既有会话
+  快照目录交给原生 `before_agent_start` 追加完整提示词尾部。环境只传路径并在任务 Pi 进程内保留，
+  供 `switch_session` 重载扩展时读取；工具 shell 与独立子代理不继承该路径。片段文件沿用快照目录
+  的关闭／退出／启动失败清理，不写入历史；内容参与 SSH 启动指纹，设备托管 Pi 暂不支持。
+  不可用时遵守任务指定的出错策略；变更片段后通过既有运行时关闭／恢复流程在下一次输入应用。
+  历史插件曾携带不合法的同名未知字段时，只丢弃新能力，保留已装插件原有功能与批准状态。
 - 安装／更新确认只决定这次落位是否进行，不以弹窗点击作为运行期能力授权事实；
   **prompt 和前端展示都不构成运行期安全边界**。确认结论由 Main 在安装锁内按真实包复核，
   不能由 Renderer 或 Agent 自报（第 3.1 节）。
@@ -301,6 +377,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用 `ghost_market_install` 安装选定的缺失插件，用户在「迁移助理」中选择并确认的
   市场插件（[新电脑设置](../product-rules/new-device-setup-migration.md)），或服务端为当前
   owner 下发 `defaultInstall`。安装成功默认启用。
+- **后台更新不降级**：市场按客户端兼容性筛选出的 `currentRelease` 可能比已装版本旧，
+  release ID 不同不代表版本更高。普通市场更新、自定义来源更新、默认下发接管和种子交还
+  商店时，按实际已装 manifest 的 SemVer 比较；候选更旧则保留当前安装与账本，不下载覆盖。
+  同版本修复和显式安装沿用既有流程；非 SemVer 历史版本保留原有判法，不猜测大小。
+  实现与回归见 `main/plugin-market/service.ts`、`__tests__/service.test.ts` 与
+  `__tests__/service-custom-sources.test.ts`（均在 `apps/desktop/src/` 下）。
 - **安装／更新确认**（`shared/ghostInstallConsent.ts` 判据，`main/cindy-brain/ghostInstallConsent.ts`
   两段式实现）：
   - 判据：「权限」与插件详情页权限区同口径，即 `ghostPermissionItems` 中除 Agent 工具外的
@@ -393,6 +475,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   代替包验证；Forge、显式 SHA 冲突及不匹配的组织／来源不进入此恢复。沿用更新确认、
   忙碌跳过和失败退避，保留启停态、实例键和同来源用户数据。实现与回归见
   `main/plugin-market/service.ts` 及其 `__tests__/service.test.ts`。
+- 本地种子（开发或个人构建放进 `resources/builtin-ghosts` 的种子；安装包不带种子，见
+  [协议兼容 §2](protocol-compatibility.md#2-插件来源)）与同 id 的服务端市场安装按版本取新、相同取商店：
+  种子版本严格更新才覆盖已装实例（旧布局 `<id>` 或新布局 `_ns/_root/<id>` 原位替换，保留启停态与数据键），
+  相同、更旧或不可比时不动商店字节。实例仍在播种台账内、种子已撤或当前种子不比 Release 新时，自动更新按原
+  商店路由把种子字节换回商店包，不算换源；播种发现已装的是商店字节后摘除台账。受众与孤儿回收不删除有商店
+  安装的实例。只放行播种台账内的根 namespace 已批准实例，不用于授权查找，其它来源冲突仍需用户显式替换。
+  实现与回归见 `main/cindy-brain/builtinGhostProvisioner.ts`、`main/plugin-market/service.ts`
+  （`seededBuiltinYieldsToRelease`）及对应测试。
 - 同一 release 自动更新失败后，在当前进程内按 owner、来源路由和 release 做指数退避
   （5 分钟起、最长 6 小时），日志记录失败次数与下次重试时间；来源发布新 release 时立即
   解除。忙碌跳过不记失败，用户手动重试不受退避限制。
@@ -670,8 +760,10 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   Guide 失败必须局部隔离，不能阻断其余模型或插件面板。响应仍只把归一化后的
   `modalities.input/output` 原样交给插件，不得包含 Guide、endpoint、凭证或内部兼容判定；
   付费请求前 Core 必须再次校验。新媒体生成请求只能由当前 Agent 调用永久 Core `media`
-  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办仅作
-  兼容，不得作为新 Guide 模型的接入路径。插件工具通过现有 `tool-result` 返回普通 JSON，
+  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办保留
+  原接口：Host 完成原有权限、配额、参考图归属与账号校验后，将旧参数适配到已有 Core
+  `prepare/request/poll`；可用模型由 Server operation 的输入是否可表达决定，不按 Guide ID
+  筛选。兼容入口不向插件开放任意 Core 操作，不另起 Agent，也不重复入仓。插件工具通过现有 `tool-result` 返回普通 JSON，
   Agent 读取后自行决定下一次 `media` 调用；Host 不识别插件专用媒体意图字段，也不自动
   转发。插件需要结果时，Agent 调用普通接收工具，并通过顶层
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
@@ -704,6 +796,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   [`feature-retirements.md`](../product-rules/feature-retirements.md)。
 
 ## 5. 存量插件兼容：升级必须无感（红线）
+
+`tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
+UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
+`validateInstalledGhostManifest` 保留原 UTF-16 长度上限 16,384。市场详情解析与
+`GhostManager` 的 `stored-release` 安装／更新因此可继续读取旧口径合法的多字节 schema，
+无需以服务端历史数据盘点作为客户端兼容的前提。旧口径超限、参数非对象及其它不合法字段仍拒绝；
+市场历史参数兼容独立于已装快照的 agent 声明兼容，不放宽新的能力声明。
+实现同步于协议正本与 Desktop 镜像；回归见协议包 `delivery.test.ts`、Desktop
+`ghost.test.ts` 与 `ghostLocalInstallIdentity.test.ts`（含安装、更新和 receipt 重载）。
 
 **红线**：插件系统的任何改动，都不得让用户本地**已安装、已启用**的插件在 Cindy 升级
 后变得不可用，也不得要求用户重新安装、额外确认、重新配置凭证或重新落一次技能。
@@ -751,7 +852,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   （无 receipt／旧 schema／旧指纹编码／旧目录形态），断言升级后插件仍列为启用、技能仍
   挂链、无需用户操作。只测全新安装流程不算覆盖，这类回归**只在存量数据上出现**。
 - **PR 约束**：命中本节的 PR，Description 必须写明「存量插件影响：无」或「有 + 迁移与
-  提示方案」，并说明上面的升级用例跑在哪。会让存量插件失效的改动与 mobile 冷更同级：
+  提示方案」，并说明上面的升级用例跑在哪。会让存量插件失效的改动
   需仓库把关人针对该影响明确确认后才能合并，提交者身份不构成例外。漏迁移 = P0。
 - **插件基座改动一律走白名单确认门。** 「基座」= 所有已装插件共同踩着的那一层：运行时与
   沙箱、来源／信任 receipt、能力声明、打包与内容判据、manifest 契约、装入与能力说明 UI、已装
@@ -821,6 +922,11 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 - 同一 owner、会话 generation、市场端点及执行策略的并发请求合并为一轮；延后维护的槽位
   保留到实际维护结束。不同账号或端点不复用在途结果。一次同步扫描只读一组市场账本，
   这组事实不跨 `await` 保存，也不作为运行时授权缓存。
+- 已装列表的发布来源展示在每次扫描内复用一组账本事实。异步扫描可在该轮内跨 `await`
+  使用展示快照，但返回前必须重读并核对全部账本事实，变化或核对失败则重试；owner、安装变更、
+  注册表与 locale 的现有复核保持。展示快照不跨扫描保存，也不用于运行时授权；授权查询仍实时读取。
+  实现见 `GhostManager.listAsync()` 与 `PluginMarketLedger.createListingLookup()`，回归见
+  `cindy-brain/__tests__/GhostManager.test.ts` 和 `plugin-market/__tests__/ledger.test.ts`。
 - `pending-but-not-listed` 是注册表中的旧实例脱离普查清单，不能只记日志后永远跳过。
   修复不得扩大冻结的普查名单，也不能用 receipt 的 namespace 字段直接确认身份。必须核对
   唯一的已安装市场记录、包指纹、namespace 和当前组织；实例已有 pluginId 时，市场记录必须
@@ -838,7 +944,44 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 这部分不改变 manifest、包格式、安装布局、批准权限、凭证或用户偏好，不涉及作者契约变更。
 
+### 5.4 插件读取与扫描预算
+
+插件市场、实例查找、使用统计和面板请求属于同一类本地读取，必须遵守
+`engineering-conventions.md` §8 的通用预算；本节只补插件特有边界。
+
+- Renderer 的市场分页只做 discovery；Main 按 owner／revision 复用同一份安装快照。分页、
+  来源切换和计数复用同一快照，不得每页调用 `readLocalInstallSnapshot` 或重建全量安装列表。
+- 精确实例键走 `findInstalledInstance`；只有无法精确匹配时才回退 `availableGhosts()`。
+  面板、协议 handler、点击／按键复核只读目标实例，不得为每次请求重扫其他插件。
+- 循环内不得调用带默认 `listMarketInstallations()` 参数的
+  `installedGhostMatchingMarketPlugin`；先取一次快照并传入。锁内需要复核单项时，用精确实例
+  查找，不要重新全量 list。
+- `ghosts:usage-summary` 只读；`bind` 只在安装、启动、首次使用或身份 revision 变化时
+  执行。统计卡片可见时轮询，隐藏时停止，前一次未完成不叠加。
+- 自定义来源发现必须有超时和部分结果；超时不能阻塞首屏。Library 用量扫描有熔断和条目
+  上限，面板投影不得为每条记录重扫全部文件。
+- 验收：翻 10 页 `GhostManager.list()` 1 次；精确实例查找 0 次；连续 summary 3 次写事务
+  0 次；40 次面板点击／按键复核不调用 `list()`。
+- 例外：安装、卸载、批准、切换账号后必须失效快照；首次打开详情的幂等 ensure 允许一次
+  绑定；启动窗口创建前的固定配置读取和一次性 CLI 不受请求预算约束。
+
 ## 6. 作者契约与编写手册同步
+
+插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
+MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 新能力由 receipt 的
+可选 `approvedHostUi` 记录实际展示并批准的精确主体；页面原有批准不扩张为草稿/上下文等宿主权限。
+未知声明保留为数据，新增已知能力仍需批准；存量原工具与页面不要求重新确认。
+导航、任务菜单、输入补全和统一设置沿同一声明与批准投影，不另建注册表或批准状态。
+`settings[]` 通过原 app-settings service 使用 `plugins.<物理实例>`，只读改原 KV 的登记键；
+单独批准设置不开放 MCP App transport。原 `/kv` 写入口同样校验登记字段并发布原设置变更事件。
+补全不观察普通输入，只接已有 `/` / `@` 触发状态，200ms 防抖、2 秒超时；取消或撤权后丢弃旧结果。
+附件提供者只处理本机新添加且匹配声明的附件，文件沿原工具审批及过户，工具 JSON 不含本机路径。
+结果只接纳同实例可读资源链接，经原媒体仓/附件缓存导入；失败或移除后保留原草稿边界，不接纳晚到结果。
+侧栏分区默认折叠，仅展开且可见时加载原 MCP App；收起、隐藏和撤权后销毁页面。
+没有贡献时各新增界面位置不挂包装组件、Context 消费者或 IPC；不扩展任务列表每行及宿主布局树。
+主窗、完整任务副窗和分离侧栏共用原 MCP Apps 页面承载。开页操作沿原主窗布局路由；
+草稿快照及修改交给实际承载编辑器的窗口，只有无编辑器的分离侧栏和弹出页签回到主窗。
+辅助窗口沿受限 preload 调用，不另挂一份编辑器宿主或复制草稿。
 
 内置 `cindy-plugin-creator` Skill 是 Agent 替用户编写插件的**统一手册与流程入口**，正本位于
 `apps/desktop/resources/system-skills/cindy-plugin-creator/`。`SKILL.md` 负责流程与按需阅读索引，
@@ -864,7 +1007,10 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
 页面手册 `PAGE-GENERATION.md` 另以 `FORGE_PAGE_MANUAL` 导出，`ghost_forge_guide({section:"pages"})` 整份返回，
 不拼进 `FORGE_GUIDE`（手册自带 `## ` 小节，拼进去会被当成章节切开）。
-修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
+修改随包 Skill 字节时，在 `apps/desktop/resources/system-skills/_versions/` 新增一个记录文件
+（版本号 = `BUILT_IN_SKILLS_BUNDLE_VERSION_BASE` + 记录数；不要把旧式 `BUILT_IN_SKILLS_BUNDLE_VERSION = N`
+常量加回来，门禁会阻断），规则见 [`credentials-and-local-storage.md`](credentials-and-local-storage.md)
+「Cindy 托管的预装技能」。改动其中的《Cindy MCP Apps 页面生成手册》
 （`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
 [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。
 手册 CDN 路径带客户端版本号与 sha256（`mcp-apps/manual/<版本号>/<sha256>.md`），发布脚本从打包产出的
@@ -907,7 +1053,7 @@ Forge 新装默认 root，不按当前登录组织自动创建组织实例。已
 
 `taskView`（跟对话的任务页）的现行协议在 `FORGE_GUIDE` §4.22；v2 对应 `task-view` 槽。
 任务页页签（右侧栏 kind `plugin-task`）存在各任务自己的页签桶里，随任务切换；页面与
-panel / mainView 同一 Ghost WebView 沙箱（零桥、专属分区），只经查询参数 `session`
+panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面选模桥），只经查询参数 `session`
 得知所在任务。逻辑页经 `cindy.taskView({sessionId?, focus?})`（管子 `task-view-request`）
 打开或聚焦它：只承载包内页面、不收网址，因此不设 preview 式白名单与限速。Host 做资格审
 （已装、启用、声明 taskView）与落点解析（显式任务优先，缺省台前任务），回执带回落点
@@ -1069,6 +1215,20 @@ IPC 时追加对应专项规则要求的验证。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 
+桌面插件的 settings / panel / mainView / taskView WebView 可调用
+`window.cindyUI.pickModel({anchor:{x,y,width,height},initial?,allowRemote?})`，锚点使用按钮
+`getBoundingClientRect()` 的页面 CSS 坐标；默认包含其他电脑与分享供应商。
+Main 只向通过安装／owner 附加校验的 guest 注入页面选模桥（原生 tabView 与普通页面共用），只暴露这一个方法，
+逐次核对真实 sender 和顶层 frame，绑定原 guest、宿主窗口与批准代次。
+Renderer 在原宿主窗口定位该 guest，把按钮坐标换算到宿主；不存在、隐藏或锚点越界时取消。
+模型目录、搜索、收藏、最近使用、说明、档位与 Fast 复用 `ModelRouteSelectorContent`，
+选中后经既有可用性校验返回完整 route；不返回凭证、endpoint 或 ProviderView。
+参数和收藏编辑沿用现有插件选模的单次草稿，不写宿主偏好。旧 `pickModel` 与
+`POST /model-picker` 保留居中确认弹窗及原默认值，不改变旧插件批准。
+页面滚动／缩放、文档导航、关闭或崩溃撤销等待，旧答案不能落到替代页。
+此页面桥仅本机 Electron guest 使用，不进入 device-link 白名单；手机、远程控制页面与旧 Host
+须检测接口并沿用电子脑 `pickModel({mobilePageId,...})` 的原生选模通道。
+
 电子脑 `cindy.pickModel({initial?,mobilePageId?,allowRemote?})` 与桌面页面同源 `POST /model-picker`
 复用 Cindy 的统一模型选择器，返回完整配置（模型、引擎、思考档位、Fast 与可选的 `agentDeviceId` 运行来源）。
 选模不需要新的 manifest 权限、不改变存量批准，不修改默认或现有任务、不执行模型调用。
@@ -1076,7 +1236,8 @@ IPC 时追加对应专项规则要求的验证。
 
 Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 owner 与安装批准版本；
 只接受目标宿主窗口或目标页面的回答，验证输入形状与实际可用路由，异步校验后再次复核绑定。
-同一 Host 仅一单，重复打开沿用目录选择的限速。取消、90 秒超时、窗口/页面关闭、账号边界、
+同一 Host 仅一单，已有选择器时返回 `BUSY`；选模不调用模型，不设关闭后重新打开的时间冷却。
+取消、90 秒超时、窗口/页面关闭、账号边界、
 插件停止均撤销等待并收起界面；不可用的来源保持选择器可编辑，不能静默换模型。
 手机与远程桌面设置页保留显式 mobilePageId，展示端读取执行电脑目录，缺失/失效来源不回退另一设备。
 原生插件页与远程 Desktop 设置控制端打开页面时声明 `modelPickerRemoteSources:true`，Host
@@ -1088,7 +1249,12 @@ Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 ow
 远程与分享来源复用普通模型选择器的目录与授权通道。选择确认与新任务路由分别重读精确来源目录，
 不可用时不借用本机同名模型；远程 Agent 不要求插件电脑安装对应 Harness。
 `/agent-models` 无参返回可选 `supportsRemoteRoutes:true`；旧 Host 没有该标志时路由插件保留本机行为，
-不回传远程路由，防止旧解析器丢弃来源后误执行。插件自建后台任务仍使用本机 `PluginTaskRoute`。
+不回传远程路由，防止旧解析器丢弃来源后误执行。
+插件自建任务另以 `tasks.capabilities().remoteRoutes:true` 声明完整远程执行支持；
+create / setModel 接受 `PluginTaskRoute.agentDeviceId`，send/accept 重读精确来源授权目录，
+任务记录与文件仍在插件宿主，结果和取消复用普通 Session/远程 proxy 的归属及轮次校验。
+不新增插件批准、不扩大工具/目录权限、不接管远程电脑上的任意任务；旧 route、批准和回执无迁移。
+实现、错误和来源保存规则见 [插件任务远程模型](plugin-task-api-implementation.md#插件任务使用远程模型2026-11-06未发布)。
 实现见 `ghostModelPicker.ts`、`PluginModelPickerHost.tsx`、`mobilePageService.ts`；
 作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md`，回归见 `ghostModelPicker.test.ts`。
 
@@ -1100,7 +1266,7 @@ Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 ow
 留在插件。每次请求和回执重新核验 owner、安装 revision、namespace 与 peer。
 不向插件提供设备私钥、账号 token 或其他插件数据，不为通道增加远程 Renderer IPC。
 接口和失败语义见 `FORGE_GUIDE` §4.10.2，协议与兼容边界见
-[协议兼容](protocol-compatibility.md#插件资料设备同步)。
+[协议兼容](protocol-compatibility/plugin-data-device-sync.md)。
 
 ## 社区插件贡献入口
 
@@ -1143,11 +1309,20 @@ Brave、Tavily、Mivo 的历史 provider Key 仅在原安装锁内定点迁为�
 ### 插件实时屏幕
 
 `liveScreen: true`（且必须同时声明 `node`）是独立自主能力，也是唯一一条 Host 主动调用
-Node 工作进程的方向：用户从手机经远程桌面打开设备画面时，Main 的
+Node 工作进程的方向：用户从手机或同账号的另一台电脑经远程桌面打开设备画面时，Main 的
 `cindy-brain/liveScreenHost.ts` 只对已装启用、同时声明两者的插件，经
 `GhostNodeRuntimeBroker.handleRequest` 调用固定的 `liveScreen.list/open/input/control/close`，
 沿用 broker 的启用、更新、超时与限流复核；不经 main.js，不出现在 Agent 工具里，也不给插件
-任何手机或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
-`http://127.0.0.1:<端口>`，由 Main 读取，采集页与手机都拿不到地址。旧版插件的权限不变；
+任何手机、电脑或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
+`http://127.0.0.1:<端口>`，由 Main 读取，采集页与查看端（手机、另一台电脑）都拿不到地址。旧版插件的权限不变；
 声明该字段的更新属于能力增加，按 3.1 节处理。接口见 `FORGE_GUIDE` §4.22.1，协议与兼容边界见
-[协议兼容](protocol-compatibility.md)的「插件实时屏幕」。
+[协议兼容 · 代输入](protocol-compatibility/input-handoff.md)的「插件实时屏幕」。
+
+查看端在电脑上时方向相反：同一能力让插件在**自己的页面**里显示它在本账号另一台电脑上的设备
+（`taskView.remote` + `cindy.liveScreenView()`，`remote-desktop-viewer/pluginViews.ts`），不新增
+权限项。边界由 Main 守住：只答应已装启用且声明 `liveScreen` 的插件；只列出、只打开那台电脑上
+**同一来源同一 id** 的插件的设备（按逻辑身份比对，不信页面传来的插件名）；连接仍是普通的设备
+画面租约，目标由 Main 绑定，插件拿到的只有一个带一次性令牌的本机回环地址（画面流 + 设备输入），
+拿不到远程桌面、整屏画面、其它插件的设备或任何凭证；输入只收触摸、设备按键与打字。插件停用、
+卸载、换账号或本机锁屏时地址立即失效。本机没装该插件时宿主只提示安装，不代为显示设备。
+接口见 `FORGE_GUIDE` §4.22.2。

@@ -3,7 +3,7 @@ import os from 'node:os';
 import { ipcMain } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { isPluginMarketPassthroughErrorCode } from './api.js';
 import {
   isGhostInstallApprovalToken,
@@ -169,6 +169,20 @@ export function registerPluginMarketIpc(): void {
       }),
     );
   });
+  ipcMain.handle('plugin-market:query', (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const query = requireObject(input, 'query');
+    return invokePluginMarket(() => service().query(query));
+  });
+  ipcMain.handle('plugin-market:recommendations', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return invokePluginMarket(() => service().recommendations());
+  });
+  ipcMain.handle('plugin-market:lookup', (event, ghostIds: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(ghostIds)) throwIpcError('INVALID_PARAMS', 'Invalid Plugin identities');
+    return invokePluginMarket(() => service().lookup(ghostIds));
+  });
   ipcMain.handle('plugin-market:consume-removal-notice', (event) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(async () => service().consumeRemovalNotice());
@@ -176,7 +190,7 @@ export function registerPluginMarketIpc(): void {
   ipcMain.handle('plugin-market:detail', (event, pluginId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
-      service().detail(requireString(pluginId, 'pluginId')),
+      service().detail(requireString(pluginId, 'pluginId'), { includeReadme: true }),
     );
   });
   ipcMain.handle('plugin-market:prepare-share', (event, pluginId: unknown, options: unknown) => {

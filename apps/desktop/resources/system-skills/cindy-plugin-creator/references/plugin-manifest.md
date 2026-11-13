@@ -7,7 +7,11 @@
   "name": "我的插件",           // 展示名
   "description": "一句话说清这个插件是干嘛的(给人看:插件详情页)",  // 1–300 字
   "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的插件花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;花名册会折叠连续空白,异常数据会截断;缺省时花名册回落用 description
-  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。不配则面板与消息身份头显示默认拼图占位符;官方插件仓惯例放 assets/icon.png
+  "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。图片由用户提供或同意后生成，禁止用纯色占位图；未设置时省略此字段，客户端显示默认符号；官方插件仓惯例放 assets/icon.png
+  "readme": {                  // 可选:详细介绍(给人看:详情页「介绍」区,不进模型上下文);语言到包内 .md 文件,必须提供 en,见下文「详细介绍」
+    "en": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
     "zh-CN": "locales/zh-CN.json",
@@ -69,6 +73,15 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
+可选 `mcpApps.host` 声明具名视图、原生位置、命令、补全与附件处理提供者、普通设置字段和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
+只激活用户已批准的已知声明；未知扩展保留为数据，原页面批准不会自动授予新增宿主能力。
+
+`systemPrompt` 可选，声明包内静态系统提示词片段：
+`[{ "id": "style", "text": "Use the documented terminology.", "order": 100, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }]`。
+安装确认展示完整原文，用户在任务设置中选择后才生效；不进入其它任务或全局提示词。
+顺序、作用范围、引擎支持与大小限制见[静态系统提示词片段](plugin-control-points.md#静态系统提示词片段)。
+该能力尚未发布，开发示例不能作为正式版版本下限的依据。
+
 ### whenToUse:只写发现线索,不写使用规则
 
 在作者契约里,`whenToUse` 是专门给模型做插件发现与判断的唯一字段;
@@ -96,6 +109,29 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 ```json
 "whenToUse": "需要查询、创建或更新项目、任务、成员、迭代与发布状态时找我"
 ```
+
+### 详细介绍(readme)
+
+`description` 是卡片和详情页标题下的一句话(≤300 字)。需要讲清用法、放截图时,另写
+详细介绍:`readme` 是语言到包内 Markdown 文件的映射,与 `locales` 同一组语言、必须提供
+`en`;缺少当前宿主语言时显示英文。多个语言可以共用同一份文件。
+
+- 显示位置:安装后的插件详情页、安装前的市场详情页(官方市场需服务端支持;自定义市场
+  直接读源里的文件)与手机插件详情。正文较长时先折叠。内容只给人看,**不进模型上下文**,
+  也不会出现在插件花名册或市场搜索结果里——写给 AI 的说明仍放 `whenToUse`。
+- 写法:普通 Markdown(标题、列表、表格、代码块、链接)。HTML 不渲染,包括 `<img>`,插图一律用
+  Markdown 图片语法(行内 `![说明](路径)` 或引用式均可;代码块里的示例不算)。链接只开放
+  http(s) 与 mailto,用系统浏览器打开。
+- **图片只能用包内文件**:相对介绍文件所在目录写路径(如 `![搜索结果](assets/readme/search.png)`,
+  可用 `./`、可用不越出包根的 `../`)。外部图片地址、`data:` 图片和不支持的格式一律不显示。
+  格式与图标相同(png / jpg / jpeg / webp / gif,不收 svg);路径每段只用字母、数字、
+  `_`、`.`、`-`。
+- 上限:单份 Markdown ≤ 128 KB;单张图片 ≤ 512 KB;每份介绍最多 8 张、合计 ≤ 3 MB。手机端
+  经电脑转发,图片约 1.5 MB 以内能完整显示,超出的按出现顺序省略、文字保留——想让手机也
+  看全,把图片总量控制在 1.5 MB 内。打包时(`ghost_forge_pack`)缺文件、超限或引用的图片不存在会直接
+  报错;运行时超出的图片按出现顺序跳过。
+- 截图建议用 webp 或压缩后的 png,宽度 1200–1600 像素即可;深浅两种模式下都要看得清。
+- 旧版客户端会忽略 `readme`,只显示 `description`,不需要为它提高 `minCindyVersion`。
 
 ## 2.1 本地化资源(locales)
 
@@ -165,7 +201,7 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
-`browserExtension`、`skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
+`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`

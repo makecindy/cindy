@@ -3,7 +3,7 @@
  * 的第三个控制目标。
  *
  * 与另外两个后端的差别:
- * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它;
+ * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 按需启动但不关闭它;
  * - 用哪个浏览器是用户的选择,所以能力与专用浏览器对齐(扩展 0.4.42 起):截图、
  *   上传、页面脚本、控制台、网络、弹窗、坐标与拖拽都可用。底线是不打扰用户自己的
  *   使用:新页面开在 Cindy 自己的后台窗口,不抢焦点,不切换用户正在看的标签页;
@@ -42,6 +42,7 @@ export interface UserBrowserPageControl {
 export interface UserBrowserBackendOptions {
   /** 声明 browserExtension.pageControl 的插件桥接;null = 没有这样的插件(或未启用)。 */
   getPageControl(): UserBrowserPageControl | null;
+  getUnavailableReason?(): 'plugin-missing' | 'plugin-updating' | 'plugin-selection-required';
   /** 上传可读取的本地目录(按会话);没有则上传不可用。 */
   resolveUploadRoots?(sessionId: string): Promise<string[]>;
   logger: {
@@ -51,6 +52,9 @@ export interface UserBrowserBackendOptions {
   now?(): number;
   /** status 时扩展未连接,先等它重连这么久(扩展刷新或更新后会断开几秒);默认 8 秒。 */
   reconnectWaitMs?: number;
+  /** Only called for actual browser use, never passive status/doctor/settings reads. */
+  startBrowser?(): Promise<void>;
+  startupWaitMs?: number;
 }
 
 interface TargetRecord {
@@ -224,7 +228,7 @@ const TAB_ACTION_LABEL: Partial<Record<BackendRequest['action'], string>> = {
 const NOT_CONFIGURED_MESSAGE =
   '没有已启用的浏览器扩展插件提供页面控制(安装并启用 Cindy Chrome 插件后再选择「我的浏览器」)。';
 const DISCONNECTED_MESSAGE =
-  '浏览器扩展未连接:请在用户的 Chrome / Edge 中安装并启用 Cindy 扩展,保持 Cindy 运行;连接后重新查询 status。';
+  '浏览器扩展尚未连接；start 会尝试启动浏览器并等待连接。自动启动后仍未连接时检查扩展是否启用或需要配对；未连接不代表未安装。';
 
 const UNPAIRED_MESSAGE =
   '浏览器扩展已连到 Cindy,但还没完成配对或授权:请让用户在 Cindy Chrome 插件页确认这个浏览器,或重新启用插件后再查询 status。';
@@ -244,6 +248,7 @@ export class UserBrowserBackend implements BrowserBackend {
   private readonly recipePumps = new Map<string, () => Promise<void>>();
   private nextAlias = 1;
   private disposed = false;
+  private preparing: { wantsLaunch: boolean; promise: Promise<void> } | null = null;
 
   constructor(private readonly opts: UserBrowserBackendOptions) {}
 
@@ -255,6 +260,11 @@ export class UserBrowserBackend implements BrowserBackend {
         'BROWSER_RUNTIME_UNAVAILABLE',
       );
     try {
+      if (!['status', 'doctor', 'profiles', 'stop'].includes(request.action) &&
+          request.proxyServer === undefined && request.proxyAllowedHostnames === undefined) {
+        await this.ensureConnected(request);
+      }
+      if (this.disposed) return actionFailed(request.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
       const result = await this.dispatch(request);
       this.noteSessionTab(request, result);
       return result;
@@ -265,6 +275,45 @@ export class UserBrowserBackend implements BrowserBackend {
       });
       return actionFailed(request.action, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  private async ensureConnected(req: BackendRequest): Promise<void> {
+    const control = this.opts.getPageControl();
+    if (!control || !this.opts.startBrowser || this.connectedClients(control).length > 0) return;
+    // A named connection may belong to a different browser/profile. Never substitute the OS
+    // default for it. Requests without a profile may still join a wait that began earlier and
+    // ask it to launch the default browser, so the first caller's profile does not decide for all.
+    if (!req.profile && this.preparing) this.preparing.wantsLaunch = true;
+    if (!this.preparing) {
+      const state: { wantsLaunch: boolean; promise: Promise<void> } = {
+        wantsLaunch: !req.profile,
+        promise: Promise.resolve(),
+      };
+      const stillCurrent = () => !this.disposed && this.opts.getPageControl()?.bridge === control.bridge;
+      const prepare = async () => {
+        let status = await control.bridge.status();
+        // Pairing is a separate boundary; opening more browsers cannot resolve it.
+        if (!stillCurrent() || !status.ok || status.clients.some(c => c.connected || c.trusted === false)) return;
+        let launched = false;
+        const launchIfWanted = async () => {
+          if (!state.wantsLaunch || launched) return;
+          launched = true;
+          await this.opts.startBrowser!();
+        };
+        await launchIfWanted();
+        const deadline = (this.opts.now ?? Date.now)() + (this.opts.startupWaitMs ?? 35_000);
+        while (stillCurrent() && this.connectedClients(control).length === 0 && (this.opts.now ?? Date.now)() < deadline) {
+          await sleep(500);
+          await launchIfWanted();
+          status = await control.bridge.status();
+          // The extension came online but still needs the user's approval: waiting cannot fix that.
+          if (status.ok && status.clients.some(c => c.trusted === false)) return;
+        }
+      };
+      state.promise = prepare().finally(() => { this.preparing = null; });
+      this.preparing = state;
+    }
+    await this.preparing.promise;
   }
 
   async dispose(): Promise<void> {
@@ -310,7 +359,7 @@ export class UserBrowserBackend implements BrowserBackend {
         return actionOk(req.action, {
           ready: true,
           backend: this.kind,
-          note: '用户浏览器由用户自己启停,Cindy 不关闭它。',
+          note: 'Cindy 会按需启动用户浏览器，不会关闭它。',
         });
       case 'profiles':
         return this.handleProfiles(req);
@@ -347,6 +396,18 @@ export class UserBrowserBackend implements BrowserBackend {
 
   // ── 连接解析 ────────────────────────────────────────────────────────────
 
+  private unavailable() {
+    const reason = this.opts.getUnavailableReason?.() ?? 'plugin-missing';
+    return {
+      reason,
+      message: reason === 'plugin-updating'
+        ? '浏览器连接正在更新，完成后会自动恢复。'
+        : reason === 'plugin-selection-required'
+          ? '请在插件详情中选择「使用此浏览器扩展」。'
+          : NOT_CONFIGURED_MESSAGE,
+    };
+  }
+
   private control(
     action: BackendRequest['action'],
   ): { ok: true; control: UserBrowserPageControl } | { ok: false; result: BackendResult } {
@@ -354,7 +415,7 @@ export class UserBrowserBackend implements BrowserBackend {
     if (!control)
       return {
         ok: false,
-        result: actionFailed(action, NOT_CONFIGURED_MESSAGE, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
+        result: actionFailed(action, this.unavailable().message, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
       };
     return { ok: true, control };
   }
@@ -411,6 +472,42 @@ export class UserBrowserBackend implements BrowserBackend {
       this.targets.delete(record.targetId);
     }
     return job;
+  }
+
+  /**
+   * 页面文字读取的作业:最多等 `budgetMs`(调用方给的剩余时间),到点按失败返回。桥接对一个作业的默认期限是
+   * 45 秒,不理会 payload 里的 timeoutMs;页面无响应时,调用方的 5 秒探测循环不能被它拖长。作业本身仍可能
+   * 在扩展里跑完,它的结果会被丢弃(只读,没有副作用)。
+   */
+  private async pageJobWithin(
+    budgetMs: number | undefined,
+    control: UserBrowserPageControl,
+    record: TargetRecord,
+    kind: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<BrowserExtensionJobResult> {
+    const job = this.pageJob(control, record, kind, extra);
+    if (budgetMs === undefined) return job;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<BrowserExtensionJobResult>((resolve) => {
+      timer = setTimeout(
+        () =>
+          resolve({
+            ok: false,
+            error: 'BROWSER_TIMEOUT',
+            message: `页面在 ${budgetMs}ms 内没有响应`,
+            execution: 'unknown',
+          }),
+        budgetMs,
+      );
+    });
+    try {
+      return await Promise.race([job, expired]);
+    } finally {
+      clearTimeout(timer);
+      // The abandoned job may still reject later; nobody is waiting for it.
+      job.catch(() => undefined);
+    }
   }
 
   /** 选连接:显式 profile(连接 id)优先;只有一条连接时直接用;多条且未指定时拒绝,不猜账号。 */
@@ -651,7 +748,7 @@ export class UserBrowserBackend implements BrowserBackend {
         backend: this.kind,
         running: false,
         configured: false,
-        message: NOT_CONFIGURED_MESSAGE,
+        ...this.unavailable(),
         capabilities: userBrowserCapabilities(null),
       });
     }
@@ -659,13 +756,14 @@ export class UserBrowserBackend implements BrowserBackend {
     // Right after an extension reload or update it reconnects within seconds: wait briefly before
     // reporting "not connected", so the agent does not give up on a browser that is coming back.
     const deadline = (this.opts.now ?? Date.now)() + (this.opts.reconnectWaitMs ?? 8000);
-    // Only an extension that was connected before (now dropped) is worth waiting for. One that never
-    // finished connecting, such as an unpaired install, is reported at once with its own reason.
+    // Expired clients are omitted from status.clients. Remember a successful connection independently
+    // so the reconnect grace still applies, including on the first status read after expiry.
+    // An install that has never connected (including an unpaired install) does not wait.
     if (status.ok) for (const c of status.clients) if (c.connected) this.everReady.add(c.id);
     while (
       status.ok &&
-      status.clients.some((c) => this.everReady.has(c.id)) &&
-      !status.clients.some((c) => c.connected) &&
+      (status.hadConnectedClient === true || this.everReady.size > 0) &&
+      !status.clients.some((c) => c.connected || c.trusted === false) &&
       (this.opts.now ?? Date.now)() < deadline
     ) {
       await sleep(500);
@@ -712,7 +810,7 @@ export class UserBrowserBackend implements BrowserBackend {
           }
         : {}),
       capabilities: userBrowserCapabilities(control),
-      note: '用户自己的浏览器:新页面开在 Cindy 的后台窗口里,不抢焦点;不要关闭、重排或切换用户自己的标签页,除非任务需要。',
+      note: '用户自己的浏览器:用 open 在 Cindy 的后台窗口里开自己的页面,和用户共用登录态,不抢焦点;不要在用户自己的标签页上操作,也不要关闭、重排或切换它们。',
       ...(doctor
         ? {
             port: status.port,
@@ -783,6 +881,8 @@ export class UserBrowserBackend implements BrowserBackend {
     // budget) would otherwise turn a tab the agent just opened into an unknown targetId.
     const complete = new Set<string>();
     for (const client of clients) {
+      // 新版扩展标出 Cindy 自己窗口里的页签,其余都是用户的;旧版不标,就不猜归属。
+      const knowsOwner = this.parity(gate.control, client.id);
       const listed = await gate.control.bridge.act('tabs', {
         browser: client.id,
         limit: Math.min(100, Math.max(1, req.limit ?? 50)),
@@ -813,6 +913,7 @@ export class UserBrowserBackend implements BrowserBackend {
         seen.add(record.targetId);
         tabs.push({
           ...this.describe(record),
+          ...(knowsOwner ? { owner: tab.cindyWindow === true ? 'cindy' : 'user' } : {}),
           active: tab.active === true,
           ...(tab.status ? { status: tab.status } : {}),
         });
@@ -825,7 +926,7 @@ export class UserBrowserBackend implements BrowserBackend {
     return actionOk(req.action, {
       backend: this.kind,
       tabs,
-      note: '这些是用户浏览器里当前打开的标签页;只在需要时操作,不要关闭或重排它们。',
+      note: '这些是用户浏览器里当前打开的标签页。owner:"user" 是用户自己的页签:不要在上面点击、输入或跳转,也不要关闭或重排;要用同一网站就 open 一个新页面(和用户共用登录态),需要它的账号或位置时把它的 url 传给 open。只有用户明确让你看这一页时才读取它。owner:"cindy" 是 Cindy 窗口里的页面,可以直接复用。',
     });
   }
 
@@ -1583,6 +1684,62 @@ export class UserBrowserBackend implements BrowserBackend {
       req.request as { domRead?: { kind?: string; extract?: Record<string, unknown> } }
     ).domRead;
     if (!domRead) return outdated(req.action, '任意页面脚本(evaluate.fn)');
+    if (domRead.kind === 'text') {
+      // The rendered text of the page, as `{ok, url, title, readyState, found, length, text}`.
+      const spec = (domRead as { text?: { selector?: string; offset?: number; maxChars?: number } }).text ?? {};
+      // The caller's time budget covers both paths below: the page script and, after it is refused, the extract.
+      const now = this.opts.now ?? Date.now;
+      const timeoutMs = (req.request as { timeoutMs?: unknown }).timeoutMs;
+      const deadline = typeof timeoutMs === 'number' && timeoutMs > 0 ? now() + timeoutMs : undefined;
+      const remaining = (): number | undefined => (deadline === undefined ? undefined : Math.max(100, deadline - now()));
+      if (this.parity(control, record.clientId)) {
+        const job = await this.pageJobWithin(remaining(), control, record, 'evaluate', { fn: buildDomReadSource(domRead) });
+        if (job.ok)
+          return actionOk(req.action, {
+            backend: this.kind,
+            targetId: record.targetId,
+            url: record.url,
+            result: job.result,
+            untrusted_content: true,
+          });
+        if (job.error !== 'EVAL_BLOCKED_BY_PAGE') return this.failureResult(req.action, job);
+      }
+      // No page script here: an older extension, or a page whose Content Security Policy refuses them
+      // (seen on github.com). The extension's own extract reads the same rendered text, but the bridge
+      // hands the model at most 4,000 characters of one field (`FIELD_VALUE_MAX`, whatever `maxChars` says) and
+      // flags the cut with `truncated`. Nothing past that prefix can be fetched, so the result says so
+      // (`capped`) instead of presenting the prefix as the whole page; a `selector` reads a narrower part.
+      // The load state is not reported, and `open` has already waited for it.
+      const job = await this.pageJobWithin(remaining(), control, record, 'extract', {
+        fields: { text: { selector: ':self' } },
+        ...(spec.selector ? { selector: spec.selector } : {}),
+        maxChars: 30000,
+      });
+      if (!job.ok && String(job.error ?? '') !== 'INVALID_ARGS') return this.failureResult(req.action, job);
+      const raw = job.ok ? (job.record as { text?: unknown } | undefined)?.text : undefined;
+      const text =
+        typeof raw === 'string'
+          ? raw.replace(/[ \t\u00a0]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+          : '';
+      const offset = spec.offset ?? 0;
+      return actionOk(req.action, {
+        backend: this.kind,
+        targetId: record.targetId,
+        url: record.url,
+        result: {
+          ok: job.ok,
+          ...(job.ok ? {} : { error: String(job.message ?? `invalid CSS selector: ${spec.selector ?? ''}`) }),
+          url: record.url,
+          title: record.title ?? '',
+          readyState: 'complete',
+          found: typeof raw === 'string',
+          length: text.length,
+          ...(job.truncated === true ? { capped: true } : {}),
+          text: text.slice(offset, offset + (spec.maxChars ?? 8000)),
+        },
+        untrusted_content: true,
+      });
+    }
     const html =
       domRead.kind === 'extract' &&
       Object.values(

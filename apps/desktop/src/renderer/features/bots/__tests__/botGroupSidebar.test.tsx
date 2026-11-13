@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readTeammatesViewMode } from '../teammatesSectionPrefs';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,8 +42,8 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: mocks.confirm }),
 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => mocks.ownerGeneration,
-  isDataOwnerGenerationCurrent: (generation: number) => generation === mocks.ownerGeneration,
+  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: mocks.ownerGeneration }),
+  isDataOwnerGenerationCurrent: (owner: { generation: number }) => owner.generation === mocks.ownerGeneration,
 }));
 
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
@@ -470,6 +471,8 @@ describe('TeammatesSection group chats', () => {
     const running = screen.getByTestId('bot-group-running');
     expect(running.textContent).toBe('bots.groupChat.sidebar.planRunning:{"step":2,"total":3,"name":"咪咪"}');
     expect(running.className).toContain('text-[var(--status-bar-accent)]');
+    expect(document.querySelector('[data-teammate-row-status] [data-teammate-status="running"]')).toBeNull();
+    expect(running.querySelector('.session-status-breathing')).not.toBeNull();
   });
 
   it('shows the organizer working out a plan in the running style', async () => {
@@ -503,20 +506,19 @@ it('localizes the join preview without presenting its subject as a chat author',
   expect(screen.queryByText(/Fallback text/)).toBeNull();
 });
 
-it('badges the real number of unread group messages, falling back to one on older hosts', async () => {
+it('shows unread counts for current hosts and the one-message fallback for older hosts', async () => {
   window.localStorage.clear();
   resetBotReadStateForTests();
   markBotRead(botGroupReadKey('g1'), 15);
   markBotRead(botGroupReadKey('g2'), 15);
   const at = (ms: number) => new Date(ms).toISOString();
   mocks.groups = [
-    group({ lastReplyAt: 30, incomingMessageTimes: [at(10), at(20), at(30)] } as Partial<BotGroupSummary>),
-    group({ id: 'g2', name: '读书会', lastReplyAt: 30 }),
+    group({ teammateActivity: { phase: 'idle' }, lastReplyAt: 30, incomingMessageTimes: [at(10), at(20), at(30)] } as Partial<BotGroupSummary>),
+    group({ id: 'g2', name: '读书会', teammateActivity: { phase: 'idle' }, lastReplyAt: 30 }),
   ];
   try {
     await renderSidebar();
-    expect(screen.getByLabelText('sidebar.teammateUnreadCount:{"count":2}').textContent).toBe('2');
-    expect(screen.getByLabelText('sidebar.teammateUnreadCount:{"count":1}').textContent).toBe('1');
+    expect(Array.from(document.querySelectorAll('[data-teammate-unread-count]'), node => node.textContent)).toEqual(['2', '1']);
   } finally {
     resetBotReadStateForTests();
     window.localStorage.clear();
@@ -559,45 +561,137 @@ it.each([false, true])('shows the executing teammate rather than a queued teamma
   expect(row.textContent).not.toContain('bots.groupChat.header.queued');
 });
 
-describe('collapsed avatar strip mentions', () => {
+describe('icon strip mentions', () => {
   const mentionLabel = 'bots.groupChat.server.thread.hintMentioned';
-  const collapse = () => fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+  // Icon/list is independent of collapse; preserve the existing status/overflow coverage.
+  const switchView = () => {
+    const wasIcons = readTeammatesViewMode('owner') === 'icons';
+    fireEvent.keyDown(screen.getByRole('button', { name: 'ccAgent.sidebar.viewStyle' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: wasIcons ? 'ccAgent.sidebar.viewStyleListWide' : 'bots.list.viewIcons' }));
+  };
   afterEach(() => window.localStorage.clear());
 
-  it('turns the group avatar status point into @ for an unread mention, keeping the running color', async () => {
+  it('keeps one orange running point for mentions without an @ glyph', async () => {
     mocks.groups = [
       group({ speakingBotIds: ['mimi'], serverUnread: { count: 2, mentioned: true } }),
-      group({ id: 'g2', name: '读书会', serverUnread: { count: 1, mentioned: false } }),
+      group({ id: 'g2', name: '读书会', teammateActivity: { phase: 'idle' }, serverUnread: { count: 1, mentioned: false } }),
     ];
     mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'running' }]]);
     const view = await renderSidebar();
-    collapse();
+    switchView();
     // The running point itself carries the @: one indicator, status color kept.
     const marked = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.running · ${mentionLabel}` });
     expect(marked.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
     const point = marked.querySelector<HTMLElement>('[data-teammate-mention]');
     expect(point?.getAttribute('data-teammate-status')).toBe('running');
-    expect(point?.style.backgroundColor).toBe('var(--status-bar-accent)');
-    // An unread group without an @ keeps only its status dot.
+    expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--warning-accent)');
+    // Ordinary group unread uses blue in icon mode.
     const plain = screen.getByRole('button', { name: /^读书会 · / });
     expect(plain.getAttribute('aria-label')).not.toContain(mentionLabel);
-    expect(plain.querySelector('[data-teammate-mention]')).toBeNull();
+    expect(plain.querySelector<HTMLElement>('[data-teammate-status] > span')?.style.backgroundColor).toBe('var(--bot-unread-bg)');
     expect(view.container.querySelectorAll('[data-teammate-mention]')).toHaveLength(1);
   });
 
-  it('paints the @ unread blue when the group is not running, even after a completed reply', async () => {
-    mocks.groups = [group({ serverUnread: { count: 1, mentioned: true } })];
-    await renderSidebar();
-    collapse();
-    const point = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.done · ${mentionLabel}` })
-      .querySelector<HTMLElement>('[data-teammate-mention]');
-    expect(point?.style.backgroundColor).toBe('var(--bot-unread-bg)');
+  it.each([false, true])('keeps a gray unread count alongside running progress (mentioned: %s)', async mentioned => {
+    mocks.profiles = [];
+    mocks.groups = [group({ speakingBotIds: ['mimi'], serverUnread: { count: 2, mentioned } })];
+    mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'running' }]]);
+    const view = await renderSidebar();
+    const row = view.container.querySelector('[data-bot-group-id="g1"]')!;
+    expect(screen.getByTestId('bot-group-running')).toBeTruthy();
+    expect(row.querySelector('[data-teammate-unread-count]')?.textContent).toBe('2');
+    expect(row.querySelector('[data-teammate-unread-count] > span')?.className).not.toContain('bg-[var(--bot-unread-bg)]');
+    expect(row.querySelector('[data-teammate-status]')).toBeNull();
+    mocks.groups = [group({ speakingBotIds: ['mimi'], serverUnread: { count: 0, mentioned: false } })];
+    view.rerender(<TeammatesSection />);
+    expect(row.querySelector('[data-teammate-unread-count]')).toBeNull();
+    expect(screen.getByTestId('bot-group-running')).toBeTruthy();
+    switchView();
+    expect(view.container.querySelector<HTMLElement>('[data-teammate-status="running"] > span')?.style.backgroundColor).toBe('var(--warning-accent)');
+  });
+
+  it.each(['completed', 'idle'] as const)('uses a blue count for list group mentions and a blue point in icon mode (%s)', async phase => {
+    mocks.profiles = [];
+    mocks.groups = [group({ teammateActivity: { phase }, serverUnread: { count: 12, mentioned: true } })];
+    const view = await renderSidebar();
+    const count = view.container.querySelector('[data-teammate-unread-count]')!;
+    expect(count.textContent).toBe('12');
+    expect(count.firstElementChild?.className).toContain('bg-[var(--bot-unread-bg)]');
+    expect(count.firstElementChild?.className).toContain('text-[var(--bot-unread-fg)]');
+    expect(count.firstElementChild?.getAttribute('aria-label')).toBe(
+      `${translate('sidebar.teammateUnreadCount', { count: 12 })} · ${translate('bots.groupChat.server.thread.hintMentioned')}`,
+    );
+    expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
+    switchView();
+    const point = screen.getByRole('button', { name: /^周末出游 ·/ }).querySelector<HTMLElement>('[data-teammate-mention]');
+    expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--bot-unread-bg)');
+    expect(screen.getByRole('button', { name: /^周末出游 ·/ }).querySelector('[data-teammate-unread-count]')).toBeNull();
+    mocks.groups = [group({ teammateActivity: { phase }, serverUnread: { count: 0, mentioned: false } })];
+    view.rerender(<TeammatesSection />);
+    switchView();
+    expect(view.container.querySelector('[data-teammate-unread-count]')).toBeNull();
+    expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
+  });
+
+  it('shows ordinary group unread as an list count and icon blue point, clearing on read', async () => {
+    mocks.groups = [group({ teammateActivity: { phase: 'idle' }, serverUnread: { count: 12, mentioned: false } })];
+    const view = await renderSidebar();
+    expect(view.container.querySelector('[data-teammate-unread-count]')?.textContent).toBe('12');
+    switchView();
+    const avatar = screen.getByRole('button', { name: /^周末出游 · / });
+    expect(avatar.querySelector<HTMLElement>('[data-teammate-status] > span')?.style.backgroundColor).toBe('var(--bot-unread-bg)');
+    expect(avatar.textContent).not.toContain('12');
+    mocks.groups = [group({ teammateActivity: { phase: 'idle' }, serverUnread: { count: 0, mentioned: false } })];
+    view.rerender(<TeammatesSection />);
+    expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
+  });
+
+  it('keeps only a green point for completed group unread in both layouts and clears on read', async () => {
+    mocks.profiles = [];
+    mocks.groups = [group({ teammateActivity: { phase: 'completed' }, serverUnread: { count: 3, mentioned: false } })];
+    const view = await renderSidebar();
+    const row = view.container.querySelector('[data-bot-group-id="g1"]')!;
+    const status = row.querySelector('[data-teammate-row-status]')!;
+    expect(status.querySelector('[data-teammate-unread-count]')).toBeNull();
+    expect(status.querySelector<HTMLElement>('[data-teammate-status="done"] > span')?.style.backgroundColor).toBe('var(--card-status-done)');
+    expect(row.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
+    switchView();
+    const avatar = screen.getByRole('button', { name: /^周末出游 · / });
+    expect(avatar.querySelector<HTMLElement>('[data-teammate-status="done"] > span')?.style.backgroundColor).toBe('var(--card-status-done)');
+    expect(avatar.querySelector('[data-teammate-unread-count]')).toBeNull();
+    mocks.groups = [group({ teammateActivity: { phase: 'completed' }, serverUnread: { count: 0, mentioned: false } })];
+    view.rerender(<TeammatesSection />);
+    expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
+    switchView();
+    expect(view.container.querySelector('[data-teammate-unread-count]')).toBeNull();
+  });
+
+  it.each([['completed', 'done', 'var(--card-status-done)'], ['idle', 'unread', 'var(--bot-unread-bg)']] as const)('keeps %s unread groups visible in overflow and clears on read', async (phase, status, color) => {
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() { this.callback([{ contentRect: { width: 48 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      mocks.groups = [group({ teammateActivity: { phase }, serverUnread: { count: 3, mentioned: false } })];
+      const view = await renderSidebar();
+      switchView();
+      const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +3' });
+      expect(more.querySelector<HTMLElement>(`[data-teammate-status="${status}"] > span`)?.style.backgroundColor).toBe(color);
+      mocks.groups = [group({ teammateActivity: { phase }, serverUnread: { count: 0, mentioned: false } })];
+      view.rerender(<TeammatesSection />);
+      expect(more.querySelector('[data-teammate-status]')).toBeNull();
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
   });
 
   it('drops the mark once the mention is no longer unread', async () => {
     mocks.groups = [group({ serverUnread: { count: 0, mentioned: true } })];
     const view = await renderSidebar();
-    collapse();
+    switchView();
     expect(screen.getByRole('button', { name: '周末出游' })).toBeTruthy();
     expect(view.container.querySelector('[data-teammate-mention]')).toBeNull();
   });
@@ -614,13 +708,13 @@ describe('collapsed avatar strip mentions', () => {
     try {
       mocks.groups = [group({ serverUnread: { count: 1, mentioned: true } })];
       await renderSidebar();
-      collapse();
+      switchView();
       const more = screen.getByRole('button', { name: `bots.list.sectionExpand · +3 · ${mentionLabel}` });
       expect(more.querySelector('[data-teammate-mention]')).not.toBeNull();
       // Mouse users read the same words as the accessible name.
       fireEvent.pointerEnter(more);
       fireEvent.pointerMove(more, { pointerType: 'mouse' });
-      expect((await screen.findByRole('tooltip')).textContent).toBe(`bots.list.sectionExpand · +3 · ${mentionLabel}`);
+      expect(await screen.findByRole('tooltip', { name: `bots.list.sectionExpand · +3 · ${mentionLabel}` })).toBeTruthy();
     } finally {
       globalThis.ResizeObserver = original;
     }

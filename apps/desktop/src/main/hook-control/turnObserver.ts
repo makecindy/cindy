@@ -28,6 +28,7 @@ import {
   createTurnPresenter,
   type ProgressBodyMode,
 } from '../im/shared/turnPresenter.js';
+import { buildActivityRecord, type TurnActivityRecord } from '../im/shared/turnActivity.js';
 import { terminalErrorText } from '../im/shared/turnRetryNotice.js';
 import { isImSubagentEvent } from '../im/shared/agentEventScope.js';
 
@@ -118,6 +119,8 @@ export interface HookTurnObserver {
   text(): string;
   /** 按桌面消息流同款折叠规则得到的正式答复正文。 */
   finalText(): string;
+  /** 这一轮的过程记录(全部工作项); 没有工作项的快答为 null。 */
+  processRecord(): TurnActivityRecord | null;
   /**
    * 在过程区挂 / 摘一行状态说明(渲染成 `> ⏳ …`, 与过载重试同一个位置)。
    *
@@ -361,6 +364,9 @@ export function observeHookTurn(
     },
     finalText(): string {
       return presenter.finalText();
+    },
+    processRecord(): TurnActivityRecord | null {
+      return buildActivityRecord(presenter.activity, Date.now());
     },
   };
 }

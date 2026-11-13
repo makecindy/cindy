@@ -57,6 +57,7 @@ export * from "./metadataContinuity.js";
 export * from "./providerShareEnvelope.js";
 export * from "./providerGroup.js";
 export * from "./modelFavorites.js";
+export * from "./orcaWorkerRoles.js";
 export * from "./sessionListTransport.js";
 export * from "./sessionMessageReuse.js";
 
@@ -66,6 +67,7 @@ export * from "./clipboardTransfer.js";
 
 export * from "./selfHostedRelay.js";
 export * from "./selfHostedRelayAuth.js";
+export * from "./relayAccountDirectory.js";
 
 export * from "./pluginOauth.js";
 export * from "./pluginSettings.js";
@@ -83,4 +85,7 @@ export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./machineStatus.js";
+export * from "./agentNetSwitch.js";
 export * from "./pluginPages.js";
+
+export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from './stallDiagnostics.js';

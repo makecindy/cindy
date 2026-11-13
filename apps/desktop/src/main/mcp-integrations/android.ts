@@ -25,7 +25,7 @@ import {
   type AndroidAutomationSettings,
 } from '../android-automation-settings-store.js';
 import { createLogger } from '../logger.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 
 const logger = createLogger('mcp/cindy_android');
 

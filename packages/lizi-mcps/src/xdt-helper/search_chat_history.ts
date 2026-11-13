@@ -152,7 +152,7 @@ export function registerSearchChatHistoryTool(
       ) {
         return errorPayload(
           'HISTORY_SCOPE_DENIED',
-          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或可追踪委派结果。',
+          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或任务摘要（get_task_digest）。',
           { denied_session_ids: scope.deniedSessionIds },
         );
       }

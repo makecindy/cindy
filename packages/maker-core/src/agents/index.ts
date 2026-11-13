@@ -126,6 +126,8 @@ export {
   isAutoReviewUnavailableNotice,
   isSystemPermissionDenialReason,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS,
+  type AutoReviewAgentContext,
   type AutoReviewDecision,
   type AutoReviewDelegate,
   type AutoReviewRequest,

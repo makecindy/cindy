@@ -26,6 +26,9 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
 | P1：明显 bug／规范违反／影响面没处理干净 | `P2` | 本次必须修 |
 | P2：可选优化／风格偏好 | 不上报 | 整条略过，不降级也不换个说法上报 |
 
+这里不上报的“仓库 P2”指可选优化／风格偏好，不等于 reviewer 评论中的 `P2` 缺陷。
+服务器通道调用的真实问题应按影响报告，不能因优先级较低或评论标记为 `P2` 而略过。
+
 ## 3. 不要重复机器门禁
 
 以下问题 `client-ci` 与其他 workflow 已经逐条断言，命中即红，自动 reviewer 报了
@@ -54,6 +57,17 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
 
 按 PR 模板的风险分类，优先看这些：
 
+- **服务器通道调用方式与压力**：凡改动直接或间接的请求、订阅、推送、同步、轮询或重试，
+  包括 Renderer／Mobile／业务层调用方，重点读
+  [服务器通道调用审查](docs/dev-rules/server-channel-review.md)。沿调用链核实通道用途、
+  共享范围、上限和已有负载，判断次数、频率、体积、并发及失败恢复是否安全可靠。
+  按实际影响报告有证据的问题，并按第 2 节映射评论标签；P2 缺陷也要报告。
+  指出触发条件、共享约束与用户影响，
+  不以通用性能建议替代缺陷证据，不据此要求新增 CI 或统一限流机制。
+- **本地读取与轮询性能**：列表、分页、批量读取、插件扫描、缓存或轮询改动，按
+  `docs/dev-rules/engineering-conventions.md` §8 核对每个用户动作的 list/scan/IPC/写事务
+  次数、隐藏/离屏是否为 0、缓存 key 是否包含 owner/revision/query；插件市场与统计的
+  特有边界见 `docs/dev-rules/plugin-security-and-authoring.md` §5.4。
 - **凭证与本地存储**：凭证、令牌、授权文件是否写进了仓库或可能被 Git 跟踪的路径；
   用户数据落盘位置是否越界。见 `docs/dev-rules/credentials-and-local-storage.md`。
 - **Electron 进程边界**：renderer／preload／IPC／CSP／WebView／导航与特权能力的改动
@@ -63,8 +77,9 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   `docs/dev-rules/database-and-migrations.md`。
 - **mobile 冷更边界**：改动是否触碰 `app.json`／`app.config.js`／`eas.json`／
   `apps/mobile/package.json`／`plugins/`／`modules/` 等进入 runtime fingerprint 的输入。
-  命中就在评论里点名——这类 PR 合并前需要把关人对冷更单独确认；可保持 Ready 并正常
-  审查，不因冷更要求新建讨论 issue 或转为 draft。见
+  命中就在评论里点名，并核对是否确实必须冷更（能用不动指纹的写法达成时要求改写），
+  以及 PR Description 是否写明冷更原因、存量装机影响与发版节奏；缺项按规范违反上报。
+  这类 PR 可保持 Ready 并正常审查，不需要把关人另外确认。见
   `docs/dev-rules/mobile-development.md`。
 - **协议兼容**：本地协议 package、device-link／relay／隧道 payload、IPC allowlist
   等跨端 wire protocol 的向后兼容性。见 `docs/dev-rules/protocol-compatibility.md`。

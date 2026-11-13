@@ -1,12 +1,14 @@
 import { stat } from 'node:fs/promises';
+import path from 'node:path';
 
 import { app } from 'electron';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { ensureBotChatOnlyWorkspaceDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { botGroupPlans, botSessionLinks, sessions } from '../localDb/schema.js';
+import { botGroupPlans, botProfileVersions, botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { botGroupPlanRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
 
@@ -103,7 +105,54 @@ export async function prepareBotWorkspaceRuntime(
   const legacyUserDataPath = deps.legacyUserDataPath ?? (() => app.getPath('userData'));
 
   const workingDir = await ensureWorkspaceDir(ownerUserDataPath(), botId, legacyUserDataPath());
+  // A V2 group or Thread lane created in the group's project folder keeps working there, like an
+  // ordinary task in that folder (bot-group-chat.md §7.5). Its stored folder must still exist.
+  if (groupRouteKey) {
+    const [lane] = await db.select({ workingDir: sessions.workingDir, projectDir: sessions.projectDir })
+      .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const home = path.dirname(path.resolve(workingDir));
+    const dir = lane?.projectDir && lane.workingDir === lane.projectDir ? path.resolve(lane.workingDir) : null;
+    if (dir && dir !== home && !dir.startsWith(home + path.sep)) {
+      const isDirectory = deps.isDirectory ?? isExistingDirectory;
+      if (!(await isDirectory(dir))) throw new BotPlanWorkDirUnavailableError();
+      opts.workingDir = dir;
+      opts.workspaceKind = 'project';
+      opts.projectDir = dir;
+      opts.remoteHostId = undefined;
+      return;
+    }
+  }
   opts.workingDir = workingDir;
-  opts.workspaceKind = 'dialogue';
   opts.remoteHostId = undefined;
+  // V2 (project mode): the workspace is the teammate's project, so its chats are
+  // project sessions and the tasks they open land in that project by default.
+  // The stored row follows too: task tools read the caller's kind from storage.
+  const projectMode = await readTeammateProjectMode(botId);
+  opts.workspaceKind = projectMode ? 'project' : 'dialogue';
+  if (projectMode) opts.projectDir = workingDir;
+  const projectDir = projectMode ? workingDir : null;
+  const [stored] = await db.select({ workspaceKind: sessions.workspaceKind, projectDir: sessions.projectDir })
+    .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  if (stored && (stored.workspaceKind !== opts.workspaceKind || (stored.projectDir ?? null) !== projectDir)) {
+    await db.update(sessions)
+      .set({ workspaceKind: opts.workspaceKind, projectDir })
+      .where(eq(sessions.id, sessionId));
+  }
+}
+
+export async function readTeammateProjectMode(botId: string): Promise<boolean> {
+  const [row] = await getDbClient().drizzle
+    .select({ config: botProfileVersions.capabilitiesJson })
+    .from(botProfiles)
+    .innerJoin(botProfileVersions, and(
+      eq(botProfileVersions.botId, botProfiles.id),
+      eq(botProfileVersions.version, botProfiles.currentVersion),
+    ))
+    .where(eq(botProfiles.id, botId))
+    .limit(1);
+  try {
+    return readBotProjectMode(JSON.parse(row?.config ?? '{}') as Record<string, unknown>);
+  } catch {
+    return false;
+  }
 }

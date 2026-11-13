@@ -312,7 +312,6 @@
         "chat-input-border-focus": "rgba(107, 107, 103, 0.30)",
         "chat-input-chip-border": "rgba(0, 0, 0, 0.08)",
         "chat-input-text": "rgba(0, 0, 0, 0.88)",
-        "chat-input-placeholder-subtle": "var(--text-placeholder)",
         "thinking-body-text": "var(--text-secondary)",
         "color-primary": "rgba(0, 0, 0, 0.88)",
         "caret-accent": "#417CDD",
@@ -370,7 +369,7 @@
         "update-btn-border": "#3C3F43",
         "update-btn-bg": "#3C3F43",
         "update-btn-text": "#FCFCFC",
-        "update-btn-hover": "#2E3237",
+        "update-btn-hover": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
         "accent-foreground": "0.0 0.0% 0.0% / 0.88",
         "panel-bg": "#F2F2ED",
         "primary": "214.3 5.5% 24.9%",
@@ -400,8 +399,6 @@
         "send-btn-icon": "#FCFCFC",
         "send-btn-disabled-bg": "#444242",
         "send-btn-disabled-icon": "#585555",
-        "send-btn-hover-bg": "#2E3237",
-        "send-btn-pressed-bg": "#25282C",
         "ask-badge-bg": "rgba(0, 0, 0, 0.05)",
         "ask-header-chip-bg": "rgba(0, 0, 0, 0.08)",
         "cmd-palette-item-hover": "rgba(0, 0, 0, 0.05)",
@@ -430,7 +427,7 @@
         "ask-send-disabled-bg": "var(--surface-elevated-soft)",
         "completion-badge-fg": "#1f1f1e",
         "create-agent-control-bg-hover": "var(--surface-hover)",
-        "create-agent-control-bg-pressed": "var(--surface-hover-soft)",
+        "create-agent-control-bg-pressed": "rgba(0, 0, 0, 0.08)",
         "create-agent-send-icon": "#FCFCFC",
         "slider-track": "#A3A39E",
         "slider-fill": "#3C3F43",
@@ -438,7 +435,8 @@
         "segmented-selected-bg": "#FDFDF8",
         "segmented-selected-border": "#F0F0EB",
         "segmented-option-fg": "#6B6B67",
-        "segmented-hover-bg": "#E4E4DF"
+        "segmented-hover-bg": "#E4E4DF",
+        "update-btn-pressed": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
       }
     },
     "cindy-dark": {
@@ -500,7 +498,6 @@
         "chat-input-border-focus": "rgba(193, 193, 193, 0.30)",
         "chat-input-chip-border": "rgba(255, 255, 255, 0.10)",
         "chat-input-text": "rgba(255, 255, 255, 0.82)",
-        "chat-input-placeholder-subtle": "var(--text-placeholder)",
         "thinking-body-text": "var(--text-secondary)",
         "color-primary": "rgba(255, 255, 255, 0.82)",
         "caret-accent": "#417CDD",
@@ -558,7 +555,7 @@
         "update-btn-border": "#EEEEEE",
         "update-btn-bg": "#EEEEEE",
         "update-btn-text": "#151515",
-        "update-btn-hover": "#E2E2E2",
+        "update-btn-hover": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
         "accent-foreground": "0.0 0.0% 100.0% / 0.82",
         "panel-bg": "#181818",
         "primary": "0.0 0.0% 93.3%",
@@ -575,7 +572,7 @@
         "titlebar-control-hover": "0.0 0.0% 100.0% / 0.06",
         "sidebar": "0 0% 9.4%",
         "sidebar-border": "0.0 0.0% 100.0% / 0.10",
-        "sidebar-item-hover": "0.0 0.0% 100.0% / 0.09",
+        "sidebar-item-hover": "0.0 0.0% 100.0% / 0.06",
         "sidebar-search-bg": "0 0% 9.4%",
         "sidebar-search-input-bg": "rgba(0, 0, 0, 0.25)",
         "sidebar-muted": "0.0 0.0% 100.0% / 0.55",
@@ -588,8 +585,6 @@
         "send-btn-icon": "#151515",
         "send-btn-disabled-bg": "#323232",
         "send-btn-disabled-icon": "#464646",
-        "send-btn-hover-bg": "#E2E2E2",
-        "send-btn-pressed-bg": "#D4D4D4",
         "completion-badge-fg": "#121212",
         "create-agent-control-bg": "#272727",
         "create-agent-control-bg-hover": "rgba(255, 255, 255, 0.06)",
@@ -623,7 +618,8 @@
         "segmented-selected-bg": "#353535",
         "segmented-selected-border": "#3B3B3B",
         "segmented-option-fg": "#AAAAAA",
-        "segmented-hover-bg": "#292929"
+        "segmented-hover-bg": "#292929",
+        "update-btn-pressed": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
       }
     },
     "default-dark": {
@@ -853,6 +849,7 @@
         "settings-theme-auto-dark": "#282c34",
         "sidebar-action-icon": "220 9% 40%",
         "sidebar-item-active": "220 14% 20%",
+        "sidebar-item-active-border": "#61afef",
         "splash-bg": "220 13% 18%",
         "splash-text": "220 6% 53%",
         "splash-text-destructive": "219 14% 71%",

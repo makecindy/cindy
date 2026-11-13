@@ -20,6 +20,8 @@ const sharedArrayBufferPolyfill = path.join(__dirname, 'src/polyfills/sharedArra
 
 // mobile 直接吃 TS 源码的 workspace 包(见下方 .js→.ts resolveRequest 分流)。
 const workspaceTsSourcePackages = [
+  'agent-net',
+  'agent-net-protocol',
   'auth-client',
   'device-link',
   'device-link-protocol',

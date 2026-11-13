@@ -2,7 +2,7 @@
  * Plugin list/detail view models derived only from the installed Ghost contract.
  *
  * Inputs: shared Ghost manifests and install records.
- * Outputs: renderer-safe list/detail facts, including the optional Host task settings card.
+ * Outputs: renderer-safe list/detail facts, legacy icon presentation and the optional Host task settings card.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -18,7 +18,7 @@ import {
 } from '../../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
-import { marketItemMatchesInstalledGhost } from './pluginMarketPresentation';
+import { marketItemMatchesInstalledGhost, type PluginPresentationOrigin } from './pluginMarketPresentation';
 
 export interface GhostPluginListItem {
   /** Instance key (storage part). Use this for enable/uninstall/panel IPC. */
@@ -30,6 +30,8 @@ export interface GhostPluginListItem {
   name: string;
   description: string;
   publisherKind?: PluginMarketItem['publisherKind'];
+  /** Source facts from the Host; omitted for unverifiable/legacy installations. */
+  origin?: PluginPresentationOrigin;
   version: string;
   enabled: boolean;
   canUse: boolean;
@@ -135,10 +137,12 @@ export function marketPresentationForInstalledGhost(
   ) return null;
   const publisherKind = marketItem.sourceType === 'server' && marketItem.scope === 'public'
     ? marketItem.publisherKind : undefined;
+  const publicAnonymous = marketItem.sourceType === 'server' && marketItem.scope === 'public'
+    && publisherKind !== 'official';
   if (marketItem.sourceType === 'server' && marketItem.installState === 'update-available'
     && marketItem.installedAuthor !== undefined) {
     return { name: ghost.manifest.name, description: ghost.manifest.description ?? '',
-      iconDataUrl: ghost.iconDataUrl, author: marketItem.installedAuthor, publisherKind };
+      iconDataUrl: ghost.iconDataUrl, author: publicAnonymous ? null : marketItem.installedAuthor, publisherKind };
   }
   if (
     marketItem.installState !== 'installed' ||
@@ -149,13 +153,27 @@ export function marketPresentationForInstalledGhost(
   return {
     name: marketItem.name,
     description: marketItem.description ?? '',
-    author: marketItem.author,
+    author: publicAnonymous ? null : marketItem.author,
     publisherKind,
     iconDataUrl:
       marketItem.sourceType === 'git-market' && !marketItem.icon
-        ? ghost.iconDataUrl
-        : marketItem.icon?.url,
+        ? ghostPluginIconSource(ghost.iconDataUrl)
+        : ghostPluginIconSource(marketItem.icon?.url, marketItem.icon?.sha256),
   };
+}
+
+// Exact asset shipped by the old scaffold. Other solid-color author assets remain valid.
+const LEGACY_SCAFFOLD_ICON_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABEElEQVR42u3SMREAIAwAsfpFAAsKOETgtCyYgGZ4A3+J1leqbmECAEYAIABuY259HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJgEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQADodQCqFQAAmACAynYAQtWXyojiIUQAAAAASUVORK5CYII=';
+const LEGACY_SCAFFOLD_ICON_SHA256 =
+  'd4b6d2997b1472f9bdfd48a034aec12d341b5a0d541a9d19122dcb79015bf3ee';
+
+/** Treat the historical placeholder as missing without modifying the Plugin package. */
+export function ghostPluginIconSource(source?: string, sha256?: string): string | undefined {
+  if (source === LEGACY_SCAFFOLD_ICON_DATA_URL || sha256 === LEGACY_SCAFFOLD_ICON_SHA256) {
+    return undefined;
+  }
+  return source;
 }
 
 export type GhostFallbackIconKind =
@@ -163,7 +181,7 @@ export type GhostFallbackIconKind =
 
 /**
  * Chooses a restrained local symbol when a Plugin package has no icon asset.
- * This is presentation-only: a package-provided icon always wins.
+ * This is presentation-only: a real package-provided icon always wins.
  */
 export function ghostFallbackIconKind(name: string, id: string): GhostFallbackIconKind {
   const identity = `${id} ${name}`.toLocaleLowerCase();
@@ -299,6 +317,10 @@ export function toGhostPluginListItem(
     name: display.name,
     description: display.description,
     publisherKind: presentation?.publisherKind,
+    origin: ghost.publishingSource?.kind === 'public-market' ? 'public'
+      : ghost.publishingSource?.kind === 'local' || (ghost.namespaceState === 'confirmed' && ghost.namespace === 'local') ? 'local'
+        : ghost.namespaceState === 'confirmed' && ghost.namespace && ghost.namespace !== 'local'
+          ? 'organization' : undefined,
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
@@ -335,7 +357,8 @@ export function toGhostPluginDetail(
     ...listItem,
     trust: listItem.trust!,
     releaseNotes: manifest.releaseNotes,
-    author: presentation ? presentation.author : ghostFallbackDisplayAuthor(ghost),
+    author: listItem.origin === 'public' && listItem.publisherKind !== 'official'
+      ? null : presentation ? presentation.author : ghostFallbackDisplayAuthor(ghost),
     contents: ghostContentKeys(manifest),
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],

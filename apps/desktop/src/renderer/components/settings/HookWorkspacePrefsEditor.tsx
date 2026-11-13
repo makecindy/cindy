@@ -128,9 +128,9 @@ export interface HookWorkspacePrefsState {
   showTeamChip: boolean;
 }
 
-export type HookPrefsProvider = 'slack' | 'telegram' | 'x';
+export type HookPrefsProvider = 'slack' | 'telegram' | 'x' | 'feishu';
 
-/** provider-neutral prefs 线(Telegram / X): 走 provider.bind/prefs 帧, 绑定按 bindingId 归属。 */
+/** provider-neutral prefs 线(Telegram / X / 飞书): 走 provider.bind/prefs 帧, 绑定按 bindingId 归属。 */
 type NeutralPrefsProvider = Exclude<HookPrefsProvider, 'slack'>;
 function isNeutralPrefsProvider(provider: HookPrefsProvider): provider is NeutralPrefsProvider {
   return provider !== 'slack';
@@ -176,13 +176,14 @@ export function useHookWorkspacePrefs(
 
   const neutral = isNeutralPrefsProvider(provider);
   const neutralView = neutral && hook !== null ? hook[provider as NeutralPrefsProvider] : null;
-  const neutralBindingId =
-    neutralView?.binding?.state === 'confirmed' ? neutralView.binding.bindingId : null;
+  const neutralConfirmedBinding = neutralView?.bindings?.[0] ??
+    (neutralView?.binding?.state === 'confirmed' ? neutralView.binding : null);
+  const neutralBindingId = neutralConfirmedBinding?.bindingId ?? null;
   const enabled = neutral ? neutralView?.enabled === true : hook?.enabled === true;
   const connected = neutral
     ? enabled && Boolean(neutralView?.available) && neutralView?.status === 'connected'
     : enabled && hook?.status === 'connected';
-  const providerBindingConfirmed = !neutral || neutralView?.binding?.state === 'confirmed';
+  const providerBindingConfirmed = !neutral || neutralConfirmedBinding !== null;
   // 本机正本不依赖 WS：已绑定即可拉本地快照。未绑定仍不发起（避免空身份）。
   const readyIdentity = providerBindingConfirmed
     ? neutral
@@ -453,7 +454,9 @@ export function useHookWorkspacePrefs(
       ? 'settings.tina.prefs.providerTelegram'
       : provider === 'x'
         ? 'settings.tina.prefs.providerX'
-        : 'settings.tina.prefs.providerSlack',
+        : provider === 'feishu'
+          ? 'settings.tina.prefs.providerFeishu'
+          : 'settings.tina.prefs.providerSlack',
   );
   const hint = loadError === 'unavailable'
     ? t('settings.tina.prefs.serverUnsupported')

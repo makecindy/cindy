@@ -1,8 +1,9 @@
+import type { ModelImageInputCatalogModel } from '../../shared/modelImageInputOverride.js';
 import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import { projectCurrentModelSources } from './model-source-snapshots.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
-  projectProviderMediaModels,
+  projectProviderMediaModels, projectSelectionAliases,
   isCustomRoutedProvider,
   isOrganizationManagedProvider,
   stripCodexGatewayWirePrefix,
@@ -75,6 +76,7 @@ import {
 } from '@cindy/model-providers';
 
 import { selectDefaultModels } from './model-default-selection.js';
+import { codexApiModelMetadata } from './codex-api-model-capabilities.js';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
@@ -135,6 +137,10 @@ let customConfigs: CustomProviderConfig[] | null = null;
  * **additions-only**:静态 id first-wins,cache 只补未来新增模型,不会覆盖目录的受控能力元数据。
  */
 let discoveredCodex: CatalogModel[] = [];
+/** API-route engine report; never mixed with OAuth membership or persisted user edits. */
+let codexApiModels: CatalogModel[] | null = null;
+const getDiscoveredModelMetadata: NonNullable<Parameters<typeof buildUserProvider>[1]>['getDiscoveredModelMetadata'] =
+  (agent, model, routing) => codexApiModelMetadata(codexApiModels, agent, model, routing);
 /** Mirrors credential presence only; secrets stay in the existing secret store. */
 let openAiImagesApiKeyConfigured = false;
 /**
@@ -402,6 +408,14 @@ function resolveXdPiGatewayServerModelApi(
   )
     return null;
   const nativeApi = nativeApiForRoute('xd', model.id);
+  // Gemini Gateway can expose Responses even though Gemini's native API is Google.
+  // Honor that explicit execution route in every region before native metadata selects an
+  // unavailable /v1beta entry point (#9288). Keep the native identity for presentation;
+  // direct Google providers and Gateway routes without this declaration retain their policy.
+  if (
+    nativeApi === 'google-generative-ai' &&
+    model.perAgent?.pi?.wireProtocol === 'openai-responses'
+  ) return 'openai-responses';
   if (nativeApi) return nativeApi;
   const declared = piGatewayAuthorityCatalog
     ? resolveCatalogPiGatewayModelApi(piGatewayAuthorityCatalog, model.id)
@@ -444,7 +458,7 @@ function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi |
 }
 
 function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | null {
-  // Source authority is deliberate and must not be inverted:
+  // Except for the explicit Gemini Responses route handled above, retain source authority:
   // Cindy Server downloaded Catalog > version-matched local Pi table > Cindy AI Gateway hint.
   const catalogApi = resolveXdPiGatewayServerModelApi(model);
   if (catalogApi !== undefined) return catalogApi;
@@ -464,7 +478,7 @@ function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
   return (model.agents ?? []).filter((agent) => agent !== 'pi' || !serverRetired);
 }
 
-/** Resolve Cindy's canonical policy for Pi, including local metadata for Server omissions.
+/** Resolve Pi's execution policy, including local metadata for Server omissions.
  * An explicit unknown keeps only an independently declared execution route.
  */
 export function resolveXdPiGatewayServerApi(modelId: string): PiModelApi | null | undefined {
@@ -900,26 +914,47 @@ function assembleRoot(
 
 /** Registry / local override 只能补账号已返回的条目，不能重新实体化账号没有的成员。 */
 function applyLayeredConsumer(
-  model: CatalogModel,
+  model: ModelImageInputCatalogModel,
   providerId: string,
   agent: RootAgentKind,
   plan: ModelPlaneRegistryPlan,
-): CatalogModel {
-  const overlaid = applyRegistryConsumerOverlay(model, providerId, agent, model.id, plan);
+): ModelImageInputCatalogModel {
   const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
-  return (registry?.schemaVersion ?? 0) >= 4
-    ? applyModelMetadata(
-        overlaid,
-        resolveModelMetadata(
-          registry,
-          providerId,
-          model.id,
-          model.discoveredMetadata,
-          model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
-          agent,
-        ),
-      )
-    : overlaid;
+  const applyConsumer = (source: CatalogModel): CatalogModel => {
+    const overlaid = applyRegistryConsumerOverlay(source, providerId, agent, source.id, plan);
+    return (registry?.schemaVersion ?? 0) >= 4
+      ? applyModelMetadata(
+          overlaid,
+          resolveModelMetadata(
+            registry,
+            providerId,
+            source.id,
+            source.discoveredMetadata,
+            source.userModelConfig ? runtimeUserModelMetadata(source.userModelConfig) : undefined,
+            agent,
+          ),
+        )
+      : overlaid;
+  };
+  return projectImageInputDefault(model, applyConsumer);
+}
+
+/** Keep the removable image flag's source in step with retained metadata layers. */
+function projectImageInputDefault(
+  model: ModelImageInputCatalogModel,
+  project: (source: CatalogModel) => CatalogModel,
+): ModelImageInputCatalogModel {
+  const result = project(model);
+  if (model.imageInputDefault === undefined) return result;
+  const inherited = project({
+    ...model,
+    supportsImageInput: model.imageInputDefault.supportsImageInput,
+    modalities: model.imageInputDefault.modalities,
+  });
+  return {
+    ...result,
+    imageInputDefault: { supportsImageInput: inherited.supportsImageInput, modalities: inherited.modalities },
+  };
 }
 
 function xaiCatalogModelById(
@@ -1718,19 +1753,19 @@ function computeMerged(): Catalog {
             (!isCustomRoutedProvider(provider) || !!provider.auth.native) &&
             (provider.id === 'xd' || agent === 'pi')
           ) {
-            next = applyModelMetadata(
-              model,
+            next = projectImageInputDefault(model, source => applyModelMetadata(
+              source,
               resolveModelMetadata(
                 b.modelRegistry,
                 metadataProviderId,
                 model.id,
-                agent === 'pi' ? model.discoveredMetadata : model.discoveredMetadata ?? catalogModelMetadata(model),
+                agent === 'pi' ? source.discoveredMetadata : source.discoveredMetadata ?? catalogModelMetadata(source),
                 model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
                 agent,
                 undefined,
                 agent === 'pi' ? model.reasoningDefaultEffort : undefined,
               ),
-            );
+            ));
           }
           const identity =
             findModelRegistryRoute(
@@ -1749,9 +1784,9 @@ function computeMerged(): Catalog {
             findBaseModel(b.modelRegistry, model.id)?.id;
           const publicPatch = identity ? localOverrides.baseModels?.[identity] : undefined;
           if (publicPatch) {
-            next = applyModelMetadata(
-              next,
-              resolveModelMetadata(undefined, provider.id, model.id, catalogModelMetadata(next), {
+            next = projectImageInputDefault(next, source => applyModelMetadata(
+              source,
+              resolveModelMetadata(undefined, provider.id, model.id, catalogModelMetadata(source), {
                 ...publicPatch,
                 // Managed Ollama fields are generated import facts, not form edits.
                 ...(provider.source === 'user' &&
@@ -1760,7 +1795,7 @@ function computeMerged(): Catalog {
                   ? runtimeUserModelMetadata(model.userModelConfig)
                   : {}),
               }),
-            );
+            ));
           }
           return applyExistingModelLocalPatch(
             provider.id,
@@ -1908,8 +1943,11 @@ function computeMerged(): Catalog {
           : undefined;
         const contextWindow = Math.min(model.contextWindow, declaredWindow ?? 272_000);
         if (contextWindow === model.contextWindow) return model;
+        // A working fallback is not evidence of physical capacity. Preserve a
+        // declared maximum, or retain the original window only when verified.
         return { ...model, contextWindow,
-          contextWindowMax: model.contextWindowMax ?? model.contextWindow };
+          ...(model.contextWindowMax === undefined && model.contextWindowVerified === true
+            ? { contextWindowMax: model.contextWindow } : {}) };
       }),
     ])),
   }));
@@ -1934,6 +1972,18 @@ function computeMerged(): Catalog {
       }),
     ])) };
   });
+  providers = providers.map((provider) => projectSelectionAliases(provider, modelRegistry, {
+    hasUserMetadata: (agent, model) => {
+      const catalogId = providerCatalogId(provider);
+      const identity = findModelRegistryRoute(modelRegistry, catalogId, model.id)?.entry.modelRef ??
+        findBaseModel(modelRegistry, model.id)?.id;
+      const key = `${encodeURIComponent(provider.id)}:${model.id}`;
+      return !!(identity && localOverrides.baseModels?.[identity]) ||
+        !!localOverrides.additions[key] ||
+        !!(localOverrides.patches[key] && (!localOverrides.patches[key].agents ||
+          localOverrides.patches[key].agents?.includes(agent)));
+    },
+  }));
   return { ...b, modelRegistry, providers };
 }
 
@@ -2028,7 +2078,7 @@ function installActiveCatalog(
   baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
-      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets }),
+      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets, getDiscoveredModelMetadata }),
     );
   }
   markChanged();
@@ -2116,6 +2166,7 @@ export function commitModelPlaneFromCatalog(
       buildUserProvider(config, {
         modelRegistry: trustedCustomProviderRegistry,
         presets: (base ?? BUNDLED_CATALOG).presets,
+        getDiscoveredModelMetadata,
       }),
     );
   }
@@ -2167,9 +2218,21 @@ export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void 
     buildUserProvider(config, {
       modelRegistry: trustedCustomProviderRegistry,
       presets: (base ?? BUNDLED_CATALOG).presets,
+      getDiscoveredModelMetadata,
     }),
   );
   markChanged();
+}
+
+export function hasCodexApiModelCapabilities(): boolean {
+  return codexApiModels !== null;
+}
+
+/** Replace the complete API-route engine report and re-project current raw configs. */
+export function setCodexApiModelCapabilities(models: CatalogModel[] | null): void {
+  codexApiModels = models;
+  if (customConfigs) setCustomProviderConfigs(customConfigs);
+  else markChanged();
 }
 
 /**

@@ -15,6 +15,7 @@ export function UserMessageImageLink({
   return (
     <>
       <span
+        data-chat-copy-content
         role="button"
         tabIndex={0}
         onClick={(event) => fileMenu.onActivate(event, open)}

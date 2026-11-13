@@ -6,7 +6,7 @@
  * are ever sent through Electron IPC to the Renderer.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { validateHeaderName, validateHeaderValue } from 'node:http';
 import {
   isLoopbackProviderUrl,
@@ -39,6 +39,12 @@ import {
   configuredPresetAgents,
 } from '../../shared/piRuntimeInitialization.js';
 import { presetConnectionRuntime } from '../../shared/presetConnectionRuntime.js';
+import type {
+  LocalProviderImportItem,
+  LocalProviderSource,
+  LocalProviderIssue,
+} from '../../shared/localProviderImport.js';
+import type { LocalSourceEntry } from './local/sources.js';
 
 const IMPORT_TTL_MS = 10 * 60_000;
 const MAX_URL_LENGTH = 32 * 1024;
@@ -106,6 +112,14 @@ type DraftRecord = {
   scope?: ProviderImportScope;
   resolution?: ProviderImportResolution;
   confirming: boolean;
+  local?: {
+    source: LocalProviderSource;
+    entry: LocalSourceEntry;
+    original: string;
+    reload: () => Promise<LocalSourceEntry | undefined>;
+    issue?: LocalProviderIssue;
+    completed?: string;
+  };
 };
 
 export interface ProviderImportResolution {
@@ -603,7 +617,9 @@ function parsePayload(value: unknown, maxModels: number): ProviderImportDraft {
   ) {
     fail('data.endpoints must be a bounded non-empty array');
   }
-  const endpoints = input.endpoints.map((endpoint, index) => parseEndpoint(endpoint, index, maxModels));
+  const endpoints = input.endpoints.map((endpoint, index) =>
+    parseEndpoint(endpoint, index, maxModels),
+  );
   if (
     auth?.method === 'none' &&
     endpoints.some(
@@ -698,7 +714,8 @@ function decodeBase64Url(value: string): string {
 }
 
 function pruneExpired(now = Date.now()): void {
-  for (const [id, record] of drafts) if (record.expiresAt <= now) drafts.delete(id);
+  for (const [id, record] of drafts)
+    if (!record.confirming && record.expiresAt <= now) drafts.delete(id);
 }
 
 /** Both transports use the same validation, ownership, preview and confirmation lifecycle. */
@@ -706,15 +723,21 @@ function createDraft(value: unknown, maxModels: number, scope?: ProviderImportSc
   const draft = parsePayload(value, maxModels);
   if (draft.kind === 'custom' && draft.config.auth?.method === 'oauth') {
     const discovery = draft.config.auth.oauth?.modelsDiscoveryUrl;
-    if (discovery && Object.values(draft.config.runtimes).some(
-      (runtime) => new URL(runtime!.baseUrl).origin !== new URL(discovery).origin,
-    )) fail('OAuth model discovery must share every runtime origin');
+    if (
+      discovery &&
+      Object.values(draft.config.runtimes).some(
+        (runtime) => new URL(runtime!.baseUrl).origin !== new URL(discovery).origin,
+      )
+    )
+      fail('OAuth model discovery must share every runtime origin');
   }
   pruneExpired();
   if (drafts.size >= MAX_DRAFTS) fail('too many pending provider imports');
   const importId = randomUUID();
   drafts.set(importId, {
-    draft, expiresAt: Date.now() + IMPORT_TTL_MS, confirming: false,
+    draft,
+    expiresAt: Date.now() + IMPORT_TTL_MS,
+    confirming: false,
     ...(scope ? { scope: { ...scope } } : {}),
   });
   return importId;
@@ -738,11 +761,19 @@ function decodeProviderImportFile(bytes: Buffer): unknown {
 }
 
 /** Validate the whole batch before exposing any drafts; rollback only in-memory drafts on failure. */
-export function createProviderImportDraftsFromFile(bytes: Buffer, scope: ProviderImportScope): string[] {
+export function createProviderImportDraftsFromFile(
+  bytes: Buffer,
+  scope: ProviderImportScope,
+): string[] {
   const input = object(decodeProviderImportFile(bytes), 'data');
-  if (!Object.hasOwn(input, 'providers')) return [createDraft(input, MAX_FILE_MODELS_PER_ENDPOINT, scope)];
+  if (!Object.hasOwn(input, 'providers'))
+    return [createDraft(input, MAX_FILE_MODELS_PER_ENDPOINT, scope)];
   exactFields(input, ['providers'], 'data');
-  if (!Array.isArray(input.providers) || !input.providers.length || input.providers.length > MAX_FILE_PROVIDERS)
+  if (
+    !Array.isArray(input.providers) ||
+    !input.providers.length ||
+    input.providers.length > MAX_FILE_PROVIDERS
+  )
     fail('providers must contain 1 to 50 configurations');
   const ids: string[] = [];
   const destinations = new Set<string>();
@@ -752,8 +783,12 @@ export function createProviderImportDraftsFromFile(bytes: Buffer, scope: Provide
       ids.push(id);
       const draft = drafts.get(id)!.draft;
       const source = object(value, 'provider');
-      const destination = draft.kind === 'builtin' ? `builtin:${draft.provider}`
-        : typeof source.id === 'string' ? `custom:${source.id.trim()}` : undefined;
+      const destination =
+        draft.kind === 'builtin'
+          ? `builtin:${draft.provider}`
+          : typeof source.id === 'string'
+            ? `custom:${source.id.trim()}`
+            : undefined;
       if (destination) {
         if (destinations.has(destination)) fail('duplicate provider identity in file');
         destinations.add(destination);
@@ -934,6 +969,8 @@ export function previewProviderImport(
   const record = requireRecord(importId);
   if (record.scope && !sameScope(record.scope, scope)) fail('the active account changed');
   if (record.confirming) fail('provider import confirmation is already running');
+  if (record.local && (record.local.issue || record.local.completed))
+    fail('local import requires input or was completed');
   materializePreset(record, presets);
   const resolution = resolveDraft(record.draft, providers, target);
   record.scope = { ...scope };
@@ -975,10 +1012,11 @@ export function previewProviderImport(
     importId: importId as string,
     kind: 'custom',
     name: draft.config.name,
+    ...(record.local ? { localSource: record.local.source } : {}),
     authMethod,
     ...resolution,
     runtimes,
-    updateTargets: providers
+    updateTargets: (record.local ? [] : providers)
       .filter((provider) => canUpdate(draft, provider))
       .map(({ id, name }) => ({ id, name })),
     ...(oauth
@@ -1015,7 +1053,13 @@ export function beginProviderImportConfirm(
 export function finishProviderImportConfirm(importId: string, succeeded: boolean): void {
   const record = drafts.get(importId);
   if (!record) return;
-  if (succeeded) drafts.delete(importId);
+  if (succeeded && record.local && record.draft.kind === 'custom') {
+    const providerId = record.draft.config.id;
+    record.local.completed = providerId;
+    record.local.entry = { ref: '', name: '', endpoints: [] };
+    record.draft = { kind: 'custom', config: { id: providerId, name: '', runtimes: {} }, keys: {} };
+    record.confirming = false;
+  } else if (succeeded) drafts.delete(importId);
   else record.confirming = false;
 }
 
@@ -1026,4 +1070,291 @@ export function cancelProviderImport(importId: unknown): void {
 /** Test-only reset for deterministic isolation. */
 export function clearProviderImportDraftsForTest(): void {
   drafts.clear();
+}
+
+/** Stable Main-only comparison. Neither this material nor its digest crosses IPC. */
+export function localEntryVersion(entry: LocalSourceEntry): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonical(entry)))
+    .digest('hex');
+}
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => [k, canonical(v)]),
+    );
+  return value;
+}
+function localHasCredential(endpoint: LocalSourceEntry['endpoints'][number]): boolean {
+  return (
+    !!endpoint.apiKey ||
+    Object.entries(endpoint.headers ?? {}).some(
+      ([k, v]) => /^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(k) && !!v,
+    )
+  );
+}
+function rebuildLocalDraft(record: DraftRecord): void {
+  const local = record.local!;
+  record.resolution = undefined;
+  if (local.entry.issue) {
+    local.issue = local.entry.issue;
+    return;
+  }
+  if (
+    !local.entry.endpoints.length ||
+    local.entry.endpoints.some((e) => !e.baseUrl || !e.protocol || !localHasCredential(e))
+  ) {
+    local.issue = 'needsInput';
+    return;
+  }
+  try {
+    const previousId = record.draft.kind === 'custom' ? record.draft.config.id : '';
+    const draft = parsePayload(
+      {
+        kind: 'custom',
+        name: local.entry.name,
+        auth: { method: 'apiKey' },
+        endpoints: local.entry.endpoints.map(({ agent, ...e }) => ({ ...e, targets: [agent] })),
+      },
+      MAX_FILE_MODELS_PER_ENDPOINT,
+    );
+    if (draft.kind !== 'custom') fail('invalid local draft');
+    draft.config.id = previousId;
+    for (const e of local.entry.endpoints) {
+      for (const model of draft.config.runtimes[e.agent]?.models ?? []) {
+        if (e.models.find((m) => m.id === model.id)?.defaultEnabled === true)
+          model.defaultEnabled = true;
+      }
+    }
+    record.draft = draft;
+    local.issue = undefined;
+  } catch {
+    local.issue = 'invalid';
+  }
+}
+/** Shares the existing quota, expiry, owner and confirmation store. */
+export function createLocalProviderImport(
+  source: LocalProviderSource,
+  entry: LocalSourceEntry,
+  scope: ProviderImportScope,
+  reload: () => Promise<LocalSourceEntry | undefined>,
+): LocalProviderImportItem {
+  pruneExpired();
+  if (drafts.size >= MAX_DRAFTS) fail('too many pending provider imports');
+  const id = randomUUID();
+  const record: DraftRecord = {
+    draft: {
+      kind: 'custom',
+      config: { id: `local-${randomUUID().replaceAll('-', '')}`, name: entry.name, runtimes: {} },
+      keys: {},
+    },
+    scope: { ...scope },
+    expiresAt: Date.now() + IMPORT_TTL_MS,
+    confirming: false,
+    local: { source, entry: structuredClone(entry), original: localEntryVersion(entry), reload },
+  };
+  rebuildLocalDraft(record);
+  drafts.set(id, record);
+  return localProviderImportItem(id, scope);
+}
+export function isLocalProviderImport(id: unknown): boolean {
+  return typeof id === 'string' && !!drafts.get(id)?.local;
+}
+/** Main-only access for comparing with owner-scoped persisted credentials. */
+export function localProviderImportDraft(
+  id: string,
+  scope: ProviderImportScope,
+): ProviderImportDraft {
+  const record = localRecord(id, scope);
+  if (record.local!.issue || record.local!.completed) fail('local import is not ready');
+  return record.draft;
+}
+export function completeEquivalentLocalImport(
+  id: string,
+  providerId: string,
+  scope: ProviderImportScope,
+): void {
+  const record = localRecord(id, scope);
+  if (record.draft.kind !== 'custom') fail('invalid local draft');
+  record.draft.config.id = providerId;
+  finishProviderImportConfirm(id, true);
+}
+function localRecord(id: unknown, scope: ProviderImportScope): DraftRecord {
+  const record = requireRecord(id);
+  if (!record.local || !sameScope(record.scope, scope))
+    fail('local import expired or owner changed');
+  return record;
+}
+export function localProviderImportItem(
+  id: string,
+  scope: ProviderImportScope,
+): LocalProviderImportItem {
+  const record = localRecord(id, scope),
+    local = record.local!;
+  // Malformed URL text may itself contain a secret. Never show query/userinfo fragments.
+  const safeUrl = (raw: string): string => {
+    try {
+      const u = new URL(raw);
+      return /^https?:$/.test(u.protocol) && !u.username && !u.password && !u.search && !u.hash
+        ? u.toString()
+        : '';
+    } catch {
+      return '';
+    }
+  };
+  return {
+    importId: id,
+    source: local.source,
+    name: local.entry.name.slice(0, 60),
+    ...(local.entry.disabled ? { disabled: true } : {}),
+    ...(local.issue ? { issue: local.issue } : {}),
+    endpoints: local.entry.endpoints.map((e) => ({
+      agent: e.agent,
+      protocol: e.protocol,
+      baseUrl: safeUrl(e.baseUrl),
+      hasCredential: localHasCredential(e),
+    })),
+  };
+}
+export function editLocalProviderImport(
+  id: unknown,
+  input: unknown,
+  scope: ProviderImportScope,
+): LocalProviderImportItem {
+  const record = localRecord(id, scope),
+    local = record.local!;
+  if (record.confirming || local.completed || local.entry.issue || local.issue === 'changed')
+    fail('local import cannot be edited');
+  const edit = object(input, 'edit');
+  exactFields(edit, ['name', 'endpoints'], 'edit');
+  const name = boundedString(edit.name, 'name', 60);
+  if (!Array.isArray(edit.endpoints) || edit.endpoints.length !== local.entry.endpoints.length)
+    fail('invalid local endpoints');
+  const endpoints = edit.endpoints.map((raw, i) => {
+    const e = object(raw, 'endpoint');
+    exactFields(e, ['baseUrl', 'protocol', 'apiKey'], 'endpoint');
+    const baseUrl = httpUrl(e.baseUrl, 'baseUrl', false, true);
+    if (!PROTOCOLS.includes(e.protocol as ProviderWireProtocol)) fail('invalid protocol');
+    const prior = local.entry.endpoints[i];
+    // Exact destination/protocol edits release old credentials and discovery destination.
+    let same = false;
+    try {
+      same =
+        new URL(baseUrl).toString() === new URL(prior.baseUrl).toString() &&
+        e.protocol === prior.protocol;
+    } catch {
+      /* missing source URL */
+    }
+    const { apiKey: oldKey, headers, modelsUrl, requestPath, ...rest } = prior;
+    const ordinaryHeaders = Object.fromEntries(
+      Object.entries(headers ?? {}).filter(
+        ([k]) => !/^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(k),
+      ),
+    );
+    const replacement =
+      e.apiKey === undefined
+        ? undefined
+        : e.apiKey === ''
+          ? ''
+          : parseApiKey(e.apiKey, 'apiKey', MAX_API_KEY_LENGTH);
+    const authHeaders = Object.entries(headers ?? {}).filter(([k]) =>
+      /^(authorization|x-api-key|api-key|x-goog-api-key)$/i.test(k),
+    );
+    const headerAuth =
+      !oldKey &&
+      e.protocol === prior.protocol &&
+      authHeaders.length === 1 &&
+      (authHeaders[0][0].toLowerCase() !== 'authorization' || /^Bearer\s+/i.test(authHeaders[0][1]))
+        ? authHeaders[0]
+        : undefined;
+    const replacementHeaders = {
+      ...(same ? ordinaryHeaders : {}),
+      ...(headerAuth && replacement
+        ? {
+            [headerAuth[0]]:
+              headerAuth[0].toLowerCase() === 'authorization'
+                ? `Bearer ${replacement}`
+                : replacement,
+          }
+        : {}),
+    };
+    return {
+      ...rest,
+      baseUrl,
+      protocol: e.protocol as ProviderWireProtocol,
+      ...(same ? { apiKey: oldKey, headers, modelsUrl, requestPath } : {}),
+      ...(replacement !== undefined
+        ? {
+            apiKey: headerAuth ? undefined : replacement || undefined,
+            headers: Object.keys(replacementHeaders).length ? replacementHeaders : undefined,
+          }
+        : {}),
+    };
+  });
+  local.entry = { ...local.entry, name, endpoints };
+  rebuildLocalDraft(record);
+  return localProviderImportItem(id as string, scope);
+}
+export async function checkLocalProviderImportSource(
+  id: unknown,
+  scope: ProviderImportScope,
+): Promise<string | undefined> {
+  if (!isLocalProviderImport(id)) return;
+  const record = localRecord(id, scope),
+    local = record.local!;
+  if (record.confirming) fail('local confirmation is running');
+  if (local.completed) return local.completed;
+  const current = await local.reload();
+  localRecord(id, scope);
+  if (!current || localEntryVersion(current) !== local.original) {
+    local.issue = 'changed';
+    record.resolution = undefined;
+    fail('saved source changed; scan again');
+  }
+  if (local.issue) fail('local import requires input');
+}
+/** Ignore discovered models only when the source supplied no explicit model selection. */
+export function equivalentLocalProvider(
+  draft: ProviderImportDraft,
+  config: CustomProviderConfig,
+  keys: Partial<Record<AgentKind, string>>,
+): boolean {
+  if (draft.kind !== 'custom' || (config.auth?.method ?? 'apiKey') !== 'apiKey') return false;
+  const incoming = draft.config;
+  if (Object.keys(incoming.runtimes).sort().join() !== Object.keys(config.runtimes).sort().join())
+    return false;
+  for (const agent of AGENTS) {
+    const a = incoming.runtimes[agent],
+      b = config.runtimes[agent];
+    if (!a || !b) {
+      if (a || b) return false;
+      continue;
+    }
+    const { models: ms, ...route } = a;
+    const { models: otherModels, ...otherRoute } = b;
+    if (
+      JSON.stringify(canonical(route)) !== JSON.stringify(canonical(otherRoute)) ||
+      (draft.keys[agent] ?? '') !== (keys[agent] ?? '')
+    )
+      return false;
+    if (
+      ms.length &&
+      (ms.length !== otherModels.length ||
+        ms.some(
+          (m) =>
+            !otherModels.some((other) =>
+              Object.entries(m).every(
+                ([k, v]) =>
+                  JSON.stringify(canonical(v)) ===
+                  JSON.stringify(canonical(other[k as keyof typeof other])),
+              ),
+            ),
+        ))
+    )
+      return false;
+  }
+  return true;
 }
