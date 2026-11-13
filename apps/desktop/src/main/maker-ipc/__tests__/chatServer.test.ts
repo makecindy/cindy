@@ -2143,18 +2143,19 @@ describe('Chat Server result delivery and refresh', () => {
       ]);
     });
 
-    it.each([selfId, peerId])('separates public execution visibility from stop permission for %s', async requester => {
+    // A stopping own execution must not enable stop while a peer is still running (P2 review regression).
+    it.each([selfId, peerId].flatMap(requester => ['running', 'stopping'].map(status => [requester, status])))('separates public execution visibility from stop permission for %s (%s)', async (requester, status) => {
       members = cindyMembers.map(m => ({ ...m, role: 'member' }));
       const previous = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => {
         if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupSingleSpeaker: 1 }, groupAssistantActorId: cindyId } };
-        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(50, requester), status: 'running' }] };
+        if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(50, requester), status }, { ...request(51, peerId), status: 'running' }] };
         return previous(route, method, body);
       });
       const result = await service.getGroup(roomId);
       if (!result.ok) throw new Error(result.errorCode);
-      expect(result.group.round.speakers).toHaveLength(1);
-      expect(result.group.round.canStop).toBe(requester === selfId);
+      expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
+      expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;
