@@ -2699,7 +2699,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       throw error;
     }
   }
-  /** The group's Cindy on this computer: one ordinary visible task per group (`groupAssistantTask.ts`). */
+  /** The group's Cindy on this computer: one ordinary visible task per main group or Thread (`groupAssistantTask.ts`). */
   const assistantTasks = createGroupAssistantTasks({
     current, store: () => chatServerAssistantSessions(config.baseUrl, selfId, current),
     folders: projectFolders, get ensureSession() { return deps.ensureGroupAssistantSession; },
@@ -2772,7 +2772,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!live()) throw new Error('STALE_EXECUTOR');
       // Words in the Thread of a task card it posted go into that task.
       if (source.threadRootId && await runInCardTask(run, s, Promise.resolve(source))) return;
-      const task = await assistantTasks.forRequest(s.room, () => running.get(execution.id) === run && !run.settlement);
+      const task = await assistantTasks.forRequest(s.room, () => running.get(execution.id) === run && !run.settlement, source.threadRootId ?? undefined);
       if (!live()) throw new Error('STALE_EXECUTOR');
       const sessionId = task.sessionId;
       const threadRootId = source.threadRootId ?? undefined;
