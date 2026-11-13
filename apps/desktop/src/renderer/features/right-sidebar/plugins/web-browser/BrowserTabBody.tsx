@@ -98,6 +98,8 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 测试)按可见处理,与 active 的既有缺省语义一致。
   const tabVisible = active === true && shellVisible !== false;
   const [chromeOverlayOpen, setChromeOverlayOpen] = useState(false);
+  const [nativeFocusRequest, setNativeFocusRequest] = useState(0);
+  const restoreNativePageFocus = useCallback(() => setNativeFocusRequest((value) => value + 1), []);
   // BrowserChrome 的 imperative ref —— Cmd/Ctrl+L 快捷键调它的 focusUrlBar()。
   const chromeRef = useRef<BrowserChromeHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -116,6 +118,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     tabId,
     slotRef,
     tabVisible && !chromeOverlayOpen,
+    nativeFocusRequest,
   );
   const browser = isNativePopup ? nativeBrowser : webviewBrowser;
   const lastNavigatedWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -497,6 +500,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         onOpenInSystemBrowser={handleOpenInSystemBrowser}
         onCopyLink={handleCopyLink}
         onOverlayOpenChange={setChromeOverlayOpen}
+        onRestorePageFocus={isNativePopup ? restoreNativePageFocus : undefined}
       />
       {/* webview slot:flex-1 占满剩余空间。pool 的 wrapper 用 100% width/height
           填满,所以这里不需要再设尺寸。

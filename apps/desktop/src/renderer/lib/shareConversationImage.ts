@@ -327,10 +327,11 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         img.remove();
         return;
       }
-      // Bundled avatars use relative asset URLs. Read them like the bundled
-      // footer artwork; absolute/managed URLs retain the shared byte reader.
-      const relativeAsset = !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(src);
-      if (!relativeAsset && !isImageBytesReachable(src)) {
+      // Vite emits relative URLs in dev, but new URL(..., import.meta.url)
+      // produces file: URLs for assets in the packaged renderer. Read both
+      // like the footer artwork, without admitting arbitrary local files.
+      const bundledAsset = isBundledShareImage(src);
+      if (!bundledAsset && !isImageBytesReachable(src)) {
         log.warn('share image: unreachable image source, dropping', {
           scheme: src.slice(0, 16),
         });
@@ -338,7 +339,7 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         return;
       }
       try {
-        if (relativeAsset) img.setAttribute('src', await sameOriginToDataUrl(src));
+        if (bundledAsset) img.setAttribute('src', await sameOriginToDataUrl(src));
         else {
           const { base64, mimeType } = await loadImageSourceBase64(src);
           img.setAttribute('src', `data:${mimeType};base64,${base64}`);
@@ -353,6 +354,19 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
       }
     }),
   );
+}
+
+function isBundledShareImage(src: string): boolean {
+  if (!/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(src)) return true;
+  if (window.location.protocol !== 'file:') return false;
+  try {
+    const asset = new URL(src);
+    const directory = new URL('./assets/', window.location.href);
+    return asset.protocol === 'file:' && asset.host === directory.host
+      && asset.pathname.startsWith(directory.pathname);
+  } catch {
+    return false;
+  }
 }
 
 /**

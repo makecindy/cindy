@@ -214,6 +214,7 @@ describe('BrowserTabBody navigation', () => {
       'tab-browser',
       expect.any(Object),
       true,
+      0,
     );
     expect(sharedWrapper.isConnected).toBe(false);
     expect(browserNavigate).not.toHaveBeenCalled();
@@ -231,6 +232,7 @@ describe('BrowserTabBody navigation', () => {
       'tab-browser',
       expect.any(Object),
       false,
+      0,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'mock.dropdown.close' }));
@@ -240,6 +242,7 @@ describe('BrowserTabBody navigation', () => {
       'tab-browser',
       expect.any(Object),
       true,
+      0,
     );
   });
 

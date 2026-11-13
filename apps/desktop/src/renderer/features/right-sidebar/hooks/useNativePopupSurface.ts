@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 import { createLogger } from '@/lib/logger';
 
@@ -58,9 +58,11 @@ export function useNativePopupSurface(
   tabId: string,
   slotRef: RefObject<HTMLDivElement | null>,
   visible: boolean,
+  focusRequest = 0,
 ): UseNativePopupSurfaceResult {
   const [snapshot, setSnapshot] = useState<RsbNativePopupSnapshot>(EMPTY_SNAPSHOT);
   const [closed, setClosed] = useState(false);
+  const consumedFocusRequest = useRef(focusRequest);
 
   useEffect(() => {
     if (!surfaceId || !sessionId) return;
@@ -119,10 +121,13 @@ export function useNativePopupSurface(
           right > left &&
           bottom > top &&
           !isCoveredByGlobalOverlay(slot!, (left + right) / 2, (top + bottom) / 2);
+        // Consume even when hidden/covered: a delayed show must not steal focus.
+        const focus = actuallyVisible && consumedFocusRequest.current !== focusRequest;
+        consumedFocusRequest.current = focusRequest;
         // A streaming chat can mutate the host DOM on every frame. Only send
         // changes in native geometry/visibility, not one IPC per text update.
         if (
-          lastUpdate?.visible === actuallyVisible &&
+          !focus && lastUpdate?.visible === actuallyVisible &&
           lastUpdate.bounds.x === left && lastUpdate.bounds.y === top &&
           lastUpdate.bounds.width === width && lastUpdate.bounds.height === height
         ) return;
@@ -130,6 +135,7 @@ export function useNativePopupSurface(
           surfaceId,
           bounds: { x: left, y: top, width, height },
           visible: actuallyVisible,
+          ...(focus ? { focus: true } : {}),
         };
         lastUpdate = update;
         void window.electronAPI.rsbNativePopup
@@ -175,7 +181,7 @@ export function useNativePopupSurface(
         })
         .catch(() => undefined);
     };
-  }, [slotRef, surfaceId, visible]);
+  }, [slotRef, surfaceId, visible, focusRequest]);
 
   const command = useCallback(
     (input: RsbNativePopupCommand) => {

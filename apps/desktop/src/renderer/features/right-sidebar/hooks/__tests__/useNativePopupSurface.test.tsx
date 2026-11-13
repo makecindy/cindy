@@ -29,9 +29,9 @@ const panelRect = new DOMRect(40, 40, window.innerWidth - 80, window.innerHeight
 const originalHitTest = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
 const originalHitStack = Object.getOwnPropertyDescriptor(document, 'elementsFromPoint');
 
-function NativeTab({ visible = true }: { visible?: boolean }) {
+function NativeTab({ visible = true, focusRequest = 0 }: { visible?: boolean; focusRequest?: number }) {
   const slot = useRef<HTMLDivElement>(null);
-  useNativePopupSurface('surface-canvas', 'session-a', 'tab-canvas', slot, visible);
+  useNativePopupSurface('surface-canvas', 'session-a', 'tab-canvas', slot, visible, focusRequest);
   return <div ref={slot} data-native-slot />;
 }
 
@@ -113,6 +113,28 @@ describe('native popup visibility beneath global previews', () => {
     else Reflect.deleteProperty(document, 'elementFromPoint');
     if (originalHitStack) Object.defineProperty(document, 'elementsFromPoint', originalHitStack);
     else Reflect.deleteProperty(document, 'elementsFromPoint');
+  });
+
+  // Unit regression #10449: a native menu restore must accompany showing the
+  // real page, occur once, and be discarded on hiding; geometry-only tests
+  // could not detect a lost native keyboard focus request.
+  it('sends native focus once with restored visibility and discards a hidden request', async () => {
+    const view = render(<NativeTab visible={false} />);
+    await flushFrame();
+    view.rerender(<NativeTab focusRequest={1} />);
+    await flushFrame();
+    expect(native.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true, focus: true }));
+    native.setBounds.mockClear();
+    fireEvent(window, new Event('resize'));
+    await flushFrame();
+    expect(native.setBounds).not.toHaveBeenCalled();
+    view.rerender(<NativeTab visible={false} focusRequest={2} />);
+    await flushFrame();
+    expect(native.setBounds.mock.calls.every(([input]) => input.focus !== true)).toBe(true);
+    view.rerender(<NativeTab focusRequest={2} />);
+    await flushFrame();
+    expect(native.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true }));
+    expect(native.setBounds.mock.calls.every(([input]) => input.focus !== true)).toBe(true);
   });
 
   it('hides for a real video preview through its closing animation, then restores the same page', async () => {
