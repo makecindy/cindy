@@ -130,7 +130,7 @@ export function mergeBotGroupMessages(
  * Missing timestamps on older hosts precede history instead of following every new message.
  * Never use update/observation time: incremental updates must keep an execution in place.
  */
-export function interleaveBotGroupWork<M extends { createdAt: number }, W extends { startedAt?: number }>(
+export function interleaveBotGroupWork<M extends { createdAt: number; id?: string }, W extends { startedAt?: number }>(
   messages: readonly M[], work: readonly W[],
 ): Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> {
   const timestamp = (item: W) => Number.isFinite(item.startedAt) ? item.startedAt! : 0;
@@ -138,7 +138,8 @@ export function interleaveBotGroupWork<M extends { createdAt: number }, W extend
   const result: Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> = [];
   let index = 0;
   for (const [messageIndex, message] of messages.entries()) {
-    while (index < pending.length && timestamp(pending[index]!) < message.createdAt) {
+    // Projected failures stay beside their source; their update time is not a history anchor.
+    while (!message.id?.startsWith('execution-failure:') && index < pending.length && timestamp(pending[index]!) < message.createdAt) {
       result.push({ kind: 'work', value: pending[index++]! });
     }
     result.push({ kind: 'message', value: message, index: messageIndex });
