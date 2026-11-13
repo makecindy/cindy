@@ -103,6 +103,11 @@ describe('sharedProjectPrefs', () => {
       agentKind: 'codex', model: 'shared-model', permissionMode: 'ask',
     });
     expect(getWorkspacePref('telegram', null, 'gone').model).toBeNull();
+    // 共用那份里清空的项目不留空行(它不镜像, 留着只会一直占条数上限)。
+    const stored = JSON.parse(
+      fs.readFileSync(path.join(tmp.dir, 'hook-workspace-prefs.json'), 'utf-8'),
+    ) as { entries: Array<{ channel: string; workspace: string }> };
+    expect(stored.entries.filter((row) => row.channel === 'shared').map((row) => row.workspace)).toEqual(['repo']);
     // 改过的行等着推给服务端(服务端这时还是旧值)。
     const pending = reconcileWorkspacePrefsForMirror('telegram', [
       { workspace: 'repo', model: 'old-tg', effort: null, agentKind: null, permissionMode: null },

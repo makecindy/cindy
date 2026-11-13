@@ -349,7 +349,10 @@ export function setWorkspacePref(
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
   // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null。
   // 镜像回执必须对上 rev，才允许 markWorkspacePrefMirrored 清墓碑或去掉 dirty。
-  const entries = [...rest, nextRow];
+  // 共用那一份不镜像到任何服务端, 全空行没有「待清空」要传达: 不存在与全空同义, 直接不留。
+  // 留着的话它永远不会被清掉, 配置过又清空的项目会一直占着条数上限。
+  const entries =
+    channel === SHARED_PREFS_CHANNEL && isBlankRow(nextRow) ? rest : [...rest, nextRow];
   if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }
