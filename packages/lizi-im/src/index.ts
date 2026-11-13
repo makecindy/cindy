@@ -7,6 +7,8 @@
  */
 
 export const VERSION = '0.0.0';
+export { setTransportTextResolver } from './transportText.js';
+export type { TransportTextResolver, TransportTextVars } from './transportText.js';
 export { UnsupportedInboundMediaError } from './inboundKind.js';
 export { buildInboundMessageFacts } from './inboundFacts.js';
 export type { InboundMessageFacts } from './inboundFacts.js';
@@ -62,6 +64,23 @@ export type { DownloadResult as FeishuDownloadResult } from './feishu/attachment
 
 export { DiscordIM, createDiscordIM } from './discord/index.js';
 export type { DiscordConfigState, DiscordIMOptions } from './discord/index.js';
+export {
+  decodeDiscordLaneUserId,
+  encodeDiscordLaneUserId,
+  EMPTY_DISCORD_CHANNEL_ACCESS,
+  isDiscordLaneAdmitted,
+  isDiscordLaneEnabled,
+  normalizeDiscordChannelAccess,
+} from './discord/lane.js';
+export type {
+  DiscordChannelAccessConfig,
+  DiscordChannelAccessEntry,
+  DiscordChannelAccessStore,
+  DiscordGuildAccessEntry,
+  DiscordGuildMode,
+  DiscordLane,
+} from './discord/lane.js';
+export type { DiscordGuildChannelInfo, DiscordGuildInfo } from './discord/guildDirectory.js';
 
 export { TelegramIM, createTelegramIM } from './telegram/index.js';
 // expressive 档变体池 —— 官方 bot 的 ack 表情复用同一份, 两个 bot 的表情语义

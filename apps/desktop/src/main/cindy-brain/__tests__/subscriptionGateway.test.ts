@@ -37,6 +37,9 @@ import {
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
+import { createRuntimePluginControl } from '../runtimeControl.js';
+import { createRuntimeContextProviders } from '../runtimeContext.js';
+import type { RuntimePluginSettings } from '../../../shared/pluginRuntime.js';
 
 const createSessionNotification = createGhostProductionCallbacks<{
   notifyGhostSessionEvent(
@@ -1751,6 +1754,26 @@ describe('control points', () => {
   };
   const approved = (id: string): InstalledGhost => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point] });
 
+  // Runtime latency contract, unit/fake timers: silence reaches the selected
+  // failure policy at each new point's own deadline, not the legacy 8s limit.
+  it.each([['will-start-turn', 1000], ['will-compose-context', 2000], ['will-search-memory', 1500], ['will-model-request', 1000]] as const)
+    ('bounds unanswered %s at %dms', async (runtimePoint, timeoutMs) => {
+      const provider = { ...ghost('runtime', { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] };
+      const { gw, running, sent } = makeGateway({ listGhosts: () => [provider] });
+      running.add('runtime');
+      const input = { sessionId: 'task', route: { agentKind: 'pi' as const, model: 'm', providerId: 'p' },
+        phase: 'select' as const, text: 'text', query: 'query', limit: 10 };
+      let settled = false;
+      const pending = gw.screenControlPoint(runtimePoint, input, { pluginId: 'runtime', onFailure: 'allow' });
+      void pending.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(sent[0].payload).toMatchObject({ deadline: 1000 + timeoutMs });
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({ action: 'allow' });
+      expect(settled).toBe(true);
+    });
+
   it('asks only the chosen plugin and returns its skip', async () => {
     const { gw, sent, running } = makeGateway({ listGhosts: () => [approved('p1'), approved('p2')] });
     running.add('p1').add('p2');
@@ -1811,5 +1834,147 @@ describe('control points', () => {
     await vi.advanceTimersByTimeAsync(0);
     verdict(2, { agentKind: 'cc', model: 'opus', providerId: 'anthropic' });
     expect(await runPoint).toEqual({ action: 'allow' });
+  });
+
+  // Runtime points are opt-in per task; installing a router cannot give it other
+  // tasks. Unlike the legacy new-task selector, invalid runtime answers use the
+  // task's failure policy. Unit: real gateway, in-memory transport, fake timers.
+  it('routes only the selected runtime plugin and retains request preferences', async () => {
+    const runtimePoint = 'will-start-turn' as const;
+    const ghosts = ['r1', 'r2'].map(id => ({ ...ghost(id, { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] }));
+    const listGhosts = vi.fn(() => ghosts);
+    const findGhostForDelivery = vi.fn((id: string) => ghosts.find(item => installedGhostStoragePart(item) === id) ?? null);
+    const { gw, sent, running } = makeGateway({
+      listGhosts, findGhostForDelivery,
+    });
+    running.add('r1');
+    running.add('r2');
+    const route = { agentKind: 'pi' as const, model: 'm1', providerId: 'p', effort: 'high', fastMode: true };
+    const response = gw.screenControlPoint(runtimePoint, { sessionId: 'task', text: 'work', attachmentCount: 0, route }, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(1);
+    gw.handleVerdict('r2', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await response).toMatchObject({ action: 'route', ghostId: 'r1', route });
+    // Performance contract: check fresh target approval before and after the
+    // ask without scanning unrelated installations on every model request.
+    expect(listGhosts).not.toHaveBeenCalled();
+    expect(findGhostForDelivery.mock.calls).toEqual([['r1'], ['r1']]);
+  });
+
+  it('processes a request only at the model-request point and follows failure policy for invalid routes', async () => {
+    const requestPoint = 'will-model-request' as const;
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [requestPoint] }), approvedControlPoints: [requestPoint] }],
+    });
+    running.add('r1');
+    const input = { sessionId: 'task', phase: 'payload' as const, route: { agentKind: 'pi' as const, model: 'm1', providerId: 'p' }, request: { model: 'm1', max_tokens: 100 } };
+    const response = gw.screenControlPoint(requestPoint, input, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'transform', request: { model: 'm1', max_tokens: 200 } });
+    expect(await response).toMatchObject({ action: 'transform', request: { model: 'm1', max_tokens: 200 } });
+    const invalid = gw.screenControlPoint(requestPoint, { ...input, phase: 'select' }, { pluginId: 'r1', onFailure: 'skip' });
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[1].payload as { hookId: string }).hookId, action: 'route', route: { agentKind: 'pi' } });
+    expect(await invalid).toMatchObject({ action: 'skip', failure: true });
+  });
+
+  it('rejects a runtime answer from an installation replaced during the ask', async () => {
+    const point = 'will-start-turn' as const;
+    const selected = { ...ghost('r1', { hooks: [point] }), approvedControlPoints: [point],
+      approval: { state: 'approved' as const, revision: '00000000-0000-4000-8000-000000000001' } };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [selected] });
+    running.add('r1');
+    const route = { agentKind: 'pi' as const, providerId: 'p', model: 'm' };
+    const response = gw.screenControlPoint(point, { sessionId: 'task', route }, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    selected.approval.revision = '00000000-0000-4000-8000-000000000002';
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await response).toMatchObject({ action: 'block', failure: true });
+  });
+
+  // PR #9803: a fast provider can be revoked while another provider is pending.
+  // Existing gateway tests stop at delivery; exercise the real collection and
+  // application entry, with no network/waits (unit/fake timers). Minimum input:
+  // two providers, first answers, its enable/approval changes, second answers.
+  it.each((['disabled', 'approval'] as const).flatMap(change => [
+    ['will-compose-context', 'allow', change], ['will-compose-context', 'skip', change],
+    ['will-compose-context', 'block', change], ['will-search-memory', 'allow', change],
+  ] as const))('rechecks collected %s with %s policy after %s changes', async (point, onFailure, change) => {
+    const selected = ['first', 'second'].map(id => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point],
+      approval: { state: 'approved' as const, revision: '00000000-0000-4000-8000-000000000001' } }));
+    const listGhosts = vi.fn(() => selected);
+    const { gw, sent, running } = makeGateway({ listGhosts,
+      findGhostForDelivery: id => selected.find(item => installedGhostStoragePart(item) === id) ?? null });
+    for (const item of selected) running.add(installedGhostStoragePart(item));
+    const settings: RuntimePluginSettings = { [point]: selected.map(item => ({ pluginId: item.manifest.id, onFailure })) };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    const providers = createRuntimeContextProviders(control);
+    const pending = point === 'will-compose-context' ? providers.compose('task', 'current input')
+      : providers.search({ sessionId: 'task', query: 'word', limit: 10 });
+    const observed = pending!.then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+    await vi.advanceTimersByTimeAsync(0);
+    const reply = (id: string) => {
+      const event = sent.find(item => item.ghostId === id)!.payload;
+      gw.handleVerdict(id, { type: 'event-verdict', hookId: (event as { hookId: string }).hookId,
+        ...(point === 'will-compose-context' ? { action: 'context', blocks: [{ id, text: id }] }
+          : { action: 'memories', entries: [{ id, title: id, content: id }] }) });
+    };
+    reply('first');
+    await vi.advanceTimersByTimeAsync(0);
+    if (change === 'disabled') selected[0].enabled = false;
+    else selected[0].approval.revision = '00000000-0000-4000-8000-000000000002';
+    reply('second');
+    const outcome = await observed;
+    if (onFailure !== 'allow') expect(outcome.error).toMatchObject({ action: onFailure, failure: true });
+    else if (point === 'will-search-memory') expect(outcome.value).toMatchObject({ hits: [{ id: 'second', sourcePlugin: { id: 'second' } }] });
+    else {
+      expect(outcome.error).toBeUndefined();
+      expect(typeof outcome.value).toBe('string');
+      expect(JSON.parse(outcome.value as string)).toMatchObject({ sourcePlugin: { id: 'second' }, blocks: [{ id: 'second', text: 'second' }] });
+    }
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  // The same approval boundary also spans asynchronous host route validation.
+  it.each(['will-start-turn', 'will-model-request'] as const)('rechecks %s before applying an asynchronous host effect', async point => {
+    const selected = { ...ghost('router', { hooks: [point] }), approvedControlPoints: [point] };
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => selected });
+    running.add('router');
+    const settings: RuntimePluginSettings = { [point]: [{ pluginId: 'router', onFailure: 'block' }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    const route = { agentKind: 'pi' as const, providerId: 'p', model: 'm' };
+    const applied = vi.fn();
+    const pending = control.run(point, 'task', async () => ({ sessionId: 'task', phase: 'select' as const, route }),
+      async (_result, _input, assertCurrent) => {
+        await Promise.resolve();
+        selected.enabled = false;
+        assertCurrent();
+        applied();
+      });
+    const observed = pending!.then(() => undefined, error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('router', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await observed).toMatchObject({ action: 'block', failure: true });
+    expect(applied).not.toHaveBeenCalled();
+  });
+
+  it.each(['will-compose-context', 'will-search-memory'] as const)('validates provider results and times out %s without blocking', async point => {
+    const selected = { ...ghost('provider', { hooks: [point] }), approvedControlPoints: [point] };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [selected] });
+    running.add('provider');
+    const data = point === 'will-compose-context' ? { sessionId: 'task', text: 'read' }
+      : { sessionId: 'task', query: 'word', limit: 10 };
+    const pending = gw.screenControlPoint(point, data, { pluginId: 'provider', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(0);
+    const answer = point === 'will-compose-context' ? { action: 'context', blocks: [{ id: 'a', text: 'reference', sourcePlugin: 'forged' }] }
+      : { action: 'memories', entries: [{ id: 'a', title: 'Title', content: 'Full memory', sourcePlugin: 'forged' }] };
+    gw.handleVerdict('provider', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, ...answer });
+    expect(JSON.stringify(await pending)).not.toContain('forged');
+    const timeout = gw.screenControlPoint(point, data, { pluginId: 'provider', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(8001);
+    expect(await timeout).toEqual({ action: 'allow' });
   });
 });

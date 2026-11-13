@@ -95,7 +95,10 @@ interface Runtime {
   events: ProviderShareHostEvents;
   scope: string | null;
   shares: ProviderShareOwned[];
+  unavailable: ReadonlySet<string>;
   fetchedAt: number;
+  /** 最近一次本机分享读取是否完整(各分享服务都读到了)。 */
+  complete: boolean;
   hotUntil: number;
   timer: ReturnType<typeof setTimeout> | null;
   refreshing: Promise<void> | null;
@@ -291,6 +294,15 @@ export function getProviderShareHostLoadedSnapshot(): readonly ProviderShareOwne
 }
 
 /**
+ * 与 {@link getProviderShareHostLoadedSnapshot} 相同，但只在最近一次读取完整时返回：有分享服务暂时
+ * 读不到时为 null，供只能做一次、漏读就无法补救的判断使用。
+ */
+export function getProviderShareHostCompleteSnapshot(): readonly ProviderShareOwned[] | null {
+  const rt = runtime;
+  return rt && rt.complete ? getProviderShareHostLoadedSnapshot() : null;
+}
+
+/**
  * 同账号其他电脑上的分享：窗口期内关注的那条分享出现的申请由本机弹窗；已关注的申请从快照里消失
  * (在任一台电脑上处理、撤回或过期)时移除。只用于弹窗，不进入本机快照，不影响受邀者准入。
  */
@@ -347,7 +359,9 @@ export function startProviderShareHost(events: ProviderShareHostEvents, options:
     events,
     scope,
     shares: [],
+    unavailable: new Set(),
     fetchedAt: 0,
+    complete: false,
     hotUntil: 0,
     timer: null,
     refreshing: null,
@@ -389,6 +403,7 @@ export function refreshProviderShareHost(reason: string): Promise<void> {
     try {
       const shares = await providerShareApi.listOwned();
       if (!current(rt)) return;
+      rt.unavailable = new Set(shares.unavailableShareIds);
       const self = getDeviceId();
       const next = shares.filter((share) => !self || share.hostDeviceId === self);
       const before = rt.shares;
@@ -398,9 +413,10 @@ export function refreshProviderShareHost(reason: string): Promise<void> {
       }
       await rt.events.prepareSnapshot?.(next);
       if (!current(rt) || rt.shares !== before) return;
+      rt.complete = !shares.authorityIncomplete;
       applySnapshot(rt, next, !!rt.events.prepareSnapshot);
       rt.blockedMembers.clear();
-      if (!rt.reconciled) {
+      if (!rt.reconciled && !shares.authorityIncomplete) {
         rt.reconciled = true;
         rt.events.reconcile(new Map(rt.shares.map((share) => [share.shareId, new Set(share.members.map((member) => member.memberId))])));
       }
@@ -455,6 +471,7 @@ export async function verifyProviderShareMemberGeneration(member: ProviderShareM
   if (!rt || !current(rt)) throw new Error('Provider share owner changed');
   const shares = await providerShareApi.listOwned();
   if (!current(rt)) throw new Error('Provider share owner changed');
+  if (shares.unavailableShareIds?.includes(member.shareId)) throw new Error('Provider share authority unavailable');
   const saved = shares.find((share) => share.shareId === member.shareId && share.hostDeviceId === getDeviceId())
     ?.members.find((entry) => entry.memberId === member.memberId);
   if (!saved || saved.status !== 'active' || saved.joinedAt !== member.joinedAt) {
@@ -559,6 +576,7 @@ function checkGuestAccess(controller: string): GuestAccessCheck {
   if (!current(rt)) return { denied: 'host-scope-stale' };
   const peer = parseProviderSharePeer(controller);
   if (!peer || peer.role !== 'guest') return { denied: 'not-guest-peer' };
+  if (rt.unavailable.has(peer.shareId)) return { denied: 'snapshot-not-loaded' };
   const self = getDeviceId();
   if (self && peer.deviceId === self) return { denied: 'self-device' };
   const share = rt.shares.find((item) => item.shareId === peer.shareId);

@@ -2,7 +2,7 @@
  * 自建中转服务:main / preload / renderer 共用的 IPC 契约。
  * 方案见 docs/self-hosted-relay-plan.md。只接受本机应用窗口调用,不经设备互联代理。
  */
-import type { RelayJoinErrorCode } from '@cindy/device-link';
+import type { AgentNetSwitchDisableBlock, RelayJoinErrorCode } from '@cindy/device-link';
 
 export const SELF_HOSTED_RELAY_IPC = {
   COMMAND: 'self-hosted-relay:command',
@@ -13,15 +13,28 @@ export const DEFAULT_RELAY_PORT = 47820;
 
 export type SelfHostedRelayCommand =
   | { type: 'state' }
+  | { type: 'set-agent-net'; enabled: boolean }
+  | { type: 'set-agent-net-encryption'; enabled: boolean }
+  /**
+   * 问 / 请同账号另一台电脑打开或关闭它的 Agent-Net(agent-net.md「远程切换其他电脑的连接方式」)。
+   * 只转发给那台电脑，不改这台电脑的任何设置；结果在命令返回的 `peer` 里。
+   */
+  | { type: 'peer-agent-net'; deviceId: string; request: PeerAgentNetRequest }
   /** 在这台电脑上开启中转;已开启时按新设置重启。 */
   | { type: 'enable-host'; port: number; listenAll: boolean; externalUrl: string | null }
   /** 停用本机中转,并切回官方中转。 */
   | { type: 'disable-host' }
-  /** 生成一次性加入链接(10 分钟有效)。 */
-  | { type: 'create-join-link' }
+  /** 一次性分享链接(5 分钟有效):`fresh` 为 false 时沿用还在有效期内的那条。 */
+  | { type: 'create-join-link'; fresh?: boolean }
   | { type: 'decide'; requestId: string; approve: boolean }
-  /** 加入别的中转:粘贴主人电脑给出的加入链接。 */
+  /** 加入别的中转:粘贴对方发来的分享链接。 */
   | { type: 'join'; link: string }
+  /** 重读同账号其他电脑正在用的中转(打开中转页时一次)。 */
+  | { type: 'refresh-account-relays' }
+  /** 加入同账号另一台电脑的中转:不用链接,那台电脑自动放行。 */
+  | { type: 'join-account-relay'; ownerDeviceId: string; relayId: string }
+  /** 主人:不再把中转分享给这个账号(它在中转上的网络连同设备一起删掉)。`tenantId` 是那个网络 ID。 */
+  | { type: 'revoke-tenant'; tenantId: string }
   | { type: 'cancel-join' }
   /** 切回 Cindy 官方中转(成员退出中转;主人停用本机中转;服务器上的中转继续运行)。 */
   | { type: 'use-official' }
@@ -97,6 +110,10 @@ export type RelayDeployErrorCode =
   | 'CA_UNREACHABLE'
   /** 服务器上中转已运行,但这台电脑访问不到(通常是 443 端口没对外开放)。 */
   | 'NOT_REACHABLE'
+  /** Agent-Net did not become ready on the server; HTTPS reachability is a separate check. */
+  | 'AGENT_NET_START_FAILED'
+  /** HTTPS works, but the authenticated Agent-Net directory could not be verified. */
+  | 'AGENT_NET_VERIFY_FAILED'
   /** 这个版本的 Cindy 没有带中转程序(开发环境未构建)。 */
   | 'BUNDLE_MISSING'
   | 'DEPLOY_FAILED';
@@ -118,7 +135,15 @@ export type SelfHostedRelayErrorCode =
   /** 已有部署任务在进行。 */
   | 'BUSY'
   | 'INVALID_ADDRESS'
-  | 'NO_DEPLOYMENT';
+  | 'NO_DEPLOYMENT'
+  /** 同账号加入:那台电脑在等待时间内没有回应(没开 Cindy、离线或没连上账号服务)。 */
+  | 'OWNER_UNAVAILABLE'
+  /** 同账号加入:那台电脑已经不在用这个中转。 */
+  | 'RELAY_UNAVAILABLE'
+  /** 读写账号里的中转目录失败(连不上 Cindy 账号服务)。 */
+  | 'ACCOUNT_DIRECTORY_UNAVAILABLE'
+  /** 别的账号的分享链接,但这条中转还不能分享给其他账号(没开新版加密连接,或服务器上的中转版本太旧)。 */
+  | 'SHARE_UNSUPPORTED';
 
 export interface SelfHostedRelayPairRequestView {
   requestId: string;
@@ -128,14 +153,45 @@ export interface SelfHostedRelayPairRequestView {
   replacesExisting: boolean;
   /** 配对证明与这台电脑生成的加入链接一致;为 false 时只能拒绝。 */
   verified: boolean;
+  /** 中转收到申请的时间。 */
+  requestedAt?: string;
+  /** 来自其他账号(要用这条中转建自己的网络),值是对方账号的显示名。 */
+  accountName?: string;
 }
 
+/** 主人:这条中转分享给了哪些账号(每个账号在中转上有自己的网络,互相看不到)。 */
+export interface SelfHostedRelayTenantView {
+  tenantId: string;
+  accountName: string;
+  /** 这个账号在中转上的设备数。 */
+  devices: number;
+  online: boolean;
+  createdAt: string;
+}
+
+/**
+ * 加入进度。`accountRelayId` 表示这次是加入同账号另一台电脑的中转(不用链接、不显示配对码),
+ * 界面把进度写在那一行里。
+ */
 export type SelfHostedRelayJoinView =
   | { status: 'idle' }
-  | { status: 'connecting' }
-  | { status: 'waiting'; relayName: string; verifyCode: string }
+  | { status: 'connecting'; accountRelayId?: string }
+  | { status: 'waiting'; relayName: string; verifyCode: string; accountRelayId?: string }
   | { status: 'joined'; relayName: string }
-  | { status: 'failed'; error: SelfHostedRelayErrorCode };
+  | { status: 'failed'; error: SelfHostedRelayErrorCode; accountRelayId?: string };
+
+/** 同账号另一台电脑正在用的中转(经账号私有记录同步;不含秘密)。 */
+export interface SelfHostedRelayAccountRelayView {
+  ownerDeviceId: string;
+  ownerDeviceName: string;
+  relayId: string;
+  name: string;
+  baseUrl: string;
+  /** `shared`:别人分享给这个账号、由那台电脑加入的中转。 */
+  kind: 'server' | 'host' | 'shared';
+  /** `shared` 时分享者的名字(可能没有)。 */
+  sharedBy?: string | null;
+}
 
 /** 部署日志只传受控事件，不把 SSH 原始输出、证书材料或凭证交给界面。 */
 export type RelayDeployProgressMessage =
@@ -204,10 +260,33 @@ export interface SelfHostedRelayDeploymentView {
 }
 
 export interface SelfHostedRelayState {
+  /** Actual Main-owned device preference, absent on old hosts. */
+  agentNetEnabled?: boolean;
+  agentNetOnlyEncrypted?: boolean;
+  /**
+   * 原型(agent-net.md「远程切换其他电脑的连接方式」):最近一次由同账号其他设备远程打开 / 关闭 Agent-Net 的记录，
+   * 开关下面写「由谁在几点打开」;这台电脑自己再改开关后清除。旧版主进程不提供。
+   */
+  agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
   /** 已登录且系统安全存储可用。 */
   available: boolean;
   mode: 'official' | 'self-hosted';
-  relay: { name: string; baseUrl: string; role: 'owner' | 'member'; origin: 'host' | 'server' | 'join' } | null;
+  relay: {
+    name: string;
+    baseUrl: string;
+    role: 'owner' | 'member';
+    origin: 'host' | 'server' | 'join';
+    /** 旧版主进程不提供。 */
+    relayId?: string;
+    /** 别人分享给这个账号的中转;`ownerName` 是分享者的名字。 */
+    shared?: { ownerName: string | null };
+  } | null;
+  /** 同账号其他电脑正在用的中转,不含这台电脑自己的;旧版主进程不提供。 */
+  accountRelays?: SelfHostedRelayAccountRelayView[];
+  /** 这台电脑现在的主连接:Agent-Net(对方也开启时端到端加密)或 Device Link。旧版主进程不提供。 */
+  connection?: 'agent-net' | 'device-link';
+  /** 主人:这条中转分享给了哪些账号;不支持或不是主人时不提供。 */
+  tenants?: SelfHostedRelayTenantView[];
   /** 自建模式下的连接情况:设备被移出中转 / 凭证被拒。 */
   issue: 'removed' | 'unauthorized' | null;
   host: {
@@ -225,7 +304,8 @@ export interface SelfHostedRelayState {
   deployJob: SelfHostedRelayDeployJobView | null;
   /** 这个版本 Cindy 自带的中转版本;null = 没带(开发环境未构建)。 */
   bundledRelayVersion: string | null;
-  joinLink: { link: string; expiresAt: string } | null;
+  /** `otherAccounts`:其他账号也能用这条链接(中转支持分享给其他账号)。 */
+  joinLink: { link: string; expiresAt: string; otherAccounts?: boolean } | null;
   pendingRequests: SelfHostedRelayPairRequestView[];
   join: SelfHostedRelayJoinView;
 }
@@ -267,16 +347,47 @@ export function relayBaseUrlForAddress(address: string): string {
 }
 
 /** 校验来自 renderer 的命令;不合法时返回 null。 */
+function parsePeerAgentNetRequest(raw: unknown): PeerAgentNetRequest | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.action === 'status') return { action: 'status' };
+  const switchId = typeof r.switchId === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(r.switchId) ? r.switchId : null;
+  if (!switchId) return null;
+  if (r.action === 'set' && typeof r.enabled === 'boolean') return { action: 'set', enabled: r.enabled, switchId };
+  if (r.action === 'confirm') return { action: 'confirm', switchId };
+  return null;
+}
+
 export function parseSelfHostedRelayCommand(raw: unknown): SelfHostedRelayCommand | null {
   if (!isRecord(raw) || typeof raw.type !== 'string') return null;
   switch (raw.type) {
+    case 'set-agent-net':
+    case 'set-agent-net-encryption':
+      return typeof raw.enabled === 'boolean' ? { type: raw.type, enabled: raw.enabled } : null;
+    case 'create-join-link':
+      if (raw.fresh !== undefined && typeof raw.fresh !== 'boolean') return null;
+      return { type: 'create-join-link', fresh: raw.fresh === true };
     case 'state':
     case 'disable-host':
-    case 'create-join-link':
     case 'cancel-join':
     case 'use-official':
     case 'dismiss-deploy-job':
+    case 'refresh-account-relays':
       return { type: raw.type };
+    case 'peer-agent-net': {
+      const deviceId = typeof raw.deviceId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(raw.deviceId) ? raw.deviceId : null;
+      const request = parsePeerAgentNetRequest(raw.request);
+      return deviceId && request ? { type: 'peer-agent-net', deviceId, request } : null;
+    }
+    case 'join-account-relay': {
+      const relayId = relayIdOf(raw);
+      const ownerDeviceId = typeof raw.ownerDeviceId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(raw.ownerDeviceId) ? raw.ownerDeviceId : null;
+      return relayId && ownerDeviceId ? { type: 'join-account-relay', ownerDeviceId, relayId } : null;
+    }
+    case 'revoke-tenant': {
+      const tenantId = typeof raw.tenantId === 'string' && RELAY_ID_PATTERN.test(raw.tenantId) ? raw.tenantId : null;
+      return tenantId ? { type: 'revoke-tenant', tenantId } : null;
+    }
     case 'upgrade-deployment':
     case 'forget-deployment':
     case 'use-deployment':
@@ -301,7 +412,8 @@ export function parseSelfHostedRelayCommand(raw: unknown): SelfHostedRelayComman
       return { type: 'enable-host', port, listenAll: raw.listenAll, externalUrl: externalUrl?.trim() || null };
     }
     case 'decide':
-      if (typeof raw.requestId !== 'string' || !/^[0-9a-f-]{36}$/.test(raw.requestId)) return null;
+      // `tenant:` 其他账号的申请;`v2:` 只走 V2 的网络上的设备申请。
+      if (typeof raw.requestId !== 'string' || !/^(?:tenant:|v2:)?[0-9a-f-]{36}$/.test(raw.requestId)) return null;
       if (typeof raw.approve !== 'boolean') return null;
       return { type: 'decide', requestId: raw.requestId, approve: raw.approve };
     case 'join':
@@ -325,9 +437,20 @@ export function parseSelfHostedRelayCommand(raw: unknown): SelfHostedRelayComman
   }
 }
 
+/** 发给另一台电脑的请求，与 @cindy/device-link 的 AgentNetSwitchRequest 同形(那台电脑再校验一次)。 */
+export type PeerAgentNetRequest =
+  | { action: 'status' }
+  | { action: 'set'; enabled: boolean; switchId: string }
+  | { action: 'confirm'; switchId: string };
+
+/** 那台电脑的回答;`code` 是 device-link 错误码(旧版本是 CHANNEL_NOT_ALLOWED),`message` 里带 [AGENT_NET_SWITCH_*]。 */
+export type PeerAgentNetReply = { ok: true; result: unknown; controllerBlock?: AgentNetSwitchDisableBlock | null } | { ok: false; code: string; message: string };
+
 export interface SelfHostedRelayCommandResult {
   state: SelfHostedRelayState;
   error?: SelfHostedRelayErrorCode;
+  /** 只有 `peer-agent-net` 返回。 */
+  peer?: PeerAgentNetReply;
   /** 只有 `check-server` 返回。 */
   check?: SelfHostedRelayServerCheck;
   /** 只有 `deployment-status` 返回。 */
@@ -343,6 +466,10 @@ export interface SelfHostedRelayDeploymentStatus {
   onlineDevices?: number;
   /** 中转自己申请的证书的到期时间;沿用已有网站证书时为 null。 */
   certificateExpiresAt?: string | null;
+  /** 中转带 Agent-Net(V2)内核;false = 只有 Device Link。读不到时不提供。 */
+  agentNet?: boolean;
+  /** 中转能分享给其他账号(V2 的 tenants-v1)。 */
+  tenants?: boolean;
 }
 
 /** `window.electronAPI.selfHostedRelay`。 */

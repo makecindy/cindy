@@ -746,3 +746,17 @@ Run this checklist:
 - Manually touch the exact path that regressed in the simulator.
 - Run `pnpm mobile:sim:logcheck` afterward and report its result.
 - Tell the tester which simulator/device, runtime, and build were used.
+
+### Generic simulator builds and native library slices
+
+`sim-rebuild.mjs` passes `ARCHS=<simArch>` even for the generic iOS Simulator
+destination used by Cindy-managed devices. Agent-Net builds the simulator slice
+for the host architecture, and the simulator cache is keyed by that same architecture.
+Without this setting, Xcode can request both `arm64 x86_64`; CocoaPods then skips
+copying `CindyAgentNetNative.xcframework` because no slice contains both, and Swift
+reports `Unable to resolve module dependency: CindyAgentNetNative`. Do not patch
+generated Pods or remove the Swift import.
+
+Keep the full `xcodebuild` output (redirect it to a task log when needed), rather
+than using `-quiet`: the full build report identifies the failed target and missing
+module; the quiet log can instead lead with `exit code 0 but produced no further output`.

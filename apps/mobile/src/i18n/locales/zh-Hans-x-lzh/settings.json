@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "推送诊断",
+    "read": "读取推送状态",
+    "busy": "读取中…",
+    "failed": "无法读取推送状态，请重试。",
+    "copyFailed": "无法复制令牌。",
+    "copied": "令牌已复制。",
+    "bundle": "应用 ID",
+    "build": "构建号",
+    "environment": "APNs 环境",
+    "permission": "系统权限",
+    "alerts": "横幅提醒",
+    "lockScreen": "锁定屏幕",
+    "notificationCenter": "通知中心",
+    "copy": "复制 APNs 令牌",
+    "hide": "隐藏结果",
+    "unknown": "未知",
+    "on": "已开启",
+    "off": "已关闭",
+    "hint": "仅点击后读取。APNs 令牌只在本页显示，不写入诊断记录，也不由此工具上传；离开页面或切到后台后隐藏。复制仅用于 Apple 推送控制台；已复制的内容仍留在剪贴板。",
+    "permissions": {
+      "granted": "已允许",
+      "denied": "已拒绝",
+      "undetermined": "尚未请求",
+      "provisional": "静默送达"
+    }
+  },
   "localLogs": {
     "upload": "上呈日志",
     "uploadResult": {
@@ -17,9 +44,15 @@
     "cancel": "罢",
     "uploadCopied": "日志已上呈，编号 {{code}} 已录",
     "uploadSucceeded": "日志已上呈，编号 {{code}}",
-    "footer": "日志存于手机，至多 7 天、8 MB，不自动上呈。所输之完整日志不含言谈内文与凭证；上呈仅遣筛后之运行记录与版本信息。"
+    "footer": "日志存于手机，至多 7 天、8 MB，不自动上呈。所输之完整日志不含言谈内文与凭证；上呈仅遣筛后之执行记录与版本信息。"
   },
   "title": "规制",
+  "promptRecommendation": {
+    "label": "输入之议",
+    "description": "答毕荐续语，唯此机适用。",
+    "saveFailed": "此番已生效，然未存妥。",
+    "reset": "复默认"
+  },
   "appearance": {
     "title": "仪容",
     "modeLabel": "显示之式",
@@ -30,7 +63,7 @@
     },
     "saveFailed": "显示模式未能存，重启后将复前设",
     "userBubble": {
-      "title": "吾讯气泡之色",
+      "title": "君讯气泡之色",
       "presets": "色",
       "default": "常例",
       "peach": "初稿",
@@ -125,8 +158,8 @@
     "title": "Beta 试行之途",
     "badge": "Beta",
     "description": "先受将发之用户端更新。内容更新于下次察时取下，重启 App 后生效。",
-    "saveFailed": "Beta 测试管道之设未能存",
-    "unavailable": "Beta 测试管道暂不可用，连不上 Beta 更新服务器。"
+    "saveFailed": "Beta 试行之设未能存",
+    "unavailable": "Beta 试行之途暂不可用，连不上 Beta 更新服务器。"
   },
   "notifications": {
     "sectionTitle": "告",
@@ -136,7 +169,7 @@
     "unregisterQueued": "已阖，连网后自动完成注销。",
     "preview": "示讯之先览",
     "background": "后台通知",
-    "backgroundActive": "方于背景收讯",
+    "backgroundActive": "方于后台收讯",
     "backgroundStop": "止收",
     "backgroundHint": "Google 推播或不可用时，Cindy 自维后台之连，连通时常驻示之。",
     "googleUnavailable": "Google 推播暂不可用，将依通知之设维后台之连。",
@@ -144,7 +177,11 @@
       "auto": "自动",
       "on": "常启",
       "off": "关闭"
-    }
+    },
+    "actionReplyPlaceholder": "书覆",
+    "actionNotDelivered": "未达电脑，请启 Cindy 处之。",
+    "actionReplyNotDelivered": "覆未发出，请启 Cindy 再发：{{text}}",
+    "actionRequestEnded": "此请已决，或已逾期。"
   },
   "about": {
     "sectionTitle": "关于此手机",
@@ -270,7 +307,7 @@
       "retry": "重新取下",
       "failed": {
         "network": "辨识模型取下未成，请察网络后再试。",
-        "disk": "辨识模型未能存，请察手机保存空间后再试。",
+        "disk": "辨识模型未能存，请察手机存储空间后再试。",
         "checksum": "所取之辨识模型验证未过，请再试。",
         "unavailable": "暂不能取得辨识模型，请稍后再试。"
       }
@@ -302,7 +339,7 @@
       }
     },
     "enroll": {
-      "description": "请以平常语气朗读下列 {{clips}} 段文字。每段至多录 {{seconds}} 秒，读毕点击结束录音。请于平日用语音输入之处录之，勿令他人同时说话。",
+      "description": "请以平常语气朗读下列 {{clips}} 段文字。每段至多录 {{seconds}} 秒，读毕点击「止录」。请于平日用语音输入之处录之，勿令他人同时说话。",
       "step": "第 {{current}} / {{total}} 段",
       "record": "始朗读",
       "stop": "止录",
@@ -334,7 +371,7 @@
         "recording": "方录"
       },
       "rerecordStep": "再录第 {{index}} 段",
-      "readHint": "备妥即始朗读，读毕点击结束录音。",
+      "readHint": "备妥即始朗读，读毕点击「止录」。",
       "otherClipsKept": "他段之录音皆存。"
     }
   },
@@ -370,7 +407,7 @@
     "reset": "复预设",
     "voiceKey": {
       "title": "语音键",
-      "hint": "长按此键始言，释之则止，所言之字留于输入框。于首页长按，则径开新务。若择 A、B、L1、R1，则其本有之准、返、翻页皆为所占。",
+      "hint": "长按此键始言，释之则止，所言之字留于输入框。于首页长按，则径开新差事。若择 A、B、L1、R1，则其本有之准、返、翻页皆为所占。",
       "capture": "按手柄之键以设之",
       "capturing": "请按欲用之键…"
     },

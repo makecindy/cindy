@@ -33,6 +33,13 @@ import { createLogger } from '../logger';
 
 
 export interface DeviceLinkSettings {
+  /** Device-local V2 preference; absent in existing files means V1. */
+  agentNetEnabled?: boolean;
+  agentNetOnlyEncrypted?: boolean;
+  /** 同账号另一台电脑最近一次远程打开 / 关闭 Agent-Net(开关下面写「由谁在几点」);本机再改后清除。 */
+  agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
+  /** 远程打开 Agent-Net 后等待确认的那一次;没确认前由被切的电脑自己兜底退回(agentNetRemoteSwitch.ts)。 */
+  agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number; restoring?: boolean } | null;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
@@ -62,6 +69,8 @@ const { getUserDataDir, withAvailabilityPolicyMutation } = ports;
 const log = createLogger('device-link-settings');
 
 const DEFAULTS: DeviceLinkSettings = {
+  agentNetEnabled: false,
+  agentNetOnlyEncrypted: false,
   remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
@@ -79,6 +88,11 @@ function normalize(raw: unknown): DeviceLinkSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const r = raw as Record<string, unknown>;
   return {
+    agentNetEnabled: r.agentNetEnabled === true,
+    agentNetOnlyEncrypted: r.agentNetOnlyEncrypted === true,
+    // 远程切换的两条记录只在发生过时出现，旧文件与默认值的形状不变。
+    ...optional('agentNetChangedBy', normalizeAgentNetChange(r.agentNetChangedBy)),
+    ...optional('agentNetPendingSwitch', normalizeAgentNetPendingSwitch(r.agentNetPendingSwitch)),
     remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,
@@ -89,6 +103,26 @@ function normalize(raw: unknown): DeviceLinkSettings {
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
   };
+}
+
+function optional<K extends 'agentNetChangedBy' | 'agentNetPendingSwitch'>(key: K, value: DeviceLinkSettings[K]): Partial<Pick<DeviceLinkSettings, K>> {
+  return value ? { [key]: value } as Partial<Pick<DeviceLinkSettings, K>> : {};
+}
+
+function normalizeAgentNetChange(raw: unknown): DeviceLinkSettings['agentNetChangedBy'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.deviceId !== 'string' || typeof r.deviceName !== 'string' || typeof r.at !== 'number' || typeof r.enabled !== 'boolean') return null;
+  return { deviceId: r.deviceId, deviceName: r.deviceName.slice(0, 120), at: r.at, enabled: r.enabled };
+}
+
+function normalizeAgentNetPendingSwitch(raw: unknown): DeviceLinkSettings['agentNetPendingSwitch'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.switchId !== 'string' || typeof r.controllerId !== 'string' || typeof r.previous !== 'boolean'
+    || typeof r.deadlineAt !== 'number' || typeof r.pid !== 'number') return null;
+  return { switchId: r.switchId, controllerId: r.controllerId, previous: r.previous, deadlineAt: r.deadlineAt, pid: r.pid,
+    ...(r.restoring === true ? { restoring: true } : {}) };
 }
 
 function normalizeStringList(raw: unknown): string[] {

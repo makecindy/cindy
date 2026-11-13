@@ -1,7 +1,8 @@
 import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabilityUsage.js';
 import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
 import { onProviderGroupChanged } from '../provider-group/store.js';
-import { migrateRemoteProviderAccessDefault, onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
+import { keepSharedProvidersOpen, onRemoteProviderAccessChanged, sharedProviderIdsForRevert } from '../maker-host/remote-provider-access-store.js';
+import { readOpenAiLegacyAccountsIfReadable } from '../subscription-accounts/store.js';
 import { onDeviceLinkSettingChanged } from './settings-store.desktop.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
@@ -30,9 +31,11 @@ import {
   isProviderAccessDeniedError,
   parseProviderSharePeer,
   providerShareGuestPeer,
+  providerShareFavoriteSource,
   scrubProviderShareLabel,
   scrubSharedProviderCatalog,
   type InvokeResultPayload,
+  type ProviderShareFavoriteSource,
   type ProviderShareReceived,
   type ProviderShareReceivedCatalog,
 } from '@cindy/device-link';
@@ -124,7 +127,7 @@ import {
   clearProviderShareRequestQuiet,
   ensureProviderSharePeerKnown,
   getProviderShareHostSnapshot,
-  getProviderShareHostLoadedSnapshot,
+  getProviderShareHostCompleteSnapshot,
   onProviderShareHostChanged,
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
@@ -366,11 +369,15 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   const stopModels = remoteModelAccess.subscribe(queueAvailabilityPublish);
   const stopAccess = onRemoteProviderAccessChanged(queueAvailabilityPublish);
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
-  // 供应商默认对自己的电脑开放：等拿到本账号完整的分享快照，才知道哪些是为暂停分享特意关掉的。
+  // 撤回 11-10 的默认开放：等拿到本账号完整的分享快照，那段时间里用户建过分享的供应商补记为打开。
+  // 补记只做一次，有分享服务暂时读不到、或账号池文件读不了时不做，等下一次再试。
   const migrateAccessDefault = () => {
-    const loaded = getProviderShareHostLoadedSnapshot();
-    if (loaded) void migrateRemoteProviderAccessDefault(new Set(loaded.map((share) => share.providerId)))
-      .catch((error) => log.warn('remote provider access default migration failed', { error: String(error) }));
+    const loaded = getProviderShareHostCompleteSnapshot();
+    if (!loaded) return;
+    const ids = sharedProviderIdsForRevert(loaded, readOpenAiLegacyAccountsIfReadable);
+    if (!ids) return;
+    void keepSharedProvidersOpen(ids)
+      .catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }));
   };
   const stopAccessDefault = onProviderShareHostChanged(migrateAccessDefault);
   migrateAccessDefault();
@@ -1239,6 +1246,22 @@ export async function executeProviderShareManagementCommand(command: ProviderSha
   return result;
 }
 
+/** 收藏身份与 Desktop 本机收藏同一套键。编不进去就不附带，手机不会另找成员身份。 */
+function receivedFavoriteSource(share: ProviderShareReceived): ProviderShareFavoriteSource | undefined {
+  const favoriteSource: ProviderShareFavoriteSource = {
+    shareId: share.shareId,
+    memberId: share.memberId,
+    providerId: share.providerId,
+    owner: { region: share.owner.region },
+  };
+  try {
+    providerShareFavoriteSource(favoriteSource);
+    return favoriteSource;
+  } catch {
+    return undefined;
+  }
+}
+
 const CATALOG_READ_TIMEOUT_MS = 10_000;
 const LINK_TTL_SAFETY_MS = 5_000;
 
@@ -1277,6 +1300,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
     ready: isReceivedSharesReady(),
     shares: await Promise.all(shares.map(async (share): Promise<ProviderShareReceivedCatalog> => {
       const agentDeviceId = `share:${share.shareId}`;
+      const favoriteSource = receivedFavoriteSource(share);
       let catalog: unknown = null;
       if (includeCatalog && invoke && share.status === 'active') {
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1303,6 +1327,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
         owner: { displayName: share.owner.displayName, avatarUrl: share.owner.avatarUrl },
         status: share.status,
         hostOnline: share.hostOnline,
+        ...(favoriteSource ? { favoriteSource } : {}),
         catalog,
       };
     })),

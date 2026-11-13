@@ -29,6 +29,13 @@
       "description": "Vollzugriff deaktiviert die Sandbox des Arbeitsbereichs und überspringt routinemäßige Genehmigungen. {{appName}} kann ohne Rückfrage Dateien außerhalb des Arbeitsbereichs ändern und Netzwerkbefehle ausführen. Integrierte Vorgänge mit hohem Risiko erfordern weiterhin eine Bestätigung.",
       "confirm": "Vollzugriff aktivieren",
       "cancel": "Aktuelle Berechtigungen beibehalten"
+    },
+    "description": {
+      "default": "Du genehmigst Aktionen bei Bedarf.",
+      "acceptEdits": "Dateiänderungen sind direkt erlaubt; andere Aktionen genehmigst du bei Bedarf.",
+      "auto": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du.",
+      "bypass": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen.",
+      "plan": "Analysiert und plant, ohne Dateien zu ändern."
     }
   },
   "planMode": {
@@ -38,9 +45,8 @@
   "panel": {
     "questionUnanswered": "Unbeantwortet",
     "questionWithdrawn": "Keine Antwort mehr nötig",
-    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nDein Entwurf bleibt erhalten; du kannst ihn als Ergänzung senden.",
     "sendSupplement": "Ergänzung senden",
-
     "readOnlyKind": "Ausstehend",
     "readOnlyTitle": "Warten auf Bestätigung auf deinem Computer",
     "pendingRequests": "Ausstehende Anfragen",
@@ -86,7 +92,7 @@
     "sendAndContinue": "Senden und fortfahren",
     "closeAnswer": "Schließen",
     "planReviewTitle": "Claudes Plan prüfen",
-    "planExpand": "Plan erweitern",
+    "planExpand": "Plan aufklappen",
     "planEditHint": "Passe den Plan im Bearbeitungsmodus an",
     "planBrowseHint": "Tippe auf einen Abschnitt, um dorthin zu springen",
     "planEditToggle": "Plan bearbeiten",
@@ -107,10 +113,10 @@
     "planFeedbackSubmit": "Feedback zum Plan senden",
     "planFeedbackAccessibility": "Gib Feedback, um den Plan zu ändern",
     "validation": {
-      "required": "Füllen Sie dieses Pflichtfeld aus.",
-      "choice": "Wählen Sie eine der aufgeführten Optionen.",
-      "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
-      "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+      "required": "Fülle dieses Pflichtfeld aus.",
+      "choice": "Wähle eine der aufgeführten Optionen.",
+      "tooShort": "Gib mindestens {{count}} Zeichen ein.",
+      "tooLong": "Gib höchstens {{count}} Zeichen ein."
     },
     "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
@@ -128,7 +134,7 @@
       "label": "Plan"
     },
     "issue_confirm": {
-      "title": "Problem muss bestätigt werden",
+      "title": "Issue muss bestätigt werden",
       "label": "Issue"
     },
     "rename_sessions_confirm": {
@@ -187,6 +193,7 @@
     "fromLead": "Nachricht vom Lead",
     "fromWorkerNamed": "Nachricht von Worker „{{role}}“",
     "fromWorker": "Nachricht vom Worker",
+    "fromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
     "emptyMessageBody": "(Leere Nachricht)"
   },
   "contextSheet": {
@@ -235,7 +242,7 @@
     "phase": {
       "pending": "Ausstehend",
       "action_running": "In Bearbeitung…",
-      "waiting_external": "Warte auf Autorisierung…",
+      "waiting_external": "Wartet auf Autorisierung…",
       "verifying": "Wird überprüft…",
       "satisfied": "Abgeschlossen",
       "failed": "Fehlgeschlagen",
@@ -275,7 +282,7 @@
       "embedded-frame": "Diese Felder befinden sich auf einer anderen Website, die in die Seite eingebettet ist. Prüfe, ob die Quelle vertrauenswürdig ist."
     },
     "agentControlled": "Der Agent hat diesen Bildschirm geöffnet. Prüfe vor dem Ausfüllen, ob du dich wirklich hier anmelden möchtest.",
-    "agentPicture": "Dieser Code stammt aus einem Screenshot des Agent, daher kann Cindy den ursprünglichen Bildschirm nicht sehen oder erkennen, wann du fertig bist. Prüfe, ob er zur gewünschten Anmeldeseite führt, und wähle nach dem Scannen „An Agent zurückgeben“.",
+    "agentPicture": "Dieser Code stammt aus einem Screenshot des Agents, daher kann Cindy den ursprünglichen Bildschirm nicht sehen oder erkennen, wann du fertig bist. Prüfe, ob er zur gewünschten Anmeldeseite führt, und wähle nach dem Scannen „An Agent zurückgeben“.",
     "error": {
       "decision": "Das hat nicht geklappt. Versuch es erneut.",
       "stale": "Der Bildschirm hat sich geändert. Verwende die neueste Version.",
@@ -455,5 +462,39 @@
       "ghost_id": "Plugin",
       "tool": "Tool"
     }
+  },
+  "issueConfirm": {
+    "title": "Feedback an {{appName}} bestätigen",
+    "typeBug": "Fehler",
+    "typeFeature": "Funktion",
+    "titleLabel": "Titel",
+    "bodyLabel": "Text (Markdown)",
+    "privacyHint": "Titel und Text des Issues werden öffentlich und können über Suchmaschinen auffindbar sein oder zwischengespeichert werden. Die automatische Bereinigung deckt nur einige gängige Muster ab und kann nicht alle sensiblen Zusammenhänge erkennen.",
+    "relatedLogsHint": "Diese Einreichung enthält die oben angezeigten zugehörigen Client-Protokolle. Sie werden vor der Veröffentlichung gefiltert, bereinigt und in der Länge begrenzt.",
+    "privacyConfirm": "Ich habe die obigen öffentlichen Inhalte geprüft. Sie enthalten keine persönlichen, gesprächsbezogenen oder geschäftlichen Informationen, die privat bleiben sollten",
+    "submissionMethodLabel": "Identität beim Einreichen",
+    "identityGithubUser": "Mein GitHub-Konto @{{login}}",
+    "identityGithubUserHint": "Du wirst auf GitHub als Autor eingetragen und kannst dieses Issue dort bearbeiten oder schließen",
+    "identityPlatform": "Offizieller Cindy-Bot @{{login}} (Standard)",
+    "identityPlatformHint": "Es muss kein GitHub-Konto eingerichtet werden. Der offizielle Bot erstellt das Issue, und du kannst im Text eine öffentliche Namensnennung hinzufügen",
+    "publicNameLabel": "Öffentliche Namensnennung",
+    "publicNameHint": "Diese Namensnennung erscheint öffentlich im Text des Issues",
+    "anonymous": "Anonym",
+    "useAnonymous": "Anonym einreichen",
+    "envLine": "Client-Umgebung (wird beim Absenden automatisch angehängt): Client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI-Sprache {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Modell-ID {{modelId}} (diese Sitzung)",
+    "regionLine": "Build-Region: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Feedback absenden",
+    "cancel": "Abbrechen",
+    "previewLabel": "GitHub · Öffentliches Feedback",
+    "edit": "Bearbeiten",
+    "doneEditing": "Fertig",
+    "publicSubmit": "Öffentlich senden",
+    "publicationNotice": "Feedback und Name werden auf GitHub veröffentlicht.",
+    "attribution": "Von {{name}}",
+    "environment": "Laufzeitumgebung enthalten",
+    "identitySettings": "Name und Konto"
   }
 }

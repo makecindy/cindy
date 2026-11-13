@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { CODEX_POOL_RESET_PREFIX } from '../../shared/subscriptionAccounts';
 
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
@@ -32,22 +33,41 @@ function readCodexAuthStateSubscriber(): CodexAuthStateSubscriber | undefined {
   }).electronAPI?.maker?.auth?.onStateChanged;
 }
 
-/** Missing/older preload and failed app-server reads both degrade to no extra tooltip rows. */
+// A stalled read must not leave the recovery button disabled indefinitely.
+const CODEX_RATE_LIMIT_READ_TIMEOUT_MS = 15_000;
+
+/** Never expose raw account RPC errors; older preloads remain a silent fallback. */
 export async function readCodexRateLimitsSafely(
   reader: CodexRateLimitsReader | undefined,
   providerId?: string,
+  onFailure?: () => void,
 ): Promise<MobileCodexRateLimitsResult | null> {
   if (!reader) return null;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const result = await (providerId && providerId !== 'openai' ? reader(providerId) : reader());
+    const read = providerId && providerId !== 'openai' ? reader(providerId) : reader();
+    const result = await Promise.race([
+      read,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Codex quota read timed out')), CODEX_RATE_LIMIT_READ_TIMEOUT_MS);
+      }),
+    ]);
     return providerId && providerId !== 'openai' && result.providerId !== providerId ? null : result;
   } catch {
+    onFailure?.();
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-export interface CodexRateLimitsState {
+interface CodexRateLimitsReadState {
   snapshot: MobileCodexRateLimitsResult | null;
+  failed: boolean;
+  refreshing: boolean;
+}
+
+export interface CodexRateLimitsState extends CodexRateLimitsReadState {
   /** Best-effort authoritative refetch, used when the tooltip is opened again. */
   refresh: () => void;
 }
@@ -56,12 +76,12 @@ export interface CodexRateLimitsState {
  * Memory only: reset offers are never persisted, and Main still validates actions.
  */
 interface CachedRateLimits {
-  snapshot: MobileCodexRateLimitsResult | null;
+  state: CodexRateLimitsReadState;
   version: number;
   pendingReads: number;
   liveObservers: number;
   hasLiveObservation: boolean;
-  queuedRefreshes: Set<{ version: number }>;
+  queuedRefreshes: Set<{ version: number; manual?: true }>;
   listeners: Set<() => void>;
   unsubscribe: Array<() => void>;
   providerId: string;
@@ -70,9 +90,10 @@ interface CachedRateLimits {
 }
 const snapshots = new Map<string, CachedRateLimits>();
 let cacheOwner = getDataOwnerGeneration();
+const EMPTY_STATE: CodexRateLimitsReadState = { snapshot: null, failed: false, refreshing: false };
 
-function publish(entry: CachedRateLimits, value: MobileCodexRateLimitsResult | null): void {
-  entry.snapshot = value;
+function publish(entry: CachedRateLimits, patch: Partial<CodexRateLimitsReadState>): void {
+  entry.state = { ...entry.state, ...patch };
   for (const listener of entry.listeners) listener();
 }
 
@@ -83,10 +104,12 @@ function refreshEntry(entry: CachedRateLimits): void {
   entry.queuedRefreshes.clear();
   const version = ++entry.version;
   entry.pendingReads++;
-  void readCodexRateLimitsSafely(readCodexRateLimitsReader(), entry.providerId).then(next => {
+  publish(entry, { refreshing: true });
+  let failed = false;
+  void readCodexRateLimitsSafely(readCodexRateLimitsReader(), entry.providerId, () => { failed = true; }).then(next => {
     if (entry.version !== version || !isDataOwnerGenerationCurrent(entry.owner)) return;
     // An unavailable read is not a logout. Explicit identity clears come by push.
-    if (next !== null) publish(entry, next);
+    publish(entry, { ...(next !== null ? { snapshot: next } : {}), failed, refreshing: false });
   }).finally(() => {
     entry.pendingReads--;
     if (entry.pendingReads !== 0) return;
@@ -109,13 +132,13 @@ function cachedRateLimits(providerId: string): CachedRateLimits {
   const cached = snapshots.get(providerId);
   if (cached) return cached;
   const entry: CachedRateLimits = {
-    providerId, owner, snapshot: null, version: 0, pendingReads: 0, liveObservers: 0, hasLiveObservation: false, queuedRefreshes: new Set(), listeners: new Set(), unsubscribe: [],
+    providerId, owner, state: EMPTY_STATE, version: 0, pendingReads: 0, liveObservers: 0, hasLiveObservation: false, queuedRefreshes: new Set(), listeners: new Set(), unsubscribe: [],
     awaitingAuthCompletion: false,
   };
   snapshots.set(providerId, entry);
   const clear = () => {
     entry.version++;
-    publish(entry, null);
+    publish(entry, EMPTY_STATE);
   };
   // Stay subscribed while panels are unmounted, so a replaced account cannot
   // seed the next panel with the previous identity's cached quota.
@@ -127,6 +150,15 @@ function cachedRateLimits(providerId: string): CachedRateLimits {
       && isDataOwnerGenerationCurrent(entry.owner)) refreshEntry(entry);
   }, providerId);
   if (usageUnsubscribe) entry.unsubscribe.push(usageUnsubscribe);
+  if (providerId.startsWith(CODEX_POOL_RESET_PREFIX)) {
+    const poolUnsubscribe = window.electronAPI?.subscriptionAccounts?.onChanged?.(payload => {
+      if (payload.providerId !== 'openai' || !payload.resetAccountId
+        || `${CODEX_POOL_RESET_PREFIX}${payload.resetAccountId}` !== providerId || entry.pendingReads > 0) return;
+      if (entry.listeners.size > 0 && isDataOwnerGenerationCurrent(entry.owner)) refreshEntry(entry);
+      else clear();
+    });
+    if (poolUnsubscribe) entry.unsubscribe.push(poolUnsubscribe);
+  }
   if (providerId !== 'openai') {
     const authStartedUnsubscribe = window.electronAPI?.maker?.usage?.onCodexAccountAuthStarted?.(() => {
       entry.awaitingAuthCompletion = true;
@@ -170,10 +202,20 @@ export function useCodexRateLimits(
     entry.listeners.add(listener);
     return () => { entry.listeners.delete(listener); };
   }, [entry, enabled]);
-  const readSnapshot = useCallback(() => enabled ? entry.snapshot : null, [entry, enabled]);
-  const snapshot = useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
+  const readSnapshot = useCallback(() => enabled ? entry.state : EMPTY_STATE, [entry, enabled]);
+  const state = useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
   const refresh = useCallback(() => {
-    if (enabled) refreshEntry(entry);
+    if (!enabled || entry.awaitingAuthCompletion) return;
+    if (entry.pendingReads === 0) {
+      refreshEntry(entry);
+      return;
+    }
+    // Reset completion needs a read started after older requests settle. Reuse
+    // the live-card queue, keeping one manual request independent of its unmount tokens.
+    if (![...entry.queuedRefreshes].some(request => request.manual && request.version === entry.version)) {
+      entry.queuedRefreshes.add({ version: entry.version, manual: true });
+    }
+    publish(entry, { refreshing: true });
   }, [enabled, entry]);
   useEffect(() => {
     if (!enabled) return;
@@ -200,5 +242,5 @@ export function useCodexRateLimits(
       if (request) entry.queuedRefreshes.delete(request);
     };
   }, [enabled, entry, live]);
-  return { snapshot, refresh };
+  return { ...state, refresh };
 }

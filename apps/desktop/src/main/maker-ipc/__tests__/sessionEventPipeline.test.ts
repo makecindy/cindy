@@ -2,6 +2,11 @@ import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { createDrizzleProxy } from '../../localDb/client/drizzleProxy.js';
+import type { DbTransport } from '../../localDb/client/DbTransport.js';
+import { createRemoteAgentHandle } from '../../remote-agent/controller/proxyHandle.js';
+import { ExecutorWorkspace } from '../../remote-agent/executor/workspace.js';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from '../piUsageReceipts.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
@@ -80,9 +85,6 @@ vi.mock('../../turnCostBroadcaster.js', () => ({
 }));
 vi.mock('../../modelMismatchBroadcaster.js', () => ({
   recordModelMismatchOnMessage: effects.fn('recordModelMismatchOnMessage'),
-}));
-vi.mock('../botLearningReview.js', () => ({
-  reviewTeammateLearning: effects.fn('reviewTeammateLearning'),
 }));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({
   triggerClaudeAccountUsageRefresh: effects.fn('triggerClaudeAccountUsageRefresh'),
@@ -171,7 +173,11 @@ vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   resetTurnPersistState: effects.fn('resetTurnPersistState'),
   saveTurnStartedAtForDeferred: effects.fn('saveTurnStartedAtForDeferred'),
 }));
-vi.mock('../../maker-host/claude-session-background-activity.js', () => ({
+vi.mock('../../maker-host/claude-session-background-activity.js', async (importOriginal) => ({
+  hasWorkingBackgroundCommand: (
+    await importOriginal<typeof import('../../maker-host/claude-session-background-activity.js')>()
+  ).hasWorkingBackgroundCommand,
+  noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
@@ -244,7 +250,9 @@ function event(
   return { type, source: 'codex', data, ...extra } as AgentEvent;
 }
 
-function harness() {
+const actualSnapshotWriter = await vi.importActual<typeof import('../../sessionSpendBroadcaster.js')>('../../sessionSpendBroadcaster.js');
+
+function harness(remoteHandle?: AgentSessionHandle) {
   const log = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -255,7 +263,7 @@ function harness() {
     child: () => log,
   };
   const ended = deferred();
-  const handle = {
+  const handle = remoteHandle ?? {
     id: 'provider',
     agentKind: 'codex',
     model: 'test-model',
@@ -297,10 +305,8 @@ function harness() {
     deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
     log,
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
-    workingMemoryRefresh: { markCompacted: vi.fn() },
     wireNoteMemory: { reset: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
-    botDelegationServiceHolder: { settleSession: vi.fn(async () => {}) },
     isFencedStaleSessionTerminal: vi.fn(() => false),
     redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
@@ -1094,6 +1100,109 @@ describe('production Session event pipeline', () => {
     },
   );
 
+  // #10198 (unit): end-of-turn coverage missed native compaction inside a live
+  // turn. Remote poll chunks may deliver status before its cached state. Drive
+  // the real proxy -> pipeline -> writer and reopen SQLite (db tier, no files).
+  it.each([false, true])('persists remote Pi compaction across split delivery (state first=%s)', async (stateFirst) => {
+    const oldUsage = { tokenUsage: 0, costUsd: 0, contextTokens: 579216, contextWindow: 272000 };
+    const proxy = createRemoteAgentHandle({
+      started: { id: 'remote', agentKind: 'pi', model: 'test', shadowDir: '/remote', methods: [],
+        state: { usage: oldUsage, turnRunning: true } },
+      link: { live: async () => null, ensure: vi.fn(), begin: () => () => {}, close: async () => {} },
+      workspace: new ExecutorWorkspace({ workingDir: process.cwd() }),
+      recordApproval: vi.fn(), newId: () => 'request', dispose: async () => {},
+    });
+    const h = harness(proxy.handle);
+    const iterator = proxy.handle.events()[Symbol.asyncIterator]();
+    const deliver = async (value: AgentEvent) => {
+      proxy.onEvent(value);
+      const next = await iterator.next();
+      expect(next.done).toBe(false);
+      h.emit(next.value!);
+    };
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, context_tokens INTEGER,
+      context_window INTEGER, context_window_runtime INTEGER);
+      INSERT INTO sessions VALUES ('task', 579216, 272000, 272000);`);
+    const transport: DbTransport = {
+      async send<R>(op: string, args: unknown): Promise<R> {
+        const { sql, params } = args as { sql: string; params: unknown[] };
+        const statement = sqlite.prepare(sql);
+        return (op === 'run' ? statement.run(...params) : op === 'rawGet'
+          ? statement.raw().get(...params) : statement.raw().all(...params)) as R;
+      },
+      on() {}, onTerminated() {}, async close() {},
+    };
+    const unexpectedDbCall = async (): Promise<never> => { throw new Error('Expected snapshot Drizzle path'); };
+    const db: DbClient = {
+      drizzle: createDrizzleProxy(transport),
+      query: unexpectedDbCall, queryOne: unexpectedDbCall, exec: unexpectedDbCall, tx: unexpectedDbCall,
+      vecAvailable: false, async dispose() {},
+    };
+    const writes: Promise<void>[] = [];
+    setCurrentDbClient(db, 'compaction-test');
+    effects.fn('getDbClient').mockReturnValue(db);
+    effects.fn('recordSessionContextSnapshot').mockImplementation((id, tokens, window) => {
+      effects.calls.push('recordSessionContextSnapshot');
+      const write = actualSnapshotWriter.recordSessionContextSnapshot(id as string, tokens as number, window as number);
+      writes.push(write);
+      return write;
+    });
+    try {
+      await deliver(event('status', { isRunning: true }, { source: 'pi' }));
+      const boundary = event('compact_boundary', { postTokens: 46703 }, { source: 'pi' });
+      await deliver(boundary);
+      expect(proxy.handle.getUsageSnapshot().contextTokens).toBe(579216);
+      expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+      const usage = { ...oldUsage, contextTokens: 46703 };
+      if (stateFirst) proxy.onState({ usage });
+      effects.calls.length = 0;
+      await deliver(event('status', { ...usage, isRunning: true, status: 'Working…',
+        contextSnapshotAuthoritative: true }, { source: 'pi' }));
+      ordered('broadcast', 'recordSessionContextSnapshot');
+      await Promise.all(writes);
+      if (!stateFirst) proxy.onState({ usage });
+      const reopened = new Database(sqlite.serialize());
+      try {
+        expect(reopened.prepare('SELECT context_tokens, context_window, context_window_runtime FROM sessions').get()).toEqual({
+          context_tokens: 46703, context_window: 272000, context_window_runtime: 272000,
+        });
+      } finally { reopened.close(); }
+      expect(h.activity.isSessionInTurn('task')).toBe(true);
+      expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
+      proxy.onState({ usage: { ...usage, contextTokens: 58000 } });
+      await deliver(boundary);
+      expect(effects.fn('recordSessionContextSnapshot')).toHaveBeenCalledTimes(1);
+      await deliver(event('tool_use', { toolUseId: 'after-compact', toolName: 'read', input: {} }, { source: 'pi' }));
+      expect(effects.fn('onToolUseEvent')).toHaveBeenCalled();
+      expect(h.activity.isSessionInTurn('task')).toBe(true);
+    } finally {
+      await Promise.all(writes);
+      clearCurrentDbClient(db);
+      sqlite.close();
+      await h.dispose();
+      await iterator.return?.();
+    }
+  });
+
+  it.each([
+    ['missing', undefined, {}],
+    ['NaN', NaN, {}],
+    ['negative', -1, {}],
+    ['infinite', Infinity, {}],
+    ['old generation', 46703, { sessionTurnGeneration: -1 }],
+    ['old instance', 46703, { sessionInstanceId: 'retired-instance' }],
+    ['background', 46703, { turnScope: 'background' as const }],
+  ])('does not persist a %s compaction over active work', async (_label, postTokens, scope) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    h.emit(event('compact_boundary', { postTokens }, { source: 'pi', ...scope }));
+    h.emit(event('status', { isRunning: true, status: 'Working…', contextSnapshotAuthoritative: true,
+      contextTokens: postTokens, contextWindow: 272000 }, { source: 'pi', ...scope }));
+    expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
   it.each([
     ['xd', 1],
     [null, 1],
@@ -1572,6 +1681,39 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // 任务列表的「后台命令仍在工作」来自会话的权威后台任务快照:任务表变化与回合收尾各刷新一次
+  // (收尾先刷新再记回合结束,换代清表不带事件)。SSH 远程任务的终态可能丢在断连窗口里,不参与。
+  it.each([
+    ['local task still running a test command', null, 'work', [true, true]],
+    ['local task that only left a dev server', null, 'service', [false, false]],
+    ['SSH remote task', 'ssh-host', 'work', []],
+  ] as const)(
+    'refreshes background command work from the session snapshot: %s',
+    async (_label, remoteHostId, backgroundCommandKind, expected) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      vi.spyOn(h.session, 'listBackgroundTasks').mockReturnValue([
+        { taskId: 'bash-1', taskType: 'local_bash', backgroundCommandKind },
+      ]);
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('agent_task_update', { provider: 'claude-code', taskId: 'bash-1', status: 'running' }));
+      h.emit(event('done', { reason: 'completed' }));
+      expect(effects.fn('noteClaudeSessionBackgroundCommandWork').mock.calls).toEqual(
+        expected.map((hasWork) => ['task', hasWork]),
+      );
+      if (expected.length > 0) {
+        const calls = effects.calls.filter(
+          (name) => name === 'noteClaudeSessionBackgroundCommandWork' || name === 'noteClaudeSessionTurnState',
+        );
+        expect(calls.slice(-2)).toEqual([
+          'noteClaudeSessionBackgroundCommandWork',
+          'noteClaudeSessionTurnState',
+        ]);
+      }
+      await h.dispose();
+    },
+  );
+
   it.each([null, 'ssh-host'])(
     'only records local Codex account snapshots (remote=%s)',
     async (remoteHostId) => {
@@ -1705,7 +1847,7 @@ describe('provider turn observer on real Session.send', () => {
       expect(h.handle.send).not.toHaveBeenCalled();
       gate.resolve();
       await sending;
-      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true });
+      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true, signal: expect.any(AbortSignal) });
       expect(h.handle.send).toHaveBeenCalledOnce();
       h.emit(event('done', {}));
       ready.mockRejectedValue(new Error('NOT_INSTALLED'));
@@ -1713,6 +1855,61 @@ describe('provider turn observer on real Session.send', () => {
       expect(h.handle.send).toHaveBeenCalledOnce();
     } finally {
       gate.resolve();
+      dispose();
+      await h.dispose();
+    }
+  });
+
+  // PR #9420: a cold Ollama restore must release the send reservation on Stop.
+  // Unit tier, real Session + observer: previous readiness coverage only settled the service.
+  it.each(['stop', 'pending', 'external'] as const)('cancels Ollama readiness via %s and permits another send', async (cancel) => {
+    const h = harness();
+    h.handle.abort = vi.fn(async () => undefined);
+    const deps = observerDeps();
+    const entered = deferred();
+    const release = deferred();
+    const external = new AbortController();
+    const beforeProviderStart = vi.fn();
+    const onAccepted = vi.fn();
+    let readinessSignal: AbortSignal | undefined;
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-ollama');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementationOnce(
+      async (opts: { signal?: AbortSignal }) => {
+        readinessSignal = opts.signal;
+        entered.resolve();
+        await new Promise<void>((resolve, reject) => {
+          release.promise.then(resolve);
+          opts.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    );
+    const phases: string[] = [];
+    const unsubscribe = onChannelTurn((_session, phase) => { phases.push(phase); });
+    const dispose = installSessionTurnObserver(deps, h.session);
+    const sending = h.session.send('cold start', { signal: external.signal, beforeProviderStart, onAccepted });
+    try {
+      await entered.promise;
+      expect(readinessSignal).toBeInstanceOf(AbortSignal);
+      if (cancel === 'stop') await h.session.abort();
+      else if (cancel === 'pending') expect(h.session.cancelPendingSend()).toBe(true);
+      else external.abort();
+      await expect(sending).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+      expect(readinessSignal?.aborted).toBe(true);
+      expect(h.handle.send).not.toHaveBeenCalled();
+      expect(beforeProviderStart).not.toHaveBeenCalled();
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+      expect(phases).toEqual([]);
+      expect(h.session.isTurnRunning()).toBe(false);
+      await expect(h.session.send('retry')).resolves.toEqual({ accepted: true });
+      expect(ready).toHaveBeenCalledTimes(2);
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).toHaveBeenCalledOnce();
+      expect(phases).toEqual(['starting']);
+    } finally {
+      release.resolve();
+      await sending.catch(() => undefined);
+      unsubscribe();
       dispose();
       await h.dispose();
     }
@@ -2509,24 +2706,6 @@ describe('usage through the production event pipeline', () => {
 
 
 describe('Bot adapters in the shared event pipeline', () => {
-  it.each(['a long but incomplete answer', ''])('settles output-limit with its available result (%j) before the paired done', async (result) => {
-    const h = harness();
-    h.emit(event('error', {
-      reason: 'output-limit', message: 'Pi reached the model output limit.',
-      isTerminal: true, result,
-    }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      childSessionId: 'task', outcome: 'error', resultText: result,
-      error: 'Pi reached the model output limit.',
-    }));
-    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
-    h.emit(event('done', { status: 'failed', result }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledOnce();
-    await h.dispose();
-  });
-
   it('keeps peer replies private in persistence and broadcast before done clears the input', () => {
     const h = harness();
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
@@ -2766,17 +2945,12 @@ describe('Bot adapters in the shared event pipeline', () => {
     h.deps.attemptBotCompactRuntimeRefresh.mockImplementation(() => { void coordinator.attempt(h.session); });
     h.emit(event('compact_boundary'));
     expect(h.deps.botCompactRuntimeRefreshCoordinator.noteBoundary).not.toHaveBeenCalled();
-    // 原生摘要可能丢掉账本内容:下一次发送补一份工作记忆。
-    expect(h.deps.workingMemoryRefresh.markCompacted).toHaveBeenCalledWith('task');
     // 原生摘要可能丢掉了环境说明:下一轮整体重发。
     expect(h.deps.wireNoteMemory.reset).toHaveBeenCalledWith('task');
     expect(h.deps.attemptBotCompactRuntimeRefresh).not.toHaveBeenCalled();
     h.deps.agentInputCoordinatorHolder.getQueueControlSnapshot.mockReturnValue({ pendingQueue: [{}] });
     h.emit(event('done', { result: 'first result' }));
     await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledWith(expect.objectContaining({
-      childSessionId: 'task', resultText: 'first result', hadPendingInputAtTerminal: true,
-    }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
     expect(close).not.toHaveBeenCalled();
     expect(bootstrap).not.toHaveBeenCalled();

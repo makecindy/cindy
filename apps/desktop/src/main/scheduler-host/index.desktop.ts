@@ -23,6 +23,7 @@ import {
   prepareScheduledModelPreferencesUnderLock,
   recordDispatchedModel,
   broadcastSessionCreated,
+  bootstrapScheduledSession,
   cancelSchedulerAutoResume,
   enqueueSchedulerPrompt,
   ensureSchedulerQueueRestored,
@@ -37,6 +38,7 @@ import {
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage } from './storage.desktop';
 import { MakerScheduleRunner } from './runner.desktop';
+import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { ScriptScheduleRunner } from './script-runner.desktop';
@@ -44,7 +46,9 @@ import { SchedulerScriptCapabilityBroker } from './script-capability-broker.desk
 import { DesktopNotifier } from './notifier.desktop';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
-import { getRoutineEngine, stopRoutines } from '../routines/service.js';
+import { withTeammateHomeGuard } from './teammateHomeGuard.js';
+import { ownTeammateProjectState } from './ownTeammateProject.js';
+import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
 import { createSchedulerHost, type SchedulerHostStartDeps } from './index.js';
@@ -72,6 +76,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     });
     const promptRunner = new MakerScheduleRunner({
       maker: deps.maker,
+      bootstrapSession: bootstrapScheduledSession,
       getDb: deps.getDb,
       notifier,
       logger: deps.logger,
@@ -134,17 +139,19 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     });
     return { notifier, promptRunner, scriptRunner };
   },
+  // A teammate's project automations run only on its main computer (handed away: skipped here).
+  captureFireContext: captureScheduledOwnerGuard,
+  wrapRunner: runner => withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
+  isOwnTeammateProject: async workingDir => (await ownTeammateProjectState(workingDir)) !== null,
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
   dialogueWorkspaceRoots: () => dialogueWorkspaceRoots(),
   onStarted(scheduler, deps, passive) {
     startRewoundSchedulerPromptCleanup({ logger: deps.logger });
-    void getRoutineEngine().catch(error => deps.logger.warn?.('routine startup failed', { error: String(error) }));
     if (!passive) void startScheduleWebhooks(scheduler, deps.logger).catch(error =>
       deps.logger.warn?.(`[scheduler-host] schedule webhooks failed to start (non-fatal): ${String(error)}`));
   },
   async beforeReset() {
     stopRewoundSchedulerPromptCleanup();
-    await stopRoutines();
     await stopScheduleWebhooks();
   },
 });

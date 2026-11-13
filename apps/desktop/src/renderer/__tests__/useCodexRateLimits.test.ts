@@ -25,7 +25,125 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// #10286 review: pool running-count updates must not launch account CLI reads.
+// Only this account's explicit reset invalidation may refresh; its own echo is ignored.
+it('refreshes only the named pooled reset account and ignores running-count updates', async () => {
+  const scope = 'openai-account:second';
+  let changed!: (event: { providerId: string; resetAccountId?: string }) => void;
+  const reader = vi.fn(async () => {
+    changed({ providerId: 'openai', resetAccountId: 'second' });
+    return { ...result, providerId: scope };
+  });
+  vi.stubGlobal('electronAPI', {
+    maker: { usage: { getCodexRateLimits: reader } },
+    subscriptionAccounts: { onChanged: (listener: typeof changed) => { changed = listener; return () => {}; } },
+  });
+  const hook = renderHook(() => useCodexRateLimits(true, scope));
+  await waitFor(() => expect(hook.result.current.snapshot?.providerId).toBe(scope));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'anthropic' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'third' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'second' }));
+  expect(reader).toHaveBeenCalledTimes(2);
+  hook.unmount();
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'second' }));
+  expect(reader).toHaveBeenCalledTimes(2);
+});
+
 describe('useCodexRateLimits', () => {
+  // PR #9916: a read with no reply must release the Retry button and discard
+  // any late reply. Fake time keeps this unit regression network-free.
+  it('releases a stalled read, retains usage and ignores the late response after retry', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveLate!: (value: MobileCodexRateLimitsResult) => void;
+      const recovered = { ...result, rateLimits: { primary: { usedPercent: 40 } } };
+      const reader = vi.fn().mockResolvedValueOnce(result)
+        .mockImplementationOnce(() => new Promise(resolve => { resolveLate = resolve; }))
+        .mockResolvedValueOnce(recovered);
+      vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });
+      const hook = renderHook(() => useCodexRateLimits(true));
+      await act(async () => {});
+      expect(hook.result.current.snapshot).toBe(result);
+      act(() => hook.result.current.refresh());
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(hook.result.current).toMatchObject({ snapshot: result, failed: true, refreshing: false });
+      await act(async () => hook.result.current.refresh());
+      expect(hook.result.current).toMatchObject({ snapshot: recovered, failed: false, refreshing: false });
+      await act(async () => resolveLate(result));
+      expect(hook.result.current.snapshot).toBe(recovered);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The same refresh callback is used after consuming a reset credit. That
+  // authoritative reread must not be dropped behind an older in-flight read.
+  it('honors a post-reset refresh while a pre-reset read is still pending', async () => {
+    let resolveBeforeReset!: (value: MobileCodexRateLimitsResult) => void;
+    const afterReset = { ...result, rateLimitResetCredits: { availableCount: 1, credits: [] } };
+    const reader = vi.fn().mockImplementationOnce(() => new Promise(resolve => { resolveBeforeReset = resolve; }))
+      .mockResolvedValueOnce(afterReset);
+    vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });
+    const hook = renderHook(() => useCodexRateLimits(true));
+    act(() => {
+      hook.result.current.refresh();
+      hook.result.current.refresh();
+    });
+    expect(reader).toHaveBeenCalledTimes(1);
+    await act(async () => resolveBeforeReset(result));
+    expect(reader).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.snapshot).toBe(afterReset);
+  });
+
+  // PR #9916: settings mounts two ordinary consumers. A newer rejection can
+  // finish first; accepting Retry must show busy even while its reread is queued.
+  it('marks a manual retry busy while an older consumer read is pending', async () => {
+    let finishOld!: (value: MobileCodexRateLimitsResult) => void;
+    const reader = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+      .mockRejectedValueOnce(new Error('quota unavailable')).mockResolvedValueOnce(result);
+    vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });
+    const card = renderHook(() => useCodexRateLimits(true));
+    renderHook(() => useCodexRateLimits(true));
+    await act(async () => {});
+    expect(card.result.current).toMatchObject({ failed: true, refreshing: false });
+    act(() => card.result.current.refresh());
+    expect(card.result.current).toMatchObject({ failed: true, refreshing: true });
+    expect(reader).toHaveBeenCalledTimes(2);
+    await act(async () => finishOld(result));
+    expect(reader).toHaveBeenCalledTimes(3);
+    expect(card.result.current).toMatchObject({ snapshot: result, failed: false, refreshing: false });
+  });
+
+  // F13 unit regression: the old hook swallowed a rejected read. Exercise the
+  // public hook with no cache and with a cache, then retry without losing data.
+  it.each([false, true])('reports failed reads and recovers on retry (cached=%s)', async (cached) => {
+    let finishRetry!: (value: MobileCodexRateLimitsResult) => void;
+    const reader = vi.fn();
+    if (cached) reader.mockResolvedValueOnce(result);
+    reader.mockRejectedValueOnce(new Error('Bearer F13_FAKE_SECRET user_content=F13_FAKE_CONTENT'))
+      .mockImplementationOnce(() => new Promise(resolve => { finishRetry = resolve; }));
+    vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });
+    const hook = renderHook(() => useCodexRateLimits(true));
+    if (cached) {
+      await waitFor(() => expect(hook.result.current.snapshot).toBe(result));
+      await act(async () => hook.result.current.refresh());
+    }
+    await waitFor(() => expect(hook.result.current.failed).toBe(true));
+    expect(hook.result.current.snapshot).toBe(cached ? result : null);
+    expect(JSON.stringify(hook.result.current)).not.toContain('F13_FAKE');
+    act(() => hook.result.current.refresh());
+    expect(hook.result.current.refreshing).toBe(true);
+    expect(hook.result.current.failed).toBe(true);
+    expect(reader).toHaveBeenCalledTimes(cached ? 3 : 2);
+    await act(async () => finishRetry(result));
+    expect(hook.result.current).toMatchObject({ snapshot: result, failed: false, refreshing: false });
+  });
+
   // Unit regression r4362108215: a resumed live card queues behind a pending
   // read. Existing clear/unmount tests did not have such a queue; neither may
   // start another read after the old reply settles or restore a cleared quota.

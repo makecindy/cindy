@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnostic des notifications",
+    "read": "Lire l’état des notifications",
+    "busy": "Lecture…",
+    "failed": "Impossible de lire l’état des notifications. Réessayez.",
+    "copyFailed": "Impossible de copier le jeton.",
+    "copied": "Jeton copié.",
+    "bundle": "Identifiant de l’app",
+    "build": "Build",
+    "environment": "Environnement APNs",
+    "permission": "Autorisation système",
+    "alerts": "Bannières",
+    "lockScreen": "Écran verrouillé",
+    "notificationCenter": "Centre de notifications",
+    "copy": "Copier le jeton APNs",
+    "hide": "Masquer le résultat",
+    "unknown": "Inconnu",
+    "on": "Activé",
+    "off": "Désactivé",
+    "hint": "Lecture à votre demande uniquement. Le jeton APNs reste à l’écran, sans enregistrement dans le diagnostic ni envoi par cet outil. Il disparaît en quittant l’écran ou en passant en arrière-plan. Copiez-le uniquement pour la console de notifications Apple ; le texte copié reste dans le presse-papiers.",
+    "permissions": {
+      "granted": "Autorisée",
+      "denied": "Refusée",
+      "undetermined": "Non demandée",
+      "provisional": "Livraison silencieuse"
+    }
+  },
   "localLogs": {
     "upload": "Envoyer les journaux",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "Les journaux restent sur ce téléphone jusqu'à 7 jours ou 8 Mo et ne sont jamais envoyés automatiquement. Les journaux exportés excluent le texte des conversations et les identifiants ; les envois ne transmettent que des enregistrements d'exécution filtrés et des informations de version."
   },
   "title": "Paramètres",
+  "promptRecommendation": {
+    "label": "Suggestions de saisie",
+    "description": "Suggérer quoi écrire après une réponse. Uniquement sur ce téléphone.",
+    "saveFailed": "Le réglage est actif pour le moment, mais n’a pas pu être enregistré.",
+    "reset": "Rétablir le réglage par défaut"
+  },
   "appearance": {
     "title": "Apparence",
     "modeLabel": "Mode d'apparence",
@@ -38,7 +71,7 @@
       "sage": "Étincelle",
       "blue": "Rêverie",
       "lavender": "Chat de nuit",
-      "red": "Col rouge",
+      "red": "Collier rouge",
       "custom": "Couleur personnalisée",
       "hue": "Teinte",
       "preview": "Aperçu du message",
@@ -81,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prose classique (par défaut)",
+        "prose": "Prose classique",
         "tang-poetry": "Poésie Tang",
         "song-ci": "Ci des Song",
         "yuan-qu": "Qu des Yuan",
@@ -144,7 +177,11 @@
       "auto": "Automatique",
       "on": "Toujours activées",
       "off": "Désactivées"
-    }
+    },
+    "actionReplyPlaceholder": "Saisir une réponse",
+    "actionNotDelivered": "Cela n’est pas parvenu à votre ordinateur. Ouvrez Cindy pour répondre.",
+    "actionReplyNotDelivered": "Votre réponse n’a pas été envoyée. Ouvrez Cindy pour la renvoyer : {{text}}",
+    "actionRequestEnded": "Cette demande a déjà reçu une réponse ou a expiré."
   },
   "about": {
     "sectionTitle": "À propos de ce téléphone",

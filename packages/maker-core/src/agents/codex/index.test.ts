@@ -11,10 +11,11 @@ import {
   isExactNoRolloutThreadResumeError,
 } from './index.js';
 import { CodexForkError } from './fork-error.js';
-import { Session } from '../../session.js';
+import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
-import { Method, type TurnStartParams } from './app-server/protocol.js';
+import { assembleSystemPromptSections } from '../shared/system-prompt-sections.js';
+import { Method, type CodexErrorInfo, type TurnStartParams } from './app-server/protocol.js';
 import type { Effort } from '../../types/common.js';
 import type { AppServerHost, ThreadEventHandlers } from './app-server/host.js';
 import {
@@ -1752,7 +1753,10 @@ describe('CodexAgent oneShot dispatch guard', () => {
   it('rechecks ownership before turn/start and releases the temporary thread', async () => {
     const agent = new CodexAgent(createDeps());
     const request = vi.fn(async (method: string) => {
-      if (method === Method.ThreadStart) return { thread: { id: 'thread-before-turn-guard' } };
+      // No caller model: the app-server picks its own default and reports it back.
+      if (method === Method.ThreadStart) {
+        return { thread: { id: 'thread-before-turn-guard' }, model: 'server-default-model' };
+      }
       throw new Error(`unexpected request: ${method}`);
     });
     const release = vi.fn(async () => undefined);
@@ -1769,7 +1773,7 @@ describe('CodexAgent oneShot dispatch guard', () => {
     });
 
     const beforeDispatch = vi
-      .fn<() => Promise<boolean>>()
+      .fn<(route?: { model?: string }) => Promise<boolean>>()
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
 
@@ -1777,8 +1781,12 @@ describe('CodexAgent oneShot dispatch guard', () => {
       .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
 
     expect(beforeDispatch).toHaveBeenCalledTimes(2);
+    // A retired hard-coded model id would fail every default one-shot, so no
+    // model is sent; the host still gets the chosen model before the prompt.
+    expect(beforeDispatch).toHaveBeenNthCalledWith(1);
+    expect(beforeDispatch).toHaveBeenNthCalledWith(2, { model: 'server-default-model' });
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.any(Object));
+    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.not.objectContaining({ model: expect.anything() }));
     expect(request).not.toHaveBeenCalledWith(Method.TurnStart, expect.any(Object));
     expect(subscribeThread).toHaveBeenCalledWith('thread-before-turn-guard', expect.any(Object));
     expect(release).toHaveBeenCalledOnce();
@@ -5844,6 +5852,24 @@ describe('CodexAgent.refreshLocalModels', () => {
 });
 
 describe('CodexAgent.startSession developerInstructions', () => {
+  // Unit, real thread/start projection: selected static text stays in developer
+  // instructions, after the original prefix, without creating a user message.
+  it('appends selected task fragments to the native developer instructions', async () => {
+    const instructions: string[] = [];
+    for (const selected of [false, true]) {
+      const agent = new CodexAgent(createDeps({ systemPrompt: 'HOST FIXED PREFIX' }));
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({ sessionId: `task-fragments-${selected}`,
+        model: 'gpt-5.4', workingDir: '/repo', userPrompt: assembleSystemPromptSections('Original task instructions', selected
+          ? [{ name: 'task', order: 0, text: 'STATIC FRAGMENT' }] : []),
+      });
+      const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as { developerInstructions: string };
+      instructions.push(params.developerInstructions);
+      await handle.close();
+      await agent.dispose();
+    }
+    expect(instructions[1]).toBe(instructions[0] + '\n\nSTATIC FRAGMENT');
+  });
   it.each([
     { action: 'start', resumeSessionId: undefined, expectedProvider: 'cindy_gateway' },
     {
@@ -8557,6 +8583,141 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(request?.params).toMatchObject({ cwds: [home] });
 
     await agent.dispose();
+  });
+
+  it.each([undefined, 'project'])('discovers enabled local skills without model credentials for %s context', async (context) => {
+    const home = path.join(os.tmpdir(), 'codex-skill-discovery-home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const workingDir = context ? path.join(home, 'project') : undefined;
+    const cwd = workingDir ?? home;
+    const skillPath = path.join(cwd, '.agents', 'skills', 'enabled', 'SKILL.md');
+    const skill = { name: 'enabled', description: 'Enabled skill', path: skillPath, scope: context ? 'repo' : 'user', enabled: true };
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.SkillsList, { result: { data: [{ cwd, skills: [
+        skill,
+        { ...skill, name: 'disabled', path: path.join(cwd, '.agents', 'skills', 'disabled', 'SKILL.md'), enabled: false },
+        { ...skill, name: 'admin', path: path.join(home, 'admin', 'skills', 'admin', 'SKILL.md'), scope: 'admin' },
+        { ...skill, name: 'internal', path: path.join(home, 'skills', '.system', 'internal', 'SKILL.md'), scope: 'system' },
+        { ...skill, name: 'plugin-internal', path: path.join(home, 'plugins', 'cache', 'publisher', 'plugin', '1.0.0', 'skills', 'internal', 'SKILL.md') },
+      ], errors: [{ path: cwd, message: 'Invalid skill metadata' }] }] } });
+    };
+    const deps = createDeps();
+    const getAuthEnv = vi.fn(async () => ({ CODEX_HOME: home }));
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => { throw new Error('Model bridge must not start for discovery'); });
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false, errorReason: 'no_credentials' }), getAuthEnv };
+    deps.prepareCodexExtraSpawnConfig = prepareCodexExtraSpawnConfig;
+    const agent = new CodexAgent(deps);
+
+    try {
+      await expect(agent.listAgentSkills({ workingDir, forceReload: true })).resolves.toMatchObject({
+        skills: [{ kind: 'agent-skill', name: 'enabled', path: skillPath, scope: skill.scope, enabled: true }],
+        errors: [{ path: cwd, message: 'Invalid skill metadata' }],
+      });
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(createdStdioOptions[0]).toMatchObject({ env: { CODEX_HOME: home }, extraArgs: expect.arrayContaining(['cli_auth_credentials_store="ephemeral"']) });
+      expect(createdTransports[0].lines.map(line => JSON.parse(line)).find(line => line.method === Method.SkillsList)?.params)
+        .toEqual({ cwds: [cwd], forceReload: true, perCwdExtraUserRoots: null });
+      expect(prepareCodexExtraSpawnConfig).not.toHaveBeenCalled();
+      expect(getAuthEnv).toHaveBeenCalledTimes(1);
+      await expect(agent.startSession({ sessionId: 'requires-auth', model: 'gpt-5.4', workingDir: cwd })).rejects.toBeInstanceOf(AgentNotAuthenticatedError);
+      expect(createdTransports).toHaveLength(1);
+    } finally { await agent.dispose(); }
+  });
+
+  it('closes credential-free skill discovery after a native RPC failure', async () => {
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.SkillsList, { error: { code: -32603, message: 'Skill discovery unavailable' } });
+    };
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => ({ CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') }) };
+    const agent = new CodexAgent(deps);
+    try {
+      await expect(agent.listAgentSkills({ workingDir: path.join(os.tmpdir(), 'codex-skill-project') })).rejects.toThrow('Skill discovery unavailable');
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+    } finally { await agent.dispose(); }
+  });
+
+  it('refuses skill discovery when native policy overrides ephemeral authentication', async () => {
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.ConfigRead, { result: { config: { cli_auth_credentials_store: 'file' } } });
+    };
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => ({ CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') }) };
+    const agent = new CodexAgent(deps);
+    try {
+      await expect(agent.listAgentSkills({})).rejects.toThrow('Codex could not initialize isolated account authentication');
+      expect(createdTransports[0].closed).toBe(true);
+      expect(createdTransports[0].lines.some(line => JSON.parse(line).method === Method.SkillsList)).toBe(false);
+    } finally { await agent.dispose(); }
+  });
+
+  it('does not fall back to local skill discovery for an unauthenticated remote host', async () => {
+    const deps = createDeps();
+    const getAuthEnv = vi.fn(async () => ({}));
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv };
+    const agent = new CodexAgent(deps);
+    try {
+      await expect(agent.listAgentSkills({ workingDir: '/remote/repo', remoteHostId: 'remote' })).resolves.toEqual({ skills: [] });
+      expect(createdTransports).toHaveLength(0);
+      expect(getAuthEnv).not.toHaveBeenCalled();
+    } finally { await agent.dispose(); }
+  });
+
+  it.each(['environment', 'initialize', 'skills'])('stops credential-free discovery during %s when disposed', async (phase) => {
+    let release = () => {};
+    let reached!: () => void;
+    const blocked = new Promise<void>(resolve => { reached = resolve; });
+    const pause = () => new Promise<void>(resolve => { release = resolve; reached(); });
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => {
+      if (phase === 'environment') await pause();
+      return { CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') };
+    } };
+    if (phase === 'initialize') MockCodexTransport.beforeInitializeResponse = pause;
+    if (phase === 'skills') MockCodexTransport.beforeSkillsListResponse = pause;
+    const agent = new CodexAgent(deps);
+    const result = agent.listAgentSkills({}).catch(error => error);
+    try {
+      await blocked;
+      await agent.dispose();
+      release();
+      if (phase !== 'environment') expect(createdTransports[0].closed).toBe(true);
+      expect(await result).toBeInstanceOf(Error);
+      if (phase === 'environment') expect(createdTransports).toHaveLength(0);
+    } finally {
+      release();
+      await Promise.all(createdTransports.map(transport => transport.close()));
+      await agent.dispose();
+      await result;
+    }
+  });
+
+  it.each(['initialize', 'skills'])('bounds credential-free discovery during %s and closes its process', async (phase) => {
+    vi.useFakeTimers();
+    let release = () => {};
+    let reached!: () => void;
+    const blocked = new Promise<void>(resolve => { reached = resolve; });
+    const pause = () => new Promise<void>(resolve => { release = resolve; reached(); });
+    if (phase === 'initialize') MockCodexTransport.beforeInitializeResponse = pause;
+    else MockCodexTransport.beforeSkillsListResponse = pause;
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => ({ CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') }) };
+    const agent = new CodexAgent(deps);
+    const result = agent.listAgentSkills({}).catch(error => error);
+    try {
+      await blocked;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(await result).toMatchObject({ message: expect.stringMatching(/timed out|timeout/) });
+    } finally {
+      release();
+      await Promise.all(createdTransports.map(transport => transport.close()));
+      await agent.dispose();
+      await result;
+      vi.useRealTimers();
+    }
   });
 
   it('keeps an installed skill-creator ahead of the native system fallback', async () => {
@@ -11691,7 +11852,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     function compact(host: ReturnType<typeof installFakeHost>, turnId = 'turn-1') {
       host.getThreadHandlers()!.itemStarted!({ threadId: nativeId, turnId, item: { id: 'compact', type: 'contextCompaction' } });
     }
-    function fail(host: ReturnType<typeof installFakeHost>, turnId = 'turn-1', error = failure) {
+    function fail(host: ReturnType<typeof installFakeHost>, turnId = 'turn-1', error: { message: string; codexErrorInfo: CodexErrorInfo } = failure) {
       const h = host.getThreadHandlers()!;
       h.error!({ threadId: nativeId, turnId, willRetry: false, error });
       h.turnCompleted!({ threadId: nativeId, turn: { id: turnId, status: 'failed', error } });
@@ -11719,6 +11880,248 @@ describe('CodexAgent MCP thread context hooks', () => {
       await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
       expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(2);
       await handle.close();
+    });
+    // #6876: exercise the production adapter lifecycle, not a copied status regex.
+    // Existing HTTP-status cases miss LiteLLM's code field in message/details.
+    it.each([
+      { format: 'provider code', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: false },
+      { format: 'JSON code', message: 'Error running remote compact task: {"error":{"code":"400","message":"unsupported tool type"}}', partial: true, completedOnly: false },
+      { format: 'non-status number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 402 tokens"}', partial: false, completedOnly: false },
+      { format: 'non-status forbidden number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 403 tokens"}', partial: false, completedOnly: false },
+      { format: 'non-status timeout number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 504 tokens"}', partial: false, completedOnly: false },
+      { format: 'contextual allowed status', message: 'Error running remote compact task: {"code":"400","status_code":422}', partial: false, completedOnly: false },
+      { format: 'structured retry rejection', message: 'Error running remote compact task: {"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 400 } }, partial: false, completedOnly: false },
+      { format: 'structured retry rate limit', message: 'Error running remote compact task: {"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
+      { format: 'nested allowed statuses', message: 'Error running remote compact task: {"code":"400","status":400,"cause":{"status_code":422}}', partial: false, completedOnly: false },
+      { format: 'nested retry rate limit', message: 'Error running remote compact task: {"code":"400","status":429,"cause":{"status_code":400}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
+      { format: 'nested shared retry rate limit', message: 'Error running remote compact task: {"code":"400","cause":{"code":"429"},"message":"request rejected (429)"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
+      { format: 'wrapped rate limit with exhausted retries', message: 'Error running remote compact task: {"code":"400","type":"rate_limit_error"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
+      { format: 'explicit bad gateway response', message: 'Error running remote compact task: HTTP 502 Bad Gateway {"code":"400"}', partial: false, completedOnly: false },
+      { format: 'explicit service unavailable response', message: 'Error running remote compact task: HTTP 503 Service is temporarily Unavailable {"code":"400"}', partial: false, completedOnly: false },
+      { format: 'model mentioning unsupported tool', message: 'Error running remote compact task: {"code":"400","message":"model returned unsupported tool type"}', partial: false, completedOnly: false },
+      { format: 'non-network terminated text', message: 'Error running remote compact task: {"code":"400","message":"unsupported field app_session_terminated"}', partial: false, completedOnly: false },
+      { format: 'nested allowed string code', message: 'Error running remote compact task: {"code":"400","cause":{"code":"500"}}', partial: false, completedOnly: false },
+      { format: 'nested allowed numeric code', message: 'Error running remote compact task: {"code":"400","cause":{"code":422}}', partial: false, completedOnly: false },
+      { format: 'request rejected allowed code', message: 'Error running remote compact task: {"code":"400","message":"request rejected (422)"}', partial: false, completedOnly: false },
+      { format: 'additional details', message: 'Error running remote compact task', additionalDetails: '{"error":{"code":"400"}}', partial: false, completedOnly: false },
+      { format: 'completion without error notification', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: true },
+    ])('recovers LiteLLM 400 from $format without replaying completed work', async ({ partial, completedOnly, ...sample }) => {
+      const { host, handle, events } = await start();
+      const h = host.getThreadHandlers()!;
+      const error = { message: sample.message, additionalDetails: sample.additionalDetails, codexErrorInfo: sample.codexErrorInfo ?? 'other' as const };
+      try {
+        if (partial) h.itemStarted!({ threadId: nativeId, turnId: 'turn-1',
+          item: { id: 'existing-work', type: 'commandExecution', command: 'echo done', cwd: '/repo' } });
+        compact(host);
+        if (!completedOnly) {
+          h.error!({ threadId: nativeId, turnId: 'turn-1', willRetry: false, error });
+          expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+        }
+        h.turnCompleted!({ threadId: nativeId, turn: { id: 'turn-1', status: 'failed', error } });
+        await waitForExpectation(() => expect(handle.getCurrentTurnId?.()).toBe('turn-2'));
+        expect(host.request.mock.calls.find(([m]) => m === Method.ThreadFork)![1]).toMatchObject({
+          threadId: nativeId, modelProvider: 'cindy_summary', model: 'codex/gpt-6-astra',
+        });
+        expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)[1][1]).toMatchObject({
+          threadId: 'fork-thread-id', input: partial ? [] : [{ type: 'text', text: 'Finish my existing work.' }],
+        });
+        expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(false);
+        h.turnCompleted!({ threadId: 'fork-thread-id', turn: { id: 'turn-2', status: 'completed' } });
+        await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+        expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(1);
+      } finally { await handle.close(); }
+    });
+    it.each([
+      { message: 'code: provider_invalid_request / 4000' },
+      { message: '{"error":{"code":"400_invalid"}}' },
+      { message: 'code: provider_invalid_request / 400: request timed out' },
+      { message: 'code: provider_invalid_request / 400: invalid_encrypted_content' },
+      { message: '{"code":"400","message":"insufficient_quota"}' },
+      { message: '{"code":"400","type":"insufficient_balance_error"}' },
+      { message: 'code: provider_invalid_request / 400: insufficient_balance_error' },
+      { message: '{"code":"400","message":"402 Payment Required"}' },
+      { message: '{"code":"400","message":"upstream code: 402"}' },
+      { message: '{"code":"400","status":403}' },
+      { message: '{"code":"400","message":"upstream status_code=403"}' },
+      { message: '{"code":"400","status_code":504}' },
+      { message: '{"code":"400","message":"upstream status=504"}' },
+      { message: '{"code":"400","status":408}' },
+      { message: '{"code":"400","status":409}' },
+      { message: '{"code":"400","status":400,"cause":{"status_code":504}}' },
+      { message: '{"code":"400","status":400,"cause":{"status_code":409}}' },
+      { message: '{"code":"400","status":400,"cause":{"status_code":429}}' },
+      { message: '{"code":"400","message":"HTTP 400 wrapping upstream HTTP 504"}' },
+      { message: '{"code":"400","message":"HTTP 400 wrapping code: 529"}' },
+      { message: '{"code":"400","cause":{"code":"429","upstream":{"code":"529"}}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+      { message: '{"code":"400","message":"request rejected (429); request rejected (529)"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+      { message: '{"code":"400","type":"billing_error"}' },
+      { message: '{"code":"400","message":"credit balance too low"}' },
+      { message: '{"code":"400","cause":{"code":"ECONNREFUSED"}}' },
+      { message: '{"code":"400","cause":{"code":"ENOTFOUND"}}' },
+      { message: '{"code":"400","cause":{"code":"EAI_AGAIN"}}' },
+      { message: '{"code":"400","cause":{"code":"ECONNRESET"}}' },
+      { message: '{"code":"400","cause":{"code":"EHOSTUNREACH"}}' },
+      { message: '{"code":"400","cause":{"code":"ENETUNREACH"}}' },
+      { message: '{"code":"400","cause":{"code":"UND_ERR_CONNECT_TIMEOUT"}}' },
+      { message: '{"code":"400","cause":{"code":"UND_ERR_SOCKET"}}' },
+      { message: '{"code":"400","cause":{"code":"ETIMEDOUT"}}' },
+      { message: '{"code":"400","cause":{"code":"ABORT_ERR"}}' },
+      { message: '{"code":"400","cause":{"code":"TimeoutError"}}' },
+      { message: '{"code":"400","cause":{"code":"AbortError"}}' },
+      { message: '{"code":"400","type":"permission_error"}' },
+      { message: '{"code":"400","type":"permission_error"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","message":"Invalid model name"}' },
+      { message: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400"}', codexErrorInfo: 'cyberPolicy' },
+      { message: '{"code":"400","type":"rate_limit_error"}' },
+      { message: '{"code":"400","type":"rate_limit_error"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","type":"connection_error"}' },
+      { message: '{"code":"400","type":"connection_error"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","type":"connection_error"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+      { message: '{"code":"400","message":"upstream unreachable"}' },
+      { message: '{"code":"400","message":"fetch failed"}' },
+      { message: '{"code":"400","message":"socket hang up"}' },
+      { message: '{"code":"400","message":"EPIPE"}' },
+      { message: '{"code":"400","message":"Connection error"}' },
+      { message: '{"code":"400","message":"AggregateError"}' },
+      { message: '{"code":"400","message":"OpenAI Responses stream ended before a terminal response event"}' },
+      { message: '{"code":"400","message":"upstream stream error: terminated"}' },
+      { message: '{"code":"400","message":"Gateway Time-out"}' },
+      { message: '{"code":"400","message":"Reconnecting... 2/5"}' },
+      { message: '{"code":"400","type":"content_policy_violation"}' },
+      { message: '{"code":"400","type":"content_policy_violation"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","type":"model_not_found"}' },
+      { message: '{"code":"400","type":"model_not_found"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"500"}' },
+      { message: 'request rejected (500)' },
+      { message: '{"code":"400","message":"request rejected (504)"}' },
+      { message: '{"code":"400","cause":{"code":"504"}}' },
+      { message: '{"code":"400","cause":{"code":504}}' },
+      { message: '{"code":"400","cause":{"code":"408"}}' },
+      { message: '{"code":"400","cause":{"code":409}}' },
+      { message: '{"code":"400","cause":{"code":"429","upstream":{"code":"504"}}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+      { message: '{"code":"400","type":"authentication_error"}' },
+      { message: '{"code":"400","type":"unauthorized"}' },
+      { message: '{"code":"400","message":"Unauthorized"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","message":"invalid token"}' },
+      { message: '{"code":"400","message":"鉴权失败"}' },
+      { message: '{"code":"400","message":"令牌无效"}' },
+      { message: '{"code":"400"}', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 504 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 403 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 402 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 401 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseStreamConnectionFailed: { httpStatusCode: 400 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: {} } },
+      { message: '{"code":"400"}', codexErrorInfo: 'usageLimitExceeded' },
+      { message: '{"code":"400","type":"request_too_large"}' },
+      { message: '{"code":"400","type":"request_too_large"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","type":"overloaded_error"}' },
+      { message: '{"code":"400"}', codexErrorInfo: 'serverOverloaded' },
+      { message: '{"code":"400","message":"model: glm-x not found"}' },
+      { message: '{"code":"400","message":"model: glm-x not found"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","message":"The model `x` does not exist or you do not have access"}' },
+    ] as const)('keeps unsafe or non-status LiteLLM errors terminal: %j', async (sample) => {
+      const { host, handle, events } = await start();
+      try {
+        compact(host);
+        fail(host, 'turn-1', {
+          message: `Error running remote compact task: ${sample.message}`,
+          codexErrorInfo: sample.codexErrorInfo ?? 'other',
+        });
+        await waitForExpectation(() => expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(true));
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+        expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
+      } finally { await handle.close(); }
+    });
+    // #10145 unit adapter control: wrapper code 400 must preserve the original
+    // four capacity retries before model work. The compact negative table above
+    // covers its contrasting progress guard: contextCompaction is model work,
+    // so a capacity failure there stays terminal instead of replaying history.
+    it('preserves bounded capacity backoff for LiteLLM wrappers before model work', async () => {
+      const { host, handle, events } = await start();
+      vi.useFakeTimers();
+      try {
+        const error = { message: '{"code":"400"}', codexErrorInfo: 'serverOverloaded' as const };
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          const turnId = handle.getCurrentTurnId?.() ?? '';
+          fail(host, turnId, error);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+          expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(attempt);
+          if (attempt <= 4) {
+            expect(events.filter(e => e.type === 'error').at(-1)?.data).toMatchObject({
+              isTerminal: false, willRetry: true, message: expect.stringContaining(`auto-retry ${attempt}/4`),
+            });
+            await vi.advanceTimersByTimeAsync(40_000);
+            expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(attempt + 1);
+            expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart).at(-1)![1]).toMatchObject({
+              threadId: nativeId, input: [{ type: 'text', text: 'Finish my existing work.' }],
+            });
+          } else {
+            await vi.advanceTimersByTimeAsync(40_000);
+            expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(5);
+            expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(true);
+            expect(handle.isTurnRunning?.()).toBe(false);
+          }
+        }
+      } finally { await handle.close(); vi.useRealTimers(); }
+    });
+    it('retains a recorded summary recovery when completion has no replacement error', async () => {
+      const { host, handle } = await start();
+      try {
+        compact(host);
+        const h = host.getThreadHandlers()!;
+        h.error!({ threadId: nativeId, turnId: 'turn-1', willRetry: false,
+          error: { message: '{"code":"400"}', codexErrorInfo: 'other' } });
+        h.turnCompleted!({ threadId: nativeId, turn: { id: 'turn-1', status: 'failed' } });
+        await waitForExpectation(() => expect(handle.getCurrentTurnId?.()).toBe('turn-2'));
+        expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(1);
+      } finally { await handle.close(); }
+    });
+    it.each([
+      { message: '{"code":"400","type":"insufficient_balance_error"}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400"}', codexErrorInfo: 'usageLimitExceeded' as const },
+      { message: '{"code":"400","status":403}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","status_code":504}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 504 } } },
+      { message: '{"code":"400","type":"unauthorized"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","status":400,"cause":{"status_code":504}}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","type":"billing_error"}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","cause":{"code":"EAI_AGAIN"}}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","type":"permission_error"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'other' as const },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","message":"Invalid model name"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400"}', codexErrorInfo: 'cyberPolicy' as const },
+      { message: '{"code":"400","type":"rate_limit_error"}', codexErrorInfo: 'other' as const },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","cause":{"code":"504"}}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","cause":{"code":409}}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","message":"request rejected (409)"}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","message":"upstream unreachable"}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","type":"content_policy_violation"}', codexErrorInfo: 'other' as const },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","type":"model_not_found"}', codexErrorInfo: 'badRequest' as const },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","type":"connection_error"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","cause":{"code":"429","upstream":{"code":"529"}}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","type":"request_too_large"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","type":"overloaded_error"}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400"}', codexErrorInfo: 'serverOverloaded' as const },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","message":"model: glm-x not found"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","message":"The model `x` does not exist"}', codexErrorInfo: 'other' as const },
+    ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
+      const { host, handle, events } = await start();
+      try {
+        compact(host);
+        const h = host.getThreadHandlers()!;
+        h.error!({ threadId: nativeId, turnId: 'turn-1', willRetry: false,
+          error: { message: '{"code":"400"}', codexErrorInfo: 'other' } });
+        h.turnCompleted!({ threadId: nativeId, turn: { id: 'turn-1', status: 'failed', error } });
+        await waitForExpectation(() => expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(true));
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+        expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
+      } finally { await handle.close(); }
     });
     it.skipIf(process.platform !== 'win32')('inherits Review read tools on a history fork without sending start-only parameters', async () => {
       const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-fork-'));
@@ -24727,6 +25130,21 @@ describe('CodexAgent resume preparation', () => {
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
   });
 
+  // History actions must not turn an unavailable native timeline into an empty
+  // task. Ordinary-send fallback is covered below; this is the strict path.
+  it.each([resumeSessionId, '<failed>'])('refuses empty history for strict resume %s', async (nativeId) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) throw exactNoRolloutError();
+      return undefined;
+    });
+    await expect(agent.startSession({ sessionId: 'strict-history', model: 'gpt-5.4',
+      workingDir: '/repo', resumeSessionId: nativeId,
+      vendorOptions: { _cindyRequireNativeResume: true },
+    })).rejects.toThrow(nativeId === '<failed>' ? 'valid Codex thread id' : 'Failed to resume Codex thread');
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+  });
+
   it('falls back to thread/start only when resume proves the thread has no rollout', async () => {
     const agent = new CodexAgent(createDeps({ systemPrompt: 'runtime developer instructions' }));
     const host = installFakeHost(agent, (method) => {
@@ -35895,5 +36313,211 @@ describe('Codex native model context overrides', () => {
     expect(params.config?.model_context_window).toBeUndefined();
     expect(params.config?.model_auto_compact_token_limit).toBeUndefined();
     await handle.close();
+  });
+});
+
+describe('Codex native manual compaction', () => {
+  async function setup(compactResponse?: () => unknown, consumeEvents = true) {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadCompactStart) return compactResponse?.() ?? {};
+      if (method === Method.TurnInterrupt) return {};
+      if (method === Method.TurnStart) return { turn: { id: 'next-user-turn' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'manual-compact-test', model: 'gpt-5.4', workingDir: '/repo' });
+    const events: AgentEvent[] = [];
+    if (consumeEvents) void (async () => { for await (const e of handle.events()) events.push(e); })();
+    const handlers = host.getThreadHandlers()!;
+    const started = () => handlers.turnStarted!({ threadId: handle.id, turn: { id: 'manual-turn', status: 'inProgress' } });
+    const completed = (status = 'completed', error?: { message: string }) => handlers.turnCompleted!({ threadId: handle.id, turn: { id: 'manual-turn', status, error } });
+    const boundary = () => handlers.itemCompleted!({ threadId: handle.id, turnId: 'manual-turn', item: { id: 'manual-boundary', type: 'contextCompaction' } });
+    return { agent, host, handle, events, handlers, started, completed, boundary };
+  }
+
+  it('waits beyond the ACK, emits a manual boundary and releases the session for the next send', async () => {
+    const { agent, host, handle, events, started, boundary, completed } = await setup();
+    expect(agent.capabilities.manualCompact?.supported).toBe(true);
+    let resolved = false;
+    const result = handle.compactSession!().then(value => { resolved = true; return value; });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    expect(handle.hasPendingHostOperation?.()).toBe(true);
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.isRunning === true)).toBe(true));
+    // Desktop ignores background running frames. Stop must be available even
+    // before the daemon produces its first turn/item notification.
+    expect(events.find(e => e.type === 'status' && e.data.isRunning === true)?.turnScope).not.toBe('background');
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadCompactStart, { threadId: handle.id });
+    await expect(handle.send({ type: 'user', content: 'do not race' })).rejects.toThrow('compacting');
+    await expect(handle.compactSession!()).rejects.toThrow('active');
+    started(); boundary();
+    expect(resolved).toBe(false);
+    completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });
+    await waitForExpectation(() => expect(events.filter(e => e.type === 'compact_boundary')).toHaveLength(1));
+    expect(events.find(e => e.type === 'compact_boundary')?.data).toMatchObject({ trigger: 'manual' });
+    expect(handle.hasPendingHostOperation?.()).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.send({ type: 'user', content: 'continue' });
+    expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('reports an empty native compact as a no-op, not success', async () => {
+    const { handle, started, completed } = await setup();
+    const result = handle.compactSession!();
+    started(); completed();
+    await expect(result).resolves.toEqual({ noop: true });
+    await handle.close();
+  });
+
+  it('refreshes context from the native zero-cost compact frame with unchanged billing totals', async () => {
+    const { handle, handlers, events, started, boundary, completed } = await setup();
+    const total = { inputTokens: 4000, cachedInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 4050 };
+    handlers.tokenUsageUpdated!({ threadId: handle.id, turnId: 'previous-turn',
+      tokenUsage: { last: total, total, modelContextWindow: 500000 } });
+    const result = handle.compactSession!();
+    started();
+    handlers.tokenUsageUpdated!({ threadId: handle.id, turnId: 'manual-turn', tokenUsage: {
+      total, modelContextWindow: 500000,
+      last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1200 },
+    } });
+    boundary(); completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 4000, estimatedTokensAfter: 1200 });
+    await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.contextTokens === 1200 && e.data.isRunning === false)).toBe(true));
+    expect(events.find(e => e.type === 'compact_boundary')?.turnScope).toBe('background');
+    await handle.close();
+  });
+
+  it('protects a Session send reservation before the native turn has started', async () => {
+    const { agent, handle, host } = await setup(undefined, false);
+    const session = new Session({ id: 'manual-compact-test', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0 });
+    let release!: () => void;
+    const preparation = new Promise<void>(resolve => { release = resolve; });
+    const sending = session.send('pending input', { afterTurnReserved: () => preparation });
+    await expect(session.compactSession()).rejects.toThrow('reserved');
+    expect(host.request.mock.calls.some(([m]) => m === Method.ThreadCompactStart)).toBe(false);
+    release();
+    await sending;
+    await session.close();
+  });
+
+  it('retires a previous Stop check while preserving bounded recovery for a Stop on the compact', async () => {
+    const { agent, handle, handlers, started } = await setup(undefined, false);
+    const session = new Session({ id: 'manual-compact-test', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0 });
+    session.onEvent(() => {});
+    vi.useFakeTimers();
+    try {
+      await session.send('previous turn');
+      await session.abort();
+      handlers.turnCompleted!({ threadId: handle.id,
+        turn: { id: 'next-user-turn', status: 'interrupted' } });
+      await vi.advanceTimersByTimeAsync(0);
+      const generation = session.getTurnGeneration();
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS / 2);
+      const compact = session.compactSession();
+      const failure = expect(compact).rejects.toThrow('closed');
+      started();
+      expect(session.getTurnGeneration()).toBe(generation);
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS / 2 + 1);
+      expect(session.getStatus()).toBe('active');
+      expect(handle.hasPendingHostOperation?.()).toBe(true);
+
+      // Stop on this operation must not be deduplicated against the old turn's
+      // Stop. A rejected repeat compact must not invalidate that new check.
+      await session.abort();
+      await expect(session.compactSession()).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS + 1);
+      await failure;
+      expect(session.getStatus()).toBe('closed');
+    } finally {
+      vi.useRealTimers();
+      await session.close();
+    }
+  });
+
+  it('rejects failed compaction without rollover or replay and permits another send', async () => {
+    const { handle, host, events, handlers, started, completed } = await setup();
+    const result = handle.compactSession!();
+    const failed = expect(result).rejects.toThrow('invalid_encrypted_content');
+    started();
+    const error = { message: 'Error running remote compact task: invalid_encrypted_content' };
+    handlers.error!({ threadId: handle.id, turnId: 'manual-turn', willRetry: false, error });
+    completed('failed', error);
+    await failed;
+    expect(events.some(e => e.type === 'error' || e.type === 'done')).toBe(false);
+    expect(host.request.mock.calls.some(([m]) => m === Method.TurnStart || m === Method.ThreadFork)).toBe(false);
+    await handle.send({ type: 'user', content: 'continue after failure' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
+  it('interrupts a compact stopped before its native turn id arrives', async () => {
+    const { handle, host, started, completed } = await setup();
+    const result = handle.compactSession!();
+    const stopped = expect(result).rejects.toThrow('interrupted');
+    await handle.abort();
+    expect(handle.isTurnRunning?.()).toBe(true);
+    started();
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, { threadId: handle.id, turnId: 'manual-turn' });
+    completed('interrupted');
+    await stopped;
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('settles transport loss and close while waiting for the native terminal', async () => {
+    for (const transportLoss of [false, true]) {
+      const { handle, handlers, started } = await setup();
+      const result = handle.compactSession!();
+      const failure = expect(result).rejects.toThrow(transportLoss ? 'disconnected' : 'closed');
+      started();
+      if (transportLoss) handlers.error!({ scope: 'transport', turnId: '', error: { message: 'disconnected' }, willRetry: false });
+      else await handle.close();
+      await failure;
+      expect(handle.hasPendingHostOperation?.()).toBe(false);
+      await handle.close();
+    }
+  });
+
+  it('surfaces unsupported daemons and does not submit a synthetic user prompt', async () => {
+    const { handle, host } = await setup(() => { throw Object.assign(new Error('Method not found'), { code: -32601 }); });
+    await expect(handle.compactSession!()).rejects.toThrow('Method not found');
+    expect(host.request.mock.calls.some(([m]) => m === Method.TurnStart)).toBe(false);
+    await handle.close();
+  });
+
+  it('keeps authoritative completion when the ACK arrives late', async () => {
+    let rejectAck!: (error: Error) => void;
+    const ack = new Promise((_, reject) => { rejectAck = reject; });
+    const { handle, started, boundary, completed } = await setup(() => ack);
+    const result = handle.compactSession!();
+    started(); boundary(); completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });
+    rejectAck(new Error('late ACK timeout'));
+    await Promise.resolve();
+    await handle.send({ type: 'user', content: 'continue' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
+  it('bounds a missing native terminal and retires the uncertain handle', async () => {
+    const { handle, started } = await setup();
+    vi.useFakeTimers();
+    try {
+      const result = handle.compactSession!();
+      const failure = expect(result).rejects.toThrow('timed out');
+      started();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await failure;
+      expect(handle.hasPendingHostOperation?.()).toBe(false);
+      await expect(handle.compactSession!()).rejects.toThrow('closed');
+    } finally {
+      vi.useRealTimers();
+      await handle.close();
+    }
   });
 });

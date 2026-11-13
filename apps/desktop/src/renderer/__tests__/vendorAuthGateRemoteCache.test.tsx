@@ -19,9 +19,16 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm }),
 }));
-vi.mock('@/hooks/useVendorReadiness', () => ({
-  useVendorReadiness: () => ({ revalidate }),
-}));
+// Most cases isolate the gate; `realReadiness` runs the production readiness hook.
+let realReadiness = false;
+vi.mock('@/hooks/useVendorReadiness', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useVendorReadiness')>();
+  return {
+    ...actual,
+    useVendorReadiness: (vendor: 'cc' | 'codex' | 'pi') =>
+      realReadiness ? actual.useVendorReadiness(vendor) : { revalidate },
+  };
+});
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { getDeviceName: () => 'Mac mini' },
 }));
@@ -62,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  realReadiness = false;
   vi.unstubAllGlobals();
   invoke.mockClear();
   confirm.mockClear();
@@ -221,6 +229,105 @@ describe('useVendorAuthGate 本机恢复引导', () => {
       proceed: false,
     });
     expect(confirm).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('useVendorAuthGate 本机运行时轴', () => {
+  // PR #9983 Greptile P1 / unit: an offline install may lack local Claude Code.
+  // SSH tasks run the remote runtime, so only local tasks may be blocked by it.
+  it('SSH 任务不被本机缺失的 Claude Code 拦截，本机任务引导到关于页', async () => {
+    realReadiness = true;
+    const getStatus = vi.fn(async () => ({ binaryReady: false, authReady: true }));
+    vi.stubGlobal('electronAPI', {
+      deviceLink: { invoke },
+      maker: { agent: { getStatus }, listProviders: async () => ({ providers: [provider({})] }) },
+    });
+    const { result } = renderHook(() => useVendorAuthGate());
+    await vi.waitFor(() => expect(getStatus).toHaveBeenCalledTimes(3));
+    getStatus.mockClear();
+
+    await expect(result.current.checkAndConfirm('cc', { remoteHostId: 'ssh-host' }))
+      .resolves.toEqual({ proceed: true });
+    expect(getStatus).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+
+    await expect(result.current.checkAndConfirm('cc')).resolves.toEqual({ proceed: false });
+    expect(getStatus).toHaveBeenCalledExactlyOnceWith('claude-code');
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'logic.confirm.ccBinaryMissingTitle' }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/settings?tab=about');
+  });
+});
+
+// #9952 / unit: the real inline gate must explain the failed voice service and
+// navigate to its recovery page. Existing tests cover auth/settingsTab alone,
+// and the overlay resolver tests never exercise this hook's confirmation path.
+// Minimum regression: BYOK custom ASR, missing config/key, legacy providers tab.
+describe('useVendorAuthGate voice input recovery', () => {
+  type VoiceReadiness = Awaited<ReturnType<typeof window.electronAPI.voiceInput.getReadiness>>;
+  const missingCustomConfig: VoiceReadiness = {
+    ok: false,
+    serviceMode: 'byok',
+    provider: 'custom-realtime-asr',
+    providerModel: 'custom-realtime-asr',
+    auth: 'api-key',
+    settingsTab: 'providers',
+    failureReason: 'custom-asr-config-missing',
+  };
+
+  function mockVoiceInput(readiness: VoiceReadiness, cached: VoiceReadiness | null = null) {
+    const getReadiness = vi.fn(async () => readiness);
+    vi.stubGlobal('electronAPI', {
+      voiceInput: { getReadinessCached: () => cached, getReadiness },
+    });
+    return getReadiness;
+  }
+
+  it.each([
+    [{}, 'settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing', 'voice-input'],
+    [{ failureReason: 'custom-asr-key-missing' }, 'settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing', 'voice-input'],
+    [{ serviceMode: 'cindy', provider: 'litellm-gpt-realtime-whisper', failureReason: undefined }, 'voiceInputOverlay.cindyServiceUnavailable', 'voice-input'],
+    [{ auth: 'codex', provider: 'openai-realtime-whisper', failureReason: 'codex-realtime-unsupported' }, 'settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported', 'voice-input'],
+    [{ auth: 'codex', provider: 'openai-realtime-whisper', failureReason: undefined }, 'settings.voiceInput.serviceSource.credentialError.codexMissing', 'providers'],
+    [{ provider: 'elevenlabs-scribe-realtime', failureReason: undefined }, 'settings.voiceInput.serviceSource.credentialError.elevenlabsMissing', 'voice-input'],
+    [{ provider: 'litellm-gpt-realtime-whisper', failureReason: undefined }, 'settings.voiceInput.serviceSource.credentialError.gatewayMissing', 'providers'],
+  ] satisfies [Partial<VoiceReadiness>, string, string][])(
+    'explains %j and opens its recovery settings', async (overrides, messageKey, settingsTab) => {
+      mockVoiceInput({ ...missingCustomConfig, ...overrides });
+      const { result } = renderHook(() => useVendorAuthGate());
+
+      await expect(result.current.checkAndConfirm('codex', { purpose: 'voice-input' }))
+        .resolves.toEqual({ proceed: false });
+      expect(confirm).toHaveBeenCalledExactlyOnceWith({
+        title: 'settings.voiceInput.title',
+        description: messageKey,
+        confirmText: 'logic.confirm.goToSettings',
+        cancelText: 'logic.confirm.cancel',
+        autoFocusConfirm: true,
+      });
+      expect(navigate).toHaveBeenCalledExactlyOnceWith(`/settings?tab=${settingsTab}`);
+    },
+  );
+
+  it('cancels without navigating or starting voice input', async () => {
+    mockVoiceInput(missingCustomConfig);
+    confirm.mockResolvedValueOnce(false);
+    const { result } = renderHook(() => useVendorAuthGate());
+
+    await expect(result.current.checkAndConfirm('codex', { purpose: 'voice-input' }))
+      .resolves.toEqual({ proceed: false });
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('allows a ready service (cached=%s) without prompting', async (cached) => {
+    const ready = { ...missingCustomConfig, ok: true, failureReason: undefined };
+    const getReadiness = mockVoiceInput(ready, cached ? ready : missingCustomConfig);
+    const { result } = renderHook(() => useVendorAuthGate());
+
+    await expect(result.current.checkAndConfirm('codex', { purpose: 'voice-input' }))
+      .resolves.toEqual({ proceed: true });
+    expect(getReadiness).toHaveBeenCalledTimes(cached ? 0 : 1);
+    expect(confirm).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
   });
 });

@@ -29,6 +29,13 @@
       "description": "O acesso total desativa a sandbox do espaço de trabalho e dispensa as aprovações de rotina. {{appName}} pode modificar ficheiros fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações de alto risco integradas continuarão a exigir confirmação.",
       "confirm": "Ativar acesso total",
       "cancel": "Manter permissões atuais"
+    },
+    "description": {
+      "default": "Cabe-lhe aprovar as ações quando necessário.",
+      "acceptEdits": "As edições de ficheiros são permitidas diretamente; cabe-lhe aprovar as outras ações quando necessário.",
+      "auto": "Um modelo de IA aprova as ações, o que pode exigir mais espera; cabe-lhe a si confirmar quando necessário.",
+      "bypass": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede.",
+      "plan": "Analisa e planeia sem alterar ficheiros."
     }
   },
   "planMode": {
@@ -40,7 +47,6 @@
     "questionWithdrawn": "Já não precisa de resposta",
     "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
     "sendSupplement": "Enviar complemento",
-
     "readOnlyKind": "Pendente",
     "readOnlyTitle": "A aguardar confirmação no seu computador",
     "pendingRequests": "Pedidos pendentes",
@@ -68,7 +74,7 @@
     "collapse": "Recolher",
     "collapsePendingCard": "Recolher o pedido pendente para ler primeiro o resultado do seu computador",
     "expandPendingCard": "Expandir o pedido pendente para responder: {{title}}",
-    "collapsedHint": "Tocar para responder",
+    "collapsedHint": "Toque para responder",
     "selectAnswer": "Selecionar resposta {{label}}",
     "submittingHint": "A enviar a decisão para o seu computador. Não volte a submeter.",
     "decisionNotAccepted": "A sua resposta não foi aceite. Tente novamente.",
@@ -87,8 +93,8 @@
     "closeAnswer": "Fechar",
     "planReviewTitle": "Rever o plano do Claude",
     "planExpand": "Expandir plano",
-    "planEditHint": "Usar o modo de edição para ajustar o plano",
-    "planBrowseHint": "Toque numa secção para ir para a mesma",
+    "planEditHint": "Use o modo de edição para ajustar o plano",
+    "planBrowseHint": "Toque numa secção para saltar para ela",
     "planEditToggle": "Editar plano",
     "planEditExit": "Sair da edição do plano",
     "planCollapse": "Recolher plano",
@@ -128,7 +134,7 @@
       "label": "Plano"
     },
     "issue_confirm": {
-      "title": "O problema precisa de confirmação",
+      "title": "A Issue precisa de confirmação",
       "label": "Issue"
     },
     "rename_sessions_confirm": {
@@ -148,8 +154,8 @@
       "label": "Pedido"
     },
     "input_handoff": {
-      "title": "É necessário transferir o controlo da introdução",
-      "label": "Transferência do controlo da introdução"
+      "title": "Introdução manual necessária",
+      "label": "Introdução manual"
     }
   },
   "rewind": {
@@ -187,6 +193,7 @@
     "fromLead": "Mensagem do Lead",
     "fromWorkerNamed": "Mensagem do Worker «{{role}}»",
     "fromWorker": "Mensagem do Worker",
+    "fromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
     "emptyMessageBody": "(Mensagem vazia)"
   },
   "contextSheet": {
@@ -226,7 +233,7 @@
     "photoNotReadable": "Não é possível ler esta fotografia neste momento (poderá não ter terminado de ser descarregada do iCloud). Tente novamente mais tarde."
   },
   "pluginSetup": {
-    "remoteDesktop": "Abrir aplicação de computador",
+    "remoteDesktop": "Abrir ambiente de trabalho remoto",
     "completeOnDesktop": "Use o ambiente de trabalho remoto para concluir a configuração no computador. O início de sessão, a autorização e as credenciais permanecem nesse computador; este cartão é atualizado automaticamente.",
     "chooseOne": "Escolher um método de configuração",
     "progress": "{{satisfied}}/{{total}} concluídos",
@@ -279,21 +286,21 @@
     "error": {
       "decision": "A operação não foi concluída. Tente novamente.",
       "stale": "O ecrã mudou. Use a versão mais recente.",
-      "submit": "A sua introdução não foi enviada. Tente novamente."
+      "submit": "O texto introduzido não foi enviado. Tente novamente."
     },
     "terminal": {
       "succeeded": "Controlo devolvido ao Agent.",
-      "cancelled": "Transferência do controlo da introdução cancelada.",
-      "failed": "Transferência do controlo da introdução terminada.",
-      "expired": "Transferência do controlo da introdução terminada por tempo de espera excedido."
+      "cancelled": "Introdução manual cancelada.",
+      "failed": "Introdução manual terminada.",
+      "expired": "Introdução manual terminada por tempo de espera excedido."
     },
     "failure": {
       "permission": "O Cindy não consegue ler o ecrã deste computador. Autorize o Cindy em Acessibilidade nas Definições do Sistema.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler este ecrã. Pode concluir este passo no computador anfitrião e depois devolver o controlo ao Agent.",
       "action_failed": "A ação não teve efeito. Verifique o ecrã e tente novamente.",
-      "timeout": "Transferência do controlo da introdução terminada por tempo de espera excedido.",
-      "unsupported": "Este computador ainda não suporta a transferência do controlo de introdução.",
+      "timeout": "Introdução manual terminada por tempo de espera excedido.",
+      "unsupported": "Este computador ainda não suporta a introdução manual.",
       "origin_changed": "A página mudou antes de Cindy a poder preencher, pelo que nada foi introduzido. Verifique a página atual e tente novamente.",
       "picture_unavailable": "Não foi possível mostrar este passo como imagem. Permita que Cindy grave o ecrã nas Definições do Sistema e certifique-se de que a janela não está minimizada.",
       "screen_locked": "O ecrã deste computador está bloqueado (a suspensão do ecrã também o bloqueia). Ative-o e desbloqueie-o, depois peça ao Agent para tentar novamente.",
@@ -340,11 +347,11 @@
       "donePhone_other": "O proprietário concluiu {{count}} passos de introdução num telemóvel",
       "doneElsewhere_one": "O proprietário concluiu {{count}} passo de introdução noutro dispositivo",
       "doneElsewhere_other": "O proprietário concluiu {{count}} passos de introdução noutro dispositivo",
-      "done": "Transferência do controlo de introdução concluída",
+      "done": "Introdução manual concluída",
       "nothingToFill": "Nada a escrever; controlo devolvido ao Agent",
-      "cancelled": "Transferência do controlo de introdução cancelada",
-      "expired": "O tempo da transferência do controlo de introdução expirou",
-      "failed": "A transferência do controlo de introdução não foi concluída",
+      "cancelled": "Introdução manual cancelada",
+      "expired": "O tempo da introdução manual expirou",
+      "failed": "A introdução manual não foi concluída",
       "doneOn_many": "O proprietário concluiu {{count}} passos de introdução em {{device}}",
       "doneHost_many": "O proprietário concluiu {{count}} passos de introdução no computador anfitrião",
       "donePhone_many": "O proprietário concluiu {{count}} passos de introdução num telemóvel",
@@ -459,5 +466,39 @@
       "ghost_id": "Plugin",
       "tool": "Ferramenta"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirmar envio de feedback para {{appName}}",
+    "typeBug": "Erro",
+    "typeFeature": "Funcionalidade",
+    "titleLabel": "Título",
+    "bodyLabel": "Corpo (Markdown)",
+    "privacyHint": "O título e o corpo da Issue serão públicos e poderão ser pesquisáveis ou guardados em cache. A ocultação automática abrange apenas alguns padrões comuns e não consegue detetar todo o contexto sensível.",
+    "relatedLogsHint": "Este envio inclui os registos do cliente relacionados apresentados acima. São filtrados, expurgados e limitados em extensão antes da publicação.",
+    "privacyConfirm": "Revi o conteúdo público acima e não contém informação pessoal, de conversas ou empresarial que deva permanecer privada",
+    "submissionMethodLabel": "Identidade de envio",
+    "identityGithubUser": "A minha conta GitHub @{{login}}",
+    "identityGithubUserHint": "Será o autor no GitHub e poderá editar ou fechar esta Issue no GitHub",
+    "identityPlatform": "Bot oficial do Cindy @{{login}} (predefinição)",
+    "identityPlatformHint": "Não é necessário configurar uma conta GitHub. A Issue é criada pelo bot oficial e pode adicionar uma atribuição pública no corpo",
+    "publicNameLabel": "Atribuição pública",
+    "publicNameHint": "Esta atribuição aparecerá publicamente no corpo da Issue",
+    "anonymous": "Anónimo",
+    "useAnonymous": "Usar atribuição anónima",
+    "envLine": "Ambiente do cliente de envio (anexado automaticamente ao enviar): cliente {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · Idioma da interface {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · ID do modelo {{modelId}} (esta sessão)",
+    "regionLine": "Região da compilação: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Enviar feedback",
+    "cancel": "Cancelar",
+    "previewLabel": "GitHub · Feedback público",
+    "edit": "Editar",
+    "doneEditing": "Concluir edição",
+    "publicSubmit": "Enviar publicamente",
+    "publicationNotice": "O conteúdo e o seu nome ficarão públicos no GitHub.",
+    "attribution": "Por {{name}}",
+    "environment": "Ambiente incluído",
+    "identitySettings": "Nome e conta"
   }
 }

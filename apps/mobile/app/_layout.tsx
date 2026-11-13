@@ -11,6 +11,7 @@ import { HomeRosterStoreProvider } from '@/session/HomeRosterContext';
 import { PluginPromptReadsProvider } from '@/plugins/PluginPromptReadsContext';
 import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
 import { PeerFileTransport } from '@/device-link/peerFileTransport';
+import { noteRootCommitted } from '@/debug/jsErrorGuard';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import { RemoteHistoryPrefetchBridge } from '@/session/RemoteHistoryPrefetchBridge';
@@ -31,6 +32,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
+import { RootErrorBoundary } from '@/components/RootErrorBoundary';
 import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdaptiveWindowProvider } from '@/platform/AdaptiveWindow';
@@ -49,6 +51,9 @@ import {
   useDeviceLink,
 } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
+import { NotificationActionBridge } from '@/notifications/NotificationActionBridge';
+import { useLockedLaunchGate } from '@/notifications/lockedLaunchGate';
+import { TaskBadgeBridge } from '@/notifications/TaskBadgeBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
 import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
@@ -394,6 +399,9 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
   // 自建变体:启动即生效的 JS 热更门(冷启动 check→fetch→reload,本次启动就跑上最新 JS)。
   // 内部 gate 自建 + 非 dev + updates 可用,其余直接 ready=true 不阻塞。见 useStartupOtaGate。
   const otaReady = useStartupOtaGate(channel);
+  // 通知按钮会在锁屏时把 App 拉到后台启动:此时钥匙串读不出凭证,先不挂载业务树,
+  // 等用户打开 App 再启动(见 useLockedLaunchGate)。手机已解锁时只多一次钥匙串读取。
+  const credentialsReadable = useLockedLaunchGate();
   // handoff reporter:OTA 门就绪在本层上报(reload 期间保持 pending,readiness 不推进)
   const handoff = useLoginHandoff();
   const dispatchHandoff = handoff.dispatch;
@@ -411,12 +419,17 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
   if (!otaReady) {
     return null;
   }
+  // 与上面的门一样只返回 null，不另画启动画面:此时 App 在后台，没有人在看。
+  if (!credentialsReadable) return null;
   return (
     <AuthProvider>
       <AuthHandoffBridge />
       {/* 任务完成推送:注册同步 + 通知点击路由 + 前台横幅压制(不渲染 UI) */}
       <PushNotificationsBridge />
       <DeviceLinkProvider>
+        {/* 通知按钮(允许一次 / 拒绝 / 回复)在后台经这里取得设备连接(不渲染 UI) */}
+        <NotificationActionBridge />
+        <TaskBadgeBridge />
         <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
         <MobileOutboxBridge />
@@ -425,7 +438,13 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
         <AgentActivityBridge />
         {/* 掌机模式:手柄语音键 / 焦点导航 / 副屏(仅含 cindy-handheld 的 Android 原生包,不渲染 UI) */}
         <HandheldModeBridge />
-        <NavigationGate />
+        {/* 渲染兜底:启动稳定后,页面树里任何一处渲染报错都落到这里,显示可重新加载的错误页而不是
+            让 App 退出。只包页面树、留在 AuthProvider / DeviceLinkProvider 里面:重新加载只重挂页面,
+            不会重建登录与设备连接——重建 AuthProvider 会让可能仍在途的令牌刷新与新实例的刷新
+            各用同一个会轮换的令牌,被服务端拒绝时会清掉登录状态(登出)。 */}
+        <RootErrorBoundary fallback={renderErrorFallback}>
+          <NavigationGate />
+        </RootErrorBoundary>
       </DeviceLinkProvider>
     </AuthProvider>
   );
@@ -446,6 +465,11 @@ function RootAfterEndpoints() {
 
 function RootLayout() {
   useEffect(() => startLocalDiagnostics(), []);
+  // JS 报错兜底的启动窗口从根布局首次提交起算(见 jsErrorGuard):窗口内报错照旧致命,
+  // 留给热更新的错误恢复回滚;窗口之后才显示错误页 / 继续运行。
+  useEffect(() => {
+    noteRootCommitted();
+  }, []);
   // Dev-only:注册开发者菜单的"清缓存 + reload"项(内部 __DEV__ gate,生产为 no-op)。
   useEffect(() => {
     registerDevCacheMenu();
@@ -537,6 +561,23 @@ function RootLayout() {
       </SafeAreaProvider>
       </OutsideTapProvider>
     </GestureHandlerRootView>
+  );
+}
+
+/**
+ * 渲染兜底页:与启动闸门同一套阻断内容层(标题 / 说明 / 唯一动作),唯一动作是重新加载——
+ * 丢弃出错的页面树并重新挂载它。
+ */
+function renderErrorFallback(retry: () => void): ReactElement {
+  return (
+    <MobileLoginHandoffStage staticBrand>
+      <StartupGateBlockedContent
+        title={loginText('renderErrorTitle')}
+        subtitle={loginText('renderErrorSubtitle')}
+        actionLabel={loginText('renderErrorAction')}
+        onAction={retry}
+      />
+    </MobileLoginHandoffStage>
   );
 }
 

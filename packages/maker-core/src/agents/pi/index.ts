@@ -35,6 +35,7 @@ import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
+import { findPiCloudContextFile, piCloudContextDisplayPath } from './startup-context-diagnostic.js';
 import { scanPiSessionJsonl } from './session-jsonl-scan.js';
 
 /**
@@ -71,6 +72,8 @@ import {
   BaseAgent,
   LOCAL_AGENT_CLIENT,
   MAIN_OWNED_SEND_CONTEXT,
+  MODEL_REQUEST_CONTROL,
+  TASK_SYSTEM_PROMPT,
   ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
@@ -86,6 +89,7 @@ import {
   type AgentSessionHandle,
   type AgentSessionTeardownOptions,
   type MainOwnedSendContext,
+  type ModelRequestControl,
   type PiExtraSpawnConfig,
   type PiExtensionUiStrings,
   type PiManagedPackageRuntimeConvergence,
@@ -99,10 +103,13 @@ import {
   type SendOptions,
   type StartSessionOptions,
   type TurnPermissionPolicy,
+  botRuntimeSkillPolicy,
+  isolatedBotProfile,
 } from '../base-agent.js';
 import {
   CINDY_BRIDGE_EXTENSION_FILENAME,
   CINDY_PI_TEXT_ONLY_INPUT_PREFIX,
+  CINDY_PI_MODEL_REQUEST_INPUT_PREFIX,
   CINDY_PI_TEXT_ONLY_READY_PREFIX,
   CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
   CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX,
@@ -340,6 +347,7 @@ const PI_EXTENSION_BUNDLE_HASH_ENV = 'CINDY_PI_EXTENSION_BUNDLE_HASH';
  * 旧提示词的旧进程。进 spawn env 后由远端 envHash 覆盖，变化即条件 restart。
  */
 const PI_APPEND_SYSTEM_PROMPT_HASH_ENV = 'CINDY_PI_APPEND_SYSTEM_PROMPT_HASH';
+const PI_TASK_SYSTEM_PROMPT_FILE_ENV = 'CINDY_PI_TASK_SYSTEM_PROMPT_FILE';
 /** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
 const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
 /** 会话 configHome 内的追加提示词文件名(见 startSession 里 --append-system-prompt 的传参)。 */
@@ -2687,7 +2695,8 @@ export class PiAgent extends BaseAgent {
     }
     assertRemotePiContextProfileAvailable(opts.remoteHostId, opts.model, opts.providerId);
     const reviewMode = opts.reviewMode === true;
-    const botMemoryScope = opts.makerMemoryScopeKey?.startsWith('bot:') === true;
+    // A teammate's memory follows its own switch, also once it is a project (V2, no `bot:` scope).
+    const botMemoryScope = opts.makerMemoryScopeKey?.startsWith('bot:') === true || opts.makerMemorySwitchOwned === true;
     const sessionMemoryEnabled = !reviewMode
       && (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true
       && (botMemoryScope || (this.memoryOverride ?? true));
@@ -3285,7 +3294,7 @@ export class PiAgent extends BaseAgent {
     // Bot contexts remain profile-only. SSH tasks use the remote user's rules,
     // never the controlling desktop's personal instructions.
     // 受邀者会话不带本机用户的全局说明(~/.pi/agent/AGENTS.md 等)。
-    const globalContextFiles = opts.botRuntimeProfile || hostedGuest ? [] : await readPiGlobalContext(
+    const globalContextFiles = isolatedBotProfile(opts.botRuntimeProfile) || hostedGuest ? [] : await readPiGlobalContext(
       this.deps.resolvePiGlobalContextHome?.(opts.remoteHostId),
       fileOps,
     );
@@ -3554,6 +3563,7 @@ export class PiAgent extends BaseAgent {
       nativeFastEnabled = fast;
     };
     let activeToolsDisabled = false;
+    let activeModelRequestControl: ModelRequestControl | undefined;
     let textOnlyPolicyReady = false;
     let providerRequestSequence = 0;
     let providerRequestObservedAt: number | undefined;
@@ -3564,6 +3574,8 @@ export class PiAgent extends BaseAgent {
       if (!textOnlyPolicyReady) throw new Error('Pi text-only input policy is unavailable.');
       return `${CINDY_PI_TEXT_ONLY_INPUT_PREFIX}${runtimeInstanceId}\n${text}`;
     };
+    const runtimeControlledInput = (text: string): string => activeModelRequestControl
+      ? `${CINDY_PI_MODEL_REQUEST_INPUT_PREFIX}${runtimeInstanceId}\n${textOnlyInput(text)}` : textOnlyInput(text);
     // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
     // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
     // 本地 provider 不一起传还会让同名模型落到错误 endpoint(codex P2,pi-harness §3 要求
@@ -3800,8 +3812,8 @@ export class PiAgent extends BaseAgent {
           // 不得再二次 resolve (Codex #2399 P2)。
           ...((sessionMemoryEnabled || opts.makerMemoryScopeKey) ? { memoryScopeKey } : {}),
           memoryEnabled: sessionMemoryEnabled,
-          ...(opts.botRuntimeProfile?.mcpPolicy
-            ? { botMcpPolicy: opts.botRuntimeProfile.mcpPolicy }
+          ...(isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy
+            ? { botMcpPolicy: isolatedBotProfile(opts.botRuntimeProfile)!.mcpPolicy }
             : {}),
           vendorOptions: mutableVendorOptions,
           mcpCallerKind: 'root',
@@ -3885,7 +3897,7 @@ export class PiAgent extends BaseAgent {
     // 与用户段。前缀稳定(默认 prompt 静态),易变内容禁止进入(缓存规则 3.1)。
     // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具经隧道在那台，本机装的插件不进这个任务。
     const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
-    const ghostRosterPrompt = reviewMode || opts.botRuntimeProfile
+    const ghostRosterPrompt = reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
       ? ''
       : hosted
         ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
@@ -3893,14 +3905,14 @@ export class PiAgent extends BaseAgent {
     const promptSourceEntries: Array<[string, string | undefined]> = [
       ['delivery', reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim()],
       ['profile', reviewMode ? undefined : opts.botProfilePrompt?.trim()],
-      ['host', opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
+      ['host', isolatedBotProfile(opts.botRuntimeProfile) ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
       ['plugins', ghostRosterPrompt.trim()],
       ['profile', reviewMode ? undefined : opts.botProfileContextPrompt?.trim()],
       ['memoryRules', makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
         ? MAKER_MEMORY_RULES : undefined],
       ['memoryIndex', makerMemoryIndex.trim()],
       ['user', reviewMode ? undefined : opts.botUserProfilePrompt?.trim()],
-      ['user', reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt?.trim()],
+      ['user', reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt?.trim()],
       ['directories', piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs, mutableLibraryRoot)],
     ];
     const promptSources: PiPromptSource[] = promptSourceEntries.flatMap(([source, text]) =>
@@ -3948,11 +3960,11 @@ export class PiAgent extends BaseAgent {
     // skills. Missing/throwing authorities and paths fail closed; never infer
     // approval from permission mode, MCP/plugin state, or caller vendor options.
     // 受邀者不读本机用户的技能停用偏好(本机技能整体不加载)。
-    const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode || hostedGuest
+    const disabledSkillPaths = opts.remoteHostId || isolatedBotProfile(opts.botRuntimeProfile) || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
     let disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
-    const loadProjectResourcesInPlace = !reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
+    const loadProjectResourcesInPlace = !reviewMode && !isolatedBotProfile(opts.botRuntimeProfile) && !opts.remoteHostId && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
     let projectResourceAssembly = unavailablePiProjectResourceAssembly(
       reviewMode ? 'review-mode-project-resources-disabled' : 'approval-resolver-unavailable',
     );
@@ -3985,7 +3997,7 @@ export class PiAgent extends BaseAgent {
       requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
     });
     const botSkillSelection = applyPiBotSkillPolicy(
-      reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+      reviewMode ? undefined : botRuntimeSkillPolicy(opts.botRuntimeProfile),
       projectResourceAssembly,
     );
     projectResourceAssembly = botSkillSelection.projectAssembly;
@@ -4098,8 +4110,10 @@ export class PiAgent extends BaseAgent {
     let managedSkillPaths: string[];
     let managedSkillRoot: string | undefined;
     let args: string[];
+    const taskSystemPrompt = opts[TASK_SYSTEM_PROMPT] ?? '';
+    let taskSystemPromptPath: string | undefined;
     try {
-      const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
+      const managedSkillGrants = snapshotManagedSkillGrants(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy);
       // 受邀者不带本机安装的托管技能(属于本机用户与其组织)。
       // 任务所在电脑提供了托管技能时，它们已作为项目技能放在影子目录，本机的不再加载。
       const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || hosted?.controllerManagedSkills || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
@@ -4114,6 +4128,8 @@ export class PiAgent extends BaseAgent {
       const additionalSkillPaths = [...new Map([
         ...(loadProjectResourcesInPlace || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
           !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
+        // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local, non-Review runtime only.
+        ...(opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (opts.hostSkills ?? []).map((skill) => skill.path)),
       ].map((skillPath) => [canonicalSkillPath(skillPath), skillPath])).values()];
 
       // One explicit directory also works with --no-skills. Keep its lifetime in
@@ -4131,6 +4147,10 @@ export class PiAgent extends BaseAgent {
         ? joinRemotePosixPath(configHome, CINDY_APPEND_SYSTEM_PROMPT_FILENAME)
         : undefined;
       if (appendSystemPromptPath) await writeFile(appendSystemPromptPath, appendSystemPrompt);
+      if (taskSystemPrompt) {
+        taskSystemPromptPath = joinRemotePosixPath(configHome, 'task-system-prompt.md');
+        await writeFile(taskSystemPromptPath, taskSystemPrompt, 0o600);
+      }
 
       args = [
         '--mode',
@@ -4148,14 +4168,14 @@ export class PiAgent extends BaseAgent {
         initialWireModel,
         ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
         ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? ['--no-skills', '--no-context-files', '--no-prompt-templates'] : []),
-        // Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
-        // the cwd chain — their context is the Bot profile, not the workspace.
-        ...(opts.botRuntimeProfile ? ['--no-context-files'] : []),
+        // Classic Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
+        // the cwd chain — their context is the Bot profile. V2 teammates load them like any task.
+        ...(isolatedBotProfile(opts.botRuntimeProfile) ? ['--no-context-files'] : []),
         ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
         // 受邀者：不发现本机用户的技能、模板与会话目录之外的说明文件；受邀者自己的用下面的显式路径。
         ...(hostedGuest
           ? PI_DEVICE_HOSTED_GUEST_FLAGS.filter((flag) => !(
-            (flag === '--no-context-files' && opts.botRuntimeProfile)
+            (flag === '--no-context-files' && isolatedBotProfile(opts.botRuntimeProfile))
             || (flag === '--no-skills' && botSkillSelection.disableImplicitSkills)))
           : []),
         ...additionalSkillPaths.filter((skillPath) => !projectResourceCli.skills
@@ -5759,6 +5779,7 @@ export class PiAgent extends BaseAgent {
         const normalizedKey = key.toLowerCase();
         if (
           normalizedKey === PI_MANAGED_RG_PATH_ENV.toLowerCase()
+          || normalizedKey === PI_TASK_SYSTEM_PROMPT_FILE_ENV.toLowerCase()
           || normalizedKey === PI_LEGACY_SUBAGENT_NODE_ENV.toLowerCase()
           || normalizedKey === PI_ELECTRON_RUN_AS_NODE_ENV.toLowerCase()
         ) {
@@ -5766,6 +5787,7 @@ export class PiAgent extends BaseAgent {
         }
       }
       if (managedRipgrepPath) spawnEnv[PI_MANAGED_RG_PATH_ENV] = managedRipgrepPath;
+      spawnEnv[PI_TASK_SYSTEM_PROMPT_FILE_ENV] = taskSystemPromptPath ?? '';
       // models.json + settings.json 内容 hash 进 spawn env —— 远端 daemon 的
       // envHash 覆盖它, 路由或 retry/transport 改写时条件 restart, 不误 attach。
       // 仅远端注入(本地无 envHash 机制); 值本身无凭证(只是内容指纹)。
@@ -5780,10 +5802,9 @@ export class PiAgent extends BaseAgent {
           .slice(0, 16);
         // 追加提示词本体在文件里，命令行不再带它；指纹进 env 才让提示词变化
         // 触发远端 restart 而不是纯 attach。
-        spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = createHash('sha256')
-          .update(appendSystemPrompt)
-          .digest('hex')
-          .slice(0, 16);
+        const promptHash = createHash('sha256').update(appendSystemPrompt);
+        if (taskSystemPrompt) promptHash.update('\0task\0').update(taskSystemPrompt);
+        spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = promptHash.digest('hex').slice(0, 16);
       }
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
@@ -5921,6 +5942,29 @@ export class PiAgent extends BaseAgent {
               currentModelIds: [mutableModel, mutableWireModel],
               readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
                 fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
+              controlModelRequest: async input => {
+                const control = activeModelRequestControl;
+                if (!control || closed || accountBoundaryTeardown) throw new Error('Model request control is unavailable');
+                const native = typeof input.provider === 'string' ? nativeProviderById.get(input.provider) : undefined;
+                const sourceModel = native?.models.find(candidate => candidate.id === input.model || candidate.wireId === input.model);
+                const result = await control({ phase: input.phase,
+                  providerId: input.provider === PI_PROVIDER_ID ? 'xd' : resolveSourceProvider(input.provider),
+                  model: sourceModel?.id ?? input.model,
+                  ...(input.request ? { request: input.request } : {}),
+                  ...(input.failure ? { failure: input.failure } : {}),
+                });
+                if (control !== activeModelRequestControl || closed || accountBoundaryTeardown) throw new Error('Model request control expired');
+                if (result.skip) markPiHostAbortRequested(ctx);
+                if (!result.route) return result;
+                const route = result.route;
+                const target = nativeProviderForSource(route.providerId);
+                if (!target && !['xd', PI_PROVIDER_ID].includes(route.providerId)) throw new Error('Requested provider is unavailable');
+                const provider = target?.id ?? PI_PROVIDER_ID;
+                return { ...result, route: { provider, model: resolveWireModel(provider, route.model),
+                  ...(route.effort ? { thinkingLevel: route.effort === 'ultra' ? 'max' : route.effort } : {}),
+                  ...(route.fastMode !== undefined ? { fastMode: route.fastMode === true } : {}),
+                } };
+              },
               workspaceRoots: [logicalWorkingDir],
               readRoots: [logicalWorkingDir, ...mutableExtraDirs, ...mutableWritableDirs],
               writableRoots: [logicalWorkingDir, ...mutableWritableDirs],
@@ -6652,6 +6696,9 @@ export class PiAgent extends BaseAgent {
           resumeFileExists = false;
         }
         if (!resumeFileExists) {
+          if (opts.vendorOptions?._cindyRequireNativeResume === true) {
+            throw new Error('Native Pi history is unavailable; refusing an empty replacement');
+          }
           // 轮 25 CRITICAL:session 文件缺失 = 历史数据已不存在, fresh 是唯一
           // 合理选择 —— 不因 onInvalidResumeSession 的 CAS 结果(防并发覆盖的
           // claude 语义)拒绝 fallback。CAS 仍执行(清 DB 残留 id), 但返回值
@@ -6667,6 +6714,9 @@ export class PiAgent extends BaseAgent {
             sessionPath: opts.resumeSessionId,
           }, { timeoutMs: PI_RESUME_TIMEOUT_MS });
           if (!switched.success) {
+            if (opts.vendorOptions?._cindyRequireNativeResume === true) {
+              throw new Error(`Native Pi history could not be restored: ${switched.error ?? 'switch_session failed'}`);
+            }
             // 轮 25 CRITICAL:switch 失败也允许 fallback(同文件缺失理由)——
             // CAS 结果不作门禁, fresh 比卡死强。CAS 仍执行清 DB 残留。
             // 轮 42 P2(codex-connector):fresh fallback 前**必须**检查 CAS 结果
@@ -6831,8 +6881,25 @@ export class PiAgent extends BaseAgent {
         cleanupRuntimeFiles();
       }
       if (cleanupPending) throw cleanupPending;
+      // Diagnose only a failed local startup, after executor cleanup is confirmed.
+      // A dataless context file is evidence of a possible cause, not proof of
+      // which read stalled Pi. Never inspect remote paths on the control machine.
+      let startupError = err;
+      if (!remote && !rpcReadyLogged && !args.includes('--no-context-files')
+        && err instanceof Error && 'code' in err && err.code === 'PI_RPC_TIMEOUT') {
+        try {
+          const file = await findPiCloudContextFile(opts.workingDir);
+          if (file) {
+            const display = piCloudContextDisplayPath(file);
+            const hint = this.deps.formatPiStartupCloudFileHint?.(display)
+              ?? `A cloud-only instruction file may be delaying Pi startup: ${display}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.`;
+            // Presentation marker survives legacy string-only startup envelopes.
+            startupError = new Error(`[PI_STARTUP_CLOUD_CONTEXT_FILE] ${hint}\n${err.message}`, { cause: err });
+          }
+        } catch { /* Optional diagnostics must not replace the original failure. */ }
+      }
       // Only a successful close proves exit; do not infer it from the startup error.
-      throw new AgentStartupStoppedError(err);
+      throw new AgentStartupStoppedError(startupError);
     }
 
     const deps = this.deps;
@@ -7825,6 +7892,9 @@ export class PiAgent extends BaseAgent {
       // Full Access 下 fail-closed 拒绝带策略的 send(与 capability
       // turnPermissionPolicy.unsupportedPermissionModes 一致,也与 CC/Codex 同口径)。
       validateSendOptions(sendOpts: SendOptions) {
+        if (sendOpts[MODEL_REQUEST_CONTROL] && (remote || hosted)) {
+          throw new Error('Per-request model control is supported only by local Pi.');
+        }
         if (sendOpts.toolsDisabled && remote) {
           throw new Error('Host text-only Pi turns require a local runtime, not a shared remote daemon.');
         }
@@ -7858,7 +7928,9 @@ export class PiAgent extends BaseAgent {
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
         // provider 接受前任何失败都必须撤销,避免"任务显示已开始、实际未启动"却残留策略。
         const previousTurnPermissionPolicy = activeTurnPermissionPolicy;
+        const previousModelRequestControl = activeModelRequestControl;
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        activeModelRequestControl = sendOpts?.[MODEL_REQUEST_CONTROL];
         let providerAccepted = false;
         let promptRequestStarted = false;
         let reviewIntentUpdated = false;
@@ -7943,7 +8015,7 @@ export class PiAgent extends BaseAgent {
           }
           const command: Record<string, unknown> = {
             type: 'prompt',
-            message: textOnlyInput(escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest)),
+            message: runtimeControlledInput(escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest)),
           };
           if (images.length > 0) command.images = images;
           // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
@@ -8194,6 +8266,7 @@ export class PiAgent extends BaseAgent {
           // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
           if (!providerAccepted) {
             activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+            activeModelRequestControl = previousModelRequestControl;
             if (reviewIntentUpdated) {
               currentAutoReviewIntent = '';
               currentAutoReviewAuthority = null;
@@ -9180,6 +9253,8 @@ export class PiAgent extends BaseAgent {
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       currentModelIds: readonly string[];
       readNativeFast?: (provider: string, model: string) => boolean;
+      controlModelRequest?: (input: { phase: 'select' | 'payload'; provider: string; model: string;
+        request?: Record<string, unknown>; failure?: 'request-too-large' }) => Promise<unknown>;
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
@@ -9253,6 +9328,28 @@ export class PiAgent extends BaseAgent {
     }
 
     // Internal, read-only query over the existing stdio/SSH RPC response channel.
+    if (method === 'input' && event.title === 'cindy:model-request-control') {
+      const context = getPermissionCtx();
+      void (async () => {
+        try {
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown() || !context.controlModelRequest) {
+            throw new Error('Model request control is unavailable');
+          }
+          const input = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
+          if (!['select', 'payload'].includes(input?.phase) || typeof input.provider !== 'string' || typeof input.model !== 'string'
+            || (input.failure !== undefined && (input.phase !== 'payload' || input.failure !== 'request-too-large'))) {
+            throw new Error('Invalid model request control input');
+          }
+          const result = await context.controlModelRequest(input);
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown()) throw new Error('Model request control expired');
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify(result) });
+        } catch {
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify({ error: 'Model request control failed' }) });
+        }
+      })();
+      return;
+    }
+
     // Caller input selects an exact model; it can never supply or update Fast intent.
     if (method === 'input' && event.title === 'cindy:request-preferences') {
       const context = getPermissionCtx();

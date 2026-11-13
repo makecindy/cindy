@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Push diagnostics",
+    "read": "Read push status",
+    "busy": "Reading…",
+    "failed": "Could not read push status. Try again.",
+    "copyFailed": "Could not copy the token.",
+    "copied": "Token copied.",
+    "bundle": "App ID",
+    "build": "Build",
+    "environment": "APNs environment",
+    "permission": "System permission",
+    "alerts": "Alerts",
+    "lockScreen": "Lock screen",
+    "notificationCenter": "Notification Center",
+    "copy": "Copy APNs token",
+    "hide": "Hide result",
+    "unknown": "Unknown",
+    "on": "On",
+    "off": "Off",
+    "hint": "Read only when requested. The APNs token is shown locally, never saved in diagnostics or uploaded by this tool, and hidden when you leave or background this screen. Copy only for Apple’s Push Notifications Console; copied text remains in your clipboard.",
+    "permissions": {
+      "granted": "Allowed",
+      "denied": "Denied",
+      "undetermined": "Not requested",
+      "provisional": "Quiet delivery"
+    }
+  },
   "localLogs": {
     "upload": "Upload logs",
     "uploadResult": {
@@ -12,7 +39,7 @@
     "export": "Export logs",
     "clear": "Clear logs",
     "busy": "Working…",
-    "failed": "Unable to save or share logs. Please try again.",
+    "failed": "Unable to save or share logs. Try again.",
     "clearHint": "Delete the saved diagnostic logs?",
     "cancel": "Cancel",
     "uploadCopied": "Logs uploaded. Code {{code}} copied",
@@ -20,6 +47,12 @@
     "footer": "Logs stay on this phone for up to 7 days or 8 MB and are never uploaded automatically. Exported logs exclude conversation text and credentials; uploads send only filtered run records and version info."
   },
   "title": "Settings",
+  "promptRecommendation": {
+    "label": "Input Suggestions",
+    "description": "Suggest what to say next after a reply. Applies only to this phone.",
+    "saveFailed": "The setting applies for now, but could not be saved.",
+    "reset": "Reset to Default"
+  },
   "appearance": {
     "title": "Appearance",
     "modeLabel": "Appearance Mode",
@@ -81,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Classical prose (default)",
+        "prose": "Classical prose",
         "tang-poetry": "Tang poetry",
         "song-ci": "Song ci",
         "yuan-qu": "Yuan qu",
@@ -101,7 +134,7 @@
     "updateMethodUnavailable": "Development builds can’t update in the app.",
     "checkAction": "Check for Updates",
     "testFlightCheckAction": "Check for Content Updates",
-    "checking": "Checking",
+    "checking": "Checking…",
     "checkingAccessibility": "Checking for updates",
     "testFlightCheckingAccessibility": "Checking for content updates",
     "testFlightUpdateManaged": "Install new test builds from TestFlight.",
@@ -113,7 +146,7 @@
     "bundleUpdateFound": "App package update available",
     "upToDate": "Already up to date",
     "bundleUpToDateNoOta": "Up to date. This version doesn’t support hot updates.",
-    "downloadedRestarting": "Update downloaded, restarting",
+    "downloadedRestarting": "Update downloaded. Restarting…",
     "downloadedRestartRequired": "Update downloaded. Fully quit and reopen the app to apply it.",
     "bundleCheckFailed": "Could not check for app package updates. Try again later.",
     "checkFailedDetail": "Update check failed: {{detail}}",
@@ -144,7 +177,11 @@
       "auto": "Automatic",
       "on": "Always on",
       "off": "Off"
-    }
+    },
+    "actionReplyPlaceholder": "Message",
+    "actionNotDelivered": "This didn’t reach your computer. Open Cindy to respond.",
+    "actionReplyNotDelivered": "Your reply wasn’t sent. Open Cindy to send it again: {{text}}",
+    "actionRequestEnded": "This request was already answered or has expired."
   },
   "about": {
     "sectionTitle": "About This Phone",
@@ -187,7 +224,7 @@
     "confirmBody": "Switching signs you out and restarts the app.",
     "cancel": "Cancel",
     "switchAction": "Switch",
-    "switching": "Switching",
+    "switching": "Switching…",
     "switchFailed": "Could not switch the server environment. Try again."
   },
   "updateInfo": {
@@ -226,7 +263,7 @@
     "logoutConfirmRunning": "Some sessions are still running. They keep running on your computer, but this phone stops receiving and controlling them, and every account and local mirror saved on this phone is cleared.",
     "logoutHint": "Clears every account and the remote mirror on this phone. Sessions on your computer are not affected.",
     "logout": "Sign Out",
-    "loggingOut": "Signing out",
+    "loggingOut": "Signing Out…",
     "loggingOutAccessibility": "Signing out"
   },
   "copyRow": {
@@ -251,12 +288,12 @@
     "noDesktops": "Sign in to the same account on a computer to sync your dictionary."
   },
   "voiceSpeakerFilter": {
-    "actionFailed": "The change could not be saved. Please try again.",
+    "actionFailed": "The change could not be saved. Try again.",
     "title": "Recognize my voice",
     "sectionTitle": "Voiceprint filter",
     "label": "Recognize my voice",
     "entryHint": "Mutes other people during voice input. Your voiceprint stays on this phone.",
-    "openAccessibility": "Open recognize my voice settings",
+    "openAccessibility": "Open “Recognize my voice” settings",
     "on": "On",
     "off": "Off",
     "hint": "Mutes other people during voice input so only your speech is transcribed; speech overlapping yours can’t be fully removed. Your voiceprint is encrypted on this phone and never uploaded or synced.",
@@ -330,7 +367,7 @@
       "stepStatus": {
         "pending": "Not recorded",
         "recorded": "Recorded",
-        "retry": "Record again",
+        "retry": "Needs re-recording",
         "recording": "Recording"
       },
       "rerecordStep": "Record Passage {{index}} Again",

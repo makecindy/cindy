@@ -20,7 +20,7 @@
     "alwaysAllowConfirm": "Confirmer l'autorisation pour cette session",
     "allowOnce": "Autoriser une fois",
     "allowOnceAccessibility": "Autoriser la demande d'autorisation une fois",
-    "allowOnceConfirm": "Confirmer l'autorisation",
+    "allowOnceConfirm": "Confirmer l'autorisation unique",
     "highRisk": "Risque élevé",
     "autoReviewUnavailable": "La revue automatique n'a pas pu aboutir. Confirmez si vous autorisez cette action.",
     "autoReviewReason": "La revue automatique nécessite votre décision : {{reason}}",
@@ -29,6 +29,13 @@
       "description": "L'accès complet désactive le bac à sable de l'espace de travail et ignore les approbations habituelles. {{appName}} peut modifier des fichiers hors de l'espace de travail et exécuter des commandes réseau sans demander ; les opérations intégrées à haut risque nécessiteront toujours une confirmation.",
       "confirm": "Activer l'accès complet",
       "cancel": "Conserver les autorisations actuelles"
+    },
+    "description": {
+      "default": "Vous approuvez les actions si nécessaire.",
+      "acceptEdits": "Les modifications de fichiers sont directement autorisées ; vous approuvez les autres actions si nécessaire.",
+      "auto": "Un modèle d’IA approuve les actions, ce qui peut demander plus d’attente ; vous confirmez si nécessaire.",
+      "bypass": "Les actions courantes sont directement autorisées, y compris les fichiers hors de l’espace de travail et les commandes réseau.",
+      "plan": "Analyse et planifie sans modifier les fichiers."
     }
   },
   "planMode": {
@@ -40,7 +47,6 @@
     "questionWithdrawn": "Réponse désormais inutile",
     "withdrawnDraft": "Cette question ne nécessite plus de réponse.\n{{reason}}\nVotre brouillon est conservé et peut être envoyé en complément.",
     "sendSupplement": "Envoyer un complément",
-
     "readOnlyKind": "En attente",
     "readOnlyTitle": "En attente de confirmation sur votre ordinateur",
     "pendingRequests": "Demandes en attente",
@@ -70,8 +76,8 @@
     "expandPendingCard": "Développer la demande en attente pour répondre : {{title}}",
     "collapsedHint": "Touchez pour répondre",
     "selectAnswer": "Sélectionner la réponse {{label}}",
-    "submittingHint": "Envoi de la décision à votre ordinateur. Ne renvoyez pas.",
-    "decisionNotAccepted": "Votre réponse n'a pas été acceptée. Veuillez réessayer.",
+    "submittingHint": "Envoi de la décision à votre ordinateur. Ne la renvoyez pas.",
+    "decisionNotAccepted": "Votre réponse n'a pas été acceptée. Réessayez.",
     "customAnswerInputAccessibility": "Saisir une réponse personnalisée",
     "customAnswerPlaceholder": "Saisir une autre réponse",
     "customAnswerButtonText": "Saisir une autre réponse…",
@@ -166,7 +172,7 @@
     "confirming": "Retour en arrière",
     "titleLoading": "Vérification de l'impact",
     "titleDefault": "Revenir à ce message ?",
-    "titleEmpty": "Revenir dans la conversation",
+    "titleEmpty": "Retour en arrière : conversation seule",
     "titleError": "Retour en arrière impossible",
     "detailLoading": "Lecture de l'aperçu du retour en arrière des fichiers depuis votre ordinateur.",
     "detailDefault": "Cette action restaure les fichiers ci-dessous et tronque la conversation après ce message.",
@@ -187,6 +193,7 @@
     "fromLead": "Message du Lead",
     "fromWorkerNamed": "Message du Worker « {{role}} »",
     "fromWorker": "Message du Worker",
+    "fromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
     "emptyMessageBody": "(Message vide)"
   },
   "contextSheet": {
@@ -202,7 +209,7 @@
     },
     "goalLabel": "Objectif",
     "goalObjectiveAccessibility": "Contenu de l'objectif",
-    "goalPlaceholder": "Que voulez-vous accomplir ? L'Agent continue de travailler vers cet objectif jusqu'à ce qu'il soit atteint ou qu'une limite soit atteinte.",
+    "goalPlaceholder": "Que voulez-vous accomplir ? L'Agent poursuit cet objectif jusqu'à ce qu'il soit accompli ou qu'une limite soit atteinte.",
     "advancedSettings": "Paramètres avancés",
     "limitsHint": "Sans modification, les limites par défaut de l'ordinateur distant s'appliquent ; l'objectif s'arrête automatiquement dès qu'une limite est atteinte et peut être arrêté manuellement à tout moment ; « Illimité » signifie qu'aucune limite n'est définie.",
     "maxTurns": "Tours max.",
@@ -275,7 +282,7 @@
       "embedded-frame": "Ces champs se trouvent dans un autre site intégré à la page. Vérifiez que la source est fiable."
     },
     "agentControlled": "C'est l'Agent qui a ouvert cet écran. Vérifiez qu'il s'agit bien de l'endroit où vous voulez vous connecter avant de le remplir.",
-    "agentPicture": "Ce code provient d'une capture d'écran prise par l'Agent, donc Cindy ne peut pas voir l'écran d'origine ni savoir quand vous avez terminé. Vérifiez qu'il mène au site auquel vous souhaitez vous connecter et choisissez Revenir à Agent après la numérisation.",
+    "agentPicture": "Ce code provient d'une capture d'écran prise par l'Agent, donc Cindy ne peut pas voir l'écran d'origine ni savoir quand vous avez terminé. Vérifiez qu'il mène au site auquel vous souhaitez vous connecter et choisissez Rendre la main à l'Agent après le scan.",
     "error": {
       "decision": "L'opération n'a pas abouti. Réessayez.",
       "stale": "L'écran a changé. Utilisez la version la plus récente.",
@@ -308,7 +315,7 @@
     "action": {
       "stay": "Pas encore terminé",
       "done": "Rendre la main à l'Agent",
-      "cancel": "Annuler la délégation",
+      "cancel": "Annuler le transfert",
       "claim": "Gérer ici",
       "picture": "Afficher l'écran",
       "backToForm": "Retour au formulaire",
@@ -443,7 +450,7 @@
         "ask_user_question": "Les réponses sont enregistrées comme brouillon ; l'ordinateur continue après l'envoi.",
         "issue_confirm": "Confirmez le titre et le corps avant d'envoyer.",
         "plugin_setup": "La configuration doit être terminée sur l'ordinateur ; vous pouvez annuler cette demande ici.",
-        "fallback": "Le mobile traite les demandes distantes dans l'ordre d'envoi du bureau."
+        "fallback": "Le mobile traite les demandes distantes dans l'ordre d'envoi de l'ordinateur."
       }
     }
   },
@@ -459,5 +466,39 @@
       "ghost_id": "Plugin",
       "tool": "Outil"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirmer l'envoi du retour à {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "Fonctionnalité",
+    "titleLabel": "Titre",
+    "bodyLabel": "Corps (Markdown)",
+    "privacyHint": "Le titre et le corps de l'issue seront publics et pourront être indexés ou mis en cache. L'expurgation automatique ne couvre que certains motifs courants et ne peut pas détecter tout contexte sensible.",
+    "relatedLogsHint": "Cet envoi inclut les journaux client associés affichés ci-dessus. Ils sont filtrés, expurgés et limités en longueur avant publication.",
+    "privacyConfirm": "J'ai relu le contenu public ci-dessus et il ne contient aucune information personnelle, conversationnelle ou professionnelle devant rester privée",
+    "submissionMethodLabel": "Identité d'envoi",
+    "identityGithubUser": "Mon compte GitHub @{{login}}",
+    "identityGithubUserHint": "Vous serez l'auteur sur GitHub et pourrez modifier ou fermer cette issue sur GitHub",
+    "identityPlatform": "Bot officiel de Cindy @{{login}} (par défaut)",
+    "identityPlatformHint": "Aucun compte GitHub n'est nécessaire. Le bot officiel crée l'issue, et vous pouvez ajouter une mention publique dans le corps",
+    "publicNameLabel": "Mention publique",
+    "publicNameHint": "Cette mention apparaîtra publiquement dans le corps de l'issue",
+    "anonymous": "Anonyme",
+    "useAnonymous": "Utiliser une mention anonyme",
+    "envLine": "Environnement du client d'envoi (joint automatiquement à l'envoi) : client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · langue de l'interface {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · ID du modèle {{modelId}} (cette session)",
+    "regionLine": "Région du build : {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Envoyer le retour",
+    "cancel": "Annuler",
+    "previewLabel": "GitHub · Retour public",
+    "edit": "Modifier",
+    "doneEditing": "Terminer",
+    "publicSubmit": "Publier le retour",
+    "publicationNotice": "Le contenu et votre nom seront publics sur GitHub.",
+    "attribution": "Par {{name}}",
+    "environment": "Environnement inclus",
+    "identitySettings": "Nom et compte"
   }
 }

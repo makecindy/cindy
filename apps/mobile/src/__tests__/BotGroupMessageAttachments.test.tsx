@@ -33,10 +33,16 @@ vi.mock('@/i18n/locales/ko', () => ({ default: {} }));
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
 const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) => void; onError: () => void; onDisplay: () => void; transition: number }>());
+const nativeTextRoots = vi.hoisted(() => new Map<string, {
+  selectable: boolean;
+  onTextLayout?: (event: { nativeEvent: { lines: string[] } }) => void;
+  onMenuAction?: (event: { nativeEvent: { target: number; start: number; end: number } }) => void;
+  onSideChatMenuAction?: (event: { nativeEvent: { target: number; start: number; end: number } }) => void;
+}>());
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('react-native', async () => {
   const React = await import('react');
-  const view = ({ children, testID, accessibilityLabel, onPress, onContextMenu, style }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress, onContextMenu, style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children);
+  const view = ({ children, testID, accessibilityLabel, onPress, onContextMenu, style, paragraphIndent, paragraphFirstLineIndent }: any) => React.createElement('div', { 'data-testid': testID, 'data-paragraph-indent': paragraphIndent, 'data-first-line-indent': paragraphFirstLineIndent, 'aria-label': accessibilityLabel, onClick: onPress, onContextMenu, style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children);
   const pressable = ({ onLongPress, disabled, ...props }: any) => view({
     ...props,
     onPress: disabled ? undefined : props.onPress,
@@ -67,7 +73,16 @@ vi.mock('lucide-react-native', () => ({
   ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleMinus: () => null, CircleStop: () => null, CircleX: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
 }));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));
-vi.mock('react-native-uitextview', async () => ({ UITextView: (await import('react-native')).Text }));
+vi.mock('react-native-uitextview', async () => {
+  const { createElement } = await import('react');
+  const { Text } = await import('react-native');
+  return { UITextView: ({ children, ...props }: any) => {
+    if (props.uiTextView && props.testID) nativeTextRoots.set(props.testID, props);
+    return createElement('span', {
+      'data-uitextview': props.uiTextView ? 'root' : 'span',
+    }, createElement(Text, props, children));
+  } };
+});
 vi.mock('expo-image', async () => {
   const { createElement } = await import('react');
   return { Image: ({ source, onLoad, onError, onDisplay, transition, style }: any) => {
@@ -154,6 +169,7 @@ import { ChatFilePathContext } from '@/session/chatFilePathContext';
 import { MessageLoadingImage } from '@/session/MessageLoadingImage';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { MessageContentLongPressContext } from '@/session/messageContentLongPress';
+import { SelectionQuoteContext } from '@/session/selectionQuote';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -167,7 +183,7 @@ const resolveMedia = vi.fn<ResolveRemoteMediaFn>(async (_media, options) => ({
   ossKey: 'thumbnail', size: 10, expiresAt: '',
 }));
 
-beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); vi.mocked(openBrowserAsync).mockClear(); });
+beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); nativeTextRoots.clear(); vi.mocked(openBrowserAsync).mockClear(); });
 
 async function renderAttachment(messageId: string) {
   host = document.createElement('div');
@@ -420,3 +436,95 @@ vi.mock('expo-sharing', () => ({ shareAsync: vi.fn() }));
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
 vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
 vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
+
+// #8603 / unit: mount the real MarkdownBody on native host substitutes. The
+// parser-only tests cannot catch a renderer that still emits identical bullets.
+it('renders nested reply levels inside one selectable text run', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable: true,
+    text: '- A\n  - B\n    - C\n  - D\n- E',
+  })));
+  expect(host.textContent).toBe('• A\n\n\u2003◦ B\n\n\u2003\u2003▪ C\n\n\u2003◦ D\n\n• E');
+  expect(host.querySelectorAll('[data-testid="message.markdownTextRun"]')).toHaveLength(1);
+});
+
+// #10103 / unit: existing rendering tests never dispatch a selection after
+// streaming completes. UITextView does not re-emit layout when only selectable
+// changes: unchanged text/frame keeps its cached layout and native text tree.
+it('quotes across nested items after streaming completes without another native layout', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  const commitQuote = vi.fn();
+  const askInSideChat = vi.fn();
+  const renderBody = (selectable: boolean) => createElement(SelectionQuoteContext.Provider, {
+    value: { commitQuote, askInSideChat },
+  }, createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable, streaming: !selectable,
+    text: '- parent\n  - child 😀',
+  }));
+  await act(async () => root!.render(renderBody(false)));
+  const streamingRoot = host.querySelector('[data-uitextview="root"]');
+  const native = nativeTextRoots.get('message.markdownTextRun')!;
+  expect(native.selectable).toBe(false);
+  expect(native.onMenuAction).toBeUndefined();
+  const text = host.textContent!;
+  native.onTextLayout?.({ nativeEvent: { lines: [text] } });
+  await act(async () => root!.render(renderBody(true)));
+  expect(host.querySelector('[data-uitextview="root"]')).toBe(streamingRoot);
+  const settled = nativeTextRoots.get('message.markdownTextRun')!;
+  expect(settled.selectable).toBe(true);
+  const event = { nativeEvent: { target: 1, start: text.indexOf('parent'), end: text.length } };
+  settled.onMenuAction!(event);
+  settled.onSideChatMenuAction!(event);
+  expect(commitQuote).toHaveBeenCalledExactlyOnceWith('parent\n\n\u2003◦ child 😀');
+  expect(askInSideChat).toHaveBeenCalledExactlyOnceWith('parent\n\n\u2003◦ child 😀');
+});
+
+it('retains nesting when an inline image puts a reply item on the single-block path', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable: true,
+    text: '- A\n  - B ![pic](https://example.invalid/nested.png)',
+  })));
+  const marker = [...host.querySelectorAll('div')].find(e => e.textContent === '◦');
+  expect(marker).toBeDefined();
+  expect(marker!.parentElement!.style.paddingLeft).toBe('17px');
+  expect(marker!.parentElement!.textContent).toContain('B');
+});
+
+// #10103: real text-run output must carry native paragraph layout, including
+// continuation chunks. DOM substitutes verify the native contract, not wrapping.
+it.each([true, false])('keeps paragraph indentation on long nested text and its bounded continuation (selectable=%s)', async (selectable) => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  const child = 'child 😀 **bold** '.repeat(200);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable,
+    allowIosUITextView: false, text: '- A\n  - ' + child + '\n  - sibling',
+  })));
+  const paragraphs = [...host.querySelectorAll<HTMLElement>('[data-paragraph-indent="17"]')];
+  expect(paragraphs.length).toBeGreaterThan(2);
+  expect(paragraphs[0]!.getAttribute('data-first-line-indent')).toBe('0');
+  expect(paragraphs.some(p => p.getAttribute('data-first-line-indent') === '17')).toBe(true);
+  expect(host.textContent?.match(/◦/g)).toHaveLength(2);
+  expect(paragraphs.at(-1)!.textContent).toBe('\u2003◦ sibling');
+});
+
+// Native span families must match their root even when nested list text runs
+// use UIKit but streaming/fallback quote and highlighted-code blocks do not.
+it.each([
+  { selectable: false, allowIosUITextView: true },
+  { selectable: true, allowIosUITextView: false },
+  { selectable: true, allowIosUITextView: true, boundTextRuns: true },
+])('keeps fallback blocks out of the UIKit span family (%j)', async (options) => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), ...options,
+    text: '- A\n  - B\n\n> **quote**\n\n```js\nconst answer = 1;\n```',
+  })));
+  expect(host.textContent).toContain('quote');
+  expect(host.textContent).toContain('const answer = 1;');
+  expect(host.querySelector('[data-testid="message.markdownQuote"] [data-uitextview]')).toBeNull();
+  const orphanedSpans = [...host.querySelectorAll('[data-uitextview="span"]')]
+    .filter(span => !span.closest('[data-uitextview="root"]'));
+  expect(orphanedSpans).toHaveLength(0);
+});

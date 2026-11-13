@@ -1,30 +1,35 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 
 import { app, BrowserWindow, ipcMain } from 'electron';
-import { eq } from 'drizzle-orm';
+import { and, eq, ne, or, sql } from 'drizzle-orm';
 import type { Maker } from '@cindy/maker-core';
 
 import type {
   BotLifecycleActionRequest,
   BotLifecycleActionResult,
 } from '../../shared/botLifecycle.js';
+import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { deleteBotProfileAndDetachSessionsInDb } from '../localDb/ipc/sessions.js';
+import { removeRecentWorkdir } from '../localDb/ipc/recentWorkdirsCore.js';
+import { escapeLikePattern } from '../localDb/workingDirHistoryFilter.js';
 import {
   botLifecycleEvents,
   botProfiles,
   botSessionLinks,
+  sessions,
 } from '../localDb/schema.js';
+import { teammateWorkspaceDir } from './botProjectMemory.js';
 import { removeBotProfileFolder } from './botProfileFolder.js';
 import { withBotProfileLocks } from './botProfileLock.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
-import type { BotDelegationService } from './botDelegationService.js';
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
 import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
-import { signalBotAutonomyBotsChanged } from '../bot-autonomy/botsChangedSignal.js';
+import { signalBotProfilesChanged } from './botProfilesChangedSignal.js';
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
@@ -35,11 +40,11 @@ const log = createLogger('maker-ipc:bot-lifecycle');
 
 export interface BotLifecycleServiceDeps {
   maker: Maker;
-  getDelegationService: () => BotDelegationService | null;
   deleteProfileAndDetachSessions?: (
     botId: string,
     sessionIds: string[],
     keepTaskHistory: boolean,
+    projectSessionIds?: string[],
   ) => Promise<void>;
   /** Rebuild only the canonical runtime; retain the product task and all Bot data. */
   restartRuntime?: (sessionId: string, assertOwnerCurrent: () => void) => Promise<void>;
@@ -81,7 +86,7 @@ function broadcastBotLifecycleChanged(payload: {
   action: BotLifecycleActionRequest['action'];
 }): void {
   // 伙伴自主跟进：暂停 / 恢复 / 归档后立即重算跟进者。
-  signalBotAutonomyBotsChanged();
+  signalBotProfilesChanged();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -174,12 +179,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       eventId: randomUUID(),
     });
 
-    const delegationService = deps.getDelegationService();
-    const [delegations, closed] = await Promise.all([
-      delegationService?.cancelDelegationsForBot(
-        botId,
-        'The Bot was paused by the user.',
-      ) ?? Promise.resolve(0),
+    const [closed] = await Promise.all([
       closeBotSessions(botId),
       deps.onPaused?.(botId),
     ]);
@@ -197,10 +197,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       botId,
       'pause',
       'paused',
-      {
-        sessions: closed.count,
-        delegations,
-      },
+      { sessions: closed.count },
       warnings,
     );
     await notifyLifecycleChanged(botId, 'pause');
@@ -318,8 +315,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       throwIpcError('PRECONDITION_FAILED', 'Bot 已在永久删除流程中');
     }
     // Hold the profile lock before pausing so a concurrent message cannot land halfway.
-    // Active delegations are cancelled while their target id is still intact. Historical
-    // foreign keys are detached only inside the final delete transaction.
+    // Historical foreign keys are detached only inside the final delete transaction.
     await getDbClient().tx('bots.prepareProfileDeletion', { botId: request.botId });
     assertOwnerUnchanged();
     let preparationWarnings: string[] = [];
@@ -337,13 +333,38 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       .from(botSessionLinks)
       .where(eq(botSessionLinks.botId, request.botId));
     const sessionIds = [...new Set(links.map((row) => row.sessionId))];
-    const [delegations, closed] = await Promise.all([
-      deps.getDelegationService()?.cancelDelegationsForBot(
-        request.botId,
-        'The Bot was permanently deleted by the user.',
-      ) ?? Promise.resolve(0),
-      closeBotSessions(request.botId),
-    ]);
+    // Its project goes with it (2026-11-10): automation runs and tasks the teammate opened in its own
+    // project follow the same keep-or-delete choice, and the project leaves the project list.
+    const projectDir = teammateWorkspaceDir(ownerRootAtEntry, request.botId);
+    const storedProjectDir = normalizeWorkingDirForStorage(projectDir)!;
+    const windows = process.platform === 'win32';
+    // SQLite LIKE folds only ASCII. On Windows narrow by the owner-relative Bot subtree, then
+    // check the full path below so Unicode casing, UNC and long-path spellings cannot be missed.
+    const candidatePattern = windows
+      ? `%/${escapeLikePattern(path.win32.relative(ownerRootAtEntry, projectDir).replace(/\\/g, '/'))}%`
+      : `${escapeLikePattern(storedProjectDir)}%`;
+    const candidatePaths = [sessions.projectDir, sessions.workingDir].map((column) => {
+      const storedPath = windows ? sql`replace(${column}, ${'\\'}, '/')` : column;
+      return sql`${storedPath} LIKE ${candidatePattern} ESCAPE '!'`;
+    });
+    const projectSessionIds = (await db
+      .select({ id: sessions.id, projectDir: sessions.projectDir, workingDir: sessions.workingDir })
+      .from(sessions)
+      .where(and(ne(sessions.status, 'deleted'), or(...candidatePaths))))
+      .filter((row) => {
+        const workingDir = normalizeWorkingDirForStorage(row.workingDir);
+        return !sessionIds.includes(row.id) && (
+          workingDirEquals(row.projectDir, storedProjectDir)
+          || workingDirEquals(workingDir, storedProjectDir)
+          || (workingDir?.[storedProjectDir.length] === '/'
+            && workingDirEquals(workingDir.slice(0, storedProjectDir.length), storedProjectDir))
+        );
+      })
+      .map((row) => row.id);
+    const closed = await closeBotSessions(request.botId);
+    const projectClosed = await Promise.allSettled(projectSessionIds.map((sessionId) => deps.maker.closeSession(sessionId)));
+    closed.warnings.push(...projectClosed.flatMap((result, index) => result.status === 'rejected'
+      ? [`SESSION_CLOSE_FAILED:${projectSessionIds[index]}:${String(result.reason)}`] : []));
 
     assertOwnerUnchanged();
     await deps.onBeforeDelete?.(request.botId);
@@ -352,6 +373,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       request.botId,
       sessionIds,
       request.keepTaskHistory === true,
+      projectSessionIds,
     );
     try {
       assertOwnerUnchanged();
@@ -384,9 +406,18 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       });
     }
 
+    try {
+      if ((await removeRecentWorkdir(projectDir)).deleted) {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('local-db:recent-workdirs:changed', { path: projectDir });
+        }
+      }
+    } catch (cause) {
+      log.warn('remove teammate project from project list failed', { botId: request.botId, error: String(cause) });
+    }
+
     const result = lifecycleResult(request.botId, 'delete', 'deleted', {
-      sessions: sessionIds.length,
-      delegations,
+      sessions: sessionIds.length + projectSessionIds.length,
     }, [...preparationWarnings, ...closed.warnings]);
     await notifyLifecycleChanged(request.botId, 'delete');
     return result;

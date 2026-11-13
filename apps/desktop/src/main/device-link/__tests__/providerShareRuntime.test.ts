@@ -18,11 +18,13 @@ const state = vi.hoisted(() => ({
   allowed: new Set<string>(['anthropic']),
   owned: [] as ProviderShareOwned[],
   ownedError: false,
+  ownedIncomplete: false,
   remoteOwned: [] as ProviderShareOwned[],
   received: [] as ProviderShareReceived[],
   receivedError: false,
   receivedDenied: false,
   boundaryPending: false,
+  legacyHidden: new Set<string>(),
 }));
 
 // This fixture exercises owner/delegation access without a cloud standby registration.
@@ -47,7 +49,7 @@ vi.mock('../providerShareApi.js', () => ({
   providerShareApi: {
     listOwned: async () => {
       if (state.ownedError) throw new Error('offline');
-      return state.owned;
+      return state.ownedIncomplete ? Object.assign([...state.owned], { authorityIncomplete: true }) : state.owned;
     },
     listReceived: async () => {
       if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
@@ -61,6 +63,7 @@ vi.mock('../providerShareApi.js', () => ({
   fetchIdentityCard: vi.fn(),
   sha256Hex: (value: string) => value,
   providerShareOwnerKey: () => state.scope,
+  providerShareHiddenByEncryptedOnly: (shareId: string) => state.legacyHidden.has(shareId),
   checkProviderShareDelegation: vi.fn(async () => ({ active: false })),
 }));
 vi.mock('../providerShareCrossRegion.js', async (importOriginal) => ({
@@ -82,6 +85,8 @@ import {
   applyLocalMemberChange,
   clearProviderShareRequestQuiet,
   forgetWatchedProviderShareRequest,
+  getProviderShareHostCompleteSnapshot,
+  getProviderShareHostLoadedSnapshot,
   getProviderShareHostSnapshot,
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
@@ -146,6 +151,7 @@ beforeEach(() => {
   state.allowed = new Set(['anthropic']);
   state.owned = [];
   state.ownedError = false;
+  state.ownedIncomplete = false;
   state.remoteOwned = [];
   readWatchedShares.mockReset().mockImplementation(async (hostDeviceId) =>
     state.remoteOwned.filter((item) => item.hostDeviceId === hostDeviceId));
@@ -463,6 +469,20 @@ describe('provider share host snapshot', () => {
     state.remoteControl = true;
     state.scope = 'cloud:other:2';
     expect(providerShareGuestDenial(guest('m1'))).toBe('host-scope-stale');
+  });
+
+  // PR #10150 review: the one-time revert of the 11-10 default must not run on a partial read,
+  // or providers shared during that window would stay closed after the service recovers.
+  it('offers the complete snapshot only after every share service was read', async () => {
+    state.owned = [share([member('m1')])];
+    state.ownedIncomplete = true;
+    startProviderShareHost(events());
+    await refreshProviderShareHost('partial');
+    expect(getProviderShareHostLoadedSnapshot()).toHaveLength(1);
+    expect(getProviderShareHostCompleteSnapshot()).toBeNull();
+    state.ownedIncomplete = false;
+    await refreshProviderShareHost('recovered');
+    expect(getProviderShareHostCompleteSnapshot()?.map((item) => item.providerId)).toEqual([share([]).providerId]);
   });
 
   it('announces pending requests once and reconciles stale guests on the first snapshot', async () => {
@@ -834,6 +854,10 @@ describe('provider share guest routing', () => {
     startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
     await expect(resolveRemoteAgentTargetWhenReady('share:share-1')).resolves.toBe(providerShareHostPeer('share-1', 'owner-mac'));
     expect(() => resolveRemoteAgentTarget('share:share-2')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+    // Bug (2026-11-10): 「仅使用 Agent-Net」hid a V1 share and the running task said its owner removed it.
+    state.legacyHidden.add('share-2');
+    expect(() => resolveRemoteAgentTarget('share:share-2')).toThrow(/^\[REMOTE_AGENT_SHARE_LEGACY_DISABLED\]/);
+    state.legacyHidden.clear();
   });
 
   it('retires only the changed share metadata target, not its neighbour', async () => {

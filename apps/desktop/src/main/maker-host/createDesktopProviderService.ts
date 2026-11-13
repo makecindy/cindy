@@ -29,8 +29,8 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { hasConnectedSubscriptionPool, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
-import { readPool } from '../subscription-accounts/store.js';
+import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
+import { readPool, migrateLegacyCodexAccounts, readLegacyCodexAccountId } from '../subscription-accounts/store.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -108,7 +108,7 @@ import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provi
 import {
   configureGenericOAuth,
   hasGenericOAuthLogin,
-  readCachedGenericOAuthAccessToken,
+  readGenericOAuthAccessToken,
   resetGenericOAuthMemoryCache,
 } from './generic-oauth.desktop.js';
 import {
@@ -136,15 +136,17 @@ import {
   refreshOpenAiMediaModels,
 } from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
+import { organizationProviderLogoKind } from '../organizationProviderLogo.js';
 import { getAuthState } from '../authManager.js';
 import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import { getActiveAppSession, activeOwnerScopeKey } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   claimDetectedNativeProviderAuth,
   getNativeProviderAuthSource,
   isNativeProviderAuthBound,
+  isNativeProviderAuthSharedSystemCredential,
   isNativeProviderAuthRevoked,
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
@@ -318,7 +320,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 测试连接探测与路由同源读 key（同 setter 模式，见 provider-diagnostics.ts）。
   setDiagnosticsKeyReader(readCustomProviderKey);
   // 通用 OAuth Runner 接线（idempotent）：safeStorage blob IO + 系统浏览器拉起;
-  // 路由热路径的同步 token 读取（描述符现查目录,临期后台单飞刷新,不阻塞路由）。
+  // 路由与连接测试共用异步 reader，必要时先完成刷新。
   configureGenericOAuth({
     storage: genericOAuthSecretIo,
     openExternal: async (url) => {
@@ -329,11 +331,11 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 账号切换清空本机密钥后,同步失效 generic-oauth 的内存缓存——
   // 不失效的话磁盘 blob 已删但缓存还热,B 账号会继续用 A 的 token 路由(串号)。
   addProviderSecretsClearedListener(handleProviderSecretsCleared);
-  const readOAuthToken = (providerId: string): string | null => {
+  const readOAuthToken = (providerId: string): Promise<string | null> => {
     const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
     const storageProviderId =
       provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
-    return readCachedGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
+    return readGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
   };
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
@@ -355,7 +357,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     return Promise.resolve(activeCatalog);
   }
   if (!activeInflight) {
-    const source = buildSource();
+    const source = { ...buildSource(), remoteBudgetMs: 2_500 };
     const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
@@ -644,8 +646,9 @@ export async function refreshCustomProvidersIntoCatalog(
     return;
   }
   const generation = ++customProviderCatalogRefreshGeneration;
+  const owner = activeOwnerScopeKey();
   const isCurrent = (): boolean =>
-    generation === customProviderCatalogRefreshGeneration && shouldApply();
+    generation === customProviderCatalogRefreshGeneration && owner === activeOwnerScopeKey() && shouldApply();
   try {
     const configs = await listCustomProvidersWithSecureHeaders();
     if (!isCurrent()) {
@@ -691,6 +694,20 @@ export async function refreshCustomProvidersIntoCatalog(
       return;
     }
     setCustomProviderConfigs(next);
+    // Publish old routes first: imported accounts retain these IDs for history and revocation.
+    const access = readModelDisableOverrides();
+    const nativeDefault = isNativeProviderAuthBound('openai');
+    try {
+      await migrateLegacyCodexAccounts(
+        next.filter(config => config.auth?.method === 'oauth' && config.auth.native === 'codex')
+          .map(config => ({ providerId: config.id, paused: isProviderDisabled(access, config.id) })),
+        { preserveDefault: nativeDefault, legacyDefault: nativeDefault && !isNativeProviderAuthSharedSystemCredential('openai'), isCurrent },
+      );
+    } catch {
+      // Failed metadata writes leave every original connection available for the next refresh.
+      log.warn('legacy Codex account migration did not complete');
+    }
+    if (!isCurrent()) return;
     requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
@@ -825,9 +842,36 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
+  return projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog());
+}
+
+function getDesktopSelectableBaseCatalog(): Catalog {
   return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
+}
+
+/** Apply account membership to both selectable and full routing snapshots. */
+function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
+  const pool = readPool('openai');
+  const aliases = pool?.legacyCodexAccounts;
+  if (!aliases || pool.disconnected) return catalog;
+  const accounts = new Set(pool.accounts.filter(account => !account.paused).map(account => account.id));
+  const imported = catalog.providers.filter(provider => provider.auth.native === 'codex'
+    && Object.hasOwn(aliases, provider.id) && accounts.has(aliases[provider.id])
+    && codexAccountState(provider.id).authenticated);
+  if (!imported.length) return catalog;
+  // Reuse these accounts' existing membership; do not discover an unrelated default CLI login.
+  return { ...catalog, providers: catalog.providers.map(provider => {
+    if (provider.id !== 'openai') return provider;
+    const models = Object.fromEntries(provider.agents.map(agent => {
+      const models = new Map((provider.models[agent] ?? []).map(model => [model.id, model]));
+      for (const source of imported) for (const model of source.models[agent] ?? [])
+        if (!models.has(model.id)) models.set(model.id, model);
+      return [agent, [...models.values()]];
+    }));
+    return { ...provider, models };
+  }) };
 }
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
@@ -852,7 +896,16 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   if (singleton) return singleton;
   singleton = createProviderService({
     getModelContextLimits: readModelContextLimits,
-    projectProvider: projectSubscriptionFastPolicy,
+    projectProvider: provider => {
+      const projected = projectSubscriptionFastPolicy(provider);
+      return readLegacyCodexAccountId(provider.id)
+        ? { ...projected, subscriptionPoolAlias: true }
+        : projected;
+    },
+    getOrganizationProviderLogoKind: (provider) => {
+      const state = getAuthState();
+      return organizationProviderLogoKind(provider, state.mode === 'cloud' ? state.user : null);
+    },
     getProviderPresentation: (providerId) => {
       const presentation = readProviderPresentation(providerId);
       if (providerId !== 'xd') return presentation;
@@ -863,7 +916,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
         logoKind: getCindyAiProviderLogoKind(),
       };
     },
-    getCatalog: getDesktopSelectableCatalog,
+    getCatalog: getDesktopSelectableBaseCatalog,
+    projectCatalog: projectSubscriptionPoolCatalog,
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
@@ -920,6 +974,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     codexAccountConnected: (providerId) => codexAccountState(providerId).authenticated,
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionReadUnavailable: (providerId) => (providerId === 'openai' || providerId === 'anthropic')
+      && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {
         const login = await readClaudeNativeLogin();

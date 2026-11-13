@@ -31,8 +31,14 @@ import {
   resetAppearanceSettings,
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
+  appearanceService,
+  readSelectedThemeFont,
 } from './appearance-settings-store.js';
+import { parseThemeSelection } from '../shared/appearanceDefinition.js';
+import { APPEARANCE_RESET_FIELDS, appearanceResetPatch } from './appearance/definition.js';
 import { applyDockIcon } from './app-icon.js';
+import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
+import { LOCAL_THEME_SUFFIX } from '../shared/local-themes.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -64,6 +70,14 @@ export function registerAppearanceSettingsIpc(): void {
     const state = readAppearanceSettingsState();
     broadcast(state.value);
     return state;
+  });
+
+  ipcMain.handle('appearance-settings:plugin-font', async (event, role: unknown) => {
+    if (!isTrustedAppearanceSettingsReadEvent(event) || typeof role !== 'string') throwIpcError('INVALID_PARAMS', 'Appearance font reader required');
+    const themeFont = await readSelectedThemeFont(role);
+    if (themeFont) return themeFont;
+    const { readSelectedPluginFont } = await import('./mcp-apps/appearance.js');
+    return readSelectedPluginFont(role);
   });
 
   // Local Desktop appearance only: no remote allowlist and no renderer-supplied path.
@@ -123,6 +137,26 @@ export function registerAppearanceSettingsIpc(): void {
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
     return resetAppearanceFromSettings();
+  });
+
+  ipcMain.handle('appearance-settings:select-theme', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const selection = raw === null ? null : parseThemeSelection(raw);
+    if (raw !== null && (!selection || !selection.familyId.endsWith(LOCAL_THEME_SUFFIX)))
+      throwIpcError('INVALID_PARAMS', 'Invalid theme package selection');
+    try {
+      const settings = await appearanceService.select(selection);
+      publishAppearanceFromOwner(settings);
+      return settings;
+    } catch { throwIpcError('INTERNAL', 'Unable to prepare theme package'); }
+  });
+  ipcMain.handle('appearance-settings:reset-fields', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(raw) || !raw.length || raw.length > APPEARANCE_RESET_FIELDS.length ||
+        raw.some(field => !APPEARANCE_RESET_FIELDS.includes(field))) throwIpcError('INVALID_PARAMS', 'Invalid appearance reset');
+    const settings = await writeAppearanceSettingsPatch(appearanceResetPatch(raw));
+    publishAppearanceFromOwner(settings);
+    return settings;
   });
 }
 
@@ -191,8 +225,8 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
-  void _privateUrl;
+  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback, ...publicSettings } = settings;
+  void _privateUrl; void _fallback;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -230,15 +264,22 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperBlur',
     'wallpaperMotion',
     'appIcon',
+    'density',
+    'motion',
   ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
   const patch: AppearanceOverrides = {};
-  if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
-  if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
-  if ('terminalFamily' in raw)
+  if ('uiFamily' in raw) { patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily'); patch.uiFontResource = undefined; }
+  if ('codeFamily' in raw) { patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily'); patch.codeFontResource = undefined; }
+  if ('terminalFamily' in raw) {
     patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
+    patch.terminalFontResource = undefined;
+  }
+  for (const [key, min, max] of [['density', 0.75, 1.25], ['motion', 0, 2]] as const) {
+    if (key in raw) patch[key] = parseNumber(raw[key], key, value => Math.min(max, Math.max(min, value)), { min, max });
+  }
   if ('uiSize' in raw)
     patch.uiSize = parseNumber(
       raw.uiSize,
@@ -357,18 +398,40 @@ function parseNumber(
 
 export const __testing = { parsePatch };
 
-/** UI and Agent edits share validation, persistence, live windows and broadcasts. */
-export async function updateAppearanceFromSettings(rawPatch: unknown) {
-  const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
+/** Plugin settings use the same profile owner and existing window broadcast. */
+export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
   broadcast(settings);
+}
+
+/** Refresh only a package projection already requested by the renderer. */
+export function refreshAppearanceTheme(): Promise<AppearanceSettings> | undefined {
+  const preparation = appearanceService.refresh();
+  if (!preparation) return undefined;
+  const previous = pluginAppearanceRevision(readAppearanceSettings());
+  return preparation.then(settings => {
+    if (pluginAppearanceRevision(settings) !== previous) publishAppearanceFromOwner(settings);
+    return settings;
+  });
+}
+
+/** UI and Agent edits share validation, persistence, live windows and broadcasts. */
+export async function updateAppearanceFromSettings(rawPatch: unknown, options?: { ifRevision?: unknown; assertCurrent?(): void }) {
+  const patch = parsePatch(rawPatch);
+  const settings = options ? await updateAppearanceSettingsAtomic(() => {
+    options.assertCurrent?.();
+    if (options.ifRevision !== undefined) {
+      if (typeof options.ifRevision !== 'string' || !/^[a-f0-9]{64}$/.test(options.ifRevision)) throw new Error('MCP_APP_INVALID_REQUEST');
+      if (options.ifRevision !== pluginAppearanceRevision(readAppearanceSettings())) throw new Error('MCP_APP_APPEARANCE_CHANGED');
+    }
+    return patch;
+  }) : await writeAppearanceSettingsPatch(patch);
+  publishAppearanceFromOwner(settings);
   return settings;
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
-  applyAppearanceToWindows(settings);
-  applyDockIcon(settings);
-  broadcast(settings);
+  publishAppearanceFromOwner(settings);
   return settings;
 }

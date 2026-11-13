@@ -1,13 +1,40 @@
 {
+  "pushDiagnostics": {
+    "title": "Push-Diagnose",
+    "read": "Push-Status lesen",
+    "busy": "Wird gelesen…",
+    "failed": "Push-Status konnte nicht gelesen werden. Bitte erneut versuchen.",
+    "copyFailed": "Token konnte nicht kopiert werden.",
+    "copied": "Token kopiert.",
+    "bundle": "App-ID",
+    "build": "Build",
+    "environment": "APNs-Umgebung",
+    "permission": "Systemberechtigung",
+    "alerts": "Banner",
+    "lockScreen": "Sperrbildschirm",
+    "notificationCenter": "Mitteilungszentrale",
+    "copy": "APNs-Token kopieren",
+    "hide": "Ergebnis ausblenden",
+    "unknown": "Unbekannt",
+    "on": "Ein",
+    "off": "Aus",
+    "hint": "Nur auf Anfrage auslesen. Das APNs-Token wird nur hier angezeigt, nicht in Diagnosen gespeichert oder von diesem Werkzeug hochgeladen. Beim Verlassen oder im Hintergrund wird es ausgeblendet. Nur für Apples Push-Konsole kopieren; kopierter Text bleibt in der Zwischenablage.",
+    "permissions": {
+      "granted": "Erlaubt",
+      "denied": "Abgelehnt",
+      "undetermined": "Nicht angefragt",
+      "provisional": "Stille Zustellung"
+    }
+  },
   "localLogs": {
-    "upload": "Protokolle hochladen",
+    "upload": "Logs hochladen",
     "uploadResult": {
       "unavailable": "Der Log-Upload ist in diesem Build nicht verfügbar.",
       "consentRequired": "Akzeptiere die Datenschutzerklärung, bevor du Logs hochlädst.",
       "empty": "Keine aktuellen Logs. Aktiviere die Aufzeichnung und reproduziere zuerst das Problem.",
       "failed": "Upload fehlgeschlagen. Die Logs bleiben auf diesem Smartphone gespeichert."
     },
-    "title": "Debug-Protokolle",
+    "title": "Debug-Logs",
     "record": "Logs aufzeichnen",
     "export": "Logs exportieren",
     "clear": "Logs löschen",
@@ -20,6 +47,12 @@
     "footer": "Logs bleiben bis zu 7 Tage oder bis zu einer Größe von 8 MB auf diesem Smartphone und werden nie automatisch hochgeladen. Exportierte Logs enthalten weder Gesprächstexte noch Zugangsdaten. Bei Uploads werden nur gefilterte Ausführungsprotokolle und Versionsinfos gesendet."
   },
   "title": "Einstellungen",
+  "promptRecommendation": {
+    "label": "Eingabevorschläge",
+    "description": "Nach einer Antwort Vorschläge für die nächste Eingabe anzeigen. Gilt nur auf diesem Smartphone.",
+    "saveFailed": "Die Einstellung gilt vorerst, konnte aber nicht gespeichert werden.",
+    "reset": "Auf Standard zurücksetzen"
+  },
   "appearance": {
     "title": "Darstellung",
     "modeLabel": "Darstellung",
@@ -81,11 +114,11 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Klassische Prosa (Standard)",
+        "prose": "Klassische Prosa",
         "tang-poetry": "Tang-Lyrik",
         "song-ci": "Song-Ci",
         "yuan-qu": "Yuan-Qu",
-        "chu-ci": "Chuci",
+        "chu-ci": "Chu-Ci",
         "parallel-prose": "Parallelprosa",
         "pre-qin": "Vor-Qin-Meister",
         "historian": "Stil des Großen Historikers",
@@ -144,7 +177,11 @@
       "auto": "Automatisch",
       "on": "Immer an",
       "off": "Aus"
-    }
+    },
+    "actionReplyPlaceholder": "Antwort eingeben",
+    "actionNotDelivered": "Das ist nicht bei deinem Computer angekommen. Öffne Cindy, um zu antworten.",
+    "actionReplyNotDelivered": "Deine Antwort wurde nicht gesendet. Öffne Cindy, um sie erneut zu senden: {{text}}",
+    "actionRequestEnded": "Diese Anfrage wurde bereits beantwortet oder ist abgelaufen."
   },
   "about": {
     "sectionTitle": "Über dieses Smartphone",
@@ -253,7 +290,7 @@
   "voiceSpeakerFilter": {
     "actionFailed": "Die Änderung konnte nicht gespeichert werden. Versuch es erneut.",
     "title": "Meine Stimme erkennen",
-    "sectionTitle": "Stimmabdruckfilter",
+    "sectionTitle": "Stimmprofilfilter",
     "label": "Meine Stimme erkennen",
     "entryHint": "Blendet andere Personen bei der Spracheingabe aus. Dein Stimmprofil bleibt auf diesem Smartphone.",
     "openAccessibility": "Einstellungen zur Erkennung meiner Stimme öffnen",
@@ -319,10 +356,10 @@
       "errors": {
         "too_short": "In Abschnitt {{index}} wurde zu wenig Sprache erkannt. Nimm ihn erneut auf.",
         "no_embedding": "Aus Abschnitt {{index}} konnte kein Stimmprofil ermittelt werden. Nimm ihn erneut auf.",
-        "inconsistent": "Passage {{index}} klingt nicht nach derselben Person wie die anderen; möglicherweise wurde eine andere Stimme oder ein Geräusch aufgenommen. Nimm sie erneut auf.",
+        "inconsistent": "Abschnitt {{index}} klingt nicht nach derselben Person wie die anderen; möglicherweise wurde eine andere Stimme oder ein Geräusch aufgenommen. Nimm ihn erneut auf.",
         "models_missing": "Das Erkennungsmodell ist noch nicht vollständig heruntergeladen. Versuche es gleich noch einmal.",
-        "storage_unavailable": "Der Systemschlüsselbund ist nicht verfügbar, daher kann der Stimmabdruck nicht verschlüsselt gespeichert werden. Versuche es später erneut.",
-        "failed": "Der Stimmabdruck konnte nicht erstellt werden. Versuche es erneut.",
+        "storage_unavailable": "Der Systemschlüsselbund ist nicht verfügbar, daher kann das Stimmprofil nicht verschlüsselt gespeichert werden. Versuche es später erneut.",
+        "failed": "Das Stimmprofil konnte nicht erstellt werden. Versuche es erneut.",
         "microphone": "Das Mikrofon kann nicht verwendet werden. Prüfe die Mikrofonberechtigung und versuch es erneut.",
         "noAudio": "Das Mikrofon hat keinen Ton erfasst. Prüfe es und versuch es erneut."
       },
@@ -361,7 +398,7 @@
     "sectionTitle": "Handheld",
     "label": "Handheld-Modus",
     "entryHint": "Bediene Cindy mit dem eingebauten Controller eines Gaming-Handhelds und halte die Sprachtaste gedrückt, um zu sprechen.",
-    "on": "An",
+    "on": "Ein",
     "off": "Aus",
     "openAccessibility": "Einstellungen für den Handheld-Modus öffnen",
     "title": "Handheld-Modus",

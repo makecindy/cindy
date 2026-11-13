@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Routine, RoutineInput } from '@cindy/maker-scheduler';
+import type { Routine } from '@cindy/maker-scheduler';
 import { companionEnvironmentKey, createCompanionEnvironmentStore } from '../environment.js';
 import { deserializeImportSnapshotAsync, serializeImportSnapshotAsync, fingerprint } from '../files.js';
 import { createMessage } from '../../localDb/ipc/messages.js';
@@ -61,28 +61,29 @@ vi.mock('../runtime.js', () => ({ recoverCompanionEnvironmentRemovals: vi.fn(asy
 vi.mock('../memoryMedia.js', () => ({ importMemoryMedia: h.importMedia }));
 vi.mock('../imBotConnections.js', () => ({ connectImportedImBot: h.connectImBot }));
 vi.mock('../../localDb/ipc/messages.js', () => ({ createMessage: vi.fn() }));
-vi.mock('../../routines/service.js', () => ({
-  updateBotRoutineLifecycle: h.lifecycle,
-  routineTools: {
-    list: async () => structuredClone(h.routines),
-    createOnce: async (botId: string, input: RoutineInput, id: string) => {
-      // The real engine publishes creationId as the stable routine ID.
-      const binding = (await h.store.read(h.root, botId, () => {}))?.automations?.[id];
-      if (h.native) { expect(binding).toBeUndefined(); expect(input.enabled).toBe(false); }
-      else expect(binding?.handover).toBe(h.sourceEnabled ? 'pending' : 'ready');
-      const routine = { ...input, botId, id, revision: 1, createdAt: 1, updatedAt: 1 };
-      h.routines.push(routine); return routine;
-    },
+// Imported jobs become paused project automations of the teammate (one row per routine id here).
+vi.mock('../../maker-ipc/botRoutineAutomations.js', () => ({
+  prepareTeammateRoutineProject: async () => ({ workingDir: '/fixture/project', route: null }),
+  writeRoutineAutomations: async (_dir: string, routine: Routine, options: { paused?: boolean }) => {
+    // The handover binding is published before the job reaches the project.
+    const binding = (await h.store.read(h.root, routine.botId, () => {}))?.automations?.[routine.id];
+    if (h.native) expect(binding).toBeUndefined();
+    else expect(binding?.handover).toBe(h.sourceEnabled ? 'pending' : 'ready');
+    expect(options.paused).toBe(true);
+    h.routines.push({ ...routine, enabled: false }); return { configIds: [routine.id], note: null };
   },
-  getRoutineEngine: async () => ({ put: async (_botId: string, input: RoutineInput, id: string) => {
-    expect(h.sourceEnabled).toBe(false);
-    h.routines = h.routines.map(row => row.id === id ? { ...row, ...input, revision: row.revision + 1 } : row);
-  } }),
+  findRoutineAutomations: async (_dir: string, id: string) => h.routines.filter(row => row.id === id)
+    .map(row => ({ id: `schedule-${row.id}`, name: row.name, prompt: row.prompt, status: row.enabled ? 'active' : 'paused' })),
+  setRoutineAutomationsRunning: async (_dir: string, id: string, running: boolean) => {
+    h.lifecycle(id, running);
+    if (running) expect(h.sourceEnabled).toBe(false);
+    h.routines = h.routines.map(row => row.id === id ? { ...row, enabled: running } : row);
+    return h.routines.filter(row => row.id === id);
+  },
 }));
 import { readNativeBotPackage } from '../nativePackage.js';
-import { submitRemoteCompanionImport, readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, getCompanionImportSetupStatus, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady, listNativeBotPackages, inviteNativeBotPackage } from '../host.js';
+import { submitRemoteCompanionImport, readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, getCompanionImportSetupStatus, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, listNativeBotPackages, inviteNativeBotPackage } from '../host.js';
 import { withBotProfileLocks } from '../../maker-ipc/botProfileLock.js';
-import { assertImportedAutomationReady, prepareImportedAutomation } from '../automationRuntime.js';
 import { decodeBotAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
 import { createCompanionConnectionsProvider } from '../connectionProvider.js';
 import { createImportSourceReader, discoverImportSources, inspectImportSource } from '../sources.js';
@@ -94,9 +95,7 @@ beforeEach(async () => {
   h.native = false; h.invitation.mockReset().mockResolvedValue(undefined);
   h.created = false; h.verified = false; h.sourceEnabled = true; h.failReadyWrite = false; h.boundary = false; h.routines = []; h.pause.mockReset(); h.sourceEnvironment = {};
   h.connectImBot.mockReset().mockResolvedValue(undefined);
-  h.lifecycle.mockReset().mockImplementation(async (_botId: string, action: string) => {
-    if (action === 'delete') h.routines = [];
-  });
+  h.lifecycle.mockReset();
   vi.mocked(verifyImportedAutomation).mockClear();
   vi.mocked(getBotRemoteResourceSource).mockReset().mockImplementation(async () => { if (!h.created) throw new Error('[NOT_FOUND]'); return { canonicalSessionId: 'chat' } as never; });
   vi.mocked(createBotProfile).mockReset().mockImplementation(async input => { h.created = true; h.botId = (input as { id: string }).id; return {} as never; });
@@ -128,10 +127,8 @@ afterEach(async () => { vi.restoreAllMocks(); await fs.rm(h.root, { recursive: t
 // SOUL receives the package identity text verbatim; the catalog entry does not expose it.
 const nativeIdentity = async (packageId: string) => (await readNativeBotPackage(path.resolve('resources/bot-packages'), packageId))
   .snapshot.items.find(item => item.role === 'identity')!.text;
-async function nativeFinished(result: Awaited<ReturnType<typeof inviteNativeBotPackage>>) {
-  // Admission can return while the transfer still owns the profile lock.
-  // Wait for that transfer (including file writes and checkpoint cleanup),
-  // rather than racing Windows IO against a fixed 500ms polling budget.
+async function importFinished(result: Awaited<ReturnType<typeof startCompanionImport>>) {
+  // Join the admitted transfer's file writes and checkpoint cleanup before reading its result.
   if (result.status === 'running') {
     await withBotProfileLocks([result.botId], async () => {});
     // The result reader may acquire the same lock for reconciliation.
@@ -143,7 +140,7 @@ async function nativeFinished(result: Awaited<ReturnType<typeof inviteNativeBotP
 it('invites a bundled native package through the original receipt and full file writers, without source handover', async () => {
   h.native = true;
   const entry = (await listNativeBotPackages()).find(entry => entry.packageId === 'nightly-audit-engineer')!;
-  const result = await nativeFinished(await inviteNativeBotPackage({ ...entry, locale: 'zh-CN' }, 'renderer:1'));
+  const result = await importFinished(await inviteNativeBotPackage({ ...entry, locale: 'zh-CN' }, 'renderer:1'));
   expect(result).toMatchObject({ saved: true, status: 'complete' });
   expect(createBotProfile).toHaveBeenCalledWith(expect.objectContaining({ description: entry.description, prepareInvitation: false }));
   expect(h.profile.identitySource).toBe(await nativeIdentity(entry.packageId));
@@ -165,7 +162,7 @@ it('serializes concurrent package invitations from different windows onto one re
   h.native = true;
   const entry = (await listNativeBotPackages())[0]!;
   const results = await Promise.all([inviteNativeBotPackage(entry, 'renderer:1'), inviteNativeBotPackage(entry, 'renderer:2')]);
-  await nativeFinished(results[0]!);
+  await importFinished(results[0]!);
   expect(results[0]?.requestId).toBe(results[1]?.requestId);
   expect(results[0]?.botId).toBe(results[1]?.botId);
   expect(createBotProfile).toHaveBeenCalledTimes(1);
@@ -174,10 +171,10 @@ it('recovers a failed native knowledge write using the same receipt without copy
   h.native = true;
   h.importDocument.mockRejectedValueOnce(new Error('fixture disk failure'));
   const entry = (await listNativeBotPackages())[0]!;
-  const partial = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const partial = await importFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   expect(partial.status).toBe('needs-attention'); expect(partial.saved).toBe(true);
   expect(h.invitation).not.toHaveBeenCalled();
-  const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  const complete = await importFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
   expect(complete.status).toBe('complete'); expect(complete.botId).toBe(partial.botId); expect(complete.requestId).toBe(partial.requestId);
   expect(createBotProfile).toHaveBeenCalledTimes(1);
   expect(h.importDocument).toHaveBeenCalledTimes(2);
@@ -204,10 +201,10 @@ it('resumes an unfinished 0.5.1 save from its stored checkpoint after a bundled 
   h.native = true;
   h.importDocument.mockRejectedValueOnce(new Error('fixture disk failure'));
   const entry = (await listNativeBotPackages())[0]!;
-  const partial = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const partial = await importFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   expect(partial.status).toBe('needs-attention');
   const originalPackage = await olderInstall(partial.requestId, '0.5.1');
-  const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  const complete = await importFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
   expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(partial.requestId); expect(complete.botId).toBe(partial.botId);
   expect(createBotProfile).toHaveBeenCalledTimes(1);
   const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', `${partial.requestId}.json`), 'utf8'));
@@ -217,7 +214,7 @@ it('resumes an unfinished 0.5.1 save from its stored checkpoint after a bundled 
 it('keeps an older installed version unchanged when it has no unfinished checkpoint', async () => {
   h.native = true;
   const entry = (await listNativeBotPackages())[0]!;
-  const first = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const first = await importFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   await olderInstall(first.requestId);
   const again = await inviteNativeBotPackage(entry, 'renderer:2');
   expect(again.requestId).toBe(first.requestId);
@@ -235,7 +232,7 @@ it('restarts an older install that never saved its checkpoint, as the same reque
   const requestId = indexes[0]!.slice(0, -'.json'.length);
   expect(h.created).toBe(false);
   await olderInstall(requestId);
-  const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  const complete = await importFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
   expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(requestId);
   expect(createBotProfile).toHaveBeenCalledTimes(1);
   expect(h.importDocument).toHaveBeenCalledTimes(1);
@@ -252,7 +249,7 @@ it('restarts with current package metadata while preserving the original languag
   const requestId = indexes[0]!.slice(0, -'.json'.length);
   await olderInstall(requestId);
   // The profile name is part of the stored selection identity, so a language switched since then must not change it.
-  const complete = await nativeFinished(await inviteNativeBotPackage({ ...entry, locale: 'en' }, 'renderer:2'));
+  const complete = await importFinished(await inviteNativeBotPackage({ ...entry, locale: 'en' }, 'renderer:2'));
   expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(requestId);
   expect(createBotProfile).toHaveBeenCalledTimes(1);
   expect(createBotProfile).toHaveBeenCalledWith(expect.objectContaining({ name: entry.locales!.ja!.name }));
@@ -272,7 +269,7 @@ it('restarts with current package metadata while preserving the original languag
 it('saves the teammate, opening and routine names in the language the invite was made in', async () => {
   h.native = true;
   const entry = (await listNativeBotPackages()).find(entry => entry.packageId === 'engineer-bot')!;
-  const result = await nativeFinished(await inviteNativeBotPackage({ ...entry, locale: 'ja' }, 'renderer:1'));
+  const result = await importFinished(await inviteNativeBotPackage({ ...entry, locale: 'ja' }, 'renderer:1'));
   expect(result).toMatchObject({ saved: true, status: 'complete' });
   const ja = entry.locales!.ja!;
   expect(createBotProfile).toHaveBeenCalledWith(expect.objectContaining({ name: ja.name, description: ja.description, prepareInvitation: false }));
@@ -287,7 +284,7 @@ it('saves the teammate, opening and routine names in the language the invite was
 it('respects the original memory switch without enabling it or importing identity as reference', async () => {
   h.native = true; h.profile = { config: { memory: false } };
   const entry = (await listNativeBotPackages())[0]!;
-  const result = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const result = await importFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   expect(result.status).toBe('needs-attention');
   expect(result.checks).toContainEqual(expect.objectContaining({ message: 'MEMORY_DISABLED' }));
   expect(h.importDocument).not.toHaveBeenCalled(); expect(h.profile.config).toEqual({ memory: false });
@@ -300,7 +297,7 @@ it('still opens the conversation when only a disabled routine definition fails t
   const entry = (await listNativeBotPackages()).find(entry => entry.routines.length > 0)!;
   const create = vi.spyOn(h, 'routines', 'get');
   create.mockReturnValue(new Proxy([], { get: (target, key) => key === 'push' ? () => { throw new Error('ROUTINE_ENGINE_PASSIVE'); } : Reflect.get(target, key) }) as never);
-  const result = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const result = await importFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   create.mockRestore();
   expect(result).toMatchObject({ saved: true, status: 'needs-attention' });
   expect(result.checks.filter(check => check.status === 'needs-attention').every(check => check.entryId.startsWith('routine-'))).toBe(true);
@@ -309,12 +306,12 @@ it('still opens the conversation when only a disabled routine definition fails t
 it('keeps deletion cancellation as a fence and allocates a new request only for an explicit reinstall', async () => {
   h.native = true;
   const entry = (await listNativeBotPackages())[0]!;
-  const first = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const first = await importFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   await withBotProfileLocks([first.botId], () => cancelCompanionImportsForDeletion(first.botId));
   expect((await getCompanionImportResult(first.requestId))?.checks).toContainEqual(expect.objectContaining({ message: 'IMPORT_CANCELLED' }));
   expect((await listNativeBotPackages())[0]?.installation).toBeUndefined();
   h.created = false;
-  const second = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  const second = await importFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
   expect(second.requestId).not.toBe(first.requestId); expect(second.botId).not.toBe(first.botId);
   expect(createBotProfile).toHaveBeenCalledTimes(2);
 });
@@ -323,7 +320,7 @@ it('rejects stale package identities before profile or source operations, and is
   const entry = (await listNativeBotPackages())[0]!;
   await expect(inviteNativeBotPackage({ ...entry, packageHash: '0'.repeat(64) }, 'renderer:1')).rejects.toThrow('SELECTION_CHANGED');
   expect(createBotProfile).not.toHaveBeenCalled();
-  const first = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const first = await importFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   const originalRoot = h.root;
   const nextOwnerRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-native-owner-test-'));
   try { h.root = nextOwnerRoot; expect((await listNativeBotPackages())[0]?.installation).toBeUndefined(); }
@@ -334,7 +331,7 @@ it('rejects stale package identities before profile or source operations, and is
 it('keeps an already installed teammate working after its package leaves the catalog', async () => {
   h.native = true;
   const entry = (await listNativeBotPackages()).find(entry => entry.packageId === 'cooper')!;
-  const first = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const first = await importFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   // The receipt of a package that is no longer bundled (a teammate retired from the catalog).
   const file = path.join(h.root, 'companion-imports', `${first.requestId}.json`);
   // A complete result can precede checkpoint cleanup. Join its lifecycle lock so
@@ -534,7 +531,7 @@ it('bounds background handover reconciliation and does not restart it on status 
   expect(verifyImportedAutomation).toHaveBeenCalledTimes(1);
 });
 
-it.each(['handback', 'cleanup staging'])('retains paused routines and credentials when deletion fails during %s, then completes on retry', async failure => {
+it.each(['handback', 'cleanup staging'])('retains paused automations and credentials when deletion fails during %s, then completes on retry', async failure => {
   h.verified = true;
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
@@ -542,14 +539,16 @@ it.each(['handback', 'cleanup staging'])('retains paused routines and credential
   const accepted = await startCompanionImport(selection, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
   expect(h.sourceEnabled).toBe(false);
-  const routines = structuredClone(h.routines);
-  expect(routines).toHaveLength(1);
+  expect(h.routines).toHaveLength(1);
+  // Deletion pauses the import's automations before the source task is given back.
+  const routines = h.routines.map(row => ({ ...row, enabled: false }));
+  h.lifecycle.mockClear();
   const staging = vi.spyOn(h.store, 'stageRemoval');
   if (failure === 'handback') h.pause.mockImplementationOnce(() => { throw new CompanionImportError('SOURCE_COMMAND_UNAVAILABLE'); });
   else staging.mockRejectedValueOnce(new Error('fixture staging failed'));
   const remove = () => withBotProfileLocks([accepted.botId], () => prepareCompanionImportDeletion(accepted.botId));
   await expect(remove()).rejects.toThrow(failure === 'handback' ? 'SOURCE_COMMAND_UNAVAILABLE' : 'fixture staging failed');
-  expect(h.lifecycle.mock.calls).toEqual([[accepted.botId, 'pause']]);
+  expect(h.lifecycle.mock.calls).toEqual([[routines[0]!.id, false]]);
   expect(h.routines).toEqual(routines);
   expect(h.created).toBe(true);
   expect(await h.store.read(h.root, accepted.botId, () => {})).toBeDefined();
@@ -559,12 +558,11 @@ it.each(['handback', 'cleanup staging'])('retains paused routines and credential
   // Preparation can succeed while the following profile transaction fails.
   // Even on repeated preparation, only pause: definitions must survive until commit.
   expect(h.routines).toEqual(routines);
-  expect(h.lifecycle.mock.calls).toEqual([[accepted.botId, 'pause'], [accepted.botId, 'pause']]);
+  expect(h.lifecycle.mock.calls).toEqual([[routines[0]!.id, false], [routines[0]!.id, false]]);
   const calls = h.pause.mock.calls.length;
   await remove();
   expect(h.pause).toHaveBeenCalledTimes(calls);
   expect(h.routines).toEqual(routines);
-  expect(h.lifecycle).not.toHaveBeenCalledWith(accepted.botId, 'delete');
   // Credentials remain available until the profile deletion commits.
   expect(await h.store.read(h.root, accepted.botId, () => {})).toBeDefined();
   await h.store.finishRemoval(h.root, accepted.botId, () => {});
@@ -770,9 +768,9 @@ it.each([false, true])('publishes command env/argv/stdin credentials safely (com
   const preview = await previewCompanionImport(source!.id, 'fixture');
   expect(vi.mocked(inspectImportSource).mock.calls.at(-1)?.[3]).toEqual({ bots: true });
   const requestId = 'fixture-json-command-publication';
-  const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
-    entryIds: ['source-env', 'memory', 'skill', ...(selected ? ['task'] : [])], takeover: false }, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.saved).toBe(true));
+  const result = await importFinished(await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
+    entryIds: ['source-env', 'memory', 'skill', ...(selected ? ['task'] : [])], takeover: false }, 'fixture'));
+  expect(result.saved).toBe(true);
   const published = await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/SKILL.md'), 'utf8');
   const receiptText = await fs.readFile(path.join(h.root, 'companion-imports', `${requestId}.json`), 'utf8');
   const output = JSON.stringify([published, h.importDocument.mock.calls, h.routines, receiptText]);
@@ -858,8 +856,8 @@ it.each([false, true])('publishes masked skills and runs original scripts/resour
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const requestId = 'fixture-skill-12345';
-  const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada', entryIds: ['skill', 'plain', 'native', ...(nativeOnly ? [] : ['env'])], takeover: false }, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('complete'));
+  const result = await importFinished(await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada', entryIds: ['skill', 'plain', 'native', ...(nativeOnly ? [] : ['env'])], takeover: false }, 'fixture'));
+  expect(result.status).toBe('complete');
   const skillRoot = path.join(h.root, 'bots', result.botId, 'skills');
   for (const file of files) {
     const published = await fs.readFile(path.join(skillRoot, 'report', file.name));
@@ -1027,24 +1025,23 @@ it.each(['scan', 'same-request'] as const)('recovers an indexed checkpoint befor
   expect(h.sourceEnvironment).toEqual({ SOURCE_KEY: 'fake-selected-credential' });
 });
 
-it('persists a failed handover, blocks use, and unlocks the same routine only after a successful retry', async () => {
+it('persists a failed handover, keeps the automations paused, and resumes them only after a successful retry', async () => {
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: 'fixture-request-12345', previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true };
-  await startCompanionImport(selection, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const failed = await importFinished(await startCompanionImport(selection, 'fixture'));
+  expect(failed.status).toBe('needs-attention');
   const routine = h.routines[0]!;
+  const handover = async () => (await h.store.read(h.root, routine.botId, () => {}))?.automations?.[routine.id]?.handover;
   expect(routine.enabled).toBe(false); expect(h.sourceEnabled).toBe(true); expect(h.pause).not.toHaveBeenCalled();
-  await expect(assertImportedAutomationReady(h.root, routine.botId, routine.id, () => {})).rejects.toThrow('AUTOMATION_HANDOVER_REQUIRED');
-  expect(await prepareImportedAutomation(h.root, { ...routine, enabled: true }, 'run', new AbortController().signal, () => {})).toMatchObject({ deferred: true });
+  expect(await handover()).toBe('pending');
   h.verified = true;
-  await expect(ensureImportedAutomationReady(h.root, routine.botId, routine.id, () => {}, { input: { ...routine, prompt: 'Different operation', enabled: true }, expectedRevision: routine.revision })).rejects.toThrow('TARGET_AUTOMATION_CHANGED');
-  expect(h.pause).not.toHaveBeenCalled();
-  await ensureImportedAutomationReady(h.root, routine.botId, routine.id, () => {}, { input: { ...routine, enabled: true }, expectedRevision: routine.revision });
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  // An explicit retry verifies again and finishes the original handover.
+  const retried = await importFinished(await startCompanionImport(selection, 'fixture'));
+  expect(retried.status).toBe('complete');
   expect(h.routines).toHaveLength(1); expect(h.routines[0]?.enabled).toBe(true);
   expect(h.pause).toHaveBeenCalledExactlyOnceWith(false);
-  await expect(assertImportedAutomationReady(h.root, routine.botId, routine.id, () => {})).resolves.toBeUndefined();
+  expect(await handover()).toBe('ready');
   // Status/startup reads do not decrypt the full environment for current receipts.
   const privateRead = vi.spyOn(h.store, 'read');
   await getCompanionImportResult(selection.requestId);
@@ -1057,7 +1054,7 @@ it('persists a failed handover, blocks use, and unlocks the same routine only af
   await fs.writeFile(legacyReceiptFile, JSON.stringify(legacyReceipt));
   await h.store.update(h.root, routine.botId, () => {}, env => { delete env.automations![routine.id]!.handover; });
   await getCompanionImportResult(selection.requestId);
-  await expect(assertImportedAutomationReady(h.root, routine.botId, routine.id, () => {})).resolves.toBeUndefined();
+  expect(await handover()).toBe('ready');
   expect(h.pause).toHaveBeenCalledTimes(1);
   // Simulate a crash after the ready marker but before the outer receipt save.
   await h.store.update(h.root, routine.botId, () => {}, env => { env.pendingImport = { selection, snapshotJson: JSON.stringify(h.snapshot) }; });
@@ -1072,6 +1069,24 @@ it('persists a failed handover, blocks use, and unlocks the same routine only af
   expect(h.pause).toHaveBeenCalledTimes(1);
 });
 
+// Imported jobs are project automations (2026-11-08): one the owner changed in the project
+// meanwhile, or a one-time job whose time passed, is not started; its source gets the job back.
+it.each(['TARGET_AUTOMATION_CHANGED', 'AUTOMATION_TIME_PASSED'] as const)('gives the source back instead of resuming the automation (%s)', async code => {
+  if (code === 'AUTOMATION_TIME_PASSED') h.snapshot.items[0]!.automation!.input!.triggers = [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-request-12345', previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  if (code === 'TARGET_AUTOMATION_CHANGED') h.routines[0]!.prompt = 'Edited in the project';
+  else { const now = Date.now.bind(Date); vi.spyOn(Date, 'now').mockImplementation(() => now() + 120_000); }
+  h.verified = true;
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.checks.some(check => check.message === code)).toBe(true));
+  expect(h.pause.mock.calls).toEqual([[false], [true]]);
+  expect(h.sourceEnabled).toBe(true); expect(h.routines[0]?.enabled).toBe(false);
+});
+
 it.each([false, true])('keeps a copied routine paused and only allows future enable if the source was already paused (%s)', async sourcePaused => {
   h.sourceEnabled = !sourcePaused;
   h.snapshot.items[0]!.view.enabled = !sourcePaused;
@@ -1083,12 +1098,12 @@ it.each([false, true])('keeps a copied routine paused and only allows future ena
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
   const routine = h.routines[0]!;
   expect(routine.enabled).toBe(false); expect(h.pause).not.toHaveBeenCalled();
-  const guard = assertImportedAutomationReady(h.root, routine.botId, routine.id, () => {});
-  if (sourcePaused) await expect(guard).resolves.toBeUndefined();
-  else await expect(guard).rejects.toThrow('AUTOMATION_HANDOVER_REQUIRED');
+  // Deletion gives back only a source this import paused: an active source never counts as handed over.
+  const binding = (await h.store.read(h.root, routine.botId, () => {}))?.automations?.[routine.id];
+  expect(binding?.handover).toBe(sourcePaused ? 'ready' : 'pending');
 });
 
-it('keeps the source paused and execution deferred when the ready marker write fails after activation', async () => {
+it('keeps the source paused when the ready marker write fails after activation, and records it on recovery', async () => {
   h.verified = true; h.failReadyWrite = true;
   // The one-time deadline passes while the durable host recovery waits to retry.
   h.snapshot.items[0]!.automation!.input!.triggers = [{ id: 'once', kind: 'once', at: Date.now() + 1000 }];
@@ -1099,9 +1114,8 @@ it('keeps the source paused and execution deferred when the ready marker write f
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.checks.some(check => check.message === 'TARGET_HANDOVER_UNCERTAIN')).toBe(true));
   const routine = h.routines[0]!;
   expect(routine.enabled).toBe(true); expect(h.sourceEnabled).toBe(false);
-  expect(await prepareImportedAutomation(h.root, routine, 'run', new AbortController().signal, () => {})).toMatchObject({ deferred: true });
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'), { timeout: 8000 });
-  await expect(assertImportedAutomationReady(h.root, routine.botId, routine.id, () => {})).resolves.toBeUndefined();
+  expect((await h.store.read(h.root, routine.botId, () => {}))?.automations?.[routine.id]?.handover).toBe('ready');
   expect(h.pause).toHaveBeenCalledExactlyOnceWith(false);
 }, 10000);
 
@@ -1657,7 +1671,7 @@ it('receives sparse selection chunks idempotently and starts only after the comp
   expect(h.importDocument).toHaveBeenCalledTimes(chosen.length);
 });
 
-it('archives unsupported automation definitions and blocks both management and runtime execution', async () => {
+it('archives unsupported automation definitions and keeps them paused at the source', async () => {
   const original = { id: 'native', schedule: { kind: 'source-specific' }, payload: { kind: 'heartbeat' }, delivery: { channel: 'missing-channel', to: 'original-recipient' } };
   h.snapshot.source.kind = 'openclaw';
   const item = normalizeAutomation(h.snapshot.source, original, indexAutomationDependencies([]), 'UTC');
@@ -1673,8 +1687,7 @@ it('archives unsupported automation definitions and blocks both management and r
   const routine = h.routines[0]!;
   expect(routine).toMatchObject({ enabled: false, triggers: [] });
   expect(env?.automations?.[routine.id]?.original).toEqual(original);
-  await expect(assertImportedAutomationReady(h.root, accepted.botId, routine.id, () => {})).rejects.toThrow('AUTOMATION_TRIGGER_NEEDS_ADAPTER');
-  await expect(prepareImportedAutomation(h.root, routine, 'run', new AbortController().signal, () => {})).rejects.toThrow('AUTOMATION_TRIGGER_NEEDS_ADAPTER');
+  expect(env?.automations?.[routine.id]?.issues).toContain('AUTOMATION_TRIGGER_NEEDS_ADAPTER');
   expect(h.pause).not.toHaveBeenCalled();
   expect(verifyImportedAutomation).not.toHaveBeenCalled();
   await startCompanionImport(selection, 'fixture');

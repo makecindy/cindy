@@ -125,7 +125,7 @@ beforeEach(() => {
   h.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) =>
     sqlite.prepare(sql).get(...params));
   h.query.mockImplementation(async (sql: string, params: unknown[] = []) =>
-    sql.includes('bot_delegations') ? [] : sqlite.prepare(sql).all(...params));
+    sqlite.prepare(sql).all(...params));
   h.exec.mockImplementation(async (sql: string, params: unknown[] = []) =>
     sqlite.prepare(sql).run(...params));
   h.snapshot = { client: {
@@ -266,26 +266,8 @@ it('does not read or dispatch through a replaced owner/database', async () => {
   expect(h.generate).not.toHaveBeenCalled();
   expect(h.dispatch).not.toHaveBeenCalled();
 });
-it('returns background results by protected input provenance, even after the introduction', async () => {
-  const call = await start();
-  await call.submit('input', 'Research a plan.', true);
-  h.query.mockImplementation(async (sql: string) =>
-    sql.includes('bot_delegations') ? [{ status: 'completed', result: 'Three steps.' }] : [],
-  );
-  await vi.advanceTimersByTimeAsync(650);
-  expect(h.generate).toHaveBeenCalledOnce();
-  expect(h.generate.mock.calls[0][0]).toContain('Three steps.');
-  expect(h.query.mock.calls.find(([sql]) => sql.includes('bot_delegations'))?.[1]).toEqual([
-    'main',
-    'main',
-    'input',
-  ]);
-  await vi.advanceTimersByTimeAsync(2000);
-  expect(h.generate).toHaveBeenCalledOnce();
-});
 // Regression: completed main replies are stored as bare text by createMessage;
-// JSON.parse alone silently discarded them. The delegation-only case above
-// never exercised this path. Unit tier: submit through the real dialogue, write
+// JSON.parse alone silently discarded them. Unit tier: submit through the real dialogue, write
 // a canonical reply through createMessage into SQLite, then observe the saved
 // call result/reply. Also retain compatibility with JSON-encoded text.
 it.each(['plain', 'json'] as const)('returns a completed %s-text main reply to the call once', async (format) => {

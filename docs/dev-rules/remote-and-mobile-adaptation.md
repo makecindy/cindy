@@ -139,7 +139,7 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
   推送深链回到所属任务。
 - 单窗口实时画面复用远程桌面通道：控制端只在 `start` 里带 `handoff: requestId`，由被控端按请求选窗口；
   被控端以 `handoffWindow` 能力位声明支持，旧被控端不声明时控制端不展示入口。协议细节见
-  [`protocol-compatibility.md`](protocol-compatibility.md)「代输入」。
+  [`protocol-compatibility/input-handoff.md`](protocol-compatibility/input-handoff.md)「代输入」。
 
 ## 恢复动作先回答故障半径（device-link 共享链路）
 
@@ -286,7 +286,7 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   deviceId 发起 offer，失败按 5–60 秒退避；单次协商 15 秒。桌面共享数据进程预算 64，
   同账号设备与分享各预留 8；手机维持 16。满额继续 relay、释放后按公平队列补建；
   候选、等待 offer、失败重试与压力下空闲回收的边界见
-  [`protocol-compatibility.md`](protocol-compatibility.md#device-link-局域网优先直连)。
+  [`protocol-compatibility/device-link-lan-first-direct.md`](protocol-compatibility/device-link-lan-first-direct.md)。
   两端均支持并启用保留、已完成认证与可靠握手且数据通道健康时，才可跨信令断线维持原有路径。
   新版 Mobile 仅在前台保留，退后台释放；未支持或未启用保留的旧端沿用原有断线复位。
   仅保留 RPC 数据通道，不承诺独立文件或远程桌面通道存活。
@@ -306,6 +306,21 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   Main/preload/隔离 renderer 的真实 IPC、WebRTC 与中继回退；账号和 userData 均为独立 fixture。
 
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
+
+控制端载荷交付（2026-11-10）：512KiB 上传块经 base64 后约 683KiB，慢中转链路收齐分片可能超过
+单次 invoke 的 30 秒期限；大内联 JSON 也有相同问题。`RemoteAgentRunClient.payload` 按 UTF-8 字节
+控制内联大小，超过 64KiB 先 gzip，普通载荷以 64KiB 压缩数据为一块顺序上传。每块确认后再发下一块，
+让同链路的其它请求能在块间推进；不延长通道超时、不自动重放上传、`open` 或 `call`。
+为保留原容量，大载荷会增大块大小以符合旧接收端最多 128 块、每块 512KiB、总共 64MiB 的合同；
+这些数值仍是接收上限，不能因发送偏好变小而拒收旧端的大块。既有取消检查继续覆盖压缩与各块之间。
+`abort` / `requestGracefulStop` 还会使此前尚在准备或上传的 `send` / `steer` 失效；
+压缩后、块间及最终调用前检查同一发送代次，以 `AbortError` 收口，不让停止之后再启动旧消息。
+停止请求不排在上传之后，也不关闭连接；停止之后的新消息仍可正常发送。
+Session 准备期柔性停止的 `SendOptions.signal` 由本机代理传到同一守卫，不序列化进协议；
+已经发出的业务调用保留原结果语义，不能把远端已接收的消息事后改报为未发送。
+故障半径：仅改变当前载荷的编码与分块，不重建 link、不重连共享 relay、不改授权或其它 peer 的状态。
+回归为 `runClientReply.test.ts` 的有界慢链路完整交付，以及 `roundtrip.test.ts` 的上传中取消。
+协议兼容与中转边界见 [远程 Agent 协议](protocol-compatibility/remote-agent.md)。
 
 供应商进程重启（2026-10-29）：已打开的 run 收到 `missing`、`provider-restarting` 或旧端的
 `aborted` 时只释放这条远程连接，保留本机执行器和 MCP 身份。空闲任务下次发送再接回；进行中的
@@ -348,7 +363,7 @@ M 仍保存但已撤权的 run 明确收尾为 `access-revoked`，不以 `missin
 preparing，本机 Session 可正常关闭，下一条显式消息按原生会话 ID 重建；不依赖离线电脑确认才能
 解除队列占用。回归同时覆盖远程通知失败与本机清理失败，不能把两者混为一谈。
 
-协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「远程 Agent」。恢复策略按故障半径三问：
+协议见 [`protocol-compatibility/remote-agent.md`](protocol-compatibility/remote-agent.md)「远程 Agent」。恢复策略按故障半径三问：
 
 1. **故障层级**：只处理同一台被控端的事件拉取。`poll` 遇到 peer reset、超时、背压或链路暂断时，
    用同样的游标重拉(0.5s 起指数退避，上限 5s；另一个在途 poll 成功即提前恢复)；连续 2 分钟拉不到
@@ -388,7 +403,7 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 本机与 SSH PI 的账号边界保护不变。实现见 `remote-agent/controller/{proxyHandle,startRemote}.ts`，
 不改变 wire、授权检查或跨端版本要求（#6921）。
 
-**控制端连接池的让出与连回**(2026-10-17，协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「控制端连接池」)：
+**控制端连接池的让出与连回**(2026-10-17，协议见 [`protocol-compatibility/remote-agent.md`](protocol-compatibility/remote-agent.md)「控制端连接池」)：
 
 1. **故障层级**：B 的单设备名额(`caps.maxRuns`)快满或已满，或 B 以名额类 `REMOTE_AGENT_BUSY` 拒绝一次 open；只涉及这台 A 在
    这台 B 上的连接。
@@ -466,7 +481,7 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
 
 ## 协同远端 Worker 的轮询与恢复
 
-协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「协同远端 Worker」，实现见
+协议见 [`protocol-compatibility/orca-remote-worker.md`](protocol-compatibility/orca-remote-worker.md)「协同远端 Worker」，实现见
 `apps/desktop/src/main/maker-ipc/orcaRemoteWorkerRuntime.ts`。按故障半径三问：
 
 1. **故障层级**：单台运行设备的单个请求。轮询或派活失败只把这台设备标为「暂时无法获取状态」，
@@ -993,6 +1008,18 @@ WebSocket 写入成功）与 `afterFirstWriteMs`（首次写入到结束）；�
 在途期间只保留最新一次补读；失效立即推进已有代次，旧结果不提交。整组读取结束
 （包括失败后的其它成员）才释放刷新位置。账号切换或远程断连后的新代次独立刷新，
 不等待旧请求超时；已经取消的补读不重新打开连接。该合并不引入结果缓存或定时重试。
+同账号桌面远控的目录刷新须同时处理 `maker:provider:changed`、`maker:agents:changed`
+和 `provider-group:changed`：Main 对三者都会作废目标的在途元数据读取，Renderer 若漏接
+其中一种，迟到的 `Metadata scope changed` 就可能让模型选择器停在失败状态。收到这些
+事件时沿用上述合并刷新，只推进对应设备的代次；剩余信任时间为零的通知仍只清除目录，
+不发起补读。保护账号／撤权边界的 Main 校验不变，也不重建共享链路或 relay。
+回归见 Desktop `deviceLinkRemoteRecovery.test.tsx` 与 `remoteCatalogSnapshot.test.ts`。
+宿主的只读元数据入口也区分来源刷新与权限代次：请求返回前来源刷新使旧结果作废时，
+仅在原账号、区域、权限代次及准入条件仍有效时补读一次，第二次仍作废则正常报错。
+这样没有 Renderer 订阅的读取也能恢复；不把普通 scope 错误归类为网络瞬态，
+不跨撤权、断连、账号切换或零预算退休通知补读，不复活旧快照。
+回归见 Desktop `providerMetadataContinuity.test.ts`。
+
 
 ## PR 门禁
 

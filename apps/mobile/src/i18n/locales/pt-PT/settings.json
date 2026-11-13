@@ -1,10 +1,37 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnóstico de notificações",
+    "read": "Ler estado das notificações",
+    "busy": "A ler…",
+    "failed": "Não foi possível ler o estado. Tente novamente.",
+    "copyFailed": "Não foi possível copiar o token.",
+    "copied": "Token copiado.",
+    "bundle": "ID da aplicação",
+    "build": "Compilação",
+    "environment": "Ambiente APNs",
+    "permission": "Permissão do sistema",
+    "alerts": "Avisos",
+    "lockScreen": "Ecrã bloqueado",
+    "notificationCenter": "Central de notificações",
+    "copy": "Copiar token APNs",
+    "hide": "Ocultar resultado",
+    "unknown": "Desconhecido",
+    "on": "Ativado",
+    "off": "Desativado",
+    "hint": "Lê apenas quando solicitado. O token APNs aparece só neste ecrã, sem ser guardado no diagnóstico ou enviado por esta ferramenta. Fica oculto ao sair ou passar para segundo plano. Copie apenas para a consola de notificações da Apple; o texto copiado permanece na área de transferência.",
+    "permissions": {
+      "granted": "Permitida",
+      "denied": "Negada",
+      "undetermined": "Não solicitada",
+      "provisional": "Entrega silenciosa"
+    }
+  },
   "localLogs": {
     "upload": "Carregar registos",
     "uploadResult": {
       "unavailable": "O carregamento de registos está indisponível nesta compilação.",
-      "consentRequired": "Aceita a Política de Privacidade antes de carregar registos.",
-      "empty": "Sem registos recentes. Ativa a gravação e reproduz primeiro o problema.",
+      "consentRequired": "Aceite a Política de Privacidade antes de carregar registos.",
+      "empty": "Sem registos recentes. Ative a gravação e reproduza primeiro o problema.",
       "failed": "O carregamento falhou. Os registos continuam guardados neste telemóvel."
     },
     "title": "Registos de depuração",
@@ -12,7 +39,7 @@
     "export": "Exportar registos",
     "clear": "Limpar registos",
     "busy": "A processar…",
-    "failed": "Não foi possível guardar ou partilhar os registos. Tenta novamente.",
+    "failed": "Não foi possível guardar ou partilhar os registos. Tente novamente.",
     "clearHint": "Eliminar os registos de diagnóstico guardados?",
     "cancel": "Cancelar",
     "uploadCopied": "Registos carregados. Código {{code}} copiado",
@@ -20,6 +47,12 @@
     "footer": "Os registos ficam neste telemóvel durante um máximo de 7 dias ou até 8 MB e nunca são carregados automaticamente. Os registos exportados excluem o texto das conversas e as credenciais; os carregamentos enviam apenas registos de execução filtrados e informações da versão."
   },
   "title": "Definições",
+  "promptRecommendation": {
+    "label": "Sugestões de escrita",
+    "description": "Sugerir o que escrever após uma resposta. Aplica-se apenas a este telemóvel.",
+    "saveFailed": "A definição está ativa por agora, mas não foi possível guardá-la.",
+    "reset": "Repor predefinição"
+  },
   "appearance": {
     "title": "Aspeto",
     "modeLabel": "Modo de aspeto",
@@ -81,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prosa clássica (predefinição)",
+        "prose": "Prosa clássica",
         "tang-poetry": "Poesia Tang",
         "song-ci": "Ci dos Song",
         "yuan-qu": "Qu dos Yuan",
@@ -132,19 +165,23 @@
     "sectionTitle": "Notificações",
     "taskDone": "Notificações de mensagens e tarefas",
     "taskDoneHint": "Receba notificações de mensagens de conversas e de tarefas que terminam, falham ou precisam da sua resposta.",
-    "permissionDenied": "Permita as notificações da Cindy nas definições do sistema.",
+    "permissionDenied": "Permita as notificações do Cindy nas definições do sistema.",
     "unregisterQueued": "Desativado. A anulação do registo será concluída quando voltar a estar online.",
     "preview": "Mostrar pré-visualizações de conversas",
     "background": "Notificações em segundo plano",
     "backgroundActive": "A receber notificações em segundo plano",
     "backgroundStop": "Parar de receber",
-    "backgroundHint": "A Cindy mantém uma ligação automaticamente quando o Google Push pode estar indisponível. É apresentada uma notificação permanente durante a ligação.",
+    "backgroundHint": "O Cindy mantém automaticamente uma ligação em segundo plano quando o Google Push pode estar indisponível. É apresentada uma notificação permanente durante a ligação.",
     "googleUnavailable": "O Google Push está indisponível. A ligação em segundo plano segue as suas definições de notificações.",
     "backgroundModes": {
       "auto": "Automático",
       "on": "Sempre ativas",
       "off": "Desativadas"
-    }
+    },
+    "actionReplyPlaceholder": "Escreva uma resposta",
+    "actionNotDelivered": "Isto não chegou ao seu computador. Abra a Cindy para responder.",
+    "actionReplyNotDelivered": "A sua resposta não foi enviada. Abra a Cindy para a enviar novamente: {{text}}",
+    "actionRequestEnded": "Este pedido já foi respondido ou expirou."
   },
   "about": {
     "sectionTitle": "Acerca deste telemóvel",
@@ -156,7 +193,7 @@
   "relay": {
     "online": "Ligado ao Relay",
     "connecting": "A ligar ao Relay",
-    "stopped": "Retransmissor não ligado",
+    "stopped": "Relay não ligado",
     "lastSynced": "Última sincronização: {{time}}",
     "canSync": "As sessões remotas podem ser sincronizadas.",
     "reconnectHint": "As sessões remotas voltarão a subscrever automaticamente quando a rede for restabelecida.",
@@ -177,7 +214,7 @@
   },
   "devServerEnvironment": {
     "title": "Ambiente do servidor",
-    "description": "Afeta apenas o backend ao qual a CindyDev se liga",
+    "description": "Afeta apenas o backend ao qual o CindyDev se liga",
     "accessibility": "Mudar o ambiente do servidor",
     "options": {
       "dev": "Dev",

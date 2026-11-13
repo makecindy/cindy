@@ -52,6 +52,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import { taskCreatorFilterKey } from '@/features/bots/cindyDeviceRoster';
@@ -764,6 +765,8 @@ export function SidebarFilterPopover({
                       )}
                     </DropdownMenuItem>
                     {allKnownProjects.map((project) => {
+                      // A teammate's project is chosen through the teammate filter.
+                      if (isTeammateProjectPath(project.workingDir)) return null;
                       const selected =
                         projects === 'all' ||
                         (projectsAsSet != null &&

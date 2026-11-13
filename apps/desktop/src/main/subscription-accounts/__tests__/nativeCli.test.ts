@@ -12,6 +12,9 @@ const h = vi.hoisted(() => ({
   error: false,
   hold: false,
   accountResult: undefined as unknown,
+  oldAuthenticated: false,
+  oldLogin: vi.fn<(...args: unknown[]) => Promise<{ ok: boolean; reason?: string }>>(async () => ({ ok: true })),
+  oldCancel: vi.fn(),
 }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn }));
 vi.mock('@cindy/maker-core', () => ({
@@ -23,6 +26,11 @@ vi.mock('@cindy/maker-core', () => ({
   }),
 }));
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
+vi.mock('../../maker-host/codex-account-auth.desktop.js', () => ({
+  codexAccountState: () => ({ authenticated: h.oldAuthenticated, errorReason: h.oldAuthenticated ? undefined : 'oauth_expired' }),
+  loginCodexAccount: h.oldLogin,
+  cancelCodexAccountLogin: h.oldCancel,
+}));
 vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
   refreshClaudeCliLoginStatus: vi.fn(),
   readClaudeCliPlanUsage: vi.fn(),
@@ -31,20 +39,36 @@ vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
 import {
   codexAccountRpc,
   readNativeAccount,
+  readNativeAccountUsage,
   loginNativeAccount,
   readNativeCodexTokens,
+  readLegacyCodexProviderAccount,
+  loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
+import { refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
 
 const children: (EventEmitter & {
   stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
   stdout: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
 })[] = [];
+
+// Unit regression: account replacement during CLI startup must prevent the
+// reset request itself, not merely reject its already-consumed response.
+it('does not dispatch a reset after its credential guard expires during startup', async () => {
+  await expect(codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, () => false)).rejects.toThrow('changed before dispatch');
+  const methods = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+  expect(methods).toEqual(['initialize', 'initialized']);
+});
 beforeEach(() => {
   h.binary = '/fixture/codex';
   h.error = false;
   h.hold = false;
   h.accountResult = undefined;
+  h.oldAuthenticated = false;
+  h.oldLogin.mockReset().mockResolvedValue({ ok: true });
+  h.oldCancel.mockReset();
   children.length = 0;
   h.spawn.mockReset().mockImplementation((_binary, args, options) => {
     const child = Object.assign(new EventEmitter(), {
@@ -88,7 +112,57 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.useRealTimers());
+// Standard: expiry and renewal belong to the selected native profile, never the
+// system default. Previous coverage exercised only Codex's RPC account reader.
+describe('Claude profile renewal', () => {
+  it('reads the selected profile expiry and forwards a verified renewal request', async () => {
+    vi.mocked(refreshClaudeCliLoginStatus).mockResolvedValueOnce({ loggedIn: true,
+      email: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z' });
+    expect(await readNativeAccount('anthropic', '/fixture/claude-second', { force: true })).toMatchObject({
+      authenticated: true, identity: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z',
+    });
+    expect(refreshClaudeCliLoginStatus).toHaveBeenLastCalledWith({ configDir: '/fixture/claude-second', force: true, requireFresh: true });
+    const signal = new AbortController().signal;
+    vi.mocked(runClaudeCliLogin).mockResolvedValueOnce({ ok: true, status: { loggedIn: true, email: 'second@example.test' } });
+    await loginNativeAccount('anthropic', '/fixture/claude-second', signal, { renew: true, expectedEmail: 'second@example.test' });
+    expect(runClaudeCliLogin).toHaveBeenLastCalledWith(signal, '/fixture/claude-second', { renew: true, expectedEmail: 'second@example.test' });
+    vi.mocked(runClaudeCliLogin).mockResolvedValueOnce({ ok: false, reason: 'account_mismatch' });
+    await expect(loginNativeAccount('anthropic', '/fixture/claude-second', signal, { renew: true, expectedEmail: 'second@example.test' }))
+      .rejects.toThrow('account_mismatch');
+  });
+});
 describe('official Codex profiles', () => {
+  // #10110 review, unit: legacy auth has no plan. Keep the plan returned by the
+  // selected profile's quota RPC; the old test fixtures only read account/read.
+  it('preserves the selected profile plan alongside its sanitized Codex quota', async () => {
+    h.accountResult = { rateLimits: { planType: 'pro', primary: {
+      usedPercent: 20, windowDurationMins: 300, resetsAt: Date.now() / 1000 + 3600,
+    } } };
+    expect(await readNativeAccountUsage('openai', '/fixture/legacy')).toMatchObject({
+      codexPlan: 'pro', codexUsage: { appServerBuckets: { __default__: { primary: { usedPercent: 20 } } } },
+    });
+    expect(h.spawn.mock.calls[0][2].env.CODEX_HOME).toBe('/fixture/legacy');
+  });
+  // Upgrade 2026-11-11, standard: a revoked imported login cannot be resurrected
+  // by reading its still-present token file; successful reads keep the old native profile.
+  it('honors the old connection revocation before reading its native account', async () => {
+    expect(await readLegacyCodexProviderAccount('openai-old', '/fixture/imported')).toMatchObject({ authenticated: false, errorReason: 'oauth_expired' });
+    expect(h.spawn).not.toHaveBeenCalled();
+    h.oldAuthenticated = true;
+    expect(await readLegacyCodexProviderAccount('openai-old', '/fixture/imported')).toMatchObject({ authenticated: true, plan: 'plus' });
+    expect(h.spawn.mock.calls[0][2].env.CODEX_HOME).toBe('/fixture/imported');
+  });
+
+  it('uses the original login cancellation path for an imported connection', async () => {
+    const controller = new AbortController();
+    h.oldLogin.mockImplementation(async (_id, isCurrent) => {
+      controller.abort();
+      expect((isCurrent as () => boolean)()).toBe(false);
+      return { ok: true };
+    });
+    await expect(loginLegacyCodexProviderAccount('openai-old', controller.signal)).rejects.toThrow('login_cancelled');
+    expect(h.oldCancel).toHaveBeenCalledWith('openai-old');
+  });
   // #9517, unit: the real account reader must distinguish provider-managed
   // authentication from a signed-out ChatGPT account; older tests only returned ChatGPT.
   it.each([

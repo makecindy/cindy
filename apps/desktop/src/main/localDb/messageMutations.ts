@@ -160,3 +160,18 @@ export async function findVisibleToolUseMessageByAliasesRow(
     ? { clientId: row.clientId, toolUseId: row.toolUseId }
     : null;
 }
+
+export async function readVisiblePiUserEntry(client: DbClient, sessionId: string, clientId: string): Promise<string | undefined> {
+  const [row] = await client.drizzle
+    .select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(and(
+      eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+      eq(messages.role, 'user'), isNull(messages.rewindAt),
+      or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+    ))
+    .limit(1);
+  const id = row && parseAgentMetaRecord(row.agentMeta)?.piEntryId;
+  return typeof id === 'string' && id.length > 0 && id.length <= 128 ? id : undefined;
+}

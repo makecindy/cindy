@@ -29,7 +29,7 @@ import {
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
 import { hasPrivacyConsent } from '@/update/updateConsentGate';
-import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
+import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle, replyStyleFamilyOf } from '@cindy/maker-shared/classical-reply';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { isClassicalLocale, type ClassicalLocale } from '@/i18n/locale';
 import { useLocale } from '@/i18n/useLocale';
@@ -61,6 +61,9 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
+import { useRelayAccountOffers } from '@/device-link/relayAccountDirectory';
+import { RELAY_JOIN_ROUTE, startRelayAccountJoin } from '@/device-link/relayJoinIntent';
+import { AgentNetSettingsGroup } from '@/device-link/AgentNetSettingsGroup';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
@@ -79,6 +82,7 @@ import {
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
+import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { isGooglePlayInstallation } from '@/update/androidInstallSource';
 import {
@@ -119,6 +123,7 @@ import { useGuardedPush } from '@/utils/useGuardedPush';
 type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'uptodate' | 'error';
 // 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列;
 // 文言等古典版本在菜单里合为一项放最后,选中后下方出现简繁与文风两行。
+// 简体中文 / 繁體中文界面不占额外选项,只在下方多出一行「AI 作答文风」。
 const CLASSICAL_OPTION = 'classical';
 type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
 const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
@@ -153,12 +158,15 @@ export default function SettingsScreen() {
   const { t } = useTranslation();
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
+  const replyStyleOnly = !classical && replyStyleFamilyOf(effectiveLocale) !== null;
   const languageOption: LanguageOption = classical ? CLASSICAL_OPTION : locale;
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
   const { status, connectionIssue } = useDeviceLink();
   // 中转服务:官方中转或自建中转(docs/self-hosted-relay-plan.md §5.3)。
   const selfHostedRelay = useSelfHostedRelay();
+  // 同账号电脑正在用的中转:不用链接,点一下确认就加入(§5.4)。
+  const accountRelays = useRelayAccountOffers().filter((offer) => offer.relayId !== selfHostedRelay?.relayId);
   const [relaySwitching, setRelaySwitching] = useState(false);
   const [relayMessage, setRelayMessage] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -469,11 +477,33 @@ export default function SettingsScreen() {
     );
   }, [relaySwitching, selfHostedRelay, switchToOfficialRelay, t]);
 
+  const requestJoinAccountRelay = useCallback((offer: (typeof accountRelays)[number]) => {
+    if (relaySwitching) return;
+    Alert.alert(
+      t('relay.settings.accountSwitchTitle', { name: offer.name }),
+      [
+        t('relay.settings.accountSwitchBody', { device: offer.ownerDeviceName }),
+        selfHostedRelay ? t('relay.join.switchNote', { current: selfHostedRelay.name }) : '',
+      ].filter(Boolean).join('\n\n'),
+      [
+        { text: t('devices.common.cancel'), style: 'cancel' },
+        {
+          text: t('relay.settings.accountSwitchAction'),
+          onPress: () => {
+            startRelayAccountJoin(offer);
+            router.push(RELAY_JOIN_ROUTE);
+          },
+        },
+      ],
+    );
+  }, [relaySwitching, router, selfHostedRelay, t]);
+
   // 自建中转下:被主人移出 / 中转停用(4410)或中转凭证被拒(401),以及本机凭证缺失,
   // 都要在这里给出原因,并配「切回官方中转」。
+  // 只走 V2 的网络(别人分享来的中转)本来就没有旧版凭证。
   const relayIssueMessage = !selfHostedRelay
     ? null
-    : selfHostedRelay.credential === null
+    : selfHostedRelay.credential === null && !selfHostedRelay.agentNetOnly
       ? t('relay.settings.credentialMissingHint')
       : status !== 'online' && (connectionIssue?.kind === 'device-removed' || connectionIssue?.kind === 'auth-failed')
         ? t('relay.settings.removedHint')
@@ -707,11 +737,13 @@ export default function SettingsScreen() {
         </View>
 
         {/* 中转服务:当前走官方中转还是自建中转;自建时提供「切回官方中转」。
-            加入自建中转从电脑上的二维码进入(相机扫码打开加入页),这里不放扫码入口。 */}
+            同账号电脑正在用的中转列在这里,点一下确认就加入;别人分享的中转用相机扫码打开加入页,这里不放扫码入口。 */}
         <SettingsGroup
-          footer={selfHostedRelay
-            ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
-            : t('relay.settings.officialHint')}
+          footer={selfHostedRelay?.shared
+            ? t('relay.settings.sharedHint', { address: selfHostedRelay.baseUrl })
+            : selfHostedRelay
+              ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
+              : t('relay.settings.officialHint')}
           messages={[
             relayIssueMessage ? { text: relayIssueMessage, testID: 'settings.relay.issue' } : null,
             relayMessage ? { text: relayMessage, testID: 'settings.relay.message' } : null,
@@ -723,8 +755,26 @@ export default function SettingsScreen() {
             key="relay-current"
             label={t('relay.settings.currentLabel')}
             testID="settings.relay.current"
-            value={selfHostedRelay ? selfHostedRelay.name : t('relay.settings.official')}
+            value={selfHostedRelay
+              ? selfHostedRelay.shared?.ownerName
+                ? t('relay.settings.sharedCurrent', { name: selfHostedRelay.name, owner: selfHostedRelay.shared.ownerName })
+                : selfHostedRelay.name
+              : t('relay.settings.official')}
           />
+          {accountRelays.map((offer) => (
+            <ActionInfoRow
+              accessibilityLabel={t('relay.settings.accountSwitchTitle', { name: offer.name })}
+              disabled={relaySwitching}
+              key={`relay-account-${offer.ownerDeviceId}-${offer.relayId}`}
+              label={offer.name}
+              onPress={() => requestJoinAccountRelay(offer)}
+              testID={`settings.relay.account.${offer.relayId}`}
+              value={offer.kind === 'shared'
+                ? t(offer.sharedBy ? 'relay.settings.accountSharedBy' : 'relay.settings.accountSharedOn',
+                  { device: offer.ownerDeviceName, owner: offer.sharedBy ?? '' })
+                : t('relay.settings.accountManagedOn', { device: offer.ownerDeviceName })}
+            />
+          ))}
           {selfHostedRelay ? (
             <ActionInfoRow
               accessibilityLabel={t('relay.settings.switchToOfficial')}
@@ -737,6 +787,8 @@ export default function SettingsScreen() {
             />
           ) : null}
         </SettingsGroup>
+
+        <AgentNetSettingsGroup deviceName={deviceName} />
 
         {/* 版本:当前版本 + 统一检查入口(允许整包分发时先查整包,否则直接查热更);
             更新方式与检查结果写在分组下方。检查不可用或审核模式时不显示检查行。 */}
@@ -888,6 +940,8 @@ export default function SettingsScreen() {
           />
         </SettingsGroup>
 
+        <PromptRecommendationSettings />
+
         {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup title={t('settings.appearance.title')}>
           <NativePullDownMenu
@@ -931,40 +985,40 @@ export default function SettingsScreen() {
             />
           </NativePullDownMenu>
           {classical ? (
-            <>
-              <NativePullDownMenu
-                actions={CLASSICAL_SCRIPTS.map((script) => ({
-                  id: script.locale,
-                  state: script.locale === classical ? 'on' : 'off',
-                  title: t(`settings.language.classical.script.${script.key}`),
-                }))}
-                onAction={selectClassicalScript}
-              >
-                <ChoicePickerRow
-                  expanded={classicalPicker === 'script'}
-                  label={t('settings.language.classical.scriptAriaLabel')}
-                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
-                  testID="settings.language.classicalScript"
-                  value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
-                />
-              </NativePullDownMenu>
-              <NativePullDownMenu
-                actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
-                  id: style.id,
-                  state: style.id === classicalStyle ? 'on' : 'off',
-                  title: t(`settings.language.classical.styles.${style.id}`),
-                }))}
-                onAction={selectClassicalStyle}
-              >
-                <ChoicePickerRow
-                  expanded={classicalPicker === 'style'}
-                  label={t('settings.language.classical.styleAriaLabel')}
-                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
-                  testID="settings.language.classicalStyle"
-                  value={t(`settings.language.classical.styles.${classicalStyle}`)}
-                />
-              </NativePullDownMenu>
-            </>
+            <NativePullDownMenu
+              actions={CLASSICAL_SCRIPTS.map((script) => ({
+                id: script.locale,
+                state: script.locale === classical ? 'on' : 'off',
+                title: t(`settings.language.classical.script.${script.key}`),
+              }))}
+              onAction={selectClassicalScript}
+            >
+              <ChoicePickerRow
+                expanded={classicalPicker === 'script'}
+                label={t('settings.language.classical.scriptAriaLabel')}
+                onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
+                testID="settings.language.classicalScript"
+                value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
+              />
+            </NativePullDownMenu>
+          ) : null}
+          {classical || replyStyleOnly ? (
+            <NativePullDownMenu
+              actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
+                id: style.id,
+                state: style.id === classicalStyle ? 'on' : 'off',
+                title: t(`settings.language.classical.styles.${style.id}`),
+              }))}
+              onAction={selectClassicalStyle}
+            >
+              <ChoicePickerRow
+                expanded={classicalPicker === 'style'}
+                label={t('settings.language.classical.styleAriaLabel')}
+                onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
+                testID="settings.language.classicalStyle"
+                value={t(`settings.language.classical.styles.${classicalStyle}`)}
+              />
+            </NativePullDownMenu>
           ) : null}
         </SettingsGroup>
 

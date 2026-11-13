@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest';
 // Run the actual Desktop callback without importing unrelated Electron services.
 const source = readFileSync(new URL('../mcp-providers.ts', import.meta.url), 'utf8');
 const start = source.indexOf('      sendToSession: async ({');
-const callback = source.slice(start, source.indexOf('      sessionTasks:', start));
+const callback = source.slice(start, source.indexOf('      botMessaging:', start));
 const wired = ts.transpileModule(`return {${callback}}.sendToSession;`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
@@ -14,8 +14,8 @@ function fixture() {
   const record = vi.fn(async (_id: string) => { void _id; });
   const capture = vi.fn(async (_caller: string) => { void _caller; return record; });
   const send = vi.fn(async (_params: unknown) => { void _params; return { ok: true, wakeKind: 'created', targetSessionId: 'new-task' }; });
-  const call = new Function('tryGetOrcaCollabService', 'captureBotCreatedTaskResponsibility', wired)(
-    () => ({ sendToSession: send }), capture,
+  const call = new Function('tryGetOrcaCollabService', 'captureBotCreatedTaskResponsibility', 'reportGroupTaskCreated', wired)(
+    () => ({ sendToSession: send }), capture, vi.fn(),
   ) as (params: { targetSessionId?: string; dispatcherSessionId: string; message: string; workingDir?: string }) => Promise<Record<string, unknown>>;
   return { call, record, capture, send };
 }
@@ -53,10 +53,10 @@ it('records no relationship when creation fails', async () => {
 });
 
 
-it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch'])('does not record an unverified creator/target after %s', async reason => {
-  const captureSource = readFileSync(new URL('../../maker-ipc/botWorkbenchTools.ts', import.meta.url), 'utf8');
+it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch', 'verified-remote'])('records only a verified ordinary creation after %s', async reason => {
+  const captureSource = readFileSync(new URL('../../maker-ipc/botTaskCreation.ts', import.meta.url), 'utf8');
   const begin = captureSource.indexOf('export async function captureBotCreatedTaskResponsibility');
-  const chunk = captureSource.slice(begin, captureSource.indexOf('type Failure = {', begin)).replace('export ', '');
+  const chunk = captureSource.slice(begin).replace('export ', '');
   const js = ts.transpileModule(`${chunk}; return captureBotCreatedTaskResponsibility;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   let owner = 'owner-one';
   const save = vi.fn(async () => {});
@@ -67,13 +67,15 @@ it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch'])('
     resolveBotTaskCreator: async () => reason === 'ordinary-caller' ? null : 'creator',
     readWorkbenchTarget: async () => ({ status: 'active', botLinked: false, remoteHostId: reason === 'remote-target' ? 'remote' : null, orcaRole: reason === 'worker-target' ? 'worker' : null }),
     setTaskResponsibility: save,
-    broadcastBotWorkbenchChanged: vi.fn(),
+    broadcastBotLinkedProjectsChanged: vi.fn(),
+    broadcastBotRemoteResourceChanged: vi.fn(),
   };
   const capture = new Function(...Object.keys(deps), js)(...Object.values(deps));
-  const recorder = await capture('caller');
+  const recorder = await capture('caller', reason === 'verified-remote' ? { remoteDeviceId: 'device' } : undefined);
   if (reason === 'owner-switch') {
     owner = 'owner-two';
     await expect(recorder('new-task')).rejects.toThrow('OWNER_SCOPE_CHANGED');
-  } else if (recorder) await recorder('new-task');
-  expect(save).not.toHaveBeenCalled();
+  } else if (recorder) await recorder(reason === 'verified-remote' ? 'device::new-task' : 'new-task');
+  if (reason === 'verified-remote') expect(save).toHaveBeenCalledWith('/synthetic-owner-home', 'creator', 'device::new-task', true, expect.any(Function), { created: true });
+  else expect(save).not.toHaveBeenCalled();
 });

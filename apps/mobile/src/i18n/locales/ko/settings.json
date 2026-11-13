@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "푸시 알림 진단",
+    "read": "푸시 상태 읽기",
+    "busy": "읽는 중…",
+    "failed": "푸시 상태를 읽을 수 없습니다. 다시 시도하세요.",
+    "copyFailed": "토큰을 복사할 수 없습니다.",
+    "copied": "토큰을 복사했습니다.",
+    "bundle": "앱 ID",
+    "build": "빌드",
+    "environment": "APNs 환경",
+    "permission": "시스템 권한",
+    "alerts": "알림 배너",
+    "lockScreen": "잠금 화면",
+    "notificationCenter": "알림 센터",
+    "copy": "APNs 토큰 복사",
+    "hide": "결과 숨기기",
+    "unknown": "알 수 없음",
+    "on": "켜짐",
+    "off": "꺼짐",
+    "hint": "버튼을 누를 때만 읽습니다. APNs 토큰은 이 화면에만 표시되며 진단 기록에 저장되거나 이 도구로 업로드되지 않습니다. 화면을 나가거나 백그라운드로 전환하면 숨겨집니다. Apple 푸시 알림 콘솔용으로만 복사하세요. 복사한 내용은 클립보드에 남습니다.",
+    "permissions": {
+      "granted": "허용됨",
+      "denied": "거부됨",
+      "undetermined": "요청하지 않음",
+      "provisional": "조용히 전달"
+    }
+  },
   "localLogs": {
     "upload": "로그 업로드",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "로그는 휴대폰에 최대 7일, 8MB까지 저장되며 자동으로 업로드되지 않습니다. 내보낸 로그에는 대화 본문과 자격 증명이 포함되지 않고, 업로드 시에는 필터링된 실행 기록과 버전 정보만 보냅니다."
   },
   "title": "설정",
+  "promptRecommendation": {
+    "label": "다음 입력 제안",
+    "description": "답변 후 다음에 입력할 내용을 제안합니다. 이 휴대폰에만 적용됩니다.",
+    "saveFailed": "설정은 현재 사용 중에는 적용되지만 저장하지 못했습니다.",
+    "reset": "기본값으로 재설정"
+  },
   "appearance": {
     "title": "외관",
     "modeLabel": "표시 모드",
@@ -81,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "문언문(기본)",
+        "prose": "문언문",
         "tang-poetry": "당시",
         "song-ci": "송사",
         "yuan-qu": "원곡",
@@ -144,7 +177,11 @@
       "auto": "자동",
       "on": "항상 켜기",
       "off": "끄기"
-    }
+    },
+    "actionReplyPlaceholder": "답장 입력",
+    "actionNotDelivered": "컴퓨터에 전달되지 않았습니다. Cindy를 열어 처리해 주세요.",
+    "actionReplyNotDelivered": "답장이 전송되지 않았습니다. Cindy를 열어 다시 보내 주세요: {{text}}",
+    "actionRequestEnded": "이 요청은 이미 처리되었거나 만료되었습니다."
   },
   "about": {
     "sectionTitle": "이 휴대폰 정보",
@@ -177,14 +214,14 @@
   },
   "devServerEnvironment": {
     "title": "서버 환경",
-    "description": "CindyDev가 연결하는 업무 서버에만 영향을 줍니다",
+    "description": "CindyDev가 연결하는 백엔드 서버에만 영향을 줍니다",
     "accessibility": "서버 환경 전환",
     "options": {
       "dev": "Dev",
       "release": "Release"
     },
     "confirmTitle": "{{environment}} 환경으로 전환할까요?",
-    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 App이 다시 시작됩니다.",
+    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 앱이 다시 시작됩니다.",
     "cancel": "취소",
     "switchAction": "전환",
     "switching": "전환 중",

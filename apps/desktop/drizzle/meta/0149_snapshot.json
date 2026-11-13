@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "dfd14ed1-f75b-4e11-89f9-6fdd0815161f",
+  "id": "37b05c44-2de8-4e4e-aa5f-21d3ed8bfc4c",
   "prevId": "eab5afda-1a33-4296-9e01-b3c76cfc20e6",
   "tables": {
     "account_usage_snapshots": {
@@ -2984,6 +2984,100 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "mcp_app_view_states": {
+      "name": "mcp_app_view_states",
+      "columns": {
+        "message_id": {
+          "name": "message_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "server_id": {
+          "name": "server_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "server_revision": {
+          "name": "server_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "plugin_instance": {
+          "name": "plugin_instance",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "state_json": {
+          "name": "state_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "byte_length": {
+          "name": "byte_length",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_mcp_app_view_states_session": {
+          "name": "idx_mcp_app_view_states_session",
+          "columns": [
+            "session_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "mcp_app_view_states_message_id_messages_id_fk": {
+          "name": "mcp_app_view_states_message_id_messages_id_fk",
+          "tableFrom": "mcp_app_view_states",
+          "tableTo": "messages",
+          "columnsFrom": [
+            "message_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "mcp_app_view_states_session_id_sessions_id_fk": {
+          "name": "mcp_app_view_states_session_id_sessions_id_fk",
+          "tableFrom": "mcp_app_view_states",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "media_blobs": {
       "name": "media_blobs",
       "columns": {
@@ -3776,13 +3870,6 @@
         "remote_stop_confirmed_at": {
           "name": "remote_stop_confirmed_at",
           "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "latest_report": {
-          "name": "latest_report",
-          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

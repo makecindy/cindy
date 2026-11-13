@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "推播診斷",
+    "read": "讀取推播狀態",
+    "busy": "讀取中…",
+    "failed": "無法讀取推播狀態，請重試。",
+    "copyFailed": "無法複製權杖。",
+    "copied": "權杖已複製。",
+    "bundle": "App ID",
+    "build": "建置編號",
+    "environment": "APNs 環境",
+    "permission": "系統權限",
+    "alerts": "橫幅提示",
+    "lockScreen": "鎖定畫面",
+    "notificationCenter": "通知中心",
+    "copy": "複製 APNs 權杖",
+    "hide": "隱藏結果",
+    "unknown": "未知",
+    "on": "已開啟",
+    "off": "已關閉",
+    "hint": "僅點選後讀取。APNs 權杖只在本頁顯示，不寫入診斷記錄，也不由此工具上傳；離開頁面或切至背景後隱藏。複製僅用於 Apple 推播控制台；已複製的內容仍保留在剪貼簿。",
+    "permissions": {
+      "granted": "已允許",
+      "denied": "已拒絕",
+      "undetermined": "尚未請求",
+      "provisional": "靜音傳送"
+    }
+  },
   "localLogs": {
     "upload": "上傳日誌",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "日誌儲存在手機上，最多 7 天、8 MB，不會自動上傳。匯出的完整日誌不含對話內文和憑證；上傳只傳送篩選後的執行記錄和版本資訊。"
   },
   "title": "設定",
+  "promptRecommendation": {
+    "label": "輸入建議",
+    "description": "回覆後建議下一句，僅在這支手機上生效。",
+    "saveFailed": "設定已在本次使用中生效，但未能儲存。",
+    "reset": "恢復預設"
+  },
   "appearance": {
     "title": "外觀",
     "modeLabel": "顯示模式",
@@ -59,7 +92,7 @@
     "hint": "介面和 AI 錯誤說明使用此語言；一般回覆依你的訊息或語言要求",
     "options": {
       "system": "跟隨系統",
-      "zh-CN": "簡體中文",
+      "zh-CN": "简体中文",
       "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
@@ -81,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "文言（預設）",
+        "prose": "雅正文言",
         "tang-poetry": "唐詩",
         "song-ci": "宋詞",
         "yuan-qu": "元曲",
@@ -144,7 +177,11 @@
       "auto": "自動",
       "on": "始終開啟",
       "off": "關閉"
-    }
+    },
+    "actionReplyPlaceholder": "輸入回覆",
+    "actionNotDelivered": "沒有送到電腦，請打開 Cindy 處理。",
+    "actionReplyNotDelivered": "回覆沒有送出，請打開 Cindy 重新傳送：{{text}}",
+    "actionRequestEnded": "這項請求已被處理或已過期。"
   },
   "about": {
     "sectionTitle": "關於這臺手機",
@@ -160,11 +197,11 @@
     "lastSynced": "上次同步 {{time}}",
     "canSync": "可以同步遠端任務。",
     "reconnectHint": "網路恢復後會自動重新訂閱遠端任務。",
-    "resumeHint": "回到前臺或重新登入後會恢復連線。"
+    "resumeHint": "回到前景或重新登入後會恢復連線。"
   },
   "header": {
     "notSignedIn": "未登入",
-    "thisPhone": "當前手機"
+    "thisPhone": "這臺手機"
   },
   "debug": {
     "sectionTitle": "除錯 / 開發者",
@@ -195,8 +232,8 @@
     "embeddedFallback": "隨整包（熱更未生效）",
     "unknown": "未知",
     "source": "執行來源",
-    "sourceEmbedded": "內建版本(隨包)",
-    "sourceEmergencyFallback": "內建版本(應急啟動，熱更未生效)",
+    "sourceEmbedded": "內建版本（隨包）",
+    "sourceEmergencyFallback": "內建版本（應急啟動，熱更未生效）",
     "sourceOta": "OTA 熱更新",
     "updateId": "更新 ID",
     "updatedAt": "更新時間",
@@ -216,18 +253,18 @@
     "openUserAgreement": "開啟使用者協議",
     "appFilingNumber": "App 備案號",
     "analytics": "使用統計",
-    "analyticsHint": "用於瞭解啟動與留存。上報裝置型號、系統與應用版本、裝置識別符號等資訊，登入後含帳號 ID；不含對話、檔案或提示詞。",
-    "analyticsSaveFailed": "設定未能儲存，重啟後可能恢復原值。",
+    "analyticsHint": "用於瞭解啟動與留存。會傳送裝置型號、系統與 App 版本、裝置識別碼等資訊，登入後含帳號 ID；不含對話、檔案或提示詞。",
+    "analyticsSaveFailed": "設定未能儲存，重新啟動後可能恢復原值。",
     "analyticsReset": "恢復預設",
     "analyticsResetAction": "恢復"
   },
   "account": {
-    "logoutConfirmTitle": "退出登入？",
-    "logoutConfirmRunning": "仍有任務正在執行。退出後任務會繼續在電腦上執行，但這臺手機將不再接收和控制這些任務；這臺手機上儲存的帳號和本地遠端映象也會被清除。",
-    "logoutHint": "退出會清除這臺手機上的全部帳號和遠端映象，不影響電腦上的任務。",
-    "logout": "退出登入",
-    "loggingOut": "退出中",
-    "loggingOutAccessibility": "正在退出登入"
+    "logoutConfirmTitle": "登出？",
+    "logoutConfirmRunning": "仍有任務正在執行。登出後任務會繼續在電腦上執行，但這臺手機將不再接收和控制這些任務；這臺手機上儲存的帳號和本地遠端鏡像也會被清除。",
+    "logoutHint": "登出會清除這臺手機上的全部帳號和遠端鏡像，不影響電腦上的任務。",
+    "logout": "登出",
+    "loggingOut": "登出中",
+    "loggingOutAccessibility": "正在登出"
   },
   "copyRow": {
     "action": "複製",
@@ -278,7 +315,7 @@
     "profile": {
       "title": "聲紋",
       "missing": "尚未錄製聲紋",
-      "missingHint": "錄入聲紋後才會生效。",
+      "missingHint": "錄製聲紋後才會生效。",
       "enrolled": "已錄製聲紋",
       "enrolledAt": "{{date}} 錄製",
       "enroll": "錄製聲紋",

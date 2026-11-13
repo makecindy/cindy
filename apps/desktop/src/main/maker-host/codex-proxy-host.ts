@@ -24,7 +24,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -98,6 +98,7 @@ import {
   getProviderRoutingDescriptor,
   getSessionRoutingDescriptor,
   resolveProviderRouteById,
+  oauthRefreshFailedDecision,
   resolveProviderRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveSessionRoute,
@@ -305,7 +306,7 @@ const responsesReasoningContentRecoveryRule = createResponsesReasoningContentRec
 const duplicateResponsesToolCallRecoveryRule: RecoveryRule = {
   id: 'duplicate_responses_tool_call',
   enabled: () => true,
-  matches: (errorText) => /duplicate\s+function_call_output\s+for\s+call_id/i.test(errorText),
+  matches: (errorText) => /duplicate\s+(?:function_call_output|tool\s+output)\s+for\s+call_id\b/i.test(errorText),
   strip: normalizeRepeatedResponseToolCallIdsFromBody,
   onRetry: (threadId, model) => responsesToolCallHistoryStripController.markActive(threadId, model),
   useUpstreamModel: true,
@@ -1284,7 +1285,7 @@ function createChatBridgeDecision(
   }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, ctx, res }) => {
-      const body = prepareLocalBridgeBody({
+      let body = prepareLocalBridgeBody({
         rawBody,
         parsedBody,
         instructions,
@@ -1304,6 +1305,19 @@ function createChatBridgeDecision(
       const selected = catalogSelected && modelWithInterface(catalogSelected, route.routing.modelInterface);
       const standard = selected?.api ? invocationModelRecord(selected, route.routing.upstream) : !route.routing.requestPath
         ? providerModelRecord(actualModel, route.routing.upstream, 'openai-chat') : undefined;
+      const upstream = standard
+        ? buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream
+        : route.routing.upstream;
+      // localHandler bypasses the proxy transform chain. Match the final route
+      // (including a frozen child's model) before either Chat serializer runs.
+      const usesChat = standard ? standard.execution.pi.api === 'openai-completions' : route.routing.wireProtocol === 'openai-chat';
+      if (usesChat && isPlainObject(body) && ctx?.method === 'POST'
+        && ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') === '/responses') {
+        body = normalizeKimiToolHistory(body, {
+          harness: 'codex', protocol: 'openai-chat', upstreamBase: upstream, model: actualModel,
+          authMode: route.routing.authStrategy === 'oauth-token' || route.routing.authStrategy === 'provider-oauth-header' ? 'oauth' : 'api-key',
+        }) ?? body;
+      }
       if (standard && isPlainObject(body)) {
         const nativeHeaders = overrideHeadersCaseInsensitive(withChatBridgeUserAgent(Object.fromEntries(Object.entries(headers).filter(([name]) =>
           !['authorization', 'x-api-key'].includes(name.toLowerCase())))), resolveConversationSessionHeaders(ctx?.headers));
@@ -1315,7 +1329,7 @@ function createChatBridgeDecision(
           supportsFastMode: selected?.supportsFastMode ?? standard.supportsFastMode,
         }, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
-          upstream: buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream,
+          upstream,
           apiKey: nativeBridgeApiKey(headers),
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {
@@ -2080,6 +2094,24 @@ function responsesCompatibilityRouting(
   return responsesCompatibilityRoute(body, ctx, frozenAuthInjection).routing;
 }
 
+function isXdGrokWireModel(model: string): boolean {
+  return model.startsWith('x-ai/grok') || model.startsWith('x-ai-grok/grok');
+}
+
+function isXdGatewayUpstream(upstreamBase: string | undefined): boolean {
+  const endpoint = claudeUpstreamEndpoint().trim();
+  if (!upstreamBase || !endpoint) return false;
+  try {
+    const actual = new URL(upstreamBase);
+    const gateway = new URL(buildCodexGatewayBaseUrl(endpoint));
+    return actual.origin === gateway.origin &&
+      actual.pathname.replace(/\/+$/, '') === gateway.pathname.replace(/\/+$/, '') &&
+      actual.search === gateway.search;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The XD Gateway claims this wire model for its codex routing when the active
  * catalog exposes it under `xd.models.codex`. We use the catalog membership
@@ -2095,7 +2127,7 @@ function responsesCompatibilityRouting(
  * implicit routes (PR #2444 Codex P1).
  */
 function xdProviderClaimsWireModel(wireModel: string): boolean {
-  if (!wireModel.startsWith('x-ai/grok')) return false;
+  if (!isXdGrokWireModel(wireModel)) return false;
   const { authoritative, models } = getXdGatewayModelAccessSnapshot();
   if (!authoritative) {
     // Negative evidence is unavailable. The env-key default route and the
@@ -2147,7 +2179,8 @@ function createGatewayGrokResponsesCompatTransform(
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
     const requestModel = typeof body.model === 'string' ? body.model : '';
-    if (!requestModel.startsWith('x-ai/grok')) return null;
+    if (!isXdGrokWireModel(requestModel)) return null;
+    if (ctx.upstreamBase && !isXdGatewayUpstream(ctx.upstreamBase)) return null;
     // Use providerContextForRequest so subagent-frozen routes resolve to xd
     // even when the parent session belongs to a different provider. Only
     // clean tools when the effective provider for THIS request is xd.
@@ -3156,7 +3189,7 @@ function resolveCodexCustomProviderRoutingDecision(
             threadId,
             subagentRoute.reasoningEffort,
           ) ?? unresolvedCollabSpawnRouteDecision();
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       return resolveProviderRouteDecision(
         subagentRoute.providerId,
@@ -3186,7 +3219,7 @@ function resolveCodexCustomProviderRoutingDecision(
             model !== requestModel ? model : undefined,
             threadId,
           );
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
@@ -3226,7 +3259,7 @@ function resolveCodexCustomProviderRoutingDecision(
           );
           if (implicitProviderOAuth) return implicitProviderOAuth;
           return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
       if (implicitProviderOAuth) return implicitProviderOAuth;
@@ -3267,17 +3300,21 @@ function createTransformRequestChain(
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
-    const routing = responsesCompatibilityRouting(body, ctx, frozenAuthInjection);
+    const { providerId, routing } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
     if ((routing?.wireProtocol ?? 'openai-responses') !== 'openai-responses'
       || routing?.supportsResponsesCustomTools !== false) return null;
-    const upstreamBase = ctx.upstreamBase ?? routing.upstream;
+    const gatewayEndpoint = providerId === 'xd' ? claudeUpstreamEndpoint().trim() : '';
+    const upstreamBase = ctx.upstreamBase ?? (gatewayEndpoint
+      ? buildCodexGatewayBaseUrl(gatewayEndpoint)
+      : routing.upstream);
     const model = rewriteChatBridgeModel(String(body.model ?? ''), routing.modelIdRewrite?.stripPrefix);
     // Only known provider endpoints or the existing XD model contract lower namespaces.
     const endpoint = new URL(upstreamBase);
-    const gateway = new URL(getProviderRoutingDescriptor('xd', 'codex', String(body.model ?? ''))?.upstream ?? upstreamBase);
     const knownEndpoint = ['api.x.ai', 'cli-chat-proxy.grok.com', 'api.deepseek.com'].includes(endpoint.hostname)
       || VOLCENGINE_ARK_CHAT_HOST_RE.test(endpoint.hostname);
-    const gatewayDialect = endpoint.origin === gateway.origin && /^(?:x-ai\/grok|deepseek\/|bytedance-seed\/|doubao-seed-)/.test(String(body.model ?? ''));
+    const requestModel = String(body.model ?? '');
+    const gatewayDialect = providerId === 'xd' && isXdGatewayUpstream(upstreamBase) &&
+      (isXdGrokWireModel(requestModel) || /^(?:deepseek\/|bytedance-seed\/|doubao-seed-)/.test(requestModel));
     return execAdapter.adaptRequest(body, ctx.reqId,
       { harness: 'codex', protocol: 'openai-responses', upstreamBase, model }, knownEndpoint || gatewayDialect);
   };

@@ -100,6 +100,8 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
   使用官方多账号方式：只在该账号的 CLI 子进程设置 `CLAUDE_CONFIG_DIR=~/.claude-cindy-<owner摘要>-<随机id>`，
   登录、状态、用量、任务及分叉始终使用同一目录。目录不含邮箱，不接受外部传入路径。
+  Cindy 从不设置 `CLAUDE_SECURESTORAGE_CONFIG_DIR`，并在启动与每次调起 CLI 时剥掉继承值：
+  CLI 用它（优先于 `CLAUDE_CONFIG_DIR`）决定读哪条钥匙串登录，空值会退回默认登录。
   SSH 远端的配置目录仍由远端 cc-manager 自己管理，不在此列。
   只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
   apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
@@ -298,6 +300,9 @@ relay 原有 60 秒主动续期节流保持不变。
 | 浏览器大结果补读 | MCP 工具会话内存中保留最近四份原始 JSON，每份最多 200 万字符；不落盘、不上传，关闭会话后释放。`readResult` 只能读当前会话生成的引用，沿用原页面实际 profile 的代输入读取限制；切换后端、stop 或读取受保护页面时清除。工具复用宿主现有生命周期与后端对象引用，在下一次访问及异步预检后核对，包括设置/其它任务切换、切走再切回和嵌入后端恢复；切换中的动作仍报告真实结果，但不缓存原文或保存试跑凭证。超过上限明确截断，不能声称完整原文已保存。 |
 | 自建中转服务（Desktop） | `owners/<owner-key>/device-link-relay/`：`config.json` 只存选择、本机中转设置与服务器部署记录（地址、中转 ID、主人公钥，不含秘密）；`secrets/<中转ID>.enc` 是本机在该中转上的设备凭证与 Ed25519 签名私钥（本机当主人时即主人密钥），经 safeStorage 加密，Linux 只有 basic_text 时拒绝保存；第 1 版的 `credential.enc` / `owner-credential.enc` 读到旧配置时删除；`host/` 是本机运行中转时的数据（`relay-state.json` 只存各设备凭证的 SHA-256 与档案，0600 原子写入；`media/` 为设备间中转的文件，创建 24 小时后清理）。全部按账号隔离，账号作用域未提交时不读写。见 `device-link/selfHostedRelayConfig.ts`、`packages/device-link-relay` 与 [方案](../self-hosted-relay-plan.md) |
 | 自动化任务 Webhook | `owners/<账号>/schedule-webhooks/`：`state.json` 存本机端口、排队事件所属的本机路由 ID、固定元数据和 24 小时投递回执，不含请求正文和密钥；`secrets/<路由 ID>.enc` 存开发版本机入口的 safeStorage 加密签名密钥；`remote-identities.json` 只存任务 ID 与本机触发路由 ID 的对应关系，不含云端 URL 或密钥，创建请求前落盘、云端删除确认后清除，离线关闭时保留以防重启复用旧地址。宿主创建时固定账号目录，队列、身份与密钥的读写及清理始终使用该目录，停止后的迟到操作不得改用新账号目录。均为 0600 原子写入；触发条件关闭或任务删除时清理本机队列与密钥，启动时补清孤儿文件。加密不可用时生成密钥明确报错，不回退明文；启动不访问钥匙串，首个事件才解密。见 `scheduler-host/webhook/index.ts` 与 `__tests__/host.test.ts` |
+| Mobile 登录凭证 | `expo-secure-store` 的 `cindy.mobile.auth.session.v1`（当前登录的 refresh token 与区域）和 `cindy.mobile.auth.accounts.v1`（已存账号的凭证）。iOS 钥匙串档位为「开机后首次解锁起可读写」（`AFTER_FIRST_UNLOCK`）：用户在锁屏通知或 Apple Watch 上点了按钮，App 要在后台续期登录才能把结果送到电脑，见[通知上的按钮](../product-rules/notification-actions.md)。两项必须同档——续期同时读写二者，只改一项会在锁屏时提前失败。已有条目在下一次写入时改档，不做单独迁移；其余钥匙串条目（设备 ID、设备身份、中转与 Agent 网络密钥等）保持「解锁时可读」。App 在锁屏状态下被系统从后台拉起时不读写、不清理任何凭证（`lockedLaunchGate.ts`）。锁屏时读不到这两项不算退出登录：续期报 `AUTH_STORAGE_LOCKED`，调用方按可重试失败处理，不清本机数据。见 `apps/mobile/src/auth/secureStorage.ts` |
+| 模型组 | `owners/<账号>/model-groups.json` 只存用户建的路线与模式（名字、引用的供应商连接 ID 与模型、选法、例外），全部删除即删文件；`owners/<账号>/model-group-decisions.json` 存最近 50 次选择（组名、模型、来源、推理强度、原因、当时的配额与时间），不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/store.ts`、`decisionLog.ts`。 |
+| 模型组任务记录 | `owners/<账号>/model-group-session-bindings.json` 按任务 id 记这个任务来自哪条路线或模式（组的 id）以及正在用的候选（引擎 + 供应商连接 ID + 模型），最多保留最新 2000 条；撞配额时据此提议换来源。不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/sessionBindings.ts`。 |
 | 自建中转服务（Mobile） | AsyncStorage `cindy.mobile.self-hosted-relay.v2.<账号>` 只存选择（中转地址、名称、主人公钥、本机设备 ID），不含秘密；设备凭证与 Ed25519 签名私钥合存为 `expo-secure-store` 的 `cindy.selfHostedRelay.credential.v2.<账号哈希>`，仅本机、解锁后可读。没有签名私钥的 v1 记录不再使用，读到时尽力删除。见 `apps/mobile/src/device-link/selfHostedRelay.ts` |
 | 自建中转服务（用户服务器） | 「部署到我的服务器」经 SSH 写入用户自己的服务器：`/opt/cindy-relay`（Node 运行环境与 `relay.mjs`）、`/var/lib/cindy-relay`（属 `cindy-relay` 系统用户、0700：设备凭证哈希与证书档案、Let's Encrypt 账户密钥、0600 原子发布的 `tls/material.json` 证书与 TLS 私钥、`status.json`）、`/etc/systemd/system/cindy-relay.service`。旧分立 PEM 文件仅在密钥配对且未过期时兼容读取；续期提交失败保留上一完整代次。主人凭证明文与主人私钥从不离开主人电脑；卸载前核对中转 ID 和主人公钥，匹配才删除。见 `device-link/selfHostedRelayDeploy.ts` |
 | 本机应用 Agent 授权 | `owners/<owner-key>/local-agent/grants.json`，仅含令牌 SHA-256、自报应用资料、账号范围和按授权归属的原生恢复绑定，不存令牌明文、供应商凭据或消息。复用原子写入与恢复 helper；profile 根 `local-agent/host.lock` 复用跨进程锁，保证一个发现端点和写入者。开发连接码从当前服务内存按需生成，不新增公共实例登记或短码映射文件。临时输入与新授权的 Codex 运行历史在同一 owner 下的 `local-agent/clients/<grant-hash>/`；撤权同时关闭执行及工具入口，不允许跨授权恢复。协议与旧版兼容见 [本机应用接入](../local-agent-api.md) |
@@ -325,7 +330,9 @@ relay 原有 60 秒主动续期节流保持不变。
 | 供应商按使用方的用量 | `userData/owners/<账号>/provider-usage-by-party.json`，按（日期、供应商、使用方、设备 id、组内电脑的键、Agent、模型）聚合 token 与轮次。使用方：本机、同账号另一台电脑、经同账号组所在电脑转来的受邀者任务、本机经另一台电脑的组在别的组内电脑上运行的（只用来报告给那台组所在电脑）、同账号电脑报告来的（每次报告整体替换那台从某天起的行）；没有使用方字段的旧行按设备 id 推出。原子替换写入，保留 400 天；只含供应商 id、设备 id、组内电脑的键与模型名，不含对话或凭证。按账号存放（供应商 id 在不同账号下会重复），从开始记录起不补历史 |
 | macOS 菜单栏余量设置 | `userData/menubar-settings.json`，本机偏好：是否显示、来源顺序与显隐、菜单栏文字、快见底通知、隐藏个人信息、统计范围；只含供应商 id，不含凭证或用量数值 |
 | macOS 菜单栏 Cindy 余额样本 | `userData/owners/<账号>/menubar-credit-samples.json`，只记录观测到的余额数值与时间（按区域与币种分组），用于估算日均消耗；保留 30 天、原子替换写入，不含凭证或账号标识 |
-| 云端伙伴同步状态 | `userData/owners/<账号>/companion-cloud/<sha256(端点\n主人 actor id)>.json`，只记伙伴的云端 actor id、1:1 房间 id、对话导入游标（本机消息时间与 id）、已上传资料的内容哈希与版本号、是否已交出主力电脑（本机副本隐藏、不跑例行任务）、接管后待重建上下文的标记；原子替换写入，读不出时从空开始并向服务器重新核对，不含凭证、消息正文或资料正文。见 `main/companion-cloud/state.ts` |
+| 记忆（Maker Memory 与伙伴记忆） | 普通项目：`userData/owners/<账号>/maker-memory/<范围目录>/`（记录 `*.md`、重建的 `MEMORY.md`、`meta.json`、检索库 `fts.db`），不写进用户的项目文件夹。V1 伙伴：`owners/<账号>/bots/<伙伴>/memories/`。V2 伙伴：伙伴项目里的 `bots/<伙伴>/workspace/.cindy/memory/`，记录与复制回执随项目 Git 记版本，派生文件由项目 `.gitignore` 排除；从项目外旧位置一次性复制（不覆盖、旧目录保留），完成回执 `bots/<伙伴>/project-memory-move.json`。该文件夹可被任务改动，宿主不顺着链接读写，`.cindy`／`.cindy/memory` 是链接时拒绝打开。不含凭证。见 `maker-host/maker-memory-host.ts`、`maker-ipc/botProjectMemory.ts`、`maker-ipc/botProjectMode.ts` |
+| 云端伙伴同步状态 | `userData/owners/<账号>/companion-cloud/<sha256(端点\n主人 actor id)>.json`，只记伙伴的云端 actor id、1:1 房间 id、对话导入游标（本机消息时间与 id）、已上传资料的内容哈希与版本号、是否已交出主力电脑（本机副本隐藏、不跑伙伴项目的自动化）、接管后待重建上下文的标记；原子替换写入，读不出时从空开始并向服务器重新核对，不含凭证、消息正文或资料正文。见 `main/companion-cloud/state.ts` |
+| 伙伴 V1→V2 升级（2026-11-08） | 每位伙伴一次：完成回执 `owners/<账号>/bots/<伙伴>/v2-migration.json`（全部步骤成功才写，失败下次启动重试）；V1 专用状态（`todos.v1.json`、`working-memory.json`、`nightly-learning.json`、`learning-history/`）移到同目录 `v1-archive/` 保留不删，转换前的例行任务定义与转换说明存为 `v1-archive/routines.json`、`routine-notes.json`，`workbench.json` 原位保留（关联项目仍用）并复制一份存档；未完成的旧待办、工作台事项与工作账本写进伙伴项目的 `workspace/CARRYOVER.md`，`AGENTS.md` 留一行指引。新伙伴仓库默认 `.gitignore` 排除存档、数据库与日志。不含凭证。见 `maker-ipc/botV2Migration.ts`、`botV2Carryover.ts`、`botV1Routines.ts` |
 | 伙伴已读位置 | `userData/owners/<账号>/bot-read-state.json`（electron-store），只存这台电脑上伙伴私聊（伙伴 id）、早期本机群（`group:<群 id>`）与私聊话题（`thread:<Session id>`）的已读时刻，最多 2000 条；只前进不后退，读不出时从空开始，不含消息正文或凭证。本机窗口、手机与其他电脑经远程资源 `read` 推进同一份；Renderer 另在 localStorage `cindy.bots.readState.v1.<账号>` 留副本供首帧读取。见 `main/maker-ipc/botReadStateStore.ts` |
 | macOS 菜单栏 helper（开发构建） | `userData/menubar/`，开发时由 `swiftc` 编译的 helper 及其 wordmark 图片和源码哈希；打包版改用 `resources/tools/menubar/`，不在 userData 落盘 |
 | 供应商分享：受邀者会话登记 | `userData/remote-agent/guest-sessions.json`（控制端摘要 → 本机侧任务与原生会话 id），只用来限制受邀者只能恢复自己的会话，并在分享删除时精确清理影子工作区、附件与会话记录 |
@@ -376,6 +383,19 @@ relay 原有 60 秒主动续期节流保持不变。
   `apps/desktop/src/main/mcp-integrations/browser-backend/rsb-webview-upload-policy.ts`；
   回归见对应上传策略测试和 `packages/lizi-mcps/src/browser/opencli-recipes.test.ts`。
 
+## Telegram 群准入记录
+
+个人与伙伴 Telegram 连接复用宿主加密 KV，以连接前缀下的
+`telegram-group-admission-v1` 保存 bot ID、绑定用户 ID、群 ID、群标题、邀请人名称与 ID、
+批准/拒绝/待批状态和随机按钮 token；不存群消息正文。记录不是可关闭的偏好设置。
+未知/损坏记录不授予群访问；先保存批准再反馈成功，保存失败保持未批准。
+解绑先删除并用三态读取确认记录缺失，无法确认则保持凭证、报存储错误并停止轮询。
+成员变更必须保存成功后才允许下次 getUpdates 确认消费；失败停止轮询并保留原 offset，
+恢复连接时从 Telegram 重放该事件，不依赖尽力删除来撤销旧授权。
+初始化和销毁都会丢弃准入缓存，确保宿主切换 Cindy 账号后重新读取当前账号记录。
+换 bot 或绑定用户时不继承不匹配身份的记录。
+实现与测试见 `packages/lizi-im/src/telegram/groupAdmission.ts`、`telegramIM.test.ts`。
+
 ## Review 清单
 
 截图翻译语言覆盖存于 `userData/screenshot-translation-settings.json`，仅保存
@@ -398,12 +418,19 @@ relay 原有 60 秒主动续期节流保持不变。
 
 ## Cindy 托管的预装技能
 
-随包技能字节改变时必须递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。运行
+随包技能的版本号 = `BUILT_IN_SKILLS_BUNDLE_VERSION_BASE` + `apps/desktop/resources/system-skills/_versions/`
+下的 `*.md` 记录文件数，运行时从随包目录读取（`readBuiltInSkillsBundleVersion`）。随包技能字节
+改变时在该目录新增一个记录文件（`YYYY-MM-DD-<主题>.md`，一行说明改了什么）；不改基数，不改、
+不删、不重命名已有记录。版本号原先是每次改动都要加一的同一个整数（近 30 天改了 94 次），
+任意两个改内置技能的 PR 都在那一行冲突；改成各加各的文件后不再写同一行，两个来源合成后的
+版本号也自动高于任一来源。缺少记录目录或目录为空时运行时拒绝准备（不当作低版本处理，否则
+会把本包的技能判为比已安装的旧，悄悄保留旧字节）。运行
 `pnpm check:built-in-skills`，对照完整 Git 历史核验工作区实际字节（含未跟踪文件），
 同版本不同内容或版本倒退会阻断；不会改 index、已安装技能或用户配置。检查在 CI 与
 个人版 `check` 安装依赖前执行，不给普通 Forge 打包增加 Git 历史要求（源码压缩包与
 浅克隆仍可打包，但不能声称通过此检查）。合成构建核验所有父分支，不能只和
-merge-base 比较：两个来源各自用了同一个新版本号，合成结果仍须再递增。可重复传
+merge-base 比较：两个来源各自到达同一个版本号时，合成结果必须更新——各自的记录文件合到一起后
+自然满足；合并时若保留了旧式的 `BUILT_IN_SKILLS_BUNDLE_VERSION` 行，检查会阻断。可重复传
 `--base-ref <ref>` 纳入额外基准（例如不在当前祖先链中的上一次个人构建）。需要完整
 Git checkout；浅克隆先 `git fetch --unshallow`，不在缺失历史时假定核验通过。
 `.gitattributes` 固定整个资源目录的原始字节，避免 Windows 换行转换复用同一个版本号。

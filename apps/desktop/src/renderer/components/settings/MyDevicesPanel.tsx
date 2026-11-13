@@ -41,23 +41,8 @@ import {
   inboundToggleState,
   resolveActiveConnectionIssue,
 } from './myDevicesModel';
-
-function platformLabel(platform: string | null): string {
-  switch (platform) {
-    case 'darwin':
-      return 'macOS';
-    case 'win32':
-      return 'Windows';
-    case 'linux':
-      return 'Linux';
-    case 'ios':
-      return 'iOS';
-    case 'android':
-      return 'Android';
-    default:
-      return platform ?? '—';
-  }
-}
+import { platformLabel, relativeTime } from './deviceLabels';
+import appI18n from 'i18next';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
   const label = deviceInfo?.modelLabel?.trim() || deviceInfo?.cpuLabel?.trim();
@@ -66,7 +51,7 @@ function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): str
 
 function memoryLabel(memoryGb: number | null | undefined): string | null {
   if (typeof memoryGb !== 'number' || !Number.isFinite(memoryGb) || memoryGb <= 0) return null;
-  const formatted = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(memoryGb);
+  const formatted = new Intl.NumberFormat(appI18n.language, { maximumFractionDigits: 1 }).format(memoryGb);
   return `${formatted} GB`;
 }
 
@@ -96,30 +81,8 @@ function deviceSubtitle(
   return parts.join(' · ');
 }
 
-/** lastSeenAt 相对时间(分钟粒度,超过 7 天显示日期)。 */
-function relativeTime(
-  iso: string | null,
-  t: (k: string, o?: Record<string, unknown>) => string,
-): string {
-  if (!iso) return '—';
-  const ts = Date.parse(iso);
-  if (Number.isNaN(ts)) return '—';
-  const diffMin = Math.floor((Date.now() - ts) / 60_000);
-  if (diffMin < 1) return t('settings.devices.justNow');
-  if (diffMin < 60) return t('settings.devices.minutesAgo', { count: diffMin });
-  const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return t('settings.devices.hoursAgo', { count: diffHour });
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffDay < 7) return t('settings.devices.daysAgo', { count: diffDay });
-  return new Date(ts).toLocaleDateString();
-}
-
-/** 与设置搜索命中同款的短暂高亮(globals.css),时长也一致。 */
-const FOCUS_HIGHLIGHT_CLASS = 'settings-search-target-highlight';
-const FOCUS_HIGHLIGHT_MS = 1600;
-
 /**
- * 深链聚焦某台设备:行渲染出来后滚入视野并短暂高亮。等两帧再滚 —— 设置页自己的
+ * 深链聚焦某台设备:行渲染出来后滚入视野。等两帧再滚 —— 设置页自己的
  * section 深链滚动(父组件 effect,同帧 rAF)会先把容器滚到「我的设备」顶部,
  * 这里要排在它之后,否则被它盖掉。每个 focusRequestKey 只聚焦一次。
  */
@@ -133,27 +96,21 @@ function useFocusDeviceRow(
   useEffect(() => {
     if (!focusDeviceId || !focusRequestKey || !rowRendered) return;
     if (handledKeyRef.current === focusRequestKey) return;
-    let row: HTMLLIElement | undefined;
-    let timer: number | undefined;
     let second = 0;
     const first = window.requestAnimationFrame(() => {
       second = window.requestAnimationFrame(() => {
-        row = rowRefs.current.get(focusDeviceId);
+        const row = rowRefs.current.get(focusDeviceId);
         if (!row) return;
-        // 真正滚到并高亮后才记为已处理:列表刷新等让 effect 在两帧之间被清理时,
+        // 真正滚到后才记为已处理:列表刷新等让 effect 在两帧之间被清理时,
         // 重新运行仍会再定位一次,不会因提前记账而永远跳过。
         handledKeyRef.current = focusRequestKey;
         const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
         row.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-        row.classList.add(FOCUS_HIGHLIGHT_CLASS);
-        timer = window.setTimeout(() => row?.classList.remove(FOCUS_HIGHLIGHT_CLASS), FOCUS_HIGHLIGHT_MS);
       });
     });
     return () => {
       window.cancelAnimationFrame(first);
       window.cancelAnimationFrame(second);
-      if (timer !== undefined) window.clearTimeout(timer);
-      row?.classList.remove(FOCUS_HIGHLIGHT_CLASS);
     };
   }, [focusDeviceId, focusRequestKey, rowRefs, rowRendered]);
 }

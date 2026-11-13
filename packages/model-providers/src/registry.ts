@@ -95,6 +95,8 @@ export type ModelDiscoveryFailureState = Partial<
 
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
+  /** Host observed a transient native-account read failure. Optional on older hosts; no credential data. */
+  subscriptionReadUnavailable?: true;
   /** Host-owned subscription speed policy; absence means an unrelated provider or older host. */
   subscriptionFastPolicy?: { allowFast: boolean; groupAllowsFast: boolean };
   /** 本机是否允许同账号另一台电脑调用该供应商；缺省等同关闭。 */
@@ -103,6 +105,8 @@ export interface ProviderView extends Provider {
   remoteModelIds?: string[];
   /** Definition remains available for adding a removed local connection again. */
   removed?: boolean;
+  /** Upgrade-only connection kept for saved routes; account management lives under OpenAI. */
+  subscriptionPoolAlias?: true;
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
   /** Public account identity and credential origin, never credential material. */
   openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };

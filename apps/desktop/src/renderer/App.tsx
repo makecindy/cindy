@@ -6,7 +6,7 @@ import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
 import { RouterProvider } from 'react-router-dom';
 
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
@@ -43,6 +43,8 @@ import { PluginModelPickerHost } from '@/cindy-brain/PluginModelPickerHost';
 import { LocalAgentConfirmationHost } from '@/components/LocalAgentConfirmationHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
 import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
+const PluginUiHost = lazy(() => import('@/cindy-brain/PluginUiHost').then(module => ({ default: module.PluginUiHost })));
+import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import { SetupMigrationHost } from '@/features/setup-migration/SetupMigrationHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { GithubSetupRequestHost } from '@/features/cc-agent/GithubSetupRequestHost';
@@ -88,10 +90,14 @@ import {
   subscribeProviderModelMemory,
 } from '@/state/providerModelMemory';
 import {
+  applyWorkerRolesMutation,
   readWorkerCreationPrefs,
   setWorkerPermissionModePreference,
   subscribeWorkerCreationPrefs,
+  toRemoteWorkerRoles,
+  writeWorkerCreationPrefs,
 } from '@/state/workerCreationPrefs';
+import type { OrcaWorkerRolesMutation } from '@cindy/device-link';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { router } from './router';
@@ -118,8 +124,25 @@ function syncWorkerPrefs() {
   window.electronAPI.syncWorkerCreationPrefs({
     workerPermissionMode: readWorkerCreationPrefs().workerPermissionMode,
     selection: readLocalWorkerCreationSelection(owner.dataOwnerId),
+    // 角色清单与每个角色的记忆：手机与远程控制的电脑读的就是这份镜像。
+    roles: toRemoteWorkerRoles(readWorkerCreationPrefs(), owner.dataOwnerId),
     ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
   });
+}
+
+/** 手机或远程控制的电脑改了这台电脑的角色清单：只在仍是同一个账号时写回真源。 */
+function applyRemoteWorkerRolesMutation(payload: {
+  mutation: OrcaWorkerRolesMutation;
+  ownerStamp: { dataOwnerId: string | null; ownerGeneration: number };
+}) {
+  const owner = getDataOwnerGeneration();
+  if (
+    payload.ownerStamp.dataOwnerId !== owner.dataOwnerId
+    || payload.ownerStamp.ownerGeneration !== owner.generation
+  ) return;
+  writeWorkerCreationPrefs(
+    applyWorkerRolesMutation(readWorkerCreationPrefs(), owner.dataOwnerId, payload.mutation),
+  );
 }
 
 function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
@@ -195,6 +218,10 @@ function MakerBootstrap() {
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
 
+  // Remote SSH handlers register during the environment check. Read the
+  // snapshot only after that gate passes, then keep receiving live pushes.
+  useEffect(() => installCcMgrUpgradeListener(), []);
+
   useEffect(() => {
     if (!isAuthenticated || isSecondaryWindow() || isSidebarWindow()) return;
     return installGithubStarPrompt(createGithubStarPromptEnvironment(router));
@@ -235,12 +262,14 @@ function MakerBootstrap() {
 }
 
 function OwnerScopedRouter() {
-  const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, canEnterApp } = useAuth();
   const ownerKey = `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`;
   return (
+    <PluginUiProvider enabled={canEnterApp} host={<Suspense fallback={null}><PluginUiHost /></Suspense>}>
     <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
       <RouterProvider key={ownerKey} router={router} />
     </MainViewHistoryProvider>
+    </PluginUiProvider>
   );
 }
 
@@ -282,9 +311,12 @@ export function App() {
     const offApply = window.electronAPI.onWorkerCreationPrefsApply(({ workerPermissionMode }) => {
       setWorkerPermissionModePreference(workerPermissionMode);
     });
+    // 写回后 subscribeWorkerCreationPrefs 会把新的角色清单再镜像给 main。
+    const offRoles = window.electronAPI.onWorkerRolesApplyRequest(applyRemoteWorkerRolesMutation);
     return () => {
       unsubscribe();
       offApply();
+      offRoles();
     };
   }, []);
 
@@ -440,13 +472,6 @@ export function App() {
     return installAutoPermissionFallbackToastListener();
   }, []);
 
-  // cc-mgr 版本不匹配的 UpgradeBanner: 订阅 main 的 CC_MGR_UPGRADE_AVAILABLE push +
-  // 启动时拉一次 pending snapshot, 写进 ccMgrUpgradeStore。没挂这个 listener 的话
-  // main 探到版本差异 broadcast 了也没人接, banner 永不显示。详见 ccMgrUpgradeStore.ts。
-  useEffect(() => {
-    return installCcMgrUpgradeListener();
-  }, []);
-
   return (
     <ThemeProvider>
       <FontSettingsProvider>
@@ -486,7 +511,7 @@ export function App() {
                               <LocalAgentConfirmationHost />
                               <ForgeOidcInstallConfirmHost />
                               <GhostInstallConsentHost />
-                              {/* 新电脑设置:只挂主窗(应答界面偏好读取、首次建议与迁移弹窗)。 */}
+                              {/* 迁移助理与开始引导:只挂主窗(应答界面偏好读取、首次登录后按需显示引导、迁移弹窗)。 */}
                               {!isSecondaryWindow() && !isSidebarWindow() && <SetupMigrationHost />}
                               <PluginPublisherConfirmHost />
                               <GithubSetupRequestHost />

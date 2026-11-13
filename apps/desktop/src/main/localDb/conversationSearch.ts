@@ -1,3 +1,4 @@
+import { normalizeTaskTags } from '@cindy/maker-shared';
 import { and, count, desc, eq, gte, inArray, isNull, ne, or } from 'drizzle-orm';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
 
@@ -17,7 +18,7 @@ import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
-import { botProfiles, botSessionLinks, messages, projectAliases, sessions } from './schema.js';
+import { botProfiles, botSessionLinks, messages, projectAliases, sessions, sessionTaskTags, taskTags } from './schema.js';
 import { prepareChatHistorySearch } from './chatHistorySearch.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { visibleTextMatchesMessagesFtsQuery } from './chatHistorySearch.pure.js';
@@ -210,7 +211,7 @@ export async function searchConversations(
 
   return {
     query,
-    results: await attachMessageCounts(results),
+    results: await attachResultMetadata(results),
     vectorUsed: content.vectorUsed,
     vectorSkipReason: content.vectorSkipReason,
     poolCapped: content.poolCapped,
@@ -473,15 +474,32 @@ function sessionSummaryFromRow(
   };
 }
 
-async function attachMessageCounts<T extends { session: ConversationSearchSessionSummary }>(
+async function attachResultMetadata<T extends { session: ConversationSearchSessionSummary }>(
   results: T[],
 ): Promise<T[]> {
-  const countMap = await fetchMessageCounts(results.map((item) => item.session.id));
+  if (results.length === 0) return results;
+  const sessionIds = results.map((item) => item.session.id);
+  // Enrich only the final page, in one batch, including tasks outside the sidebar cache.
+  const [countMap, tagRows] = await Promise.all([
+    fetchMessageCounts(sessionIds),
+    getDbClient().drizzle
+      .select({ sessionId: sessionTaskTags.sessionId, tag: taskTags })
+      .from(sessionTaskTags)
+      .innerJoin(taskTags, eq(taskTags.id, sessionTaskTags.tagId))
+      .where(inArray(sessionTaskTags.sessionId, sessionIds)),
+  ]);
+  const tagsBySession = new Map<string, unknown[]>();
+  for (const { sessionId, tag } of tagRows) {
+    const tags = tagsBySession.get(sessionId) ?? [];
+    tags.push(tag);
+    tagsBySession.set(sessionId, tags);
+  }
   return results.map((item) => ({
     ...item,
     session: {
       ...item.session,
       _count: { messages: countMap.get(item.session.id) ?? 0 },
+      tags: normalizeTaskTags(tagsBySession.get(item.session.id)),
     },
   }));
 }

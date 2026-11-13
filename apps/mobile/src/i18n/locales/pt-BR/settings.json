@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnóstico de notificações",
+    "read": "Ler estado das notificações",
+    "busy": "Lendo…",
+    "failed": "Não foi possível ler o estado. Tente novamente.",
+    "copyFailed": "Não foi possível copiar o token.",
+    "copied": "Token copiado.",
+    "bundle": "ID do app",
+    "build": "Compilação",
+    "environment": "Ambiente APNs",
+    "permission": "Permissão do sistema",
+    "alerts": "Alertas",
+    "lockScreen": "Tela bloqueada",
+    "notificationCenter": "Central de Notificações",
+    "copy": "Copiar token APNs",
+    "hide": "Ocultar resultado",
+    "unknown": "Desconhecido",
+    "on": "Ativado",
+    "off": "Desativado",
+    "hint": "Lê apenas quando solicitado. O token APNs aparece só nesta tela, sem ser salvo no diagnóstico ou enviado por esta ferramenta. Fica oculto ao sair ou ir para segundo plano. Copie apenas para o console de notificações da Apple; o texto copiado permanece na área de transferência.",
+    "permissions": {
+      "granted": "Permitida",
+      "denied": "Negada",
+      "undetermined": "Não solicitada",
+      "provisional": "Entrega silenciosa"
+    }
+  },
   "localLogs": {
     "upload": "Enviar logs",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "Os logs ficam neste celular por até 7 dias ou 8 MB e nunca são enviados automaticamente. Os logs exportados não incluem o texto das conversas nem credenciais; os envios incluem apenas registros de execução filtrados e informações de versão."
   },
   "title": "Configurações",
+  "promptRecommendation": {
+    "label": "Sugestões de entrada",
+    "description": "Sugerir o que escrever após uma resposta. Aplica-se apenas a este celular.",
+    "saveFailed": "A configuração está ativa por enquanto, mas não pôde ser salva.",
+    "reset": "Restaurar padrão"
+  },
   "appearance": {
     "title": "Aparência",
     "modeLabel": "Modo de aparência",
@@ -81,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prosa clássica (padrão)",
+        "prose": "Prosa clássica",
         "tang-poetry": "Poesia Tang",
         "song-ci": "Ci dos Song",
         "yuan-qu": "Qu dos Yuan",
@@ -138,13 +171,17 @@
     "background": "Notificações em segundo plano",
     "backgroundActive": "Recebendo notificações em segundo plano",
     "backgroundStop": "Parar de receber",
-    "backgroundHint": "A Cindy mantém uma conexão automaticamente quando o Google Push pode estar indisponível. Uma notificação permanente aparece durante a conexão.",
+    "backgroundHint": "O Cindy mantém automaticamente uma conexão em segundo plano quando o Google Push pode estar indisponível. Uma notificação permanente aparece durante a conexão.",
     "googleUnavailable": "O Google Push está indisponível. A conexão em segundo plano segue suas configurações de notificações.",
     "backgroundModes": {
       "auto": "Automático",
       "on": "Sempre ativadas",
       "off": "Desativadas"
-    }
+    },
+    "actionReplyPlaceholder": "Digite uma resposta",
+    "actionNotDelivered": "Isso não chegou ao seu computador. Abra o Cindy para responder.",
+    "actionReplyNotDelivered": "Sua resposta não foi enviada. Abra o Cindy para enviá-la novamente: {{text}}",
+    "actionRequestEnded": "Esta solicitação já foi respondida ou expirou."
   },
   "about": {
     "sectionTitle": "Sobre este celular",
@@ -156,7 +193,7 @@
   "relay": {
     "online": "Conectado ao Relay",
     "connecting": "Conectando ao Relay",
-    "stopped": "Retransmissor desconectado",
+    "stopped": "Relay desconectado",
     "lastSynced": "Última sincronização: {{time}}",
     "canSync": "As sessões remotas podem ser sincronizadas.",
     "reconnectHint": "As sessões remotas retomarão as assinaturas automaticamente quando a rede for restabelecida.",
@@ -242,7 +279,7 @@
     "screenTitle": "Dicionário de voz",
     "entryCount": "{{count}} termos",
     "aliasSeparator": ", ",
-    "aliases": "Frequentemente reconhecido como: {{aliases}}",
+    "aliases": "Frequentemente reconhecido incorretamente como: {{aliases}}",
     "refresh": "Atualizar",
     "refreshing": "Atualizando…",
     "refreshAccessibility": "Atualizar dicionário",

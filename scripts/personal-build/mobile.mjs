@@ -17,10 +17,20 @@ export function mobileConfig(value, base, region) {
   const m = structuredClone(value);
   check(m && typeof m === 'object' && !Array.isArray(m), 'mobile must be an object');
   check(m.enabled === true && m.platform === 'ios', 'Personal mobile delivery requires enabled=true and platform=ios');
+  check(m.distribution === undefined || ['development', 'ad-hoc'].includes(m.distribution),'Invalid mobile.distribution: use development or ad-hoc');
   for (const key of ['bundleId', 'appGroupId']) check(typeof m[key] === 'string' && /^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/.test(m[key]), `Invalid mobile.${key}`);
   check(m.appGroupId.startsWith('group.'), 'mobile.appGroupId must be an App Group');
+  if (Object.hasOwn(m, 'exportProvisioningProfiles')) {
+    const profiles = m.exportProvisioningProfiles;
+    const bundles = [m.bundleId, ...['CindyNotificationService', 'CindyHomeWidgets', 'expo-sharing-extension'].map(suffix => `${m.bundleId}.${suffix}`)];
+    check(m.distribution === 'ad-hoc' && profiles && typeof profiles === 'object' && !Array.isArray(profiles) &&
+      Object.keys(profiles).length === bundles.length && bundles.every(bundle => Object.hasOwn(profiles, bundle) &&
+        typeof profiles[bundle] === 'string' && profiles[bundle].trim().length > 0 && profiles[bundle].length <= 200 &&
+        !/[\x00-\x1f\x7f]/.test(profiles[bundle])),
+      'mobile.exportProvisioningProfiles requires ad-hoc and a profile name or UUID for exactly the main app and three extensions');
+  }
   check(/^[A-Z0-9]{10}$/.test(m.teamId), 'Invalid mobile.teamId');
-  check(!Object.hasOwn(m, 'signingCertificateSha1'), 'Legacy mobile.signingCertificateSha1: migrate the trusted certificate to signingCertificateSha256 and prepare a new build (docs/dev-rules/personal-build.md)');
+  check(!Object.hasOwn(m, 'signingCertificateSha1'), 'Legacy mobile.signingCertificateSha1: migrate the trusted certificate to signingCertificateSha256 and prepare a new build (docs/dev-rules/advanced/personal-build.md)');
   check(typeof m.signingCertificateSha256 === 'string' && /^[A-Fa-f0-9]{64}$/.test(m.signingCertificateSha256), 'Invalid mobile.signingCertificateSha256: expected 64 hex characters');
   check(typeof m.deviceId === 'string' && /^[A-Fa-f0-9-]{36}$/.test(m.deviceId), 'mobile.deviceId must identify the exact plugin device');
   check(typeof m.hardwareUdid === 'string' && /^[A-Fa-f0-9-]{20,40}$/.test(m.hardwareUdid), 'mobile.hardwareUdid required for provisioning');
@@ -103,6 +113,8 @@ export async function buildMobile(file) {
       const workspaces = fs.readdirSync(path.join(mobile, 'ios')).filter(n => n.endsWith('.xcworkspace'));
       check(workspaces.length === 1, 'Expected one generated iOS workspace');
       const scheme = workspaces[0].slice(0, -12), derived = path.join(work, 'DerivedData');
+      const archive = path.join(work, 'Cindy.xcarchive');
+      const adHoc = m.distribution === 'ad-hoc';
       exec('xcodebuild', ['-workspace', path.join(mobile, 'ios', workspaces[0]), '-scheme', scheme,
         '-configuration', 'Release', '-destination', `platform=iOS,id=${m.hardwareUdid}`, '-derivedDataPath', derived,
         '-allowProvisioningUpdates', `DEVELOPMENT_TEAM=${m.teamId}`, 'CODE_SIGN_STYLE=Automatic',
@@ -110,8 +122,18 @@ export async function buildMobile(file) {
         // verifyMobileArtifact still requires the configured exact certificate on every bundle;
         // an Xcode-selected identity mismatch blocks delivery rather than weakening the pin.
         'CODE_SIGN_IDENTITY=Apple Development', 'SWIFT_ENABLE_EXPLICIT_MODULES=NO',
-        'CLANG_ENABLE_EXPLICIT_MODULES=NO', `CURRENT_PROJECT_VERSION=${build}`, '-quiet', 'build']);
-      d.app = path.join(derived, 'Build/Products/Release-iphoneos', `${scheme}.app`);
+        'CLANG_ENABLE_EXPLICIT_MODULES=NO', `CURRENT_PROJECT_VERSION=${build}`, '-quiet',
+        ...(adHoc ? ['-archivePath', archive, 'archive'] : ['build'])]);
+      if (adHoc) {
+        const options = path.join(work, 'ExportOptions.plist'), exported = path.join(work, 'export');
+        exec('python3', [path.join(here, 'mobile-ios.py'), 'export-options', d.request, options]);
+        exec('xcodebuild', ['-exportArchive', '-archivePath', archive, '-exportPath', exported,
+          '-exportOptionsPlist', options, ...(m.exportProvisioningProfiles ? [] : ['-allowProvisioningUpdates'])]);
+        exec('python3', [path.join(here, 'mobile-ios.py'), 'extract-export', d.request, exported]);
+        const apps = fs.readdirSync(path.join(exported, 'unpacked', 'Payload')).filter(n => n.endsWith('.app'));
+        check(apps.length === 1, 'Expected one exported application');
+        d.app = path.join(exported, 'unpacked', 'Payload', apps[0]);
+      } else d.app = path.join(derived, 'Build/Products/Release-iphoneos', `${scheme}.app`);
     } finally { fs.closeSync(log); }
     verifyReport(file); verifyUpgradeSnapshot(r.configuration, r);
     const proof = verifyMobileArtifact(d.request, d.app);

@@ -7,6 +7,9 @@ import type { ProviderGroupConfig } from '../../../shared/providerGroup.js';
 import type { RemoteAgentHostDeps } from '../../remote-agent/host/runHost.js';
 import type { ProviderShareUsageStore } from '../../device-link/providerShareUsageStore.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
+import { reshareKeyFor } from '../../remote-agent/host/groupRelay.js';
+import { createProviderGroupExternalLoad } from '../externalLoad.js';
+import type { ProviderGroupPickInput, ProviderGroupPickResult, ProviderGroupRouter } from '../router.js';
 import { providerShareGuestPeer, type ProviderShareOwned, type RemoteAgentFastPolicy, type RemoteAgentRequest } from '@cindy/device-link';
 
 const state = vi.hoisted(() => ({
@@ -24,6 +27,7 @@ const state = vi.hoisted(() => ({
   self: 'self',
   direct: false,
   planDevice: 'one',
+  plan: vi.fn(),
   approved: true,
   delegatedAllowed: true,
   modelChanged: undefined as (() => void) | undefined,
@@ -72,7 +76,9 @@ vi.mock('../../device-link/settings-store.desktop.js', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: state.revoked }),
   onDeviceLinkSettingChanged: () => () => {},
 }));
-vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
+vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
+  isRemoteProviderInvocationAllowed: () => true, isRemoteProviderOpenToOwnComputers: () => true, isOwnComputerModelUseEnabled: () => false,
+}));
 vi.mock('../../device-link/providerShareHost.js', () => ({
   getProviderShareHostLoadedSnapshot: ownedShareSnapshot,
   ownedProviderShareGuestAccess: ownedGuestAccess,
@@ -109,8 +115,7 @@ vi.mock('../../remote-agent/controller/runClient.js', () => ({
 vi.mock('../../remote-agent/controller/service', () => ({ remoteAgentPollerFor: vi.fn() }));
 vi.mock('../guestRelay.js', () => ({
   createProviderGroupGuestRelay: () => ({
-    plan: async () => ({ kind: 'member', agentDeviceId: state.planDevice, providerId: 'openai',
-      memberKey: `device:${state.planDevice}:openai`, sameAccount: true }),
+    plan: (...args: unknown[]) => state.plan(...args),
     trackRun: () => ({ setRunning() {}, release() {} }),
     connect: (device: string) => {
       if (state.offline.has(device)) throw Error('executor offline');
@@ -202,12 +207,15 @@ const { groupFastPolicyStore, createGroupFastPolicyStore } = await import('../fa
 const delegation = await import('../../device-link/providerShareDelegatedAccess.js');
 const { createProviderShareUsageStore } = await import('../../device-link/providerShareUsageStore.js');
 const { installRemoteAgentHost, disposeRemoteAgentHost } = await import('../../remote-agent/host/service.js');
+const realGuestRelay = await vi.importActual<typeof import('../guestRelay.js')>('../guestRelay.js');
 let sequence = 0;
 beforeEach(() => {
   state.stopHost = () => Promise.resolve();
   state.self = 'self';
   state.direct = false;
   state.planDevice = 'one';
+  state.plan.mockReset().mockImplementation(async () => ({ kind: 'member', agentDeviceId: state.planDevice,
+    providerId: 'openai', memberKey: `device:${state.planDevice}:openai`, sameAccount: true }));
   state.approved = true;
   state.delegatedAllowed = true;
   state.modelChanged = undefined;
@@ -417,6 +425,34 @@ describe('durable direct task routing', () => {
     await state.usage!.flush();
     await installDirectHost();
     expect(await locate('history')).toBeNull();
+  });
+
+  // Unit, provider-sharing §4.3 / direct-execution §7: the installed direct
+  // switch must use the real guest planner's per-person approval. The old
+  // fixture always returned a same-account member, hiding this missing identity.
+  it.each([true, false])('issues a direct switch only for a spare approved for this guest: approved=%s', async approved => {
+    await installDirectHost();
+    await allocate('reshare-recovery');
+    const spare = { ...state.config!.members[1]!, key: 'share:spare:openai' as const,
+      kind: 'share' as const, agentDeviceId: 'share:spare' };
+    state.config!.members[1] = spare;
+    const externalLoad = createProviderGroupExternalLoad({ now: Date.now });
+    const planner = realGuestRelay.createProviderGroupGuestRelay({
+      readGroup: () => state.config,
+      reshareAllows: (device, key) => approved && device === spare.agentDeviceId && key === reshareKeyFor('share', 'member'),
+      scope: () => ({ isCurrent: () => true, externalLoad, router: {
+        pick: async ({ exclude }: ProviderGroupPickInput): Promise<ProviderGroupPickResult> => exclude?.has(spare.key)
+          ? { kind: 'unavailable' as const, resolved: [] }
+          : { kind: 'member' as const, member: spare, label: 'spare', resolved: [] },
+      } as ProviderGroupRouter }),
+      connect: () => { throw Error('Switch planning must not start the spare'); },
+      now: Date.now, log: { warn() {} },
+    });
+    state.plan.mockImplementation(input => planner.plan(input));
+    const result = await state.hostDeps!.directGuestExecution!.switch(guestPeer,
+      { op: 'direct-switch', sessionId: 'reshare-recovery' });
+    expect(Boolean(result.token)).toBe(approved);
+    expect(await locate('reshare-recovery')).toEqual({ deviceId: 'one' });
   });
 
   it('retains historical affinity on release but clears it on accepted fresh O fallback', async () => {

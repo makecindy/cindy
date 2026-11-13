@@ -48,7 +48,12 @@ afterAll(() => {
 
 describe('settings-store 多实例 mtime 失效', () => {
   it('无文件时返回默认值', () => {
-    expect(readDeviceLinkSettings().remoteControlEnabled).toBe(false);
+    // agent-net 产品规则：新安装不自动启用实验连接或限制旧版连接。
+    expect(readDeviceLinkSettings()).toMatchObject({
+      remoteControlEnabled: false,
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
+    });
   });
 
   it('本实例写入后读到新值(常规缓存路径)', async () => {
@@ -61,6 +66,26 @@ describe('settings-store 多实例 mtime 失效', () => {
     const s = readDeviceLinkSettings();
     expect(s.remoteControlEnabled).toBe(false);
     expect(s.revokedControllers).toEqual(['dev-x']);
+    // 升级前的文件缺少 Agent-Net 字段时，同样保留 V1 默认路径。
+    expect(s.agentNetEnabled).toBe(false);
+    expect(s.agentNetOnlyEncrypted).toBe(false);
+  });
+
+  it('升级读取保留用户显式启用的 Agent-Net 设置', () => {
+    externalWrite({ agentNetEnabled: true, agentNetOnlyEncrypted: true }, 3_000);
+    expect(readDeviceLinkSettings()).toMatchObject({ agentNetEnabled: true, agentNetOnlyEncrypted: true });
+  });
+
+  // #10095 discussion_r4546229095：恢复中的记录需经过真实设置存储保留，否则重启后会接受已取消的确认。
+  // 原测试没有待确认记录的写盘/重载；最小输入为 restoring:true 的 pending。tier:unit，复用现有临时目录。
+  it('保留远程切换恢复中的标记，写盘和外部重载都不丢失', async () => {
+    const pending = { switchId: 'switch-recover', controllerId: 'controller', previous: false,
+      deadlineAt: Date.now() + 60_000, pid: 123, restoring: true };
+    await writeDeviceLinkSetting('agentNetPendingSwitch', pending);
+    expect(readDeviceLinkSettings().agentNetPendingSwitch).toEqual(pending);
+    const saved = JSON.parse(fs.readFileSync(path.join(userDataDir, FILE), 'utf8')) as Record<string, unknown>;
+    externalWrite(saved, 3_500);
+    expect(readDeviceLinkSettings().agentNetPendingSwitch).toEqual(pending);
   });
 
   it('外部改动后本实例写入:以盘上最新内容为基线合并,不丢外部字段', async () => {

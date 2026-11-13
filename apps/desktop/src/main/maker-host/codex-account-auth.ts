@@ -13,6 +13,7 @@ import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
+import { legacyCodexAccountHome } from './codex-account-path.js';
 
 /** Shared native CLI account lifecycle. The launcher supplies its vetted binary,
  * profile and notifications; credential staging and owner checks stay identical. */
@@ -62,7 +63,7 @@ function codexAccountHome(providerId: string): string {
   if (!/^[a-z0-9_-]{1,40}$/.test(providerId)) throw new Error('Invalid Codex provider id');
   const owner = codexAccountOwnerDir();
   if (!owner) throw new Error('An active owner is required');
-  const home = ports.accountHome?.(providerId) ?? path.join(ports.getUserDataDir(), 'codex-accounts', owner, providerId);
+  const home = ports.accountHome?.(providerId) ?? legacyCodexAccountHome(ports.getUserDataDir(), getActiveAppSession().dataOwnerId, providerId);
   if (!path.isAbsolute(home)) throw new Error('Codex account home must be absolute');
   return home;
 }
