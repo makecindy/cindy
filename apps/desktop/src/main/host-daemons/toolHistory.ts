@@ -54,7 +54,7 @@ export async function readToolMessages(
         // 只认导入时刻之后新产生的消息（导入后真正在本机执行的记录）。
         sql`NOT EXISTS (
           SELECT 1 FROM session_imports si
-          WHERE si.session_id = ${sessions.id} AND si.imported_at <= ${messages.createdAt}
+          WHERE si.session_id = ${sessions.id} AND si.imported_at > ${messages.createdAt}
         )`,
       ),
     )
