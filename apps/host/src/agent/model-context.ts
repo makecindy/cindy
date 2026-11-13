@@ -38,10 +38,12 @@ export function createHostModelContext(ports: {
   return {
     getSelectableCatalog: () => {
       check();
-      const base = filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+      const base = filterProviderCatalogForAccount(getActiveCatalog(), {
         canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
       });
-      return projectSubscriptionPoolCatalog(base, { readPool, codexAccountState: ports.codexAccountState });
+      return filterLegacyGptContextProfiles(
+        projectSubscriptionPoolCatalog(base, { readPool, codexAccountState: ports.codexAccountState }),
+      );
     },
     resolveContextProviderId: createModelContextProviderResolver({
       readGatewayKey: ports.readGatewayKey, hasClaudeNativeLogin, hasCodexOAuthLogin: ports.hasCodexOAuthLogin,

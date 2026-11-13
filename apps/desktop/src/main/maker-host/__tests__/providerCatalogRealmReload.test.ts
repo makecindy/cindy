@@ -7,6 +7,9 @@ import { providerShareGuestPeer } from '@cindy/device-link';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import * as activeCatalogForHostParity from '../active-catalog.js';
+import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
+
 const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
@@ -338,6 +341,37 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+  it('filters legacy context profiles after imported pool projection in both desktop and Host', () => {
+    const input = structuredClone(getActiveCatalog());
+    const openai = input.providers.find(provider => provider.id === 'openai')!;
+    const model = (id: string) => ({ id, name: id, contextWindow: 100_000, efforts: [], defaultEffort: null });
+    openai.models.codex = [model('base-fixture')];
+    // The projection accepts native Codex imports independently of auth.method;
+    // only the canonical OAuth provider applies the legacy-profile filter. This
+    // input exposes a filter-before-projection implementation leaking the alias.
+    input.providers.push({ ...openai, id: 'legacy-order-fixture',
+      auth: { method: 'apiKey', native: 'codex' },
+      models: { codex: [model('gpt-order[1m]'), model('imported-order-fixture')] },
+    });
+    h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
+      legacyCodexAccounts: { 'legacy-order-fixture': 'imported' } };
+    h.poolModels = null;
+    h.legacyLoggedIn.add('legacy-order-fixture');
+    const read = vi.spyOn(activeCatalogForHostParity, 'getActiveCatalog').mockReturnValue(input);
+    try {
+      const host = createHostModelContext({ readGatewayKey: () => null, hasCodexOAuthLogin: () => false,
+        codexAccountState: id => ({ authenticated: h.legacyLoggedIn.has(id) }) });
+      const ids = (catalog: typeof input) => catalog.providers.find(provider => provider.id === 'openai')!.models.codex!.map(m => m.id);
+      expect(ids(getDesktopSelectableCatalog())).toEqual(['base-fixture', 'imported-order-fixture']);
+      expect(ids(host.getSelectableCatalog())).toEqual(ids(getDesktopSelectableCatalog()));
+      expect(input.providers.at(-1)!.models.codex!.map(m => m.id)).toContain('gpt-order[1m]');
+    } finally {
+      read.mockRestore();
+      h.pool = null;
+      h.legacyLoggedIn.clear();
+    }
+  });
+
   // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
   // Codex connections and keep their model membership under the canonical supplier.
   // Regression: the picker was covered but explicit/lazy full-catalog reads used by
