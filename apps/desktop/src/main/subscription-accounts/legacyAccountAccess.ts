@@ -25,3 +25,12 @@ export function legacyCodexAccountCanRun(
   return !isModelDisabled(access, providerId, bare)
     && !isModelDisabled(access, providerId, `chatgpt/${bare}`);
 }
+
+/** A task leaving a merged connection continues on `openai`; that route's own switches still apply. */
+export function openAiRouteAllowsModel(model: string | undefined): boolean {
+  const access = readModelDisableOverrides();
+  if (isProviderDisabled(access, 'openai')) return false;
+  if (!model) return true;
+  const bare = model.replace(/^chatgpt\//, '');
+  return !isModelDisabled(access, 'openai', bare) && !isModelDisabled(access, 'openai', `chatgpt/${bare}`);
+}

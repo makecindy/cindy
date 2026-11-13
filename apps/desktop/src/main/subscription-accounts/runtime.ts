@@ -649,9 +649,9 @@ export async function readSubscriptionSessionAccount(
     provider === 'openai' ? 'codex' : 'claude-code',
   );
   // The controller hands the task off only when a fresh start here would take another account
-  // (same judgment as the local pre-send failover). Merged legacy connections never move.
+  // (same judgment as the local pre-send failover). Accounts merged from a legacy connection move
+  // too (2026-11-13): a task on the `openai` route bound to one is an ordinary pool task.
   const blocked = keys.model !== undefined && !config.paused
-    && !(provider === 'openai' && readLegacyCodexProviderId(config.id))
     && readSubscriptionAccountBlocked(provider, config.id, keys.model);
   let switchAvailable = false;
   const switchBudget = switchDeadline - performance.now();
@@ -1072,11 +1072,11 @@ export async function acquireSubscriptionAccount(
   // A fresh native session (handoff after a computer or account switch, a cleared task) carries no
   // history on the bound account. When that account cannot take this model now (remembered
   // failure, exhausted trusted quota or signed out), the pool policy picks another one, like a
-  // paused binding; with nowhere else to go the task keeps its account and admission. Resumes,
-  // explicit account routes and merged legacy connections never move here.
+  // paused binding; with nowhere else to go the task keeps its account and admission. Resumes and
+  // explicit account routes (a legacy connection id pins its own account) never move here; an
+  // `openai` task bound to an account merged from a legacy connection does (2026-11-13).
   const freshBlockedBinding = options.resuming === false && !control && !freshPausedBinding
     && !!boundAccount && !options.accountId
-    && !(provider === 'openai' && readLegacyCodexProviderId(boundAccount.id))
     && readSubscriptionAccountBlocked(provider, boundAccount.id, model);
   const buildMembers = (rebind: boolean) => latest.accounts.map((a) => {
     const imported = provider === 'openai' ? readLegacyCodexProviderId(a.id) : undefined;

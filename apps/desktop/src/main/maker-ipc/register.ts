@@ -5148,6 +5148,12 @@ const subscriptionAccountRecoveryDeps = {
     await recovery.prepareNativeSessionRecovery(id, 'retain-route', assertCurrent,
       agentInputCoordinatorHolder?.getInputAbortSignal(id));
   },
+  // 旧独立 Codex 连接 ID 会固定原账号：任务换号后改走归并后的 OpenAI 来源(与换模型同样写运行路由和任务来源)。
+  moveRoute: async (id: string, providerId: string, assertCurrent: () => void) => {
+    assertCurrent();
+    setSessionProvider(id, providerId);
+    await persistSessionFields(id, { providerId });
+  },
   log: (message: string, fields: Record<string, unknown>) => log.info(message, fields),
 } satisfies AccountFailoverDeps;
 
