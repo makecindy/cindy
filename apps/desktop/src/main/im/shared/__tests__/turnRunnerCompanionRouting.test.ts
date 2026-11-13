@@ -310,6 +310,72 @@ beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
 
 describe('turnRunner: connection handed to a companion bot', () => {
+  // PR #10271, unit: cold wiring used to start the exhausted legacy source before the shared
+  // pre-send recovery could run. A real runner input must use the recovered row on its first startup.
+  it('prepares a cold legacy task before wiring its first channel message', async () => {
+    const id = 'mimi-main';
+    botRows.set(id, rowFor(id, { providerId: 'openai-old', model: 'bot-model', sdkSessionId: 'old-native' }));
+    const providers = await mocks.listProviders();
+    mocks.listProviders.mockResolvedValue([
+      ...providers,
+      { ...providers[0], id: 'openai-old' },
+      { ...providers[0], id: 'openai' },
+    ]);
+    const maker = mocks.getMaker();
+    const create = maker.createSession.getMockImplementation();
+    maker.createSession.mockImplementation(async (args: { id: string; providerId: string; resumeSessionId?: string }) => {
+      expect(args.providerId).toBe('openai');
+      expect(args.resumeSessionId).toBeUndefined();
+      return create(args);
+    });
+    const release = vi.fn();
+    acquirePendingAgentSwitch.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { providerId: 'openai', model: 'bot-model', sdkSessionId: null }));
+      return release;
+    });
+    mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
+      limit: async () => [{ ...botRows.get(id), status: 'active' }],
+    }) }) }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps, acquirePendingAgentSwitch,
+      prepareUnhealthySession: vi.fn(async () => undefined),
+    });
+    await runTurn(OWNER);
+    expect(harnesses.get(id)?.send).toHaveBeenCalledOnce();
+    expect(acquirePendingAgentSwitch.mock.invocationCallOrder[0]!).toBeLessThan(maker.createSession.mock.invocationCallOrder[0]!);
+    expect(release.mock.invocationCallOrder[0]!).toBeGreaterThan(maker.createSession.mock.invocationCallOrder[0]!);
+  });
+
+  // Cold subscription admission has the same early-rejection contract, before TurnState exists.
+  it.each([{ failure: 'acquire', external: false }, { failure: 'read', external: true }])(
+    'settles cold account preparation failure without leaving a processing reaction: %j', async ({ failure, external }) => {
+      const release = vi.fn();
+      acquirePendingAgentSwitch.mockImplementation(async () => {
+        if (failure === 'acquire') throw new Error('ACCOUNT_UNAVAILABLE');
+        vi.mocked(fakeRepo.peekSessionById).mockRejectedValueOnce(new Error('DB_READ_FAILED'));
+        return release;
+      });
+      runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+        companion: companion as unknown as ImCompanionRouteDeps, acquirePendingAgentSwitch,
+        prepareUnhealthySession: vi.fn(async () => undefined),
+      });
+      const onEarlyReject = vi.fn(() => true);
+      const args = { botContextId: BOT_CONTEXT, userId: OWNER, requesterIsOwner: true,
+        text: 'continue', attachments: [], userMessageId: 'cold-account-error',
+        ackReactionIdPromise: Promise.resolve('ack'), onEarlyReject };
+      if (external) {
+        await expect(runner.dispatchAgentTurn({ ...args, queueMode: 'external', beforeProviderStart: vi.fn() }))
+          .resolves.toMatchObject({ kind: 'rejected' });
+        expect(onEarlyReject).not.toHaveBeenCalled();
+      } else {
+        await expect(runner.runAgentTurn(args)).resolves.toBeUndefined();
+        expect(onEarlyReject).toHaveBeenCalledOnce();
+      }
+      expect(mocks.im.removeMessageReaction).toHaveBeenCalled();
+      expect(release).toHaveBeenCalledTimes(failure === 'read' ? 1 : 0);
+      expect(createSessionArgs).toHaveLength(0);
+    });
+
   // Durable transports settle receipts only from dispatch outcomes. Preparation
   // must reject before provider start even when there is no TurnState to clean up.
   it.each([
@@ -624,6 +690,8 @@ describe('turnRunner: connection handed to a companion bot', () => {
     // prepareUnhealthySessionForSend closes the live handle with reason 'runtime-refresh'
     // (idle-gap / pressure rebuild). The runner must keep the task, recreate the session from
     // the DB row and send this message to the new handle.
+    // This case exercises the already-running handle; cold wiring has its own recovery test.
+    harnesses.set('mimi-main', makeSessionHarness('mimi-main'));
     const listeners: Array<(event: MakerEvent) => void> = [];
     const rebuilt = makeSessionHarness('mimi-main');
     let live: Session | undefined;

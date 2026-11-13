@@ -586,14 +586,18 @@ describe('hook task model selection on next send', () => {
       expect(h.createSessionRow).not.toHaveBeenCalled();
     }
   });
-  // Unit: disabled-account recovery clears the native id after createOpts was
-  // assembled. The hook must carry retained context to a fresh thread, not resume
-  // the old account's id (the earlier tests only covered unchanged cold resumes).
-  it('drops the stale native resume id after pre-send account recovery', async () => {
+  // PR #10271 / Codex review, unit: recovery now also migrates the persisted source. The real
+  // Hook runner must refresh both startup and bridge routing, not just clear the old native id.
+  // The earlier input only checked unchanged-provider recovery; minimal failure is old-id -> OpenAI.
+  it('refreshes the migrated provider and drops the stale native id after pre-send account recovery', async () => {
+    const { getSessionRowSnapshot, getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshot).mockResolvedValueOnce({ providerId: 'openai-old', agentDeviceId: null } as never);
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({ status: 'active', providerId: 'openai' } as never);
     h.prepareUnhealthy.mockResolvedValueOnce(true);
     const result = await createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
     expect(result.status, result.errorMessage ?? undefined).toBe('ok');
-    expect(fakeMaker.createSession).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: undefined }));
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'openai', resumeSessionId: undefined }));
+    expect(h.hydrateSessionProvider).toHaveBeenCalledWith(expect.any(String), 'openai');
   });
 
   // Regression #6493: createSession options do not hydrate Claude's bridge.

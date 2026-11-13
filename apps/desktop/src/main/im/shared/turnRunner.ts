@@ -1119,7 +1119,62 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'companion_unavailable' };
       }
     }
+    // Only an actual incoming turn prepares a cold runtime. The existing lock bridge applies
+    // pending choices and subscription recovery before an exhausted old source can block startup.
+    const cold = deps.prepareUnhealthySession && deps.acquirePendingAgentSwitch
+      && !sessionStates.has(target.row.id) && !wiringInFlight.has(target.row.id)
+      && !getMaker().getSession(target.row.id);
+    if (cold && deps.acquirePendingAgentSwitch) {
+      let release: (() => void) | undefined;
+      const releaseOnce = () => { const held = release; release = undefined; held?.(); };
+      const id = target.row.id;
+      try {
+        let refreshed: ImSessionRow;
+        try {
+          if ((!target.attached && !target.notificationReply && !target.botOwned) || target.botOwned?.lane === 'channel')
+            coldWiringVendorOptions.set(id, adapter.buildVendorOptions(userId, target.scopeKey));
+          release = await deps.acquirePendingAgentSwitch(id, {
+            channelOwned: !target.attached && !target.notificationReply && !target.botOwned,
+          });
+          const current = await repo.peekSessionById(id);
+          if (!current) throw new Error(`session ${id} missing after cold route preparation`);
+          refreshed = current;
+        } catch (err) {
+          if (isImAccountScopeClosedError(err)) throw err;
+          const normalized = normalizeSendError(err);
+          await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+          if (args.queueMode === 'internal') {
+            try {
+              const text = ui.agent.sendInternalError(normalized.reason);
+              const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
+              if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+            } catch { /* Keep the definite pre-dispatch rejection if its notice fails. */ }
+          }
+          return { kind: 'rejected', reason: normalized.reason };
+        }
+        return await dispatchPreparedAgentTurn(args, { ...target, authChecked: false }, {
+          row: refreshed, release: releaseOnce,
+        });
+      } finally {
+        releaseOnce();
+        coldWiringVendorOptions.delete(id);
+      }
+    }
+    return dispatchPreparedAgentTurn(args, target);
+  }
+
+  async function dispatchPreparedAgentTurn(
+    args: Parameters<typeof dispatchAgentTurnInternal>[0],
+    target: RouteTarget,
+    cold?: { row: ImSessionRow; release(): void },
+  ): Promise<ImTurnDispatch> {
+    const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    // Keep the entry row for title/new-conversation decisions; use the refreshed execution
+    // row for authentication and wiring after a recovery clears its native id.
     const row = target.row;
+    const routeRow = cold?.row ?? row;
+    const coldCompanion = target.botOwned && (!!cold || (!sessionStates.has(row.id)
+      && !wiringInFlight.has(row.id) && !getMaker().getSession(row.id)));
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     let followTarget: ImDefaultRoute | null | undefined = null;
     // 伙伴任务(主任务 / channel 专线)用伙伴自己的模型链, 不跟随渠道默认。
@@ -1133,18 +1188,18 @@ export function createTurnRunner(
       // 渠道默认跟随: 本条消息会在 send 锁内切到新默认时, 按新路由检查授权 ——
       // 否则旧默认坏掉(如供应商断开)时, 消息会先被「缺授权」挡掉, 永远换不过去。
       followTarget =
-        !target.attached && !target.notificationReply && !target.botOwned
+        !cold && !target.attached && !target.notificationReply && !target.botOwned
           ? await deps.channelDefaultRoute?.previewSwitchTarget(row.id)
           : null;
       const authRow = followTarget
         ? {
-            ...row,
+            ...routeRow,
             agentKind: followTarget.agentKind,
             model: followTarget.model,
             providerId: followTarget.providerId,
             agentDeviceId: followTarget.agentDeviceId ?? null,
           }
-        : row;
+        : routeRow;
       const auth = await checkImRouteAuthDetailed(authRow, undefined, authCheckDeps());
       if (!auth.ok) {
         if (args.queueMode === 'internal') {
@@ -1249,9 +1304,9 @@ export function createTurnRunner(
     // 未接线的任务(如重启后)要跟随新默认: 接线前先对齐, 不先用可能已坏的旧路由
     // 起一次进程。只换接线用的路由; `row` 保持入口读到的值(标题等逻辑按它判断,
     // 跨引擎切换清掉的原生会话 id 不应被当成「新对话」)。
-    let wireTarget = target;
+    let wireTarget = cold ? { ...target, row: cold.row } : target;
     if (
-      followTarget &&
+      !cold && followTarget &&
       deps.channelDefaultRoute &&
       !sessionStates.has(row.id) &&
       !wiringInFlight.has(row.id) &&
@@ -1318,6 +1373,9 @@ export function createTurnRunner(
       throw err;
     }
 
+    // The regular dispatch path takes the same lock again; release the cold-start lease
+    // only after wiring has consumed the refreshed route, including on all early exits.
+    cold?.release();
     await repoTouchUserSent(row.id);
 
     // 接管 session 首条消息自动改 title — 对齐 desktop new maker (makerChatStore

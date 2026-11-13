@@ -956,6 +956,12 @@ export function createMakerHookSessionRunner(deps: {
         if (await prepareUnhealthySessionForSend(req.sessionId)) {
           // Recovery retained the context but retired the original native id.
           createOpts.resumeSessionId = undefined;
+          const recovered = await getSessionRowSnapshotStrict(req.sessionId);
+          assertAccount?.();
+          if (!recovered || recovered.status === 'deleted') throw new Error('The task route changed');
+          rowProviderId = recovered.providerId ?? null;
+          sessionProviderId = rowProviderId;
+          createOpts.providerId = rowProviderId;
         }
         session = req.isNew
           ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {

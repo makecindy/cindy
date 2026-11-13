@@ -1,5 +1,7 @@
 import { needsSubscriptionAccountHandoff } from '../subscription-accounts/runtime.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
+import { readLegacyCodexAccountId } from '../subscription-accounts/store.js';
+import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
@@ -11996,9 +11998,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log,
   });
+  const resolveScheduledExecutionSelection = async (sessionId: string, selection: ScheduledModelSelection) => {
+    const current = await getSessionRowSnapshotStrict(sessionId);
+    const device = selection.agentDeviceId === undefined ? current?.agentDeviceId : selection.agentDeviceId;
+    // Repeated fires and baseline restoration must not re-pin the former account after handoff.
+    // Check the original model grant as well as the canonical destination's ordinary admission.
+    if (current?.providerId !== 'openai' || !selection.providerId || selection.providerId === 'openai'
+      || current.remoteHostId || dbToMakerAgentKind(current.agentKind) !== selection.agentKind
+      || (device ?? null) !== (current.agentDeviceId ?? null) || isProviderShareAgentDeviceId(device)) return selection;
+    let admittedAlias: boolean;
+    if (device) {
+      const providers = await readDeviceProviderViews(remoteBackgroundInvoke, device, { live: true });
+      const alias = providers.find(view => view.id === selection.providerId && view.subscriptionPoolAlias === true);
+      const model = findCatalogModel(alias, selection.model, selection.agentKind, { exact: true });
+      admittedAlias = !!alias && !!model && isModelSelectableForNewRoute(model, { userProvider: alias.source === 'user' });
+    } else {
+      admittedAlias = !!readLegacyCodexAccountId(selection.providerId)
+        && legacyCodexAccountCanRun(selection.providerId, selection.model, { remote: false, newRoute: false, modelSwitch: true });
+    }
+    return admittedAlias ? { ...selection, providerId: 'openai' } : selection;
+  };
   const applyScheduledProfile = async (
     sessionId: string, selection: ScheduledModelSelection, signal?: AbortSignal,
-  ) => applyScheduledModelSelection(selection, {
+  ) => applyScheduledModelSelection(await resolveScheduledExecutionSelection(sessionId, selection), {
     getTarget: async () => {
       const row = await agentSwitchDeps.getSessionRow(sessionId);
       return row ? { agentKind: dbToMakerAgentKind(row.agentKind), status: row.status,
@@ -12079,7 +12101,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         effort: row.effort, fastMode: row.fastMode,
       } } : null;
     },
-    write: async (sessionId, baseline, profileRevision, expectedBaseline = null) => {
+    write: async (sessionId, baseline, profileRevision, expectedBaseline = null, restoredProfile) => {
       const owner = captureSessionRuntimeControlOwnerEpoch();
       const client = getDbClient();
       if (baseline) {
@@ -12091,7 +12113,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return written;
       }
       const db = client.drizzle;
-      const saved = parseScheduledModelBaseline(expectedBaseline);
+      const saved = restoredProfile ?? parseScheduledModelBaseline(expectedBaseline);
       if (!sessionRuntimeControlOwnerEpochMatches(owner)) throw new Error('Account changed during scheduled model selection');
       const updated = await db.update(sessions)
         .set({
@@ -12110,7 +12132,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     isBusy: (sessionId) => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning() ||
       isUserPendingAgentSwitchIntent(agentSwitchPending.get(sessionId)),
-    apply: async (sessionId, profile) => { await applyScheduledProfile(sessionId, profile); },
+    apply: (sessionId, profile) => applyScheduledProfile(sessionId, profile),
     recoverUnavailableBaseline: (sessionId, expectedBaseline) =>
       reconcileBotModelRoute.recoverUnavailableBaseline(sessionId, expectedBaseline),
   });
@@ -12171,7 +12193,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 注册，而恢复账号的 app session commit 可能更晚（更新重启、冷启动较慢）。注册时的快照
   // 会永久过期，之后每次自动化都报 'Scheduled session owner changed'，直到应用重启。
   scheduledSessionBootstrapHolder = createScheduledSessionBootstrap((options, assertAccess) =>
-    bootstrapSession(options as MakerSessionCreateOpts, assertAccess));
+    bootstrapSession(options as MakerSessionCreateOpts, assertAccess), async (options, assertAccess) => {
+      if (!options.id || options.resumeSessionId || maker.getSession(options.id)) return false;
+      assertAccess();
+      const existing = await getSessionRowSnapshotStrict(options.id);
+      assertAccess();
+      if (existing) {
+        const moved = await prepareUnhealthySessionForSend(options.id);
+        if (moved) {
+          const recovered = await getSessionRowSnapshotStrict(options.id);
+          assertAccess();
+          if (!recovered) throw new Error('The task route changed');
+          options.providerId = recovered.providerId;
+        }
+        return moved;
+      }
+      // A per-run task has no saved row/history yet. Use its real task id for account admission,
+      // but change only this startup's source; the schedule's saved choice remains untouched.
+      const row = { status: 'active', title: null, userSendAt: null, workingDir: options.workingDir ?? null,
+        workspaceKind: null, providerId: options.providerId ?? null,
+        agentKind: options.agentKind, model: options.model, sdkSessionId: null,
+        agentDeviceId: options.agentDeviceId, remoteHostId: options.remoteHostId };
+      const deps = {
+        readSession: async () => row, isRunning: () => false, invokeRemote: remoteBackgroundInvoke,
+        rebuild: async (_id: string, assertCurrent: () => void) => { assertAccess(); assertCurrent(); },
+        moveRoute: async (_id: string, providerId: string, assertCurrent: () => void) => {
+          assertAccess(); assertCurrent(); row.providerId = providerId; options.providerId = providerId;
+        },
+      };
+      return await prepareSubscriptionAccountForSend(options.id, deps)
+        || await prepareSubscriptionAccountFailover(options.id, deps);
+    });
   let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
     throw new Error('session model recovery is not ready');
   };
@@ -12227,7 +12279,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         resolvedSelection = await applyScheduledProfile(sessionId, selection, signal);
       }
       stage = 'direct-send:prepareUnhealthySession';
-      await prepareUnhealthySessionForSend(sessionId);
+      const recovered = await prepareUnhealthySessionForSend(sessionId);
+      if (recovered && resolvedSelection) {
+        const row = await getSessionRowSnapshotStrict(sessionId);
+        if (!row) throw new Error('The task route changed');
+        if (row.providerId === 'openai' && resolvedSelection.providerId !== 'openai'
+          && row.model === resolvedSelection.model && dbToMakerAgentKind(row.agentKind) === resolvedSelection.agentKind
+          && (row.agentDeviceId ?? null) === (resolvedSelection.agentDeviceId ?? null))
+          resolvedSelection = { ...resolvedSelection, providerId: 'openai' };
+      }
       // The caller retains the lease through runtime refresh and Session.send.
       stage = 'direct-send:caller-dispatch';
       return { release, selection: resolvedSelection };
