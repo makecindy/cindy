@@ -197,3 +197,15 @@ it('expands when a readiness gap ends in a direct reveal', async () => {
   await act(async () => { rerender({ ready: true, session: 'task-b', userToggle: true }); });
   expect(resize).toHaveBeenLastCalledWith(400);
 });
+
+// Bug: 首帧由视图强制的程序展示（Orca workers）在启动时和「存档恢复展开」走了同一条
+// 路径，把窗口宽度也一起占了；程序展示只该把面板放出来。
+it('keeps the window width when the first frame reveal is forced by the view', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { result } = renderHook(() =>
+    useSidebarPresentation(root, false, true, () => 400, false, 'task-a', true));
+  await act(async () => undefined);
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});

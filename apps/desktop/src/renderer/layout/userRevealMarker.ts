@@ -10,6 +10,8 @@ export interface UserRevealMarker {
   mark(targetSessionId: string): void;
   /** 当前任务提交时消费标记；返回这次提交是不是标记的那次用户开栏。 */
   consume(committedSessionId: string | null): boolean;
+  /** 导航没了落点（离开聊天视图）时作废标记；不改窗口，也不留给以后的导航。 */
+  cancel(): void;
 }
 
 export function createUserRevealMarker(): UserRevealMarker {
@@ -24,6 +26,9 @@ export function createUserRevealMarker(): UserRevealMarker {
       // 不管这次提交是不是目标，标记都只用一次：被顶掉的手势不能留给以后的导航。
       pending = null;
       return target === committedSessionId;
+    },
+    cancel(): void {
+      pending = null;
     },
   };
 }
