@@ -290,7 +290,7 @@ export function useBotGroupMentionPicker({
     resolve: (value: string, roster: readonly BotGroupMemberView[] = members) =>
       resolveBotGroupMentions(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
     /** Typed names several members share: they name nobody, so sending asks to pick from the list. */
-    ambiguous: (value: string) =>
-      ambiguousBotGroupMentionLabels(value, { members: mentionMembers, allLabels: resolveLabels, allBotLabels, tracked }),
+    ambiguous: (value: string, roster: readonly BotGroupMemberView[] = members) =>
+      ambiguousBotGroupMentionLabels(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
   };
 }

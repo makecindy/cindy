@@ -866,6 +866,29 @@ describe('chat interaction controls', () => {
     expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(original.clientId);
   });
 
+  // PR #10371 review (component): the shared-name hold read the live roster before the retry
+  // rule, so a member renamed to the same name after a failed send blocked its retry. A retry
+  // keeps its own roster and clientId; only a newly typed @ is held.
+  it('retries a failed typed thread reply after another member takes the same name, and holds only a retyped one', async () => {
+    mocks.reply.mockResolvedValue({ ok: false, errorCode: 'REQUEST_TIMEOUT' });
+    const ann = { botId: 'bot', name: 'Ann', status: 'active' as const };
+    const view = render(<ChatThreadPanel group={{ ...group, members: [ann] } as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '@Ann hello' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await screen.findByRole('alert');
+    const original = mocks.reply.mock.calls[0]![0];
+    view.rerender(<Tooltip.Provider><ChatThreadPanel group={{ ...group, members: [ann, { ...ann, botId: 'namesake' }] } as BotGroupDetail} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1]![0]).toEqual(original);
+    await waitFor(() => expect(input.value).toBe('@Ann hello'));
+    fireEvent.change(input, { target: { value: '@Ann hello again' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('bots.groupChat.errors.mentionAmbiguous'));
+    expect(mocks.reply).toHaveBeenCalledTimes(2);
+  });
+
   // Regression: thread mode hid the attachment menu and silently sent text only.
   // Real panel + useAttachments; unit tier, picking a single image is the minimal input.
   // #8084 / r4429774858: also-send must carry its image before the main share receipt arrives.
