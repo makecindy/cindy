@@ -17009,7 +17009,9 @@
         "saveAria": "自動化を保存",
         "createAria": "自動化を作成",
         "namePlaceholder": "この自動化に名前を付ける",
-        "promptPlaceholder": "例: Sentry で新しいクラッシュを見つけ、主要なリグレッションを要約する。"
+        "promptPlaceholder": "例: Sentry で新しいクラッシュを見つけ、主要なリグレッションを要約する。",
+        "expandPrompt": "広げて編集",
+        "collapsePrompt": "縮める"
       },
       "executionMode": {
         "label": "実行方法",

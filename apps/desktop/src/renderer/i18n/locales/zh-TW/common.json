@@ -17009,7 +17009,9 @@
         "saveAria": "儲存自動化",
         "createAria": "建立自動化",
         "namePlaceholder": "為這個自動化命名",
-        "promptPlaceholder": "示例：在 Sentry 中查詢新崩潰並總結關鍵迴歸。"
+        "promptPlaceholder": "示例：在 Sentry 中查詢新崩潰並總結關鍵迴歸。",
+        "expandPrompt": "展開編輯",
+        "collapsePrompt": "收起"
       },
       "executionMode": {
         "label": "執行方式",

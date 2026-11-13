@@ -17009,7 +17009,9 @@
         "saveAria": "자동화 저장",
         "createAria": "자동화 만들기",
         "namePlaceholder": "이 자동화의 이름을 지정하세요",
-        "promptPlaceholder": "예: Sentry에서 새로운 크래시를 찾아 주요 회귀를 요약합니다."
+        "promptPlaceholder": "예: Sentry에서 새로운 크래시를 찾아 주요 회귀를 요약합니다.",
+        "expandPrompt": "크게 편집",
+        "collapsePrompt": "접기"
       },
       "executionMode": {
         "label": "실행 방식",

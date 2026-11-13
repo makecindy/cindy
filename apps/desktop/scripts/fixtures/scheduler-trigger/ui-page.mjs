@@ -20,12 +20,20 @@ export default {
   },
   cases: { default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
-    scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } } },
+    scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } },
+    expanded: { about: '四十行提示词：卡片仍是原来的三行并滚动，展开编辑铺满弹窗，收起后回到卡片' } },
   async ready(page) {
     const label = await page.evaluate(() => window.__uiPage.t('scheduler.editor.webhook.eventPicker.choose'));
     await page.getByRole('button', { name: label, exact: true }).waitFor();
   },
   async check(page, ui) {
+    // Issue #10224: the compact field still shows the original three lines; a long
+    // prompt scrolls inside it, and the expand button above it opens a large editor.
+    const prompt = await page.locator('textarea').evaluate((el) => ({
+      height: el.getBoundingClientRect().height, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
+    }));
+    console.log(`prompt field: ${JSON.stringify(prompt)}`);
+    assert.ok(prompt.height <= 60, `Compact prompt field is taller than its original three lines: ${JSON.stringify(prompt)}`);
     // Regression: the previous centered, content-sized dialog shrank immediately
     // when Webhook fields unmounted, then grew while run settings expanded.
     // jsdom form tests cannot observe rendered geometry; sample actual paint frames.
@@ -84,6 +92,31 @@ export default {
           && Math.abs(viewport.scrollHeight - Math.max(viewport.clientHeight, naturalBottom)) <= 1;
       });
       await ui.capture('manual-scrolled-back');
+    }
+    if (ui.case === 'expanded') {
+      assert.ok(prompt.scrollHeight > prompt.clientHeight,
+        `Long prompt must scroll inside the compact field: ${JSON.stringify(prompt)}`);
+      const expand = await ui.t('scheduler.editor.promptDialog.expandPrompt');
+      await page.getByRole('button', { name: expand, exact: true }).click();
+      const panel = page.getByRole('group', { name: await ui.t('scheduler.editor.fields.prompt'), exact: true });
+      await panel.waitFor();
+      // Exactly one field may exist while expanded: a second, covered textarea
+      // would take Tab and be announced twice.
+      assert.equal(await page.locator('textarea').count(), 1);
+      const field = await panel.locator('textarea').evaluate((el) => ({
+        height: el.getBoundingClientRect().height, value: el.value.length,
+      }));
+      console.log(`expanded prompt field: ${JSON.stringify(field)}`);
+      assert.ok(field.height >= 360, `Expanded editor is not the full panel height: ${JSON.stringify(field)}`);
+      assert.ok(field.value > 0, 'Expanded editor lost the prompt text');
+      await ui.capture('expanded');
+      const collapse = await ui.t('scheduler.editor.promptDialog.collapsePrompt');
+      await page.getByRole('button', { name: collapse, exact: true }).click();
+      await panel.waitFor({ state: 'detached' });
+      const back = await page.locator('textarea').evaluate((el) => ({ height: el.getBoundingClientRect().height }));
+      assert.ok(back.height <= 60, `Collapsing did not restore the compact field: ${JSON.stringify(back)}`);
+      // Focus returns to the entry button instead of restarting at the top.
+      assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), expand);
     }
   },
 };

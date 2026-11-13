@@ -17009,7 +17009,9 @@
         "saveAria": "存此自运",
         "createAria": "立此自运",
         "namePlaceholder": "为此自运赐一佳名",
-        "promptPlaceholder": "例：于 Sentry 中查新崩溃，撮其要害之回归。"
+        "promptPlaceholder": "例：于 Sentry 中查新崩溃，撮其要害之回归。",
+        "expandPrompt": "展編",
+        "collapsePrompt": "收"
       },
       "executionMode": {
         "label": "行法",

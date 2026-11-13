@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
@@ -629,4 +629,28 @@ it('does not relocate hidden Auto history outside a template source constraint',
   });
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
   expect(onSubmit).not.toHaveBeenCalled();
+});
+
+// issue 10224: the prompt card keeps its original three lines, so a long automation
+// prompt is edited in a panel-filling editor opened from it. Unit/jsdom: the toggle,
+// live text, a single field and the focus hand-back are the user-visible results a
+// second hidden textarea or a dropped focus would break.
+it('edits a long prompt in the expanded editor and returns focus on collapse', async () => {
+  const h = mount(schedule({ prompt: 'first\nsecond\nthird\nfourth' }));
+  const expand = screen.getByRole('button', { name: 'scheduler.editor.promptDialog.expandPrompt' });
+  fireEvent.click(expand);
+  const panel = screen.getByRole('group', { name: 'scheduler.editor.fields.prompt' });
+  const editor = within(panel).getByRole('textbox') as HTMLTextAreaElement;
+  expect(editor.value).toBe('first\nsecond\nthird\nfourth');
+  expect(document.querySelectorAll('textarea')).toHaveLength(1);
+  fireEvent.change(editor, { target: { value: 'rewritten in the expanded editor' } });
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.collapsePrompt' }));
+  expect(screen.queryByRole('group', { name: 'scheduler.editor.fields.prompt' })).toBeNull();
+  const compact = document.querySelector('textarea') as HTMLTextAreaElement;
+  expect(compact.value).toBe('rewritten in the expanded editor');
+  expect(document.activeElement).toBe(expand);
+  h.save();
+  await waitFor(() => expect(h.onSubmit).toHaveBeenCalledWith(
+    expect.objectContaining({ prompt: 'rewritten in the expanded editor' }), true,
+  ));
 });

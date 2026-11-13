@@ -2,7 +2,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
-import { CalendarClock, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
+import { CalendarClock, FolderOpen, Info, Maximize2, Minimize2, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -195,6 +195,15 @@ export function ScheduleFormDialog({
   const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
   const [activeTab, setActiveTab] = useState<'content' | 'options'>('content');
+  // 长提示词在弹窗里只显示三行,展开后在面板内铺满编辑;收起后回到原来的卡片布局。
+  const [promptExpanded, setPromptExpanded] = useState(false);
+  const promptExpandButtonRef = useRef<HTMLButtonElement>(null);
+  const promptWasExpanded = useRef(false);
+  useEffect(() => {
+    // 展开时被遮住的内容是 inert 的,撤掉之后才聚得进去:收起后把焦点还给入口按钮。
+    if (promptWasExpanded.current && !promptExpanded) promptExpandButtonRef.current?.focus();
+    promptWasExpanded.current = promptExpanded;
+  }, [promptExpanded]);
   const formScrollRef = useRef<HTMLDivElement>(null);
   const formContentRef = useRef<HTMLDivElement>(null);
 
@@ -220,7 +229,9 @@ export function ScheduleFormDialog({
   };
   const tabsId = useId();
   useEffect(() => {
-    if (open) setActiveTab('content');
+    // 关闭时也清掉展开态:否则下次打开会直接停在展开层,焦点也会落到入口按钮上。
+    setActiveTab('content');
+    setPromptExpanded(false);
   }, [open, initial?.id]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -731,6 +742,26 @@ export function ScheduleFormDialog({
     }
   };
 
+  // 紧凑卡片与展开层共用同一个输入框定义:值、占位符、字号与主题都只有一处。
+  const promptField = (className: string, autoFocus?: boolean) => (
+    <textarea
+      value={form.prompt}
+      onChange={(e) => {
+        if (selectedTemplate) setPromptDirty(true);
+        setField('prompt', e.target.value);
+      }}
+      placeholder={t('scheduler.editor.promptDialog.promptPlaceholder')}
+      aria-label={t('scheduler.editor.fields.prompt')}
+      autoFocus={autoFocus}
+      className={cn(
+        'h-full w-full resize-none bg-transparent text-sm leading-[1.43] outline-none',
+        'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
+        'select-text',
+        className,
+      )}
+    />
+  );
+
   return (
     <Dialog.Root open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
       <Dialog.Portal>
@@ -742,14 +773,25 @@ export function ScheduleFormDialog({
           aria-describedby={undefined}
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => submitting && e.preventDefault()}
+          onEscapeKeyDown={(e) => {
+            if (promptExpanded) {
+              e.preventDefault();
+              setPromptExpanded(false);
+            } else if (submitting) {
+              e.preventDefault();
+            }
+          }}
           className={cn(
             'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             'flex h-[640px] max-h-[88vh] w-[760px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <header className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6">
+          {/* 展开编辑时这些内容被盖在下面:inert 让 Tab 与读屏都停在展开层里。 */}
+          <header
+            inert={promptExpanded || undefined}
+            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6"
+          >
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <Dialog.Title className="text-24 font-normal leading-[1.33] text-[var(--msg-assistant-text)]">
                 {isProjectAutomationMode
@@ -804,7 +846,7 @@ export function ScheduleFormDialog({
             </button>
           </header>
           {(mode !== 'gallery' || isEdit || isProjectAutomationMode) && !isScriptMode && (
-            <div className="shrink-0 px-6 pb-3">
+            <div inert={promptExpanded || undefined} className="shrink-0 px-6 pb-3">
               <SegmentedControl
                 role="tablist"
                 aria-label={t('scheduler.editor.layout.sections')}
@@ -822,11 +864,15 @@ export function ScheduleFormDialog({
           )}
 
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
-            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]">
+            <div
+              inert={promptExpanded || undefined}
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]"
+            >
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
           ) : (
             <div key={activeTab} ref={formScrollRef} onScroll={releaseUnusedScrollSpace}
+              inert={promptExpanded || undefined}
               className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
               <div ref={formContentRef} className="flex flex-col gap-3 px-6 py-3">
                 {modelUnavailable && (
@@ -901,26 +947,28 @@ export function ScheduleFormDialog({
 
                       {!isScriptMode && (
                         <div className="flex shrink-0 flex-col gap-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center justify-between gap-2">
                             <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
                               {t('scheduler.editor.fields.prompt')}
                             </span>
+                            <Button
+                              ref={promptExpandButtonRef}
+                              variant="secondary"
+                              tone="quiet"
+                              size="xxs"
+                              compact
+                              type="button"
+                              onClick={() => setPromptExpanded(true)}
+                            >
+                              <Maximize2 size={12} aria-hidden />
+                              {t('scheduler.editor.promptDialog.expandPrompt')}
+                            </Button>
                           </div>
                           <div className="flex h-[144px] flex-col overflow-hidden rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
                             <div className="min-h-0 flex-1 p-4">
-                              <textarea
-                                value={form.prompt}
-                                onChange={(e) => {
-                                  if (selectedTemplate) setPromptDirty(true);
-                                  setField('prompt', e.target.value);
-                                }}
-                                placeholder={t('scheduler.editor.promptDialog.promptPlaceholder')}
-                                className={cn(
-                                  'h-full w-full resize-none overflow-y-auto bg-transparent text-sm leading-[1.43] outline-none',
-                                  'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
-                                  'select-text',
-                                )}
-                              />
+                              {/* 展开时只保留展开层里那一个输入框:两个同名 textarea 会让 Tab
+                                  闯进被遮住的那个,读屏也会重复播报。 */}
+                              {!promptExpanded && promptField('overflow-y-auto')}
                             </div>
                             <div className="flex min-h-[44px] shrink-0 items-center gap-0 border-t border-[var(--settings-input-border)] px-2.5 py-2">
                               <div className="flex min-w-0 flex-1 items-center gap-0">
@@ -1676,7 +1724,10 @@ export function ScheduleFormDialog({
             </div>
           )}
           {(mode !== 'gallery' || isEdit || isProjectAutomationMode) && (
-            <footer className="flex shrink-0 justify-end border-t border-[var(--border-default)] px-6 py-3">
+            <footer
+              inert={promptExpanded || undefined}
+              className="flex shrink-0 justify-end border-t border-[var(--border-default)] px-6 py-3"
+            >
               <Button
                 variant="primary"
                 size="lg"
@@ -1694,6 +1745,29 @@ export function ScheduleFormDialog({
                 {submitLabel}
               </Button>
             </footer>
+          )}
+          {promptExpanded && (
+            <div
+              role="group"
+              aria-label={t('scheduler.editor.fields.prompt')}
+              className="absolute inset-0 z-10 flex flex-col bg-[var(--confirm-bg)]"
+            >
+              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-[18px] pb-[14px]">
+                <p className="min-w-0 flex-1 text-24 font-normal leading-[1.33] text-[var(--msg-assistant-text)]">
+                  {t('scheduler.editor.fields.prompt')}
+                </p>
+                <Button variant="secondary" size="lg" type="button" onClick={() => setPromptExpanded(false)}>
+                  <Minimize2 size={12} aria-hidden />
+                  {t('scheduler.editor.promptDialog.collapsePrompt')}
+                </Button>
+              </header>
+              <div className="min-h-0 flex-1 px-6 pb-6">
+                {promptField(
+                  'rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-4',
+                  true,
+                )}
+              </div>
+            </div>
           )}
         </Dialog.Content>
       </Dialog.Portal>

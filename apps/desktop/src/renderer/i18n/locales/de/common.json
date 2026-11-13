@@ -17083,7 +17083,9 @@
         "saveAria": "Automatisierung speichern",
         "createAria": "Automatisierung erstellen",
         "namePlaceholder": "Benenne diese Automatisierung",
-        "promptPlaceholder": "Beispiel: Finde neue Abstürze in Sentry und fasse die wichtigsten Regressionen zusammen."
+        "promptPlaceholder": "Beispiel: Finde neue Abstürze in Sentry und fasse die wichtigsten Regressionen zusammen.",
+        "expandPrompt": "Groß bearbeiten",
+        "collapsePrompt": "Verkleinern"
       },
       "executionMode": {
         "label": "Ausführung",
