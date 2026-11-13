@@ -204,7 +204,9 @@ function guardAccountSwitch(
   agent: BaseAgent,
   initial: StartSessionOptions,
   auth?: SubscriptionAccountRouting,
+  legacyDefaultProvider?: SubscriptionProvider,
 ): AgentSessionHandle {
+  const owner = activeOwnerScopeKey();
   let providerId = initial.providerId;
   const crossesPool = async (model: string, target?: { providerId?: string | null }) => {
     const next = target?.providerId !== undefined ? target.providerId : providerId;
@@ -217,6 +219,18 @@ function guardAccountSwitch(
   };
   return new Proxy(handle, {
     get(target, property) {
+      if (property === 'send' && legacyDefaultProvider &&
+          (providerId === initial.providerId || providerId === legacyDefaultProvider))
+        return async (...args: Parameters<AgentSessionHandle['send']>) => {
+          assertOwnerCurrent(owner);
+          // The first pool setting can be saved after this default-account runtime started.
+          // Do not create a pool on startup, but honor its live pause/removal once it exists.
+          const pool = readPool(legacyDefaultProvider);
+          const account = pool?.accounts.find(a => a.id === 'default');
+          if (pool && (pool.disconnected || !account || account.paused))
+            throw new Error('The task subscription account is disabled; retry to switch accounts');
+          return target.send(...args);
+        };
       if (property === 'requiresModelSwitchRebuild')
         return async (model: string, options?: { providerId?: string | null }) =>
           (await crossesPool(model, options)) ||
@@ -272,8 +286,11 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         };
       if (property === 'startSession')
         return async (options: StartSessionOptions) => {
-          const startLegacy = async () =>
-            guardAccountSwitch(await target.startSession(options), target, options, auth);
+          const startLegacy = async () => {
+            const provider = await providerFor(target, options, auth);
+            const legacyDefaultProvider = provider && !readPool(provider) ? provider : undefined;
+            return guardAccountSwitch(await target.startSession(options), target, options, auth, legacyDefaultProvider);
+          };
           const keys = [
             options.sessionId ? `task:${options.sessionId}` : '',
             options.resumeSessionId ? `native:${options.resumeSessionId}` : '',

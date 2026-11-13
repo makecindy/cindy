@@ -3093,6 +3093,39 @@ describe('disabled task account recovery before send', () => {
     expect(deps.rebuild).not.toHaveBeenCalled();
     expect(h.bindings.get('task:task-a')?.accountId).toBe('default');
   });
+  // Unit: an already-hosted default subscription can predate the first pool configuration.
+  // Existing live-handle coverage creates the pool before startup, so it misses the legacy path.
+  it.each(['openai', 'anthropic'] as const)('honors first-time pause on a live unpooled %s task', async provider => {
+    delete h.pools[provider];
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: provider === 'openai' ? 'codex' : 'claude-code',
+      startSession: async () => ({ id: 'unpooled-native', send, setModel: async () => {}, close: async () => {} }),
+    } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: provider, sessionId: 'unpooled-task',
+      deviceHosted: { workingDir: '/controller' },
+    } as StartSessionOptions);
+    await handle.send({ type: 'user', content: 'before' });
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: provider, accountId: 'default', paused: true });
+    await expect(handle.send({ type: 'user', content: 'paused' })).rejects.toThrow('disabled');
+    expect(send).toHaveBeenCalledTimes(1);
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: provider, accountId: 'default', paused: false });
+    await handle.send({ type: 'user', content: 'enabled' });
+    expect(send).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+  it('does not apply a later subscription pause to a handle already switched to an API provider', async () => {
+    delete h.pools.openai;
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async () => ({
+      id: 'unpooled-switch', send, setModel: async () => {}, close: async () => {},
+    }) } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'openai' } as StartSessionOptions);
+    await handle.setModel!('custom-model', { providerId: 'custom-api' });
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: true });
+    await handle.send({ type: 'user', content: 'api' });
+    expect(send).toHaveBeenCalledTimes(1);
+    await handle.close();
+  });
   it('blocks the next send on an already-live handle after its account is disabled', async () => {
     const send = vi.fn(async () => {});
     const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => ({
