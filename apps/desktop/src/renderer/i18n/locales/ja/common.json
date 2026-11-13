@@ -20749,6 +20749,7 @@
       "description": "「{{name}}」からこのパソコンに移行する内容を選んでください。このパソコンで変更済みの設定はそのまま残り、上書きされません。",
       "partial": "そのパソコンの一部の内容は今回読み込めませんでした。読み込めた内容だけを表示しています。",
       "groupCount": "{{selected}} / {{total}} 件を選択",
+      "groupCount_other": "{{selected}} / {{total}} 件を選択",
       "present_one": "ほかに {{count}} 件はこのパソコンと同じため、移行は不要です",
       "present_other": "ほかに {{count}} 件はこのパソコンと同じため、移行は不要です",
       "start_one": "{{count}} 件を移行",

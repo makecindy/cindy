@@ -20829,6 +20829,8 @@
       "description": "Wähle aus, was von „{{name}}“ auf diesen Computer übernommen werden soll. Einstellungen, die du hier bereits geändert hast, bleiben erhalten.",
       "partial": "Einige Inhalte auf dem anderen Computer konnten diesmal nicht gelesen werden. Unten steht nur, was gelesen wurde.",
       "groupCount": "{{selected}} von {{total}} ausgewählt",
+      "groupCount_one": "{{selected}} von {{total}} ausgewählt",
+      "groupCount_other": "{{selected}} von {{total}} ausgewählt",
       "present_one": "{{count}} weiteres Element ist hier bereits gleich",
       "present_other": "{{count}} weitere Elemente sind hier bereits gleich",
       "start_one": "{{count}} Element übernehmen",

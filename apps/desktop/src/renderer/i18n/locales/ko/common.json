@@ -20749,6 +20749,7 @@
       "description": "‘{{name}}’에서 이 컴퓨터로 옮길 내용을 선택하세요. 이 컴퓨터에서 이미 바꾼 설정은 그대로 유지되며 덮어쓰지 않습니다.",
       "partial": "그 컴퓨터의 일부 내용은 이번에 읽지 못했습니다. 읽은 내용만 아래에 표시합니다.",
       "groupCount": "{{total}}개 중 {{selected}}개 선택",
+      "groupCount_other": "{{total}}개 중 {{selected}}개 선택",
       "present_one": "그 밖의 {{count}}개 항목은 이 컴퓨터와 같아 옮기지 않아도 됩니다",
       "present_other": "그 밖의 {{count}}개 항목은 이 컴퓨터와 같아 옮기지 않아도 됩니다",
       "start_one": "{{count}}개 항목 옮기기",
