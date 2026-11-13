@@ -370,8 +370,9 @@ export class MemoryStorage {
     if (!isMemoryType(type)) {
       throw new MemoryError('invalid-type', `type 必须是 user/feedback/project/reference, 收到 "${type}"`);
     }
-    const supplied = rawName.trim();
-    if (/\.md$/i.test(supplied)) {
+    // 后缀大小写统一成 .md: parseFilename 只认小写, 否则 .MD 会绕过内嵌 type 检查
+    const supplied = rawName.trim().replace(/\.md$/i, '.md');
+    if (supplied.endsWith('.md')) {
       const parsed = parseFilename(supplied);
       if (parsed && parsed.type !== type) {
         throw new MemoryError(
@@ -380,8 +381,13 @@ export class MemoryStorage {
         );
       }
     }
-    const name = normalizeShardName(supplied);
+    const name = supplied.replace(/\.md$/, '');
+    // 只剥一次 .md 后的名字不能带第二个后缀 (note.md.md), 长度按去掉 type 前缀的 slug 算
+    if (!SLUG_REGEX.test(name)) {
+      throw new MemoryError('invalid-slug', `slug 只允许 [a-z0-9_-], 收到 "${name}"`);
+    }
     const key = addressKey(type, name);
+    validateSlug(key, this.config.maxSlugLen);
     // 只读文件名, 不解析正文: 地址由 filename 决定 (#10274 review)
     const matches = (await fs.readdir(this.dir))
       .filter((filename) => parseFilename(filename)?.type === type)
@@ -400,9 +406,6 @@ export class MemoryStorage {
       );
     }
     if (matches.length === 1) return matches[0];
-    // 只剥离一次 .md 后的 slug 才是落盘名; 二次后缀等脏输入在这里拦下,
-    // 否则会写出 parseFilename 认不出的分片 (#10274 review)
-    validateSlug(name, this.config.maxSlugLen);
     return buildFilename(type, name);
   }
 

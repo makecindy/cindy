@@ -218,6 +218,17 @@ describe('MemoryStorage · 分片地址解析', () => {
     expect(await missing('project_note.md.md')).toBe(true);
   });
 
+  it('重复 .md 后缀在命中存量分片时也被拒绝, 不静默改成 update', async () => {
+    await storage.write(opts('note'));
+    await expect(storage.write(opts('note.md.md', 'v2', 'update'))).rejects.toThrow(/invalid-slug/);
+    expect((await storage.read('project_note.md')).body).toBe('v1');
+  });
+
+  it('大写 .MD 与 .md 走同一条内嵌 type 检查', async () => {
+    await expect(storage.write(opts('feedback_foo.MD'))).rejects.toThrow(/invalid-type/);
+    expect(await missing('project_feedback_foo.md')).toBe(true);
+  });
+
   it('索引文件名内嵌的 type 与传入 type 不符时拒绝, 不新建', async () => {
     await expect(storage.write(opts('feedback_foo.md'))).rejects.toThrow(/invalid-type/);
     expect(await missing('project_feedback_foo.md')).toBe(true);
