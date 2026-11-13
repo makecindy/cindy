@@ -232,6 +232,15 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
     triggerLogin: (options?: AuthLoginOptions) => native.triggerLogin(options),
     cancelLogin: () => native.cancelLogin(),
     logout: () => native.logout(),
+    // As the desktop's DesktopClaudeAuthAdapter.getOneShotAuth: with a Claude Code login connected,
+    // the Host's own one-shot requests use the gateway key on the gateway endpoint, never the
+    // subscription and not through the loopback proxy's routing.
+    async getOneShotAuth(): Promise<{ apiKey: string; baseURL?: string } | null> {
+      if (!hasClaudeNativeLogin()) return null;
+      const apiKey = gatewayKey();
+      if (!apiKey) return null;
+      return { apiKey, baseURL: claudeUpstreamEndpoint() };
+    },
     async getAuthEnv(opts?: AuthAdapterOptions): Promise<Record<string, string>> {
       if (opts?.nativeSubscriptionAccount) {
         const account = opts.nativeSubscriptionAccount;

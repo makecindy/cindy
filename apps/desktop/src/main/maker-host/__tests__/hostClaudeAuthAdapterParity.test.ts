@@ -7,6 +7,8 @@
  *   account kinds. For every source × credential mode × model they must return the same
  *   state and the same environment. The only allowed difference: where the desktop CLI
  *   carries the public provider placeholder, the Host CLI carries its runtime secret.
+ *   The one-shot credential (getOneShotAuth: the Host's own direct requests) matches for
+ *   every set of facts, so neither side's one-shot request uses the subscription.
  *   Facts are synthetic; no CLI, network or real credential store is used.
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -20,6 +22,7 @@ const h = vi.hoisted(() => ({
   networkEnv: { HTTPS_PROXY: 'http://127.0.0.1:7890' } as Record<string, string>,
   accounts: new Map<string, 'claude' | 'xai'>([['xai-acct', 'xai'], ['claude-acct', 'claude']]),
   grokLogins: new Map<string, string>(),
+  gatewayEndpoint: 'https://gateway.test',
 }));
 
 vi.mock('../provider-presentation-store.js', () => ({
@@ -85,6 +88,11 @@ vi.mock('../built-in-skills.js', () => ({
   resolveBundledSystemSkillsRoot: () => '/tmp/cindy-bundled-system-skills',
 }));
 vi.mock('../anthropic-compat-proxy-host.js', () => ({ isAnthropicCompatProxyHandleReady: () => h.proxyReady }));
+// Both sides' claudeUpstreamEndpoint read the effective gateway endpoint.
+vi.mock('../../model-access/effectiveEndpoint.js', async (original) => ({
+  ...(await original<typeof import('../../model-access/effectiveEndpoint.js')>()),
+  effectiveXdGatewayBaseUrl: () => h.gatewayEndpoint,
+}));
 
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, DesktopClaudeAuthAdapter } from '../auth-adapters.js';
 
@@ -92,6 +100,7 @@ const HOST_SECRET = 'host-runtime-secret-fixture';
 type Adapter = {
   getState(opts?: AuthAdapterOptions): Promise<AuthState>;
   getAuthEnv(opts?: AuthAdapterOptions): Promise<Record<string, string>>;
+  getOneShotAuth?(): Promise<{ apiKey: string; baseURL?: string } | null>;
 };
 let host: Adapter;
 const desktop: Adapter = new DesktopClaudeAuthAdapter();
@@ -150,6 +159,19 @@ describe('Host and desktop Claude adapters decide the same way', () => {
     expect(cells).toBe(facts.length * providers.length * modes.length * models.length);
     expect(mismatches.slice(0, 5)).toEqual([]);
   }, 120_000);
+
+  it('the one-shot credential matches for every set of facts', async () => {
+    const outcomes = new Set<string>();
+    for (const f of facts) {
+      Object.assign(h, { gatewayKey: f.gatewayKey, nativeLogin: f.nativeLogin, bound: f.bound, proxyReady: f.proxyReady });
+      h.grokLogins = f.grok ? new Map([['xai-acct', 'grok@example.test']]) : new Map();
+      const [d, o] = [await desktop.getOneShotAuth!(), await host.getOneShotAuth!()];
+      expect({ facts: f, host: o }).toEqual({ facts: f, host: d });
+      outcomes.add(JSON.stringify(d));
+    }
+    // Both outcomes occur: the gateway key on the gateway endpoint, and the fallback (null).
+    expect([...outcomes].sort()).toEqual([JSON.stringify({ apiKey: 'sk-xd-gateway', baseURL: 'https://gateway.test' }), 'null'].sort());
+  });
 
   it('the Host CLI never carries the public placeholder', async () => {
     Object.assign(h, { gatewayKey: null, nativeLogin: true, bound: true, proxyReady: true });

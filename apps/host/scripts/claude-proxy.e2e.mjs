@@ -69,7 +69,8 @@ const upstream = createServer(async (req, res) => {
     model: body?.model, content: [{ type: 'text', text: 'synthetic complete' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }));
 });
 // Tunnels (any optional HTTPS probe) fail fast instead of hanging.
-upstream.on('connect', (_req, socket) => socket.destroy());
+const connects = [];
+upstream.on('connect', (req, socket) => { connects.push(req.url); socket.destroy(); });
 await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
 const endpoint = `http://127.0.0.1:${upstream.address().port}`;
 process.env.HTTP_PROXY = process.env.HTTPS_PROXY = process.env.ALL_PROXY = endpoint;
@@ -237,6 +238,21 @@ try {
   assert.equal(requests.length, afterRevoked);
   assert.equal(requests.slice(before).filter(r => r.url.includes('/v1/messages') && !r.url.includes('count_tokens')).length, 0);
   console.log(`PASS revoked login: marker ${marker.reason}, auth.json removed, the next request got ${next.status} and sent nothing upstream`);
+
+  // 5. A Claude Code login is connected (synthetic status and binding): the Host's own one-shot
+  // request uses the gateway key on the gateway endpoint, as the desktop's getOneShotAuth, and
+  // never the subscription.
+  const { publishClaudeCliLoginStatus } = await import('../../desktop/src/main/maker-host/claude-native-cli-status.ts');
+  publishClaudeCliLoginStatus({ loggedIn: true, email: 'fixture@example.test', subscriptionType: 'pro', authMethod: 'claude.ai' });
+  bindNativeProviderAuth('anthropic', { instanceIsolated: true });
+  assert.deepEqual(await graph.agent.deps.auth.getOneShotAuth(), { apiKey: gatewayKey, baseURL: endpoint });
+  before = requests.length;
+  const connectsBefore = connects.length;
+  assert.equal(await graph.maker.oneShot('claude-code', 'return synthetic complete', { model: 'claude-sonnet-4-5', timeoutMs: 30_000 }), 'synthetic complete');
+  const oneShotRequests = requests.slice(before);
+  assert.deepEqual(oneShotRequests.map(r => [r.url, r.apiKey, r.authorization]), [['/v1/messages', gatewayKey, undefined]]);
+  assert.equal(connects.length, connectsBefore);
+  console.log('PASS one-shot with a Claude Code login: one request to the gateway with the gateway key, none elsewhere');
 } catch (error) {
   process.exitCode = 1;
   throw error;
