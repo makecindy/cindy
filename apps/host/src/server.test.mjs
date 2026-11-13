@@ -121,6 +121,29 @@ test('model-access retry performs synchronization and Codex route reads the actu
   assert.deepEqual((await request('/api/agents/codex-runtime-route', options)).body, { authInjection: 'provider-oauth' });
 });
 
+test('plugin confirmation replies use the authenticated controller, never a caller supplied in JSON', async t => {
+  const auth = createWebAuth();
+  const cookie = `cindy_host_web=${auth.exchange(auth.pair())}`;
+  const authenticated = auth.caller(cookie);
+  const replies = [];
+  const request = await withServer(t, { webAuth: auth,
+    resolvePluginConfirmation: (caller, kind, requestId, confirmed) => {
+      replies.push({ caller, kind, requestId, confirmed }); return caller === authenticated;
+    },
+    requestPluginTaskApproval: async (id, capability) => ({ granted: id === 'demo' && capability === 'host-tools:terminal' }),
+  });
+  const body = JSON.stringify({ requestId: 'pending', confirmed: true, caller: 'web:forged' });
+  const headers = { cookie, 'content-type': 'application/json' };
+  assert.equal((await request('/api/ghosts/confirm/resolve', { method: 'POST', body })).status, 401);
+  assert.deepEqual((await request('/api/ghosts/confirm/resolve', { method: 'POST', headers, body })).body, { handled: true });
+  assert.deepEqual(replies, [{ caller: authenticated, kind: 'confirm', requestId: 'pending', confirmed: true }]);
+  assert.equal((await request('/api/ghosts/confirm/resolve', { method: 'POST', headers,
+    body: JSON.stringify({ requestId: 'pending', confirmed: 'yes' }) })).status, 400);
+  assert.equal(replies.length, 1);
+  assert.deepEqual((await request('/api/ghosts/request-task-approval', { method: 'POST', headers,
+    body: JSON.stringify({ id: 'demo', capability: 'host-tools:terminal' }) })).body, { granted: true });
+});
+
 test('managed stop requires the profile bearer and the current instance, never a browser cookie', async (t) => {
   let stopped = 0;
   const webAuth = createWebAuth();
