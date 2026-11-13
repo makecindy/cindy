@@ -10,7 +10,7 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
-import { and, asc, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
 
 import { getDbClient, getCurrentDbClientUserId } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
@@ -48,7 +48,12 @@ const SCANNED_ROLES = new Set(['user', 'assistant']);
  * data migration. A trillion entries is outside any supported reorder group.
  */
 function manualPrPriority() {
-  return sql`case when ${sessionPrRefs.priority} >= 1000000000000 then 0 else ${sessionPrRefs.priority} end`;
+  return sql<number>`case when ${sessionPrRefs.priority} >= 1000000000000 then 0 else ${sessionPrRefs.priority} end`;
+}
+
+/** Export the same effective priority used by SQL ordering for clients that re-sort. */
+function prRefColumns() {
+  return { ...getTableColumns(sessionPrRefs), priority: manualPrPriority().as('priority') };
 }
 
 /** PR 引用有变化时广播 renderer 的回调,由 ipc.ts 注入(解耦 Electron)。 */
@@ -386,7 +391,7 @@ async function reconcilePrRefsForSession(
 export async function listAllPrRefs(): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(and(isNull(sessionPrRefs.removedAt), eq(sessionPrRefs.associationSource, 'explicit')))
     .orderBy(
@@ -402,7 +407,7 @@ export async function listAllPrRefs(): Promise<SessionPrRef[]> {
 export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(
       and(
@@ -612,7 +617,7 @@ async function managePrRefsWithinWrite(
     await db.update(sessionPrRefs).set(patch).where(eq(sessionPrRefs.id, row.id));
   }
   const result = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(eq(sessionPrRefs.sessionId, sessionId))
     .orderBy(

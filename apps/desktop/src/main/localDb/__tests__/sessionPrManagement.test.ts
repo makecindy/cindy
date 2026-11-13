@@ -114,6 +114,7 @@ describe('manual PR management', () => {
   // DB regression: old add priorities (wall-clock ms) hid newer message refs.
   // Existing tests cover manual ordering, but never mix adds with later messages.
   // All three public read paths must expose the latest three without losing pins/reorder.
+  // Exported priority must also match SQL order: Mobile re-sorts these returned rows.
   it('replaces older added PRs with recent mentions, including legacy add priorities', async () => {
     const start = 1_800_000_000_000;
     const clock = vi.spyOn(Date, 'now');
@@ -130,14 +131,22 @@ describe('manual PR management', () => {
       await recordPrRefsForImportedMessages('s');
       const reads = [() => listPrRefs('s'), listAllPrRefs,
         () => managePrRefs('s', { action: 'list' }, verify)];
-      for (const read of reads) expect((await read()).slice(0, 3).map(r => r.prNumber)).toEqual([4, 3, 2]);
+      for (const read of reads) {
+        const rows = await read();
+        expect(rows.slice(0, 3).map(r => r.prNumber)).toEqual([4, 3, 2]);
+        expect(rows.map(r => r.priority)).toEqual([0, 0, 0, 0]);
+      }
       const refs = await listPrRefs('s');
       const oldest = refs.find(r => r.prNumber === 1)!;
       await managePrRefs('s', { action: 'pin', id: oldest.id }, verify);
       expect((await listPrRefs('s'))[0].prNumber).toBe(1);
       const unpinned = refs.filter(r => r.id !== oldest.id).reverse();
       await managePrRefs('s', { action: 'reorder', ids: unpinned.map(r => r.id) }, verify);
-      for (const read of reads) expect((await read()).map(r => r.prNumber)).toEqual([1, 2, 3, 4]);
+      for (const read of reads) {
+        const rows = await read();
+        expect(rows.map(r => r.prNumber)).toEqual([1, 2, 3, 4]);
+        expect(rows.map(r => r.priority)).toEqual([0, 3, 2, 1]);
+      }
     } finally { clock.mockRestore(); }
   });
 
