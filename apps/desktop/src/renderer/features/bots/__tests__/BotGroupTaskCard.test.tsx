@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BotGroupTaskCardView } from '../../../../shared/botGroupChat';
 import { EMPTY_COMPANION_CLOUD_SNAPSHOT, type CompanionCloudSnapshot } from '../../../../shared/companionCloud';
@@ -16,7 +16,12 @@ vi.mock('../BotCollaborationCard', () => ({
   BotTaskCard: ({ sessionId }: { sessionId?: string }) => <span data-testid="live-card">live:{sessionId}</span>,
 }));
 
-import { BotGroupTaskCard } from '../BotGroupTaskCard';
+const nav = vi.hoisted(() => ({ navigate: vi.fn(), pin: vi.fn(), route: vi.fn(async (id: string) => `/cc-agent/${id}`) }));
+vi.mock('react-router-dom', () => ({ useNavigate: () => nav.navigate }));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: { pinSessionOrigin: nav.pin } }));
+vi.mock('@/lib/orcaSessionIdentity', () => ({ resolveSessionRoute: nav.route }));
+
+import { BotGroupLiveTaskCard, BotGroupTaskCard } from '../BotGroupTaskCard';
 
 const task = (state: BotGroupTaskCardView['state'], summary?: string): BotGroupTaskCardView => ({
   meta: { v: 1, role: 'delegation-request', delegationId: 'task-1', fromBotId: 'bot-a', fromBotName: 'LiZi', toBotId: null,
@@ -81,5 +86,27 @@ describe('BotGroupTaskCard', () => {
     stores.cloud = { ...EMPTY_COMPANION_CLOUD_SNAPSHOT, demotedBotIds: ['bot-a'] };
     render(<BotGroupTaskCard task={task('started')} owned botId="bot-a" />);
     expect(screen.queryByTestId('live-card')).toBeNull();
+  });
+});
+
+// bot-group-chat.md §10, revision 2: the teammate's owner opens the task where it runs; others see the card.
+describe('BotGroupLiveTaskCard', () => {
+  const live = { taskId: 'task-1', deviceId: 'other-mac', title: 'Fix login', state: 'waiting' as const, requesterName: 'Ann', botName: 'Cindy' };
+  it.each([[true, false], [true, true], [false, true]])('opens the task only for its owner (owner: %s, here: %s)', async (openable, here) => {
+    nav.navigate.mockClear(); nav.pin.mockClear();
+    render(<BotGroupLiveTaskCard task={{ ...live, ...(openable ? { openable } : {}), ...(here ? { here } : {}) }} />);
+    expect(screen.getByTestId('bot-group-live-task').textContent).toContain('Fix login');
+    const button = screen.queryByRole('button', { name: 'bots.groupChat.task.open' });
+    if (!openable) { expect(button).toBeNull(); return; }
+    fireEvent.click(button!);
+    await waitFor(() => expect(nav.navigate).toHaveBeenCalledWith('/cc-agent/task-1'));
+    if (here) expect(nav.pin).not.toHaveBeenCalled();
+    else expect(nav.pin).toHaveBeenCalledWith('other-mac', 'task-1');
+  });
+
+  // 2026-11-11 owner decision: where the task stopped follows its state on the same line.
+  it('shows where the task stopped after its state', () => {
+    render(<BotGroupLiveTaskCard task={{ ...live, state: 'idle', summary: 'Preflight failed' }} />);
+    expect(screen.getByTitle('bots.groupChat.task.askedBy · bots.groupChat.task.live.idle · Preflight failed')).toBeTruthy();
   });
 });

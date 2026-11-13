@@ -115,6 +115,12 @@ export function readPool(provider: SubscriptionProvider): SubscriptionPoolConfig
   store.invalidateIfChanged();
   return store.read().pools[provider] ?? null;
 }
+/** OpenAI 池里从旧 Codex 连接导入的账号(旧连接 ID → 账号)；账号池文件读不了时返回 null，不当成没有。 */
+export function readOpenAiLegacyAccountsIfReadable(): Readonly<Record<string, string>> | null {
+  store.invalidateIfChanged();
+  if (store.isUnreadable()) return null;
+  return store.read().pools.openai?.legacyCodexAccounts ?? {};
+}
 export function readLegacyCodexAccountId(providerId: string): string | undefined {
   const accountId = readPool('openai')?.legacyCodexAccounts?.[providerId];
   return typeof accountId === 'string' && accountId.startsWith(`cindy-${accountOwnerPrefix()}-`) ? accountId : undefined;

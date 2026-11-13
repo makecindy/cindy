@@ -1,3 +1,4 @@
+import { imText } from './imText';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import {
   createLocalImSource,
@@ -43,7 +44,7 @@ import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
 import { bindInputHandoffChannelNotice } from './inputHandoffChannelNotice';
 import { isImSubagentEvent } from './agentEventScope';
 import { isExpiredPermissionDecision, type SharedPermission } from '../../maker-ipc/sharedPermission';
-import { presentSharedPermissionCard } from './permissionPresentation';
+import { permissionExpiredText, presentSharedPermissionCard } from './permissionPresentation';
 import { describeInteractionSource } from './interactionSource';
 import { hasSessionPermissionUpdates } from '@cindy/maker-core';
 
@@ -51,11 +52,11 @@ import { hasSessionPermissionUpdates } from '@cindy/maker-core';
  * 群里的授权卡改投宿主私聊时, 加在卡片正文顶部的说明。
  *
  * 放在这一层(desktop main)而不是 @cindy/im: 传输层没有 locale、也不该持有产品措辞。
- * 与个人 bot 其它 bot 侧文案(im/telegram/uiText.ts)同口径 —— 那一整套目前是单语中文,
- * 见该文件头部说明; 若要做多语言应连同整套一起改, 不在这一句上开特例。
+ * 与个人 bot 其它控制文案同口径, 跟随界面语言, 发送时现取。
  */
-const GROUP_APPROVAL_OWNER_DM_NOTE =
-  '🔐 群聊里的任务需要你授权。授权卡不会发到群里，在这里确认即可。';
+function groupApprovalOwnerDmNote(): string {
+  return imText('imBot.text.shared.turn.groupApprovalOwnerDm');
+}
 
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
@@ -2566,7 +2567,7 @@ export function createTurnRunner(
         ...(req.kind === 'permission'
           ? {
               deliverToOwnerDm: true,
-              ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+              ownerDmNote: groupApprovalOwnerDmNote(),
               // 迁移路径同样按业务 turn 取来源消息(可能没有进行中的 turn)。
               ...(migratedSourceMessageId !== undefined
                 ? { ownerDmSourceMessageId: migratedSourceMessageId }
@@ -3614,7 +3615,7 @@ export function createTurnRunner(
             ? typeof unsupportedCopy === 'function'
               ? unsupportedCopy(rejectedMode)
               : unsupportedCopy
-            : `❌ 启动 agent 失败：${failure.reason}`;
+            : imText('imBot.text.shared.turn.agentStartFailed', { reason: failure.reason });
         // 早期拒绝终态交调用方消费(群主流 @ 开话题时 patch 开场白卡),
         // 消费了就不再另发。
         const consumed =
@@ -4039,7 +4040,7 @@ export function createTurnRunner(
       isQuotaExhaustionFailure(errData) ? {
         ...(await resolveSessionErrorContext(state.makerSession.id)),
         botLabel: [
-          channel === 'telegram' ? 'Telegram 个人 bot' : `${channel} 个人 bot`,
+          imText('imBot.text.shared.turn.personalBotLabel', { channel: channel === 'telegram' ? 'Telegram' : channel }),
           adapter.getBotDisplayName?.(),
         ].filter(Boolean).join(' · '),
         surface: 'personal',
@@ -4048,21 +4049,22 @@ export function createTurnRunner(
     );
     if (turn?.streamingHandle) {
       const view = composeStreamingView(turn, true);
-      const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
+      const errorLine = imText('imBot.text.shared.turn.error', { message: msg });
+      const body = view ? `${view}\n\n${errorLine}` : errorLine;
       await finalizeTurnStream(turn, body);
     } else if (!turn.streamingOutputInvalidated) {
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: `❌ 错误：${msg}`,
+            text: imText('imBot.text.shared.turn.error', { message: msg }),
             terminal: 'error',
             threadTs: turn.scopeKey,
             errorCode: turn?.terminalErrorCode ?? 'agent_turn_error',
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          const errorText = `❌ 错误：${msg}`;
+          const errorText = imText('imBot.text.shared.turn.error', { message: msg });
           const triggerId = output.im.getPendingOpenerTrigger?.(userId);
           const isMyOpener = triggerId === turn?.userMessageId;
           const consumed =
@@ -4271,7 +4273,7 @@ export function createTurnRunner(
             { title: permissionSpec.title ?? '', body: permissionSpec.body },
             decision.kind === 'permission' && decision.behavior === 'allow'
               ? hasSessionPermissionUpdates(decision) ? permissionUi.resolvedAllowAlways : permissionUi.resolvedAllowOnce
-              : isExpiredPermissionDecision(decision) ? '⌛ 本次确认已失效' : permissionUi.resolvedDeny,
+              : isExpiredPermissionDecision(decision) ? permissionExpiredText() : permissionUi.resolvedDeny,
           ),
           update: (messageId, card) => output.im.updateInteractiveCard(messageId, card),
           onError: () => log.warn('shared permission card delivery/update failed'),
@@ -4297,7 +4299,7 @@ export function createTurnRunner(
           ...(req.kind === 'permission'
             ? {
                 deliverToOwnerDm: true,
-                ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+                ownerDmNote: groupApprovalOwnerDmNote(),
                 ...(ownerDmSourceMessageId !== undefined ? { ownerDmSourceMessageId } : {}),
               }
             : {}),

@@ -39,7 +39,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { setSessionArchiveSyncRequester } from '../localDb/sessionArchiveSync.js';
 import { getActiveAppSession, activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { remoteCodexProvider } from './ssh-codex-models.js';
-import { getActiveAuthRealm } from '../authManager.js';
+import { getActiveAuthRealm, getAuthState } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { hasCodexApiConnections, setCodexApiModelProbe } from './codex-api-model-capabilities.js';
@@ -119,6 +119,7 @@ import {
   type BotProfileRuntimeSnapshot,
 } from '../maker-ipc/botProfileRuntime.js';
 import { collectBotOwnSkillMounts } from '../maker-ipc/botSkillService.js';
+import { collectGroupCollaborationSkillMount, isGroupCindyTask } from '../maker-ipc/groupCollaborationSkill.js';
 import { buildBotMcpCatalog } from './botMcpCatalog.js';
 import { createBotCapabilityService, type BotCapabilityServiceDeps, type BotCapabilityUpdate } from '../maker-ipc/botCapabilityService.js';
 import {
@@ -2564,6 +2565,7 @@ export function getMaker(): Maker {
     });
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
+      getUserName: () => getAuthState().user?.name,
       listSkills: async ({ agentKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
         const result = await _maker.listAgentSkills(agentKind, {
@@ -2796,6 +2798,15 @@ export function getMaker(): Maker {
           );
           if (botRuntimeSnapshot) {
             pendingBotRuntimeSnapshots.set(sessionId, botRuntimeSnapshot);
+          }
+          // A group's Cindy task starts with Cindy's 「群协作」 Skill, mounted for that task alone
+          // (bot-group-chat.md §9). A missing Skill never keeps the task from starting.
+          if (!createOpts.remoteHostId && !createOpts.botRuntimeProfile && isGroupCindyTask(sessionId)) {
+            const mount = await collectGroupCollaborationSkillMount(app.getPath('userData')).catch((error) => {
+              desktopMakerLogger.warn('Group collaboration Skill not mounted', { error: String(error) });
+              return null;
+            });
+            if (mount) createOpts.hostSkills = [mount];
           }
           if (botRuntimeSnapshot?.unavailableSkills.length) {
             desktopMakerLogger.warn('Bot configured Skills unavailable for runtime', {

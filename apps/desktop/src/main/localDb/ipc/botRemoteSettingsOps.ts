@@ -99,7 +99,7 @@ export interface BotSettingsOpsDeps {
 const fail = (message = 'Invalid settings arguments'): never => throwIpcError('INVALID_PARAMS', message);
 /** The settings view an older controller expects from `autonomy.get`, with follow-up off. */
 const FOLLOW_UP_OFF = { schedulerBotId: null, isCustomized: false, defaults: { schedulerBotId: null } } as const;
-const FOLLOW_UP_REMOVED = 'Follow-up is no longer available for teammates';
+const FOLLOW_UP_REMOVED = 'Follow-up is no longer available for buddies';
 const record = (value: unknown, name: string): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : fail(`${name} must be an object`);
 const text = (value: unknown, name: string, max: number, allowEmpty = false): string =>
@@ -107,7 +107,7 @@ const text = (value: unknown, name: string, max: number, allowEmpty = false): st
 const keysWithin = (value: Record<string, unknown>, allowed: readonly string[], name: string) => {
   if (Object.keys(value).some(key => !allowed.includes(key))) fail(`${name} has an unsupported field`);
 };
-const botOf = (call: BotSettingsCall): string => call.botId ?? fail('Teammate required');
+const botOf = (call: BotSettingsCall): string => call.botId ?? fail('Buddy required');
 
 /** Strips what the controller must not receive: Home path, runtime snapshots, last-message content and hidden lanes. */
 export function projectBotSettingsProfile(raw: unknown): Record<string, unknown> {
@@ -176,7 +176,7 @@ const voiceCall = async <T>(run: () => T | Promise<T>): Promise<T> => {
 };
 
 const routinesRemoved = async (): Promise<never> =>
-  throwIpcError('UNSUPPORTED_CAPABILITY', 'Routines are no longer available for teammates; use project automations');
+  throwIpcError('UNSUPPORTED_CAPABILITY', 'Routines are no longer available for buddies; use project automations');
 const KINDS: readonly Kind[] = ['skill', 'mcp', 'toolset'];
 
 export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Record<BotSettingsOp, BotSettingsOpHandler>> {
@@ -319,13 +319,13 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const wechat = await wechatOf(deps);
       // A teammate's page may assign WeChat to itself or release its own assignment, never another's.
       if (call.args.assign !== true && (wechat.getChannelSettings() as { companionBotId?: string | null }).companionBotId !== botId)
-        throwIpcError('PRECONDITION_FAILED', 'WeChat is assigned to another teammate');
+        throwIpcError('PRECONDITION_FAILED', 'WeChat is assigned to another buddy');
       return { channelSettings: wechatSettings(await wechat.setCompanion(call.args.assign === true ? botId : null)) };
     },
     'channels.wechat.unbind': async call => {
       const wechat = await wechatOf(deps);
       if ((wechat.getChannelSettings() as { companionBotId?: string | null }).companionBotId !== botOf(call))
-        throwIpcError('PRECONDITION_FAILED', 'WeChat is assigned to another teammate');
+        throwIpcError('PRECONDITION_FAILED', 'WeChat is assigned to another buddy');
       await wechat.unbind();
       return null;
     },
@@ -342,7 +342,7 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const botId = botOf(call);
       const summary = await deps.channels.x.summary();
       const expected = call.args.expectedBotId === null ? null : text(call.args.expectedBotId, 'expectedBotId', 128);
-      if (call.args.assign !== true && summary.companionBotId !== botId) throwIpcError('PRECONDITION_FAILED', 'The official X account belongs to another teammate');
+      if (call.args.assign !== true && summary.companionBotId !== botId) throwIpcError('PRECONDITION_FAILED', 'The official X account belongs to another buddy');
       await deps.channels.x.setCompanion(call.args.assign === true ? botId : null, expected);
       return deps.channels.x.summary();
     },

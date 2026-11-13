@@ -221,6 +221,13 @@ it('keeps other imports in one importmap when adding the host SDK', () => {
 const withoutRuntime = (html: string) => html.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '');
 const sdkUrl = 'https://view.example/__cindy/sdk/ext-apps/app.js';
 const sdkModule = '<script type="module">import { App } from "@modelcontextprotocol/ext-apps";</script>';
+it('adds the optional Cindy state modules without overriding authored mappings', () => {
+  const prepared = withHostAppSdk('<head>' + sdkModule + '</head>', sdkUrl, { coreUrl: 'https://view.example/cindy.js', reactUrl: 'https://view.example/cindy-react.js' });
+  expect(prepared).toContain('"@cindy/ext-apps":"https://view.example/cindy.js"');
+  expect(prepared).toContain('"@cindy/ext-apps/react":"https://view.example/cindy-react.js"');
+  const authored = '<script type="importmap">{"imports":{"@cindy/ext-apps":"/own.js"}}</script>' + sdkModule;
+  expect(withoutRuntime(withHostAppSdk(authored, sdkUrl, { coreUrl: 'https://view.example/cindy.js', reactUrl: 'https://view.example/cindy-react.js' }))).toContain('"@cindy/ext-apps/react":"https://view.example/cindy-react.js"');
+});
 it('prepares SDK-free BOM pages for later computed imports without changing standards mode', () => {
   const html = '\ufeff<!doctype html><html><head></head><body>Old page</body></html>';
   const prepared = withHostAppSdk(html, sdkUrl);
@@ -265,4 +272,16 @@ it.each([
 ])('preserves authored SDK prefix mappings and explicit blocks: %j', imports => {
   const html = '<script type="importmap">' + JSON.stringify({ imports }) + '</script>' + sdkModule;
   expect(withoutRuntime(withHostAppSdk(html, sdkUrl))).toBe(html);
+});
+
+// Unit: authored prefix/null/scopes mappings for addons must remain effective;
+// adding Cindy mappings is independent of the author's official SDK choice.
+it.each([
+  { '@cindy/': 'https://own.example/cindy/' },
+  { '@cindy/ext-apps': null, '@cindy/ext-apps/': null },
+])('preserves author addon mappings without replacing the official SDK: %j', imports => {
+  const map = { imports: { '@modelcontextprotocol/ext-apps': '/own-sdk.js', ...imports },
+    scopes: { '/page/': { '@cindy/ext-apps': '/scoped.js' } } };
+  const html = '<script type="importmap">' + JSON.stringify(map) + '</script>';
+  expect(withoutRuntime(withHostAppSdk(html, sdkUrl, { coreUrl: 'https://view.example/core.js', reactUrl: 'https://view.example/react.js' }))).toBe(html);
 });

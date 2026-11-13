@@ -51,6 +51,9 @@ import {
   useDeviceLink,
 } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
+import { NotificationActionBridge } from '@/notifications/NotificationActionBridge';
+import { useLockedLaunchGate } from '@/notifications/lockedLaunchGate';
+import { TaskBadgeBridge } from '@/notifications/TaskBadgeBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
 import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
@@ -396,6 +399,9 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
   // 自建变体:启动即生效的 JS 热更门(冷启动 check→fetch→reload,本次启动就跑上最新 JS)。
   // 内部 gate 自建 + 非 dev + updates 可用,其余直接 ready=true 不阻塞。见 useStartupOtaGate。
   const otaReady = useStartupOtaGate(channel);
+  // 通知按钮会在锁屏时把 App 拉到后台启动:此时钥匙串读不出凭证,先不挂载业务树,
+  // 等用户打开 App 再启动(见 useLockedLaunchGate)。手机已解锁时只多一次钥匙串读取。
+  const credentialsReadable = useLockedLaunchGate();
   // handoff reporter:OTA 门就绪在本层上报(reload 期间保持 pending,readiness 不推进)
   const handoff = useLoginHandoff();
   const dispatchHandoff = handoff.dispatch;
@@ -413,12 +419,17 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
   if (!otaReady) {
     return null;
   }
+  // 与上面的门一样只返回 null，不另画启动画面:此时 App 在后台，没有人在看。
+  if (!credentialsReadable) return null;
   return (
     <AuthProvider>
       <AuthHandoffBridge />
       {/* 任务完成推送:注册同步 + 通知点击路由 + 前台横幅压制(不渲染 UI) */}
       <PushNotificationsBridge />
       <DeviceLinkProvider>
+        {/* 通知按钮(允许一次 / 拒绝 / 回复)在后台经这里取得设备连接(不渲染 UI) */}
+        <NotificationActionBridge />
+        <TaskBadgeBridge />
         <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
         <MobileOutboxBridge />
