@@ -1413,7 +1413,8 @@
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modelo no cambiado: el proveedor compartido no está disponible temporalmente (la computadora del propietario está desconectada o el uso compartido está desactivado por ahora). Vuelve a intentarlo más tarde o elige otro modelo.",
     "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modelo no cambiado: este es un recurso compartido antiguo y no se puede usar mientras «Usar solo Agent-Net» esté activado. Desactívalo o elige otro modelo.",
     "SSH_HOST_KEY_MISMATCH": "Clave de host SSH cambiada",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy no puede leer el archivo adjunto de origen; el mensaje no se envió. Guarda una copia en Descargas u otra carpeta accesible, quita el archivo adjunto original y agrega la copia con el botón de adjuntar antes de volver a enviarlo."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy no puede leer el archivo adjunto de origen; el mensaje no se envió. Guarda una copia en Descargas u otra carpeta accesible, quita el archivo adjunto original y agrega la copia con el botón de adjuntar antes de volver a enviarlo.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "El cambio de capacidad de entrada de imágenes no surtió efecto (se revirtió o se reintentará más tarde). Reinténtalo; si sigue fallando, vuelve a abrir la tarea."
   },
   "providerError": {
     "AUTH_INVALID": "La autenticación falló para esta interfaz. Comprueba la dirección, la clave y el método de autenticación.",
@@ -4282,7 +4283,20 @@
           },
           "codexContextUnknown": "Configuración CLI no disponible",
           "codexContextValues": "Total {{total}} · Utilizable {{usable}} · Compactación automática {{compact}} tokens",
-          "contextLimitGptHint": "GPT tiene como valor predeterminado como máximo 272K; puedes configurarlo en 1M aquí. Codex aplica la ventana y el umbral de compactación automática juntos, conservando un 5 % de espacio libre. La capacidad real depende del servicio del modelo."
+          "contextLimitGptHint": "GPT tiene como valor predeterminado como máximo 272K; puedes configurarlo en 1M aquí. Codex aplica la ventana y el umbral de compactación automática juntos, conservando un 5 % de espacio libre. La capacidad real depende del servicio del modelo.",
+          "thinking": "Razonamiento",
+          "thinkingOverride": {
+            "label": "Declarar niveles de razonamiento",
+            "inherit": "Seguir al proveedor",
+            "declared": "Declarado",
+            "sourceHint": "El catálogo no declara niveles de razonamiento; decláralos aquí si el modelo realmente razona",
+            "saveFailed": "No se pudo guardar la declaración de razonamiento",
+            "saveFailedWithReason": "No se pudo guardar la declaración de razonamiento: {{reason}}"
+          },
+          "thinkingCapability": {
+            "on": "Admite razonamiento",
+            "off": "Sin razonamiento"
+          }
         },
         "kindFilter": {
           "all": "Todo",

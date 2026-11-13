@@ -8138,8 +8138,10 @@ export class PiAgent extends BaseAgent {
           });
           if (restore.success) {
             // mutableEffort 只跟随**已确认生效**的档位：它是对外汇报（getEffort）与后续
-            // 切换恢复的依据；切换恢复的依据；被 Pi 拒绝的目标档不能当成已生效值。
+            // 切换恢复的依据；被 Pi 拒绝的目标档不能当成已生效值。应用具体档位同时意味着
+            // 思考是开着的 —— 关闭状态到此被覆盖，后续 reload 恢复的是这个档位而不是 off。
             mutableEffort = restoredEffort;
+            thinkingExplicitlyOff = false;
           } else {
             deps.logger.warn('pi: restore thinking level after model switch failed', {
               effort: restoredEffort,
@@ -9087,8 +9089,10 @@ export class PiAgent extends BaseAgent {
           level: effortToPiThinkingLevel(effort),
         }));
         if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
-        // mutableEffort 只跟随已确认生效的档位。
+        // mutableEffort 只跟随已确认生效的档位。应用具体档位同时意味着思考开着：覆盖可能的
+        // 关闭记录，否则后续 reload 恢复会把刚应用的档位用 off 关掉。
         mutableEffort = effort;
+        thinkingExplicitlyOff = false;
       },
 
       getEffort() {

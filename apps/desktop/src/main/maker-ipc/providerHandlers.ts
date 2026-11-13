@@ -535,6 +535,9 @@ export interface ProviderHandlerDeps {
   ): void | Promise<void>;
   /** 写入后把 override 文件重新注入 active-catalog(写盘不会自动生效)。 */
   syncLocalCatalogOverrides?(): void;
+  readModelCompaction?(target: ModelPriceOverrideTarget): { pct: number; isCustomized: boolean };
+  writeModelCompaction?(targets: readonly ModelPriceOverrideTarget[], pct: number | null): Promise<void>;
+  stageClearProviderModelCompaction?(providerId: string): () => boolean;
 }
 
 /** 图片输入能力的读回视图。 */
@@ -542,9 +545,6 @@ export interface ModelCatalogImageInputView {
   /** null = 没有本地声明(跟随目录)。 */
   value: boolean | null;
   isCustomized: boolean;
-  readModelCompaction?(target: ModelPriceOverrideTarget): { pct: number; isCustomized: boolean };
-  writeModelCompaction?(targets: readonly ModelPriceOverrideTarget[], pct: number | null): Promise<void>;
-  stageClearProviderModelCompaction?(providerId: string): () => boolean;
 }
 
 /** 上下文上限的读回视图(与写入返回同形，UI 一次拿齐当前值与是否自定义)。 */
