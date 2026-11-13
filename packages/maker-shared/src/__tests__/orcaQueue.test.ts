@@ -18,8 +18,8 @@ describe('Orca queue previews and notes', () => {
   it('never cuts a preview in the middle of a surrogate pair', () => {
     const preview = orcaQueuePreview(`${'x'.repeat(118)}🚀 launched`);
     expect(preview).toBe(`${'x'.repeat(118)}…`);
-    // In Unicode mode, valid surrogate pairs form one code point; only lone halves match.
-    expect(preview).not.toMatch(/\p{Surrogate}/u);
+    // URI encoding also rejects lone surrogates, without requiring ES2024 types.
+    expect(() => encodeURIComponent(preview)).not.toThrow();
   });
 
   it('keeps message text and sender names from forging the note structure', () => {

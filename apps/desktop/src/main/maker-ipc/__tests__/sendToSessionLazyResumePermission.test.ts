@@ -110,7 +110,7 @@ function botTaskDispatchSlice(): string {
     '\n  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);',
   );
   const groupDispatch = slice(
-    '({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>',
+    '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, onQueued, onAccepted }) =>',
     ',\n    prepareAttachments:',
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
@@ -660,6 +660,24 @@ describe('idle forwarded request authorization', () => {
 });
 
 describe('stored-mode Host dispatch keeps the persisted permission and Plan', () => {
+  // PR #10271 / Greptile, guard: sendToSessionInternal kept the old provider snapshot after
+  // account recovery changed the persisted source. Execute the real dispatch closure: a legacy
+  // source becomes OpenAI, lazy bootstrap must use it without changing this entry's permission policy.
+  it.each([true, false])('uses the recovered source for lazy bootstrap (stored permission=%s)', async storedMode => {
+    const row = { permissionMode: 'ask', planModeEnabled: false, providerId: 'openai-old' };
+    const readRecovered = vi.fn(async () => ({ ...row, status: 'active', title: 'child', userSendAt: null, sdkSessionId: null }));
+    const h = botTaskDispatchHarness({ child: row }, {}, {
+      prepareUnhealthySessionForSend: vi.fn(async () => { row.providerId = 'openai'; return true; }),
+      getSessionRowSnapshotStrict: readRecovered,
+    });
+    const result = await h.sendToSessionInternal({ targetSessionId: 'child', message: 'Continue',
+      clientId: 'recovered-source', resumeWithStoredPermissionMode: storedMode });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(h.bootstrapped).toEqual([expect.objectContaining({ providerId: 'openai',
+      resumeSessionId: undefined, permissionMode: storedMode ? 'ask' : 'bypassPermissions' })]);
+    expect(readRecovered).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['auto', false, 'auto'],
     ['ask', false, 'ask'],

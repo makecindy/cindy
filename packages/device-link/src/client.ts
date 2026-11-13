@@ -1316,7 +1316,7 @@ export class DeviceLinkClient {
       try {
         ws.close(1000, 'client stopped');
       } catch {
-        ws.terminate?.();
+        closeOrTerminate(ws);
       }
     }
     this.log.info(
@@ -2522,7 +2522,8 @@ export class DeviceLinkClient {
       try {
         prev.close(1000, 'reconnecting');
       } catch {
-        prev.terminate?.();
+        // 兜底硬断本身也可能抛(已断开 / 半关闭的 socket),不能让清理逃逸出 connect()。
+        closeOrTerminate(prev);
       }
       this.failNonReliablePending(
         new DeviceLinkError('NOT_CONNECTED', `connection restarted (${reason})`),

@@ -4,7 +4,7 @@ import { reconcilePluginUiRegions } from '../mcp-apps/visibility.js';
 import { reconcilePluginAppearanceSources } from '../mcp-apps/appearance.js';
 export { pluginAppServerId } from './pluginAppIdentity.js';
 const registry = createPluginAppRegistry(replacePluginAppServers);
-export const { setPluginPageToolRunner, readPluginHostUi } = registry;
+export const { setPluginPageToolRunner, readPluginHostUi, listPluginHostUi } = registry;
 export function refreshPluginApps(...args: Parameters<typeof registry.refreshPluginApps>): void {
   registry.refreshPluginApps(...args);
   void reconcilePluginAppearanceSources(readPluginHostUi, args[1].available).catch(() => {});
