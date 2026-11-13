@@ -174,6 +174,21 @@ describe('Bot group lane transactions', () => {
     expect(ensureWorkspaceDir).not.toHaveBeenCalled();
   });
 
+  // Unit: a new chat-only work step persists the resolved group folder, not
+  // an empty cwd or a separate legacy chat workspace. Recovery must accept it.
+  it('restores a chat-only work step from its persisted shared group folder', async () => {
+    const workingDir = path.join(ownerRoot, 'group-project');
+    await mkdir(workingDir);
+    const routeKey = `${chatGroupLaneRouteKey('g1', { mode: 'chat', revision: 1 })}:plan:chat-work`;
+    const session = { ...laneSession('chat-project-step'), workingDir, projectDir: workingDir, workspaceKind: 'project' };
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
+    const ensureWorkspaceDir = vi.fn(async () => '/private-home');
+    const opts: MakerSessionCreateOpts = { id: session.id, agentKind: 'claude-code', model: session.model, workingDir: '', workspaceKind: 'dialogue' };
+    await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
+    expect(opts).toMatchObject({ workingDir, workspaceKind: 'project' });
+    expect(ensureWorkspaceDir).not.toHaveBeenCalled();
+  });
+
   // bot-group-chat.md §7.0: a queue turn has no project folder. It starts where its group lane works:
   // the teammate's own place, or the grant's isolated chat folder for chat-only access.
   it.each(['owner', 'tools', 'chat'] as const)('starts a %s queue lane where its group lane works', async mode => {

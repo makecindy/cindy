@@ -44,7 +44,7 @@ vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; 
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }) } }));
 // The real filesystem, except an `lstat` failure a test injects for a delivery file.
 const fsFault = vi.hoisted(() => ({ lstat: null as Error | null }));
-vi.mock('../../localDb/dialogueWorkspace.js', () => ({ dialogueWorkspaceRootDir: () => '/test/group-workspace' }));
+vi.mock('../../dialogue-workspace-settings.js', () => ({ readDialogueWorkspaceSettings: () => ({ directory: '/test/group-workspace', isCustomized: true }) }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const lstat = (async (...args: Parameters<typeof actual.lstat>) => {
@@ -1430,8 +1430,7 @@ describe('Chat Server result delivery and refresh', () => {
   });
   // bot-group-chat.md §7.5: with no folder chosen here, a 分工 works in the registered project of the
   // group's repository instead of the group's own folder.
-  it('prepares a 分工 step in the folder found from the group repository', async () => {
-    const mode = 'owner';
+  it.each(['owner', 'chat'] as const)('prepares a %s division step in the resolved group project', async mode => {
     deps.validateProjectDir = vi.fn(async dir => ({ ok: true as const, dir }));
     deps.findProjectDirsForRepo = vi.fn(async () => ['/projects/cindy']);
     deps.workDir = { prepare: vi.fn(), snapshot: vi.fn(), changedFiles: vi.fn(), trashGroupFolder: vi.fn() };
@@ -1442,12 +1441,19 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.handle.mockImplementation(route => {
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: mode, plan_id: planId, plan_step: 0 }; claimed = true; return { body: { execution: next } }; }
-      if (route.includes('/plans?ids=')) return { body: [plan] };
+      if (route.includes('/plans')) return { body: [plan] };
       if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project: { kind: 'github', repo: 'makecindy/cindy' } }, members: [], messages: [], cursor: '1' } };
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fix it' }], deleted: false, threadRootId: null } };
       return response(route);
     });
     await vi.advanceTimersByTimeAsync(2000);
-    expect(deps.workDir.prepare).toHaveBeenCalledWith({ groupId: roomId, projectDir: '/projects/cindy' });
+    if (mode === 'owner') expect(deps.workDir.prepare).toHaveBeenCalledWith({ groupId: roomId, projectDir: '/projects/cindy' });
+    else {
+      expect(deps.workDir.prepare).not.toHaveBeenCalled();
+      expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ projectDir: '/projects/cindy',
+        plan: { planId, workDir: '/projects/cindy', sessionId: undefined } }));
+      expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true }));
+    }
   });
 
   // #9909: a group turn can end with nothing published. Each such ending now leaves a trace,
@@ -3823,7 +3829,10 @@ describe('Chat Server result delivery and refresh', () => {
       return response(route);
     });
     await vi.advanceTimersByTimeAsync(2000);
-    expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: '', sessionId: undefined } }));
+    expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: expect.any(String), sessionId: undefined } }));
+    const laneInput = vi.mocked(deps.ensureLane).mock.calls[0][0];
+    expect(laneInput.plan?.workDir).toBe(laneInput.projectDir);
+    expect(laneInput.plan?.workDir).not.toBe('');
     expect(deps.workDir.prepare).not.toHaveBeenCalled();
     expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true, message: expect.stringContaining('Discuss the draft') }));
     await service.settleLaneTurn(terminal);

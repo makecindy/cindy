@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { githubRepositoryOfRemote, type GroupCheckoutResult, type GroupProjectCheckouts } from './groupProjectCheckout.js';
 
 /**
@@ -31,7 +31,7 @@ export function createGroupProjectFolders(deps: {
   /** Persisted automatic binding survives group rename and workspace setting changes. */
   fallback?: (room: GroupProjectRoom) => string | null;
   bindFallback?: (roomId: string, dir: string) => void;
-  workspaceRoot?: () => string;
+  workspaceRoot?: () => { directory: string; isCustomized: boolean };
   /** Registered project folders whose git `origin` is this repository. */
   findRegistered?: (repo: string) => Promise<string[]>;
   checkouts?: Pick<GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged'>;
@@ -60,13 +60,22 @@ export function createGroupProjectFolders(deps: {
     return checked?.ok ? checked.dir : null;
   };
 
-  const fallback = (room: GroupProjectRoom) => deps.fallback?.(room) ?? path.join(
-    (() => { if (!deps.workspaceRoot) throw new Error('WORKDIR_UNAVAILABLE'); return deps.workspaceRoot(); })(),
-    `${(room.name ?? 'Group').replace(/[<>:\\\/|?*\x00-\x1f]/g, '-').slice(0, 80) || 'Group'}-${encodeURIComponent(room.id)}`);
+  const fallback = (room: GroupProjectRoom) => {
+    const bound = deps.fallback?.(room);
+    // A persisted location may be on an offline volume too. Never recreate its parents.
+    if (bound) return { dir: bound, recursive: false };
+    const workspace = deps.workspaceRoot?.();
+    if (!workspace) throw new Error('WORKDIR_UNAVAILABLE');
+    const name = `${(room.name ?? 'Group').replace(/[<>:\\\/|?*\x00-\x1f]/g, '-').slice(0, 80) || 'Group'}-${encodeURIComponent(room.id)}`;
+    return { dir: path.join(workspace.directory, name), recursive: !workspace.isCustomized };
+  };
   const defaultFolder = async (room: GroupProjectRoom, isCurrent: () => boolean) => {
-    const dir = fallback(room);
+    const { dir, recursive } = fallback(room);
     if (!isCurrent()) throw new Error('OWNER_CHANGED');
-    await mkdir(dir, { recursive: true });
+    try { await mkdir(dir, { recursive }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !(await stat(dir)).isDirectory()) throw error;
+    }
     if (!isCurrent()) throw new Error('OWNER_CHANGED');
     deps.bindFallback?.(room.id, dir);
     return { dir, auto: true };
@@ -78,7 +87,7 @@ export function createGroupProjectFolders(deps: {
       const chosen = deps.chosen(room.id);
       if (chosen) return { dir: chosen, auto: false };
       const repo = repoOf(room);
-      return { dir: (repo ? await registeredFolder(repo) : null) ?? fallback(room), auto: true };
+      return { dir: (repo ? await registeredFolder(repo) : null) ?? fallback(room).dir, auto: true };
     },
     /**
      * The folder work for this group runs in, checked to exist. `signIn`: Cindy may open its GitHub

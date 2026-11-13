@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdtemp, stat, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, stat, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { createGroupProjectFolders } from '../groupProjectFolder.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -122,7 +122,7 @@ it('creates one workspace folder on demand and retains its binding across a rena
   const root = await mkdtemp(path.join(os.tmpdir(), 'group-folder-'));
   let bound: string | null = null;
   try {
-    const folders = createGroupProjectFolders({ chosen: () => null, workspaceRoot: () => root,
+    const folders = createGroupProjectFolders({ chosen: () => null, workspaceRoot: () => ({ directory: root, isCustomized: true }),
       fallback: () => bound, bindFallback: (_, dir) => { bound = dir; },
       validate: async dir => ({ ok: true as const, dir }) });
     const room = { id: 'group-1234', name: 'Team / work' };
@@ -132,7 +132,35 @@ it('creates one workspace folder on demand and retains its binding across a rena
     expect(actual.dir).toBe(shown.dir);
     expect((await stat(actual.dir!)).isDirectory()).toBe(true);
     expect((await folders.forWork({ ...room, name: 'Renamed' }, { signIn: false, isCurrent: () => true })).dir).toBe(actual.dir);
-    const missing = createGroupProjectFolders({ chosen: () => '/missing/user-choice', workspaceRoot: () => root, validate: async () => ({ ok: false as const }) });
+    const missing = createGroupProjectFolders({ chosen: () => '/missing/user-choice', workspaceRoot: () => ({ directory: root, isCustomized: true }), validate: async () => ({ ok: false as const }) });
     await expect(missing.forWork(room, { signIn: false, isCurrent: () => true })).rejects.toThrow('WORKDIR_UNAVAILABLE');
+    await rm(root, { recursive: true });
+    await expect(folders.forWork(room, { signIn: false, isCurrent: () => true })).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// Unit: custom roots can be offline mounts. The production resolver must not
+// recursively recreate them, while app-managed defaults may be initialized.
+it.each([true, false])('preserves workspace root creation policy (custom=%s)', async isCustomized => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'group-mount-'));
+  const root = path.join(parent, 'missing-root');
+  const bindFallback = vi.fn();
+  const room = { id: 'group-mount', name: 'Team' };
+  try {
+    const folders = createGroupProjectFolders({ chosen: () => null,
+      workspaceRoot: () => ({ directory: root, isCustomized }), bindFallback,
+      validate: async dir => ({ ok: true as const, dir }) });
+    const shown = await folders.shown(room);
+    if (isCustomized) {
+      await expect(folders.forWork(room, { signIn: false, isCurrent: () => true })).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(bindFallback).not.toHaveBeenCalled();
+      await mkdir(root);
+    }
+    const result = await folders.forWork(room, { signIn: false, isCurrent: () => true });
+    expect(result.dir).toBe(shown.dir);
+    expect((await stat(result.dir!)).isDirectory()).toBe(true);
+    expect(bindFallback).toHaveBeenCalledOnce();
+  } finally { await rm(parent, { recursive: true, force: true }); }
 });

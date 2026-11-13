@@ -30,7 +30,7 @@ import { prepareChatReplyImages } from './chatServerReplyImages.js';
 import { chatServerAssistantSessions, chatServerTaskCards, chatServerWorkspaces } from './chatServerWorkspaces.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { botGroupFolderPath } from './botGroupWorkDir.js';
-import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace.js';
+import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
 import { createGroupProjectFolders } from './groupProjectFolder.js';
 import { createGroupTaskCards } from './groupTaskCards.js';
 import { createGroupAssistantTasks, formatGroupRequest, type GroupAssistantTask } from './groupAssistantTask.js';
@@ -528,7 +528,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const memberName = (m: Member, members: readonly Member[]) => isAssistant(m) ? BOT_GROUP_ASSISTANT_NAME : chatGroupMemberName(m, members);
   /** Where a group's work happens on this computer (`groupProjectFolder.ts`, bot-group-chat.md §7.5). */
   const projectFolders = createGroupProjectFolders({
-    workspaceRoot: dialogueWorkspaceRootDir,
+    workspaceRoot: readDialogueWorkspaceSettings,
     chosen: roomId => workspaces().read(roomId)?.projectDir ?? null,
     fallback: room => workspaces().read(room.id)?.fallbackDir ??
       (existsSync(botGroupFolderPath(ownerScopedUserDataPath(), room.id)) ? botGroupFolderPath(ownerScopedUserDataPath(), room.id) : null),
@@ -2927,7 +2927,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(digest ? { personalDigest: true } : {}),
           // A queue turn talks in its own lane (no project folder); a division of work runs in its work directory.
           ...(run.plan?.kind === 'talk' ? { talkPlanId: run.plan.id }
-            : run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? '', sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}),
+            : run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? (execution.access_mode === 'chat' ? projectDir ?? '' : ''), sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}),
           ...(threadRootId ? { threadRootId } : {}) });
         if (!lane.ok) throw new Error(botGroupRuntimeFailureCode({ code: lane.errorCode, message: lane.message }));
         if (lane.replacedSessionId) void deps.closeLanes?.([lane.replacedSessionId]);

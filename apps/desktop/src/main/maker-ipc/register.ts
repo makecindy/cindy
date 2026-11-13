@@ -709,7 +709,7 @@ import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
 import { createGroupProjectFolders } from './groupProjectFolder.js';
 import { botGroups as localBotGroups } from '../localDb/schema.js';
-import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace.js';
+import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings.js';
 import { botGroupFolderPath } from './botGroupWorkDir.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
@@ -13738,7 +13738,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 分工 steps run in the group's folder, the 项目文件夹, or one worktree per plan (bot-group-chat.md §7.5).
   const botGroupAttachments = createBotGroupAttachmentStore({ ownerRoot: () => ownerScopedUserDataPath(), log });
   const localGroupFolders = createGroupProjectFolders({
-    chosen: () => null, workspaceRoot: dialogueWorkspaceRootDir,
+    chosen: () => null, workspaceRoot: readDialogueWorkspaceSettings,
     validate: async dir => { try { return (await statWorkingDirectory(dir)).isDirectory() ? { ok: true as const, dir } : { ok: false as const }; } catch { return { ok: false as const }; } },
   });
   const localGroupFolder = async (groupId: string) => {
