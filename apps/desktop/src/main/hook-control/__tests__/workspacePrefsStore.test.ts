@@ -653,6 +653,21 @@ describe('workspacePrefsStore', () => {
     expect(getWorkspacePref('feishu', null, 'main').model).toBeNull();
   });
 
+  // PR #10291 review(第二轮): 把新名称下所有全空行都当成改名墓碑, 会把用户主动清空的设置
+  // 用旧名称下的值(例如随服务端快照回来的旧行)盖回去。
+  it('项目改名: 用户在新名称下主动清空的设置不被旧名称的值盖回去', () => {
+    setWorkspacePref('feishu', null, 'main', { model: 'tmp' });
+    setWorkspacePref('feishu', null, 'main', { model: null });
+    setWorkspacePref('feishu', null, 'app', { model: 'old', permissionMode: 'default' });
+
+    moveWorkspacePrefsToRenamed([{ from: 'app', to: 'main' }]);
+    expect(getWorkspacePref('feishu', null, 'main')).toMatchObject({
+      model: null,
+      permissionMode: null,
+    });
+    expect(getWorkspacePref('feishu', null, 'app').model).toBeNull();
+  });
+
   it('项目改名: 新名称下已有偏好时不覆盖; 来源偏好一并挪过去', () => {
     setWorkspacePref('feishu', null, 'xdmaker', { model: 'old' });
     setWorkspacePref('feishu', null, '主仓库', { model: 'new' });

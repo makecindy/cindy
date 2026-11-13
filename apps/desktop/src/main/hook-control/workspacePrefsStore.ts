@@ -45,6 +45,11 @@ export interface WorkspacePrefsEntry {
    * 有值时可先用 server 快照补齐未改字段，再安全地生成完整镜像行。
    */
   dirtyPatch?: HookPrefsPatch;
+  /**
+   * 这条全空行是项目改名时留在旧名称下的清空墓碑, 不是用户清空的。项目又改回这个名称时,
+   * 只有带这个标记的全空行才会被抄回来的值顶掉; 用户主动清空的设置不受改名影响。
+   */
+  renameTombstone?: boolean;
 }
 
 interface StoreFile {
@@ -100,7 +105,8 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
     (r.rev === undefined ||
       (typeof r.rev === 'number' && Number.isInteger(r.rev) && r.rev >= 0 && r.rev <= 1_000_000_000)) &&
     (r.dirty === undefined || typeof r.dirty === 'boolean') &&
-    (r.dirtyPatch === undefined || isDirtyPatch(r.dirtyPatch))
+    (r.dirtyPatch === undefined || isDirtyPatch(r.dirtyPatch)) &&
+    (r.renameTombstone === undefined || typeof r.renameTombstone === 'boolean')
   );
 }
 
@@ -282,6 +288,8 @@ export function setWorkspacePref(
     dirty: true,
     dirtyPatch,
   };
+  // 用户亲手写过这一行, 它就不再是改名留下的墓碑(哪怕写进去的仍是全空)。
+  delete nextRow.renameTombstone;
   const rest = store.entries.filter((e) => !sameKey(e, channel, teamId, workspace));
   // 全空行是未同步的删除墓碑：派发视为跟随默认，重连时向 server 发 all-null。
   // 镜像回执必须对上 rev，才允许 markWorkspacePrefMirrored 清墓碑或去掉 dirty。
@@ -639,9 +647,10 @@ export function resolveWorkspacePrefOverrides(
 /**
  * 项目改名后, 把按旧名称存的偏好挪到新名称下; 返回有改动的渠道。
  *
- * 新名称下没有实值时照抄旧行(整行作为本机正本镜像出去); 已有实值(用户在新名称下改过)
- * 就不覆盖。新名称下只有一条全空行时照样抄过去: 那多半是上一次改名留在这个名称下、还没
- * 镜像出去的清空墓碑(项目离线改名又改回来), 当成「已有设置」就会两头都清空。
+ * 新名称下还没有行时照抄旧行(整行作为本机正本镜像出去); 已经有行(用户在新名称下改过,
+ * 或主动清空留下的全空行)就不覆盖。例外是上一次改名留在这个名称下、还没镜像出去的清空
+ * 墓碑(renameTombstone; 项目离线改名又改回来): 把它当成「已有设置」会两头都清空, 所以
+ * 照样抄过去。
  * 旧行一律收成未同步的清空墓碑, 镜像后两边一起消失 —— 留着它, 用户之后清空新名称下的
  * 偏好时, 下一次整理又会把旧值抄回来。
  * 可重复执行: 旧名称下没有实值时什么也不做。
@@ -658,7 +667,8 @@ export function moveWorkspacePrefsToRenamed(
     if (from === to || !HOOK_WORKSPACE_ALIAS_RE.test(to)) continue;
     for (const row of entries.filter((entry) => entry.workspace === from && !isBlankRow(entry))) {
       const target = entries.find((entry) => sameKey(entry, row.channel, row.teamId, to));
-      const keepTarget = target !== undefined && !isBlankRow(target);
+      const keepTarget =
+        target !== undefined && !(isBlankRow(target) && target.renameTombstone === true);
       const tombstone: WorkspacePrefsEntry = {
         channel: row.channel,
         teamId: row.teamId,
@@ -669,6 +679,7 @@ export function moveWorkspacePrefsToRenamed(
         permissionMode: null,
         rev: rowRev(row) + 1,
         dirty: true,
+        renameTombstone: true,
       };
       const moved: WorkspacePrefsEntry = {
         channel: row.channel,
