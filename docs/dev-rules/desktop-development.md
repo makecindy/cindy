@@ -100,6 +100,11 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 不要为只替换设备互联服务而启动完整 `local` 模式：它会把两个账号区域固定到同一套
 本机服务，不能承载真实双区企业 SSO。
 
+只调试本机 Webhook/GitHub App 时，使用相同的 remote 隔离启动方式，并设置 `XDT_WEBHOOK_GLOBAL_LOCAL_URL=http://127.0.0.1:8793`（中国大陆账号用 `XDT_WEBHOOK_CN_LOCAL_URL`）。只替换本区 Webhook API，保留真实认证；只接受带端口的回环地址，正式版忽略此覆盖。
+
+个人版与普通开发版默认使用端点清单，`CINDY_PERSONAL_FIXED_APP` 不改变 Webhook 地址。内部 GitHub App 测试必须显式设置上述本区开发覆盖；它会替换该隔离实例的整个 Webhook 服务，不能将仅开放 `/github/*` 的临时代理当作普通 Webhook 的公网接收入口。正式包始终忽略开发覆盖。
+
+
 两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
 命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
 用户机器上的正式版。
@@ -527,7 +532,7 @@ node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
 
 展开／收起时 `sidebarPresentation` 暂时固定内容区旧宽度并保留旧侧栏状态；主进程
 回传实际增量后，等待 renderer 观察到对应 viewport 宽度，再在同一帧释放旧宽并切换
-侧栏。原生窗口有尺寸变化时不叠加侧栏的 250ms 宽度动画，避免聊天消息先压缩或
+侧栏。原生窗口有尺寸变化时不叠加侧栏的宽度动画，避免聊天消息先压缩或
 拉宽再恢复；无可用空间时保留窗口内动画。快速反向操作丢弃迟到回包。
 
 侧栏开关归聊天区所有，点击展开、再次点击收起；展开后仍留在聊天区原来的角上

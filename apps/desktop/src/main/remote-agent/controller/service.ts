@@ -27,6 +27,8 @@ import type {
 } from '@cindy/maker-core';
 import {
   LOCAL_AGENT_CLIENT,
+  AgentStartupStoppedError,
+  isolatedBotProfile,
   resolveAllowedManagedSkills,
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
@@ -51,7 +53,8 @@ import {
   type LocalManagedSkill,
 } from './projectFiles';
 import type { LocalMcpTarget } from './router';
-import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from './runClient';
+import { RemoteAgentPoller, RemoteAgentRunClient, RemoteAgentRemoteError, remoteAgentInvoker } from './runClient';
+import { decideProviderGroupFailure } from '../../provider-group/failurePolicy.js';
 import { registerPendingRemoteStart, startRemoteAgentSession, type PreparedRemoteMcp } from './startRemote';
 import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, sharedTaskLeaseDeadline,
   trackLiveSharedTaskTarget, rememberSharedTaskAuthorization, forgetSharedTaskAuthorization,
@@ -165,6 +168,8 @@ export interface DirectGuestRecovery {
   ownerRoute: string;
   isCurrent(): boolean;
   requestSwitch(): Promise<string | undefined>;
+  /** Retire an unstarted run's grant after recovery settles or is abandoned. */
+  dispose?(): void;
 }
 
 interface DirectGuestSession {
@@ -176,8 +181,15 @@ interface DirectGuestSession {
 
 const liveDirectGuestSessions = new Map<string, DirectGuestSession & {
   identity: object;
+  failedStartCleanup?(): void;
 }>();
 const DIRECT_GRANT_ID = /^[0-9a-f-]{36}$/;
+
+/** Only M's explicit pre-process/confirmed-exit evidence permits another runtime. */
+function confirmedStoppedStartup(error: unknown): error is RemoteAgentRemoteError {
+  return error instanceof RemoteAgentRemoteError && error.phase === 'start'
+    && (error.info.name === 'AgentStartupStoppedError' || error.info.name === 'AgentNotAuthenticatedError');
+}
 
 export function liveDirectGuestSession(sessionId: string): Readonly<DirectGuestSession> | null {
   return liveDirectGuestSessions.get(sessionId) ?? null;
@@ -255,8 +267,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       }
     }
     // 插件工具同样经隧道回到本机：花名册也按本机真实工作目录现算一次(会话内恒定)。
-    // 外部应用只开放它自己的工具，伙伴另有发现规则，都不带。
-    if (opts.ghostRosterSnapshot === undefined && deps.ghostRosterPrompt && !opts[LOCAL_AGENT_CLIENT] && !opts.botRuntimeProfile) {
+    // 与本机引擎同一判断：隔离运行的伙伴另有发现规则，带空花名册(不带时对方会回退到它自己的插件)；
+    // V2 伙伴在自己项目里的对话按普通任务，照常带。外部应用只开放它自己的工具，不带。
+    const isolatedBot = isolatedBotProfile(opts.botRuntimeProfile);
+    if (opts.ghostRosterSnapshot === undefined && isolatedBot) {
+      opts.ghostRosterSnapshot = '';
+    } else if (opts.ghostRosterSnapshot === undefined && deps.ghostRosterPrompt && !opts[LOCAL_AGENT_CLIENT]) {
       try {
         opts.ghostRosterSnapshot = deps.ghostRosterPrompt(opts.workingDir);
       } catch (error) {
@@ -431,6 +447,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const openingDirectGeneration = selectedDirectRoute?.generation;
     // Keep this attempt's grant even if another start replaces the task's route cache.
     const openingDirectRoute = selectedDirectRoute;
+    const startupAuthorization = opts.resumeSessionId && sessionId && openingDirectRoute
+      ? captureSharedTaskAuthorizationCheck(input.deviceId, sessionId, input.agentKind, opts.model, target) : null;
     let reusedHistory = openingDirectRoute?.reused === true;
     let leaseDeadline = openingDirectRoute?.leaseDeadline ?? performance.now();
     let wallDeadline = openingDirectRoute?.wallDeadline ?? Date.now();
@@ -534,14 +552,15 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       // Codex 建线程时沿上级目录逐级查找 .git 与插件清单：先把有没有报过去，对方不再逐个经设备互联来问。
       ...(input.agentKind === 'codex' ? { collectAncestorMarkers } : {}),
       collectPersonal: async (kind, projectFiles, agent) => {
-        // 与本机任务同一规则：伙伴按授权挑托管 Skill，停用的不带；个人 Skill 只按停用过滤。
+        // 与本机引擎同一规则：隔离运行的伙伴按授权挑托管 Skill；V2 伙伴在自己项目里的对话按普通任务，
+        // 不套伙伴授权。停用的都不带；个人 Skill 只按停用过滤。
         const disabledSkillPaths = [...(deps.disabledSkillPaths?.() ?? [])];
         let managedSkills: LocalManagedSkill[] | undefined;
         if (deps.managedSkills) {
           try {
             managedSkills = resolveAllowedManagedSkills(
               await deps.managedSkills(),
-              snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy),
+              snapshotManagedSkillGrants(isolatedBot?.skillPolicy),
               disabledSkillPaths,
             ).flatMap((skill) => skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []);
           } catch (error) {
@@ -551,7 +570,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
         return collectPersonalConfig(kind, projectFiles, {
           ...collect,
-          ...(opts.botRuntimeProfile ? {} : { disabledSkillPaths }),
+          ...(isolatedBot ? {} : { disabledSkillPaths }),
           ...(managedSkills ? { managedSkills } : {}),
           ...(managedSkills && agent?.managedSkillDigests ? { agentDigests: agent.managedSkillDigests } : {}),
         });
@@ -580,13 +599,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       if (expiryTimer) clearTimeout(expiryTimer);
       const ownsDirectIdentity = !!sessionId
         && liveDirectGuestSessions.get(sessionId)?.identity === directIdentity;
-      clearDirectIdentity();
       if (target !== input.deviceId && shareId && sessionId) {
         if (opts.resumeSessionId && recoverLostHistoryGrant && !startupAbort.signal.aborted
           && isSharedTaskAuthorizationDenied(error)) {
           const original = parseProviderSharePeer(target);
           if (original?.role === 'host') {
             requireCurrent();
+            clearDirectIdentity();
             // M restarted and lost its memory-only grant. Reissue only for the
             // original M through O; never send native history to another peer.
             const reauthorized = await authorizeSharedTaskExecutor(input.deviceId, sessionId,
@@ -600,6 +619,62 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
         const taskKey = `${shareId}:${sessionId}`;
         const failed = directTasks.get(taskKey);
+        // A confirmed M startup failure has not dispatched the user's input. Keep
+        // its exact grant available to the same input-recovery path used by a
+        // running task. O must issue the switch token before this route retires;
+        // the native ID still belongs only to M and never goes through fallback.
+        if (opts.resumeSessionId && groupSwitch && ownsDirectIdentity && openingDirectRoute && openingDirectGeneration
+          && !openingDirectRoute.availability && !cloudAllocation && !startupAbort.signal.aborted
+          && confirmedStoppedStartup(error)
+          && decideProviderGroupFailure({ ...error.info, message: error.message }, 'start').action === 'switch') {
+          requireCurrent();
+          // Capture before startup, never recreate it after failure: explicit
+          // link close or an owner change during M's startup must stay terminal.
+          const authorized = startupAuthorization;
+          if (authorized?.()) {
+            const pending = registerPendingRemoteStart(sessionId);
+            let active = true;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const dispose = () => {
+              if (!active) return;
+              active = false;
+              if (timer) clearTimeout(timer);
+              pending.signal.removeEventListener('abort', dispose);
+              pending.dispose();
+              clearDirectIdentity();
+              if (directTasks.get(taskKey) === openingDirectRoute) directTasks.delete(taskKey);
+              void releaseFailedDirectAllocation(openingDirectGeneration);
+            };
+            const isCurrent = () => {
+              if (active && !pending.signal.aborted && authorized()) return true;
+              dispose();
+              return false;
+            };
+            const recovery: DirectGuestRecovery = {
+              ownerRoute: input.deviceId, isCurrent, dispose,
+              async requestSwitch() {
+                if (!isCurrent()) return undefined;
+                const result = await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
+                  op: 'direct-switch', sessionId, generation: openingDirectGeneration,
+                }]);
+                if (!isCurrent()) return undefined;
+                const reply = result && typeof result === 'object'
+                  ? result as { token?: unknown; generation?: unknown } : null;
+                // Older O ignores the request generation. It cannot prove that
+                // the token belongs to this failure rather than another open.
+                return reply?.generation === openingDirectGeneration && typeof reply.token === 'string' ? reply.token : undefined;
+              },
+            };
+            liveDirectGuestSessions.set(sessionId, { identity: directIdentity,
+              ...recovery, captureRecovery: () => isCurrent() ? recovery : null, failedStartCleanup: dispose });
+            pending.signal.addEventListener('abort', dispose, { once: true });
+            timer = setTimeout(dispose, Math.max(0, Math.min(openingDirectRoute.authorizedUntil - Date.now(),
+              wallDeadline - Date.now(), leaseDeadline - performance.now())));
+            (timer as { unref?: () => void }).unref?.();
+            throw error;
+          }
+        }
+        clearDirectIdentity();
         if (ownsDirectIdentity && failed?.target === target && failed.generation === openingDirectGeneration) {
           directTasks.delete(taskKey);
           if (startupAbort.signal.aborted) void releaseFailedDirectAllocation(openingDirectGeneration);
@@ -616,6 +691,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         target = input.deviceId;
         return fallback;
       }
+      clearDirectIdentity();
       throw error;
     });
     if (attempt.signal.aborted) {
@@ -929,6 +1005,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   };
   return async (input: StartInput): Promise<AgentSessionHandle> => {
     if (!input.options.sessionId) throw new Error('remote agent sessions require a session id');
+    liveDirectGuestSessions.get(input.options.sessionId)?.failedStartCleanup?.();
     const attempt = registerPendingRemoteStart(input.options.sessionId);
     let ready: AgentSessionHandle | undefined;
     let rejectCancelled!: (error: unknown) => void;
@@ -942,6 +1019,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         if (attempt.signal.aborted) { closeCancelled(); throw attempt.signal.reason; }
         return handle;
       }), cancelled]);
+    } catch (error) {
+      // M proved that it never started a process or has stopped it, and
+      // startRemote has finished G's local cleanup. Preserve that evidence as
+      // a local class so Maker releases this attempt's guards before reopening.
+      if (confirmedStoppedStartup(error)) {
+        throw new AgentStartupStoppedError(error);
+      }
+      throw error;
     } finally {
       attempt.signal.removeEventListener('abort', onCancel);
       attempt.dispose();

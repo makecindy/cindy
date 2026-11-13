@@ -858,6 +858,8 @@ interface CCAgentStatusUpdate {
   costUsd?: number;
   contextTokens: number;
   contextWindow: number;
+  /** A confirmed mid-turn snapshot may be zero; old hosts omit this flag. */
+  contextSnapshotAuthoritative?: boolean;
   outputTokens?: number;
   generationDurationMs?: number;
   generationActive?: boolean;
@@ -1251,8 +1253,12 @@ interface ElectronAPI {
   pageZoomOut: () => Promise<{ ok: true; zoomFactor: number }>;
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
+  /** Device screens of another computer shown inside this window (sidebar tab). */
+  liveScreenEmbed?: import('../shared/remoteDesktopViewer').LiveScreenEmbedBridge;
+  liveScreenRelay?: import('../shared/liveScreenView').LiveScreenRelayBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
+    loadPluginFont?: (role: string) => Promise<{ family: string; bytes: ArrayBuffer }>;
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -1264,6 +1270,8 @@ interface ElectronAPI {
       patch: Partial<import('../shared/appearanceSettings').AppearanceSettings>,
     ) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
     reset: () => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    selectTheme?: (selection: import('../shared/appearanceDefinition').ThemeSelection | null) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    resetFields?: (fields: string[]) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
     onChanged: (
       callback: (settings: import('../shared/appearanceSettings').AppearanceSettings) => void,
     ) => () => void;
@@ -1288,6 +1296,10 @@ interface ElectronAPI {
 
   /** 开屏卡住时上报一次启动门快照;main 校验字段后写进可上传的诊断日志。仅主窗 preload 提供。 */
   reportStartupGateStall?: (snapshot: StartupGateStallSnapshot) => void;
+
+  cindyFiles: {
+    open: (filePath: string) => Promise<import('../shared/cindyFile').CindyFileOpenResult>;
+  };
 
   localThemes: {
     listSync: () => LocalThemesResult;
@@ -1344,6 +1356,20 @@ interface ElectronAPI {
   };
 
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
+  /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
+  modelGroups: {
+    get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
+    decisions: () => Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]>;
+    bindSession: (request: {
+      sessionId: string;
+      selection: import('../shared/modelGroups').ModelGroupSelection;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+    }) => Promise<void>;
+    switchOffer: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null>;
+  },
+
   ghosts: {
     activateBrowser: (id: string) => Promise<{ ok: boolean }>;
     mailPreview: (sessionId: string, url: string, read: boolean, opened?: boolean, providerId?: string) => Promise<import('@cindy/maker-shared/mail-message').MailPreviewResult>;
@@ -1446,7 +1472,7 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions' | `host-tools:${import('@cindy/plugin-protocol').GhostHostToolGroup}` | `event:${import('../shared/ghost').GhostTaskEventTopic}`) => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
     runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings) => Promise<import('../shared/pluginRuntime').RuntimePluginSettings>;
@@ -1660,6 +1686,7 @@ interface ElectronAPI {
       }) => void,
     ) => () => void;
     /** confirm 槽回包:把用户的点击送回 main 结算挂起的管子请求。 */
+    onConfirmDismissed?: (callback: (payload: { requestId: string }) => void) => () => void;
     resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
     onModelPickerRequest: (callback: (request: import('../shared/pluginModelPicker').PluginModelPickerPresentation) => void) => () => void;
     onModelPickerDismissed: (callback: (request: { requestId: string }) => void) => () => void;
@@ -2478,6 +2505,9 @@ interface ElectronAPI {
 
   // ── 伙伴自有 IM 机器人连接(Telegram / 飞书, 伙伴设置「消息平台」页)──
   botImConnection: {
+    getIMessageConfig?: (payload: { id: string }) => Promise<import('../shared/botImConnection').BotIMessageConfig>;
+    updateIMessageConfig?: (payload: { id: string; config: import('../shared/botImConnection').BotIMessageUpdateInput }) => Promise<import('../shared/botImConnection').BotImConnectionListPayload>;
+
     list: () => Promise<import('../shared/botImConnection').BotImConnectionListPayload>;
     /**
      * 填凭证并建连。伙伴不存在 → NOT_FOUND; 其余都是 PRECONDITION_FAILED, 以 message 前缀
@@ -4280,7 +4310,7 @@ interface ElectronAPI {
     onReshareRequested(cb: () => void): () => void;
   };
   subscriptionAccounts: {
-    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
+    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider; resetAccountId?: string }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
     /** Validate the reply with parseSubscriptionSessionAccountView. */
     sessionAccount?(query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown>;
@@ -4763,6 +4793,10 @@ interface ElectronAPI {
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    githubAppStatus: () => Promise<import('../shared/githubSetup').GithubAppConnectionState>;
+    connectGithubApp: () => Promise<void>;
+    installGithubApp: () => Promise<void>;
+    disconnectGithubApp: () => Promise<void>;
     checkCindyStar: () => Promise<boolean | null>;
     starCindy: () => Promise<boolean | null>;
     githubConnection: () => Promise<import('../shared/githubSetup').GithubConnectionState>;
@@ -5160,6 +5194,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     bots: {
+      projectRepository: (botId: string, retry: boolean) => Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus>;
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;
@@ -5769,6 +5804,7 @@ interface ElectronAPI {
     ) => () => void;
     getCompanionCloudState: () => Promise<import('../shared/companionCloud').CompanionCloudSnapshot>;
     takeOverCompanion: (botId: string) => Promise<import('../shared/companionCloud').CompanionCloudActionResult>;
+    repairCompanionProfile: (botId: string, request: import('../shared/companionCloud').CompanionProfileRepairRequest) => Promise<import('../shared/companionCloud').CompanionProfileRepairResult>;
     switchCompanionHome: (botId: string, targetDeviceId: string, options?: import('../shared/companionCloud').CompanionSwitchOptions) => Promise<import('../shared/companionCloud').CompanionCloudActionResult>;
     getCompanionTranscript: (botId: string, before?: string) => Promise<import('../shared/companionCloud').CompanionTranscriptPage>;
     getCompanionHomeChoices: (botId: string) => Promise<import('../shared/companionCloud').CompanionHomeChoices>;
@@ -5966,7 +6002,9 @@ interface ElectronAPI {
     /** 自定义供应商变更广播订阅（返回 off）。 */
     onProvidersChanged: (cb: () => void) => () => void;
 
-    mcpApps: (sessionId: string, input: unknown) => Promise<unknown>;
+    mcpApps: (sessionId: string | null, input: unknown) => Promise<unknown>;
+    onPluginUiAction: (callback: (input: unknown) => void) => () => void;
+    onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,
@@ -6121,6 +6159,9 @@ interface ElectronAPI {
       providerId: string;
       enabled: boolean;
     }) => Promise<{ ok: true; enabled: boolean }>;
+    /** 「远程连接」里的「让我的其他电脑用本机模型」：默认关闭，与供应商分享无关。 */
+    getOwnComputerModelUse: () => Promise<{ enabled: boolean }>;
+    setOwnComputerModelUse: (input: { enabled: boolean }) => Promise<{ ok: true; enabled: boolean }>;
     /** 供应商「运行于」：deviceId、'local'，或 null 回到默认；写入后经 PROVIDER_CHANGED 刷新。 */
     setProviderRunLocation: (input: { providerId: string; location: string | null }) => Promise<{ ok: true }>;
     /** Persist the visible provider order only if the active owner still matches. */
@@ -7407,7 +7448,7 @@ interface ElectronAPI {
         received: number;
         ignored: number;
         connected?: boolean;
-        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+        problem?: 'limit' | 'failed' | 'unsupported' | 'suspended' | 'quota' | 'released';
         quotaLimit?: number;
         quotaResetAt?: number;
       } | null>;

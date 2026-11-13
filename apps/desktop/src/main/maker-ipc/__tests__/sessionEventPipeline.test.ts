@@ -2,6 +2,11 @@ import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { createDrizzleProxy } from '../../localDb/client/drizzleProxy.js';
+import type { DbTransport } from '../../localDb/client/DbTransport.js';
+import { createRemoteAgentHandle } from '../../remote-agent/controller/proxyHandle.js';
+import { ExecutorWorkspace } from '../../remote-agent/executor/workspace.js';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from '../piUsageReceipts.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
@@ -245,7 +250,9 @@ function event(
   return { type, source: 'codex', data, ...extra } as AgentEvent;
 }
 
-function harness() {
+const actualSnapshotWriter = await vi.importActual<typeof import('../../sessionSpendBroadcaster.js')>('../../sessionSpendBroadcaster.js');
+
+function harness(remoteHandle?: AgentSessionHandle) {
   const log = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -256,7 +263,7 @@ function harness() {
     child: () => log,
   };
   const ended = deferred();
-  const handle = {
+  const handle = remoteHandle ?? {
     id: 'provider',
     agentKind: 'codex',
     model: 'test-model',
@@ -1092,6 +1099,109 @@ describe('production Session event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // #10198 (unit): end-of-turn coverage missed native compaction inside a live
+  // turn. Remote poll chunks may deliver status before its cached state. Drive
+  // the real proxy -> pipeline -> writer and reopen SQLite (db tier, no files).
+  it.each([false, true])('persists remote Pi compaction across split delivery (state first=%s)', async (stateFirst) => {
+    const oldUsage = { tokenUsage: 0, costUsd: 0, contextTokens: 579216, contextWindow: 272000 };
+    const proxy = createRemoteAgentHandle({
+      started: { id: 'remote', agentKind: 'pi', model: 'test', shadowDir: '/remote', methods: [],
+        state: { usage: oldUsage, turnRunning: true } },
+      link: { live: async () => null, ensure: vi.fn(), begin: () => () => {}, close: async () => {} },
+      workspace: new ExecutorWorkspace({ workingDir: process.cwd() }),
+      recordApproval: vi.fn(), newId: () => 'request', dispose: async () => {},
+    });
+    const h = harness(proxy.handle);
+    const iterator = proxy.handle.events()[Symbol.asyncIterator]();
+    const deliver = async (value: AgentEvent) => {
+      proxy.onEvent(value);
+      const next = await iterator.next();
+      expect(next.done).toBe(false);
+      h.emit(next.value!);
+    };
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, context_tokens INTEGER,
+      context_window INTEGER, context_window_runtime INTEGER);
+      INSERT INTO sessions VALUES ('task', 579216, 272000, 272000);`);
+    const transport: DbTransport = {
+      async send<R>(op: string, args: unknown): Promise<R> {
+        const { sql, params } = args as { sql: string; params: unknown[] };
+        const statement = sqlite.prepare(sql);
+        return (op === 'run' ? statement.run(...params) : op === 'rawGet'
+          ? statement.raw().get(...params) : statement.raw().all(...params)) as R;
+      },
+      on() {}, onTerminated() {}, async close() {},
+    };
+    const unexpectedDbCall = async (): Promise<never> => { throw new Error('Expected snapshot Drizzle path'); };
+    const db: DbClient = {
+      drizzle: createDrizzleProxy(transport),
+      query: unexpectedDbCall, queryOne: unexpectedDbCall, exec: unexpectedDbCall, tx: unexpectedDbCall,
+      vecAvailable: false, async dispose() {},
+    };
+    const writes: Promise<void>[] = [];
+    setCurrentDbClient(db, 'compaction-test');
+    effects.fn('getDbClient').mockReturnValue(db);
+    effects.fn('recordSessionContextSnapshot').mockImplementation((id, tokens, window) => {
+      effects.calls.push('recordSessionContextSnapshot');
+      const write = actualSnapshotWriter.recordSessionContextSnapshot(id as string, tokens as number, window as number);
+      writes.push(write);
+      return write;
+    });
+    try {
+      await deliver(event('status', { isRunning: true }, { source: 'pi' }));
+      const boundary = event('compact_boundary', { postTokens: 46703 }, { source: 'pi' });
+      await deliver(boundary);
+      expect(proxy.handle.getUsageSnapshot().contextTokens).toBe(579216);
+      expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+      const usage = { ...oldUsage, contextTokens: 46703 };
+      if (stateFirst) proxy.onState({ usage });
+      effects.calls.length = 0;
+      await deliver(event('status', { ...usage, isRunning: true, status: 'Working…',
+        contextSnapshotAuthoritative: true }, { source: 'pi' }));
+      ordered('broadcast', 'recordSessionContextSnapshot');
+      await Promise.all(writes);
+      if (!stateFirst) proxy.onState({ usage });
+      const reopened = new Database(sqlite.serialize());
+      try {
+        expect(reopened.prepare('SELECT context_tokens, context_window, context_window_runtime FROM sessions').get()).toEqual({
+          context_tokens: 46703, context_window: 272000, context_window_runtime: 272000,
+        });
+      } finally { reopened.close(); }
+      expect(h.activity.isSessionInTurn('task')).toBe(true);
+      expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
+      proxy.onState({ usage: { ...usage, contextTokens: 58000 } });
+      await deliver(boundary);
+      expect(effects.fn('recordSessionContextSnapshot')).toHaveBeenCalledTimes(1);
+      await deliver(event('tool_use', { toolUseId: 'after-compact', toolName: 'read', input: {} }, { source: 'pi' }));
+      expect(effects.fn('onToolUseEvent')).toHaveBeenCalled();
+      expect(h.activity.isSessionInTurn('task')).toBe(true);
+    } finally {
+      await Promise.all(writes);
+      clearCurrentDbClient(db);
+      sqlite.close();
+      await h.dispose();
+      await iterator.return?.();
+    }
+  });
+
+  it.each([
+    ['missing', undefined, {}],
+    ['NaN', NaN, {}],
+    ['negative', -1, {}],
+    ['infinite', Infinity, {}],
+    ['old generation', 46703, { sessionTurnGeneration: -1 }],
+    ['old instance', 46703, { sessionInstanceId: 'retired-instance' }],
+    ['background', 46703, { turnScope: 'background' as const }],
+  ])('does not persist a %s compaction over active work', async (_label, postTokens, scope) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    h.emit(event('compact_boundary', { postTokens }, { source: 'pi', ...scope }));
+    h.emit(event('status', { isRunning: true, status: 'Working…', contextSnapshotAuthoritative: true,
+      contextTokens: postTokens, contextWindow: 272000 }, { source: 'pi', ...scope }));
+    expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
 
   it.each([
     ['xd', 1],

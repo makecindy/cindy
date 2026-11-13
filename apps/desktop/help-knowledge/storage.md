@@ -23,7 +23,7 @@ summary: Settings > Storage shows how much disk Cindy uses and lets you set the 
 **Database:**
 
 - **Database cleanup** — click **Scan database** to see what would be removed. It targets the message history of **soft-deleted and archived** tasks not updated for longer than the period you pick (**7 days** by default, or 1, 3, or 6 months).
-  - **Clean Unarchived Tasks** (off by default) also includes old unarchived tasks: their history is removed, their agent context is reset, and they leave the task list (teammates' main tasks stay). Cindy asks you to confirm, because such a task could still be running.
+  - **Clean Unarchived Tasks** (off by default) also includes old unarchived tasks: their history is removed, their agent context is reset, and they leave the task list (buddies' main tasks stay). Cindy asks you to confirm, because such a task could still be running.
   - **Back up database before cleanup** is on by default (the default backup lives in the database folder and only the latest cleanup backup is kept; **Choose backup folder** to put it elsewhere).
   - **Confirm database cleanup** → **Restart and clean up database**: Cindy restarts, backs up (if enabled), removes the history, compacts, and verifies the database before opening it. If a step fails, Cindy keeps or restores the original database.
   - **This permanently removes that history.** With a backup you can restore task and message data from it (**Open cleanup backup**); without one, it can't be recovered. Records used to review or undo file changes from those messages aren't in the backup. Files and generated media on disk are not deleted.

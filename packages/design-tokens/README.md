@@ -34,12 +34,12 @@ Effort/price 静态表也由 colors.ts 生成并导出，`effortTierColors.ts` i
 - 标准类型：color、dimension（px/rem）、number、duration、cubicBezier、fontFamily、fontWeight、shadow。null 在模式绑定中显式保留，dark:null 继续走原 light 回退。
 - 数值层单向：component→semantic→reference；内置主题覆盖只引用 reference/semantic。遗留 CSS alias 的直接目标及 var/hsl 包装由扩展元数据保留；Terrazzo 的终值用于校验，输出继续是符号引用。守卫核验符号目标与 DTCG 目标连接，不能把它们全部固化成 hex。
 - `com.cindy.desktop` 格式元数据只记录大小写、精度、透明度/阴影语法，不存第二份值；`com.cindy.governance` 保留保护与语义豁免标签。保护标签限制改值，不放宽主题导入或颜色门禁。
-- **历史 HSL 不按名称纠正**：Light text-primary 是 #262626，其 HSL 是 `0 0% 9%`；Dark surface-hover 是 #3c3c3a，其 HSL 是 `60 2% 17%`。它们不是精确同色。本批保留全部实际 triplet/alpha/小数格式；新导入仍遵守 DESIGN §10 的精确换算，CINDY twin/格式冻结照旧。
+- **HSL 写法与 hex 同色**：DS-8 迁移时曾原样保留 Classic 三处历史 triplet（Light `text-primary-hsl` `0 0% 9%`、Dark `surface-hover-hsl` `60 2% 17%`、Dark `text-tertiary-hsl` `0 0% 45%`）。2026-11-11 维护者裁决（A-05）改为与对应颜色同色：`0 0% 15%`（= #262626）、`60 2% 23%`（= #3c3c3a）、`0 0% 64%`（= 次要档 #a3a3a3；`text-tertiary-hsl` 跟随次要档，与 CINDY 一致）。新导入仍遵守 DESIGN §10 的精确换算，CINDY twin/格式冻结照旧。
 - 用户 `colors.radius`、局部/全局覆盖、未知 ID、导入、重复加载、磁盘字节与原主题顺序均保留。生成不读写用户主题目录。
 
 ## 已接管与保留
 
-基线为 **541 ID / 11 内置主题**。DS-11 新增独立 `form-field-hint` 角色（默认保留 secondary-mid alias，One Dark Pro / Solarized 单独补可读性），Switch 新增独立 `switch-thumb-on` 角色（默认保留 background alias，CINDY Dark 使用近白滑块），Slider 与 Segmented 的独立组件角色已接管，当前 536 注册项接管，19 项原位保留：7 个 Markdown `inherit`、2 个登录背景 `none`、7 个 color-mix 运行期表达式，以及 annotation-accent / login-brand-accent / login-brand-accent-pressed 三个 register-only 保护 singleton。静态阴影、透明度、radius 和 splash 动效已建模，不能统称动态值漏掉。
+基线为 **541 ID / 11 内置主题**。DS-11 新增独立 `form-field-hint` 角色（默认保留 secondary-mid alias，One Dark Pro / Solarized 单独补可读性），Switch 新增独立 `switch-thumb-on` 角色（默认保留 background alias，CINDY Dark 使用近白滑块），Slider 与 Segmented 的独立组件角色已接管，当前（2026-11-11）554 注册项接管，29 项原位保留：10 个运行期相对色、7 个 Markdown `inherit`、5 个 color-mix 运行期表达式、2 个登录背景 `none`、`chat-input-placeholder-subtle` 跟随 `var(--chat-input-placeholder)` 的运行期别名、一个默认 alias `update-btn-hover` 的按钮状态，以及 annotation-accent / login-brand-accent / login-brand-accent-pressed 三个 register-only 保护 singleton；逐项以 `desktop-bindings.json` 的 `retained` 为准。静态阴影、透明度、radius 和 splash 动效已建模，不能统称动态值漏掉。
 
 动态模型 OKLCH 配色、effort 插值、字体选择/缩放/compact、reduced-motion、Diff 测量/Worker/缓存、数据几何及业务计时继续留在原代码。通用 Tailwind 尺度已接源，不代表所有局部任意值、第三方编辑器/终端/登录画布几何或各业务组件已完成设计迁移；这些保持现有登记与后续批次边界，不新增标准档位。
 

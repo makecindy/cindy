@@ -25,6 +25,7 @@ interface GroupData {
   /** #9398: message-only push, then an explicitly released full plan read. */
   planRead?: 'talk' | 'work' | 'missing';
   processRecord?: boolean;
+  processVariant?: 'empty' | 'late';
   processEmpty?: boolean;
   processUnavailable?: boolean;
   processOtherOwner?: boolean;
@@ -33,6 +34,7 @@ interface GroupData {
   sharePending?: boolean;
   workState?: 'thinking' | 'reading-file' | 'testing' | 'waiting' | 'stopping' | 'unknown' | 'queued';
   workRemote?: boolean;
+  canStop?: boolean;
   workParallel?: boolean;
   workQueuedStep?: boolean;
   workLastStopping?: boolean;
@@ -361,15 +363,15 @@ function groupFrom(data: GroupData) {
       authorKind: 'user',
       authorBotId: null,
       authorName: '',
-      content: data.workState ? ["帮我检查群聊里的工作状态和任务入口。", "过程放在下面的动态区，完成后告诉我结果。"][i % 2] : `Layout message ${i + 1}`,
+      content: data.workState ? ["帮我检查群聊里的工作状态和任务入口。", "这是执行开始后补充的一条消息。"][i % 2] : `Layout message ${i + 1}`,
       mentions: { all: false, botIds: [] },
       noticeCode: null,
       planId: null,
       attachments: [],
-      createdAt: 1700000000000 + i,
+      createdAt: data.workState ? Date.now() - 90_000 + i * 60_000 : 1700000000000 + i,
     })),
     hasMoreBefore: false,
-    round: data.workState ? { status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
+    round: data.workState ? { canStop: data.canStop, status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
       ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 41_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
       : { status: 'idle', speakers: [], canContinue: false },
   };
@@ -478,9 +480,10 @@ void mountPage({
         onStatusChanged: subscription('deviceLinkStatus'),
         onPresenceChanged: subscription('deviceLinkPresence'),
         onResponsivenessChanged: subscription('deviceLinkResponsiveness'),
-        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? data.processUnavailable ? Promise.reject(new Error('Process unavailable')) : data.processEmpty ? [
+        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? data.processUnavailable ? Promise.reject(new Error('Process unavailable')) : (data.processEmpty || data.processVariant ? [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },
           { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } },
+          ...(data.processVariant === 'late' ? [{ clientId: 'fixture-late', role: 'thinking', content: 'Hidden reasoning' }] : []),
         ] : [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },
           { clientId: 'fixture-thought', role: 'thinking', content: 'Hidden reasoning' },
@@ -489,7 +492,7 @@ void mountPage({
           { clientId: 'fixture-result', role: 'tool_result', toolUseId: 'fixture-tool', content: 'Task records' },
           { clientId: 'fixture-note2', role: 'assistant', content: '已经继续获取任务信息，接下来核对未完成 PR 的当前状态。', agentMeta: { assistantPhase: 'commentary' } },
           { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { turnCompleted: true } },
-        ] : args[0]?.ref?.collectionId === 'bot-groups' ? {
+        ]).map(row => ({ ...row, agentMeta: { ...row.agentMeta, botPrivateReply: true, botGroupLane: true } })) : args[0]?.ref?.collectionId === 'bot-groups' ? {
           ref: { collectionId: 'bot-groups', kind: 'bot-group', id: group.id },
           blocks: [{ primitive: 'bot-group-chat', data: { ...group, round: { ...group.round, speakers: [{ ...group.round.speakers[0], sessionId: 'fixture-work' }] } } }],
         } : { blocks: [] },

@@ -8,6 +8,7 @@ import { createHostService } from './service.mjs';
  */
 
 import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -17,6 +18,7 @@ import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from '
 import { buildWebShim } from './web-client-build.mjs';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
+const HOST_PROMPT_BUFFER_BYTES = 1024 * 1024;
 
 function send(response, status, body, extraHeaders = {}) {
   response.writeHead(status, { ...JSON_HEADERS, ...extraHeaders });
@@ -97,6 +99,7 @@ export function createHostServer(input) {
     // Revoke browser streams immediately and drain existing database callers
     // before the owner runtime closes. Concurrent sign-out clicks share a result.
     deps.webAuth.clear();
+    deps.platformClient?.()?.close();
     logoutFlight = cancelPendingAuth().then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
       .finally(() => { logoutFlight = undefined; });
     return logoutFlight;
@@ -111,8 +114,26 @@ export function createHostServer(input) {
       response.setHeader('x-content-type-options', 'nosniff');
       response.setHeader('x-frame-options', 'DENY');
       if (!isLoopbackRequest(request)) { send(response, 403, { error: 'origin_not_allowed' }); return; }
+      // An updating Desktop reconnects to the *same* backend. Do not execute a
+      // stale client's writes after another Host reuses its address. Existing
+      // clients without the optional header retain the original recovery path.
+      const expectedInstance = request.headers['x-cindy-host-instance'];
+      if (expectedInstance !== undefined) {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        if (!deps.instanceId || expectedInstance !== deps.instanceId) {
+          send(response, 409, { error: 'host_instance_changed' }); return;
+        }
+      }
+      if (request.method === 'POST' && url.pathname === '/control/attachment') {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        const health = await deps.probe();
+        send(response, 200, { protocol: 1, instanceId: deps.instanceId, pid: health.pid,
+          ready: health.runtime?.state === 'ready', remoteReady: health.remote?.status === 'online',
+          clientHandoffReady: health.clientHandoffReady === true });
+        return;
+      }
       const ownerRequest = (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/') && url.pathname !== '/api/me')
-        || ['/control/remote', '/events', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
+        || ['/control/platform', '/control/remote', '/events', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
       if (ownerRequest) {
         if (ownerPaused || logoutFlight || deps.isOwnerReady?.() === false) {
           send(response, 409, { error: 'owner_runtime_unavailable' }); return;
@@ -121,6 +142,14 @@ export function createHostServer(input) {
         ownerRequests.add(completion);
         finishOwnerRequest = (() => { const complete = finishOwnerRequest;
           return () => { ownerRequests.delete(completion); complete(); }; })();
+      }
+      if (request.method === 'POST' && url.pathname === '/control/platform') {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        if (!deps.instanceId || expectedInstance !== deps.instanceId) { send(response, 409, { error: 'host_instance_changed' }); return; }
+        if (!deps.platformClient?.()) { send(response, 409, { error: 'platform_client_unavailable' }); return; }
+        const body = await readJson(request);
+        send(response, 200, await deps.platformClient().control(body.action, body.client));
+        return;
       }
       if (request.method === 'POST' && url.pathname === '/control/remote') {
         if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
@@ -249,6 +278,17 @@ export function createHostServer(input) {
           response.write(`${idLine}data: ${JSON.stringify(event)}\n\n`);
           response.flush?.();
         });
+        // Confirmations go to one authenticated controller and never enter the
+        // replay buffer. Disconnect cancels its pending answers; replay cannot
+        // resurrect an old permission dialog.
+        const confirmationCaller = deps.webAuth.caller?.(request.headers.cookie)
+          ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
+        const disconnectController = confirmationCaller && versioned && url.searchParams.get('confirmations') === '1' ? deps.connectController?.(confirmationCaller, event => {
+          if (response.writableEnded || response.destroyed || response.writableLength > HOST_PROMPT_BUFFER_BYTES || !isWebAuthorized(request, deps)) return false;
+          const written = response.write(`data: ${JSON.stringify({ type: 'host_prompt', channel: event.channel, payload: event.payload })}\n\n`);
+          response.flush?.();
+          return written || response.writableLength === 0;
+        }) : undefined;
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;
           if (!isWebAuthorized(request, deps)) { response.end(); return; }
@@ -256,6 +296,7 @@ export function createHostServer(input) {
         }, 15_000);
         const revoke = deps.webAuth.onRevoke(() => response.end());
         request.on('close', () => {
+          disconnectController?.();
           revoke();
           clearInterval(keepAlive);
           unsubscribe();
@@ -327,16 +368,37 @@ export function createHostServer(input) {
       }
     }
   });
+  const platformSockets = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024, perMessageDeflate: false });
+  server.on('upgrade', (request, socket, head) => {
+    // Native-client channel: no web cookie, cross-origin caller, or unpinned Host.
+    if (request.url !== '/control/platform/socket' || stopping || ownerPaused || logoutFlight
+      || !isLoopbackRequest(request) || request.headers.origin
+      || !isAuthorized(request.headers.authorization, deps.token)
+      || !deps.instanceId || request.headers['x-cindy-host-instance'] !== deps.instanceId
+      || deps.isOwnerReady?.() === false || !deps.platformClient?.()) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
+    }
+    const bridge = deps.platformClient();
+    platformSockets.handleUpgrade(request, socket, head, ws => {
+      void bridge.accept(ws).catch(() => ws.terminate());
+    });
+  });
+  server.once('close', () => { for (const socket of platformSockets.clients) socket.terminate(); platformSockets.close(); });
   // Stop accepting new work first. The caller closes SSE connections after the
   // queue and runtime have drained; they do not keep database requests in flight.
   const stopAccepting = () => {
     stopping = true;
+    // Reject queued and in-flight platform calls before HTTP drains them.
+    deps.platformClient?.()?.close();
+    for (const socket of platformSockets.clients) socket.terminate();
     server.close();
     const drained = activeRequests ? new Promise(resolve => drainWaiters.add(resolve)) : Promise.resolve();
     return Promise.all([cancelPendingAuth(), drained]);
   };
   const pauseOwnerRequests = () => {
     ownerPaused = true;
+    deps.platformClient?.()?.close();
+    for (const socket of platformSockets.clients) socket.terminate();
     deps.webAuth.clear();
     return Promise.all([cancelPendingAuth(), Promise.allSettled([...ownerRequests])]);
   };

@@ -366,6 +366,21 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
               chunk({}, event.reason === 'toolUse' ? 'tool_calls' : event.reason === 'length' ? 'length' : 'stop',
                 { prompt_tokens: usage.input + usage.cacheRead + usage.cacheWrite, completion_tokens: usage.output,
                   prompt_tokens_details: { cached_tokens: usage.cacheRead } });
+              // Names such as create_worker/create_workers keep the shorter tool
+              // pending until finish(). Flush those reserved output indices before
+              // assigning an index to native history; otherwise history can occupy
+              // the pending tool's slot and the Anthropic bridge drops the call.
+              const closingEvents: unknown[] = [];
+              const terminalEvents: unknown[] = [];
+              for (const value of translator.finish(true)) {
+                const type = (value as Record<string, unknown>).type;
+                if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') {
+                  terminalEvents.push(value);
+                } else {
+                  closingEvents.push(value);
+                }
+              }
+              emit(closingEvents);
               if (event.message.content.some(block => ('thinkingSignature' in block && block.thinkingSignature) || ('thoughtSignature' in block && block.thoughtSignature) || ('textSignature' in block && block.textSignature))) {
                 historyItem = { type: 'reasoning', id: `rs_${randomUUID().replaceAll('-', '')}`, summary: [],
                   encrypted_content: HISTORY_PREFIX + Buffer.from(JSON.stringify({ identity, content: event.message.content })).toString('base64') };
@@ -373,7 +388,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
                 emit([{ type: 'response.output_item.added', output_index, item: { ...historyItem, encrypted_content: undefined } },
                   { type: 'response.output_item.done', output_index, item: historyItem }]);
               }
-              emit(translator.finish(true)); ended = true;
+              emit(terminalEvents); ended = true;
             } else if (event.type === 'error') { emit(translator.fail(failureMessage('adapter-event'))); ended = true; }
           }
           if (pending.length) controller.enqueue(pending.shift()!);
