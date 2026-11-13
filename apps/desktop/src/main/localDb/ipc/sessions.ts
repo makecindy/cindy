@@ -2463,9 +2463,9 @@ export async function patchSessionMetaInDb(
 }
 
 /**
- * Routine and channel lanes are listed with ordinary tasks (`ordinaryTaskListFilter`)
+ * Routine, channel and group lanes are listed with ordinary tasks (`ordinaryTaskListFilter`)
  * and hold no Profile pointer, so they archive, restore and delete like ordinary tasks.
- * Their next trigger resumes an archived lane (`ensureBotOwnedLaneSession`).
+ * IM/routine triggers resume archived lanes; group triggers create a fresh active lane.
  */
 async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: string): Promise<boolean> {
   const [link] = await db
@@ -2473,7 +2473,7 @@ async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: string): Pr
     .from(botSessionLinks)
     .where(and(
       eq(botSessionLinks.sessionId, sessionId),
-      inArray(botSessionLinks.role, ['routine', 'channel']),
+      inArray(botSessionLinks.role, ['routine', 'channel', 'group']),
     ))
     .limit(1);
   return !!link;

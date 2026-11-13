@@ -1743,17 +1743,18 @@ describe('db worker tx handlers', () => {
           await client.exec(
             'CREATE TABLE IF NOT EXISTS bot_session_links (id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, route_key TEXT, created_at INTEGER NOT NULL, archived_at INTEGER)',
           );
-          for (const [id, role] of [['routine-lane', 'routine'], ['channel-lane', 'channel'], ['bot-chat', 'canonical']] as const) {
+          for (const [id, role] of [['routine-lane', 'routine'], ['channel-lane', 'channel'], ['group-lane', 'group'], ['bot-chat', 'canonical']] as const) {
             await seedSession(client, id, { source: 'bot' });
             await client.exec(
               'INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES (?, ?, ?, ?, ?)',
               [`link-${id}`, 'bot-1', id, role, Date.now()],
             );
           }
-          await expect(client.tx('sessions.setStatus', { sessionIds: ['routine-lane', 'channel-lane'], status: 'archived' }))
+          await expect(client.tx('sessions.setStatus', { sessionIds: ['routine-lane', 'channel-lane', 'group-lane'], status: 'archived' }))
             .resolves.toEqual([
               expect.objectContaining({ sessionId: 'routine-lane', source: 'bot', status: 'archived' }),
               expect.objectContaining({ sessionId: 'channel-lane', source: 'bot', status: 'archived' }),
+              expect.objectContaining({ sessionId: 'group-lane', source: 'bot', status: 'archived' }),
             ]);
           // 一条专线 + 一条私人主对话：整批回滚，专线也保持原状态。
           await client.exec("UPDATE sessions SET status = 'active' WHERE id IN ('routine-lane', 'channel-lane')");
@@ -1762,8 +1763,18 @@ describe('db worker tx handlers', () => {
           await expect(client.query('SELECT id, status FROM sessions ORDER BY id')).resolves.toEqual([
             { id: 'bot-chat', status: 'active' },
             { id: 'channel-lane', status: 'active' },
+            { id: 'group-lane', status: 'archived' },
             { id: 'routine-lane', status: 'active' },
           ]);
+          // All group work, including private digests, uses ordinary lifecycle.
+          await client.tx('sessions.setStatus', { sessionIds: ['group-lane'], status: 'active' });
+          await client.tx('sessions.setTerminalStatus', { sessionId: 'group-lane', status: 'deleted' });
+          await expect(client.query("SELECT status FROM sessions WHERE id='group-lane'"))
+            .resolves.toEqual([{ status: 'deleted' }]);
+          await seedSession(client, 'digest', { source: 'bot' });
+          await client.exec("INSERT INTO bot_session_links (id, bot_id, session_id, role, route_key, created_at) VALUES ('digest', 'bot-1', 'digest', 'group', 'group:g:personal-digest', 1)");
+          await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'digest', status: 'deleted' }))
+            .resolves.toBeDefined();
         },
         { useInlineWorker },
       );

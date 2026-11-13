@@ -195,7 +195,7 @@ export interface BotGroupChatServiceDeps {
    * The organizer's forced 要不要分工 decision (§7.2): a structured answer already
    * validated against the members, or null when no usable answer came back.
    */
-  decidePlan?: (input: PlanDecisionInput, signal: AbortSignal) => Promise<PlanDecision | null>;
+  decidePlan?: (input: PlanDecisionInput & { groupId: string; organizerBotId: string }, signal: AbortSignal) => Promise<PlanDecision | null>;
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
   validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
@@ -1373,6 +1373,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         : undefined;
       if (deps.decidePlan && !planning.cancelled) {
         decision = await deps.decidePlan({
+          groupId, organizerBotId: input.organizer.botId,
           mode: input.mode,
           groupName: input.group.name,
           organizerName: input.organizer.name,

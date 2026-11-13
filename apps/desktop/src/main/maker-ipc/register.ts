@@ -705,7 +705,7 @@ import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
-import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
+import { createBotGroupPlanDecider, createVisibleGroupPlanDecider } from './botGroupPlanDecider.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
 import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
 import { getBotGroupStepNotificationBody, getInputHandoffNotificationBody } from '../sessionNotificationCopy.js';
@@ -13883,7 +13883,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     syncLanePermission: async (laneSessionId) => syncBotLanePermission(laneSessionId),
     hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
-    decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, opts)),
+    decidePlan: createVisibleGroupPlanDecider({
+      decide: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, opts)),
+      begin: async (input) => {
+        const scope = captureDataOwnerBroadcastScope();
+        const isCurrent = () => isDataOwnerBroadcastScopeCurrent(scope);
+        const assertCurrent = async () => { if (!isCurrent()) throw new Error('OWNER_CHANGED'); };
+        const lane = await ensureBotGroupLaneSession({ botId: input.organizerBotId, groupId: input.groupId, title: input.groupName });
+        if (!lane.ok) throw new Error(lane.errorCode);
+        const clientId = randomUUID();
+        const heading = t('bots.groupChat.speaking.planning');
+        const request = `${heading}\n\n${input.request}`;
+        await createDbMessage(lane.sessionId, { clientId, role: 'assistant', content: request }, { beforePublish: assertCurrent });
+        return {
+          isCurrent,
+          finish: async ({ state, decision }) => {
+            const status = t(`bots.groupChat.task.state.${state}`);
+            const result = decision ? `\n\n\`\`\`json\n${JSON.stringify(decision, null, 2)}\n\`\`\`` : '';
+            await updateMessageContent(lane.sessionId, clientId, `${request}\n\n${status}${result}`, undefined, { isCurrent });
+          },
+        };
+      },
+    }),
     workDir: botGroupWorkDir,
     validateProjectDir: async (dir) => {
       try {

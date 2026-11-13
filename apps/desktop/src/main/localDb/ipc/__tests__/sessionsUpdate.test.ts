@@ -1048,14 +1048,15 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted).toEqual({ title: 'Release Bot', status: 'active' });
   });
 
-  it('archives, restores and deletes teammate tasks listed with ordinary tasks', async () => {
+  // Group visibility must work through the real IPC guard, not only the worker transaction.
+  it.each([['routine', 'routine:daily'], ['group', 'group:room:thread:root'], ['group', 'group:room:personal-digest']])('archives, restores and deletes listed %s tasks', async (role, routeKey) => {
     // 例行任务 / 渠道专线进入普通任务列表，生命周期与普通任务一致；主聊天仍由伙伴生命周期管理。
     const link = h.sqlite!.prepare('INSERT INTO bot_session_links(session_id, bot_id, role, route_key) VALUES (?, ?, ?, ?)');
     link.run('bot-local', 'bot-1', 'canonical', null);
     await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow(/Bot task lifecycle/);
 
     h.sqlite!.prepare('UPDATE bot_session_links SET role = ?, route_key = ? WHERE session_id = ?')
-      .run('routine', 'routine:daily', 'bot-local');
+      .run(role, routeKey, 'bot-local');
     const status = () => (h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('bot-local') as { status: string }).status;
     await invokeUpdate('bot-local', { status: 'archived' });
     expect(status()).toBe('archived');

@@ -316,9 +316,9 @@ export type EnsureBotGroupLaneResult =
   | { ok: false; errorCode: 'MEMBER_UNAVAILABLE' | 'NO_MODEL'; message: string };
 
 /**
- * The Bot's hidden lane for one group chat (docs/product-rules/bot-group-chat.md).
+ * The Bot's isolated lane for one group chat (docs/product-rules/bot-group-chat.md).
  * Same Profile, Home workspace and model chain as the canonical Chat; never a
- * second canonical Session and never visible in the task list.
+ * second canonical Session. Group work is listed under its companion project.
  *
  * With `plan`, the Bot's 分工 Session for that plan instead (§7.4): same Profile and
  * model chain, but it works in the plan's recorded work directory. A worktree plan
@@ -460,6 +460,8 @@ export async function ensureBotGroupLaneSession(input: {
     await syncBotLinkedLanePermissions(result.permissionRepairCanonicalSessionId);
     owner.assertCurrent();
   }
+  if (result.created) emitSessionCreated(result.sessionId);
+  if (result.replacedSessionId) broadcastSessionPatched(result.replacedSessionId, { status: 'archived' });
   return { ok: true, sessionId: result.sessionId, created: result.created,
     ...(result.replacedSessionId ? { replacedSessionId: result.replacedSessionId } : {}) };
 }
@@ -531,7 +533,7 @@ async function resumeArchivedBotOwnedLaneSession(
  * The Bot's hidden lane for one personal-IM group / topic (or an admitted guest
  * DM) once the whole connection is handed to the Bot. Same Profile, Home
  * workspace, model chain and permission profile as the canonical Chat; never a
- * second canonical Session and never visible in the task list. Route keys:
+ * second canonical Session. Channel work retains its ordinary task-list entry. Route keys:
  * `im:<channel>:<botContextId>:g:<chatId>[:t:<threadId>]` / `…:dm:<userId>`.
  */
 export async function ensureBotChannelLaneSession(input: {
@@ -2438,14 +2440,13 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
     .where(eq(botProfiles.id, botId))
     .limit(1);
   if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
-  // Group / IM channel lanes only hold hidden channel turns; the group chat or
-  // the IM conversation itself is the user's record.
+  // All group work, including private catch-up reports, belongs in the owner's
+  // history. IM channel history keeps its existing dedicated entry.
   const links = await db
     .select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks)
     .where(and(
       eq(botSessionLinks.botId, botId),
-      ne(botSessionLinks.role, 'group'),
       ne(botSessionLinks.role, 'channel'),
     ));
   return searchConversations(

@@ -867,7 +867,7 @@ function insertBotSession(db: Database.Database, s: Record<string, unknown>): vo
       expectNumber(s.updatedAt, 'session.updatedAt'), nullableString(s.agentDeviceId), nullableString(s.projectDir));
 }
 
-/** One hidden lane per (group, Bot); reuses an active lane instead of creating a second. */
+/** One isolated lane per (group, Bot); reuses an active lane instead of creating a second. */
 function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArgs): BotGroupsCreateLaneResult {
   const p = asRecord(args, 'bots.createGroupLane args');
   const botId = expectString(p.botId, 'botId');
@@ -2129,7 +2129,7 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
   }>;
 }
 
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel', 'group') LIMIT 1";
 
 // 批量归档 / 取消归档:存在性预检 + 状态更新放进同一事务,任一 id 缺失整批回滚(全有才写)。
 // 本文件是 inproc 回滚口;默认热路径走 file worker 的同名 handler(client/WorkerThreadTransport.ts)。

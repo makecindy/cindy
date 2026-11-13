@@ -3,7 +3,11 @@ import type { HistoryCompanion } from '@cindy/mcps';
 
 /** Attribution is a persisted link, never a directory, channel, name or current connection guess. */
 export function historyCompanionJson(sessionId: SQL): SQL<string | null> {
-  return sql<string | null>`(SELECT json_object('id', hcl.bot_id, 'role', hcl.role, 'routeKey', hcl.route_key)
+  return sql<string | null>`(SELECT json_object('id', hcl.bot_id, 'role', hcl.role, 'routeKey', hcl.route_key,
+      'taskProjectDir', CASE WHEN hcl.role = 'group'
+        THEN (SELECT canonical.working_dir FROM bot_session_links owner
+          JOIN sessions canonical ON canonical.id = owner.session_id
+          WHERE owner.bot_id = hcl.bot_id AND owner.role = 'canonical' LIMIT 1) ELSE NULL END)
     FROM bot_session_links hcl WHERE hcl.session_id = ${sessionId} LIMIT 1)`;
 }
 
@@ -12,10 +16,10 @@ const ROUTINE_ROUTE_KEY = /^routine:(.+?)(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 
 export function parseHistoryCompanion(value: string | null | undefined): HistoryCompanion | null {
   if (!value) return null;
-  const row = JSON.parse(value) as { id: string; role: string; routeKey: string | null };
+  const row = JSON.parse(value) as { id: string; role: string; routeKey: string | null; taskProjectDir?: string | null };
   const channel = row.routeKey?.match(/^im:([^:]+):/)?.[1];
   const routineId = row.role === 'routine' ? row.routeKey?.match(ROUTINE_ROUTE_KEY)?.[1] : undefined;
-  return { id: row.id, role: row.role, ...(channel ? { channel } : {}), ...(routineId ? { routineId } : {}) };
+  return { id: row.id, role: row.role, ...(row.taskProjectDir ? { taskProjectDir: row.taskProjectDir } : {}), ...(channel ? { channel } : {}), ...(routineId ? { routineId } : {}) };
 }
 
 /** A query filter only: callers' existing authorization/remote visibility still applies. */

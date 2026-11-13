@@ -66,6 +66,8 @@ export interface HistoryWorkdir {
 }
 
 export interface HistoryCompanion {
+  /** Task-list membership only; never the execution directory. */
+  taskProjectDir?: string;
   id: string;
   role: string;
   channel?: string;
