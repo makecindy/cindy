@@ -47,7 +47,7 @@ export function GroupMaskSettings({ groupId }: { groupId: string }) {
           options={(['chat', 'tools'] as const).map(value => ({ value, label: t(`bots.groupChat.server.settings.${value === 'tools' ? 'accessTools' : 'accessChat'}`) }))}
           onValueChange={async access => {
             const owner = getDataOwnerGeneration(), companionId = config.companionId;
-            if (access === 'tools' && !await confirm({ presentation: 'standard',
+            if (access === 'tools' && !await confirm({
               title: t('bots.groupChat.server.settings.authorizeTitle', { name: mask.companions.find(c => c.id === config.companionId)?.name ?? '' }),
               description: t('bots.groupChat.server.settings.toolsHint'), confirmText: t('bots.groupChat.server.settings.confirm'),
               cancelText: t('bots.cancel'), confirmVariant: 'destructive' })) return;

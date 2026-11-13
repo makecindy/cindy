@@ -973,7 +973,7 @@ export function SearchFilterMenu({
           lockedProjectComparisonKey,
       ) ?? null
     : null;
-  const choosableProjects = allKnownProjects.filter((project) => !isTeammateProjectPath(project.workingDir));
+  const choosableProjects = allKnownProjects.filter((project) => !isTeammateProjectPath(project.workingDir) || project.sessions.some(session => !!session.companion?.taskProjectDir));
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
     : lockedProjectName;

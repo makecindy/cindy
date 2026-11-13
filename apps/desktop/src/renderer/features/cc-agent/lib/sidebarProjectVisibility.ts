@@ -10,7 +10,7 @@ import {
 
 type SidebarProjectSession = Pick<
   Session,
-  'workingDir' | 'projectDir' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
+  'workingDir' | 'projectDir' | 'companion' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
 >;
 
 /**
@@ -39,7 +39,7 @@ export function isSessionInHiddenProject(
 ): boolean {
   // Dialogue tasks own a working directory too, but that directory is not a
   // user-added project and must never be hidden by a project tombstone.
-  if (session.workspaceKind === 'dialogue') return false;
+  if (session.workspaceKind === 'dialogue' && !session.companion?.taskProjectDir) return false;
   const projectKey = projectIdentityKeyForSession(session);
   return projectKey != null && isProjectHidden(projectKey, hiddenProjectKeys, localPlatform);
 }
@@ -86,7 +86,7 @@ export function isSessionInProjectComparisonSet(
   projectComparisonKeys: ReadonlySet<string>,
   localPlatform: string,
 ): boolean {
-  if (session.workspaceKind === 'dialogue') return false;
+  if (session.workspaceKind === 'dialogue' && !session.companion?.taskProjectDir) return false;
   return projectKeyComparisonSetHas(
     projectComparisonKeys,
     projectIdentityKeyForSession(session),
@@ -100,7 +100,7 @@ export function isSessionInProject(
   projectKey: string,
   localPlatform: string,
 ): boolean {
-  if (session.workspaceKind === 'dialogue') return false;
+  if (session.workspaceKind === 'dialogue' && !session.companion?.taskProjectDir) return false;
   const sessionProjectKey = projectIdentityKeyForSession(session);
   const sessionComparisonKey = projectKeyComparisonKey(sessionProjectKey, localPlatform);
   const projectComparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
@@ -178,7 +178,8 @@ export function sidebarSessionsWithHiddenProjectsAsDialogues(
       hiddenProjectComparisonKeys,
       localPlatform,
     )
-      ? { ...session, workspaceKind: 'dialogue' }
+      ? { ...session, workspaceKind: 'dialogue',
+          ...(session.companion ? { companion: { ...session.companion, taskProjectDir: undefined } } : {}) }
       : session,
   );
 }

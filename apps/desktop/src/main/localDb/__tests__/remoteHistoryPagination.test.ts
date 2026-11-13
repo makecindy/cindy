@@ -43,7 +43,7 @@ describe.each(modes)('%s remote history visibility', (mode) => {
   beforeEach(() => {
     db = new Database(':memory:');
     db.exec(`
-    CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT DEFAULT '', working_dir TEXT,
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT DEFAULT '', working_dir TEXT, project_dir TEXT,
       agent_kind TEXT DEFAULT 'codex', workspace_kind TEXT DEFAULT 'project', model TEXT DEFAULT '',
       status TEXT DEFAULT 'active', source TEXT DEFAULT 'desktop', orca_role TEXT, orca_remote_lead TEXT,
       parent_session_id TEXT, created_at INTEGER, updated_at INTEGER, user_send_at INTEGER, hidden_at INTEGER);

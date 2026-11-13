@@ -75,6 +75,90 @@ function safeCssColor(value: string | undefined, fallback: string): string {
   return trimmed && SAFE_CSS_COLOR_RE.test(trimmed) ? trimmed : fallback;
 }
 
+export const MATH_BASE_KATEX_EM = 1.08;
+export const MATH_MIN_FIT_SCALE = 0.76;
+
+export interface DisplayMathClassList {
+  add(token: string): void;
+  remove(token: string): void;
+  contains(token: string): boolean;
+}
+
+export interface DisplayMathHtmlElementLike {
+  scrollWidth?: number;
+  getBoundingClientRect?: () => { width: number };
+}
+
+export interface DisplayMathKatexElementLike {
+  style: { fontSize: string };
+  scrollWidth?: number;
+  querySelector?: (selector: string) => DisplayMathHtmlElementLike | null;
+}
+
+export interface DisplayMathContainerElementLike {
+  classList: DisplayMathClassList;
+}
+
+export interface DisplayMathRootElementLike {
+  clientWidth: number;
+}
+
+export function computeDisplayMathScale(
+  availableWidth: number,
+  naturalWidth: number,
+): { fontSizeEm: string; ratio: number } | null {
+  if (!(availableWidth > 0) || !(naturalWidth > availableWidth)) {
+    return null;
+  }
+  const ratio = Math.max(MATH_MIN_FIT_SCALE, availableWidth / naturalWidth);
+  return {
+    ratio,
+    fontSizeEm: `${(MATH_BASE_KATEX_EM * ratio).toFixed(4)}em`,
+  };
+}
+
+export function shouldEnableDisplayMathOverflow(
+  availableWidth: number,
+  measuredWidthAfterScale: number,
+): boolean {
+  return availableWidth > 0 && measuredWidthAfterScale > availableWidth + 1;
+}
+
+export function measureDisplayFormulaWidth(
+  displayEl: DisplayMathContainerElementLike | null,
+  katexEl: DisplayMathKatexElementLike,
+): number {
+  const htmlEl = katexEl.querySelector ? katexEl.querySelector('.katex-html') : null;
+  const hadOverflow = displayEl ? displayEl.classList.contains('katex-overflow') : false;
+  if (displayEl && !hadOverflow) displayEl.classList.add('katex-overflow');
+  let width = katexEl.scrollWidth || 0;
+  if (htmlEl) {
+    const rectW = htmlEl.getBoundingClientRect ? Math.ceil(htmlEl.getBoundingClientRect().width) : 0;
+    width = Math.max(width, htmlEl.scrollWidth || 0, rectW);
+  }
+  if (displayEl && !hadOverflow) displayEl.classList.remove('katex-overflow');
+  return width;
+}
+
+export function fitDisplayFormulaElement(
+  rootEl: DisplayMathRootElementLike,
+  displayEl: DisplayMathContainerElementLike | null,
+  katexEl: DisplayMathKatexElementLike | null,
+  paddingX = 16,
+): void {
+  if (!katexEl) return;
+  if (displayEl) displayEl.classList.remove('katex-overflow');
+  katexEl.style.fontSize = '';
+  const available = rootEl.clientWidth - paddingX;
+  const natural = measureDisplayFormulaWidth(displayEl, katexEl);
+  const fit = computeDisplayMathScale(available, natural);
+  if (!fit) return;
+  katexEl.style.fontSize = fit.fontSizeEm;
+  if (displayEl && shouldEnableDisplayMathOverflow(available, measureDisplayFormulaWidth(displayEl, katexEl))) {
+    displayEl.classList.add('katex-overflow');
+  }
+}
+
 /**
  * display LaTeX 公式 → 自包含 WebView HTML 文档。
  * - 首屏立即绘制公式源码(零外链阻塞,永不白屏),KaTeX 就绪后原位升级;
@@ -107,17 +191,34 @@ export function buildMathWebViewHtml(
       padding: 0;
       background: ${background};
       color: ${textPrimary};
+      font-size: 15px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     #root {
       box-sizing: border-box;
-      padding: 8px 4px;
+      width: 100%;
+      padding: 10px 8px;
       overflow-x: auto;
       overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
       text-align: center;
     }
     #root .katex-display {
       margin: 0;
+      overflow: visible;
+    }
+    #root .katex-display > .katex {
+      font-size: ${MATH_BASE_KATEX_EM}em;
+      line-height: 1.3;
+      white-space: nowrap;
+    }
+    #root .katex-display.katex-overflow {
+      text-align: left;
+    }
+    #root .katex-display.katex-overflow > .katex {
+      text-align: left;
+      display: inline-block;
+      min-width: 100%;
     }
     pre {
       margin: 0;
@@ -137,13 +238,48 @@ export function buildMathWebViewHtml(
     var source = ${serializedSource};
     var root = document.getElementById('root');
 
+    var BASE_KATEX_EM = ${MATH_BASE_KATEX_EM};
+    var MIN_FIT_SCALE = ${MATH_MIN_FIT_SCALE};
+
+    function measureFormulaWidth(displayEl, katexEl) {
+      var htmlEl = katexEl.querySelector ? katexEl.querySelector('.katex-html') : null;
+      var hadOverflow = displayEl ? displayEl.classList.contains('katex-overflow') : false;
+      if (displayEl && !hadOverflow) displayEl.classList.add('katex-overflow');
+      var w = katexEl.scrollWidth || 0;
+      if (htmlEl) {
+        var rectW = htmlEl.getBoundingClientRect ? Math.ceil(htmlEl.getBoundingClientRect().width) : 0;
+        w = Math.max(w, htmlEl.scrollWidth || 0, rectW);
+      }
+      if (displayEl && !hadOverflow) displayEl.classList.remove('katex-overflow');
+      return w;
+    }
+
+    function fitFormula() {
+      var displayEl = root.querySelector('.katex-display');
+      var katexEl = displayEl ? displayEl.querySelector('.katex') : root.querySelector('.katex');
+      if (!katexEl) return;
+      if (displayEl) displayEl.classList.remove('katex-overflow');
+      katexEl.style.fontSize = '';
+      var cs = window.getComputedStyle ? window.getComputedStyle(root) : null;
+      var padX = cs ? (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) : 16;
+      var available = root.clientWidth - padX;
+      var natural = measureFormulaWidth(displayEl, katexEl);
+      if (available > 0 && natural > available) {
+        var ratio = Math.max(MIN_FIT_SCALE, available / natural);
+        katexEl.style.fontSize = (BASE_KATEX_EM * ratio).toFixed(4) + 'em';
+        if (displayEl && measureFormulaWidth(displayEl, katexEl) > available + 1) {
+          displayEl.classList.add('katex-overflow');
+        }
+      }
+    }
+
     var lastSentHeight = 0;
     var lastSentStage = '';
     // stage 语义:'source' = 源码占位的过渡态高度;'katex' = KaTeX 成品的最终
     // 态高度。宿主组件对已有最终高度缓存的公式会忽略过渡态上报,重访零跳动。
     function reportHeight(stage) {
       if (!window.ReactNativeWebView) return;
-      var height = Math.ceil(root.getBoundingClientRect().height);
+      var height = Math.ceil(Math.max(root.getBoundingClientRect().height, root.scrollHeight));
       // 滞回去抖:相近高度不重复上报(阈值与宿主同口径);stage 升级
       // (source → katex)即使高度相同也放行一次,宿主靠它落最终高度缓存。
       if (stage === lastSentStage && Math.abs(height - lastSentHeight) < 3) return;
@@ -152,6 +288,11 @@ export function buildMathWebViewHtml(
       window.ReactNativeWebView.postMessage(
         JSON.stringify({ kind: 'math-height', stage: stage, height: height }),
       );
+    }
+
+    function syncLayoutAndReport() {
+      fitFormula();
+      reportHeight('katex');
     }
 
     function renderKatex() {
@@ -164,11 +305,12 @@ export function buildMathWebViewHtml(
       if (${captureMarkup} && window.ReactNativeWebView && root.innerHTML.length <= 200000) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ kind: 'math-rendered', markup: root.innerHTML }));
       }
-      reportHeight('katex');
+      syncLayoutAndReport();
       // 字体异步就绪后度量可能微调,fonts.ready 后补报一次(幂等)。
       if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(function () { reportHeight('katex'); });
+        document.fonts.ready.then(syncLayoutAndReport);
       }
+      window.addEventListener('resize', syncLayoutAndReport);
     }
 
     // 首屏源码已绘制,先按它上报过渡态高度,WebView 立即获得正确尺寸的可见内容。
@@ -180,10 +322,11 @@ export function buildMathWebViewHtml(
       style.textContent = ${serializeForScript(MOBILE_KATEX_CSS)};
       document.head.appendChild(style);
       root.innerHTML = ${serializeForScript(cachedMarkup)};
-      reportHeight('katex');
+      syncLayoutAndReport();
       if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(function () { reportHeight('katex'); });
+        document.fonts.ready.then(syncLayoutAndReport);
       }
+      window.addEventListener('resize', syncLayoutAndReport);
       ` : buildKatexLoaderJs('renderKatex();')}
     }
   </script>

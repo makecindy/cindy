@@ -217,7 +217,7 @@ export function VoiceSpeakerEnrollmentDialog({
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         >
           <div className="flex flex-col gap-1.5">
-            <Dialog.Title className="text-18 font-semibold leading-[1.35] text-[var(--settings-section-title)]">
+            <Dialog.Title className="text-18 font-medium leading-[1.35] text-[var(--settings-section-title)]">
               {t('settings.voiceInput.speakerFilter.enroll.title')}
             </Dialog.Title>
             <Dialog.Description className="text-13 leading-[1.5] text-[var(--settings-section-sublabel)]">

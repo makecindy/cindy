@@ -245,6 +245,7 @@ function RailButton(props: RailButtonProps) {
   return props.provider ? (
     <ModelPickerAccountBoundary
       providerId={props.provider.auth?.method === 'oauth' ? props.provider.id : ''}
+      subscriptionPool={!!props.provider.subscriptionPool || !!props.provider.subscriptionAccountPool}
       deviceId={props.usageDeviceId}
     >
       <ProviderQuotaButton {...props} provider={props.provider} />

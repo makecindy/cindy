@@ -94,6 +94,29 @@ describe('agentDeviceDraftMemory', () => {
     expect(m.recallAgentDeviceSelection('dev-b', 'claude-code')?.providerModelMemory).toBeUndefined();
   });
 
+  // Codex review #9369:自动播种 / holder 同步落进 holder 的那条不是用户选的 —— 记忆必须
+  // 如实标 modelChosenByUser: false,下游才不会把它当显式来源钉死(断连 / 清单失败时
+  // 让位给健康的默认)。不传标记时保持旧语义(真实选择后写入 → true)。
+  it('区分自动播种与用户当场选择的标记', async () => {
+    const m = await loadModules();
+    m.rememberAgentDeviceSelection('dev-a', 'claude-code', {
+      model: 'claude-sonnet-5',
+      effort: null,
+      fastMode: false,
+      providerId: 'auto-seeded',
+    }, false);
+    expect(m.recallAgentDeviceSelection('dev-a', 'claude-code')?.modelChosenByUser).toBe(false);
+
+    m.rememberAgentDeviceSelection('dev-a', 'claude-code', {
+      model: 'claude-sonnet-5',
+      effort: 'low',
+      fastMode: false,
+      providerId: 'user-picked',
+    });
+    expect(m.recallAgentDeviceSelection('dev-a', 'claude-code')?.modelChosenByUser).toBe(true);
+    expect(m.recallAgentDeviceSelection('dev-a', 'claude-code')?.providerId).toBe('user-picked');
+  });
+
   it('A 设 xhigh+Fast → 切到 B → 切回 A:还原 xhigh 与 Fast,而不是默认 high', async () => {
     const m = await loadModules();
     // 在 A 上调档(ChatInput 经读写器写进这台电脑的记忆)。

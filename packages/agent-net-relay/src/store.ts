@@ -29,7 +29,19 @@ export interface State { schema: 1; networks: Record<string, NetworkRecord>; sha
   /** Keyed by sha256(invite code); the code itself is never stored. */
   tenantInvites?: Record<string, { expiresAt: number; used: boolean }>;
   tenantRequests?: Record<string, TenantRequestRecord>; }
-export class Store {
+/** Reads return snapshots; a transaction commits its draft atomically or not at all. */
+export interface RelayStore {
+  network(id: string): NetworkRecord | undefined;
+  networks(): NetworkRecord[];
+  delegationRequests(): DelegationRequest[];
+  primaryNetworkId(): string | undefined;
+  tenantRequests(): TenantRequestRecord[];
+  sharingStorage(): SharingStorage;
+  transaction<T>(update: (state: State) => T | Promise<T>): Promise<T>;
+  settled(): Promise<void>;
+}
+/** One relay process: the whole state in one atomically replaced file. */
+export class Store implements RelayStore {
   private state: State;
   private revision = 0;
   private queue: Promise<unknown> = Promise.resolve();

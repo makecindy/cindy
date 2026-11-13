@@ -8,7 +8,7 @@ import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
 import { memo, useContext, useId, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
+import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import { HighlightedCodeText } from './HighlightedCodeText';
 import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
@@ -81,16 +81,23 @@ function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label
   });
 }
 
-function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext): ReactNode[] {
+function inlineMathSubFontSize(baseFontSize: number): number {
+  if (baseFontSize <= typeScale.bodySmall) return typeScale.micro;
+  if (baseFontSize <= typeScale.subtitle) return typeScale.caption;
+  return typeScale.footnote;
+}
+
+function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext, baseFontSize: number = typeScale.bodyLarge): ReactNode[] {
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
   let offset = 0;
   const runs = inlines.map(inline => {
+    const mathSegments = inline.type === 'math' && options.richContent ? tokenizeInlineMath(inline.text) : null;
     const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : ''
-      : inline.type === 'math' && options.richContent ? latexToUnicodeApproximation(inline.text) : inline.text;
+      : mathSegments ? mathSegments.map(segment => segment.text).join('') : inline.text;
     const start = offset;
     offset += text.length;
-    return { inline, text, start, end: offset, excluded: ['code', 'link', 'image'].includes(inline.type) };
+    return { inline, mathSegments, text, start, end: offset, excluded: ['code', 'link', 'image', 'math'].includes(inline.type) };
   });
   offset = 0;
   // Match the whole visible word before mapping back to styled native runs:
@@ -104,10 +111,34 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
     return { ...segment, start, end: offset, label: segment.text,
       mention: segment.mention && !runs.some(run => run.excluded && run.start < offset && run.end > start) };
   }) : null;
-  return runs.map(({ inline, text, start, end, excluded }, index) => {
+  return runs.map(({ inline, mathSegments, text, start, end, excluded }, index) => {
     const textStyle = [...(inline.marks?.map(mark => markStyles[mark]) ?? []),
       inline.type === 'strong' ? styles.strong : inline.type === 'emphasis' ? styles.emphasis
         : inline.type === 'strikethrough' ? styles.strike : inline.type === 'code' ? styles.inlineCode : undefined];
+    if (mathSegments) {
+      const subFontSize = inlineMathSubFontSize(baseFontSize);
+      return (
+        <Span key={index} style={textStyle}>
+          {mathSegments.map((segment, segIndex) => (
+            <Span
+              key={`${index}:${segIndex}`}
+              style={[
+                ...textStyle,
+                segment.kind === 'var'
+                  ? styles.mathVar
+                  : segment.kind === 'sup'
+                    ? styles.mathSup
+                    : segment.kind === 'sub'
+                      ? [segment.italic ? styles.mathVar : styles.mathText, { fontSize: subFontSize }]
+                      : styles.mathText,
+              ]}
+            >
+              {segment.text}
+            </Span>
+          ))}
+        </Span>
+      );
+    }
     if (inline.type === 'link') {
       const clickable = options.richContent && options.interactive !== false && /^https?:\/\//i.test(inline.url);
       return <Span key={index} style={[textStyle, clickable && styles.link]}
@@ -152,7 +183,7 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
       {widths.map((width, index) => (
         <View key={index} style={[styles.tableCell, { width }]}>
           <MarkdownSelectableText selectable style={[styles.tableText, header && styles.tableHeaderText]}>
-            {renderInlines(cells[index] ?? [], styles, options, context)}
+            {renderInlines(cells[index] ?? [], styles, options, context, typeScale.bodySmall)}
           </MarkdownSelectableText>
         </View>
       ))}
@@ -284,6 +315,18 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   strong: { fontWeight: fontWeight.semibold },
   emphasis: { fontStyle: 'italic' },
   strike: { textDecorationLine: 'line-through' },
+  mathVar: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'italic',
+  },
+  mathText: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'normal',
+  },
+  mathSup: {
+    fontFamily: Platform.select({ ios: 'Helvetica Neue', android: 'sans-serif', default: undefined }),
+    fontStyle: 'normal',
+  },
   link: { textDecorationLine: 'underline' },
   inlineCode: { fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyLarge, backgroundColor: colors.surfaceChip },
   quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: spacing.md },

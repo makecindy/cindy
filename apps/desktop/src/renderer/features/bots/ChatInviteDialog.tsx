@@ -202,7 +202,7 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         </div>
       </Dialog.Content>
     </Dialog.Portal>
-    <ConfirmDialog open={revokeConfirm} cancelFirst presentation="standard"
+    <ConfirmDialog open={revokeConfirm}
       onOpenChange={open => { if (!busyRef.current) setRevokeConfirm(open); }}
       title={t(key('revokeLink'))} description={t(key('revokeDescription'))}
       confirmText={t(key('revokeLink'))} confirmVariant="destructive" loading={busy}

@@ -191,7 +191,7 @@ function FormDialog({
           className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[88vh] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col outline-none"
         >
           <div className="flex flex-col gap-1 px-4 pb-4 pt-4">
-            <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">{title}</Dialog.Title>
+            <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">{title}</Dialog.Title>
             <Dialog.Description className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{description}</Dialog.Description>
           </div>
           {children}
@@ -1096,7 +1096,7 @@ function DeployDialog({
         >
           {/* 三步共用一个固定高度:内容在中间区域滚动,换步骤、步骤推进时窗口不变高也不重新居中。 */}
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 pb-3 pt-4">
-            <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">{t(`${DEPLOY}.title`)}</Dialog.Title>
+            <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">{t(`${DEPLOY}.title`)}</Dialog.Title>
             <DialogSteps current={view === 'form' ? 0 : view === 'progress' ? 1 : 2} />
           </div>
           {controller.error ? (

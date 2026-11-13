@@ -193,6 +193,31 @@ describe('collectMenubarInputs', () => {
     ]);
   });
 
+  // #10405, unit: a legacy connection can own several accounts. Previous fixtures only
+  // used built-in ids, hiding both the missed pool read and the wrong Claude projection.
+  it.each(['local', 'remote'])('reads a legacy Codex target pool on %s', async location => {
+    const legacy = provider({ id: 'legacy-codex', subscriptionAccountPool: 'openai',
+      auth: { method: 'oauth', native: 'codex' }, remoteInvocationEnabled: true,
+      agents: ['codex'], models: { codex: [] } });
+    const owned: SubscriptionPoolView = { ...pool, providerId: legacy.id, kind: 'openai',
+      accounts: pool.accounts.map((account, index) => ({ ...account, id: `owned-${index}` })) };
+    const calls: string[] = [];
+    const remote = location === 'remote' ? (await readRemoteSubscriptions(remoteDeps(async (_device, channel) => {
+      calls.push(channel);
+      return { ok: true, result: owned };
+    }, [legacy]))).sources.filter(source => source.providerId === legacy.id) : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [legacy] : [],
+      readSubscriptionPool: async id => { expect(id).toBe(legacy.id); return owned; },
+      readRemoteSubscriptions: async () => remote,
+    }));
+    expect(collected.sources).toMatchObject([
+      { providerId: legacy.id, family: 'codex', account: 'default@example.com', windows: [{ usedPercent: 90 }] },
+      { providerId: legacy.id, family: 'codex', account: 'extra@example.com', windows: [{ usedPercent: 35 }] },
+    ]);
+    if (location === 'remote') expect(calls).not.toContain('maker:usage:account');
+  });
+
   // #10110 review: email is not a Codex workspace identity. Previous fixtures
   // only covered different emails; two legal pool entries sharing an email lost
   // one quota and transferred its running marker. Unit, real collector/peer reader.

@@ -1142,6 +1142,7 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    if (!sameAccountController) delete rest.subscriptionPoolTarget;
     // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
@@ -1210,14 +1211,18 @@ function projectInvokeResultForTunnel(
  * Mutates the projected entries in place.
  */
 function foldSubscriptionPoolAliases(providers: Record<string, unknown>[]): void {
-  const pool = providers.find(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true);
-  const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
   for (const provider of providers) {
     if (!provider.subscriptionPoolAlias) continue;
+    const target = typeof provider.subscriptionPoolTarget === 'string' ? provider.subscriptionPoolTarget : 'openai';
+    const pool = providers.find(entry => entry.id === target && entry.remoteInvocationEnabled === true);
+    const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
     const models = remoteInvocationModels(provider as unknown as ProviderView).models;
     const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
       (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
-    if (!covered) delete provider.subscriptionPoolAlias;
+    if (!covered) {
+      delete provider.subscriptionPoolAlias;
+      delete provider.subscriptionPoolTarget;
+    }
   }
 }
 
@@ -4865,14 +4870,17 @@ function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown
  * 选择器出现重复入口，菜单栏还会为已在池里的账号多读一次配额。
  */
 function refoldOwnComputerPoolAliases(source: unknown, final: unknown): unknown {
-  const aliases = new Map<string, unknown>();
+  const aliases = new Map<string, { subscriptionPoolAlias: unknown; subscriptionPoolTarget?: unknown }>();
   mapProviderEntries(source, (entry) => {
-    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, entry.subscriptionPoolAlias);
+    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, {
+      subscriptionPoolAlias: entry.subscriptionPoolAlias,
+      ...(typeof entry.subscriptionPoolTarget === 'string' ? { subscriptionPoolTarget: entry.subscriptionPoolTarget } : {}),
+    });
     return entry;
   });
   if (aliases.size === 0) return final;
   const restored = mapProviderEntries(final, (entry) => typeof entry.id === 'string' && aliases.has(entry.id)
-    ? { ...entry, subscriptionPoolAlias: aliases.get(entry.id) }
+    ? { ...entry, ...aliases.get(entry.id) }
     : entry);
   const providers = (restored as { providers?: unknown }).providers;
   if (Array.isArray(providers)) {

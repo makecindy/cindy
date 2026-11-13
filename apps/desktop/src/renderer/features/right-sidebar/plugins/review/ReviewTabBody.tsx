@@ -490,6 +490,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     hideWhitespace,
     deviceLinkDeviceId: ctx.deviceLinkDeviceId,
     remoteHostId: ctx.remoteHostId,
+    workdir: ctx.workdir,
   });
   const data = sourceState.reviewData;
   const loading = sourceState.loading;
@@ -501,6 +502,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     capabilities.canSwitchSource ? sessionId : null,
     branchBaseRef,
     deviceLinkDeviceId,
+    ctx.workdir,
   );
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -609,6 +611,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     cappedFileDiffRequest,
     reviewWriteVersion,
     deviceLinkDeviceId,
+    ctx.workdir,
   );
   const cappedFileDiffData = cappedFileDiffState.data;
   const maybeCappedLoadedDiff = cappedFileDiffData?.diff ?? null;

@@ -503,7 +503,7 @@ function PluginSetupPromptStateful({
               size="mini"
             />}
           </span> : null}
-          <span className="truncate text-14 font-semibold text-[var(--ask-header-text)]">
+          <span className="truncate text-14 font-medium text-[var(--ask-header-text)]">
             {title}
           </span>
           {compact && minimizedStatus ? <span className="ml-auto shrink-0 text-12 text-[var(--text-secondary)]">{minimizedStatus}</span> : null}

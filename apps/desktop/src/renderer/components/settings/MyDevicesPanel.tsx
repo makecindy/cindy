@@ -586,7 +586,6 @@ export function MyDevicesPanel({
         onOpenChange={(open) => {
           if (!open && !deletePending.current) setDeleteTarget(null);
         }}
-        presentation="standard"
         title={t('settings.devices.deleteTitle', { name: deleteTarget?.name ?? '' })}
         description={t('settings.devices.deleteMessage')}
         confirmText={t('settings.devices.delete')}

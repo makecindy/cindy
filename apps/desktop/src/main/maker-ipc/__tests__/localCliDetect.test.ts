@@ -15,11 +15,13 @@ function depsWith(
   files: string[],
   claudeLogin = false,
   shared: (cli: string) => boolean = () => true,
+  codexHome = join(HOME, '.codex'),
 ): LocalCliScanDeps {
   const dirSet = new Set(dirs.map((d) => join(HOME, d)));
   const fileSet = new Set(files.map((f) => join(HOME, f)));
   return {
     homeDir: HOME,
+    codexHomeDir: codexHome,
     isDirectory: async (p) => dirSet.has(p),
     isFile: async (p) => fileSet.has(p),
     hasClaudeLogin: () => claudeLogin,
@@ -68,9 +70,26 @@ describe('scanLocalCliAuth', () => {
     expect(codex).toMatchObject({ installed: true, loggedIn: true });
   });
 
+  // #8258: CODEX_HOME 指向别处时,codex 的安装目录与登录态文件都在那里,
+  // 扫描不能只认 home 下的 `.codex`(否则设置页把 Codex 行藏起来,用户以为没装)。
+  it('codex 的探测跟随 CODEX_HOME 指定的主目录', async () => {
+    const custom = join('/tmp', 'cli-detect-codex-home');
+    const deps: LocalCliScanDeps = {
+      homeDir: HOME,
+      codexHomeDir: custom,
+      isDirectory: async (p) => p === custom,
+      isFile: async (p) => p === join(custom, 'auth.json'),
+      hasClaudeLogin: () => false,
+      isCredentialSharedWithCindy: () => true,
+    };
+    const codex = (await scanLocalCliAuth(deps)).find((d) => d.cli === 'codex-cli');
+    expect(codex).toMatchObject({ installed: true, loggedIn: true });
+  });
+
   it('文件探测抛错向上传播(生产 deps 在 stat 层吞错,handler 再降级空数组)', async () => {
     const deps: LocalCliScanDeps = {
       homeDir: HOME,
+      codexHomeDir: join(HOME, '.codex'),
       isDirectory: async () => true,
       isFile: async () => {
         throw new Error('EACCES');

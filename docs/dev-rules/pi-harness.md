@@ -513,21 +513,25 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   与 CC/Codex 对齐);版本差 + daemon 活着时 defer 并显示 UpgradeBanner, 用户确认
   后才 kill + 重装(daemon 已死则静默升级磁盘 bundle)。
 
-### 本机普通会话空闲回收(2026-10)
+### 本机会话空闲回收(2026-10，2026-11 补齐伙伴与自动化)
 
 - **动机**：`pi --mode rpc` 每个约 150~300MB，普通会话此前只有退出应用/切换 Agent
   才回收（Orca 工人另有 `workerIdleReleaseMinutes`，默认关闭），长时间使用进程与内存
   持续累积（upstream #5830）。
 - **实现**：`apps/desktop/src/main/maker-ipc/piIdleReleaseWatcher.ts`（30min TTL /
-  5min 扫描）。候选只取本机桌面普通任务或插件任务、无 Orca 角色、非远程的 pi 会话；
-  插件任务包含隐藏任务，其余隐藏任务仍排除
+  5min 扫描）。候选取本机桌面普通任务、插件、伙伴及自动化来源、无 Orca 角色、非远程的 Pi 会话；
+  插件、伙伴及自动化包含隐藏任务，其余隐藏任务仍排除
   （归档也纳入——归档不会关运行时）；释放前在发送锁内复查回合/后台任务/silent-stop
-  续跑/自动续跑/排队输入，并重读最新活动时间复核阈值；最后由
-  `Session.closeIfIdle()` 做同步的检查+关闭预约——它同时拒绝关闭宿主独占 RPC 操作
+  续跑/自动续跑/排队输入，并重读最新活动时间复核阈值；有未答异步问题时保留运行时，
+  避免关闭使问题失效。最后由
+  Maker 的 `closeSessionIfCurrent(..., 'runtime-refresh', { onlyIfIdle: true })` 在既有
+  rehydrate 抑制窗口内调用 `Session.closeIfIdle()`，保留暂存附件、工作区和输入边界。
+  `closeIfIdle()` 做同步的检查+关闭预约——它同时拒绝关闭宿主独占 RPC 操作
   （手动压缩 / rewind / 切模）在途的会话（pi 侧由 `runExclusivePiRpc` 计数，
   见 `hasPendingHostOperation`）。
 - **重建语义**：释放不影响会话数据；下一次发送走既有 lazy create-session，resume 自
   `sdk_session_id`，与冷启动一致。闲置后首次发送因此可能多等一次冷启动。
+  伙伴的 canonical link、产品任务和完整历史保持不变，不因闲置换窗或新建主任务。
 - **回归**：`apps/desktop/src/main/maker-ipc/__tests__/piIdleReleaseWatcher.test.ts`。
 
 ## 6. 上线门禁

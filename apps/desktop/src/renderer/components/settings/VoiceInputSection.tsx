@@ -2226,7 +2226,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       >
-                        <Dialog.Title className="text-18 font-semibold leading-[1.35] text-[var(--settings-section-title)]">
+                        <Dialog.Title className="text-18 font-medium leading-[1.35] text-[var(--settings-section-title)]">
                           {t('settings.voiceInput.refinement.dictionary.addDialog.title')}
                         </Dialog.Title>
                         <Dialog.Description className="sr-only">

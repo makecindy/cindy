@@ -293,6 +293,14 @@ export function BillingCheckoutDialog({
                   {t('billing.actions.refresh')}
                 </Button>
               )}
+              {isTerminalPhase(state.phase) && (
+                <Button variant="secondary" size="lg"
+                  type="button"
+                  onClick={onClose}
+                >
+                  {t('billing.actions.close')}
+                </Button>
+              )}
               {(state.phase === 'FAILED' || state.phase === 'EXPIRED') && canRetry && (
                 <Button variant="cta" size="lg"
                   type="button"
@@ -300,14 +308,6 @@ export function BillingCheckoutDialog({
                 >
                   <RotateCcw size={14} />
                   {t('billing.actions.retry')}
-                </Button>
-              )}
-              {isTerminalPhase(state.phase) && (
-                <Button variant="secondary" size="lg"
-                  type="button"
-                  onClick={onClose}
-                >
-                  {t('billing.actions.close')}
                 </Button>
               )}
             </div>

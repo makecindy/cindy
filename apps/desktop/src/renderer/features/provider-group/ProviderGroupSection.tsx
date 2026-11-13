@@ -136,7 +136,6 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
       if (!config) return;
       const last = config.members.length === 1;
       const ok = await confirm({
-        presentation: 'standard',
         title: t('providerGroup.member.removeConfirm.title', { name: label }),
         description: last
           ? t('providerGroup.member.removeConfirm.lastDescription', { provider: providerName })
@@ -155,7 +154,6 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
 
   const deleteGroup = useCallback(async () => {
     const ok = await confirm({
-      presentation: 'standard',
       title: t('providerGroup.deleteConfirm.title', { provider: providerName }),
       description: t('providerGroup.deleteConfirm.description'),
       confirmText: t('providerGroup.deleteConfirm.confirm'),

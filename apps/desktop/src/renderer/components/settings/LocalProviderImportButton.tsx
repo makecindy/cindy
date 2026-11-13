@@ -172,7 +172,6 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
         {localImportSetting.title}
       </Button>
       <ConfirmDialog
-        presentation="standard"
         open={open && !editing}
         maxWidth={600}
         onOpenChange={(value) => {
@@ -271,7 +270,6 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
         }
       />
       <ConfirmDialog
-        presentation="standard"
         open={!!editing}
         maxWidth={560}
         title={t('settings.providers.import.local.edit')}

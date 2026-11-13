@@ -102,9 +102,9 @@ describe('useReviewSource', () => {
     expect(mocks.getTurnChangeSets).toHaveBeenCalledWith('worker-session', ['set-1']);
     expect(result.current.diffs).toEqual([recordedDiff]);
     expect(result.current.isPartial).toBe(true);
-    expect(mocks.useReviewGitState).toHaveBeenCalledWith(null, false, null);
-    expect(mocks.useReviewCommitDiff).toHaveBeenCalledWith(null, null, false, null);
-    expect(mocks.useReviewBranchDiff).toHaveBeenCalledWith(null, null, false, false, null);
+    expect(mocks.useReviewGitState).toHaveBeenCalledWith(null, false, null, null);
+    expect(mocks.useReviewCommitDiff).toHaveBeenCalledWith(null, null, false, null, null);
+    expect(mocks.useReviewBranchDiff).toHaveBeenCalledWith(null, null, false, false, null, null);
   });
 
   it('fails closed for remote historical snapshots without calling the local IPC', async () => {

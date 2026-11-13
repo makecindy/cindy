@@ -44,7 +44,7 @@ import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import { resolveProjectAliasForSessions, type ProjectAliasesByDevice } from '@cindy/maker-shared/project-alias-sync';
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { normalizeWorkingDirForGrouping } from '../../../../shared/workingDir';
-import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { sessionTaskProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import {
   deviceLinkProjectKey,
   normalizeProjectKey,
@@ -179,7 +179,7 @@ export function buildPersistentLocalProjects(
   const knownKindsByComparisonKey = new Map<string, Set<string>>();
   for (const session of sessions) {
     if (
-      session.workspaceKind === 'dialogue' ||
+      (session.workspaceKind === 'dialogue' && !session.companion?.taskProjectDir) ||
       isOrcaWorkerSession(session) ||
       session.remoteHostId != null ||
       session.deviceLinkDeviceId != null
@@ -231,9 +231,9 @@ export function persistentProjectMatchesVendor(
 }
 
 export function projectIdentityKeyForSession(
-  session: Pick<Session, 'workingDir' | 'projectDir' | 'remoteHostId' | 'deviceLinkDeviceId'>,
+  session: Pick<Session, 'workingDir' | 'projectDir' | 'companion' | 'remoteHostId' | 'deviceLinkDeviceId'>,
 ): string | null {
-  const workingDir = normalizeWorkingDir(sessionProjectDirectory(session));
+  const workingDir = normalizeWorkingDir(sessionTaskProjectDirectory(session));
   if (workingDir == null) return null;
   if (session.deviceLinkDeviceId)
     return deviceLinkProjectKey(session.deviceLinkDeviceId, workingDir);
@@ -245,7 +245,7 @@ export function projectIdentityKeyForSession(
 }
 
 export function getProjectIdentity(session: Session): ProjectIdentity | null {
-  const workingDir = normalizeWorkingDir(sessionProjectDirectory(session));
+  const workingDir = normalizeWorkingDir(sessionTaskProjectDirectory(session));
   if (workingDir == null) return null;
   if (session.deviceLinkDeviceId) {
     return {
@@ -448,9 +448,9 @@ export function groupSessions(
 
   const aliasMembersByProject = new Map<string, Session[]>();
   for (const member of options.projectAliasMembers ?? sessions) {
-    if (member.status === 'deleted' || member.workspaceKind === 'dialogue' || member.orcaRole === 'worker'
+    if (member.status === 'deleted' || (member.workspaceKind === 'dialogue' && !member.companion?.taskProjectDir) || member.orcaRole === 'worker'
       || !member.deviceLinkDeviceId) continue;
-    const dir = normalizeWorkingDir(sessionProjectDirectory(member));
+    const dir = normalizeWorkingDir(sessionTaskProjectDirectory(member));
     if (!dir) continue;
     const key = deviceLinkProjectKey(member.deviceLinkDeviceId, dir);
     const members = aliasMembersByProject.get(key);
@@ -498,16 +498,16 @@ export function groupSessions(
   const groups = new Map<string, Session[]>();
   const identityByKey = new Map<string, ProjectIdentity>();
   for (const s of remaining) {
-    if (s.workspaceKind === 'dialogue') {
+    if (s.workspaceKind === 'dialogue' && !s.companion?.taskProjectDir) {
       dialogues.push(s);
       continue;
     }
-    const dir = normalizeWorkingDir(sessionProjectDirectory(s));
+    const dir = normalizeWorkingDir(sessionTaskProjectDirectory(s));
     const noPhysicalMessages = (s._count?.messages ?? 0) === 0;
     const isOrcaLead = isOrcaLeadSession(s);
     // 新建页里正在输入、还没发送的任务：已经选好项目，就放在那个项目下。
     const isAutoPlacedSession =
-      s.source === 'scheduler' || s.source === 'plugin' || s.id === options.provisionalDraftTaskId;
+      !!s.companion?.taskProjectDir || s.source === 'scheduler' || s.source === 'plugin' || s.id === options.provisionalDraftTaskId;
     if (
       dir == null ||
       (!options.includeDraftsInProjects &&

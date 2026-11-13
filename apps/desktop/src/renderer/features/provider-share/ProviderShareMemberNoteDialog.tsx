@@ -136,6 +136,16 @@ export function ProviderShareMemberNoteDialog({
         {errorKey && <ErrorNotice role="alert" className="mt-3" message={t(errorKey)} />}
         <ProviderShareDialogFooter>
           <Button
+            type="button"
+            variant="secondary"
+            palette="confirmation"
+            size="lg"
+            disabled={saving}
+            onClick={onClose}
+          >
+            {t('settings.providers.button.cancel')}
+          </Button>
+          <Button
             type="submit"
             variant="primary"
             palette="confirmation"
@@ -147,16 +157,6 @@ export function ProviderShareMemberNoteDialog({
                 ? 'providerShare.manage.memberNote.saving'
                 : 'providerShare.manage.memberNote.save',
             )}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            palette="confirmation"
-            size="lg"
-            disabled={saving}
-            onClick={onClose}
-          >
-            {t('settings.providers.button.cancel')}
           </Button>
         </ProviderShareDialogFooter>
       </form>

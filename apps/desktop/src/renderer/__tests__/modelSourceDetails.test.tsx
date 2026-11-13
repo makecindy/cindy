@@ -179,6 +179,27 @@ describe('model source second line', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  // Isolated-sandbox finding (2026-11-13, subscription-account-pools.md 合并与拿出由用户决定): a
+  // provider Cindy created for one account showed no account or quota in the picker, because only
+  // the built-in ids were read. It reads its own accounts (there is no CLI default to preview).
+  it.each(['subscriptionPool', 'subscriptionAccountPool'] as const)('shows the own account of a provider marked by %s', async (marker) => {
+    const created = { ...provider('openai-sub-fixture', 'codex'), [marker]: 'openai' as const };
+    const command = vi.fn(async () => ({
+      providerId: 'openai-sub-fixture', kind: 'openai', configured: true, strategy: 'least',
+      accounts: [{ id: 'cindy-x', identity: 'two@example.test', plan: 'pro', paused: false, status: 'ready',
+        running: 0, limit: 4, weight: 1, directory: '' }],
+    } satisfies SubscriptionPoolView));
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const view = render(
+      <ModelSourceUsageProvider providers={[created]} scope={{ deviceId: null }}>
+        <ModelSourceDetails providerId="openai-sub-fixture" label="OpenAI · two" modelId="gpt-5" />
+      </ModelSourceUsageProvider>,
+    );
+    await act(async () => {});
+    expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'read', providerId: 'openai-sub-fixture' });
+    expect(view.container.textContent).toContain('two@example.test');
+  });
+
   it.each(['multiple', 'signed-out', 'unavailable', 'limited', 'busy', 'unknown-identity'] as const)(
     'retains known pool quotas without claiming an allocation when %s', async (state) => {
       reads.claudeSnapshot = { subscriptionType: 'pro', sevenDay: { utilization: 93 } };

@@ -105,8 +105,19 @@ export interface ProviderView extends Provider {
   remoteModelIds?: string[];
   /** Definition remains available for adding a removed local connection again. */
   removed?: boolean;
-  /** Upgrade-only connection kept for saved routes; account management lives under OpenAI. */
+  /**
+   * A provider merged into another one (its own account belongs elsewhere and none is left): kept
+   * only so saved routes and old tasks resolve; its accounts are managed by that other provider.
+   */
   subscriptionPoolAlias?: true;
+  /** Current owner-only destination of a merged provider. Older hosts imply only `openai`. */
+  subscriptionPoolTarget?: string;
+  /**
+   * 2026-11-13: this host manages the provider's subscription accounts in its account pool of this
+   * kind (built-in subscriptions with a pool, providers Cindy created, registered legacy Codex
+   * connections). Older hosts omit it; clients then keep their built-in-only behavior.
+   */
+  subscriptionAccountPool?: 'openai' | 'anthropic';
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
   /** Public account identity and credential origin, never credential material. */
   openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };

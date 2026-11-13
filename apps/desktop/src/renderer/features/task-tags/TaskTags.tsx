@@ -537,7 +537,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
                 <ArrowLeft size={16} />
               </button>
             )}
-            <Dialog.Title className="flex-1 text-base font-semibold">
+            <Dialog.Title className="flex-1 text-base font-medium">
               {t(
                 deletion
                   ? 'taskTags.delete'

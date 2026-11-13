@@ -23,7 +23,7 @@ export function ordinaryTaskListFilter(): SQL | undefined {
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id
-        WHERE task_link.session_id = ${OUTER_SESSION_ID_SQL} AND task_link.role IN ('routine', 'channel')
+        WHERE task_link.session_id = ${OUTER_SESSION_ID_SQL} AND task_link.role IN ('routine', 'channel', 'group')
           AND task_bot.status <> 'deleting' AND (task_bot.hidden_at IS NULL OR task_bot.hidden_at = 0)
       )`)),
     isNull(sessions.hiddenAt),

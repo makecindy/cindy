@@ -159,7 +159,7 @@ function AccountCard({
             <LoaderCircle size={17} aria-hidden />
           </span>
         ) : null}
-        <h2 className="text-16 font-semibold text-[var(--text-primary)]">{title}</h2>
+        <h2 className="text-16 font-medium text-[var(--text-primary)]">{title}</h2>
       </div>
       {description ? (
         <p

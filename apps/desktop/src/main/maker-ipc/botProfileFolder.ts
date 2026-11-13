@@ -167,7 +167,7 @@ export async function ensureBotContentDirs(
   await migrateLegacyBotProfileFolder(userDataDir, legacyUserDataDir, botId);
   const home = botProfileDir(userDataDir, botId);
   const workspace = path.join(home, 'workspace');
-  const dirs = [workspace, path.join(home, 'memories'), path.join(home, 'skills')];
+  const dirs = [path.join(home, 'memories'), path.join(home, 'skills')];
   await Promise.all(dirs.map((dir) => fs.mkdir(dir, { recursive: true })));
   return [workspace];
 }

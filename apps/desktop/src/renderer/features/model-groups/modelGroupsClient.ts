@@ -102,7 +102,8 @@ export async function resolveModelGroup(
 }
 
 /**
- * 记下这个任务经哪条路线建、现在用着哪个候选；只在模型组真的选了一个(routed)时记。
+ * 实际采用后提交选路记录，并记下任务用着哪个候选。取消或失败的调用方不进入这里。
+ * 沿用原模型也提交选择记录；撞配额提议没有选路凭据，只更新绑定。
  * 失败只记日志：没有记录时撞配额就不提议换来源，其余一切照旧。
  */
 export function bindModelGroupSession(
@@ -112,6 +113,10 @@ export function bindModelGroupSession(
 ): void {
   const route: { agentKind: ModelGroupCandidate['agentKind']; providerId: string; model: string; agentDeviceId?: string } | null =
     !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
+  if (result && 'outcome' in result && result.decisionId) {
+    void window.electronAPI.modelGroups.commit(result.decisionId)
+      .catch((err: unknown) => log.warn('model group decision commit failed', err));
+  }
   if (!route) return;
   void window.electronAPI.modelGroups.bindSession({
     sessionId,

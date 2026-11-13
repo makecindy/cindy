@@ -125,16 +125,6 @@ export function ProviderShareApproveDialog({
       </div>
       <ProviderShareDialogFooter>
         <Button
-          variant="cta"
-          palette="confirmation"
-          size="lg"
-          loading={busy === 'approve'}
-          disabled={busy !== null || !providerClassificationReady}
-          onClick={() => void decide('approve')}
-        >
-          {t('providerShare.approve.approve')}
-        </Button>
-        <Button
           variant="secondary"
           palette="confirmation"
           size="lg"
@@ -143,6 +133,16 @@ export function ProviderShareApproveDialog({
           onClick={() => void decide('reject')}
         >
           {t('providerShare.approve.reject')}
+        </Button>
+        <Button
+          variant="cta"
+          palette="confirmation"
+          size="lg"
+          loading={busy === 'approve'}
+          disabled={busy !== null || !providerClassificationReady}
+          onClick={() => void decide('approve')}
+        >
+          {t('providerShare.approve.approve')}
         </Button>
       </ProviderShareDialogFooter>
     </ProviderShareDialog>

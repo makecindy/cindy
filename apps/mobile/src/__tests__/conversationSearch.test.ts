@@ -97,6 +97,20 @@ it('finds a renamed project without mixing devices and honors project filters', 
   expect(listConversationSearchProjects(sessions, undefined, aliases).map((p) => p.title)).toEqual(['Customer Portal', 'repo']);
 });
 
+// Old group/topic sessions must remain searchable under their Buddy when the host
+// is offline; existing fallback coverage only used execution directories. Unit tier.
+it('keeps old group tasks in the Buddy project during cached search', () => {
+  const task = session({ id: 'group', title: 'Group needle', source: 'bot',
+    workingDir: '/group-repo', projectDir: '/group-repo', workspaceKind: 'dialogue',
+    companion: { id: 'buddy', role: 'group', taskProjectDir: '/home/bots/buddy/workspace' } });
+  const origin = { deviceId: 'dev-a', deviceName: 'Studio', reachable: false };
+  const page = searchCachedDeviceSessions(origin, { query: 'needle', filters: { workingDirs: ['/home/bots/buddy/workspace'] } }, [task]);
+  expect(page.results.map(item => item.session.id)).toEqual(['group']);
+  expect(page.results[0]?.session.workingDir).toBe('/group-repo');
+  expect(listConversationSearchProjects([task])[0]?.workingDir).toBe('/home/bots/buddy/workspace');
+  expect(searchCachedDeviceSessions(origin, { query: 'needle', filters: { workingDirs: ['/group-repo'] } }, [task]).results).toEqual([]);
+});
+
 const studio: ConversationSearchDeviceOrigin = {
   deviceId: 'dev-a',
   deviceName: 'Studio',

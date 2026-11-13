@@ -210,7 +210,7 @@ export function TeammatesSection() {
     let focusArchived = !!group.archived;
     const actionKey = 'bots.groupChat.server.settings.' + (group.archived ? 'unarchive' : 'archive');
     try {
-      const accepted = await confirm({ presentation: 'standard', title: t(actionKey),
+      const accepted = await confirm({ title: t(actionKey),
         description: t(actionKey + 'Hint'), confirmText: t(actionKey),
         cancelText: t('bots.cancel'), confirmVariant: 'destructive' });
       if (!accepted || !isDataOwnerGenerationCurrent(owner)) return;

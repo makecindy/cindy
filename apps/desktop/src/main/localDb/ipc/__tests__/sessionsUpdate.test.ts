@@ -226,7 +226,7 @@ function createDb(): void {
   const sqlite = new Database(':memory:');
   // 与 schema.ts 的 sessions/messages 全列对齐(selectSessionWithCount select 全列)。
   sqlite.exec(`
-    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT, archived_at INTEGER);
     CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
     CREATE TABLE task_tags (
       id TEXT PRIMARY KEY NOT NULL,
@@ -1048,19 +1048,24 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted).toEqual({ title: 'Release Bot', status: 'active' });
   });
 
-  it('archives, restores and deletes teammate tasks listed with ordinary tasks', async () => {
+  // Group visibility must work through the real IPC guard, not only the worker transaction.
+  it.each([['routine', 'routine:daily'], ['group', 'group:room:thread:root'], ['group', 'group:room:personal-digest']])('archives, restores and deletes listed %s tasks', async (role, routeKey) => {
     // 例行任务 / 渠道专线进入普通任务列表，生命周期与普通任务一致；主聊天仍由伙伴生命周期管理。
+    h.sqlite!.exec(`CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER, kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER, PRIMARY KEY (shared_task_id, kind, revision))`);
+    Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
     const link = h.sqlite!.prepare('INSERT INTO bot_session_links(session_id, bot_id, role, route_key) VALUES (?, ?, ?, ?)');
     link.run('bot-local', 'bot-1', 'canonical', null);
     await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow(/Bot task lifecycle/);
 
     h.sqlite!.prepare('UPDATE bot_session_links SET role = ?, route_key = ? WHERE session_id = ?')
-      .run('routine', 'routine:daily', 'bot-local');
+      .run(role, routeKey, 'bot-local');
     const status = () => (h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('bot-local') as { status: string }).status;
     await invokeUpdate('bot-local', { status: 'archived' });
     expect(status()).toBe('archived');
+    if (role === 'group') h.sqlite!.exec("UPDATE bot_session_links SET archived_at=NULL WHERE session_id='bot-local'");
     await restoreArchivedSessionForSend('bot-local');
     expect(status()).toBe('active');
+    if (role === 'group') expect((h.sqlite!.prepare("SELECT archived_at FROM bot_session_links WHERE session_id='bot-local'").get() as { archived_at: number }).archived_at).toBeGreaterThan(0);
     await invokeUpdate('bot-local', { status: 'deleted' });
     expect(status()).toBe('deleted');
   });

@@ -94,6 +94,12 @@ function fixture(): {
   const home = path.join(root, 'home');
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
   vi.spyOn(os, 'homedir').mockReturnValue(home);
+  // The Codex CLI home honours `CODEX_HOME` (#8258). An ambient absolute value
+  // would bypass the mocked home and point the reconcile flow at the developer's
+  // real `~/.codex/auth.json` — the refresh write in the local-reconnect case
+  // would overwrite that live credential with a test token. Neutralise it here;
+  // the CODEX_HOME cases below override it.
+  vi.stubEnv('CODEX_HOME', '');
   const systemAuth = path.join(home, '.codex', 'auth.json');
   fs.writeFileSync(
     systemAuth,
@@ -436,6 +442,45 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     bindReleaseOpenAi(releaseAuth);
 
     expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(useCli ? systemAuth : releaseAuth);
+  });
+
+  // #8258 / unit: 本机 Codex CLI 凭证发现必须跟随用户设置的 CODEX_HOME。
+  // 依据:提报者把 codex login 放在 CODEX_HOME=E:\CodexHome / NixOS 自定义目录,
+  // 发现路径写死 ~/.codex 导致「使用本机 Codex 账号」找不到登录态;现有覆盖只测
+  // ~/.codex 常规位置。最小失败输入:packaged + CODEX_HOME=自定义绝对目录。
+  describe('本机 Codex CLI 凭证发现跟随 CODEX_HOME (#8258)', () => {
+    it('packaged 下 CODEX_HOME 为绝对路径时使用该目录的 auth.json', () => {
+      const { systemAuth } = fixture();
+      const customHome = path.join(path.dirname(systemAuth), 'custom-codex-home');
+      fs.mkdirSync(customHome, { recursive: true });
+      h.isPackaged = true;
+      vi.stubEnv('CODEX_HOME', customHome);
+
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(
+        path.join(customHome, 'auth.json'),
+      );
+    });
+
+    it('不继承环境里的 CODEX_HOME:凭证路径始终落在 fixture 的临时目录里', () => {
+      // 开发者的环境里若带着绝对路径 CODEX_HOME,凭证发现就会指到真实目录 ——
+      // 之后的 reconcile 写入会覆盖开发者真正的 auth.json。
+      const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-ambient-codex-home-'));
+      dirs.push(decoy);
+      vi.stubEnv('CODEX_HOME', decoy);
+      const { systemAuth } = fixture();
+      h.isPackaged = true;
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+    });
+
+    it('相对路径与空值不生效,回退 ~/.codex(不按 cwd 解析)', () => {
+      const { systemAuth } = fixture();
+      h.isPackaged = true;
+      vi.stubEnv('CODEX_HOME', 'relative-codex-home');
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+
+      vi.stubEnv('CODEX_HOME', '');
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+    });
   });
 
   // #9316 / unit: a junction to the Release profile must preserve the same-entry

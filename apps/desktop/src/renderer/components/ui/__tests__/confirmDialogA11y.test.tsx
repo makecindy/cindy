@@ -99,15 +99,15 @@ describe('ConfirmDialog confirmIcon', () => {
 });
 
 describe('ConfirmDialog action layout', () => {
-  it.each([false, true])('preserves cancel focus with cancelFirst=%s', (cancelFirst) => {
-    render(<ConfirmDialog presentation="standard" cancelFirst={cancelFirst} open onOpenChange={() => {}}
+  it('places Cancel first and keeps it focused on open', () => {
+    render(<ConfirmDialog open onOpenChange={() => {}}
       title="Confirm" description="Description" confirmText="Confirm action" cancelText="Keep" />);
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(
-      cancelFirst ? ['Keep', 'Confirm action'] : ['Confirm action', 'Keep'],
+      ['Keep', 'Confirm action'],
     );
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Keep' }));
   });
-  it('keeps action labels on one line without allowing buttons to shrink', () => {
+  it('orders three actions Cancel, tertiary, primary in a widened dialog', () => {
     render(
       <ConfirmDialog
         open
@@ -121,15 +121,10 @@ describe('ConfirmDialog action layout', () => {
       />,
     );
 
-    const dialog = screen.getByRole('alertdialog');
-    expect(dialog.style.maxWidth).toBe('520px');
-    expect(
-      screen.getByRole('button', { name: '打开 ChatGPT App' }).parentElement?.className,
-    ).toContain('flex-wrap');
-    for (const label of ['打开 ChatGPT App', '重新登录 ChatGPT', '稍后处理']) {
-      const button = screen.getByRole('button', { name: label });
-      expect(button.className).toContain('whitespace-nowrap');
-      expect(button.className).toContain('shrink-0');
-    }
+    expect(screen.getByRole('alertdialog').style.maxWidth).toBe('520px');
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(
+      ['稍后处理', '重新登录 ChatGPT', '打开 ChatGPT App'],
+    );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '稍后处理' }));
   });
 });

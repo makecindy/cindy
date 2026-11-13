@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stat } from 'node:fs/promises';
 
+import { codexHomeDir } from '../../shared/codexHome.js';
 import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { isCodexAuthInheritedFromSystemCli } from '../maker-host/auth-adapters.js';
 import { isNativeProviderAuthSelfAuthorized } from '../maker-host/nativeProviderAuthBinding.js';
@@ -22,6 +23,11 @@ import {
 
 export interface LocalCliScanDeps {
   homeDir: string;
+  /**
+   * Codex CLI 主目录(`CODEX_HOME` 绝对路径,未设置时是 `~/.codex`)。codex 的配置
+   * 目录与登录态文件都在这里,不一定是 home 下的 `.codex`(#8258)。
+   */
+  codexHomeDir: string;
   /** 路径存在且是目录。 */
   isDirectory(path: string): Promise<boolean>;
   /** 路径存在且是普通文件。 */
@@ -40,8 +46,10 @@ export interface LocalCliScanDeps {
 
 /** 生产 deps:真实 home + fs.stat(异常一律 false)+ Claude 跨平台登录探测。 */
 export function createLocalCliScanDeps(): LocalCliScanDeps {
+  const home = homedir();
   return {
-    homeDir: homedir(),
+    homeDir: home,
+    codexHomeDir: codexHomeDir(process.env, home),
     isDirectory: async (path) => {
       try {
         return (await stat(path)).isDirectory();
@@ -94,7 +102,9 @@ export function createLocalCliScanDeps(): LocalCliScanDeps {
 export async function scanLocalCliAuth(deps: LocalCliScanDeps): Promise<LocalCliDetection[]> {
   const results: LocalCliDetection[] = [];
   for (const entry of LOCAL_CLI_DETECT_MAP) {
-    const configDir = join(deps.homeDir, ...entry.configDirSegments);
+    // codex 的基准目录是它自己的主目录(CODEX_HOME),不是 home 下的 `.codex`。
+    const base = entry.homeBase === 'codex-home' ? deps.codexHomeDir : deps.homeDir;
+    const configDir = join(base, ...entry.configDirSegments);
     const dirExists = await deps.isDirectory(configDir);
     let installed = dirExists;
     let loggedIn = false;
@@ -103,7 +113,7 @@ export async function scanLocalCliAuth(deps: LocalCliScanDeps): Promise<LocalCli
       // Keychain 登录的 Mac 用户可能连 ~/.claude 目录都没有——登录了就算已安装。
       installed = dirExists || loggedIn;
     } else if (dirExists && entry.credentialFileSegments) {
-      loggedIn = await deps.isFile(join(deps.homeDir, ...entry.credentialFileSegments));
+      loggedIn = await deps.isFile(join(base, ...entry.credentialFileSegments));
     }
     // 未登录时不必探测共用性(也无从谈起);已登录才问「Cindy 用的是不是这一份」。
     const sharedWithCindy = loggedIn ? deps.isCredentialSharedWithCindy(entry.cli) : false;

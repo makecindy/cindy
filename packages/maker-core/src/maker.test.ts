@@ -705,6 +705,18 @@ describe('Maker local Pi package generation fence', () => {
 });
 
 describe('Maker initial plan persistence', () => {
+  // A second, best-effort provider write could leave a valid task with a default
+  // route after a crash. Creation must hand storage the same identity as startup.
+  it.each(['xd', null, undefined])('stores initial provider %s with the new task', async (providerId) => {
+    const storage = createStorage();
+    const handle = createHandle({ id: 'provider-handle' });
+    const maker = new Maker({ agents: { codex: createAgent(async () => handle) }, storage, logger: createLogger() });
+    try {
+      const session = await maker.createSession({ agentKind: 'codex', workingDir: '/repo', model: 'm', providerId });
+      expect(await storage.get(session.id)).toMatchObject({ providerId });
+    } finally { await maker.shutdown(); }
+  });
+
   it.each([true, false, undefined])('stores initial plan mode %s with the new task', async (planMode) => {
     const storage = createStorage();
     const create = vi.spyOn(storage, 'create');
@@ -738,7 +750,7 @@ describe('Maker initial plan persistence', () => {
         .mockRejectedValueOnce(new Error('storage unavailable'))
         .mockImplementation(create);
       const maker = new Maker({ agents: { [agentKind]: createAgent(start, agentKind) }, storage, logger: createLogger() });
-      const opts: CreateSessionOptions = { agentKind, workingDir: '/repo', model: 'm', planMode: true };
+      const opts: CreateSessionOptions = { agentKind, workingDir: '/repo', model: 'm', planMode: true, providerId: 'xd' };
       try {
         await expect(maker.createSession(opts)).rejects.toThrow('storage unavailable');
         expect(insert.mock.calls[0][0].planMode).toBe(true);
@@ -746,7 +758,7 @@ describe('Maker initial plan persistence', () => {
         expect(maker.listActiveSessions()).toEqual([]);
         expect(await storage.list()).toEqual([]);
         const session = await maker.createSession(opts);
-        expect(await storage.list()).toEqual([expect.objectContaining({ id: session.id, planMode: true })]);
+        expect(await storage.list()).toEqual([expect.objectContaining({ id: session.id, planMode: true, providerId: 'xd' })]);
         expect(maker.listActiveSessions()).toHaveLength(1);
       } finally {
         await maker.shutdown();

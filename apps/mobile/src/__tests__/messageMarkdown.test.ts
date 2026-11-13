@@ -2043,6 +2043,34 @@ describe('LaTeX math(块级 $$ 围栏与 inline $ 定界符)', () => {
     const groups = groupMobileMarkdownSelectableBlocks(blocks);
     expect(groups.map((group) => group.type)).toEqual(['text_run', 'single', 'text_run']);
   });
+
+  it('同行多个 $$a$$ + $$b$$ 不被贪婪吞成单个 math 块', () => {
+    const blocks = parseMobileMarkdown('$$a = 1$$ + $$b = 2$$');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      type: 'paragraph',
+      inlines: [
+        { type: 'math', text: 'a = 1' },
+        { type: 'text', text: ' + ' },
+        { type: 'math', text: 'b = 2' },
+      ],
+    });
+  });
+
+  it('首尾行带内容的跨行 $$ 围栏正确识别为 math 块,未闭合流式仍保段落', () => {
+    const streaming = parseMobileMarkdown('$$ \\Delta z = f(x, y) - f(0, 0)\n= 0 \\cdot x');
+    expect(streaming).toHaveLength(1);
+    expect(streaming[0]).toMatchObject({ type: 'paragraph' });
+
+    const closed = parseMobileMarkdown('$$ \\Delta z = f(x, y) - f(0, 0)\n= 0 \\cdot x + 0 \\cdot y + o(\\rho) $$');
+    expect(closed).toEqual([
+      {
+        type: 'math',
+        key: 'math:0:0',
+        text: '\\Delta z = f(x, y) - f(0, 0)\n= 0 \\cdot x + 0 \\cdot y + o(\\rho)',
+      },
+    ]);
+  });
 });
 
 describe('title 剥离不得灾难性回溯(ReDoS)', () => {

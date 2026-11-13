@@ -354,6 +354,17 @@ function DeleteScheduleWithSessionsDialog({
           </div>
 
           <div className="mt-6 flex justify-end gap-2.5">
+            <AlertDialog.Cancel asChild>
+              <Button
+                variant="secondary"
+                size="lg"
+                type="button"
+                disabled={loading}
+                onClick={onCancel}
+              >
+                {t('scheduler.confirm.delete.cancel')}
+              </Button>
+            </AlertDialog.Cancel>
             <Button
               variant="cta"
               size="lg"
@@ -366,17 +377,6 @@ function DeleteScheduleWithSessionsDialog({
                 ? t('scheduler.deleteDialog.confirmDeleteSessions')
                 : t('scheduler.deleteDialog.confirm')}
             </Button>
-            <AlertDialog.Cancel asChild>
-              <Button
-                variant="secondary"
-                size="lg"
-                type="button"
-                disabled={loading}
-                onClick={onCancel}
-              >
-                {t('scheduler.confirm.delete.cancel')}
-              </Button>
-            </AlertDialog.Cancel>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

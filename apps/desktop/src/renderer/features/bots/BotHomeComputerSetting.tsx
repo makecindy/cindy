@@ -243,8 +243,6 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
     <CompanionProfileRepairDialog botId={bot.id} open={state.repairOpen} onOpenChange={state.setRepairOpen} />
     <ConfirmDialog
       open={state.busyTarget !== null}
-      presentation="standard"
-      cancelFirst
       onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setBusyTarget(null); }}
       title={t('bots.cloud.busyTitle', { name: bot.name })}
       description={t('bots.cloud.busyDescription', { name: bot.name, device: busyDevice })}
@@ -257,8 +255,6 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
     />
     <ConfirmDialog
       open={state.pending !== null}
-      presentation="standard"
-      cancelFirst
       onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setPending(null); }}
       title={t('bots.cloud.switchTitle', { name: bot.name, device })}
       description={t('bots.cloud.switchDescription', { name: bot.name, device })}

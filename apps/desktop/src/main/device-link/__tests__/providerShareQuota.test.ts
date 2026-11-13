@@ -137,6 +137,33 @@ describe('share quota projection', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
   // Regression: a shared multi-account subscription showed only its default account's quota.
+  // #10405, unit: no assignable accounts is not a single-account fallback. A pure
+  // historical alias still serves its original shared account after it moved elsewhere.
+  it.each([false, true])('does not borrow old quota from an empty target pool (compatibility alias: %s)', async alias => {
+    state.providers = [{ id: 'legacy', connected: true, auth: { method: 'oauth', native: 'claude' },
+      ...(alias ? { subscriptionPoolAlias: true } : { subscriptionAccountPool: 'anthropic' }) }];
+    state.pool = [];
+    readers.claude.mockResolvedValue({ updatedAt: 1, sevenDay: { utilization: 25, resetsAt: Date.now() / 1000 + 3600 } });
+    const result = await readProviderShareQuota('legacy');
+    expect(result.accounts[0]).toMatchObject(alias ? { state: 'ready', windows: [{ remainingPercent: 75 }] }
+      : { state: 'unavailable', windows: [] });
+  });
+
+  // #10405 unit: a named target must expand its accounts too, selecting the quota family
+  // from its native auth rather than treating every non-builtin id as Codex.
+  it.each(['claude', 'codex'])('expands the accounts of a named %s target without borrowing its old login', async native => {
+    const providerId = `${native}-target`;
+    state.providers = [{ id: providerId, connected: true, auth: { method: 'oauth', native } }];
+    const resetsAt = Date.now() / 1000 + 3600;
+    state.pool = [25, 60].map(percent => ({ isDefault: false, usage: native === 'claude'
+      ? { claudeUsage: { updatedAt: 1, sevenDay: { utilization: percent, resetsAt } } }
+      : { codexUsage: { appServerBuckets: { codex: { updatedAt: 1,
+        secondary: { usedPercent: percent, windowMinutes: 10_080, resetsAt } } } } } }));
+    const result = await readProviderShareQuota(providerId);
+    expect(result.accounts.map(account => account.windows.map(window => window.remainingPercent)))
+      .toEqual([[75], [40]]);
+  });
+
   it('lists every assignable pooled subscription account with all of its windows', async () => {
     state.providers = [
       { id: 'anthropic', connected: true, source: 'builtin', auth: { method: 'oauth', native: 'claude' } },

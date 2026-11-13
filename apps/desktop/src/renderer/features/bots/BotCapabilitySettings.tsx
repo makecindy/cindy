@@ -96,7 +96,6 @@ export function BotCapabilitySettings({
 
   // Same unsaved-changes question as memory.
   const confirmDiscard = useCallback(async () => !editorDirtyRef.current?.() || confirm({
-    presentation: 'standard',
     title: t('bots.capabilities.learned.unsavedTitle'),
     description: t('bots.capabilities.learned.unsavedDescription'),
     confirmText: t('bots.capabilities.learned.discard'),

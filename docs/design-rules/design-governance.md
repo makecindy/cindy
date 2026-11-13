@@ -321,7 +321,7 @@ ls apps/desktop/src/renderer/themes/builtin/*.ts | wc -l
 | 快捷键键帽外框 | 2026-09-06 用户裁决 [#4001](https://github.com/makecindy/cindy/pull/4001)：所有可见快捷键外框（含承载快捷键的交互按钮）4px；边框/填充/内边距/颜色按所在表面 | 已回写 `DESIGN.md §5` / decision-log；Desktop Permission 本样本键帽已 4px，不重开该决定，不把键帽按普通按钮胶囊改掉 |
 | DS-4 基础控件 | `DESIGN.md §4` 与 decision-log 2026-09-04：按钮/输入尺寸、按钮字号字重、hover/pressed、通用 secondary Tier-1、ivory 暂留 | DS-4 已落地；DS-4b 设置封装恢复局部覆盖。ivory 的长期用途已由下列 DS-6 裁决明确；完整表单/证据与第二消费者在 DS-6 |
 
-**DS-6 已批准、验收另记（2026-09-08）**：D1 soft/50% 输入焦点环，亮暗/错误/旧主题可辨识是验收前提；不通过须提供实际对照再讨论该项。D2 elevated 默认＋用途明确的 ivory，保留局部覆盖。D3 普通确认保留反相中性主按钮、轮廓次/第三按钮、主→第三→取消排列、默认 Cancel / 显式主按钮 / typed 输入优先分支及 default/destructive；仅指定两处删除入口 opt-in，授权不迁。D4 原必填/格式规则转字段错误并定位首错，服务失败保留 Toast。D5 仅实际保存禁止重复提交及 Cancel/Esc/遮罩关闭，成功关闭/失败恢复，不锁独立测试连接/获取模型，不改业务语义。实现与实际证据见 [DS-6 索引](../design-evidence/2026-09-08/ds6-forms.md)，未验证不记通过。
+**DS-6 已批准、验收另记（2026-09-08）**：D1 soft/50% 输入焦点环，亮暗/错误/旧主题可辨识是验收前提；不通过须提供实际对照再讨论该项。D2 elevated 默认＋用途明确的 ivory，保留局部覆盖。D3 普通确认保留反相中性主按钮、轮廓次/第三按钮、主→第三→取消排列、默认 Cancel / 显式主按钮 / typed 输入优先分支及 default/destructive；仅指定两处删除入口 opt-in，授权不迁。D4 原必填/格式规则转字段错误并定位首错，服务失败保留 Toast。D5 仅实际保存禁止重复提交及 Cancel/Esc/遮罩关闭，成功关闭/失败恢复，不锁独立测试连接/获取模型，不改业务语义。实现与实际证据见 [DS-6 索引](../design-evidence/2026-09-08/ds6-forms.md)，未验证不记通过。D3 的按钮排列与「仅两处 opt-in」已被 2026-11-11 维护者裁决 C-01 / C-02 取代（取消在左、主操作在右，标准按钮为唯一呈现），现行规则见 `DESIGN.md §4`。
 
 **DS-9 Desktop Permission 已裁决（2026-09-11）**：真实组件对照后用户选择允许一次突出、保持中性、沿用当前密度；适用边界见 DESIGN §4「Desktop chat and operation authorization」及 decision-log 同日条目。下表 Permission 行保留来源比较：Desktop 已关闭，Mobile 保持后续待决。工程实现、用户最终视觉验收分别登记。
 

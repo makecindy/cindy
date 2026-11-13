@@ -183,6 +183,7 @@ import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
 import { ContextCapacityRing, formatTokenCount, getModelContextWindow } from '@/components/status/ContextCapacityRing';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
+import { DiffPanelContainer } from '@/components/diff-panel/DiffPanelShell';
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
@@ -5937,7 +5938,7 @@ function CCAgentSessionContent({
         {/* Scroll container — full height, bottom padding reserves space for input overlay.
            key={sessionId}: force a full remount on session switch so scroll state,
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
-        <div
+        <DiffPanelContainer
           className="wallpaper-message-viewport relative min-h-0 flex-1"
           data-plugin-ui-element="messages"
           style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
@@ -5954,7 +5955,7 @@ function CCAgentSessionContent({
           {botChatIdentity && isBotOpeningPending({ invitationStage: botInvitationStage, historyLoaded, messageCount: messages.length }) ? (
             <BotOpeningPending name={botChatIdentity.name} bottomInset={overlayHeight} />
           ) : null}
-        </div>
+        </DiffPanelContainer>
 
         {/* Input overlay — sticky at bottom with gradient fade.
            左右 padding 由 useProportionalWidth.inputPad 计算:默认 40,compact

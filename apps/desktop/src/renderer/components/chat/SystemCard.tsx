@@ -118,7 +118,7 @@ const cardClass = cn(
   'select-text',
 );
 
-const titleClass = 'text-15 font-semibold mb-2';
+const titleClass = 'text-15 font-medium mb-2';
 const labelClass = 'text-[var(--msg-tool-text)]';
 const valueClass = 'font-medium';
 const rowClass = 'flex items-baseline justify-between gap-3 py-[2px]';

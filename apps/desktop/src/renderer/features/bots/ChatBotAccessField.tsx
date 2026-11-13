@@ -42,7 +42,7 @@ export function ChatBotAccessField({ groupId, member, disabled = false }: {
     const live = () => mounted.current && isDataOwnerGenerationCurrent(owner);
     try {
       if (access === 'tools' && !(await confirm({
-        presentation: 'standard', title: t(key('authorizeTitle'), { name: member.name }),
+        title: t(key('authorizeTitle'), { name: member.name }),
         description: t(key('toolsHint')), confirmText: t(key('confirm')),
         cancelText: t('bots.cancel'), confirmVariant: 'destructive',
       }))) return;
