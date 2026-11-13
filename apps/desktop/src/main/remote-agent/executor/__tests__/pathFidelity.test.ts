@@ -69,6 +69,9 @@ describe('remote provider file paths', () => {
       expect(fs.existsSync(path.join(workingDir, 'C:', 'Agent', 'Temp', 'claude', 'scratchpad', 'marker.txt'))).toBe(false);
       expect((await executor.callTool('Write', { file_path: 'normal.txt', content: 'normal' })).isError).toBeFalsy();
       expect(fs.readFileSync(path.join(workingDir, 'normal.txt'), 'utf8')).toBe('normal');
+      const posixDoubleSlash = '//' + workingDir.slice(1) + '/double-slash.txt';
+      expect((await executor.callTool('Write', { file_path: posixDoubleSlash, content: 'posix' })).isError).toBeFalsy();
+      expect(fs.readFileSync(path.join(workingDir, 'double-slash.txt'), 'utf8')).toBe('posix');
       expect((await mappedExecutor.callTool('Write', { file_path: 'C:/Agent/workspace/mapped.txt', content: 'mapped' })).isError).toBeFalsy();
       expect(fs.readFileSync(path.join(workingDir, 'mapped.txt'), 'utf8')).toBe('mapped');
     } finally {

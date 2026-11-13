@@ -119,6 +119,8 @@ function stripAliasPrefix(input: string, from: string): string | null {
 }
 
 const WINDOWS_PATH = /^[A-Za-z]:|^[\\/]{2}/;
+/** 结构化路径在 POSIX 上仍未映射时，只有 drive 和反斜杠 UNC 才属于 Windows 主机路径。 */
+const UNMAPPED_WINDOWS_PATH = /^[A-Za-z]:|^\\\\/;
 
 /** 正文与脚本里的路径边界（含通配符/变量后缀）；若磁盘上存在同名延续，仍由 continuesName 保留字面目录名。 */
 const NAME_END = /[\s"'\x60<>()[\]{}|&;:,*?$%，。、；：！？（）【】《》「」『』“”‘’]/;
@@ -1107,7 +1109,7 @@ export class ExecutorWorkspace {
     // On POSIX, Node treats an unmapped Windows absolute path as a relative string
     // (for example `C:/tmp` becomes `<workingDir>/C:/tmp`). Reject it before
     // path.resolve can turn an agent-host path into a project-local path.
-    if (process.platform !== 'win32' && WINDOWS_PATH.test(mapped)) {
+    if (process.platform !== 'win32' && UNMAPPED_WINDOWS_PATH.test(mapped)) {
       throw new ExecutorPathError('Windows absolute paths must be mapped before use');
     }
     return path.resolve(this.mapAlias(baseDir), mapped);
