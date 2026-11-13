@@ -29,6 +29,7 @@ import { getActiveCatalog, getLocalCatalogOverridesSnapshot } from '../../../des
 import { resolvePiCindyGatewayModelApi, resolvePiCindyGatewayModelSpec } from '../../../desktop/src/main/maker-host/piNativeProvidersCore.js';
 import { createHostPiNativeProviders } from './pi-native-providers.js';
 import { spawnHostPiSubagentRunner } from './pi-subagent-runner.js';
+import { createHostPiPackages } from './pi-packages.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId, resolvePiGatewayDescriptorProviderId, resolvePiRuntimeModelDescriptor } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from '../../../desktop/src/main/maker-host/capability-routing.js';
 import { createCodexCapabilityRouting } from '../../../desktop/src/main/maker-host/codexCapabilityRouting.js';
@@ -661,6 +662,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // The desktop's learned Pi cache compatibility (pi-native-compat-overrides-store.ts), on this
   // profile; the Pi bridge writes the file and the runtime reads it back.
   const piNativeCompatOverrides = createPiNativeCompatOverridesStore({ app: { getPath: () => options.userDataDir } });
+  // As the desktop (pi-host.ts, maker-host/index.ts): Pi packages from this profile's pi-package-home.
+  const piPackages = createHostPiPackages({ userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null });
   const piNativeProviders = createHostPiNativeProviders({
     userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null, endpoint: engineEndpoint,
     claudeProxy, providerConfig: config,
@@ -723,6 +726,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         resolvePiNativeProviders: (ctx) => piNativeProviders.resolvePiNativeProviders(ctx),
         // As the desktop (pi-host.ts): durable Subagent runners, forked as Node child processes (pi-subagent-runner.ts).
         spawnPiSubagentRunner: (request) => spawnHostPiSubagentRunner(request),
+        resolvePiManagedPackageResources: piPackages.deps.resolvePiManagedPackageResources,
+        resolvePiNativePackagePaths: piPackages.deps.resolvePiNativePackagePaths,
+        mutatePiManagedPackage: piPackages.deps.mutatePiManagedPackage,
+        onPiManagedPackageMutationSettled: piPackages.deps.onPiManagedPackageMutationSettled,
         resolvePiGatewayModelApi: resolvePiCindyGatewayModelApi,
         resolvePiGatewayModelSpec: resolvePiCindyGatewayModelSpec,
         ...piModelResolvers,
@@ -820,7 +827,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     onQueueGateReleased: createDeferredRestartSettledWake({ wakeSession: options.wakeSession ?? (() => {}) }),
     logger: LOGGER,
   });
-  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge,
+  piPackages.attachMaker(maker);
+  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge, piPackages,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }

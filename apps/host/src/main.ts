@@ -1566,6 +1566,8 @@ async function disposeOwnerRuntime(): Promise<void> {
     platformClient?.close();
     await attempt(() => inputQueue.dispose());
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
+    // Stop watching this profile's Pi packages once Maker no longer runs Pi.
+    agentGraph?.piPackages.close();
     // As the desktop's teardown: the process-wide vision-bridge controller and key reader go.
     await attempt(() => agentGraph?.visionBridge.close());
     await attempt(() => codexRuntime?.close());
