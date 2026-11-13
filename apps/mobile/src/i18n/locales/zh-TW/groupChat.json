@@ -133,8 +133,8 @@
       },
       "AUTH_REQUIRED": {
         "summary": "{{name}}無法回覆：模型連線需要重新驗證。",
-        "advice": "請重新連接對應的模型來源。",
-        "details": "請在設定中重新連線對應的模型來源後重新傳送。"
+        "advice": "請重新連線對應的模型供應商。",
+        "details": "請在設定中重新連線對應的模型供應商後重新傳送。"
       },
       "RATE_LIMITED": {
         "summary": "{{name}}無法回覆：模型請求過於頻繁。",
@@ -149,11 +149,11 @@
       "QUOTA_EXCEEDED": {
         "summary": "{{name}}無法回覆：模型用量已達上限。",
         "advice": "請檢查配額或選擇其他模型。",
-        "details": "請檢查對應來源的配額，或選擇其他可用模型。"
+        "details": "請檢查對應供應商的配額，或選擇其他可用模型。"
       },
       "NETWORK_ERROR": {
         "summary": "{{name}}無法回覆：網路連線失敗。",
-        "advice": "請檢查網路或Proxy。",
+        "advice": "請檢查網路或 Proxy。",
         "details": "請檢查網路或 Proxy 後重新傳送。"
       },
       "RUNTIME_TIMEOUT": {
@@ -171,7 +171,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
-      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。"
     }
   },
   "plan": {
@@ -249,7 +250,7 @@
       "all": "所有訊息",
       "mentions": "僅 @我",
       "none": "關閉通知",
-      "allHint": "群聊訊息和已關注話題的新回覆都會提醒",
+      "allHint": "群聊訊息和已追蹤話題的新回覆都會提醒",
       "mentionsHint": "有人 @你或 @所有人時提醒，分工待處理仍會提醒",
       "noneHint": "關閉本群所有系統提醒，未讀訊息仍會保留",
       "saving": "正在儲存…",
@@ -292,7 +293,7 @@
     "projectDirOnComputer": "在電腦上選擇或更換",
     "memberActions": "{{name}} 的操作",
     "retry": "重試",
-    "conflict": "群設定已更新，請核對後再儲存。輸入已保留。",
+    "conflict": "群聊設定已更新，請核對後再儲存。輸入已保留。",
     "makeAdmin": "設為管理員",
     "removeAdmin": "取消管理員",
     "roles": {
@@ -364,7 +365,7 @@
     "hide": "從我的列表移除",
     "hideNote": "從你所有裝置的列表中移除此群聊。不改變成員關係，不刪除歷史訊息、不停止進行中的工作，也不影響其他成員。",
     "leave": "退出群聊",
-    "leaveNote": "你和你的伙伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
+    "leaveNote": "你和你的夥伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
     "unavailable": "目前伺服器或電腦尚不支援此操作。",
     "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
     "failed": "操作未完成，請重試。",
@@ -373,7 +374,7 @@
   "thread": {
     "openFailed": "無法開啟話題，請重試。",
     "title": "話題",
-    "root": "原問題",
+    "root": "原訊息",
     "replies": "回覆",
     "placeholder": "回覆這個話題…",
     "create": "建立話題",
@@ -388,9 +389,9 @@
     "remoteUnavailable": "透過電腦連線暫不支援開啟話題。你可以返回這台電腦上的群聊。",
     "unavailableTitle": "暫時無法開啟這個話題",
     "rootUnavailable": "原訊息已刪除或無法查看，暫時不能回覆。",
-    "archived": "群聊已歸檔，暫時不能傳送訊息。",
-    "follow": "關注",
-    "following": "已關注",
+    "archived": "群聊已封存，暫時不能傳送訊息。",
+    "follow": "追蹤",
+    "following": "已追蹤",
     "alsoSend": "同時發到群聊",
     "sharedOwn": "回覆了話題，也發到了群聊",
     "sharedOther": "貼回了 {{name}} 的話題回覆",
@@ -407,7 +408,7 @@
     "newReplies_one": "{{count}} 則新回覆",
     "newReplies_other": "{{count}} 則新回覆",
     "shareFailed": "回覆已發到話題，但沒能同時發到群聊。",
-    "followFailed": "未能更新關注狀態，請重試。",
+    "followFailed": "未能更新追蹤狀態，請重試。",
     "posting": "正在傳送至群聊…",
     "shareStopped": "權限已變更，已停止傳送至群聊。",
     "loadingOlder": "正在載入更早的回覆…",
@@ -476,7 +477,7 @@
     },
     "digest": {
       "daily": "每日彙總",
-      "manual": "手動彙整"
+      "manual": "手動彙總"
     },
     "minutes": "{{count}} 分鐘",
     "presence": "你正在參與 · 離開 {{minutes}} 分鐘後恢復",
@@ -567,7 +568,7 @@
     "accessChatTitle": "只在群組裡交流",
     "accessChatHint": "只根據群組裡的訊息回答，不讀你的記憶和私人資料，也不呼叫工具。",
     "accessToolsTitle": "可以用工具和資料",
-    "accessToolsHint": "可以使用 {{name}} 已有的工具和你的私人資料，結果全群可見。原有的操作審批照常；撤回後，已經完成的操作無法撤銷。",
+    "accessToolsHint": "可以使用 {{name}} 已有的工具和你的私人資料，結果全群可見。原有的操作核准照常；撤回後，已經完成的操作無法撤銷。",
     "capabilitiesRow": "{{name}} 的工具與授權",
     "capabilityScope": "這是 {{name}} 自己的工具與授權，不是僅限本群的設定。",
     "accessMenu": "在本群的權限",

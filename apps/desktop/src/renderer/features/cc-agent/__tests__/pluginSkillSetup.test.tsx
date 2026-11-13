@@ -126,6 +126,16 @@ describe('plugin Skill setup state', () => {
     expect(await pluginSetupRoute(undefined, 'cindy-github')).toBeNull();
   });
 
+  // Unit, #4540881698: a stamped organization install keeps its physical route;
+  // the existing route test only covered root and could not detect source mixups.
+  it('keeps the exact installed route only for the expected logical identity', async () => {
+    const stamped = { ...github(false), namespace: 'acme', instanceKey: 'cindy-github' };
+    expect(await pluginSetupRoute(stamped, 'cindy-github', { namespace: 'acme', ghostId: 'cindy-github' }))
+      .toBe('/plugins?ghost=cindy-github');
+    expect(await pluginSetupRoute(stamped, 'cindy-github', { namespace: null, ghostId: 'cindy-github' }))
+      .toBeNull();
+  });
+
   it('prepends the Skill and keeps what the user wrote', () => {
     expect(text(prependSlashSkill(null, 'pr'))).toBe('/pr ');
     expect(text(prependSlashSkill(plainTextToTiptapDoc('fix the login bug'), 'pr'))).toBe(

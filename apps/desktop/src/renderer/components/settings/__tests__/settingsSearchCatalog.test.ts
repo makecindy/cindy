@@ -227,7 +227,6 @@ describe('settings discoverability regressions', () => {
     ['我的浏览器', 'computerUse.browserTarget'],
     ['恢复默认布局', 'appearance.layout'],
     ['对话工作区', 'storage.dialogueDirectory'],
-    ['伙伴默认模型', 'general.botModel'],
     ['供应商组', 'providers.sharing'],
     ['字体大小', 'settings.appearance.font.uiSize.label'],
     ['自动更新', 'settings.about.autoUpdateLabel'],

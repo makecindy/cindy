@@ -42,7 +42,7 @@ interface PermissionSelectorProps {
   disabled?: boolean;
   /** 窄容器(如 doc rail)下把 trigger 字号/图标各压一档,默认 false。 */
   dense?: boolean;
-  /** 极窄新建对话工具栏只显示当前权限图标，文字通过 tooltip / aria-label 提供。 */
+  /** 任务内及极窄工具栏只显示当前权限图标，文字通过 tooltip / aria-label 提供。 */
   iconOnly?: boolean;
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
   visualVariant?: 'default' | 'create-agent';
@@ -167,8 +167,7 @@ export function PermissionSelector({
   // 走 Radix Popover 的两种情况:设置页字段,以及模态弹窗里的 chip。
   const anchoredPopover = isFieldTrigger || !useMorphPopover;
   const previousOptionsLengthRef = useRef(options.length);
-  // 窄态工具条:权限语义由 tooltip + aria-label 保留，视觉收成固定宽图标。
-  // 普通会话在侧栏 + 浏览器 split-pane 下同样会变窄，不能只处理 create-agent。
+  // 任务内与极窄工具条收成固定宽图标；tooltip + aria-label 保留当前权限名称。
   const isIconOnly = iconOnly && !isFieldTrigger;
 
   useEffect(() => {
@@ -195,7 +194,7 @@ export function PermissionSelector({
   const triggerContent = (
     <>
       <TriggerIcon
-        size={isCreateAgentVariant ? 11 : dense ? 13 : 14}
+        size={isIconOnly ? 16 : isCreateAgentVariant ? 11 : dense ? 13 : 14}
         className="shrink-0 text-current"
       />
       {!isIconOnly && (
@@ -227,7 +226,7 @@ export function PermissionSelector({
   // 归一化、中性呈现只此一份,分叉的只有弹层壳。
   const triggerButton = (
         <Tip
-          text={triggerDescription}
+          text={isIconOnly ? t('newChat.permissionSelector.triggerAria', { label: triggerLabel }) : triggerDescription}
           side="top"
           contentClassName="max-w-[280px] whitespace-normal break-words text-left"
         >
@@ -250,13 +249,14 @@ export function PermissionSelector({
                   )
                 : cn(
                     'rounded-full',
-                    // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
-                    // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
+                    // 文字入口悬停显示胶囊外框；图标入口只显示轻微底色。
                     isIconOnly
-                      ? 'h-[30px] w-[34px] min-w-[34px] justify-center px-0'
+                      ? 'h-[30px] w-7 min-w-7 justify-center px-0'
                       : 'h-[30px] min-w-[72px] max-w-full shrink px-2.5',
-                    'border border-transparent bg-transparent text-[var(--text-primary)]',
-                    'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+                    'border border-transparent bg-transparent',
+                    isIconOnly
+                      ? 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]'
+                      : 'text-[var(--text-primary)] hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
                   ),
               disabled && 'pointer-events-none opacity-50',
             )}

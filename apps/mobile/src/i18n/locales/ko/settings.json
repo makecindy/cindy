@@ -171,7 +171,11 @@
       "auto": "자동",
       "on": "항상 켜기",
       "off": "끄기"
-    }
+    },
+    "actionReplyPlaceholder": "답장 입력",
+    "actionNotDelivered": "컴퓨터에 전달되지 않았습니다. Cindy를 열어 처리해 주세요.",
+    "actionReplyNotDelivered": "답장이 전송되지 않았습니다. Cindy를 열어 다시 보내 주세요: {{text}}",
+    "actionRequestEnded": "이 요청은 이미 처리되었거나 만료되었습니다."
   },
   "about": {
     "sectionTitle": "이 휴대폰 정보",
@@ -204,14 +208,14 @@
   },
   "devServerEnvironment": {
     "title": "서버 환경",
-    "description": "CindyDev가 연결하는 업무 서버에만 영향을 줍니다",
+    "description": "CindyDev가 연결하는 백엔드 서버에만 영향을 줍니다",
     "accessibility": "서버 환경 전환",
     "options": {
       "dev": "Dev",
       "release": "Release"
     },
     "confirmTitle": "{{environment}} 환경으로 전환할까요?",
-    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 App이 다시 시작됩니다.",
+    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 앱이 다시 시작됩니다.",
     "cancel": "취소",
     "switchAction": "전환",
     "switching": "전환 중",

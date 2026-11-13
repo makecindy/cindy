@@ -10,7 +10,10 @@ import { importPickedFiles } from './pickedFiles.js';
 import { mediaTypeForLibraryPath } from './runtime/ghostFiles.js';
 import { pluginUiPromptDeclined, pluginUiPromptSuppressed, deferPluginUiPrompt, declinePluginUiPrompt } from './pluginUiPreferences.js';
 import { ghostPermissionItems, ghostHostUiNeedsApproval, declaredGhostControlPoints } from '../../shared/ghost.js';
-import { refreshPluginApps } from '../mcp-integrations/plugin-app-registry.js';
+import { refreshPluginApps, listPluginHostUi, readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
+import { configurePluginSettings } from '../app-settings/plugins.js';
+import { notifyAppSettingsChanged } from '../app-settings/changes.js';
+import { isGhostHostUiSettingValue } from '@cindy/plugin-protocol';
 import { revokePluginAppServers, stopPluginAppInstance } from '../mcp-apps/runtime.js';
 import { nativePluginUi, publishPluginUiControl } from '../mcp-apps/nativeRuntime.js';
 import { releasePluginUiRegions } from '../mcp-apps/visibility.js';
@@ -517,6 +520,7 @@ import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostBrowserExtensionSlot } from './browserExtensionSlot.js';
 import { broadcastTaskViewOpen, GhostTaskViewSlot } from './taskViewSlot.js';
 import { LiveScreenHost } from './liveScreenHost.js';
+import { PluginLiveScreenViews } from '../remote-desktop-viewer/pluginViews.js';
 import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
@@ -1422,6 +1426,7 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   // sessions. Owner mutation leases stay held until each call unwinds; waiting
   // for idle first would let marker-window teardown race the lease.
   pluginDeviceSync.reset();
+  pluginLiveScreenViews.endAll();
   await getGhostLibrarySlot().disposeAll();
   if (libraryExtraDirSync) {
     await libraryExtraDirSync(null).catch((error) => {
@@ -2371,6 +2376,7 @@ export function getGhostRuntime(): GhostRuntime {
         log.info('ghost runtime state', { id, state });
         if (['off', 'stopping', 'crashed', 'fused'].includes(state)) {
           pluginDeviceSync.invalidate(storagePart);
+          pluginLiveScreenViews.invalidate(storagePart);
           releasePluginUiRegions(storagePart);
           releasePluginAppearance(storagePart);
         }
@@ -2402,6 +2408,16 @@ export const pluginDeviceSync = new PluginDeviceSync({
     if (!started.ok || !await runtime.waitUntilRunning(id)) return false;
     return started.ok && isCurrent() && scope === activeOwnerScopeKey() &&
       ghostInstallApprovalToken(findGhostForInstanceId(id)?.approval) === ghostInstallApprovalToken(ghost.approval) && sendToGhostLogic(id, message);
+  },
+});
+
+/** A live screen plugin's own view of its screens on the account's other computers. */
+export const pluginLiveScreenViews = new PluginLiveScreenViews({
+  available: () => getAppCapabilities().canUseDeviceLink && !isAppSessionBoundaryPending(),
+  identity: (instance) => {
+    const ghost = findGhostForInstanceId(instance);
+    return ghost && ghost.enabled && ghost.manifest.liveScreen === true && ghost.manifest.node
+      ? pluginStoragePart(installedGhostLogicalIdentity(ghost)) : null;
   },
 });
 
@@ -4734,7 +4750,7 @@ export function getGhostBrowserExtensionSlot(): GhostBrowserExtensionSlot {
           detail: t('settings.ghosts.detail.browserSwitchDetail')
             .replaceAll('{{instance}}', () => instanceId)
             .replaceAll('{{host}}', () => ghost.manifest.browserExtension!.nativeHost!.name),
-          buttons: [t('common.confirm'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+          buttons: [t('commonUi.confirmDialog.confirm'), t('commonUi.confirmDialog.cancel')], defaultId: 1, cancelId: 1, noLink: true,
         });
         const current = findGhostForInstanceId(instanceId);
         return decision.response === 0 && activeOwnerScopeKey() === owner && current?.enabled === true &&
@@ -6363,7 +6379,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
             message: t('settings.ghosts.detail.portReclaimMessage')
               .replaceAll('{{name}}', () => ghost.manifest.name).replaceAll('{{port}}', () => String(port)),
             detail: owners.map(process => `${process.name} (PID ${process.pid})`).join('\n') + '\n\n' + t('settings.ghosts.detail.portReclaimDetail'),
-            buttons: [t('common.confirm'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+            buttons: [t('commonUi.confirmDialog.confirm'), t('commonUi.confirmDialog.cancel')], defaultId: 1, cancelId: 1, noLink: true,
           });
           return decision.response === 0 && current();
         }, current);
@@ -8038,6 +8054,7 @@ async function updateLocalGhostPackageLocked(
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
           expectedInstalledApproval,
+          expectedInstalledInstanceId: instanceId,
           installOrigin: installOrigin ?? 'manual',
           ...(sourceChanged ? { sourceStateArchiveId: ghostSourceStateArchiveId(previousGhost) } : {}),
           ...deliveryNamespaceFields(previousGhost),
@@ -8076,6 +8093,10 @@ async function updateLocalGhostPackageLocked(
       throwInstallError(result.rejection);
     }
     runtime.resetFuse(instanceId);
+    if (result.ghost.namespaceState === 'unconfirmed') {
+      recheckOwner();
+      result = { ghost: await manager.confirmUpdatedInstanceNamespace(result.ghost) };
+    }
     await bindPluginUsage(result.ghost,
       !detachMarketRecord && previousGhost?.approval.state === 'approved' ? previousGhost.approval.revision : undefined);
     spawnIfResident(result.ghost);
@@ -8623,6 +8644,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
+          ...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),
           ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
           ...(previousRelId ? { simulatorMarketRelease: expected.simulatorMarketRelease } : {}),
           ...(expected.sourceChanged ? { sourceStateArchiveId: ghostSourceStateArchiveId(installed) } : {}),
@@ -8665,6 +8687,11 @@ async function installOrUpdateMarketGhostPackageLocked(
     }
     runtime.resetFuse(installedGhostStoragePart(result.ghost));
     await expected.afterCommitInLock?.(result.ghost, commitEvidence);
+    if (result.ghost.namespaceState === 'unconfirmed') {
+      recheckOwner();
+      result = { ghost: await manager.confirmUpdatedInstanceNamespace(result.ghost,
+        expected.sourceChanged && expected.pendingMarketRecord?.source === 'market' ? expected.pluginId : undefined) };
+    }
     spawnIfResident(result.ghost);
     await bindPluginUsage(result.ghost);
     return result.ghost;
@@ -9339,8 +9366,27 @@ export function registerGhostIpc(): void {
   const ghostKv = createGhostKvStore({
     getRootDir: () => ownerScopedUserDataPath('ghost-kv'),
     log,
+    validate: (instance, value) => (readPluginHostUi(instance)?.host.settings ?? [])
+      .every(field => !Object.hasOwn(value, field.id) || isGhostHostUiSettingValue(field, value[field.id])),
+    onWrite: instance => {
+      if (readPluginHostUi(instance)?.host.settings?.length) notifyAppSettingsChanged(`plugins.${instance}`);
+    },
   });
   ghostSetupKvStore = ghostKv;
+  configurePluginSettings({
+    entries: () => [...listPluginHostUi()].flatMap(entry => entry.host.settings?.length ? [{
+      instance: entry.config.plugin!.instance, title: entry.ghost.manifest.name, settings: entry.host.settings,
+      assertCurrent: () => {
+        entry.config.plugin!.assertCurrent();
+        if (readPluginHostUi(entry.config.plugin!.instance) !== entry) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+      },
+    }] : []),
+    read: instance => ghostKv.read(instance),
+    write: (instance, value) => {
+      ghostKv.write(instance, value);
+      getGhostSetupChangeBus().emit(instance, { source: 'kv' });
+    },
+  });
   const ghostInstalled = (ghostId: string): boolean => findGhostForInstanceId(ghostId) !== null;
   setGhostKvStore({
     captureTarget: ghostInstallMutationTargetFor,
@@ -9855,6 +9901,9 @@ export function registerGhostIpc(): void {
     // library-request = library 持久作品库(资格审/binding 根解析/owner scope
     // 复核/SQL 语句门在 librarySlot;结果结构化 errorCode,永不 reject)。
     if (type === 'device-sync-request') return pluginDeviceSync.handle(id, payload);
+    // live-screen-view-request = 提供设备画面的插件，在自己的页面里查看本账号另一台电脑上
+    // 同一插件的画面（资格、目标绑定和输入校验都在 pluginViews）。
+    if (type === 'live-screen-view-request') return pluginLiveScreenViews.handle(id, payload);
 
     // agent-request = 让 Cindy Agent 开始一个普通 user 回合；插件文本绝不
     // 进入 system prompt。票据、会话归属、模板和后台权限都在 agentSlot。

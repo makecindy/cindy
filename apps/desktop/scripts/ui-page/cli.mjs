@@ -12,7 +12,7 @@ selection (one of):
   --page <name>            registered page (pnpm ui:check --list)
   --entry <file.tsx>       ad-hoc entry calling mountPage(); generic checks + screenshots
   --changed[=<ref>]        pages that load files changed since the upstream merge-base
-matrix (comma lists; every combination runs in one browser):
+matrix (comma lists; every combination gets an isolated browser context):
   --case <name,…|all>      default: default
   --theme light,dark|all   default: light
   --locale <list>|all      ${LOCALES.join(', ')} (default: zh-CN)
