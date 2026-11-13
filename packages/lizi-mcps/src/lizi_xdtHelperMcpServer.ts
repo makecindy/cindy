@@ -1,5 +1,9 @@
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
+import { registerTerminalTools, type TerminalToolCallbacks } from './xdt-helper/terminal.js';
+import { registerFileTools, type FileToolCallbacks } from './xdt-helper/files.js';
+import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/storage.js';
+import { registerHostServiceTools, type HostServicesToolCallbacks } from './xdt-helper/host_services.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
@@ -169,7 +173,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings', 'terminal', 'files', 'storage', 'discovery'] as const;
 
 /**
  * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
@@ -220,6 +224,10 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     '搜索还能查到主力电脑离线的伙伴的云端对话；',
     '其余本机。',
   ].join(''),
+  terminal: '启动、列举、输入、续读和停止当前调用方的宿主终端与后台作业。仅执行电脑本机，作业独立于读取连接；SSH 工作区不在本机代跑远程命令。',
+  files: '通过同一宿主文件服务访问真实任务工作目录或用户亲选的插件目录；读、写、列举、删除与有界监听。',
+  storage: '插件自身 KV、私有文件、作品库、媒体与交接文件的统一调用接口；跨插件快照分享每次经宿主确认，仅同账号本机和同一组织范围。',
+  discovery: '只读发现执行宿主实际提供的服务与本插件的批准事实；仅本机，不安装、启停或撤销其他插件。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
     '给已有任务发消息或新建任务。',
@@ -466,6 +474,10 @@ export type ControlDispatchOutcome =
 // ── Factory ────────────────────────────────────────────────────────────────
 
 export interface XdtHelperMcpDeps {
+  terminal?: TerminalToolCallbacks;
+  files?: FileToolCallbacks;
+  storage?: StorageToolCallbacks;
+  hostServices?: HostServicesToolCallbacks;
   github?: GithubToolCallbacks;
   getSessionProject?: import('./xdt-helper/get_current_session_id.js').GetCurrentSessionIdDeps['getSessionProject'];
   logger?: LiziMcpLogger;
@@ -633,6 +645,10 @@ export function createXdtHelperMcpServer(
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
   };
 
+  if (deps.terminal) registerTerminalTools(registry, deps.terminal, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.files) registerFileTools(registry, deps.files, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.storage) registerStorageTools(registry, deps.storage, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.hostServices) registerHostServiceTools(registry, deps.hostServices, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.github) registerGithubTools(registry, deps.github, () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
@@ -993,6 +1009,7 @@ export function createXdtHelperMcpServer(
     });
   }
   return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
     describe(name: string) {
       const tool = registry.get(name);
       return tool ? { name: tool.name, category: tool.category } : undefined;

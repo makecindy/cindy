@@ -530,8 +530,13 @@ export type BotGroupSpeakerActivity = 'reply' | 'planning' | 'step';
 
 export interface BotGroupSpeaker {
   botId: string;
+  sourceMessageId?: string;
+  /** null is the main timeline; absent with a source ID means ownership is unresolved. */
+  threadRootId?: string | null;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
+  /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
+  timelineAt?: number;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
@@ -548,6 +553,8 @@ export interface BotGroupRoundView {
   canContinue: boolean;
   /** Server groups: someone else's request or teammate is also working, so stopping only yours leaves it running. */
   othersActive?: boolean;
+  /** This account has work it can stop with the default scope; canStopAll is separate. Absent on older hosts. */
+  canStop?: boolean;
 }
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';

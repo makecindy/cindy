@@ -1,8 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-// These adapters live in the Electron entrypoint; keep the shared dependency
-// wiring covered without booting Electron or touching real credential storage.
+// Guard tier: cross-file provider-import credential and IPC contracts in the
+// Electron entrypoint, preload and renderer (engineering-conventions.md §3.2).
+// Runtime deepLink/controller tests cannot detect a caller leaving credentials
+// in argv for relaunch, or dropping a payload at the context-bridge boundary.
+// Minimal privacy regression: move argv redaction after either dispatch path.
+// Keep the security wiring covered without booting Electron or real credentials.
 const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
 const register = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
 const updateService = readFileSync(new URL('../updateService.ts', import.meta.url), 'utf8');
@@ -32,7 +36,9 @@ describe('provider import wiring', () => {
     expect(bootstrap).toMatch(/redactConsumedDeepLinkInArgv\(process.argv\);\s*const args = process.argv.slice\(1\);\s*spawn\(exe, args,/);
   });
   it('redacts received argv before dispatch for cold-start and second-instance delivery', () => {
-    expect(bootstrap).toMatch(/redactConsumedDeepLinkInArgv\(argv, url\);\s*handleIncomingDeepLink\(url, 'second-instance'\)/);
+    // Both the shared handoff and the ordinary Electron path must see argv
+    // already redacted; accepting either branch alone would miss the other.
+    expect(bootstrap).toMatch(/redactConsumedDeepLinkInArgv\(argv, url\);\s*if \(windowsHandoff\) windowsHandoff.dispatch\(url, additionalData, 'second-instance'\);\s*else handleIncomingDeepLink\(url, 'second-instance'\)/);
     expect(bootstrap).toMatch(/redactConsumedDeepLinkInArgv\(process.argv, coldStartUrl\);\s*handleIncomingDeepLink\(coldStartUrl, 'cold-start-argv'\)/);
   });
   it('reuses the settings built-in key bridge and its OpenAI media invalidation', () => {

@@ -16,6 +16,25 @@ afterEach(() => {
 });
 
 describe('useDeviceLinkDeviceList initial request', () => {
+  // App routing, unit: real store + hook must publish an app-only directory
+  // change. Old snapshot equality compared platform but silently dropped app.
+  it('publishes a refreshed App label so an already listed Friend stops being a computer target', async () => {
+    const target: DeviceLinkDeviceView = { deviceId: 'peer', name: 'Mac', platform: 'darwin', appVersion: '1',
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false, lastSeenAt: null };
+    let changed!: (snapshot: DeviceLinkPresenceSnapshot) => void;
+    const listDevices = vi.fn().mockResolvedValueOnce({ devices: [target] })
+      .mockResolvedValue({ devices: [{ ...target, app: 'cindy-friend' }] });
+    vi.stubGlobal('electronAPI', { deviceLink: { listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+      onPresenceChanged: (callback: typeof changed) => { changed = callback; }, onStatusChanged: vi.fn(), onControlTargetChanged: vi.fn(),
+    } });
+    const { useDeviceLinkDeviceList } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result, unmount } = renderHook(() => useDeviceLinkDeviceList());
+    await waitFor(() => expect(result.current?.[0]?.name).toBe('Mac'));
+    act(() => changed({ deviceId: 'peer', deviceName: 'Mac', platform: 'darwin', app: 'cindy-friend', appVersion: '1',
+      online: true, busy: false, remoteControlEnabled: true, lastSeenAt: 1000 }));
+    await waitFor(() => expect(result.current?.[0]?.app).toBe('cindy-friend'));
+    unmount();
+  });
   it('silently retries a failed directory request without a later push event', async () => {
     let resolveRetry: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let resolvePresenceRefresh: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;

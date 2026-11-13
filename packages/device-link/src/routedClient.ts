@@ -215,9 +215,9 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     for (const connection of this.extraScopedConnections()) connection.start();
   }
 
-  override stop(): void {
+  override stop(options?: Parameters<DeviceLinkClient['stop']>[0]): void {
     this.started = false;
-    super.stop();
+    super.stop(options);
     this.syncCrossAccount();
     for (const connection of this.extraScopedConnections()) connection.stop();
   }
@@ -320,6 +320,11 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
   override onPeerTransportReset(cb: (change: DeviceLinkPeerTransportReset) => void): () => void {
     return this.both(super.onPeerTransportReset(change => { if (this.acceptsScopedEvent(this, change.deviceId)) cb(change); }),
       connection => connection.onPeerTransportReset(change => { if (this.acceptsScopedEvent(connection, change.deviceId)) cb(change); }));
+  }
+
+  override onInboundPeerReleased(cb: (peer: string) => void): () => void {
+    return this.both(super.onInboundPeerReleased(peer => { if (this.acceptsScopedEvent(this, peer)) cb(peer); }),
+      connection => connection.onInboundPeerReleased(peer => { if (this.acceptsScopedEvent(connection, peer)) cb(peer); }));
   }
 
   override onReliableFrameBeforeLink(cb: (deviceId: string) => unknown): () => void {

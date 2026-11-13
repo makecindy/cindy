@@ -1558,7 +1558,11 @@ describe('the seed keeps a restored explicit choice', () => {
         id: 'shared-model', displayName: 'Shared model', contextWindow: 200_000,
         efforts: ['medium', 'high'], defaultEffort: 'high', effortsUnknown: false,
       }],
-      hasFastMode: false, effortLevels: ['medium', 'high'],
+      hasFastMode: false,
+      effortLevels: [
+        { id: 'medium', displayName: 'Medium' },
+        { id: 'high', displayName: 'High' },
+      ],
       permissionModes: [{ id: 'default', displayName: 'Default' }],
     };
     defaultsEffect('provider revision 驱逐时 hook 会保留旧快照但标 loading', {

@@ -312,13 +312,13 @@ import {
   isDeviceModelVisible,
 } from '@/lib/providerModels';
 import {
-  chatEligibleSourcesForModel,
   effectiveSourceIdForModel,
   getModel,
   isModelSelectableForNewRoute,
   providerOffersModel,
   connectedProvidersForAgent,
   reconcileInvocationEffort,
+  chatEligibleSourcesForModel,
   displayNameOfStoredModelId,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -4466,8 +4466,17 @@ export function NewMakerDraftRoute() {
           const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
             : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
-          // 模型组没选出来源、沿用原模型时，原模型所在那台的目录照样要就绪(与上面没选模型组时同一检查)。
-          if (modelGroupAtSend && !routedTo && !draftCatalogReady()) return;
+          // 输入框见到选着模型组或插件模型就不按原模型挡发送(ChatInput sendRoutesOwnModel)；这里没选出来源、
+          // 沿用原模型时(含开了协同、这次不经它们选路)补上那道检查：原模型所在那台的目录要就绪，也要有已连接的来源。
+          if ((activeModelGroup || activePluginModel) && !routedTo) {
+            if (!draftCatalogReady()) return;
+            const keptHasSource = (!!catalogDeviceId && deviceProvidersUnsupported)
+              || chatEligibleSourcesForModel(providers, sendBaseRoute.model, dbToMakerAgentKind(sendBaseRoute.persistedAgentKind), { onlyConnected: true }).length > 0;
+            if (!keptHasSource) {
+              toast.error(t('newChat.noProvider.description'));
+              return;
+            }
+          }
           const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
           const persistedAgentKind = routedTo?.agentKind ?? sendBaseRoute.persistedAgentKind;
           const authVendor = persistedAgentKind;
@@ -5564,6 +5573,8 @@ export function NewMakerDraftRoute() {
       activePluginModel,
       activeModelGroup,
       modelGroupLocationName,
+      providers,
+      deviceProvidersUnsupported,
       effectiveWorkingDir,
       effectiveRemoteHostId,
       isRemoteProjectDraft,
@@ -5755,6 +5766,13 @@ export function NewMakerDraftRoute() {
           ? pluginRoute.route
           : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
         if (goalModelGroup && !routedTo) assertDraftCatalogReady();
+        // 同 handleSend：选了模型组或插件模型却沿用原模型时(含开了协同、这次不经它们选路)，原模型要有已连接的来源，
+        // 否则不建目标任务、提示先连接来源(输入框这时不按原模型挡，见 ChatInput sendRoutesOwnModel)。
+        if ((activeModelGroup || activePluginModel) && !routedTo) {
+          const keptHasSource = (!!catalogDeviceId && deviceProvidersUnsupported)
+            || chatEligibleSourcesForModel(providers, goalBaseRoute.model, dbToMakerAgentKind(goalBaseRoute.persistedAgentKind), { onlyConnected: true }).length > 0;
+          if (!keptHasSource) throw new Error(t('newChat.noProvider.description'));
+        }
         const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
         const persistedAgentKind = routedTo?.agentKind ?? goalBaseRoute.persistedAgentKind;
         const authVendor = persistedAgentKind;
@@ -6263,6 +6281,8 @@ export function NewMakerDraftRoute() {
       vendorAuthGate,
       activePluginModel,
       activeModelGroup,
+      providers,
+      deviceProvidersUnsupported,
       modelGroupLocationName,
       authVendor,
       effectiveDeviceLinkDeviceId,

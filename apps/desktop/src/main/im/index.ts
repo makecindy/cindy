@@ -84,6 +84,8 @@ import {
 } from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
 import { backfillPersonalFeishuSessions } from './feishu/legacySessionBackfill';
+import { setControlProjectCatalogSource } from './shared/controlProjects';
+import { loadImProjectCatalog } from '../hook-control/projectCatalog';
 import { wireDiscordOrchestrator } from './discord';
 import { wireTelegramOrchestrator } from './telegram';
 import { listTelegramKnownGroups } from './telegram/groupWindow';
@@ -254,6 +256,8 @@ export function startImOrchestrators(): void {
   wechatCompatibilityPolicy.start();
   if (wired) return;
   wired = true;
+  // /ctr 与 /project 列的项目就是侧栏的本机项目(与官方机器人同一份)。
+  setControlProjectCatalogSource(loadImProjectCatalog);
   // Production bootstrap wires handlers before login/DbClient readiness.
   // Keep the synchronous ingress gate closed until startImConnection reaches
   // the authenticated account's initialized DB boundary.
@@ -686,6 +690,15 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
         .where(eq(sessions.source, 'feishu'));
       for (const row of rows) {
         if (!row.botContextId) continue;
+        // 同 Telegram: /project 切到项目目录是用户显式选择, 重连不得覆盖回托管目录 ——
+        // 本归一只服务跨 owner 命名空间迁移的旧托管路径(完整尾段判定)。
+        // 两种分隔符都认: Windows 上库里的目录可能是正斜杠形态, 也可能是反斜杠。
+        if (
+          row.workingDir &&
+          !row.workingDir.replace(/\\/g, '/').endsWith(`/im-working-dir/${row.botContextId}`)
+        ) {
+          continue;
+        }
         const scoped = feishuAdapter.sessions.ensureWorkingDir(row.botContextId);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
