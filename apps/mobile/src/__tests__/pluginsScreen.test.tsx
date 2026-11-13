@@ -1452,3 +1452,44 @@ it.each(['full-success', 'newer-lightweight'] as const)(
     } finally { act(() => localRoot.unmount()); fixture.promptReads = null; vi.useRealTimers(); }
   },
 );
+
+// PR #10206 R6, unit: the real prompt/client chain must tolerate additive compact
+// item fields. Existing fixtures lacked a manifest field that collides with the
+// full-plugin discriminator, hiding both actions before any approval request.
+it('keeps compact consent actionable when the Host adds manifest and unknown item fields', async () => {
+  vi.useFakeTimers();
+  const { plugin } = lightweightPromptHost('approve-ui');
+  const normal = fixture.wire.getMockImplementation()!;
+  fixture.wire.mockImplementation(async (id, channel, args, options) => {
+    const response = await normal(id, channel, args, options);
+    if (args?.[0]?.actionId === 'management:ui-consent') return { ...response, result: {
+      ...response.result, futureTopLevel: 'preserved', item: { ...response.result.item,
+        manifest: { description: 'Additional Host metadata' }, futureItemField: { version: 2 },
+      },
+    } };
+    return response;
+  });
+  const container = document.createElement('div'); const localRoot = createRoot(container);
+  try {
+    await act(async () => localRoot.render(createElement(PluginUiEnablePrompt, {
+      deviceId: 'mac', deviceName: 'Mac', online: true, active: true,
+    })));
+    expect(container.textContent).toContain('plugins.uiApproval.title');
+    const notice = fixture.props.get('plugins.uiApproval');
+    expect(notice.actions.map((action: { label: string }) => action.label)).toEqual([
+      'plugins.uiApproval.enable', 'plugins.uiApproval.later',
+    ]);
+    const { state, controller } = fixture.props.get('observedManagement');
+    expect(state.uiConsent.futureTopLevel).toBe('preserved');
+    const approve = vi.spyOn(controller, 'approveUiFromConsent'); // Calls through to production.
+    await act(async () => { notice.actions[0].onPress(); await vi.advanceTimersByTimeAsync(0); });
+    expect(approve).toHaveBeenCalledWith({ instanceKey: plugin.instanceKey, name: plugin.manifest.name,
+      approvalToken: 'approved:12345678-1234-4123-8123-123456789abc' });
+    const begins = fixture.wire.mock.calls.filter(call => call[2]?.[0]?.actionId === 'management:begin');
+    expect(begins).toHaveLength(1);
+    expect(begins[0][2][0]).toMatchObject({ resourceRef: { id: plugin.instanceKey }, input: {
+      kind: 'approve-ui', expectedInstalledApproval: 'approved:12345678-1234-4123-8123-123456789abc', uiConsentVersion: 1,
+    } });
+    expect(fixture.props.get('observedManagement').state.outcome).toBe('succeeded');
+  } finally { act(() => localRoot.unmount()); fixture.promptReads = null; vi.restoreAllMocks(); vi.useRealTimers(); }
+});

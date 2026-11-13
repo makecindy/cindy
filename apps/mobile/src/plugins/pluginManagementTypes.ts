@@ -175,6 +175,9 @@ export function parsePluginUiConsent(value: unknown): PluginUiConsentSnapshot {
       || !str(item.approvalToken, 256)
       || !(item.approvalToken === 'legacy-unapproved' || item.approvalToken === 'invalid'
         || /^approved:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(item.approvalToken))) return invalid();
+    // Additive wire fields must not turn a compact item into a full plugin locally.
+    return { ...value, item: { instanceKey: item.instanceKey, name: item.name,
+      approvalToken: item.approvalToken } } as unknown as PluginUiConsentSnapshot;
   }
   return value as unknown as PluginUiConsentSnapshot;
 }
