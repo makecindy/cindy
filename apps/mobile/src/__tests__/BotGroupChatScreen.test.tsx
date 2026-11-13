@@ -2693,12 +2693,16 @@ it('releases execution process space across idle and the next round without oute
 
 // PR #7806 integration fixture: the real screen/work area consumes server state.
 // A stop receipt alone must not hide work; only the next idle snapshot clears both surfaces.
-it('keeps one group stop for concurrent work and clears header and strip on the idle snapshot', async () => {
+it.each([false, true])('keeps one group stop for concurrent work and clears header and strip on the idle snapshot (newest first: %s)', async newestFirst => {
   const active = group({ round: { status: 'running', canContinue: false, speakers: [
     { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
     { botId: 'mimi', sessionId: 's-mimi', activity: 'reply', executionStatus: 'stopping', stopping: true },
   ] } });
+  active.round.speakers[0]!.timelineAt = newestFirst ? 2000 : 1000;
+  active.round.speakers[1]!.timelineAt = newestFirst ? 1000 : 2000;
   await render(active);
+  // Unit / #10345: source order differs from timeline order; stop follows the newest row.
+  expect(byId(newestFirst ? 'speaker.abu.reply' : 'speaker.mimi.reply')!.contains(byId('botGroup.work.stop'))).toBe(true);
   expect(node.textContent).toContain('groupChat.list.running');
   expect(all('botGroup.work.stop')).toHaveLength(1);
   expect(byId('botGroup.work.stop')!.disabled).toBe(false);
@@ -3457,6 +3461,24 @@ it.each(['pending', 'failed'] as const)('keeps a paused discussion independent o
   expect(h.chat.act).toHaveBeenLastCalledWith(status === 'failed' ? 'plan-retry' : 'plan-continue', { planId: 'p1' });
 });
 
+// Unit / #10345: the real timeline must carry server enqueue time through WorkArea,
+// even without an elapsed start or a resolvable private session.
+it('keeps direct-server work between its neighboring messages when elapsed timing arrives', async () => {
+  const data = group({ plans: [], openPlan: null, serverBacked: true,
+    messages: [message('before', 1, { createdAt: 10_000 }), message('after', 2, { createdAt: 50_000 })],
+    round: { status: 'running', canContinue: false, speakers: [{ botId: 'abu', executionId: 'run', sessionId: null,
+      activity: 'reply', timelineAt: 40_000, executionStatus: 'needs_input' }] } });
+  await render(data);
+  const work = byId('speaker.abu.reply')!;
+  const order = () => Array.from(node.querySelectorAll('[data-testid]')).map(row => row.getAttribute('data-testid'));
+  expect(order().indexOf('botGroup.row.before')).toBeLessThan(order().indexOf('speaker.abu.reply'));
+  expect(order().indexOf('speaker.abu.reply')).toBeLessThan(order().indexOf('botGroup.row.after'));
+  await render({ ...data, round: { ...data.round,
+    speakers: [{ ...data.round.speakers[0]!, executionStatus: 'running', startedAt: 60_000 }] } });
+  expect(byId('speaker.abu.reply')).toBe(work);
+  expect(order().indexOf('speaker.abu.reply')).toBeLessThan(order().indexOf('botGroup.row.after'));
+});
+
 // Unit: missing timing must not be replaced by when the screen opened; completed
 // step time belongs to its exact result message, even when another bot is running.
 it('shows the real step start and handoff time and keeps missing timing absent', async () => {
@@ -3509,7 +3531,8 @@ it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exist
     await click('botGroup.composer.stop');
     expect(h.chat.act).toHaveBeenLastCalledWith('stop');
   } else {
-    expect(all('botGroup.work')).toHaveLength(1);
+    expect(byId('speaker.abu.reply')).not.toBeNull();
+    expect(byId('speaker.mimi.reply')).toBeNull();
     await click('botGroup.work.stopMenu.action.mine');
     expect(h.chat.act).toHaveBeenLastCalledWith('stop');
     await click('botGroup.work.stopMenu.action.all');

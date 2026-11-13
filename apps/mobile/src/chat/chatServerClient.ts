@@ -438,12 +438,12 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     return [{ ...failure, botName: member ? memberName(member, ownerMembers) : '' }];
   });
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
-  // No server-provided start time here: created_at is the enqueue time, so omit startedAt
-  // rather than presenting queued time as elapsed work.
+  // Enqueue time anchors history; it is not an elapsed-work start.
   const speakers = executions.map(row => {
     const source = [...page.messages, ...page.snapshot.messages].find(message => message.id === row.source_message_id);
     const threadRootId = row.plan_id ? null : row.threadRootId !== undefined ? row.threadRootId : source ? source.threadRootId ?? null : undefined;
     return { sourceMessageId: row.source_message_id, ...(threadRootId !== undefined ? { threadRootId } : {}), botId: row.bot_id, sessionId: null, executionId: row.id,
+    timelineAt: row.created_at && Number.isFinite(Date.parse(row.created_at)) ? Date.parse(row.created_at) : undefined,
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
     activity: row.plan_id ? 'step' as const : 'reply' as const };
   }).filter(speaker => speaker.threadRootId === (page.threadRootId ?? null));

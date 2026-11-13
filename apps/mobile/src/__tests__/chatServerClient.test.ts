@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveRemoteText } from '@cindy/device-link';
 import { i18n } from '@/i18n';
-import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupNewMessageCount, interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -803,6 +803,21 @@ it('projects waiting and stopping executions without inventing task IDs or losin
   expect(view.round.speakers.map(speaker => [speaker.executionId, speaker.executionStatus, speaker.sessionId])).toEqual([
     [id(30), 'needs_input', null], [id(31), 'stopping', null],
   ]);
+});
+
+// Unit / #10345: direct-server executions had no elapsed start and disappeared above loaded history.
+it('positions direct-server work by enqueue time without inventing elapsed time across refreshes', () => {
+  const messages = [message(20), message(21), message(22)].map((row, index) => ({ ...row,
+    createdAt: new Date([10_000, 30_000, 50_000][index]!).toISOString() }));
+  const execution = { source_message_id: id(21), bot_id: id(12), epoch: 1, id: id(30),
+    status: 'queued', created_at: new Date(40_000).toISOString() };
+  for (const status of ['queued', 'running', 'needs_input', 'stopping']) {
+    const view = chatGroupView({ snapshot: snapshot(), messages, before: null,
+      executions: [{ ...execution, status, updated_at: new Date(100_000).toISOString() }] }, id(11));
+    expect(view.round.speakers[0]?.startedAt).toBeUndefined();
+    expect(interleaveBotGroupWork(view.messages, view.round.speakers).map(row =>
+      row.kind === 'work' ? row.value.executionId : row.value.id)).toEqual([id(20), id(21), id(30), id(22)]);
+  }
 });
 
 // Unit: cross-device Cindy filters use profile identity, including exact legacy presets.

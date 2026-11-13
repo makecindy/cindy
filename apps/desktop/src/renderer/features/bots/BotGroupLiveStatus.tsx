@@ -32,6 +32,7 @@ export interface BotGroupLiveSpeaker {
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
   target?: BotGroupWorkTarget;
+  timelineAt?: number;
   startedAt?: number;
   stopping?: boolean;
   executionId?: string;
@@ -56,7 +57,7 @@ function pendingBot(speaker: BotGroupLiveSpeaker) {
   return { id: member.botId, name: speaker.displayName, avatar: member.avatar, avatarColor: member.avatarColor };
 }
 
-/** Brief initial status; longer work moves to the composer progress area. */
+/** Planning status in the timeline. */
 export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: BotGroupLiveSpeaker; showStatus?: boolean }) {
   const { t } = useTranslation();
   const { member, sessionId, activity: speakerActivity } = speaker;
@@ -111,7 +112,7 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
   );
 }
 
-/** Only a speaker's pending confirmation, for steps whose status lives in the progress strip. */
+/** A speaker's pending confirmation beside its timeline execution. */
 export function BotGroupSpeakerInteraction({ speaker }: { speaker: BotGroupLiveSpeaker }) {
   if (!speaker.sessionId || speaker.target) return null;
   return (
@@ -122,8 +123,7 @@ export function BotGroupSpeakerInteraction({ speaker }: { speaker: BotGroupLiveS
 }
 
 /**
- * Fixed above the composer while a plan step runs, or a teammate has been speaking for a few
- * seconds. Remount it (key) when the speaker set changes so 「几秒」 counts from the new turn.
+ * Execution progress at its original position in the message timeline.
  */
 export function BotGroupProgressStrip(props: BotGroupProgressStripProps) {
   const active = props.speakers.filter(speaker => speaker.activity !== 'planning');
@@ -141,6 +141,8 @@ export function BotGroupProgressStrip(props: BotGroupProgressStripProps) {
 }
 
 interface BotGroupProgressStripProps {
+  showStop?: boolean;
+  stopPending?: boolean;
   step: (BotGroupRunningStep & { member: BotGroupMemberView | undefined; displayName: string }) | null;
   speakers: readonly BotGroupLiveSpeaker[];
   onStop?: (scope?: 'all') => void;

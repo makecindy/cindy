@@ -365,12 +365,12 @@ function groupFrom(data: GroupData) {
       authorKind: 'user',
       authorBotId: null,
       authorName: '',
-      content: data.workState ? ["帮我检查群聊里的工作状态和任务入口。", "过程放在下面的动态区，完成后告诉我结果。"][i % 2] : `Layout message ${i + 1}`,
+      content: data.workState ? ["帮我检查群聊里的工作状态和任务入口。", "这是执行开始后补充的一条消息。"][i % 2] : `Layout message ${i + 1}`,
       mentions: { all: false, botIds: [] },
       noticeCode: null,
       planId: null,
       attachments: [],
-      createdAt: 1700000000000 + i,
+      createdAt: data.workState ? Date.now() - 90_000 + i * 60_000 : 1700000000000 + i,
     })),
     hasMoreBefore: false,
     round: data.workState ? { canStop: data.canStop, status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
@@ -386,7 +386,7 @@ void mountPage({
     let group = { ...groupFrom(data), ...(data.planRead ? { serverBacked: true, historyRevision: 'fixture-live', organizerBotId: 'b' } : {}) };
     if (data.threadWork) {
       group.round = { status: 'running', canContinue: false, speakers: [
-        { botId: 'a', executionId: 'thread-a', sourceMessageId: 'reply-a', threadRootId: 'a1', sessionId: null, activity: 'reply', executionStatus: 'needs_input' },
+        { botId: 'a', executionId: 'thread-a', sourceMessageId: 'reply-a', threadRootId: 'a1', timelineAt: T0 + 3.5 * MINUTE, sessionId: null, activity: 'reply', executionStatus: 'needs_input' },
         { botId: 'b', executionId: 'thread-b', sourceMessageId: 'reply-b', threadRootId: 'q4', sessionId: null, activity: 'reply', executionStatus: 'queued' },
       ] };
     }

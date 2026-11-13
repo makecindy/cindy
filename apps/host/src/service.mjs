@@ -157,6 +157,19 @@ export function createHostService(deps) {
             return { status: 400, body: { error: 'invalid_plugin_enable_request' } };
         return { status: 200, body: await deps.setPluginEnabled(body.id, body.enabled, body.expectedInstalledApproval) };
     }
+    if (url.pathname === '/api/ghosts/request-task-approval') {
+        if (!context.caller) return { status: 403, body: { error: 'authenticated_controller_required' } };
+        if (typeof body.id !== 'string' || !body.id || typeof body.capability !== 'string')
+            return { status: 400, body: { error: 'invalid_plugin_approval_request' } };
+        return { status: 200, body: await deps.requestPluginTaskApproval(body.id, body.capability) };
+    }
+    if (url.pathname === '/api/ghosts/confirm/resolve' || url.pathname === '/api/ghosts/install-consent/resolve') {
+        if (!context.caller) return { status: 403, body: { error: 'authenticated_controller_required' } };
+        if (typeof body.requestId !== 'string' || typeof body.confirmed !== 'boolean')
+            return { status: 400, body: { error: 'invalid_confirmation' } };
+        return { status: 200, body: { handled: deps.resolvePluginConfirmation(context.caller,
+            url.pathname === '/api/ghosts/confirm/resolve' ? 'confirm' : 'install', body.requestId, body.confirmed) } };
+    }
     if (url.pathname === '/api/plugins/list') {
         return { status: 200, body: await deps.listPlugins() };
     }

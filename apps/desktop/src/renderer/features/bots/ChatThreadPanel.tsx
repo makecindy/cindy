@@ -1,3 +1,4 @@
+import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { BotGroupProgressStrip, BotGroupSpeakerInteraction, type BotGroupLiveSpeaker } from './BotGroupLiveStatus';
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
@@ -678,6 +679,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     if (!wasFollowing && stickToBottomRef.current) refreshRef.current();
   };
 
+  const stopSpeaker = interleaveBotGroupWork([], speakers).at(-1)?.value;
   return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
@@ -705,21 +707,27 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
             </ThreadPanelRoot>
             {hasMore && <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>}
-            {replyRows.map(message => (
-              <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
+            {interleaveBotGroupWork(replyRows, sharing ? [] : speakers).map((entry, index, timeline) => {
+              if (entry.kind === 'work') {
+                const speaker = entry.value;
+                return <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
+                  <BotGroupProgressStrip step={null} speakers={[speaker]} onStop={onStop} stopping={stopping}
+                    canStop={group.round.canStop} canStopAll={canStopAll} showStop={speaker === stopSpeaker}
+                    stopPending={stopping || speakers.every(item => item.stopping || item.executionStatus === 'stopping')} />
+                  <BotGroupSpeakerInteraction speaker={speaker} />
+                </Fragment>;
+              }
+              const message = entry.value;
+              return <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {message.id === firstNewId ? (
                   <div data-testid="bot-group-thread-new-replies" className="mt-3 flex select-none items-center gap-3 text-12 font-medium text-[var(--text-primary)]">
                     <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />{t(key('thread.newSeparator'))}</span>
                     <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
                   </div>
                 ) : null}
-                {renderRow(message, firstNewId === message.id ? false : layout.get(message.id)?.continued ?? false)}
-              </Fragment>
-            ))}
-            {!sharing && <>
-              {speakers.length > 0 && <BotGroupProgressStrip step={null} speakers={speakers} onStop={onStop} stopping={stopping} canStop={group.round.canStop} canStopAll={canStopAll} />}
-              {speakers.map(speaker => <BotGroupSpeakerInteraction key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />)}
-            </>}
+                {renderRow(message, timeline[index - 1]?.kind !== 'work' && firstNewId !== message.id && (layout.get(message.id)?.continued ?? false))}
+              </Fragment>;
+            })}
           </div>
         </div>
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"

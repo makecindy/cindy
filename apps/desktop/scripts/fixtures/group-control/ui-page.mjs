@@ -672,6 +672,14 @@ export default {
         assert.equal(await page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0, 'topic respects group stop capability');
       }
       if (ui.case === 'thread-work') {
+        const order = await page.locator('aside.thread-panel').evaluate(panel => {
+          const first = panel.querySelector('[data-bot-group-message-id="r1"]');
+          const second = panel.querySelector('[data-bot-group-message-id="r2"]');
+          const work = panel.querySelector('[data-testid="bot-group-work"]');
+          return !!first && !!second && !!work && !!(first.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING)
+            && !!(work.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+        });
+        assert.ok(order, 'topic work retains its original timestamp between replies');
         const stop = page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
         await stop.click();
         await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopMine'), exact: true }).click();
