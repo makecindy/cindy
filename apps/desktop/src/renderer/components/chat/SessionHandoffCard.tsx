@@ -122,7 +122,7 @@ export function SessionHandoffCard({
 
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-14 font-semibold leading-5 text-[var(--msg-tool-card-text)]">
+          <span className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--msg-tool-card-text)]">
             {displayTitle}
           </span>
           <span

@@ -3958,6 +3958,7 @@
           "unsupportedProtocol": "This model protocol is not supported by connection testing",
           "inconclusive": "Connection could not be confirmed. Check the address or network before retrying; the previous request may have run.",
           "exhausted": "All candidate interfaces were tried. No working connection was found.",
+          "model": "Tested model: {{model}}",
           "costHint": "Testing sends short generation requests and may incur a small charge.",
           "details": "View attempts",
           "stop": "Stop test"

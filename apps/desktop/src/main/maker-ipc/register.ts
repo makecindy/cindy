@@ -12559,6 +12559,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   }
 
+  // 代表一个 turn 的 user 行只从这个入口写:silent-stop 自动续跑额度仅在 createUserMessageDurably
+  // 里按落库的用户消息充值。直投(send_to_session / Orca 派单)不走 composer 的 makeSendTransaction,
+  // 用裸 createDbMessage 写会让目标会话额度恒为 0 —— 模型第一次只输出思考的空响应就 exhausted。
+  // 注册期先用原始写入,durable 版定义后切换(直接前向引用那个 const 会命中 TDZ)。
+  let persistUserTurnMessage: typeof createDbMessage = createDbMessage;
+
   async function sendToSessionInternal(params: {
     taskActionDeliveryGuard?: TaskActionDeliveryGuard;
     botTaskCoordination?: BotTaskCoordination;
@@ -12943,7 +12949,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 clientId,
               });
               createdPreviewStarted = true;
-              await createDbMessage(session.id, {
+              await persistUserTurnMessage(session.id, {
                 clientId,
                 role: 'user',
                 content: persistedContent ?? message,
@@ -13142,7 +13148,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clientId,
         });
         userPromptPreviewStarted = true;
-        await createDbMessage(targetSessionId, {
+        await persistUserTurnMessage(targetSessionId, {
           clientId,
           role: 'user',
           content: persistedContent ?? message,
@@ -15737,7 +15743,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return inputCoordinator.reserveNextInput(sessionId, item, { onReserved }).reserved;
     },
     sendToSessionInternal,
-    createDbMessage,
+    // 直投兜底同样走用户 turn 的写入口,与 sendToSessionInternal 的两个直投分支一致。
+    createDbMessage: (sessionId, message) => persistUserTurnMessage(sessionId, message),
     beginDirectTurnChangeSet: async (sessionId, clientId) => {
       const liveSession = maker.getSession(sessionId);
       if (!liveSession) {
@@ -18625,6 +18632,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
+  persistUserTurnMessage = createUserMessageDurably;
+
   const readAutoReviewHistory = async (sessionId: string) => {
     await drainPersistQueue();
     return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
@@ -21184,6 +21193,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertPendingOwner();
       setSessionEffort(sessionId, finalEffort);
       setSessionFastMode(sessionId, finalFastMode);
+      if (finalModel) {
+        agentInputCoordinatorHolder?.refreshQueuedRoute(sessionId, {
+          model: finalModel,
+          providerId: route.providerId,
+          effort: finalEffort ?? undefined,
+          fastMode: finalFastMode,
+        });
+      }
       broadcastSessionPatched(sessionId, patch);
     },
     logger: log,
@@ -24742,6 +24759,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 currentFastMode: getSessionFastMode(sessionId),
               })
             : undefined;
+        if (result.status !== 'deferred') {
+          agentInputCoordinatorHolder?.refreshQueuedRoute(sessionId, {
+            model,
+            providerId: getSessionProvider(sessionId),
+            effort: getSessionEffort(sessionId) ?? undefined,
+            fastMode: getSessionFastMode(sessionId),
+          });
+          wakeSessionInputAfterCredentialSwitch(sessionId);
+        }
         await broadcastSessionRuntimeProjection(sessionId, userBaselineOverride).catch((error) => {
           log.debug('session runtime projection broadcast failed', {
             sessionId,
