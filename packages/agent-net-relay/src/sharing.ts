@@ -10,7 +10,8 @@ import { verifyRequestProof } from './identity.js';
 export interface SharingActor { accountId: string; deviceId: string; networkId: string; }
 export interface SharingAuthenticationContext {
   rootPublicKey(networkId: string): string;
-  remember(account: string, device: string, nonce: string): void;
+  /** Throws on replay. Asynchronous when replicas share the replay window. */
+  remember(account: string, device: string, nonce: string): void | Promise<void>;
 }
 export interface AgentNetSharingOptions {
   /** A separate, audience-bound account identity surface. Full account access
@@ -32,12 +33,12 @@ export interface SharingHost {
   storage: SharingStorage;
   /** `tenant`: the network another account owns on this relay. */
   member(req: IncomingMessage, bytes: Buffer): Promise<{ networkId: string; deviceId: string; subject: string; tenant?: boolean }>;
-  hostStatus(deviceId: string, networkId: string): { online: boolean; capabilities: readonly string[] };
+  hostStatus(deviceId: string, networkId: string): { online: boolean; capabilities: readonly string[] } | Promise<{ online: boolean; capabilities: readonly string[] }>;
   changed(networkIds: readonly string[]): void;
   requests(): DelegationRequest[];
   saveRequest(request: DelegationRequest): Promise<void>;
   grant(request: DelegationRequest): { rootPublicKey: string; certificate: DeviceCertificate; delegation?: Delegation; revoked?: boolean };
-  remember(account: string, device: string, nonce: string): void;
+  remember(account: string, device: string, nonce: string): void | Promise<void>;
   rootPublicKey(networkId: string): string;
   now(): number;
   grants?(networkId: string): Delegation[];
@@ -155,7 +156,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
       try { if (typeof header !== 'string' || header.length > 1024) throw new Error();
         proof = JSON.parse(Buffer.from(header, 'base64url').toString('utf8')); } catch { throw permissionDenied('Applicant proof required'); }
       if (!verifyRequestProof(signingKey, proof, method, req.url ?? '/', bytes, host.now())) throw permissionDenied('Invalid applicant proof');
-      host.remember(actor.accountId, actor.deviceId, proof.nonce);
+      await host.remember(actor.accountId, actor.deviceId, proof.nonce);
       let request: DelegationRequest | undefined;
       if (status) {
         request = host.requests().find(r => r.id === text(input.id) && r.guestDeviceId === actor.deviceId
