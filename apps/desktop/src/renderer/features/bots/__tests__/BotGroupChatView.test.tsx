@@ -5882,3 +5882,23 @@ it('does not reread group history for busy-only online presence', async () => {
     expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads + 2);
   } finally { view.unmount(); vi.useRealTimers(); }
 });
+
+// Unit: an older live execution must not be appended below a later human message.
+it('inserts live work before later messages and keeps its element on an incremental refresh', async () => {
+  const startedAt = Date.now() - 20_000;
+  const messages = [msg({ id: 'request', sequence: 1, content: 'First request', createdAt: startedAt - 1 }),
+    msg({ id: 'later', sequence: 2, content: 'Later message', createdAt: startedAt + 1 })];
+  const snapshot = detail({ messages, speakingBotIds: ['mimi'], round: { status: 'running', canContinue: false,
+    speakers: [{ botId: 'mimi', sessionId: 'lane-mimi', executionId: 'original', activity: 'reply', startedAt }] } });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: snapshot });
+  renderView();
+  const work = await screen.findByTestId('bot-group-work');
+  const later = screen.getByText('Later message');
+  expect(work.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...snapshot, messages: [...messages,
+    msg({ id: 'newest', sequence: 3, content: 'Newest message', createdAt: startedAt + 2 })] } });
+  act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+  await screen.findByText('Newest message');
+  expect(screen.getByTestId('bot-group-work')).toBe(work);
+  expect(work.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});

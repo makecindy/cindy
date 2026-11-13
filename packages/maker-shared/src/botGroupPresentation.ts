@@ -126,6 +126,27 @@ export function mergeBotGroupMessages(
   return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
+/** Insert live executions by their original timestamp without reordering persisted messages.
+ * Missing timestamps on older hosts precede history instead of following every new message.
+ * Never use update/observation time: incremental updates must keep an execution in place.
+ */
+export function interleaveBotGroupWork<M extends { createdAt: number }, W extends { startedAt?: number }>(
+  messages: readonly M[], work: readonly W[],
+): Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> {
+  const timestamp = (item: W) => Number.isFinite(item.startedAt) ? item.startedAt! : 0;
+  const pending = [...work].sort((a, b) => timestamp(a) - timestamp(b));
+  const result: Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> = [];
+  let index = 0;
+  for (const [messageIndex, message] of messages.entries()) {
+    while (index < pending.length && timestamp(pending[index]!) < message.createdAt) {
+      result.push({ kind: 'work', value: pending[index++]! });
+    }
+    result.push({ kind: 'message', value: message, index: messageIndex });
+  }
+  for (; index < pending.length; index++) result.push({ kind: 'work', value: pending[index]! });
+  return result;
+}
+
 /** Bound each HTTP reconciliation request to 100 displayed sources, without truncating loaded history. */
 export function botGroupExecutionFailureBatches(sourceIds: readonly string[]): string[][] {
   const unique = [...new Set(sourceIds)];

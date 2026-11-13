@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  interleaveBotGroupWork,
   botGroupBodyParts,
   botGroupComposerPlanState,
   botGroupErrorVariant,
@@ -416,4 +417,18 @@ describe('unclaimed talk turn controls', () => {
     // A division step hands work over; it is never a spoken turn.
     expect(botGroupPlanStepState({ ...value, kind: 'work' }, value.steps[0])).toBe('done');
   });
+});
+
+// Unit: live executions were appended after newer chat messages on both clients.
+// Their original timestamps, independent identities and removal must survive refreshes.
+it('keeps concurrent execution updates between their original neighboring messages', () => {
+  const messages = [{ id: 'request', createdAt: 10 }, { id: 'later', createdAt: 30 }];
+  const first = { id: 'first', startedAt: 20, status: 'running' };
+  const second = { id: 'second', startedAt: 25, status: 'queued' };
+  const ids = (work: typeof first[], rows = messages) => interleaveBotGroupWork(rows, work).map(row => row.value.id);
+  expect(ids([second, first])).toEqual(['request', 'first', 'second', 'later']);
+  expect(ids([{ ...first, status: 'stopping' }, second], [...messages, { id: 'newest', createdAt: 40 }]))
+    .toEqual(['request', 'first', 'second', 'later', 'newest']);
+  expect(ids([second])).toEqual(['request', 'second', 'later']);
+  expect(ids([])).toEqual(['request', 'later']);
 });
