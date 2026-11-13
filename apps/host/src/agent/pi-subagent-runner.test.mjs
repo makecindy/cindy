@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnHostPiSubagentRunner } from './pi-subagent-runner.ts';
+import { startParentWatchdog } from './pi-subagent-parent-watchdog.cts';
 import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
@@ -101,7 +102,8 @@ test('paths outside the declared run directory are refused before any process st
 });
 
 // Source shape: the Host entry is the desktop entry except how the ready frame is sent and how the
-// channel is dropped (reviewer, P4).
+// channel is dropped (reviewer, P4), and the parent watchdog: a utilityProcess ends with Electron's
+// main process, a Node fork does not (reviewer, m1-cp18c review, option B).
 test('the Host runner entry matches the desktop entry except the ready frame and the channel', () => {
   // Bracket-only lines appear in both files and are not compared.
   const lines = file => fs.readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//'));
@@ -120,11 +122,19 @@ test('the Host runner entry matches the desktop entry except the ready frame and
     '} catch {',
   ]);
   assert.deepEqual(host.filter(line => !desktop.includes(line)), [
+    "import { startParentWatchdog } from './pi-subagent-parent-watchdog.cjs';",
     'const send = process.send?.bind(process);',
+    'const hostPid = process.ppid;',
     "if (!send) throw new Error('PI Subagent runner process is missing its IPC channel');",
     "send({ type: 'ready' }, (error: Error | null) => {",
     'if (error) throw error;',
     'process.disconnect?.();',
+    'startParentWatchdog({',
+    'parentPid: hostPid,',
+    'onParentGone: () => {',
+    'setTimeout(() => process.exit(1), 5_000);',
+    "process.kill(process.pid, 'SIGTERM');",
+    '},',
   ]);
 });
 
@@ -248,3 +258,70 @@ test('a runner that ignores SIGTERM is killed after the grace period; its detach
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Unit: the parent watchdog's decision with injected process facts and a short interval. A live
+// parent with its start time is never reported; re-parenting, a vanished pid, or the same pid with
+// another start time (pid reuse) is reported once.
+test('the parent watchdog reports a gone parent once and never a live one', async () => {
+  const run = (facts, ticks) => new Promise(resolve => {
+    let gone = 0;
+    let n = 0;
+    const stop = startParentWatchdog({
+      parentPid: 4242, intervalMs: 2, probeEveryTicks: 3,
+      readStartTimeSec: () => facts.start(n), isPidAlive: () => facts.alive(n), currentParentPid: () => facts.ppid(n),
+      onParentGone: () => { gone += 1; },
+    });
+    const tick = setInterval(() => { n += 1; if (n >= ticks) { clearInterval(tick); stop(); resolve(gone); } }, 2);
+  });
+  const live = { start: () => 1_000, alive: () => true, ppid: () => 4242 };
+  assert.equal(await run(live, 40), 0);
+  assert.equal(await run({ ...live, ppid: n => (n > 5 ? 1 : 4242) }, 40), 1);
+  assert.equal(await run({ ...live, alive: n => n <= 5 }, 40), 1);
+  // Same pid, alive, still our parent by pid, but started at another time.
+  assert.equal(await run({ ...live, start: n => (n > 5 ? 2_000 : 1_000) }, 40), 1);
+  // An unreadable start time counts as the same process, as in the runner.
+  assert.equal(await run({ ...live, start: n => (n === 0 ? 1_000 : null) }, 40), 0);
+});
+
+// Integration: a separate parent process (as the Host) launches a real runner with a fake Pi child,
+// then is killed with SIGKILL (a crash). Both the runner and its Pi child end within a few seconds.
+async function killHostThenWait(ignoreTerm) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-runner-')));
+  fs.mkdirSync(path.join(root, 'home'));
+  const { piPids, request } = stageRealRun(root, 'run-orphan', { ignoreTerm });
+  const runnerPidFile = path.join(root, 'runner.pid');
+  const parentScript = path.join(root, 'host.mjs');
+  fs.writeFileSync(parentScript, `
+import { spawnHostPiSubagentRunner } from ${JSON.stringify(path.join(here, 'pi-subagent-runner.ts'))};
+import fs from 'node:fs';
+const runner = spawnHostPiSubagentRunner(JSON.parse(process.argv[2]));
+runner.once('spawn', () => fs.writeFileSync(${JSON.stringify(runnerPidFile)}, String(runner.pid)));
+setInterval(() => {}, 1000);
+`);
+  const { spawn } = await import('node:child_process');
+  const host = spawn(process.execPath, ['--import', 'tsx', parentScript, JSON.stringify(request)], { stdio: 'ignore', cwd: here });
+  let runnerPid;
+  try {
+    await waitFor(() => fs.existsSync(runnerPidFile) && readPids(piPids).length === 1, 20_000);
+    runnerPid = Number(fs.readFileSync(runnerPidFile, 'utf8'));
+    const [piPid] = readPids(piPids);
+    assert.ok(alive(runnerPid) && alive(piPid));
+    host.kill('SIGKILL');
+    const killedAt = Date.now();
+    if (ignoreTerm) {
+      // The runner ignores SIGTERM: the 5-second forced exit ends it. Its detached child is not its
+      // to reap without the runner's cleanup, as after the SIGKILL fallback.
+      await waitFor(() => !alive(runnerPid), 15_000);
+      assert.ok(Date.now() - killedAt >= 4_000, 'the forced exit waits for the cleanup bound');
+    } else {
+      await waitFor(() => !alive(runnerPid) && !alive(piPid), 15_000);
+    }
+  } finally {
+    if (host.exitCode === null && host.signalCode === null) host.kill('SIGKILL');
+    for (const pid of [runnerPid, ...readPids(piPids)]) if (pid && alive(pid)) process.kill(pid, 'SIGKILL');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('a real runner and its Pi child end after the Host is killed', { timeout: 60_000 }, () => killHostThenWait(false));
+test('a runner whose SIGTERM cleanup hangs still ends after the Host is killed', { timeout: 60_000 }, () => killHostThenWait(true));
