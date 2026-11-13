@@ -8,14 +8,17 @@ import {
 
 import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import { isStopCommand } from '../shared/controlCommands';
+import { imText } from '../shared/imText';
+import { localizedReplyWords, matchesReplyWord, type ReplyWords } from '../shared/replyWords';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
-import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '../shared/permissionPresentation';
+import { interactionChoiceReceivedText, permissionOutcomeText } from '../shared/permissionPresentation';
 import { createLogger } from '../../logger';
 
 const log = createLogger('im:wecom-interaction');
 
 interface PendingInteraction {
   request: InteractionRequest;
+  words: ReplyWords;
   resolve: (decision: InteractionDecision) => void;
   timer: ReturnType<typeof setTimeout>;
   /** 已发出的确认卡(模板卡片); 点击按 messageId 对回本请求。 */
@@ -50,6 +53,8 @@ const INTERACTION_TIMEOUT_MS = 10 * 60_000;
 /** 这些 reason 表示请求没被真正作答(超时/取消/被替换/发不出去), 而不是用户拒绝。 */
 const EXPIRED_INTERACTION_REASON =
   /timeout|cancelled|replaced_by_new_request|send_failed|disconnected|session_disposed|session_aborted|session_closed|interaction_route_released|turn_terminal/;
+
+const K = 'imBot.text.wecom.interaction';
 
 /**
  * 企业微信的文字 + 模板卡片确认。
@@ -91,6 +96,7 @@ export class WecomTextInteractions {
     const settle = (decision: InteractionDecision) => shared ? shared.decide(decision) : resolvePending(decision);
     const entry: PendingInteraction = {
       request,
+      words: localizedReplyWords(),
       resolve: settle,
       timer: undefined as unknown as ReturnType<typeof setTimeout>,
       settled: false,
@@ -177,7 +183,7 @@ export class WecomTextInteractions {
     request: InteractionRequest,
     entry: PendingInteraction,
   ): Promise<void> {
-    const prompt = formatWecomInteractionPrompt(request);
+    const prompt = formatWecomInteractionPrompt(request, entry.words);
     // 无论长短都先发完整提示。
     await this.im.sendMarkdownText(userId, prompt);
     // 提示发送期间请求可能已经被桌面/手机/超时/stop/新请求收口: 不再发可批准卡。
@@ -225,13 +231,13 @@ export class WecomTextInteractions {
     // 只认本请求那张卡: 旧卡(已被替换/收口的)点击一律忽略。
     if (!pending.cardId || pending.cardId !== event.messageId) return;
     const value = typeof event.payload.value === 'string' ? event.payload.value : '';
-    const decision = value ? parseReply(pending.request, value) : null;
+    const decision = value ? parseReply(pending.request, value, pending.words) : null;
     if (!decision) return;
     // 只提交一次: 收口后重复/迟到点击不会再调用 decide。
     if (!this.settleEntry(event.senderId, pending, decision)) return;
     if (pending.paused) {
       void this.im
-        .sendText(event.senderId, INTERACTION_CHOICE_RECEIVED_TEXT)
+        .sendText(event.senderId, interactionChoiceReceivedText())
         .catch(() => undefined);
     }
   }
@@ -313,11 +319,12 @@ export class WecomTextInteractions {
       );
       return false;
     }
-    const decision = parseReply(pending.request, event.text);
+    const decision = parseReply(pending.request, event.text, pending.words);
     if (!decision) {
+      const words = pending.words;
       void this.im.sendText(
         event.senderId,
-        '回复格式不正确。请按上一条消息提示回复；权限确认只支持“允许”或“拒绝”。',
+        imText(`${K}.invalidReply`, { allow: words.allow, deny: words.deny }),
       );
       return true;
     }
@@ -325,7 +332,7 @@ export class WecomTextInteractions {
     // 仅共享路径回"已收到"(宿主可能还暂停着); 非共享由最终结果说明覆盖, 不双发。
     if (pending.paused) {
       void this.im
-        .sendText(event.senderId, INTERACTION_CHOICE_RECEIVED_TEXT)
+        .sendText(event.senderId, interactionChoiceReceivedText())
         .catch(() => undefined);
     }
     return true;
@@ -358,39 +365,39 @@ export function buildWecomConfirmCard(request: InteractionRequest): InteractiveC
   };
 }
 
-export function formatWecomInteractionPrompt(request: InteractionRequest): string {
+export function formatWecomInteractionPrompt(request: InteractionRequest, words = localizedReplyWords()): string {
   if (request.kind === 'permission') {
     const toolName = escapeWecomMarkdown(request.displayName ?? request.toolName);
     const unavailable = autoReviewUnavailablePromptLine(request);
-    return `需要确认工具“${toolName}”。
+    return `${imText(`${K}.permissionTitle`, { toolName })}
 ${permissionPromptDescription(request) ?? ''}
 ${unavailable ? `\n${unavailable}\n` : ''}
-${permissionOperationPreview(request) ? `操作：
+${permissionOperationPreview(request) ? `${imText(`${K}.operationLabel`)}
 \`\`\`
 ${permissionOperationPreview(request)}
 \`\`\`
 ` : ''}
 
-回复“允许”执行一次，或回复“拒绝”取消本次操作。企业微信内不支持永久授权。`;
+${imText(`${K}.permissionFooter`, { allow: words.allow, deny: words.deny })}`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;
-    return `Agent 提交了一份执行计划：
+    return `${imText(`${K}.planIntro`)}
 
 ${plan}
 
-回复“批准”继续，或回复“拒绝”取消。`;
+${imText(`${K}.planFooter`, { approve: words.approve, deny: words.deny })}`;
   }
   const question = request.questions[0];
-  if (!question) return 'Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。';
+  if (!question) return imText(`${K}.askNoQuestion`);
   const options = (question.options ?? [])
     .slice(0, 9)
     .map((option, index) => `${index + 1}. ${escapeWecomMarkdown(option.label)}`)
     .join('\n');
-  return `Agent 需要你的回答：
+  return `${imText(`${K}.askIntro`)}
 ${escapeWecomMarkdown(question.question)}
 ${options ? `\n${options}\n` : ''}
-请回复选项序号，或直接输入你的回答。`;
+${imText(`${K}.askFooter`)}`;
 }
 
 function defaultDecision(request: InteractionRequest, reason: string): InteractionDecision {
@@ -403,24 +410,25 @@ function defaultDecision(request: InteractionRequest, reason: string): Interacti
   return { kind: 'permission', behavior: 'deny', reason };
 }
 
-function parseReply(request: InteractionRequest, rawText: string): InteractionDecision | null {
+function parseReply(request: InteractionRequest, rawText: string, words: ReplyWords): InteractionDecision | null {
   const text = rawText.trim();
   if (!text) return null;
   const normalized = text.toLowerCase();
+  const is = (fixed: string[], localized: string) => matchesReplyWord(normalized, fixed, localized);
   if (request.kind === 'permission') {
-    if (['允许', '同意', '确认', 'allow', 'yes', 'y'].includes(normalized)) {
+    if (is(['允许', '同意', '确认', 'allow', 'yes', 'y'], words.allow)) {
       return { kind: 'permission', behavior: 'allow' };
     }
-    if (['拒绝', '不允许', '取消', 'deny', 'no', 'n'].includes(normalized)) {
+    if (is(['拒绝', '不允许', '取消', 'deny', 'no', 'n'], words.deny)) {
       return { kind: 'permission', behavior: 'deny', reason: 'wecom_user_denied' };
     }
     return null;
   }
   if (request.kind === 'plan_review') {
-    if (['批准', '同意', '确认', '继续', 'approve', 'allow', 'yes', 'y'].includes(normalized)) {
+    if (is(['批准', '同意', '确认', '继续', 'approve', 'allow', 'yes', 'y'], words.approve)) {
       return { kind: 'plan_review', behavior: 'allow' };
     }
-    if (['拒绝', '取消', 'deny', 'no', 'n'].includes(normalized)) {
+    if (is(['拒绝', '取消', 'deny', 'no', 'n'], words.deny)) {
       return { kind: 'plan_review', behavior: 'deny', reason: 'wecom_user_denied' };
     }
     return null;

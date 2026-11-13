@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { IMHost, IMMessageEvent } from "../../types.js";
 import { decodeWecomLane } from "../codec.js";
 import { WecomIM } from "../index.js";
+import { setTransportTextResolver } from "../../transportText.js";
 
 type Handler = (payload?: unknown) => void;
 type IpcHandler = (payload?: unknown) => Promise<unknown> | unknown;
@@ -789,6 +790,37 @@ describe("WecomIM routing and ownership", () => {
         rm(allowedDir, { recursive: true, force: true }),
         rm(outsideDir, { recursive: true, force: true }),
       ]);
+    }
+  });
+
+  // Main localized commitFinal while this branch moved its text into prepareFinal.
+  // Exercise the real planner so that merge resolution cannot silently lose host copy.
+  // Unit: no network/files; unresolved paths are rejected before filesystem access.
+  it("keeps host translations in the replayable final plan", async () => {
+    const { host } = createHost();
+    const im = new WecomIM(host, { clientFactory: () => new FakeClient() as never });
+    setTransportTextResolver((key, vars) => {
+      if (key.endsWith("attachmentsOmitted")) return `${vars?.count} attachments omitted (limit ${vars?.max})`;
+      if (key.endsWith("filesRejected")) return `${vars?.count} files rejected`;
+      if (key.endsWith("imagesUnresolved")) return `${vars?.count} images unavailable`;
+      if (key.endsWith("attachmentsBelow")) return "Attachments below";
+      return null;
+    });
+    try {
+      const plan = await im.prepareFinal({
+        userId: "owner", terminal: "done",
+        text: "![missing](cindy-media://blobs/missing.png)",
+        fileAbsPaths: ["outside.txt"], allowedFileRoots: [],
+        mediaAbsPaths: ["one", "two", "three", "four", "five"],
+      });
+      expect(plan.steps[0]).toMatchObject({ kind: "text", text:
+        "1 attachments omitted (limit 4)\n\n1 files rejected\n\n1 images unavailable" });
+      const attachmentOnly = await im.prepareFinal({
+        userId: "owner", terminal: "done", text: "", mediaAbsPaths: ["one"],
+      });
+      expect(attachmentOnly.steps[0]).toMatchObject({ kind: "text", text: "Attachments below" });
+    } finally {
+      setTransportTextResolver(null);
     }
   });
 

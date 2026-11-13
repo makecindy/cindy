@@ -65,11 +65,26 @@ import {
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
 } from './nativeCli.js';
+import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
+
+const log = desktopMakerLogger.child('subscription-accounts');
+
+/** 成功快照的复用窗口。 */
+const ACCOUNT_SNAPSHOT_TTL_MS = 30_000;
+/**
+ * 读取失败只复用这么短：一次读不到**不是**「已登出」或「不可用」的证据。官方 CLI 冷启动、
+ * app-server 抢占、owner 边界都可能让重启后的第一次读失败，按成功快照一样缓存 30 秒会把
+ * 启动瞬间的一次抖动变成半分钟发不出去(2026-11-12 实测：OpenAI 池里第一个账号额度用尽时，
+ * 第二个有额度的账号也被判不可用，整池无账号可选)。并发读取仍由 `state.flights` 合并，
+ * 缩短失败窗口不会反复 spawn CLI。
+ */
+const ACCOUNT_SNAPSHOT_FAILURE_TTL_MS = 3_000;
 
 type Usage = {
   claudeUsage?: ReturnType<typeof parseClaudeSdkRateLimitInfo>;
   codexUsage?: ReturnType<typeof providerGroupCodexUsageFromReads>;
   codexCredits?: NonNullable<SubscriptionAccountUsage['codex']>['credits'];
+  codexPlan?: string;
 };
 interface AccountSnapshot {
   auth: AuthState & { plan?: string; loginExpiresAt?: string };
@@ -81,7 +96,7 @@ interface AccountSnapshot {
 interface OwnerRuntime {
   owner: string;
   cache: Map<string, AccountSnapshot>;
-  flights: Map<string, Promise<AccountSnapshot>>;
+  flights: Map<string, { promise: Promise<AccountSnapshot>; forceUsage: boolean }>;
   running: Map<string, Set<string>>;
   /** Pending reassignments still require admission after an abandoned reservation expires. */
   pendingStarts: Map<string, { accountId: string; token: string; until: number }>;
@@ -299,15 +314,24 @@ async function snapshot(
   provider: SubscriptionProvider,
   id: string,
   force = false,
+  forceUsage = false,
 ): Promise<AccountSnapshot> {
   assertOwner(state);
   const key = keyOf(provider, id);
   const cached = state.cache.get(key);
-  if (!force && cached && Date.now() - cached.at < 30_000) return cached;
+  const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
+  if (!force && cached && Date.now() - cached.at < ttl) return cached;
   const pending = state.flights.get(key);
-  if (pending) return pending;
+  if (pending) {
+    if (!forceUsage || pending.forceUsage) return pending.promise;
+    // A normal read may reuse its cached quota. A manual refresh waits for it,
+    // then starts one fresh read shared by any other concurrent refreshes.
+    await pending.promise;
+    return snapshot(state, provider, id, force, forceUsage);
+  }
   const directory = directoryFor(provider, id);
   const flight = (async (): Promise<AccountSnapshot> => {
+    const startedAt = Date.now();
     let result: AccountSnapshot;
     if (id === 'default' && !defaultAccountBound(provider)) {
       result = { auth: { authenticated: false }, at: Date.now() };
@@ -317,7 +341,7 @@ async function snapshot(
         const expectedIdentity = provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id)?.reloginIdentity
           : undefined;
-        let auth = imported
+        let auth: AccountSnapshot['auth'] = imported
           ? await readLegacyCodexProviderAccount(imported, directory)
           : id === 'default' && legacyCodexDefault(provider)
             ? await readLegacyCodexAccount()
@@ -362,6 +386,7 @@ async function snapshot(
         const current = state.cache.get(key);
         const sameAccount = current?.auth.identity === auth.identity;
         const reuseUsage =
+          !forceUsage &&
           sameAccount &&
           current?.usageAt !== undefined &&
           Date.now() - current.usageAt < 180_000;
@@ -406,16 +431,26 @@ async function snapshot(
           }
         }
         result = {
-          auth,
+          auth: { ...auth, plan: auth.plan ?? usage?.codexPlan },
           usage,
           at: Date.now(),
           usageAt: reuseUsage ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
-      } catch {
+      } catch (error) {
         const account = provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id) : undefined;
         const identity = account?.reloginIdentity ?? account?.lastConfirmedIdentity;
+        // 这条日志是「重启后发不出去」唯一可查的线索。**不记 error.message**：读取链里有
+        // auth.json 的 JSON.parse，解析失败的 message 会带上文件片段(可能含 token)。
+        // 耗时与错误类型已足够分辨：近 0ms 多为 CLI 未就绪 / spawn 失败，15s 是读超时，
+        // SyntaxError 指向 auth.json 损坏。
+        log.warn('subscription account read failed', {
+          provider,
+          accountId: id,
+          elapsedMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.name : typeof error,
+        });
         result = { auth: { authenticated: false, ...(identity ? { identity } : {}) }, unavailable: true, at: Date.now() };
       }
     }
@@ -423,7 +458,7 @@ async function snapshot(
     state.cache.set(key, result);
     return result;
   })();
-  state.flights.set(key, flight);
+  state.flights.set(key, { promise: flight, forceUsage });
   void flight
     .finally(() => {
       state.flights.delete(key);
@@ -439,6 +474,14 @@ export function hasConnectedSubscriptionPool(provider: SubscriptionProvider): bo
   const state = currentRuntime();
   return pool.accounts.some((a) => state.cache.get(keyOf(provider, a.id))?.auth.authenticated);
 }
+/** Cached read evidence only; disconnected/unconfigured/paused pools never request UI recovery. */
+export function hasUnavailableSubscriptionPoolAccount(provider: SubscriptionProvider): boolean {
+  const pool = readPool(provider);
+  if (!pool || pool.disconnected) return false;
+  const state = currentRuntime();
+  return pool.accounts.some(account => !account.paused
+    && state.cache.get(keyOf(provider, account.id))?.unavailable === true);
+}
 export async function disconnectSubscriptionPool(provider: SubscriptionProvider): Promise<void> {
   const pool = readPool(provider);
   if (!pool || pool.disconnected) return;
@@ -450,8 +493,9 @@ export async function disconnectSubscriptionPool(provider: SubscriptionProvider)
 }
 export function refreshSubscriptionPool(
   provider: SubscriptionProvider,
+  forceUsage = false,
 ): Promise<SubscriptionPoolView> {
-  return readSubscriptionPool(provider);
+  return readSubscriptionPoolView(provider, false, undefined, forceUsage);
 }
 /** Outer groups see the next usable account's quota, not an exhausted default.
  * No identity, directory, credentials, or account identifiers cross this boundary.
@@ -519,7 +563,8 @@ export function readSubscriptionAccountBlocked(
 export async function readSubscriptionPoolModelAvailability(
   provider: SubscriptionProvider,
   model: string,
-  options: { remote?: boolean } = {},
+  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)。 */
+  options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<boolean | null> {
   const pool = readPool(provider);
   if (!pool || pool.accounts.length < 2) return null;
@@ -540,7 +585,7 @@ export async function readSubscriptionPoolModelAvailability(
       || (account.id === 'default' && !defaultAccountBound(provider))) return false;
     const imported = provider === 'openai' ? readLegacyCodexProviderId(account.id) : undefined;
     if (imported && !legacyAccess?.legacyCodexAccountCanRun(imported, model, {
-      remote: options.remote === true, newRoute: true,
+      remote: options.remote === true, ownComputer: options.ownComputer === true, newRoute: true,
     })) return false;
     const usage = providerGroupMemberUsageState(info.usage ?? {},
       provider === 'openai' ? model.replace(/^chatgpt\//, '') : model,
@@ -559,7 +604,8 @@ const ACCOUNT_SWITCH_PROBE_BUDGET_MS = 2_000;
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
   keys: { sessionId?: string; nativeSessionId?: string; model?: string },
-  options: { remote?: boolean } = {},
+  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)，换号探测也认「让我的其他电脑用本机模型」。 */
+  options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
   // Replacement admission is optional. Share a short budget with the original bound-account
   // read so a slow original read never starts another long CLI wait before returning its view.
@@ -616,7 +662,8 @@ export async function readSubscriptionSessionAccount(
       // actual slot and the grants used by a fresh start. The probe reserves and binds nothing.
       switchAvailable = await Promise.race([
         acquireSubscriptionAccount(provider, keys.model, [], false, {
-          remote: options.remote === true, exclude: new Set([config.id]), dryRun: true,
+          remote: options.remote === true, ownComputer: options.ownComputer === true,
+          exclude: new Set([config.id]), dryRun: true,
         }).then(() => true),
         new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), switchBudget); }),
       ]);
@@ -773,10 +820,19 @@ function accountUsage(usage: Usage | undefined): { usage?: SubscriptionAccountUs
     ? { usage: { codex: { buckets, credits: usage?.codexCredits ?? null } } }
     : {};
 }
-export async function readSubscriptionPool(
+export function readSubscriptionPool(
   provider: SubscriptionProvider,
   previewDefault = false,
   taskId?: string,
+): Promise<SubscriptionPoolView> {
+  return readSubscriptionPoolView(provider, previewDefault, taskId);
+}
+
+async function readSubscriptionPoolView(
+  provider: SubscriptionProvider,
+  previewDefault: boolean,
+  taskId?: string,
+  forceUsage = false,
 ): Promise<SubscriptionPoolView> {
   const state = currentRuntime();
   const pool = readPool(provider) ?? defaultPool();
@@ -793,7 +849,7 @@ export async function readSubscriptionPool(
           )
             .then((auth) => ({ auth, at: Date.now() }))
             .catch(() => ({ auth: { authenticated: false }, unavailable: true, at: Date.now() }))
-        : await snapshot(state, provider, account.id);
+        : await snapshot(state, provider, account.id, forceUsage, forceUsage);
       const usage = providerGroupMemberUsageState(
         info.usage ?? {},
         undefined,
@@ -980,6 +1036,8 @@ export async function acquireSubscriptionAccount(
   control = false,
   options: {
     remote?: boolean;
+    /** 远程调用来自自己的其他电脑(不是受邀者)：旧版导入的 Codex 账号也认「让我的其他电脑用本机模型」。 */
+    ownComputer?: boolean;
     accountId?: string;
     resuming?: boolean;
     /** Accounts already tried for this start (provider group: each member at most once per round). */
@@ -1044,7 +1102,8 @@ export async function acquireSubscriptionAccount(
       usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
         && ((Boolean(binding) && !rebind) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
-          remote: options.remote === true, newRoute: (!binding || rebind) && !options.resuming,
+          remote: options.remote === true, ownComputer: options.ownComputer === true,
+          newRoute: (!binding || rebind) && !options.resuming,
         }) === true),
       running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
       // Control leases reserve no slot. Pinned tasks never re-pick, so the limit only gates new assignments.
@@ -1124,7 +1183,7 @@ export async function acquireSubscriptionAccount(
     const imported = provider === 'openai' ? readLegacyCodexProviderId(selected) : undefined;
     if (imported && (options.remote || modelSwitch)
       && !legacyAccess?.legacyCodexAccountCanRun(imported, targetModel, {
-        remote: options.remote === true, newRoute: false, modelSwitch,
+        remote: options.remote === true, ownComputer: options.ownComputer === true, newRoute: false, modelSwitch,
       }))
       throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };
@@ -1428,7 +1487,7 @@ export async function runSubscriptionAccountCommand(
       if (accountId === 'default' && !legacyCodexDefault(provider))
         bindNativeProviderAuth(provider, { sharedSystem: true });
       // Do not let a pre-login read land after the post-login identity check.
-      await state.flights.get(keyOf(provider, accountId))?.catch(() => {});
+      await state.flights.get(keyOf(provider, accountId))?.promise.catch(() => {});
       assertOwner(state);
       state.cache.delete(keyOf(provider, accountId));
       // Codex's previous rejected credential must not invalidate the newly logged-in account.
@@ -1456,7 +1515,7 @@ export async function runSubscriptionAccountCommand(
     } catch (error) {
       // The CLI owns its credentials even on failure/cancel. Re-read only this slot;
       // its persisted identity guard prevents a wrong account becoming usable later.
-      await state.flights.get(keyOf(provider, accountId))?.catch(() => {});
+      await state.flights.get(keyOf(provider, accountId))?.promise.catch(() => {});
       state.cache.delete(keyOf(provider, accountId));
       if (state.owner === activeOwnerScopeKey()) changed(provider);
       throw error;

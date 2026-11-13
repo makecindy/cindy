@@ -62,6 +62,7 @@ import {
   safeWecomFilename,
 } from "./media.js";
 import { createWecomProgress } from "./progress.js";
+import { tt } from "../transportText.js";
 
 const BOT_ID_SECRET_KEY = "wecom-bot-id";
 const BOT_SECRET_SECRET_KEY = "wecom-bot-secret";
@@ -71,7 +72,10 @@ const CALLBACK_QUEUE_CAPACITY = 64;
 const STREAM_SAFE_TIMEOUT_MS = 2 * 60_000 + 45_000;
 const DEDUPE_CAPACITY = 2_048;
 const MAX_TERMINAL_ATTACHMENTS = 4;
-const SECRET_WRITE_FAILED_REASON = "无法使用系统安全存储保存企业微信机器人凭证";
+const secretWriteFailedReason = (): string =>
+  tt("imBot.text.transport.wecom.secretWriteFailed", "无法使用系统安全存储保存企业微信机器人凭证");
+const authFailedHint = (): string =>
+  tt("imBot.text.transport.wecom.authFailedHint", "企业微信鉴权失败，请检查 Bot ID、Secret 和长连接模式");
 const NO_ACCOUNT_SCOPE = Symbol("no-account-scope");
 
 type StagedImage = {
@@ -227,7 +231,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     if (!botId || !secret) {
       const failed: IMStatus = {
         kind: "error",
-        reason: "Bot ID 和 Secret 不能为空",
+        reason: tt("imBot.text.transport.wecom.credentialsRequired", "Bot ID 和 Secret 不能为空"),
       };
       this.setStatus(failed);
       return this.getConfigState(failed);
@@ -235,7 +239,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     if (!this.host.secrets.isAvailable()) {
       const failed: IMStatus = {
         kind: "error",
-        reason: SECRET_WRITE_FAILED_REASON,
+        reason: secretWriteFailedReason(),
       };
       this.setStatus(failed);
       return this.getConfigState(failed);
@@ -256,7 +260,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwner);
       const failed: IMStatus = {
         kind: "error",
-        reason: SECRET_WRITE_FAILED_REASON,
+        reason: secretWriteFailedReason(),
       };
       this.setStatus(failed);
       return this.getConfigState(failed);
@@ -539,7 +543,13 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       try {
         await this.sendChunks(
           output.userId,
-          chunkWecomMarkdown(`⚠️ 有 ${failed} 个附件发送失败，请稍后重试。`),
+          chunkWecomMarkdown(
+            tt(
+              "imBot.text.transport.wecom.attachmentsFailed",
+              "⚠️ 有 {{count}} 个附件发送失败，请稍后重试。",
+              { count: failed },
+            ),
+          ),
           "none",
         );
       } catch {
@@ -746,7 +756,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
         kind: "error",
         reason:
           code === "WS_AUTH_FAILURE_EXHAUSTED"
-            ? this.lastAuthFailureReason || "企业微信鉴权失败，请检查 Bot ID、Secret 和长连接模式"
+            ? this.lastAuthFailureReason || authFailedHint()
             : this.lastAuthFailureReason || sanitizeReason(error.message),
       });
     });
@@ -1534,8 +1544,8 @@ function formatAuthFailureReason(message: string): string {
     "",
   );
   return detail
-    ? `企业微信鉴权失败：${detail}`
-    : "企业微信鉴权失败，请检查 Bot ID、Secret 和长连接模式";
+    ? tt("imBot.text.transport.wecom.authFailedDetail", "企业微信鉴权失败：{{detail}}", { detail })
+    : authFailedHint();
 }
 
 function safeError(error: unknown): { code: string; message: string } {
