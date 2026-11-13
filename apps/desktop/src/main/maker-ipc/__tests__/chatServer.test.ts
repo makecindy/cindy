@@ -2005,10 +2005,11 @@ describe('Chat Server result delivery and refresh', () => {
       });
     });
     const dispatched = () => vi.mocked(deps.dispatch).mock.calls.map(([input]) => input);
+    // These requests come from another device: the head start this computer leaves it has passed.
     async function ask(n: number, text: string, requester = selfId) {
       history.push(message(n, requester, text));
       queue.push(request(n, requester));
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(12_000);
     }
 
     // Claimed as the group's Cindy, never through AI reply mode; the requester's own words become one
@@ -2048,7 +2049,7 @@ describe('Chat Server result delivery and refresh', () => {
       queue.splice(0, queue.length);
       vi.mocked(deps.dispatch).mockClear();
       queue.push(request(6));
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(12_000);
       const input = dispatched().at(-1)!;
       expect(input.message.startsWith('@Cindy check the logs')).toBe(true);
       expect(input.autoReviewUserText).toBeUndefined();
@@ -2078,7 +2079,7 @@ describe('Chat Server result delivery and refresh', () => {
       const send = async (n: number, text: string, threadRootId: string | null) => {
         history.push(message(n, selfId, text, { threadRootId }));
         queue.push(request(n));
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(12_000);
         const input = dispatched().at(-1)!;
         await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId, resultText: 'Done' });
         return input;
@@ -2213,6 +2214,37 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(1000);
       expect(dispatched()).toHaveLength(1);
       expect(dispatched()[0]!.message.startsWith('slow start')).toBe(true);
+    });
+
+    // 2026-11-14 owner report: «我现在连哪个设备会回复都搞不清了». Every computer of the account
+    // may take a request to the group's Cindy; the one it was sent from takes it at once, the others
+    // only after a short head start, so the answer comes from the computer in front of the user.
+    it('lets the computer the request was sent from take it first', async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets.at(-1)!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      // The server's notice that the group's Cindy has work, as every computer of the account gets it.
+      const notice = () => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: String(Date.now()),
+        changes: [{ type: 'work.available', data: { work: [{ botId: cindyId, conversationId: roomId }] } }] }));
+      const sent = await service.sendMessage({ groupId: roomId, text: '@Cindy look', clientId: 'studio-send-1', mentions: { all: false, botIds: [cindyId] } });
+      expect(sent).toMatchObject({ ok: true });
+      history.push(message(5, selfId, '@Cindy look'));
+      queue.push(request(5));
+      notice();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(dispatched()).toHaveLength(1);
+      await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Here' });
+      // A request sent elsewhere (another computer, a phone): this computer leaves it a head start.
+      await vi.advanceTimersByTimeAsync(61_000);
+      history.push(message(6, selfId, '@Cindy from the phone'));
+      queue.push(request(6));
+      notice();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(dispatched()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(dispatched()).toHaveLength(2);
+      expect(dispatched()[1]!.message.startsWith('@Cindy from the phone')).toBe(true);
     });
 
     // A task the group task opens while answering shows in the group as a card, posted as the group's Cindy.

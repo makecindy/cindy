@@ -279,6 +279,10 @@ const mediaNames = (m: Message) => m.deleted ? '' : m.content.flatMap(b => b.typ
  * two hours; time waiting on the user is not counted. A hung lane is ended by its own idle watchdog.
  */
 const TURN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+/** How long the computers a request to the group's Cindy was not sent from leave it to the one it was. */
+const ASSISTANT_SENDER_HEAD_START_MS = 8_000;
+/** A message sent this recently from this computer is taken to be the request now waiting. */
+const ASSISTANT_SENDER_WINDOW_MS = 60_000;
 /** One server message holds this much text. */
 const CHAT_MESSAGE_TEXT_MAX = 8000;
 /** Splits long text into message-sized pieces, preferring a line break near the limit; '' → []. */
@@ -3320,6 +3324,37 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     hints.set(`room:${run.execution.conversation_id}`, { roomId: run.execution.conversation_id });
     queuedHints.set(botId, hints);
   }
+  /**
+   * The group's Cindy answers on the computer the request was sent from (bot-group-chat.md §9):
+   * every computer of the account may take its requests, so the others hold back for a moment and
+   * only take a request nobody here sent once it is still waiting after that. A request sent from a
+   * phone has no such computer and goes to whichever takes it first.
+   */
+  const sentHere = new Map<string, number>();
+  let lastSentHere = 0;
+  let assistantWaitingSince: number | undefined;
+  function noteSentHere(messageId: string) {
+    lastSentHere = Date.now();
+    sentHere.set(messageId, lastSentHere);
+    if (sentHere.size > 200) sentHere.delete(sentHere.keys().next().value!);
+  }
+  /** False while this computer gives the computer the request was sent from a head start; wakes the poll when it ends. */
+  function mayTakeAssistantRequest(actorId: string, request?: { sourceId: string; createdAt?: string }): boolean {
+    const now = Date.now();
+    let since: number;
+    if (request) {
+      if (sentHere.has(request.sourceId)) return true;
+      since = Date.parse(request.createdAt ?? '') || now;
+    } else {
+      // Not knowing which request is waiting: a message sent here just before it counts as its source.
+      if (now - lastSentHere < ASSISTANT_SENDER_WINDOW_MS) return true;
+      since = assistantWaitingSince ??= now;
+    }
+    const wait = since + ASSISTANT_SENDER_HEAD_START_MS - now;
+    if (wait <= 0) return true;
+    setTimeout(() => { if (current()) workPolling.wake([actorId]); }, wait).unref?.();
+    return false;
+  }
   /** Leases one execution: the oldest the server offers, or exactly `executionId`. */
   async function claim(actorId: string, executionId?: string): Promise<Execution | null> {
     const payload = { operationId: randomUUID(), executorId, accessPolicyVersion: 1, planVersion: 1, ...(directRoomClaims ? { directRoomVersion: 1 } : {}),
@@ -3339,7 +3374,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
       if (masked.execution) return masked.execution;
     }
-    return (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', payload, actorId)).execution;
+    if (assistant && !executionId && !mayTakeAssistantRequest(actorId)) return null;
+    const claimed = (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', payload, actorId)).execution;
+    if (assistant && !executionId) assistantWaitingSince = undefined;
+    return claimed;
   }
 
   /**
@@ -3384,6 +3422,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         let lane: string;
         try { lane = await executionLane(row, true); } catch { continue; }
         if (lanes.has(lane)) { hints.delete(row.id); continue; }
+        if (actorId === assistantActorId && !mayTakeAssistantRequest(actorId, { sourceId: row.source_message_id, createdAt: row.created_at })) continue;
         // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
         if (!mayRequest()) return;
         const execution = await claim(actorId, row.id);
@@ -4045,6 +4084,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     if (prepared?.ok) prepared.commit();
     sendJournal.confirm(journalKey, signature, result.id);
+    noteSentHere(result.id);
     deps.log?.info?.('Chat group send confirmed', { groupId: i.groupId, messageId: result.id,
       trace: createHash('sha256').update(i.clientId).digest('hex').slice(0, 16), durationMs: Date.now() - started });
     // The message exists: the send is answered now and its receipt answers any retry, so the
