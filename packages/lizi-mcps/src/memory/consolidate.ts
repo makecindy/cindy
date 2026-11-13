@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 
-import { shardNameSchema, withStore } from './_shared.js';
+import { refineTargetShardName, shardNameSchema, withStore } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 
@@ -35,6 +35,7 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
         body: z.string().min(1),
       }),
     },
+    refine: refineTargetShardName,
     handler: async ({ sources, target }) => {
       const saved = deps.beginWrite?.(deps.getSessionContext?.());
       let written: { filename: string } | undefined;

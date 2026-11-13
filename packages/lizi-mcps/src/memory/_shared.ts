@@ -16,7 +16,6 @@
 import { z } from 'zod';
 
 import {
-  CURATED_MEMORY_TYPES,
   resolveMemoryScopeKey,
   type MakerMemoryManager,
   type MakerMemoryStore,
@@ -28,7 +27,6 @@ import { classifyMemoryError } from './errors.js';
 
 /** 与 MemoryConfig.maxSlugLen 默认值一致；前缀与 .md 不计入 */
 const SHARD_SLUG_MAX = 64;
-const TYPE_PREFIX = new RegExp(`^(?:${CURATED_MEMORY_TYPES.join('|')})[_-]`);
 
 /** memory_write / memory_consolidate 的 name: 裸 slug, 或 MEMORY.md 索引里的文件名 */
 export const shardNameSchema = z
@@ -36,11 +34,45 @@ export const shardNameSchema = z
   .min(1)
   .max(80)
   .regex(/^[a-z0-9_-]+(\.md)?$/, 'slug 只允许 [a-z0-9_-]，或带 .md 的完整文件名')
-  .refine(
-    (name) => name.replace(/\.md$/, '').replace(TYPE_PREFIX, '').length <= SHARD_SLUG_MAX,
-    { message: `slug 最多 ${SHARD_SLUG_MAX} 个字符（不含 type 前缀与 .md）` },
-  )
   .describe('分片 slug；也可直接粘贴 MEMORY.md 索引里的文件名');
+
+/**
+ * 长度例外只给与 type 匹配的前缀：`feedback` + `project_<64>` 若放行，storage 的
+ * addressKey 不会剥这个前缀，最终仍按 65 字符拒绝（且错误出现在 dispatch 之后）。
+ * 这里按同一个规则提前拒绝；`path` 用于嵌套的 memory_consolidate.target.name。
+ */
+function checkShardNameLength(
+  type: unknown,
+  name: unknown,
+  path: (string | number)[],
+  ctx: z.RefinementCtx,
+): void {
+  if (typeof type !== 'string' || typeof name !== 'string') return;
+  const key = name.replace(/\.md$/, '').replace(new RegExp(`^(?:${type}[_-])+`), '');
+  if (key.length > SHARD_SLUG_MAX) {
+    ctx.addIssue({
+      code: 'custom',
+      path,
+      message: `slug 最多 ${SHARD_SLUG_MAX} 个字符（不含 type 前缀与 .md）`,
+    });
+  }
+}
+
+export function refineShardName(args: Record<string, unknown>, ctx: z.RefinementCtx): void {
+  checkShardNameLength(args.type, args.name, ['name'], ctx);
+}
+
+export function refineTargetShardName(args: Record<string, unknown>, ctx: z.RefinementCtx): void {
+  const target = args.target;
+  if (target && typeof target === 'object') {
+    checkShardNameLength(
+      (target as Record<string, unknown>).type,
+      (target as Record<string, unknown>).name,
+      ['target', 'name'],
+      ctx,
+    );
+  }
+}
 
 export function buildJsonResult(payload: unknown, isError = false): MemoryToolResult {
   return {
