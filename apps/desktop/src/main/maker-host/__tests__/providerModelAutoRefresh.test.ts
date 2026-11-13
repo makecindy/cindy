@@ -61,6 +61,27 @@ describe('provider model auto-refresh coordinator', () => {
     expect(refreshCustomModelSources).toHaveBeenCalledTimes(2);
   });
 
+  // Unit regression for #10156: a pending display-only recovery must not
+  // hold the production startup readiness promise, including list failures.
+  it.each([false, true])('finishes startup while supplier recovery is pending (list fails: %s)', async fails => {
+    const recovery = deferred();
+    const refreshCustomModelSources = vi.fn(() => recovery.promise);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => { if (fails) throw new Error('offline'); return [view('openai', true)]; },
+      refreshProvider: async () => undefined, refreshCustomModelSources,
+      now: () => 1_000, log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    let ready = false;
+    const started = coordinator.requestAutoRefresh('startup', ['openai']).then(() => { ready = true; });
+    try {
+      await vi.waitFor(() => expect(ready).toBe(true), { timeout: 100 });
+      expect(refreshCustomModelSources).toHaveBeenCalledOnce();
+    } finally {
+      recovery.resolve();
+      await started;
+    }
+  });
+
   it('refreshes the public image catalog before manual OpenAI discovery', async () => {
     const catalog = deferred();
     const refreshProvider = vi.fn(async () => undefined);

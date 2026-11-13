@@ -75,6 +75,8 @@ async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: ty
 export interface ProviderModelsFetchSpec {
   /** Add-flow callers distinguish an empty directory from an invalid response. */
   allowEmpty?: boolean;
+  /** Recovery must not treat missing rows in a partial catalog as withdrawal. */
+  requireComplete?: boolean;
   agent: AgentKind;
   /** 上游 wire protocol；用于区分 Codex 原生 OpenAI 与 Anthropic Messages 桥。 */
   wireProtocol?: ProviderWireProtocol;
@@ -130,7 +132,7 @@ export async function restoreProviderModelSources(
       const result = await fetchProviderModels({
         agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl,
         wireProtocol: runtime.wireProtocol, authMethod: config.auth?.method ?? 'apiKey',
-        apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true,
+        apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true,
       }, (url, init) => {
         if (!isCurrent()) throw new Error('Model source discovery context changed');
         return fetchImpl(url, init);
@@ -413,7 +415,7 @@ export async function fetchProviderModels(
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
-  });
+  }, spec.requireComplete);
   // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),
   // without treating an error envelope as an empty catalog or an account grant.

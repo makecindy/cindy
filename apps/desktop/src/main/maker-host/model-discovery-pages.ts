@@ -5,6 +5,8 @@ export async function collectModelDiscoveryPages(
   first: unknown,
   endpoint: string,
   fetchPage: (url: string) => Promise<unknown>,
+  // Destructive reconciliation requires an authoritative, complete catalog.
+  requireComplete = false,
 ): Promise<DiscoveredModel[] | null> {
   const origin = new URL(endpoint);
   const visited = new Set([origin.toString()]);
@@ -28,9 +30,9 @@ export async function collectModelDiscoveryPages(
   let current = origin;
   for (let count = 0; count < 100; count++) {
     const parsed = parseModelsListResponse(page, endpoint);
-    if (!parsed) return models.size ? [...models.values()] : null;
+    if (!parsed) return !requireComplete && models.size ? [...models.values()] : null;
     append(parsed);
-    if (models.size >= 10_000) return [...models.values()];
+    if (models.size >= 10_000) return requireComplete ? null : [...models.values()];
     if (!page || typeof page !== 'object' || Array.isArray(page)) break;
     const data = page as Record<string, unknown>;
     const next = new URL(current);
@@ -43,13 +45,23 @@ export async function collectModelDiscoveryPages(
       next.searchParams.set('after_id', data.last_id);
     else if (typeof link === 'string' && link) {
       let resolved: URL;
-      try { resolved = new URL(link, current); } catch { break; }
-      if (resolved.origin !== origin.origin || resolved.pathname !== origin.pathname || resolved.username || resolved.password) break;
+      try { resolved = new URL(link, current); } catch { if (requireComplete) return null; break; }
+      if (resolved.origin !== origin.origin || resolved.pathname !== origin.pathname || resolved.username || resolved.password) {
+        if (requireComplete) return null;
+        break;
+      }
       next.href = resolved.href;
-    } else break;
-    if (visited.has(next.toString())) break;
+    } else {
+      if (requireComplete && data.has_more === true) return null;
+      break;
+    }
+    if (requireComplete && count === 99) return null;
+    if (visited.has(next.toString())) {
+      if (requireComplete) return null;
+      break;
+    }
     visited.add(next.toString());
-    try { page = await fetchPage(next.toString()); } catch { break; }
+    try { page = await fetchPage(next.toString()); } catch { if (requireComplete) return null; break; }
     current = next;
   }
   // The ordinary OpenRouter list excludes speech. Fetch its separate catalog on
@@ -59,9 +71,16 @@ export async function collectModelDiscoveryPages(
     const speech = new URL(origin);
     speech.searchParams.set('output_modalities', 'speech');
     try {
-      const parsed = parseModelsListResponse(await fetchPage(speech.toString()), speech.toString());
+      const speechPage = await fetchPage(speech.toString());
+      const parsed = requireComplete
+        ? await collectModelDiscoveryPages(speechPage, speech.toString(), fetchPage, true)
+        : parseModelsListResponse(speechPage, speech.toString());
+      if (!parsed && requireComplete) return null;
       append((parsed ?? []).filter(model => model.discoveredMetadata?.mode === 'audio_speech'));
-    } catch { /* Keep the successfully fetched catalog, as for a failed pagination request. */ }
+    } catch {
+      if (requireComplete) return null;
+      // Ordinary discovery can retain successful chat rows during a speech outage.
+    }
   }
   return [...models.values()];
 }

@@ -277,7 +277,7 @@ export function createProviderModelRefreshCoordinator(
           trigger,
           error: err instanceof Error ? err.message : String(err),
         });
-        await Promise.all([catalogRefresh, customSourcesRefresh]);
+        await Promise.all([catalogRefresh, trigger === 'startup' ? undefined : customSourcesRefresh]);
         return;
       }
 
@@ -316,7 +316,8 @@ export function createProviderModelRefreshCoordinator(
               : String(result.reason),
         });
       });
-      await customSourcesRefresh;
+      // Supplier labels are display-only; task readiness must not wait on a saved gateway.
+      if (trigger !== 'startup') await customSourcesRefresh;
     },
 
     async refreshManually(providerId): Promise<void> {
