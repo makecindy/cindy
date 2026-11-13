@@ -1356,7 +1356,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }),
   setApplicationMenuLocale: (locale: ApplicationMenuLocale): Promise<{ ok: true }> =>
     ipcRenderer.invoke('app-menu:set-locale', locale),
-  // 文言等古典界面下 AI 作答的输出风格（只影响本机发起的轮次）。
+  // AI 作答文风（文言、唐诗……；文言界面与简体 / 繁體中文界面都可选，只影响本机发起的轮次）。
   setClassicalReplyStyle: (style: string): Promise<{ ok: true }> =>
     ipcRenderer.invoke('app-locale:set-classical-style', style),
 
@@ -6225,6 +6225,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     },
     bots: {
+      projectRepository: (botId: string, retry: boolean): Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus> =>
+        ipcRenderer.invoke('local-db:bots:project-repository', botId, retry),
       generateAvatar: (token: string): Promise<{ avatarImageBase64: string }> =>
         ipcRenderer.invoke('local-db:bots:generate-avatar', token),
       generateDraft: (
@@ -8664,7 +8666,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         received: number;
         ignored: number;
         connected?: boolean;
-        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+        problem?: 'limit' | 'failed' | 'unsupported' | 'suspended' | 'quota' | 'released';
         quotaLimit?: number;
         quotaResetAt?: number;
       } | null> => ipcRenderer.invoke('maker:schedule:webhook-status', id),

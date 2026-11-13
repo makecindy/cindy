@@ -1475,6 +1475,7 @@ describe('pi translator', () => {
 
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     expect(ctx.isStreaming).toBe(true);
+    ctx.contextTokens = 50_000;
 
     translatePiEvent(
       ev({
@@ -1487,6 +1488,8 @@ describe('pi translator', () => {
     );
     const boundary = events.find((e) => e.type === 'compact_boundary');
     expect(boundary?.turnScope).toBe('background');
+    expect(ctx.contextTokens).toBe(50_000);
+    expect(boundary?.data).not.toHaveProperty('postTokens');
     expect(
       events.filter(
         (e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done',
@@ -1523,8 +1526,10 @@ describe('pi translator', () => {
       queue,
       ctx,
     );
-    // 只有 compact_boundary,没有 status 收口(turn 结束经 agent_settled 自然收口)。
-    expect(events.filter((e) => e.type === 'status')).toHaveLength(0);
+    // #10198: publish the lower watermark immediately without settling the turn.
+    expect(events.filter((e) => e.type === 'status')).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ isRunning: true, contextTokens: 32000 }) }),
+    ]);
     expect(events.some((e) => e.type === 'compact_boundary')).toBe(true);
     // 即便 manual 压缩期间用户已开始新 turn(isStreaming),也不收口。
     const ctx2 = createPiTranslateContext(noopLogger);
@@ -1535,7 +1540,45 @@ describe('pi translator', () => {
       q2,
       ctx2,
     );
-    expect(ev2.filter((e) => e.type === 'status')).toHaveLength(0);
+    expect(ev2.filter((e) => e.type === 'status')).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ isRunning: true, contextTokens: 20 }) }),
+    ]);
+  });
+
+  // #10198 (unit): existing compaction tests only checked the translator's memory.
+  // A running task must receive the new snapshot before its next tool or terminal.
+  it('publishes successful mid-turn compaction without interrupting subsequent tools', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    ctx.contextTokens = 579216;
+    ctx.contextWindow = 1_000_000;
+    ctx.workingContextWindow = 272000;
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    events.length = 0;
+    translatePiEvent(ev({ type: 'compaction_end', reason: 'threshold', result: {
+      tokensBefore: 318394, estimatedTokensAfter: 46703,
+    } }), queue, ctx);
+    expect(events.map(event => event.type)).toEqual(['compact_boundary', 'status']);
+    expect(events[1].data).toMatchObject({ contextTokens: 46703, contextWindow: 272000, isRunning: true });
+    expect(ctx.isStreaming).toBe(true);
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'after-compact', toolName: 'read', args: { path: 'README.md' } }), queue, ctx);
+    expect(events.find(event => event.type === 'tool_use')?.data).toMatchObject({ toolUseId: 'after-compact' });
+    expect(events.some(event => event.type === 'done' || (event.type === 'status' && (event.data as { isRunning: boolean }).isRunning === false))).toBe(false);
+    disposePiTranslateContext(ctx);
+  });
+
+  it.each([undefined, NaN, Infinity, -1])('keeps the last known watermark for invalid postTokens %s', (postTokens) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    ctx.contextTokens = 579216;
+    ctx.isStreaming = true;
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    events.length = 0;
+    translatePiEvent(ev({ type: 'compaction_end', reason: 'threshold', result: { estimatedTokensAfter: postTokens } }), queue, ctx);
+    expect(ctx.contextTokens).toBe(579216);
+    expect(events.find(event => event.type === 'compact_boundary')?.data).not.toHaveProperty('postTokens');
+    expect(events.some(event => event.type === 'status')).toBe(false);
   });
 
   it('does not emit compact_boundary for aborted or failed compaction_end', () => {
