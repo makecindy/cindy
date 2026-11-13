@@ -318,7 +318,7 @@ function mainGroupContext<V extends { text: string }>(messages: Message[], view:
 }
 /**
  * One turn of a discussion arrangement: the request, the earlier answers on this card and what
- * the requester added meanwhile — never the rest of the group (bot-group-chat.md §7).
+ * the requester added meanwhile. The conversation envelope supplies the request background (§7).
  */
 function discussionTurnBrief(plan: ServerPlan, position: number, history: readonly Message[]) {
   const step = plan.steps[position];
@@ -2966,7 +2966,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // A Thread lane sees only its Thread: the mixed room page carries no Thread structure,
         // so the root and replies are read explicitly, even when they predate the bounded page.
         // Neither the main group nor other Threads are included.
-        const threadRootId = run.plan || digest ? null : source?.threadRootId ?? null;
+        const threadRootId = digest || (plan && plan.kind !== 'talk') ? null : source?.threadRootId ?? null;
         let thread: { root?: Message; replies: Message[]; earlierRepliesOmitted: boolean } | undefined;
         if (threadRootId) {
           const repliesRead = api<Message[]>(`/conversations/${s.room.id}/messages?threadRootId=${id.parse(threadRootId)}&limit=100&before=${contextBefore}`);
@@ -3106,7 +3106,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const fullConversation = digest ? { messages: chronological(history).map(promptMessage) } : thread ? {
         thread: { root: thread.root ? focusMessage(thread.root) : { id: threadRootId, unavailable: true },
           replies: chronological(textHistory).map(focusMessage), earlierRepliesOmitted: thread.earlierRepliesOmitted },
-      } : run.plan?.kind === 'talk' ? {}
+      } : run.plan?.kind === 'talk' ? mainGroupContext(chronological(history.filter(message =>
+        !message.threadRootId && source && BigInt(message.seq) <= BigInt(source.seq))), promptMessage)
         // The shortened main-group context belongs to single-speaker servers; older ones keep the full projection.
         : singleSpeaker ? mainGroupContext(chronological(history.filter(message => !message.threadRootId)), promptMessage)
         : { messages: chronological(history.filter(message => !message.threadRootId)).map(promptMessage) };
@@ -3114,7 +3115,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         root: thread.root ? previous.seen.get(thread.root.id) === messageVersion(thread.root)
           ? { id: thread.root.id, retainedInContext: true } : focusMessage(thread.root) : { id: threadRootId, unavailable: true },
         replies: chronological(additions).map(focusMessage), earlierRepliesOmitted: false,
-      } } : run.plan?.kind === 'talk' ? {} : {
+      } } : run.plan?.kind === 'talk' ? fullConversation : {
         messages: chronological(additions.filter(m => !m.threadRootId)).map(mainMessage),
       } : fullConversation;
       // Retain both the bootstrap window and every addition for recovery, including

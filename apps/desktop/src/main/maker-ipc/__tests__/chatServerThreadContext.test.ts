@@ -176,6 +176,28 @@ describe('Chat Server Thread context reaches the Agent input', () => {
   const payload = (message: string) => JSON.parse(message.split('<untrusted-data>\n')[1].split('\n</untrusted-data>')[0]);
   const settle = (local: string, resultText: string) => service.settleLaneTurn({ sessionId: `lane-${local}`, activeInputClientId: null, outcome: 'done', resultText });
 
+  // Regression: automatic talk queues dropped the candidate list before a follow-up.
+  // Unlike existing quote/file tests, inspect each speaker's actual dispatch (unit).
+  it.each([false, true])('keeps the original discussion background for every speaker (thread=%s)', async inThread => {
+    const root = post('选择联网方式');
+    const background = post('候选方案：公网 SSH、VPN、Tailscale、ZeroTier', { by: 0, ...(inThread ? { threadRootId: root.id } : {}) });
+    const other = post('另一话题的私有候选', { threadRootId: uuid(90) });
+    const request = post('你推荐哪个呢', inThread ? { threadRootId: root.id } : {});
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: request.id, request_text: '你推荐哪个呢',
+      steps: bots.map((bot, position) => ({ position, botId: bot.id, botName: bot.name, task: '回答', status: 'running' })) };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    trigger(request, { plan_id: planId }).forEach((execution, position) => { execution.plan_step = position; });
+    await vi.advanceTimersByTimeAsync(2000);
+    for (const bot of bots) {
+      const input = inputs(bot.local)[0];
+      expect(input.message).toContain(background.content[0].text);
+      expect(input.message).not.toContain(other.content[0].text);
+      expect(payload(input.message).currentRequest.text).toBe('你推荐哪个呢');
+      if (inThread) expect(payload(input.message).thread.root.id).toBe(root.id);
+    }
+  });
+
   // Text cursors consume only successful, verified native context. Cover actual
   // service input/history/settlement and the recovery snapshot separately (unit).
   it('sends only new main-group text while keeping the current request and full explicit quote', async () => {

@@ -3263,7 +3263,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(delivery[2]).not.toHaveProperty('continueDiscussion');
     });
 
-    // A queue turn reads only its own card; a division of work (every older plan is kind=work after
+    // A queue turn includes bounded background text but only its own card files; a division of work (every older plan is kind=work after
     // the server migration) keeps the main-group context it had, including chat-only steps without a workspace.
     it.each(['talk', 'work'] as const)('gives a %s step the context of its kind', async (kind) => {
       const planId = '80000000-0000-4000-8000-000000000001';
@@ -3291,7 +3291,7 @@ describe('Chat Server result delivery and refresh', () => {
       const downloaded = fixture.download.mock.calls.map(([, mediaId]) => mediaId);
       if (kind === 'talk') {
         expect(prompt()).toContain('You are turn 2 of 2. Your focus: tests.');
-        expect(prompt()).not.toContain('unrelated main group chatter');
+        expect(prompt()).toContain('unrelated main group chatter');
         expect(downloaded).toEqual([answerFile]);
         // A queue turn only talks: no project folder or worktree, its own queue lane rather than a 分工 lane
         // (an owner-access 分工 lane without a work directory cannot start).
