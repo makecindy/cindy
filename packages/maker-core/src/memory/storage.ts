@@ -382,23 +382,24 @@ export class MemoryStorage {
     }
     const name = normalizeShardName(supplied);
     const key = addressKey(type, name);
-    const matches = (await this.list()).filter(
-      (record) => record.frontmatter.type === type && addressKey(type, record.filename) === key,
-    );
+    // 只读文件名, 不解析正文: 地址由 filename 决定 (#10274 review)
+    const matches = (await fs.readdir(this.dir))
+      .filter((filename) => parseFilename(filename)?.type === type)
+      .filter((filename) => addressKey(type, filename) === key);
     if (matches.length > 1) {
       // 完整文件名 (含 .md) 按字面命中, 否则同 key 无解
       if (/\.md$/i.test(supplied)) {
         const exact = `${name}.md`;
-        const hit = matches.find((record) => record.filename === exact);
-        if (hit) return hit.filename;
+        const hit = matches.find((filename) => filename === exact);
+        if (hit) return hit;
       }
       throw new MemoryError(
         'ambiguous-address',
-        `多个分片都指向 "${key}": ${matches.map((r) => r.filename).join(', ')}; ` +
+        `多个分片都指向 "${key}": ${matches.join(', ')}; ` +
           '请传完整文件名（含 .md），或先重命名其中一个',
       );
     }
-    if (matches.length === 1) return matches[0].filename;
+    if (matches.length === 1) return matches[0];
     return buildFilename(type, name);
   }
 
