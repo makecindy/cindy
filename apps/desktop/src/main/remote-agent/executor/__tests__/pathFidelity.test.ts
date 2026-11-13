@@ -54,6 +54,29 @@ function readBack(result: { content: Array<{ type: string; text?: string }> }): 
 }
 
 describe('remote provider file paths', () => {
+  it.skipIf(process.platform === 'win32')('rejects unmapped Windows absolute paths without writing into the project', async () => {
+    const { workingDir, executor } = setup();
+    const mappedWorkspace = new ExecutorWorkspace({
+      workingDir,
+      aliases: [{ from: 'C:/Agent/workspace', to: workingDir }],
+    });
+    const mappedExecutor = new RemoteExecutor({ workspace: mappedWorkspace, gate: new ExecutorGate(mappedWorkspace, 'full'), rgPath: 'unused' });
+    try {
+      for (const filePath of ['C:\\Agent\\Temp\\claude\\scratchpad\\marker.txt', 'C:/Agent/Temp/claude/scratchpad/marker.txt', '\\\\server\\share\\scratchpad\\marker.txt']) {
+        const result = await executor.callTool('Write', { file_path: filePath, content: 'must not write' });
+        expect(result.isError).toBe(true);
+      }
+      expect(fs.existsSync(path.join(workingDir, 'C:', 'Agent', 'Temp', 'claude', 'scratchpad', 'marker.txt'))).toBe(false);
+      expect((await executor.callTool('Write', { file_path: 'normal.txt', content: 'normal' })).isError).toBeFalsy();
+      expect(fs.readFileSync(path.join(workingDir, 'normal.txt'), 'utf8')).toBe('normal');
+      expect((await mappedExecutor.callTool('Write', { file_path: 'C:/Agent/workspace/mapped.txt', content: 'mapped' })).isError).toBeFalsy();
+      expect(fs.readFileSync(path.join(workingDir, 'mapped.txt'), 'utf8')).toBe('mapped');
+    } finally {
+      await mappedExecutor.close();
+      await executor.close();
+    }
+  });
+
   it.each(['flash-party-retro.git', 'flash-party-retro-v1'])('keeps the sibling folder %s apart from the workspace everywhere', async (sibling) => {
     const { parent, workspace, executor } = setup();
     const real = path.join(parent, sibling, 'fp-devlog', 'v20', '验收报告.html');

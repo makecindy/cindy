@@ -1103,7 +1103,14 @@ export class ExecutorWorkspace {
     const expanded = trimmed === '~' || trimmed.startsWith('~/')
       ? path.join(os.homedir(), trimmed.slice(1))
       : trimmed;
-    return path.resolve(this.mapAlias(baseDir), this.mapAlias(expanded));
+    const mapped = this.mapAlias(expanded);
+    // On POSIX, Node treats an unmapped Windows absolute path as a relative string
+    // (for example `C:/tmp` becomes `<workingDir>/C:/tmp`). Reject it before
+    // path.resolve can turn an agent-host path into a project-local path.
+    if (process.platform !== 'win32' && WINDOWS_PATH.test(mapped)) {
+      throw new ExecutorPathError('Windows absolute paths must be mapped before use');
+    }
+    return path.resolve(this.mapAlias(baseDir), mapped);
   }
 
   /** 真实路径是否落在工作目录或附加目录内(防符号链接与 `..` 借道)。 */
