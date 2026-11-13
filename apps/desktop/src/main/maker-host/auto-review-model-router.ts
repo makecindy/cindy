@@ -8,7 +8,7 @@ import {
   type DedicatedAutoReviewCandidate,
 } from '../utility-model/oneShotCandidates.js';
 import { requestUtilityTextWithinTimeout } from '../utility-model/utilityTextTimeout.js';
-import { parseAutoPermissionReviewDecision } from './auto-permission-reviewer.js';
+import { parseAutoPermissionReviewDecision, type AutoReviewTextFailure } from './auto-permission-reviewer.js';
 
 export const AUTO_REVIEW_CANDIDATE_TIMEOUT_MS = 12_000;
 /**
@@ -107,7 +107,20 @@ function candidateTimeoutFailure(
 function safeFailureReason(result: UtilityTextResult): string {
   if (result.ok) return 'none';
   const failed = result.attempts.find((attempt) => attempt.status === 'failed');
-  return failed?.reason ?? result.reason;
+  return failed?.reason ?? result.attempts[0]?.reason ?? result.reason;
+}
+
+function reviewFailure(result: UtilityTextResult): AutoReviewTextFailure['failure'] {
+  if (result.ok) return result.text.trim() ? 'malformed' : 'empty_response';
+  const failed = result.attempts.find((attempt) => attempt.status === 'failed');
+  if (failed?.reason === 'http_error') return 'http_error';
+  if (failed?.reason === 'timeout' || result.reason === 'timeout') return 'timeout';
+  if (failed?.reason === 'empty_response' || result.reason === 'empty_response') return 'empty_response';
+  if (failed || result.attempts.some((attempt) => attempt.reason === 'auth_probe_failed')) return 'request_failed';
+  // An empty attempt list can also mean a captured account/configuration changed.
+  // Only positive local availability evidence can claim that there is no model.
+  return result.reason === 'no_candidate' && result.attempts.length > 0
+    ? 'no_available_model' : 'configuration_unavailable';
 }
 
 interface PendingCandidateAttempt {
@@ -130,7 +143,7 @@ interface PendingCandidateAttempt {
  */
 export function createAutoReviewModelRouter(
   deps: AutoReviewModelRouterDeps,
-): (prompt: string, signal?: AbortSignal) => Promise<string | null> {
+): (prompt: string, signal?: AbortSignal) => Promise<string | AutoReviewTextFailure | null> {
   const candidates = deps.candidates ?? DEDICATED_AUTO_REVIEW_CANDIDATES;
   const requestCandidate = deps.requestCandidate ?? requestDedicatedAutoReviewCandidateText;
   const parseDecision = deps.parseDecision ?? parseAutoPermissionReviewDecision;
@@ -139,10 +152,20 @@ export function createAutoReviewModelRouter(
 
   return async (prompt, parentSignal) => {
     const startedAt = now();
+    let failure: AutoReviewTextFailure['failure'] = 'no_available_model';
+    const recordFailure = (result: UtilityTextResult) => {
+      const next = reviewFailure(result);
+      // Later skipped candidates must not erase an actual request/output failure.
+      if (next !== 'no_available_model' || failure === 'no_available_model') failure = next;
+    };
+    let auxiliaryState = 'not_configured';
     let auxiliaryFallback: AutoReviewAuxiliaryFallback | undefined;
     try {
       auxiliaryFallback = deps.createAuxiliaryFallback?.();
+      if (auxiliaryFallback) auxiliaryState = 'configured';
     } catch {
+      auxiliaryState = 'configuration_unavailable';
+      failure = 'configuration_unavailable';
       deps.logger.warn('auto-review auxiliary fallback unavailable', { reason: 'configuration_unavailable' });
     }
     const deadlineAt = startedAt + AUTO_REVIEW_CHAIN_TIMEOUT_MS;
@@ -159,7 +182,7 @@ export function createAutoReviewModelRouter(
       while (queue.length > 0 && !controller.signal.aborted) {
         const { candidate, attempt } = queue.shift()!;
         const remainingMs = deadlineAt - now();
-        if (remainingMs <= 0) break;
+        if (remainingMs <= 0) { failure = 'timeout'; break; }
         // A retry always gets a full candidate timeout; a truncated one mostly just delays
         // the confirmation card.
         if (attempt > 1 && remainingMs < AUTO_REVIEW_CANDIDATE_TIMEOUT_MS) {
@@ -204,6 +227,7 @@ export function createAutoReviewModelRouter(
             });
             return JSON.stringify(decision);
           }
+          recordFailure(result);
           deps.logger.warn('auto-review model candidate returned malformed decision', {
             candidateId: candidate.id,
             providerId: candidate.providerId,
@@ -213,6 +237,7 @@ export function createAutoReviewModelRouter(
           });
           continue;
         }
+        recordFailure(result);
 
         // Queued work keeps its order: a retry may only jump ahead when the budget still covers
         // one full timeout for every pending attempt, including earlier deferred retries.
@@ -267,10 +292,12 @@ export function createAutoReviewModelRouter(
               });
               return JSON.stringify(decision);
             }
+            recordFailure(result);
             deps.logger.warn('auto-review auxiliary fallback failed', {
               reason: result.ok ? 'malformed_decision' : safeFailureReason(result),
             });
           } catch {
+            failure = 'request_failed';
             deps.logger.warn('auto-review auxiliary fallback failed', { reason: 'request_failed' });
           }
         }
@@ -281,10 +308,13 @@ export function createAutoReviewModelRouter(
     }
 
     deps.logger.warn('auto-review model chain exhausted', {
+      reason: parentSignal?.aborted ? 'cancelled' : controller.signal.aborted ? 'timeout' : failure,
+      auxiliaryFallback: auxiliaryState,
       candidates: candidates.length,
       aborted: controller.signal.aborted,
       durationMs: now() - startedAt,
     });
-    return null;
+    if (parentSignal?.aborted) return null;
+    return { failure: controller.signal.aborted ? 'timeout' : failure };
   };
 }

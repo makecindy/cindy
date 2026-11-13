@@ -680,6 +680,7 @@
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方組中諸機今皆不能行此差事：或皆離線、已暫停分配、方冷卻，或無此模型。可於機上此供方之「遠端與分享」頁察組內諸機。",
     "REMOTE_DAEMON_CLOSED": "遠端連線中斷，或方更新。此輪已畢，請重遣。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端差事不能存取本地之卷或圖附件。請徑貼其內容。",
+    "AUTO_REVIEW_NO_AVAILABLE_MODEL": "無可用之自動審批模型。請於執行 Agent 之電腦，在「模型供應商」啟用並連接審批供應商，或於設定自訂「輔助模型」。待審之舉仍由君確認。",
     "AUTO_REVIEW_UNAVAILABLE": "自動審批暫不能決斷，須審批之操作已改由君確認。欲少受打擾，可將差事切至「完全存取」，然風險更高。",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動審批暫不能決斷，須審批之操作已改由君確認。個人微信不能用「完全存取」，請徑確認此次操作。",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動審批未竟，確認亦未送達或未被點按。此次拒絕非君所點。",

@@ -12837,6 +12837,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "无可用之自动审批模型。请于运行 Agent 之电脑，在「模型供应商」启用并连接审批供应商，或于设置自定「辅助模型」。待审之举仍由君确认。",
           "autoReviewUnavailable": "自动审批暂不能断，须审批之操作已改由君确认。欲少受扰，可将差事切至「完全访问」，然风险更高。",
           "autoReviewUnavailableWechat": "自动审批暂不能断，须审批之操作已改由君确认。个人微信不可用「完全访问」，请径确认此举。",
           "autoReviewConfirmUndelivered": "自动审批未竟，确认或未送达，或无人点选。此番之拒，非君所点。",
@@ -15470,6 +15471,7 @@
       "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
       "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已终，请再遣。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程差事不能取此机之卷／图附件。请径贴其内容。",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "无可用之自动审批模型。请于运行 Agent 之电脑，在「模型供应商」启用并连接审批供应商，或于设置自定「辅助模型」。待审之举仍由君确认。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂不能断，须审批之操作已改由君确认。欲少受扰，可将差事切至「完全访问」，然风险更高。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂不能断，须审批之操作已改由君确认。个人微信不可用「完全访问」，请径确认此举。",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批未毕，确认亦未送达或未被点。此番拒绝非君所点。",

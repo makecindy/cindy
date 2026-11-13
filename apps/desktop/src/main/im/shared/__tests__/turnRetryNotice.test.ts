@@ -22,6 +22,13 @@ beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
 
 describe('turnRetryNotice', () => {
+  // #10385, unit: both channel styles must expose recovery, never the provider's raw details.
+  it.each(['telegram', 'wechat'])('localizes missing review models for %s without widening permissions', (channel) => {
+    const text = turnRetryNotice({ message: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] PRIVATE_EXCEPTION' }, { channel });
+    expect(text).toContain('模型供应商');
+    expect(text).toContain('辅助模型');
+    expect(text).not.toMatch(/PRIVATE_EXCEPTION|完全访问/);
+  });
   it('终态 429 外层重投 → 渠道侧限流进度', () => {
     expect(
       turnRetryNotice({
