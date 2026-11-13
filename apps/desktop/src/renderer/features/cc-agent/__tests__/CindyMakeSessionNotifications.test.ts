@@ -139,6 +139,7 @@ function dispatcher(local: NotificationSession[], remote: NotificationSession[] 
     formatOrcaWorkerNotificationTitle,
     findOrcaLeadSessionIdForWorker: leadOfWorker,
     findOrcaWorkerReportQuestion: workerReportQuestion,
+    findOrcaWorkerLatestReportState: () => null,
     t: () => 'Unnamed task',
   };
   return new Function(...Object.keys(bindings), emitted)(...Object.values(bindings)) as (
