@@ -56,6 +56,7 @@ import { useTranslation } from 'react-i18next';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { createFileTransferProgressValues } from '@/lib/fileTransferProgress';
 
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import {
   acquireFindInPage,
@@ -217,6 +218,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // 全部 per-file:relPath 变化时通过下方 effect 一次性清空,避免上一文件的 dirty
   // 错带到新文件里。
   const [editMode, setEditMode] = useState(false);
+  const [svgSource, setSvgSource] = useState(false);
+  const [svgDraft, setSvgDraft] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -312,6 +315,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
 
   useEffect(() => {
     setEditMode(false);
+    setSvgSource(false);
+    setSvgDraft(null);
     setDirty(false);
     setSaving(false);
     setSaveError(null);
@@ -332,6 +337,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     lastInitRelPathRef.current = null;
   }, [relPath, autosave]);
 
+  const isSvg = !!relPath && /\.svg$/i.test(relPath) && !isDrawioPath(relPath);
+  const showSvgPreview = isSvg && !svgSource;
   const isText = content.kind === 'text';
   const isTruncated = content.kind === 'text' && content.truncated;
   // 可编辑条件:文本 + 未截断 + 有 relPath。Truncated 文件保存会把后半段截掉,
@@ -558,6 +565,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     'find-in-page',
     () => {
       if (mermaidModalOpen() || getTextPreviewHost()) return false;
+      setSvgSource(true);
       setBarVisible(true);
       queueMicrotask(() => {
         searchInputRef.current?.focus();
@@ -713,6 +721,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     if (!relPath || content.kind !== 'text' || !jumpQuery) return;
     const jumpKey = `${relPath}|${jumpQuery}|${jumpLine ?? ''}`;
     if (lastJumpKeyRef.current === jumpKey) return;
+    setSvgSource(true);
 
     // 阶段 1: 把 query 灌进去, 等 runner 跑完。setSearchQuery 同值是 no-op
     // (React 优化), 只在真不同时才 setState。
@@ -988,6 +997,34 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         ) : null}
       </div>
 
+      {isSvg && !content.truncated && (
+        <div className="flex shrink-0 gap-2 px-4 py-2">
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={() => {
+              closeSearch();
+              setSvgSource((value) => !value);
+            }}
+          >
+            {t(svgSource ? 'attachmentPreview.rendered' : 'attachmentPreview.source')}
+          </Button>
+        </div>
+      )}
+      {showSvgPreview && !content.truncated && (
+        <div className="min-h-0 flex-1">
+          <ImagePreview
+            workdir={workdir}
+            relPath={relPath}
+            size={content.size}
+            mtimeMs={content.mtimeMs}
+            sessionId={sessionId}
+            remote={!!remoteHostId || !!deviceId}
+            src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(dirty && svgDraft !== null ? svgDraft : content.content)}`}
+          />
+        </div>
+      )}
+
       {/* 保存错误 toast —— 出现在按钮组下方,主动重试或切文件后清掉。 */}
       {saveError && (
         <ErrorNotice
@@ -1011,7 +1048,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         // 注意:不 remount 时 initialValue 只在首次 mount 生效 —— 这正是想要
         // 的:用户编辑期间外部 onSaved 回调触发 content 刷新不会把编辑器内容
         // 冲掉。文件切换(relPath 变)时 key 变化仍会 remount,无影响。
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className={cn('flex min-h-0 flex-1 flex-col', showSvgPreview && !content.truncated && 'hidden')}>
           {content.truncated && (
             // editContainerCls 现在不带 px(为了让 cm-scroller 拉满到右边沿),
             // 这里 banner 自己补 px-[30px] 让左右内边距和 .cm-content 对齐。
@@ -1068,6 +1105,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
                       // setBaseline 时一次性完成,这里每键只付一次原生比较。
                       const hasChange = val !== initialContentNormalizedRef.current;
                       setDirty(hasChange);
+                      if (isSvg) setSvgDraft(val);
                       if (isMarkdown) {
                         if (hasChange) autosave.schedule();
                         else autosave.cancel();
@@ -1348,6 +1386,19 @@ function CachedFileBody({
         </div>
         <OpenInSystemActions absPath={cachePath} className="shrink-0" />
       </div>
+    );
+  }
+  if (text !== null && /\.svg$/i.test(stat.relPath) && !isDrawioPath(stat.relPath)) {
+    return (
+      <FileBodyView
+        workdir={cacheDir}
+        relPath={cacheBase}
+        allowEdit={false}
+        content={{
+          kind: 'text', relPath: cacheBase, content: text,
+          size: stat.size, mtimeMs: stat.mtimeMs, truncated: textTruncated,
+        }}
+      />
     );
   }
   if (text !== null) {
