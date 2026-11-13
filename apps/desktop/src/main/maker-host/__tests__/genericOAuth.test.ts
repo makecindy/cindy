@@ -321,6 +321,29 @@ describe('manual model refresh for saved OAuth providers', () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  // #10388 Greptile empty-catalog finding, unit: real saved-OAuth wrapper.
+  // Prior empty-list tests bypassed OAuth. A prefixed/query discovery endpoint
+  // cannot use Magpie hello detection; only complete background emptiness may
+  // clear old sources. Manual import and malformed/incomplete results still fail.
+  it.each([
+    { recovery: true, body: { data: [] }, ok: true },
+    { recovery: false, body: { data: [] }, ok: false },
+    { recovery: true, body: { data: [{}] }, ok: false },
+    { recovery: true, body: { data: [], has_more: true }, ok: false },
+  ])('handles OAuth empty catalog recovery=$recovery body=$body', async ({ recovery, body, ok }) => {
+    seedBlob('empty-oauth', { access_token: 'fake-empty-access' });
+    const provider = savedProvider('nous');
+    provider.routing.pi!.upstream = 'https://gateway.example/prefix/v1';
+    provider.routing.pi!.modelsUrl = 'https://gateway.example/prefix/v1/models?tenant=test';
+    const fetcher = vi.fn(async (_url: RequestInfo | URL) => new Response(JSON.stringify(body)));
+    const result = await fetchSavedOAuthProviderModels(provider, 'pi', 'empty-oauth', () => true, fetcher,
+      undefined, { sourceRecovery: recovery, requireComplete: recovery });
+    expect(result.ok).toBe(ok);
+    if (ok) expect(result.models).toEqual([]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][0]).toBe(provider.routing.pi!.modelsUrl);
+  });
+
   // #9882, unit: the real OAuth wrapper must preserve a late failure deadline
   // without accepting stale model data. Revalidator mocks missed this wrapper.
   // Minimal input: generation expires during a 429/503 read; manual reads and

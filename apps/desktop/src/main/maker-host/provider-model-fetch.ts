@@ -193,6 +193,9 @@ export async function fetchSavedOAuthProviderModels(
     headers,
     redirect: 'error',
     ...options,
+    // Complete empty recovery catalogs authorize clearing old display sources.
+    // Ordinary manual imports keep their conservative empty-list policy.
+    allowEmpty: options.sourceRecovery === true,
   }, async (url, init) => {
     // Pagination and the separate speech catalog may run after the first reply.
     // Revoke the captured credentials before another request if ownership changed.
