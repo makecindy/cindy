@@ -50,6 +50,8 @@ import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { createHostAutoReview } from './auto-review.js';
 import { createClaudeAutoPermissionFallbackCoordinator, setClaudeAutoClassifierUnavailableListener } from '../../../desktop/src/main/maker-host/claude-auto-permission-fallback.js';
+import { registerAgentProcess, registerCodexProcessRole } from '../../../desktop/src/main/process-monitor/codex-process-registry.js';
+import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../../../desktop/src/main/logger.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -565,6 +567,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     capabilityAdditions: availableModels('claude-code'),
     // The turn change record the desktop keeps for Claude and Pi (turn-change-set/store.ts).
     turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
+    // As the desktop: the process registry (read by the quit-time Codex reaper and, from M2, the
+    // process monitor) and each session's cc-debug raw file under the profile's logs directory.
+    registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
+      registerAgentProcess(pid, kind, role, sessionId),
+    resolveCcDebugFile: resolveSessionCcDebugFile,
+    trackCcDebugFile: trackSessionCcDebugFile,
     ...claudeModelResolvers,
     ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
@@ -585,6 +593,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         runtimeConfig: runtimeConfigs.buildCodexRuntimeConfig(),
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
+        // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
+        registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
@@ -615,6 +625,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         capabilityAdditions: availableModels('pi'),
         ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
         turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
+        registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
+          registerAgentProcess(pid, kind, role, sessionId),
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
         // Only for Pi models the vision bridge targets (layer C), as on the desktop.

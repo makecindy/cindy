@@ -69,7 +69,8 @@ import { removeSessionModelInterface } from '../../desktop/src/main/maker-host/s
 import { reconcileSavepointRefsForDeletedSessions } from '../../desktop/src/main/git-snapshot/savepointCleanup.js';
 import { createHostMcpRuntime } from './agent/mcp-runtime.js';
 import { createHostAgentAuth } from './agent/auth-service.js';
-import { createLogger, initLogger } from '../../desktop/src/main/logger.js';
+import { createLogger, initLogger, setCcDebugTailingEnabled } from '../../desktop/src/main/logger.js';
+import { reapCodexToolTreesSync } from '../../desktop/src/main/codex-tool-tree-reaper.js';
 import { createHostIpcRoute } from './ipc-route.mjs';
 import { createHostIpcBindings } from './ipc-bindings/index.js';
 import { projectHostAuthState } from './auth-state.js';
@@ -228,6 +229,9 @@ mkdirSync(profileDir, { recursive: true, mode: 0o700 });
 const serviceLease = acquireHostServiceLease(profileDir);
 if (!serviceLease.held) throw new Error(`Cindy Host profile is busy (${serviceLease.reason}). Use status or stop for this profile.`);
 initLogger({ userDataDir: profileDir, isPackaged: true, logDir: path.join(profileDir, 'logs') });
+// As the desktop at startup (bootstrap-electron.ts): the tailer that merges each session's
+// cc-debug raw file into its NDJSON follows XDT_CC_DEBUG_NET.
+setCcDebugTailingEnabled(process.env.XDT_CC_DEBUG_NET === '1');
 const instanceId = randomUUID();
 let removeEndpoint: (() => void) | undefined;
 const releaseService = () => {
@@ -1729,6 +1733,11 @@ const stop = () => {
   if (refreshTimer) clearInterval(refreshTimer);
   const requestsDrained = server.stopAccepting();
   const releaseOwnerBoundary = beginAppSessionBoundary();
+  // As the desktop's quit ('reap-codex-tool-trees', a sync step before the Maker shutdown):
+  // once the app-servers close, the parent chain proving these trees are the Host's is gone.
+  // Only on this exit; an owner change or a window handoff leaves the Host running.
+  try { reapCodexToolTreesSync(); }
+  catch (error) { console.error('cindy-host codex tool tree reap failed:', error instanceof Error ? error.message : String(error)); }
   void (async () => {
     try {
       // Always drain every in-flight writer before releasing the profile lease,
