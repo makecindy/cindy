@@ -1856,8 +1856,8 @@ interface ElectronAPI {
      * status 与 getSystemPermissions 的各项同为 string 形状（granted / denied / …）。
      */
     requestInputMonitoringPermission: () => Promise<{ ok: true; status: string }>;
-    muteSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
-    restoreSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
+    muteSystemAudio: (payload?: { recordingId?: string }) => Promise<{ ok: true } | { ok: false; error: string }>;
+    restoreSystemAudio: (payload?: { recordingId?: string }) => Promise<{ ok: true } | { ok: false; error: string }>;
     testConnection: () => Promise<VoiceInputConnectionTestResult>;
     getReadiness: () => Promise<{
       ok: boolean;
@@ -1915,6 +1915,7 @@ interface ElectronAPI {
     reloadModelSelection: () => Promise<VoiceInputModelSelectionResultData>;
     openSettings: (tab: 'voice-input' | 'providers') => Promise<{ ok: true }>;
     start: (params?: {
+      recordingId?: string;
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;

@@ -1970,10 +1970,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 不一致，收紧要整条一起动，超出本次改动范围。
     requestInputMonitoringPermission: (): Promise<{ ok: true; status: string }> =>
       ipcRenderer.invoke('voice-input:request-input-monitoring-permission'),
-    muteSystemAudio: (): Promise<{ ok: true } | { ok: false; error: string }> =>
-      ipcRenderer.invoke('voice-input:mute-system-audio'),
-    restoreSystemAudio: (): Promise<{ ok: true } | { ok: false; error: string }> =>
-      ipcRenderer.invoke('voice-input:restore-system-audio'),
+    muteSystemAudio: (payload?: { recordingId?: string }): Promise<{ ok: true } | { ok: false; error: string }> =>
+      payload === undefined ? ipcRenderer.invoke('voice-input:mute-system-audio')
+        : ipcRenderer.invoke('voice-input:mute-system-audio', payload),
+    restoreSystemAudio: (payload?: { recordingId?: string }): Promise<{ ok: true } | { ok: false; error: string }> =>
+      payload === undefined ? ipcRenderer.invoke('voice-input:restore-system-audio')
+        : ipcRenderer.invoke('voice-input:restore-system-audio', payload),
     testConnection: (): Promise<VoiceInputConnectionTestResult> =>
       ipcRenderer.invoke(VOICE_INPUT_TEST_CONNECTION_CHANNEL),
     getReadiness: (): Promise<VoiceInputReadinessWire> =>
@@ -1991,6 +1993,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openSettings: (tab: 'voice-input' | 'providers'): Promise<{ ok: true }> =>
       ipcRenderer.invoke('voice-input:open-settings', tab),
     start: (params?: {
+      recordingId?: string;
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;

@@ -275,20 +275,31 @@ export class MemoryStorage {
    * 不让两次替换同一文件的 rename 重叠 (Windows 上重叠的 rename 报 EPERM)。
    */
   async init(absWorkdir: string): Promise<void> {
+    return this.mutate(() => this.initLocked(absWorkdir));
+  }
+
+  private async initLocked(absWorkdir: string): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
     const metaPath = path.join(this.dir, META_FILENAME);
-    await this.mutate(async () => {
-      if (await fs.access(metaPath).then(() => true, () => false)) return;
-      // 首次打开副作用也 fail-closed (review #2388 Codex 16th P1): 异步初始化
-      // 期间边界发生, 不得在旧 owner 下创建 meta.json。
-      this.beforeFileWrite?.();
-      const meta: MemoryStorageMeta = {
-        absPath: absWorkdir,
-        createdAt: new Date().toISOString(),
-        lastUsedAt: new Date().toISOString(),
-      };
-      await writeFileNoFollow(metaPath, JSON.stringify(meta, null, 2), this.beforeFileWrite);
-    });
+    if (await fs.access(metaPath).then(() => true, () => false)) return;
+    // 首次打开副作用也 fail-closed (review #2388 Codex 16th P1): 异步初始化
+    // 期间边界发生, 不得在旧 owner 下创建 meta.json。
+    this.beforeFileWrite?.();
+    const meta: MemoryStorageMeta = {
+      absPath: absWorkdir,
+      createdAt: new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+    };
+    await writeFileNoFollow(metaPath, JSON.stringify(meta, null, 2), this.beforeFileWrite);
+  }
+
+  /** Keep metadata, derived indexes and FTS initialization in the mutation queue.
+   * The supplied initializer already owns that queue: never enqueue it again. */
+  async serializeInitialization(run: (initializeStorage: (absWorkdir: string) => Promise<void>) => Promise<void>): Promise<void> {
+    return this.mutate(() => run(async (absWorkdir) => {
+      await this.initLocked(absWorkdir);
+      await this.rebuildIndexLocked();
+    }));
   }
 
   /**
