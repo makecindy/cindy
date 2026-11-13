@@ -532,6 +532,8 @@ export interface BotGroupSpeaker {
   botId: string;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
+  /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
+  timelineAt?: number;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
