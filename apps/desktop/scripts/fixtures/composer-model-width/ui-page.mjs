@@ -36,6 +36,15 @@ export default {
     'plugin-hidden': { about: 'Hidden plugin actions do not reserve empty toolbar space', data: { showRuntimeControls: true, pluginToolbar: 1, pluginHidden: true, modelName: 'GPT-6 Astra Extended Context' } },
     'plugin-hidden-narrow': { about: 'Hidden plugin actions do not obstruct a narrow composer', viewport: { width: 400, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 1, pluginHidden: true, modelName: 'GPT-6 Astra Extended Context' } },
     'plugin-recording': { about: 'Recording and plugin actions remain reachable together', viewport: { width: 360, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 2, recording: true, modelName: 'GPT-6 Astra Extended Context' } },
+    'plugin-recording-stream-compact': { about: 'Recording during a reply keeps every control reachable at the compact boundary', viewport: { width: 468, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 3, recording: true, streaming: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
+    'plugin-recording-stream-narrow': { about: 'Recording during a reply keeps every control reachable at the narrow boundary', viewport: { width: 568, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 3, recording: true, streaming: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
+    'plugin-recording-stream-wide': { about: 'Recording during a reply keeps every control reachable at the wide boundary', viewport: { width: 648, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 3, recording: true, streaming: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
+    'plugin-typed-stream-compact': { about: 'Typing during a reply keeps the send and stop controls reachable', viewport: { width: 468, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 3, streaming: true, typed: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
+    'plugin-typed-stream-dense': { about: 'Typing during a reply remains usable across the dense boundary', viewport: { width: 496, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 3, streaming: true, typed: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
+    'plugin-recording-compact': { about: 'Recording without a running reply keeps one plugin action reachable', viewport: { width: 468, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 1, recording: true, modelName: 'GPT-6 Astra Extended Context' } },
+    'plugin-hidden-recording-stream': { about: 'Hidden plugin actions do not obstruct recording during a reply', viewport: { width: 468, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 1, pluginHidden: true, recording: true, streaming: true, modelName: 'GPT-6 Astra Extended Context' } },
+    'no-plugin-recording-stream': { about: 'Recording during a reply remains usable without plugins', viewport: { width: 468, height: 400 }, data: { showRuntimeControls: true, recording: true, streaming: true, modelName: 'GPT-6 Astra Extended Context' } },
+    'plugin-loading-narrow': { about: 'Loading a model keeps action positions stable beside a plugin', viewport: { width: 360, height: 400 }, data: { showRuntimeControls: true, pluginToolbar: 1, modelLoading: true, modelName: 'GPT-6 Astra Extended Context' } },
     'plugin-no-model': { about: 'Plugin actions remain reachable when runtime controls are hidden', viewport: { width: 300, height: 400 }, data: { pluginToolbar: 2 } },
     tight: { about: 'All controls remain reachable in an extremely narrow composer', viewport: { width: 300, height: 400 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra Extended Context' } },
     recording: { about: 'Expanded recording controls do not hide neighbouring actions', viewport: { width: 360, height: 400 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra Extended Context' } },
@@ -62,6 +71,21 @@ export default {
     }
     const trigger = slot.locator('button').first();
     if (ui.data.showRuntimeControls) await trigger.getByText(ui.data.modelName, { exact: true }).waitFor();
+    if (ui.data.streaming) await page.getByTestId('running').click();
+    if (ui.data.typed) await page.locator('[contenteditable="true"]').fill('Queued message');
+    if (ui.case === 'recording' || ui.data.recording) {
+      await page.locator('button[aria-pressed]').last().click();
+      await page.locator('button[aria-pressed="true"]').waitFor();
+      await ui.capture('recording');
+    }
+    if (ui.data.streaming && (ui.data.recording || ui.data.typed)) {
+      const stop = page.getByRole('button', { name: await ui.t('newChat.sendButton.stop'), exact: true });
+      const send = page.getByRole('button', { name: await ui.t('newChat.sendButton.queue'), exact: true });
+      await stop.waitFor();
+      await send.waitFor();
+      assert.equal(await stop.count(), 1);
+      assert.equal(await send.count(), 1);
+    }
     if (ui.data.pluginHidden) {
       await page.getByRole('button', { name: 'Plugin 1', exact: true }).waitFor({ state: 'detached' });
       const width = await toolbar.locator(':scope > .overflow-x-auto').evaluate((element) => element.getBoundingClientRect().width);
@@ -84,42 +108,48 @@ export default {
         assert.equal(await page.evaluate(() => window.__pluginActions.at(-1)), `action-${index - 1}`);
       }
     }
-    if (ui.case === 'recording' || ui.data.recording) {
-      await page.locator('button[aria-pressed]').last().click();
-      await page.locator('button[aria-pressed="true"]').waitFor();
-      await ui.capture('recording');
-    }
-    const bounds = await toolbar.evaluate((root) => {
-      const rect = (element) => {
-        const { left, right, top, bottom, width, height } = element.getBoundingClientRect();
-        return { left, right, top, bottom, width, height };
-      };
-      const card = root.closest('[data-split-group-composer-drop-target]');
-      return { card: rect(card), buttons: [...root.querySelectorAll('button')]
-        .filter((button) => button.getClientRects().length)
-        .map((button) => {
-          const bounds = rect(button);
-          const scrollport = button.closest('.overflow-x-auto');
-          if (scrollport && root.contains(scrollport)) {
-            const clip = rect(scrollport);
-            bounds.left = Math.max(bounds.left, clip.left);
-            bounds.right = Math.min(bounds.right, clip.right);
-            bounds.width = Math.max(0, bounds.right - bounds.left);
-          }
-          return { label: button.getAttribute('aria-label'), ...bounds };
-        }).filter((button) => button.width > 0) };
-    });
-    assert.ok(bounds.buttons.length >= (ui.data.showRuntimeControls ? 5 : 4), 'the composer controls must be present');
-    for (const button of bounds.buttons) {
-      assert.ok(button.width > 0 && button.height > 0, `empty control: ${button.label}`);
-      assert.ok(button.left >= bounds.card.left - 1 && button.right <= bounds.card.right + 1, `control outside composer: ${button.label}`);
-    }
-    for (const [index, left] of bounds.buttons.entries()) {
-      for (const right of bounds.buttons.slice(index + 1)) {
-        const overlapX = Math.min(left.right, right.right) - Math.max(left.left, right.left);
-        const overlapY = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top);
-        assert.ok(overlapX <= 1 || overlapY <= 1, `overlapping controls: ${left.label} / ${right.label}`);
+    const assertToolbarBounds = async () => {
+      const bounds = await toolbar.evaluate((root) => {
+        const rect = (element) => {
+          const { left, right, top, bottom, width, height } = element.getBoundingClientRect();
+          return { left, right, top, bottom, width, height };
+        };
+        const card = root.closest('[data-split-group-composer-drop-target]');
+        return { card: rect(card), buttons: [...root.querySelectorAll('button')]
+          .filter((button) => button.getClientRects().length)
+          .map((button) => {
+            const bounds = rect(button);
+            const scrollport = button.closest('.overflow-x-auto');
+            if (scrollport && root.contains(scrollport)) {
+              const clip = rect(scrollport);
+              bounds.left = Math.max(bounds.left, clip.left);
+              bounds.right = Math.min(bounds.right, clip.right);
+              bounds.width = Math.max(0, bounds.right - bounds.left);
+            }
+            return { label: button.getAttribute('aria-label'), ...bounds };
+          }).filter((button) => button.width > 0) };
+      });
+      assert.ok(bounds.buttons.length >= (ui.data.showRuntimeControls ? 5 : 4), 'the composer controls must be present');
+      for (const button of bounds.buttons) {
+        assert.ok(button.width > 0 && button.height > 0, `empty control: ${button.label}`);
+        assert.ok(button.left >= bounds.card.left - 1 && button.right <= bounds.card.right + 1, `control outside composer: ${button.label}`);
       }
+      for (const [index, left] of bounds.buttons.entries()) {
+        for (const right of bounds.buttons.slice(index + 1)) {
+          const overlapX = Math.min(left.right, right.right) - Math.max(left.left, right.left);
+          const overlapY = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top);
+          assert.ok(overlapX <= 1 || overlapY <= 1, `overlapping controls: ${left.label} / ${right.label}`);
+        }
+      }
+    };
+    await assertToolbarBounds();
+    if (ui.case === 'plugin-recording-stream-compact') {
+      await page.getByRole('button', { name: await ui.t('newChat.chatInput.voiceInput.stop'), exact: true }).click();
+      await page.getByRole('button', { name: await ui.t('newChat.chatInput.voiceInput.start'), exact: true }).waitFor();
+      await assertToolbarBounds();
+      await page.getByTestId('running').click();
+      await page.getByRole('button', { name: await ui.t('newChat.sendButton.send'), exact: true }).waitFor();
+      await assertToolbarBounds();
     }
     if (ui.case === 'default' || ui.case === 'plugin-hidden') {
       const label = await trigger.getByText(ui.data.modelName, { exact: true }).evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }));

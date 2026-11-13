@@ -9485,9 +9485,11 @@ export function ChatInput({
     isCreateAgentVariant && (toolbarWidthMeasured ? autoNarrowToolbar : narrowToolbar);
   const useUltraCompactToolbar =
     useNarrowToolbar && (!toolbarWidthMeasured || toolbarWidthMode === 'ultra' || toolbarWidthMode === 'tight');
-  // Keep recording and plugin controls reachable in an already narrow pane.
+  // A busy voice or secondary stop action can expand the fixed controls at any
+  // width. Let the plugin lane and the other controls wrap before they overlap.
   const allowToolbarWrap = toolbarWidthMode === 'tight' ||
-    (useUltraCompactToolbar && (voiceInput.isListening || hasPluginToolbar));
+    (useUltraCompactToolbar && voiceInput.isListening) ||
+    (hasPluginToolbar && (useUltraCompactToolbar || voiceBusyOnCurrentComposer || showSecondaryStop));
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
@@ -10085,7 +10087,7 @@ export function ChatInput({
                 className={cn(
                   allowToolbarWrap
                     ? cn('flex max-w-full flex-1 flex-wrap items-center justify-end gap-1',
-                        hasPluginToolbar ? (hideRuntimeControls ? 'min-w-[30px]' : 'min-w-[72px]') : 'min-w-0')
+                        hasPluginToolbar ? 'min-w-min' : 'min-w-0')
                     : useNarrowToolbar
                     ? 'flex min-w-0 shrink items-center justify-end gap-1'
                     : effectiveCompactToolbar
@@ -10108,10 +10110,14 @@ export function ChatInput({
                   data-session-model-slot={sessionId ? '' : undefined}
                   // Reserve space while the model is unknown, keeping the toolbar height and
                   // right-aligned actions stable. Once ready, the model takes its natural width
-                  // and shrinks only when its neighbours need the space.
-                  className={sessionId
-                    ? cn('h-[30px] min-w-[72px] max-w-full', allowToolbarWrap ? 'flex-[1_1_72px]' : 'shrink', sessionModelLoading && 'w-[148px]')
-                    : cn('min-w-[72px] max-w-full', allowToolbarWrap ? 'flex-[1_1_72px]' : 'shrink')}
+                  // and shrinks only when its neighbours need the space. With plugins, the
+                  // width bounds the group's intrinsic minimum while flex can still grow it.
+                  className={cn(
+                    'min-w-[72px] max-w-full', sessionId && 'h-[30px]',
+                    allowToolbarWrap ? 'flex-[1_1_72px]' : 'shrink',
+                    allowToolbarWrap && hasPluginToolbar && 'w-[72px]',
+                    sessionId && sessionModelLoading && 'w-[148px]',
+                  )}
                 >
                   {!sessionModelLoading && <ModelSelector
                     openRequest={modelPickerRequest}
