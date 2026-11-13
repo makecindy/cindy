@@ -897,6 +897,8 @@ export class DeviceLinkClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStableTimer: ReturnType<typeof setTimeout> | null = null;
   private congestionStableTimer: ReturnType<typeof setTimeout> | null = null;
+  // Internal request waiters only: connection status observers keep their deduped contract.
+  private readonly handshakeWaiters = new Set<() => void>();
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   /** 连续握手超时次数;任一次 hello-ack 上线即复位(驱动握手窗口自适应放宽)。 */
   private handshakeTimeoutStreak = 0;
@@ -1288,7 +1290,7 @@ export class DeviceLinkClient {
    * 已 stopped 时不自动拉起连接
    * (start/stop 仍由宿主生命周期掌管),直接快速失败让上层感知。
    */
-  waitUntilOnline(timeoutMs?: number): Promise<void> {
+  waitUntilOnline(timeoutMs?: number, options?: { waitForHandshake?: boolean }): Promise<void> {
     if (this.status === 'online') return Promise.resolve();
     if (this.stopped) {
       return Promise.reject(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
@@ -1296,7 +1298,16 @@ export class DeviceLinkClient {
     // Only un-park a pending retry; concurrent waiters keep the in-flight handshake.
     if (this.reconnectTimer) this.connectNow('wait-until-online');
 
-    const timeout = timeoutMs ?? this.timing.requestTimeoutMs;
+    const requestedTimeout = timeoutMs ?? this.timing.requestTimeoutMs;
+    const startedAt = this.monotonicNow();
+    let attemptEnded = false;
+    const attemptEpoch = this.connEpoch;
+    // Only an active socket handshake extends the read's wait, not token fetch or
+    // backoff. Recheck at expiry because TCP/TLS open starts a new hello-ack window.
+    const handshakeRemaining = () => options?.waitForHandshake && !attemptEnded && this.handshakeTimer
+      && !this.reconnectTimer && this.connEpoch === attemptEpoch && this.status === 'connecting'
+      ? Math.max(0, this.connectAttemptDeadlineWallAt - Date.now()) : 0;
+    const timeout = Math.max(requestedTimeout, handshakeRemaining());
     return new Promise<void>((resolve, reject) => {
       let off: (() => void) | null = null;
       const settle = (fn: () => void): void => {
@@ -1305,16 +1316,34 @@ export class DeviceLinkClient {
           off = null;
         }
         clearTimeout(timer);
+        this.handshakeWaiters.delete(onAttemptEnded);
         fn();
       };
-      const timer = setTimeout(() => {
-        settle(() => reject(new DeviceLinkError('NOT_CONNECTED', `not online within ${timeout}ms`)));
-      }, timeout);
+      const onTimeout = () => {
+        const remaining = handshakeRemaining();
+        if (remaining > 0) {
+          timer = setTimeout(onTimeout, remaining);
+          return;
+        }
+        settle(() => reject(new DeviceLinkError('NOT_CONNECTED', `not online within ${Math.round(this.monotonicNow() - startedAt)}ms`)));
+      };
+      let timer = setTimeout(onTimeout, timeout);
+      const onAttemptEnded = () => {
+        if (attemptEnded) return;
+        attemptEnded = true;
+        clearTimeout(timer);
+        // Only the original attempt can extend this request. Subsequent retries
+        // cannot repeatedly renew its send-slot ownership.
+        const remaining = requestedTimeout - (this.monotonicNow() - startedAt);
+        if (remaining <= 0) onTimeout();
+        else timer = setTimeout(onTimeout, remaining);
+      };
+      if (options?.waitForHandshake) this.handshakeWaiters.add(onAttemptEnded);
       off = this.onStatusChange((s) => {
         if (s === 'online') settle(resolve);
         else if (s === 'stopped') {
           settle(() => reject(new DeviceLinkError('NOT_CONNECTED', 'client stopped')));
-        }
+        } else if (s !== 'connecting' && options?.waitForHandshake) onAttemptEnded();
       });
     });
   }
@@ -2644,6 +2673,13 @@ export class DeviceLinkClient {
 
   private async connect(reason: string): Promise<void> {
     if (this.stopped) return;
+    for (const waiter of this.handshakeWaiters) waiter();
+    // The previous watchdog is epoch-stale; leaving it armed would let new waiters
+    // treat this attempt's token fetch as an active socket handshake.
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = null;
+    }
     this.clearNetworkProbe();
     this.resetLegacyInboundQueue();
     this.connectionStartedAt = this.monotonicNow();
@@ -2896,6 +2932,7 @@ export class DeviceLinkClient {
 
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return;
+    for (const waiter of this.handshakeWaiters) waiter();
     // 普通指数退避与拥塞冷却下限取 max;向下抖动(0.7x–1.0x)打散同 deviceId
     // 双连风暴 / 服务重启后的全端齐步重连,上界不变,文档承诺的最大退避
     // (reconnectMaxMs / congestionBackoffMaxMs)仍然成立。

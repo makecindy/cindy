@@ -4,6 +4,7 @@ import {
   diffHomeDeviceSyncScope,
   HOME_DEVICE_SYNC_CONCURRENCY,
   HomeDeviceSyncLimiter,
+  HomeSyncRound,
   resolveHomeDeviceSyncIds,
   runHomeDeviceSyncBatch,
 } from '@/session/homeDeviceSync';
@@ -93,4 +94,92 @@ describe('home device sync scope', () => {
     }
     await Promise.all([...initial, visible]);
   });
+});
+
+// Unit regression: overlapping foreground/epoch triggers previously queued complete
+// directory rounds. Pending promises expose new-connection progress and stale writes.
+it('retires queued same-connection reads and starts a new round before the old read settles', async () => {
+  const sync = new HomeSyncRound();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const applied: string[] = [];
+  let reads = 0;
+  const old = sync.run(async current => {
+    reads++;
+    await pending;
+    if (current()) applied.push('old');
+  });
+  await Promise.resolve();
+  const duplicate = sync.run(async () => { reads++; });
+  expect(duplicate).toBe(old);
+  await Promise.resolve();
+  expect(reads).toBe(1);
+  sync.invalidate();
+  await sync.run(async current => {
+    reads++;
+    if (current()) applied.push('new');
+  });
+  expect(applied).toEqual(['new']);
+  release();
+  await old;
+  expect(reads).toBe(2);
+  expect(applied).toEqual(['new']);
+  expect(sync.current).toBeNull();
+});
+
+it('does not start a retired round or let its completion release the new round', async () => {
+  const sync = new HomeSyncRound();
+  let obsoleteReads = 0;
+  const old = sync.run(async () => { obsoleteReads++; });
+  sync.invalidate(); // Background or reconnect before the scheduled read starts.
+  let release!: () => void;
+  const latest = sync.run(() => new Promise<void>(resolve => { release = resolve; }));
+  await old;
+  expect(obsoleteReads).toBe(0);
+  expect(sync.current).toBe(latest);
+  release();
+  await latest;
+  expect(sync.current).toBeNull();
+});
+
+// Review regression: an in-flight filter/manual/budget trigger was silently lost.
+// Real round + deferred first read; newest closure must run once before callers settle (unit).
+it('runs the latest in-flight trigger once after the current read, including after a failed read', async () => {
+  const sync = new HomeSyncRound();
+  let release!: () => void;
+  const reads: string[] = [];
+  const first = sync.run(async () => {
+    reads.push('old-filter');
+    await new Promise<void>(resolve => { release = resolve; });
+    throw new Error('old read failed');
+  });
+  await Promise.resolve();
+  const stale = sync.run(async () => { reads.push('intermediate-filter'); });
+  const latest = sync.run(async () => { reads.push('latest-filter'); });
+  release();
+  await Promise.all([first, stale, latest]);
+  expect(reads).toEqual(['old-filter', 'latest-filter']);
+  expect(sync.current).toBeNull();
+});
+
+it('keeps retired device work inside the same concurrency budget while a new directory round starts', async () => {
+  const sync = new HomeSyncRound();
+  const limiter = new HomeDeviceSyncLimiter(1);
+  let release!: () => void;
+  const events: string[] = [];
+  const old = sync.run(() => limiter.run(async () => {
+    events.push('old-device');
+    await new Promise<void>(resolve => { release = resolve; });
+  }));
+  await Promise.resolve();
+  sync.invalidate();
+  const latest = sync.run(async () => {
+    events.push('new-directory');
+    await limiter.run(async () => { events.push('new-device'); });
+  });
+  await Promise.resolve();
+  expect(events).toEqual(['old-device', 'new-directory']);
+  release();
+  await Promise.all([old, latest]);
+  expect(events).toEqual(['old-device', 'new-directory', 'new-device']);
 });

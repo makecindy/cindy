@@ -32,6 +32,8 @@ export interface HomeListFreshness {
    * the page limit, otherwise null.
    */
   markFresh(deviceId: string, token: HomeListFreshnessToken, boundedListEpoch?: number | null): void;
+  /** A pull marked fresh as complete later installed rows up to the page limit. */
+  markBounded(deviceId: string, token: HomeListFreshnessToken, boundedListEpoch: number): void;
   /** True when nothing has invalidated the device since its last successful full pull. */
   isFresh(deviceId: string, listMutationEpoch?: number): boolean;
   invalidate(deviceId: string): void;
@@ -56,6 +58,13 @@ export function createHomeListFreshness(): HomeListFreshness {
     markFresh(deviceId, token, boundedListEpoch = null) {
       if (isCurrent(deviceId, token)) fresh.set(deviceId, { ...token, boundedListEpoch });
       else fresh.delete(deviceId);
+    },
+    markBounded(deviceId, token, boundedListEpoch) {
+      const record = fresh.get(deviceId);
+      if (record && record.boundedListEpoch === null && record.epoch === token.epoch
+        && record.invalidation === token.invalidation && isCurrent(deviceId, token)) {
+        fresh.set(deviceId, { ...record, boundedListEpoch });
+      }
     },
     isFresh(deviceId, listMutationEpoch) {
       const record = fresh.get(deviceId);
@@ -90,11 +99,11 @@ export type HomeListFocusReturnPlan =
 
 /**
  * What a return to Home should fetch. A short stay away after a completed sync only refills the
- * devices whose list may have missed a push. A long stay, no completed sync yet, or a background /
+ * devices whose list may have missed a push. A long stay, no completed sync yet, or a
  * reconnect while away falls back to the full device-list + per-device reload.
  */
 export function planHomeListFocusReturn(input: {
-  /** Set when the app went to the background or the relay reconnected while Home was covered. */
+  /** Set when the relay reconnected or a full reload remains outstanding. */
   forceFull: boolean;
   blurredAt: number | null;
   lastSyncedAt: number | null;
@@ -117,5 +126,66 @@ export function planHomeListFocusReturn(input: {
     deviceIds: input.deviceIds.filter((deviceId) => (
       !input.freshness.isFresh(deviceId, input.listMutationEpoch(deviceId))
     )),
+  };
+}
+
+/** Outstanding Home refresh intent; only the matching successful read can consume it. */
+export function createHomeRefreshRequests() {
+  let sequence = 0;
+  let full: number | null = null;
+  const schedules = new Map<string, number>();
+  return {
+    requestFull() { full = ++sequence; },
+    captureFull: () => full,
+    completeFull(token: number | null) { if (full === token) full = null; },
+    markScheduleDirty(deviceId: string) {
+      const token = ++sequence;
+      schedules.set(deviceId, token);
+      return token;
+    },
+    scheduleDeviceIds: () => new Set(schedules.keys()),
+    completeSchedule(deviceId: string, token: number) {
+      if (schedules.get(deviceId) === token) schedules.delete(deviceId);
+    },
+    clear() { full = null; schedules.clear(); },
+  };
+}
+
+/**
+ * Follows one Home list pull past readiness: history-only rows installed by optional enrichment
+ * still count toward page-limit truncation and the automation index scope, as they did when
+ * enrichment finished before the list was applied.
+ */
+export function createHomeInstalledRows(input: {
+  limit: number;
+  /** Installed rows reached the limit after the pull was already marked fresh. */
+  onBounded(): void;
+  /** Rows outside the armed automation index refresh were installed. */
+  onScheduleScopeGrew(): void;
+}) {
+  let ids: string[] = [];
+  let freshMarked = false;
+  let bounded = false;
+  let scheduled: Set<string> | null = null;
+  return {
+    install(rows: readonly { id: string }[]) {
+      ids = rows.map(row => row.id);
+      if (freshMarked && !bounded && ids.length >= input.limit) {
+        bounded = true;
+        input.onBounded();
+      }
+      if (scheduled && ids.some(id => !scheduled!.has(id))) {
+        scheduled = new Set(ids);
+        input.onScheduleScopeGrew();
+      }
+    },
+    sessionIds: (): readonly string[] => ids,
+    /** Call when marking the pull fresh; true when the applied window is truncated. */
+    markFresh(rawLength: number) {
+      freshMarked = true;
+      bounded = Math.max(rawLength, ids.length) >= input.limit;
+      return bounded;
+    },
+    armSchedule() { scheduled = new Set(ids); },
   };
 }

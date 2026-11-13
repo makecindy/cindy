@@ -2554,9 +2554,8 @@ async function rebuildSessionSnapshot(
   if (batchFailure.kind === 'reject') throw batchFailure.error;
 }
 
-// 掉线/重连窗口里发起请求时,先有界等待连接就绪的上限。够一次健康重连握手完成
-// (通常 <1s),又短到连不上时能快速失败、让上层 withTransientRemoteRetry 重试,
-// 而不是把单次 client.invoke park 在退避 gap 里干等十几秒。
+// 退避期间保持短等待；正在握手时由 waitForHandshake 延长到当前握手截止时间，
+// hello-ack 到达立即继续，不先进入上层重试睡眠。Desktop 默认等待不变。
 const CONNECT_READY_TIMEOUT_MS = 1_500;
 
 function canUsePeerData(client: DeviceLinkClient, deviceId: string): boolean {
@@ -2569,7 +2568,7 @@ function canUsePeerData(client: DeviceLinkClient, deviceId: string): boolean {
 function ensureOnlineForRequest(client: DeviceLinkClient, deviceId?: string): Promise<void> {
   const connection = deviceId ? client.connectionFor(deviceId) : client;
   if (connection.getStatus() === 'online' || (deviceId && connection.hasOfflineDirectPath(deviceId))) return Promise.resolve();
-  return connection.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
+  return connection.waitUntilOnline(CONNECT_READY_TIMEOUT_MS, { waitForHandshake: true });
 }
 
 function sendOpenLinkWithAccessHandling(
@@ -2749,7 +2748,7 @@ async function sendSubscribe(
     settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
   }
-  // ensureOnlineForRequest 最长等待 1.5s;期间 App 可能已退后台并开始释放
+  // ensureOnlineForRequest 在当前握手期间可延长等待；期间 App 可能已退后台并开始释放
   // heavy topics。真正 invoke 前再检查一次,避免迟到 subscribe 覆盖 unsubscribe。
   if (shouldSend && !shouldSend()) {
     settleDeviceSend(deviceId, slot, 'inconclusive');

@@ -2,6 +2,7 @@ import { resolveRemoteText } from '@cindy/device-link';
 import { isAccessRevokedRemoteError as isAccessRevokedError } from '@cindy/maker-shared/device-link-contract';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { listRemoteCollection, normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
+import { runHomeDeviceSyncBatch } from './homeDeviceSync';
 import { readCompanionTask } from './companionTaskReads';
 import { isTeammateTask, parseTaskCompanion, type TaskTeammate } from './teammateTaskSource';
 import type { RemoteSession } from './types';
@@ -74,21 +75,23 @@ export async function readTeammateTasks(input: {
     if (response.collectionId !== 'teammates' || !Array.isArray(response.items)) throw new Error('Invalid buddies');
     const items = normalizeRemoteCollectionItems(response, 'teammates').filter(item => item.ref.kind === 'bot');
     rosterRead = true;
-    for (const item of items) {
+    let revoked = false;
+    await runHomeDeviceSyncBatch(items, async (item) => {
+      if (revoked || !current()) return;
       const bot: TaskTeammate = { id: item.ref.id, name: resolveRemoteText(item.display.title), avatar: item.display.avatar };
       owners.set(bot.id, bot);
       const session = item.links?.find(link => link.rel === 'conversation' && link.target.kind === 'session')?.target;
-      if (session?.kind !== 'session') continue;
-      if (!current()) return [];
+      if (session?.kind !== 'session') return;
+      if (!current()) return;
       try {
         const reply = await invoke<{ ok: boolean; delegations: Array<{ requestingBotId: string; childSessionId: string }> }>(
           deviceId, 'maker:bot-delegations:list', [session.sessionId]);
-        if (!current()) return [];
-        if (!reply?.ok || !Array.isArray(reply.delegations)) continue;
+        if (!current()) return;
+        if (!reply?.ok || !Array.isArray(reply.delegations)) return;
         checked.add(bot.id);
         for (const task of reply.delegations) if (task.requestingBotId === bot.id && typeof task.childSessionId === 'string') creators.set(task.childSessionId, bot);
-      } catch (error) { if (isAccessRevokedError(error)) throw error; }
-    }
+      } catch (error) { if (isAccessRevokedError(error)) { revoked = true; throw error; } }
+    }, 3);
   } catch (error) { if (isAccessRevokedError(error)) throw error; }
   if (!current()) return [];
   return [...rows.values()].filter(row => row.source !== 'bot' || isTeammateTask(row)).map(row => {
@@ -99,4 +102,62 @@ export async function readTeammateTasks(input: {
     const retained = old && (!rosterRead || (owners.has(old.id) && !checked.has(old.id))) ? old : undefined;
     return { ...row, taskTeammate: found ?? retained ?? null };
   });
+}
+
+let homeTaskSnapshotSeq = 0;
+
+/** Publish a usable Home list now; completion only represents optional enrichment.
+ * The caller fences both phases by account, connection, scope and list mutation. */
+export function publishHomeTaskSnapshot(input: Omit<Parameters<typeof readTeammateTasks>[0], 'publishInitial'> & {
+  publish(rows: RemoteSession[]): void;
+  onReady(): void;
+  /** A rejected optional snapshot must remain eligible for a later Home refill. */
+  onDiscard?(): void;
+}): Promise<void> {
+  // Companion reads batch per scope with the first caller's invoke/fence. Give every
+  // snapshot its own queue so a superseded snapshot cannot reject a newer one's reads.
+  const scope = JSON.stringify([input.scope, ++homeTaskSnapshotSeq]);
+  return readTeammateTasks({ ...input, scope, publishInitial: rows => {
+    if (!input.current()) return;
+    input.publish(rows);
+    input.onReady();
+  } }).then(rows => {
+    if (input.current()) input.publish(rows);
+    else input.onDiscard?.();
+  }, error => {
+    if (!input.current()) input.onDiscard?.();
+    throw error;
+  });
+}
+
+type ActivitySnapshotStore = {
+  getSessionLiveActivity(sessionId: string, deviceId?: string): unknown;
+  getSessionRunStatus(sessionId: string): { isRunning: boolean };
+  setActiveSessionSnapshots(deviceId: string, response: unknown, activityEpochAtFetchStart: number): void;
+};
+
+/** The early activity snapshot can land before history-only lanes are installed; another
+ * device's list recompute then drops their alerts. Re-apply only those lost entries under
+ * the original fetch fence. A legacy array skips the complete-snapshot absence sweep, and a
+ * changed run flag means a later push owns the session. */
+export function restoreActivityForInstalledRows(
+  store: ActivitySnapshotStore,
+  deviceId: string,
+  snapshot: { response: unknown; epoch: number } | null,
+  rows: readonly RemoteSession[],
+): void {
+  if (!snapshot) return;
+  const response = snapshot.response as { format?: unknown; sessions?: unknown } | unknown[] | null;
+  const list = Array.isArray(response)
+    ? response
+    : (response && response.format === 'active-sessions-v2' && Array.isArray(response.sessions) ? response.sessions : []);
+  const ids = new Set(rows.map(row => row.id));
+  const lost = list.filter((item) => {
+    const entry = item as { sessionId?: unknown; isTurnRunning?: unknown } | null;
+    return !!entry && typeof entry.sessionId === 'string' && ids.has(entry.sessionId)
+      && typeof entry.isTurnRunning === 'boolean'
+      && store.getSessionRunStatus(entry.sessionId).isRunning === entry.isTurnRunning
+      && !store.getSessionLiveActivity(entry.sessionId, deviceId);
+  });
+  if (lost.length) store.setActiveSessionSnapshots(deviceId, lost, snapshot.epoch);
 }
