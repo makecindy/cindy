@@ -10509,7 +10509,7 @@
         "control-requested": "Uma solicitação de controle foi enviada pela tarefa principal.",
         "transcript-truncated": "Limite de armazenamento da transcrição atingido.",
         "turn-ended": "Turno do Subagent encerrado.",
-        "command-refused": "PI rejeitou um comando do Subagent filho.",
+        "command-refused": "PI rejeitou um comando para o Subagent filho.",
         "generation-unreadable": "Não foi possível ler uma parte anterior desta conversa."
       },
       "activityKinds": {
