@@ -1237,7 +1237,7 @@ describe('dispatcher 核心语义', () => {
     const ends = c.ofType('turn.end').map((m) => m.payload);
     const queued = ends.find((e) => e.requestId === 'req-2')!;
     expect(queued.status).toBe('error');
-    expect(queued.errorMessage).toContain('已不在工作目录映射里');
+    expect(queued.errorMessage).toContain('已不属于任何项目');
     // 关键: 排队那条根本没进 runner
     expect(fr.calls).toHaveLength(1);
   });
@@ -1267,7 +1267,7 @@ describe('dispatcher 核心语义', () => {
     expect(fr.calls).toHaveLength(0);
     const end = c.last('turn.end')!.payload;
     expect(end.status).toBe('error');
-    expect(end.errorMessage).toContain('已不在工作目录映射里');
+    expect(end.errorMessage).toContain('已不属于任何项目');
   });
 
   it('排队期间连接被停用: 目录还在映射里也不执行', async () => {
@@ -1341,7 +1341,10 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('inspect 期间目录被加回映射: 按当前映射判定, 不误杀这条绑定', async () => {
+  // 2026-11-13 起复用要求任务就在这次点名的项目里(见下一条用例)。原先这里断言的是
+  // 「inspect 期间把任务所在目录加回清单 -> 照旧复用」: 那时只要求任务在清单内任一目录里。
+  // 现在即便它所在的目录此刻是清单里的另一个项目, 也不复用 —— 这次点名的是 xdmaker。
+  it('inspect 期间任务所在目录成了清单里的另一个项目: 仍按点名的项目新建, 不接回旧任务', async () => {
     const bindings = memoryBindings();
     const OUTSIDE = path.resolve('/repos/another-project');
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {
@@ -1349,6 +1352,7 @@ describe('dispatcher 核心语义', () => {
     };
     const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
     let releaseInspect!: () => void;
+    const calls: HookRunRequest[] = [];
     const runner: HookSessionRunner = {
       isBusy: () => false,
       inspect: async (id) => {
@@ -1357,7 +1361,10 @@ describe('dispatcher 核心语义', () => {
         });
         return sessions[id] ? { ...sessions[id] } : null;
       },
-      run: async () => ({ status: 'ok', finalText: 'done', errorMessage: null, durationMs: 1 }),
+      run: async (req) => {
+        calls.push(req);
+        return { status: 'ok', finalText: 'done', errorMessage: null, durationMs: 1 };
+      },
     };
     const { d } = makeDispatcher({ runner, bindings, config });
     const c = collector();
@@ -1365,13 +1372,93 @@ describe('dispatcher 核心语义', () => {
 
     d.handleDispatch('conn-1', dispatch(), c.send);
     await tick();
-    // inspect 还挂着时用户把这个目录加进了映射 —— 入口快照里没有它, 当前映射有
     config.workspaces = { xdmaker: WS_DIR, other: OUTSIDE };
     releaseInspect();
     await tick();
 
-    expect(c.last('task.ack')!.payload.sessionId).toBe('bound-session');
-    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe('bound-session');
+    const created = c.last('task.ack')!.payload.sessionId;
+    expect(created).not.toBe('bound-session');
+    expect(calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'xdmaker' });
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe(created);
+  });
+
+  // 回归(2026-11-13): 在 IM 里把会话从项目 A 切到项目 B 后, 服务端带同一个 externalKey
+  // 派发(工作区改成 B), 旧任务还在 A 里、A 也还在清单内, 消息照旧进了 A 的旧任务 ——
+  // 而机器人刚回过「已切换到 B」。最小失败输入: 两个项目 + 同 key 两次派发、第二次点名 B。
+  it('IM 里切到另一个项目 -> 不复用旧项目里的任务, 在新项目新建', async () => {
+    const bindings = memoryBindings();
+    const OTHER = path.resolve('/repos/other-project');
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR, other: OTHER } };
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    sessions[first] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2', workspace: 'other' }), c.send);
+    await tick();
+    const second = c.last('task.ack')!.payload.sessionId!;
+    expect(second).not.toBe(first);
+    expect(fr.calls[1]).toMatchObject({ isNew: true, workingDir: OTHER, workspaceAlias: 'other' });
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe(second);
+    fr.finish();
+    await tick();
+
+    // 切回原项目同理: 绑定已经指向 B 里的任务, 不会凭「A 也在清单内」被接回去。
+    sessions[second] = { workingDir: OTHER, usable: true };
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-3' }), c.send);
+    await tick();
+    expect(fr.calls[2]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'xdmaker' });
+    fr.finish();
+  });
+
+  // 项目改名后(侧栏改名 / 升级前手填的别名), 服务端仍按旧名称派发。清单把旧名称补在现用
+  // 名称之后(见 projectWorkspaces.lookupWorkspaces): 旧名称要能找到目录、复用同一个任务,
+  // 且偏好按现用名称读 —— 否则改个名字就丢了这个项目的模型与权限设置。
+  it('按改名前的旧名称派发 -> 找到同一个项目, 新任务与复用都报现用名称', async () => {
+    const bindings = memoryBindings();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { 主仓库: WS_DIR, xdmaker: WS_DIR } };
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: '主仓库' });
+    sessions[first] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2', workspace: '主仓库' }), c.send);
+    await tick();
+    expect(fr.calls[1]).toMatchObject({ isNew: false, sessionId: first, workspaceAlias: '主仓库' });
+    fr.finish();
+  });
+
+  // PR #10291 review: 纯数字的旧名称在对象里恒排最前, 按目录反查名称不能靠键序。
+  it('旧名称是纯数字时: 仍能按它派发, 报出的是现用名称', async () => {
+    const fr = fakeRunner();
+    const config: HookConnectionConfig = {
+      ...CONFIG,
+      workspaces: { reports: WS_DIR, '2025': WS_DIR },
+      retiredWorkspaceNames: ['2025'],
+    };
+    const { d } = makeDispatcher({ runner: fr.runner, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ workspace: '2025' }), c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload.result).toBe('accepted');
+    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'reports' });
+    fr.finish();
   });
 
   it('在工作目录映射内换目录 -> 无感跟随复用(边界内的移动不受影响)', async () => {

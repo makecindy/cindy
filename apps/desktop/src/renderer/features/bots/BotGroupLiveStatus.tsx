@@ -25,11 +25,14 @@ import { BotGroupPendingInteraction } from './BotGroupPendingInteraction';
 import type { BotGroupRunningStep } from './BotGroupTimelineModel';
 
 export interface BotGroupLiveSpeaker {
+  sourceMessageId?: string;
+  threadRootId?: string | null;
   member: BotGroupMemberView;
   displayName: string;
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
   target?: BotGroupWorkTarget;
+  timelineAt?: number;
   startedAt?: number;
   stopping?: boolean;
   executionId?: string;
@@ -54,7 +57,7 @@ function pendingBot(speaker: BotGroupLiveSpeaker) {
   return { id: member.botId, name: speaker.displayName, avatar: member.avatar, avatarColor: member.avatarColor };
 }
 
-/** Brief initial status; longer work moves to the composer progress area. */
+/** Planning status in the timeline. */
 export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: BotGroupLiveSpeaker; showStatus?: boolean }) {
   const { t } = useTranslation();
   const { member, sessionId, activity: speakerActivity } = speaker;
@@ -109,7 +112,7 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
   );
 }
 
-/** Only a speaker's pending confirmation, for steps whose status lives in the progress strip. */
+/** A speaker's pending confirmation beside its timeline execution. */
 export function BotGroupSpeakerInteraction({ speaker }: { speaker: BotGroupLiveSpeaker }) {
   if (!speaker.sessionId || speaker.target) return null;
   return (
@@ -120,8 +123,7 @@ export function BotGroupSpeakerInteraction({ speaker }: { speaker: BotGroupLiveS
 }
 
 /**
- * Fixed above the composer while a plan step runs, or a teammate has been speaking for a few
- * seconds. Remount it (key) when the speaker set changes so 「几秒」 counts from the new turn.
+ * Execution progress at its original position in the message timeline.
  */
 export function BotGroupProgressStrip(props: BotGroupProgressStripProps) {
   const active = props.speakers.filter(speaker => speaker.activity !== 'planning');
@@ -134,15 +136,18 @@ export function BotGroupProgressStrip(props: BotGroupProgressStripProps) {
   if (active.length <= 1) return <BotGroupSingleProgressStrip {...props} />;
   return <>{active.map((speaker, index) => <BotGroupSingleProgressStrip
     key={speaker.executionId ?? `${speaker.member.botId}:${speaker.activity}`}
-    {...props} step={props.step?.step.botId === speaker.member.botId && speaker.activity === 'step' ? props.step : null} speakers={[speaker]} showStop={index === active.length - 1} stopPending={stopPending}
+    {...props} step={props.step?.step.botId === speaker.member.botId && speaker.activity === 'step' ? props.step : null} speakers={[speaker]} showStop={!!props.onStop && index === active.length - 1} stopPending={stopPending}
   />)}</>;
 }
 
 interface BotGroupProgressStripProps {
+  showStop?: boolean;
+  stopPending?: boolean;
   step: (BotGroupRunningStep & { member: BotGroupMemberView | undefined; displayName: string }) | null;
   speakers: readonly BotGroupLiveSpeaker[];
-  onStop: (scope?: 'all') => void;
+  onStop?: (scope?: 'all') => void;
   canStopAll?: boolean;
+  canStop?: boolean;
   stopping: boolean;
 }
 
@@ -151,8 +156,9 @@ function BotGroupSingleProgressStrip({
   speakers,
   onStop,
   canStopAll = false,
+  canStop = true,
   stopping,
-  showStop = true,
+  showStop = !!onStop,
   stopPending,
 }: BotGroupProgressStripProps & { showStop?: boolean; stopPending?: boolean }) {
   const { t } = useTranslation();
@@ -213,7 +219,7 @@ function BotGroupSingleProgressStrip({
                 {t('bots.groupChat.progress.viewProcess')}
               </Button>
             ) : null}
-            {!showStop ? null : canStopAll ? (
+            {!showStop || (!canStop && !canStopAll) ? null : canStopAll ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button type="button" variant="secondary" tone="quiet" size="sm" compact loading={buttonPending} className="text-[var(--text-danger)]">
@@ -221,10 +227,10 @@ function BotGroupSingleProgressStrip({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" side="top" className="min-w-[220px]">
-                  <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStop()}>
+                  {canStop ? <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStop?.()}>
                     {t('bots.groupChat.progress.stopMine')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className={cn(MENU_ITEM_CLASS, 'h-auto items-start py-2')} onSelect={() => onStop('all')}>
+                  </DropdownMenuItem> : null}
+                  <DropdownMenuItem className={cn(MENU_ITEM_CLASS, 'h-auto items-start py-2')} onSelect={() => onStop?.('all')}>
                     <span className="flex min-w-0 flex-col gap-0.5">
                       <span className="text-[var(--text-danger)]">{t('bots.groupChat.progress.stopAll')}</span>
                       <span className="text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">{t('bots.groupChat.progress.stopAllHint')}</span>
@@ -240,7 +246,7 @@ function BotGroupSingleProgressStrip({
                 size="sm"
                 compact
                 loading={buttonPending}
-                onClick={() => onStop()}
+                onClick={() => onStop?.()}
                 className="text-[var(--text-danger)]"
               >
                 {t('bots.groupChat.progress.stop')}

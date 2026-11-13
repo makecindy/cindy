@@ -86,8 +86,8 @@ export interface ProviderServiceDeps {
   hasModelAliasOverride?: (providerId: string, agent: AgentKind, modelId: string) => boolean;
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
-  /** Live account membership also applies to explicit/lazy routing catalogs, before access overrides. */
-  projectCatalog?: (catalog: Catalog) => Catalog;
+  /** Live membership precedes access overrides. Explicit/lazy routing reads retain history-only models. */
+  projectCatalog?: (catalog: Catalog, routingCatalog: boolean) => Catalog;
   /** 连接状态判定器。 */
   connection: ProviderConnectionReaders;
   /**
@@ -164,7 +164,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       Promise.resolve(deps.connection.xai(readOpts)),
     ]);
     const sourceCatalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
-    const catalog = deps.projectCatalog?.(sourceCatalog) ?? sourceCatalog;
+    const catalog = deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
@@ -251,7 +251,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),
-      ...(!provider.connected && deps.subscriptionReadUnavailable?.(provider.id)
+      ...(deps.subscriptionReadUnavailable?.(provider.id)
         ? { subscriptionReadUnavailable: true as const } : {}),
     })).map(
       (provider) =>

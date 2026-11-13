@@ -26,8 +26,7 @@ import {
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
-  readCachedGenericOAuthAccessToken,
-  refreshGenericOAuthIfNeeded,
+  readGenericOAuthAccessToken,
 } from './generic-oauth.desktop.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
 
@@ -124,15 +123,15 @@ export async function fetchSavedOAuthProviderModels(
   if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
     return { ok: false, code: 'AUTH_INVALID' };
   }
+  let token: string | null;
   try {
-    await refreshGenericOAuthIfNeeded(storageProviderId, oauth);
+    token = await readGenericOAuthAccessToken(storageProviderId, oauth);
   } catch {
-    return { ok: false, code: 'UNKNOWN' };
+    return { ok: false, code: 'AUTH_INVALID' };
   }
   // A token refresh can outlive logout, account switching, or edits to this connection.
   // Never use the old endpoint snapshot with credentials from the new owner/configuration.
   if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
-  const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
   const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({

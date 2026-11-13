@@ -677,6 +677,17 @@ describe('translateErrorNotification', () => {
     expect(events[0].data).toMatchObject({ isTerminal: false, willRetry: true });
   });
 
+  // #9836: the shared signal extraction also serves Codex errors before text redaction.
+  it('preserves provider 403 when credential redaction consumes its text', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(makeParams({ willRetry: false,
+      message: 'Authorization: Bearer secret-token, HTTP 403: Forbidden',
+    }), q, makeCtx(newCodexRuntimeState()));
+    const events = await collect(q);
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ errorStatus: 403, message: 'Authorization: [REDACTED]' });
+  });
+
   it('preserves Missing bearer classification when Authorization redaction consumes the phrase', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();

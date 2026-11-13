@@ -83,12 +83,24 @@ vi.mock('../runtime.js', () => ({
   readSubscriptionSessionAccount: h.sessionRead,
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
+import { onSubscriptionAccountsChanged } from '../runtime.js';
+import { broadcast } from '../../device-link/index.js';
 import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
-import { legacyCodexAccountCanRun, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
+import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
+
+// #10286 review: preserve the exact reset target through the real owner push
+// adapter; ordinary pool/load events retain their original payload.
+it('forwards scoped reset invalidation without marking ordinary pool changes', () => {
+  const listener = vi.mocked(onSubscriptionAccountsChanged).mock.calls[0][0];
+  listener('openai', 'second');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', resetAccountId: 'second' });
+  listener('openai');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai' });
+});
 beforeEach(() => {
   h.context = null;
   h.trusted = true;
@@ -107,6 +119,21 @@ beforeEach(() => {
 });
 
 describe('legacy Codex account upgrade', () => {
+  // PR #10271, unit: moving a remote legacy task must not bypass the destination's own grants.
+  it('checks the merged route model and remote grants independently of the old connection', () => {
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
+    h.ownComputers = true;
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(true);
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true })).toBe(false);
+    h.remoteModels = ['other-model'];
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
+    h.remoteModels = null;
+    h.access.disabledModels['openai:chatgpt/gpt-model'] = true;
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
+    h.access.disabledModels = {};
+    h.access.disabledProviders.openai = true;
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
+  });
   it('keeps original model exclusions and remote permission after folding a connection', () => {
     h.access.disabledModels['openai-a:chatgpt/gpt-model'] = true;
     expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: false, newRoute: true })).toBe(false);
@@ -256,6 +283,12 @@ describe('subscription management boundary', () => {
     await invoke(remoteQuery);
     // PR #10150 review: the account-switch probe for the owner's other computer honours the own-computer switch.
     expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', remoteQuery, { remote: true, ownComputer: true });
+    const legacyQuery = { ...query, model: 'gpt-model', legacyProviderId: 'old-codex' };
+    await invoke(legacyQuery);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('openai', legacyQuery, { remote: true, ownComputer: true });
+    const freshLegacyQuery = { action: 'session', providerId: 'openai', legacyProviderId: 'old-codex', model: 'gpt-model' };
+    await invoke(freshLegacyQuery);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('openai', freshLegacyQuery, { remote: true, ownComputer: true });
     h.context = { sharedTask: {} };
     await expect(invoke(query)).rejects.toThrow('PERMISSION_DENIED');
     h.context = null;
@@ -265,11 +298,13 @@ describe('subscription management boundary', () => {
       { action: 'session', providerId: 'anthropic', sessionId: 'x'.repeat(257) },
       { action: 'session', providerId: 'anthropic-second', sessionId: 'task-1' },
       ...['', ' ', 1, {}, 'x'.repeat(513)].map(model => ({ ...query, model })),
+      ...['', ' ', 1, {}, 'x'.repeat(257)].map(legacyProviderId => ({ ...query, legacyProviderId })),
+      { ...remoteQuery, legacyProviderId: 'old-codex' },
     ])
       await expect(invoke(bad)).rejects.toThrow('INVALID_PARAMS');
     h.sessionRead.mockRejectedValue(new Error('fixture-private-path'));
     await expect(invoke(query)).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_FAILED]');
-    expect(h.sessionRead).toHaveBeenCalledTimes(3);
+    expect(h.sessionRead).toHaveBeenCalledTimes(5);
     expect(h.execute).not.toHaveBeenCalled();
   });
   it('rejects invalid account paths, settings and login keys before any native operation', async () => {

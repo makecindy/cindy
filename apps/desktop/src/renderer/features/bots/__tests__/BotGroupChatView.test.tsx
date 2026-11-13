@@ -134,6 +134,15 @@ vi.mock('../BotGenerationLabel', () => ({
   BotGenerationLabel: ({ phase }: { phase?: string }) => <span>{`phase:${phase}`}</span>,
 }));
 vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivity: () => mocks.activity }));
+// Voice lifecycle and native shortcut ownership are exercised with the real
+// shared hook in useBotGroupVoiceInput.test.tsx; this suite covers group sends.
+vi.mock('../useBotGroupVoiceInput', () => {
+  const ownsDraft = () => false;
+  return { useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+  ownsDraft,
+  displayText: text, state: 'idle', isBusy: false, isListening: false, isCaptureReady: false,
+  lastError: null, shortcutLabel: '', start: () => false, stop: async () => {}, cancel: async () => {},
+}) }; });
 
 beforeAll(() => {
   // jsdom has no layout; scrolling is a no-op here.
@@ -1856,6 +1865,30 @@ describe('BotGroupChatView', () => {
     await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
     fireEvent.change(input, { target: { value: 'hello', selectionStart: 5 } });
     fireEvent.change(input, { target: { value: '@Ann hello', selectionStart: 10 } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['other'] });
+  });
+
+  // Incident 2026-11-13 (component): a typed name two members share used to address both.
+  // One @ names one identity, so the draft stays and asks for a pick from the list.
+  it('holds a typed name that two members share until one is picked from the list', async () => {
+    const namesakes = [
+      { ...detail().members[0]!, botId: 'picked', name: 'Ann' },
+      { ...detail().members[1]!, botId: 'other', name: 'Ann' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes }) });
+    mocks.sendBotGroupMessage.mockResolvedValue({ ok: true, messageId: 'accepted' });
+    renderView();
+    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '@Ann hello', selectionStart: 10 } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.mentionAmbiguous:Ann');
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    expect(input.value).toBe('@Ann hello');
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } });
+    fireEvent.click((await screen.findAllByRole('option'))[2]!);
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
     expect(mocks.sendBotGroupMessage.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['other'] });
@@ -5242,18 +5275,20 @@ it('opens the exact remote execution and leaves other members’ private tasks u
 
 // A stopping last row must not disable the group control while an earlier
 // execution is still stoppable (Greptile review #4375066338).
-it.each([false, true])('keeps the group stop control enabled for another running execution (admin: %s)', async admin => {
+it.each([[false, false], [false, true], [true, false], [true, true]])('keeps the group stop control enabled for another running execution (admin: %s, newest first: %s)', async (admin, newestFirst) => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
     canStopAll: admin,
     speakingBotIds: ['mimi', 'xiaoman'],
     round: { status: 'running', canContinue: false, othersActive: admin, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'first-running', sessionId: 'lane-mimi', startedAt: Date.now() - 10_000, executionStatus: 'running' },
-      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', sessionId: 'lane-xiaoman', startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
+      { botId: 'mimi', activity: 'reply', executionId: 'first-running', sessionId: 'lane-mimi', timelineAt: Date.now() - (newestFirst ? 1000 : 10000), startedAt: Date.now() - 10_000, executionStatus: 'running' },
+      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', sessionId: 'lane-xiaoman', timelineAt: Date.now() - (newestFirst ? 10000 : 1000), startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
     ] },
   }) });
   renderView();
   const buttons = await screen.findAllByRole('button', { name: 'bots.groupChat.progress.stop' });
   expect(buttons).toHaveLength(1);
+  // Unit / #10345: the latest timeline execution owns the one group-wide control.
+  expect(buttons[0]!.closest('[data-testid="bot-group-progress"]')?.textContent).toContain(newestFirst ? '咪咪' : '小满');
   expect((buttons[0] as HTMLButtonElement).disabled).toBe(false);
   if (admin) {
     fireEvent.pointerDown(buttons[0]!, { button: 0, ctrlKey: false });
@@ -5881,4 +5916,24 @@ it('does not reread group history for busy-only online presence', async () => {
     await act(async () => { emit(false); emit(true); await vi.advanceTimersByTimeAsync(60); });
     expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads + 2);
   } finally { view.unmount(); vi.useRealTimers(); }
+});
+
+// Unit: an older live execution must not be appended below a later human message.
+it('inserts live work before later messages and keeps its element on an incremental refresh', async () => {
+  const startedAt = Date.now() - 20_000;
+  const messages = [msg({ id: 'request', sequence: 1, content: 'First request', createdAt: startedAt - 1 }),
+    msg({ id: 'later', sequence: 2, content: 'Later message', createdAt: startedAt + 1 })];
+  const snapshot = detail({ messages, speakingBotIds: ['mimi'], round: { status: 'running', canContinue: false,
+    speakers: [{ botId: 'mimi', sessionId: 'lane-mimi', executionId: 'original', activity: 'reply', startedAt }] } });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: snapshot });
+  renderView();
+  const work = await screen.findByTestId('bot-group-work');
+  const later = screen.getByText('Later message');
+  expect(work.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...snapshot, messages: [...messages,
+    msg({ id: 'newest', sequence: 3, content: 'Newest message', createdAt: startedAt + 2 })] } });
+  act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+  await screen.findByText('Newest message');
+  expect(screen.getByTestId('bot-group-work')).toBe(work);
+  expect(work.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

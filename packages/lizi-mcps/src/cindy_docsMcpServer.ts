@@ -46,6 +46,7 @@ import type { DocsMcpDeps, DocsMcpSessionCtx } from './cindy-docs/types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
 import type { LiziMcpLogger } from './types.js';
+import type { HostToolMcpServer } from './host-tool-runtime.js';
 
 /**
  * 每个工具描述末尾都带的共同约束。顶层暴露后没有 call_tool 那段总说明可挂,
@@ -180,7 +181,7 @@ function registerTopLevelTools(
 export function createCindyDocsMcpServer(
   deps: DocsMcpDeps,
   sessionCtx: DocsMcpSessionCtx,
-): McpServer {
+): HostToolMcpServer {
   const server = new McpServer({ name: 'cindy_docs', version: '1.0.0' });
   const registry = new DocsToolRegistry();
 
@@ -211,7 +212,12 @@ export function createCindyDocsMcpServer(
     getSessionId: () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
   });
 
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
+    describe: (name: string) => registry.list().find(tool => tool.name === name),
+    call: (name: string, args?: Record<string, unknown>) => registry.call(name, args),
+    close: () => server.close(),
+  } });
 }
 
 export type { DocsMcpDeps, DocsMcpSessionCtx } from './cindy-docs/types.js';

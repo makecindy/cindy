@@ -189,6 +189,7 @@ export interface DeviceLinkDeviceView {
   selfName?: string | null;
   deviceInfo?: DeviceLinkDeviceInfo | null;
   platform: string | null;
+  app?: string;
   appVersion: string | null;
   lastSeenAt: string | null;
   online: boolean;

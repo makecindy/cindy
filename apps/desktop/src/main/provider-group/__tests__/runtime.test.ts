@@ -36,6 +36,13 @@ vi.mock('../../subscription-accounts/runtime.js', async importOriginal => ({
   ...await importOriginal<Record<string, unknown>>(),
   onSubscriptionAccountsChanged: (listener: () => void) => { io.localAccountPush = listener; return () => {}; },
 }));
+// The account runtime now statically imports route admission. These directory/cache tests never
+// dispatch accounts; keep that permission leaf fail-closed without loading share/fast-policy assembly.
+vi.mock('../../subscription-accounts/legacyAccountAccess.js', () => ({
+  legacyCodexAccountCanRun: () => false,
+  openAiRouteAllowsModel: () => false,
+  setLegacyCodexAccountPaused: vi.fn(),
+}));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => owner, isAppSessionBoundaryPending: () => false }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: io.shares,
   captureProviderShareGroupRecovery: () => async () => undefined }));
@@ -765,7 +772,9 @@ describe('provider group runtime quota account selection', () => {
     const resolved = await h.read();
     expect(resolved[1].codexUsage?.nativeAccountPool).toBe(true);
     for (const kind of ['pi', 'claude-code']) {
-      expect(providerGroupMemberUsageState(resolved[1], 'chatgpt/gpt-6', Date.now(), kind).limited).toBe(true);
+      // The native bucket still describes the full plan window, but the pool can spend credits.
+      expect(providerGroupMemberUsageState(resolved[1], 'chatgpt/gpt-6', Date.now(), kind))
+        .toMatchObject({ limited: false, quota: { usedPercent: 100 } });
       expect(providerGroupMemberUsageState(resolved[1], 'chatgpt/special-model', Date.now(), kind).limited).toBe(false);
     }
     expect(io.invoke).toHaveBeenCalledTimes(1);
