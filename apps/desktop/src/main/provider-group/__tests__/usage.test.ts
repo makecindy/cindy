@@ -29,6 +29,46 @@ describe('OpenAI group quota snapshots', () => {
   const state = (raw: unknown, model = 'gpt-5.3-codex', agentKind = 'codex') =>
     providerGroupMemberUsageState({ codexUsage: providerGroupCodexUsageSnapshot(raw) }, model, NOW, agentKind);
 
+  // #10330, unit: parsing + admission + the real scheduler previously discarded
+  // positive credits. Existing window-only cases cannot distinguish quota from
+  // credit-backed admission. Keep model/age boundaries and prefer plan capacity.
+  it('admits fresh credit-backed quota and prefers remaining subscription capacity', () => {
+    const raw = { ...bucket(100), credits: { hasCredits: true, unlimited: false, balance: '25.5' } };
+    const usage = state(raw);
+    expect(usage).toMatchObject({ limited: false, resetAtMs: null, creditOnly: true });
+    const members = [raw, bucket(90, 300, (NOW + 3 * 3_600_000) / 1000)].map((value, index) => ({
+      key: String(index), usable: !state(value).limited, paused: false, running: index, limit: 4, weight: 1,
+      ...state(value),
+    }));
+    expect(pickProviderGroupMember(members, 'least')).toBe('1');
+    expect(pickProviderGroupMember(members.slice(0, 1), 'least')).toBe('0');
+    expect(state({ appServerBuckets: { codex: raw, spark: { ...bucket(100), limitName: 'GPT-5.3-Codex-Spark' } } },
+      'gpt-5.3-codex-spark').limited).toBe(true);
+  });
+
+  it.each([
+    undefined, null, { hasCredits: false, unlimited: false, balance: '25' },
+    { hasCredits: true, unlimited: false, balance: '0' },
+    { hasCredits: true, unlimited: false, balance: '-1' },
+    { hasCredits: true, unlimited: false, balance: 'Infinity' },
+    { hasCredits: true, unlimited: false, balance: 'unknown' },
+    { hasCredits: true, unlimited: false, balance: null },
+  ])('keeps exhausted accounts limited without valid positive credits (%j)', credits => {
+    expect(state({ ...bucket(100), credits })).toMatchObject({ limited: true, resetAtMs: 3_000_000 });
+  });
+
+  it('keeps credit freshness separate from window refreshes and preserves sanitized round trips', () => {
+    const parsed = providerGroupCodexUsageFromReads(null, { rateLimits: {
+      ...bucket(100), credits: { hasCredits: true, unlimited: true, balance: null },
+    } }, NOW);
+    expect(state(parsed)).toMatchObject({ limited: false, creditOnly: true });
+    const old = providerGroupCodexUsageFromReads(null, { rateLimits: {
+      ...bucket(100), credits: { hasCredits: true, unlimited: false, balance: '25' },
+    } }, NOW - PROVIDER_GROUP_USAGE_MAX_AGE_MS - 1);
+    const refreshed = { ...old?.appServerBuckets?.__default__, updatedAt: NOW };
+    expect(state(refreshed)).toMatchObject({ limited: true });
+  });
+
   it('uses only the selected model bucket, and only WHAM for bridge/Pi', () => {
     const raw = { appServerBuckets: {
       codex: bucket(20), spark: { ...bucket(100), limitName: 'GPT-5.3-Codex-Spark' },

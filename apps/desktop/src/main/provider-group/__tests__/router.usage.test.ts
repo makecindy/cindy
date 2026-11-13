@@ -89,6 +89,24 @@ describe('OpenAI subscription group routing', () => {
     expect((await h.router.view('openai', { model: GPT, agentKind: 'pi' })).members[0].state).toBe('cooling');
   });
 
+  // #10330, unit: the real group router must carry credit fallback ordering to
+  // the scheduler for both local and remote native pools. Existing quota tests
+  // have no credits, so dropping that scheduling fact would silently spend them.
+  it.each(['codex', 'pi'] as const)('keeps plan capacity ahead of a credit-backed native pool (%s)', async agentKind => {
+    const h = openaiHarness();
+    h.config.strategy = 'least';
+    h.usage.set('local', { nativeAccountPool: true, appServerBuckets: { codex: {
+      ...quota(100, 20), credits: { hasCredits: true, unlimited: false, balance: '25' },
+    } } });
+    h.usage.set(h.remote, { nativeAccountPool: true, appServerBuckets: { codex: quota(90, 40) } });
+    expect(await h.pick(GPT, agentKind)).toMatchObject({ member: { key: h.remote } });
+    h.config.members[1].paused = true;
+    expect(await h.pick(GPT, agentKind)).toMatchObject({ member: { key: 'local' } });
+    expect((await h.router.view('openai', { model: GPT, agentKind })).members[0])
+      .toMatchObject({ state: 'available' });
+    expect(h.writeCooling).not.toHaveBeenCalled();
+  });
+
   it('falls back to group order for unknown/stale quotas and reports unavailable only when both accounts are exhausted', async () => {
     const h = openaiHarness();
     h.usage.set('local', { ...quota(100, 100), updatedAt: NOW - 600_001 });

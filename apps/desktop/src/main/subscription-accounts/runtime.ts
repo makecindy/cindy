@@ -381,6 +381,7 @@ export function observeSubscriptionAccountUsage(
       [bucketKey]: { ...bucket,
         primary: 'primary' in codexEvent ? bucket.primary : previous?.primary ?? null,
         secondary: 'secondary' in codexEvent ? bucket.secondary : previous?.secondary ?? null,
+        creditAvailability: 'credits' in codexEvent ? bucket.creditAvailability : previous?.creditAvailability,
       },
     } };
   }
@@ -678,7 +679,7 @@ export async function readSubscriptionPoolModelAvailability(
     const usage = providerGroupMemberUsageState(info.usage ?? {},
       provider === 'openai' ? model.replace(/^chatgpt\//, '') : model,
       Date.now(), provider === 'openai' ? 'codex' : 'claude-code');
-    return !usage.limited && usage.quota !== null;
+    return !usage.limited && (usage.quota !== null || usage.creditOnly === true);
   });
 }
 
@@ -831,6 +832,7 @@ export async function readSubscriptionPoolUsage(
         limit: Number.POSITIVE_INFINITY,
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
+        creditOnly: usage.creditOnly,
       }];
     });
     const id = pickProviderGroupMember(members, latest.strategy, {
@@ -1231,6 +1233,7 @@ export async function acquireSubscriptionAccount(
       limit: control ? Number.POSITIVE_INFINITY : effectiveConcurrencyLimit(a),
       urgency: usage.urgency,
       fiveHourTight: usage.fiveHourTight,
+      creditOnly: usage.creditOnly,
     };
   });
   // Reopening an old task without a recorded binding must keep its original default home.

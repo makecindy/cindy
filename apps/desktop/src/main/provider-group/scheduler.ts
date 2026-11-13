@@ -18,6 +18,8 @@ export interface SchedulableMember {
   urgency?: number | null;
   /** 5 小时配额快满、离重置还早(usage.ts)：先不分新任务，除非别的都不行。 */
   fiveHourTight?: boolean;
+  /** Plan quota is exhausted; only a fresh credit observation admits this candidate. */
+  creditOnly?: boolean;
 }
 
 export interface PickOptions {
@@ -76,8 +78,12 @@ export function pickProviderGroupMember(
  * 尚未接入用量的订阅或 API 连接)排在读得到的后面；全部读不到时不筛，原样交给组策略。保持组里的顺序。
  */
 function byQuota(open: readonly SchedulableMember[]): readonly SchedulableMember[] {
-  const roomy = open.filter((member) => !member.fiveHourTight);
-  const pool = roomy.length > 0 ? roomy : open;
+  // Try plan/unknown capacity before known paid-credit fallback, even when that
+  // plan is near its short-window limit. Concurrency and permissions already ran.
+  const withoutCredits = open.filter((member) => !member.creditOnly);
+  const capacity = withoutCredits.length > 0 ? withoutCredits : open;
+  const roomy = capacity.filter((member) => !member.fiveHourTight);
+  const pool = roomy.length > 0 ? roomy : capacity;
   const known = pool.filter((member) => typeof member.urgency === 'number' && Number.isFinite(member.urgency));
   if (known.length === 0) return pool;
   const top = Math.max(...known.map((member) => member.urgency!));

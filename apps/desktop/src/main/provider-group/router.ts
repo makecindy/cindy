@@ -313,6 +313,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           weight: r.member.weight,
           urgency: quota.urgency,
           fiveHourTight: quota.fiveHourTight,
+          creditOnly: quota.creditOnly,
         };
       });
       const key = pickProviderGroupMember(schedulable, config.strategy, {

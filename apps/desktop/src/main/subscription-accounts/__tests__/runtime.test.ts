@@ -113,6 +113,7 @@ import {
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
   readSubscriptionPoolModelAvailability,
+  readSubscriptionAccountBlocked,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
   readSubscriptionSessionAccount,
@@ -169,6 +170,83 @@ beforeEach(() => {
   h.cooling = {};
   h.writeCooling.mockReset().mockResolvedValue(undefined);
   h.clearCooling.mockReset().mockResolvedValue(undefined);
+});
+
+// #10330, unit/in-process: real pool reads and acquisition used to reject a
+// signed-in account with a full window and positive credits. Existing quota-only
+// tests cannot catch this. No upstream requests or paid probes are made.
+describe('OpenAI credit-backed account admission', () => {
+  const usage = (used = 100) => ({ codexUsage: providerGroupCodexUsageFromReads(null, {
+    rateLimits: { limitId: 'codex', primary: { usedPercent: used, windowDurationMins: 10080,
+      resetsAt: (Date.now() + 86_400_000) / 1000 },
+    credits: { hasCredits: true, unlimited: false, balance: '25' } },
+  }, Date.now()) });
+
+  it.each([{}, { remote: true, ownComputer: true }, { remote: true }])(
+    'admits the only account for new and pinned tasks (%j)', async options => {
+      h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+      h.usage.mockResolvedValue(usage());
+      expect((await readSubscriptionPool('openai')).accounts[0].status).toBe('ready');
+      const lease = await acquireSubscriptionAccount('openai', 'gpt-6', ['task'], false, options);
+      expect(lease?.accountId).toBe('default');
+      await lease?.bind(['task', 'native']);
+      lease?.release();
+      const resumed = await acquireSubscriptionAccount('openai', 'gpt-6', ['task', 'native'], false, { ...options, resuming: true });
+      expect(resumed?.accountId).toBe('default');
+      resumed?.release();
+      const projected = await readSubscriptionPoolUsage('openai');
+      expect(providerGroupMemberUsageState(projected ?? {}, 'gpt-6', Date.now(), 'codex').limited).toBe(false);
+    },
+  );
+
+  it('prefers subscription quota but keeps the established credit account affinity', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.usage.mockImplementation(async (_provider, dir: string) => usage(dir.endsWith('default') ? 100 : 20));
+    const fresh = await acquireSubscriptionAccount('openai', 'gpt-6', ['new']);
+    expect(fresh?.accountId).toBe('second');
+    fresh?.release();
+    h.bindings.set('existing', { providerId: 'openai', accountId: 'default' });
+    const pinned = await acquireSubscriptionAccount('openai', 'gpt-6', ['existing'], false, { resuming: true });
+    expect(pinned?.accountId).toBe('default');
+    pinned?.release();
+  });
+
+  it('retains upstream refusal cooling despite positive credits', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), { ...account('second'), paused: true }] };
+    h.usage.mockResolvedValue(usage());
+    const lease = await acquireSubscriptionAccount('openai', 'gpt-6', ['failed']);
+    expect(await readSubscriptionPoolModelAvailability('openai', 'gpt-6')).toBe(true);
+    lease!.observeFailure(Object.assign(new Error('usage limit'), { codexErrorInfo: 'usageLimitExceeded' }), 'gpt-6', 'run');
+    lease!.release();
+    expect(await readSubscriptionPoolModelAvailability('openai', 'gpt-6')).toBe(false);
+    await expect(acquireSubscriptionAccount('openai', 'gpt-6', ['new'])).rejects.toThrow('No subscription account');
+  });
+
+  it('does not let credits bypass imported account grants or paused accounts', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [{ ...account('default'), paused: true }, account('imported')],
+      legacyCodexAccounts: { 'old-openai': 'imported' } };
+    h.usage.mockResolvedValue(usage());
+    h.accountAllowed.mockReturnValue(false);
+    await expect(acquireSubscriptionAccount('openai', 'gpt-6', [], false, { remote: true }))
+      .rejects.toThrow('No subscription account');
+    expect(await readSubscriptionPoolModelAvailability('openai', 'gpt-6', { remote: true })).toBe(false);
+  });
+
+  it('does not refresh an old credit observation when only a window changes', async () => {
+    vi.useFakeTimers();
+    try {
+      h.pools.openai = { strategy: 'least', accounts: [account('default'), { ...account('second'), paused: true }] };
+      h.usage.mockResolvedValue(usage());
+      const lease = await acquireSubscriptionAccount('openai', 'gpt-6', ['task']);
+      vi.setSystemTime(Date.now() + 10 * 60_000 + 1);
+      observeSubscriptionAccountUsage(lease!.account, { limitId: 'codex', primary: {
+        usedPercent: 100, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 3600,
+      } });
+      // Send admission reads the event cache without an unrelated CLI refresh.
+      expect(readSubscriptionAccountBlocked('openai', 'default', 'gpt-6')).toBe(true);
+      lease!.release();
+    } finally { vi.useRealTimers(); }
+  });
 });
 
 // Regression: added OpenAI accounts had neither reset RPC routing nor an automatic

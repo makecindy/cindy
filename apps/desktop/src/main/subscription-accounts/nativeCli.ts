@@ -131,7 +131,7 @@ export async function readNativeAccountUsage(provider: SubscriptionProvider, dir
   };
 }
 
-/** Settings shows the balance line of the provider usage card; scheduling ignores it. */
+/** Settings retains the balance; scheduling uses only the bucket's sanitized credit availability. */
 function codexCredits(raw: unknown) {
   const credits = (raw as { rateLimits?: { credits?: unknown } } | null)?.rateLimits?.credits;
   if (!credits || typeof credits !== 'object') return null;

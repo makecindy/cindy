@@ -130,6 +130,8 @@ interface CodexUsageBucket {
   updatedAt: number | null;
   primary: CodexUsageWindow | null;
   secondary: CodexUsageWindow | null;
+  /** Sanitized credit fact from this bucket, with its own observation time. No balance or identity. */
+  creditAvailability?: { available: boolean; updatedAt: number | null };
 }
 
 /** Only quota fields survive parsing; account identity and reset-credit offers stay out of the directory. */
@@ -167,11 +169,26 @@ function codexWindow(raw: unknown): CodexUsageWindow | null {
 function codexBucket(raw: unknown): CodexUsageBucket | null {
   const value = record(raw);
   if (!value) return null;
+  const observed = record(value.creditAvailability);
+  const credits = record(value.credits);
+  const balance = typeof credits?.balance === 'string' && credits.balance.trim() !== ''
+    ? Number(credits.balance) : NaN;
+  // An explicit empty/invalid credits field supersedes an older observation.
+  // Sanitized pool round trips retain the credit timestamp, not the RPC read time.
+  const creditAvailability = 'credits' in value ? {
+    available: credits?.hasCredits === true
+      && (credits.unlimited === true || (Number.isFinite(balance) && balance > 0)),
+    updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : null,
+  } : observed ? {
+    available: observed.available === true,
+    updatedAt: typeof observed.updatedAt === 'number' && Number.isFinite(observed.updatedAt) ? observed.updatedAt : null,
+  } : undefined;
   return {
     limitId: typeof value.limitId === 'string' ? value.limitId : null,
     limitName: typeof value.limitName === 'string' ? value.limitName : null,
     updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : null,
     primary: codexWindow(value.primary), secondary: codexWindow(value.secondary),
+    ...(creditAvailability ? { creditAvailability } : {}),
   };
 }
 
@@ -214,6 +231,10 @@ function codexUsageState(snapshot: ProviderGroupCodexUsageSnapshot, model: strin
   const windows = [bucket.primary, bucket.secondary].filter((w): w is CodexUsageWindow => w !== null);
   const limit = accountUsageLimitFromWindows(windows.flatMap((w) => w.usedPercent === undefined
     ? [] : [{ usedPercent: w.usedPercent, resetsAtSec: w.resetsAt }]), now);
+  // A full plan window is not a refusal from OpenAI. A fresh positive credit fact
+  // allows a request; actual model admission and subsequent errors remain upstream.
+  const creditOnly = limit.limited && bucket.creditAvailability?.available === true
+    && currentSnapshot(bucket.creditAvailability.updatedAt, now);
   const current = (w: CodexUsageWindow) => w.usedPercent !== undefined && (!w.resetsAt || w.resetsAt * 1000 > now);
   // 按长于 5 小时的窗口(周额度)排；只有 5 小时窗口的套餐按它排。
   const timed = windows.filter((w) => w.windowMinutes !== null);
@@ -223,12 +244,15 @@ function codexUsageState(snapshot: ProviderGroupCodexUsageSnapshot, model: strin
     && fiveHourTight(w.usedPercent, w.resetsAt ? w.resetsAt * 1000 : null, now));
   return {
     ...limit,
+    creditOnly,
     fiveHourTight: tight,
     ...paceState(paced.length > 0 && paced.every(current)
       ? paced.map((w) => ({
         usedPercent: w.usedPercent!, resetAtMs: w.resetsAt ? w.resetsAt * 1000 : null, windowMs: w.windowMinutes! * 60_000,
       }))
       : null, now),
+    // Paid fallback has no expiring plan quota to spend or rebalance towards.
+    ...(creditOnly ? { limited: false, resetAtMs: null, urgency: null, quota: null } : {}),
   };
 }
 
@@ -237,7 +261,7 @@ export function providerGroupMemberUsageState(
   model: string | null | undefined,
   now: number,
   agentKind?: string,
-) {
+): ReturnType<typeof providerGroupUsageState> & { creditOnly?: boolean } {
   return member.codexUsage ? codexUsageState(member.codexUsage, model, now, agentKind) : providerGroupUsageState(member.claudeUsage, model, now);
 }
 
