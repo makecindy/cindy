@@ -212,7 +212,11 @@ export class ChatBridgeToolContext {
     }
     const selectorName = namespace === undefined ? name : namespace + '.' + name;
     const recorded = this.currentSelectors.get(`${selectorKind}\0${selectorName}`);
-    if (recorded) return recorded;
+    // Distinguish a miss from a recorded ambiguity: `null` means two declarations claim this
+    // selector, and the caller has to say which one. Falling through would let the exact
+    // identity below pick one for them.
+    if (recorded === null) return clampChatToolName(name);
+    if (recorded !== undefined) return recorded;
     // Only declarations this turn made may answer a selector, and only under the name the Chat
     // catalog actually advertises: the restoration map also holds replayed history and the raw
     // fallback can differ from the clamped wire name.

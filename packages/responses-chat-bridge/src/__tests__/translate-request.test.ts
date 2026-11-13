@@ -976,6 +976,28 @@ describe('translateResponsesRequest', () => {
     expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'now' } });
   });
 
+  it('does not resolve an ambiguous selector to a declaration it did not unambiguously name', () => {
+    // A custom `now` and a `clock.now` function both answer the bare name `now`. The selector
+    // does not say which one, so it must stay unqualified instead of being resolved to the
+    // namespaced declaration the caller never named.
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [
+            { type: 'custom', name: 'now' },
+            { type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }] },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'now' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'now' } });
+  });
+
   it('tolerates a non-string custom description instead of throwing (#9715)', () => {
     const out = translateResponsesRequest(base({
       input: [
