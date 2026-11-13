@@ -85,7 +85,8 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       setResult(null);
     }
     const run = observed.current;
-    if (!enabled) {
+    // Loading only defers requests; a known opt-out discards the live run.
+    if (preference.ready && !enabled) {
       cancelPending.current?.();
       run.running = false;
       run.sawRunning = false;
@@ -126,7 +127,7 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       setResult(null);
       return;
     }
-    if (!available || blocked || (result?.scope === scope && result.revision === revision)) return;
+    if (!enabled || !available || blocked || (result?.scope === scope && result.revision === revision)) return;
     // Historical navigation only reuses a host result; it never starts a paid prediction.
     const cacheOnly = run.liveRevision !== revision;
     const previous = request.current;
@@ -190,7 +191,7 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       if (!started && request.current === attempt) request.current = null;
     };
   }, [scope, deviceId, sessionId, agentKind, revision, running, blocked, hasTerminalError, result,
-    available, connectionEpoch, settledAttempt, enabled]);
+    available, connectionEpoch, settledAttempt, enabled, preference.ready]);
 
   return {
     prompt: enabled && !running && !displayBlocked && result?.scope === scope && result.revision === revision

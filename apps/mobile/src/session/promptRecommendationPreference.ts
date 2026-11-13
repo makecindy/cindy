@@ -39,13 +39,22 @@ function load(): Promise<void> {
 
 /** Phone-local choice, independent of the controlled computer. Null removes the override. */
 export function savePromptRecommendationPreference(enabled: boolean | null): Promise<void> {
-  revision += 1;
+  const writeRevision = ++revision;
   loaded ??= Promise.resolve();
-  snapshot = { ready: true, enabled: enabled ?? DEFAULT_ENABLED, customized: enabled !== null };
+  // Keep reset available until its persisted override is actually removed.
+  snapshot = { ready: true, enabled: enabled ?? DEFAULT_ENABLED, customized: enabled !== null || snapshot.customized };
   notify();
-  const write = writes.catch(() => undefined).then(() => enabled === null
-    ? AsyncStorage.removeItem(STORAGE_KEY)
-    : AsyncStorage.setItem(STORAGE_KEY, String(enabled)));
+  const write = writes.catch(() => undefined).then(async () => {
+    if (enabled === null) {
+      await AsyncStorage.removeItem(STORAGE_KEY);
+      if (writeRevision === revision) {
+        snapshot = { ...snapshot, customized: false };
+        notify();
+      }
+    } else {
+      await AsyncStorage.setItem(STORAGE_KEY, String(enabled));
+    }
+  });
   writes = write;
   // Keep the choice active for this process on failure; the settings UI reports
   // that it was not saved. Serialize writes so a quick toggle cannot undo it.

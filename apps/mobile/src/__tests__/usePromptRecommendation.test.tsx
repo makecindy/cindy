@@ -105,6 +105,63 @@ it('does not request anything before a slow saved opt-out is read', async () => 
   expect(value.prompt).toBeNull();
 });
 
+// Review regression: loading is not opt-out. A completed live turn must still
+// generate once when a delayed read confirms the default or explicit opt-in.
+it.each([null, 'true'])('preserves a live completion while preference loading resolves to %s', async (raw) => {
+  let resolve!: (raw: string | null) => void;
+  vi.mocked(AsyncStorage.getItem).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  expect(request).not.toHaveBeenCalled();
+  await act(async () => resolve(raw));
+  await advance();
+  expect(request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    cacheOnly: false, completionRevision: 20,
+  }));
+  expect(value.prompt).toBe('Suggested next step');
+});
+
+// Review regression: failed removal must leave a usable reset action, so users
+// can persist the default without toggling to an unwanted value first.
+it('keeps reset available after removal fails and lets the user retry', async () => {
+  storage.set(preferenceTesting.storageKey, 'false');
+  showSettings = true;
+  await render();
+  vi.mocked(AsyncStorage.removeItem).mockRejectedValueOnce(new Error('disk full'));
+  const reset = () => [...container.querySelectorAll<HTMLButtonElement>('button')]
+    .find(button => button.textContent === 'settings.promptRecommendation.reset');
+  await act(async () => reset()!.click());
+  expect(preference.enabled).toBe(true);
+  expect(storage.get(preferenceTesting.storageKey)).toBe('false');
+  expect(container.textContent).toContain('settings.promptRecommendation.saveFailed');
+  expect(reset()).toBeDefined();
+  expect(reset()!.disabled).toBe(false);
+  await act(async () => reset()!.click());
+  expect(storage.has(preferenceTesting.storageKey)).toBe(false);
+  expect(reset()).toBeUndefined();
+  expect(container.textContent).not.toContain('settings.promptRecommendation.saveFailed');
+  await act(async () => root.render(null));
+  preferenceTesting.reset();
+  await render();
+  expect(preference).toMatchObject({ ready: true, enabled: true, customized: false });
+});
+
+it('does not let an older reset clear a newer explicit choice', async () => {
+  storage.set(preferenceTesting.storageKey, 'false');
+  await render();
+  let completeRemoval!: () => void;
+  vi.mocked(AsyncStorage.removeItem).mockImplementationOnce(key => new Promise(done => {
+    completeRemoval = () => { storage.delete(key); done(); };
+  }));
+  let reset!: Promise<void>;
+  await act(async () => { reset = savePromptRecommendationPreference(null); });
+  let disable!: Promise<void>;
+  await act(async () => { disable = savePromptRecommendationPreference(false); });
+  await act(async () => { completeRemoval(); await Promise.all([reset, disable]); });
+  expect(preference).toMatchObject({ enabled: false, customized: true });
+  expect(storage.get(preferenceTesting.storageKey)).toBe('false');
+});
+
 it('cancels a scheduled prediction when disabled', async () => {
   await render({ running: true });
   await render({ running: false, revision: 20 });
