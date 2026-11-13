@@ -1,6 +1,7 @@
 // Own-window backdrop only. No screen capture, global input, or foreign window IDs.
 // CGS is private SPI: resolve at runtime and report failure to the material fallback.
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>
 #include <node_api.h>
 #include <dlfcn.h>
 #include <cmath>
@@ -15,6 +16,7 @@ using SetBlur = int32_t (*)(uint32_t, uint32_t, uint32_t);
 static char originalBackgroundKey;
 static char sidebarKey;
 static char radiusKey;
+static char neutralStateKey;
 
 static NSWindow *OwnedWindow(void *bytes) {
   if (![NSThread isMainThread]) return nil;
@@ -46,6 +48,77 @@ static void PreserveCornerMask(NSWindow *window) {
   window.backgroundColor = CornerMaskBackground();
 }
 
+// The sidebar keeps only the material's blur; Cindy paints its color in CSS, in
+// the main area's hue (user decision, 2026-11-11). AppKit's private layer tree is
+// a backdrop layer (blur + saturation) beside tint, blend and desktop-tinting
+// layers. Any other layout is left untouched, keeping the system material.
+static void StripMaterialColor(CALayer *layer) {
+  for (CALayer *child in layer.sublayers) {
+    if (![NSStringFromClass(child.class) isEqualToString:@"CABackdropLayer"]) {
+      StripMaterialColor(child);
+      continue;
+    }
+    NSMutableArray *filters = [NSMutableArray array];
+    for (id filter in child.filters) {
+      id name = [filter respondsToSelector:@selector(name)] ? [filter valueForKey:@"name"] : nil;
+      if ([name isEqual:@"gaussianBlur"] || [name isEqual:@"sdrNormalize"]) [filters addObject:filter];
+    }
+    child.filters = filters;
+    for (CALayer *sibling in layer.sublayers) {
+      if (sibling != child && sibling.sublayers.count == 0) sibling.hidden = YES;
+    }
+    return;
+  }
+}
+static void StripView(NSView *view) {
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  StripMaterialColor(view.layer);
+  [CATransaction commit];
+}
+// AppKit rebuilds these layers on appearance, state and layout changes. A
+// one-time hook on NSVisualEffectView strips them again after each rebuild, only
+// for views marked here; no class is swapped, so KVO and other views are
+// unaffected. Unmarking restores the untouched system material (0% and artwork).
+static void InstallStripHook() {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    Class base = NSVisualEffectView.class;
+    for (NSString *selectorName in @[@"updateLayer", @"layout", @"viewDidChangeEffectiveAppearance"]) {
+      SEL selector = NSSelectorFromString(selectorName);
+      Method method = class_getInstanceMethod(base, selector);
+      if (!method) continue;
+      IMP original = method_getImplementation(method);
+      IMP hook = imp_implementationWithBlock(^(NSVisualEffectView *self) {
+        ((void (*)(id, SEL))original)(self, selector);
+        if (objc_getAssociatedObject(self, &neutralStateKey)) StripView(self);
+      });
+      if (!class_addMethod(base, selector, hook, method_getTypeEncoding(method))) {
+        method_setImplementation(method, hook);
+      }
+    }
+  });
+}
+static void SetNeutral(NSVisualEffectView *view, bool neutral) {
+  NSNumber *state = objc_getAssociatedObject(view, &neutralStateKey);
+  if (neutral) {
+    InstallStripHook();
+    if (!state) {
+      objc_setAssociatedObject(view, &neutralStateKey, @(view.state), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      // An inactive window would swap the blur for an opaque gray in another hue.
+      view.state = NSVisualEffectStateActive;
+    }
+    StripView(view);
+  } else if (state) {
+    objc_setAssociatedObject(view, &neutralStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    view.state = (NSVisualEffectState)state.integerValue;
+    // Reassigning the appearance makes AppKit rebuild its own tint layers.
+    NSAppearance *appearance = view.appearance;
+    view.appearance = nil;
+    view.appearance = appearance;
+  }
+}
+
 static napi_value SetSidebar(napi_env env, napi_callback_info info) {
   size_t argc = 3, length = 0;
   napi_value args[3], result;
@@ -70,6 +143,7 @@ static napi_value SetSidebar(napi_env env, napi_callback_info info) {
       ? ((id (*)(id, SEL))objc_msgSend)(window, selector) : nil;
     NSVisualEffectView *view = [candidate isKindOfClass:NSVisualEffectView.class] ? candidate : nil;
     if (width == 0) {
+      if (view) SetNeutral(view, false);
       objc_setAssociatedObject(window, &sidebarKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
       if ([objc_getAssociatedObject(window, &radiusKey) doubleValue] == 0) RestoreBackground(window);
     } else if (view) {
@@ -87,6 +161,7 @@ static napi_value SetSidebar(napi_env env, napi_callback_info info) {
       mask.capInsets = NSEdgeInsetsMake(0, visibleWidth + 1, 0, 0);
       mask.resizingMode = NSImageResizingModeStretch;
       view.maskImage = mask;
+      SetNeutral(view, true);
       objc_setAssociatedObject(window, &sidebarKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
       PreserveCornerMask(window);
     } else {

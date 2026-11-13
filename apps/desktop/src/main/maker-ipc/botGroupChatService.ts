@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { messageSourceSenderFromMeta, parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import path from 'node:path';
 
 import { and, asc, desc, eq, gt, inArray, lt, ne } from 'drizzle-orm';
@@ -16,6 +17,7 @@ import {
   messages,
 } from '../localDb/schema.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import {
   buildPlanStepBrief,
@@ -64,7 +66,6 @@ import {
   type BotGroupSpeaker,
   type BotGroupSpeakingMode,
   type BotGroupSummary,
-  type BotGroupTaskCard,
 } from '../../shared/botGroupChat.js';
 
 /** docs/product-rules/bot-group-chat.md §4.2 — enforced here, never by prompt. */
@@ -91,7 +92,7 @@ type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
   | { ok: false; errorCode: string; message: string };
 
-type LaneResult = { ok: true; sessionId: string } | { ok: false; errorCode: string; message: string };
+type LaneResult = { ok: true; sessionId: string; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
 
 interface TurnExecution {
   instanceId: string;
@@ -139,6 +140,8 @@ export interface BotGroupChatServiceDeps {
     threadRootId?: string;
     talkPlanId?: string;
     personalDigest?: boolean;
+    /** The group's project folder on this computer; a V2 teammate's replies work there (§7.5). */
+    projectDir?: string;
   }) => Promise<LaneResult>;
   /** Live native context identity; absent/unknown means background must be restored. */
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
@@ -147,14 +150,28 @@ export interface BotGroupChatServiceDeps {
     targetSessionId: string;
     message: string;
     persistedContent: string;
-    /** Exact owner-authored text verified by the live server execution, never the group envelope. */
-    autoReviewUserText?: string;
+    /**
+     * Exact owner-authored text verified by the live server execution, never the group envelope;
+     * a receipt when the words go into a task card's task (owner words carry `delegatedText`).
+     */
+    autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
+    /** Host-stamped source of words going into a task card's task (the speaker and the group). */
+    origin?: AgentInputQueuedMessage['origin'];
     clientId: string;
     attachments?: BotGroupAttachment[];
     toolsDisabled?: boolean;
+    /** An ordinary task that is not running starts with the permission it was opened with, never bypass. */
+    resumeWithStoredPermissionMode?: boolean;
     onQueued?: (clientId: string) => Promise<void>;
     onAccepted: () => void | Promise<void>;
   }) => Promise<DispatchResult>;
+  /**
+   * The group's Cindy on this computer (bot-group-chat.md「群里的 Cindy」): the given task when it is
+   * still usable, else a new ordinary visible task titled with the group's name, under the project
+   * folder (`projectDir`) or under 「对话」 (null), with this user's new-task model and permission.
+   */
+  ensureGroupAssistantSession?: (input: { sessionId?: string; title: string; projectDir: string | null }) =>
+    Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; errorCode: string; message: string }>;
   /**
    * Turns a composer's attachments into stored ones (bot-group-chat.md §3.1): images end up
    * in the media store under this group, files stay where they are on this computer or, from
@@ -183,6 +200,20 @@ export interface BotGroupChatServiceDeps {
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
   validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
   /**
+   * A task this computer runs, for its group card: title, state and recorded pull request; null
+   * when the task is gone (bot-group-chat.md §10).
+   */
+  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string } | null>;
+  /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */
+  readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
+  /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
+  findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
+  /**
+   * Cindy's own checkouts of a group's GitHub repository (`groupProjectCheckout.ts`): cloned on
+   * first need when no registered project is that repository, fast-forwarded when clean.
+   */
+  groupCheckouts?: Pick<import('./groupProjectCheckout.js').GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged'>;
+  /**
    * A 分工 step stopped for the user: finished (继续, or the whole plan is done) or not
    * finished (重试). Phones are notified from here (bot-group-chat.md §8.3).
    */
@@ -192,6 +223,8 @@ export interface BotGroupChatServiceDeps {
   onChanged?: (payload: BotGroupChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
   onChatMessageNotification?: (payload: import('./chatMessageNotifications.js').ChatMessageNotification, current: () => boolean) => void;
   onChatGroupAttention?: (groupId: string, input: import('../agent-island/groupChat.js').AgentIslandGroupChatInput | null, current: () => boolean) => void;
+  /** The signed-in account's own preference `key` changed (written by this or another device). */
+  onAccountPreferenceChanged?: (key: string) => void;
   /** Cloud companions (cloud-companions.md); absent keeps the Chat Server per-computer only. */
   companionCloud?: import('../companion-cloud/runtime.js').CompanionCloudHost;
   now?: () => number;
@@ -516,7 +549,7 @@ export function buildMemberTurnPrompt(input: {
   const lines = [
     `[Cindy group chat "${input.groupName.replace(/["\\\r\n]/g, ' ')}"]`,
     `You are ${input.botName}, one participant in this group chat with the user (your owner)${
-      input.peerNames.length > 0 ? ` and your teammates ${input.peerNames.join(', ')}` : ''
+      input.peerNames.length > 0 ? ` and your buddies ${input.peerNames.join(', ')}` : ''
     }.`,
   ];
   if (input.mentioned === 'you') lines.push('The user mentioned you, so answer this time.');
@@ -566,6 +599,20 @@ export async function readPersistedReplyText(sessionId: string, messageClientId:
     .limit(1);
   const text = visibleMessageTextForConversationSearch('assistant', row?.content ?? '').trim();
   return text || null;
+}
+
+/** The task on this computer that sent a stored input to another task; null for any other sender. */
+export async function readPersistedInputSenderTask(sessionId: string, messageClientId: string): Promise<string | null> {
+  const [row] = await getDbClient()
+    .drizzle.select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, messageClientId), eq(messages.role, 'user')))
+    .limit(1);
+  let meta: unknown = row?.agentMeta;
+  if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { return null; } }
+  const sender = messageSourceSenderFromMeta(meta);
+  const target = sender?.kind === 'session' ? parseSourceSessionTarget(sender.sessionId) : null;
+  return target && !target.deviceId ? target.sessionId : null;
 }
 
 export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
@@ -2249,32 +2296,9 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     editPlanStep,
     settleLaneTurn,
     refreshPendingInteraction,
-    /** Only a server room has a message channel a teammate can post into outside a turn. */
-    postCompanionTaskMessage: async (_input: BotGroupTaskPostInput): Promise<BotGroupTaskPostResult> =>
-      ({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }),
     dispose,
   };
 }
-
-/** One message a teammate posts into its group about an independent task (bot-group-chat.md §10). */
-export interface BotGroupTaskPostInput {
-  groupId: string;
-  botId: string;
-  /** Idempotent per event: retries return the message the server already stored. */
-  clientId: string;
-  text: string;
-  card?: BotGroupTaskCard;
-  /** Generic task outboxes freeze the same wire payload without a delegation row. */
-  preparePost?: (prepare: () => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>,
-    destination: { endpoint: string; selfId: string; roomId: string; clientId: string }) => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>;
-  /** Delivered files, uploaded as this teammate's attachments; unreadable ones are skipped. */
-  files?: Array<{ absolutePath: string }>;
-  /** A task started in a Thread reports back into that Thread. */
-  threadRootId?: string;
-}
-export type BotGroupTaskPostResult =
-  | { ok: true; messageId: string }
-  | { ok: false; errorCode: string; retryable: boolean };
 
 export type BotGroupChatService = ReturnType<typeof createBotGroupChatService> & {
   chatServer?: import('../../shared/botGroupChat.js').ChatServerApi;

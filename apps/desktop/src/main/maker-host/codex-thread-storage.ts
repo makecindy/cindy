@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
-import { codexAccountHome } from './codex-account-auth.js';
+import { codexAccountHome } from './codex-account-auth.desktop.js';
 import { readCodexThreadStorageForArchiveAsync, prepareCodexRolloutForResume } from './codex-local-sessions.js';
 import { CodexThreadLocations } from './codex-thread-locations.js';
 

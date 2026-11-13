@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { appendPendingQueueItems } from '@/components/chat/pendingQueueItems';
 import { describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
@@ -43,7 +45,7 @@ function queuedMessage(patch: Partial<QueuedMessage> = {}): QueuedMessage {
 }
 
 describe('getPendingQueueRowPresentation', () => {
-  it('marks messages sent by another session as read-only rows with the sender title', () => {
+  it('allows messages sent by another session to steer without editing their source', () => {
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({
         text: 'follow-up',
@@ -65,7 +67,7 @@ describe('getPendingQueueRowPresentation', () => {
       senderLabel: 'Release checklist',
       displayText: 'follow-up',
       canEdit: false,
-      canSteer: false,
+      canSteer: true,
     });
     expect(
       getPendingQueueRowPresentation(
@@ -134,6 +136,19 @@ describe('getPendingQueueRowPresentation', () => {
       canEdit: false,
       canSteer: true,
     });
+  });
+
+  // 回归：批次 origin 即使带首个 Worker 的名字，也必须保留总数与正文（unit）。
+  it('counts system batches without changing their content or permissions', () => {
+    const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
+    const origin = { kind: 'orca' as const, senderLabel: 'A', senderSessionId: 'worker-1', displayText: body };
+    const presentation = getPendingQueueRowPresentation(queuedMessage({ origin }));
+    expect(presentation.senderLabel).toBe('A');
+    const batch = getPendingQueueRowPresentation(queuedMessage({
+      origin: { ...origin, autoBridge: true, autoBridgeBatchCount: 2 },
+    }));
+    expect(batch).toEqual({ ...presentation,
+      senderLabel: i18n.t('chat.userMessage.orcaFromWorkerBatch', { count: 2 }), displayText: body });
   });
 
   it('marks scheduler heartbeat rows with schedule name, hides silent-run suffix, locks edit/steer', () => {
@@ -320,6 +335,15 @@ describe('resolveSoleSteerableQueuedMessage', () => {
     expect(resolveSoleSteerableQueuedMessage([queuedMessage()], idle)).toBe('client-1');
   });
 
+  it('never targets a hidden answered question reply, but still targets a supplement', () => {
+    const answered = queuedMessage({ clientId: 'question-reply:answered:request-1:digest' });
+    expect(getPendingQueueRowPresentation(answered)).toMatchObject({ canEdit: false, canSteer: false });
+    expect(resolveSoleSteerableQueuedMessage([answered], idle)).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage({ clientId: 'question-reply:request-2:digest' })], idle),
+    ).toBe('question-reply:request-2:digest');
+  });
+
   it('declines when the target is ambiguous or the row cannot steer right now', () => {
     expect(
       resolveSoleSteerableQueuedMessage(
@@ -366,6 +390,19 @@ it('decodes forwarded queue display without mutating the queued body', () => {
 // not independent queue/history arrival: this unit regression prevents double rows
 // and keeps pending input out of turn grouping (minimum: one stale queue echo).
 describe('pending queue timeline', () => {
+  // PR #9727: an accepted answer is already visible on its card. Previous
+  // timeline coverage only tested deduplication against history. Tier: unit.
+  it('omits card answers before history arrives without consuming their queued payload', () => {
+    const first = queuedMessage().chatMessage;
+    const answer = { ...first, clientId: 'question-reply:answered:request-1' };
+    const supplement = { ...first, clientId: 'question-reply:request-2' };
+    const pending = [answer, first, supplement];
+    expect(appendPendingQueueItems([], pending, []).map(item => item.key))
+      .toEqual(['msg-client-1', 'msg-question-reply:request-2']);
+    expect(pending).toEqual([answer, first, supplement]);
+    expect(appendPendingQueueItems([], [answer], [])).toEqual([]);
+  });
+
   it('keeps queue order and the delivered message key while dropping stale queue echoes', () => {
     const first = queuedMessage().chatMessage;
     const second = { ...first, clientId: 'second', content: 'second' };

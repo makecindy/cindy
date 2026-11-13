@@ -3,7 +3,7 @@
  * 的第三个控制目标。
  *
  * 与另外两个后端的差别:
- * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它;
+ * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 按需启动但不关闭它;
  * - 用哪个浏览器是用户的选择,所以能力与专用浏览器对齐(扩展 0.4.42 起):截图、
  *   上传、页面脚本、控制台、网络、弹窗、坐标与拖拽都可用。底线是不打扰用户自己的
  *   使用:新页面开在 Cindy 自己的后台窗口,不抢焦点,不切换用户正在看的标签页;
@@ -52,6 +52,9 @@ export interface UserBrowserBackendOptions {
   now?(): number;
   /** status 时扩展未连接,先等它重连这么久(扩展刷新或更新后会断开几秒);默认 8 秒。 */
   reconnectWaitMs?: number;
+  /** Only called for actual browser use, never passive status/doctor/settings reads. */
+  startBrowser?(): Promise<void>;
+  startupWaitMs?: number;
 }
 
 interface TargetRecord {
@@ -225,7 +228,7 @@ const TAB_ACTION_LABEL: Partial<Record<BackendRequest['action'], string>> = {
 const NOT_CONFIGURED_MESSAGE =
   '没有已启用的浏览器扩展插件提供页面控制(安装并启用 Cindy Chrome 插件后再选择「我的浏览器」)。';
 const DISCONNECTED_MESSAGE =
-  '浏览器扩展尚未连接:保持 Cindy 和 Chrome / Edge 运行,检查 Cindy 扩展是否启用;未连接不代表未安装。';
+  '浏览器扩展尚未连接；start 会尝试启动浏览器并等待连接。自动启动后仍未连接时检查扩展是否启用或需要配对；未连接不代表未安装。';
 
 const UNPAIRED_MESSAGE =
   '浏览器扩展已连到 Cindy,但还没完成配对或授权:请让用户在 Cindy Chrome 插件页确认这个浏览器,或重新启用插件后再查询 status。';
@@ -245,6 +248,7 @@ export class UserBrowserBackend implements BrowserBackend {
   private readonly recipePumps = new Map<string, () => Promise<void>>();
   private nextAlias = 1;
   private disposed = false;
+  private preparing: { wantsLaunch: boolean; promise: Promise<void> } | null = null;
 
   constructor(private readonly opts: UserBrowserBackendOptions) {}
 
@@ -256,6 +260,11 @@ export class UserBrowserBackend implements BrowserBackend {
         'BROWSER_RUNTIME_UNAVAILABLE',
       );
     try {
+      if (!['status', 'doctor', 'profiles', 'stop'].includes(request.action) &&
+          request.proxyServer === undefined && request.proxyAllowedHostnames === undefined) {
+        await this.ensureConnected(request);
+      }
+      if (this.disposed) return actionFailed(request.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
       const result = await this.dispatch(request);
       this.noteSessionTab(request, result);
       return result;
@@ -266,6 +275,45 @@ export class UserBrowserBackend implements BrowserBackend {
       });
       return actionFailed(request.action, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  private async ensureConnected(req: BackendRequest): Promise<void> {
+    const control = this.opts.getPageControl();
+    if (!control || !this.opts.startBrowser || this.connectedClients(control).length > 0) return;
+    // A named connection may belong to a different browser/profile. Never substitute the OS
+    // default for it. Requests without a profile may still join a wait that began earlier and
+    // ask it to launch the default browser, so the first caller's profile does not decide for all.
+    if (!req.profile && this.preparing) this.preparing.wantsLaunch = true;
+    if (!this.preparing) {
+      const state: { wantsLaunch: boolean; promise: Promise<void> } = {
+        wantsLaunch: !req.profile,
+        promise: Promise.resolve(),
+      };
+      const stillCurrent = () => !this.disposed && this.opts.getPageControl()?.bridge === control.bridge;
+      const prepare = async () => {
+        let status = await control.bridge.status();
+        // Pairing is a separate boundary; opening more browsers cannot resolve it.
+        if (!stillCurrent() || !status.ok || status.clients.some(c => c.connected || c.trusted === false)) return;
+        let launched = false;
+        const launchIfWanted = async () => {
+          if (!state.wantsLaunch || launched) return;
+          launched = true;
+          await this.opts.startBrowser!();
+        };
+        await launchIfWanted();
+        const deadline = (this.opts.now ?? Date.now)() + (this.opts.startupWaitMs ?? 35_000);
+        while (stillCurrent() && this.connectedClients(control).length === 0 && (this.opts.now ?? Date.now)() < deadline) {
+          await sleep(500);
+          await launchIfWanted();
+          status = await control.bridge.status();
+          // The extension came online but still needs the user's approval: waiting cannot fix that.
+          if (status.ok && status.clients.some(c => c.trusted === false)) return;
+        }
+      };
+      state.promise = prepare().finally(() => { this.preparing = null; });
+      this.preparing = state;
+    }
+    await this.preparing.promise;
   }
 
   async dispose(): Promise<void> {
@@ -311,7 +359,7 @@ export class UserBrowserBackend implements BrowserBackend {
         return actionOk(req.action, {
           ready: true,
           backend: this.kind,
-          note: '用户浏览器由用户自己启停,Cindy 不关闭它。',
+          note: 'Cindy 会按需启动用户浏览器，不会关闭它。',
         });
       case 'profiles':
         return this.handleProfiles(req);
@@ -424,6 +472,42 @@ export class UserBrowserBackend implements BrowserBackend {
       this.targets.delete(record.targetId);
     }
     return job;
+  }
+
+  /**
+   * 页面文字读取的作业:最多等 `budgetMs`(调用方给的剩余时间),到点按失败返回。桥接对一个作业的默认期限是
+   * 45 秒,不理会 payload 里的 timeoutMs;页面无响应时,调用方的 5 秒探测循环不能被它拖长。作业本身仍可能
+   * 在扩展里跑完,它的结果会被丢弃(只读,没有副作用)。
+   */
+  private async pageJobWithin(
+    budgetMs: number | undefined,
+    control: UserBrowserPageControl,
+    record: TargetRecord,
+    kind: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<BrowserExtensionJobResult> {
+    const job = this.pageJob(control, record, kind, extra);
+    if (budgetMs === undefined) return job;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<BrowserExtensionJobResult>((resolve) => {
+      timer = setTimeout(
+        () =>
+          resolve({
+            ok: false,
+            error: 'BROWSER_TIMEOUT',
+            message: `页面在 ${budgetMs}ms 内没有响应`,
+            execution: 'unknown',
+          }),
+        budgetMs,
+      );
+    });
+    try {
+      return await Promise.race([job, expired]);
+    } finally {
+      clearTimeout(timer);
+      // The abandoned job may still reject later; nobody is waiting for it.
+      job.catch(() => undefined);
+    }
   }
 
   /** 选连接:显式 profile(连接 id)优先;只有一条连接时直接用;多条且未指定时拒绝,不猜账号。 */
@@ -1600,6 +1684,62 @@ export class UserBrowserBackend implements BrowserBackend {
       req.request as { domRead?: { kind?: string; extract?: Record<string, unknown> } }
     ).domRead;
     if (!domRead) return outdated(req.action, '任意页面脚本(evaluate.fn)');
+    if (domRead.kind === 'text') {
+      // The rendered text of the page, as `{ok, url, title, readyState, found, length, text}`.
+      const spec = (domRead as { text?: { selector?: string; offset?: number; maxChars?: number } }).text ?? {};
+      // The caller's time budget covers both paths below: the page script and, after it is refused, the extract.
+      const now = this.opts.now ?? Date.now;
+      const timeoutMs = (req.request as { timeoutMs?: unknown }).timeoutMs;
+      const deadline = typeof timeoutMs === 'number' && timeoutMs > 0 ? now() + timeoutMs : undefined;
+      const remaining = (): number | undefined => (deadline === undefined ? undefined : Math.max(100, deadline - now()));
+      if (this.parity(control, record.clientId)) {
+        const job = await this.pageJobWithin(remaining(), control, record, 'evaluate', { fn: buildDomReadSource(domRead) });
+        if (job.ok)
+          return actionOk(req.action, {
+            backend: this.kind,
+            targetId: record.targetId,
+            url: record.url,
+            result: job.result,
+            untrusted_content: true,
+          });
+        if (job.error !== 'EVAL_BLOCKED_BY_PAGE') return this.failureResult(req.action, job);
+      }
+      // No page script here: an older extension, or a page whose Content Security Policy refuses them
+      // (seen on github.com). The extension's own extract reads the same rendered text, but the bridge
+      // hands the model at most 4,000 characters of one field (`FIELD_VALUE_MAX`, whatever `maxChars` says) and
+      // flags the cut with `truncated`. Nothing past that prefix can be fetched, so the result says so
+      // (`capped`) instead of presenting the prefix as the whole page; a `selector` reads a narrower part.
+      // The load state is not reported, and `open` has already waited for it.
+      const job = await this.pageJobWithin(remaining(), control, record, 'extract', {
+        fields: { text: { selector: ':self' } },
+        ...(spec.selector ? { selector: spec.selector } : {}),
+        maxChars: 30000,
+      });
+      if (!job.ok && String(job.error ?? '') !== 'INVALID_ARGS') return this.failureResult(req.action, job);
+      const raw = job.ok ? (job.record as { text?: unknown } | undefined)?.text : undefined;
+      const text =
+        typeof raw === 'string'
+          ? raw.replace(/[ \t\u00a0]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+          : '';
+      const offset = spec.offset ?? 0;
+      return actionOk(req.action, {
+        backend: this.kind,
+        targetId: record.targetId,
+        url: record.url,
+        result: {
+          ok: job.ok,
+          ...(job.ok ? {} : { error: String(job.message ?? `invalid CSS selector: ${spec.selector ?? ''}`) }),
+          url: record.url,
+          title: record.title ?? '',
+          readyState: 'complete',
+          found: typeof raw === 'string',
+          length: text.length,
+          ...(job.truncated === true ? { capped: true } : {}),
+          text: text.slice(offset, offset + (spec.maxChars ?? 8000)),
+        },
+        untrusted_content: true,
+      });
+    }
     const html =
       domRead.kind === 'extract' &&
       Object.values(

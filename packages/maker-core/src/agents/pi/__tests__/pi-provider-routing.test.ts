@@ -6314,7 +6314,11 @@ describe("Pi provider-aware model routing", () => {
             }));
           } else {
             await expect(sent).rejects.toMatchObject({ code: "PI_IMAGE_INPUT_UNSUPPORTED" });
-            expect(captured.requests).toHaveLength(0);
+            // Runtime capability discovery can issue get_commands in the background.
+            // Rejected images must never reach Pi as user input.
+            expect(captured.requests.filter((request) =>
+              request.type === "prompt" || request.type === "steer",
+            )).toHaveLength(0);
           }
         }
       }

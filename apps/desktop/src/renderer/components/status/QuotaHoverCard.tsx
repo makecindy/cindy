@@ -10,8 +10,11 @@ import { useTranslation } from 'react-i18next';
 
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import {
   formatQuotaResetCountdown,
+  formatQuotaResetDuration,
   formatQuotaResetAt,
   type UsageCardAccount,
   type UsageCardWindow,
@@ -199,6 +202,12 @@ function WindowBlock({
   if (compact) {
     // 嵌入态(设置页)一行一个窗口:标题 | 进度条 | 百分比 | 重置倒计时,列宽由外层 grid 统一,
     // 各行进度条左右对齐。明细(绝对重置时间 / 节奏 / breakdown)只在悬浮卡里展示。
+    // 可见行省略重复的「剩余」「后重置」;进度条和重置说明的读屏文案仍保留完整语义。
+    const percentValue = new Intl.NumberFormat(locale, {
+      style: 'percent',
+      maximumFractionDigits: 0,
+    }).format(Math.round(showRemaining ? 100 - usedPercent : usedPercent) / 100);
+    const resetDuration = formatQuotaResetDuration(window.resetsAt, nowMs, t);
     return (
       <section
         data-testid="quota-window"
@@ -206,12 +215,21 @@ function WindowBlock({
       >
         {titleNode}
         {bar}
-        <span className="text-right font-medium text-[var(--text-primary)]">{percentText}</span>
+        <span title={percentText} className="text-right font-medium text-[var(--text-primary)]">
+          {percentValue}
+        </span>
         <span
           className="min-w-0 truncate text-right text-12 text-[var(--text-secondary)]"
           title={resetCountdown ?? undefined}
         >
-          {resetCountdown}
+          {resetDuration === null ? (
+            resetCountdown
+          ) : (
+            <>
+              <span aria-hidden="true">{resetDuration}</span>
+              <span className="sr-only">{resetCountdown}</span>
+            </>
+          )}
         </span>
       </section>
     );
@@ -549,7 +567,22 @@ export function QuotaHoverCard({
         {!embedded && windows.length === 0 && windowAction ? (
           <div className="flex justify-end px-4">{windowAction}</div>
         ) : null}
-        {emptyText ? (
+        {account.refreshFailure ? (
+          <ErrorNotice
+            role="status"
+            className="mx-4 my-2"
+            message={t('quotaCard.codexRefreshFailed')}
+            actions={
+              <Button
+                variant="secondary"
+                disabled={account.refreshFailure.retrying}
+                onClick={account.refreshFailure.retry}
+              >
+                {t(account.refreshFailure.retrying ? 'quotaCard.retryingQuota' : 'quotaCard.retryQuota')}
+              </Button>
+            }
+          />
+        ) : emptyText ? (
           <div className="px-4 py-2 text-[var(--text-secondary)]">{emptyText}</div>
         ) : null}
         {notices.map((notice, index) => (

@@ -36,6 +36,7 @@ import {
   getCachedProvidersSnapshot,
   isProvidersRefreshCurrent,
   loadProvidersSnapshot,
+  type ProvidersSnapshot,
 } from '@/lib/providersSnapshotStore';
 
 const log = createLogger('localCatalogSnapshot');
@@ -52,39 +53,55 @@ function cancelRecovery(): void {
   recoveryTimer = undefined;
 }
 
-function failed(owner: DataOwnerGeneration, reason: LocalCatalogFailureReason): void {
-  if (!isDataOwnerGenerationCurrent(owner)) return;
-  setLocalCatalogFailure(owner, reason);
-  // Corrupt bytes need deliberate repair, not repeated writes or a reset to
-  // factory defaults. Other failures receive a bounded recovery window.
-  if (!recoveryOwners || reason === 'preferences-corrupt'
+function scheduleRecovery(owner: DataOwnerGeneration): void {
+  if (!recoveryOwners || document.visibilityState !== 'visible'
     || recoveryAttempt >= RECOVERY_DELAYS_MS.length) return;
   cancelRecovery();
   recoveryTimer = setTimeout(() => {
     recoveryTimer = undefined;
-    if (!isDataOwnerGenerationCurrent(owner)) return;
+    if (!isDataOwnerGenerationCurrent(owner) || document.visibilityState !== 'visible') return;
     recoveryAttempt += 1;
     void refreshSnapshot();
   }, RECOVERY_DELAYS_MS[recoveryAttempt]);
 }
 
+function failed(owner: DataOwnerGeneration, reason: LocalCatalogFailureReason): void {
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  setLocalCatalogFailure(owner, reason);
+  // Corrupt preferences require deliberate repair. Other failures share the
+  // existing bounded recovery timer, including a partial native-account read.
+  if (reason !== 'preferences-corrupt') scheduleRecovery(owner);
+}
+
+function hasUnavailableSubscription(snapshot: ProvidersSnapshot | null): boolean {
+  return snapshot?.providers.some(provider =>
+    (provider.id === 'openai' || provider.id === 'anthropic') && !provider.connected
+    && !provider.suspended && !provider.removed && provider.subscriptionReadUnavailable === true) ?? false;
+}
+
 /** Main-window lifecycle owns recovery. Never leave polling behind after unmount/HMR. */
 export function startLocalCatalogRecovery(): () => void {
+  if (!recoveryOwners) recoveryAttempt = 0;
   recoveryOwners += 1;
   const retry = (): void => {
+    if (document.visibilityState !== 'visible') return;
     const owner = getDataOwnerGeneration();
     const snapshot = getCachedProvidersSnapshot();
     // An owner-generation change hides the previous failure. A foreground
     // retry may still be needed if this account has no current complete snapshot.
     if (getLocalCatalogFailure() || (owner.dataOwnerId && (!snapshot
-      || snapshot.ownerGeneration !== owner.generation))) void refreshLocalCatalogSnapshot();
+      || snapshot.ownerGeneration !== owner.generation || hasUnavailableSubscription(snapshot)))) void refreshLocalCatalogSnapshot();
   };
   const onVisible = (): void => {
     if (document.visibilityState === 'visible') retry();
+    else cancelRecovery();
   };
   window.addEventListener('focus', retry);
   window.addEventListener('online', retry);
   document.addEventListener('visibilitychange', onVisible);
+  // Initial preload can finish before this lifecycle mounts. Recover its partial
+  // read through the same bounded timer; configuration uses onProvidersChanged.
+  if (hasUnavailableSubscription(getCachedProvidersSnapshot())) scheduleRecovery(getDataOwnerGeneration());
   return () => {
     recoveryOwners -= 1;
     window.removeEventListener('focus', retry);
@@ -156,8 +173,9 @@ async function refreshSnapshot(): Promise<boolean> {
       // 两次提交均为同步通知；React 会把同一事件循环内的 hook 更新批处理到同一帧。
       commitLocalCapabilitiesSnapshot(capabilitiesGeneration, capabilities);
       commitProvidersSnapshot(providersGeneration, providers);
-      recoveryAttempt = 0;
       setLocalCatalogFailure(owner, null);
+      if (hasUnavailableSubscription(providers)) scheduleRecovery(owner);
+      else recoveryAttempt = 0;
       return true;
     } catch (error) {
       if (refreshGeneration === generation) {

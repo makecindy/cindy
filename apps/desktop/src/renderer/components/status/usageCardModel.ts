@@ -21,6 +21,7 @@ import {
   formatClaudeSubscriptionPlanLabel,
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
+import appI18n from 'i18next';
 
 export interface UsageCardWindow {
   key: string;
@@ -49,6 +50,8 @@ export interface UsageCardAccount {
   notices?: Array<{ text: string; tone: 'warn' | 'crit' }>;
   emptyText?: string;
   updatedAt?: number | null;
+  /** Optional recovery for a failed read; counters and other usage stay intact. */
+  refreshFailure?: { retry: () => void; retrying: boolean };
 }
 
 /** Compact surfaces lead with time remaining; round up to minutes and show
@@ -59,8 +62,19 @@ export function formatQuotaResetCountdown(
   t: TFunction,
 ): string | null {
   if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  const duration = formatQuotaResetDuration(resetsAt, nowMs, t);
+  return duration === null ? t('quotaCard.resetPending') : t('quotaCard.resetIn', { duration });
+}
+
+/** The bare time left in a window, without the "resets in" wording; null when unknown or elapsed. */
+export function formatQuotaResetDuration(
+  resetsAt: number | null | undefined,
+  nowMs: number,
+  t: TFunction,
+): string | null {
+  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
   const remainingMs = resetsAt * 1000 - nowMs;
-  if (remainingMs <= 0) return t('quotaCard.resetPending');
+  if (remainingMs <= 0) return null;
   const minutes = Math.ceil(remainingMs / 60_000);
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
@@ -77,7 +91,7 @@ export function formatQuotaResetCountdown(
             ...(remainder ? [`${remainder}${t('todaySpend.unit.minute')}`] : []),
           ]
         : [`${minutes}${t('todaySpend.unit.minute')}`];
-  return t('quotaCard.resetIn', { duration: parts.join(' ') });
+  return parts.join(' ');
 }
 
 export function formatQuotaResetAt(
@@ -387,8 +401,8 @@ export function buildXaiUsageCard(
   ) {
     details.push(
       t('todaySpend.xai.requestsLine', {
-        remaining: rateLimit.remainingRequests.toLocaleString(),
-        limit: rateLimit.limitRequests.toLocaleString(),
+        remaining: rateLimit.remainingRequests.toLocaleString(appI18n.language),
+        limit: rateLimit.limitRequests.toLocaleString(appI18n.language),
       }),
     );
   }

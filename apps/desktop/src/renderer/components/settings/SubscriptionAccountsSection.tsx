@@ -11,8 +11,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -26,6 +28,7 @@ import {
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
 import { toast } from '@/lib/toast';
+import { extractIpcError } from '@/utils/ipcError';
 import { cn } from '@/lib/utils';
 import {
   QUOTA_WINDOW_COLUMNS,
@@ -33,16 +36,36 @@ import {
   QuotaWindowSubgridContext,
 } from '../status/QuotaHoverCard';
 import { buildSubscriptionAccountUsageCard } from '../status/usageCardModel';
-import type {
-  SubscriptionAccountCommand,
-  SubscriptionAccountView,
-  SubscriptionPoolView,
-  SubscriptionProvider,
+import {
+  isUnusedDefaultAccount,
+  type SubscriptionAccountCommand,
+  type SubscriptionAccountView,
+  type SubscriptionPoolView,
+  type SubscriptionProvider,
 } from '../../../shared/subscriptionAccounts';
-import type { ProviderGroupStrategy } from '../../../shared/providerGroup';
+import {
+  CONCURRENCY_LIMIT_OPTIONS,
+  CONCURRENCY_LIMIT_UNLIMITED,
+  concurrencyLimitFromOption,
+  concurrencyLimitOptionValue,
+  type ProviderGroupStrategy,
+} from '../../../shared/providerGroup';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
+import { isClassicalLocale, modernLocaleOf } from '../../../shared/locale';
 import { providersSettings } from './ProvidersSection.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
+import { codexResetScope } from '../../../shared/subscriptionAccounts';
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
+import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
+import { CodexResetCredits } from '../status/CodexResetCredits';
+
+function AccountResetCredits({ scope }: { scope: string }) {
+  const { snapshot, refresh } = useCodexRateLimits(true, scope);
+  const reset = useCodexRateLimitReset(snapshot, refresh, scope);
+  return <CodexResetCredits variant="embedded" providerId={scope} snapshot={snapshot}
+    onChanged={refresh} busy={reset.busy} canReset={reset.canReset} canRetry={reset.canRetry}
+    onReset={credit => void reset.reset(credit)} />;
+}
 
 const strategies: ProviderGroupStrategy[] = ['least', 'round', 'order', 'weight'];
 const statusDot: Record<SubscriptionAccountView['status'], string> = {
@@ -51,6 +74,11 @@ const statusDot: Record<SubscriptionAccountView['status'], string> = {
   'signed-out': 'var(--error-fg)',
   unavailable: 'var(--remote-status-disconnected)',
 };
+
+/** Alone, the unused default slot lists nothing: the provider header's sign-in (or Add) fills it. */
+function isUnusedDefaultSlot(accounts: SubscriptionAccountView[]): boolean {
+  return accounts.length === 1 && isUnusedDefaultAccount(accounts[0]);
+}
 
 function AccountTag({ children }: { children: ReactNode }) {
   return (
@@ -129,8 +157,17 @@ export function SubscriptionAccountsSection({
       await window.electronAPI.subscriptionAccounts.command(command);
       await refresh();
     } catch (error) {
-      if (!String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED'))
-        toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(
+          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+            ? 'subscriptionAccounts.providerManagedAuth'
+            : code === 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
+              ? 'subscriptionAccounts.loginIdentityMismatch'
+              : code === 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
+                ? 'subscriptionAccounts.loginIdentityUnknown'
+                : 'subscriptionAccounts.failed',
+        ));
       await refresh();
     } finally {
       inFlight.current = false;
@@ -142,6 +179,9 @@ export function SubscriptionAccountsSection({
     const result = await window.electronAPI.openPath(directory);
     if (shouldShowOpenPathError(result)) toast.error(t('subscriptionAccounts.openDirectoryFailed'));
   };
+  const accounts = view && !isUnusedDefaultSlot(view.accounts) ? view.accounts : [];
+  // Strategy and weights only choose between accounts; a single account has nothing to balance.
+  const balancing = accounts.length > 1;
   return (
     <section
       {...accountSetting.anchorProps}
@@ -153,8 +193,8 @@ export function SubscriptionAccountsSection({
           <h3 className="text-16 font-medium text-[var(--text-primary)]">
             {t('subscriptionAccounts.title')}
           </h3>
-          {view && (
-            <span className="text-12 text-[var(--text-tertiary)]">{view.accounts.length}</span>
+          {accounts.length > 0 && (
+            <span className="text-12 text-[var(--text-tertiary)]">{accounts.length}</span>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -188,9 +228,6 @@ export function SubscriptionAccountsSection({
           </Button>
         </div>
       </div>
-      <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">
-        {t('subscriptionAccounts.note')}
-      </p>
       {failed && (
         <p role="alert" className="mt-3 text-12 text-[var(--text-danger)]">
           {t('subscriptionAccounts.failed')}
@@ -202,37 +239,40 @@ export function SubscriptionAccountsSection({
         </div>
       )}
       {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}
-      {defaultUsage &&
-        ((!view && failed) || view?.accounts.every((account) => account.id !== 'default')) && (
-          <div data-testid="provider-usage-module" className="-mx-4 mt-3">
-            {defaultUsage}
-          </div>
-        )}
-      {view && (
+      {defaultUsage && (view ? accounts.every((account) => account.id !== 'default') : failed) && (
+        <div data-testid="provider-usage-module" className="-mx-4 mt-3">
+          {defaultUsage}
+        </div>
+      )}
+      {view && accounts.length > 0 && (
         <>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-13 font-medium text-[var(--text-secondary)]">
-              {t('subscriptionAccounts.strategy')}
-            </span>
-            <Select
-              {...accountSetting.controlProps}
-              label={t('subscriptionAccounts.strategy')}
-              value={view.strategy === 'usage' ? 'least' : view.strategy}
-              disabled={busy}
-              className="h-8"
-              options={strategies.map((value) => ({
-                value,
-                label: t(`providerGroup.strategy.${value}`),
-              }))}
-              onValueChange={(value) =>
-                void run({
-                  action: 'configure',
-                  providerId,
-                  strategy: value as ProviderGroupStrategy,
-                })
-              }
-            />
-          </div>
+          {balancing && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-13 font-medium text-[var(--text-secondary)]">
+                {t('subscriptionAccounts.strategy')}
+              </span>
+              {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
+              <SegmentedControl
+                {...accountSetting.controlProps}
+                aria-label={t('subscriptionAccounts.strategy')}
+                value={view.strategy === 'usage' ? 'least' : view.strategy}
+                disabled={busy}
+                options={strategies.map((value) => ({
+                  value,
+                  label: t(`providerGroup.strategy.${value}`),
+                }))}
+                onValueChange={(value) => {
+                  // Only a changed strategy is saved, as with the previous picker.
+                  if (value === (view.strategy === 'usage' ? 'least' : view.strategy)) return;
+                  void run({
+                    action: 'configure',
+                    providerId,
+                    strategy: value,
+                  });
+                }}
+              />
+            </div>
+          )}
           {/* One grid for every account: each usage card joins it as a subgrid, so the bars of all
               accounts start and end at the same columns. */}
           <QuotaWindowSubgridContext.Provider value={true}>
@@ -242,7 +282,7 @@ export function SubscriptionAccountsSection({
                 QUOTA_WINDOW_COLUMNS,
               )}
             >
-              {view.accounts.map((account, index) => {
+              {accounts.map((account, index) => {
                 const name =
                   account.identity ||
                   t('providerGroup.member.accountFallback', { index: index + 1 });
@@ -258,7 +298,9 @@ export function SubscriptionAccountsSection({
                 );
                 // As in provider groups, a usable account reports its load; other states add it.
                 const running = t('providerGroup.member.runningCount', { count: account.running });
-                const state = account.paused
+                const state = account.authIssue === 'claude-account-mismatch'
+                  ? t('subscriptionAccounts.loginIdentityMismatchStatus')
+                  : account.paused
                   ? t('providerGroup.member.status.paused')
                   : account.status === 'ready'
                     ? account.running > 0
@@ -271,12 +313,40 @@ export function SubscriptionAccountsSection({
                   account.running > 0 && (account.paused || account.status !== 'ready')
                     ? `${state} · ${running}`
                     : state;
+                const connected = account.status === 'ready' || account.status === 'limited';
+                const expiresAt = account.loginExpiresAt ? Date.parse(account.loginExpiresAt) : NaN;
+                const remaining = expiresAt - Date.now();
+                const expiryKnown = Number.isFinite(expiresAt);
+                // The CLI supplies an estimate; passing it never changes the auth status.
+                const expiring = expiryKnown && remaining <= 7 * 86_400_000;
+                const expiryText = !expiryKnown
+                  ? t('subscriptionAccounts.loginExpiryUnknown')
+                  : remaining <= 0
+                    ? t('subscriptionAccounts.loginMayHaveExpired')
+                    : remaining <= 86_400_000
+                      ? t('subscriptionAccounts.loginExpiresSoon')
+                      : t('subscriptionAccounts.loginExpiresInDays', { days: Math.ceil(remaining / 86_400_000) });
+                const expiryDetail = expiryKnown ? t('subscriptionAccounts.loginExpiryDetail', {
+                  date: new Intl.DateTimeFormat(isClassicalLocale(locale) ? modernLocaleOf(locale) : locale,
+                    { dateStyle: 'medium', timeStyle: 'short' }).format(expiresAt),
+                }) : expiryText;
+                const signIn = () => void run({
+                  action: 'login', providerId, accountId: account.id, loginKey: crypto.randomUUID(),
+                });
+                const resetScope = account.codexResetProviderId ?? codexResetScope(account.id);
+                // Reset settings do not depend on a successful usage read. A replaced
+                // identity remounts the reader; ordinary running-count changes do not.
+                const resetNode = providerId === 'openai' && connected ? (
+                  <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
+                ) : null;
                 const usageNode =
                   account.id === 'default' && defaultUsage ? (
                     defaultUsage
                   ) : usage ? (
-                    <QuotaHoverCard variant="embedded" hideIdentity account={usage} />
-                  ) : null;
+                    <QuotaHoverCard variant="embedded" hideIdentity account={usage}>
+                      {resetNode}
+                    </QuotaHoverCard>
+                  ) : resetNode;
                 return (
                   <div
                     key={account.id}
@@ -310,52 +380,77 @@ export function SubscriptionAccountsSection({
                             </span>
                             {plan && <AccountTag>{plan}</AccountTag>}
                             {account.id === 'default' && !account.legacy && (
-                              <AccountTag>{t('subscriptionAccounts.default')}</AccountTag>
+                              <AccountTag>{t('subscriptionAccounts.defaultTag')}</AccountTag>
                             )}
                           </div>
-                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
-                            <span
-                              aria-hidden="true"
-                              className="size-1.5 shrink-0 rounded-full"
-                              style={{
-                                background: account.paused
-                                  ? 'var(--remote-status-disconnected)'
-                                  : statusDot[account.status],
-                              }}
-                            />
-                            <span title={status} className="min-w-0 truncate">
-                              {status}
+                          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-12 text-[var(--text-secondary)]">
+                            <span className="inline-flex min-w-0 items-center gap-1.5">
+                              <span
+                                aria-hidden="true"
+                                className="size-1.5 shrink-0 rounded-full"
+                                style={{
+                                  background: account.paused
+                                    ? 'var(--remote-status-disconnected)'
+                                    : statusDot[account.status],
+                                }}
+                              />
+                              <span title={status} className="min-w-0 truncate">{status}</span>
                             </span>
+                            {providerId === 'anthropic' && connected && (
+                              <Tip text={expiryDetail}>
+                                <span className={cn('min-w-0', expiring && 'text-[var(--warning-fg)]')}>
+                                  {expiryText}
+                                </span>
+                              </Tip>
+                            )}
+                            {providerId === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
+                              <Button
+                                data-settings-search-action="Sign in again to this Claude account"
+                                variant="secondary"
+                                tone="quiet"
+                                size="sm"
+                                disabled={busy || account.running > 0}
+                                aria-label={t('subscriptionAccounts.loginAccountAria', { name })}
+                                onClick={signIn}
+                              >
+                                {t('subscriptionAccounts.loginAgain')}
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </div>
-                      <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1.5">
+                      <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
                         <Select
                           {...accountSetting.controlProps}
                           label={t('providerGroup.member.limitAria', { name })}
-                          value={String(account.limit)}
+                          value={concurrencyLimitOptionValue(account)}
                           disabled={busy}
-                          className="h-8 w-[104px]"
-                          options={Array.from({ length: 16 }, (_, n) => ({
-                            value: String(n + 1),
-                            label: t('providerGroup.member.limitOption', { count: n + 1 }),
+                          size="compact"
+                          width="xs"
+                          options={CONCURRENCY_LIMIT_OPTIONS.map((value) => ({
+                            value,
+                            label:
+                              value === CONCURRENCY_LIMIT_UNLIMITED
+                                ? t('providerGroup.member.limitUnlimited')
+                                : t('providerGroup.member.limitOption', { count: Number(value) }),
                           }))}
                           onValueChange={(value) =>
                             void run({
                               action: 'configure',
                               providerId,
                               accountId: account.id,
-                              limit: Number(value),
+                              limit: concurrencyLimitFromOption(value),
                             })
                           }
                         />
-                        {view.strategy === 'weight' && (
+                        {balancing && view.strategy === 'weight' && (
                           <Select
                             {...accountSetting.controlProps}
                             label={t('providerGroup.member.weightAria', { name })}
                             value={String(account.weight)}
                             disabled={busy}
-                            className="h-8 w-[120px]"
+                            size="compact"
+                            width="xs"
                             options={[1, 2, 3, 5, 10, 20, 50, 100].map((weight) => ({
                               value: String(weight),
                               label: t('providerGroup.member.weightOption', { weight }),
@@ -386,28 +481,28 @@ export function SubscriptionAccountsSection({
                         />
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button
-                              data-settings-search-action="Open sign-in, folder and removal actions for this subscription account"
-                              variant="secondary"
-                              tone="quiet"
-                              size="md"
-                              compact
-                              aria-label={t('providerGroup.member.moreAria', { name })}
-                            >
-                              <MoreHorizontal size={16} />
-                            </Button>
+                            {/* Below the button, so the tip shown on keyboard focus (e.g. after Esc
+                                closes the menu) never covers the controls wrapped above it. */}
+                            <Tip side="bottom" text={t('providerGroup.member.moreAria', { name })}>
+                              {/* The negative margins cancel the round face's padding: the dots keep
+                                  the same 8px gap as the other controls and end on the row's right
+                                  edge, in line with the reset times below. */}
+                              <Button
+                                data-settings-search-action="Open sign-in, folder and removal actions for this subscription account"
+                                variant="secondary"
+                                tone="quiet"
+                                size="sm"
+                                className="-mx-2 w-7 px-0"
+                                aria-label={t('providerGroup.member.moreAria', { name })}
+                              >
+                                <MoreHorizontal size={16} />
+                              </Button>
+                            </Tip>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem
                               disabled={busy || account.running > 0}
-                              onSelect={() =>
-                                void run({
-                                  action: 'login',
-                                  providerId,
-                                  accountId: account.id,
-                                  loginKey: crypto.randomUUID(),
-                                })
-                              }
+                              onSelect={signIn}
                             >
                               <LogIn size={18} className="mr-2.5" />
                               {/* Signing in replaces this folder's own login; say so when it is already connected. */}

@@ -24,7 +24,7 @@ vi.mock('electron', () => ({
 
 const schema = await import('../../localDb/schema');
 const ledger = await import('../ledger');
-const blobStore = await import('../blobStore');
+const blobStore = await import('../blobStore.desktop');
 const recycler = await import('../recycler');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');

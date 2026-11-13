@@ -45,10 +45,13 @@ export type RemoteCodexAccountUsagePayload = RateLimitSnapshot & {
 
 const codexAccountMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsagePayload>({
   invokeChannel: 'maker:usage:account',
-  read: (deviceId, providerId = 'openai') => window.electronAPI.deviceLink.invoke(
-    deviceId, 'maker:usage:account', providerId === 'openai'
-      ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId],
-  ),
+  read: (deviceId, providerId = 'openai', scheduling) => {
+    const args = providerId === 'openai'
+      ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId];
+    return scheduling
+      ? window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:account', args, scheduling)
+      : window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:account', args);
+  },
   pushChannel: 'usage:codex-account-changed',
   defaultProviderId: 'openai',
   providerPushChannel: 'usage:codex-provider-account-changed',
@@ -56,6 +59,13 @@ const codexAccountMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsage
 const codexNativeRateLimitsMirror = createRemoteDeviceUsageMirror<MobileCodexRateLimitsResult>({
   refreshOnReconnect: true,
   invokeChannel: 'maker:usage:codex-rate-limits',
+  // Group cards use this richer native result for the default account. An
+  // unscoped read returns usable pool quota and can borrow another account.
+  read: (deviceId, providerId = 'openai', scheduling) => window.electronAPI.deviceLink.invoke(
+    deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
+      ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
+    ...(scheduling ? [scheduling] : []),
+  ),
   pushChannel: 'usage:codex-account-changed',
   defaultProviderId: 'openai',
   providerPushChannel: 'usage:codex-provider-account-changed',
@@ -88,7 +98,7 @@ const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUs
   pushChannel: null,
   defaultProviderId: 'openai',
   refreshIntervalMs: 60_000,
-  async read(deviceId, providerId = 'openai') {
+  async read(deviceId, providerId = 'openai', scheduling) {
     const owner = getDataOwnerGeneration();
     const matchesProvider = (value: { providerId?: string }) =>
       value.providerId === providerId || (value.providerId === undefined && providerId === 'openai');
@@ -96,6 +106,7 @@ const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUs
       const result = await window.electronAPI.deviceLink.invoke(
         deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
           ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
+        ...(scheduling ? [scheduling] as const : []),
       ) as MobileCodexRateLimitsResult | null;
       if (result && matchesProvider(result) && result.rateLimits && result.account) {
         const updatedAt = Date.now();
@@ -121,6 +132,7 @@ const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUs
     const fallback = await window.electronAPI.deviceLink.invoke(
       deviceId, 'maker:usage:account', providerId === 'openai'
         ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId],
+      ...(scheduling ? [scheduling] as const : []),
     ) as (RemoteCodexAccountUsagePayload & { providerId?: string }) | null;
     // A successful empty account read is authoritative (for example after logout).
     if (fallback === null) return null;

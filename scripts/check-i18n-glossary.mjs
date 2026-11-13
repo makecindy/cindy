@@ -8,18 +8,20 @@
  *
  * 校验对象:i18n/glossary.json 里登记的术语,对照 desktop + mobile 全部 locale JSON。
  *
- * 三类规则:
+ * 四类规则:
  *  1. forbidden —— 术语在某语言下的禁用译法(如 Agent 在 zh-CN 禁「代理」)。
  *  2. case-form —— 保留英文的术语必须统一大小写形态(如 Worker 不写 worker)。
  *  3. punctuation —— 两条规则适用范围不同:半角标点(汉字后禁 , : ; ! ?)对 zh-CN /
  *     zh-TW 生效——日文 UI 惯例本就用半角冒号,实测 ja 半角 124:78 才是主流;省略号
  *     (… 而非三个半角点)覆盖 en / zh-CN / zh-TW / ja / ko。
+ *  4. english-copy —— 只查 en:Please、successfully、直引号、无宾动词按钮
+ *     (DESIGN.md §11.1 / §11.2,口径见 shared/glossary-rules.mjs 的 findEnglishCopyIssues)。
  *
  * 分级:
  *  - status=decided 的术语违规 → **阻断**(exit 1)。
  *  - status=proposed 的术语违规 → 只告警。proposed 用于承载「已知不一致但尚未拍板」的
  *    术语,让清单可见、可讨论,而不是靠脚本单方面替产品做裁决。
- *  - 标点规则视同 decided。
+ *  - 标点规则与英文写法规则视同 decided。
  *
  * 存量:i18n/glossary-baseline.json 冻结首次引入时的既有违规,只告警不阻断。baseline
  * **只减不增**——已修复却仍留在 baseline 的条目会报错,强制随手清理。新增违规一律阻断。
@@ -35,7 +37,6 @@
  * (src/auth/loginMessages.ts 等 .ts 文件),本脚本只扫 locale JSON,不解析这些 TS。
  * 它们由各自的编译期 Record 类型 + parity 单测保证结构,但术语一致性目前是盲区。
  */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,7 +52,10 @@ import {
   HALFWIDTH_PUNCT_LOCALES,
   caseStandardFor,
   findCaseMismatch,
+  findEnglishCopyIssues,
   findHalfWidthPunct,
+  makeEnglishCopyExemptChecker,
+  textDigest,
   hasAsciiEllipsis,
   normalizeForPunctuation,
   makeExemptChecker,
@@ -134,6 +138,20 @@ if (localeKeyErrors.length > 0) {
   fail(`术语表里有无法生效的语言键(拼错的语言键会让整条规则静默失效):\n${localeKeyErrors.map((e) => `  - ${e}`).join('\n')}`);
 }
 
+// terms 必须按 id 升序。新术语若都加在数组开头(或末尾),任意两个加术语的 PR 都会在同一
+// 位置冲突——2026-11-11 有 7 个未合并 PR 卡在这里。按 id 排序让新增落在各自的位置。
+// 顺序不参与任何规则判定:扫描逐条独立,人读版生成时自行重排(已裁决在前,各组内按 id)。
+for (let i = 1; i < glossary.terms.length; i += 1) {
+  const previous = glossary.terms[i - 1].id;
+  const current = glossary.terms[i].id;
+  if (previous > current) {
+    fail(
+      `i18n/glossary.json 的 terms 必须按 id 升序排列:"${current}" 排在了 "${previous}" 之后。\n` +
+        `  把新术语插到按 id 排序的位置,不要加在数组开头或末尾(大家都往同一处加会让 PR 互相冲突)。`,
+    );
+  }
+}
+
 /** 递归展平嵌套 JSON 为 Map<'a.b.c', string>。 */
 function flatten(obj, prefix, out) {
   for (const [key, value] of Object.entries(obj)) {
@@ -210,7 +228,7 @@ function truncate(text, max) {
  * 安全得多——baseline 的全部意义就是「已知且冻结」,文案变了就不再是同一件事。
  */
 function makeViolation({ locale, key, rule, detail, severity, hint, text }) {
-  const digest = crypto.createHash('sha256').update(text ?? '').digest('hex').slice(0, 12);
+  const digest = textDigest(text);
   return {
     locale,
     key,
@@ -382,6 +400,48 @@ for (const locale of locales) {
   }
 }
 
+// --- 规则 4:英文写法(DESIGN.md §11.1 / §11.2,只查 en) ---
+// 2026-11-11 维护者裁决 B-14:保留规则,先修高频文案,只拦新增。引入时的存量冻结在
+// baseline 里,按页迁移时修一条摘一条;规则口径见 shared/glossary-rules.mjs。
+const EN_COPY_HINTS = {
+  'en-please': '英文不写 "Please"(DESIGN.md §11.1),直接说明要做什么',
+  'en-successfully': '结果文案说明改变了什么,不写 "successfully"(DESIGN.md §11.1)',
+  'en-straight-quote': '英文正文用弯引号 “ ”,不用直引号 "(DESIGN.md §11.2)',
+  'en-bare-action': '按钮要写清对什么做什么,不用无宾动词 Confirm / OK / Submit(DESIGN.md §11.1)',
+};
+// 必须原样展示的格式字面量(JSON 示例等)按规则、按精确 key 豁免,见 glossary.json 的
+// englishCopyExempt 与 makeEnglishCopyExemptChecker。豁免的 key 改成不再命中时报失效,
+// 与 baseline 同样只减不增;不在本语料里的 key 属于手写 catalog,由各自的测试核对。
+const englishCopyExempt = glossary.englishCopyExempt ?? {};
+const isEnglishCopyExempt = makeEnglishCopyExemptChecker(englishCopyExempt);
+const englishCopyExemptUsed = new Set();
+const sourceCorpus = corpus.get(glossary.sourceLocale) ?? new Map();
+for (const [key, value] of sourceCorpus) {
+  for (const issue of findEnglishCopyIssues(value)) {
+    if (isEnglishCopyExempt(issue.rule, key)) {
+      englishCopyExemptUsed.add(`${issue.rule}\t${key}`);
+      continue;
+    }
+    violations.push(
+      makeViolation({
+        locale: glossary.sourceLocale,
+        key,
+        rule: issue.rule,
+        detail: issue.detail,
+        severity: 'error',
+        text: value,
+        hint: `${EN_COPY_HINTS[issue.rule]}\n      当前: ${truncate(value, 100)}`,
+      }),
+    );
+  }
+}
+
+const englishCopyExemptStale = Object.entries(englishCopyExempt)
+  .flatMap(([rule, keys]) => keys.map((key) => [rule, key]))
+  .filter(([rule, key]) => sourceCorpus.has(key) && !englishCopyExemptUsed.has(`${rule}\t${key}`))
+  .map(([rule, key]) => `${rule} / ${key}`)
+  .sort();
+
 violations.sort((a, b) => a.fingerprint.localeCompare(b.fingerprint));
 
 // ---------------------------------------------------------------------------
@@ -417,9 +477,9 @@ if (UPDATE_BASELINE) {
   const kept = blockingAll.map((v) => v.fingerprint).sort();
   const payload = {
     _comment:
-      '存量违规冻结清单(仅 status=decided 的术语与标点规则)。只减不增:修好一条就从这里' +
-      '删一条,新增违规一律阻断 CI。剪枝: node scripts/check-i18n-glossary.mjs --update-baseline' +
-      '(该命令拒绝登记新违规,新增条目必须手动编辑本文件)',
+      '存量违规冻结清单(仅 status=decided 的术语、标点规则与英文写法规则)。只减不增:修好一条就从这里' +
+      '删一条,新增违规一律阻断 CI。剪枝(只删已修好的、拒绝登记新违规): node scripts/check-i18n-glossary.mjs' +
+      ' --update-baseline —— 确需新冻结一批存量时必须手动编辑本文件,让新增条目出现在 diff 里被 review 看到。',
     _generatedFrom: `glossary.json version ${glossary.version}`,
     entries: kept,
   };
@@ -507,6 +567,14 @@ if (stale.length > 0) {
   );
 }
 
+if (englishCopyExemptStale.length > 0) {
+  console.error(
+    `\n[check-i18n-glossary] ❌ englishCopyExempt 有 ${englishCopyExemptStale.length} 条豁免已不再命中(文案已不含该写法):`,
+  );
+  for (const item of englishCopyExemptStale) console.error(`  ${item}`);
+  console.error('\n请从 i18n/glossary.json 的 englishCopyExempt 删除上述 key,豁免只覆盖仍需原样展示的格式字面量。');
+}
+
 // GLOSSARY.md 是给人和 AI 查阅的入口,过期比不存在更糟——大家会照着过期的表写文案。
 // 用与生成器完全相同的渲染函数比对,不做「差不多就行」的模糊校验。
 const docStale = fs.existsSync(DOC_PATH)
@@ -527,9 +595,10 @@ if (REPORT_ONLY) {
   process.exit(0);
 }
 
-if (blocking.length > 0 || stale.length > 0 || docStale) {
+if (blocking.length > 0 || stale.length > 0 || englishCopyExemptStale.length > 0 || docStale) {
   console.error(
     `\n[check-i18n-glossary] 失败:新增违规 ${blocking.length} / baseline 失效 ${stale.length}` +
+      `${englishCopyExemptStale.length > 0 ? ` / 豁免失效 ${englishCopyExemptStale.length}` : ''}` +
       `${docStale ? ' / 文档过期' : ''}。术语裁决见 i18n/glossary.json,人读版 i18n/GLOSSARY.md。`,
   );
   process.exit(1);

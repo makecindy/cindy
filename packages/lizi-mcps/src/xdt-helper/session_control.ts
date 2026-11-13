@@ -12,9 +12,7 @@ export type SessionQueueControlErrorCode =
   | 'QUEUED_MESSAGE_NOT_FOUND'
   | 'MESSAGE_CONSUMING'
   | 'NOT_AUTHORIZED'
-  | 'INVALID_ARGS'
-  /** The sending task's review did not confirm the owner asked for this hand-off; nothing changed. */
-  | 'DELEGATION_NOT_AUTHORIZED';
+  | 'INVALID_ARGS';
 
 /** 排队消息转插话未成功、消息仍留在队列时的原因。 */
 export type SessionQueueSteerReason =
@@ -28,8 +26,7 @@ export type SessionSteerErrorCode =
   | 'NO_ACTIVE_TURN'
   | 'UNSUPPORTED_CAPABILITY'
   | 'INPUT_LOCKED'
-  | 'DELIVERY_FAILED'
-  | 'DELEGATION_NOT_AUTHORIZED';
+  | 'DELIVERY_FAILED';
 
 export type SessionStopErrorCode = 'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY';
 

@@ -5,12 +5,11 @@ import { RemoteResourceRegistryError } from '../../../device-link/remoteResource
 import { createIpcError } from '../../../../shared/ipc-errors.js';
 import type { BotMemoryDetail } from '../../../../shared/botMemory.js';
 import type { BotSkillDetail } from '../../../../shared/botSkill.js';
-import type { BotSystemSkillId } from '../../../../shared/botSystemSkills.js';
 
 function fixture() {
   let owner = 'a';
   const source = { id: 'bot-a', name: 'Cindy', description: '', avatar: '', avatarColor: '', status: 'active', canonicalSessionId: 'main-a', lastMessagePreview: null, lastMessageAt: null, lastMessageRole: null, needsAttention: false, hiddenAt: null, pinnedAt: null, activityAt: 1, currentVersion: 3, updatedAt: 1 };
-  const settings = { source, identity: '', userContext: '', memory: true, permissions: 'auto', modelChain: [], followsDefault: true, skills: ['existing'], connections: [], toolsets: [], systemSkillsOff: undefined as BotSystemSkillId[] | undefined };
+  const settings = { source, identity: '', userContext: '', memory: true, permissions: 'auto', modelChain: [], followsDefault: true, skills: ['existing'], connections: [], toolsets: [] };
   let skill: BotSkillDetail = { slug: 'learned', name: '写简报', description: '写简报时使用', body: '保留准确来源。', updatedAt: '1' };
   const catalog = [{ id: 'existing', name: 'Existing', description: 'A skill', available: false, joined: true }, { id: 'new', name: 'New', description: 'Available skill', available: true, joined: false }];
   let clock = 0;
@@ -38,17 +37,13 @@ function fixture() {
   };
   const deps: BotRemoteEditorDeps = {
     owner: () => owner, assertOwner: captured => { if (captured !== owner) throw Error('OWNER_CHANGED'); },
-    read: vi.fn(async () => settings), update: vi.fn(async (input: Record<string, unknown>) => {
-      const capabilities = input.capabilities as { systemSkillsOff?: BotSystemSkillId[] } | undefined;
-      if (capabilities?.systemSkillsOff) settings.systemSkillsOff = capabilities.systemSkillsOff;
-      source.currentVersion++;
-    }),
+    read: vi.fn(async () => settings), update: vi.fn(async () => { source.currentVersion++; }),
     modelDefaults: vi.fn(async () => []),
     create: vi.fn(async () => {}), avatar: vi.fn(async () => {}),
     skills: vi.fn(async () => [skill]), skill: vi.fn(async () => skill), saveSkill: vi.fn(async (_bot, value) => { skill = value; }),
     removeSkill: vi.fn(async () => {}), capabilities: vi.fn(async () => catalog), memory,
     setSkillEnabled: vi.fn(async (_bot: string, _slug: string, enabled: boolean) => { skill = { ...skill, enabled }; }),
-    coreGuide: vi.fn((off: readonly string[]) => `## teammate-guide\nOff: ${off.join(',')}`),
+    coreGuide: vi.fn(() => '## teammate-guide'),
   };
   const host = createBotRemoteSettingsResource({ ...deps, lifecycle: vi.fn(async () => ({})) });
   const get = createBotRemoteEditors(deps, host.bindResource);
@@ -127,45 +122,44 @@ describe('portable teammate editors', () => {
     expect(f.deps.update).toHaveBeenCalledWith({ id: 'bot-a', capabilities: { skills: [], skillMode: 'allowlist' } }, 3);
     expect(f.deps.removeSkill).not.toHaveBeenCalled();
   });
+  it('reports inherited official skills without offering a per-teammate override', async () => {
+    const f = fixture();
+    vi.mocked(f.deps.capabilities).mockResolvedValue([
+      { id: 'pr', name: 'pr', description: 'Pull requests', available: true, joined: true, cindyOfficial: true },
+    ]);
+    const list = await f.resource('settings:bot-a/connections/skill');
+    const detail = await f.resource(f.entries(list)[0].resourceId);
+    expect(detail.actions![0].disabled).toBe(true);
+    expect(detail.blocks![0].fallbackMarkdown).toContain('Cindy');
+    await expect(f.send(detail, { joined: false })).rejects.toThrow();
+    expect(f.deps.update).not.toHaveBeenCalled();
+  });
   it('rejects a stale capability selection and arbitrary resource paths', async () => {
     const f = fixture(); const list = await f.resource('settings:bot-a/connections/skill');
     const detail = await f.resource(f.entries(list)[1].resourceId); f.settings.source.currentVersion++;
     await expect(f.send(detail, { joined: true })).rejects.toThrow();
-    for (const id of ['settings:bot-a/skills/../../secret', 'settings:bot-a/connections/credentials', 'settings:bot-a/unknown']) await expect(f.resource(id)).rejects.toThrow();
+    // `follow-up` is the removed V1 follow-up page that older phones may still open.
+    for (const id of ['settings:bot-a/skills/../../secret', 'settings:bot-a/connections/credentials', 'settings:bot-a/unknown', 'settings:bot-a/follow-up']) await expect(f.resource(id)).rejects.toThrow();
     expect(f.deps.update).not.toHaveBeenCalled();
   });
   // Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」) on the phone's generic settings pages. Unit, in-memory deps.
-  // Gap: the page listed learned skills only. Minimal input: one learned skill turned off, `routine` off.
-  it('lists the read-only core, the three system Skills and every learned skill, marking the ones turned off', async () => {
-    const f = fixture(); f.settings.systemSkillsOff = ['routine'];
+  // Gap: the page listed learned skills only. Minimal input: one learned skill turned off.
+  it('lists the read-only core and every learned skill, marking the ones turned off', async () => {
+    const f = fixture();
     await f.deps.setSkillEnabled('bot-a', 'learned', false);
     const shelf = await f.resource('settings:bot-a/skills');
-    expect(shelf.blocks!.map(block => block.id)).toEqual(['core', 'system', 'skills']);
+    expect(shelf.blocks!.map(block => block.id)).toEqual(['core', 'skills']);
     expect(f.entries(shelf, 'core')).toMatchObject([{ resourceId: 'settings:bot-a/skills/_core', subtitle: { translations: { 'zh-CN': '所有伙伴共用 · 始终开启 · 随 Cindy 更新' } } }]);
-    expect(f.entries(shelf, 'system').map(entry => [entry.resourceId, !!entry.subtitle])).toEqual([
-      ['settings:bot-a/skills/_todo', false], ['settings:bot-a/skills/_routine', true], ['settings:bot-a/skills/_follow', false]]);
     expect(f.entries(shelf, 'skills')).toMatchObject([{ resourceId: 'settings:bot-a/skills/learned', subtitle: { fallback: 'Off' } }]);
     const core = await f.resource('settings:bot-a/skills/_core');
     expect(core.actions ?? []).toEqual([]);
-    expect(core.blocks!.map(block => block.fallbackMarkdown)).toEqual([expect.stringContaining('了解与设置 Cindy'), '## teammate-guide\nOff: routine']);
-    expect(f.deps.coreGuide).toHaveBeenCalledWith(['routine']);
-    // `_` never collides with a learned slug, and only the three system ids exist.
-    await expect(f.resource('settings:bot-a/skills/_memory')).rejects.toThrow();
-  });
-  it('turns a system Skill off and on against the profile version the page was opened at', async () => {
-    const f = fixture();
-    const todo = await f.resource('settings:bot-a/skills/_todo');
-    expect(todo.blocks![0]).toMatchObject({ id: 'capability', data: { values: { enabled: true } } });
-    expect(todo.blocks![0].fallbackMarkdown).toContain('到期提醒你');
-    await expect(f.send(todo, { enabled: 'no' })).rejects.toThrow();
-    await f.send(await f.resource('settings:bot-a/skills/_todo'), { enabled: false });
-    expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: ['todo'] } }, 3);
-    const follow = await f.resource('settings:bot-a/skills/_follow');
-    f.settings.source.currentVersion++;
-    await expect(f.send(follow, { enabled: false })).rejects.toThrow();
-    expect(f.deps.update).toHaveBeenCalledTimes(1);
-    await f.send(await f.resource('settings:bot-a/skills/_todo'), { enabled: true });
-    expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: [] } }, 5);
+    expect(core.blocks!.map(block => block.fallbackMarkdown)).toEqual([expect.stringContaining('了解与设置 Cindy'), '## teammate-guide']);
+    // `_` never collides with a learned slug. The removed system Skills (`_routine`, `_follow`, `_todo`)
+    // that older phones may still open answer NOT_FOUND.
+    for (const id of ['_memory', '_todo', '_follow', '_routine']) {
+      await expect(f.resource(`settings:bot-a/skills/${id}`)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    }
+    expect(f.deps.update).not.toHaveBeenCalled();
   });
   it('turns a learned skill off without rewriting it and back on together with an edit', async () => {
     const f = fixture();
@@ -291,31 +285,6 @@ describe('portable teammate memory pages', () => {
   });
 });
 
-// Existing opaque grants must bind follow-up consent to this owner, computer and current choice.
-it('keeps follow-up off until chosen and rejects an invitation made stale by another explicit choice', async () => {
-  const f = fixture();
-  let choice = { schedulerBotId: null as string | null, isCustomized: false, defaults: { schedulerBotId: null } };
-  f.deps.followUp = { get: vi.fn(async () => choice), set: vi.fn(async id => {
-    choice = { ...choice, isCustomized: true, schedulerBotId: id }; return choice;
-  }) };
-  const read = () => f.resource('settings:bot-a/follow-up');
-  const invitation = await read();
-  expect((invitation.blocks![0].data as any).invitationAvailable).toBe(true);
-  expect(f.deps.followUp.set).not.toHaveBeenCalled();
-  await f.send(invitation, {}, 1);
-  expect(choice).toMatchObject({ schedulerBotId: null, isCustomized: true });
-  expect((await read()).blocks![0].data).toMatchObject({ invitationAvailable: false });
-  await expect(f.send(invitation, { enabled: true })).rejects.toThrow();
-  await f.send(await read(), { enabled: true });
-  expect(choice.schedulerBotId).toBe('bot-a');
-  const enabled = await read();
-  expect(enabled.actions![0].confirmation).toBeUndefined();
-  await f.send(enabled, { enabled: false });
-  expect(choice.schedulerBotId).toBeNull();
-  const stale = await read(); f.owner('b');
-  await expect(f.send(stale, { enabled: true })).rejects.toThrow();
-});
-
 // Restored project links use existing opaque settings actions. Minimal input: two projects and a stale save.
 // Covers list/detail/save, device paths withheld and owner-bound rejection; unit, no network.
 it('links multiple projects through settings while keeping paths private and rejecting stale or foreign saves', async () => {
@@ -364,4 +333,38 @@ it('distinguishes equal project paths on different devices in the list and toggl
   expect(JSON.stringify([list, detail])).not.toContain('/PRIVATE');
   await f.send(detail, { linked: false });
   expect(projects.map(project => project.linked)).toEqual([false, true]);
+});
+
+// Owner 2026-11-10: the phone shows a teammate's automations like the desktop page. New phone write path:
+// only the teammate project's own automations are listed and switchable. Unit, real editor + opaque action.
+it('lists and switches only the automations of the teammate project', async () => {
+  const f = fixture();
+  Object.assign(f.settings, { projectMode: true });
+  const base = { cronExpr: '0 9 * * *', recurring: true, manual: false, workspaceKind: 'project', lastFiredAt: undefined, nextFireAt: undefined };
+  const schedules = [
+    { ...base, id: 'own', name: '早报', status: 'active', workingDir: '/home/bots/bot-a/workspace' },
+    { ...base, id: 'paused', name: '周报', status: 'paused', workingDir: '/home/bots/bot-a/workspace/' },
+    { ...base, id: 'other', name: '别人的', status: 'active', workingDir: '/home/bots/bot-b/workspace' },
+  ];
+  const set = (id: string, status: string) => { schedules.find(item => item.id === id)!.status = status; };
+  f.deps.automations = {
+    workspace: botId => `/home/bots/${botId}/workspace`,
+    list: async () => schedules.map(item => ({ ...item })) as never,
+    inflight: async () => 0,
+    pause: vi.fn(async (id: string) => set(id, 'paused')), resume: vi.fn(async (id: string) => set(id, 'active')),
+  };
+  const list = await f.resource('settings:bot-a/automations');
+  expect(f.entries(list, 'automations')).toEqual([
+    expect.objectContaining({ id: 'paused', subtitle: '每天 09:00 · 已暂停' }),
+    expect.objectContaining({ id: 'own', subtitle: '每天 09:00' }),
+  ]);
+  await expect(f.resource('settings:bot-a/automations/other')).rejects.toThrow();
+  await f.send(await f.resource('settings:bot-a/automations/own'), { active: false });
+  await f.send(await f.resource('settings:bot-a/automations/paused'), { active: true });
+  expect(schedules.map(item => item.status)).toEqual(['paused', 'active', 'active']);
+  // The list switches in place too, and only the teammate's own automations.
+  await f.send(await f.resource('settings:bot-a/automations'), { own: true });
+  expect(schedules.map(item => item.status)).toEqual(['active', 'active', 'active']);
+  await expect(f.send(await f.resource('settings:bot-a/automations'), { other: false })).rejects.toThrow();
+  expect(schedules[2].status).toBe('active');
 });

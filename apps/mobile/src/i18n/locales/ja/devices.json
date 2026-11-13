@@ -43,14 +43,14 @@
     "titleFallback": "リソース",
     "loading": "読み込み中…",
     "emptyTitle": "まだ項目がありません",
-    "emptyCopy": "このコンピュータには、ここに表示する項目がまだありません。",
+    "emptyCopy": "このコンピューターには、ここに表示する項目がまだありません。",
     "loadFailed": "項目を読み込めませんでした",
-    "noHosts": "対応するコンピュータを利用できません。",
+    "noHosts": "対応するコンピューターを利用できません。",
     "noConversation": "この項目には現在、開けるセッションがありません。",
     "openFailed": "セッションを開けませんでした",
     "resolving": "最新のセッションを開いています…",
     "retry": "もう一度試す",
-    "hostCount": "{{count}} 台のコンピュータ",
+    "hostCount": "{{count}} 台のコンピューター",
     "stale": "内容が古い可能性があります。更新できません。"
   },
   "presentation": {
@@ -212,7 +212,7 @@
       "noDevice": {
         "accessRevoked": {
           "title": "アクセス権が取り消されました",
-          "copy": "{{names}} がこのスマートフォンのリモートアクセスを取り消しました。アクセスを再試行するか、コンピューター側で再度許可してください。"
+          "copy": "{{names}} がこのスマートフォンのリモートアクセスを取り消しました。アクセスを再試行するか、コンピューター側で再度許可してください。許可すると自動的に再接続されます。"
         },
         "remoteDisabled": {
           "title": "コンピューターでリモートコントロールを許可",
@@ -232,13 +232,13 @@
       "action": {
         "archive": "アーカイブ",
         "delete": "削除",
-        "pin": "固定",
+        "pin": "ピン留め",
         "restore": "アーカイブ解除",
-        "unpin": "固定解除"
+        "unpin": "ピン留め解除"
       },
-      "title": "{{count}} 件のタスクを{{action}}",
-      "description": "選択した {{count}} 件のタスクを{{action}}します。",
-      "descriptionWithSkipped": "選択した {{count}} 件のタスクを{{action}}します。対象外の {{skippedCount}} 件はスキップされます。"
+      "title": "{{count}} 件のセッションを{{action}}",
+      "description": "選択した {{count}} 件のセッションを{{action}}します。",
+      "descriptionWithSkipped": "選択した {{count}} 件のセッションを{{action}}します。対象外の {{skippedCount}} 件はスキップされます。"
     }
   },
   "list": {
@@ -348,7 +348,7 @@
       "add": "別のアカウントでログイン",
       "syncFailed": "アカウント情報を更新できませんでした",
       "runningTitle": "アカウントを切り替えますか？",
-      "runningMessage": "実行中のタスクがあります。切り替え後もコンピューターでは実行が続きますが、このスマートフォンでは受信や操作ができなくなります。",
+      "runningMessage": "実行中のセッションがあります。切り替え後もコンピューターでは実行が続きますが、このスマートフォンでは受信や操作ができなくなります。",
       "switchConfirm": "切り替える"
     },
     "menu": {
@@ -442,7 +442,7 @@
         "sort": {
           "relevance": "関連度",
           "activityDesc": "最近アクティブ",
-          "activityAsc": "古いアクティブ順"
+          "activityAsc": "アクティブが古い順"
         },
         "status": {
           "active": "アクティブ",
@@ -542,7 +542,7 @@
     },
     "bulk": {
       "pinning": "ピン留め中",
-      "unpinning": "解除中",
+      "unpinning": "ピン留め解除中",
       "archiving": "アーカイブ中",
       "restoring": "アーカイブ解除中",
       "deleting": "削除中",
@@ -561,8 +561,8 @@
       "noneModifiable": "選択したセッションはいずれも変更できません。"
     },
     "automationScope": {
-      "eyebrow": "自動化タスク",
-      "title": "自動化タスク",
+      "eyebrow": "自動化",
+      "title": "自動化",
       "emptyCopy": "タスクを実行すると、各実行のセッションがここに表示されます。",
       "emptyTitle": "このタスクにはまだ実行履歴がありません"
     },
@@ -576,7 +576,7 @@
       "activeAndProjects": "アクティブなセッション {{count}} 件 · プロジェクト {{projects}} 件"
     },
     "row": {
-      "a11yAutomationGroup": "自動化会話グループ {{title}}",
+      "a11yAutomationGroup": "自動化グループ {{title}}",
       "a11ySession": "セッション {{title}}",
       "a11yCollapse": "{{title}} を折りたたむ",
       "a11yExpand": "{{title}} を展開",
@@ -602,7 +602,7 @@
       "showAllA11y": "すべて表示（{{count}}）",
       "showLess": "閉じる"
     },
-    "noCreateHosts": "対応するコンピュータを利用できません。パソコンで Cindy を開き、同じアカウントでログインするとチームメイトを新規作成できます。",
+    "noCreateHosts": "対応するコンピュータを利用できません。パソコンで Cindy を開き、同じアカウントでログインすると仲間を新規作成できます。",
     "messageSent": "バックグラウンドタスクにメッセージを送信しました",
     "sentTo": "{{name}} にメッセージを送信",
     "receivedFrom": "{{name}} からのメッセージ",
@@ -621,14 +621,12 @@
       "minutes": "{{n}} 分",
       "hoursMinutes": "{{h}} 時間 {{m}} 分"
     },
-    "retrying": "まだ開始できていません。再試行中…",
-    "stopTask": "タスクを停止",
     "actionFailed": "読み込みまたは操作を完了できません",
     "messages": "メッセージ",
     "readOnly": "閲覧のみ",
     "directEmpty": "表示できるメッセージはまだありません。",
     "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインセッションに戻りました",
-    "directUnavailable": "このチームメイト同士の会話は利用できません。",
+    "directUnavailable": "この仲間同士の会話は利用できません。",
     "unread": "新しい返信",
     "status": {
       "queued": "開始しています",
@@ -640,8 +638,8 @@
       "timed-out": "タイムアウト",
       "unknown": "状態不明"
     },
-    "title": "チームメイト",
-    "search": "チームメイトを検索",
+    "title": "仲間",
+    "search": "仲間を検索",
     "startChat": "会話を始める",
     "automation": {
       "unsavedTitle": "変更を破棄しますか？",
@@ -649,7 +647,7 @@
       "discard": "変更を破棄"
     },
     "openProfile": "{{name}}のプロフィールを表示",
-    "switchCompanion": "チームメイトを切り替える",
+    "switchCompanion": "仲間を切り替える",
     "activity": {
       "thinking": "考え中",
       "typing": "入力中",
@@ -692,7 +690,7 @@
     "viewResult": "結果を見る",
     "noWrittenResult": "テキストの結果はありません。",
     "errorDetails": "エラー詳細",
-    "createTeammate": "新しい仲間",
+    "createTeammate": "新しいチームメイト",
     "createMenu": "新規作成",
     "awaiting": "確認待ち",
     "taskResult": "タスクの結果",
@@ -723,7 +721,7 @@
     "memorySearch": "記憶を検索",
     "memoryEmpty": "まだ記憶はありません",
     "memoryNoResults": "一致する記憶はありません",
-    "memoryDisabled": "記憶はオフです。チームメイトは記憶を読み取ったり保存したりしません。保存済みの記憶は引き続き表示・削除できます。",
+    "memoryDisabled": "記憶はオフです。仲間は記憶を読み取ったり保存したりしません。保存済みの記憶は引き続き表示・削除できます。",
     "memoryLoadFailed": "記憶を読み込めませんでした",
     "memoryToday": "今日",
     "memoryUpdated": "{{time}} に更新",
@@ -738,14 +736,14 @@
     "memorySaveFailed": "保存できませんでした。編集内容は保持されています。",
     "memoryMissing": "この記憶はもう存在しません。",
     "memoryDeleteFailed": "削除できませんでした",
-    "create": "チームメイトを新規作成",
+    "create": "仲間を新規作成",
     "createFailed": "作成結果を確認できていません。再試行して確認してください。",
-    "title": "チームメイト",
+    "title": "仲間",
     "profile": "プロフィールと性格",
     "memory": "記憶",
     "skills": "スキルと接続",
     "artifacts": "成果物",
-    "direct": "チームメイト間のメッセージ",
+    "direct": "仲間間のメッセージ",
     "settings": "モデルと権限",
     "search": "メッセージを検索",
     "models": "モデル候補",
@@ -754,27 +752,25 @@
     "connections": "参照中のスキルと接続",
     "save": "変更を保存",
     "offline": "続けるには {{deviceName}} に再接続してください。編集内容は保持されています。",
-    "hostUpgrade": "{{deviceName}} の Cindy を更新して再試行するか、そのパソコンでチームメイトの設定を編集してください。",
+    "hostUpgrade": "{{deviceName}} の Cindy を更新して再試行するか、そのパソコンで仲間の設定を編集してください。",
     "readFailed": "最新の状態を確認できませんでした。更新してから再試行してください。操作は完了している可能性があります。編集内容は保持されています。",
     "deleteFailed": "削除は完了しませんでした。",
-    "artifactsEmpty": "成果物はまだありません。チームメイトに作成を頼んでみましょう。",
+    "artifactsEmpty": "成果物はまだありません。仲間に作成を頼んでみましょう。",
     "openSourceTask": "元のセッションを開く",
     "modelFollowsDefault": "現在のデフォルトモデル候補を使用",
-    "taskModel": "セッション用モデル",
-    "taskInheritsPrimary": "メインモデルを継承",
-    "modelOverride": "このチームメイト固有のモデル候補を使用",
-    "modelsUnavailable": "利用可能なモデルがありません。パソコンでこのチームメイトのモデル設定を確認し、更新してください。",
+    "modelOverride": "この仲間固有のモデル候補を使用",
+    "modelsUnavailable": "利用可能なモデルがありません。パソコンでこの仲間のモデル設定を確認し、更新してください。",
     "artifactsRecovery": "メッセージカードからファイルを開くか、{{deviceName}} でファイルを参照してください。",
-    "directRecovery": "チームメイト間のメッセージを読み込めません。{{deviceName}} の Cindy を更新して再試行してください。",
-    "directEmpty": "チームメイト間のメッセージはまだありません",
-    "skillsEmpty": "学習したスキルはまだありません。作業方法を覚えるようチームメイトに頼めます。",
+    "directRecovery": "仲間間のメッセージを読み込めません。{{deviceName}} の Cindy を更新して再試行してください。",
+    "directEmpty": "仲間間のメッセージはまだありません",
+    "skillsEmpty": "学習したスキルはまだありません。作業方法を覚えるよう仲間に頼めます。",
     "connectionsEmpty": "スキルや接続は選択されていません",
     "largeProfileRecovery": "このプロフィールは長すぎるため、ここでは編集できません。{{deviceName}} で全文を編集してください。",
     "addModel": "予備モデルを追加",
     "removeModel": "モデルを削除",
     "moveModelUp": "モデルを上へ",
     "backupModels": "予備のモデル（{{count}}）",
-    "settingsTitle": "チームメイトの設定",
+    "settingsTitle": "仲間の設定",
     "name": "名前",
     "portraitNumber": "アバター {{number}}",
     "uploadAvatar": "アバターをアップロード",
@@ -783,8 +779,8 @@
     "home": "メインのパソコン",
     "chat": "チャット",
     "showReplyTarget": "返信の対象メッセージを表示",
-    "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。すべてのチームメイトに適用されます。以前の返信には表示されません。",
-    "channels": "メッセージサービス",
+    "showReplyTargetHint": "仲間の返信の上に、どのメッセージへの返信かを表示します。すべての仲間に適用されます。以前の返信には表示されません。",
+    "channels": "メッセージプラットフォーム",
     "channelsEmpty": "接続されたサービスはありません",
     "channelTasksEmpty": "タスクはまだありません",
     "channelPlatforms": {
@@ -802,7 +798,7 @@
     "description": "Hermes または OpenClaw から引き継ぐ内容を選びます。",
     "empty": "このコンピュータに Agent が見つかりません。",
     "personality": "性格と仕事の習慣",
-    "memory": "メモリー",
+    "memory": "記憶",
     "skills": "スキル",
     "connections": "環境と接続",
     "automations": "自動化",
@@ -821,7 +817,7 @@
     "retry": "再確認",
     "missingSelection": "必要な項目が選択されていません。",
     "authRefresh": "元の認証の更新接続が必要です。",
-    "toolMapping": "元のツール制限の対応付けが必要です。",
+    "toolMapping": "引き継ぐ前に、元のツール制限の対応付けが必要です。",
     "modelMapping": "元のモデル設定の対応付けが必要です。",
     "contextMapping": "元の作業ディレクトリまたは関連コンテキストの対応付けが必要です。",
     "deliveryFailed": "元の送信先を確認できていません。",
@@ -844,16 +840,16 @@
     "databaseDriver": "データベースドライバーを読み込めません。Cindy を更新または修復して再試行してください。",
     "databaseUnavailable": "元のデータベースを読み込めません。元データは変更されていません。修復後に再試行できます。",
     "fileTooLarge": "ファイルまたはインポート全体が読み取り上限を超えています。内容は切り捨てていません。",
-    "memoryMetadata": "メモリの概要またはタイトルが保存要件を満たしていません。",
-    "memoryWrite": "メモリの保存または整合性確認に失敗しました。再試行できます。",
-    "memoryChanged": "保存済みのメモリが変更されているため、上書きしていません。",
+    "memoryMetadata": "記憶の概要またはタイトルが保存要件を満たしていません。",
+    "memoryWrite": "記憶の保存または整合性確認に失敗しました。再試行できます。",
+    "memoryChanged": "保存済みの記憶が変更されているため、上書きしていません。",
     "attachmentUnsupported": "この添付形式にはまだ対応していません。元ファイルはインポート元に残っています。",
     "diskFull": "ディスク容量が不足しています。空きを確保して再試行してください。",
     "permissionDenied": "読み取りまたは保存の権限がありません。権限を修正して再試行してください。",
-    "setupDeferred": "パートナーとのチャットでログインと確認を続けられます。",
+    "setupDeferred": "仲間とのチャットでログインと確認を続けられます。",
     "automationInvalid": "自動化の定義を変換できず、作成されていません。",
     "itemFailed": "この項目は未完了です。再試行するか詳細を確認してください。",
-    "chatPartial": "パートナーは作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。",
+    "chatPartial": "仲間は作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。",
     "imBotOwnerMissing": "オーナーのユーザー ID が見つかりませんでした。仲間の「メッセージプラットフォーム」ページでこのボットを接続してください。",
     "imBotGatewayRunning": "元のゲートウェイがまだこのボットを使っています。停止してから「メッセージプラットフォーム」で接続してください。",
     "imBotInUse": "このボットはすでにこのコンピューターで使われています（設定 → IM ボット、または別の仲間）。",
@@ -867,7 +863,6 @@
   },
   "glance": {
     "open": "{{name}}の近況",
-    "dueUnseen": "期限が来た Todo があります",
     "computers": "コンピュータ",
     "runningHere": "このコンピュータで実行中",
     "online": "オンライン",
@@ -875,37 +870,16 @@
     "current": "現在",
     "offlineCount_one": "オフライン {{count}} 台",
     "offlineCount_other": "オフライン {{count}} 台",
-    "todos": "Todo",
     "showMore": "さらに表示",
     "showLess": "閉じる",
     "doneCount_one": "完了 {{count}}",
     "doneCount_other": "完了 {{count}}",
-    "delete": "削除",
-    "deleted": "削除しました。同じ件は今後記録しません",
-    "undo": "元に戻す",
-    "undoFailed": "元に戻せませんでした。もう一度お試しください",
-    "deleteFailed": "削除できませんでした。もう一度お試しください",
-    "check": "確認して",
     "checkMeta": "接続済みのメールやメッセージから新しい Todo を探します",
-    "checkPrompt": "接続済みのメールやメッセージなどに、私が対応すべき新しい用件がないか確認して、あれば Todo に追加して。",
-    "dailyCheck": "毎日確認する",
-    "dailyCheckMeta": "平日 9:00、新しい Todo がなければ通知しません",
     "recentTasks": "最近のセッション",
     "unread": "未読の結果",
-    "stopDailyCheck": "毎日の確認を停止",
     "openFailed": "リンクを開けませんでした",
-    "dailyCheckFailed": "保存できませんでした。もう一度お試しください",
-    "loadFailed": "Todo を読み込めませんでした",
     "outputs": "成果物",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "あなたの依頼",
-      "mail": "メールから",
-      "feishu": "Feishu から",
-      "github": "GitHub から",
-      "community": "コミュニティから",
-      "task": "タスクから"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "メインのパソコン「{{device}}」がオフラインです",
@@ -915,10 +889,10 @@
     "empty": "クラウドの会話はまだありません。",
     "loadFailed": "クラウドの会話を読み込めません。",
     "loadOlder": "以前のメッセージを読み込む",
-    "noTargets": "ほかに使えるパソコンがありません。別のパソコンで Cindy を開いて同じアカウントでログインし、「同じアカウントのデバイスにこのパソコンの操作を許可」をオンにしてから、もう一度お試しください。",
+    "noTargets": "ほかに使えるパソコンがありません。別のパソコンで Cindy を開いて同じアカウントでログインし、「同一アカウントのデバイスによる操作を許可」をオンにしてから、もう一度お試しください。",
     "devicesFailed": "パソコンの一覧を読み込めません。しばらくしてからもう一度お試しください。",
     "preparing": "「{{device}}」で準備しています…",
-    "preparingHint": "そのパソコンがクラウドのプロフィールからチームメイトを引き継ぎ、準備ができたら自動で開きます。",
+    "preparingHint": "そのパソコンがクラウドのプロフィールから仲間を引き継ぎ、準備ができたら自動で開きます。",
     "timeout": "「{{device}}」の準備がまだ終わっていません。そのパソコンで Cindy が開いていてオンラインか確認して、もう一度お試しください。",
     "conflict": "{{name}} はすでに「{{device}}」に移っています。",
     "switchFailed": "メインのパソコンを変更できません。しばらくしてからもう一度お試しください。",
@@ -928,6 +902,8 @@
     "moveTo": "「{{device}}」に移す",
     "moveTitle": "{{name}} を「{{device}}」で実行しますか？",
     "moveDescription": "今後 {{name}} は「{{device}}」で実行され、チャット履歴も一緒に移ります。作業ディレクトリ、接続、ローカルのファイルは元のパソコンに残ります。",
+    "olderTarget": "旧バージョンの Cindy",
+    "olderTargetNote": "「{{device}}」の Cindy は旧バージョンのため、{{name}} はそこで従来どおりに動きます。チャット履歴は同期されますが、プロジェクトのルールと自動化はそこでは適用されません。",
     "moveAction": "「{{device}}」に移す",
     "moving": "{{name}} を「{{device}}」に移しています…",
     "busyTitle": "{{name}} はまだ返信中です",
@@ -937,7 +913,7 @@
     "transferBusy": "{{name}} はまだ返信中です。返信が終わってから移してください",
     "switchConflict": "{{name}} のメインのパソコンはすでに変更されているため、移しませんでした",
     "homeOutdated": "メインのパソコン「{{device}}」の Cindy が古いバージョンです。更新するか、そのパソコンで変更してください",
-    "homeUnreachable": "「{{device}}」に接続できません。オンラインで「同じアカウントのデバイスからの操作を許可」をオンにする必要があります",
+    "homeUnreachable": "「{{device}}」に接続できません。オンラインで、「同一アカウントのデバイスによる操作を許可」がオンになっている必要があります",
     "sendUnreachable": "メッセージがメインのパソコン「{{device}}」に届いていません。オフラインの可能性があります。別のパソコンで続けられます。"
   },
   "sessionImport": {
@@ -996,5 +972,8 @@
       "disk-full": "インポートできませんでした：ディスクの空き容量が足りません",
       "native-unloadable": "インポートできませんでした：元の記録を読み込めません"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "更新待ち"
   }
 }

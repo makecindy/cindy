@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   canOfferCodexHistoryRecovery,
@@ -11,7 +11,34 @@ import {
   redactSensitiveText,
   redactSensitiveTextDeep,
   parseAgentErrorCode,
+  localizeSubscriptionAccountError,
+  requiresAgentErrorConfigurationChange,
 } from './errorRedaction.js';
+
+// #10187: unit coverage for the host's explicit guest resume refusal. Existing
+// code-only cases cannot distinguish it from other REMOTE_AGENT_INVALID errors.
+describe('guest resume rejection guidance', () => {
+  const refusal = '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+  it.each([
+    refusal,
+    `LAZY_CREATE_FAILED: ${refusal}`,
+    `Error invoking remote method 'maker:send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: ${refusal}`,
+  ])('does not offer unchanged continuation for %s', message => {
+    expect(parseAgentErrorCode(message)?.code).toBe('REMOTE_AGENT_INVALID');
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(true);
+  });
+  it.each([
+    '[REMOTE_AGENT_INVALID] invalid request',
+    '[REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.',
+    '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer.',
+    '[REMOTE_AGENT_UNAUTHORIZED] this conversation cannot be resumed on this computer',
+    '[REMOTE_AGENT_OFFLINE] connection timed out',
+    '[REMOTE_FUTURE] this conversation cannot be resumed on this computer',
+    'this conversation cannot be resumed on this computer',
+  ])('preserves the existing fallback for other refusals and network errors: %s', message => {
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(false);
+  });
+});
 
 describe('explicit Codex history recovery offer', () => {
   const message = 'stream disconnected before completion: stream closed before response.completed';
@@ -356,7 +383,7 @@ describe('isGatewayProxyTokenInvalidError', () => {
 
 
 describe('agent error envelopes shared by desktop and mobile', () => {
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY', 'SUBSCRIPTION_ACCOUNTS_FULL'])(
     'parses %s directly and inside an IPC error', code => {
       for (const prefix of ['', '[IPC_ERROR] ', "Error invoking remote method 'maker:send': Error: ", 'LAZY_CREATE_FAILED: ']) {
         expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });
@@ -368,5 +395,34 @@ describe('agent error envelopes shared by desktop and mobile', () => {
     expect(parseAgentErrorCode('[REMOTE_FUTURE]')).toEqual({ code: 'REMOTE_FUTURE', fallback: '[REMOTE_FUTURE]' });
     expect(parseAgentErrorCode('[CUSTOM_ERROR] diagnostic')).toBeNull();
     expect(parseAgentErrorCode('prose containing [REMOTE_FUTURE] diagnostic')).toBeNull();
+  });
+});
+
+// Unit regression: startup envelopes previously fell back to "reply failed".
+// The public presenter must preserve cause and trusted time across IPC wrappers.
+describe('subscription account startup guidance', () => {
+  beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(1899999999000); });
+  afterEach(() => { vi.restoreAllMocks(); });
+  const t = (key: string, options?: { resetAt: string }) => key + (options ? ` ${options.resetAt}` : '');
+  // Unit: reopening a saved error at/after reset must not present an expired
+  // timestamp as a future wait, regardless of which client renders it.
+  it.each([-1, 0])('omits a reset timestamp %i ms from now', offset => {
+    const message = `[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=${Date.now() + offset}`;
+    expect(localizeSubscriptionAccountError(message, t, 'zh-CN')).toBe('chat.subscriptionAccountError.limited');
+  });
+  it.each(['', 'LAZY_CREATE_FAILED: ', "Error invoking remote method 'send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: "])(
+    'keeps the limit and reset time through %s', prefix => {
+      const text = localizeSubscriptionAccountError(`${prefix}[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000`, t, 'zh-CN');
+      expect(text).toContain('chat.subscriptionAccountError.limitedUntil');
+      expect(text).toContain(new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(1900000000000)));
+    });
+  it.each(['', '\nresetAtMs=NaN', '\nresetAtMs=-1', '\nresetAtMs=9999999999999999'])(
+    'does not invent a reset time for %s', metadata => {
+      expect(localizeSubscriptionAccountError(`[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic${metadata}`, t)).toBe('chat.subscriptionAccountError.limited');
+    });
+  it('keeps old ambiguous failures cause-neutral and rejects unrelated messages', () => {
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset', t)).toBe('chat.subscriptionAccountError.legacy');
+    expect(localizeSubscriptionAccountError('An upstream diagnostic mentions quota reset', t)).toBeNull();
+    expect(localizeSubscriptionAccountError('[REMOTE_FUTURE] quota reset', t)).toBeNull();
   });
 });

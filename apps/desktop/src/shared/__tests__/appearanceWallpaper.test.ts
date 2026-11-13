@@ -107,6 +107,8 @@ describe('wallpaper catalog compatibility', () => {
         windowZoom: 1.2,
       });
       expect(settings).toEqual({
+        density: 1,
+        motion: 1,
         terminalFamily: '',
         terminalSize: 13,
         wallpaperId: 'none',

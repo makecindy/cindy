@@ -15,7 +15,7 @@ import {
 } from '@cindy/device-link';
 import { nodeRelayAuthCrypto } from '@cindy/device-link/node-relay-crypto';
 import { createLogger } from '../logger.js';
-import { activeSelfHostedRelay, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
+import { activeSelfHostedRelay, isAgentNetOnlyRelay, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
 
 const log = createLogger('self-hosted-relay:signatures');
 
@@ -110,7 +110,8 @@ function create(relay: ActiveSelfHostedRelay): Current {
 /** DeviceLinkClient 每帧调用:官方中转返回 null(不签名、不核对)。 */
 export function currentRelayFrameAuth(): DeviceLinkFrameAuth | null {
   const relay = activeSelfHostedRelay();
-  if (!relay) {
+  // 只走 V2 的网络没有旧版连接,旧版帧签名与证书列表都用不上(V2 端到端加密,自带设备认证)。
+  if (!relay || isAgentNetOnlyRelay(relay)) {
     dispose();
     return null;
   }

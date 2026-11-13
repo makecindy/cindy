@@ -42,7 +42,7 @@ import {
   HISTORY_FILE_MAX,
 } from './groupContext';
 import { createFeishuGroupTurnPermissionPolicy } from './permissionPolicy';
-import { ui, REACTION_PROCESSING } from './uiText';
+import { feishuText, ui, REACTION_PROCESSING } from './uiText';
 
 const log = createLogger('im:feishu-adapter');
 
@@ -83,8 +83,7 @@ async function notifyContextFetchFailure(
   const owner = feishuIm.getOwnerOpenId();
   if (!owner) return;
   contextFailNoticeAt.set(key, now);
-  const where = lane.threadId ? '话题' : '群';
-  const platform = isLark ? 'Lark' : '飞书';
+  const platform = isLark ? 'Lark' : feishuText('notice.platformFeishu');
   // 一键跳转当前 bot 应用的权限页; appId 拿不到(未连接)时回落平台控制台首页。
   const status = feishuIm.getStatus();
   const appId = status.kind === 'connected' ? status.appId : '';
@@ -92,12 +91,12 @@ async function notifyContextFetchFailure(
   const authLink = appId ? `${domain}/app/${appId}/auth` : domain;
   await feishuIm.sendMarkdownText(
     owner,
-    `⚠️ 拉取${where}聊天记录失败, 刚才在${where}里的 @ 只能基于消息本身回答, 看不到聊天上下文。\n` +
-      `开启方法: ${platform}开放平台 → 开发者后台 → 选择本应用 → 权限管理 → ` +
-      '搜索并开通 (im:message.group_msg) 与 (im:message.group_msg.include_bot:read)' +
-      ' → 创建版本并发布(自建应用需管理员审核)。\n' +
-      `错误详情: ${errMsg.slice(0, 200)}\n` +
-      `[点击前往](${authLink})`,
+    [
+      feishuText(lane.threadId ? 'notice.contextFetchFailedThread' : 'notice.contextFetchFailedGroup'),
+      feishuText('notice.contextFetchFailedHowTo', { platform }),
+      feishuText('notice.contextFetchFailedDetail', { error: errMsg.slice(0, 200) }),
+      feishuText('notice.contextFetchFailedLink', { link: authLink }),
+    ].join('\n'),
   );
 }
 
@@ -163,9 +162,10 @@ export function buildFeishuAdapter(
     channel: 'feishu',
     messageSourceIm: () => feishuIm.getService(),
     resolveNotificationReply: (event) => resolveFeishuNotificationReply(feishuIm, event),
+    // getter: 发送时按主人当前界面语言取文案
     notificationReplyText: {
-      unavailable: '暂时无法继续这条通知对应的任务，请在 Cindy 中确认任务仍可用后重试。',
-      commands: '本话题用于继续通知对应的任务。停止请用 !stop；其他命令请在主聊天中操作。',
+      get unavailable() { return feishuText('notificationReply.unavailable'); },
+      get commands() { return feishuText('notificationReply.commands'); },
     },
     im: feishuIm,
     output: { kind: 'rich-card', im: feishuIm },
@@ -281,8 +281,8 @@ export function buildFeishuAdapter(
     },
     queuedEmoji: 'OneSecond',
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
-    // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线; 对外开放
-    // 后的外部用户私聊(transport guests)按用户一条专线。
+    // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线。
+    // guest-dm 路由保留兼容旧专线；新陌生私信由 transport 在派发前拒绝。
     companionLane: (userId) => {
       const lane = decodeFeishuLaneUserId(userId);
       if (lane) return { kind: 'group', chatId: lane.chatId, threadId: lane.threadId };

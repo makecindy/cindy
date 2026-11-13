@@ -182,6 +182,7 @@ export function MessageSourceLabels({
     <div
       {...{ [SHARE_SOURCE_ATTR]: '' }}
       data-message-source-labels=""
+      data-selection-quote-scope=""
       className={cn(
         'flex max-w-full flex-wrap items-center gap-x-3 gap-y-0.5 empty:hidden',
         align === 'start' ? 'justify-start' : 'justify-end',
