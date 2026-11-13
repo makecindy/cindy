@@ -1,8 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-// These adapters live in the Electron entrypoint; keep the shared dependency
-// wiring covered without booting Electron or touching real credential storage.
+// Guard tier: cross-file provider-import credential and IPC contracts in the
+// Electron entrypoint, preload and renderer (engineering-conventions.md §3.2).
+// Runtime deepLink/controller tests cannot detect a caller leaving credentials
+// in argv for relaunch, or dropping a payload at the context-bridge boundary.
+// Minimal privacy regression: move argv redaction after either dispatch path.
+// Keep the security wiring covered without booting Electron or real credentials.
 const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
 const register = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
 const updateService = readFileSync(new URL('../updateService.ts', import.meta.url), 'utf8');
