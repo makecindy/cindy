@@ -6440,7 +6440,7 @@
         "hook": "Cindy-IM-Bots"
       },
       "hook": {
-        "description": "Verbinde Slack, Telegram, Feishu / Lark und weitere Kanäle mit derselben Cindy. Nachrichten werden an dieses Gerät weitergeleitet und nutzen dessen Projektliste und Sitzungsausführung; jeder Anbieter behält sein eigenes Konto und seine Einstellungen.",
+        "description": "Verbinde Slack, Telegram, Feishu / Lark und weitere Kanäle mit derselben Cindy. Nachrichten werden an dieses Gerät weitergeleitet und nutzen dessen Projektliste und Sitzungsausführung; Modell und Berechtigungen eines Projekts gelten für alle Kanäle gemeinsam, nur die Kontoverknüpfung bleibt je Kanal getrennt.",
         "slackDescription": "Verknüpfe Slack-Workspaces und übergib Cindy Aufgaben aus Slack.",
         "slackDisabledHint": "Aktiviere den Schalter, um die Slack-Autorisierung zu starten. Nach der Verknüpfung kannst du Aufgaben aus Slack übermitteln.",
         "slackBoundHint": "Verknüpfung abgeschlossen. Durch Ausschalten des Schalters wird die Verknüpfung dieses Geräts aufgehoben. Zum Wiedereinschalten ist eine erneute Autorisierung erforderlich.",
@@ -6460,7 +6460,7 @@
         },
         "form": {
           "workspacesCardTitle": "Projekte und Modelle",
-          "workspacesCardDescription": "Gilt für alle offiziellen Bots gemeinsam: Die Projekte sind die lokalen Projekte aus der Seitenleiste, und Modell und Berechtigungen eines Projekts sind in jedem Bot gleich. Änderungen über /model in einem Chat erscheinen auch hier. Erstelle, benenne oder entferne Projekte in der Seitenleiste.",
+          "workspacesCardDescription": "Gilt für alle offiziellen Bots gemeinsam. Die Projekte stammen aus der Seitenleiste – dort erstellst, benennst oder entfernst du sie. Änderungen über /model in einem Chat erscheinen auch hier.",
           "workspacesBoundCount_one": "{{count}} Projekt",
           "workspacesBoundCount_other": "{{count}} Projekte",
           "aliasPlaceholder": "Alias, z. B. my-server",
@@ -6468,7 +6468,11 @@
           "defaultWorkspaceChip": "Standard: {{name}}",
           "defaultWorkspaceAria": "Wähle das Standardprojekt für übermittelte Aufgaben",
           "defaultWorkspaceRadioAria": "„{{name}}“ als Standardprojekt festlegen",
-          "defaultWorkspaceRowHint": "Das ausgewählte Projekt ist das Standardprojekt: Jede Unterhaltung in Telegram, Feishu / Lark oder X ohne eigenes ausgewähltes Projekt führt ihre Aufgaben dort aus (Unterhaltungen, die über /project eines ausgewählt haben, behalten dieses). Beachte den Berechtigungsmodus in der Zeile des ausgewählten Projekts: Bei „Vollzugriff“ wird eine @Erwähnung aus jeder beliebigen Gruppe mit vollem Zugriff innerhalb dieses Projekts ausgeführt.",
+          "defaultWorkspaceRowHint": "Das ausgewählte Projekt ist das Standardprojekt: Unterhaltungen in Telegram, Feishu / Lark und X ohne eigenes Projekt führen ihre Aufgaben dort aus.",
+          "defaultProjectTag": "Standard",
+          "defaultProjectFullAccessWarning": "Das Standardprojekt „{{name}}“ hat Vollzugriff: Eine @Erwähnung aus jeder beliebigen Gruppe wird darin mit vollem Zugriff ausgeführt.",
+          "sharedSettingsPointer": "Projekte, Modelle und Berechtigungen gelten für alle offiziellen Bots gemeinsam.",
+          "sharedSettingsPointerAction": "Einstellungen öffnen",
           "legacyDefaultsTitle": "Die bisherigen Standardeinstellungen für „Neue Unterhaltung“ gelten weiterhin",
           "legacyDefaultsDescription": "Auf diesem Gerät sind ältere Standardeinstellungen des offiziellen Bots gespeichert, die weiterhin als Fallback für Projekte ohne eigene Einstellungen dienen (die offiziellen Bots für Telegram und X teilen sich eine Kopie). Diese Werte werden jetzt pro Projekt festgelegt. Durch das Wiederherstellen der Standardeinstellungen wird Folgendes vollständig gelöscht:",
           "legacyDefaultsRow": {
@@ -6927,9 +6931,10 @@
         "offlineLocal": "{{provider}} ist offline. Änderungen werden auf diesem Computer gespeichert und bei erneuter Verbindung mit der Chat-Modellkarte synchronisiert.",
         "requireBinding": "Schließe zuerst die Kontoverknüpfung mit {{provider}} ab.",
         "serverUnsupported": "Der Server ist zu alt oder antwortet nicht; die Einstellungen können nicht geladen werden.",
+        "loadFailed": "Die Projekteinstellungen konnten nicht geladen werden.",
         "retry": "Erneut versuchen",
         "toast": {
-          "saveFailed": "Verzeichniseinstellungen konnten nicht gespeichert werden"
+          "saveFailed": "Projekteinstellungen konnten nicht gespeichert werden"
         },
         "teamChipAria": "Wähle den Slack-Workspace, zu dem diese Einstellungen gehören"
       }

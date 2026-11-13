@@ -6397,7 +6397,7 @@
         "hook": "Cindy IM ボット"
       },
       "hook": {
-        "description": "Slack、Telegram、Feishu / Lark などを同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。アカウント連携と設定はプロバイダーごとに分離されます。",
+        "description": "Slack、Telegram、Feishu / Lark などを同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。各プロジェクトのモデルと権限は全チャンネル共通で、アカウント連携だけがチャンネルごとに分かれます。",
         "slackDescription": "Slack ワークスペースを連携し、Slack から Cindy にタスクを依頼できます。",
         "slackDisabledHint": "スイッチをオンにすると Slack 認証が始まります。連携が完了すると Slack からタスクを依頼できます。",
         "slackBoundHint": "連携が完了しました。スイッチをオフにすると連携が解除され、再びオンにするには再認証が必要です。",
@@ -6417,7 +6417,7 @@
         },
         "form": {
           "workspacesCardTitle": "プロジェクトとモデル",
-          "workspacesCardDescription": "すべての公式ボットで共通の設定です。プロジェクトはサイドバーのローカルプロジェクトと同じ一覧で、各プロジェクトのモデルと権限はどのボットから使っても同じです。チャットで /model から変更した内容もここに反映されます。プロジェクトの作成・名前変更・削除はサイドバーで行ってください。",
+          "workspacesCardDescription": "すべての公式ボットで共通の設定です。プロジェクトはサイドバーのものと同じで、作成・名前変更・削除はサイドバーで行います。チャットで /model から変更した内容もここに反映されます。",
           "workspacesBoundCount_one": "プロジェクト {{count}} 件",
           "workspacesBoundCount_other": "プロジェクト {{count}} 件",
           "aliasPlaceholder": "エイリアス(例: my-server)",
@@ -6425,7 +6425,11 @@
           "defaultWorkspaceChip": "デフォルト: {{name}}",
           "defaultWorkspaceAria": "タスク発行時に使う既定のプロジェクトを選択",
           "defaultWorkspaceRadioAria": "「{{name}}」を既定のプロジェクトに設定",
-          "defaultWorkspaceRowHint": "選択したプロジェクトが既定のプロジェクトです。Telegram・Feishu / Lark・X のうち、プロジェクトを個別に選んでいない会話のタスクはすべてここで実行されます（/project で個別に選んだ会話はそのまま）。選択したプロジェクトの行の権限モードにご注意ください。「フルアクセス」にすると、どのグループから @ で呼ばれてもそのプロジェクト内でフルアクセスで実行されます。",
+          "defaultWorkspaceRowHint": "選択中が既定のプロジェクトです。Telegram・Feishu / Lark・X でプロジェクトを個別に選んでいない会話のタスクはここで実行されます。",
+          "defaultProjectTag": "既定",
+          "defaultProjectFullAccessWarning": "既定のプロジェクト「{{name}}」の権限はフルアクセスです。どのグループから @ で呼ばれても、この中でフルアクセスで実行されます。",
+          "sharedSettingsPointer": "プロジェクト・モデル・権限はすべての公式ボットで共通です。",
+          "sharedSettingsPointerAction": "設定を開く",
           "legacyDefaultsTitle": "旧「新規会話の設定」がまだ有効です",
           "legacyDefaultsDescription": "この端末には以前の公式 bot 既定値が保存されており、個別に設定していないプロジェクトのフォールバックとして今も使われます（公式 Telegram と X で共通の 1 件）。これらの値は各プロジェクトごとに設定する方式になりました。既定値に戻すと、次のすべてが削除されます:",
           "legacyDefaultsRow": {
@@ -6884,9 +6888,10 @@
         "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピューターに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
         "serverUnsupported": "サーバーのバージョンが古いか応答がないため、設定を読み込めません。",
+        "loadFailed": "プロジェクト設定を読み込めませんでした。",
         "retry": "再試行",
         "toast": {
-          "saveFailed": "ディレクトリ設定の保存に失敗しました"
+          "saveFailed": "プロジェクト設定の保存に失敗しました"
         },
         "teamChipAria": "設定の対象となる Slack ワークスペースを選択"
       }

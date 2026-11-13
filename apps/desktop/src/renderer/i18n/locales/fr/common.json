@@ -6503,7 +6503,7 @@
         "hook": "Bots de messagerie Cindy"
       },
       "hook": {
-        "description": "Connectez Slack, Telegram, Feishu / Lark et d'autres canaux au même Cindy. Les messages sont transmis à cet appareil et partagent sa liste de projets et son exécuteur de sessions ; chaque fournisseur conserve son propre compte et ses préférences.",
+        "description": "Connectez Slack, Telegram, Feishu / Lark et d'autres canaux au même Cindy. Les messages sont transmis à cet appareil et partagent sa liste de projets et son exécuteur de sessions ; le modèle et les autorisations de chaque projet sont partagés par tous les canaux, et chaque canal conserve sa propre liaison de compte.",
         "slackDescription": "Associez des espaces de travail Slack et confiez des tâches à Cindy depuis Slack.",
         "slackDisabledHint": "Activez l'interrupteur pour lancer l'autorisation Slack ; une fois l'association faite, vous pourrez envoyer des tâches depuis Slack.",
         "slackBoundHint": "Association terminée. Désactiver l'interrupteur dissocie cet appareil ; le réactiver nécessite une nouvelle autorisation.",
@@ -6523,7 +6523,7 @@
         },
         "form": {
           "workspacesCardTitle": "Projets et modèles",
-          "workspacesCardDescription": "Partagé par tous les bots officiels : les projets sont les projets locaux de la barre latérale, et le modèle et les autorisations de chaque projet sont les mêmes quel que soit le bot utilisé. Les modifications faites avec /model dans une conversation apparaissent aussi ici. Créez, renommez ou retirez des projets dans la barre latérale.",
+          "workspacesCardDescription": "Partagé par tous les bots officiels. Les projets viennent de la barre latérale : créez-les, renommez-les ou retirez-les là-bas. Les modifications faites avec /model dans une conversation apparaissent aussi ici.",
           "workspacesBoundCount_one": "{{count}} projet",
           "workspacesBoundCount_other": "{{count}} projets",
           "aliasPlaceholder": "Alias, par ex. my-server",
@@ -6531,7 +6531,11 @@
           "defaultWorkspaceChip": "Par défaut : {{name}}",
           "defaultWorkspaceAria": "Choisir le projet par défaut des tâches transmises",
           "defaultWorkspaceRadioAria": "Définir « {{name}} » comme projet par défaut",
-          "defaultWorkspaceRowHint": "Le projet sélectionné est le projet par défaut : toute conversation Telegram, Feishu / Lark ou X qui n'a pas choisi son propre projet y exécute ses tâches (les conversations qui en ont choisi un avec /project conservent le leur). Attention au mode d'autorisation sur la ligne du projet sélectionné : s'il est réglé sur Accès complet, une @mention depuis n'importe quel groupe s'exécute avec un accès complet dans ce projet.",
+          "defaultWorkspaceRowHint": "Le projet sélectionné est le projet par défaut : les conversations Telegram, Feishu / Lark et X qui n'ont pas choisi de projet y exécutent leurs tâches.",
+          "defaultProjectTag": "Par défaut",
+          "defaultProjectFullAccessWarning": "Le projet par défaut « {{name}} » est en Accès complet : une @mention depuis n'importe quel groupe s'y exécute avec un accès complet.",
+          "sharedSettingsPointer": "Les projets, modèles et autorisations sont partagés par tous les bots officiels.",
+          "sharedSettingsPointerAction": "Ouvrir les réglages",
           "legacyDefaultsTitle": "D'anciennes valeurs par défaut « nouvelle conversation » sont toujours en vigueur",
           "legacyDefaultsDescription": "Cet appareil a enregistré d'anciennes valeurs par défaut du bot officiel, qui servent encore de repli pour les projets sans paramètres propres (Telegram officiel et X partagent une même copie). Ces valeurs se définissent désormais par projet. Restaurer les valeurs par défaut efface tout ce qui suit :",
           "legacyDefaultsRow": {
@@ -6994,9 +6998,10 @@
         "offlineLocal": "{{provider}} est hors ligne. Les modifications sont enregistrées sur cet ordinateur et seront synchronisées avec la fiche du modèle dans la conversation à la reconnexion.",
         "requireBinding": "Terminez d'abord l'association du compte {{provider}}.",
         "serverUnsupported": "Le serveur est trop ancien ou ne répond pas ; impossible de charger les préférences.",
+        "loadFailed": "Impossible de charger les réglages des projets.",
         "retry": "Réessayer",
         "toast": {
-          "saveFailed": "Échec de l'enregistrement des préférences du répertoire"
+          "saveFailed": "Échec de l'enregistrement des réglages du projet"
         },
         "teamChipAria": "Choisir l'espace de travail Slack auquel appartiennent ces préférences"
       }

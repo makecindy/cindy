@@ -6440,7 +6440,7 @@
         "hook": "Cindy IM bots"
       },
       "hook": {
-        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
+        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; every project’s model and permissions are shared by all channels, while each channel keeps its own account link.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
@@ -6460,7 +6460,7 @@
         },
         "form": {
           "workspacesCardTitle": "Projects and models",
-          "workspacesCardDescription": "Shared by every official bot: the projects are the local projects in your sidebar, and each project’s model and permissions are the same in whichever bot you use it. Changes made with /model in a chat show up here too. Create, rename, or remove projects in the sidebar.",
+          "workspacesCardDescription": "Shared by every official bot. Projects come from your sidebar — create, rename, or remove them there. Changes made with /model in a chat show up here too.",
           "workspacesBoundCount_one": "{{count}} project",
           "workspacesBoundCount_other": "{{count}} projects",
           "aliasPlaceholder": "Alias, e.g. my-server",
@@ -6468,7 +6468,11 @@
           "defaultWorkspaceChip": "Default: {{name}}",
           "defaultWorkspaceAria": "Choose the default project for dispatched tasks",
           "defaultWorkspaceRadioAria": "Set “{{name}}” as the default project",
-          "defaultWorkspaceRowHint": "The selected project is the default project: any Telegram, Feishu / Lark or X conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /project keep theirs). Mind the permission mode on the selected project’s row — set to Full access, an @mention from any group runs with full access inside that project.",
+          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark and X conversations that have not picked a project run their tasks there.",
+          "defaultProjectTag": "Default",
+          "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
+          "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
+          "sharedSettingsPointerAction": "Open settings",
           "legacyDefaultsTitle": "Legacy “new conversation” defaults are still in effect",
           "legacyDefaultsDescription": "This device saved older official-bot defaults that still act as the fallback for projects without their own settings (official Telegram and X share one copy). These values are now set per project. Restoring defaults clears all of the following:",
           "legacyDefaultsRow": {
@@ -6927,9 +6931,10 @@
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
+        "loadFailed": "Could not load project settings.",
         "retry": "Retry",
         "toast": {
-          "saveFailed": "Failed to save directory preferences"
+          "saveFailed": "Failed to save project settings"
         },
         "teamChipAria": "Choose which Slack workspace these preferences belong to"
       }

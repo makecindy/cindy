@@ -265,7 +265,7 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
     applyProviderSource,
     editable: prefs !== null && !loadError,
     pendingWs,
-    hint: loadError ? t('settings.tina.prefs.serverUnsupported') : null,
+    hint: loadError ? t('settings.tina.prefs.loadFailed') : null,
     retry: loadError ? () => void fetchPrefs() : null,
     imDefaults,
     reloadImDefaults: fetchImDefaults,
@@ -284,8 +284,10 @@ function PrefsField({
   children: ReactNode;
 }) {
   return (
-    <div className={cn('flex min-w-0 flex-col gap-1', className)}>
-      <span className="text-11 text-[var(--text-tertiary)]">{label}</span>
+    // 字段名只给读屏: 每个项目一行, 控件本身(模型名 / 权限档 + 图标)已经说明了自己是什么,
+    // 每行再重复一遍「模型」「权限模式」只会把列表拉长。
+    <div className={cn('flex min-w-0 flex-col', className)}>
+      <span className="sr-only">{label}</span>
       {children}
     </div>
   );
@@ -345,7 +347,7 @@ export function WorkspacePrefsEditor({
   };
 
   return (
-    <div className="flex flex-wrap items-end gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {/* 模型 + 思考强度同一个控件, **composer 同款全功能标准面板**(2026-07 用户
           定稿基准: 全软件一个模型选择面板, 处处同行为, 差异只有样式):供应商分段、
           订阅来源、推理强度全开。来源(providerId)是纯客户端维度, 落本地
@@ -354,7 +356,7 @@ export function WorkspacePrefsEditor({
           effectiveSourceIdForModel 校验: 显式来源失效时拒绝而不换账号; 目录模型
           跟随默认时, 不提供该模型的残留来源被忽略(issue #5912), 不会拼出不可能
           路由 —— 「选 A 落 B」的根因(选了来源没地方存)已消除。 */}
-      <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[220px]">
+      <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[200px]">
         <ModelSelector
           remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
           fastModeConfigurable={false}
@@ -427,7 +429,7 @@ export function WorkspacePrefsEditor({
           }}
         />
       </PrefsField>
-      <PrefsField label={t('settings.tina.prefs.permissionLabel')} className="basis-[160px]">
+      <PrefsField label={t('settings.tina.prefs.permissionLabel')} className="basis-[148px]">
         <PermissionSelector
           permissionMode={eff.permissionMode.id ?? HOOK_DEFAULT_PERMISSION_MODE}
           vendorKey={vendorKey}

@@ -6397,7 +6397,7 @@
         "hook": "Cindy IM 使者"
       },
       "hook": {
-        "description": "將 Slack、Telegram、飛書 / Lark 諸渠道接入同一 Cindy：訊皆派至此臺裝置，共用此間案之清單與差事；名籍繫結與執行偏好依渠道各自隔離。",
+        "description": "將 Slack、Telegram、飛書 / Lark 諸渠道接入同一 Cindy：訊皆派至此臺裝置，共用此間案之清單與差事；每案之模型與權限，諸渠道共用一份，名籍繫結依渠道各自隔離。",
         "slackDescription": "繫結 Slack workspace，於 Slack 中 @Cindy 派差事。",
         "slackDisabledHint": "開此開關即發起 Slack 授權，繫結畢即可於 Slack 中派活。",
         "slackBoundHint": "繫結已畢。關此開關將解除繫結，重開須再授權。",
@@ -6417,7 +6417,7 @@
         },
         "form": {
           "workspacesCardTitle": "案與模型",
-          "workspacesCardDescription": "諸官方機器人共用此一份：案即側欄本機諸案，每案之模型與權限，於任一機器人中皆同；於 IM 中以 /model 更之，此處亦隨之而變。立案、更名、除案，皆於側欄行之。",
+          "workspacesCardDescription": "諸官方機器人共用此一份。案出於側欄，立案、更名、除案皆於側欄行之；於 IM 中以 /model 更之，此處亦隨之而變。",
           "workspacesBoundCount_one": "案 {{count}} 個",
           "workspacesBoundCount_other": "案 {{count}} 個",
           "aliasPlaceholder": "別名，如 my-server",
@@ -6425,7 +6425,11 @@
           "defaultWorkspaceChip": "常例：{{name}}",
           "defaultWorkspaceAria": "擇派差事時所用之常例案",
           "defaultWorkspaceRadioAria": "立「{{name}}」為常例案",
-          "defaultWorkspaceRowHint": "所選之案即常例案：Telegram、飛書 / Lark 與 X 中，凡未另擇案者，差事皆落於此（以 /project 另擇者，仍從其擇）。請留意所選之案此行之權限模式：若設為「完全存取」，任一群中 @ bot，皆將以完全存取之權於此案中執行，慎之。",
+          "defaultWorkspaceRowHint": "所選者即常例案：Telegram、飛書 / Lark 與 X 中，未另擇案之私聊與群，差事皆落於此。",
+          "defaultProjectTag": "常例",
+          "defaultProjectFullAccessWarning": "常例案「{{name}}」之權限為完全存取：任一群中 @ 機器人，皆將以完全存取之權於其中執行，慎之。",
+          "sharedSettingsPointer": "案、模型與權限，諸官方機器人共用。",
+          "sharedSettingsPointerAction": "往設之",
           "legacyDefaultsTitle": "舊版「新言談配置」猶在生效",
           "legacyDefaultsDescription": "此臺裝置曾存一份舊版官方 bot 常例設定，凡未另行配置之案，仍以之為兜底（官方 Telegram 與 X 共用一份）。此等值今已統一於各案中設定。復常例將一併清除以下全部內容：",
           "legacyDefaultsRow": {
@@ -6884,9 +6888,10 @@
         "offlineLocal": "{{provider}} 暫連不上，變更存於此機；連上後同步至言談中之模型卡。",
         "requireBinding": "須先完成 {{provider}} 名籍關聯，方可修。",
         "serverUnsupported": "伺服器版本過舊或暫無應答，無法讀取偏好。",
+        "loadFailed": "讀案之設未成。",
         "retry": "再試",
         "toast": {
-          "saveFailed": "存目錄偏好未成"
+          "saveFailed": "存案之設未成"
         },
         "teamChipAria": "擇偏好所屬之 Slack workspace"
       }

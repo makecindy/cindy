@@ -6397,7 +6397,7 @@
         "hook": "Cindy IM 봇"
       },
       "hook": {
-        "description": "Slack, Telegram, Feishu / Lark 등을 하나의 Cindy에 연결합니다. 메시지는 이 기기로 전달되며 프로젝트 목록과 세션 실행기를 공유합니다. 계정 연동과 설정은 채널별로 분리됩니다.",
+        "description": "Slack, Telegram, Feishu / Lark 등을 하나의 Cindy에 연결합니다. 메시지는 이 기기로 전달되며 프로젝트 목록과 세션 실행기를 공유합니다. 각 프로젝트의 모델과 권한은 모든 채널이 함께 쓰고, 계정 연동만 채널별로 분리됩니다.",
         "slackDescription": "Slack 워크스페이스를 연결하고 Slack에서 Cindy에게 작업을 맡기세요.",
         "slackDisabledHint": "스위치를 켜면 Slack 인증이 시작됩니다. 연결이 완료되면 Slack에서 작업을 맡길 수 있습니다.",
         "slackBoundHint": "연결이 완료되었습니다. 스위치를 끄면 연결이 해제되며 다시 켜려면 재인증이 필요합니다.",
@@ -6417,7 +6417,7 @@
         },
         "form": {
           "workspacesCardTitle": "프로젝트 및 모델",
-          "workspacesCardDescription": "모든 공식 봇이 함께 쓰는 설정입니다. 프로젝트는 사이드바의 로컬 프로젝트와 같은 목록이며, 각 프로젝트의 모델과 권한은 어느 봇에서 사용하든 동일합니다. 채팅에서 /model로 바꾼 내용도 여기에 반영됩니다. 프로젝트 생성·이름 변경·제거는 사이드바에서 하세요.",
+          "workspacesCardDescription": "모든 공식 봇이 함께 쓰는 설정입니다. 프로젝트는 사이드바와 같으며 생성·이름 변경·제거는 사이드바에서 합니다. 채팅에서 /model로 바꾼 내용도 여기에 반영됩니다.",
           "workspacesBoundCount_one": "프로젝트 {{count}}개",
           "workspacesBoundCount_other": "프로젝트 {{count}}개",
           "aliasPlaceholder": "별칭, 예: my-server",
@@ -6425,7 +6425,11 @@
           "defaultWorkspaceChip": "기본값: {{name}}",
           "defaultWorkspaceAria": "작업을 보낼 때 사용할 기본 프로젝트 선택",
           "defaultWorkspaceRadioAria": "\"{{name}}\"을(를) 기본 프로젝트로 설정",
-          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X에서 프로젝트를 따로 고르지 않은 대화의 작업은 모두 여기에서 실행됩니다(/project로 따로 고른 대화는 그대로 유지). 선택한 프로젝트 행의 권한 모드를 확인하세요. ‘전체 액세스’로 두면 어느 그룹에서 @로 불러도 해당 프로젝트에서 전체 액세스로 실행됩니다.",
+          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X에서 프로젝트를 따로 고르지 않은 대화의 작업은 여기에서 실행됩니다.",
+          "defaultProjectTag": "기본",
+          "defaultProjectFullAccessWarning": "기본 프로젝트 ‘{{name}}’의 권한이 전체 액세스입니다. 어느 그룹에서 @로 불러도 이 안에서 전체 액세스로 실행됩니다.",
+          "sharedSettingsPointer": "프로젝트, 모델, 권한은 모든 공식 봇이 함께 씁니다.",
+          "sharedSettingsPointerAction": "설정 열기",
           "legacyDefaultsTitle": "이전 ‘새 대화 설정’이 아직 적용되고 있습니다",
           "legacyDefaultsDescription": "이 기기에는 예전 공식 bot 기본값이 저장되어 있으며, 개별 설정이 없는 프로젝트의 대체값으로 계속 사용됩니다(공식 Telegram과 X가 같은 항목을 공유). 이 값들은 이제 프로젝트별로 설정합니다. 기본값으로 복원하면 다음 항목이 모두 삭제됩니다:",
           "legacyDefaultsRow": {
@@ -6884,9 +6888,10 @@
         "offlineLocal": "{{provider}}에 연결되지 않은 동안 변경 사항은 이 컴퓨터에 저장되며, 다시 연결되면 채팅의 모델 카드로 동기화됩니다.",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
         "serverUnsupported": "서버 버전이 오래되었거나 응답이 없어 설정을 불러올 수 없습니다.",
+        "loadFailed": "프로젝트 설정을 불러오지 못했습니다.",
         "retry": "다시 시도",
         "toast": {
-          "saveFailed": "디렉터리 설정을 저장하지 못했습니다"
+          "saveFailed": "프로젝트 설정을 저장하지 못했습니다"
         },
         "teamChipAria": "환경설정이 속한 Slack 워크스페이스 선택"
       }

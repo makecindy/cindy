@@ -6397,7 +6397,7 @@
         "hook": "Cindy IM 機器人"
       },
       "hook": {
-        "description": "把 Slack、Telegram、飛書 / Lark 等渠道接入同一個 Cindy：訊息都會派發到這臺裝置，共用這裡的專案清單和任務；帳號繫結和執行偏好按渠道分開保存。",
+        "description": "把 Slack、Telegram、飛書 / Lark 等渠道接入同一個 Cindy：訊息都會派發到這臺裝置，共用這裡的專案清單和任務；每個專案的模型和權限所有渠道共用一份，帳號繫結按渠道分開保存。",
         "slackDescription": "繫結 Slack workspace，在 Slack 裡 @Cindy 派發任務。",
         "slackDisabledHint": "開啟開關即發起 Slack 授權，繫結完成後即可在 Slack 裡派活。",
         "slackBoundHint": "已完成繫結。關閉開關將解除繫結，重新開啟需再次授權。",
@@ -6417,7 +6417,7 @@
         },
         "form": {
           "workspacesCardTitle": "專案與模型",
-          "workspacesCardDescription": "所有官方機器人共用這一份：專案就是側邊欄裡的本機專案，每個專案的模型和權限在哪個機器人裡都一樣；在 IM 裡用 /model 改，這裡也會跟著變。新增、改名或移除專案請在側邊欄操作。",
+          "workspacesCardDescription": "所有官方機器人共用這一份。專案來自側邊欄，新增、改名或移除請在側邊欄操作；在 IM 裡用 /model 改，這裡也會跟著變。",
           "workspacesBoundCount_one": "{{count}} 個專案",
           "workspacesBoundCount_other": "{{count}} 個專案",
           "aliasPlaceholder": "別名，如 my-server",
@@ -6425,7 +6425,11 @@
           "defaultWorkspaceChip": "預設：{{name}}",
           "defaultWorkspaceAria": "選擇派發任務時使用的預設專案",
           "defaultWorkspaceRadioAria": "把「{{name}}」設為預設專案",
-          "defaultWorkspaceRowHint": "選中的專案是預設專案：Telegram、飛書 / Lark 和 X 裡，凡是沒有單獨選過專案的，任務都落在它裡面（用 /project 單獨選過的，仍按那個走）。請留意所選專案這一行的權限模式：設成「完全訪問」時，任何群裡 @ bot 都會以完全訪問在這個專案裡執行。",
+          "defaultWorkspaceRowHint": "選中的是預設專案：在 Telegram、飛書 / Lark 和 X 裡，沒有單獨選過專案的私聊和群，任務都落在它裡面。",
+          "defaultProjectTag": "預設",
+          "defaultProjectFullAccessWarning": "預設專案「{{name}}」的權限是完全訪問：任何群裡 @ 機器人，都會以完全訪問在它裡面執行。",
+          "sharedSettingsPointer": "專案、模型與權限由所有官方機器人共用。",
+          "sharedSettingsPointerAction": "去設定",
           "legacyDefaultsTitle": "舊版「新對話配置」仍在生效",
           "legacyDefaultsDescription": "這臺裝置儲存過一份舊的官方 bot 預設設定，它仍是沒有單獨配置過的專案的兜底值（官方 Telegram 與 X 共用同一份）。這些值現在統一在每個專案裡設定。恢復預設會一併清掉以下全部內容：",
           "legacyDefaultsRow": {
@@ -6884,9 +6888,10 @@
         "offlineLocal": "{{provider}} 暫時連不上，變更會保存在本機；連上後同步到對話裡的模型卡。",
         "requireBinding": "先完成 {{provider}} 帳號關聯後可編輯。",
         "serverUnsupported": "伺服器版本過舊或暫時無應答，無法讀取偏好。",
+        "loadFailed": "讀取專案設定失敗。",
         "retry": "重試",
         "toast": {
-          "saveFailed": "儲存目錄偏好失敗"
+          "saveFailed": "儲存專案設定失敗"
         },
         "teamChipAria": "選擇偏好所屬的 Slack workspace"
       }

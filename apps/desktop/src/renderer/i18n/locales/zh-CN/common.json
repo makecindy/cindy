@@ -6397,7 +6397,7 @@
         "hook": "Cindy IM 机器人"
       },
       "hook": {
-        "description": "把 Slack、Telegram、飞书 / Lark 等渠道接入同一个 Cindy：消息都会派发到这台设备，共用这里的项目清单和任务；账号绑定和运行偏好按渠道分开保存。",
+        "description": "把 Slack、Telegram、飞书 / Lark 等渠道接入同一个 Cindy：消息都会派发到这台设备，共用这里的项目清单和任务；每个项目的模型和权限所有渠道共用一份，账号绑定按渠道分开保存。",
         "slackDescription": "绑定 Slack workspace，在 Slack 里 @Cindy 派发任务。",
         "slackDisabledHint": "打开开关即发起 Slack 授权，绑定完成后即可在 Slack 里派发任务。",
         "slackBoundHint": "已完成绑定。关闭开关将解除绑定，重新打开需再次授权。",
@@ -6417,7 +6417,7 @@
         },
         "form": {
           "workspacesCardTitle": "项目与模型",
-          "workspacesCardDescription": "所有官方机器人共用这一份：项目就是侧栏里的本机项目，每个项目的模型和权限在哪个机器人里都一样；在 IM 里用 /model 改，这里也会跟着变。新建、改名或移除项目请在侧栏操作。",
+          "workspacesCardDescription": "所有官方机器人共用这一份。项目来自侧栏，新建、改名或移除请在侧栏操作；在 IM 里用 /model 改，这里也会跟着变。",
           "workspacesBoundCount_one": "{{count}} 个项目",
           "workspacesBoundCount_other": "{{count}} 个项目",
           "aliasPlaceholder": "别名，如 my-server",
@@ -6425,7 +6425,11 @@
           "defaultWorkspaceChip": "默认：{{name}}",
           "defaultWorkspaceAria": "选择派发任务时使用的默认项目",
           "defaultWorkspaceRadioAria": "把「{{name}}」设为默认项目",
-          "defaultWorkspaceRowHint": "选中的项目是默认项目：Telegram、飞书 / Lark 和 X 里，凡是没有单独选过项目的，任务都落在它里面（用 /project 单独选过的，仍按那个走）。请留意所选项目这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个项目里执行。",
+          "defaultWorkspaceRowHint": "选中的是默认项目：在 Telegram、飞书 / Lark 和 X 里，没有单独选过项目的私聊和群，任务都落在它里面。",
+          "defaultProjectTag": "默认",
+          "defaultProjectFullAccessWarning": "默认项目「{{name}}」的权限是完全访问：任何群里 @ 机器人，都会以完全访问在它里面执行。",
+          "sharedSettingsPointer": "项目、模型与权限由所有官方机器人共用。",
+          "sharedSettingsPointerAction": "去设置",
           "legacyDefaultsTitle": "旧版「新对话配置」仍在生效",
           "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置，它仍是没有单独配置过的项目的兜底值（官方 Telegram 与 X 共用同一份）。这些值现在统一在每个项目里设置。恢复默认会一并清掉以下全部内容：",
           "legacyDefaultsRow": {
@@ -6884,9 +6888,10 @@
         "offlineLocal": "{{provider}} 暂时连不上，改动会保存在本机；连上后同步到对话里的模型卡。",
         "requireBinding": "先完成 {{provider}} 账号关联后可编辑。",
         "serverUnsupported": "服务器版本过旧或暂时无应答，无法读取偏好。",
+        "loadFailed": "读取项目配置失败。",
         "retry": "重试",
         "toast": {
-          "saveFailed": "保存目录偏好失败"
+          "saveFailed": "保存项目配置失败"
         },
         "teamChipAria": "选择偏好所属的 Slack workspace"
       }

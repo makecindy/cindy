@@ -40,11 +40,11 @@ import { imBotSettings } from './ImBotSection.settings-search';
  */
 
 import { Button } from '@/components/ui/button';
-import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Plus, Trash2 } from 'lucide-react';
 
 import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -71,6 +71,7 @@ import {
 /** provider-neutral 渠道卡覆盖的 provider(Slack 走 legacy 专属卡)。 */
 type NeutralCardProvider = 'telegram' | 'x' | 'feishu';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
+import { HOOK_DEFAULT_PERMISSION_MODE } from './hookWorkspacePrefsLogic';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import {
@@ -420,6 +421,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     (card) => entry?.targetId === 'cindy-im-' + card || entry?.fallbackTargetId === 'cindy-im-' + card,
   ) ?? null;
   const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(companion ? 'x' : targetCard);
+  const projectsSectionRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (targetCard) setExpandedCard(targetCard);
   }, [targetCard, activation]);
@@ -1134,133 +1136,163 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const setSharedDefaultWorkspace = (alias: string | null) =>
     void setProviderDefaultWorkspace('feishu', alias);
 
-  /**
-   * 「项目与模型」区块(整页只有一处, 在各渠道卡之上): 列的就是侧栏的本机项目, 每个项目的
-   * 模型与权限、以及默认项目, 所有官方机器人共用一份 —— 不再按渠道各配一遍。
-   * 用普通函数而非内联子组件渲染: 内联组件每次渲染都会重建类型导致子树 remount。
-   */
-  const renderProjectsSection = () => (
-    <section
-      className={cn(
-        'flex flex-col gap-1.5 rounded-xl p-4',
-        'border border-[var(--settings-theme-card-border)]',
-        'bg-[var(--settings-theme-card-bg)]',
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-14 font-medium leading-[1.3] text-[var(--settings-section-title)]">
-          {t('settings.remoteControl.hook.form.workspacesCardTitle')}
-        </span>
-        <span className="text-12 text-[var(--text-tertiary)]">
-          · {t('settings.remoteControl.hook.form.workspacesBoundCount', { count: workdirCount })}
-        </span>
-      </div>
-      <span className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-        {t('settings.remoteControl.hook.form.workspacesCardDescription')}
-      </span>
-      {/* 解释"选中即默认"这层语义, 并把权限档的后果说在选之前。 */}
-      {projectsDefaultApplies ? (
-        <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-          {t('settings.remoteControl.hook.form.defaultWorkspaceRowHint')}
-        </span>
-      ) : null}
-      {projectPrefsState.hint !== null && (
-        <div className="flex items-center gap-2 text-11 text-[var(--text-tertiary)]">
-          <span>{projectPrefsState.hint}</span>
-          {projectPrefsState.retry !== null && (
-            <Button data-settings-search-action="Retry loading channel preferences" variant="secondary" size="xs" compact type="button" onClick={projectPrefsState.retry}>
-              {t('settings.tina.prefs.retry')}
-            </Button>
-          )}
-        </div>
-      )}
-      <div
-        className="mt-1.5 flex flex-col gap-2"
-        {...(projectsDefaultApplies
-          ? {
-              role: 'radiogroup',
-              'aria-label': t('settings.remoteControl.hook.form.defaultWorkspaceAria'),
-              onKeyDown: handleRadioGroupKeyDown,
-            }
-          : {})}
-      >
-        {/* 内置「对话」伪目录: 与真实项目同级, 常驻第一位, 不可改名/删除;
-          IM 那头对应保留名 chat, 偏好与 /model 选 chat 同一份 */}
-        <div className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5">
-          <div className="flex items-center gap-1.5">
-            {projectsDefaultApplies ? (
-              <DefaultWorkspaceRadio
-                selected={sharedDefaultWorkspace === null}
-                label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
-                  name: t('settings.tina.chat.title'),
-                })}
-                onSelect={() => setSharedDefaultWorkspace(null)}
-              />
-            ) : null}
-            <span className="w-36 shrink-0 px-2.5 py-1.5 text-13 font-medium text-[var(--text-primary)]">
-              {t('settings.tina.chat.title')}
-            </span>
-            <span
-              className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]"
-              title={t('settings.tina.chat.description')}
-            >
-              {t('settings.tina.chat.description')}
-            </span>
-          </div>
-          <WorkspacePrefsEditor alias={HOOK_CHAT_WORKSPACE_ALIAS} state={projectPrefsState} />
-        </div>
-        {Object.entries(hook.workspaces).map(([name, dir]) => (
-          <div
-            key={name}
-            className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5"
-          >
-            <div className="flex items-center gap-1.5">
-              {projectsDefaultApplies ? (
-                <DefaultWorkspaceRadio
-                  selected={sharedDefaultWorkspace === name}
-                  label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', { name })}
-                  onSelect={() => setSharedDefaultWorkspace(name)}
-                />
-              ) : null}
-              <span
-                data-setting-id={imBotSettings.cindy.id}
-                className="w-36 shrink-0 truncate px-2.5 py-1.5 text-13 font-medium text-[var(--text-primary)]"
-                title={name}
-              >
-                {name}
-              </span>
-              <span
-                className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]"
-                title={dir}
-              >
-                {dir}
-              </span>
-            </div>
-            {/* 偏好按项目名称归属(与 IM 里 /model 卡同键) */}
-            <WorkspacePrefsEditor alias={name} state={projectPrefsState} />
-          </div>
-        ))}
-      </div>
-      <Button data-setting-id={imBotSettings.cindy.id}
+  /** 渠道卡里指向「项目与模型」的那一行: 以前这块在每张卡里, 现在整页只有一处。 */
+  const sharedSettingsPointer = (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--border-default)] pt-3 text-12 leading-[1.45] text-[var(--text-secondary)]">
+      <span>{t('settings.remoteControl.hook.form.sharedSettingsPointer')}</span>
+      <Button
+        data-settings-search-action="Scroll to the shared projects and models settings"
         variant="secondary"
-        size="sm"
+        size="xs"
         compact
         type="button"
-        onClick={() => void handleAddProject()}
-        className="mt-1.5 w-fit"
+        onClick={() => projectsSectionRef.current?.scrollIntoView({ block: 'start' })}
       >
-        <Plus size={12} />
-        {t('settings.remoteControl.hook.form.addProject')}
+        {t('settings.remoteControl.hook.form.sharedSettingsPointerAction')}
       </Button>
-      {/* 存量 global override 的收尾入口: 它仍是没单独配置过的项目的兜底值, 要能看见才谈得上
-          "可管理"。从未改过的设备一次都不会渲染。 */}
-      <LegacyGlobalDefaultsNotice
-        state={legacyGlobalDefaults.state}
-        pending={legacyGlobalDefaults.pending}
-        onRestore={() => void legacyGlobalDefaults.restore()}
-      />
-    </section>
+    </div>
   );
+
+  /** 「项目与模型」里的一行: 左边项目名与目录, 右边模型与权限; 窄的时候控件掉到名称下面。 */
+  const renderProjectRow = (alias: string, title: string, hint: string, selected: boolean, onSelect: () => void) => (
+    <SettingsRow
+      key={alias}
+      wrap
+      lead={
+        projectsDefaultApplies ? (
+          <DefaultWorkspaceRadio
+            selected={selected}
+            label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', { name: title })}
+            onSelect={onSelect}
+          />
+        ) : undefined
+      }
+      title={
+        <span data-setting-id={imBotSettings.cindy.id} title={title}>
+          {title}
+        </span>
+      }
+      tag={
+        projectsDefaultApplies && selected
+          ? t('settings.remoteControl.hook.form.defaultProjectTag')
+          : undefined
+      }
+      hint={
+        <span className="line-clamp-2 [overflow-wrap:anywhere]" title={hint}>
+          {hint}
+        </span>
+      }
+      trailing={
+        // 模型面板与选择框同宽: 选择框太窄会把面板里的模型名截断, 所以这一侧给足宽度。
+        <div className="min-w-0 max-w-[560px] flex-[2_1_440px]">
+          <WorkspacePrefsEditor alias={alias} state={projectPrefsState} />
+        </div>
+      }
+    />
+  );
+
+  /**
+   * 「项目与模型」区块(整页只有一处, 在各渠道卡之后): 列的就是侧栏的本机项目, 每个项目的
+   * 模型与权限、以及默认项目, 所有官方机器人共用一份 —— 不再按渠道各配一遍。
+   * 放在渠道卡之后: 第一次打开某个机器人的开关时它才出现, 出现在下方不会把正在操作的卡顶走;
+   * 项目再多也不会把「连接机器人」压到屏幕外。
+   * 用普通函数而非内联子组件渲染: 内联组件每次渲染都会重建类型导致子树 remount。
+   */
+  const renderProjectsSection = () => {
+    const defaultAlias = sharedDefaultWorkspace ?? HOOK_CHAT_WORKSPACE_ALIAS;
+    // 默认项目的权限是完全访问(从没设过也是)时把后果说出来: 群里任何人 @ 机器人都会落到它里面。
+    const defaultFullAccess =
+      projectsDefaultApplies &&
+      projectPrefsState.editable &&
+      (projectPrefsState.prefsFor(defaultAlias).permissionMode ?? HOOK_DEFAULT_PERMISSION_MODE) ===
+        HOOK_DEFAULT_PERMISSION_MODE;
+    return (
+      <section
+        ref={projectsSectionRef}
+        aria-labelledby="cindy-im-projects-heading"
+        className="mt-3 flex scroll-mt-4 flex-col gap-[14px]"
+      >
+        <div className="flex flex-col gap-1">
+          <h4
+            id="cindy-im-projects-heading"
+            className="text-13 font-medium leading-[1.5] text-[var(--settings-section-title)]"
+          >
+            {t('settings.remoteControl.hook.form.workspacesCardTitle')}
+            <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
+              {t('settings.remoteControl.hook.form.workspacesBoundCount', { count: workdirCount })}
+            </span>
+          </h4>
+          <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
+            {t('settings.remoteControl.hook.form.workspacesCardDescription')}
+          </p>
+        </div>
+        {projectPrefsState.hint !== null && (
+          <div className={cn('flex items-center gap-2', SETTINGS_HINT)}>
+            <span>{projectPrefsState.hint}</span>
+            {projectPrefsState.retry !== null && (
+              <Button data-settings-search-action="Retry loading channel preferences" variant="secondary" size="xs" compact type="button" onClick={projectPrefsState.retry}>
+                {t('settings.tina.prefs.retry')}
+              </Button>
+            )}
+          </div>
+        )}
+        <SettingsCard
+          {...(projectsDefaultApplies
+            ? {
+                role: 'radiogroup',
+                'aria-label': t('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+                onKeyDown: handleRadioGroupKeyDown,
+              }
+            : {})}
+        >
+          {/* 内置「对话」: 与真实项目同级, 常驻第一位; IM 那头对应保留名 chat, 偏好与 /model 选 chat 同一份 */}
+          {renderProjectRow(
+            HOOK_CHAT_WORKSPACE_ALIAS,
+            t('settings.tina.chat.title'),
+            t('settings.tina.chat.description'),
+            sharedDefaultWorkspace === null,
+            () => setSharedDefaultWorkspace(null),
+          )}
+          {Object.entries(hook.workspaces).map(([name, dir]) =>
+            renderProjectRow(name, name, dir, sharedDefaultWorkspace === name, () =>
+              setSharedDefaultWorkspace(name),
+            ),
+          )}
+        </SettingsCard>
+        {projectsDefaultApplies ? (
+          <p className={SETTINGS_HINT}>{t('settings.remoteControl.hook.form.defaultWorkspaceRowHint')}</p>
+        ) : null}
+        {defaultFullAccess ? (
+          <p className="flex gap-1.5 text-12 leading-[1.4] text-[var(--text-secondary)]">
+            <AlertTriangle size={14} aria-hidden className="mt-px shrink-0 text-[var(--warning-fg)]" />
+            <span>
+              {t('settings.remoteControl.hook.form.defaultProjectFullAccessWarning', {
+                name: sharedDefaultWorkspace ?? t('settings.tina.chat.title'),
+              })}
+            </span>
+          </p>
+        ) : null}
+        <Button data-setting-id={imBotSettings.cindy.id}
+          variant="secondary"
+          size="sm"
+          compact
+          type="button"
+          onClick={() => void handleAddProject()}
+          className="w-fit"
+        >
+          <Plus size={12} />
+          {t('settings.remoteControl.hook.form.addProject')}
+        </Button>
+        {/* 存量 global override 的收尾入口: 它仍是没单独配置过的项目的兜底值, 要能看见才谈得上
+            "可管理"。从未改过的设备一次都不会渲染。 */}
+        <LegacyGlobalDefaultsNotice
+          state={legacyGlobalDefaults.state}
+          pending={legacyGlobalDefaults.pending}
+          onRestore={() => void legacyGlobalDefaults.restore()}
+        />
+      </section>
+    );
+  };
 
   /**
    * provider-neutral 渠道卡(Telegram / X 同构)。用普通函数而非内联子组件
@@ -1642,25 +1674,23 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             ) : null}
           </> : null}
 
-          {provider === 'telegram' && cs.confirmed ? (
+          {/* 没有行为设置可显示时不留一个只有分割线的空容器。 */}
+          {provider === 'telegram' && cs.confirmed && view.behaviorAvailable === true ? (
             <div
               key={cs.binding?.bindingId ?? 'telegram-unbound'}
               className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
             >
-              {view.behaviorAvailable === true ? (
-                <>
-                  <TelegramBehaviorSettings
-                    source="official"
-                    bindingId={cs.binding?.bindingId ?? undefined}
-                  />
-                  <TelegramGroupActivationSettings
-                    source="official"
-                    bindingId={cs.binding?.bindingId ?? undefined}
-                  />
-                </>
-              ) : null}
+              <TelegramBehaviorSettings
+                source="official"
+                bindingId={cs.binding?.bindingId ?? undefined}
+              />
+              <TelegramGroupActivationSettings
+                source="official"
+                bindingId={cs.binding?.bindingId ?? undefined}
+              />
             </div>
           ) : null}
+          {view.enabled && !view.companionBotId ? sharedSettingsPointer : null}
         </div>
       </ImChannelSettingsCard>
     );
@@ -1671,9 +1701,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       {!companion ? <p className="text-12 text-[var(--text-tertiary)]">
         {t('settings.remoteControl.hook.description')}
       </p> : null}
-
-      {/* ── 项目与模型(所有官方机器人共用, 只此一处) ─────────────────── */}
-      {projectsSectionVisible ? renderProjectsSection() : null}
 
       {/* ── Slack 渠道卡 ─────────────────────────────────────────────── */}
       {!companion ? <ImChannelSettingsCard
@@ -2109,6 +2136,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </>
           ) : null}
 
+          {hook.enabled ? sharedSettingsPointer : null}
         </div>
       </ImChannelSettingsCard> : null}
 
@@ -2117,6 +2145,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       {/* 飞书 / Lark 没有伙伴专线, 伙伴页不显示(与 Telegram 相同)。 */}
       {!companion ? renderProviderCard('feishu') : null}
       {renderProviderCard('x')}
+
+      {/* ── 项目与模型(所有官方机器人共用, 只此一处) ─────────────────── */}
+      {projectsSectionVisible ? renderProjectsSection() : null}
     </div>
   );
 }
