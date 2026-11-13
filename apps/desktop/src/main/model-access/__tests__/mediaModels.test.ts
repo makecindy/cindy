@@ -116,6 +116,25 @@ describe('listAvailableMediaModels', () => {
     await expect(listAvailableMediaModels()).resolves.toMatchObject([{ displayPricing, costDiscount: 0.2, currency: 'CNY', providerId: 'xd' }]);
   });
 
+  it('requests provider sources for the exact capability before returning their default', async () => {
+    listProviderMediaModelsMock.mockReturnValue([{ id: 'private-image', name: 'Image input', providerId: 'relay',
+      mode: 'image_generation', guideDriven: true, sourceAgent: 'codex', sourceAgents: ['codex'],
+      modalities: { input: ['text', 'image'], output: ['image'] } }]);
+    await expect(listAvailableMediaModels('image.edit', { skipGateway: true })).resolves.toMatchObject([
+      { providerId: 'relay', sourceAgent: 'codex', sourceAgents: ['codex'] },
+    ]);
+    expect(listProviderMediaModelsMock).toHaveBeenCalledExactlyOnceWith(['image.edit']);
+  });
+
+  it('discovers a common source when executable listing requires generation and editing together', async () => {
+    listProviderMediaModelsMock.mockReturnValue([{ id: 'private-image', name: 'Image input', providerId: 'relay',
+      mode: 'image_generation', guideDriven: true, sourceAgent: 'codex', sourceAgents: ['codex'],
+      modalities: { input: ['text', 'image'], output: ['image'] } }]);
+    const result = await listExecutableMediaModels(['image.generate', 'image.edit'], { skipGateway: true });
+    expect(result.models).toMatchObject([{ sourceAgent: 'codex', sourceAgents: ['codex'] }]);
+    expect(listProviderMediaModelsMock).toHaveBeenCalledExactlyOnceWith(['image.generate', 'image.edit']);
+  });
+
   it('不带操作筛选时按 Gateway mode 返回图片/视频模型', async () => {
     await expect(listAvailableMediaModels()).resolves.toMatchObject([
       { id: 'image-without-guide' },

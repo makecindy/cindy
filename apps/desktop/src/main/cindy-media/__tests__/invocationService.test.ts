@@ -682,6 +682,8 @@ describe('Cindy Core media invocation state and security boundary', () => {
   });
   it('keeps an existing public image adapter Guide on its existing executor', async () => {
     const { model } = setupGuideDriven();
+    // A ready legacy image adapter is advertised with its actual protocol.
+    mocks.providerModel.mockReturnValue({ ...model, imageProtocol: 'openai' });
     const published = providerServerGuide(model.id, 'openai');
     mocks.resolvedGuide.mockResolvedValueOnce({ source: 'official', protocol: 'openai', value: published.guide });
     mocks.providerInvoke.mockResolvedValueOnce({ buffer: PNG, mimeType: 'image/png' });
@@ -689,6 +691,21 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(await callCindyMedia({ action: 'request', invocationId: String(p.invocation_id), body: { prompt: 'cat' } })).toMatchObject({ ok: true });
     expect(mocks.providerInvoke).toHaveBeenCalledTimes(1);
     expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+  it.each(['openai', 'openai-videos'] as const)('returns an unusable public adapter %s as a Guide gap before preparing a call', async protocol => {
+    const { model, value } = setupGuideDriven(protocol === 'openai' ? undefined : recoveryVideoOperation());
+    mocks.providerModel.mockReturnValue({ ...model, sourceAgent: undefined, sourceAgents: ['pi', 'codex'] });
+    mocks.videoConnection.mockReturnValue(null);
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'official', protocol, value: providerServerGuide(model.id, protocol).guide });
+    const request = { action: 'prepare' as const, providerId: model.providerId, sourceAgent: 'pi' as const,
+      modelId: model.id, capability: protocol === 'openai' ? 'image.generate' as const : 'video.generate' as const };
+    expect(await callCindyMedia(request)).toMatchObject({ ok: false, errorCode: 'GUIDE_NOT_AVAILABLE', outcomeKnown: true,
+      allowedActions: expect.arrayContaining(['get_or_complete_media_guide']) });
+    expect(mocks.rows.size).toBe(0);
+    expect(mocks.providerInvoke).not.toHaveBeenCalled();
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value });
+    expect(await callCindyMedia(request)).toMatchObject({ ok: true, source_agent: 'pi', guide_source: 'custom' });
   });
   it.each(['xai-videos', 'minimax-videos', 'openai-videos'] as const)('keeps the existing %s public Guide on its original video connection', async protocol => {
     const published = providerServerGuide('private/new-model', protocol);

@@ -152,10 +152,10 @@ export function isMediaModelExecutableForLegacyInput(
 
 export { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 
-function availableProviderMediaModels(capability?: MediaCapability): ExecutableMediaModel[] {
-  return listProviderMediaModels()
+function availableProviderMediaModels(capabilities: readonly MediaCapability[] = []): ExecutableMediaModel[] {
+  return listProviderMediaModels(capabilities)
     .filter(
-      (model) => capability === undefined || supportsMediaCapability(model.modalities, capability),
+      (model) => capabilities.every(capability => supportsMediaCapability(model.modalities, capability)),
     )
     .map((model) => ({
       id: model.id,
@@ -263,7 +263,7 @@ export async function listAvailableMediaModels(
   capability?: MediaCapability,
   options?: { skipGateway?: boolean },
 ): Promise<ExecutableMediaModel[]> {
-  const providerModels = availableProviderMediaModels(capability);
+  const providerModels = availableProviderMediaModels(capability ? [capability] : []);
   if (options?.skipGateway) return providerModels;
   try {
     const gatewayModels = filterEnabledGatewayMediaModels(
@@ -524,9 +524,7 @@ export async function listExecutableMediaModels(
   capabilities: readonly MediaCapability[] = [],
   options: { includeDisabled?: boolean; forceRefresh?: boolean; skipGateway?: boolean } = {},
 ): Promise<ExecutableMediaModelsResult> {
-  const providerModels = availableProviderMediaModels().filter((model) =>
-    capabilities.every((capability) => supportsMediaCapability(model.modalities, capability)),
-  );
+  const providerModels = availableProviderMediaModels(capabilities);
   if (options.skipGateway || (!options.includeDisabled && isProviderDisabled(readModelDisableOverrides(), CINDY_AI_PROVIDER_ID)))
     return { models: providerModels, unavailable: [], candidateCount: providerModels.length };
   let snapshot: ExecutableMediaSnapshot;

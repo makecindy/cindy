@@ -747,7 +747,7 @@ import {
 import { createCustomImageChannel, registerCustomImageChannels } from './customImageChannel.js';
 import { readByokCredential, readByokInferenceBase } from '../model-access/byokCredentials.js';
 import type { AgentKind } from '@cindy/model-providers';
-import { resolveCustomMediaConnection, isCustomVideoProvider } from './customMediaConnection.js';
+import { resolveCustomMediaConnection, isCustomVideoProvider, customMediaAgents as declaredCustomMediaAgents, customMediaGuideProtocol } from './customMediaConnection.js';
 import { videoConnectionRevision } from '../cindy-media/customVideoProtocol.js';
 import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
@@ -5724,16 +5724,12 @@ function resolveImageChannelForModel(
   return getImageChannelRegistry().resolve(entry.providerId, model);
 }
 
-function customMediaAgents(provider: Provider, model: ProviderMediaModel, respectDisplaySwitch: boolean): AgentKind[] {
-  return (model.sourceAgents ?? (model.sourceAgent ? [model.sourceAgent] : [])).filter(agent => {
-    const route = provider.routing[agent];
-    const member = provider.models[agent]?.find(candidate => candidate.id === model.id && candidate.mode === model.mode);
-    return !!route && !route.disabled && !!member && !member.disabled &&
-      (!respectDisplaySwitch || isCatalogMediaModelVisible(provider.id, model.id, member.defaultEnabled, agent));
-  });
+function customMediaAgents(provider: Provider, model: ProviderMediaModel, respectDisplaySwitch: boolean, capabilities: readonly MediaCapability[] = []): AgentKind[] {
+  return declaredCustomMediaAgents(provider, model, capabilities).filter(agent => !respectDisplaySwitch ||
+    isCatalogMediaModelVisible(provider.id, model.id, provider.models[agent]?.find(member => member.id === model.id && member.mode === model.mode)?.defaultEnabled, agent));
 }
 
-function listLocalProviderMediaModels(respectDisplaySwitch = false) {
+function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities: readonly MediaCapability[] = []) {
   const access = readModelDisableOverrides();
   return getActiveCatalog().providers.flatMap((provider) => {
     if (
@@ -5746,7 +5742,7 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false) {
     }
     return (provider.imageModels ?? []).flatMap((model) => {
       const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
-      const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch) : [];
+      const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch, capabilities) : [];
       if (
         (guideDriven && !sourceAgents.length) ||
         (!guideDriven && !getImageChannelRegistry().isProviderReady(provider.id, model.id)) ||
@@ -5795,7 +5791,7 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false) {
  * provider runtime. Keep their catalog projection beside the image projection
  * so Art can read the same provider-owned models that Settings displays.
  */
-function listLocalProviderVideoModels(respectDisplaySwitch = false): ProviderMediaRuntimeModel[] {
+function listLocalProviderVideoModels(respectDisplaySwitch = false, capabilities: readonly MediaCapability[] = []): ProviderMediaRuntimeModel[] {
   const access = readModelDisableOverrides();
   const registry = getVideoProviderRegistry();
   return getActiveCatalog().providers.flatMap((provider) => {
@@ -5809,7 +5805,7 @@ function listLocalProviderVideoModels(respectDisplaySwitch = false): ProviderMed
     }
     return (provider.videoModels ?? []).flatMap((model) => {
       const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
-      const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch) : [];
+      const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch, capabilities) : [];
       if (
         (guideDriven && !sourceAgents.length) ||
         isModelDisabled(access, provider.id, model.id) ||
@@ -5905,11 +5901,7 @@ function resolveCustomVideoConnection(providerId: string, modelId: string): Prov
 configureProviderMediaRuntime({
   guideProtocol: target => {
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
-    const route = provider?.routing[target.agent];
-    const mode = provider?.models[target.agent]?.find(model => model.id === target.modelId)?.mode;
-    const media = (mode === 'image_generation' ? provider?.imageModels : provider?.videoModels)?.find(model => model.id === target.modelId);
-    if (media?.sourceAgent !== target.agent) return undefined;
-    return mode === 'image_generation' ? route?.imageApi === 'openai-images' ? 'openai' : undefined : route?.videoApi;
+    return customMediaGuideProtocol(provider, target.modelId, target.agent);
   },
   resolveHttpConnection: (providerId, modelId, capability, agent) => {
     const kind = capability.startsWith('image.') ? 'image' : 'video';
@@ -5945,8 +5937,8 @@ configureProviderMediaRuntime({
   resolveVideoConnection: (providerId, modelId) => providerId === 'xai'
     ? resolveNativeVideoConnection(providerId, modelId)
     : resolveCustomVideoConnection(providerId, modelId),
-  listModels: () => listLocalProviderMediaModels(true),
-  listVideoModels: () => listLocalProviderVideoModels(true),
+  listModels: capabilities => listLocalProviderMediaModels(true, capabilities),
+  listVideoModels: capabilities => listLocalProviderVideoModels(true, capabilities),
   listExecutableModels: () => listLocalProviderMediaModels(false),
   listExecutableVideoModels: () => listLocalProviderVideoModels(false),
   invoke: async (request) => {

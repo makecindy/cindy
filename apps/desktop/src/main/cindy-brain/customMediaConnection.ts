@@ -1,8 +1,27 @@
-import { isLoopbackProviderUrl, type AgentKind, type Provider, type ProviderVideoApi } from '@cindy/model-providers';
+import { isLoopbackProviderUrl, type AgentKind, type MediaCapability, type Provider, type ProviderMediaModel, type ProviderVideoApi } from '@cindy/model-providers';
 import { withProviderAppAttribution } from '../maker-host/provider-app-attribution.js';
+import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 
 export interface CustomMediaConnection { agent: AgentKind; baseUrl: string; headers: Record<string, string>; videoApi?: ProviderVideoApi; }
 export interface CustomMediaConnectionOptions { getProvider(): Provider | undefined; readApiKey(agent: AgentKind): string | null; isOwnerBoundaryPending(): boolean; }
+
+export function customMediaAgents(provider: Provider, model: ProviderMediaModel, capabilities: readonly MediaCapability[] = []): AgentKind[] {
+  return (model.sourceAgents ?? (model.sourceAgent ? [model.sourceAgent] : [])).filter(agent => {
+    const route = provider.routing[agent];
+    const member = provider.models[agent]?.find(candidate => candidate.id === model.id && candidate.mode === model.mode);
+    return !!route && !route.disabled && !!member && !member.disabled &&
+      capabilities.every(capability => supportsMediaCapability(member.modalities ?? {
+        input: ['text'], output: [model.mode === 'image_generation' ? 'image' : 'video'],
+      }, capability));
+  });
+}
+
+export function customMediaGuideProtocol(provider: Provider | undefined, modelId: string, agent: AgentKind): string | undefined {
+  const route = provider?.routing[agent];
+  const mode = provider?.models[agent]?.find(model => model.id === modelId)?.mode;
+  if (mode === 'image_generation') return route?.imageApi === 'openai-images' ? 'openai' : undefined;
+  return mode === 'video_generation' ? route?.videoApi : undefined;
+}
 
 /** Preserve gateway path prefixes, accepting either an API origin or a /v1 base. */
 function mediaBaseUrl(raw: string, preservePath = false): string | null {

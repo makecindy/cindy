@@ -1293,11 +1293,16 @@ async function prepareInvocation(
       binding = { providerId: model.providerId, executor: 'provider-http', connectionRevision: connection.revision, sourceAgent: agent, guideSource: resolved.source };
       // Public adapter Guides keep their existing executor; local Guides describe HTTP directly.
       if (resolved.source === 'official' && resolved.protocol === 'openai') {
+        if (providerModel.imageProtocol !== 'openai') return failure('GUIDE_NOT_AVAILABLE',
+          '公开 Guide 依赖的图片通道不适用于所选连接；请根据接口资料补齐本地 HTTP Guide，再重新 prepare', false,
+          { outcomeKnown: true, allowedActions: GUIDE_FALLBACK_ACTIONS });
         binding = { providerId: model.providerId, executor: 'provider-image' };
       } else if (resolved.source === 'official' && isProviderVideoApi(resolved.protocol)) {
         const videoConnection = await resolveProviderVideoConnection(model.providerId, resolvedModelId);
         assertAuthScope(scope);
-        if (!videoConnection) return failure('CONNECTION_UNAVAILABLE', '视频来源的接口或凭证未就绪');
+        if (!videoConnection) return failure('GUIDE_NOT_AVAILABLE',
+          '公开 Guide 依赖的视频通道不适用于所选连接；请根据接口资料补齐本地 HTTP Guide，再重新 prepare', false,
+          { outcomeKnown: true, allowedActions: GUIDE_FALLBACK_ACTIONS });
         binding = { providerId: model.providerId, executor: 'provider-video', connectionRevision: videoConnection.revision,
           videoProtocol: resolved.protocol };
       }

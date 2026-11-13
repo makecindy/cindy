@@ -45,8 +45,8 @@ interface ProviderMediaRuntime {
   guideScope?(target: { providerId: string; agent: AgentKind; modelId: string }): string | null;
   guideProtocol?(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined;
   resolveHttpConnection?(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
-  listModels(): ProviderMediaRuntimeModel[];
-  listVideoModels?(): ProviderMediaRuntimeModel[];
+  listModels(capabilities?: readonly MediaCapability[]): ProviderMediaRuntimeModel[];
+  listVideoModels?(capabilities?: readonly MediaCapability[]): ProviderMediaRuntimeModel[];
   /** Settings readiness; must include hidden models so the display switch stays togglable. */
   listExecutableModels?(): ProviderMediaRuntimeModel[];
   listExecutableVideoModels?(): ProviderMediaRuntimeModel[];
@@ -72,10 +72,10 @@ export function configureProviderMediaRuntime(next: ProviderMediaRuntime): void 
   runtime = next;
 }
 
-export function listProviderMediaModels(): ProviderMediaRuntimeModel[] {
+export function listProviderMediaModels(capabilities: readonly MediaCapability[] = []): ProviderMediaRuntimeModel[] {
   return [
-    ...(runtime?.listModels() ?? []),
-    ...(runtime?.listVideoModels?.().filter(model => model.videoProtocol || model.guideDriven) ?? []),
+    ...(runtime?.listModels(capabilities) ?? []),
+    ...(runtime?.listVideoModels?.(capabilities).filter(model => model.videoProtocol || model.guideDriven) ?? []),
   ];
 }
 
@@ -97,7 +97,7 @@ export function resolveProviderMediaModel(
   capability: MediaCapability,
 ): ProviderMediaRuntimeModel | null {
   return (
-    listProviderMediaModels().find(
+    listProviderMediaModels([capability]).find(
       (model) =>
         model.providerId === providerId &&
         model.id === modelId &&
