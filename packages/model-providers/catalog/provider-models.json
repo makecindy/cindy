@@ -22249,7 +22249,7 @@
         "id": "qwen/qwen3.8-27b",
         "name": "Qwen3.8 27B",
         "upstream": "https://api.groq.com/openai/v1",
-        "contextWindow": 131042,
+        "contextWindow": 131072,
         "maxOutput": 16384,
         "modalities": {
           "input": [
