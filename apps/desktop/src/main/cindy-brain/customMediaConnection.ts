@@ -104,8 +104,10 @@ export function resolveCustomMediaConnection(
       // Reuse only this runtime's existing managed authentication configuration.
       // A Guide can neither supply these values nor choose another key owner.
       const configured = new Headers(route.headerOverride);
+      const protocol = model.route?.wireProtocol ?? route.wireProtocol;
       if (configured.has('api-key')) headers['api-key'] = configured.get('api-key')!;
-      if (configured.has('x-api-key') || route.wireProtocol === 'anthropic-messages') headers['x-api-key'] = key;
+      if (configured.has('x-api-key') || protocol === 'anthropic-messages') headers['x-api-key'] = key;
+      if (configured.has('x-goog-api-key') || protocol === 'google-generative-ai') headers['x-goog-api-key'] = key;
     }
   }
   return { agent, baseUrl, headers, ...(kind === 'video' ? { videoApi: route.videoApi } : {}) };

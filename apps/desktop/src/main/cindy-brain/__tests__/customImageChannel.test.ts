@@ -97,6 +97,23 @@ describe('standalone custom OpenAI Images', () => {
     expect(resolveCustomMediaConnection(options, MODEL, 'image', { guideDriven: true, agent: 'codex' })).toBeNull();
     expect(readApiKey).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    ['runtime', 'google-generative-ai', 'x-goog-api-key'],
+    ['model', 'google-generative-ai', 'x-goog-api-key'],
+    ['model', 'anthropic-messages', 'x-api-key'],
+    ['headers', 'openai-chat', 'x-goog-api-key'],
+  ] as const)('reuses the selected connection authentication from %s (%s)', (level, protocol, header) => {
+    const source = provider('https://relay.example.invalid/custom/api');
+    delete source.routing.pi!.imageApi;
+    if (level === 'runtime') source.routing.pi!.wireProtocol = protocol;
+    if (level === 'model') source.models.pi![0]!.route = { baseUrl: source.routing.pi!.upstream, wireProtocol: protocol };
+    if (level === 'headers') source.routing.pi!.headerOverride = { [header]: 'stale-configured-key' };
+    const readApiKey = vi.fn(() => 'test-selected-key');
+    const connection = resolveCustomMediaConnection({ getProvider: () => source, readApiKey,
+      isOwnerBoundaryPending: () => false }, MODEL, 'image', { guideDriven: true, agent: 'pi' });
+    expect(connection?.headers[header]).toBe('test-selected-key');
+    expect(readApiKey).toHaveBeenCalledExactlyOnceWith('pi');
+  });
   it('keeps URL-capable custom sources in Core but out of the legacy image channel', () => {
     const h = harness();
     const registry = new ImageChannelRegistry();
