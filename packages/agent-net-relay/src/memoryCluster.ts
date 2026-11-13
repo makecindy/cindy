@@ -34,7 +34,7 @@ export function createMemoryRelayCluster(): RelayClusterBackend {
         entries.set(key, { version: (entries.get(key)?.version ?? 0) + 1, ...(value === undefined ? {} : { value: structuredClone(value) }) });
         return entry(key);
       });
-      later(() => { for (const listener of changeListeners) listener(committed.map(item => structuredClone(item))); });
+      if (committed.length) later(() => { for (const listener of changeListeners) listener(committed.map(item => structuredClone(item))); });
       return { ok: true, versions: Object.fromEntries(committed.map(item => [item.key, item.version])) };
     },
     onChange(listener) { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; },

@@ -29,9 +29,10 @@ export interface RelayClusterBackend {
   /** Every key at its latest committed version, including deletion tombstones. */
   snapshot(): Promise<RelayStateEntry[]>;
   /** Atomic: only when every `expected` key is still at that version, apply all writes. Otherwise
-   * return the latest entries of the keys that moved. */
+   * return the latest entries of the keys that moved. Empty writes still check every expected
+   * version, providing a targeted read barrier without changing state or emitting a notification. */
   commit(input: { origin: string; expected: Record<string, number>; writes: { key: string; value?: unknown }[] }): Promise<RelayStateCommit>;
-  /** Every commit, in commit order, delivered to every replica including its author. */
+  /** Every state-changing commit, in commit order, delivered to every replica including its author. */
   onChange(listener: (entries: RelayStateEntry[]) => void): () => void;
   /** Request-proof replay protection across replicas: false when the nonce is already claimed. */
   claimNonce(id: string, expiresAt: number): Promise<boolean>;
@@ -62,6 +63,7 @@ export const CLUSTER_PATH = '/_agent-net-cluster';
 const HOP_HEADER = 'x-agent-net-cluster-hop';
 const CLIENT_HEADER = 'x-agent-net-cluster-client';
 const FORWARD_TIMEOUT_MS = 10_000;
+const STREAM_IDLE_TIMEOUT_MS = 30_000;
 
 export function checkClusterOptions(options: RelayClusterOptions): RelayClusterOptions {
   if (typeof options.replicaId !== 'string' || !ID_PATTERN.test(options.replicaId)) throw new Error('INVALID_CLUSTER_REPLICA_ID');
@@ -93,8 +95,7 @@ export function clusterOwner(networkId: string, members: readonly RelayClusterMe
  * The network an authenticated request claims, read without verification: it only picks the replica,
  * and that replica still authenticates. Requests without one (joins, enrollment, health) stay local.
  */
-export function routingNetwork(req: IncomingMessage): string | undefined {
-  const header = req.headers.authorization;
+export function routingNetwork(req: IncomingMessage, header: unknown = req.headers.authorization): string | undefined {
   if (typeof header !== 'string' || header.length > 16_384) return undefined;
   const space = header.indexOf(' ');
   const scheme = header.slice(0, space);
@@ -123,24 +124,36 @@ export function createClusterRouter(options: { secret: string }) {
     const forwarded = req.headers[CLIENT_HEADER];
     return trusted(req) && typeof forwarded === 'string' && forwarded.length <= 64 ? forwarded : req.socket.remoteAddress ?? 'unknown';
   };
-  const send = (target: RelayClusterMember, path: string, method: string, headers: Record<string, string | string[] | undefined>): ClientRequest => {
+  const send = (target: RelayClusterMember, path: string, method: string, headers: Record<string, string | string[] | undefined>, upgrade = false): ClientRequest => {
     const url = checkMemberUrl(target.url);
     const outgoing = (url.protocol === 'https:' ? httpsRequest : httpRequest)({ hostname: url.hostname.replace(/^\[|\]$/g, ''),
       port: url.port || undefined, path, method, headers });
     requests.add(outgoing); outgoing.once('close', () => requests.delete(outgoing));
-    // Cover connection establishment as well as an owner that accepts but never answers. Once
-    // upgraded, this is a long-lived device connection and must have no forwarding deadline.
-    const deadline = setTimeout(() => outgoing.destroy(new Error('CLUSTER_TIMEOUT')), FORWARD_TIMEOUT_MS);
+    const timeout = () => outgoing.destroy(new Error('CLUSTER_TIMEOUT'));
+    // A WebSocket has one bounded handshake. HTTP uploads instead have a bounded connect,
+    // progress-based stream timeout, then a response-header deadline after the body is sent.
+    let deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS);
     deadline.unref();
-    const answered = () => clearTimeout(deadline);
+    let received = false;
+    const answered = () => { received = true; clearTimeout(deadline); };
+    if (!upgrade) {
+      outgoing.once('socket', socket => {
+        if (!socket.connecting) clearTimeout(deadline);
+        else socket.once(url.protocol === 'https:' ? 'secureConnect' : 'connect', () => clearTimeout(deadline));
+      });
+      outgoing.once('finish', () => {
+        if (received) return;
+        clearTimeout(deadline); deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS); deadline.unref();
+      });
+    }
     outgoing.once('response', answered);
     outgoing.once('close', answered);
-    outgoing.setTimeout(FORWARD_TIMEOUT_MS, () => outgoing.destroy(new Error('CLUSTER_TIMEOUT')));
+    outgoing.setTimeout(STREAM_IDLE_TIMEOUT_MS, timeout);
     outgoing.once('upgrade', () => { answered(); outgoing.setTimeout(0); });
     return outgoing;
   };
-  const forward = (req: IncomingMessage, target: RelayClusterMember) => send(target, req.url ?? '/', req.method ?? 'GET',
-    { ...req.headers, [HOP_HEADER]: options.secret, [CLIENT_HEADER]: clientAddress(req) });
+  const forward = (req: IncomingMessage, target: RelayClusterMember, upgrade = false) => send(target, req.url ?? '/', req.method ?? 'GET',
+    { ...req.headers, [HOP_HEADER]: options.secret, [CLIENT_HEADER]: clientAddress(req) }, upgrade);
   return {
     trusted, clientAddress,
     http(req: IncomingMessage, res: ServerResponse, target: RelayClusterMember): void {
@@ -162,7 +175,7 @@ export function createClusterRouter(options: { secret: string }) {
     },
     upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, target: RelayClusterMember): void {
       let outgoing: ClientRequest;
-      try { outgoing = forward(req, target); } catch { socket.destroy(); return; }
+      try { outgoing = forward(req, target, true); } catch { socket.destroy(); return; }
       sockets.add(socket);
       socket.once('close', () => { sockets.delete(socket); outgoing.destroy(); });
       socket.on('error', () => outgoing.destroy());

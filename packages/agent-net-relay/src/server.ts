@@ -1,4 +1,4 @@
-import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer as createHttpServer, STATUS_CODES, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { createSocket, type RemoteInfo } from 'node:dgram';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -195,6 +195,16 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   await mkdir(mediaDir, { recursive: true, mode: 0o700 });
   const key = (network: string, device: string) => network + '\0' + device;
   const network = (id: string) => store.network(id) ?? fail(401, 'NETWORK_UNKNOWN');
+  const synchronized = new WeakMap<IncomingMessage, Set<string>>();
+  async function synchronize(req: IncomingMessage, networkIds: readonly string[]): Promise<void> {
+    if (!(store instanceof ClusterStore)) return;
+    const done = synchronized.get(req) ?? new Set<string>();
+    const keys = [...new Set([...networkIds.map(id => 'network:' + id), ...(options.sharing ? ['sharing', 'delegationRequests'] : [])])]
+      .filter(key => !done.has(key));
+    try { await store.synchronize(keys); } catch { return fail(503, 'CLUSTER_STATE_UNAVAILABLE'); }
+    for (const key of keys) done.add(key);
+    synchronized.set(req, done);
+  }
   const memberRecord = (n: NetworkRecord, id: string) => own(n.devices, id) ?? fail(401, 'DEVICE_UNKNOWN');
   // Cluster: one owner replica per network. A draining replica no longer owns anything.
   const router = cluster ? createClusterRouter(cluster) : undefined;
@@ -226,9 +236,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (nonces.size >= 50_000) fail(429, 'TOO_MANY_REQUESTS');
     // Keep for the full acceptance window, including timestamps up to 90 seconds ahead.
     const until = now() + 180_000;
-    nonces.set(id, until);
     // A network can move to another replica within the window; the claim is cluster-wide.
-    if (cluster && !await cluster.backend.claimNonce(id, until)) fail(401, 'REQUEST_REPLAYED');
+    if (cluster) {
+      let accepted: boolean;
+      try { accepted = await cluster.backend.claimNonce(id, until); } catch { return fail(503, 'CLUSTER_STATE_UNAVAILABLE'); }
+      if (!accepted) fail(401, 'REQUEST_REPLAYED');
+    }
+    nonces.set(id, until);
   }
   async function authenticate(req: IncomingMessage, bytes: Buffer, guest = false, digest?: string, suppliedHeader?: string): Promise<Principal> {
     const expected = guest ? 'AgentNetGuest ' : 'AgentNet ';
@@ -242,7 +256,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       ? verifyRequestProof(signingKey, proof, method, path, bytes, now()) : verifyRequestDigestProof(signingKey, proof, method, path, digest, now());
     if (guest) {
       const compact = envelope.delegation === undefined;
-      const n = network(identifier(compact ? envelope.networkId : (envelope.delegation as Delegation)?.networkId));
+      const networkId = identifier(compact ? envelope.networkId : (envelope.delegation as Delegation)?.networkId);
+      await synchronize(req, [networkId]);
+      const n = network(networkId);
       const delegation = (compact ? own(n.grants, identifier(envelope.delegationId))?.delegation : envelope.delegation) as Delegation;
       if (!delegation) return fail(401, 'GRANT_INVALID');
       const grant = own(n.grants, delegation.id);
@@ -256,7 +272,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       return { networkId: n.id, deviceId: 'guest:' + delegation.id, delegation };
     }
     const c = envelope.certificate as DeviceCertificate;
-    const n = network(identifier(c?.networkId));
+    const networkId = identifier(c?.networkId);
+    await synchronize(req, [networkId]);
+    const n = network(networkId);
     if (!verifyCertificate(n.rootPublicKey, c, now()) || c.subject !== n.subject) return fail(401, 'CERTIFICATE_INVALID');
     const existing = memberRecord(n, c.deviceId);
     if (existing.revokedAt !== null || c.issuedAt < (existing.notBefore ?? 0) || existing.certificate.signingKey !== c.signingKey
@@ -392,8 +410,16 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
           && d.guestTransportKey === request.guestTransportKey && d.scope?.memberId === request.scope.memberId
           && d.scope?.memberVersion === request.scope.memberVersion && d.scope?.guestSubject === request.scope.guestSubject ? { delegation: d } : {}) };
     },
-    remember: (account, device, nonce) => remember('sharing:' + account, device, nonce),
+    async remember(account, device, nonce) {
+      try { await remember('sharing:' + account, device, nonce); } catch (error) {
+        // The scoped identity verifier preserves SharingError statuses; backend outages must
+        // not be converted by it into an invalid-account 401.
+        if (error instanceof AgentNetError) throw new SharingError(error.code, error.status, error.message);
+        throw error;
+      }
+    },
     rootPublicKey: networkId => network(networkId).rootPublicKey,
+    synchronize: (req, networkId) => synchronize(req, [networkId]),
     grants: networkId => { const n = network(networkId); return Object.values(n.grants).filter(g => g.revokedAt === null && usableDelegation(n, g.delegation)).map(g => g.delegation); },
     memberCertificate: (networkId, deviceId) => { const member = own(network(networkId).devices, deviceId);
       return member?.revokedAt === null && verifyCertificate(network(networkId).rootPublicKey, member.certificate, now()) ? member.certificate : undefined; },
@@ -446,6 +472,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (url.pathname.startsWith(API + '/sharing/')) {
       if (!sharing) return fail(404, 'SHARING_UNAVAILABLE');
       if (!allow('sharing:' + clientAddress(req), 180)) return fail(429, 'TOO_MANY_REQUESTS');
+      await synchronize(req, [routingNetwork(req), routingNetwork(req, req.headers['x-agent-net-authorization'])]
+        .filter((id): id is string => id !== undefined));
       return writeJson(res, 200, await sharing.handle(req, await readBody(req, 16_384)));
     }
     if (url.pathname === API + '/enroll' && method === 'POST') {
@@ -454,6 +482,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       const enrollment = await options.enroll(req, jsonBody(bytes));
       const c = enrollment.certificate;
       if (!verifyCertificate(enrollment.rootPublicKey, c, now()) || c.networkId !== enrollment.networkId) return fail(500, 'ENROLLMENT_INVALID');
+      await synchronize(req, [c.networkId]);
       await store.transaction((state) => {
         const n = own(state.networks, c.networkId) ?? blankNetwork(c.networkId, enrollment.name, enrollment.rootPublicKey, c.subject);
         if (n.rootPublicKey !== enrollment.rootPublicKey || n.subject !== c.subject) return fail(403, 'NETWORK_MISMATCH');
@@ -471,6 +500,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       if (!allow(clientAddress(req))) return fail(429, 'TOO_MANY_REQUESTS');
       const request = jsonBody(await readBody(req, 16_384)) as unknown as JoinRequest;
       if (!verifyJoinRequest(request)) return fail(400, 'JOIN_PROOF_INVALID');
+      await synchronize(req, [request.networkId]);
       const pollToken = randomBytes(32).toString('base64url');
       await store.transaction((state) => {
         const n = own(state.networks, request.networkId) ?? fail(404, 'NOT_FOUND');
@@ -485,7 +515,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (url.pathname === API + '/join/status' && method === 'POST') {
       const body = jsonBody(await readBody(req, 4_096));
-      const n = network(identifier(body.networkId));
+      const networkId = identifier(body.networkId);
+      await synchronize(req, [networkId]);
+      const n = network(networkId);
       const join = own(n.joins, identifier(body.requestId));
       if (!join || join.expiresAt <= now() || join.pollHash !== sha256(string(body.pollToken))) return fail(403, 'POLL_TOKEN_INVALID');
       return writeJson(res, 200, { status: join.status, ...(join.status === 'approved' ? { certificate: join.certificate, rootPublicKey: n.rootPublicKey } : {}) });
@@ -975,8 +1007,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         announce(principal.networkId);
       });
     }).catch((error: unknown) => {
-      const status = error instanceof AgentNetError ? error.status : 401;
-      socket.end('HTTP/1.1 ' + status + ' Unauthorized\r\nConnection: close\r\n\r\n');
+      const status = error instanceof AgentNetError ? error.status : 503;
+      socket.end('HTTP/1.1 ' + status + ' ' + (STATUS_CODES[status] ?? 'Upgrade Rejected') + '\r\nConnection: close\r\n\r\n');
     });
   });
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 0, options.host ?? '127.0.0.1', () => { server.off('error', reject); resolve(); }); });

@@ -55,6 +55,17 @@ export class ClusterStore implements RelayStore {
   network(id: string): NetworkRecord | undefined { return Object.hasOwn(this.state.networks, id) ? structuredClone(this.state.networks[id]) : undefined; }
   networks(): NetworkRecord[] { return Object.values(structuredClone(this.state.networks)); }
   networkIds(): string[] { return Object.keys(this.state.networks); }
+  /** A targeted read barrier before control-plane authorization. Notifications may arrive later
+   * than a successful write on another replica; datagrams continue using the in-memory view. */
+  async synchronize(keys: readonly string[]): Promise<void> {
+    const expected = Object.fromEntries([...new Set(keys)].map(key => [key, this.versions.get(key) ?? 0]));
+    if (!Object.keys(expected).length) return;
+    const result = await this.backend.commit({ origin: this.origin, expected, writes: [] });
+    if (!result.ok) {
+      if (result.latest.some(entry => entry.value !== undefined && !valid(entry.key, entry.value))) throw new Error('INVALID_AGENT_NET_STATE');
+      this.apply(result.latest, true);
+    }
+  }
   delegationRequests(): DelegationRequest[] { return structuredClone(this.state.delegationRequests ?? []); }
   primaryNetworkId(): string | undefined { return this.state.primaryNetworkId; }
   tenantRequests(): TenantRequestRecord[] { return Object.values(structuredClone(this.state.tenantRequests ?? {})); }

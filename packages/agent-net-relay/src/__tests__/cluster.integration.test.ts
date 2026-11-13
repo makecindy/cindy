@@ -10,28 +10,33 @@
  *   在非负责副本上暂停一个分享成员。
  * - 本次回归：暂停鉴权后扩容／下线；暂停附件提交后换负责副本并重试同一偏移，且延迟状态通知；
  *   负责副本接住 HTTP／升级却不响应，验证等待有界、已建立的 WebSocket 不被握手超时误关。
+ *   延迟状态通知后立即用设备、访客、分享身份与主机证明鉴权，撤权仍拒绝，后端故障返回 503；
+ *   使用真实 HTTP 流逐块上传并推进 fake clock 超过 10 秒，验证持续进展不会被响应头期限误切断。
  * - tier：integration；需要真实 socket 和多个副本，单进程 fixture 与 handler mock 都替代不了。
  *   单独成文件是因为每个用例的副本组生命周期与 relay.integration 的单进程 fixture 不同。
- * - 实测耗时：2026-11-13 本机单独运行 `pnpm exec vitest run src/__tests__/cluster.integration.test.ts` 约 4.2 秒。
+ * - 实测耗时：2026-11-13 本机单独运行 `pnpm exec vitest run src/__tests__/cluster.integration.test.ts` 5.34 秒
+ *   （测试体 3.87 秒；包含真实 HTTP／WS 资源的关闭确认，不增加真实 sleep）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import WebSocket from 'ws';
+import { SignJWT, createLocalJWKSet } from 'jose';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { API, type DelegationRequest, type DeviceCertificate } from '@cindy/agent-net-protocol';
+import { API, sharingIdentityPayload, type DelegationRequest, type DeviceCertificate } from '@cindy/agent-net-protocol';
 import { AppError } from '@cindy/device-link-sharing/errors';
 import { startAgentNetRelay, type RelayHandle, type RelayOptions } from '../server.js';
 import { clusterOwner, type RelayClusterMember } from '../cluster.js';
 import { createMemoryRelayCluster } from '../memoryCluster.js';
-import { generateIdentity, issueCertificate, publicBytes, createRequestProof, type Identity } from '../identity.js';
+import { generateIdentity, issueCertificate, publicBytes, createRequestProof, createDelegation, sha256, type Identity } from '../identity.js';
 import { AgentNetClient, authorization, type AgentNetUplink } from '../client.js';
 import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
+import { createAgentNetSharingAuth } from '../sharingAuth.js';
 
 const cleanups: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => {
@@ -55,7 +60,6 @@ async function replicaSet(extra: Partial<RelayOptions> = {}) {
     [id, issueCertificate(root, { networkId: NETWORK, subject: 'owner-account', identity, role: 'owner' })]));
   const replicas = new Map<string, RelayHandle>();
   const uplinks: AgentNetUplink[] = [];
-  cleanups.push(() => { for (const uplink of uplinks) uplink.close(); });
   const set = {
     backend, identities, certificates, rootPublicKey, uplinks, mediaDir: path.join(base, 'media'),
     async start(replicaId: string) {
@@ -65,7 +69,8 @@ async function replicaSet(extra: Partial<RelayOptions> = {}) {
           return { certificate: c, rootPublicKey, networkId: c.networkId, name: 'Account network', deviceName: c.deviceId };
         },
         cluster: { backend, replicaId, secret, drainMs: 0 }, ...extra });
-      replicas.set(replicaId, relay); cleanups.push(() => relay.close());
+      replicas.set(replicaId, relay);
+      cleanups.push(async () => { for (const uplink of uplinks) uplink.close(); await relay.close(); });
       return relay;
     },
     async enroll(relay: RelayHandle, deviceId: string) {
@@ -105,6 +110,105 @@ async function exchange(a: AgentNetUplink, b: AgentNetUplink): Promise<void> {
 }
 
 describe('replicated official relay', () => {
+  it('authenticates fresh membership and grants before delayed notifications, preserves revocation and reports outages as retryable', async () => {
+    const pair = generateKeyPairSync('rsa', { modulusLength: 2048 }), issuer = 'https://identity.example.test';
+    const auth = createAgentNetSharingAuth({ issuer }, createLocalJWKSet({ keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'cluster', alg: 'RS256' }] }));
+    const set = await replicaSet({ sharing: auth });
+    const pending: Array<() => void> = [];
+    const subscribe = set.backend.onChange;
+    vi.spyOn(set.backend, 'onChange').mockImplementation(listener => subscribe(entries => { pending.push(() => listener(entries)); }));
+    await set.start('replica-a'); await set.start('replica-b');
+    const { home, entry } = set.roles();
+    await set.enroll(entry, 'owner');
+    const identity = set.identities.owner;
+    const card = await new SignJWT({ typ: 'identity-card', sub: 'owner-account', device: identity.deviceId,
+      region: 'global', purpose: 'network-session', nonce: createHash('sha256')
+        .update(sharingIdentityPayload(NETWORK, set.rootPublicKey, identity.deviceId, identity.signingKey)).digest('hex') })
+      .setProtectedHeader({ alg: 'RS256', kid: 'cluster' }).setIssuer(issuer).setAudience('cindy-agent-net-sharing')
+      .setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + 300).sign(pair.privateKey);
+    const sharingPath = API + '/sharing/provider-shares';
+    const sharingCall = () => fetch(home.url + sharingPath, { headers: {
+      authorization: 'AgentNetIdentity ' + Buffer.from(JSON.stringify({ networkId: NETWORK, deviceId: identity.deviceId,
+        signingKey: identity.signingKey, card, proof: createRequestProof(identity, 'GET', sharingPath) })).toString('base64url'),
+      'x-agent-net-authorization': set.client(home, 'owner').header('GET', sharingPath),
+    } });
+    // Both scoped identity verification and the certified-host proof read a previously cold network.
+    expect((await sharingCall()).status).toBe(200);
+    await set.enroll(entry, 'member');
+    const owner = set.client(home, 'owner'), member = set.client(entry, 'member');
+    const x = await owner.connect(), y = await member.connect(); set.uplinks.push(x, y);
+    const commit = vi.spyOn(set.backend, 'commit');
+    const beforePackets = commit.mock.calls.length;
+    await exchange(x, y);
+    expect(commit.mock.calls).toHaveLength(beforePackets);
+    const visitor = generateIdentity('lag-visitor');
+    const delegation = createDelegation(set.identities.owner, set.certificates.owner,
+      { guest: visitor, kind: 'shared-task', resourceId: 'lag-resource' });
+    await owner.request('POST', '/grants', { delegation });
+    const guest = new AgentNetClient(entry.url, visitor, set.certificates.owner, set.rootPublicKey, delegation);
+    await owner.request('DELETE', '/devices/member');
+    await home.close();
+    // The remaining replica has received neither the grant nor the device revocation event.
+    const guestUplink = await guest.connect(); set.uplinks.push(guestUplink);
+    expect(await guest.directory()).toHaveLength(1);
+    await expect(member.connect()).rejects.toThrow('AGENT_NET_UPGRADE_401');
+    const target = API + '/directory';
+    commit.mockRejectedValueOnce(new Error('BACKEND_OFFLINE'));
+    expect((await fetch(entry.url + target, { headers: { authorization: member.header('GET', target) } })).status).toBe(503);
+    commit.mockRejectedValueOnce(new Error('BACKEND_OFFLINE'));
+    await expect(set.client(entry, 'owner').connect()).rejects.toThrow('AGENT_NET_UPGRADE_503');
+    const nonce = vi.spyOn(set.backend, 'claimNonce').mockRejectedValueOnce(new Error('BACKEND_OFFLINE'));
+    await expect(set.client(entry, 'owner').connect()).rejects.toThrow('AGENT_NET_UPGRADE_503');
+    nonce.mockRejectedValueOnce(new Error('BACKEND_OFFLINE'));
+    const sharingResponse = await fetch(entry.url + sharingPath, { headers: {
+      authorization: 'AgentNetIdentity ' + Buffer.from(JSON.stringify({ networkId: NETWORK, deviceId: identity.deviceId,
+        signingKey: identity.signingKey, card, proof: createRequestProof(identity, 'GET', sharingPath) })).toString('base64url'),
+      'x-agent-net-authorization': set.client(entry, 'owner').header('GET', sharingPath),
+    } });
+    expect(sharingResponse.status).toBe(503);
+    nonce.mockRestore();
+    // Late delivery must not roll back the fresher authorization view.
+    for (const deliver of pending.splice(0)) deliver();
+    await expect(member.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+  });
+
+  it('forwards a continuously progressing binary upload beyond the response-header timeout', async () => {
+    const set = await replicaSet();
+    await set.start('replica-a'); await set.start('replica-b');
+    const { entry } = set.roles();
+    const progressed = deferred(), chunks: Buffer[] = [];
+    let progress = progressed;
+    const receiving = createServer((req, res) => {
+      req.on('data', (chunk: Buffer) => { chunks.push(chunk); progress.resolve(); });
+      req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ received: Buffer.concat(chunks).length })); });
+    });
+    await new Promise<void>(resolve => receiving.listen(0, '127.0.0.1', resolve));
+    cleanups.push(() => new Promise<void>(resolve => { receiving.closeAllConnections(); receiving.close(() => resolve()); }));
+    await set.backend.join({ id: set.joinerTakingOver('upload-owner-'), url: 'http://127.0.0.1:' + (receiving.address() as AddressInfo).port });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const client = set.client(entry, 'owner'), bytes = randomBytes(16_384), target = API + '/media/slow-upload?offset=0';
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const request = httpRequest(entry.url + target, { method: 'PUT', headers: { authorization: client.header('PUT', target, bytes),
+        'content-type': 'application/octet-stream', 'content-length': bytes.length, 'x-agent-net-content-sha256': sha256(bytes) } });
+      cleanups.push(() => { request.destroy(); });
+      const response = new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+        request.on('error', reject);
+        request.on('response', res => { const body: Buffer[] = []; res.on('data', (chunk: Buffer) => body.push(chunk));
+          res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(body).toString() })); });
+      });
+      for (let offset = 0; offset < bytes.length; offset += 1024) {
+        const received = progress.promise;
+        request.write(bytes.subarray(offset, offset + 1024)); await received;
+        progress = deferred();
+        await vi.advanceTimersByTimeAsync(750);
+      }
+      request.end();
+      expect(await response).toEqual({ status: 200, body: JSON.stringify({ received: bytes.length }) });
+      expect(Buffer.concat(chunks)).toEqual(bytes);
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each(['join', 'drain'] as const)('rejects an upgrade whose authentication finishes after ownership changes (%s)', async (change) => {
     const set = await replicaSet();
     const a = await set.start('replica-a'); await set.start('replica-b');
