@@ -18,7 +18,6 @@ import {
 import { redactEventForRenderer } from '../maker-ipc/rendererEventRedaction.js';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
-const rendererRedactionSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'rendererEventRedaction.ts'), 'utf8').replace(/\r\n?/g, '\n');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const registerSource = source;
 const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
@@ -112,19 +111,22 @@ describe('maker:event hot path ordering', () => {
   );
 
   it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
-    const redactor = rendererRedactionSource.slice(
-      rendererRedactionSource.indexOf('export function redactEventForRenderer'),
-    );
-    expect(redactor).toContain('delete rendererEvent.sessionTurnGeneration;');
-    expect(redactor).toContain('delete rendererEvent.sessionInstanceId;');
-    for (const key of [
-      'subagentObservation',
-      'returnedResult',
-      'returnedResultEmpty',
-      'returnedResultTruncated',
-    ]) {
-      expect(redactor).toContain(`'${key}'`);
-    }
+    const hostOnly = {
+      subagentObservation: { kind: 'returned' },
+      subagentParentContext: { parentSessionId: 'parent' },
+      returnedResult: 'complete subagent output',
+      returnedResultEmpty: false,
+      returnedResultTruncated: false,
+    };
+    const original = {
+      type: 'agent_task_update', source: 'pi', sessionInstanceId: 'runtime', sessionTurnGeneration: 7,
+      data: { taskId: 'subagent-1', status: 'completed', ...hostOnly },
+    } as unknown as AgentEvent;
+    const boundary = redactEventForRenderer(original);
+    expect(boundary).toEqual({ type: 'agent_task_update', source: 'pi', data: { taskId: 'subagent-1', status: 'completed' } });
+    // The Host keeps the full return for its own bookkeeping.
+    expect(original.data).toMatchObject(hostOnly);
+    expect(original.sessionTurnGeneration).toBe(7);
   });
 
   it('rewires a replacement Session instance that retains the same business id', () => {
