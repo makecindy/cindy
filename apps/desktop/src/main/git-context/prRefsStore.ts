@@ -47,7 +47,9 @@ const SCANNED_ROLES = new Set(['user', 'assistant']);
  * them as the default priority on read so existing records recover without a
  * data migration. A trillion entries is outside any supported reorder group.
  */
-const manualPrPriority = sql`case when ${sessionPrRefs.priority} >= 1000000000000 then 0 else ${sessionPrRefs.priority} end`;
+function manualPrPriority() {
+  return sql`case when ${sessionPrRefs.priority} >= 1000000000000 then 0 else ${sessionPrRefs.priority} end`;
+}
 
 /** PR 引用有变化时广播 renderer 的回调,由 ipc.ts 注入(解耦 Electron)。 */
 let onRefsChanged: ((sessionId: string) => void) | null = null;
@@ -389,7 +391,7 @@ export async function listAllPrRefs(): Promise<SessionPrRef[]> {
     .where(and(isNull(sessionPrRefs.removedAt), eq(sessionPrRefs.associationSource, 'explicit')))
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(manualPrPriority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     )
     .limit(2000);
@@ -411,7 +413,7 @@ export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
     )
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(manualPrPriority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     );
   return rows.map(rowToSessionPrRef);
@@ -615,7 +617,7 @@ async function managePrRefsWithinWrite(
     .where(eq(sessionPrRefs.sessionId, sessionId))
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(manualPrPriority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     );
   if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
