@@ -58,6 +58,34 @@ export class DingTalkApiClient {
     await this.getAccessToken();
   }
 
+  /** Text emotions sit on the incoming message rather than adding a chat message. */
+  async sendMessageEmotion(
+    action: "reply" | "recall",
+    conversationId: string,
+    messageId: string,
+    emotionName: string,
+  ): Promise<void> {
+    const token = await this.getAccessToken();
+    await this.postJson(
+      `https://api.dingtalk.com/v1.0/robot/emotion/${action}`,
+      {
+        robotCode: this.appKey,
+        openConversationId: conversationId,
+        openMsgId: messageId,
+        emotionType: 2,
+        emotionName,
+        textEmotion: {
+          // DingTalk's built-in text-emotion template, also used for its thinking badge.
+          emotionId: "2659900",
+          emotionName,
+          text: emotionName,
+          backgroundId: "im_bg_1",
+        },
+      },
+      token,
+    );
+  }
+
   async sendText(target: DingTalkOutboundTarget, text: string): Promise<void> {
     if (target.sessionWebhook && this.isWebhookUsable(target)) {
       try {

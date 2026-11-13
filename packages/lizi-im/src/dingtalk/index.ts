@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -100,6 +101,19 @@ interface PendingReply<T = unknown> {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface MessageReactionTarget {
+  conversationId: string;
+  api: DingTalkApiClient;
+  accountToken: unknown;
+  receivedAt: number;
+}
+
+interface ActiveMessageReaction {
+  messageId: string;
+  emotionName: string;
+  target: MessageReactionTarget;
+}
+
 export class DingTalkIM extends BaseIM implements ChannelIM {
   private readonly messageHandlers = new Set<MessageHandler>();
   private readonly statusHandlers = new Set<StatusHandler>();
@@ -107,6 +121,9 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
   private readonly laneQueues = new Map<string, Promise<void>>();
   private readonly seenMessageIds = new Map<string, number>();
   private readonly pendingReplies = new Map<string, PendingReply>();
+  // Only admitted messages can acquire a reaction; neither cache survives a transport change.
+  private readonly messageReactionTargets = new Map<string, MessageReactionTarget>();
+  private readonly activeMessageReactions = new Map<string, ActiveMessageReaction>();
 
   private status: IMStatus = { kind: "idle" };
   private client: DingTalkStreamClient | null = null;
@@ -147,6 +164,8 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     this.client = null;
     this.api?.close();
     this.api = null;
+    this.messageReactionTargets.clear();
+    this.activeMessageReactions.clear();
     this.targetByUserId.clear();
     this.laneQueues.clear();
     this.seenMessageIds.clear();
@@ -261,6 +280,47 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       hasSecret: Boolean(credentials),
       ownerUserId: this.host.secrets.read(this.key(OWNER_USER_ID_SECRET))?.trim() || null,
     };
+  }
+
+  async reactToMessage(messageId: string, emoji: string): Promise<string | null> {
+    const target = this.messageReactionTargets.get(messageId);
+    if (
+      !target || Date.now() - target.receivedAt > DEDUP_TTL_MS ||
+      !this.isReactionTargetCurrent(target)
+    ) return null;
+    const emotionName = emoji.trim() || "🤔";
+    try {
+      await this.runInCapturedAccountScope(target.accountToken, () =>
+        target.api.sendMessageEmotion("reply", target.conversationId, messageId, emotionName),
+      );
+      if (!this.isReactionTargetCurrent(target)) return null;
+      const token = randomUUID();
+      this.activeMessageReactions.set(token, { messageId, emotionName, target });
+      while (this.activeMessageReactions.size > DEDUP_CAPACITY) {
+        const oldest = this.activeMessageReactions.keys().next().value;
+        if (!oldest) break;
+        this.activeMessageReactions.delete(oldest);
+      }
+      return token;
+    } catch {
+      this.log.warn("dingtalk message reaction failed");
+      return null;
+    }
+  }
+
+  async removeMessageReaction(messageId: string, reactionToken: string): Promise<void> {
+    const reaction = this.activeMessageReactions.get(reactionToken);
+    if (!reaction || reaction.messageId !== messageId) return;
+    if (!this.isReactionTargetCurrent(reaction.target)) {
+      this.activeMessageReactions.delete(reactionToken);
+      return;
+    }
+    await this.runInCapturedAccountScope(reaction.target.accountToken, () =>
+      reaction.target.api.sendMessageEmotion(
+        "recall", reaction.target.conversationId, messageId, reaction.emotionName,
+      ),
+    );
+    this.activeMessageReactions.delete(reactionToken);
   }
 
   async sendText(userId: string, text: string): Promise<{ messageId: string }> {
@@ -584,6 +644,8 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     this.api?.close();
     this.api = null;
     client?.disconnect();
+    this.messageReactionTargets.clear();
+    this.activeMessageReactions.clear();
     if (resetRetry) {
       this.targetByUserId.clear();
       this.laneQueues.clear();
@@ -708,6 +770,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     }
     if (connectionVersion !== this.connectionVersion) return;
 
+    this.rememberMessageReactionTarget(envelope);
     const event: IMMessageEvent = {
       channelName: "dingtalk",
       interactionSource: {
@@ -827,6 +890,32 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
           sessionWebhook: null,
           sessionWebhookExpiresAt: null,
         };
+  }
+
+  private rememberMessageReactionTarget(envelope: DingTalkInboundEnvelope): void {
+    if (!this.api) return;
+    const now = Date.now();
+    for (const [id, target] of this.messageReactionTargets) {
+      if (now - target.receivedAt > DEDUP_TTL_MS) this.messageReactionTargets.delete(id);
+    }
+    this.messageReactionTargets.set(envelope.messageId, {
+      conversationId: envelope.conversationId,
+      api: this.api,
+      accountToken: this.host.accountScope?.capture(),
+      receivedAt: now,
+    });
+    while (this.messageReactionTargets.size > DEDUP_CAPACITY) {
+      const oldest = this.messageReactionTargets.keys().next().value;
+      if (!oldest) break;
+      this.messageReactionTargets.delete(oldest);
+    }
+  }
+
+  private isReactionTargetCurrent(target: MessageReactionTarget): boolean {
+    const scope = this.host.accountScope;
+    return target.api === this.api && (
+      !scope || (target.accountToken != null && scope.isCurrent(target.accountToken))
+    );
   }
 
   private isDuplicate(messageId: string): boolean {

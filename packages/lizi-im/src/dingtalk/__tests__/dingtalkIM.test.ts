@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DWClientDownStream } from "dingtalk-stream";
 
 import type { IMHost, IMMessageEvent } from "../../types.js";
@@ -223,6 +223,160 @@ function directMessage(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+// Exercises admitted Stream callbacks -> reaction API -> terminal cleanup through
+// public transport methods. Existing tests covered message delivery but not this
+// optional capability, including its account/connection ownership (unit tier).
+describe("DingTalk message reactions", () => {
+  const transports: DingTalkIM[] = [];
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(async () => {
+    for (const im of transports) await im.dispose();
+    transports.length = 0;
+    vi.useRealTimers();
+  });
+
+  async function setup(accountScope?: IMHost["accountScope"]) {
+    const { host } = makeHost();
+    host.accountScope = accountScope;
+    const client = new FakeClient();
+    const fetcher = vi.fn<typeof fetch>(async (input) => new Response(JSON.stringify(
+      String(input).endsWith("/accessToken")
+        ? { accessToken: "test-token", expireIn: 7200 }
+        : {},
+    )));
+    const im = new DingTalkIM(host, { fetcher, clientFactory: () => client });
+    transports.push(im);
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    client.emit(directMessage());
+    await vi.advanceTimersByTimeAsync(0);
+    const emotionCalls = () => fetcher.mock.calls
+      .filter(([url]) => String(url).includes("/robot/emotion/"))
+      .map(([url, init]) => ({
+        url: String(url),
+        headers: init?.headers,
+        body: JSON.parse(String(init?.body)),
+      }));
+    return { im, client, fetcher, received, emotionCalls };
+  }
+
+  it("adds and recalls the same emotion on its original direct or group message", async () => {
+    const { im, client, emotionCalls } = await setup();
+    const first = await im.reactToMessage("message-1", "");
+    client.emit(directMessage({
+      msgId: "group-message", conversationId: "group-chat",
+      conversationType: "2", isInAtList: true,
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    const second = await im.reactToMessage("group-message", "👀");
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    await im.removeMessageReaction("message-1", first!);
+    await im.removeMessageReaction("group-message", second!);
+    const calls = emotionCalls();
+    expect(calls.map((call) => call.url.split("/").at(-1))).toEqual([
+      "reply", "reply", "recall", "recall",
+    ]);
+    expect(calls[0].headers).toMatchObject({ "x-acs-dingtalk-access-token": "test-token" });
+    expect(calls[0].body).toEqual({
+      robotCode: "app-key", openConversationId: "direct-chat", openMsgId: "message-1",
+      emotionType: 2, emotionName: "🤔",
+      textEmotion: { emotionId: "2659900", emotionName: "🤔", text: "🤔", backgroundId: "im_bg_1" },
+    });
+    expect(calls[1].body).toMatchObject({
+      openConversationId: "group-chat", openMsgId: "group-message", emotionName: "👀",
+    });
+    expect(calls[2].body).toEqual(calls[0].body);
+    expect(calls[3].body).toEqual(calls[1].body);
+  });
+
+  it("does not react to unknown, foreign, or unmentioned messages", async () => {
+    const { im, client, fetcher, received } = await setup();
+    client.emit(directMessage({ msgId: "foreign", senderStaffId: "another-owner" }));
+    client.emit(directMessage({ msgId: "other-bot", robotCode: "another-app" }));
+    client.emit(directMessage({ msgId: "ambient", conversationType: "2", isInAtList: false }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(received).toHaveLength(1);
+    fetcher.mockClear();
+    for (const id of ["unknown", "foreign", "other-bot", "ambient"]) {
+      expect(await im.reactToMessage(id, "👀")).toBeNull();
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps normal replies working when the emotion API rejects the acknowledgement", async () => {
+    const { im, fetcher, received } = await setup();
+    fetcher.mockResolvedValueOnce(new Response("{}", { status: 403 }));
+    expect(await im.reactToMessage("message-1", "👀")).toBeNull();
+    await im.commitFinal({ userId: received[0].senderId, text: "Done", terminal: "done" });
+    const send = fetcher.mock.calls.find(([url]) => String(url).endsWith("/oToMessages/batchSend"));
+    expect(JSON.parse(String(send?.[1]?.body))).toMatchObject({
+      msgParam: JSON.stringify({ content: "Done" }),
+    });
+  });
+
+  it("can retry a failed recall without losing its reaction token", async () => {
+    const { im, fetcher, emotionCalls } = await setup();
+    const token = await im.reactToMessage("message-1", "👀");
+    fetcher.mockResolvedValueOnce(new Response("{}", { status: 500 }));
+    await expect(im.removeMessageReaction("message-1", token!)).rejects.toThrow();
+    await im.removeMessageReaction("message-1", token!);
+    await im.removeMessageReaction("message-1", token!);
+    expect(emotionCalls().map((call) => call.url.split("/").at(-1))).toEqual([
+      "reply", "recall", "recall",
+    ]);
+  });
+
+  it("can clean up a long-running turn after the incoming-message cache expires", async () => {
+    const { im, client, emotionCalls } = await setup();
+    const token = await im.reactToMessage("message-1", "👀");
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    client.emit(directMessage({ msgId: "later-message" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await im.reactToMessage("message-1", "👀")).toBeNull();
+    await im.removeMessageReaction("message-1", token!);
+    expect(emotionCalls().at(-1)?.body).toMatchObject({ openMsgId: "message-1" });
+    expect(emotionCalls().at(-1)?.url).toMatch(/\/recall$/);
+  });
+
+  it("does not reuse message or reaction handles after reconnecting", async () => {
+    const { im, fetcher } = await setup();
+    const token = await im.reactToMessage("message-1", "👀");
+    await im.saveCredentials({ appKey: "new-app-key", appSecret: "new-app-secret" });
+    fetcher.mockClear();
+    expect(await im.reactToMessage("message-1", "👀")).toBeNull();
+    await im.removeMessageReaction("message-1", token!);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("does not send reactions after their ingress account is replaced", async () => {
+    let account = 1;
+    const { im, fetcher } = await setup({
+      capture: () => account,
+      isCurrent: (token) => token === account,
+      run: async (_token, operation) => operation(),
+    });
+    const token = await im.reactToMessage("message-1", "👀");
+    account += 1;
+    fetcher.mockClear();
+    expect(await im.reactToMessage("message-1", "👀")).toBeNull();
+    await im.removeMessageReaction("message-1", token!);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("discards a late acknowledgement from a replaced connection", async () => {
+    const { im, fetcher } = await setup();
+    let finish!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = im.reactToMessage("message-1", "👀");
+    await vi.advanceTimersByTimeAsync(0);
+    await im.saveCredentials({ appKey: "new-app-key", appSecret: "new-app-secret" });
+    finish(new Response("{}"));
+    expect(await pending).toBeNull();
+  });
+});
 
 describe("DingTalkIM", () => {
   it.each(['', ' \n '])('does not send an empty final %j', async (text) => {
