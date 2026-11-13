@@ -4216,3 +4216,5 @@ return {
   mutatePiPackage,
 };
 }
+
+export type PiPackageStore = ReturnType<typeof createPiPackageStore>;
