@@ -67,6 +67,38 @@ function trackingSqlite() {
 }
 
 describe('MakerMemoryManager · owner scope guard (#2341)', () => {
+  // PR #10294 / discussion_r4559490483: existing native-edit coverage bypassed store
+  // mutations. Minimal real-SQLite unit: search A, mutate its index, restore identical bytes;
+  // the same open store must find A again (as after Git restore), without stale search hits.
+  it.each(['write', 'update', 'delete', 'consolidate', 'resetAll'] as const)(
+    'finds an unchanged file restored after %s without reopening the store', async (operation) => {
+      const workdir = path.join(rootA, 'project');
+      const directory = path.join(workdir, '.cindy', 'memory');
+      const manager = new MakerMemoryManager({
+        basePath: rootA, sqliteFactory: trackingSqlite().factory, agents: {}, logger: noopLogger,
+        initialEnabled: true, resolveStorageDir: () => directory,
+      });
+      try {
+        const store = await manager.getStore(workdir);
+        const original = { type: 'user' as const, name: 'drink', title: 'Drink', description: 'Preferred drink', body: 'oolong' };
+        const { filename } = await store.write(original);
+        const file = path.join(directory, filename);
+        const bytes = await readFile(file);
+        expect(await store.search('oolong')).toHaveLength(1);
+        if (operation === 'write') await store.write({ ...original, body: 'sencha', mode: 'update' });
+        if (operation === 'update') {
+          const record = await store.read(filename);
+          await store.update(filename, record.frontmatter.updatedAt, { ...original, body: 'sencha' });
+        }
+        if (operation === 'delete') await store.delete(filename);
+        if (operation === 'consolidate') await store.consolidate({ sources: [filename], target: { ...original, body: 'sencha' } });
+        if (operation === 'resetAll') await store.resetAll();
+        await writeFile(file, bytes);
+        expect(await store.search('oolong')).toHaveLength(1);
+        expect(await store.search('sencha')).toHaveLength(0);
+      } finally { manager.dispose(); }
+    },
+  );
   // Native project-file recall: startup must not create a store or inline its index; an external
   // same-name edit and deletion must be visible to the compatibility search (real SQLite, unit).
   it('loads project memory on demand and refreshes native edits without a service restart', async () => {
