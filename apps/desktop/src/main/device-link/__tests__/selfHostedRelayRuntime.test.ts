@@ -420,10 +420,10 @@ it('renames a deployment locally, including the route in use and a deployment st
   expect((await command({ type: 'rename-deployment', relayId: '00000000-0000-4000-8000-000000000000', name: 'X' })).error).toBe('NO_DEPLOYMENT');
 });
 
-// 0.3.0 已部署用户必须能从状态投影进入升级，才能获得本次证书重试修复；原版本号未递增时此用例失败。
-// 生产入口为 state IPC；现有部署成功用例不覆盖旧版记录。最小输入：已完成的 0.3.0 部署，tier: unit。
-it('offers the certificate retry update to an existing 0.3.0 relay and clears it after upgrading', async () => {
-  h.deploy.mockResolvedValueOnce({ relayVersion: '0.3.0' });
+// 已部署的 0.5.0 中转必须能从状态投影进入升级，才能获得本次发送排队修复；版本号未递增时此用例失败。
+// 生产入口为 state IPC；部署成功用例不覆盖最新旧版记录。最小输入：已完成的 0.5.0 部署，tier: unit。
+it('offers the queue-delay update to an existing 0.5.0 relay and clears it after upgrading', async () => {
+  h.deploy.mockResolvedValueOnce({ relayVersion: '0.5.0' });
   await command(deployCommand);
   await vi.runAllTimersAsync();
   expect((await command({ type: 'state' })).state.deployments[0]?.upgradeAvailable).toBe(true);

@@ -96,7 +96,9 @@ import {
   SessionSubscriptionAccountProvider,
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
-import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import { beginAgentSwitchOperation, hasPendingAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
   getCindyMakeTestRecovery,
@@ -175,7 +177,7 @@ import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
-import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import { RunningTokenCount } from './RunningTokenCount';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
@@ -2627,6 +2629,53 @@ function CCAgentSessionContent({
       },
     };
   }, [modelGroupSwitchOffer, sessionId, t]);
+  // 进行中的任务里选模式(model-groups.md §5)：只在任务所在的运行位置里按规则当场挑一个，走选择器同一条换模型路径
+  // 换过去；之后不会自己再换。远程控制别的电脑、SSH 与伙伴对话不提供，条件与撞配额的换来源提议相同。
+  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && !remoteDeviceId && !session?.remoteHostId;
+  // 任务视图挂着但看不见(聊天栏收起)时不读配置，重新看得见时再读。
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask && viewVisible);
+  // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
+  const taskLocation = agentSwitchIntent && agentSwitchIntent.agentDeviceId !== undefined
+    ? agentSwitchIntent.agentDeviceId ?? null
+    : session?.agentDeviceId ?? null;
+  const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
+    if (!sessionId) return;
+    // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
+    // 这时点发送会等换完，而不是先用旧模型发出去。
+    if (hasPendingAgentSendDispatch(sessionId)) return;
+    const finishSwitch = beginAgentSwitchOperation(sessionId);
+    try {
+      // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
+      const navigationVersion = sessionNavigationVersionRef.current;
+      const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+      if (sessionNavigationVersionRef.current !== navigationVersion) return;
+      if (!result || result.outcome !== 'routed') {
+        if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
+        return;
+      }
+      const pick = sessionModelPickRef.current;
+      if (!pick) return;
+      const applied = await pick({
+        agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
+        // 模式指定了推理强度且选中的模型支持时一起换(选路时已按目录核对过)。
+        ...(result.route.effort ? { effort: result.route.effort as Effort } : {}),
+      });
+      if (!applied) return;
+      // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
+      bindModelGroupSession(sessionId, selection, result);
+      toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
+    } finally {
+      finishSwitch();
+    }
+  }, [sessionId, taskLocation, t]);
+  const taskModelGroups = useMemo(() => (modelGroupsInTask
+    ? {
+        config: modelGroupsConfig,
+        active: null,
+        onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
+        onManage: () => navigate('/settings?tab=model-groups'),
+      }
+    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate]);
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -6247,6 +6296,7 @@ function CCAgentSessionContent({
                 >
                 <ChatInput
                   sessionModelPickRef={sessionModelPickRef}
+                  {...(taskModelGroups ? { modelGroups: taskModelGroups } : {})}
                   modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
                   onModelPickerRequestConsumed={sharedTaskRecovery.consumeModelPickerRequest}
                   topSlot={cindyMakeRecoveryId && session ? (
@@ -6940,17 +6990,20 @@ function RunningStatusBar({
     generationDurationMs,
   ]);
 
-  // Animate the token counter so live mid-turn updates feel like a smoothly-
-  // incrementing number. Rate does not use this: locally ticking the
-  // denominator would make a paused model look like decaying speed.
-  const animatedTokens = useAnimatedNumber(tokenUsage, 400);
-  const tokenCountText = t('chat.runningStatus.tokenCount', {
-    tokens: formatRunningTokenCount(animatedTokens),
-  });
   // Host speed counts and times generation itself; usage counters stay the fallback.
   const rateOutputTokens = tokenSpeed?.tokens ?? outputTokens;
   const rateDurationMs = tokenSpeed?.elapsedMs ?? generationDurationMs;
   const rateReliable = tokenSpeed ? true : generationReliable;
+  const displayTokens = tokenUsage > 0
+    ? tokenUsage
+    : tokenSpeed?.streaming && rateOutputTokens > 0
+      ? rateOutputTokens
+      : 0;
+  // Keep authoritative text for the accessible popover label. Interpolation
+  // belongs to the displayed counter leaf, so rate-only/hidden rows do no RAF work.
+  const tokenCountText = t('chat.runningStatus.tokenCount', {
+    tokens: formatRunningTokenCount(displayTokens),
+  });
   const rateHistory = useRunningTokenRateHistory({
     sessionKey,
     startedAt,
@@ -6969,7 +7022,7 @@ function RunningStatusBar({
     outputTokens: rateOutputTokens,
     generationDurationMs: rateDurationMs,
     generationReliable: rateReliable,
-    tokenUsage,
+    tokenUsage: Math.max(tokenUsage, displayTokens),
     latestRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
@@ -7088,11 +7141,13 @@ function RunningStatusBar({
                   backgroundTasksRunning ||
                   (tokenSpeed && !tokenSpeed.streaming)
                     ? null
-                    : usageMeta.kind === 'tokens'
-                      ? tokenCountText
-                      : rateText
+                    : rateText ?? (displayTokens > 0 ? tokenCountText : null)
                 }
-                isTokenCount={usageMeta.kind === 'tokens'}
+                isTokenCount={
+                  usageMeta.kind === 'tokens' ||
+                  (usageMeta.kind === 'rate' && rateText === null && displayTokens > 0)
+                }
+                tokenUsage={displayTokens}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
                 outputTokens={rateOutputTokens}
                 history={rateHistory}
@@ -7134,7 +7189,7 @@ function RunningStatusBar({
                     </span>
                     <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                      {tokenCountText}
+                      <RunningTokenCount tokenUsage={tokenUsage} />
                     </span>
                   </>
                 )}

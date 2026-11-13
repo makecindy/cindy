@@ -136,14 +136,13 @@ export function isProviderRouteMutationInProgress(providerId: string): boolean {
 /**
  * 通用 OAuth 供应商的 access_token 读取器（注入，同 key reader 模式）。
  *
- * **必须同步**（路由热路径，规则 10）：读 generic-oauth 的内存 blob 缓存；临期刷新由
- * generic-oauth 侧在读取时后台单飞触发，不阻塞本次路由。返回 null = 未登录 / 无 token
+ * 请求等待 generic-oauth 必要刷新完成。返回 null = 未登录 / 无 token
  * → 路由仍指向该供应商上游但置哑 token（上游预期 401；绝不回落默认路由防凭证泄漏）。
  */
-type OAuthTokenReader = (providerId: string) => string | null;
+type OAuthTokenReader = (providerId: string) => string | null | Promise<string | null>;
 let oauthTokenReader: OAuthTokenReader = () => null;
 
-/** host 启动期接通 generic-oauth 的同步 token 缓存读取。 */
+/** host 启动期接通等待必要刷新的 token reader。 */
 export function setOAuthTokenReader(reader: OAuthTokenReader): void {
   oauthTokenReader = reader;
 }
@@ -285,6 +284,19 @@ function pendingProviderSwitchRouteDecision(providerId: string | null): RoutingD
         'retry-after': '1',
       });
       res.end(payload);
+    },
+  };
+}
+
+/** 本次刷新失败只终止本次请求，不能落回默认上游或重放用户输入。 */
+export function oauthRefreshFailedDecision(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ type: 'error', error: {
+        type: 'authentication_error', code: 'provider_oauth_refresh_failed',
+        message: 'Provider authentication refresh failed.',
+      } }));
     },
   };
 }
@@ -587,6 +599,15 @@ export function providerRoutingForModel(
   // 协议切换后误继承旧 runtime 的路径，只有模型覆盖显式声明时才带回。
   const inherited = { ...routing };
   delete inherited.requestPath;
+  // A user connection can default to Chat while its selected model uses
+  // Responses. Apply the same custom-tool default as buildUserProvider after
+  // that protocol selection, preserving explicit capabilities and native OAuth.
+  if (agent === 'codex' && provider.source === 'user'
+    && modelRoute?.wireProtocol === 'openai-responses'
+    && routing.authStrategy !== 'oauth-passthrough'
+    && inherited.supportsResponsesCustomTools === undefined) {
+    inherited.supportsResponsesCustomTools = false;
+  }
   return {
     ...inherited,
     ...(model?.selectedInterface ? { modelInterface: model.selectedInterface } : {}),
@@ -747,7 +768,12 @@ export async function resolveProviderRouteById(
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
   const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
+  const revision = getProviderRouteCredentialRevision(providerId);
   const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  if (isProviderRouteMutationInProgress(providerId)
+    || getProviderRouteCredentialRevision(providerId) !== revision) {
+    throw new Error('provider_oauth_login_changed');
+  }
   return {
     providerId,
     providerSource: provider.source,
@@ -772,8 +798,14 @@ export async function resolveSessionRoute(
   const provider = getActiveCatalog().providers.find(p => p.id === providerId);
   const routing = provider ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
-  return { providerId, providerSource: provider.source, routing,
-    ...await readProviderRouteCredentials(provider, routing, agent) };
+  const revision = getProviderRouteCredentialRevision(providerId);
+  const credentials = await readProviderRouteCredentials(provider, routing, agent);
+  if (isProviderRouteMutationInProgress(providerId)
+    || getProviderRouteCredentialRevision(providerId) !== revision
+    || getSessionProvider(sessionId) !== providerId) {
+    throw new Error('provider_oauth_login_changed');
+  }
+  return { providerId, providerSource: provider.source, routing, ...credentials };
 }
 
 /** Build outbound headers for an already resolved local protocol handler. */
@@ -843,7 +875,7 @@ async function readProviderRouteCredentials(
     isCustomRoutedProvider(provider) ? customProviderKeyReader(credentialProviderId, agent) : null;
   let oauthToken: string | null = null;
   if (routing.authStrategy === 'oauth-token') {
-    oauthToken = oauthTokenReader(credentialProviderId);
+    oauthToken = await oauthTokenReader(credentialProviderId);
   } else if (routing.authStrategy === 'provider-oauth-header') {
     try {
       oauthToken = await providerOAuthTokenReader(provider.id, agent);
@@ -876,7 +908,17 @@ export async function resolveProviderRouteDecision(
   const provider = getActiveCatalog().providers.find((p) => p.id === id);
   const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : providerRoutingForModel(provider, agent, wireModel)) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
-  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  const revision = getProviderRouteCredentialRevision(id);
+  let credentials: { apiKey: string | null; oauthToken: string | null };
+  try {
+    credentials = await readProviderRouteCredentials(provider, routing, agent);
+  } catch {
+    return { providerId: id, routing, decision: oauthRefreshFailedDecision() };
+  }
+  if (isProviderRouteMutationInProgress(id) || getProviderRouteCredentialRevision(id) !== revision) {
+    return { providerId: id, routing, decision: updatingProviderRouteDecision(id) };
+  }
+  const { apiKey, oauthToken } = credentials;
   const decision = buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken);
   return {
     providerId: id,
@@ -907,7 +949,13 @@ export async function resolveFrozenProviderRouteDecision(
   if (!provider || !isCustomRoutedProvider(provider) || !provider.agents.includes(agent)) return null;
   if (!routingServesWireModel(routing, wireModel)) return null;
   if (routing.modelInterface && wireModel) assertModelInterfaceAvailable(routing.modelInterface, wireModel, getActiveCatalog().modelRegistry);
-  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  let credentials: { apiKey: string | null; oauthToken: string | null };
+  try {
+    credentials = await readProviderRouteCredentials(provider, routing, agent);
+  } catch {
+    return { providerId: id, routing, decision: oauthRefreshFailedDecision() };
+  }
+  const { apiKey, oauthToken } = credentials;
   // Header overrides are user-owned configuration. Organization routes use only the trusted
   // directory descriptor and managed credential, even if stale local data shares an id.
   const customHeaders = provider.source === 'user'
@@ -968,18 +1016,16 @@ export function resolveSessionRouteDecision(
     decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
       : decision;
-  // 通用 OAuth 供应商（oauth-token）：从 generic-oauth 内存缓存**同步**读 access_token
-  // （临期刷新在后台单飞，不阻塞路由热路径，规则 10）。
   if (routing.authStrategy === 'oauth-token') {
-    return withRequestPath(
-      buildRouteDecision(
-        routing,
-        gatewayKey,
-        agent,
-        apiKey,
-        oauthTokenReader(credentialProviderId),
-      ),
-    );
+    const revision = getProviderRouteCredentialRevision(providerId);
+    const stillCurrent = () => !isProviderRouteMutationInProgress(providerId)
+      && getProviderRouteCredentialRevision(providerId) === revision
+      && getSessionProvider(sessionId) === providerId;
+    return Promise.resolve().then(() => oauthTokenReader(credentialProviderId)).then(token => {
+      if (!stillCurrent()) return updatingProviderRouteDecision(providerId);
+      const decision = withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey, token));
+      return decision ? { ...decision, dispatchGenerationValid: stillCurrent } : decision;
+    }).catch(() => oauthRefreshFailedDecision());
   }
   if (routing.authStrategy !== 'provider-oauth-header') {
     return withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey));

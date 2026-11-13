@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
+import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 
@@ -164,8 +165,9 @@ export function createInputQueue(deps) {
       isStoppingRuntime: () => closing,
       persistMessage: deps.persistMessage ?? (async () => {}),
       onPersistenceError: persistenceFailed,
-      onTerminal: (id, type, error, meta) => {
-        coordinator.onTurnEvent(id, type, error, undefined, meta);
+      onTerminal: (id, type, error, meta, direct) => {
+        if (direct) coordinator.wakeSession(id, 'host-turn-settled');
+        else coordinator.onTurnEvent(id, type, error, undefined, meta);
         deps.onSessionSettled?.(id);
       },
     });
@@ -308,6 +310,9 @@ export function createInputQueue(deps) {
       return project(coordinator.getProjection(id));
     }
     const api = {
+      wireHostSession: session => { assertCurrent(); executor.wireHostSession(session); },
+      beginHostTurn: id => command(id, () => executor.beginHostTurn(id)),
+      taskActionInput: id => readTaskActionInput(id, sessionId => deps.getMaker()?.getSession(sessionId), coordinator),
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },

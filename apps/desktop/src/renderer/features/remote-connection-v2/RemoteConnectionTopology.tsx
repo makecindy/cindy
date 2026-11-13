@@ -35,7 +35,8 @@ import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
 import { groupLines, layoutTopology, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
 import type { TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
-import { formatRtt, protocolLabel, rowSubtitle } from './topologyPresentation';
+import { ProtocolMark } from './ProtocolMark';
+import { formatRtt, protocolKind, protocolLabel, rowSubtitle, type ProtocolKind } from './topologyPresentation';
 
 import './remote-connection-v2.css';
 
@@ -197,6 +198,7 @@ function RowText({
   side,
   name,
   hint,
+  hintKind,
   dim,
   animate,
 }: {
@@ -205,6 +207,8 @@ function RowText({
   side: 1 | -1;
   name: string;
   hint?: string;
+  /** 小字是协议名时给出协议，画成图标 + 名称(Agent-Net 紫色) */
+  hintKind?: ProtocolKind | null;
   dim?: boolean;
   animate: boolean;
 }) {
@@ -230,7 +234,11 @@ function RowText({
       >
         {name}
       </span>
-      {hint ? <span className="max-w-full truncate text-12 leading-[1.3] text-[var(--text-tertiary)]">{hint}</span> : null}
+      {hint && hintKind ? (
+        <ProtocolMark kind={hintKind} label={hint} className="text-12 leading-[1.3] text-[var(--text-tertiary)]" />
+      ) : hint ? (
+        <span className="max-w-full truncate text-12 leading-[1.3] text-[var(--text-tertiary)]">{hint}</span>
+      ) : null}
     </div>
   );
 }
@@ -494,6 +502,7 @@ export function RemoteConnectionTopology({
           side={group.side}
           name={node.name}
           hint={protocol ?? undefined}
+          hintKind={running ? null : protocolKind(node)}
           dim={node.status === 'offline'}
           animate={animate}
         />,

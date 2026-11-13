@@ -155,18 +155,27 @@ export default {
       await page.mouse.move(0, 0);
     }
     if (ui.case === 'default') {
+      // Fractional RTT samples must render as whole milliseconds in the topology and both cards.
+      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 3 }), { exact: true }).waitFor();
+      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 97 }), { exact: true }).waitFor();
+      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 25 }), { exact: true }).waitFor();
       // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).first().waitFor();
       // 拓扑卡片只展示连接信息(本机的配置在上方「我的设备」的本机卡片,其它设备不再列出)。
       await page.getByRole('button', { name: /^Work PC/ }).click();
       await page.getByRole('dialog').waitFor();
+      await page.getByRole('dialog').getByText(`${await ui.t('settings.remoteControl.v2.ms', { value: 3 })} · ${await ui.t('settings.remoteControl.v2.popover.rttNote')}`, { exact: true }).waitFor();
       await ui.capture('popover');
+      await page.keyboard.press('Escape');
+      await page.getByRole('button', { name: /^Home server/ }).click();
+      await page.getByRole('dialog').getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).waitFor();
+      await ui.capture('agent-net-card');
       await page.keyboard.press('Escape');
       // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。
       await page.getByRole('button', { name: 'Studio Mac', exact: true }).click();
       const hubCard = page.getByRole('dialog');
-      await hubCard.getByText(await ui.t('settings.devices.linkStatus.online')).waitFor();
+      await hubCard.getByText(`${await ui.t('settings.devices.linkStatus.online')} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`, { exact: true }).waitFor();
       await ui.capture('hub-card');
       await page.keyboard.press('Escape');
       // 要处理的设备:点开卡片,「状态」用红字写原因(没有单独的「需要处理」卡片)。
