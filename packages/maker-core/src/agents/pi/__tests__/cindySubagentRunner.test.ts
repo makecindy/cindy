@@ -245,6 +245,13 @@ async function makeFixture(options: {
   surviveStdinEnd?: boolean;
   /** Model a wedged runner: publish status, never consume the stop mailbox. */
   ignoreStopControl?: boolean;
+  /**
+   * Write the real runner script into the run directory, as the production
+   * launcher does, instead of sharing one script file across fixtures. The
+   * runner's recorded script path then carries the run UUID, which is the
+   * identity recovery verifies before signalling.
+   */
+  runnerInRunDir?: boolean;
   /** Inject OS signal failures into the real runner, without faking its receipt. */
   failChildTermination?: boolean;
   /** Runner config of a shared-user (guest) hosted session. */
@@ -283,7 +290,7 @@ async function makeFixture(options: {
   // the control mailbox. Written *into the run dir* so its argv path carries the
   // run UUID, exactly as the production runner does — that path is the identity
   // the host verifies before signalling.
-  const runnerFile = options.ignoreStopControl || options.failChildTermination
+  const runnerFile = options.ignoreStopControl || options.failChildTermination || options.runnerInRunDir
     ? path.join(runDir, 'runner.cjs')
     : await sharedRunnerFile();
   const fakePiFile = path.join(root, 'fake-pi.cjs');
@@ -342,6 +349,10 @@ publish();
 setInterval(publish, 1000);
 setTimeout(() => process.exit(0), 60000).unref();
 `, { mode: 0o700 });
+    await chmod(runnerFile, 0o700);
+  }
+  if (options.runnerInRunDir) {
+    await writeFile(runnerFile, CINDY_SUBAGENT_RUNNER_SOURCE, { mode: 0o700 });
     await chmod(runnerFile, 0o700);
   }
   await writeFile(bridgeFile, 'export default function () {}\n');
@@ -662,6 +673,33 @@ describe('Cindy durable PI Subagent runner', () => {
       undefined, 'the independent process inventory to confirm the completed runner exited');
     expect(await Promise.all(files.map(file => readFile(path.join(fixture.runDir, file)))))
       .toEqual(before);
+  });
+
+  // #8736: with no result.json at all, only the runner's startup identity
+  // file can release the boundary after status corruption. The runner must
+  // publish it before any status flush, with the same instance identity the
+  // status record carries, and recovery must leave it untouched.
+  it('recovers account teardown from a real runner identity file after status corruption with no result', async () => {
+    const fixture = await makeFixture({ runnerInRunDir: true });
+    await waitForClose(fixture.child, fixture.stderr);
+    const status = JSON.parse(await readFile(path.join(fixture.runDir, 'status.json'), 'utf8'));
+    const identity = JSON.parse(await readFile(path.join(fixture.runDir, 'runner-identity.json'), 'utf8'));
+    expect(identity).toMatchObject({
+      version: 1,
+      runId: fixture.runId,
+      runnerInstanceId: status.runnerInstanceId,
+      runnerScript: path.join(fixture.runDir, 'runner.cjs'),
+    });
+    expect(Number.isSafeInteger(identity.runnerPid) && identity.runnerPid > 0).toBe(true);
+    expect(identity.startedAt).toBe(status.startedAt);
+    const runnerConfig = JSON.parse(await readFile(path.join(fixture.runDir, 'config.json'), 'utf8'));
+    expect(identity.sessionIds).toEqual(runnerConfig.tasks.map((task: any) => task.sessionId));
+    const identityBefore = await readFile(path.join(fixture.runDir, 'runner-identity.json'));
+    await rm(path.join(fixture.runDir, 'result.json'));
+    await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
+    await waitFor(async () => await stopForAccountBoundary(fixture.root, { timeoutMs: 0 }) ? true : null,
+      undefined, 'the independent process inventory to confirm the completed runner exited');
+    expect(await readFile(path.join(fixture.runDir, 'runner-identity.json'))).toEqual(identityBefore);
   });
 
   it.skipIf(process.platform === 'win32')('refuses a real signal receipt until the orphan child has exited', async () => {
