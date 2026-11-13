@@ -13,7 +13,6 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { configureHostOwner } from './claude-auth.mjs';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
@@ -28,8 +27,6 @@ import { lifoCleanup } from '../test-support/cleanup.mjs';
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
 const TEST_TIMEOUT_MS = 120_000;
 
-const agentDir = path.dirname(fileURLToPath(import.meta.url));
-const desktopIndex = path.join(agentDir, '..', '..', '..', 'desktop', 'src', 'main', 'maker-host', 'index.ts');
 
 function fixtureHarnessRoot(profile) {
   const root = path.join(profile, 'harnesses');
@@ -132,31 +129,6 @@ test('a Codex credential-mode switch is refused while a session is busy, by its 
   assert.deepEqual(closed, []);
 });
 
-test('the three Host lines are the desktop constructor lines', { timeout: TEST_TIMEOUT_MS }, () => {
-  const desktop = fs.readFileSync(desktopIndex, 'utf8');
-  const host = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  for (const line of [
-    'claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),',
-    'registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),',
-    'getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),',
-  ]) {
-    assert.equal(desktop.split(line).length - 1, 1, `desktop: ${line}`);
-    assert.equal(host.split(line).length - 1, 1, `host: ${line}`);
-  }
-  // The same arguments to the shared switch, in the same order; the desktop's guard for a Maker that
-  // is not built yet has no Host counterpart (the Host closes over its Maker).
-  const args = (source) => {
-    const start = source.indexOf('await prepareLocalCodexCredentialModeSwitch({');
-    const body = source.slice(start, source.indexOf('});', start));
-    return [...body.matchAll(/^\s+(\w+)(?::|,)/gm)].map(m => m[1]);
-  };
-  assert.deepEqual(args(desktop), ['maker', 'isSessionInTurn', 'hostKey', 'fromMode', 'fromModeEffective', 'toMode']);
-  assert.deepEqual(args(host), args(desktop));
-  // The proxy core the Host's Claude proxy uses records into the default (process-wide) bridge.
-  const core = fs.readFileSync(path.join(path.dirname(desktopIndex), 'anthropicCompatProxyHostCore.ts'), 'utf8');
-  assert.ok(core.includes('createClaudeSubagentUsageResponseObserver(),'));
-  assert.ok(core.includes('createClaudeSubagentUsageRequestTransform(),'));
-});
 
 test('Claude gets the MCP duplicate choices main.ts builds from the plugin gateway reads', { timeout: TEST_TIMEOUT_MS }, t => {
   t = lifoCleanup(t);
@@ -164,12 +136,6 @@ test('Claude gets the MCP duplicate choices main.ts builds from the plugin gatew
   const graph = buildGraph(t, 'engine-deps-mcp-duplicates', { resolveLocalMcpDuplicateChoices });
   assert.equal(graph.agent.deps.resolveLocalMcpDuplicateChoices, resolveLocalMcpDuplicateChoices);
   assert.equal(buildGraph(t, 'engine-deps-mcp-duplicates-absent').agent.deps.resolveLocalMcpDuplicateChoices, undefined);
-  const main = fs.readFileSync(path.join(agentDir, '..', 'main.ts'), 'utf8');
-  assert.ok(main.includes('resolveLocalMcpDuplicateChoices: createHostMcpDuplicateChoices(pluginGateway.customMcp).resolveLocalMcpDuplicateChoices,'));
-  // The desktop Claude constructor takes the same function from the same module family.
-  const desktop = fs.readFileSync(desktopIndex, 'utf8');
-  assert.ok(desktop.includes("import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';"));
-  assert.ok(desktop.includes('    const claudeAgent = new ClaudeCodeAgent({\n      resolveLocalMcpDuplicateChoices,\n'));
 });
 
 test('Claude checks explicit subagent models with the Host gateway key and provider views', { timeout: TEST_TIMEOUT_MS }, async t => {
@@ -179,15 +145,6 @@ test('Claude checks explicit subagent models with the Host gateway key and provi
   assert.equal(typeof resolve, 'function');
   // No authoritative XD snapshot in this process: nothing can be denied.
   assert.deepEqual(await resolve({ providerId: 'xd', parentModel: 'fixture-model', model: 'claude-haiku-4-5' }), { status: 'unknown' });
-  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  assert.ok(runtime.includes([
-    '    resolveClaudeSubagentModelAccess: createHostClaudeSubagentModelAccess({',
-    '      readGatewayKey: () => options.gateway?.credential ?? null,',
-    '      listProviderViews: () => config.publicViews(Boolean(options.gateway?.credential)),',
-    '    }),',
-  ].join('\n')));
-  const desktop = fs.readFileSync(desktopIndex, 'utf8');
-  assert.ok(desktop.includes('      resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,\n'));
 });
 
 test('Pi reads the user\'s own global context from the home the desktop uses', { timeout: TEST_TIMEOUT_MS }, async t => {
@@ -226,20 +183,6 @@ test('Pi resolves its live models and descriptors from the Host selectable catal
   if (sample) {
     assert.ok(deps.resolvePiRuntimeModelDescriptor(sample.providerId, sample.id), 'a listed model has a descriptor');
   }
-  // The same expressions as the desktop's buildPiAgentForDesktop, over the Host catalog.
-  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  const desktop = fs.readFileSync(desktopIndex, 'utf8');
-  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
-  const body = (source, from, to) => {
-    const start = source.indexOf(from);
-    assert.ok(start >= 0, from);
-    return source.slice(start, source.indexOf(to, start)).split('\n').map(line => line.trim()).filter(line => !line.startsWith('//')).join('\n');
-  };
-  const desktopModels = body(desktop, 'resolvePiRuntimeModels: () =>', 'mcpProviders: piMcpProviders,').replaceAll('getDesktopSelectableCatalog()', 'modelContext.getSelectableCatalog()');
-  const hostModels = body(runtime, 'resolvePiRuntimeModels: () =>', '        mcpProviders,\n');
-  assert.ok(hostModels.startsWith(desktopModels), 'the three model resolvers are the desktop lines');
-  assert.equal(body(runtime, 'resolvePiGlobalContextHome: (remoteHostId) => {', '        },'),
-    body(piHost, 'resolvePiGlobalContextHome: (remoteHostId) => {', '    },'));
 });
 
 test('Pi learns cache compatibility in the profile file the desktop uses and reads it back', { timeout: TEST_TIMEOUT_MS }, t => {
@@ -266,22 +209,6 @@ test('Pi learns cache compatibility in the profile file the desktop uses and rea
   // A later bridge write is seen on the next read, as on the desktop.
   write({});
   assert.equal(deps.resolvePiNativeCompatOverride('openai', 'gpt-x', routeKey), undefined);
-  // The same lines as the desktop's buildPiAgent, over the Host profile and the Host instance.
-  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
-  const body = (source, from, to) => {
-    const start = source.indexOf(from);
-    assert.ok(start >= 0, from);
-    const end = source.indexOf(to, start);
-    assert.ok(end > start, to);
-    return source.slice(start, end).split('\n').map(line => line.trim()).filter(line => !line.startsWith('//')).join('\n');
-  };
-  assert.equal(body(runtime, 'resolvePiNativeCompatStorePath:', 'resolvePiNativeProviders:'),
-    body(piHost, 'resolvePiNativeCompatStorePath:', 'getManagedSkills:')
-      .replaceAll("app.getPath('userData')", 'options.userDataDir')
-      .replaceAll('readPiNativeCompatOverride(providerId', 'piNativeCompatOverrides.readPiNativeCompatOverride(providerId'));
-  assert.ok(runtime.includes("const piNativeCompatOverrides = createPiNativeCompatOverridesStore({ app: { getPath: () => options.userDataDir } });"));
-  assert.ok(runtime.includes("import { createPiNativeCompatOverridesStore } from '../../../desktop/src/main/maker-host/piNativeCompatOverridesStoreCore.js';"));
 });
 
 test('Pi gets the desktop startup hint and extension dialog strings in the system language', { timeout: TEST_TIMEOUT_MS }, t => {
@@ -316,17 +243,4 @@ test('Pi gets the desktop startup hint and extension dialog strings in the syste
   // Every string is a translation, not a key the lookup fell back to.
   const values = [strings.confirm, strings.cancel, strings.mutationFailed, ...Object.values(strings.mutationFailure), ...Object.values(strings.mutationSuccess)];
   for (const value of values) assert.ok(value.trim() && !value.startsWith('settings.piPackages.'), value);
-  // The same lines as the desktop's buildPiAgent.
-  const runtime = fs.readFileSync(path.join(agentDir, 'runtime.ts'), 'utf8');
-  const piHost = fs.readFileSync(path.join(path.dirname(desktopIndex), 'pi-host.ts'), 'utf8');
-  const lines = (source, from, to) => {
-    const start = source.indexOf(from);
-    assert.ok(start >= 0, from);
-    const end = source.indexOf(to, start);
-    assert.ok(end > start, to);
-    return source.slice(start, end).split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//')).join('\n');
-  };
-  assert.equal(lines(runtime, 'formatPiStartupCloudFileHint: (file) =>', 'resolvePiVisionBridgeEnv:'),
-    lines(piHost, 'formatPiStartupCloudFileHint: (file) =>', 'preparePiExtraSpawnConfig:'));
-  assert.ok(runtime.includes('const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);'));
 });

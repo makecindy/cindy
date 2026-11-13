@@ -106,7 +106,4 @@ test('an agent turn rejected on the current key resynchronizes once per window',
     assert.equal(f.service.gateway.credential, 'fixture-key-2');
     assert.equal(f.requests, 2, 'the second report inside the window sends nothing');
   } finally { f.close(); }
-  // main.ts gives the input queue (and so the turn executor) this entry.
-  const main = fs.readFileSync(new URL('../main.ts', import.meta.url), 'utf8');
-  assert.ok(main.includes('  reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),\n'));
 });

@@ -199,12 +199,4 @@ test('permission requests leave the Host with the desktop tool-input redaction',
   await Promise.resolve();
   assert.deepEqual(events.at(-1).request, question);
   broker.dispose();
-  // The same expression as the desktop's boundaryRequest (register.ts installDesktopInteractionListener).
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const shape = text => text.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//')).join(' ');
-  const desktop = fs.readFileSync(path.join(here, '../../../desktop/src/main/maker-ipc/register.ts'), 'utf8');
-  const host = fs.readFileSync(path.join(here, 'interactions.mjs'), 'utf8');
-  const cut = (text, from, to) => { const start = text.indexOf(from); assert.ok(start >= 0, from); return text.slice(start, text.indexOf(to, start)); };
-  assert.equal(shape(cut(host, 'request.kind === \'permission\'', ': request;')),
-    shape(cut(desktop, "req.kind === 'permission'", ': req;')).replaceAll('...req,', '...request,').replaceAll('req.', 'request.').replace(' as Record<string, unknown>', ''));
 });

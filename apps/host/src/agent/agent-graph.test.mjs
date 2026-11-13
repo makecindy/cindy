@@ -70,9 +70,6 @@ test('the PiAgent the Host assembles gets the MCP bridge under the key it reads,
   for (const key of ['resolvePiManagedPackageResources', 'resolvePiNativePackagePaths', 'mutatePiManagedPackage', 'onPiManagedPackageMutationSettled']) {
     assert.equal(graph.pi.deps[key], graph.piPackages.deps[key], key);
   }
-  // The retirement hooks need the Host's Maker (source shape: the attach after Maker is built, the close on teardown).
-  assert.ok(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'runtime.ts'), 'utf8').includes('  piPackages.attachMaker(maker);\n'));
-  assert.ok(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../main.ts'), 'utf8').includes('    agentGraph?.piPackages.close();\n'));
   graph.piPackages.close();
 
   // PiAgent calls it as (providers, ctx). The environment records the session's runtime MCP

@@ -37,7 +37,6 @@ const TEST_TIMEOUT_MS = 120_000;
 
 const agentDir = path.dirname(fileURLToPath(import.meta.url));
 const hostDir = path.dirname(path.dirname(agentDir));
-const desktopMain = path.join(hostDir, '..', 'desktop', 'src', 'main');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-leases-'));
@@ -306,26 +305,3 @@ test('no lease is taken outside a managed worktree or for a remote task', { time
   assert.deepEqual(leaseFiles(f.leaseDir), []);
 });
 
-test('the Host lease steps are the desktop start-hook lines, before the shared Skill links', { timeout: TEST_TIMEOUT_MS }, () => {
-  const host = fs.readFileSync(path.join(agentDir, 'start-options.ts'), 'utf8');
-  const desktop = fs.readFileSync(path.join(desktopMain, 'maker-host', 'index.ts'), 'utf8');
-  const block = (source, from) => {
-    const start = source.indexOf(from);
-    assert.ok(start >= 0, from);
-    const end = source.indexOf('}', source.indexOf('assertPrecreatedSessionNotCancelled(sessionId);', start));
-    return source.slice(start, end + 1).split('\n').map(line => line.trim()).join('\n');
-  };
-  const desktopBlock = block(desktop, 'if (!createOpts.remoteHostId && createOpts.workingDir) {\n            const lease');
-  const hostBlock = block(host, 'if (!createOpts.remoteHostId && createOpts.workingDir) {')
-    .replace('hostWorktreeRuntimeLeases.acquireWorktreeRuntimeLease(', 'acquireWorktreeRuntimeLease(')
-    .replace('hostPrecreatedCancellation.assertPrecreatedSessionNotCancelled(', 'assertPrecreatedSessionNotCancelled(');
-  assert.equal(hostBlock, desktopBlock);
-  const prepare = host.slice(host.indexOf('async function prepareStartOptions('), host.indexOf('async function onBeforeStart('));
-  assert.ok(prepare.indexOf('acquireWorktreeRuntimeLease(') < prepare.indexOf('prepareSharedProjectSkillLinks('));
-  const desktopPrepare = desktop.slice(desktop.indexOf('const createOpts = opts as MakerSessionCreateOpts;'));
-  assert.ok(desktopPrepare.indexOf('acquireWorktreeRuntimeLease(') < desktopPrepare.indexOf('prepareSharedProjectSkillLinks('));
-  // The release warning the desktop logs, word for word.
-  const warn = "'worktree runtime lease release postponed', { sessionId, code: (error as NodeJS.ErrnoException).code }";
-  assert.equal(desktop.split(warn).length - 1, 3);
-  assert.equal(host.split(warn).length - 1, 1);
-});

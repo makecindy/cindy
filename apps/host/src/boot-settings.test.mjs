@@ -15,11 +15,6 @@ const TEST_TIMEOUT_MS = 120_000;
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
 const hostDir = path.dirname(srcDir);
 
-test('main.ts sets the settings default right after the env boot step', { timeout: TEST_TIMEOUT_MS }, () => {
-  const imports = fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8')
-    .split('\n').filter(line => line.startsWith('import '));
-  assert.deepEqual(imports.slice(0, 2), ["import './boot-env.js';", "import './boot-settings.js';"]);
-});
 
 // In a child process, so the process-wide default does not reach the other tests.
 const probe = (boot) => `

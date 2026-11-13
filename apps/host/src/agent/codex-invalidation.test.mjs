@@ -229,29 +229,6 @@ test('a login linked to a file outside the profile: neither invalidation changes
   }
 });
 
-// As the desktop's invalidate(reason, context): the Host's entry takes exactly the context
-// maker-core sends (AuthAdapter.invalidate), nothing the desktop does not receive.
-test('the Host invalidation takes only the context maker-core reports', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const { createRequire } = await import('node:module');
-  const { fileURLToPath } = await import('node:url');
-  const root = fileURLToPath(new URL('../../../../', import.meta.url));
-  const ts = createRequire(path.join(root, 'apps/desktop/package.json'))('typescript');
-  const source = rel => ts.createSourceFile(rel, fs.readFileSync(path.join(root, rel), 'utf8'), ts.ScriptTarget.ESNext, true);
-  const members = type => type && ts.isTypeLiteralNode(type) ? type.members.map(member => member.name.getText()).sort() : null;
-  let core = null;
-  let host = null;
-  const visit = node => {
-    if (ts.isMethodSignature(node) && node.name.getText() === 'invalidate' && node.parameters.length === 2) core = members(node.parameters[1].type);
-    if (ts.isVariableDeclaration(node) && node.name.getText() === 'invalidateNative' && node.initializer && ts.isArrowFunction(node.initializer)) {
-      host = members(node.initializer.parameters[1]?.type);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source('packages/maker-core/src/interfaces/auth-adapter.ts'));
-  visit(source('apps/host/src/agent/codex-runtime.ts'));
-  assert.deepEqual(core, ['credentialAttribution', 'credentialGeneration', 'providerId']);
-  assert.deepEqual(host, core);
-});
 
 // As the desktop (auth-adapters.ts invalidate): only an independent account is left to the account
 // service; a task on the gateway or a custom provider reporting a ChatGPT login failure
@@ -270,11 +247,6 @@ test('a failure reported by a task on the gateway or a custom provider invalidat
   }
 });
 
-// The runtime hands the account service's predicate, without the native connection.
-test('the Codex runtime passes the account service predicate to the invalidation', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const source = fs.readFileSync(new URL('./codex-runtime.ts', import.meta.url), 'utf8');
-  assert.ok(source.includes("isCodexAccountProvider: id => id !== 'openai' && options.config.codexAccounts.isCodexAccountProvider(id),"));
-});
 
 // As the desktop's disconnectCodexOAuth: when codex-home is itself a link to the system login's
 // directory, the invalidation removes nothing there; the system file keeps its bytes and inode.

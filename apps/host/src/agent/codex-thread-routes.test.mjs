@@ -11,7 +11,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 
 import { configureHostOwner } from './claude-auth.mjs';
 import { createHostProviderConfig } from './provider-config.ts';
@@ -99,18 +98,4 @@ test('the Host registers smart subagent routes with the parent reasoning effort,
   assert.deepEqual(registered[0][3].smartSubagentRoutes, [{ ...routes[0], reasoningEffort: 'xhigh' }]);
   assert.equal(registered[1][3].smartSubagentRoutes.some(route => 'reasoningEffort' in route), false, 'no effort is stamped when none was selected');
   assert.equal(registered[2][3].smartSubagentRoutes.some(route => 'reasoningEffort' in route), false, 'an empty choice is not replaced by a default');
-
-  // The same lines as the desktop.
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const lines = (text, from, to) => {
-    const start = text.indexOf(from);
-    assert.ok(start >= 0, from);
-    const end = text.indexOf(to, start);
-    assert.ok(end > start, to);
-    return text.slice(start, end).split('\n').map(line => line.trim()).filter(Boolean).join('\n');
-  };
-  const desktopIndex = await fs.readFile(path.join(here, '../../../desktop/src/main/maker-host/index.ts'), 'utf8');
-  const host = await fs.readFile(path.join(here, 'codex-runtime.ts'), 'utf8');
-  const from = '...(subagentRoute ? { subagentRoute } : {}),';
-  assert.equal(lines(host, from, 'getCodexSubagentIdentity:'), lines(desktopIndex, from, 'getCodexSubagentIdentity:').replace(/\}\),$/, '});\n},'));
 });

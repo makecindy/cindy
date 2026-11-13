@@ -237,14 +237,3 @@ describe('Host XD snapshot authority matches the desktop', () => {
   });
 });
 
-describe('the Host wiring the parity drives', () => {
-  it('is main.ts: the catalog writes and the unknown mark go to the shared active catalog', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const main = fs.readFileSync(path.join(__dirname, '../../../../../host/src/main.ts'), 'utf8');
-    expect(main).toContain('    setXdGatewayModels(models, options);\n');
-    expect(main).toContain('  markModelsUnknown: () => markXdGatewayModelAccessUnknown(),\n');
-    expect(main).toContain('  readModels: () => getXdGatewayModels(),\n');
-    expect(main).toContain('const parsed = parseModelsSyncPayload(payload);');
-  });
-});

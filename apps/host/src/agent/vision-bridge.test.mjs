@@ -55,9 +55,3 @@ test('the Host graph hands the vision bridge to Maker and Pi and owns the contro
   assert.equal(getVisionBridgeController(), null);
 });
 
-test('the Host teardown closes the vision bridge after Maker shuts down', { timeout: TEST_TIMEOUT_MS }, () => {
-  const main = fs.readFileSync(new URL('../main.ts', import.meta.url), 'utf8');
-  const shutdown = main.indexOf('?.shutdown?.());');
-  const close = main.indexOf('agentGraph?.visionBridge.close()');
-  assert.ok(shutdown > 0 && close > shutdown, 'visionBridge.close() follows Maker shutdown in the runtime teardown');
-});

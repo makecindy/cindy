@@ -101,42 +101,6 @@ test('paths outside the declared run directory are refused before any process st
   }
 });
 
-// Source shape: the Host entry is the desktop entry except how the ready frame is sent and how the
-// channel is dropped (reviewer, P4), and the parent watchdog: a utilityProcess ends with Electron's
-// main process, a Node fork does not (reviewer, m1-cp18c review, option B).
-test('the Host runner entry matches the desktop entry except the ready frame and the channel', () => {
-  // Bracket-only lines appear in both files and are not compared.
-  const lines = file => fs.readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//'));
-  const desktop = lines(path.join(here, '../../../desktop/src/main/cindy-brain/piSubagentRunnerProcess.ts'));
-  const host = lines(path.join(here, 'pi-subagent-runner-process.cts'));
-  assert.deepEqual(desktop.filter(line => !host.includes(line)), [
-    'interface ParentPortLike {',
-    'postMessage(message: unknown): void;',
-    'const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;',
-    "if (!parentPort) throw new Error('PI Subagent runner process is missing parentPort');",
-    "parentPort.postMessage({ type: 'ready' });",
-    'try {',
-    "Object.defineProperty(process, 'parentPort', {",
-    'configurable: true,',
-    'value: undefined,',
-    '} catch {',
-  ]);
-  assert.deepEqual(host.filter(line => !desktop.includes(line)), [
-    "import { startParentWatchdog } from './pi-subagent-parent-watchdog.cjs';",
-    'const send = process.send?.bind(process);',
-    'const hostPid = process.ppid;',
-    "if (!send) throw new Error('PI Subagent runner process is missing its IPC channel');",
-    "send({ type: 'ready' }, (error: Error | null) => {",
-    'if (error) throw error;',
-    'process.disconnect?.();',
-    'startParentWatchdog({',
-    'parentPid: hostPid,',
-    'onParentGone: () => {',
-    'setTimeout(() => process.exit(1), 5_000);',
-    "process.kill(process.pid, 'SIGTERM');",
-    '},',
-  ]);
-});
 
 // maker-core's runner source as a release build produces it. Under tsx (this test, any Host source
 // run) the embedded createPiCacheInputTracker.toString() carries tsx's __name helper, which the

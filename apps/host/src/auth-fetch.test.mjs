@@ -70,13 +70,3 @@ test('login and session refresh go through the proxy the environment names', { t
   assert.deepEqual(connects, ['auth.example.test:443']);
 });
 
-test('every Cindy auth client the Host builds uses hostAuthFetch', { timeout: TEST_TIMEOUT_MS }, () => {
-  for (const [file, count] of [['main.ts', 2], ['login-cli.mjs', 1]]) {
-    const source = fs.readFileSync(path.join(srcDir, file), 'utf8');
-    assert.equal(source.split('new CindyAuthClient(').length - 1, count, file);
-    assert.equal(source.split('fetch: (input, init) => hostAuthFetch(input, init),').length - 1, count, file);
-    assert.equal(source.includes('globalThis.fetch'), false, file);
-  }
-  const helper = fs.readFileSync(path.join(srcDir, 'auth-fetch.mjs'), 'utf8');
-  assert.ok(helper.includes('export const hostAuthFetch = (input, init) => hostOutbound.outboundFetch(input, init);'));
-});
