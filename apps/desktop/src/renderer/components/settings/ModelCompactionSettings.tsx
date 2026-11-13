@@ -39,7 +39,8 @@ export function ModelCompactionSettings({
     owner: ReturnType<typeof getDataOwnerGeneration>;
     timer: ReturnType<typeof setTimeout>;
   } | null>(null);
-  const writing = useRef<number | null>(null);
+  const writing = useRef<{ seq: number; pct: number } | null>(null);
+  const writeSeq = useRef(0);
   const lastWriteAt = useRef(0);
   // 取消手势后，共享 Slider 会回放一次按下前的值；这一次不是新预览。
   const cancelling = useRef(false);
@@ -49,7 +50,7 @@ export function ModelCompactionSettings({
   // 但属于还没发送的尾部提交或在途写入的预览要留住，否则连按的最后一格会被确认吃掉。
   useEffect(() => {
     setDraft((current) =>
-      current !== null && (pending.current?.pct === current || writing.current === current)
+      current !== null && (pending.current?.pct === current || writing.current?.pct === current)
         ? current
         : null,
     );
@@ -66,12 +67,17 @@ export function ModelCompactionSettings({
   );
 
   const write = async (pct: number) => {
-    writing.current = pct;
+    // 每次写入独有序号：89→88→89 的连按时，第一个 89 的回包不能动第三个 89 的预览。
+    const seq = ++writeSeq.current;
+    writing.current = { seq, pct };
     lastWriteAt.current = Date.now();
     await onChange(pct);
-    if (writing.current === pct) writing.current = null;
-    // 写失败时策略不变，这里把预览收回，显示主进程真正保存的值。
-    setDraft((current) => (current === pct ? null : current));
+    if (writing.current?.seq === seq) {
+      writing.current = null;
+      // 写失败时策略不变，这里把预览收回，显示主进程真正保存的值。
+      setDraft((current) => (current === pct ? null : current));
+    }
+    // 序号已被更新的写入顶掉：这次回包（可能失败）不再碰当前预览与标记。
   };
   const commit = (pct: number) => {
     const since = Date.now() - lastWriteAt.current;
