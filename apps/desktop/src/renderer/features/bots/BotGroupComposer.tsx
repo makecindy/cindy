@@ -267,6 +267,7 @@ export function BotGroupComposer({
   textRef.current = text;
   const voice = useBotGroupVoiceInput({
     draftKey, textareaRef, text, disabled: disabled || sending,
+    onStart: () => groupMask?.participate(),
     maxLength: thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined,
     onTooLong: () => toast.warning(t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS })),
     onChange: (value, edit) => {

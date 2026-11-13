@@ -176,6 +176,37 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
+  // discussion_r4560895062 / unit: existing drains fail after a run already
+  // exists; Send may instead wait for startup, then its extra audio barrier.
+  // The real stop promise must reject that same attempt, not release Send.
+  it('rejects Send when ASR fails in the post-start audio barrier', async () => {
+    const h = mount();
+    await act(async () => { h.mute.resolve({ ok: true }); h.result.current.start(); });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    expect(h.api.start).toHaveBeenCalledOnce();
+    const barrier = deferred<void>();
+    h.api.drainAudioQueue.mockResolvedValueOnce({ ok: true }).mockImplementationOnce(async () => {
+      await barrier.promise;
+      return { ok: true };
+    });
+    const send = vi.fn(); const failed = vi.fn();
+    let stopping!: Promise<void>;
+    await act(async () => { stopping = h.result.current.stop({ waitForRefinement: true }).then(send, failed); });
+    expect(h.api.drainAudioQueue).toHaveBeenCalledTimes(1);
+    await act(async () => { h.connection.resolve({ ok: true, runId: 'post-start-error' }); });
+    expect(h.api.drainAudioQueue).toHaveBeenCalledTimes(2);
+    expect(send).not.toHaveBeenCalled();
+    await act(async () => {
+      h.api.onEvent.mock.calls.at(-1)![0]({ type: 'error', runId: 'post-start-error', message: 'ASR failed after startup' });
+      barrier.resolve();
+      await stopping;
+    });
+    expect(h.result.current.state).toBe('error');
+    expect(send).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(new Error('ASR failed after startup'));
+    expect(h.api.stop).not.toHaveBeenCalled();
+  });
+
   // discussion_r4560047246: the real stop promise must reject Send when
   // readiness fails after PCM arrives. Existing failures happen before stop
   // or after a runId exists, missing this pending-start continuation (unit).

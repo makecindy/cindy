@@ -4,6 +4,7 @@
 // startup after closing a thread. Unit tier: no devices, network or real waits.
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useRef, useState } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 import type { VoiceInputShortcut } from '@/voice-input/shortcut';
@@ -61,6 +62,9 @@ vi.mock('@/components/new-chat/ComposerAttachments', () => ({ AttachmentRejectio
 
 import { useBotGroupVoiceInput } from '../useBotGroupVoiceInput';
 import { BotGroupComposer } from '../BotGroupComposer';
+import { GroupMaskProvider } from '../GroupMaskProvider';
+import { useGroupMask } from '../groupMaskPresentation';
+import type { ChatMaskState } from '../../../../shared/botGroupChat';
 import { Tooltip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { BOT_GROUP_MESSAGE_MAX_CHARS } from '../../../../shared/botGroupChat';
@@ -122,6 +126,53 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearArmedDetachedVoiceDraft(); events.clear(); shortcuts.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('group textarea dictation ownership (#6650)', () => {
+  // discussion_r4560895069 / unit: real Composer + voice hooks + mask Provider.
+  // Keyboard tests do not cover either shared voice start entry. Assert the
+  // participate wire action and paused projection before any ASR text arrives;
+  // always delegation must retain the Provider's existing exception.
+  it.each(['scheduled', 'manual', 'always'] as const)('applies %s participation rules to microphone and shortcut starts', async triggerMode => {
+    for (const entry of ['button', 'shortcut'] as const) {
+      let state: ChatMaskState = {
+        revision: 1, status: 'enabled', manualRunning: true,
+        self: { id: 'self', name: 'Self', avatarUrl: null }, companions: [{ id: 'companion', name: 'Helper', avatarUrl: null }],
+        settings: { companionId: 'companion', enabled: true, trigger: triggerMode, start: '09:00', end: '18:00',
+          timeZone: 'UTC', resumeMinutes: 15, collectTodos: false, digest: 'manual' },
+      };
+      const mask = vi.fn(async (request: { action?: { type: string } }) => {
+        if (request.action?.type === 'participate') state = { ...state, status: 'paused', manualRunning: false };
+        return { ok: true, state };
+      });
+      vi.stubGlobal('electronAPI', { platform: 'win32', voiceInput: api, maker: {
+        chatServer: { mask, mentions: async () => ({ ok: true, mentions: [], hasMore: false }) },
+        onBotGroupChanged: () => () => {},
+      } });
+      function Projection() {
+        const mask = useGroupMask('group');
+        return <output data-testid="mask-projection">{mask?.status}:{String(mask?.manualRunning)}</output>;
+      }
+      const view = render(<MemoryRouter><Tooltip.Provider><GroupMaskProvider groupId="group">
+        <Projection />
+        <BotGroupComposer groupId="group" draftKey={`mask-voice-${triggerMode}-${entry}`} mode={entry === 'button' ? 'group' : 'thread'}
+          members={[]} running={false} sendReply={vi.fn()} />
+      </GroupMaskProvider></Tooltip.Provider></MemoryRouter>);
+      await act(async () => {});
+      expect(screen.getByTestId('mask-projection').textContent).toBe('enabled:true');
+      const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
+      act(() => textbox.focus());
+      const starts = api.start.mock.calls.length;
+      await act(async () => {
+        if (entry === 'button') fireEvent.click(screen.getByRole('button', { name: 'newChat.chatInput.voiceInput.start' }));
+        else trigger('start');
+      });
+      expect(api.start).toHaveBeenCalledTimes(starts + 1);
+      expect(mask.mock.calls.filter(([request]) => request.action?.type === 'participate')).toHaveLength(triggerMode === 'always' ? 0 : 1);
+      expect(screen.getByTestId('mask-projection').textContent).toBe(triggerMode === 'always' ? 'enabled:true' : 'paused:false');
+      act(() => { submit(); refine(); emit({ type: 'state', runId: 'run', state: 'done' }); });
+      expect(textbox.value).toBe('Spoken.');
+      view.unmount();
+    }
+  });
+
   // discussion_r4560047254: real hooks in two composers, with the idle
   // composer mounted first. Existing shortcuts cover focus changes only on
   // release; Escape must cancel the owner before document/thread dismissal.

@@ -14,7 +14,7 @@ const LONG_PRESS_MS = 450;
 const SHORTCUT_DEDUPE_MS = 250;
 
 export function useBotGroupVoiceInput({
-  draftKey, textareaRef, text, onChange, disabled, maxLength = -1, onTooLong,
+  draftKey, textareaRef, text, onChange, disabled, maxLength = -1, onTooLong, onStart,
 }: {
   draftKey: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -23,12 +23,14 @@ export function useBotGroupVoiceInput({
   disabled: boolean;
   maxLength?: number;
   onTooLong?: () => void;
+  /** Accepted microphone/shortcut input participates before any ASR text. */
+  onStart?: () => void;
 }) {
   const { settings } = useVoiceInputSettings();
   const identity = useRef(Symbol('group-dictation')).current;
   const mounted = useRef(false);
-  const current = useRef({ draftKey, text, onChange, disabled, maxLength, onTooLong });
-  current.current = { draftKey, text, onChange, disabled, maxLength, onTooLong };
+  const current = useRef({ draftKey, text, onChange, disabled, maxLength, onTooLong, onStart });
+  current.current = { draftKey, text, onChange, disabled, maxLength, onTooLong, onStart };
   const owner = useRef<ReturnType<typeof getDataOwnerGeneration> | null>(null);
   const startedDraft = useRef<string | null>(null);
   const expectedText = useRef('');
@@ -97,6 +99,7 @@ export function useBotGroupVoiceInput({
     if (claimed) {
       activeComposer = identity;
       tooLongNotified.current = false;
+      current.current.onStart?.();
     }
     return claimed;
   }, [identity]);

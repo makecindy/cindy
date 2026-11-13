@@ -1878,6 +1878,13 @@ export function useVoiceInput(
     } else {
       await drainAndStopEngine();
     }
+    // The extra post-start drain can fail this attempt and clear its run ID.
+    // Only a new generation makes Send stale; report its failure first.
+    if (startAttemptIdRef.current !== attemptId) return;
+    const stateAfterDrain = stateRef.current as VoiceInputState;
+    if (stateAfterDrain === 'error') {
+      throw new Error(lastErrorRef.current ?? 'Voice input failed.');
+    }
     if (!isActiveStartAttempt(attemptId) || ownedRunIdRef.current !== runId) return;
     runIdRef.current = null;
     restorePromise ??= restoreSystemAudioAndNotifyEndCue(options);
