@@ -417,6 +417,23 @@ describe('pi: provider-aware Anthropic wire routing', () => {
     });
   });
 
+  it.each(['anthropic-messages', 'openai-chat', 'openai-responses'] as const)(
+    'removes the Pi placeholder API key when injecting generic OAuth over %s',
+    (wireProtocol) => {
+      const decision = buildRouteDecision({
+        upstream: 'https://api.kimi.com/coding',
+        authStrategy: 'oauth-token',
+        wireProtocol,
+        headerDelete: ['x-test-private'],
+      }, null, 'pi', null, 'test-kimi-oauth-token');
+      expect(decision).toMatchObject({
+        upstreamOverride: 'https://api.kimi.com/coding',
+        headerOverride: { authorization: 'Bearer test-kimi-oauth-token' },
+        headerDelete: ['x-test-private', 'x-api-key'],
+      });
+    },
+  );
+
   it('Pi 会话选 Claude 订阅 → 无路由(不注入 host OAuth,调用方本地拒绝)', async () => {
     setSessionProvider('s-pi', 'anthropic');
     const tokenReader = vi.fn(() => Promise.resolve('claude-live-token'));

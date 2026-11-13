@@ -97,6 +97,7 @@ vi.mock('../store.js', () => ({
 }));
 import {
   acquireSubscriptionAccount,
+  hasUnavailableSubscriptionPoolAccount,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
   refreshSubscriptionPool,
@@ -492,7 +493,7 @@ describe('paused account next-turn handoff', () => {
     if (limited || !allowed) await expect(result).rejects.toThrow('No subscription account');
     else expect(await result).toBe(true);
     expect(h.remote.mock.calls[1].slice(0, 3)).toEqual(['mini', 'maker:subscription-pool:quota', ['openai', model]]);
-    expect(h.accountAllowed).toHaveBeenCalledWith('old-imported', model, { remote: true, newRoute: true });
+    expect(h.accountAllowed).toHaveBeenCalledWith('old-imported', model, { remote: true, ownComputer: false, newRoute: true });
     expect(h.bindings.size).toBe(0);
   });
 
@@ -748,6 +749,46 @@ describe('native account assignment on the executing computer', () => {
     });
     await expect(acquireSubscriptionAccount('anthropic', undefined, ['task:existing']))
       .rejects.toThrow(state === 'signed-out' ? '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED]' : '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
+  });
+
+  // 2026-11-12 实测：重启后 OpenAI 池里第一个账号额度用尽、第二个有额度，却整池无账号可选。
+  // 根因是官方 CLI 的第一次读失败被当成成功快照缓存 30 秒，用户重试也只会拿到同一份
+  // 旧结论。生产入口：acquireSubscriptionAccount；可观察结果：短暂窗口后的重试能发出。
+  // 已有覆盖不够：上方 'distinguishes unavailable' 只断言首次失败的错误码，不推进时间、不重试。
+  // 最小失败输入：绑定账号首读抛错、随后恢复，4 秒后重试。tier：默认 unit(进程内 fake + 假时钟)。
+  it('re-reads a failed account snapshot instead of serving it for the whole success window', async () => {
+    vi.useFakeTimers();
+    try {
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+      h.bindings.set('task:existing', { providerId: 'openai', accountId: 'second' });
+      let cliReady = false;
+      h.read.mockImplementation(async (_provider, directory: string) => {
+        if (directory !== 'openai/second') return { authenticated: true, identity: 'first@example.test' };
+        if (!cliReady) throw new Error('Codex CLI unavailable');
+        return { authenticated: true, identity: 'second@example.test' };
+      });
+      const send = () => acquireSubscriptionAccount('openai', 'gpt-6.1-sol', ['task:existing']);
+      await expect(send()).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
+      // Cached evidence is for configured active accounts only. These pure
+      // projections do not trigger a CLI read or revive a disconnected pool.
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+      h.pools.openai.disconnected = true;
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      delete h.pools.openai.disconnected;
+      h.pools.openai.accounts[1].paused = true;
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      h.pools.openai.accounts[1].paused = false;
+      // 窗口内仍复用失败快照：并发与连续重试不得反复 spawn 官方 CLI。
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(send()).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
+      cliReady = true;
+      await vi.advanceTimersByTimeAsync(3_001);
+      const lease = await send();
+      expect(lease?.accountId).toBe('second');
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      lease?.release();
+    } finally { vi.useRealTimers(); }
   });
 
   it('projects the task binding without selecting, reserving or unpausing an account', async () => {
