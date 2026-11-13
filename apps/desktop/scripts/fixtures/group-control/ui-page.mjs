@@ -647,9 +647,19 @@ export default {
     }
     if (ui.case === 'thread-work' || ui.case === 'thread-work-overflow') {
       assert.equal(await page.getByTestId('bot-group-work').count(), 0, 'topic work must not appear in main');
+      await page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true }).waitFor();
       await page.locator('[data-thread-preview="a1"]').first().click();
       await page.getByTestId('bot-group-work').first().waitFor();
       assert.equal(await page.getByTestId('bot-group-work').count(), ui.case === 'thread-work-overflow' ? 19 : 1, 'only the selected topic work');
+      if (ui.case === 'thread-work') {
+        const stop = page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
+        await stop.click();
+        await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopMine'), exact: true }).click();
+        assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'mine');
+        await stop.click();
+        await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopAll') }).click();
+        assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'all');
+      }
       if (ui.case === 'thread-work-overflow') {
         const panel = page.locator('aside.thread-panel');
         const composer = panel.locator('textarea');

@@ -3483,3 +3483,25 @@ it('shows the real step start and handoff time and keeps missing timing absent',
   expect(card.textContent).not.toContain('groupChat.plan.stepRunning');
   vi.useRealTimers();
 });
+
+// Unit regression: filtering topic speakers must not remove the original group stop controls.
+it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exists (page=%s)', async threadRootId => {
+  h.chat.server = true;
+  const active = group({ supportsScopedStop: true, canStopAll: true, round: { status: 'running', canContinue: false,
+    othersActive: true, speakers: [
+      { botId: 'abu', sessionId: 's-abu', activity: 'reply', sourceMessageId: 'source-a', threadRootId: 'topic-a', executionStatus: 'running' },
+      { botId: 'mimi', sessionId: 's-mimi', activity: 'reply', sourceMessageId: 'source-b', threadRootId: 'topic-b', executionStatus: 'running' },
+    ] } });
+  await render(active, 'ready', threadRootId, '');
+  if (!threadRootId) {
+    expect(byId('botGroup.work')).toBeNull();
+    await click('botGroup.composer.stop');
+    expect(h.chat.act).toHaveBeenLastCalledWith('stop');
+  } else {
+    expect(all('botGroup.work')).toHaveLength(1);
+    await click('botGroup.work.stopMenu.action.mine');
+    expect(h.chat.act).toHaveBeenLastCalledWith('stop');
+    await click('botGroup.work.stopMenu.action.all');
+    expect(h.chat.act).toHaveBeenLastCalledWith('stop', { scope: 'all' });
+  }
+});

@@ -182,8 +182,11 @@ export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: st
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, speakers = [], quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, canStopAll = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
   speakers?: BotGroupLiveSpeaker[];
+  onStop?: (scope?: 'all') => void;
+  stopping?: boolean;
+  canStopAll?: boolean;
   group: BotGroupDetail; rootId: string; quoteSources?: readonly BotGroupMessageView[];
   /** A reply to bring into view; a new nonce repeats the jump. */
   focus?: { messageId: string; nonce: number } | null;
@@ -714,7 +717,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], quoteSources = g
               </Fragment>
             ))}
             {!sharing && <>
-              {speakers.length > 0 && <BotGroupProgressStrip step={null} speakers={speakers} stopping={false} />}
+              {speakers.length > 0 && <BotGroupProgressStrip step={null} speakers={speakers} onStop={onStop} stopping={stopping} canStopAll={canStopAll} />}
               {speakers.map(speaker => <BotGroupSpeakerInteraction key={speaker.executionId ?? speaker.member.botId} speaker={speaker} />)}
             </>}
           </div>

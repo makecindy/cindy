@@ -1208,6 +1208,7 @@ it('keeps main and two topics isolated including waiting work and unknown source
   expect(chatGroupView(page, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(120)]);
   expect(chatGroupView({ ...page, threadRootId: id(20) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(121)]);
   expect(chatGroupView({ ...page, threadRootId: id(19) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(122)]);
+  expect(chatGroupView({ ...page, threadRootId: id(18) }, id(10)).round).toMatchObject({ status: 'running', speakers: [] });
 });
 
 // Unit: two active executions from a removed message used to repeat the same failed GET.

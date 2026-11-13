@@ -389,6 +389,10 @@ void mountPage({
         { botId: 'b', executionId: 'thread-b', sourceMessageId: 'reply-b', threadRootId: 'q4', sessionId: null, activity: 'reply', executionStatus: 'queued' },
       ] };
     }
+    if (data.threadWork) {
+      Object.assign(group, { canStopAll: true });
+      Object.assign(group.round, { othersActive: true });
+    }
     if (data.threadWorkTall) {
       group.round.speakers.push(...Array.from({ length: 18 }, (_, index) => ({
         botId: 'a', executionId: `long-thread-${index}`, sourceMessageId: `long-source-${index}`,
@@ -461,7 +465,10 @@ void mountPage({
             resolve({ ok: true, messageId: id });
           }, { once: true });
         }) : forbid('maker.sendBotGroupMessage'),
-        stopBotGroupRound: forbid('maker.stopBotGroupRound'),
+        stopBotGroupRound: data.threadWork ? async (_groupId: string, scope?: string) => {
+          document.body.dataset.fixtureStopScope = scope ?? 'mine';
+          return { ok: true };
+        } : forbid('maker.stopBotGroupRound'),
         chatServer: {
           reactors: async () => ({ ok: true, reactors: [{ actorId: 'me', isSelf: true, name: 'You', formerMember: false }] }),
           readers: async (input: { messageId: string }) => {
