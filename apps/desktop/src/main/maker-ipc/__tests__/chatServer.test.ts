@@ -2175,7 +2175,15 @@ describe('Chat Server result delivery and refresh', () => {
         }));
         const sync = vi.fn(() => new Promise<void>(() => {}));
         deps.groupCheckouts = { ensure, sync, isManaged: folder => folder.startsWith(root), dirOf: () => dir };
+        // Finding the folder reads the real disk, which the fake clock does not wait for (slow CI).
+        const delivered = async (count: number) => {
+          for (let i = 0; i < 200 && dispatched().length < count; i++) {
+            await new Promise(resolve => setImmediate(resolve));
+            await vi.advanceTimersByTimeAsync(0);
+          }
+        };
         await ask(5, 'Where are the docs?');
+        await delivered(1);
         expect(ensure).toHaveBeenCalledWith('makecindy/cindy', expect.objectContaining({ signIn: true }));
         expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: dir });
         expect(dispatched()[0]!.message.startsWith(`Where are the docs?\n\n${t('bots.groupChat.assistant.checkout.preparing').replaceAll('{{repo}}', 'makecindy/cindy')}`)).toBe(true);
@@ -2183,6 +2191,7 @@ describe('Chat Server result delivery and refresh', () => {
         await vi.advanceTimersByTimeAsync(0);
         await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Soon' });
         await ask(6, 'And now?');
+        await delivered(2);
         expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Room', projectDir: dir });
         expect(sync).toHaveBeenCalledWith(dir);
         expect(dispatched()[1]).toMatchObject({ targetSessionId: 'group-task-1' });
