@@ -19632,6 +19632,7 @@
       "partial": "Parte do conteúdo daquele computador não pôde ser lida desta vez. Abaixo aparece apenas o que foi lido.",
       "groupCount": "{{selected}} de {{total}} selecionados",
       "groupCount_one": "{{selected}} de {{total}} selecionado",
+      "groupCount_zero": "{{selected}} de {{total}} selecionados",
       "groupCount_many": "{{selected}} de {{total}} selecionados",
       "groupCount_other": "{{selected}} de {{total}} selecionados",
       "present_one": "Mais {{count}} item já é igual aqui",
