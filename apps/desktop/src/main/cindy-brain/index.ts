@@ -2257,6 +2257,15 @@ export function getGhostManager(): GhostManager {
           releaseMutation();
         }
       },
+      onUninstallSourceState: async fromPart => {
+        const releaseMutation = beginGhostMutation(captureGhostMutationOwner());
+        try {
+          // The journal already rejects new work. Drain the source's existing
+          // mutations, then release its lock before taking any consumer lock.
+          await withActiveOwnerGhostOauthMutationLock(fromPart, () => {});
+          await relocateGhostAccountReuseReferences(fromPart, null);
+        } finally { releaseMutation(); }
+      },
       isTrustedBundledSource,
       recordBuiltinTombstone: (id) => recordBuiltinTombstone(brainRootDir(), id, log),
       clearBuiltinTombstone: (id) => clearBuiltinTombstone(brainRootDir(), id, log),
@@ -8922,11 +8931,9 @@ export async function uninstallGhostAndCleanup(
     options?.assertCurrent?.();
     const ghost = findGhostForInstanceId(id);
     if (!ghost) throwIpcError('NOT_FOUND', '目标插件实例已不存在');
-    const storagePart = installedGhostStoragePart(ghost);
     const release = beginGhostMutation();
     try {
       await uninstallGhostAndCleanupLocked(id, options);
-      await relocateGhostAccountReuseReferences(storagePart, null);
     } finally { release(); }
   });
 }
@@ -8966,11 +8973,11 @@ async function uninstallGhostAndCleanupLocked(
     const downloadScope = activeOwnerScopeKey();
     const uninstallTasks = pluginTaskUninstaller;
     if (!uninstallTasks) throw new Error('Plugin task storage is not ready for uninstall');
-    await manager.runExclusiveMutation(mutation => withActiveOwnerGhostOauthMutationLock(storagePart, () => uninstallTasks(storagePart, async () => {
+    await manager.runExclusiveMutation(mutation => uninstallTasks(storagePart, async () => {
       options?.assertCurrent?.();
       const result = await mutation.uninstall(relId, { notify: false });
       if ('rejection' in result) throwUninstallError(result.rejection);
-    })));
+    }));
     try { await currentPluginUsageService()?.detach(storagePart); }
     catch { log.warn('plugin usage uninstall binding unavailable'); }
     await pluginDownloads.removePlugin(storagePart, downloadRoot, downloadScope).catch(err => log.warn('plugin download cache cleanup failed', { id: storagePart, error: String(err) }));

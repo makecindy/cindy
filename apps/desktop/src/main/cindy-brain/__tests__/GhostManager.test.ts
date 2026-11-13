@@ -3922,6 +3922,116 @@ describe('GhostManager · install', () => {
 });
 
 describe('GhostManager · uninstall', () => {
+  // Recovery has no outer UI lease. The real Desktop factory must pin the
+  // owner across the source-lock await before acquiring any consumer lock.
+  it('pins the production cleanup owner while draining and releasing the source lock', async () => {
+    let cleanup!: NonNullable<GhostManagerOptions['onUninstallSourceState']>;
+    let held = false, sourceHeld = false;
+    let started!: () => void, finish!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const owner = {};
+    const release = vi.fn(() => { held = false; });
+    const revoke = vi.fn(async () => { expect(held).toBe(true); expect(sourceHeld).toBe(false); });
+    productionManager({
+      GhostManager: class {
+        constructor(options: GhostManagerOptions) { cleanup = options.onUninstallSourceState!; }
+        list() { return []; }
+      },
+      brainRootDir: () => rootDir, activeOwnerScopeKey: () => 'owner', broadcastGhostsChanged: vi.fn(),
+      getResolvedMainLocale: () => 'en', loadGhostTrustRegistry: () => ({}), isTrustedBundledSource: () => false,
+      log: { warn: vi.fn() }, getGhostSetupManifestTracker: () => ({ seed: vi.fn() }),
+      captureGhostMutationOwner: () => owner,
+      beginGhostMutation: (expected: unknown) => { expect(expected).toBe(owner); held = true; return release; },
+      withActiveOwnerGhostOauthMutationLock: async (_id: string, run: () => void) => {
+        sourceHeld = true; started();
+        try { await gate; return run(); } finally { sourceHeld = false; }
+      },
+      relocateGhostAccountReuseReferences: revoke,
+    }).getGhostManager();
+    const pending = cleanup('source');
+    try { await entered; expect(held).toBe(true); }
+    finally { finish(); await pending.catch(() => {}); }
+    await pending;
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('source', null);
+    expect(release).toHaveBeenCalledOnce();
+    expect(held).toBe(false);
+  });
+
+  // #10130 / 4560691468, unit: successful cleanup missed consumer lock/vault
+  // failure after package deletion. Real uninstall/install + recovery journal
+  // must prevent a replacement installation from inheriting the old reference.
+  it.each([
+    { failure: 'lock', recovery: 'retry' }, { failure: 'vault', recovery: 'retry' },
+    { failure: 'lock', recovery: 'restart' }, { failure: 'vault', recovery: 'restart' },
+  ])('retains uninstall isolation on $failure failure until $recovery revokes incoming credentials', async ({ failure, recovery }) => {
+    let blocked = false;
+    let cleanup!: (from: string, to: string | null) => Promise<void>;
+    const options = { getRootDir: () => rootDir,
+      onUninstallSourceState: (from: string) => cleanup(from, null) };
+    manager = new GhostManager(options);
+    const manifest = { ...goodManifest(), slots: ['tool', 'network'], settingsHtml: 'settings.html', network: {
+      hosts: ['api.example.com'], secrets: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }],
+    } };
+    const original = await makeCindy('original.cindy', manifest);
+    const installed = await manager.install(original);
+    if (!('ghost' in installed)) throw new Error('source fixture failed');
+    const from = installedGhostStoragePart(installed.ghost), relId = installedGhostPhysicalRelId(installed.ghost);
+    const consumer = await manager.install(await makeCindy('consumer.cindy', { ...manifest, id: 'consumer' }));
+    if (!('ghost' in consumer)) throw new Error('consumer fixture failed');
+    const target = installedGhostStoragePart(consumer.ghost);
+    const data = new Map<string, string>([[`${from}\0token`, 'old-source-pat']]);
+    const vault = { read: (id: string, key: string) => data.get(`${id}\0${key}`) ?? null,
+      readStrict: (id: string, key: string) => {
+        if (blocked && failure === 'vault' && id === target) throw new Error('vault unavailable');
+        return data.get(`${id}\0${key}`) ?? null;
+      },
+      store: (id: string, key: string, value: string) => { data.set(`${id}\0${key}`, value); return true; },
+      remove: (id: string, key: string) => { data.delete(`${id}\0${key}`); }, readTail: () => null };
+    const source = (id: string) => {
+      const ghost = manager.list().find(item => installedGhostStoragePart(item) === id);
+      return ghost?.enabled && ghost.approval.state === 'approved'
+        ? { instanceKey: id, manifest: ghost.manifest, name: ghost.manifest.name } : null;
+    };
+    const references = new GhostSavedCredentialManager({ vault, connections: new GhostConnectionManager({ vault }),
+      connectionSource: source, connectionSources: () => [], captureTarget: id => source(id) ? id : null,
+      confirm: async () => true, withMutationLock: async (_id, task) => {
+        if (blocked && failure === 'lock') throw new Error('consumer lock unavailable');
+        return task();
+      } });
+    ({ relocateGhostAccountReuseReferences: cleanup } = createGhostProductionCallbacks<{
+      relocateGhostAccountReuseReferences(from: string, to: string | null): Promise<void>;
+    }>({ functions: ['relocateGhostAccountReuseReferences'] })({
+      getGhostManager: () => manager, getGhostSavedCredentialManager: () => references,
+      listGhostAccountReferenceKeys: (ids: string[]) => ids.map(instanceKey => ({ instanceKey,
+        keys: [...data.keys()].filter(key => key.startsWith(instanceKey + '\0')).map(key => key.slice(instanceKey.length + 1)) })),
+      getGhostOauthAccountManager: () => ({ relocateSourceReferences: async () => {} }), beginGhostMutation: () => () => {},
+      throwIpcError: (code: string) => { throw new Error(code); },
+    }));
+    expect(await references.reuse(target, 'token', { kind: 'secret', instanceKey: from, secretKey: 'token', accountId: 'saved' })).toEqual({ ok: true });
+    blocked = true;
+    expect(await manager.uninstall(relId)).toMatchObject({ rejection: { code: 'io' } });
+    const store = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    expect(fs.existsSync(installed.ghost.dir)).toBe(true);
+    expect(store.readPendingMutationSync(relId)).toMatchObject({ state: 'valid', mutation: { kind: 'uninstall' } });
+    expect(references.resolve(target, 'token')).toBeNull();
+    expect(await manager.install(original)).toHaveProperty('rejection');
+    if (recovery === 'restart') {
+      manager = new GhostManager(options);
+      await manager.retryInterruptedMutationsAfterDbReady();
+      expect(store.readPendingMutationSync(relId).state).toBe('valid');
+    }
+    blocked = false;
+    if (recovery === 'restart') await manager.retryInterruptedMutationsAfterDbReady();
+    else expect(await manager.uninstall(relId)).toEqual({ ok: true });
+    expect(store.readPendingMutationSync(relId).state).toBe('missing');
+    expect(vault.read(target, 'token-reused-credential')).toBeNull();
+    expect(await manager.install(original)).toHaveProperty('ghost');
+    vault.store(from, 'token', 'replacement-pat');
+    expect(references.resolve(target, 'token')).toBeNull();
+    expect(references.list(target, 'token').accounts).toEqual([]);
+  });
+
   it('卸下已装意识:目录消失、list 变空、onChanged 广播', async () => {
     await manager.install(await makeCindy('a.cindy', goodManifest()));
     onChanged.mockClear();

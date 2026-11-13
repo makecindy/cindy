@@ -172,18 +172,28 @@ export function createHostPluginAuthorization(options: {
     cancelledMessage: () => i18n.t('newChat.pluginSetup.cancelled'), logger: log,
   });
   let savedCredentials: GhostSavedCredentialManager | undefined;
+  function savedCredentialManager(): GhostSavedCredentialManager {
+    return savedCredentials ??= new GhostSavedCredentialManager({
+      vault: { read: secret.readGhostSecret, readStrict: secret.readGhostSecretStrict,
+        store: secret.storeGhostSecret, remove: secret.removeGhostSecret },
+      connections, connectionSources, connectionSource, captureTarget: target,
+      // Creating references remains a trusted Desktop-only action.
+      confirm: async () => false, withMutationLock,
+    });
+  }
   return {
     oauth, connections, connectionTokens, changes, target, assess, bridge, coordinator, withMutationLock, i18n,
     changed,
     resolveSavedCredential(id: string, key: string) {
-      savedCredentials ??= new GhostSavedCredentialManager({
-        vault: { read: secret.readGhostSecret, readStrict: secret.readGhostSecretStrict,
-          store: secret.storeGhostSecret, remove: secret.removeGhostSecret },
-        connections, connectionSources, connectionSource, captureTarget: target,
-        // Creating references remains a trusted Desktop-only action.
-        confirm: async () => false, withMutationLock,
-      });
-      return savedCredentials.resolve(id, key);
+      return savedCredentialManager().resolve(id, key);
+    },
+    async cleanupSourceReferences(from: string) {
+      // Wait for existing source mutations, releasing that lock before taking
+      // consumer locks. The manager's uninstall journal already blocks new work.
+      await withMutationLock(from, () => {});
+      const targets = secret.listGhostAccountReferenceKeys(options.list().map(installedGhostStoragePart));
+      await savedCredentialManager().relocateSourceReferences(from, null, targets);
+      await oauth.relocateSourceReferences(from, null, targets);
     },
     bindConnection(args: { ghostId: string; actionId: string; onCommitted(): void }) {
       const ghost = getGhost(args.ghostId); if (!ghost) return null;

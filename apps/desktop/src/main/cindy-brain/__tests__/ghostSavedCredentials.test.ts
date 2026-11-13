@@ -13,6 +13,7 @@ import { withGhostOauthMutationLock } from '../ghostOauthMutationLock.js';
 const createReuseLifecycle = createGhostProductionCallbacks<{
   relocateGhostUserData(from: string, to: string): Promise<void>;
   uninstallGhostAndCleanup(id: string): Promise<void>;
+  relocateGhostAccountReuseReferences(from: string, to: string | null): Promise<void>;
 }>({ functions: ['relocateGhostUserData', 'uninstallGhostAndCleanup', 'relocateGhostAccountReuseReferences'] });
 
 const createReuseIpc = createGhostProductionCallbacks<{
@@ -57,7 +58,7 @@ function setup(withMutationLock: <T>(id: string, task: () => T | Promise<T>) => 
 
 function lifecycle(h: ReturnType<typeof setup>) {
   const noop = () => {};
-  return createReuseLifecycle({
+  const entry = createReuseLifecycle({
     getGhostHandoffStore: () => ({ blockForRelocation: () => noop }),
     relocateIdleGhostUserData: async (from: string, to: string) => {
       for (const [key, value] of [...h.data]) {
@@ -71,12 +72,17 @@ function lifecycle(h: ReturnType<typeof setup>) {
     withGhostInstallLock: async (_id: string, task: () => unknown) => task(),
     withActiveOwnerGhostOauthMutationLock: h.withMutationLock,
     findGhostForInstanceId: () => h.source, installedGhostStoragePart: (ghost: typeof h.source) => ghost.instanceKey,
-    uninstallGhostAndCleanupLocked: async () => { h.sources.splice(0, 1); h.vault.remove('source', 'token'); },
+    uninstallGhostAndCleanupLocked: async () => {
+      // The real Manager now invokes this port before removing source content.
+      await entry.relocateGhostAccountReuseReferences('source', null);
+      h.sources.splice(0, 1); h.vault.remove('source', 'token');
+    },
     getGhostManager: () => ({ list: () => h.sources }), getGhostSavedCredentialManager: () => h.manager,
     listGhostAccountReferenceKeys: (ids: string[]) => ids.map(instanceKey => ({ instanceKey,
       keys: [...h.data.keys()].filter(key => key.startsWith(instanceKey + '\0')).map(key => key.slice(instanceKey.length + 1)) })),
     getGhostOauthAccountManager: () => ({ relocateSourceReferences: async () => {} }), beginGhostMutation: () => noop,
   });
+  return entry;
 }
 
 describe('saved credential references', () => {

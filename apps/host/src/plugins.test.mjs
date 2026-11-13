@@ -91,6 +91,8 @@ test('Host assembly injects an existing saved credential and rejects its revoked
     readGhostSecretStrict: (id, key) => records.get(id + ':' + key) ?? null,
     storeGhostSecret: (id, key, value) => { records.set(id + ':' + key, value); return true; },
     removeGhostSecret: (id, key) => records.delete(id + ':' + key), readGhostSecretTail: () => null,
+    listGhostAccountReferenceKeys: ids => ids.map(instanceKey => ({ instanceKey,
+      keys: [...records.keys()].filter(key => key.startsWith(instanceKey + ':')).map(key => key.slice(instanceKey.length + 1)) })),
   };
   const ghosts = ['source', 'target'].map(id => ({ enabled: true, dir: `/fixture/${id}`,
     approval: { state: 'approved', revision: 'saved-reference-fixture' },
@@ -99,7 +101,8 @@ test('Host assembly injects an existing saved credential and rejects its revoked
   const requests = [];
   const noop = () => {};
   const imports = new Proxy({
-    GhostSavedCredentialManager, GhostConnectionManager, GhostNetworkSlot,
+    GhostSavedCredentialManager, GhostConnectionManager, GhostNetworkSlot, GhostOauthAccountManager,
+    withGhostOauthMutationLock: async (_owner, _id, _path, run) => run(),
     installedGhostMutationTargetToken, installedGhostStoragePart,
     activeOwnerScopeKey: () => 'owner:1', isAppSessionBoundaryPending: () => false,
     createLogger: () => ({ warn: noop, info: noop }), hostRuntimeLayout: () => ({ packaged: false }),
@@ -129,6 +132,13 @@ test('Host assembly injects an existing saved credential and rejects its revoked
     api.secret.removeGhostSecret('source', 'token');
     const revoked = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
     assert.equal(revoked.ok, false);
+    assert.equal(requests.length, 1);
+    api.secret.storeGhostSecret('source', 'token', 'synthetic-replacement-pat');
+    await api.authorization.cleanupSourceReferences('source');
+    assert.equal(api.secret.readGhostSecret('target', 'token-reused-credential'), null);
+    assert.equal(api.secret.readGhostSecret('source', 'token'), 'synthetic-replacement-pat');
+    const replacement = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(replacement.ok, false);
     assert.equal(requests.length, 1);
   } finally { await api.network.disposeAll(); }
 });
