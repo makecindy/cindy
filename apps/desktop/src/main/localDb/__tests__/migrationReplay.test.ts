@@ -190,7 +190,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149,
+          143, 144, 145, 146, 147, 148, 149, 150,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -369,6 +369,7 @@ describeMigrationReplay('migration replay', () => {
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
         130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149,
+        150,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
@@ -873,7 +874,7 @@ describeMigrationReplay.each([false, true])('local MCP migration (column already
       db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
       db.exec(`CREATE TABLE custom_mcp_servers (id TEXT PRIMARY KEY, transport TEXT, url TEXT, headers TEXT${existing ? ', stdio TEXT' : ''});
         INSERT INTO custom_mcp_servers (id, transport, url, headers) VALUES ('saved', 'sse', 'https://example.test/mcp', '{}');`);
-      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 148 });
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 149 });
       expect(db.prepare('SELECT * FROM custom_mcp_servers').all()).toEqual([
         { id: 'saved', transport: 'sse', url: 'https://example.test/mcp', headers: '{}', stdio: null },
       ]);
