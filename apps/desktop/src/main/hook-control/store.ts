@@ -614,6 +614,12 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     const account = fingerprint
       ? (document.accounts[fingerprint] ?? EMPTY_ACCOUNT())
       : EMPTY_ACCOUNT();
+    // 默认项目所有官方机器人共用一个。升级前各渠道分别存过的, 按 飞书 -> Telegram -> X
+    // 取第一个仍然可选的; 之后任何一处修改都会把三处写成同一个值(setProviderDefaultWorkspace)。
+    const defaultWorkspace =
+      selectableDefaultWorkspace(document, account.feishu.defaultWorkspace) ??
+      selectableDefaultWorkspace(document, account.telegram.defaultWorkspace) ??
+      selectableDefaultWorkspace(document, account.x.defaultWorkspace);
     return {
       enabled: account.slack.enabled,
       telegramEnabled: account.telegram.enabled,
@@ -638,12 +644,9 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       // 手改配置文件、或将来新增了别的清单写入口的情况。代价不对称 —— 漏兜的
       // 后果是 hello 带上清单外别名被协议拒收, **该 provider 的连接**断在握手上
       // 且没有任何用户可见线索(Telegram / X 两条线同样适用), 所以这层留着。
-      xDefaultWorkspace: selectableDefaultWorkspace(document, account.x.defaultWorkspace),
-      telegramDefaultWorkspace: selectableDefaultWorkspace(
-        document,
-        account.telegram.defaultWorkspace,
-      ),
-      feishuDefaultWorkspace: selectableDefaultWorkspace(document, account.feishu.defaultWorkspace),
+      xDefaultWorkspace: defaultWorkspace,
+      telegramDefaultWorkspace: defaultWorkspace,
+      feishuDefaultWorkspace: defaultWorkspace,
     };
   }
 
@@ -755,8 +758,12 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
           );
         }
       }
+      // 默认项目是共用的: 从哪个机器人的入口改, 都把三处写成同一个值。
+      void provider;
       return mutateAccount((account) => {
-        account[provider].defaultWorkspace = normalized;
+        account.feishu.defaultWorkspace = normalized;
+        account.telegram.defaultWorkspace = normalized;
+        account.x.defaultWorkspace = normalized;
       });
     },
     setXCompanionBotId(botId) {

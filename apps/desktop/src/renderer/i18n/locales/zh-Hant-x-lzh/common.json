@@ -6416,8 +6416,8 @@
           "error": "連線未成"
         },
         "form": {
-          "workspacesCardTitle": "案",
-          "workspacesCardDescription": "與側欄本機諸案同為一份，諸渠道共用；執行偏好依渠道各立。立案、更名、除案，皆於側欄行之，此處隨之而變。",
+          "workspacesCardTitle": "案與模型",
+          "workspacesCardDescription": "諸官方機器人共用此一份：案即側欄本機諸案，每案之模型與權限，於任一機器人中皆同；於 IM 中以 /model 更之，此處亦隨之而變。立案、更名、除案，皆於側欄行之。",
           "workspacesBoundCount_one": "案 {{count}} 個",
           "workspacesBoundCount_other": "案 {{count}} 個",
           "aliasPlaceholder": "別名，如 my-server",
@@ -6425,7 +6425,7 @@
           "defaultWorkspaceChip": "常例：{{name}}",
           "defaultWorkspaceAria": "擇派差事時所用之常例案",
           "defaultWorkspaceRadioAria": "立「{{name}}」為常例案",
-          "defaultWorkspaceRowHint": "所選之案即常例案：Telegram 私聊、群與話題中，凡未另擇案者，差事皆落於此（以 /project 另擇者，仍從其擇）。請留意所選之案此行之權限模式：若設為「完全存取」，任一群中 @ bot，皆將以完全存取之權於此案中執行，慎之。",
+          "defaultWorkspaceRowHint": "所選之案即常例案：Telegram、飛書 / Lark 與 X 中，凡未另擇案者，差事皆落於此（以 /project 另擇者，仍從其擇）。請留意所選之案此行之權限模式：若設為「完全存取」，任一群中 @ bot，皆將以完全存取之權於此案中執行，慎之。",
           "legacyDefaultsTitle": "舊版「新言談配置」猶在生效",
           "legacyDefaultsDescription": "此臺裝置曾存一份舊版官方 bot 常例設定，凡未另行配置之案，仍以之為兜底（官方 Telegram 與 X 共用一份）。此等值今已統一於各案中設定。復常例將一併清除以下全部內容：",
           "legacyDefaultsRow": {

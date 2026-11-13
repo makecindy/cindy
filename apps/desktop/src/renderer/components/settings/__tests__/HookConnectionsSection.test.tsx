@@ -94,10 +94,6 @@ vi.mock('../HookWorkspacePrefsEditor', () => ({
     retry: null,
     imDefaults: null,
     applyPatch: vi.fn(),
-    teams: [],
-    selectedTeamId: null,
-    selectTeam: vi.fn(),
-    showTeamChip: false,
   }),
   WorkspacePrefsEditor: (props: { alias: string; maxVisibleModelRows?: number }) => {
     workspacePrefsEditor.render(props);
@@ -333,29 +329,31 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(ipc.setXCompanion).not.toHaveBeenCalled();
   });
 
-  it('limits only the Slack built-in chat model list to six visible rows', async () => {
+  // 规则: 所有官方机器人共用一套「项目与模型」, 不再每个机器人各配一遍。
+  // 生产入口: 设置页。可观察结果: 开了几个机器人, 项目区块都只出现一次(每个项目一个编辑行),
+  // 且不必展开任何一张渠道卡就能看到。最小失败输入: 同时开着两个渠道。tier: unit(jsdom)。
+  it('项目与模型区块整页只有一处, 不随开启的机器人数量重复', async () => {
     ipc.get.mockResolvedValue({
       hook: {
         ...BASE_HOOK,
         enabled: true,
         status: 'connected',
+        workspaces: { cindy: '/code/cindy' },
+        telegram: { ...BASE_HOOK.telegram, enabled: true, status: 'connected' },
       },
     });
 
     render(<HookConnectionsSection />);
+    await screen.findByText('settings.remoteControl.hook.form.workspacesCardTitle');
     await expandChannelCard(SLACK_CARD);
-    await waitFor(() =>
-      expect(workspacePrefsEditor.render).toHaveBeenCalledWith(
-        expect.objectContaining({ alias: 'chat', maxVisibleModelRows: 6 }),
-      ),
-    );
-
-    workspacePrefsEditor.render.mockClear();
     await expandChannelCard(TELEGRAM_CARD);
-    await waitFor(() => expect(workspacePrefsEditor.render).toHaveBeenCalled());
-    expect(workspacePrefsEditor.render).toHaveBeenCalledWith(
-      expect.objectContaining({ alias: 'chat', maxVisibleModelRows: undefined }),
+
+    expect(screen.getAllByText('settings.remoteControl.hook.form.workspacesCardTitle')).toHaveLength(1);
+    expect(screen.getAllByRole('radiogroup')).toHaveLength(1);
+    const aliases = new Set(
+      workspacePrefsEditor.render.mock.calls.map(([props]) => (props as { alias: string }).alias),
     );
+    expect([...aliases].sort()).toEqual(['chat', 'cindy']);
   });
 
   it('expands an official channel selected by settings search', async () => {
@@ -2119,52 +2117,41 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     }
   });
 
-  it('X 卡是 chip 形态, Telegram 卡是目录行内的选中态单选', async () => {
-    // X 一次交互只有一条公开推文, 没有目录选择面板的位置; Telegram 虽能在会话里
-    // /workspace, 但那是每会话各自设的 —— 设置页绑好目录后进新群仍会落「对话」。
-    // 注: chip 下拉展开后的写入路径没在这里覆盖(Radix 菜单在 jsdom 下不展开, 本仓
-    // 同款 team chip 也没测); Telegram 的行内单选可以直接点, 下面就点了。
-    const xView = {
+  // 规则: 默认项目所有官方机器人共用一个(Telegram / 飞书 / X 都按它落任务)。
+  // 生产入口: 设置页的项目区块。可观察结果: 只有一组单选, 选中项就是共用的默认项目,
+  // 点另一行只发一次写入。tier: unit(jsdom)。
+  it('默认项目是项目区块里唯一的一组单选, 各渠道卡里不再各有一个', async () => {
+    const lane = {
       enabled: true,
       url: 'wss://x-hook.example.test',
       status: 'connected' as const,
       lastError: null,
       available: true,
       capabilityPending: false,
-      defaultWorkspace: 'cindy',
+      defaultWorkspace: null,
       binding: null,
     };
     const hook: SlackHookView = {
       ...BASE_HOOK,
-      workspaces: { cindy: '/Users/dash/Code/cindy' },
-      x: xView,
-      telegram: { ...xView, url: 'wss://tg-hook.example.test', defaultWorkspace: null },
+      workspaces: { cindy: '/code/cindy' },
+      x: lane,
+      telegram: { ...lane, url: 'wss://tg-hook.example.test' },
     };
     ipc.get.mockResolvedValue({ hook });
 
     render(<HookConnectionsSection />);
-    await expandChannelCard(X_CARD);
-    // X: 标题行的 chip, 且没有行内单选
-    expect(
-      await screen.findByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
-    ).toBeTruthy();
-    expect(screen.queryAllByRole('radio')).toHaveLength(0);
-
-    cleanup();
-    ipc.get.mockResolvedValue({ hook });
-    render(<HookConnectionsSection />);
-    await expandChannelCard(TELEGRAM_CARD);
-    // Telegram: 目录清单是一组单选 —— 「对话」+ 一个真实目录
+    // 「对话」+ 一个真实项目
     const radios = await screen.findAllByRole('radio');
     expect(radios).toHaveLength(2);
-    // defaultWorkspace=null → 选中的是「对话」那一行
     expect(radios[0].getAttribute('aria-checked')).toBe('true');
     expect(radios[1].getAttribute('aria-checked')).toBe('false');
+    await expandChannelCard(X_CARD);
+    await expandChannelCard(TELEGRAM_CARD);
+    expect(screen.getAllByRole('radio')).toHaveLength(2);
 
     fireEvent.click(radios[1]);
-    await waitFor(() =>
-      expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledWith('telegram', 'cindy'),
-    );
+    await waitFor(() => expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledTimes(1));
+    expect(ipc.setProviderDefaultWorkspace.mock.calls[0][1]).toBe('cindy');
   });
 
   /** 目录清单 + 两条 provider lane 的 hook 视图(默认目录相关用例共用)。 */
@@ -2202,9 +2189,8 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     radios[0].focus();
     // 从 radio 自身派发(真实路径: 焦点在 radio 上按键), 事件冒泡到组容器。
     fireEvent.keyDown(radios[0], { key: 'ArrowDown' });
-    await waitFor(() =>
-      expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledWith('telegram', 'cindy'),
-    );
+    await waitFor(() => expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledTimes(1));
+    expect(ipc.setProviderDefaultWorkspace.mock.calls[0][1]).toBe('cindy');
     // 焦点也要跟过去, 否则连按方向键只会在原处反复触发同一项
     expect(document.activeElement).toBe(radios[1]);
   });
@@ -2249,8 +2235,8 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     await waitFor(() => expect(screen.queryByTestId('hook-legacy-global-defaults')).toBeNull());
   });
 
-  it('清掉存量 override 后, Telegram、X 与飞书三份生效值都重读', async () => {
-    // 三张卡的目录行都以 global scope 为解析源 —— 只刷新当前这张, 其它卡会继续显示
+  it('清掉存量 override 后, 项目行的生效值重读', async () => {
+    // 项目行(所有官方机器人共用的那一份)以 global scope 为解析源 —— 不重读的话会继续显示
     // 磁盘上已经不存在的旧默认。
     ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
     ipc.imDefaultSettingsGet.mockResolvedValue(customizedGlobalDefaults());
@@ -2261,7 +2247,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     await screen.findByTestId('hook-legacy-global-defaults');
     prefsReload.mockClear();
     fireEvent.click(screen.getByTestId('hook-legacy-global-defaults-restore'));
-    await waitFor(() => expect(prefsReload).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(prefsReload).toHaveBeenCalledTimes(1));
   });
 
   /**
@@ -2298,8 +2284,10 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
     ipc.imDefaultSettingsGet.mockResolvedValue(customizedGlobalDefaults());
     render(<HookConnectionsSection />);
-    await expandChannelCard(TELEGRAM_CARD);
     await screen.findByTestId('hook-legacy-global-defaults');
+    // 只看提示出现之后稳定下来的那一次渲染(之前的渲染次数不是这里要锁的东西)。
+    tCalls.length = 0;
+    await expandChannelCard(TELEGRAM_CARD);
 
     // 三条 customizedKeys → 三行
     expect(screen.getAllByTestId('hook-legacy-global-defaults-row')).toHaveLength(3);
@@ -2495,18 +2483,14 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
   });
 
   it('X 未启用、未绑定时小节照样显示: 评估阶段最需要看到风险', async () => {
-    // BASE_HOOK 的 x 是 enabled:false / available:false / binding:null。工作目录区
-    // 按 view.enabled 门控, 这一节刻意不跟 —— 决定要不要打开的人才最需要读它。
+    // BASE_HOOK 的 x 是 enabled:false / available:false / binding:null。这一节刻意不跟
+    // 开关门控 —— 决定要不要打开的人才最需要读它。
     ipc.get.mockResolvedValue({ hook: xUnboundHook() });
     render(<HookConnectionsSection />);
     await expandChannelCard(X_CARD);
     expect(
       await screen.findByText('settings.remoteControl.hook.x.guide.riskWorkdirBody'),
     ).toBeTruthy();
-    // 同一张卡上工作目录区确实是收起的, 证明两者门控独立
-    expect(
-      screen.queryByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
-    ).toBeNull();
   });
 
   it('首次绑定成功弹一次确认门: 单按钮、不可用取消绕过', async () => {

@@ -6416,8 +6416,8 @@
           "error": "連線失敗"
         },
         "form": {
-          "workspacesCardTitle": "專案",
-          "workspacesCardDescription": "與側邊欄裡的本機專案是同一份，所有渠道共用；執行偏好按渠道獨立。新增、改名或移除專案請在側邊欄操作，這裡會跟著變。",
+          "workspacesCardTitle": "專案與模型",
+          "workspacesCardDescription": "所有官方機器人共用這一份：專案就是側邊欄裡的本機專案，每個專案的模型和權限在哪個機器人裡都一樣；在 IM 裡用 /model 改，這裡也會跟著變。新增、改名或移除專案請在側邊欄操作。",
           "workspacesBoundCount_one": "{{count}} 個專案",
           "workspacesBoundCount_other": "{{count}} 個專案",
           "aliasPlaceholder": "別名，如 my-server",
@@ -6425,7 +6425,7 @@
           "defaultWorkspaceChip": "預設：{{name}}",
           "defaultWorkspaceAria": "選擇派發任務時使用的預設專案",
           "defaultWorkspaceRadioAria": "把「{{name}}」設為預設專案",
-          "defaultWorkspaceRowHint": "選中的專案是預設專案：Telegram 私聊、群和話題裡，凡是沒有單獨選過專案的，任務都落在它裡面（用 /project 單獨選過的，仍按那個走）。請留意所選專案這一行的權限模式：設成「完全訪問」時，任何群裡 @ bot 都會以完全訪問在這個專案裡執行。",
+          "defaultWorkspaceRowHint": "選中的專案是預設專案：Telegram、飛書 / Lark 和 X 裡，凡是沒有單獨選過專案的，任務都落在它裡面（用 /project 單獨選過的，仍按那個走）。請留意所選專案這一行的權限模式：設成「完全訪問」時，任何群裡 @ bot 都會以完全訪問在這個專案裡執行。",
           "legacyDefaultsTitle": "舊版「新對話配置」仍在生效",
           "legacyDefaultsDescription": "這臺裝置儲存過一份舊的官方 bot 預設設定，它仍是沒有單獨配置過的專案的兜底值（官方 Telegram 與 X 共用同一份）。這些值現在統一在每個專案裡設定。恢復預設會一併清掉以下全部內容：",
           "legacyDefaultsRow": {

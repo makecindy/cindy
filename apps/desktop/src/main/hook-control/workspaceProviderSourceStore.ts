@@ -50,7 +50,8 @@ function isEntry(raw: unknown): raw is WorkspaceProviderSourceEntry {
     (r.channel === 'slack' ||
       r.channel === 'telegram' ||
       r.channel === 'x' ||
-      r.channel === 'feishu') &&
+      r.channel === 'feishu' ||
+      r.channel === 'shared') &&
     (r.teamId === null || (typeof r.teamId === 'string' && r.teamId.length > 0 && r.teamId.length <= 64)) &&
     typeof r.workspace === 'string' &&
     HOOK_WORKSPACE_ALIAS_RE.test(r.workspace) &&

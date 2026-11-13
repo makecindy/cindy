@@ -385,7 +385,6 @@ describe('provider 与 Cindy 账号隔离', () => {
       const store = makeStore();
       store.setWorkspaces({ xdmaker: '/code/cindy', docs: '/code/docs' });
       store.setProviderDefaultWorkspace('feishu', 'xdmaker');
-      store.setProviderDefaultWorkspace('x', 'docs');
 
       const next = store.applyProjectWorkspaces({
         workspaces: { 主仓库: '/code/cindy' },
@@ -394,7 +393,7 @@ describe('provider 与 Cindy 账号隔离', () => {
       });
       expect(next.workspaces).toEqual({ 主仓库: '/code/cindy' });
       expect(next.feishuDefaultWorkspace).toBe('主仓库');
-      expect(next.xDefaultWorkspace).toBeNull();
+      expect(next.xDefaultWorkspace).toBe('主仓库');
       store.markProjectCatalogMigrated();
 
       expect(makeStore().get()).toMatchObject({
@@ -405,37 +404,51 @@ describe('provider 与 Cindy 账号隔离', () => {
       });
     });
 
-    it('两个 provider 各存一份, 互不影响', () => {
+    // 规则: 默认项目所有官方机器人共用一个(不再每个机器人各选一个)。
+    // 生产入口: store 的读写。可观察结果: 从任一机器人的入口改, 三处读到同一个值, 清空也一起清。
+    // 最小失败输入: 先后从两个入口各写一次。tier: unit。
+    it('默认项目所有官方机器人共用一个: 任一入口写入或清空, 三处一起变', () => {
       const store = makeStore();
-      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
+      store.setWorkspaces({ cindy: '/code/cindy', other: '/tmp/other' });
 
       store.setProviderDefaultWorkspace('telegram', 'cindy');
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: 'cindy', xDefaultWorkspace: 'cindy', feishuDefaultWorkspace: 'cindy',
+      });
       store.setProviderDefaultWorkspace('x', 'other');
-      expect(store.get().telegramDefaultWorkspace).toBe('cindy');
-      expect(store.get().xDefaultWorkspace).toBe('other');
-
-      // 清掉一个不得连带清掉另一个 —— 泛化前只有一个字段, 很容易写成共用。
-      store.setProviderDefaultWorkspace('telegram', null);
-      expect(store.get().telegramDefaultWorkspace).toBeNull();
-      expect(store.get().xDefaultWorkspace).toBe('other');
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: 'other', xDefaultWorkspace: 'other', feishuDefaultWorkspace: 'other',
+      });
+      store.setProviderDefaultWorkspace('feishu', null);
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: null, xDefaultWorkspace: null, feishuDefaultWorkspace: null,
+      });
     });
 
-    it('旧配置文件没有 telegram.defaultWorkspace 键: 读成 null, 不需要迁移动作', () => {
+    // 持久化兼容: 升级前每个机器人各存各的默认项目, 存档里三处可能不一样(也可能缺键)。
+    // 可观察结果: 不需要迁移动作, 读出来按 飞书 -> Telegram -> X 取第一个仍然可选的。
+    // 最小失败输入: 飞书没设、Telegram 缺键、X 设过。tier: unit。
+    it('升级前各存各的默认项目: 读出来按 飞书 -> Telegram -> X 取第一个可选的', () => {
       const store = makeStore();
-      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy' });
+      store.setWorkspaces({ cindy: '/code/cindy', other: '/tmp/other' });
       store.setProviderDefaultWorkspace('x', 'cindy');
-
-      // 手工把这个键删掉, 模拟升级前写下的存档。
       const raw = JSON.parse(fs.readFileSync(filePath(), 'utf-8')) as {
-        accounts: Record<string, { telegram: Record<string, unknown> }>;
+        accounts: Record<string, Record<'telegram' | 'x' | 'feishu', Record<string, unknown>>>;
       };
-      delete raw.accounts['account-test'].telegram.defaultWorkspace;
+      const account = raw.accounts['account-test'];
+      account.feishu.defaultWorkspace = null;
+      delete account.telegram.defaultWorkspace;
+      account.x.defaultWorkspace = 'cindy';
       fs.writeFileSync(filePath(), JSON.stringify(raw), 'utf-8');
+      expect(makeStore().get()).toMatchObject({
+        telegramDefaultWorkspace: 'cindy', xDefaultWorkspace: 'cindy', feishuDefaultWorkspace: 'cindy',
+      });
 
-      const reopened = makeStore();
-      expect(reopened.get().telegramDefaultWorkspace).toBeNull();
-      // 同一份存档里 X 那份不受影响。
-      expect(reopened.get().xDefaultWorkspace).toBe('cindy');
+      account.telegram.defaultWorkspace = 'other';
+      fs.writeFileSync(filePath(), JSON.stringify(raw), 'utf-8');
+      expect(makeStore().get()).toMatchObject({
+        telegramDefaultWorkspace: 'other', xDefaultWorkspace: 'other', feishuDefaultWorkspace: 'other',
+      });
     });
 
     it('目录被删掉后每个 provider 的默认值都归零(存档层面也删掉)', () => {

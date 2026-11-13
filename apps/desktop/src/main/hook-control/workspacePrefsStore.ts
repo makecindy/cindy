@@ -27,8 +27,15 @@ const log = createLogger('hook-control');
 
 export type HookPrefsChannel = 'slack' | 'telegram' | 'x' | 'feishu';
 
+/**
+ * 所有官方机器人共用的那一份(见 sharedProjectPrefs.ts)。它是派发与设置页的正本;
+ * 各渠道的行只是给各自服务端 /model 卡看的镜像, 由共享那份投影过去。
+ */
+export const SHARED_PREFS_CHANNEL = 'shared';
+export type HookPrefsStoreChannel = HookPrefsChannel | typeof SHARED_PREFS_CHANNEL;
+
 export interface WorkspacePrefsEntry {
-  channel: HookPrefsChannel;
+  channel: HookPrefsStoreChannel;
   /** Slack multi-team 归属；Telegram / X / 飞书 / 单绑定为 null。 */
   teamId: string | null;
   workspace: string;
@@ -55,6 +62,8 @@ export interface WorkspacePrefsEntry {
 interface StoreFile {
   version: 1;
   migrated: Partial<Record<HookPrefsChannel, boolean>>;
+  /** 该渠道原有的按渠道偏好是否已经并入共享那一份(一次性)。 */
+  sharedAdopted?: Partial<Record<HookPrefsChannel, boolean>>;
   entries: WorkspacePrefsEntry[];
 }
 
@@ -66,8 +75,14 @@ function filePath(): string {
   return ownerScopedImUserDataPath(FILE_NAME);
 }
 
-function isChannel(value: unknown): value is HookPrefsChannel {
-  return value === 'slack' || value === 'telegram' || value === 'x' || value === 'feishu';
+function isChannel(value: unknown): value is HookPrefsStoreChannel {
+  return (
+    value === 'slack' ||
+    value === 'telegram' ||
+    value === 'x' ||
+    value === 'feishu' ||
+    value === SHARED_PREFS_CHANNEL
+  );
 }
 
 function isNullablePrefField(value: unknown): value is string | null {
@@ -115,7 +130,16 @@ function isEntry(raw: unknown): raw is WorkspacePrefsEntry {
  * 否则表快满时改个项目名, 「新行 + 墓碑」会超限而整次搬移失败, 偏好留在旧名称下读不到。
  */
 function exceedsPrefsCap(entries: readonly WorkspacePrefsEntry[]): boolean {
-  return entries.filter((entry) => entry.renameTombstone !== true).length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES;
+  // 上限按渠道各算各的: 共用那一份会投影到每个已连接的渠道, 合在一起算的话,
+  // 配了几十个项目的用户一开第二个机器人就会撞上限。
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.renameTombstone === true) continue;
+    const count = (counts.get(entry.channel) ?? 0) + 1;
+    if (count > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) return true;
+    counts.set(entry.channel, count);
+  }
+  return false;
 }
 
 function emptyStore(): StoreFile {
@@ -136,7 +160,18 @@ function readStore(fp: string): StoreFile {
       }
     }
     const entries = Array.isArray(r.entries) ? r.entries.filter(isEntry) : [];
-    return { version: 1, migrated, entries };
+    const sharedAdopted: NonNullable<StoreFile['sharedAdopted']> = {};
+    if (r.sharedAdopted && typeof r.sharedAdopted === 'object') {
+      for (const channel of ['slack', 'telegram', 'x', 'feishu'] as const) {
+        if ((r.sharedAdopted as Record<string, unknown>)[channel] === true) sharedAdopted[channel] = true;
+      }
+    }
+    return {
+      version: 1,
+      migrated,
+      ...(Object.keys(sharedAdopted).length > 0 ? { sharedAdopted } : {}),
+      entries,
+    };
   } catch {
     return emptyStore();
   }
@@ -151,7 +186,7 @@ function writeStore(fp: string, store: StoreFile): void {
 
 const sameKey = (
   e: WorkspacePrefsEntry,
-  channel: HookPrefsChannel,
+  channel: HookPrefsStoreChannel,
   teamId: string | null,
   workspace: string,
 ): boolean => e.channel === channel && e.teamId === teamId && e.workspace === workspace;
@@ -229,7 +264,18 @@ export function markWorkspacePrefsMigrated(channel: HookPrefsChannel): void {
   writeStore(fp, { ...store, migrated: { ...store.migrated, [channel]: true } });
 }
 
-export function listWorkspacePrefs(channel: HookPrefsChannel): HookWorkspacePrefs[] {
+export function isSharedPrefsAdopted(channel: HookPrefsChannel): boolean {
+  return readStore(filePath()).sharedAdopted?.[channel] === true;
+}
+
+export function markSharedPrefsAdopted(channel: HookPrefsChannel): void {
+  const fp = filePath();
+  const store = readStore(fp);
+  if (store.sharedAdopted?.[channel] === true) return;
+  writeStore(fp, { ...store, sharedAdopted: { ...store.sharedAdopted, [channel]: true } });
+}
+
+export function listWorkspacePrefs(channel: HookPrefsStoreChannel): HookWorkspacePrefs[] {
   return readStore(filePath()).entries.filter((e) => e.channel === channel).map(toHookPrefs);
 }
 
@@ -238,7 +284,7 @@ export function listWorkspacePrefs(channel: HookPrefsChannel): HookWorkspacePref
  * teamId 精确匹配优先，null 行兜底 —— 与设置页 prefsFor 的 multi-team 宽松语义一致。
  */
 export function getWorkspacePref(
-  channel: HookPrefsChannel,
+  channel: HookPrefsStoreChannel,
   teamId: string | null,
   workspace: string,
 ): HookWorkspacePrefs {
@@ -252,7 +298,7 @@ export function getWorkspacePref(
 }
 
 export function setWorkspacePref(
-  channel: HookPrefsChannel,
+  channel: HookPrefsStoreChannel,
   teamId: string | null,
   workspace: string,
   patch: HookPrefsPatch,
@@ -282,7 +328,9 @@ export function setWorkspacePref(
   const fullLocalAuthority =
     localBase !== undefined &&
     ((isDirtyRow(localBase) && localBase.dirtyPatch === undefined) ||
-      (store.migrated[channel] !== true && !isDirtyRow(localBase)));
+      (channel !== SHARED_PREFS_CHANNEL &&
+        store.migrated[channel] !== true &&
+        !isDirtyRow(localBase)));
   const dirtyPatch = fullLocalAuthority
     ? undefined
     : mergePatch(localBase && isDirtyRow(localBase) ? localBase.dirtyPatch : undefined, patch);
@@ -671,6 +719,7 @@ export function moveWorkspacePrefsToRenamed(
   const store = readStore(fp);
   let entries = store.entries;
   const touched = new Set<HookPrefsChannel>();
+  let movedAny = false;
   for (const { from, to } of renames) {
     if (from === to || !HOOK_WORKSPACE_ALIAS_RE.test(to)) continue;
     for (const row of entries.filter((entry) => entry.workspace === from && !isBlankRow(entry))) {
@@ -700,15 +749,18 @@ export function moveWorkspacePrefsToRenamed(
         rev: (target ? rowRev(target) : 0) + 1,
         dirty: true,
       };
+      // 共用那一份不镜像到任何服务端, 旧名称下不需要留「待清空」的行。
+      const shared = row.channel === SHARED_PREFS_CHANNEL;
       entries = [
         ...entries.filter((entry) => entry !== row && (keepTarget || entry !== target)),
-        tombstone,
-        ...(keepTarget ? [] : [moved]),
+        ...(shared ? [] : [tombstone]),
+        ...(keepTarget ? [] : [shared ? { ...moved, dirty: false } : moved]),
       ];
-      touched.add(row.channel);
+      movedAny = true;
+      if (row.channel !== SHARED_PREFS_CHANNEL) touched.add(row.channel);
     }
   }
-  if (touched.size === 0) return [];
+  if (!movedAny) return [];
   if (exceedsPrefsCap(entries)) {
     throw new Error('too many workspace prefs entries');
   }

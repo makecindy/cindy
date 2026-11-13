@@ -6522,8 +6522,8 @@
           "error": "La conexión falló"
         },
         "form": {
-          "workspacesCardTitle": "Proyectos",
-          "workspacesCardDescription": "Son los mismos proyectos locales de la barra lateral y se comparten entre canales; las preferencias de ejecución son específicas de cada canal. Crea, renombra o quita proyectos en la barra lateral y esta lista se actualiza.",
+          "workspacesCardTitle": "Proyectos y modelos",
+          "workspacesCardDescription": "Compartido por todos los bots oficiales: los proyectos son los proyectos locales de la barra lateral, y el modelo y los permisos de cada proyecto son los mismos en cualquier bot. Los cambios hechos con /model en un chat también aparecen aquí. Crea, renombra o quita proyectos en la barra lateral.",
           "workspacesBoundCount_one": "{{count}} proyecto",
           "workspacesBoundCount_other": "{{count}} proyectos",
           "aliasPlaceholder": "Alias, p. ej., my-server",
@@ -6531,7 +6531,7 @@
           "defaultWorkspaceChip": "Predeterminado: {{name}}",
           "defaultWorkspaceAria": "Elige el proyecto predeterminado para las tareas enviadas",
           "defaultWorkspaceRadioAria": "Establecer «{{name}}» como proyecto predeterminado",
-          "defaultWorkspaceRowHint": "El proyecto seleccionado es el proyecto predeterminado: cualquier conversación por mensaje directo, grupo o tema de Telegram que no haya elegido su propio proyecto ejecuta sus tareas allí (las conversaciones que eligieron uno con /project conservan el suyo). Presta atención al modo de permisos en la fila del proyecto seleccionado: si está en Acceso completo, una @mention desde cualquier grupo se ejecuta con acceso completo dentro de ese proyecto.",
+          "defaultWorkspaceRowHint": "El proyecto seleccionado es el proyecto predeterminado: cualquier conversación de Telegram, Feishu / Lark o X que no haya elegido su propio proyecto ejecuta sus tareas allí (las conversaciones que eligieron uno con /project conservan el suyo). Presta atención al modo de permisos en la fila del proyecto seleccionado: si está en Acceso completo, una @mention desde cualquier grupo se ejecuta con acceso completo dentro de ese proyecto.",
           "legacyDefaultsTitle": "Los valores predeterminados antiguos de «nueva conversación» siguen vigentes",
           "legacyDefaultsDescription": "Este dispositivo guardó valores predeterminados antiguos del bot oficial que aún se usan como alternativa para los proyectos sin configuración propia (Telegram oficial y X comparten una copia). Estos valores ahora se configuran por proyecto. Restaurar los valores predeterminados borra todo lo siguiente:",
           "legacyDefaultsRow": {

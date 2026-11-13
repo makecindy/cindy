@@ -6522,8 +6522,8 @@
           "error": "Falha na conexão"
         },
         "form": {
-          "workspacesCardTitle": "Projetos",
-          "workspacesCardDescription": "São os mesmos projetos locais da barra lateral, compartilhados entre os canais; as preferências de execução são específicas de cada canal. Crie, renomeie ou remova projetos na barra lateral e esta lista acompanha.",
+          "workspacesCardTitle": "Projetos e modelos",
+          "workspacesCardDescription": "Compartilhado por todos os bots oficiais: os projetos são os projetos locais da barra lateral, e o modelo e as permissões de cada projeto são os mesmos em qualquer bot. Alterações feitas com /model em uma conversa também aparecem aqui. Crie, renomeie ou remova projetos na barra lateral.",
           "workspacesBoundCount_one": "{{count}} projeto",
           "workspacesBoundCount_other": "{{count}} projetos",
           "aliasPlaceholder": "Alias, ex.: my-server",
@@ -6531,7 +6531,7 @@
           "defaultWorkspaceChip": "Padrão: {{name}}",
           "defaultWorkspaceAria": "Escolha o projeto padrão para tarefas encaminhadas",
           "defaultWorkspaceRadioAria": "Definir \"{{name}}\" como projeto padrão",
-          "defaultWorkspaceRowHint": "O projeto selecionado é o projeto padrão: qualquer conversa por mensagem direta, grupo ou tópico do Telegram que não tenha escolhido seu próprio projeto executa suas tarefas nele (conversas que escolheram um com /project mantêm sua escolha). Atenção ao modo de permissão na linha do projeto selecionado — se estiver definido como Acesso total, uma @mention de qualquer grupo será executada com acesso total dentro desse projeto.",
+          "defaultWorkspaceRowHint": "O projeto selecionado é o projeto padrão: qualquer conversa do Telegram, Feishu / Lark ou X que não tenha escolhido seu próprio projeto executa suas tarefas nele (conversas que escolheram um com /project mantêm sua escolha). Atenção ao modo de permissão na linha do projeto selecionado — se estiver definido como Acesso total, uma @mention de qualquer grupo será executada com acesso total dentro desse projeto.",
           "legacyDefaultsTitle": "Os padrões antigos de “nova conversa” ainda estão em vigor",
           "legacyDefaultsDescription": "Este dispositivo salvou padrões antigos do bot oficial que ainda servem como alternativa para projetos sem configurações próprias (o Telegram oficial e o X compartilham uma cópia). Agora esses valores são definidos por projeto. Restaurar os padrões limpa todos os itens a seguir:",
           "legacyDefaultsRow": {

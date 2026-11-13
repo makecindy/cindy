@@ -6459,8 +6459,8 @@
           "error": "Connection failed"
         },
         "form": {
-          "workspacesCardTitle": "Projects",
-          "workspacesCardDescription": "The same local projects as in the sidebar, shared across channels; run preferences stay per channel. Create, rename, or remove projects in the sidebar and this list follows.",
+          "workspacesCardTitle": "Projects and models",
+          "workspacesCardDescription": "Shared by every official bot: the projects are the local projects in your sidebar, and each project’s model and permissions are the same in whichever bot you use it. Changes made with /model in a chat show up here too. Create, rename, or remove projects in the sidebar.",
           "workspacesBoundCount_one": "{{count}} project",
           "workspacesBoundCount_other": "{{count}} projects",
           "aliasPlaceholder": "Alias, e.g. my-server",
@@ -6468,7 +6468,7 @@
           "defaultWorkspaceChip": "Default: {{name}}",
           "defaultWorkspaceAria": "Choose the default project for dispatched tasks",
           "defaultWorkspaceRadioAria": "Set “{{name}}” as the default project",
-          "defaultWorkspaceRowHint": "The selected project is the default project: any Telegram DM, group or topic conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /project keep theirs). Mind the permission mode on the selected project’s row — set to Full access, an @mention from any group runs with full access inside that project.",
+          "defaultWorkspaceRowHint": "The selected project is the default project: any Telegram, Feishu / Lark or X conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /project keep theirs). Mind the permission mode on the selected project’s row — set to Full access, an @mention from any group runs with full access inside that project.",
           "legacyDefaultsTitle": "Legacy “new conversation” defaults are still in effect",
           "legacyDefaultsDescription": "This device saved older official-bot defaults that still act as the fallback for projects without their own settings (official Telegram and X share one copy). These values are now set per project. Restoring defaults clears all of the following:",
           "legacyDefaultsRow": {

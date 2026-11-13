@@ -6416,8 +6416,8 @@
           "error": "연결 실패"
         },
         "form": {
-          "workspacesCardTitle": "프로젝트",
-          "workspacesCardDescription": "사이드바의 로컬 프로젝트와 같은 목록이며 모든 채널이 공유합니다. 실행 설정은 채널별로 독립적입니다. 프로젝트 생성·이름 변경·제거는 사이드바에서 하면 여기에도 반영됩니다.",
+          "workspacesCardTitle": "프로젝트 및 모델",
+          "workspacesCardDescription": "모든 공식 봇이 함께 쓰는 설정입니다. 프로젝트는 사이드바의 로컬 프로젝트와 같은 목록이며, 각 프로젝트의 모델과 권한은 어느 봇에서 사용하든 동일합니다. 채팅에서 /model로 바꾼 내용도 여기에 반영됩니다. 프로젝트 생성·이름 변경·제거는 사이드바에서 하세요.",
           "workspacesBoundCount_one": "프로젝트 {{count}}개",
           "workspacesBoundCount_other": "프로젝트 {{count}}개",
           "aliasPlaceholder": "별칭, 예: my-server",
@@ -6425,7 +6425,7 @@
           "defaultWorkspaceChip": "기본값: {{name}}",
           "defaultWorkspaceAria": "작업을 보낼 때 사용할 기본 프로젝트 선택",
           "defaultWorkspaceRadioAria": "\"{{name}}\"을(를) 기본 프로젝트로 설정",
-          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram 개인 대화·그룹·주제 중 프로젝트를 따로 고르지 않은 대화의 작업은 모두 여기에서 실행됩니다(/project로 따로 고른 대화는 그대로 유지). 선택한 프로젝트 행의 권한 모드를 확인하세요. ‘전체 액세스’로 두면 어느 그룹에서 @로 불러도 해당 프로젝트에서 전체 액세스로 실행됩니다.",
+          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X에서 프로젝트를 따로 고르지 않은 대화의 작업은 모두 여기에서 실행됩니다(/project로 따로 고른 대화는 그대로 유지). 선택한 프로젝트 행의 권한 모드를 확인하세요. ‘전체 액세스’로 두면 어느 그룹에서 @로 불러도 해당 프로젝트에서 전체 액세스로 실행됩니다.",
           "legacyDefaultsTitle": "이전 ‘새 대화 설정’이 아직 적용되고 있습니다",
           "legacyDefaultsDescription": "이 기기에는 예전 공식 bot 기본값이 저장되어 있으며, 개별 설정이 없는 프로젝트의 대체값으로 계속 사용됩니다(공식 Telegram과 X가 같은 항목을 공유). 이 값들은 이제 프로젝트별로 설정합니다. 기본값으로 복원하면 다음 항목이 모두 삭제됩니다:",
           "legacyDefaultsRow": {

@@ -111,7 +111,9 @@ import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemot
 import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
+  SHARED_PREFS_CHANNEL,
   getWorkspacePref,
+  isSharedPrefsAdopted,
   isWorkspacePrefsMigrated,
   resolveWorkspacePrefOverrides,
   type HookPrefsChannel,
@@ -208,9 +210,14 @@ function hookDefaultInputs(
       ? sourceIm
       : null;
   const workspaceAlias = workspaceCtx?.alias;
+  // 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts): 这个渠道原有的按渠道偏好并入
+  // 之后, 一律读共用的那一份; 并入之前(升级后还没连上过服务端)沿用它自己的那份。
+  const shared = prefsChannel !== null && isSharedPrefsAdopted(prefsChannel);
   const localPref =
     prefsChannel !== null && workspaceAlias
-      ? getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      ? shared
+        ? getWorkspacePref(SHARED_PREFS_CHANNEL, null, workspaceAlias)
+        : getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const mergedOverrides = resolveWorkspacePrefOverrides(
     localPref,
@@ -220,7 +227,9 @@ function hookDefaultInputs(
   // 项目级来源偏好(纯本地, 用户在设置页该项目那一行显式选的来源)优先于草稿默认来源。
   const workdirRoute =
     prefsChannel !== null && workspaceAlias
-      ? getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      ? shared
+        ? getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, workspaceAlias)
+        : getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const workdirProviderId = workdirRoute?.providerId ?? null;
   // 官方 Telegram hook 与个人 Bot 是两个独立入口。个人 Bot 使用

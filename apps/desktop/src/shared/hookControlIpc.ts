@@ -46,10 +46,10 @@ export const HOOK_CONTROL_INVOKE = {
   BIND_START: 'maker:hook-control:bind-start',
   /** 解除 Slack 账号绑定(bind.revoke)。 */
   BIND_REVOKE: 'maker:hook-control:bind-revoke',
-  /** 拉取绑定用户的全部目录偏好快照(经 WS prefs.get, 10s 超时)。 */
-  PREFS_GET: 'maker:hook-control:prefs-get',
-  /** 部分更新某目录偏好(经 WS prefs.set; null = 清空回默认)。 */
-  PREFS_SET: 'maker:hook-control:prefs-set',
+  /** 读所有官方机器人共用的项目偏好(本机正本)。 */
+  SHARED_PREFS_GET: 'maker:hook-control:shared-prefs-get',
+  /** 部分更新某个项目的共用偏好(null = 清空回默认); 随后投影到各渠道并镜像到各服务端。 */
+  SHARED_PREFS_SET: 'maker:hook-control:shared-prefs-set',
   /** (multi-team)添加新 Slack workspace 绑定(bind.start 空 teamId, 授权页自选)。 */
   ADD_BINDING: 'maker:hook-control:add-binding',
   /** (multi-team)给指定 team 重新授权(bind.start 带 teamId, pin 授权页)。 */
@@ -70,10 +70,6 @@ export const HOOK_CONTROL_INVOKE = {
   PROVIDER_BIND_SELECT: 'maker:hook-control:provider-bind-select',
   /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接。 */
   PROVIDER_OPEN_ACTION: 'maker:hook-control:provider-open-action',
-  /** 读取 provider-neutral(Telegram / X / 飞书)独立的 workspace 偏好。 */
-  PROVIDER_PREFS_GET: 'maker:hook-control:provider-prefs-get',
-  /** 更新 provider-neutral(Telegram / X / 飞书)独立的 workspace 偏好。 */
-  PROVIDER_PREFS_SET: 'maker:hook-control:provider-prefs-set',
   /** 读取官方 Telegram bot 的回应、引用与群激活设置。 */
   TELEGRAM_BEHAVIOR_GET: 'maker:hook-control:telegram-behavior-get',
   /** 部分更新官方 Telegram bot 的回应或引用设置。 */
@@ -91,10 +87,8 @@ export const HOOK_CONTROL_INVOKE = {
 export const HOOK_CONTROL_EVENT = {
   /** 状态推送(完整快照; 连接与绑定状态变化都走这里)。 */
   STATUS_CHANGED: 'maker:hook-control:status-changed',
-  /** 目录偏好快照推送(prefs.state; 含 Slack /model 卡改动的实时同步)。 */
-  PREFS_CHANGED: 'maker:hook-control:prefs-changed',
-  /** provider-neutral 偏好快照推送（Telegram / X / 飞书消费）。 */
-  PROVIDER_PREFS_CHANGED: 'maker:hook-control:provider-prefs-changed',
+  /** 共用项目偏好快照推送(设置页写入、IM 里 /model 卡改动并入后)。 */
+  SHARED_PREFS_CHANGED: 'maker:hook-control:shared-prefs-changed',
   /** 官方 Telegram 行为配置快照推送（含其它客户端写入）。 */
   TELEGRAM_BEHAVIOR_CHANGED: 'maker:hook-control:telegram-behavior-changed',
   /** 目录模型来源偏好全量推送(本地写入后广播全窗口, 多窗口设置页同步)。 */
@@ -390,7 +384,8 @@ export const HOOK_CHAT_WORKSPACE_ALIAS = 'chat';
  */
 export interface HookWorkspaceProviderSourceEntry {
   agentDeviceId?: string | null;
-  channel: 'slack' | 'telegram' | 'x' | 'feishu';
+  /** `shared` = 所有官方机器人共用的那一份(派发与设置页读写它)。 */
+  channel: 'slack' | 'telegram' | 'x' | 'feishu' | 'shared';
   /** Slack multi-team 归属; Telegram / X / 飞书 / 单绑定为 null。 */
   teamId: string | null;
   workspace: string;
@@ -417,6 +412,11 @@ export interface HookPrefsView {
 }
 
 /** provider-neutral 偏好快照；selector 与协议帧同形。 */
+/** 所有官方机器人共用的项目偏好(本机正本); 没配置过的项目不在其中。 */
+export interface SharedProjectPrefsView {
+  prefs: HookWorkspacePrefs[];
+}
+
 export interface ProviderPrefsView extends HookPrefsView {
   provider: HookProvider;
   bindingId: string | null;

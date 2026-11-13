@@ -6459,8 +6459,8 @@
           "error": "Verbindung fehlgeschlagen"
         },
         "form": {
-          "workspacesCardTitle": "Projekte",
-          "workspacesCardDescription": "Dieselben lokalen Projekte wie in der Seitenleiste, kanalübergreifend gemeinsam genutzt; die Ausführungseinstellungen gelten pro Kanal separat. Erstelle, benenne oder entferne Projekte in der Seitenleiste – diese Liste folgt.",
+          "workspacesCardTitle": "Projekte und Modelle",
+          "workspacesCardDescription": "Gilt für alle offiziellen Bots gemeinsam: Die Projekte sind die lokalen Projekte aus der Seitenleiste, und Modell und Berechtigungen eines Projekts sind in jedem Bot gleich. Änderungen über /model in einem Chat erscheinen auch hier. Erstelle, benenne oder entferne Projekte in der Seitenleiste.",
           "workspacesBoundCount_one": "{{count}} Projekt",
           "workspacesBoundCount_other": "{{count}} Projekte",
           "aliasPlaceholder": "Alias, z. B. my-server",
@@ -6468,7 +6468,7 @@
           "defaultWorkspaceChip": "Standard: {{name}}",
           "defaultWorkspaceAria": "Wähle das Standardprojekt für übermittelte Aufgaben",
           "defaultWorkspaceRadioAria": "„{{name}}“ als Standardprojekt festlegen",
-          "defaultWorkspaceRowHint": "Das ausgewählte Projekt ist das Standardprojekt: Jede Telegram-Direktnachricht sowie jede Gruppen- oder Themenunterhaltung ohne eigenes ausgewähltes Projekt führt ihre Aufgaben dort aus (Unterhaltungen, die über /project eines ausgewählt haben, behalten dieses). Beachte den Berechtigungsmodus in der Zeile des ausgewählten Projekts: Bei „Vollzugriff“ wird eine @Erwähnung aus jeder beliebigen Gruppe mit vollem Zugriff innerhalb dieses Projekts ausgeführt.",
+          "defaultWorkspaceRowHint": "Das ausgewählte Projekt ist das Standardprojekt: Jede Unterhaltung in Telegram, Feishu / Lark oder X ohne eigenes ausgewähltes Projekt führt ihre Aufgaben dort aus (Unterhaltungen, die über /project eines ausgewählt haben, behalten dieses). Beachte den Berechtigungsmodus in der Zeile des ausgewählten Projekts: Bei „Vollzugriff“ wird eine @Erwähnung aus jeder beliebigen Gruppe mit vollem Zugriff innerhalb dieses Projekts ausgeführt.",
           "legacyDefaultsTitle": "Die bisherigen Standardeinstellungen für „Neue Unterhaltung“ gelten weiterhin",
           "legacyDefaultsDescription": "Auf diesem Gerät sind ältere Standardeinstellungen des offiziellen Bots gespeichert, die weiterhin als Fallback für Projekte ohne eigene Einstellungen dienen (die offiziellen Bots für Telegram und X teilen sich eine Kopie). Diese Werte werden jetzt pro Projekt festgelegt. Durch das Wiederherstellen der Standardeinstellungen wird Folgendes vollständig gelöscht:",
           "legacyDefaultsRow": {

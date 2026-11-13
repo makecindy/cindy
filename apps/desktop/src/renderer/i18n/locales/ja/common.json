@@ -6416,8 +6416,8 @@
           "error": "接続失敗"
         },
         "form": {
-          "workspacesCardTitle": "プロジェクト",
-          "workspacesCardDescription": "サイドバーのローカルプロジェクトと同じ一覧で、全チャンネル共通です。実行設定はチャンネルごとに独立します。プロジェクトの作成・名前変更・削除はサイドバーで行うと、ここにも反映されます。",
+          "workspacesCardTitle": "プロジェクトとモデル",
+          "workspacesCardDescription": "すべての公式ボットで共通の設定です。プロジェクトはサイドバーのローカルプロジェクトと同じ一覧で、各プロジェクトのモデルと権限はどのボットから使っても同じです。チャットで /model から変更した内容もここに反映されます。プロジェクトの作成・名前変更・削除はサイドバーで行ってください。",
           "workspacesBoundCount_one": "プロジェクト {{count}} 件",
           "workspacesBoundCount_other": "プロジェクト {{count}} 件",
           "aliasPlaceholder": "エイリアス(例: my-server)",
@@ -6425,7 +6425,7 @@
           "defaultWorkspaceChip": "デフォルト: {{name}}",
           "defaultWorkspaceAria": "タスク発行時に使う既定のプロジェクトを選択",
           "defaultWorkspaceRadioAria": "「{{name}}」を既定のプロジェクトに設定",
-          "defaultWorkspaceRowHint": "選択したプロジェクトが既定のプロジェクトです。Telegram の個別チャット・グループ・トピックのうち、プロジェクトを個別に選んでいない会話のタスクはすべてここで実行されます（/project で個別に選んだ会話はそのまま）。選択したプロジェクトの行の権限モードにご注意ください。「フルアクセス」にすると、どのグループから @ で呼ばれてもそのプロジェクト内でフルアクセスで実行されます。",
+          "defaultWorkspaceRowHint": "選択したプロジェクトが既定のプロジェクトです。Telegram・Feishu / Lark・X のうち、プロジェクトを個別に選んでいない会話のタスクはすべてここで実行されます（/project で個別に選んだ会話はそのまま）。選択したプロジェクトの行の権限モードにご注意ください。「フルアクセス」にすると、どのグループから @ で呼ばれてもそのプロジェクト内でフルアクセスで実行されます。",
           "legacyDefaultsTitle": "旧「新規会話の設定」がまだ有効です",
           "legacyDefaultsDescription": "この端末には以前の公式 bot 既定値が保存されており、個別に設定していないプロジェクトのフォールバックとして今も使われます（公式 Telegram と X で共通の 1 件）。これらの値は各プロジェクトごとに設定する方式になりました。既定値に戻すと、次のすべてが削除されます:",
           "legacyDefaultsRow": {

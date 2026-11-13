@@ -27,3 +27,12 @@
 
 同一会话在 IM 里换项目后的任务归属由客户端判定（`hook-control/dispatcher.ts` 的 `resolveTarget`）：
 复用绑定的任务要求它就在这次点名的项目里，否则新建。服务端换项目时不必更换 `externalKey`。
+
+## 各渠道的 `prefs` 镜像同一份配置
+
+所有官方机器人共用一套项目配置（Agent、模型、思考强度、权限档），正本在客户端
+（`hook-control/sharedProjectPrefs.ts`）。协议不变：客户端仍按渠道各发各的 `prefs.set` /
+`provider.prefs.set`，只是每个已连接渠道收到的是同一组值；任一渠道的服务端推来的改动（IM 里的
+`/model` 卡）由客户端并回共用那份，再写给其他渠道。各服务端继续按自己的键存取，不需要互相知道，
+也不需要迁移；旧客户端仍按渠道各存各的，与新客户端、新旧服务端都兼容。默认项目同理：
+`hello.defaultWorkspace` 字段不变，Telegram / 飞书 / X 三条连接带的是同一个值。

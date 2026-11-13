@@ -6416,8 +6416,8 @@
           "error": "连接失败"
         },
         "form": {
-          "workspacesCardTitle": "项目",
-          "workspacesCardDescription": "与侧栏里的本机项目是同一份，所有渠道共用；运行偏好按渠道独立。新建、改名或移除项目请在侧栏操作，这里会跟着变。",
+          "workspacesCardTitle": "项目与模型",
+          "workspacesCardDescription": "所有官方机器人共用这一份：项目就是侧栏里的本机项目，每个项目的模型和权限在哪个机器人里都一样；在 IM 里用 /model 改，这里也会跟着变。新建、改名或移除项目请在侧栏操作。",
           "workspacesBoundCount_one": "{{count}} 个项目",
           "workspacesBoundCount_other": "{{count}} 个项目",
           "aliasPlaceholder": "别名，如 my-server",
@@ -6425,7 +6425,7 @@
           "defaultWorkspaceChip": "默认：{{name}}",
           "defaultWorkspaceAria": "选择派发任务时使用的默认项目",
           "defaultWorkspaceRadioAria": "把「{{name}}」设为默认项目",
-          "defaultWorkspaceRowHint": "选中的项目是默认项目：Telegram 私聊、群和话题里，凡是没有单独选过项目的，任务都落在它里面（用 /project 单独选过的，仍按那个走）。请留意所选项目这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个项目里执行。",
+          "defaultWorkspaceRowHint": "选中的项目是默认项目：Telegram、飞书 / Lark 和 X 里，凡是没有单独选过项目的，任务都落在它里面（用 /project 单独选过的，仍按那个走）。请留意所选项目这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个项目里执行。",
           "legacyDefaultsTitle": "旧版「新对话配置」仍在生效",
           "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置，它仍是没有单独配置过的项目的兜底值（官方 Telegram 与 X 共用同一份）。这些值现在统一在每个项目里设置。恢复默认会一并清掉以下全部内容：",
           "legacyDefaultsRow": {
