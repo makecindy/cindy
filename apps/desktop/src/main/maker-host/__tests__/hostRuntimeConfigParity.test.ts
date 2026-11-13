@@ -151,7 +151,6 @@ describe('Host runtime config parity with the desktop assembly', () => {
         list: async () => [],
         readKey: () => null,
         oauth: { readCachedGenericOAuthAccessToken: () => null },
-        piNativeProviders: () => ({ providers: [], env: {} }),
         codexAccounts: {
           setCodexAccountRetirement: () => {},
           isCodexAccountProvider: () => false,

@@ -65,7 +65,6 @@ function buildGraph(t, ownerId) {
       list: async () => [],
       readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false },
     },
   });

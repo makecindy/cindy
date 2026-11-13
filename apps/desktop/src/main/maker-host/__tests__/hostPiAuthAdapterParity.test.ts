@@ -142,7 +142,6 @@ beforeAll(async () => {
       list: async () => h.customs,
       readKey: (id: string) => h.keys.get(id) ?? null,
       oauth: { readCachedGenericOAuthAccessToken: (id: string) => (h.oauthTokens.has(id) ? 'fixture-oauth-token' : null) },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       // The Host's own Codex account service over this profile, as provider-config.ts builds it.
       codexAccounts: createHostCodexAccounts({ profileDir: h.userDataDir, getCodexBinary: () => null },
         { owner: 'cloud:owner-a:1', check: () => {}, closed: () => false }),

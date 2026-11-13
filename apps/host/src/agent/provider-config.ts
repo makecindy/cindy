@@ -11,7 +11,6 @@ import { customProviderHeaderStorageKey, customProviderSecretStorageKey, provide
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.js';
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
-import { buildPiNativeProvidersFromConfigs } from '../../../desktop/src/main/maker-host/pi-native-catalog.js';
 import { createProviderService } from '../../../desktop/src/main/maker-host/provider-service.js';
 import { hasCustomProviderCredential } from '../../../desktop/src/main/maker-host/provider-connection-state.js';
 import { withoutProviderHeaderCredentials } from '../../../desktop/src/main/maker-host/provider-public-view.js';
@@ -184,12 +183,6 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
       });
       const views = await service.listProviders({ allowSideEffects: false }); check();
       return views.map(withoutProviderHeaderCredentials);
-    },
-    async piNativeProviders() {
-      const configs = await list();
-      // Protocol, endpoint, header isolation and model limits use the exact same
-      // projection as Desktop. Unknown capacities are never replaced with guesses.
-      return buildPiNativeProvidersFromConfigs(configs, readKey);
     },
   };
   setCustomProviderKeyReader(readKey);

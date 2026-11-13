@@ -56,7 +56,6 @@ test('the PiAgent the Host assembles gets the MCP bridge under the key it reads,
       list: async () => [],
       readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {} },
     },
   });
@@ -104,7 +103,6 @@ test('every engine the Host assembles resolves per-model context the way the des
       list: async () => [],
       readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false },
     },
   });
@@ -199,7 +197,6 @@ test('every engine the Host assembles skips the Skills the user disabled and get
       grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
       list: async () => [], readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
     },
   });
@@ -240,7 +237,6 @@ test('every engine the Host assembles gets the desktop runtime config: product p
     grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
     list: async () => [], readKey: () => null,
     oauth: { readCachedGenericOAuthAccessToken: () => null },
-    piNativeProviders: () => ({ providers: [], env: {} }),
     codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
   };
   const engines = { binaryPath: path.join(profile, 'claude'), codexBinaryPath: path.join(profile, 'codex'), piBinaryPath: path.join(profile, 'pi') };
@@ -322,7 +318,6 @@ test('without the bundled ripgrep the Host fails the way the desktop does', { ti
     grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
     list: async () => [], readKey: () => null,
     oauth: { readCachedGenericOAuthAccessToken: () => null },
-    piNativeProviders: () => ({ providers: [], env: {} }),
     codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
   };
   const base = { userDataDir: profile, harnessRoot: missing, gateway: null, mcpRuntime: mcp, mcpProviders: [], storage: {}, providerConfig };
@@ -356,7 +351,6 @@ test('with the loopback proxy, Claude and Pi use its endpoint and Pi registers i
       grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
       list: async () => [], readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
     },
   });

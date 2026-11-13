@@ -64,7 +64,6 @@ export async function learnFixture(t, { publish = true } = {}) {
       grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
       list: async () => [], readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
     } });
   t.after(() => graph.maker.shutdown?.());

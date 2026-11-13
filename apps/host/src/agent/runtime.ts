@@ -26,6 +26,8 @@ import { createPiNativeCompatOverridesStore } from '../../../desktop/src/main/ma
 import { createMainI18n } from '../../../desktop/src/main/i18n.js';
 import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import { getActiveCatalog, getLocalCatalogOverridesSnapshot } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { resolvePiCindyGatewayModelApi, resolvePiCindyGatewayModelSpec } from '../../../desktop/src/main/maker-host/piNativeProvidersCore.js';
+import { createHostPiNativeProviders } from './pi-native-providers.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId, resolvePiGatewayDescriptorProviderId, resolvePiRuntimeModelDescriptor } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from '../../../desktop/src/main/maker-host/capability-routing.js';
 import { createCodexCapabilityRouting } from '../../../desktop/src/main/maker-host/codexCapabilityRouting.js';
@@ -658,6 +660,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // The desktop's learned Pi cache compatibility (pi-native-compat-overrides-store.ts), on this
   // profile; the Pi bridge writes the file and the runtime reads it back.
   const piNativeCompatOverrides = createPiNativeCompatOverridesStore({ app: { getPath: () => options.userDataDir } });
+  const piNativeProviders = createHostPiNativeProviders({
+    userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null, endpoint: engineEndpoint,
+    claudeProxy, providerConfig: config,
+  });
   // The desktop's main-process strings (i18n.desktop.ts) in the system language, as
   // plugins/authorization.ts does; the window's language choice does not reach the Host.
   const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
@@ -711,7 +717,11 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           : path.join(options.userDataDir, 'pi-native-compat-overrides.json'),
         resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
           piNativeCompatOverrides.readPiNativeCompatOverride(providerId, modelId, routeKey),
-        resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
+        // As the desktop (pi-host.ts): the shared resolver with the Host's ports (pi-native-providers.ts),
+        // and the Cindy gateway block's API and compat from the same probe state.
+        resolvePiNativeProviders: (ctx) => piNativeProviders.resolvePiNativeProviders(ctx),
+        resolvePiGatewayModelApi: resolvePiCindyGatewayModelApi,
+        resolvePiGatewayModelSpec: resolvePiCindyGatewayModelSpec,
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
         capabilityAdditions: availableModels('pi'),

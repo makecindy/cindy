@@ -215,7 +215,6 @@ test('the Maker the Host assembles releases the lease on a dead start failure, a
       list: async () => [],
       readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false },
     },
   });

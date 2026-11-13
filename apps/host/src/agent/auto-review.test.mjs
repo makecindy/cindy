@@ -112,7 +112,6 @@ test('the engines and Maker get the Host reviewers under the keys the desktop us
       grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
       list: async () => [], readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false },
     },
   });
@@ -232,7 +231,6 @@ test('a failing native Auto classifier moves an Auto Claude task to the Cindy re
       grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
       list: async () => [], readKey: () => null,
       oauth: { readCachedGenericOAuthAccessToken: () => null },
-      piNativeProviders: () => ({ providers: [], env: {} }),
       codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false },
     },
   });
