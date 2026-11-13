@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
+import { selectedReplyQuote } from '../selectedReplyQuote';
 
 // Regression: a model withdrawal needs the same reason in the persisted row and all clients.
 // Execute the production event preparation and default cancellation decision without Electron.
@@ -17,8 +18,8 @@ const code = ts.transpileModule([
   declaration('../register.ts', 'defaultDecisionForPending'),
   'return { prepareSessionEvent, defaultDecisionForPending };',
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const runtime = new Function('readChannelToolScope', 'MAKER_PUSH', code)(() => null,
-  { INTERACTION_DISMISSED: 'maker:interaction-dismissed' });
+const runtime = new Function('readChannelToolScope', 'MAKER_PUSH', 'selectedReplyQuote', code)(() => null,
+  { INTERACTION_DISMISSED: 'maker:interaction-dismissed' }, selectedReplyQuote);
 
 it('persists and broadcasts withdrawal without turning it into a user answer', () => {
   const request = { kind: 'ask_user_question', requestId: 'q1', delivery: 'async', questions: [{ question: 'Logged in?' }] };
