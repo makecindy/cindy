@@ -7886,6 +7886,7 @@
           "accessDenied": "此法器操作不被允许，或已取消。",
           "notConfigured": "此环境未设法器坊。",
           "invalidPackage": "法器安装包有异，不可纳，请联系发布者。",
+          "downloadAuthorizationExpired": "法器下载授权已过期，无法续装。请核对系统日期与时间后重新安装",
           "downloadTimeout": "法器取下逾时，请稍后再试。",
           "downloadFailed": "法器取下未成，请查网络后再试。",
           "brokerRedirectPortRequired": "此法器声明授权 broker，然同一 OAuth 设置缺 redirectPort，故不能自法器坊纳之。请联系发布者补此字段并重新发布。",

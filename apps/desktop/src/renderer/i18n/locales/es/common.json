@@ -7998,6 +7998,7 @@
           "accessDenied": "Esta operación del complemento no está permitida o se canceló.",
           "notConfigured": "El mercado de complementos no está disponible en este entorno.",
           "invalidPackage": "Este paquete de complemento no es válido y no se puede instalar. Contacta al editor.",
+          "downloadAuthorizationExpired": "La autorización de descarga del complemento ha caducado. Comprueba la fecha y la hora del sistema antes de iniciar una nueva instalación.",
           "downloadTimeout": "Se agotó el tiempo de descarga del complemento. Inténtalo más tarde.",
           "downloadFailed": "No se pudo descargar el complemento. Revisa tu conexión e inténtalo de nuevo.",
           "brokerRedirectPortRequired": "Este complemento declara un intermediario de autorización, pero falta redirectPort en la misma configuración de OAuth, por lo que no se puede instalar desde el mercado de complementos. Contacta al editor para que agregue el campo y publique una nueva versión.",

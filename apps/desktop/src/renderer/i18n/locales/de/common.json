@@ -7930,6 +7930,7 @@
           "accessDenied": "Diese Plugin-Aktion ist nicht zulässig oder wurde abgebrochen.",
           "notConfigured": "Der Plugin-Marktplatz ist in dieser Umgebung nicht verfügbar.",
           "invalidPackage": "Dieses Plugin-Paket ist ungültig und kann nicht installiert werden. Kontaktiere den Herausgeber.",
+          "downloadAuthorizationExpired": "Die Downloadberechtigung für das Plugin ist abgelaufen. Prüfe Datum und Uhrzeit des Systems, bevor du die Installation erneut startest.",
           "downloadTimeout": "Zeitüberschreitung beim Plugin-Download. Versuche es später erneut.",
           "downloadFailed": "Der Plugin-Download ist fehlgeschlagen. Prüfe deine Verbindung und versuche es erneut.",
           "brokerRedirectPortRequired": "Dieses Plugin deklariert einen Autorisierungsbroker, aber in derselben OAuth-Konfiguration fehlt redirectPort. Daher kann es nicht aus dem Plugin-Marktplatz installiert werden. Bitte den Herausgeber, das Feld hinzuzufügen und ein neues Release zu veröffentlichen.",

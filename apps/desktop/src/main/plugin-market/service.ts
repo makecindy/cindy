@@ -3037,7 +3037,7 @@ export class PluginMarketService {
     }
     const expiresAt = Date.parse(download.expiresAt);
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-      throwIpcError('PRECONDITION_FAILED', 'Plugin download authorization expired');
+      throwIpcError('GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED', 'Plugin download authorization expired');
     }
 
     const tempPath = path.join(

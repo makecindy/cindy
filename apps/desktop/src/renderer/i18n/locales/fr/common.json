@@ -7998,6 +7998,7 @@
           "accessDenied": "Cette opération sur le plugin n'est pas autorisée ou a été annulée.",
           "notConfigured": "Le marketplace de plugins n'est pas disponible dans cet environnement.",
           "invalidPackage": "Ce paquet de plugin n'est pas valide et ne peut pas être installé. Contactez l'éditeur.",
+          "downloadAuthorizationExpired": "L’autorisation de téléchargement du plugin a expiré. Vérifiez la date et l’heure du système avant de lancer une nouvelle installation.",
           "downloadTimeout": "Le téléchargement du plugin a expiré. Veuillez réessayer plus tard.",
           "downloadFailed": "Échec du téléchargement du plugin. Vérifiez votre connexion et réessayez.",
           "brokerRedirectPortRequired": "Ce plugin déclare un broker d'autorisation mais redirectPort est absent de la même configuration OAuth : il ne peut donc pas être installé depuis le marketplace de plugins. Contactez l'éditeur pour qu'il ajoute ce champ et publie une nouvelle version.",

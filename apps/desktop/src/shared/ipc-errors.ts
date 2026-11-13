@@ -284,6 +284,7 @@ export type IpcErrorCode =
   | 'TERMINAL_ALREADY_DISPOSED' // 在已 dispose 的 session 上调 restart 等操作
   // 意识(.cindy 装入)
   | 'GHOST_FILE_INVALID' // 不是合法 zip / 缺 ghost.json / 清单不合格 / 超限
+  | 'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED' // 下载授权无效或已到期，未开始下载
   | 'GHOST_DOWNLOAD_TIMEOUT' // 市场包下载总时限或无进展超时
   | 'GHOST_DOWNLOAD_FAILED' // 市场包下载网络失败
   | 'GHOST_HOST_UNSUPPORTED' // 插件包使用了当前 Cindy 不认识的未来 schema
@@ -524,6 +525,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'TERMINAL_SHELL_NOT_FOUND',
   'TERMINAL_ALREADY_DISPOSED',
   'GHOST_FILE_INVALID',
+  'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED',
   'GHOST_DOWNLOAD_TIMEOUT',
   'GHOST_DOWNLOAD_FAILED',
   'GHOST_HOST_UNSUPPORTED',
