@@ -44,6 +44,21 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
 
 const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.title' });
 
+// Non-Cindy Apps on desktop platforms must not be probed as outdated Cindy or
+// offered remote desktop. Existing card/batch tests only varied platform. Unit.
+it.each(['cindy-friend', 'other-app'])('labels app=%s and excludes it from card and batch computer actions', app => {
+  const command = vi.fn();
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  const peer = node({ id: app, app, encrypted: true });
+  render(<><DeviceNodePopover node={peer} relayName="Cindy" onRemoteDesktop={vi.fn()} onSwitch={vi.fn()} />
+    <RemoteSwitchBatch nodes={[peer]} entries={new Map()} /></>);
+  const appName = app === 'cindy-friend' ? 'settings.devices.apps.cindyFriend' : app;
+  expect(screen.getByText(`${appName} · Work PC`)).toBeTruthy();
+  expect(remoteDesktop()).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+  expect(command).not.toHaveBeenCalled();
+});
+
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 // 2026-11-12 用户裁决：单台与批量入口都须保留目标的仅加密选择。真实组件+状态探测，tier:unit。

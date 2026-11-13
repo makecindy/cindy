@@ -11,6 +11,8 @@
 
 import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
+import { deviceLabel } from '@/components/settings/deviceLabels';
 import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -264,10 +266,10 @@ export function DeviceNodePopover({
         ? 'text-[var(--warning-accent)]'
         : undefined;
   const canRemoteDesktop =
-    node.status !== 'offline' && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
+    node.status !== 'offline' && isCindyApp(node.app) && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
   return (
     <div className="flex flex-col gap-3">
-      <Heading name={node.name} sub={sub} platform={node.platform} isMobile={node.isMobile} />
+      <Heading name={deviceLabel(node, t)} sub={sub} platform={node.platform} isMobile={node.isMobile} />
       <div className="flex flex-col gap-1.5">
         {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
         <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />

@@ -17,6 +17,7 @@ function createHarness() {
   const freshness = createControllerPresenceFreshnessTracker();
   const onlineByDevice = new Map<string, boolean>();
   const platformByDevice = new Map<string, string>();
+  const appByDevice = new Map<string, string | undefined>();
   const nameByDevice = new Map<string, string>();
   const exchanged = vi.fn();
   const confirmed = vi.fn();
@@ -27,6 +28,7 @@ function createHarness() {
     freshness,
     onlineByDevice,
     platformByDevice,
+    appByDevice,
     nameByDevice,
     exchanged,
     confirmed,
@@ -49,7 +51,8 @@ function createHarness() {
         getOnline: (deviceId) => onlineByDevice.get(deviceId),
         setOnline: (deviceId, online) => onlineByDevice.set(deviceId, online),
         forgetOnline: (deviceId) => onlineByDevice.delete(deviceId),
-        setPlatform: (deviceId, platform) => {
+        setPlatform: (deviceId, platform, app) => {
+          appByDevice.set(deviceId, app);
           if (platform) platformByDevice.set(deviceId, platform);
           else platformByDevice.delete(deviceId);
         },
@@ -68,6 +71,15 @@ function createHarness() {
 }
 
 describe('controller presence directory snapshot', () => {
+  // App routing, unit: cold directory seeding passes app to the same metadata
+  // cache used by live presence. Previous tests only retained platform.
+  it('passes App identity through online and offline directory seeding', () => {
+    const h = createHarness();
+    h.apply([{ deviceId: 'friend', online: true, platform: 'darwin', app: 'cindy-friend' }]);
+    expect(h.appByDevice.get('friend')).toBe('cindy-friend');
+    h.apply([{ deviceId: 'friend', online: false, platform: 'darwin', app: 'cindy-friend' }]);
+    expect(h.appByDevice.get('friend')).toBe('cindy-friend');
+  });
   // Unit: group RPC availability outlives transient relay loss only on a
   // bounded, already-authenticated path. Only an online false bit is a fresh
   // control-off; offline rows mask the flag and must keep verified availability.

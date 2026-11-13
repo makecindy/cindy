@@ -7070,7 +7070,11 @@
         "remoteSessionEnded": "El dispositivo remoto finalizó esta sesión"
       },
       "control": "Control",
-      "standbyHint": "Otra instancia de Cindy en esta computadora está usando la conexión remota. Ciérrala y esta instancia tomará el control automáticamente."
+      "standbyHint": "Otra instancia de Cindy en esta computadora está usando la conexión remota. Ciérrala y esta instancia tomará el control automáticamente.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",

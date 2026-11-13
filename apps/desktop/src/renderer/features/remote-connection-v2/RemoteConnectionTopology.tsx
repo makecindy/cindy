@@ -21,6 +21,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
+import { deviceLabel } from '@/components/settings/deviceLabels';
 import { MonitorOff, Radio } from 'lucide-react';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -432,7 +433,8 @@ export function RemoteConnectionTopology({
       const protocol = running
         ? t(running.target === 'agent-net' ? 'settings.remoteControl.v2.peerSwitch.row.toAgentNet' : 'settings.remoteControl.v2.peerSwitch.row.toDeviceLink')
         : protocolLabel(node, t);
-      const description = [node.name, protocol, sub.text].filter(Boolean).join(' · ');
+      const displayName = deviceLabel(node, t);
+      const description = [displayName, protocol, sub.text].filter(Boolean).join(' · ');
       pills.push(
         <LatencyPill
           key={`${row.id}:pill`}
@@ -492,7 +494,7 @@ export function RemoteConnectionTopology({
           layout={layout}
           at={p}
           side={group.side}
-          name={node.name}
+          name={displayName}
           hint={protocol ?? undefined}
           dim={node.status === 'offline'}
           animate={animate}

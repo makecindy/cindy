@@ -14,6 +14,8 @@ export default {
     },
   },
   cases: {
+    'app-nodes': { about: 'Friend, unknown App and offline Friend keep their App label and platform icon; no Cindy remote actions or control-off warning', storage: V2_ON },
+    'app-nodes-list': { about: 'My devices labels other Apps without outbound computer actions; legacy Cindy stays unchanged' },
     default: {
       about: 'Eight other devices: direct (one exchanging messages), relay (receiving), not linked, needs attention and two folded offline',
       storage: V2_ON,
@@ -43,6 +45,28 @@ export default {
   },
   async check(page, ui) {
     await page.getByRole('switch', { name: await ui.t('settings.remoteControl.v2.switch.title') }).waitFor();
+    if (ui.case === 'app-nodes' || ui.case === 'app-nodes-list') {
+      const friend = `${await ui.t('settings.devices.apps.cindyFriend')} · Friend Mac`;
+      if (ui.case === 'app-nodes-list') {
+        await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).click();
+        const row = page.locator('[data-device-id="friend"]');
+        await row.getByText(friend, { exact: true }).waitFor();
+        assert.equal(await row.getByText(await ui.t('settings.remoteControl.myDevices.peerControlOff'), { exact: true }).count(), 0);
+        assert.equal(await row.getByText(await ui.t('settings.remoteControl.myDevices.controlIt'), { exact: true }).count(), 0);
+        await page.getByText('future-app · Lab Mac', { exact: true }).waitFor();
+        await page.getByText('Legacy Cindy', { exact: true }).waitFor();
+      } else {
+        await page.getByRole('button', { name: new RegExp(`^${friend}`) }).click();
+        const card = page.getByRole('dialog');
+        await card.getByText(friend, { exact: true }).waitFor();
+        assert.equal(await card.getByRole('button').count(), 0);
+        await ui.capture('friend-card');
+        await page.keyboard.press('Escape');
+        await page.getByText('future-app · Lab Mac', { exact: true }).waitFor();
+        await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).waitFor();
+      }
+      return;
+    }
     if (ui.case === 'model-access-off' || ui.case === 'model-access-on') {
       const card = page.getByTestId('own-computer-model-access');
       await card.waitFor();

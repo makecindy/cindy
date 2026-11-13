@@ -459,7 +459,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (deviceId === this.deviceId) return;
     const view = this.roster.get(deviceId);
     this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId, deviceName: view?.name ?? '', selfName: view?.selfName,
-      online, remoteControlEnabled: online && (view?.remoteControlEnabled ?? false), platform: view?.platform ?? '',
+      online, remoteControlEnabled: online && (view?.remoteControlEnabled ?? false), platform: view?.platform ?? '', app: view?.app,
       appVersion: view?.appVersion ?? '', busy: online && !!view?.busy, lastSeenAt: view?.lastSeenAt ?? Date.now() } });
   }
   private fromPeer(peer: Peer, frame: Envelope): void {

@@ -423,6 +423,10 @@ Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 a
 
 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
 
+### Cindy Friend
+
+Agent-Net App name supplied by the product request; preserve the brand in every locale.
+
 ### Cindy Make
 
 用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。

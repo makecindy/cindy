@@ -6960,7 +6960,11 @@
         "remoteSessionEnded": "リモートデバイスがこのセッションを終了しました"
       },
       "control": "操作",
-      "standbyHint": "このパソコンの別の Cindy インスタンスがリモート接続を使用しています。それを閉じると、このインスタンスが自動的に引き継ぎます。"
+      "standbyHint": "このパソコンの別の Cindy インスタンスがリモート接続を使用しています。それを閉じると、このインスタンスが自動的に引き継ぎます。",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
