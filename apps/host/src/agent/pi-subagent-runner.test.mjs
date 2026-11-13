@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,9 +84,28 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
 
 test('the runner is ready once, loses its IPC channel before loading, and stops through its handle', async t => {
   let runner;
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-runner-')));
-  fs.mkdirSync(path.join(root, 'home'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-runner-')));
+  const home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  const controlRoot = process.platform === 'win32' ? path.join(root, 'powershell-control') : null;
+  const controlHome = controlRoot ? path.join(controlRoot, 'home') : null;
+  let controlRun;
   try {
+    if (controlRoot) {
+      fs.mkdirSync(controlHome, { recursive: true });
+      // Measure Windows known-folder creation with the same isolated environment,
+      // without running Node, tsx, or our runner in the control home.
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$null'], {
+        cwd: controlRoot, env: fixtureRunnerEnv(controlRoot), windowsHide: true, encoding: 'utf8', timeout: 5_000,
+      });
+      controlRun = { status: result.status, signal: result.signal,
+        error: result.error ? { code: result.error.code, message: result.error.message } : null,
+        stdout: result.stdout, stderr: result.stderr };
+      const detail = JSON.stringify({ home, entries: directoryEntries(home),
+        controlHome, controlEntries: directoryEntries(controlHome), controlRun });
+      assert.equal(result.error, undefined, detail);
+      assert.equal(result.status, 0, detail);
+    }
     const { status, request } = stageRun(root, 'run-1');
     // A variable only the parent has must not reach the child.
     process.env.CINDY_TEST_PARENT_ONLY = 'parent-only';
@@ -114,13 +134,24 @@ test('the runner is ready once, loses its IPC channel before loading, and stops 
       ? { code: 1, signal: null } : { code: null, signal: 'SIGTERM' });
     assert.equal(runner.killed, true);
     assert.equal(alive(pid), false);
-    const home = path.join(root, 'home');
-    assert.deepEqual(fs.readdirSync(home), [], JSON.stringify({ home, entries: directoryEntries(home) }));
+    const entries = directoryEntries(home);
+    const controlEntries = controlHome ? directoryEntries(controlHome) : [];
+    const detail = JSON.stringify({ home, entries, controlHome, controlEntries });
+    // Files, links, and other entry kinds are forbidden on every platform and
+    // in both homes. Windows directory names come from this run's control only.
+    assert.deepEqual(entries.filter(entry => entry.type !== 'directory'), [], detail);
+    assert.deepEqual(controlEntries.filter(entry => entry.type !== 'directory'), [], detail);
+    assert.deepEqual(entries.map(entry => entry.path).sort(), controlEntries.map(entry => entry.path).sort(), detail);
   } finally {
     // A failed assertion above must not leave the fixture runner behind: stop it through its handle.
     if (runner && !runner.killed) runner.kill('SIGKILL');
     delete process.env.CINDY_TEST_PARENT_ONLY;
+    t.diagnostic(JSON.stringify({ home, entries: directoryEntries(home) }));
     diagnoseRunnerDirectories(t, root);
+    if (controlRoot) {
+      t.diagnostic(JSON.stringify({ home: controlHome, entries: directoryEntries(controlHome), controlRun }));
+      diagnoseRunnerDirectories(t, controlRoot);
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
