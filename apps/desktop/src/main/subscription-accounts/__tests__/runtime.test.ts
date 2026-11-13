@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
+  SubscriptionAccountCommand,
   SubscriptionPoolConfig,
   SubscriptionProvider,
 } from '../../../shared/subscriptionAccounts.js';
@@ -35,7 +36,74 @@ const h = vi.hoisted(() => ({
   cooling: {} as Record<string, Record<string, Record<string, number>>>,
   writeCooling: vi.fn<(cooling: Record<string, Record<string, Record<string, number>>>) => Promise<undefined>>(async () => undefined),
   clearCooling: vi.fn<(provider: string, accountId: string) => Promise<undefined>>(async () => undefined),
+  /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
+  placement: {} as Record<string, string>,
+  /** Providers Cindy created for subscription accounts (placement.ts), by provider id. */
+  created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
+  strategies: {} as Record<string, string>,
 }));
+// Persisted placement is replaced like the pool file; its own rules are covered in ipc.test.ts.
+vi.mock('../placement.js', () => {
+  type Kind = 'openai' | 'anthropic';
+  const owner = (kind: string, id: string) => (id === 'default' ? kind : h.placement[`${kind}:${id}`] ?? kind);
+  const legacyAccount = (providerId: string) => h.pools.openai?.legacyCodexAccounts?.[providerId];
+  const providerAccounts = <T extends { id: string }>(kind: string, accounts: readonly T[], providerId = kind) =>
+    accounts.filter((a) => owner(kind, a.id) === providerId);
+  const resolveSubscriptionPoolProvider = (providerId: string | null | undefined) => {
+    if (providerId === 'openai' || providerId === 'anthropic') return { kind: providerId as Kind, providerId };
+    const created = providerId ? h.created[providerId] : undefined;
+    if (providerId && created) return { kind: created.kind, providerId, ownAccount: created.account, created: true as const };
+    const legacy = providerId ? legacyAccount(providerId) : undefined;
+    return providerId && legacy ? { kind: 'openai' as const, providerId, ownAccount: legacy } : null;
+  };
+  const pinnedOwnAccount = (ref: { kind: Kind; providerId: string; ownAccount?: string }) =>
+    ref.ownAccount && providerAccounts(ref.kind, h.pools[ref.kind]?.accounts ?? [], ref.providerId).length === 0
+      && h.pools[ref.kind]?.accounts.some((a) => a.id === ref.ownAccount)
+      ? ref.ownAccount : undefined;
+  const place = (kind: string, accountId: string, providerId: string) => {
+    if (providerId === kind) delete h.placement[`${kind}:${accountId}`];
+    else h.placement[`${kind}:${accountId}`] = providerId;
+  };
+  return {
+    accountProviderId: owner,
+    providerAccounts,
+    accountSiblings: <T extends { id: string }>(kind: string, accounts: readonly T[], accountId: string) =>
+      accounts.filter((a) => owner(kind, a.id) === owner(kind, accountId)),
+    readMergedLegacyCodexAccountId: (providerId: string) => {
+      const accountId = legacyAccount(providerId);
+      return accountId && owner('openai', accountId) !== providerId ? accountId : undefined;
+    },
+    resolveSubscriptionPoolProvider,
+    pinnedOwnAccount,
+    readMergedProviderAccount: (providerId: string) => {
+      const ref = resolveSubscriptionPoolProvider(providerId);
+      return ref && ref.providerId !== ref.kind ? pinnedOwnAccount(ref) : undefined;
+    },
+    accountOwnProvider: (kind: string, accountId: string) => {
+      if (accountId === 'default') return kind;
+      const created = Object.entries(h.created).find(([, entry]) => entry.kind === kind && entry.account === accountId);
+      if (created) return created[0];
+      const legacy = Object.entries(h.pools.openai?.legacyCodexAccounts ?? {}).find(([, id]) => id === accountId);
+      return kind === 'openai' ? legacy?.[0] : undefined;
+    },
+    placeSubscriptionAccount: async (kind: string, accountId: string, providerId: string) => place(kind, accountId, providerId),
+    createSubscriptionProvider: async (kind: Kind, accountId: string, name: string, createId: () => string) => {
+      const providerId = `${kind}-sub-${createId()}`;
+      h.created[providerId] = { kind, name, account: accountId };
+      place(kind, accountId, providerId);
+      return providerId;
+    },
+    deleteCreatedSubscriptionProvider: async (providerId: string) => {
+      delete h.created[providerId];
+      for (const [key, id] of Object.entries(h.placement)) if (id === providerId) delete h.placement[key];
+    },
+    renameCreatedSubscriptionProvider: async (providerId: string, name: string) => {
+      if (h.created[providerId]) h.created[providerId] = { ...h.created[providerId], name };
+    },
+    readProviderStrategy: (providerId: string) => h.strategies[providerId],
+    writeProviderStrategy: async (providerId: string, strategy: string) => { h.strategies[providerId] = strategy; },
+  };
+});
 vi.mock('../../provider-group/coolingStore.js', () => ({
   readProviderGroupCooling: () => ({}),
   writeProviderGroupCooling: async () => undefined,
@@ -170,6 +238,9 @@ beforeEach(() => {
   h.cooling = {};
   h.writeCooling.mockReset().mockResolvedValue(undefined);
   h.clearCooling.mockReset().mockResolvedValue(undefined);
+  h.placement = {};
+  h.created = {};
+  h.strategies = {};
 });
 
 // Regression: added OpenAI accounts had neither reset RPC routing nor an automatic
@@ -897,6 +968,47 @@ describe('tasks using imported Codex connections', () => {
     await handle.close();
   });
 
+  // 2026-11-13 user decision (subscription-account-pools.md 合并与拿出由用户决定), unit: an account
+  // the upgrade merged belongs to its own connection again. Same minimal input as the merged case
+  // above (two accounts, the first exhausted), but OpenAI must neither assign it nor move its tasks.
+  it('keeps tasks on an account restored to its own connection and stops OpenAI from assigning it', async () => {
+    h.pools.openai = {
+      strategy: 'order', accounts: [{ ...account('imported'), limit: 4 }, { ...account('second'), limit: 4 }],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    h.placement = { 'openai:imported': 'openai-old' };
+    const failed = await acquireSubscriptionAccount('openai', model, [], false, { accountId: 'imported' });
+    await failed!.bind(['task:fresh', 'native:old']);
+    failed!.observeFailure(Object.assign(new Error('usage limit'), { codexErrorInfo: 'usageLimitExceeded' }), model, 'run');
+    failed!.release();
+    // An `openai` task assigned to the account while it was merged follows the account.
+    expect(await readSubscriptionSessionAccount('openai', { sessionId: 'fresh', model }))
+      .toMatchObject({ state: 'bound', account: { number: 1 } });
+    expect(await readSubscriptionSessionAccount('openai', { sessionId: 'fresh', model }))
+      .not.toHaveProperty('account.blocked');
+    const start = vi.fn(async () => ({ id: 'native-new', close: async () => {} }) as unknown as AgentSessionHandle);
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'openai', sessionId: 'fresh', model } as StartSessionOptions);
+    expect((start.mock.calls[0] as unknown as [StartSessionOptions])[0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
+    expect(h.bindings.get('task:fresh')?.accountId).toBe('imported');
+    await handle.close();
+    expect(await canSwitchSubscriptionAccount('fresh', async () => ({
+      status: 'active', providerId: 'openai', agentKind: 'codex', model, sdkSessionId: 'old',
+    }))).toBe(false);
+    // New OpenAI work and the OpenAI account list use only OpenAI's own accounts. Another model is
+    // used so the first account's cooling for `model` cannot explain the choice.
+    const fresh = await acquireSubscriptionAccount('openai', 'gpt-other', [], false);
+    expect(fresh?.accountId).toBe('second');
+    fresh?.release();
+    expect((await readSubscriptionPool('openai')).accounts.map((a) => a.id)).toEqual(['second']);
+    // Disconnecting OpenAI does not stop the restored connection.
+    h.pools.openai.disconnected = true;
+    const own = await acquireSubscriptionAccount('openai', model, [], false, { accountId: 'imported' });
+    expect(own?.accountId).toBe('imported');
+    own?.release();
+    await expect(acquireSubscriptionAccount('openai', model, [], false)).rejects.toThrow('disconnected');
+  });
+
   // PR #10271 independent review (unit): local-only recovery left remote tasks on their old
   // connection id. Exercise executor admission, the wire parser, controller handoff and a fresh
   // Agent start together; two accounts and one unavailable legacy account are the minimal input.
@@ -1383,7 +1495,7 @@ describe('native account assignment on the executing computer', () => {
         target: 'default',
         providerId,
         loginKey: 'existing',
-      });
+      } as SubscriptionAccountCommand);
       expect(h.pools[providerId]!.accounts.map((a) => a.id)).toEqual(['default']);
       expect(h.login).not.toHaveBeenCalled();
     },
@@ -2042,6 +2154,60 @@ describe('native account assignment on the executing computer', () => {
     const ordered = await acquireSubscriptionAccount('anthropic', undefined, []);
     expect(ordered!.account.configDir).toBe('anthropic/default');
     ordered!.release();
+  });
+  // 2026-11-13 (subscription-account-pools.md 合并与拿出由用户决定), unit: the pool used to serve only
+  // the built-in provider, so an account the user took out or moved kept being listed and assigned
+  // there. Real command entry and dispatch; placement storage is the in-memory stand-in above.
+  it.each(['anthropic', 'openai'] as const)('takes out, moves, merges and deletes %s providers by account', async kind => {
+    h.pools[kind] = {
+      strategy: 'order',
+      accounts: ['default', 'second', 'third'].map(id => ({ ...account(id), limit: 4 })),
+    };
+    const ids = async (providerId: string) => (await readSubscriptionPool(providerId)).accounts.map(a => a.id);
+    const pick = async (providerId: string) => {
+      const lease = await acquireSubscriptionAccount(providerId, undefined, []);
+      lease?.release();
+      return lease?.account.configDir;
+    };
+    await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
+    const [created] = Object.keys(h.created);
+    expect(created).toMatch(new RegExp(`^${kind}-sub-`));
+    expect(await ids(kind)).toEqual(['default', 'second']);
+    expect(await pick(created!)).toBe(`${kind}/third`);
+    // Review regression: a task switched to another provider used to keep its old account. A fresh
+    // session picks within the new provider; a resume never runs the old history in another account.
+    const first = await acquireSubscriptionAccount(kind, undefined, ['task:switch']);
+    await first!.bind(['task:switch']);
+    first!.release();
+    await expect(acquireSubscriptionAccount(created!, undefined, ['task:switch'])).rejects.toThrow('changed');
+    const fresh = await acquireSubscriptionAccount(created!, undefined, ['task:switch'], false, { resuming: false });
+    expect(fresh!.account.configDir).toBe(`${kind}/third`);
+    fresh!.release();
+    // Moving into the created provider leaves only the CLI default with the built-in one.
+    await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'second', target: created! });
+    expect(await ids(kind)).toEqual(['default']);
+    expect(await ids(created!)).toEqual(['second', 'third']);
+    h.pools[kind]!.accounts[1]!.paused = true;
+    expect(await pick(created!)).toBe(`${kind}/third`);
+    expect(await pick(kind)).toBe(`${kind}/default`);
+    // Merging moves every account back; the emptied provider keeps pinning its own for old tasks.
+    await runSubscriptionAccountCommand({ action: 'merge', providerId: created!, target: kind });
+    expect(await ids(kind)).toEqual(['default', 'second', 'third']);
+    expect(await ids(created!)).toEqual([]);
+    // Deleting a created provider stops using only its own accounts.
+    await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
+    await runSubscriptionAccountCommand({ action: 'remove-provider', providerId: created! });
+    expect(h.pools[kind]!.accounts.map(a => a.id)).toEqual(['default', 'second']);
+    expect(h.created).toEqual({});
+    await expect(runSubscriptionAccountCommand({ action: 'remove-provider', providerId: kind })).rejects.toThrow();
+    // Review regression: the built-in provider is never merged away as a whole, even from a pool
+    // migrated without a CLI default account.
+    h.pools[kind]!.accounts = [{ ...account('second'), limit: 4 }, { ...account('fourth'), limit: 4 }];
+    await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'fourth', target: null });
+    const [other] = Object.keys(h.created);
+    await expect(runSubscriptionAccountCommand({ action: 'merge', providerId: kind, target: other! }))
+      .rejects.toThrow('built-in');
+    expect(await ids(kind)).toEqual(['second']);
   });
   // Report verification (unit): the scheduler's pure-input tests did not cover
   // settings commands reaching dispatch. Equal/unknown quota lets order, the

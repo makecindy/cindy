@@ -131,6 +131,14 @@ let custom: Provider[] = [];
 let managed: Provider[] = [];
 /** 当前 owner 的原始配置；仅用于 Registry 热更新后的运行时重投影。 */
 let customConfigs: CustomProviderConfig[] | null = null;
+/** A provider Cindy created for subscription accounts (2026-11-13), as shown in the catalog. */
+export interface SubscriptionPoolProviderEntry {
+  id: string;
+  kind: 'openai' | 'anthropic';
+  name: string;
+}
+/** 当前 owner 为订阅账号新建的供应商；在合并目录末尾按同类内置订阅镜像出条目。 */
+let subscriptionPoolProviders: SubscriptionPoolProviderEntry[] = [];
 /**
  * codex cache 派生的规范化模型快照(原始 slug,不带 chatgpt/ 前缀)。先 augment 到
  * openai.codex,再从生效后的 codex 列表投影 openai.claude-code bridge,确保两边名称和排序同源。
@@ -1984,6 +1992,17 @@ function computeMerged(): Catalog {
           localOverrides.patches[key].agents?.includes(agent)));
     },
   }));
+  // Providers Cindy created for subscription accounts (2026-11-13) mirror their built-in
+  // subscription's final routes and models; only the accounts behind them differ (placement.ts).
+  // Platform-key media stays with the built-in connection.
+  for (const entry of subscriptionPoolProviders) {
+    const base = providers.find((provider) => provider.id === entry.kind);
+    if (!base || providers.some((provider) => provider.id === entry.id)) continue;
+    providers = [...providers, {
+      ...base, id: entry.id, name: entry.name, subscriptionPool: entry.kind,
+      imageModels: undefined, imageDefaults: undefined, videoModels: undefined, videoDefaults: undefined,
+    }];
+  }
   return { ...b, modelRegistry, providers };
 }
 
@@ -2205,6 +2224,17 @@ export function setManagedProviders(providers: Provider[]): void {
 export function setCustomProviders(providers: Provider[]): void {
   customConfigs = null;
   custom = [...providers];
+  markChanged();
+}
+
+/**
+ * Publish the current owner's created subscription providers (2026-11-13); each mirrors its
+ * built-in subscription in the merged catalog. Pass an empty list when the owner changes.
+ */
+export function setSubscriptionPoolProviders(entries: readonly SubscriptionPoolProviderEntry[]): void {
+  const next = entries.map(({ id, kind, name }) => ({ id, kind, name }));
+  if (JSON.stringify(next) === JSON.stringify(subscriptionPoolProviders)) return;
+  subscriptionPoolProviders = next;
   markChanged();
 }
 

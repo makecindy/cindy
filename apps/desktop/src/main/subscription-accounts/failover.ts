@@ -20,6 +20,7 @@
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { readPool } from './store.js';
+import { providerAccounts } from './placement.js';
 import {
   acquireSubscriptionAccount,
   readRemoteSubscriptionAccountSwitch,
@@ -67,7 +68,7 @@ function boundAccount(sessionId: string, row: AccountFailoverSession): BoundAcco
   const task = readTaskPoolAccount(sessionId, row);
   if (!task) return null;
   const pool = readPool(task.provider);
-  if (!pool || pool.disconnected || pool.accounts.length < 2) return null;
+  if (!pool || pool.disconnected || providerAccounts(task.provider, pool.accounts).length < 2) return null;
   return { ...task, model: row.model ?? undefined };
 }
 
@@ -79,7 +80,7 @@ async function routeAdmits(bound: BoundAccount): Promise<boolean> {
 function hasMultiAccountPool(): boolean {
   return (['anthropic', 'openai'] as const).some((provider) => {
     const pool = readPool(provider);
-    return !!pool && !pool.disconnected && pool.accounts.length > 1;
+    return !!pool && !pool.disconnected && providerAccounts(provider, pool.accounts).length > 1;
   });
 }
 

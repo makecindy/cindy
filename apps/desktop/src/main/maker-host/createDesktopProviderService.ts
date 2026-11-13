@@ -30,7 +30,14 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
-import { readPool, migrateLegacyCodexAccounts, readLegacyCodexAccountId } from '../subscription-accounts/store.js';
+import { readPool } from '../subscription-accounts/store.js';
+import {
+  accountProviderId,
+  readCreatedSubscriptionProviders,
+  readMergedProviderAccount,
+  restoreAutoMergedLegacyCodexAccounts,
+  resolveSubscriptionPoolProvider,
+} from '../subscription-accounts/placement.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -73,6 +80,7 @@ import {
   setCustomProviders,
   setDiscoveredCodexModels,
   setLocalCatalogOverrides,
+  setSubscriptionPoolProviders,
 } from './active-catalog.js';
 import { readModelCatalogOverrides } from './model-catalog-override-store.js';
 import {
@@ -91,7 +99,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './model-discovery/xai.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
-import { readModelDisableOverrides } from './model-disable-store.js';
+import { readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
@@ -146,7 +154,6 @@ import {
   claimDetectedNativeProviderAuth,
   getNativeProviderAuthSource,
   isNativeProviderAuthBound,
-  isNativeProviderAuthSharedSystemCredential,
   isNativeProviderAuthRevoked,
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
@@ -694,20 +701,25 @@ export async function refreshCustomProvidersIntoCatalog(
       return;
     }
     setCustomProviderConfigs(next);
-    // Publish old routes first: imported accounts retain these IDs for history and revocation.
-    const access = readModelDisableOverrides();
-    const nativeDefault = isNativeProviderAuthBound('openai');
+    // Publish old routes first. Accounts are never merged automatically any more (2026-11-13,
+    // subscription-account-pools.md 合并与拿出由用户决定); connections the 11-11 upgrade folded into
+    // OpenAI belong to their own connection again, keeping their account, login and task bindings.
     try {
-      await migrateLegacyCodexAccounts(
-        next.filter(config => config.auth?.method === 'oauth' && config.auth.native === 'codex')
-          .map(config => ({ providerId: config.id, paused: isProviderDisabled(access, config.id) })),
-        { preserveDefault: nativeDefault, legacyDefault: nativeDefault && !isNativeProviderAuthSharedSystemCredential('openai'), isCurrent },
+      await restoreAutoMergedLegacyCodexAccounts(
+        new Set(next.filter(config => config.auth?.method === 'oauth' && config.auth.native === 'codex')
+          .map(config => config.id)),
+        {
+          disable: providerId => setProviderDisabled(providerId, true),
+          isDisabled: providerId => readModelDisableOverrides().disabledProviders?.[providerId] === true,
+          isCurrent,
+        },
       );
     } catch {
-      // Failed metadata writes leave every original connection available for the next refresh.
-      log.warn('legacy Codex account migration did not complete');
+      // The merged view stays as it was; the next refresh retries.
+      log.warn('restoring merged legacy Codex connections did not complete');
     }
     if (!isCurrent()) return;
+    publishSubscriptionPoolProviders();
     requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
@@ -851,19 +863,43 @@ function getDesktopSelectableBaseCatalog(): Catalog {
   });
 }
 
+/**
+ * Publish the providers Cindy created for this owner's subscription accounts into the catalog
+ * (subscription-account-pools.md 合并与拿出由用户决定). Hidden ones (merged away, no accounts left)
+ * stay in the catalog so old tasks keep resolving; the provider view marks them as merged.
+ */
+export function publishSubscriptionPoolProviders(): void {
+  try {
+    setSubscriptionPoolProviders(Object.entries(readCreatedSubscriptionProviders())
+      .map(([id, entry]) => ({ id, kind: entry.kind, name: entry.name })));
+  } catch (err) {
+    // An unreadable placement file keeps the previous list; the next refresh retries.
+    log.warn('publishing subscription providers failed', { err: String(err) });
+  }
+}
+
 /** Apply account membership to both selectable and full routing snapshots. */
 function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
   const pool = readPool('openai');
   const aliases = pool?.legacyCodexAccounts;
-  if (!aliases || pool.disconnected) return catalog;
-  const accounts = new Set(pool.accounts.filter(account => !account.paused).map(account => account.id));
-  const imported = catalog.providers.filter(provider => provider.auth.native === 'codex'
-    && Object.hasOwn(aliases, provider.id) && accounts.has(aliases[provider.id])
-    && codexAccountState(provider.id).authenticated);
-  if (!imported.length) return catalog;
+  if (!aliases) return catalog;
+  // A merged legacy connection lends its model membership to the provider its account belongs to
+  // now (OpenAI or another provider of the user's choice), while that provider can use it.
+  const lenders = new Map<string, Catalog['providers']>();
+  for (const provider of catalog.providers) {
+    const accountId = provider.auth.native === 'codex' && Object.hasOwn(aliases, provider.id) ? aliases[provider.id] : undefined;
+    const account = accountId ? pool.accounts.find(entry => entry.id === accountId && !entry.paused) : undefined;
+    if (!account) continue;
+    const owner = accountProviderId('openai', account.id);
+    if (owner === provider.id || (owner === 'openai' && pool.disconnected)) continue;
+    if (!codexAccountState(provider.id).authenticated) continue;
+    lenders.set(owner, [...(lenders.get(owner) ?? []), provider]);
+  }
+  if (!lenders.size) return catalog;
   // Reuse these accounts' existing membership; do not discover an unrelated default CLI login.
   return { ...catalog, providers: catalog.providers.map(provider => {
-    if (provider.id !== 'openai') return provider;
+    const imported = lenders.get(provider.id);
+    if (!imported) return provider;
     const models = Object.fromEntries(provider.agents.map(agent => {
       const models = new Map((provider.models[agent] ?? []).map(model => [model.id, model]));
       for (const source of imported) for (const model of source.models[agent] ?? [])
@@ -898,9 +934,12 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     getModelContextLimits: readModelContextLimits,
     projectProvider: provider => {
       const projected = projectSubscriptionFastPolicy(provider);
-      return readLegacyCodexAccountId(provider.id)
-        ? { ...projected, subscriptionPoolAlias: true }
-        : projected;
+      // Only a provider whose own account belongs to another provider (and that has no accounts
+      // left) is hidden behind it: a merged legacy connection or a merged created provider.
+      if (readMergedProviderAccount(provider.id)) return { ...projected, subscriptionPoolAlias: true };
+      // Clients manage this provider's accounts through the account pool (2026-11-13).
+      const pool = resolveSubscriptionPoolProvider(provider.id);
+      return pool && readPool(pool.kind) ? { ...projected, subscriptionAccountPool: pool.kind } : projected;
     },
     getOrganizationProviderLogoKind: (provider) => {
       const state = getAuthState();
@@ -973,8 +1012,10 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     codexAccountConnected: (providerId) => codexAccountState(providerId).authenticated,
+    subscriptionPoolConnected: (providerId) => hasConnectedSubscriptionPool(providerId),
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
-    subscriptionReadUnavailable: (providerId) => (providerId === 'openai' || providerId === 'anthropic')
+    subscriptionReadUnavailable: (providerId) => (providerId === 'openai' || providerId === 'anthropic'
+      || resolveSubscriptionPoolProvider(providerId)?.created === true)
       && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {

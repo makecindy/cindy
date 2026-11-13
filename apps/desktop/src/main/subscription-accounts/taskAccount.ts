@@ -14,6 +14,7 @@
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { openAiRouteAllowsModel } from './legacyAccountAccess.js';
 import { readAccountBinding, readLegacyCodexAccountId } from './store.js';
+import { accountProviderId } from './placement.js';
 
 export interface TaskAccountSession {
   status: string;
@@ -56,6 +57,10 @@ export function readTaskPoolAccount(sessionId: string, row: TaskAccountSession):
     // Pre-pool Claude tasks resume the official default home (same as agent.ts).
     ?? (provider === 'anthropic' && row.sdkSessionId ? 'default' : undefined);
   if (!accountId) return null;
+  // A task follows its account (subscription-account-pools.md 合并与拿出, 2026-11-13). Accounts move
+  // between accounts of the built-in provider only; an account that belongs to an independent
+  // connection again keeps its tasks, including `openai` tasks assigned to it while it was merged.
+  if (accountProviderId(provider, accountId) !== provider) return null;
   return { provider, accountId, ...(legacyAccount ? { legacyRoute: row.providerId! } : {}) };
 }
 

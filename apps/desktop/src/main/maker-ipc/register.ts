@@ -1,6 +1,6 @@
 import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
-import { readLegacyCodexAccountId } from '../subscription-accounts/store.js';
+import { readMergedLegacyCodexAccountId } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
@@ -12044,7 +12044,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const model = findCatalogModel(alias, selection.model, selection.agentKind, { exact: true });
       admittedAlias = !!alias && !!model && isModelSelectableForNewRoute(model, { userProvider: alias.source === 'user' });
     } else {
-      admittedAlias = !!readLegacyCodexAccountId(selection.providerId)
+      // A connection restored to its own account is an ordinary provider again: the saved choice runs there.
+      admittedAlias = !!readMergedLegacyCodexAccountId(selection.providerId)
         && legacyCodexAccountCanRun(selection.providerId, selection.model, { remote: false, newRoute: false, modelSwitch: true });
     }
     return admittedAlias ? { ...selection, providerId: 'openai' } : selection;

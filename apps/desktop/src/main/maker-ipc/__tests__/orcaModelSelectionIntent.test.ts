@@ -237,7 +237,7 @@ describe('complete selection commit boundaries', () => {
     const applied: string[] = [];
     const resolveExecution = compile(scheduledExecutionSelection, {
       getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
-      isProviderShareAgentDeviceId: () => false, readLegacyCodexAccountId: () => 'account-a',
+      isProviderShareAgentDeviceId: () => false, readMergedLegacyCodexAccountId: () => 'account-a',
       legacyCodexAccountCanRun: () => true, findCatalogModel, isModelSelectableForNewRoute,
       readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: true,
         models: { codex: [{ id: 'gpt-5', mode: 'chat' }] } }], remoteBackgroundInvoke: vi.fn(),
@@ -279,14 +279,17 @@ describe('complete selection commit boundaries', () => {
     expect(saved.providerId).toBe('openai-old');
   });
 
-  it.each(['local-model-disabled', 'remote-model-revoked', 'remote-not-alias'] as const)(
+  // 2026-11-13 (subscription-account-pools.md 合并与拿出由用户决定): a connection restored to its own
+  // account is an ordinary provider again, so the saved choice runs there instead of on OpenAI.
+  it.each(['local-model-disabled', 'local-restored', 'remote-model-revoked', 'remote-not-alias'] as const)(
     'retains original admission when a saved alias cannot follow the migrated task (%s)', async mode => {
-      const device = mode === 'local-model-disabled' ? null : 'executor';
+      const device = mode.startsWith('local-') ? null : 'executor';
       const selection = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old', agentDeviceId: device };
       const resolve = compile(scheduledExecutionSelection, {
         getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai' }),
         dbToMakerAgentKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
-        readLegacyCodexAccountId: () => 'account-a', legacyCodexAccountCanRun: () => false,
+        readMergedLegacyCodexAccountId: () => (mode === 'local-restored' ? undefined : 'account-a'),
+        legacyCodexAccountCanRun: () => mode === 'local-restored',
         readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: mode !== 'remote-not-alias',
           models: { codex: mode === 'remote-model-revoked' ? [] : [{ id: 'gpt-5', mode: 'chat' }] } }],
         remoteBackgroundInvoke: vi.fn(), findCatalogModel, isModelSelectableForNewRoute,

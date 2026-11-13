@@ -58,6 +58,12 @@ import { codexResetScope } from '../../../shared/subscriptionAccounts';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from '../status/CodexResetCredits';
+import {
+  MergeProviderButton,
+  MoveAccountMenu,
+  useMoveSubscriptionAccount,
+  useSubscriptionPlacementTargets,
+} from './SubscriptionPlacement';
 
 function AccountResetCredits({ scope }: { scope: string }) {
   const { snapshot, refresh } = useCodexRateLimits(true, scope);
@@ -94,10 +100,16 @@ function AccountTag({ children }: { children: ReactNode }) {
  */
 export function SubscriptionAccountsSection({
   providerId,
+  kind = providerId as SubscriptionProvider,
+  providerName,
   defaultUsage,
   dashboard,
 }: {
-  providerId: SubscriptionProvider;
+  /** The provider whose accounts are listed: built-in, created or a legacy Codex connection. */
+  providerId: string;
+  /** The account pool it uses (2026-11-13); defaults to the built-in provider id. */
+  kind?: SubscriptionProvider;
+  providerName?: string;
   defaultUsage?: ReactNode;
   dashboard?: { label: string; onOpen: () => void };
 }) {
@@ -128,8 +140,9 @@ export function SubscriptionAccountsSection({
   }, [providerId]);
   useEffect(() => {
     void refresh();
+    // Change notifications name the account pool (kind), shared by every provider of that kind.
     const unsubscribe = window.electronAPI.subscriptionAccounts.onChanged((event) => {
-      if (event.providerId === providerId) void refresh();
+      if (event.providerId === kind) void refresh();
     });
     const focus = () => {
       void refresh();
@@ -147,7 +160,9 @@ export function SubscriptionAccountsSection({
           .command({ action: 'cancel', providerId, loginKey: login.current })
           .catch(() => {});
     };
-  }, [providerId, refresh]);
+  }, [providerId, kind, refresh]);
+  const placementTargets = useSubscriptionPlacementTargets(kind, providerId);
+  const moveAccount = useMoveSubscriptionAccount(providerId, () => void refresh());
   const run = async (command: SubscriptionAccountCommand) => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -198,6 +213,16 @@ export function SubscriptionAccountsSection({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
+          {/* A built-in provider holds the CLI default login and is never merged away as a whole. */}
+          {providerId !== kind && accounts.length > 0 && (
+            <MergeProviderButton
+              kind={kind}
+              providerId={providerId}
+              providerName={providerName ?? providerId}
+              disabled={busy}
+              onDone={() => void refresh()}
+            />
+          )}
           {dashboard && (
             <Button
               data-settings-search-action="Open the provider usage page"
@@ -287,7 +312,7 @@ export function SubscriptionAccountsSection({
                   account.identity ||
                   t('providerGroup.member.accountFallback', { index: index + 1 });
                 const plan =
-                  providerId === 'openai'
+                  kind === 'openai'
                     ? formatCodexPlanLabel(account.plan)
                     : formatClaudeSubscriptionPlanLabel(account.plan);
                 const usage = buildSubscriptionAccountUsageCard(
@@ -336,7 +361,7 @@ export function SubscriptionAccountsSection({
                 const resetScope = account.codexResetProviderId ?? codexResetScope(account.id);
                 // Reset settings do not depend on a successful usage read. A replaced
                 // identity remounts the reader; ordinary running-count changes do not.
-                const resetNode = providerId === 'openai' && connected ? (
+                const resetNode = kind === 'openai' && connected ? (
                   <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
                 ) : null;
                 const usageNode =
@@ -396,14 +421,14 @@ export function SubscriptionAccountsSection({
                               />
                               <span title={status} className="min-w-0 truncate">{status}</span>
                             </span>
-                            {providerId === 'anthropic' && connected && (
+                            {kind === 'anthropic' && connected && (
                               <Tip text={expiryDetail}>
                                 <span className={cn('min-w-0', expiring && 'text-[var(--warning-fg)]')}>
                                   {expiryText}
                                 </span>
                               </Tip>
                             )}
-                            {providerId === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
+                            {kind === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
                               <Button
                                 data-settings-search-action="Sign in again to this Claude account"
                                 variant="secondary"
@@ -519,6 +544,15 @@ export function SubscriptionAccountsSection({
                               <FolderOpen size={18} className="mr-2.5" />
                               {t('subscriptionAccounts.openDirectory')}
                             </DropdownMenuItem>
+                            {/* The CLI default login always stays with the built-in provider. */}
+                            {account.id !== 'default' && (
+                              <MoveAccountMenu
+                                targets={placementTargets}
+                                canTakeOut={providerId === kind || accounts.length > 1}
+                                disabled={busy}
+                                onMove={(target) => void moveAccount({ id: account.id, name }, target)}
+                              />
+                            )}
                             {account.id !== 'default' && (
                               <>
                                 <DropdownMenuSeparator />

@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   remoteAllowed: new Set<string>(),
   ownComputers: false,
   remoteModels: null as string[] | null,
+  placement: {} as Record<string, string>,
+  placementUnreadable: false,
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -46,15 +48,26 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: {} }));
 vi.mock('../../maker-host/override-settings-file.js', () => ({
-  createOverrideSettingsFile: () => ({
-    invalidateIfChanged: () => {},
-    read: () => ({ bindings: h.bindings, pools: h.pools }),
-    updateAtomic: async (edit: (input: { value: { pools: typeof h.pools; bindings: typeof h.bindings } }) => { pools: typeof h.pools }) => {
-      h.beforeWrite?.();
-      const next = edit({ value: { pools: h.pools, bindings: h.bindings } });
-      h.pools = next.pools;
-    },
-  }),
+  createOverrideSettingsFile: (options: { label: string }) => options.label === 'subscription-account-placement'
+    ? {
+        invalidateIfChanged: () => {},
+        isUnreadable: () => h.placementUnreadable,
+        read: () => ({ accounts: h.placement }),
+        updateAtomic: async (edit: (input: { value: { accounts: Record<string, string> } }) => { accounts: Record<string, string> }) => {
+          h.beforeWrite?.();
+          h.placement = edit({ value: { accounts: h.placement } }).accounts;
+        },
+      }
+    : {
+        invalidateIfChanged: () => {},
+        isUnreadable: () => false,
+        read: () => ({ bindings: h.bindings, pools: h.pools }),
+        updateAtomic: async (edit: (input: { value: { pools: typeof h.pools; bindings: typeof h.bindings } }) => { pools: typeof h.pools }) => {
+          h.beforeWrite?.();
+          const next = edit({ value: { pools: h.pools, bindings: h.bindings } });
+          h.pools = next.pools;
+        },
+      },
 }));
 vi.mock('../../userDataPath.js', () => ({
   getUserDataDir: () => path.join(homedir(), 'fake-cindy-data'),
@@ -89,6 +102,12 @@ import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readB
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
+import {
+  normalizePlacementFile,
+  readMergedLegacyCodexAccountId,
+  readOpenAiMergedLegacyAccountsIfReadable,
+  restoreAutoMergedLegacyCodexAccounts,
+} from '../placement.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
 
@@ -113,6 +132,8 @@ beforeEach(() => {
   h.remoteAllowed.clear();
   h.ownComputers = false;
   h.remoteModels = null;
+  h.placement = {};
+  h.placementUnreadable = false;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
   h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
@@ -213,6 +234,71 @@ describe('legacy Codex account upgrade', () => {
     h.beforeWrite = () => { h.owner = 'owner-b'; };
     await expect(migrateLegacyCodexAccounts([{ providerId: 'openai-b' }], { preserveDefault: false, legacyDefault: false })).rejects.toThrow('owner');
     expect(JSON.stringify(h.pools)).toBe(before);
+  });
+
+  // 2026-11-13 user decision (subscription-account-pools.md 合并与拿出由用户决定), standard: the
+  // v0.1.135 upgrade merged connections without asking (reproduced with its real metadata writer).
+  // Restoring through the real placement entry must keep homes and pool accounts, turn a pause or
+  // removal into a disabled connection, keep a merge the user chose, wait while placement cannot be
+  // read, and undo an older client merging again after a downgrade.
+  it('restores upgrade-merged connections to their own accounts and keeps merges the user chose', async () => {
+    await migrateLegacyCodexAccounts(
+      ['openai-a', 'openai-b', 'openai-c', 'openai-d'].map((providerId) => ({ providerId })),
+      { preserveDefault: true, legacyDefault: false },
+    );
+    const ids = Object.fromEntries(['a', 'b', 'c', 'd'].map((key) => [key, readLegacyCodexAccountId(`openai-${key}`)!]));
+    h.pools.openai!.accounts = h.pools.openai!.accounts
+      .filter((account) => account.id !== ids.c)
+      .map((account) => (account.id === ids.b ? { ...account, paused: true } : account));
+    h.placement = { [`openai:${ids.d}`]: 'openai' };
+    const connections = new Set(['openai-a', 'openai-b', 'openai-c', 'openai-d', 'openai-e']);
+    const disable = (providerId: string) => { h.access.disabledProviders[providerId] = true; };
+    const isDisabled = (providerId: string) => h.access.disabledProviders[providerId] === true;
+
+    h.placementUnreadable = true;
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(false);
+    expect(readMergedLegacyCodexAccountId('openai-a')).toBe(ids.a);
+    h.placementUnreadable = false;
+
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(true);
+    expect(h.placement).toEqual({
+      [`openai:${ids.a}`]: 'openai-a', [`openai:${ids.b}`]: 'openai-b', [`openai:${ids.d}`]: 'openai',
+    });
+    expect(readMergedLegacyCodexAccountId('openai-a')).toBeUndefined();
+    expect(readOpenAiMergedLegacyAccountsIfReadable()).toEqual({ 'openai-d': ids.d });
+    expect(h.pools.openai!.accounts.map((account) => [account.id, account.paused])).toEqual([
+      ['default', false], [ids.a, false], [ids.b, false], [ids.d, false],
+    ]);
+    expect(readLegacyCodexAccountId('openai-c')).toBeUndefined();
+    expect(h.access.disabledProviders).toEqual({ 'openai-b': true, 'openai-c': true });
+    expect(accountDirectory('openai', ids.a)).toBe(path.join(homedir(), 'fake-cindy-data', 'codex-accounts', createHash('sha256').update(h.owner).digest('hex'), 'openai-a'));
+    const settled = JSON.stringify([h.pools, h.placement]);
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(false);
+    expect(JSON.stringify([h.pools, h.placement])).toBe(settled);
+    // Review regression: a pause the user sets in a restored connection's account list stays a pause;
+    // only a leftover pause on a connection already turned off (an interrupted restore) is converted.
+    const pause = (accountId: string) => { h.pools.openai!.accounts = h.pools.openai!.accounts
+      .map((account) => (account.id === accountId ? { ...account, paused: true } : account)); };
+    pause(ids.a);
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(false);
+    expect(h.access.disabledProviders['openai-a']).toBeUndefined();
+    pause(ids.b);
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(true);
+    expect(h.pools.openai!.accounts.map((account) => [account.id, account.paused])).toEqual([
+      ['default', false], [ids.a, true], [ids.b, false], [ids.d, false],
+    ]);
+
+    // An older client merges a connection again after a downgrade; the next load restores it.
+    await migrateLegacyCodexAccounts([{ providerId: 'openai-e' }], { preserveDefault: true, legacyDefault: false });
+    expect(readMergedLegacyCodexAccountId('openai-e')).toBeDefined();
+    await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled });
+    expect(readMergedLegacyCodexAccountId('openai-e')).toBeUndefined();
+    expect(readMergedLegacyCodexAccountId('openai-d')).toBe(ids.d);
+    // Persisted placement never moves the CLI default account or accepts a malformed entry.
+    expect(normalizePlacementFile({ accounts: {
+      'openai:default': 'openai-a', 'openai:../escape': 'openai-a', [`openai:${ids.a}`]: 'Not An Id',
+      [`anthropic:${ids.a}`]: 'claude-work',
+    } })).toEqual({ accounts: { [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {} });
   });
 });
 describe('subscription management boundary', () => {

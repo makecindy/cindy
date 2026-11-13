@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react';
-import { UserRound } from 'lucide-react';
+import { Check, UserRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { cn } from '@/lib/utils';
 import type {
   SubscriptionPoolView,
   SubscriptionProvider,
 } from '../../../shared/subscriptionAccounts';
+import { useLoadedSubscriptionPlacementTargets, type PlacementTarget } from './SubscriptionPlacement';
+
+/**
+ * Where a newly signed-in account goes: `null` is a separate provider (the default), otherwise the
+ * id of a connected provider of the same kind (subscription-account-pools.md 合并与拿出由用户决定).
+ */
+export type SubscriptionSignInTarget = { target: 'default' } | { target: 'new'; into: string | null };
 
 /** Read-only detection; only an explicit choice may connect a CLI account. */
 export function SubscriptionSignInChoices({
@@ -17,13 +25,22 @@ export function SubscriptionSignInChoices({
 }: {
   providerId: SubscriptionProvider;
   busy: boolean;
-  onConnect: (target: 'default' | 'new') => void;
+  onConnect: (choice: SubscriptionSignInTarget) => void;
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
   const [view, setView] = useState<SubscriptionPoolView | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const targets = useLoadedSubscriptionPlacementTargets(providerId, '');
+  const [placing, setPlacing] = useState(false);
+  const signInAnother = () => setPlacing(true);
+  // Without a connected provider of this kind there is nothing to choose: it becomes its own provider.
+  useEffect(() => {
+    if (!placing || !targets || targets.length) return;
+    setPlacing(false);
+    onConnect({ target: 'new', into: null });
+  }, [placing, targets, onConnect]);
   useEffect(() => {
     let current = true;
     setView(null);
@@ -51,6 +68,21 @@ export function SubscriptionSignInChoices({
   const providerManagedAuth = account?.authIssue === 'codex-provider-managed-auth';
   const hasOtherAccounts = view?.accounts.some((item) => item.id !== 'default');
   const loading = !view && !failed;
+  if (placing && !busy && !targets?.length)
+    return (
+      <div role="status" className="flex items-center gap-2 text-12 text-[var(--text-tertiary)]">
+        <Spinner size={13} />
+        {t('subscriptionAccounts.signIn.checking')}
+      </div>
+    );
+  if (placing && !busy && targets)
+    return (
+      <SignInPlacementChoice
+        targets={targets}
+        onBack={() => setPlacing(false)}
+        onContinue={(into) => { setPlacing(false); onConnect({ target: 'new', into }); }}
+      />
+    );
   return (
     <div className="flex flex-col gap-4" data-testid="subscription-sign-in">
       {loading && (
@@ -124,7 +156,7 @@ export function SubscriptionSignInChoices({
                 variant="primary"
                 size="lg"
                 type="button"
-                onClick={() => onConnect('default')}
+                onClick={() => onConnect({ target: 'default' })}
               >
                 {t(
                   detected
@@ -137,11 +169,11 @@ export function SubscriptionSignInChoices({
             )}
             {(detected || hasOtherAccounts || loading || failed || providerManagedAuth) && (
               <Button
-                data-settings-search-action="Sign in to another account within this provider"
+                data-settings-search-action="Sign in to another subscription account"
                 variant="secondary"
                 size="lg"
                 type="button"
-                onClick={() => onConnect('new')}
+                onClick={signInAnother}
               >
                 {t('subscriptionAccounts.signIn.anotherAccount')}
               </Button>
@@ -154,6 +186,82 @@ export function SubscriptionSignInChoices({
           {t('subscriptionAccounts.signIn.keepExisting')}
         </p>
       )}
+    </div>
+  );
+}
+
+/** Chosen before the browser sign-in starts; cancelling sign-in changes no provider. */
+function SignInPlacementChoice({
+  targets,
+  onBack,
+  onContinue,
+}: {
+  targets: readonly PlacementTarget[];
+  onBack: () => void;
+  onContinue: (into: string | null) => void;
+}) {
+  const { t } = useTranslation();
+  const [into, setInto] = useState<string | null>(null);
+  const options: { id: string | null; label: string; hint?: string }[] = [
+    {
+      id: null,
+      label: t('subscriptionAccounts.placement.signInSeparate'),
+      hint: t('subscriptionAccounts.placement.signInSeparateHint'),
+    },
+    ...targets.map((target) => ({
+      id: target.id,
+      label: t('subscriptionAccounts.placement.signInInto', { name: target.name }),
+    })),
+  ];
+  return (
+    <div className="flex flex-col gap-3" data-testid="subscription-sign-in-placement">
+      <span className="text-13 font-medium text-[var(--text-primary)]">
+        {t('subscriptionAccounts.placement.signInQuestion')}
+      </span>
+      <div role="radiogroup" aria-label={t('subscriptionAccounts.placement.signInQuestion')} className="flex flex-col gap-2">
+        {options.map((option) => {
+          const selected = option.id === into;
+          return (
+            <button
+              key={option.id ?? ''}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => setInto(option.id)}
+              className={cn(
+                'flex min-h-11 w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                selected
+                  ? 'border-[var(--settings-menu-border-selected)] bg-[var(--settings-menu-bg-selected)]'
+                  : 'border-[var(--border-default)] hover:bg-[var(--settings-menu-bg-selected)]',
+              )}
+            >
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="break-words text-13 text-[var(--text-primary)]">{option.label}</span>
+                {option.hint && <span className="text-12 text-[var(--text-tertiary)]">{option.hint}</span>}
+              </span>
+              <Check
+                size={16}
+                aria-hidden="true"
+                className={cn('shrink-0 text-[var(--settings-menu-text-selected)]', !selected && 'invisible')}
+              />
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          data-settings-search-action="Sign in with the chosen placement for the new subscription account"
+          variant="primary"
+          size="lg"
+          type="button"
+          onClick={() => onContinue(into)}
+        >
+          {t('subscriptionAccounts.placement.signInContinue')}
+        </Button>
+        <Button variant="secondary" size="lg" type="button" onClick={onBack}>
+          {t('subscriptionAccounts.placement.signInBack')}
+        </Button>
+      </div>
     </div>
   );
 }

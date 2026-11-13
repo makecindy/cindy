@@ -36,7 +36,9 @@ const h = vi.hoisted(() => ({
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
   pool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
   legacyLoggedIn: new Set<string>(),
-  migrateLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
+  /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
+  placement: {} as Record<string, string>,
+  restoreLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
 }));
 vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../subscription-accounts/store.js')>();
@@ -44,7 +46,22 @@ vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
     ...actual,
     readPool: (id: string) => id === 'openai' ? h.pool : null,
     readLegacyCodexAccountId: (id: string) => h.pool?.legacyCodexAccounts?.[id],
-    migrateLegacyCodexAccounts: h.migrateLegacy,
+  };
+});
+vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../subscription-accounts/placement.js')>();
+  const owner = (kind: string, accountId: string) => h.placement[`${kind}:${accountId}`] ?? kind;
+  // A legacy connection is merged while its account belongs to another provider (no created ones here).
+  const merged = (providerId: string) => {
+    const accountId = h.pool?.legacyCodexAccounts?.[providerId];
+    return accountId && owner('openai', accountId) !== providerId ? accountId : undefined;
+  };
+  return {
+    ...actual,
+    accountProviderId: owner,
+    readMergedLegacyCodexAccountId: merged,
+    readMergedProviderAccount: merged,
+    restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
   };
 });
 vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
@@ -274,14 +291,16 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
-  // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
-  // Codex connections and keep their model membership under the canonical supplier.
-  // Regression: the picker was covered but explicit/lazy full-catalog reads used by
-  // scheduled admission dropped imported-only models and rejected the saved route.
-  it('projects imported model membership under OpenAI while retaining compatibility routes', async () => {
+  // A connection merged into OpenAI (since 2026-11-13 only when the user chose it) keeps its model
+  // membership under the canonical supplier through the real loader/view wiring. Regression: the
+  // picker was covered but explicit/lazy full-catalog reads used by scheduled admission dropped
+  // imported-only models and rejected the saved route. Every catalog refresh offers only native
+  // Codex connections to the restore of upgrade-merged accounts (subscription-account-pools.md).
+  it('projects merged model membership under OpenAI while retaining compatibility routes', async () => {
     const previous = getActiveCatalog();
     h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
       legacyCodexAccounts: { 'legacy-imported': 'imported' } };
+    h.placement = { 'openai:imported': 'openai' };
     h.legacyLoggedIn.add('legacy-imported');
     const legacy: CustomProviderConfig = { id: 'legacy-imported', name: 'Old OpenAI',
       auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
@@ -293,9 +312,9 @@ describe('provider catalog realm reload', () => {
     try {
       setActiveCatalog(BUNDLED_CATALOG);
       h.customProviderRead.mockResolvedValue([legacy, api]);
-      h.migrateLegacy.mockClear();
+      h.restoreLegacy.mockClear();
       await refreshCustomProvidersIntoCatalog();
-      expect(h.migrateLegacy.mock.calls[0][0]).toEqual([{ providerId: 'legacy-imported', paused: false }]);
+      expect(h.restoreLegacy.mock.calls[0][0]).toEqual(new Set(['legacy-imported']));
       const catalog = getDesktopSelectableCatalog();
       expect(catalog.providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === 'gpt-migration-fixture')).toBe(true);
       expect(catalog.providers.some(provider => provider.id === 'legacy-imported')).toBe(true);
@@ -327,8 +346,22 @@ describe('provider catalog realm reload', () => {
           expect(() => resolveScheduledModelSelection(selection, views)).toThrow('MODEL_SELECTION_UNAVAILABLE');
         }
       }
+      // Restored to its own connection (the upgrade merge undone): the connection is an ordinary
+      // visible provider again and OpenAI no longer borrows its models or schedules its account.
+      h.pool.accounts[0].paused = false;
+      h.pool.disconnected = false;
+      h.legacyLoggedIn.add('legacy-imported');
+      h.placement = { 'openai:imported': 'legacy-imported' };
+      expect(getDesktopSelectableCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === selection.model)).not.toBe(true);
+      for (const views of await readRoutes()) {
+        const restored = views.find(view => view.id === 'legacy-imported');
+        expect(restored).toBeDefined();
+        expect(restored?.subscriptionPoolAlias).toBeUndefined();
+        expect(() => resolveScheduledModelSelection(selection, views)).toThrow('MODEL_SELECTION_UNAVAILABLE');
+      }
     } finally {
       h.pool = null;
+      h.placement = {};
       h.legacyLoggedIn.clear();
       setCustomProviders([]);
       setActiveCatalog(previous);

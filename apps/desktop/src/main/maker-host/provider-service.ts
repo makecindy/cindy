@@ -96,6 +96,8 @@ export interface ProviderServiceDeps {
    */
   genericOAuthConnected?: (providerId: string) => boolean;
   codexAccountConnected?: (providerId: string) => boolean;
+  /** A provider Cindy created for subscription accounts: one of its own accounts is signed in. */
+  subscriptionPoolConnected?: (providerId: string) => boolean;
   subscriptionAccountConnected?: (providerId: string) => boolean;
   subscriptionReadUnavailable?: (providerId: string) => boolean;
   subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
@@ -174,6 +176,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           const routing = p.routing[agent];
           return routing !== undefined && routing.disabled !== true;
         });
+      }
+      // 为订阅账号新建的供应商（2026-11-13）：自己名下有已登录的账号才算连接。
+      else if (p.subscriptionPool) {
+        connected[p.id] = deps.subscriptionPoolConnected?.(p.id) ?? false;
       }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。

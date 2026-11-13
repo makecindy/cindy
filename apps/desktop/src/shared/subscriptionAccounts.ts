@@ -71,7 +71,13 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   usage?: SubscriptionAccountUsage;
 }
 export interface SubscriptionPoolView {
-  providerId: SubscriptionProvider;
+  /**
+   * The provider these accounts belong to: a built-in provider, or (2026-11-13) a provider Cindy
+   * created for subscription accounts or a legacy Codex connection. Older hosts only report built-ins.
+   */
+  providerId: string;
+  /** Pool kind of the provider (optional; older hosts omit it and only serve built-in providers). */
+  kind?: SubscriptionProvider;
   configured: boolean;
   strategy: ProviderGroupStrategy;
   /** Present only for an explicitly task-scoped read; null means no recorded binding. */
@@ -79,10 +85,10 @@ export interface SubscriptionPoolView {
   accounts: SubscriptionAccountView[];
 }
 export type SubscriptionAccountCommand =
-  | { action: 'read'; providerId: SubscriptionProvider; taskId?: string }
+  | { action: 'read'; providerId: string; taskId?: string }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
-  | { action: 'add'; providerId: SubscriptionProvider; loginKey: string }
+  | { action: 'add'; providerId: string; loginKey: string }
   /** Explicit wizard intent. Older hosts reject this action instead of reusing a different account. */
   | {
       action: 'connect';
@@ -90,12 +96,23 @@ export type SubscriptionAccountCommand =
       target: 'default' | 'new';
       loginKey: string;
     }
-  | { action: 'login'; providerId: SubscriptionProvider; accountId: string; loginKey: string }
-  | { action: 'cancel'; providerId: SubscriptionProvider; loginKey: string }
-  | { action: 'remove'; providerId: SubscriptionProvider; accountId: string }
+  /**
+   * 2026-11-13: sign in another account as a separate provider (the wizard's default). Older hosts
+   * reject the action instead of adding the account to the built-in provider.
+   */
+  | { action: 'create'; providerId: SubscriptionProvider; loginKey: string }
+  /** 2026-11-13: move one account to another provider of the same kind, or out on its own (`target: null`). */
+  | { action: 'place'; providerId: string; accountId: string; target: string | null }
+  /** 2026-11-13: move every account of a provider into another provider of the same kind. */
+  | { action: 'merge'; providerId: string; target: string }
+  /** 2026-11-13: delete a provider Cindy created; its accounts stop being used (logins stay). */
+  | { action: 'remove-provider'; providerId: string }
+  | { action: 'login'; providerId: string; accountId: string; loginKey: string }
+  | { action: 'cancel'; providerId: string; loginKey: string }
+  | { action: 'remove'; providerId: string; accountId: string }
   | {
       action: 'configure';
-      providerId: SubscriptionProvider;
+      providerId: string;
       strategy?: ProviderGroupStrategy;
       accountId?: string;
       paused?: boolean;
@@ -223,4 +240,11 @@ export function isUnusedDefaultAccount(account: SubscriptionAccountView): boolea
 }
 export function isSubscriptionProvider(value: unknown): value is SubscriptionProvider {
   return value === 'anthropic' || value === 'openai';
+}
+/**
+ * Shape check for a provider that may own subscription accounts (built-in, created or a legacy
+ * Codex connection). The executing host still resolves it against its own records.
+ */
+export function isSubscriptionPoolProviderIdShape(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9_-]{1,40}$/.test(value);
 }

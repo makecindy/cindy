@@ -1,5 +1,6 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
+  isSubscriptionPoolProviderIdShape,
   isSubscriptionProvider,
   type SubscriptionAccountCommand,
   type SubscriptionSessionAccountQuery,
@@ -50,9 +51,13 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
     throwIpcError('INVALID_PARAMS', 'Invalid account command');
   const value = raw as Record<string, unknown>;
-  if (!isSubscriptionProvider(value.providerId))
+  // Built-in providers own the CLI default login; detection, connecting and creating start there.
+  // Other commands may name any provider that owns accounts (2026-11-13); the executing host
+  // resolves it against its own records and rejects unknown ones.
+  const builtinOnly = value.action === 'preview' || value.action === 'connect' || value.action === 'create';
+  if (builtinOnly ? !isSubscriptionProvider(value.providerId) : !isSubscriptionPoolProviderIdShape(value.providerId))
     throwIpcError('INVALID_PARAMS', 'Invalid subscription provider');
-  const providerId = value.providerId;
+  const providerId = value.providerId as string;
   const loginKey = value.loginKey;
   const accountId = value.accountId;
   const validLoginKey = typeof loginKey === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(loginKey);
@@ -61,14 +66,24 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       throwIpcError('INVALID_PARAMS', 'Invalid task');
     return { action: 'read', providerId, taskId: value.taskId };
   }
-  if (value.action === 'read' || value.action === 'preview')
-    return { action: value.action, providerId };
+  if (value.action === 'read') return { action: 'read', providerId };
+  if (value.action === 'preview' && isSubscriptionProvider(providerId)) return { action: 'preview', providerId };
   if (
     value.action === 'connect' &&
+    isSubscriptionProvider(providerId) &&
     validLoginKey &&
     (value.target === 'default' || value.target === 'new')
   )
     return { action: 'connect', providerId, loginKey, target: value.target };
+  if (value.action === 'create' && isSubscriptionProvider(providerId) && validLoginKey)
+    return { action: 'create', providerId, loginKey };
+  if (value.action === 'place' && accountIdValid(accountId) && accountId !== 'default'
+    && (value.target === null || isSubscriptionPoolProviderIdShape(value.target)))
+    return { action: 'place', providerId, accountId, target: value.target };
+  if (value.action === 'merge' && isSubscriptionPoolProviderIdShape(value.target) && value.target !== providerId)
+    return { action: 'merge', providerId, target: value.target };
+  if (value.action === 'remove-provider' && !isSubscriptionProvider(providerId))
+    return { action: 'remove-provider', providerId };
   if ((value.action === 'add' || value.action === 'cancel') && validLoginKey)
     return { action: value.action, providerId, loginKey };
   if (value.action === 'login' && accountIdValid(accountId) && validLoginKey)
