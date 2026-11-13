@@ -1,13 +1,14 @@
 import type { Catalog } from '@cindy/model-providers';
 
-import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { getActiveCatalog, getActiveCatalogWithCodexModels } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { filterLegacyGptContextProfiles } from '../../../desktop/src/main/maker-host/legacy-context-profiles.js';
 import { createModelContextProviderResolver } from '../../../desktop/src/main/maker-host/modelContextProvider.js';
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.js';
 import type { ModelContextProviderResolver } from '../../../desktop/src/main/maker-host/engineModelResolvers.js';
 import { filterProviderCatalogForAccount } from '../../../desktop/src/main/maker-host/provider-access-policy.js';
 import { projectSubscriptionPoolCatalog } from '../../../desktop/src/main/maker-host/subscriptionPoolCatalog.js';
-import { readPool } from '../../../desktop/src/main/subscription-accounts/store.js';
+import { readMergedProviderAccount, accountProviderId } from '../../../desktop/src/main/subscription-accounts/placement.js';
+import { readPool, readProviderBoundAccountIds } from '../../../desktop/src/main/subscription-accounts/store.js';
 import { getAppCapabilities } from '../../../desktop/src/main/appCapabilities.js';
 
 export interface HostModelContext {
@@ -42,7 +43,10 @@ export function createHostModelContext(ports: {
         canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
       });
       return filterLegacyGptContextProfiles(
-        projectSubscriptionPoolCatalog(base, { readPool, codexAccountState: ports.codexAccountState }),
+        projectSubscriptionPoolCatalog(base, { readPool, codexAccountState: ports.codexAccountState,
+          getActiveCatalogWithCodexModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds,
+          // M2: subscription-pool Codex discovery is still a desktop runtime; see the release table.
+          readSubscriptionPoolCodexModels: () => null }, false),
       );
     },
     resolveContextProviderId: createModelContextProviderResolver({

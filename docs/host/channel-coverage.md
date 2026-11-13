@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`153254dcbc`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`79ada7fb08`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
@@ -10,14 +10,14 @@
 
 ## 总口径
 
-**真正要 Host 做的 = A + C-后台 + C-两段式 = 924 + 32 + 43 = 999**；巡检实际调用到 **131** 个（666 次，其中 A 129）。
+**真正要 Host 做的 = A + C-后台 + C-两段式 = 925 + 32 + 43 = 1000**；巡检实际调用到 **131** 个（666 次，其中 A 129）。
 同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。
 
 | 分类 | 含义 | 通道数 |
 |---|---|---:|
 | contract | 已在 Host 通道合同或通用路由登记表里，窗口做客户端时转发给 Host | 80（巡检调用 35） |
 | client | 客户端模式自己的通道（连接状态、重连） | 2（巡检调用 1） |
-| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 924（巡检调用 129） |
+| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 925（巡检调用 129） |
 | **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 359（巡检调用 70） |
 | **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 6（巡检调用 1） |
 | **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
@@ -29,12 +29,12 @@
 | 　C-两段式（窗口做界面动作，数据调 Host） | | 43（巡检调用 0） |
 | 　C-窗口本地 | | 11（巡检调用 2） |
 | 　C-专项设计（安全边界） | | 4（巡检调用 0） |
-| 合计 | | 1481 |
+| 合计 | | 1482 |
 
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
 已注册 **374**（其中 10 个只有源码判定，客户端快照里还没有）、未注册 **0**（今天被拒或无人监听，见下文）、快照无法判断 10。
 
-判定依据：A:default 119、A:rule 805、B:rule 359、C:dependency 20、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
+判定依据：A:default 120、A:rule 805、B:rule 359、C:dependency 20、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
 
 合同一侧（`hostChannelContract.ts`、`host-delegation.ts`、客户端模式预取、Host 通用路由的登记表 `hostIpcEntries/`）的通道名全部静态解析：解析不出任何一个时脚本直接失败，不会生成本清单。
 
@@ -100,7 +100,7 @@
 | 4 | 供应商与模型 | 82 | 15 | 80 | maker-ipc 52、local-model-runtime 19、bootstrap-electron 7 |
 | 5 | git 与工作树 | 63 | 9 | 75 | git-context 21、git-review 21、worktree 11 |
 | 6 | 设备互联与远程执行 | 75 | 7 | 66 | device-link 41、remote-ssh 29、bootstrap-electron 4 |
-| 7 | 未登记前缀 | 119 | 17 | 29 | maker-ipc 57、bootstrap-electron 22、billing 19 |
+| 7 | 未登记前缀 | 120 | 17 | 29 | maker-ipc 57、bootstrap-electron 22、billing 19 |
 | 8 | 记忆、学习与钩子 | 42 | 4 | 24 | hook-control 27、learn-host 6、maker-ipc 6 |
 | 9 | 账号与凭据 | 40 | 4 | 17 | bootstrap-electron 30、device-link 7、subscription-accounts 2 |
 | 10 | 设置与偏好 | 33 | 9 | 15 | bootstrap-electron 9、appearance-settings-ipc 8、maker-ipc 6 |
@@ -420,8 +420,8 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | plugin-market | 0 | 19 | 0 | 0 | 0 | 0 | 1 | 20 |
 | plugin-contributions | 0 | 13 | 0 | 0 | 0 | 0 | 0 | 13 |
 | worktree | 0 | 11 | 0 | 0 | 0 | 0 | 1 | 12 |
+| model-groups | 0 | 7 | 0 | 0 | 0 | 0 | 0 | 7 |
 | learn-host | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 6 |
-| model-groups | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 6 |
 | setup-migration | 0 | 6 | 0 | 0 | 0 | 2 | 0 | 8 |
 | plugin-publisher | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | session-import | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
@@ -1745,6 +1745,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `model-groups:bind-session` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
+| `model-groups:commit` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
 | `model-groups:decisions` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/decisionIpc.ts` |
 | `model-groups:get` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
 | `model-groups:resolve` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
