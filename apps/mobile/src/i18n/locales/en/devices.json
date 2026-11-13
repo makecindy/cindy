@@ -56,7 +56,7 @@
   "presentation": {
     "deviceList": {
       "headerAvailable": "{{count}} controllable computers",
-      "headerUnavailable": "{{count}} computers currently unavailable",
+      "headerUnavailable": "Computers currently unavailable: {{count}}",
       "waitingForDesktop": "Waiting for a computer to come online",
       "filterAvailable": "Controllable devices",
       "filterEmpty": "No controllable devices",
@@ -135,7 +135,7 @@
           "search": "Search includes titles, project paths, models, automation names, and message previews.",
           "active": "Open a session to continue controlling it, or touch and hold to select multiple sessions.",
           "waiting": "Permissions, plan reviews, and questions that need confirmation on your phone appear here.",
-          "automation": "Automation sessions are grouped by task; expand a group to open an individual run.",
+          "automation": "Automation sessions are grouped by automation; expand a group to open an individual run.",
           "archived": "Touch and hold an archived session to unarchive or delete it in bulk.",
           "all": "Active, archived, and automation sessions are shown together for quick lookup."
         }
@@ -243,8 +243,8 @@
   },
   "list": {
     "projectActions": {
-      "newTask": "New task",
-      "allTasks": "All tasks",
+      "newTask": "New session",
+      "allTasks": "All sessions",
       "search": "Search"
     },
     "taskSuggestions": {
@@ -294,15 +294,15 @@
     "allConversations": "All Sessions",
     "syncFailed": "Sync failed",
     "requestFailed": "Request failed",
-    "loading": "Loading available devices",
+    "loading": "Loading available devices…",
     "untitled": "Untitled session",
     "connection": {
       "connecting": "Connecting",
       "disconnected": "Disconnected"
     },
     "error": {
-      "sessionDeviceNotFound": "Can't find the device this session belongs to. Sync again and retry.",
-      "taskDeviceNotFound": "Can't find the device this task belongs to. Sync again and retry.",
+      "sessionDeviceNotFound": "Can’t find the device this session belongs to. Sync again and retry.",
+      "taskDeviceNotFound": "Can’t find the device this task belongs to. Sync again and retry.",
       "noDevice": "No device available. Turn on remote control on the desktop, then sync again."
     },
     "alert": {
@@ -311,7 +311,7 @@
       "actionFailed": "Action failed",
       "renameFailed": "Rename failed",
       "deleteTitle": "Delete session?",
-      "deleteMessage": "This deletes \"{{title}}\" and can't be undone."
+      "deleteMessage": "This deletes “{{title}}” and can’t be undone."
     },
     "a11y": {
       "selectScope": "Select session scope",
@@ -359,11 +359,11 @@
       "remoteSettings": "Remote connection settings",
       "displaySettings": "Display settings",
       "groupHeading": "Group",
-      "sortHeading": "Task sort",
+      "sortHeading": "Session sorting",
       "projectOrderHeading": "Project sorting",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
       "statusHeading": "Task status",
-      "showDeviceTasks": "Show tasks",
+      "showDeviceTasks": "Show sessions",
       "openDevice": "Open",
       "renameDevice": "Rename",
       "groupProject": "Project",
@@ -410,7 +410,7 @@
         "text": "Text",
         "list": "List"
       },
-      "taskInfoHeading": "Task info",
+      "taskInfoHeading": "Session info",
       "taskInfo": {
         "time": "Time",
         "pr": "PR status",
@@ -442,7 +442,7 @@
         "sort": {
           "relevance": "Relevance",
           "activityDesc": "Recently active",
-          "activityAsc": "Oldest active"
+          "activityAsc": "Least recently active"
         },
         "status": {
           "active": "Active",
@@ -478,7 +478,7 @@
     },
     "revoked": {
       "title": "Access revoked",
-      "body": "\"{{deviceName}}\" revoked this device's remote access. Re-authorize this device in {{appName}} settings on that computer, then tap \"Retry Access.\"",
+      "body": "“{{deviceName}}” revoked this device’s remote access. Re-authorize this device in {{appName}} settings on that computer, then tap “Retry Access.”",
       "retry": "Retry Access"
     },
     "viewAllConversations": "View all {{count}} sessions",
@@ -541,11 +541,11 @@
       "clearA11y": "Clear session selection"
     },
     "bulk": {
-      "pinning": "Pinning",
-      "unpinning": "Unpinning",
-      "archiving": "Archiving",
-      "restoring": "Unarchiving",
-      "deleting": "Deleting",
+      "pinning": "Pinning…",
+      "unpinning": "Unpinning…",
+      "archiving": "Archiving…",
+      "restoring": "Unarchiving…",
+      "deleting": "Deleting…",
       "pinA11y": "Pin selected sessions",
       "unpinA11y": "Unpin selected sessions",
       "archiveA11y": "Archive selected sessions",
@@ -563,8 +563,8 @@
     "automationScope": {
       "eyebrow": "Automation",
       "title": "Automation",
-      "emptyCopy": "After the task runs, each run's session shows up here.",
-      "emptyTitle": "This task has no run history yet"
+      "emptyCopy": "After the automation runs, each run’s session shows up here.",
+      "emptyTitle": "This automation has no run history yet"
     },
     "projectScope": {
       "eyebrow": "Project",
@@ -683,7 +683,7 @@
       "avatar": "{{name}} is choosing a new portrait",
       "welcome": "Getting a first hello ready",
       "failed": "Preparation paused. Everything completed so far is saved. You can try again.",
-      "retryFailed": "Couldn’t retry just now. Please try again shortly.",
+      "retryFailed": "Couldn’t retry just now. Try again shortly.",
       "leave": "Step away",
       "avatarSkipped": "Using the default portrait for now. You can change it anytime."
     },
@@ -840,7 +840,7 @@
     "databaseDriver": "The database driver could not load. Update or repair Cindy, then retry.",
     "databaseUnavailable": "The source database could not be read. Original data is unchanged; retry after repair.",
     "fileTooLarge": "A file or this import exceeds the read limit. Content was not truncated.",
-    "memoryMetadata": "The memory summary or title exceeds storage requirements.",
+    "memoryMetadata": "The memory summary or title doesn’t meet storage requirements.",
     "memoryWrite": "Memory writing or integrity verification failed. You can retry.",
     "memoryChanged": "The saved memory was changed and has not been overwritten.",
     "attachmentUnsupported": "This attachment format is not supported yet. The original remains at the source.",
@@ -889,7 +889,7 @@
     "empty": "No conversation in the cloud yet.",
     "loadFailed": "Can’t load the cloud conversation right now.",
     "loadOlder": "Load earlier messages",
-    "noTargets": "No other computer is available. Open Cindy on another computer, sign in to the same account, and turn on “Allow same-account devices to control this computer”, then try again.",
+    "noTargets": "No other computer is available. Open Cindy on another computer, sign in to the same account, and turn on “Allow same-account devices to control this machine”, then try again.",
     "devicesFailed": "Can’t load your computers right now. Try again later.",
     "preparing": "Getting ready on “{{device}}”…",
     "preparingHint": "That computer takes over the buddy from its cloud profile and opens it when ready.",

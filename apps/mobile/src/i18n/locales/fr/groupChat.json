@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} n’a pas commencé le traitement dans le délai d’attente. Cette demande est terminée.",
-        "advice": "Demandez au propriétaire du partenaire de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
+        "advice": "Demandez au propriétaire du coéquipier de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
         "details": "Une fois Cindy et le réseau rétablis, renvoyez le message."
       }
     },
@@ -174,7 +174,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire de l’ami peut renouveler la demande dans ce groupe.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
-      "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
+      "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment)."
     }
   },
   "plan": {
@@ -258,7 +259,7 @@
     "minMembers": "Une conversation de groupe nécessite au moins {{min}} amis",
     "maxMembers": "Jusqu'à {{max}}",
     "noMoreBots": "Aucun autre ami n'est disponible à l'ajout",
-    "nameSaveFailed": "Impossible d'enregistrer le nom du groupe. Votre saisie a été conservée. Veuillez réessayer.",
+    "nameSaveFailed": "Impossible d'enregistrer le nom du groupe. Votre saisie a été conservée. Réessayez.",
     "membersSaveFailed": "Impossible de mettre à jour les membres. Réessayez.",
     "replyMode": "Quand personne n'est @mentionné",
     "replyModeAll": "Tout le monde",
@@ -362,7 +363,7 @@
     "attachmentPreviewOpenOutside": "Ouvrir dans le navigateur",
     "attachmentPreviewClose": "Fermer l'aperçu de la pièce jointe",
     "previewUnavailable": "Aperçu indisponible",
-    "endpointUnavailable": "La configuration du service de conversation de groupe est indisponible. Veuillez réessayer."
+    "endpointUnavailable": "La configuration du service de conversation de groupe est indisponible. Réessayez."
   },
   "lifecycle": {
     "dissolve": "Dissoudre le groupe",
@@ -473,7 +474,7 @@
       "paused": "Vous avez pris le relais de cet échange",
       "off": "Les réponses automatiques sont désactivées",
       "offline": "Réponses en pause · Ordinateur hors ligne",
-      "waiting": "En attente de votre démarrage",
+      "waiting": "En attente de démarrage manuel",
       "unbound": "Aucun ami sélectionné",
       "enabled": "Votre ami est prêt à répondre à votre place."
     },
@@ -542,7 +543,7 @@
     "teammateTag": "Ami",
     "paused": "En pause",
     "accessNone": "Propriétaire uniquement",
-    "accessChat": "Discussion de groupe uniquement",
+    "accessChat": "Conversation de groupe uniquement",
     "accessTools": "Peut utiliser les outils et les informations",
     "replies": "Mode de réponse des amis",
     "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
@@ -616,7 +617,7 @@
     "alreadyMember": "Vous êtes déjà dans ce groupe.",
     "openGroup": "Ouvrir le groupe",
     "editLink": "Modifier le lien",
-    "otherInvitation": "Une autre invitation n'a pas remplacé celle-ci. Pour le visualiser, rouvrez son lien d'origine.",
+    "otherInvitation": "Une autre invitation n'a pas remplacé celle-ci. Pour la consulter, rouvrez son lien d'origine.",
     "countUnknown": "Nombre de membres indisponible",
     "until": "Valable jusqu'au {{date}}",
     "retryAccept": "Réessayer de rejoindre",

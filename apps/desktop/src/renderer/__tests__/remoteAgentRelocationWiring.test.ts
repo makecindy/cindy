@@ -94,7 +94,7 @@ describe('ChatInput:换位置进切换事务', () => {
       'if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||\n' +
         '        sessionOrcaRole === undefined ||\n' +
         '        (sessionOrcaRole !== null && deviceLinkDeviceId && !hostSupportsOrcaAgentRelocation) ||\n' +
-        '        sessionOrcaRemoteWorker) return undefined;',
+        '        (sessionOrcaRemoteWorker && deviceLinkDeviceId && !hostSupportsOrcaRemoteWorkerAgentRelocation)) return undefined;',
     );
     expect(chatInputSource).toContain('agentDeviceId: selection.agentDevice?.deviceId ?? null,');
   });

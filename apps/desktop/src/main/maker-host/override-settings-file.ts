@@ -35,6 +35,8 @@ export interface OverrideSettingsFile<T> {
    * 支持"直接改文件即生效"语义的 store 在读取入口调用;不调用 = 原缓存语义。
    */
   invalidateIfChanged(): void;
+  /** 文件存在但读不了(只有 preserveUnreadableFile 的 store 会区分)；此时 read() 返回的是默认值。 */
+  isUnreadable(): boolean;
 }
 
 interface CachedState<T> extends OverrideSettingsState<T> {
@@ -335,6 +337,10 @@ export function createOverrideSettingsFile<T>(options: {
     reset,
     resetAtomic,
     invalidateIfChanged,
+    isUnreadable: () => {
+      readState();
+      return cached?.readStatus === 'unreadable';
+    },
   };
 
   function invalidate(): void {

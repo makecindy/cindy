@@ -27,6 +27,7 @@ import * as path from 'node:path';
 
 import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
+import type { PermissionAlert, QuestionAlert } from './device-link/mobileNotify';
 import { notificationPreview } from './notificationPreview';
 import { companionAvatarThumbnail } from './agent-island/companionIdentity';
 import { getDeepLinkMainWindow, openMainWindowChatMessage, openMainWindowSession } from './deepLink';
@@ -544,6 +545,13 @@ export interface NotificationServiceDeps {
    * while it can show), so the OS notification would repeat it.
    */
   isTaskAlertShownElsewhere?: (kind: 'done' | 'error' | 'needs-reply') => boolean;
+  /**
+   * The one interaction waiting in this task, worded for a phone alert that can
+   * answer it: a tool permission (see `buildPermissionAlert`) or a question
+   * (`buildQuestionAlert`). Undefined when the alert must stay a plain one or
+   * something else is waiting too.
+   */
+  pendingInteractionAlert?: (sessionId: string) => { permission?: PermissionAlert; question?: QuestionAlert } | undefined;
   getWindow: () => BrowserWindow | null;
   /**
    * 飞书 IM 实例,用于飞书通道发消息。来源与 scheduler-host/notifier.ts 相同
@@ -793,9 +801,22 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         releasePending();
         if (channels?.mobile === true && (kind !== 'done' || !wasReplyNotified(mobileKey, eventId))) {
           try {
+            // Read at send time, after the preview wait: a request answered meanwhile
+            // must not reach the phone with buttons. A mirrored task belongs to another
+            // computer; a local task with the same id says nothing about it.
+            const waiting = kind === 'needs-reply' && !payload.remoteDeviceId
+              ? deps.pendingInteractionAlert?.(sessionId) : undefined;
+            const permission = waiting?.permission;
+            const question = permission ? undefined : waiting?.question;
+            // The renderer's event identity is shared by execution and mirror hosts.
+            // Local action availability must not change the UUID registered for retirement.
+            const phoneEventId = (kind === 'done' ? undefined : usableAlertEventId)
+              ?? (permission ? `permission:${permission.requestId}` : question ? `question:${question.requestId}` : mobileEventId);
             const accepted = sendMobileSessionNotify({
               sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
-              ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
+              ...(fallbackBody ? { fallbackBody } : {}), ...(phoneEventId ? { eventId: phoneEventId } : {}),
+              ...(permission ? { permission } : {}), ...(question ? { question } : {}),
+              ...(kind === 'done' ? { reply: true } : {}),
               ...(mobileTeammateBotId ? { teammateBotId: mobileTeammateBotId } : {}),
               ...(preview?.teammateAvatar ? { teammateAvatar: preview.teammateAvatar } : {}),
               ...(markAttention ? {} : { muteExempt: true }),
