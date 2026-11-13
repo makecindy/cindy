@@ -5841,6 +5841,9 @@ export class PiAgent extends BaseAgent {
         transport,
         logger: this.deps.logger,
         onEvent: (event: PiRpcEvent) => {
+          // Retry exhaustion already settled the old run. Its optional native
+          // tail must not clear a new prompt's permission policy before start.
+          if (ctx.turnSettled && (event.type === 'agent_settled' || event.type === 'auto_retry_end')) return;
           const cacheInput = cacheInputTracker.observe(event);
           if (cacheInput) pendingCacheCompatibility = { key: cacheInput.key, value: readCacheCompatibility() };
           if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {

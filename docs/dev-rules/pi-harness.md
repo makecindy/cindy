@@ -462,7 +462,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   轮次标记仅在实际 prompt RPC 边界登记。已完成的 Host 包 mutation 不退回可重放状态。
   复用原退出确认流程退役 root Pi，不重放输入、不重跑构建、不杀后代进程树；
   退出未确认时仍保留进程登记和 runtime 文件。SSH daemon 断链保活语义不变。
-  缺 settled 但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
+  缺 settled 且没有明确失败终态但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
   回归见 `pi-long-tool-lifecycle.test.ts`、`transport.test.ts` 与 `rpc-client.test.ts`。
 - Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
   无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
@@ -472,6 +472,11 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   发送续跑指令，保留已有结果；用户 Stop 取消待续跑。Pi `auto_retry_end(success=false)`
   已用尽原生预算时保持 `pi-gateway-drop` 终态，不再叠加 Host 重试。本规则不修改受管
   Pi 二进制、版本或原生重试上限；原生分类兼容需由 Pi 上游独立修正。
+  重试耗尽即释放运行标记并发布失败收尾与空闲状态，Host Stop 则保留取消结果；
+  不依赖可能缺席的 `agent_settled`，不把失败伪装成原生成功。新 `agent_start` 前
+  到达的旧终态不重复结算，也不清除下一条已准备消息的逐轮权限策略；队列中的旧
+  `done`／空闲状态仍属于旧轮次。回归见 `pi-long-tool-lifecycle.test.ts`、
+  `pi-translator.test.ts` 与 `pi-auto-review-dispatch.test.ts`。
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
 
