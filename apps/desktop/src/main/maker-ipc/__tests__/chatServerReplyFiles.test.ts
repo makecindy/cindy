@@ -17,6 +17,28 @@ import { replyWithoutAttachments } from '../chatServerReplyFallback.js';
 describe('reply without attachments', () => {
   const project = (source: string) => replyWithoutAttachments(source, '附件未能附上。', '附件');
 
+  // #9193 review / unit: the existing projection cases missed bare-space image
+  // destinations, escaped path labels and decoded table pipes. These minimal
+  // inputs call the production projection and assert the delivered Markdown;
+  // paths here are message content, not host filesystem paths. Standalone run:
+  // 79 tests, 1.64s wall time on macOS (2026-11-13).
+  it('omits bare-space local images alongside a refused file but preserves code examples', () => {
+    const image = '![图表](/Users/example/Project Files/chart.png)';
+    const source = `[报告](../private.md) ${image}\n\n\`${image}\`\n\n\`\`\`md\n${image}\n\`\`\``;
+    expect(project(source)).toBe(`附件未能附上。\n\n报告 图表\n\n\`${image}\`\n\n\`\`\`md\n${image}\n\`\`\``);
+  });
+
+  it('keeps the complete image filename and escapes it only after removing its directory', () => {
+    expect(project('[报告](../private.md) ![/private/chart_final.png](cindy-media://blobs/a.png)'))
+      .toBe('附件未能附上。\n\n报告 chart\\_final.png');
+  });
+
+  it('keeps image alt text in its original table cell', () => {
+    const header = '| 图表 | 状态 |\n| --- | --- |\n';
+    expect(project('[报告](../private.md)\n\n' + header + '| ![before\\|after](./chart.png) | APPROVED |'))
+      .toBe('附件未能附上。\n\n报告\n\n' + header + '| before\\|after | APPROVED |');
+  });
+
   it('keeps labels and code while removing shared local definitions and nested image references', () => {
     const source = '**Analysis** [![preview][r]](../private.pdf) [download][r]\n\n[r]: /private/preview.png\n\n'
       + '[web](https://example.test/report) `![example](./code.png)`\n\n```md\n[example](../code.pdf)\n```\n\n'

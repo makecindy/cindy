@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { visit } from 'unist-util-visit';
 import type { Definition } from 'mdast';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
+import { findBareSpaceLocalImages } from '../../shared/bareSpaceLocalImages.js';
 
 const parser = unified().use(remarkParse).use(remarkGfm);
 
@@ -82,13 +83,13 @@ export function replyFileLinks(text: string, fileLabel: (label: string) => strin
 }
 
 const internalMedia = /^(?:cindy-(?:remote-)?media|xdt-(?:image|video|audio|model)):/i;
-const escapeLabel = (value: string) => value.replace(/[\\`*_[\]<>]/g, '\\$&').replace(/[\r\n]/g, ' ');
+const escapeLabel = (value: string) => value.replace(/[\\`*_{}[\]<>#!|]/g, '\\$&').replace(/[\r\n]/g, ' ');
 
 /** Path-only labels must not turn into a visible private address after unlinking. */
-function readableLabel(label: string, untitled: string): string {
+function readableLabel(label: string, untitled: string, format: (value: string) => string = value => value): string {
   const value = label.trim().replace(/^(`+)([^`]+)\1$/, '$2');
   if (!value || internalMedia.test(value)) return untitled;
-  if (!/^(?:[\\/]|\.{1,2}[\\/]|~[\\/]|[A-Za-z]:[\\/]|(?:file|xdt-file|sandbox):)/i.test(value)) return label;
+  if (!/^(?:[\\/]|\.{1,2}[\\/]|~[\\/]|[A-Za-z]:[\\/]|(?:file|xdt-file|sandbox):)/i.test(value)) return format(label);
   let local = value;
   if (/^(?:file|xdt-file|sandbox):/i.test(value)) {
     try {
@@ -113,13 +114,25 @@ export function replyWithoutAttachments(source: string, notice: string, untitled
   });
   const edits: Array<{ start: number; end: number; text: string }> = [];
   visit(tree, (node, _index, parent) => {
+    // Match the shared image parser's recovery, only in original prose spans.
+    if (node.type === 'text') {
+      if (parent?.type === 'link' || parent?.type === 'linkReference') return;
+      const start = node.position?.start.offset, end = node.position?.end.offset;
+      if (start === undefined || end === undefined) return;
+      for (const image of findBareSpaceLocalImages(text.slice(start, end))) {
+        edits.push({ start: start + image.start, end: start + image.end,
+          text: readableLabel(image.alt, untitled, escapeLabel) });
+      }
+      return;
+    }
     if (node.type !== 'image' && node.type !== 'imageReference' && node.type !== 'link' && node.type !== 'linkReference') return;
     const target = node.type === 'imageReference' || node.type === 'linkReference' ? definitions.get(node.identifier) : node;
     if (!target) return;
     const start = node.position?.start.offset, end = node.position?.end.offset;
     if (start === undefined || end === undefined) return;
     if (node.type === 'image' || node.type === 'imageReference') {
-      const label = readableLabel(escapeLabel(node.alt ?? ''), untitled);
+      // Extract filenames before escaping; Markdown escapes are not path separators.
+      const label = readableLabel(node.alt ?? '', untitled, escapeLabel);
       // Remote media still has an accessible page; local and managed media do not.
       const web = /^https?:\/\//i.test(target.url);
       const url = target.url.replace(/[<>\r\n]/g, char => encodeURIComponent(char));
