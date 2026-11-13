@@ -265,6 +265,8 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
     if (await exists(workspace)) {
       await ensureTeammateTemplate({ botId, displayName: upgraded.name, workspace });
       assertCurrent();
+      await ensureBotProjectAutomations({ botId, displayName: upgraded.name, workingDir: workspace, addMissing: false });
+      assertCurrent();
       const projectDir = normalizeRecentWorkdirPath(workspace);
       if (projectDir) await nameBotProject(botId, projectDir, upgraded.name);
     }
