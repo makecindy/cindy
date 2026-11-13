@@ -316,7 +316,7 @@ describe('direct Chat Server client', () => {
     const request = vi.fn().mockImplementation(async (path: string) => {
       if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
       if (path.endsWith('/snapshot')) return snapshot();
-      if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), status: executionStatus, epoch: 1, source_message_id: id(20) }];
+      if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), status: executionStatus, epoch: 1, source_message_id: id(21) }];
       if (path.endsWith(`/messages/${id(20)}`)) return message(20);
       if (path.includes('/messages?')) return [{ ...message(21), threadRootId: id(20) }];
       return [];
@@ -794,7 +794,7 @@ it('stops my requests and companions without stopping another member’s work', 
 
 it('projects waiting and stopping executions without inventing task IDs or losing concurrent turns', () => {
   const common = { source_message_id: id(20), bot_id: id(12), epoch: 1 };
-  const page = { snapshot: snapshot(), messages: [], before: null, executions: [
+  const page = { snapshot: snapshot(), messages: [message(20)], before: null, executions: [
     { ...common, id: id(30), status: 'needs_input' }, { ...common, id: id(31), status: 'stopping' },
     { ...common, id: id(32), status: 'succeeded' },
   ] };
@@ -1196,4 +1196,16 @@ it('uses my admin companion actor for an explicit all, preserving server plan re
     [`/conversations/${id(1)}/plans/${id(40)}`, 'POST', { operationId: `all-op:plan:${id(40)}`, expectedRevision: 7, action: 'stop' }, id(12)],
     [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `all-op:execution:${id(30)}`, action: 'stop' }, id(12)],
   ]);
+});
+
+// Unit regression: mixed main/topic executions used to appear together in the main group.
+// Existing waiting-state coverage had only one source; assert the public projection per scope.
+it('keeps main and two topics isolated including waiting work and unknown sources', () => {
+  const messages = [message(20), { ...message(21), threadRootId: id(20) }, { ...message(22), threadRootId: id(19) }];
+  const page = { snapshot: snapshot(), messages, before: null, executions: [20, 21, 22, 99].map(n => ({
+    id: id(n + 100), bot_id: id(12), source_message_id: id(n), epoch: 1, status: 'needs_input',
+  })) };
+  expect(chatGroupView(page, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(120)]);
+  expect(chatGroupView({ ...page, threadRootId: id(20) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(121)]);
+  expect(chatGroupView({ ...page, threadRootId: id(19) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(122)]);
 });

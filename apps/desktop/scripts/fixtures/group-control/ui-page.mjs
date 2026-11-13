@@ -135,6 +135,7 @@ export default {
       about: 'Server read state: unread thread entries (with @you), the in-chat 话题 hint above the composer and its list of this group\'s Threads',
       data: { ...base, bubbles: true, threadUnread: true },
     },
+    'thread-work': { about: 'Concurrent topic work stays in its own thread', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true } },
     'thread-follow': {
       about: 'The Thread panel\'s 关注 switch, off by default; switched on it reads 已关注',
       data: { ...base, bubbles: true, threadUnread: true, threadPanel: true },
@@ -641,6 +642,14 @@ export default {
       // A queue waiting for 继续 takes a new request: the composer does not offer to revise the last answer.
       const placeholder = await input.getAttribute('placeholder');
       assert.ok(ui.case === 'arrangement' ? placeholder.includes('正在说') : !placeholder.includes('改改'), placeholder);
+      return;
+    }
+    if (ui.case === 'thread-work') {
+      assert.equal(await page.getByTestId('bot-group-work').count(), 0, 'topic work must not appear in main');
+      await page.locator('[data-thread-preview="a1"]').first().click();
+      await page.getByTestId('bot-group-work').waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), 1, 'only the selected topic work');
+      await ui.capture('topic-work');
       return;
     }
     if (ui.case === 'thread-unread') {

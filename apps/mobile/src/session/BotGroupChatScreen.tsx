@@ -253,7 +253,13 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const returnAnchor = useRef<{ owner: string; id: string; offset: number } | null>(null);
   const restoreOffset = useRef<number | null>(null);
   const pauseReadUntilInteraction = useRef(false);
-  const group = chat.state.kind === 'ready' ? chat.state.group : null;
+  const group = useMemo(() => {
+    if (chat.state.kind !== 'ready') return null;
+    const value = chat.state.group;
+    const speakers = value.round.speakers.filter(speaker => speaker.threadRootId === (threadRootId ?? null)
+      || (!threadRootId && !speaker.sourceMessageId && !speaker.threadRootId));
+    return { ...value, round: { ...value.round, status: speakers.length ? value.round.status : 'idle' as const, speakers } };
+  }, [chat.state, threadRootId]);
   const mask = useGroupPersonalMask(groupId, deviceId, !!group?.serverBacked && group.conversationKind !== 'direct' && (!deviceId || group.supportsPersonalMask === true), chat.act, group);
   const [foreground, setForeground] = useState(() => AppState.currentState === 'active');
   const previewVisibility = useScrollViewMessageVisibility(
@@ -845,7 +851,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onEditStep={editPlanStep}
           />
         </SessionQuickSendProvider>
-      {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+      {!imageSelectionActive ? <BotGroupWorkArea onStop={threadRootId ? undefined : stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
         onError={message => { if (message) Alert.alert(message); }} /> : null}
       {processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight, marginTop: -spacing.sm }} />}
       </ComposerPullThroughScrollView>

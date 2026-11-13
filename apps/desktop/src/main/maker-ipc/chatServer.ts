@@ -1922,13 +1922,22 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Keep execution identity across computers and concurrent threads. Only the executing
     // computer resolves a lane; authenticated peers retrieve it through the group resource.
     const speakers: BotGroupSpeaker[] = [];
+    const sourceMessages = new Map([...s.messages, ...page].map(message => [message.id, message]));
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
+      const source = e.plan_id ? undefined : sourceMessages.get(e.source_message_id)
+        ?? (summaryOnly ? undefined : await (history()?.message<Message>(roomId, e.source_message_id) ?? readMessage(roomId, e.source_message_id)).catch(error => {
+          if (error instanceof ChatResponseError && [403, 404, 410].includes(error.status)) return undefined;
+          throw error;
+        }));
+      if (source) sourceMessages.set(source.id, source);
       const run = running.get(e.id);
       // created_at is the enqueue time, not the start of work; showing it as elapsed time
       // made queued executions look like they had already been working.
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
-        executionId: e.id, ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
+        executionId: e.id, sourceMessageId: e.source_message_id,
+        ...(e.plan_id || source ? { threadRootId: e.plan_id ? null : source!.threadRootId ?? null } : {}),
+        ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
         activity: e.plan_id ? 'step' : 'reply' };
       speakers.push(speaker);

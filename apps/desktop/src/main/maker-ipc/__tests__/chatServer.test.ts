@@ -2650,15 +2650,19 @@ describe('Chat Server result delivery and refresh', () => {
   // bot-group-chat.md §3: a companion may answer in several Threads at once;
   // each execution keeps its identity so the UI can stop/open the exact task.
   it('shows a companion running in two Threads as two execution speakers', async () => {
+    const otherSource = '70000000-0000-4000-8000-000000000099';
+    const root = '70000000-0000-4000-8000-000000000098';
     fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, content: [], threadRootId: null } };
+      if (route.endsWith(`/messages/${otherSource}`)) return { body: { id: otherSource, content: [], threadRootId: root } };
       if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'running' },
-        { ...execution, id: '50000000-0000-4000-8000-000000000099', status: 'running' }] };
+        { ...execution, id: '50000000-0000-4000-8000-000000000099', source_message_id: otherSource, status: 'running' }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
     expect(result).toMatchObject({ ok: true, group: { round: { status: 'running', speakers: [
-      { activity: 'reply', executionId: execution.id, executionStatus: 'running' },
-      { activity: 'reply', executionId: '50000000-0000-4000-8000-000000000099', executionStatus: 'running' },
+      { activity: 'reply', executionId: execution.id, executionStatus: 'running', sourceMessageId: execution.source_message_id, threadRootId: null },
+      { activity: 'reply', executionId: '50000000-0000-4000-8000-000000000099', executionStatus: 'running', sourceMessageId: otherSource, threadRootId: root },
     ] } } });
     expect(result.ok && result.group.round.speakers).toHaveLength(2);
   });

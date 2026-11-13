@@ -77,7 +77,7 @@ export interface ChatExecutionFailure {
   id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
-export interface ChatExecution extends ChatExecutionFailure { requester_id?: string; created_at?: string; status: string }
+export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; created_at?: string; status: string }
 /** Existing Chat Server plan contract, also consumed by Desktop's chatServer adapter. */
 export interface ChatPlan {
   activeExecution?: { id: string; status: string };
@@ -440,9 +440,13 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
   // No server-provided start time here: created_at is the enqueue time, so omit startedAt
   // rather than presenting queued time as elapsed work.
-  const speakers = executions.map(row => ({ botId: row.bot_id, sessionId: null, executionId: row.id,
+  const speakers = executions.map(row => {
+    const source = [...page.messages, ...page.snapshot.messages].find(message => message.id === row.source_message_id);
+    const threadRootId = row.plan_id ? null : row.threadRootId !== undefined ? row.threadRootId : source ? source.threadRootId ?? null : undefined;
+    return { sourceMessageId: row.source_message_id, ...(threadRootId !== undefined ? { threadRootId } : {}), botId: row.bot_id, sessionId: null, executionId: row.id,
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
-    activity: row.plan_id ? 'step' as const : 'reply' as const }));
+    activity: row.plan_id ? 'step' as const : 'reply' as const };
+  }).filter(speaker => speaker.threadRootId === (page.threadRootId ?? null));
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
   const open = plans.find(plan => ['proposed', 'running', 'waiting'].includes(plan.status));
   const currentStep = open?.steps.find(step => step.position === open.currentStep);
@@ -833,6 +837,17 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }
       // Use the same execution snapshot for running status and stop controls.
       const executions = await request<ChatExecution[]>(`/conversations/${room}/executions`);
+      const sourceMessages = new Map([...snapshot.messages, ...messages].map(message => [message.id, message]));
+      for (const execution of Array.isArray(executions) ? executions : []) {
+        if (execution.plan_id || !['queued', 'running', 'needs_input', 'stopping'].includes(execution.status)) continue;
+        let source = sourceMessages.get(execution.source_message_id);
+        if (!source) {
+          try { source = await this.message(room, execution.source_message_id); }
+          catch (error) { if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error; }
+          if (source) sourceMessages.set(source.id, source);
+        }
+        if (source) execution.threadRootId = source.threadRootId ?? null;
+      }
       const executionFailures = await failures(room, messages);
       const plans = snapshot.room.kind === 'group' && !threadRootId ? await readPlans(room, messages) : undefined;
       const projection = await stored?.projection<ChatMessage>(room, []);
