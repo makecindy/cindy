@@ -4007,6 +4007,7 @@
           "unsupportedProtocol": "La prueba de conexión no admite este protocolo de modelo",
           "inconclusive": "No se pudo confirmar la conexión. Comprueba la dirección o la red antes de volver a intentarlo; es posible que la solicitud anterior se haya ejecutado.",
           "exhausted": "Se probaron todas las interfaces candidatas. No se encontró ninguna conexión que funcione.",
+          "model": "Modelo probado: {{model}}",
           "costHint": "Las pruebas envían breves solicitudes de generación y pueden generar un pequeño cargo.",
           "details": "Ver intentos",
           "stop": "Detener prueba"
