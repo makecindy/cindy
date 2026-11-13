@@ -370,14 +370,24 @@ export class MemoryStorage {
     if (!isMemoryType(type)) {
       throw new MemoryError('invalid-type', `type 必须是 user/feedback/project/reference, 收到 "${type}"`);
     }
-    const name = normalizeShardName(rawName);
+    const supplied = rawName.trim();
+    if (/\.md$/i.test(supplied)) {
+      const parsed = parseFilename(supplied);
+      if (parsed && parsed.type !== type) {
+        throw new MemoryError(
+          'invalid-type',
+          `文件名 "${supplied}" 属于 type "${parsed.type}", 与传入的 type "${type}" 不符`,
+        );
+      }
+    }
+    const name = normalizeShardName(supplied);
     const key = addressKey(type, name);
     const matches = (await this.list()).filter(
       (record) => record.frontmatter.type === type && addressKey(type, record.filename) === key,
     );
     if (matches.length > 1) {
       // 完整文件名 (含 .md) 按字面命中, 否则同 key 无解
-      if (/\.md$/i.test(rawName.trim())) {
+      if (/\.md$/i.test(supplied)) {
         const exact = `${name}.md`;
         const hit = matches.find((record) => record.filename === exact);
         if (hit) return hit.filename;
