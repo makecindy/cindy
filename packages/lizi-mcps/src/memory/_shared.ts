@@ -16,6 +16,7 @@
 import { z } from 'zod';
 
 import {
+  CURATED_MEMORY_TYPES,
   resolveMemoryScopeKey,
   type MakerMemoryManager,
   type MakerMemoryStore,
@@ -25,12 +26,20 @@ import type { MemoryToolResult } from '../cindy_memoryToolRegistry.js';
 import type { MemoryMcpDeps } from '../types.js';
 import { classifyMemoryError } from './errors.js';
 
+/** 与 MemoryConfig.maxSlugLen 默认值一致；前缀与 .md 不计入 */
+const SHARD_SLUG_MAX = 64;
+const TYPE_PREFIX = new RegExp(`^(?:${CURATED_MEMORY_TYPES.join('|')})[_-]`);
+
 /** memory_write / memory_consolidate 的 name: 裸 slug, 或 MEMORY.md 索引里的文件名 */
 export const shardNameSchema = z
   .string()
   .min(1)
   .max(80)
   .regex(/^[a-z0-9_-]+(\.md)?$/, 'slug 只允许 [a-z0-9_-]，或带 .md 的完整文件名')
+  .refine(
+    (name) => name.replace(/\.md$/, '').replace(TYPE_PREFIX, '').length <= SHARD_SLUG_MAX,
+    { message: `slug 最多 ${SHARD_SLUG_MAX} 个字符（不含 type 前缀与 .md）` },
+  )
   .describe('分片 slug；也可直接粘贴 MEMORY.md 索引里的文件名');
 
 export function buildJsonResult(payload: unknown, isError = false): MemoryToolResult {

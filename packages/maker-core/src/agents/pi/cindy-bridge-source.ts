@@ -4058,7 +4058,7 @@ class CindyMcpGateway {
             limit: { type: 'integer', minimum: 1, maximum: 50 },
             name: {
               type: 'string',
-              pattern: '^[a-z0-9_-]{1,80}(\\.md)?$',
+pattern: '^(?:[a-z0-9_-]{1,64}|(?:user|feedback|project|reference)[_-][a-z0-9_-]{1,64})(?:\\.md)?$',
               description:
                 'Slug or a MEMORY.md index filename (may end with .md) required for write; both name the same record.',
             },
