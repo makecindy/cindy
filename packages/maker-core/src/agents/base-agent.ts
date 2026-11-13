@@ -618,7 +618,7 @@ export function projectPiManagedCommandFailure(value: unknown): import('./pi/man
     phase: data.phase as import('./pi/managed-command.js').PiManagedCommandFailure['phase'],
     packagesUpdated: data.packagesUpdated,
     recovery: data.recovery as import('./pi/managed-command.js').PiManagedCommandFailure['recovery'],
-    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish'].includes(data.hostStage)
+    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish', 'unsupported'].includes(data.hostStage)
       ? { hostStage: data.hostStage as import('./pi/managed-command.js').PiBinaryUpdateFailureStage } : {}),
   };
 }

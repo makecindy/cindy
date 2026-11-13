@@ -65,7 +65,7 @@ export function parsePiManagementText(text: string): PiManagementParseResult | u
 }
 
 /** Stable Host-only diagnostics; never contains stderr, paths or credentials. */
-export type PiBinaryUpdateFailureStage = 'release-lookup' | 'asset-validation' | 'prepare' | 'download' | 'extract' | 'version-verification' | 'publish';
+export type PiBinaryUpdateFailureStage = 'release-lookup' | 'asset-validation' | 'prepare' | 'download' | 'extract' | 'version-verification' | 'publish' | 'unsupported';
 export interface PiManagedCommandFailure {
   phase: 'native-packages' | 'native-core' | 'native-query' | 'host-binary-update';
   hostStage?: PiBinaryUpdateFailureStage;
