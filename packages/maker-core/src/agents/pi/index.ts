@@ -7809,6 +7809,7 @@ export class PiAgent extends BaseAgent {
       }
       return { tiers: next, from: current };
     };
+    /**
      * 应用思考开关（调用方必须已在 `runExclusivePiRpc` 队列内）。
      *
      * 打开时回到会话期望档位，但只限**当前模型支持的档**：用户先在 `high` 关闭思考、
