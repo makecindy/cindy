@@ -40,7 +40,7 @@ test('Claude and Pi get the published built-in learn', { timeout: TEST_TIMEOUT_M
     ['pi', () => f.graph.maker.listAgentSkills('pi', { workingDir: f.project })],
   ]) {
     const listed = await list();
-    for (const skill of listed.skills) if (skill.path) assert.ok(inside(f.root, skill.path), `${kind}: ${skill.path}`);
+    for (const skill of listed.skills) if (skill.path) assert.ok(inside(f.root, skill.path), `${kind}: root=${f.root}; file=${fs.realpathSync.native(skill.path)}`);
   }
   const expect = async (id, kind, text) => {
     const s = f.session(id, kind);
@@ -56,9 +56,9 @@ test('Claude and Pi get the published built-in learn', { timeout: TEST_TIMEOUT_M
     assert.ok(grant, `${kind} ${text}`);
     assert.equal(grant.version, 1);
     assert.equal(grant.sessionInstanceId, `instance-${id}`);
-    assert.ok(inside(f.root, grant.resolvedSkillPath), grant.resolvedSkillPath);
-    assert.ok(fs.realpathSync(grant.resolvedSkillPath).startsWith(fs.realpathSync(descriptor.absolutePath)),
-      `${kind}: the pinned file is the published built-in learn (${grant.resolvedSkillPath})`);
+    assert.ok(inside(f.root, grant.resolvedSkillPath), `root=${f.root}; file=${fs.realpathSync.native(grant.resolvedSkillPath)}`);
+    assert.ok(fs.realpathSync.native(grant.resolvedSkillPath).startsWith(fs.realpathSync.native(descriptor.absolutePath)),
+      `${kind}: root=${fs.realpathSync.native(descriptor.absolutePath)}; file=${fs.realpathSync.native(grant.resolvedSkillPath)}`);
   }
   // Not a /learn turn at all.
   assert.equal(await expect('claude-other', 'claude-code', 'please learn how we deploy'), null);

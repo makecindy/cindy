@@ -105,10 +105,10 @@ const forged = (root) => ({ version: 1, sessionInstanceId: 'forged-instance', re
 test('a /cindy:learn turn pins the published built-in learn and records the same snapshot', async t => {
   t = lifoCleanup(t);
   const h = await harness(t);
-  const learn = fs.realpathSync(learnDescriptor(h.f).absolutePath);
+  const learn = fs.realpathSync.native(learnDescriptor(h.f).absolutePath);
   const { session, pin, grant } = await h.turn('learn-task', { clientId: 'learn-1', text: '/cindy:learn how we deploy' });
   assert.equal(pin?.name, 'learn');
-  assert.ok(fs.realpathSync(pin.path).startsWith(learn), pin.path);
+  assert.ok(fs.realpathSync.native(pin.path).startsWith(learn), `root=${learn}; file=${fs.realpathSync.native(pin.path)}`);
   assert.deepEqual(grant, { version: 1, sessionInstanceId: session.instanceId, resolvedSkillPath: pin.path });
   // An ordinary turn carries neither.
   const plain = await h.turn('learn-task', { clientId: 'plain-1', text: 'how do we deploy?' });
@@ -119,7 +119,7 @@ test('a /cindy:learn turn pins the published built-in learn and records the same
 test('client-supplied snapshots change neither the pinned file nor the recorded snapshot', async t => {
   t = lifoCleanup(t);
   const h = await harness(t);
-  const learn = fs.realpathSync(learnDescriptor(h.f).absolutePath);
+  const learn = fs.realpathSync.native(learnDescriptor(h.f).absolutePath);
   const evil = forged(h.f.root);
   const smuggle = (clientId, text) => ({
     clientId, text,
@@ -130,7 +130,7 @@ test('client-supplied snapshots change neither the pinned file nor the recorded 
   });
   // Conditions met: Host's own resolution wins.
   const met = await h.turn('forge-task', smuggle('forge-1', '/cindy:learn how we deploy'));
-  assert.ok(fs.realpathSync(met.pin.path).startsWith(learn), met.pin.path);
+  assert.ok(fs.realpathSync.native(met.pin.path).startsWith(learn), `root=${learn}; file=${fs.realpathSync.native(met.pin.path)}`);
   assert.notEqual(met.pin.path, evil.resolvedSkillPath);
   assert.deepEqual(met.grant, { version: 1, sessionInstanceId: met.session.instanceId, resolvedSkillPath: met.pin.path });
   // Not a /learn turn: nothing pinned, nothing recorded.
