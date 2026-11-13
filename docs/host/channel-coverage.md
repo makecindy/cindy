@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`f788ed8bfd`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`153254dcbc`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
@@ -10,31 +10,31 @@
 
 ## 总口径
 
-**真正要 Host 做的 = A + C-后台 + C-两段式 = 912 + 32 + 41 = 985**；巡检实际调用到 **131** 个（666 次，其中 A 129）。
+**真正要 Host 做的 = A + C-后台 + C-两段式 = 924 + 32 + 43 = 999**；巡检实际调用到 **131** 个（666 次，其中 A 129）。
 同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。
 
 | 分类 | 含义 | 通道数 |
 |---|---|---:|
-| contract | 已在 Host 通道合同或通用路由登记表里，窗口做客户端时转发给 Host | 77（巡检调用 35） |
+| contract | 已在 Host 通道合同或通用路由登记表里，窗口做客户端时转发给 Host | 80（巡检调用 35） |
 | client | 客户端模式自己的通道（连接状态、重连） | 2（巡检调用 1） |
-| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 912（巡检调用 129） |
-| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 351（巡检调用 70） |
+| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 924（巡检调用 129） |
+| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 359（巡检调用 70） |
 | **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 6（巡检调用 1） |
 | **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
 | 　S·本地 | 同步·本地（窗口读 profile：界面设置与首帧提示） | 8（巡检调用 8） |
 | 　S·镜像 | 同步·数据归 Host（需窗口缓存镜像） | 6（巡检调用 3） |
 | **R** | 回执通道：主进程向界面要数据，界面回执；先不排期 | 6（巡检调用 2） |
-| **C** | 跨两边，按处理方式分四种 | 88（巡检调用 4） |
+| **C** | 跨两边，按处理方式分四种 | 90（巡检调用 4） |
 | 　C-后台 | | 32（巡检调用 2） |
-| 　C-两段式（窗口做界面动作，数据调 Host） | | 41（巡检调用 0） |
+| 　C-两段式（窗口做界面动作，数据调 Host） | | 43（巡检调用 0） |
 | 　C-窗口本地 | | 11（巡检调用 2） |
 | 　C-专项设计（安全边界） | | 4（巡检调用 0） |
-| 合计 | | 1456 |
+| 合计 | | 1481 |
 
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
-已注册 **374**（其中 10 个只有源码判定，客户端快照里还没有）、未注册 **0**（今天被拒或无人监听，见下文）、快照无法判断 2。
+已注册 **374**（其中 10 个只有源码判定，客户端快照里还没有）、未注册 **0**（今天被拒或无人监听，见下文）、快照无法判断 10。
 
-判定依据：A:default 110、A:rule 802、B:rule 351、C:dependency 18、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
+判定依据：A:default 119、A:rule 805、B:rule 359、C:dependency 20、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
 
 合同一侧（`hostChannelContract.ts`、`host-delegation.ts`、客户端模式预取、Host 通用路由的登记表 `hostIpcEntries/`）的通道名全部静态解析：解析不出任何一个时脚本直接失败，不会生成本清单。
 
@@ -94,16 +94,16 @@
 
 | # | 领域 | 通道数 | 巡检调用到 | 调用次数 | 主要模块 |
 |---:|---|---:|---:|---:|---|
-| 1 | 伙伴与 IM | 133 | 22 | 128 | im 58、maker-ipc 39、localDb 27 |
+| 1 | 伙伴与 IM | 137 | 22 | 128 | im 60、maker-ipc 40、localDb 28 |
 | 2 | 任务、消息与输入队列 | 111 | 17 | 123 | maker-ipc 69、localDb 25、bootstrap-electron 12 |
-| 3 | 插件、技能与 MCP | 148 | 16 | 93 | cindy-brain 52、skillhub 41、plugin-market 19 |
+| 3 | 插件、技能与 MCP | 145 | 16 | 93 | cindy-brain 49、skillhub 41、plugin-market 19 |
 | 4 | 供应商与模型 | 82 | 15 | 80 | maker-ipc 52、local-model-runtime 19、bootstrap-electron 7 |
-| 5 | git 与工作树 | 59 | 9 | 75 | git-review 21、git-context 17、worktree 11 |
+| 5 | git 与工作树 | 63 | 9 | 75 | git-context 21、git-review 21、worktree 11 |
 | 6 | 设备互联与远程执行 | 75 | 7 | 66 | device-link 41、remote-ssh 29、bootstrap-electron 4 |
-| 7 | 未登记前缀 | 110 | 17 | 29 | maker-ipc 55、bootstrap-electron 22、billing 19 |
-| 8 | 记忆、学习与钩子 | 44 | 4 | 24 | hook-control 29、learn-host 6、maker-ipc 6 |
+| 7 | 未登记前缀 | 119 | 17 | 29 | maker-ipc 57、bootstrap-electron 22、billing 19 |
+| 8 | 记忆、学习与钩子 | 42 | 4 | 24 | hook-control 27、learn-host 6、maker-ipc 6 |
 | 9 | 账号与凭据 | 40 | 4 | 17 | bootstrap-electron 30、device-link 7、subscription-accounts 2 |
-| 10 | 设置与偏好 | 31 | 9 | 15 | bootstrap-electron 9、appearance-settings-ipc 6、maker-ipc 6 |
+| 10 | 设置与偏好 | 33 | 9 | 15 | bootstrap-electron 9、appearance-settings-ipc 8、maker-ipc 6 |
 | 11 | 自动化 | 30 | 5 | 6 | maker-ipc 30 |
 | 12 | Orca | 26 | 1 | 5 | maker-ipc 21、localDb 5 |
 | 13 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | 8 | 2 | 2 | maker-ipc 8 |
@@ -287,7 +287,7 @@ S·本地：界面设置与登录首帧提示，由窗口本地读同一份 prof
 | `model-favorites:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `maker-ipc/modelFavoritesSync.ts` |
 | `setup-migration:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `setup-migration/rendererPrefsHost.ts` |
 
-## C 类全量（88）
+## C 类全量（90）
 
 C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做的（终端优先级低）。C-两段式：窗口保留处理者做界面动作，数据那一半调 Host，每个需要一个 Host 接口，计入但低频、排在后面。C-窗口本地：路径来自用户在本窗口的选择，客户端模式下照常注册，不计入。C-专项设计：安全边界，先读 docs/product-rules/input-handoff.md，方案出来前不动。
 
@@ -302,6 +302,8 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `app:open-cindy-make-tools-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `bootstrap-electron.ts` |
 | `appearance-settings:import-wallpaper` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:plugin-font` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host | 0 | `appearance-settings-ipc.ts` |
+| `appearance-settings:reset-fields` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设置与偏好，但处理函数用到窗口 API：app.dock、nativeTheme；窗口做界面动作，数据那一半调 Host | 0 | `appearance-settings-ipc.ts` |
+| `appearance-settings:select-theme` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设置与偏好，但处理函数用到窗口 API：app.dock、nativeTheme；窗口做界面动作，数据那一半调 Host | 0 | `appearance-settings-ipc.ts` |
 | `billing:open-payment-redirect` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `billing/index.ts` |
 | `billing:open-subscription-portal` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `billing/index.ts` |
 | `cindy-media:chat-attachments-clear` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 附件与媒体库，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `bootstrap-electron.ts` |
@@ -393,37 +395,39 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 |---|---:|
 | 窗口本地照常处理 | 364 |
 | 窗口本地照常处理（源码判定：客户端分支调用其注册函数；客户端快照早于这次改动，未实测） | 10 |
+| 两次快照都未注册（按需注册或未走到） | 8 |
 | 注册在插件页面的 webContents.ipc 上，主进程快照不覆盖 | 2 |
 
-快照无法判断的窗口类通道（2）：`ghost-page:cancel-model-picker`（注册在插件页面的 webContents.ipc 上，主进程快照不覆盖）、`ghost-page:pick-model`（注册在插件页面的 webContents.ipc 上，主进程快照不覆盖）
+快照无法判断的窗口类通道（10）：`ghost-page:cancel-model-picker`（注册在插件页面的 webContents.ipc 上，主进程快照不覆盖）、`ghost-page:pick-model`（注册在插件页面的 webContents.ipc 上，主进程快照不覆盖）、`live-screen-embed:channel-reply`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:close`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:ice`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:open`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:request`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:frame`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:host`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:state`（两次快照都未注册（按需注册或未走到））
 
 ## 按注册模块
 
 | 模块 | 已代理 | A | B | W | S | R | C | 合计 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| maker-ipc | 28 | 299 | 10 | 0 | 0 | 3 | 14 | 354 |
+| maker-ipc | 28 | 302 | 10 | 0 | 0 | 3 | 14 | 357 |
 | bootstrap-electron | 5 | 129 | 61 | 0 | 1 | 0 | 20 | 216 |
-| im | 0 | 58 | 0 | 0 | 0 | 0 | 1 | 59 |
-| localDb | 26 | 55 | 1 | 1 | 0 | 0 | 4 | 87 |
+| im | 0 | 60 | 0 | 0 | 0 | 0 | 1 | 61 |
+| localDb | 26 | 56 | 1 | 1 | 0 | 0 | 4 | 88 |
 | device-link | 0 | 49 | 0 | 0 | 0 | 0 | 3 | 52 |
-| cindy-brain | 5 | 48 | 2 | 0 | 6 | 0 | 5 | 66 |
+| cindy-brain | 8 | 45 | 2 | 0 | 6 | 0 | 5 | 66 |
 | skillhub | 0 | 40 | 0 | 0 | 0 | 0 | 2 | 42 |
-| hook-control | 0 | 29 | 0 | 0 | 0 | 0 | 0 | 29 |
 | remote-ssh | 0 | 28 | 0 | 0 | 0 | 0 | 1 | 29 |
+| hook-control | 0 | 27 | 0 | 0 | 0 | 0 | 0 | 27 |
+| git-context | 0 | 21 | 0 | 0 | 0 | 0 | 0 | 21 |
 | git-review | 0 | 20 | 0 | 0 | 0 | 0 | 1 | 21 |
 | billing | 0 | 19 | 0 | 0 | 0 | 0 | 2 | 21 |
 | local-model-runtime | 0 | 19 | 0 | 0 | 0 | 0 | 0 | 19 |
 | plugin-market | 0 | 19 | 0 | 0 | 0 | 0 | 1 | 20 |
-| git-context | 0 | 17 | 0 | 0 | 0 | 0 | 0 | 17 |
 | plugin-contributions | 0 | 13 | 0 | 0 | 0 | 0 | 0 | 13 |
 | worktree | 0 | 11 | 0 | 0 | 0 | 0 | 1 | 12 |
 | learn-host | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 6 |
+| model-groups | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 6 |
 | setup-migration | 0 | 6 | 0 | 0 | 0 | 2 | 0 | 8 |
 | plugin-publisher | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | session-import | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | wecomGroupNotification | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | analyticsSettingsService | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 4 |
-| appearance-settings-ipc | 2 | 4 | 0 | 0 | 1 | 0 | 2 | 9 |
+| appearance-settings-ipc | 2 | 4 | 0 | 0 | 1 | 0 | 4 | 11 |
 | app-shortcuts | 0 | 3 | 1 | 0 | 1 | 0 | 0 | 5 |
 | remotePrecreatedWorktreeLedger | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | cross-agent-convert | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
@@ -433,6 +437,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | relaunchBusyActivityIpc | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
 | subscription-accounts | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
 | bot-import | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| cindy-files | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | commands | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | local-agent | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | model-access | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 3 |
@@ -459,7 +464,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | projectOrderStore | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 2 |
 | region-screenshot | 0 | 0 | 48 | 0 | 0 | 0 | 0 | 48 |
 | remote-desktop | 0 | 0 | 20 | 0 | 0 | 0 | 0 | 20 |
-| remote-desktop-viewer | 0 | 0 | 17 | 0 | 0 | 0 | 0 | 17 |
+| remote-desktop-viewer | 0 | 0 | 25 | 0 | 0 | 0 | 0 | 25 |
 | resource-usage-window | 0 | 0 | 4 | 0 | 0 | 0 | 0 | 4 |
 | right-sidebar-window | 0 | 0 | 11 | 0 | 0 | 0 | 0 | 11 |
 | rsb-browser-bridge | 0 | 0 | 12 | 0 | 0 | 0 | 0 | 12 |
@@ -545,6 +550,8 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `appearance-settings:plugin-font` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:remove-wallpaper` | invoke | A（设置与偏好） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:reset` | invoke | contract | 0 | `appearance-settings-ipc.ts` |
+| `appearance-settings:reset-fields` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：app.dock、nativeTheme；窗口做界面动作，数据那一半调 Host） | 0 | `appearance-settings-ipc.ts` |
+| `appearance-settings:select-theme` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：app.dock、nativeTheme；窗口做界面动作，数据那一半调 Host） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:set-patch` | invoke | contract | 0 | `appearance-settings-ipc.ts` |
 
 ### billing
@@ -818,7 +825,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `ghosts:card:report-height` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:clear-unread` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:composer-list` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:confirm:resolve` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
+| `ghosts:confirm:resolve` | invoke | contract | 0 | `cindy-brain/index.ts` |
 | `ghosts:control-points:candidates` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:control-points:get` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:defer-ui-prompt` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
@@ -831,7 +838,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `ghosts:handoff-list` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:inspect` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:install` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:install-consent:resolve` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
+| `ghosts:install-consent:resolve` | invoke | contract | 0 | `cindy-brain/index.ts` |
 | `ghosts:legacy-recovery-status` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-bind` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-delete` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
@@ -852,7 +859,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `ghosts:recent-usage` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 2 | `cindy-brain/index.ts` |
 | `ghosts:recommendations` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 8 | `cindy-brain/index.ts` |
 | `ghosts:reload` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
-| `ghosts:request-task-approval` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
+| `ghosts:request-task-approval` | invoke | contract | 0 | `cindy-brain/index.ts` |
 | `ghosts:request-ui-approval` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:resolve-panel-media` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:restore-builtin` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
@@ -870,6 +877,12 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `ghosts:workdir-prefs` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 0 | `cindy-brain/index.ts` |
 | `ghosts:workdir-prefs` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:workdir-prefs:set` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
+
+### cindy-files
+
+| 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
+|---|---|---|---:|---|
+| `cindy-files:open` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `cindy-files/register.ts` |
 
 ### clientEndpointsService
 
@@ -999,6 +1012,10 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `git-context:find-linked-worktree` | invoke | A（git 与工作树） | 17 | `git-context/ipc.ts` |
 | `git-context:get` | invoke | A（git 与工作树） | 0 | `git-context/ipc.ts` |
 | `git-context:get-for-session` | invoke | A（git 与工作树） | 19 | `git-context/ipc.ts` |
+| `git-context:github-app:connect` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
+| `git-context:github-app:disconnect` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
+| `git-context:github-app:install` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
+| `git-context:github-app:status` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
 | `git-context:github-read` | invoke | A（git 与工作树） | 0 | `git-context/ipc.ts` |
 | `git-context:github-setup:cancel` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
 | `git-context:github-setup:connection` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
@@ -1045,19 +1062,16 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `maker:hook-control:add-binding` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
+| `maker:hook-control:add-project` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:bind-revoke` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:bind-start` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:cancel-pending-bind` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:prefs-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:prefs-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-bind-cancel` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-bind-revoke` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-bind-select` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-bind-start` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:provider-open-action` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:provider-prefs-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:provider-prefs-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:rebind-team` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:revoke-team` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-enabled` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
@@ -1065,8 +1079,9 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:hook-control:set-provider-default-workspace` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-provider-enabled` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-slack-communications` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:set-workspaces` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-x-companion` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
+| `maker:hook-control:shared-prefs-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
+| `maker:hook-control:shared-prefs-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:telegram-behavior-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:telegram-behavior-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:telegram-group-activation-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
@@ -1084,6 +1099,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `botImConnection:add` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
 | `botImConnection:adopt` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImPersonalAdoption.ts` |
 | `botImConnection:archive-lane` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
+| `botImConnection:get-imessage-config` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
 | `botImConnection:list` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
 | `botImConnection:list-adoptable` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImPersonalAdoption.ts` |
 | `botImConnection:list-discord-channels` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
@@ -1093,6 +1109,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `botImConnection:reset-lane` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
 | `botImConnection:set-discord-channel-access` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
 | `botImConnection:set-group-activation` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
+| `botImConnection:update-imessage-config` | invoke | A（伙伴与 IM） | 0 | `im/shared/botImConnectionRuntime.ts` |
 | `desktop:cc-prefs-changed` | event | A（伙伴与 IM） | 4 | `im/index.ts` |
 | `dingtalkBot:clear` | invoke | A（伙伴与 IM） | 0 | `packages/lizi-im/src/dingtalk/index.ts` |
 | `dingtalkBot:get-state` | invoke | A（伙伴与 IM） | 1 | `packages/lizi-im/src/dingtalk/index.ts` |
@@ -1234,6 +1251,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `local-db:bots:model-chain-settings-get` | invoke | A（伙伴与 IM） | 6 | `localDb/ipc/bots.ts` |
 | `local-db:bots:model-chain-settings-reset` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
 | `local-db:bots:model-chain-settings-set` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
+| `local-db:bots:project-repository` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
 | `local-db:bots:projects:list` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
 | `local-db:bots:projects:set` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
 | `local-db:bots:search-history` | invoke | A（伙伴与 IM） | 0 | `localDb/ipc/bots.ts` |
@@ -1420,6 +1438,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:companion-cloud:home-choices` | invoke | A（伙伴与 IM） | 0 | `maker-ipc/register.ts` |
 | `maker:companion-cloud:merge` | invoke | A（伙伴与 IM） | 0 | `maker-ipc/register.ts` |
 | `maker:companion-cloud:merge-cindy` | invoke | A（伙伴与 IM） | 0 | `maker-ipc/register.ts` |
+| `maker:companion-cloud:repair-profile` | invoke | A（伙伴与 IM） | 0 | `maker-ipc/register.ts` |
 | `maker:companion-cloud:state` | invoke | A（伙伴与 IM） | 1 | `maker-ipc/register.ts` |
 | `maker:companion-cloud:switch-home` | invoke | A（伙伴与 IM） | 0 | `maker-ipc/register.ts` |
 | `maker:companion-cloud:take-over` | invoke | A（伙伴与 IM） | 0 | `maker-ipc/register.ts` |
@@ -1524,6 +1543,8 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:orca:remote-worker:models` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
 | `maker:orca:remote-worker:open` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
 | `maker:orca:remote-worker:release` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
+| `maker:own-computer-model-use:get` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/providerHandlers.ts` |
+| `maker:own-computer-model-use:set` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/providerHandlers.ts` |
 | `maker:persist-turn-error-deferred` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:pi-packages:list` | invoke | A（插件、技能与 MCP） | 1 | `maker-ipc/register.ts` |
 | `maker:pi-packages:mutate` | invoke | A（插件、技能与 MCP） | 0 | `maker-ipc/register.ts` |
@@ -1719,6 +1740,17 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `model-access:retry` | invoke | contract | 0 | `model-access/index.ts` |
 | `model-access:rotate` | invoke | A（供应商与模型） | 0 | `model-access/index.ts` |
 
+### model-groups
+
+| 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
+|---|---|---|---:|---|
+| `model-groups:bind-session` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
+| `model-groups:decisions` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/decisionIpc.ts` |
+| `model-groups:get` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
+| `model-groups:resolve` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
+| `model-groups:set` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
+| `model-groups:switch-offer` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
+
 ### notificationService
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
@@ -1896,6 +1928,14 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
+| `live-screen-embed:channel-reply` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:close` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:ice` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:open` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:request` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-relay:frame` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-relay:host` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-relay:state` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
 | `remote-desktop-viewer:channel-reply` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
 | `remote-desktop-viewer:clipboard` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
 | `remote-desktop-viewer:clipboard-sync` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |

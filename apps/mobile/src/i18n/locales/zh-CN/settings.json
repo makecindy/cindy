@@ -430,7 +430,11 @@
       "voice": "长按说话",
       "scrollKeys": "右摇杆",
       "scroll": "滚动",
-      "page": "翻页"
+      "page": "翻页",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字键上/下",
+      "triggerScroll": "滚动当前内容",
+      "sendText": "发送已输入文字",
+      "taskHint": "组合键和 Start 仅用于任务页。设为语音键时，优先按住说话；松开后文字留在输入框。"
     }
   }
 }

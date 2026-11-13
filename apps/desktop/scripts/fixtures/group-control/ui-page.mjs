@@ -27,7 +27,8 @@ export default {
   stubs: {
     // Rich component bodies read account context, but sign-in is not under test.
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
-    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice input is not covered by this fixture"); };',
+    // The group voice hook resolves its URL on render; capture is not exercised.
+    'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return ""; }',
     // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
     'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
   },
@@ -35,8 +36,13 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'reply-composer': {
+      about: 'Real thread reply composer with microphone and editable draft at narrow width',
+      viewport: { width: 420, height: 600 },
+      data: { ...base, sidebar: false, replyComposer: true },
+    },
     'public-cindy': { about: 'Public Cindy work remains visible to a peer without private process or stop access',
       data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, workState: 'unknown', canStop: false } },
 
@@ -590,6 +596,13 @@ export default {
       return;
     }
     const input = page.locator('textarea');
+    if (ui.case === 'reply-composer') {
+      assert.equal(await page.locator('button[aria-pressed="false"]').count(), 1, 'microphone entry is visible');
+      await input.fill('A reply draft ready for dictation');
+      assert.equal(await input.inputValue(), 'A reply draft ready for dictation');
+      await ui.capture('reply-draft');
+      return;
+    }
     const chip = page.locator('[data-controlled-banner-chip]');
     const collapsedDot = page.locator('[data-controlled-banner="collapsed"]');
     const scroller = page.getByTestId('bot-group-timeline');
