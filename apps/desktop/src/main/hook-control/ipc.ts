@@ -47,6 +47,7 @@ import {
   requireString,
 } from '../utils/ipcValidate.js';
 import {
+  moveWorkspaceProviderSourcesToRenamed,
   listWorkspaceProviderSources,
   setWorkspaceProviderSource,
 } from './workspaceProviderSourceStore.js';
@@ -54,10 +55,15 @@ import {
   applyIncomingServerWorkspacePrefs,
   listWorkspacePrefs,
   markWorkspacePrefsMigrated,
+  moveWorkspacePrefsToRenamed,
   setWorkspacePref,
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
+import { lookupWorkspaces, retiredAliasPairs } from './projectWorkspaces.js';
+import { createProjectWorkspaceSync } from './projectWorkspaceSync.js';
+import { loadImProjectCatalog, registerImProjectDirectory } from './projectCatalog.js';
+import { onProjectCatalogChanged } from '../projectCatalogEvents.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
@@ -331,6 +337,7 @@ function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWor
   try {
     const sourcesBefore = snapshotWorkspaceProviderSources();
     applyIncomingServerWorkspacePrefs(channel, prefs);
+    applyRetiredProjectNames();
     rebroadcastWorkspaceProviderSources(sourcesBefore);
     remotePrefsSnapshotGenerations.set(
       channel,
@@ -397,6 +404,8 @@ const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
     else broadcastProviderPrefs(providerLocalPrefsView(channel));
     // 重连镜像同样经 applyIncomingServerWorkspacePrefs 落快照, 可能清掉配对来源(issue #5912)。
     rebroadcastWorkspaceProviderSources();
+    // 快照可能把改名前旧名称下的行带回来; 没有可挪的行时什么也不做。
+    applyRetiredProjectNames();
   },
   onError: (channel, err) => {
     log.warn(
@@ -404,6 +413,49 @@ const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
     );
   },
 });
+
+/**
+ * 项目改过名时, 把按旧名称存的偏好与来源挪到现用名称下。可重复执行: 服务端快照
+ * 落地后(它可能把旧名称下的行带回来)与每次项目整理后各跑一次。
+ */
+function applyRetiredProjectNames(): void {
+  if (!store) return;
+  try {
+    const config = store.get();
+    const pairs = retiredAliasPairs(config.workspaces, config.retiredWorkspaces ?? {});
+    if (pairs.length === 0) return;
+    const sources = moveWorkspaceProviderSourcesToRenamed(pairs);
+    if (sources !== null) broadcastWorkspaceProviderSources(sources);
+    for (const channel of moveWorkspacePrefsToRenamed(pairs)) {
+      if (channel === 'slack') broadcastPrefs(slackLocalPrefsView());
+      else broadcastProviderPrefs(providerLocalPrefsView(channel));
+      void mirrorWorkspacePrefs(channel);
+    }
+  } catch (err) {
+    log.warn(
+      `moving IM project preferences to the renamed project failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** 官方 IM 机器人可选的项目跟随侧栏项目(见 projectWorkspaces.ts)。 */
+const projectWorkspaceSync = createProjectWorkspaceSync({
+  getStore: () => store,
+  loadCatalog: loadImProjectCatalog,
+  registerDirectory: async (directory) => {
+    await registerImProjectDirectory(directory);
+  },
+  onSynced: ({ changed, mappingChanged }) => {
+    if (!store || !manager) return;
+    applyRetiredProjectNames();
+    // 名称清单变了要让服务端知道: 在线时重发 hello(它以最新一帧为准); 不在线时
+    // 下次建连的 hello 自带新清单, 不需要为此重建连接。
+    if (mappingChanged) manager.refreshHello();
+    if (changed) broadcastStatus(manager.snapshot());
+  },
+  log,
+});
+let disposeProjectCatalogListener: (() => void) | null = null;
 
 function broadcastTelegramBehavior(view: TelegramHookBehaviorState): void {
   for (const w of BrowserWindow.getAllWindows()) {
@@ -505,7 +557,8 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
           url: meta.url,
           enabled: meta.enabled,
           ...(provider === 'x' ? { companionBotId: config.xCompanionBotId ?? null } : {}),
-          workspaces: config.workspaces,
+          // 现用名称 + 改名前的旧名称(只供查找): 服务端可能还按旧名称派发。
+          workspaces: lookupWorkspaces(config.workspaces, config.retiredWorkspaces ?? {}),
           createdAt: 0,
         };
       },
@@ -643,6 +696,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       getAccountFingerprint: currentAccountFingerprint,
       accountInitiallyActive: false,
       listRecentSessions: () => listRecentHookSessions(store!.get().workspaces),
+      syncProjectWorkspaces: () => projectWorkspaceSync.run(),
       // /model /effort 实时问答的数据源: 与会话内模型选择器**同一套规则**——
       // live providers(含自定义供应商 + 实时连接态)-> 仅已连接供应商 ->
       // 可见性过滤(renderer 镜像到 main 的 override + 目录 defaultEnabled,
@@ -805,9 +859,17 @@ export function readXCompanionSummary(): { available: boolean; visible: boolean;
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
 export function registerHookControlIpc(): void {
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, () => ({
-    hook: hookControlAvailable() ? ensureInstances().manager.snapshot() : disabledHookView(),
-  }));
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, () => {
+    if (!hookControlAvailable()) return { hook: disabledHookView() };
+    const hook = ensureInstances().manager.snapshot();
+    // 打开设置页时顺手与侧栏项目对齐; 有变化经状态广播推给页面。
+    projectWorkspaceSync.schedule();
+    return { hook };
+  });
+  disposeProjectCatalogListener?.();
+  disposeProjectCatalogListener = onProjectCatalogChanged(() => {
+    if (store && hookControlAvailable()) projectWorkspaceSync.schedule();
+  });
 
   // 开关即绑定(设置页 toggle 直接调, 无确认弹窗): 开 = 连接 + 置自动绑定意图
   // (连上后 main 自动发起 OIDC 弹浏览器); 关 = 解除绑定并断开(再开需重新
@@ -945,16 +1007,14 @@ export function registerHookControlIpc(): void {
     },
   );
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_WORKSPACES, (_e, payload) => {
+  // 添加项目: 登记进侧栏的项目列表, 再按项目列表整理一次机器人可选的项目。
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.ADD_PROJECT, async (_e, payload) => {
     requireHookControl();
-    const { store: s, manager: m } = ensureInstances();
-    const p = requireObject(payload);
-    const workspaces = requireObject(p.workspaces) as Record<string, string>;
-    translateValidation(() => s.setWorkspaces(workspaces));
-    // 别名清单变更要让 server 侧感知: 在线时直接重发 hello(server 以最新
-    // 一帧为准, 连接不动 —— 整条重建会让设置页状态/偏好区闪烁); 未连接时
-    // 回退重建, 下次建连的 hello 自带新清单
-    if (!m.refreshHello()) m.sync();
+    const { manager: m } = ensureInstances();
+    const directory = requireString(requireObject(payload).directory, 'directory');
+    const registered = await registerImProjectDirectory(directory);
+    if (!registered.ok) throwIpcError('INVALID_PARAMS', registered.message);
+    await projectWorkspaceSync.run();
     return { hook: m.snapshot() };
   });
 
@@ -969,7 +1029,7 @@ export function registerHookControlIpc(): void {
       // 把缺字段当 null 会让 renderer 的一次调用疏忽静默清掉用户已保存的设置。
       const alias = requireNullableString(p.alias, 'alias');
       translateValidation(() => s.setProviderDefaultWorkspace(provider, alias));
-      // 与 SET_WORKSPACES 同款: 默认目录也走 hello, 在线时重发一帧即可让 server
+      // 默认项目也走 hello, 在线时重发一帧即可让 server
       // 感知(它以最新一帧为准), 不重建连接 —— 重建会让设置页状态与偏好区闪烁。
       if (!m.refreshHello()) m.sync();
       return { hook: m.snapshot() };
@@ -1320,6 +1380,8 @@ export function startHookControlAccount(): void {
   // 群窗口生命周期入口在 manager.activateAccount 内执行并纳入账号级
   // pendingAccountOps；当前永久保留模式下该入口是兼容 no-op。
   ensureInstances().manager.activateAccount();
+  // 账号的项目存储此时已就绪: 先把机器人可选的项目与侧栏对齐。
+  void projectWorkspaceSync.run();
 }
 
 /** Close hook ingress before the old account DB is disposed. */
@@ -1340,6 +1402,8 @@ export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boole
 export function disposeHookControl(): void {
   disposeAuthListener?.();
   disposeAuthListener = null;
+  disposeProjectCatalogListener?.();
+  disposeProjectCatalogListener = null;
   observedAuthRealm = null;
   // App quit is not an account unbind: preserve the durable cursor and only
   // discard the in-memory cache so the next process resumes incrementally.

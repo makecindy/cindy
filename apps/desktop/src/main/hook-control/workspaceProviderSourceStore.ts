@@ -175,3 +175,30 @@ export function clearWorkspaceProviderSourcesForRemoteModelChanges(
   writeFileEntries(fp, next);
   return next;
 }
+
+/**
+ * 项目改名后, 把按旧名称存的来源偏好挪到新名称下(新名称下已有的不覆盖);
+ * 有改动时返回更新后的全量条目, 否则返回 null。来源偏好只在本机, 没有镜像。
+ */
+export function moveWorkspaceProviderSourcesToRenamed(
+  renames: ReadonlyArray<{ from: string; to: string }>,
+): WorkspaceProviderSourceEntry[] | null {
+  if (renames.length === 0) return null;
+  const fp = filePath();
+  let entries = readFileEntries(fp);
+  let changed = false;
+  for (const { from, to } of renames) {
+    if (from === to || !HOOK_WORKSPACE_ALIAS_RE.test(to)) continue;
+    for (const row of entries.filter((entry) => entry.workspace === from)) {
+      const hasTarget = entries.some((entry) => sameKey(entry, row.channel, row.teamId, to));
+      entries = [
+        ...entries.filter((entry) => entry !== row),
+        ...(hasTarget ? [] : [{ ...row, workspace: to }]),
+      ];
+      changed = true;
+    }
+  }
+  if (!changed) return null;
+  writeFileEntries(fp, entries);
+  return entries;
+}

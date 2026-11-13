@@ -43,6 +43,7 @@ import {
   listProjectsForControl,
   listRecentSessionsForPicker,
   listSessionsForWorkspace,
+  setControlProjectCatalogSource,
 } from '../im/shared/controlProjects';
 import { listWorkLouderCodexTaskCatalog } from '../worklouder-codex/taskSlots';
 
@@ -50,6 +51,47 @@ describe('/ctr control project/session picker', () => {
   beforeEach(() => {
     dbMock.rows = [];
     dbMock.drizzle = null;
+    setControlProjectCatalogSource(null);
+  });
+
+  // 规则(2026-11-13): 个人机器人 /ctr 与 /project 列的项目就是侧栏的本机项目。生产入口
+  // listProjectsForControl(宿主注入侧栏项目)。此前清单只按活跃任务的目录分组: 没有任务的
+  // 项目不出现, 侧栏里移除的项目还在, 名字也不跟侧栏。最小输入: 一个改过名且有任务的项目、
+  // 一个没有任务的项目、一个已移除但仍有任务的项目、一条不在任何项目里的对话任务。
+  it('lists the sidebar projects with their sidebar names, without removed ones', async () => {
+    dbMock.rows = [
+      { id: 'a', title: 'A', workingDir: '/code/cindy', userSendAt: 5_000, updatedAt: 1 },
+      { id: 'b', title: 'B', workingDir: '/code/removed', userSendAt: 9_000, updatedAt: 1 },
+      {
+        id: '30c1ae07-5508-4c2e-9f1a-1234567890ab',
+        title: '聊聊周报',
+        workingDir: '/data/dialogues/2026-06-03/30c1ae07-5508-4c2e-9f1a-1234567890ab',
+        userSendAt: 7_000,
+        updatedAt: 1,
+      },
+    ];
+    setControlProjectCatalogSource(async () => ({
+      projects: [
+        { path: '/code/cindy', name: '主仓库', lastUsedAtMs: 5_000 },
+        { path: '/code/empty', name: 'empty', lastUsedAtMs: 6_000 },
+      ],
+      isRemoved: (directory) => directory === '/code/removed',
+    }));
+
+    // /ctr: 项目(含没有任务的) + 可接管的对话任务; 已移除的项目不在。
+    expect((await listProjectsForControl()).map((row) => [row.displayName, row.workingDir])).toEqual([
+      ['聊聊周报', '/data/dialogues/2026-06-03/30c1ae07-5508-4c2e-9f1a-1234567890ab'],
+      ['empty', '/code/empty'],
+      ['主仓库', '/code/cindy'],
+    ]);
+    // /project: 只列项目。
+    expect(
+      (await listProjectsForControl({ projectsOnly: true })).map((row) => row.displayName),
+    ).toEqual(['empty', '主仓库']);
+
+    // 侧栏项目读不到时退回按活跃任务的目录分组(原行为)。
+    setControlProjectCatalogSource(async () => null);
+    expect((await listProjectsForControl()).map((row) => row.workingDir)).toContain('/code/removed');
   });
 
   it('keeps tasks running in checkouts under their selected project', async () => {

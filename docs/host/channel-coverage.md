@@ -1035,6 +1035,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `maker:hook-control:add-binding` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
+| `maker:hook-control:add-project` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:bind-revoke` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:bind-start` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:cancel-pending-bind` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
@@ -1055,7 +1056,6 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:hook-control:set-provider-default-workspace` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-provider-enabled` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-slack-communications` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
-| `maker:hook-control:set-workspaces` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:set-x-companion` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:telegram-behavior-get` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |
 | `maker:hook-control:telegram-behavior-set` | invoke | A（记忆、学习与钩子） | 0 | `hook-control/ipc.ts` |

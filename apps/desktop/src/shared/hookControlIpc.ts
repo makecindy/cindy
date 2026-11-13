@@ -31,8 +31,11 @@ export const HOOK_CONTROL_INVOKE = {
   SET_ENABLED: 'maker:hook-control:set-enabled',
   /** Slack Bot 是否发送本设备上下线通知。 */
   SET_LIFECYCLE_ANNOUNCEMENT: 'maker:hook-control:set-lifecycle-announcement',
-  /** 覆写工作目录清单(别名 -> 本地绝对路径, 全量替换)。 */
-  SET_WORKSPACES: 'maker:hook-control:set-workspaces',
+  /**
+   * 添加项目: 把一个本机目录登记进侧栏的项目列表。IM 机器人可选的项目就是侧栏的
+   * 本机项目, 这里没有单独的清单可写(见 hook-control/projectWorkspaces.ts)。
+   */
+  ADD_PROJECT: 'maker:hook-control:add-project',
   /**
    * 设置某个 provider 派发任务的默认工作目录(null / 「对话」= 内置伪目录)。
    * 进程内通道, 没有跨版本兼容问题 —— 原 set-x-default-workspace 直接改名。
@@ -323,7 +326,10 @@ export interface SlackHookView {
   lifecycleAnnouncement: boolean;
   /** 实际生效的服务器地址(默认内置值; 被 urlOverride 覆写时为覆写值)。 */
   url: string;
-  /** 工作区别名 -> 本地绝对路径。协议里只跑别名, 路径不出本机。 */
+  /**
+   * 项目名称 -> 本地绝对路径, 与侧栏的本机项目一一对应(名称跟随侧栏)。
+   * 协议里只跑名称, 路径不出本机。
+   */
   workspaces: Record<string, string>;
   status: HookConnectionStatus;
   lastError: string | null;
@@ -352,8 +358,15 @@ export interface SlackHookView {
   feishu: ProviderHookView;
 }
 
-/** 工作区别名的合法格式(与 hook server 侧约定一致)。 */
-export const HOOK_WORKSPACE_ALIAS_RE = /^[A-Za-z0-9_-]{1,32}$/;
+/**
+ * 协议里项目名称的合法格式: 1–32 个字, 不含控制字符, 首尾不是空白, 也不像绝对路径
+ * (协议拒收以 `/`、`\\`、盘符或 `file:` 开头的名称 —— 路径不出本机)。
+ *
+ * 名称来自侧栏的项目名, 所以允许中文等任意文字; 服务端只把它当不透明字符串
+ * (按它存会话选的项目与偏好), 没有字符集限制。
+ */
+export const HOOK_WORKSPACE_ALIAS_RE =
+  /^(?![\\/])(?![A-Za-z]:[\\/])(?!file:)(?!\s)\P{Cc}{1,32}(?<!\s)$/iu;
 
 /**
  * 保留别名「对话」: 内置的伪工作目录, 与真实目录同级 —— 桌面端把它恒定加进

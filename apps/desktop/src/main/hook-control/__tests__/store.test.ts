@@ -55,6 +55,8 @@ describe('默认态与持久化', () => {
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
+      retiredWorkspaces: {},
+      projectCatalogMigrated: false,
       bindingsCache: [],
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
@@ -91,10 +93,16 @@ describe('默认态与持久化', () => {
 });
 
 describe('workspaces 校验', () => {
-  it('非法别名 / 相对路径拒绝', () => {
-    expect(() => validateWorkspaces({ 别名: path.join(dir, 'x') })).toThrow(
-      HookConnectionValidationError,
-    );
+  it('非法名称 / 相对路径拒绝; 侧栏项目名(含中文、空格)可以用', () => {
+    // 名称来自侧栏项目名, 不限字符集; 但像绝对路径的名称会被协议拒收(路径不出本机),
+    // 控制字符与首尾空白也不行。
+    for (const name of ['/etc/passwd', 'C:\\repo', 'a\nb', ' 前导空格', 'x'.repeat(33)]) {
+      expect(() => validateWorkspaces({ [name]: path.join(dir, 'x') })).toThrow(
+        HookConnectionValidationError,
+      );
+    }
+    const abs = path.join(dir, 'x');
+    expect(validateWorkspaces({ '周报 整理': abs })).toEqual({ '周报 整理': abs });
     expect(() => validateWorkspaces({ ok: 'relative/path' })).toThrow(
       HookConnectionValidationError,
     );
@@ -182,6 +190,8 @@ describe('旧多连接文件迁移', () => {
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
+      retiredWorkspaces: {},
+      projectCatalogMigrated: false,
       bindingsCache: [],
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
@@ -367,6 +377,32 @@ describe('provider 与 Cindy 账号隔离', () => {
       ).toBeNull();
       expect(store.setProviderDefaultWorkspace('x', 'cindy').xDefaultWorkspace).toBe('cindy');
       expect(store.setProviderDefaultWorkspace('x', null).xDefaultWorkspace).toBeNull();
+    });
+
+    // 规则: 清单由侧栏项目投影而来(projectWorkspaces.ts)。项目改名时默认项目必须跟着改名 ——
+    // 按「清单外」清掉的话, 侧栏里改个名字, 默认项目就悄悄退回「对话」。
+    it('按项目列表落清单: 改名的默认项目跟着改名, 移除的清掉, 旧名称与迁移标记落盘', () => {
+      const store = makeStore();
+      store.setWorkspaces({ xdmaker: '/code/cindy', docs: '/code/docs' });
+      store.setProviderDefaultWorkspace('feishu', 'xdmaker');
+      store.setProviderDefaultWorkspace('x', 'docs');
+
+      const next = store.applyProjectWorkspaces({
+        workspaces: { 主仓库: '/code/cindy' },
+        retired: { xdmaker: '/code/cindy' },
+        renames: [{ from: 'xdmaker', to: '主仓库' }],
+      });
+      expect(next.workspaces).toEqual({ 主仓库: '/code/cindy' });
+      expect(next.feishuDefaultWorkspace).toBe('主仓库');
+      expect(next.xDefaultWorkspace).toBeNull();
+      store.markProjectCatalogMigrated();
+
+      expect(makeStore().get()).toMatchObject({
+        workspaces: { 主仓库: '/code/cindy' },
+        retiredWorkspaces: { xdmaker: '/code/cindy' },
+        projectCatalogMigrated: true,
+        feishuDefaultWorkspace: '主仓库',
+      });
     });
 
     it('两个 provider 各存一份, 互不影响', () => {

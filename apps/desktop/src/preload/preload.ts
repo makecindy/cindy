@@ -5708,8 +5708,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       enabled: boolean,
     ): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-provider-enabled', { provider, enabled }),
-    setWorkspaces: (workspaces: Record<string, string>): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:set-workspaces', { workspaces }),
+    addProject: (directory: string): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:add-project', { directory }),
     setXCompanion: (botId: string | null, expectedBotId: string | null): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-x-companion', { botId, expectedBotId }),
     setProviderDefaultWorkspace: (

@@ -1012,7 +1012,7 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
     );
 
     expect(outcome.status).toBe('error');
-    expect(outcome.errorMessage).toContain('已不在工作目录映射里的目录');
+    expect(outcome.errorMessage).toContain('已不属于任何项目');
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send).not.toHaveBeenCalled();
   });

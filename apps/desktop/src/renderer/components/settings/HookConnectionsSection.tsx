@@ -66,7 +66,6 @@ import {
   HOOK_BIND_REASON_APP_CHANGED,
   HOOK_BIND_REASON_NOT_INSTALLED,
   HOOK_CHAT_WORKSPACE_ALIAS,
-  HOOK_WORKSPACE_ALIAS_RE,
   slackHookInstallUrl,
   type HookTeamBindingView,
   type ProviderHookView,
@@ -412,65 +411,12 @@ function DefaultWorkspaceRadio({
   );
 }
 
-const RESERVED_WORKSPACE_ALIASES = new Set([
-  HOOK_CHAT_WORKSPACE_ALIAS,
-  '__proto__',
-  'prototype',
-  'constructor',
-]);
-
-/** 目录名 -> 合法别名: 只留 [A-Za-z0-9_-], 其余折叠成 '-', 撞名或保留名加序号。 */
-export function deriveAlias(dir: string, taken: ReadonlySet<string>): string {
-  const base = dir.split(/[\\/]/).filter(Boolean).pop() ?? 'ws';
-  let alias =
-    base
-      .replace(/[^A-Za-z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 32) || 'ws';
-  if (taken.has(alias) || RESERVED_WORKSPACE_ALIASES.has(alias)) {
-    for (let i = 2; ; i++) {
-      const candidate = `${alias.slice(0, 32 - String(i).length - 1)}-${i}`;
-      if (!taken.has(candidate) && !RESERVED_WORKSPACE_ALIASES.has(candidate)) {
-        alias = candidate;
-        break;
-      }
-    }
-  }
-  return alias;
-}
-
-/** Validate a complete renderer edit before constructing its IPC payload. */
-export function workspaceRowsToMap(
-  rows: ReadonlyArray<{ alias: string; dir: string }>,
-): Record<string, string> | null {
-  const workspaces: Record<string, string> = {};
-  for (const row of rows) {
-    const alias = row.alias.trim();
-    const dir = row.dir.trim();
-    if (
-      !alias ||
-      !dir ||
-      !HOOK_WORKSPACE_ALIAS_RE.test(alias) ||
-      RESERVED_WORKSPACE_ALIASES.has(alias) ||
-      Object.hasOwn(workspaces, alias)
-    ) {
-      return null;
-    }
-    workspaces[alias] = dir;
-  }
-  return workspaces;
-}
-
 export function HookConnectionsSection({ companion }: { companion?: { id: string; name: string } } = {}) {
   const { t } = useTranslation();
   const { entry, activation } = useSettingsSearchNavigation();
   /** 飞书不可用时的去向因身份而异: 组织成员找管理员, 个人账号没有管理员可找。 */
   const personalAccount = useOptionalAuthUser()?.membershipKind === 'personal';
   const [hook, setHook] = useState<SlackHookView | null>(null);
-  /** 工作目录行的本地编辑态(别名输入中不被状态推送打断, blur 时提交)。 */
-  const [rows, setRows] = useState<Array<{ alias: string; dir: string }>>([]);
-  /** 最近一次与 main 对齐的 workspaces 序列化(判断外部变更用)。 */
-  const syncedRef = useRef<string>('');
   /**
    * 渠道卡同刻最多展开一张(交互对齐「个人」栏 PersonalGroupContent), 默认
    * 全收起 —— 收起行自带状态徽章与绑定摘要。打开渠道开关时自动展开对应卡,
@@ -500,11 +446,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   const applyView = useCallback((view: SlackHookView) => {
     setHook(view);
-    const serialized = JSON.stringify(view.workspaces);
-    if (serialized !== syncedRef.current) {
-      syncedRef.current = serialized;
-      setRows(Object.entries(view.workspaces).map(([alias, dir]) => ({ alias, dir })));
-    }
   }, []);
   const applyPushedView = useCallback(
     (view: SlackHookView) => {
@@ -528,31 +469,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       unsubscribe();
     };
   }, [applyPushedView, applyView]);
-
-  const saveWorkspaces = useCallback(
-    async (next: Array<{ alias: string; dir: string }>) => {
-      // Reject the whole edit before assigning attacker-shaped keys to a
-      // plain object. Silently skipping/overwriting one row could persist a
-      // partial map and remove a previously valid workspace.
-      const workspaces = workspaceRowsToMap(next);
-      if (workspaces === null) {
-        toast.error(t('settings.remoteControl.hook.toast.saveFailed'));
-        return;
-      }
-      // 无变更的 blur(点进输入框又点出去)不发保存 —— 避免无谓 IPC 与状态刷新
-      if (JSON.stringify(workspaces) === syncedRef.current) return;
-      try {
-        const requestedAtRevision = ++viewRevisionRef.current;
-        const res = await window.electronAPI.hookControl.setWorkspaces(workspaces);
-        if (viewRevisionRef.current === requestedAtRevision) applyView(res.hook);
-      } catch (err) {
-        toast.error(
-          extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.saveFailed'),
-        );
-      }
-    },
-    [applyView, t],
-  );
 
   /** Slack 授权相关动作共用一个门，避免开关/添加/重绑交叉点击创建多轮 OAuth。 */
   const runSlackAuthAction = useCallback(
@@ -849,41 +765,23 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     })();
   }, [xConfirmedPrincipalId, confirm, t]);
 
-  const handleAddWorkspace = async () => {
+  /**
+   * 添加项目: 选一个本机文件夹, 登记进项目列表。机器人可选的项目就是侧栏的本机项目,
+   * 所以它同时出现在侧栏里; 改名、移除在侧栏做, 这里跟着变。
+   */
+  const handleAddProject = async () => {
     const res = await window.electronAPI.showOpenDirectoryDialog();
     if (res.canceled || !res.path) return;
-    const dir = res.path as string;
-    if (rows.some((r) => r.dir === dir)) return;
-    const next = [
-      ...rows,
-      {
-        alias: deriveAlias(dir, new Set([HOOK_CHAT_WORKSPACE_ALIAS, ...rows.map((r) => r.alias)])),
-        dir,
-      },
-    ];
-    setRows(next);
-    await saveWorkspaces(next);
+    try {
+      const requestedAtRevision = ++viewRevisionRef.current;
+      const added = await window.electronAPI.hookControl.addProject(res.path as string);
+      if (viewRevisionRef.current === requestedAtRevision) applyView(added.hook);
+    } catch {
+      toast.error(t('settings.remoteControl.hook.toast.addProjectFailed'));
+    }
   };
 
-  const handleRemoveWorkspace = async (index: number) => {
-    const next = rows.filter((_, i) => i !== index);
-    setRows(next);
-    await saveWorkspaces(next);
-  };
-
-  /** 更换某行的目录(保留别名 —— 偏好按别名归属, 换目录不丢偏好)。 */
-  const handleChangeDir = async (index: number) => {
-    const res = await window.electronAPI.showOpenDirectoryDialog();
-    if (res.canceled || !res.path) return;
-    const dir = res.path as string;
-    if (rows.some((r, i) => i !== index && r.dir === dir)) return;
-    const next = rows.slice();
-    next[index] = { ...next[index], dir };
-    setRows(next);
-    await saveWorkspaces(next);
-  };
-
-  // 目录清单设备共享；运行偏好按 provider 隔离。三个 hook 都始终调用，避免
+  // 项目清单与侧栏共用；运行偏好按 provider 隔离。三个 hook 都始终调用，避免
   // provider 开关切换时改变 React hook 顺序。
   const slackPrefsState = useHookWorkspacePrefs(hook, 'slack');
   const telegramPrefsState = useHookWorkspacePrefs(hook, 'telegram');
@@ -1239,22 +1137,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     : hook.binding?.state === 'confirmed';
 
   /**
-   * 工作目录映射区块(渲染进每张渠道卡的展开区): 目录清单是设备级共享的
-   * 同一份 —— 在任一渠道卡里增删目录都作用于全部渠道(区块描述已标注),
-   * 运行偏好按渠道隔离, 由所在卡决定传入哪份 prefsState, 因此不再需要
-   * 渠道切换 chip。用普通函数而非内联子组件渲染: 内联组件每次渲染都会
-   * 重建类型导致子树 remount, 别名输入框会在输入中途失焦。
+   * 项目区块(渲染进每张渠道卡的展开区): 列的就是侧栏的本机项目, 名称与侧栏一致,
+   * 所有渠道共用同一份; 运行偏好按渠道隔离, 由所在卡决定传入哪份 prefsState。
+   * 用普通函数而非内联子组件渲染: 内联组件每次渲染都会重建类型导致子树 remount。
    */
-  /**
-   * 该目录当前**已保存**的别名(null = 这一行还没落盘, 或别名正在编辑中)。
-   *
-   * 默认工作目录写的是别名, 而 store 只接受 workspaces 里已有的别名 —— 所以选中态
-   * 与写入都必须以落盘的那份映射为准, 不能用别名输入框的临时值。目录路径在一次渲染
-   * 里是稳定键(rows 就按 dir 去重), 用它反查别名。
-   */
-  const savedAliasOf = (dir: string): string | null =>
-    Object.keys(hook.workspaces).find((alias) => hook.workspaces[alias] === dir) ?? null;
-
   const renderWorkdirSection = (
     prefsState: ReturnType<typeof useHookWorkspacePrefs>,
     chatMaxVisibleModelRows?: number,
@@ -1408,63 +1294,35 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               maxVisibleModelRows={chatMaxVisibleModelRows}
             />
           </div>
-          {rows.map((row, i) => (
+          {Object.entries(hook.workspaces).map(([name, dir]) => (
             <div
-              key={row.dir}
+              key={name}
               className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5"
             >
               <div className="flex items-center gap-1.5">
                 {defaultWorkspace?.mode === 'row' ? (
                   <DefaultWorkspaceRadio
-                    // **只认已保存的 alias → dir 映射**, 不看输入框里的临时值: 别名改了
-                    // 但还没 blur 落盘时, 拿它当选中判据会把未保存的名字显示成已选中,
-                    // 点下去还会把 workspaces 里不存在的别名发给 store(直接抛校验错)。
-                    // 未保存的新行(还没有对应映射)不给选 —— 先落盘再设默认。
-                    selected={
-                      savedAliasOf(row.dir) !== null &&
-                      defaultWorkspace.value === savedAliasOf(row.dir)
-                    }
-                    disabled={savedAliasOf(row.dir) === null}
-                    label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
-                      name: savedAliasOf(row.dir) ?? row.alias.trim(),
-                    })}
-                    onSelect={() => {
-                      const saved = savedAliasOf(row.dir);
-                      if (saved === null) return;
-                      void setProviderDefaultWorkspace(defaultWorkspace.provider, saved);
-                    }}
+                    selected={defaultWorkspace.value === name}
+                    label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', { name })}
+                    onSelect={() => void setProviderDefaultWorkspace(defaultWorkspace.provider, name)}
                   />
                 ) : null}
-                <input data-setting-id={imBotSettings.cindy.id}
-                  value={row.alias}
-                  onChange={(e) => {
-                    const next = rows.slice();
-                    next[i] = { ...next[i], alias: e.target.value };
-                    setRows(next);
-                  }}
-                  onBlur={() => void saveWorkspaces(rows)}
-                  maxLength={32}
-                  className="shrink-0 w-36 rounded-lg border border-transparent px-2.5 py-1.5 text-13 text-[var(--settings-input-text)] bg-transparent outline-none hover:border-[var(--border-default)] focus:border-[var(--border-default)] transition-colors"
-                />
-                <button data-setting-id={imBotSettings.cindy.id}
-                  type="button"
-                  onClick={() => void handleChangeDir(i)}
-                  title={t('settings.remoteControl.hook.form.changeDir')}
-                  className="min-w-0 flex-1 truncate text-left text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                <span
+                  data-setting-id={imBotSettings.cindy.id}
+                  className="w-36 shrink-0 truncate px-2.5 py-1.5 text-13 font-medium text-[var(--text-primary)]"
+                  title={name}
                 >
-                  {row.dir}
-                </button>
-                <button data-settings-search-action="Remove this workspace from the bot connection"
-                  type="button"
-                  onClick={() => void handleRemoveWorkspace(i)}
-                  aria-label={t('settings.remoteControl.hook.form.removeWorkspace')}
-                  className="shrink-0 rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                  {name}
+                </span>
+                <span
+                  className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]"
+                  title={dir}
                 >
-                  <Trash2 size={13} />
-                </button>
+                  {dir}
+                </span>
               </div>
-              {/* 会话偏好编辑行: 偏好按别名归属(与 Slack /model 卡同键) */}
-              <WorkspacePrefsEditor alias={row.alias.trim()} state={prefsState} />
+              {/* 会话偏好编辑行: 偏好按项目名称归属(与 IM 里 /model 卡同键) */}
+              <WorkspacePrefsEditor alias={name} state={prefsState} />
             </div>
           ))}
         </div>
@@ -1473,11 +1331,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           size="sm"
           compact
           type="button"
-          onClick={() => void handleAddWorkspace()}
+          onClick={() => void handleAddProject()}
           className="w-fit"
         >
           <Plus size={12} />
-          {t('settings.remoteControl.hook.form.addWorkspace')}
+          {t('settings.remoteControl.hook.form.addProject')}
         </Button>
       </div>
     </>

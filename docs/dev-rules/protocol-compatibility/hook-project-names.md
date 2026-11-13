@@ -1,0 +1,25 @@
+# 官方 IM 机器人的项目名称
+
+> 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
+
+官方 Slack / Telegram / X / 飞书的 hook 协议里，`hello.workspaces`、`hello.defaultWorkspace`、
+`task.dispatch.workspace`、`query.response.workspaces`、`prefs` 的 `workspace` 一直是不透明的名称
+（协议只要求非空，`sessions` 与 `provider.prefs` 另外拒收像绝对路径的值）。字段、消息类型与协议版本
+都没有变化；变化只在客户端填进去的内容。
+
+2026-11-13 起，客户端把侧栏的本机项目投影成这份名称清单（`hook-control/projectWorkspaces.ts`），
+不再有用户手填的别名：
+
+- 名称跟随侧栏的项目名，可以是中文等任意文字、可以含空格；1–32 个字，不含控制字符，首尾不是空白，
+  不以 `/`、`\`、盘符或 `file:` 开头（`HOOK_WORKSPACE_ALIAS_RE`）。路径仍然不出本机。
+- 清单最多 64 个，按最近使用排序；内置 `chat`（对话）恒在第一位，含义不变。
+- 项目改名时名称跟着变。服务端按名称存的会话选择与偏好不需要迁移：客户端保留改名前的旧名称作查找
+  （不进 `hello`，也不出现在选择卡里），旧名称派发来的任务落到同一个目录；按旧名称存的偏好由客户端
+  挪到新名称并镜像（旧名称以全空行镜像，服务端随之删除）。
+
+服务端各 hook server 把名称当不透明字符串存取与展示，没有字符集限制，无需改动即可显示非 ASCII 名称；
+本次服务端只改了文案（「工作目录」改为「项目」）。新客户端连旧 server、旧客户端连新 server 都照常工作，
+两仓可独立发布 / 回滚。旧客户端读到新客户端写入的本机配置时会丢弃不合旧格式的名称（只少不多）。
+
+同一会话在 IM 里换项目后的任务归属由客户端判定（`hook-control/dispatcher.ts` 的 `resolveTarget`）：
+复用绑定的任务要求它就在这次点名的项目里，否则新建。服务端换项目时不必更换 `externalKey`。

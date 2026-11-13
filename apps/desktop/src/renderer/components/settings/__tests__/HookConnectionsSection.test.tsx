@@ -22,6 +22,8 @@ const ipc = vi.hoisted(() => ({
   openProviderAction: vi.fn(),
   openExternal: vi.fn(),
   setProviderDefaultWorkspace: vi.fn(),
+  addProject: vi.fn(),
+  showOpenDirectoryDialog: vi.fn(),
   setXCompanion: vi.fn(),
   imDefaultSettingsGet: vi.fn(),
   imDefaultSettingsReset: vi.fn(),
@@ -118,7 +120,7 @@ vi.mock('../TelegramBehaviorSettings', () => ({
   ),
 }));
 
-import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
+import { HookConnectionsSection } from '../HookConnectionsSection';
 import { SettingsSearchNavigationContext } from '../SettingsSearchNavigation';
 import { resolveSettingsSearchEntry } from '../settingsSearchCatalog';
 import { resetXUsageNoticeMemoryState } from '@/state/xUsageNotice';
@@ -281,6 +283,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
         revokeTeam: ipc.revokeTeam,
         openProviderAction: ipc.openProviderAction,
         setProviderDefaultWorkspace: ipc.setProviderDefaultWorkspace,
+        addProject: ipc.addProject,
         setXCompanion: ipc.setXCompanion,
       },
       maker: {
@@ -288,6 +291,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
         imDefaultSettingsReset: ipc.imDefaultSettingsReset,
       },
       openExternal: ipc.openExternal,
+      showOpenDirectoryDialog: ipc.showOpenDirectoryDialog,
     };
   });
 
@@ -327,31 +331,6 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.officialX.bind' }));
     await waitFor(() => expect(dialog.confirm).toHaveBeenCalled());
     expect(ipc.setXCompanion).not.toHaveBeenCalled();
-  });
-
-  it('never derives prototype or built-in chat aliases from a selected folder', () => {
-    expect(deriveAlias('/tmp/chat', new Set())).toBe('chat-2');
-    expect(deriveAlias('/tmp/__proto__', new Set())).toBe('__proto__-2');
-    expect(deriveAlias('/tmp/prototype', new Set())).toBe('prototype-2');
-    expect(deriveAlias('/tmp/constructor', new Set(['constructor-2']))).toBe('constructor-3');
-  });
-
-  it('rejects a partial workspace save for reserved or duplicate aliases', () => {
-    expect(
-      workspaceRowsToMap([
-        { alias: 'safe', dir: '/tmp/safe' },
-        { alias: '__proto__', dir: '/tmp/hidden' },
-      ]),
-    ).toBeNull();
-    expect(
-      workspaceRowsToMap([
-        { alias: 'same', dir: '/tmp/one' },
-        { alias: ' same ', dir: '/tmp/two' },
-      ]),
-    ).toBeNull();
-    expect(workspaceRowsToMap([{ alias: ' repo ', dir: ' /tmp/repo ' }])).toEqual({
-      repo: '/tmp/repo',
-    });
   });
 
   it('limits only the Slack built-in chat model list to six visible rows', async () => {
@@ -2230,51 +2209,28 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(document.activeElement).toBe(radios[1]);
   });
 
-  it('别名输入框里未保存的临时值不影响选中态, 也不会被写进 IPC', async () => {
-    // 默认目录写的是别名, 而 store 只接受 workspaces 里已有的别名 —— 拿输入框的
-    // 临时值当判据会把未保存的名字显示成已选中, 点下去还会触发 store 校验报错。
+  // 规则(2026-11-13): 机器人可选的项目就是侧栏的本机项目, 设置页不再有单独的目录映射。
+  // 生产入口: 渠道卡里的项目区块。可观察结果: 列出的是项目名与目录(不可在此改名 / 删除),
+  // 「添加项目」把选中的文件夹交给 main 登记, 并用返回的清单刷新页面。
+  it('项目区块列出侧栏项目且不可在此改名; 添加项目走 addProject 并刷新清单', async () => {
     ipc.get.mockResolvedValue({ hook: hookWithWorkdirs('cindy') });
-    render(<HookConnectionsSection />);
-    await expandChannelCard(TELEGRAM_CARD);
-
-    const radios = await screen.findAllByRole('radio');
-    // cindy 是当前默认 → 第二项选中(第一项是「对话」)
-    expect(radios[1].getAttribute('aria-checked')).toBe('true');
-
-    // 把 cindy 这一行的别名改成 renamed 但**不失焦**(不落盘)
-    const aliasInput = screen.getByDisplayValue('cindy');
-    fireEvent.change(aliasInput, { target: { value: 'renamed' } });
-
-    // 选中态仍按已保存的映射走, 没有跳成"未选中"
-    expect(screen.getAllByRole('radio')[1].getAttribute('aria-checked')).toBe('true');
-    // 点它写回去的也必须是已保存的 cindy, 不是 renamed
-    ipc.setProviderDefaultWorkspace.mockClear();
-    fireEvent.click(screen.getAllByRole('radio')[1]);
-    await waitFor(() =>
-      expect(ipc.setProviderDefaultWorkspace).toHaveBeenCalledWith('telegram', 'cindy'),
-    );
-    expect(ipc.setProviderDefaultWorkspace).not.toHaveBeenCalledWith(
-      'telegram',
-      expect.stringContaining('renamed'),
-    );
-  });
-
-  it('别名输入框里的方向键照常移动光标, 不得被单选组劫持', async () => {
-    // 单选组容器同时包着别名输入框: 不做事件目标判定的话, 在输入框里按 ←/→ 会被
-    // 当成"换选项", 焦点跳到相邻 radio 并点击它 —— 用户改个名字就换掉了默认目录。
-    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs('cindy') });
+    ipc.showOpenDirectoryDialog.mockResolvedValue({ canceled: false, path: '/code/new-project' });
+    ipc.addProject.mockResolvedValue({
+      hook: { ...hookWithWorkdirs('cindy'), workspaces: { 'new-project': '/code/new-project' } },
+    });
     render(<HookConnectionsSection />);
     await expandChannelCard(TELEGRAM_CARD);
     await screen.findAllByRole('radio');
 
-    const aliasInput = screen.getByDisplayValue('cindy');
-    aliasInput.focus();
-    ipc.setProviderDefaultWorkspace.mockClear();
-    fireEvent.keyDown(aliasInput, { key: 'ArrowRight' });
-    fireEvent.keyDown(aliasInput, { key: 'ArrowDown' });
+    expect(screen.getByText('cindy')).toBeTruthy();
+    expect(screen.queryByDisplayValue('cindy')).toBeNull();
 
-    expect(ipc.setProviderDefaultWorkspace).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(aliasInput);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.form.addProject' }),
+    );
+    await waitFor(() => expect(ipc.addProject).toHaveBeenCalledWith('/code/new-project'));
+    expect(await screen.findByText('new-project')).toBeTruthy();
+    expect(screen.queryByText('blog')).toBeNull();
   });
 
   it('只用 X 的升级用户也能清掉存量 global override', async () => {

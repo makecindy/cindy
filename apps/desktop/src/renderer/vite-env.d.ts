@@ -4673,8 +4673,9 @@ interface ElectronAPI {
       provider: 'telegram' | 'x' | 'feishu',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    setWorkspaces: (
-      workspaces: Record<string, string>,
+    /** 把一个本机目录加进项目列表(侧栏与 IM 机器人共用)。 */
+    addProject: (
+      directory: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     /** Official X assignment, compared with the caller's last observed value. */
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>

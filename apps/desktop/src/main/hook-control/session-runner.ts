@@ -217,7 +217,7 @@ function hookDefaultInputs(
     overrides,
     prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel),
   );
-  // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
+  // 项目级来源偏好(纯本地, 用户在设置页该项目那一行显式选的来源)优先于草稿默认来源。
   const workdirRoute =
     prefsChannel !== null && workspaceAlias
       ? getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)

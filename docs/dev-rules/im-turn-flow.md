@@ -37,6 +37,27 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 设置页在自动模式下随目录更新重读实际模型，加载、刷新与保存共用请求代次，迟到刷新不得
 覆盖用户刚固定的模型或切换后的渠道。
 
+## 0. 项目清单（2026-11-13）
+
+**侧栏的本机项目就是 IM 机器人用的项目**，不另设「工作目录映射」这一层概念；界面与机器人文案一律叫
+「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
+
+- **官方机器人**（Slack / Telegram / X / 飞书）：可选项目 = 侧栏的本机项目（登记过的目录减去侧栏里
+  移除的；不含远程电脑上的项目与伙伴自己的项目），外加内置「对话」。`hook-control/projectWorkspaces.ts`
+  把项目列表投影成协议里的「名称 → 目录」表，名称跟随侧栏；`projectWorkspaceSync.ts` 在账号就绪、
+  项目列表变化（`projectCatalogEvents.ts`）、打开设置页与 IM 里查询项目之前各整理一次。设置页只列出
+  这些项目并提供「添加项目」（登记进侧栏），改名与移除在侧栏做。升级前手动配置的目录在第一次整理时
+  登记成项目，原别名改为侧栏名字，旧别名留作查找；按名称存的偏好与默认项目跟着改名。这份表同时是
+  「IM 能驱动哪些目录」的边界：一个项目要被执行，仍须由主人在 IM 里用 `/project` 选中，或在设置里设为
+  默认项目。协议约定见 [`protocol-compatibility/hook-project-names.md`](protocol-compatibility/hook-project-names.md)。
+- **换项目后的任务归属**：复用绑定的任务要求它就在这次点名的项目里（同一项目内换目录、任务自己的
+  worktree 照旧跟随）。在 IM 里把会话从项目 A 切到 B 后，下一条消息在 B 里新建任务，不再进 A 的旧任务；
+  桌面端把任务移到别的项目同理，原会话下一条消息在它点名的项目里新建。
+- **个人机器人**：`/ctr` 第一步与 `/project` 切换卡列的也是侧栏项目（`im/shared/controlProjects.ts`，
+  名字跟随侧栏、含没有任务的项目、不含已移除的）；`/ctr` 另带不在任何项目里的对话任务目录。
+  `/project` 在个人 Telegram 与个人飞书可用；用它切进项目的会话，启动时的托管目录归一与分组补写
+  （`im/index.ts`、`feishu/legacySessionBackfill.ts`）都不得把它改回去。
+
 ## 1. 入口账本
 
 每一行是一轮任务的一个步骤。「现状」列写真正干活的函数；「目标」列写合并后的归属：
@@ -47,7 +68,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 |---|---|---|---|
 | 入站 | 各渠道 adapter → `im/shared/messageHandler.ts`（微信经 `WechatTaskStore` 持久队列） | `hook-control/manager.ts` 收 `task.dispatch` → `dispatcher.handleDispatch` | 渠道适配（入站来源各自保留） |
 | 幂等与重投 | 无（个人连接无重投） | `ackHistory` / `inflightRequests` / `terminalLedger` | 渠道适配（服务端重投是 hook 的传输语义） |
-| 找任务 | `turnRunner.resolveRouteTarget`：通知回复 → `/ctr` 绑定 → 确定性 id 通道行（`sessionRepo.findActiveSession` 复活归档行） | `dispatcher.resolveTarget`：接管 sessionId → 绑定复用（每条消息按工作目录映射现场重算）→ 失效则换任务并交接 | 共用流程的「定位」骨架 + 渠道策略（台账第三节「绑定的任务失效后怎么接续」有意不同） |
+| 找任务 | `turnRunner.resolveRouteTarget`：通知回复 → `/ctr` 绑定 → 确定性 id 通道行（`sessionRepo.findActiveSession` 复活归档行） | `dispatcher.resolveTarget`：接管 sessionId → 绑定复用（每条消息按项目清单现场重算：任务必须就在这次点名的项目里）→ 失效则换任务并交接 | 共用流程的「定位」骨架 + 渠道策略（台账第三节「绑定的任务失效后怎么接续」有意不同） |
 | 建任务 | `sessionRepo.createSession` 确定性 id upsert；`createFreshSession`（`/new` 轮换事务）；随后 `maker.createSession` —— 2026-10 起两处建行都经 `openChannelSession` → **`openSession`**（模型准入） | `session-runner` 新任务的 `maker.createSession`、`/new` 的 `desktopSessionStorage.create` —— 同样经 `openChannelSession` → **`openSession`** | **公共入口 `openSession`**（已完成，批次 2）；渠道专属建行在 commit 回调里。live session 仍各自 `maker.createSession`，未改用 register 内部的 `bootstrapSession`（会新增项目上下文 / Orca 指令注入等行为，见 §6） |
 | 默认配置 | `resolveImSessionDefaults(channel)` + 跟随渠道默认（`channelDefaultRouteSync`） | `resolveNewSessionConfig`（目录偏好 > 全局 IM 默认 > 清单首项；权限档规则见 `defaults.ts`）+ 共用 `createDefaultRouteFollower` 跟随默认 | 渠道策略（台账第三节「新会话的默认…从哪读」有意不同） |
 | 命令 | `messageHandler.processOne` → `slashCommands`（注册表 `botCommands.ts`） | 服务端分发命令，桌面只收 `query.*` | 渠道适配（官方命令分发在服务端） |

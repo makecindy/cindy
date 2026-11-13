@@ -635,3 +635,61 @@ export function resolveWorkspacePrefOverrides(
     permissionMode: pick('permissionMode'),
   };
 }
+
+/**
+ * 项目改名后, 把按旧名称存的偏好挪到新名称下; 返回有改动的渠道。
+ *
+ * 新名称下还没有行时照抄旧行(整行作为本机正本镜像出去); 已经有行(用户在新名称下改过,
+ * 或显式清空留下的墓碑)就不覆盖。旧行一律收成未同步的清空墓碑, 镜像后两边一起消失 ——
+ * 留着它, 用户之后清空新名称下的偏好时, 下一次整理又会把旧值抄回来。
+ * 可重复执行: 旧名称下没有实值时什么也不做。
+ */
+export function moveWorkspacePrefsToRenamed(
+  renames: ReadonlyArray<{ from: string; to: string }>,
+): HookPrefsChannel[] {
+  if (renames.length === 0) return [];
+  const fp = filePath();
+  const store = readStore(fp);
+  let entries = store.entries;
+  const touched = new Set<HookPrefsChannel>();
+  for (const { from, to } of renames) {
+    if (from === to || !HOOK_WORKSPACE_ALIAS_RE.test(to)) continue;
+    for (const row of entries.filter((entry) => entry.workspace === from && !isBlankRow(entry))) {
+      const hasTarget = entries.some((entry) => sameKey(entry, row.channel, row.teamId, to));
+      const tombstone: WorkspacePrefsEntry = {
+        channel: row.channel,
+        teamId: row.teamId,
+        workspace: from,
+        model: null,
+        effort: null,
+        agentKind: null,
+        permissionMode: null,
+        rev: rowRev(row) + 1,
+        dirty: true,
+      };
+      const moved: WorkspacePrefsEntry = {
+        channel: row.channel,
+        teamId: row.teamId,
+        workspace: to,
+        model: row.model,
+        effort: row.effort,
+        agentKind: row.agentKind,
+        permissionMode: row.permissionMode,
+        rev: 1,
+        dirty: true,
+      };
+      entries = [
+        ...entries.filter((entry) => entry !== row),
+        tombstone,
+        ...(hasTarget ? [] : [moved]),
+      ];
+      touched.add(row.channel);
+    }
+  }
+  if (touched.size === 0) return [];
+  if (entries.length > HOOK_WORKSPACE_PREFS_MAX_ENTRIES) {
+    throw new Error('too many workspace prefs entries');
+  }
+  writeStore(fp, { ...store, entries });
+  return [...touched];
+}

@@ -6416,20 +6416,18 @@
           "error": "连接失败"
         },
         "form": {
-          "workspacesCardTitle": "工作目录映射",
-          "workspacesCardDescription": "别名 → 本地绝对路径；目录清单所有渠道共用，运行偏好按渠道独立。",
-          "workspacesBoundCount_one": "已绑定 {{count}} 个本地工作目录",
-          "workspacesBoundCount_other": "已绑定 {{count}} 个本地工作目录",
+          "workspacesCardTitle": "项目",
+          "workspacesCardDescription": "与侧栏里的本机项目是同一份，所有渠道共用；运行偏好按渠道独立。新建、改名或移除项目请在侧栏操作，这里会跟着变。",
+          "workspacesBoundCount_one": "{{count}} 个项目",
+          "workspacesBoundCount_other": "{{count}} 个项目",
           "aliasPlaceholder": "别名，如 my-server",
-          "addWorkspace": "添加工作目录",
-          "removeWorkspace": "删除此工作目录",
-          "changeDir": "点击更换目录（别名与偏好保留）",
+          "addProject": "添加项目",
           "defaultWorkspaceChip": "默认：{{name}}",
-          "defaultWorkspaceAria": "选择派发任务时使用的默认工作目录",
-          "defaultWorkspaceRadioAria": "把「{{name}}」设为默认工作目录",
-          "defaultWorkspaceRowHint": "选中的目录是默认工作目录：Telegram 私聊、群和话题里，凡是没有单独选过项目的，任务都落在它里面（用 /workspace 单独选过的，仍按那个走）。请留意所选目录这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个仓库里执行。",
+          "defaultWorkspaceAria": "选择派发任务时使用的默认项目",
+          "defaultWorkspaceRadioAria": "把「{{name}}」设为默认项目",
+          "defaultWorkspaceRowHint": "选中的项目是默认项目：Telegram 私聊、群和话题里，凡是没有单独选过项目的，任务都落在它里面（用 /project 单独选过的，仍按那个走）。请留意所选项目这一行的权限模式：设成「完全访问」时，任何群里 @ bot 都会以完全访问在这个项目里执行。",
           "legacyDefaultsTitle": "旧版「新对话配置」仍在生效",
-          "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置，它仍是没有单独配置过的目录的兜底值（官方 Telegram 与 X 共用同一份）。这些值现在统一在每个目录里设置。恢复默认会一并清掉以下全部内容：",
+          "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置，它仍是没有单独配置过的项目的兜底值（官方 Telegram 与 X 共用同一份）。这些值现在统一在每个项目里设置。恢复默认会一并清掉以下全部内容：",
           "legacyDefaultsRow": {
             "agentKind": "默认 Agent：{{current}} → {{fallback}}",
             "permissionMode": "权限模式：{{current}} → {{fallback}}"
@@ -6459,7 +6457,8 @@
         "toast": {
           "saveFailed": "保存失败",
           "toggleFailed": "切换失败",
-          "actionFailed": "操作失败"
+          "actionFailed": "操作失败",
+          "addProjectFailed": "添加项目失败"
         },
         "loginRequired": "需要先登录 {{appName}} 账号，连接会在登录后自动恢复。",
         "standbyHint": "本机另一 Cindy 实例正在使用 Slack 连接。关闭它后，重新打开此开关即可接管。",
@@ -6590,7 +6589,7 @@
             "usageBody": "在 X 上发一条推文 @askmycindy，任务就会派到这台设备上执行，结论以回帖发回给你。",
             "riskLabel": "回帖是公开的",
             "riskPublicBody": "回复是公开推文，任何人都能看到。适合公开提问、解决问题；不适合处理私事，以免暴露隐私。",
-            "riskWorkdirBody": "X 任务都落在 X 连接设置里的默认工作目录，Agent 能读写其中文件，而结论会公开回帖 —— 默认目录指到私密仓库时，文件内容可能随之公开。",
+            "riskWorkdirBody": "X 任务都落在 X 连接设置里的默认项目，Agent 能读写其中文件，而结论会公开回帖 —— 默认项目指到私密仓库时，文件内容可能随之公开。",
             "withdrawLabel": "想撤回",
             "withdrawBody": "提问者在要删除的回答下回复「@askmycindy /delete」（或「@askmycindy /删除」），正文中必须手动带上 @askmycindy。只删公开回帖，本地任务记录保留。",
             "ackTitle": "X 已关联，先看一下用法与风险",
@@ -6670,8 +6669,8 @@
           "botFallback": "Cindy 机器人",
           "bridgeTitle": "飞书机器人",
           "bridgeDescription": "机器人只负责把飞书里的消息转给 Cindy。每个飞书账号的消息交给它的工作电脑处理，任务按机器人和飞书账号分开。",
-          "settingsTitle": "工作目录与模型",
-          "settingsDescription": "属于你的 Cindy 账号和这台电脑，不随机器人或飞书账号变化：所有飞书机器人共用同一份。工作目录清单也与其他渠道共用。",
+          "settingsTitle": "项目与模型",
+          "settingsDescription": "属于你的 Cindy 账号和这台电脑，不随机器人或飞书账号变化：所有飞书机器人共用同一份。项目就是侧栏里的本机项目，也与其他渠道共用。",
           "workingDeviceLabel": "工作电脑：{{name}}",
           "workingDeviceThisComputer": "本机",
           "workingDeviceUnknown": "工作电脑尚未同步",
@@ -12453,7 +12452,7 @@
         "expiredCardNotice": "卡片已过期",
         "slash": {
           "new": "🌱 新存档已开 — 之前的对话清掉了，从头聊~",
-          "help": "🤖 我能帮你做这些：\n\n/new         开个新存档（清掉当前对话上下文）\n/model       换个模型上场\n/permission  调一下权限模式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换任务）\n/exctr       结束接管，回到我们俩的 Discord 私聊\n/help        看看我会啥\n\n有活儿在跑想让它停？直接发 `!stop`，我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。\n\n平时直接发消息就行，我在听~",
+          "help": "🤖 我能帮你做这些：\n\n/new         开个新存档（清掉当前对话上下文）\n/model       换个模型上场\n/permission  调一下权限模式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上的某个项目（接管中再发可直接换任务）\n/exctr       结束接管，回到我们俩的 Discord 私聊\n/help        看看我会啥\n\n有活儿在跑想让它停？直接发 `!stop`，我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。\n\n平时直接发消息就行，我在听~",
           "unknownCommand": "没认出 `{{cmd}}` 这个命令 🤔\n我能听懂的：/new、/model、/permission、/ctr、/exctr、/help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` 在服务器频道里用不了——它会把你桌面上的私人任务 / 项目挂到公共场合。想用的话，请在和我的私信里发。",
           "detachedBySlash": "🚪 接管结束，咱们回到 Discord 私聊。下次想远程操控 desktop 再 /ctr",
@@ -12531,15 +12530,15 @@
             "fullAccessCancelled": "已取消，保留当前权限"
           },
           "control": {
-            "title": "🎮 挑个工作区上号",
-            "emptyBody": "_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_",
-            "hint": "点工作区往下走；点 🚪 退出 取消这次",
+            "title": "🎮 挑个项目上号",
+            "emptyBody": "_暂时还没有可接管的项目~ 在 desktop 端打开/创建一个任务再来_",
+            "hint": "点项目往下走；点 🚪 退出 取消这次",
             "attachedSwitchHint": "🎮 当前接管中：**{{sessionTitle}}**\n选个新任务直接换乘；点 🚪 退出则保持现状",
             "btnExit": "🚪 退出",
             "resolvedExit": "🚪 走了，下次想远程操控再 /ctr",
             "sessionPickerTitle": "🎮 {{displayName}} 里的存档",
-            "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消",
-            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
+            "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换项目 · 🚪 退出 取消",
+            "sessionPickerEmptyBody": "_项目 **{{displayName}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
             "btnNew": "➕ 新建",
             "btnBack": "↩️ 后退",
             "resolvedSessionPick": "🎯 上号了：**{{sessionTitle}}**（{{workspaceName}}）\n接下来你发消息我就直接进这个任务；想撤随时 `/exctr`",
@@ -12644,7 +12643,7 @@
         "slash": {
           "start": "👋 你好，我是你的个人 Cindy 助理~\n\n私聊直接发消息就行；群里 @ 我或回复我的消息才会触发。发 /help 看全部命令。",
           "new": "🌱 新任务已创建 — 已在任务列表显示，从头开始吧~",
-          "help": "🤖 我能帮你做这些：\n\n/new         创建新任务（旧任务保留；群里按当前群话题创建）\n/project     切到某个项目目录干活（在 bot 这边跑，不接管 desktop）\n/session     列最近的 desktop 任务，点一个直接接管续聊\n/model       换个模型上场\n/permission  调一下权限模式（auto / bypass / ask 等）\n/settings    看看当前项目、Agent、模型、推理强度、权限\n/ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换任务）\n/exctr       结束接管，回到 Telegram 对话\n/help        看看我会啥\n\n有活儿在跑想让它停？发 /stop（或 `!stop`），我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。\n\n私聊直接发消息就行；群里 @ 我或回复我的消息才会触发，我也会记住群里最近的消息做上下文~",
+          "help": "🤖 我能帮你做这些：\n\n/new         创建新任务（旧任务保留；群里按当前群话题创建）\n/project     切到某个项目目录干活（在 bot 这边跑，不接管 desktop）\n/session     列最近的 desktop 任务，点一个直接接管续聊\n/model       换个模型上场\n/permission  调一下权限模式（auto / bypass / ask 等）\n/settings    看看当前项目、Agent、模型、推理强度、权限\n/ctr         远程接管 desktop 上的某个项目（接管中再发可直接换任务）\n/exctr       结束接管，回到 Telegram 对话\n/help        看看我会啥\n\n有活儿在跑想让它停？发 /stop（或 `!stop`），我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。\n\n私聊直接发消息就行；群里 @ 我或回复我的消息才会触发，我也会记住群里最近的消息做上下文~",
           "unknownCommand": "没认出 `{{cmd}}` 这个命令 🤔\n我能听懂的：/new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help",
           "settings": "⚙️ 当前设置\n\n项目：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n推理强度：{{effort}}\n权限：{{permission}}\n\n想改就发 /project、/model、/permission～",
           "settingsCompanion": "⚙️ 当前设置（伙伴）\n\n项目：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n推理强度：{{effort}}\n权限：{{permission}}\n\n模型、权限和工作目录跟随伙伴设置，请在 Cindy 的伙伴设置里修改。",
@@ -12745,15 +12744,15 @@
             "dialogueName": "对话（托管目录）"
           },
           "control": {
-            "title": "🎮 挑个工作区上号",
-            "emptyBody": "_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_",
-            "hint": "点工作区往下走；点 🚪 退出 取消这次",
+            "title": "🎮 挑个项目上号",
+            "emptyBody": "_暂时还没有可接管的项目~ 在 desktop 端打开/创建一个任务再来_",
+            "hint": "点项目往下走；点 🚪 退出 取消这次",
             "attachedSwitchHint": "🎮 当前接管中：**{{title}}**\n选个新任务直接换乘；点 🚪 退出则保持现状",
             "btnExit": "🚪 退出",
             "resolvedExit": "🚪 走了，下次想远程操控再 /ctr",
             "sessionPickerTitle": "🎮 {{name}} 里的任务",
-            "sessionPickerHint": "挑个任务继续 · ➕ 新建 开新任务 · ↩️ 后退 换工作区 · 🚪 退出 取消",
-            "sessionPickerEmptyBody": "_工作区 **{{name}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
+            "sessionPickerHint": "挑个任务继续 · ➕ 新建 开新任务 · ↩️ 后退 换项目 · 🚪 退出 取消",
+            "sessionPickerEmptyBody": "_项目 **{{name}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
             "btnNew": "➕ 新建",
             "btnBack": "↩️ 后退",
             "resolvedSessionPick": "🎯 上号了：**{{title}}**（{{workspace}}）\n接下来你发消息我就直接进这个任务；想撤随时 `/exctr`",
@@ -12762,7 +12761,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ 那个任务还在跑——下方给你刷了张新卡片，重选一下吧",
             "recentSessions": {
               "title": "🕑 最近的任务",
-              "hint": "点一个直接接管续聊（跨工作区按时间排）· 想按工作区挑用 /ctr · 🚪 退出取消",
+              "hint": "点一个直接接管续聊（跨项目按时间排）· 想按项目挑用 /ctr · 🚪 退出取消",
               "emptyBody": "_desktop 端还没有活跃任务~ 先在 desktop 里开一个再来_"
             },
             "sessionBusyPrompts": {
@@ -12916,18 +12915,18 @@
           "permissionTimeout": "等待授权超时，已拒绝该权限请求"
         },
         "run": {
-          "routeReselectHint": "。请在 设置 → IM 机器人 中为这个渠道的工作目录重新选择模型。",
+          "routeReselectHint": "。请在 设置 → IM 机器人 中为这个渠道的项目重新选择模型。",
           "awaitingPermission": "等待授权 · 需要你确认",
           "awaitingAnswer": "等待回答 · 需要你选择",
           "awaitingPlan": "等待审阅 · 需要你确认计划",
           "awaitingFallback": "等待你的确认",
           "cancelledBeforeRun": "任务已被用户喊停，本条消息没有执行。",
-          "liveSessionDirUnmapped": "这个任务正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个任务后重发。",
+          "liveSessionDirUnmapped": "这个任务所在的目录已不属于任何项目，本条消息没有执行。在侧栏把该目录添加为项目，或在桌面端关掉这个任务后重发。",
           "interactionExpired": "任务已结束，此交互已失效",
           "telegramOfficialBot": "Telegram 官方 bot"
         },
         "dispatch": {
-          "dirUnmapped": "这个任务所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。"
+          "dirUnmapped": "这个任务所在的目录已不属于任何项目，本条消息没有执行。在侧栏把它所在的目录添加为项目后再发一次。"
         }
       },
       "wecom": {
@@ -13011,9 +13010,9 @@
             "fullAccessCancelled": "已取消，保留当前权限"
           },
           "control": {
-            "title": "🎮 选择工作区",
-            "emptyBody": "_暂时没有可接管的工作区，请先在 desktop 创建任务。_",
-            "hint": "选择工作区继续，或退出本次操作。",
+            "title": "🎮 选择项目",
+            "emptyBody": "_暂时没有可接管的项目，请先在 desktop 创建任务。_",
+            "hint": "选择项目继续，或退出本次操作。",
             "attachedSwitchHint": "当前正在接管：**{{sessionTitle}}**",
             "btnExit": "🚪 退出",
             "resolvedExit": "🚪 已退出接管",
@@ -13075,7 +13074,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 新存档已开 — 之前的对话清掉了，从头聊~",
-          "help": "🤖 我能帮你做这些：\n\n/new         开个新存档（清掉当前对话上下文）\n/model       换个模型上场\n/permission  调一下权限模式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换任务）\n/exctr       结束接管，回到我们俩的私聊\n/help        看看我会啥\n\n有活儿在跑想让它停？直接发 `!stop`，我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。\n\n平时直接发消息就行，我在听~",
+          "help": "🤖 我能帮你做这些：\n\n/new         开个新存档（清掉当前对话上下文）\n/project     切到某个项目目录干活（在 bot 这边跑，不接管 desktop）\n/model       换个模型上场\n/permission  调一下权限模式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上的某个项目（接管中再发可直接换任务）\n/exctr       结束接管，回到我们俩的私聊\n/help        看看我会啥\n\n有活儿在跑想让它停？直接发 `!stop`，我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。\n\n平时直接发消息就行，我在听~",
           "unknownCommand": "没认出 `{{cmd}}` 这个命令 🤔\n我能听懂的：/new、/model、/permission、/ctr、/exctr、/help",
           "detachedBySlash": "🚪 接管结束，咱们回到私聊频道。下次想远程操控 desktop 再 /ctr",
           "detachedByRevoke": "⚠️ 你在 desktop 那边把接管收回去了，后续消息回到我们俩的私聊。",
@@ -13172,16 +13171,29 @@
             "resolved": "✅ 已切到「自动审批」— 回群里继续发消息吧~",
             "failed": "❌ 没切过去：{{reason}}。可以发 /permission auto 手动切换"
           },
+          "project": {
+            "title": "📂 切个项目目录",
+            "hint": "**当前**：{{name}}\n选一个项目，接下来的消息就在那个目录里干活（会重开上下文，模型和权限设置保留）",
+            "emptyBody": "_desktop 端还没有活跃的项目工作区~ 先在 desktop 里打开一个项目再来_",
+            "btnDialogue": "💬 回到对话",
+            "btnCancel": "🚪 算了",
+            "resolvedPick": "📂 已切到 **{{name}}** —— 新上下文已就位，直接发指令开干。想回普通对话发 /project 选「回到对话」",
+            "resolvedDialogue": "💬 已回到对话目录，上下文重新开始~",
+            "resolvedCancel": "🚪 没切，保持现状",
+            "switchFailed": "❌ 没切过去：{{reason}}（目录可能已被移动或删除）",
+            "attachedUnsupported": "🎮 你正在 /ctr 接管一个 desktop 任务——接管期间消息直接进那个任务，不需要 /project。想切项目先 `/exctr` 退出接管",
+            "dialogueName": "对话（托管目录）"
+          },
           "control": {
-            "title": "🎮 挑个工作区上号",
-            "emptyBody": "_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_",
-            "hint": "点工作区往下走；点 🚪 退出 取消这次",
+            "title": "🎮 挑个项目上号",
+            "emptyBody": "_暂时还没有可接管的项目~ 在 desktop 端打开/创建一个任务再来_",
+            "hint": "点项目往下走；点 🚪 退出 取消这次",
             "attachedSwitchHint": "🎮 当前接管中：**{{title}}**\n选个新任务直接换乘；点 🚪 退出则保持现状",
             "btnExit": "🚪 退出",
             "resolvedExit": "🚪 走了，下次想远程操控再 /ctr",
             "sessionPickerTitle": "🎮 {{workspace}} 里的存档",
-            "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消",
-            "sessionPickerEmptyBody": "_工作区 **{{workspace}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
+            "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换项目 · 🚪 退出 取消",
+            "sessionPickerEmptyBody": "_项目 **{{workspace}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
             "btnNew": "➕ 新建",
             "btnBack": "↩️ 后退",
             "resolvedSessionPick": "🎯 上号了：**{{title}}**（{{workspace}}）\n接下来你发消息我就直接进这个任务；想撤随时 `/exctr`",
@@ -13225,7 +13237,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 新存档已开 — 之前的对话清掉了，从头聊~",
-          "help": "🤖 我能帮你做这些：\n\n/new         开个新存档（清掉当前对话上下文）\n/model       换个模型上场\n/permission  调一下权限模式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换任务）\n/exctr       结束接管，回到我们俩的微信私聊\n/help        看看我会啥\n\n有活儿在跑想让它停？直接发 `!stop`，我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。\n\n平时直接发消息就行，我在听~",
+          "help": "🤖 我能帮你做这些：\n\n/new         开个新存档（清掉当前对话上下文）\n/model       换个模型上场\n/permission  调一下权限模式（auto / bypass / ask 等）\n/ctr         远程接管 desktop 上的某个项目（接管中再发可直接换任务）\n/exctr       结束接管，回到我们俩的微信私聊\n/help        看看我会啥\n\n有活儿在跑想让它停？直接发 `!stop`，我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。\n\n平时直接发消息就行，我在听~",
           "unknownCommand": "没认出 `{{cmd}}` 这个命令 🤔\n我能听懂的：/new、/model、/permission、/ctr、/exctr、/help",
           "detachedBySlash": "🚪 接管结束，咱们回到微信私聊。下次想远程操控 desktop 再 /ctr",
           "detachedByRevoke": "⚠️ 你在 desktop 那边把接管收回去了，后续消息回到我们俩的微信私聊。",
@@ -13308,15 +13320,15 @@
             "fullAccessCancelled": "已取消，保留当前权限"
           },
           "control": {
-            "title": "🎮 挑个工作区上号",
-            "emptyBody": "_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_",
-            "hint": "点工作区往下走；点 🚪 退出 取消这次",
+            "title": "🎮 挑个项目上号",
+            "emptyBody": "_暂时还没有可接管的项目~ 在 desktop 端打开/创建一个任务再来_",
+            "hint": "点项目往下走；点 🚪 退出 取消这次",
             "attachedSwitchHint": "🎮 当前接管中：**{{sessionTitle}}**\n选个新任务直接换乘；点 🚪 退出则保持现状",
             "btnExit": "🚪 退出",
             "resolvedExit": "🚪 走了，下次想远程操控再 /ctr",
             "sessionPickerTitle": "🎮 {{displayName}} 里的存档",
-            "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消",
-            "sessionPickerEmptyBody": "_工作区 **{{displayName}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
+            "sessionPickerHint": "挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换项目 · 🚪 退出 取消",
+            "sessionPickerEmptyBody": "_项目 **{{displayName}}** 这边还没有活跃任务~ 不如点 ➕ 新建 开一个？_",
             "btnNew": "➕ 新建",
             "btnBack": "↩️ 后退",
             "resolvedSessionPick": "🎯 上号了：**{{sessionTitle}}**（{{workspaceName}}）\n接下来你发消息我就直接进这个任务；想撤随时 `/exctr`",

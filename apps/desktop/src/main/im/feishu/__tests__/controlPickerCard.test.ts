@@ -36,7 +36,7 @@ describe('buildControlPickerCard — 接管态换乘提示', () => {
     expect(spec.body).toContain('修复登录 bug');
     // 提示在 body 最前面 (picker hint 之前)
     expect(spec.body!.indexOf('当前接管中')).toBeLessThan(
-      spec.body!.indexOf('点工作区往下走'),
+      spec.body!.indexOf('点项目往下走'),
     );
     expect(spec.buttons).toHaveLength(PROJECTS.length + 1);
   });
@@ -48,7 +48,7 @@ describe('buildControlPickerCard — 接管态换乘提示', () => {
       currentAttachedTitle: '修复登录 bug',
     });
     expect(spec.body).toContain('当前接管中');
-    expect(spec.body).toContain('还没有可接管的工作区');
+    expect(spec.body).toContain('还没有可接管的项目');
     expect(spec.buttons).toHaveLength(1); // 只剩退出按钮
   });
 
