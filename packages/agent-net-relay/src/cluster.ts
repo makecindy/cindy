@@ -52,7 +52,9 @@ export interface RelayClusterBackend {
   withMediaLock<T>(networkKey: string, mediaId: string, work: (network: RelayStateEntry) => Promise<T>): Promise<T>;
   join(member: RelayClusterMember): Promise<void>;
   leave(id: string): Promise<void>;
-  /** Live replicas. A replica that stops without leaving must drop out after a short liveness timeout. */
+  /** Live replicas. A replica that stops without leaving must drop out after a short liveness timeout; a replica
+   * that can no longer renew its own liveness must leave itself out. Once joined, a replica serves no network
+   * that has no owner in this list (an empty list means it serves nothing). */
   members(): readonly RelayClusterMember[];
   onMembers(listener: (members: readonly RelayClusterMember[]) => void): () => void;
 }

@@ -153,6 +153,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   // Self-hosted relays stay one process: tenants and the owner bootstrap assume a single writer.
   if (options.cluster && mode !== 'official') throw new Error('CLUSTER_REQUIRES_OFFICIAL_MODE');
   const cluster = options.cluster ? checkClusterOptions(options.cluster) : undefined;
+  // Replicas share the attachment directory; a per-replica default would lose files on handover.
+  if (cluster && options.mediaDir === undefined) throw new Error('CLUSTER_MEDIA_DIR_REQUIRED');
   const store: RelayStore = cluster ? await ClusterStore.open(cluster.backend, cluster.replicaId) : await Store.open(options.dataDir);
   if (options.bootstrap) {
     const bootstrap = options.bootstrap;
@@ -210,6 +212,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const router = cluster ? createClusterRouter(cluster) : undefined;
   let members: readonly RelayClusterMember[] = cluster ? cluster.backend.members() : [];
   let draining = false;
+  // Set once this replica is in the member list; from then on a list without an owner means "own nothing".
+  let joined = false;
   const owners = new Map<string, RelayClusterMember | undefined>();
   function ownerOf(networkId: string): RelayClusterMember | undefined {
     if (!cluster) return undefined;
@@ -219,8 +223,22 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     return owners.get(networkId);
   }
-  /** Without a live member list (startup, backend outage) a replica serves what reaches it. */
-  const owns = (networkId: string) => !cluster || (ownerOf(networkId)?.id ?? cluster.replicaId) === cluster.replicaId;
+  /**
+   * Before joining (startup) a replica serves what reaches it. Once joined, a member list with no owner for
+   * the network (this replica fenced itself after losing its lease, or every member dropped out) means it
+   * owns nothing: falling back to single-process behaviour would let it keep sessions a new owner also serves.
+   */
+  const owns = (networkId: string) => {
+    if (!cluster) return true;
+    const owner = ownerOf(networkId);
+    return owner ? owner.id === cluster.replicaId : !joined;
+  };
+  /** A request for a network that currently has no owner anywhere (see owns); hops are judged by their target. */
+  const ownerless = (req: IncomingMessage) => {
+    if (!cluster || !joined || router?.trusted(req)) return false;
+    const networkId = routingNetwork(req);
+    return networkId !== undefined && ownerOf(networkId) === undefined;
+  };
   const clientAddress = (req: IncomingMessage) => router?.clientAddress(req) ?? req.socket.remoteAddress ?? 'unknown';
   function allow(source: string, maximum = 60): boolean {
     const at = now();
@@ -911,6 +929,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (closing) { writeJson(res, 503, { error: { code: 'SERVER_CLOSING', message: 'Server closing' } }); return; }
     const target = forwardTarget(req);
     if (target) { router!.http(req, res, target); return; }
+    if (ownerless(req)) { writeJson(res, 503, { error: { code: 'REPLICA_UNAVAILABLE', message: 'Replica unavailable' } }); return; }
     const operation = handle(req, res).catch((error: unknown) => {
       if (res.headersSent || res.destroyed) { res.destroy(); return; }
       if (error instanceof AgentNetError) writeJson(res, error.status, { error: { code: error.code, message: error.message } });
@@ -928,6 +947,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (closing) { socket.destroy(); return; }
     const target = forwardTarget(req);
     if (target) { router!.upgrade(req, socket, head, target); return; }
+    if (ownerless(req)) { socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return; }
     // A leaving replica accepts no new sessions; the client retries and reaches a remaining one.
     if (draining) { socket.destroy(); return; }
     pendingUpgrades.add(socket);
@@ -1123,7 +1143,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       store.close(); clearInterval(sweep); server.closeAllConnections(); server.close(); udp?.close();
       throw error;
     }
-    members = cluster.backend.members(); owners.clear();
+    members = cluster.backend.members(); owners.clear(); joined = true;
   }
   /** Leave first so the others take this replica's networks, then send its devices there. */
   async function leaveCluster(): Promise<void> {

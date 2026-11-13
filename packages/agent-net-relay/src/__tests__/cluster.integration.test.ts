@@ -15,6 +15,9 @@
  *   共享状态提交失败时，写请求返回可重试的 503 CLUSTER_STATE_UNAVAILABLE（而不是 500），后端恢复后同一写入成功。
  *   两个 ClusterStore 经每程 1 ms 的 fake-timer 后端争用同一文档：一方持续写入时另一方的单次写入仍能提交；
  *   去掉重试退避（或去掉抖动）后后者 16 次尝试全部落败并返回 STATE_CONTENDED。
+ *   已加入的副本在成员名单里找不到负责者（后端自我隔离后名单为空）时以 1012 关闭会话，并对该网络的 HTTP／升级回 503；
+ *   恢复为原来的「无名单即承载全部」时，该副本会继续承载新负责副本也在承载的网络。
+ *   集群模式未显式配置共享附件目录时拒绝启动（CLUSTER_MEDIA_DIR_REQUIRED），避免各副本落到自己的数据目录。
  * - tier：integration；需要真实 socket 和多个副本，单进程 fixture 与 handler mock 都替代不了。
  *   单独成文件是因为每个用例的副本组生命周期与 relay.integration 的单进程 fixture 不同。
  * - 实测耗时：2026-11-14 本机单独运行 `pnpm exec vitest run src/__tests__/cluster.integration.test.ts` 4.32 秒
@@ -448,6 +451,35 @@ describe('replicated official relay', () => {
     expect((await call('/provider-shares/members/' + approved.body.memberId + '/pause', 'POST', {}, true)).status).toBe(200);
     expect(await closed).toEqual([4410]);
     await expect(guest.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+  });
+});
+
+// A replica without an explicit shared attachment directory would default to its own data directory and lose
+// attachments on every handover. Minimal failing input: cluster options without mediaDir.
+describe('replicated official relay: configuration', () => {
+  it('refuses to start a replica without an explicit shared attachment directory', async () => {
+    const set = await replicaSet({ mediaDir: undefined });
+    await expect(set.start('replica-a')).rejects.toThrow('CLUSTER_MEDIA_DIR_REQUIRED');
+  });
+});
+
+// A replica that fenced itself (its own lease lapsed) and found nobody else in the member list must stop serving,
+// not fall back to single-process ownership while a new owner takes over.
+// Minimal failing input: one joined replica whose backend member list becomes empty.
+describe('replicated official relay: ownerless networks', () => {
+  it('closes sessions and refuses the network once the joined replica finds no owner in its member list', async () => {
+    const set = await replicaSet();
+    const a = await set.start('replica-a');
+    await set.enroll(a, 'owner');
+    const uplink = await set.client(a, 'owner').connect(); set.uplinks.push(uplink);
+    const closed = once(uplink, 'close');
+    await set.backend.leave('replica-a');
+    expect((await closed)[0]).toBe(1012);
+    await expect(set.client(a, 'owner').connect()).rejects.toThrow('AGENT_NET_UPGRADE_503');
+    await expect(set.client(a, 'owner').directory()).rejects.toMatchObject({ status: 503, code: 'REPLICA_UNAVAILABLE' });
+    // Back in the list: it serves again.
+    await set.backend.join({ id: 'replica-a', url: a.url });
+    await vi.waitFor(async () => { const again = await set.client(a, 'owner').connect(); set.uplinks.push(again); });
   });
 });
 
