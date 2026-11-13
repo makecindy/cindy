@@ -301,6 +301,26 @@ describe('host network connections', () => {
     } finally { slot.disposeAll(); }
   });
 
+  // #10130 / 4558948515, unit: the author contract promises NDJSON streams,
+  // but existing SSE cases did not cover application/x-ndjson. Exercise fetch
+  // and connection read, keeping buffered and binary response rules unchanged.
+  it.each([
+    ['application/x-ndjson; charset=utf-8', 'stream', true],
+    ['application/x-ndjson', 'text', false],
+    ['application/octet-stream', 'stream', false],
+  ] as const)('handles %s as %s without widening other response modes (%s)', async (contentType, as, accepted) => {
+    const data = '{"ok":true}\n';
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(data, { headers: { 'content-type': contentType } }) });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as });
+      expect(opened).toMatchObject({ ok: accepted });
+      if (!accepted || !opened.ok || !('connectionId' in opened)) return;
+      expect(opened.connectionId).toEqual(expect.any(String));
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 }))
+        .toMatchObject({ ok: true, events: expect.arrayContaining([expect.objectContaining({ type: 'text', data })]) });
+    } finally { await slot.disposeAll(); }
+  });
+
   it('cancels a pending stream read when its call ends and releases the guarded transport', async () => {
     const signal = new AbortController();
     const release = vi.fn(async () => {});

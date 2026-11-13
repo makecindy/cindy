@@ -1549,7 +1549,7 @@ export class GhostNetworkSlot {
       }
       if (asMode === 'stream') {
         controller.signal.throwIfAborted();
-        if (!isTextualContentType(contentType)) {
+        if (!isTextualContentType(contentType) && normalizeMime(contentType) !== 'application/x-ndjson') {
           await response.body?.cancel();
           return { ok: false, message: '流式响应须为 UTF-8 文本，媒体请使用 as:media' };
         }
