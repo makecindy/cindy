@@ -255,7 +255,13 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const returnAnchor = useRef<{ owner: string; id: string; offset: number } | null>(null);
   const restoreOffset = useRef<number | null>(null);
   const pauseReadUntilInteraction = useRef(false);
-  const group = chat.state.kind === 'ready' ? chat.state.group : null;
+  const group = useMemo(() => {
+    if (chat.state.kind !== 'ready') return null;
+    const value = chat.state.group;
+    const speakers = value.round.speakers.filter(speaker => speaker.threadRootId === (threadRootId ?? null)
+      || (!threadRootId && !speaker.sourceMessageId && !speaker.threadRootId));
+    return { ...value, round: { ...value.round, speakers } };
+  }, [chat.state, threadRootId]);
   const mask = useGroupPersonalMask(groupId, deviceId, !!group?.serverBacked && group.conversationKind !== 'direct' && (!deviceId || group.supportsPersonalMask === true), chat.act, group);
   const [foreground, setForeground] = useState(() => AppState.currentState === 'active');
   const previewVisibility = useScrollViewMessageVisibility(
@@ -828,9 +834,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
               event.nativeEvent.layout.y - (floatingHeader ? headerHeight + spacing.md : spacing.md));
           }} />
         <SessionQuickSendProvider value={!imageSelectionActive && !group.archived && !group.dissolvedAt && (chat.online || chat.canQueue) ? sendRichAnswer : null}>
-        <BotGroupWorkArea enabled={!imageSelectionActive && !threadRootId} onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        <BotGroupWorkArea enabled={!imageSelectionActive} onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onError={message => { if (message) Alert.alert(message); }}>
-        {workRows => <BotGroupTimeline workRows={imageSelectionActive || threadRootId ? undefined : workRows} onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        {workRows => <BotGroupTimeline workRows={imageSelectionActive ? undefined : workRows} onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onRetrySource={chat.reload}
           onOpenTopic={!deviceId && chat.server ? openTopic : undefined} onRevealShare={revealShare}
           onShare={chat.shareToMain ? shareToMain : undefined}
