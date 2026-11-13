@@ -797,6 +797,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
+本地模式首次云登录采用插件时，内容目录必须连同原 receipt、技能快照、实例记录和市场
+来源账本一起交接，保留 revision、启停态与原批准能力，不重新铸造批准。仅最终持久认领
+`local-v1` 的首个云账号可采用；已有目标插件状态不自动混合，源资料保留。交接在账号
+隔离区内完成，复制中断由冻结计划恢复；未完成安装事务须先恢复，不能把 pending journal
+当成有效安装。OAuth 锁与账号授权不复制。凭证范围及回滚见
+[本地模式首次云登录的凭证交接](credentials-and-local-storage.md#本地模式首次云登录的凭证交接)。
+回归入口为 `localProfileAssetsMigration.test.ts` 的实际 GhostManager/receipt 重载。
+
 `tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
 UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
 `validateInstalledGhostManifest` 保留原 UTF-16 长度上限 16,384。市场详情解析与

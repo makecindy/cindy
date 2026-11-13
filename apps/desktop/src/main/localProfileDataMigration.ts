@@ -296,6 +296,29 @@ export async function withLocalProfileMigrationStartupBarrier<T>(
   }
 }
 
+/** Run a retained-data handoff only for the finalized first cloud owner. */
+export async function withCommittedLocalProfileDataOwner<T>(
+  ownerId: string,
+  userDataDir: string,
+  dbFilePrefix: string,
+  operation: () => Promise<T>,
+): Promise<T | undefined> {
+  return withLocalProfileMigrationStartupBarrier(userDataDir, dbFilePrefix, async () => {
+    const marker = path.join(
+      userDataDir,
+      `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
+    );
+    const raw = readAtomicFileSync(marker);
+    if (raw === null) return undefined;
+    const claim = parseLocalProfileMigrationMarker(raw);
+    if (!claim) throw new Error('local profile ownership is unreadable');
+    if (claim.ownerId !== ownerId || claim.claimToken || ownerId === LOCAL_PROFILE_DATA_OWNER_ID) {
+      return undefined;
+    }
+    return operation();
+  });
+}
+
 export type LocalProfileMigrationReservation =
   'claimed' | 'already-owned' | 'owned-by-other' | 'failed';
 

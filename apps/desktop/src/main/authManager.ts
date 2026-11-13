@@ -159,8 +159,11 @@ import {
 } from './appSessionState.js';
 import {
   claimLegacyOwnerNamespace,
+  hasExclusiveSharedLegacyUserDataAccess,
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
+import { adoptLocalProfileAssets } from './localProfileAssetsMigration.js';
+import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier.js';
 import {
   migrateLocalNativeProviderAuthBindings,
   readLegacyNativeProviderAuthOwner,
@@ -2479,6 +2482,20 @@ async function withCloudOwnerCommit<T>(opts: {
           throw new Error('cloud owner data reservation finalization remains pending');
         }
         rollbackReservation = null;
+        // The verified first cloud owner adopts local credentials and plugin
+        // installation facts while the old runtime is drained and the new
+        // owner is still quarantined. Optional provisioning must not race this.
+        await adoptLocalProfileAssets(opts.nextOwnerId, {
+          userDataDir: app.getPath('userData'),
+          dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
+          hasExclusiveSourceAccess: hasExclusiveSharedLegacyUserDataAccess,
+          acquireSourcePublicationBarrier: process.platform === 'win32'
+            ? () => acquireWindowsPackagedInstanceBarrier({
+                userDataDir: app.getPath('userData'),
+                programName: BRAND_IDENTITY.executableName,
+              })
+            : undefined,
+        });
         // Same-owner repair: advance the owner generation after the real commit
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
