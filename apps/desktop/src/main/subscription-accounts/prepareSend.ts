@@ -1,17 +1,26 @@
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
+import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { readAccountBinding, readPool } from './store.js';
+import { readPool } from './store.js';
 import { acquireSubscriptionAccount } from './runtime.js';
+import { mergedRouteAllowsModel, readTaskPoolAccount } from './taskAccount.js';
 
 interface PrepareAccountSendDeps {
   readSession(id: string): Promise<SessionRowSnapshot | null>;
   isRunning(id: string): boolean;
   /** Retires only this runtime and durably retains its context before clearing the native id. */
   rebuild(id: string, assertCurrent: () => void): Promise<void>;
+  /**
+   * Moves an idle task off a merged legacy Codex connection id onto the merged `openai` route
+   * after its context handoff (same as failover.ts). Without it such tasks are left as before.
+   */
+  moveRoute?(id: string, providerId: SubscriptionProvider, assertCurrent: () => void, fromProviderId: string): Promise<void>;
 }
 
 /** Called under the ordinary send lock, before lazy bootstrap or reuse of a live handle.
  * Disabling an account is an explicit routing decision. Quota exhaustion alone is not.
+ * A task on a merged legacy connection hands off like any other (2026-11-13): pausing that
+ * account in the merged OpenAI list is the only way left to move such tasks by hand.
  */
 export async function prepareSubscriptionAccountForSend(
   sessionId: string,
@@ -23,24 +32,25 @@ export async function prepareSubscriptionAccountForSend(
       throw new Error('Subscription account owner changed');
   };
   assertOwner();
-  const row = await deps.readSession(sessionId);
+  const read = await deps.readSession(sessionId);
   assertOwner();
-  if (!row || row.status === 'deleted' || row.remoteHostId || row.agentDeviceId) return false;
-  const provider = row.providerId;
-  if (provider !== 'openai' && !(provider === 'anthropic' && row.agentKind === 'cc')) return false;
+  // Keep comparing against what this send saw, even if the caller reuses its row object.
+  const row = read && { ...read };
+  const task = row && readTaskPoolAccount(sessionId, row);
+  if (!task || (task.legacyRoute && !deps.moveRoute)) return false;
+  const { provider } = task;
   const pool = readPool(provider);
   if (!pool || pool.disconnected) return false;
-  const binding = readAccountBinding(`task:${sessionId}`, provider)
-    ?? (row.sdkSessionId ? readAccountBinding(`native:${row.sdkSessionId}`, provider) : undefined)
-    // Pre-pool Claude tasks resume the official default home (same as agent.ts).
-    ?? (provider === 'anthropic' && row.sdkSessionId ? { accountId: 'default' } : undefined);
-  if (!binding) return false;
-  const original = pool.accounts.find(account => account.id === binding.accountId);
+  const original = pool.accounts.find(account => account.id === task.accountId);
   if (original && !original.paused) return false;
   if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
+  // The merged route's own model switches still apply; never widen access by moving.
+  if (task.legacyRoute && !(await mergedRouteAllowsModel(row!.model ?? undefined)))
+    throw new Error('No subscription account is available');
+  assertOwner();
 
   // Reserve a usable replacement before touching the old runtime or its history.
-  const lease = await acquireSubscriptionAccount(provider, row.model ?? undefined, []);
+  const lease = await acquireSubscriptionAccount(provider, row!.model ?? undefined, []);
   if (!lease) throw new Error('No subscription account is available');
   try {
     const assertCurrent = () => {
@@ -51,6 +61,13 @@ export async function prepareSubscriptionAccountForSend(
     assertCurrent();
     await deps.rebuild(sessionId, assertCurrent);
     assertCurrent();
+    if (task.legacyRoute) {
+      // The old id would pin the paused account again; continue on the merged route instead.
+      const latest = await deps.readSession(sessionId);
+      if (latest?.providerId !== task.legacyRoute) throw new Error('The task route changed');
+      await deps.moveRoute!(sessionId, provider, assertCurrent, task.legacyRoute);
+      assertCurrent();
+    }
     // Commit context first. A failed binding write leaves a recoverable handoff on the
     // old account; a retry can switch again. Never rebind old native ids to a new home.
     await lease.bind([`task:${sessionId}`]);

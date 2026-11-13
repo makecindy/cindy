@@ -29,7 +29,7 @@
 | 插件花名册、ghost 发现链、可见性与作者契约 | [渐进式发现](../ghost-progressive-discovery.md) |
 | 插件持久 Library、binding、迁移、回收站与面板投影 | [插件 Library](plugin-library-storage.md) |
 | 客户端自动更新 | [更新器与 owner 确认](cindy-updater.md) |
-| 日志、IPC 错误、main 业务、测试价值与性能预算、客户端读取／扫描、跨平台与 i18n、登记点与合并冲突 | [工程约定](engineering-conventions.md) |
+| 日志、IPC 错误、main 业务、测试价值与性能预算、客户端读取／扫描、变化通知后的刷新与界面写入、跨平台与 i18n、登记点与合并冲突 | [工程约定](engineering-conventions.md) |
 | 日志采集、脱敏、上报、行格式与崩溃标记 | [日志上报](log-upload-and-redaction.md) |
 | 本地协议包、插件分发来源、device-link、relay、wire protocol 与 allowlist | [协议兼容](protocol-compatibility.md) |
 | 服务器请求、订阅、同步、轮询与重试的调用方式、共享压力及缺陷审查 | [服务器通道调用审查](server-channel-review.md) |

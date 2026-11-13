@@ -1,4 +1,5 @@
 import { imText } from './imText';
+import { getSessionRuntimeStartOverride } from '../../maker-ipc/sessionRuntimeControl';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import {
   createLocalImSource,
@@ -1119,7 +1120,62 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'companion_unavailable' };
       }
     }
+    // Only an actual incoming turn prepares a cold runtime. The existing lock bridge applies
+    // pending choices and subscription recovery before an exhausted old source can block startup.
+    const cold = deps.prepareUnhealthySession && deps.acquirePendingAgentSwitch
+      && !sessionStates.has(target.row.id) && !wiringInFlight.has(target.row.id)
+      && !getMaker().getSession(target.row.id);
+    if (cold && deps.acquirePendingAgentSwitch) {
+      let release: (() => void) | undefined;
+      const releaseOnce = () => { const held = release; release = undefined; held?.(); };
+      const id = target.row.id;
+      try {
+        let refreshed: ImSessionRow;
+        try {
+          if ((!target.attached && !target.notificationReply && !target.botOwned) || target.botOwned?.lane === 'channel')
+            coldWiringVendorOptions.set(id, adapter.buildVendorOptions(userId, target.scopeKey));
+          release = await deps.acquirePendingAgentSwitch(id, {
+            channelOwned: !target.attached && !target.notificationReply && !target.botOwned,
+          });
+          const current = await repo.peekSessionById(id);
+          if (!current) throw new Error(`session ${id} missing after cold route preparation`);
+          refreshed = current;
+        } catch (err) {
+          if (isImAccountScopeClosedError(err)) throw err;
+          const normalized = normalizeSendError(err);
+          await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+          if (args.queueMode === 'internal') {
+            try {
+              const text = ui.agent.sendInternalError(normalized.reason);
+              const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
+              if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+            } catch { /* Keep the definite pre-dispatch rejection if its notice fails. */ }
+          }
+          return { kind: 'rejected', reason: normalized.reason };
+        }
+        return await dispatchPreparedAgentTurn(args, { ...target, authChecked: false }, {
+          row: refreshed, release: releaseOnce,
+        });
+      } finally {
+        releaseOnce();
+        coldWiringVendorOptions.delete(id);
+      }
+    }
+    return dispatchPreparedAgentTurn(args, target);
+  }
+
+  async function dispatchPreparedAgentTurn(
+    args: Parameters<typeof dispatchAgentTurnInternal>[0],
+    target: RouteTarget,
+    cold?: { row: ImSessionRow; release(): void },
+  ): Promise<ImTurnDispatch> {
+    const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    // Keep the entry row for title/new-conversation decisions; use the refreshed execution
+    // row for authentication and wiring after a recovery clears its native id.
     const row = target.row;
+    const routeRow = effectiveRuntimeAuthRow(cold?.row ?? row);
+    const coldCompanion = target.botOwned && (!!cold || (!sessionStates.has(row.id)
+      && !wiringInFlight.has(row.id) && !getMaker().getSession(row.id)));
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     let followTarget: ImDefaultRoute | null | undefined = null;
     // 伙伴任务(主任务 / channel 专线)用伙伴自己的模型链, 不跟随渠道默认。
@@ -1133,18 +1189,18 @@ export function createTurnRunner(
       // 渠道默认跟随: 本条消息会在 send 锁内切到新默认时, 按新路由检查授权 ——
       // 否则旧默认坏掉(如供应商断开)时, 消息会先被「缺授权」挡掉, 永远换不过去。
       followTarget =
-        !target.attached && !target.notificationReply && !target.botOwned
+        !cold && !target.attached && !target.notificationReply && !target.botOwned
           ? await deps.channelDefaultRoute?.previewSwitchTarget(row.id)
           : null;
       const authRow = followTarget
         ? {
-            ...row,
+            ...routeRow,
             agentKind: followTarget.agentKind,
             model: followTarget.model,
             providerId: followTarget.providerId,
             agentDeviceId: followTarget.agentDeviceId ?? null,
           }
-        : row;
+        : routeRow;
       const auth = await checkImRouteAuthDetailed(authRow, undefined, authCheckDeps());
       if (!auth.ok) {
         if (args.queueMode === 'internal') {
@@ -1249,9 +1305,9 @@ export function createTurnRunner(
     // 未接线的任务(如重启后)要跟随新默认: 接线前先对齐, 不先用可能已坏的旧路由
     // 起一次进程。只换接线用的路由; `row` 保持入口读到的值(标题等逻辑按它判断,
     // 跨引擎切换清掉的原生会话 id 不应被当成「新对话」)。
-    let wireTarget = target;
+    let wireTarget = cold ? { ...target, row: cold.row } : target;
     if (
-      followTarget &&
+      !cold && followTarget &&
       deps.channelDefaultRoute &&
       !sessionStates.has(row.id) &&
       !wiringInFlight.has(row.id) &&
@@ -1269,7 +1325,7 @@ export function createTurnRunner(
         // 授权检查只验过新默认路由 —— 按实际路由补一次, 旧供应商断开时在这里给出
         // 缺授权提示, 而不是进旧路由的发送流程运行时失败(PR #5155 review P2)。
         if (!sameImDefaultRoute(routeOfRow(refreshed), followTarget)) {
-          const auth = await checkImRouteAuthDetailed(refreshed, undefined, authCheckDeps());
+          const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(refreshed), undefined, authCheckDeps());
           if (!auth.ok) {
             const authStatus = { ...auth, agentKind: refreshed.agentKind, model: refreshed.model };
             if (args.queueMode === 'internal') {
@@ -1318,6 +1374,9 @@ export function createTurnRunner(
       throw err;
     }
 
+    // The regular dispatch path takes the same lock again; release the cold-start lease
+    // only after wiring has consumed the refreshed route, including on all early exits.
+    cold?.release();
     await repoTouchUserSent(row.id);
 
     // 接管 session 首条消息自动改 title — 对齐 desktop new maker (makerChatStore
@@ -1621,7 +1680,7 @@ export function createTurnRunner(
           throw new Error(`companion session ${rowId} missing before route authentication`);
         }
         if (landed && (state.botLane || (followAuthRoute && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)))) {
-          const auth = await checkImRouteAuthDetailed(landed, undefined, authCheckDeps());
+          const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(landed), undefined, authCheckDeps());
           if (!auth.ok) {
             const attached = state.attached || !!state.botLane;
             const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
@@ -2086,6 +2145,12 @@ export function createTurnRunner(
     }
   }
 
+  function effectiveRuntimeAuthRow(row: ImSessionRow): ImSessionRow {
+    const profile = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    return { ...row, model: profile.model ?? row.model,
+      providerId: profile.providerId === undefined ? row.providerId : profile.providerId };
+  }
+
   async function refreshSessionAfterPendingAgentSwitch(
     state: SessionState,
     sessionId: string,
@@ -2114,9 +2179,10 @@ export function createTurnRunner(
         throw new Error(`session ${sessionId} missing after deferred agent switch`);
       }
       const agentKind = toCoreAgentKind(row.agentKind);
-      hydrateSessionProvider(sessionId, row.providerId ?? null);
-      if (row.effort) setSessionEffort(sessionId, row.effort);
-      setSessionFastMode(sessionId, (row.fastMode ?? false));
+      const startOverride = getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
+      hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
+      setSessionEffort(sessionId, startOverride.model ? startOverride.effort : row.effort);
+      setSessionFastMode(sessionId, startOverride.fastMode ?? row.fastMode ?? false);
       current = await maker.createSession({
         id: sessionId,
         agentKind,
@@ -2130,6 +2196,7 @@ export function createTurnRunner(
         agentDeviceId: row.agentDeviceId ?? undefined,
         remoteHostId: row.remoteHostId ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
+        ...startOverride,
         vendorOptions: ownsChannelOutput(state)
           ? adapter.buildVendorOptions(userId, state.scopeKey)
           : undefined,
@@ -2370,11 +2437,12 @@ export function createTurnRunner(
     // routingTransform)读它决定走哪个供应商上游/钥匙。进程重启后 IM turn 首次起会话时,
     // 内存 store 是空的;不 hydrate 的话 /model 选过的供应商会丢、回落默认路由。对齐
     // renderer 开会话(register.ts)与 scheduler(runner.ts)的 hydrate 时机。
-    hydrateSessionProvider(row.id, row.providerId);
+    const startOverride = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
     // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
     // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
-    if (row.effort) setSessionEffort(row.id, row.effort);
-    setSessionFastMode(row.id, (row.fastMode ?? false));
+    setSessionEffort(row.id, startOverride.model ? startOverride.effort : row.effort);
+    setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
     // 接管路径: 必须传 resumeSessionId 让 Claude SDK 用 desktop 留下的 sdkSessionId
     // resume, 否则 maker.activeSessions 没该 row.id 时会 spawn 全新空会话——oneshot
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
@@ -2392,6 +2460,7 @@ export function createTurnRunner(
       providerId: row.providerId,
       agentDeviceId: row.agentDeviceId ?? undefined,
       remoteHostId: row.remoteHostId ?? undefined,
+      ...startOverride,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
       // 仅作防御兜底(原 feishu 实现传 '飞书会话' 字面量, 语义等价)。
       title: preserveSessionConfig ? undefined : adapter.sessions.defaultTitle(userId),

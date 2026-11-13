@@ -1253,6 +1253,215 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
   });
+  // #6538, unit: mount the real screen and its heartbeat. The existing success
+  // case did not cover a lost presentation reply, pending retries or old leases.
+  const browserPresentation = async (
+    type: string,
+    values: Record<string, unknown> = {},
+  ) => {
+    await act(async () =>
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type, epoch: "lease", ...values }),
+        },
+      }),
+    );
+  };
+  const viewOnlyPip = async (platform: "ios" | "android") => {
+    fixture.canControl = false;
+    fixture.hostPlatform = "linux";
+    fixture.platform = platform;
+    if (platform === "ios") {
+      await retainedViewer();
+      return nativePresentation;
+    }
+    await connect();
+    await browserPresentation("pipCapability", { supported: true });
+    act(() => button("operations").click());
+    await act(async () => button("smallWindow").click());
+    await browserPresentation("presentation", { active: true });
+    return browserPresentation;
+  };
+  it.each([
+    { platform: "ios" as const, code: "INVOKE_TIMEOUT" },
+    { platform: "android" as const, code: "DESKTOP_INPUT_BUSY" },
+  ])(
+    "keeps view-only video and retries fullscreen on the heartbeat: $platform/$code",
+    async ({ platform, code }) => {
+      const present = await viewOnlyPip(platform);
+      const original = fixture.invoke.getMockImplementation()!;
+      let attempts = 0;
+      fixture.invoke.mockImplementation((...args) => {
+        const req = args[2][0];
+        if (req.op === "presentation" && !req.enabled && ++attempts === 1)
+          return Promise.reject(Object.assign(new Error(code), { code }));
+        return original(...args);
+      });
+      const messages = sent().length;
+      await present("presentation", { active: false });
+      expect(attempts).toBe(1);
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+      expect(sent().slice(messages).some((m) => m.type === "stop")).toBe(false);
+      expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(attempts).toBe(2);
+      expect(
+        requests().filter((r) => r.op === "presentation" && !r.enabled),
+      ).toEqual([
+        { op: "presentation", lease: "lease", enabled: false },
+        { op: "presentation", lease: "lease", enabled: false },
+      ]);
+      await act(async () => vi.advanceTimersByTimeAsync(6000));
+      expect(attempts).toBe(2);
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    },
+  );
+  it.each([
+    { code: "INVOKE_TIMEOUT", outcome: "grant" },
+    { code: "DESKTOP_INPUT_BUSY", outcome: "timeout" },
+  ])(
+    "requires fresh PiP authorization after a settled view-only restore: $code/$outcome",
+    async ({ code, outcome }) => {
+      const present = await viewOnlyPip("ios");
+      const original = fixture.invoke.getMockImplementation()!;
+      let finish!: () => void;
+      fixture.invoke.mockImplementation((...args) => {
+        const req = args[2][0];
+        if (req.op === "presentation") {
+          if (!req.enabled) return Promise.reject(new Error(code));
+          return new Promise((resolve) => { finish = () => resolve({}); });
+        }
+        return original(...args);
+      });
+      await present("presentation", { active: false });
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+      const heartbeats = requests().filter((r) => r.op === "heartbeat").length;
+      await act(async () => {
+        AppState.currentState = "inactive";
+        fixture.appState!("inactive");
+        AppState.currentState = "background";
+        fixture.appState!("background");
+      });
+      await present("presentation", { active: true });
+      // No clock advance: enter again before the original heartbeat can retry.
+      expect(requests().filter((r) => r.op === "heartbeat")).toHaveLength(heartbeats);
+      expect(requests().filter((r) => r.op === "presentation" && r.enabled)).toEqual([
+        { op: "presentation", lease: "lease", enabled: true },
+        { op: "presentation", lease: "lease", enabled: true },
+      ]);
+      expect(sent().filter((m) => m.type === "pipPolicy").at(-1)).toMatchObject({
+        preparing: true, authorized: false,
+      });
+      if (outcome === "grant") await act(async () => finish());
+      await act(async () => vi.advanceTimersByTimeAsync(4100));
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(
+        outcome === "grant" ? 0 : 1,
+      );
+      if (outcome === "timeout") await act(async () => finish());
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+    },
+  );
+  it("keeps one view-only restore in flight across duplicate PiP events and heartbeats", async () => {
+    const present = await viewOnlyPip("ios");
+    const original = fixture.invoke.getMockImplementation()!;
+    let reject!: (cause: Error) => void;
+    let attempts = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "presentation" && !req.enabled && ++attempts === 1)
+        return new Promise((_resolve, fail) => { reject = fail; });
+      return original(...args);
+    });
+    await present("presentation", { active: false });
+    await present("presentation", { active: false });
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(attempts).toBe(1);
+    await act(async () => reject(new Error("INVOKE_TIMEOUT")));
+    expect(attempts).toBe(1); // No recursive retry from catch/finally.
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(attempts).toBe(2);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+  });
+  it.each(["DESKTOP_LEASE_EXPIRED", "DESKTOP_STOPPED"])(
+    "still stops a view-only lease on definitive fullscreen rejection: %s",
+    async (code) => {
+      const present = await viewOnlyPip("ios");
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "presentation" && !args[2][0].enabled
+          ? Promise.reject(new Error(code))
+          : original(...args),
+      );
+      await present("presentation", { active: false });
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+      expect(sent()).toContainEqual(
+        expect.objectContaining({ type: "stop", epoch: "lease" }),
+      );
+    },
+  );
+  it.each(["success", "failure"])(
+    "ignores an old view-only restore %s while a new lease is restoring",
+    async (outcome) => {
+      await viewOnlyPip("android");
+      const original = fixture.invoke.getMockImplementation()!;
+      let finishOld!: () => void;
+      let rejectNew!: (cause: Error) => void;
+      let newAttempts = 0;
+      let newPipAuthorized = false;
+      fixture.invoke.mockImplementation((...args) => {
+        const req = args[2][0];
+        if (req.op === "start")
+          return Promise.resolve(original(...args)).then((result) => ({
+            ...result, lease: "lease-2",
+          }));
+        if (req.op === "presentation" && req.lease === "lease-2" && req.enabled)
+          newPipAuthorized = true;
+        if (req.op === "presentation" && !req.enabled) {
+          if (req.lease === "lease")
+            return new Promise((resolve, reject) => {
+              finishOld = () => outcome === "success"
+                ? resolve({}) : reject(new Error("DESKTOP_STOPPED"));
+            });
+          if (newPipAuthorized && ++newAttempts === 1)
+            return new Promise((_resolve, reject) => { rejectNew = reject; });
+        }
+        return original(...args);
+      });
+      await browserPresentation("presentation", { active: false });
+      fixture.status = "offline";
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      fixture.status = "online";
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      await browserPresentation("framePresented", { epoch: "lease-2" });
+      await browserPresentation("pipCapability", { supported: true, epoch: "lease-2" });
+      // The saved option is already enabled. Turn it off, then on to enter
+      // browser PiP again; the first disable is not a fullscreen restoration.
+      if (!button("smallWindow")) act(() => button("operations").click());
+      await act(async () => button("smallWindow").click());
+      await act(async () => button("smallWindow").click());
+      expect(requests()).toContainEqual({
+        op: "presentation", lease: "lease-2", enabled: true,
+      });
+      await browserPresentation("presentation", { active: true, epoch: "lease-2" });
+      await browserPresentation("presentation", { active: false, epoch: "lease-2" });
+      expect(newAttempts).toBe(1);
+      const stops = requests().filter((r) => r.op === "stop").length;
+      await act(async () => finishOld());
+      await browserPresentation("presentation", { active: false, epoch: "lease-2" });
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(newAttempts).toBe(1); // Old finally must not unlock the new request.
+      await act(async () => rejectNew(new Error("INVOKE_TIMEOUT")));
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(newAttempts).toBe(2); // Old ACK must not consume the new intent.
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
+      expect(requests().filter((r) => r.op === "control")).toHaveLength(0);
+    },
+  );
   it("does not select view-only or label the viewer as view-only during actual PiP", async () => {
     await retainedViewer();
     expect(host.textContent).not.toContain("remoteDesktop.viewOnly");
@@ -1622,8 +1831,12 @@ describe("remote desktop controls", () => {
       await nativePresentation("presentation", { active: true });
       expect(grants()).toBe(before);
       expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
-      if (outcome === "timeout")
+      if (outcome === "timeout") {
         await act(async () => vi.advanceTimersByTimeAsync(4100));
+        // A previous PiP grant cannot cancel this new entry's deadline while
+        // its foreground restoration is still pending.
+        expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+      }
       await act(async () => finish({ controlling: true }));
       expect(grants()).toBe(before + (outcome === "grant" ? 1 : 0));
       await act(async () => vi.advanceTimersByTimeAsync(4100));

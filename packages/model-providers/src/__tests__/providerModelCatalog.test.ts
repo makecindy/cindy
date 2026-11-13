@@ -8,6 +8,45 @@ import { BUNDLED_CATALOG } from '../builtin.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
 
 describe("standard provider catalog", () => {
+  // #10269, unit: discovery supplies only Carbon's ID on a Messages connection.
+  // The Astra regression covers a different API; this must select Chat without
+  // turning defaults into user overrides or changing the other models' routes.
+  it.each(['claude-code', 'codex', 'pi'] as const)('routes ID-only Copilot Carbon through Chat in %s', agent => {
+    const baseUrl = 'https://api.individual.githubcopilot.com';
+    const models = ['gemini-4-carbon', 'gemini-4-argon', 'gpt-6-astra', 'claude-fable-5'].map(id => ({ id, name: id }));
+    const provider = buildUserProvider({ id: 'copilot-carbon', name: 'Copilot', runtimes: {
+      [agent]: { baseUrl, wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot', models },
+    } }, { presets: BUNDLED_CATALOG.presets });
+    expect(provider.models[agent]?.map(model => model.api)).toEqual([
+      'openai-completions', 'openai-completions', 'openai-responses', 'anthropic-messages',
+    ]);
+    expect(provider.models[agent]?.[0]).toMatchObject({
+      route: { baseUrl, wireProtocol: 'openai-chat' }, userModelConfig: models[0],
+    });
+    expect(provider.models[agent]?.[0].userModelConfig).not.toHaveProperty('api');
+    expect(provider.routing[agent]?.wireProtocol ?? 'anthropic-messages').toBe('anthropic-messages');
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('preserves explicit Carbon routes and custom endpoints in %s', agent => {
+    for (const [baseUrl, override, requestPath] of [
+      ['https://api.individual.githubcopilot.com', { api: 'anthropic-messages' as const }, undefined],
+      ['https://api.individual.githubcopilot.com', { route: {
+        baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'anthropic-messages' as const,
+      } }, undefined],
+      ['https://proxy.example', {}, undefined],
+      ['https://api.individual.githubcopilot.com', {}, '/custom/messages'],
+    ] as const) {
+      const provider = buildUserProvider({ id: 'copilot-carbon', name: 'Copilot', runtimes: {
+        [agent]: { baseUrl, wireProtocol: 'anthropic-messages', catalogPresetId: 'github-copilot', requestPath,
+          models: [{ id: 'gemini-4-carbon', name: 'Carbon', ...override }] },
+      } }, { presets: BUNDLED_CATALOG.presets });
+      const model = provider.models[agent]![0];
+      expect(model.api ?? model.piApi ?? provider.routing[agent]?.wireProtocol ?? 'anthropic-messages').toBe('anthropic-messages');
+      expect(model.route?.baseUrl ?? provider.routing[agent]?.upstream).toBe(baseUrl);
+      expect(model.userModelConfig).toMatchObject(override);
+    }
+  });
+
   // #9863, unit: an ID-only Copilot discovery previously selected Chat in all three
   // engines. The mixed OpenCode cases do not cover this supplier's source record.
   it.each(['claude-code', 'codex', 'pi'] as const)('routes Copilot Astra through Responses in %s', agent => {
@@ -178,8 +217,11 @@ it('keeps generated defaults consistent with Cindy model preferences', async () 
   const { PROVIDER_MODEL_CATALOG } = await import('../providerModelCatalog.js');
   const { defaultEffortForCapabilities } = await import('../effortResolution.js');
   for (const model of Object.values(PROVIDER_MODEL_CATALOG.providers).flat()) {
+    // A transport-only record makes no reasoning/default declaration. Keep that
+    // distinct from an explicitly empty capability (whose default is null).
     // Explicit official defaults: K2.8 max and Grok 4.7 high.
-    const expected = model.id === 'kimi-for-coding' && model.upstream === 'https://api.kimi.com/coding'
+    const expected = model.reasoning === undefined ? undefined
+      : model.id === 'kimi-for-coding' && model.upstream === 'https://api.kimi.com/coding'
       ? 'max' : model.id === 'grok-4.7' && model.upstream === 'https://api.x.ai/v1'
         ? 'high' : defaultEffortForCapabilities(model.efforts ?? []);
     expect(model.defaultEffort, model.id).toBe(expected);

@@ -24,6 +24,8 @@ export const BOT_SETTINGS_OPS = [
   'profile.acceptModelSelection',
   'profile.chooseAvatar',
   'profile.retryInvitation',
+  'project.repository',
+  'project.retryRepository',
   'lifecycle.run',
   'models.default',
   'memory.list',

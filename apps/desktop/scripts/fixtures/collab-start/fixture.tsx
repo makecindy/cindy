@@ -11,6 +11,10 @@ import {
   commitProvidersSnapshot,
 } from '../../../src/renderer/lib/providersSnapshotStore';
 import { getDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+import {
+  DEFAULT_WORKER_CREATION_PREFS,
+  writeWorkerCreationPrefs,
+} from '../../../src/renderer/state/workerCreationPrefs';
 import type {
   WorkerProjectContext,
   WorkerProjectInfo,
@@ -120,10 +124,24 @@ void mountPage({
   route: '/',
   host: (ctx) => {
     const owner = getDataOwnerGeneration();
+    const savedUnavailable = ctx.case === 'saved-unavailable';
+    if (savedUnavailable) {
+      writeWorkerCreationPrefs({
+        ...DEFAULT_WORKER_CREATION_PREFS,
+        modelSelectionByHost: {
+          [JSON.stringify([owner.dataOwnerId, 'local'])]: {
+            agent: 'codex', agentDeviceId: null, model: 'fixture-model',
+            providerId: 'fixture-saved', effort: 'high', fast: false,
+          },
+        },
+      });
+    }
     commitProvidersSnapshot(beginProvidersRefresh(), {
       dataOwnerId: owner.dataOwnerId,
       ownerGeneration: owner.generation,
-      providers: [provider],
+      providers: savedUnavailable
+        ? [{ ...provider, id: 'fixture-saved', name: 'Saved source', connected: false }, provider]
+        : [provider],
       providerOrder: [],
     });
     const selected: WorkerProjectInfo =

@@ -86,6 +86,15 @@ Copilot 发现使用官方账号主机的 `/models`，不依赖推理使用 Mess
 
 ## 用户实测后的补充验收
 
+2026-11-13：[#10269](https://github.com/makecindy/cindy/issues/10269) 的 Copilot
+`gemini-4-carbon` 仅发现 ID 时曾继承连接的 Messages 默认值，缺少 IDE 身份头。
+标准目录补入精确 Carbon 的 Chat 适配；生成入口从同来源、同官方个人端点的 Argon
+记录复用 headers / compat，不另存版本头常量，也不通过型号代际猜协议。上游已有 Carbon
+记录时优先保留上游。补充记录只声明已验证的传输字段，不借用 Argon 的容量、价格、
+模态或推理能力；发现及用户显式配置继续按原优先级覆盖。来源登记在 supplementalSources。
+回归覆盖三引擎 ID-only 导入、Pi 启动描述符、Codex 账号主机路由及真实 SDK / Claude
+桥接的模拟文本与工具往返；不等于真实账号、图片或长上下文验收。Server Registry 未修改。
+
 最初审计把三引擎都构造成 Chat 路由，没有覆盖实际添加请求。OpenRouter 的公开模型接口
 带 Bearer 与 `anthropic-version` 时返回 20 条重写 ID 的兼容视图；普通目录返回 445 条。
 发现请求现按供应商目录协议构造，不能照搬生成请求头。审计脚本使用生产请求构造器、

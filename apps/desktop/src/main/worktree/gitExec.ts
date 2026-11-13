@@ -74,6 +74,8 @@ export class GitExecError extends Error {
 }
 
 export interface GitExecOpts {
+  /** False for read-only probes: propagate ownership errors without changing global trust. Default true. */
+  repairSafeDirectory?: boolean;
   /** 额外的环境变量, 会与 process.env 合并(后者优先级低)。常见: { LC_ALL: 'C' } */
   extraEnv?: Record<string, string>;
   /**
@@ -781,7 +783,7 @@ export async function gitExec(
     // spawn ENOENT(git 未安装) 也走 GitExecError, 这里不该重试
     if (err.cause?.code === 'ENOENT') throw err;
 
-    if (/dubious ownership/i.test(err.stderr)) {
+    if (opts?.repairSafeDirectory !== false && /dubious ownership/i.test(err.stderr)) {
       const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
       if (dubiousPath) {
         try {

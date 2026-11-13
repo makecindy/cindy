@@ -286,7 +286,14 @@ describe('SSH baseline restoration through production profile application', () =
       return views;
     });
     const local = vi.fn(async () => { throw createIpcError('MODEL_SELECTION_UNAVAILABLE', 'not in local catalog'); });
+    // Execute the new production preparation too: SSH must retain its saved route
+    // before the ordinary SSH catalog/payment/offline checks below, not skip it in a stub.
+    const resolveScheduledExecutionSelection = registeredFunction('resolveScheduledExecutionSelection', {
+      getSessionRowSnapshotStrict: async () => ({ providerId: 'openai', agentKind: 'codex',
+        remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }),
+    });
     const apply = registeredFunction('applyScheduledProfile', {
+      resolveScheduledExecutionSelection,
       applyScheduledModelSelection, createScheduledModelSelectionResolver, resolveScheduledModelSelection,
       readSshCodexModelList, listSshCodexProviders: ssh,
       agentSwitchDeps: { getSessionRow: async () => ({ agentKind: 'codex', status: 'active', remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }) },

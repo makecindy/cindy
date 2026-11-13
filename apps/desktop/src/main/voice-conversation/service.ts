@@ -65,6 +65,7 @@ export class VoiceConversationService {
       createProvider(): Promise<AsrProvider>;
       createAudioGate?(onFiltered: () => void): AudioGate | undefined;
       connection(selection: SpeechModelSelection): SpeechConnection;
+      prepareConnection?(selection: SpeechModelSelection): Promise<SpeechConnection>;
       fetch: typeof fetch;
       hasReplyHook?(): boolean;
       classifyExit?(input: VoiceExitClassification): Promise<VoiceExitDecision>;
@@ -79,7 +80,8 @@ export class VoiceConversationService {
 
   async voices(selection: SpeechModelSelection): Promise<SpeechVoiceCatalog> {
     const owner = this.deps.owner();
-    const connection = this.deps.connection(selection);
+    const connection = this.deps.prepareConnection
+      ? await this.deps.prepareConnection(selection) : this.deps.connection(selection);
     const identity = JSON.stringify(connection);
     return loadSpeechVoices(
       connection,
@@ -104,8 +106,8 @@ export class VoiceConversationService {
     if (this.call || this.preview || this.deps.hasDictation()) throw new Error('busy');
     if (!this.models().some((model) => voiceModelKey(model) === voiceModelKey(selection)))
       throw new Error('model_unavailable');
-    const binding = this.deps.connection(selection);
-    const identity = JSON.stringify(binding);
+    let binding = this.deps.connection(selection);
+    let identity = JSON.stringify(binding);
     const owner = this.deps.owner();
     if (!acquireVoiceConversationLease(selection.previewId)) throw new Error('busy');
     const preview: Preview = {
@@ -119,6 +121,10 @@ export class VoiceConversationService {
             ...event,
           }),
         connection: () => binding,
+        prepareConnection: this.deps.prepareConnection ? async () => {
+          binding = await this.deps.prepareConnection!(selection);
+          identity = JSON.stringify(binding);
+        } : undefined,
         fetch: this.deps.fetch,
         assertCurrent: () => {
           if (
@@ -189,8 +195,8 @@ export class VoiceConversationService {
     if (this.call || this.preview || this.deps.hasDictation()) throw new Error('busy');
     if (!this.models().some((model) => voiceModelKey(model) === voiceModelKey(selection)))
       throw new Error('model_unavailable');
-    const binding = this.deps.connection(selection);
-    const bindingIdentity = JSON.stringify(binding);
+    let binding = this.deps.connection(selection);
+    let bindingIdentity = JSON.stringify(binding);
     const id = selection.callId;
     const owner = this.deps.owner();
     if (!acquireVoiceConversationLease(id)) throw new Error('busy');
@@ -206,6 +212,10 @@ export class VoiceConversationService {
               ...event,
             }),
           connection: () => binding,
+          prepareConnection: this.deps.prepareConnection ? async () => {
+            binding = await this.deps.prepareConnection!(selection);
+            bindingIdentity = JSON.stringify(binding);
+          } : undefined,
           fetch: this.deps.fetch,
           assertCurrent: () => {
             assertCurrent();

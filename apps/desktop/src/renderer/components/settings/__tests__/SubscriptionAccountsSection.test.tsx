@@ -63,6 +63,36 @@ beforeEach(() => {
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // Unit regression: the real second-account row must expose the shared reset UI
+  // and send its own scope/key. Previously only the supplied default card had it.
+  it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {
+    const scope = 'openai-account:cindy-owner-second';
+    const autoUse = { accountKey: 'second-account-key', settings: {
+      enabled: false, lowQuota: true, minimumDays: 3, expiring: true, expiryMinutes: 60,
+    }, customized: false, lastUsedAt: null };
+    const snapshot = { providerId: scope, account: { email: 'se***@example.test', accountId: '…second', planType: 'pro' },
+      rateLimits: {}, rateLimitsByLimitId: null, rateLimitResetCredits: { availableCount: 1, credits: null }, resetOffer: null, autoUse };
+    const getCodexRateLimits = vi.fn(async () => snapshot);
+    const setCodexResetAutoUse = vi.fn(async () => ({ ...snapshot, autoUse: {
+      ...autoUse, settings: { ...autoUse.settings, enabled: true }, customized: true,
+    } }));
+    Object.assign(window.electronAPI, { maker: { usage: { getCodexRateLimits, setCodexResetAutoUse } } });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, providerId: 'openai', accounts: [
+      view.accounts[0], { ...view.accounts[1], codexResetProviderId: scope, usage: hasQuota ? { codex: { credits: null, buckets: {
+        codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
+          secondary: { usedPercent: 20, windowMinutes: 10080, resetsAt } },
+      } } } : undefined },
+    ] });
+    render(<SubscriptionAccountsSection providerId="openai" defaultUsage={<div>Default quota</div>} />);
+    const toggle = await screen.findByRole('switch', { name: 'codexResets.autoUse.label' });
+    const rows = screen.getAllByTestId('subscription-account');
+    expect(within(rows[0]).getByText('Default quota')).toBeTruthy();
+    expect(within(rows[1]).getByText('codexResets.title')).toBeTruthy();
+    expect(getCodexRateLimits).toHaveBeenCalledWith(scope);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setCodexResetAutoUse).toHaveBeenCalledWith({ enabled: true }, 'second-account-key', scope));
+  });
   // Unit: independent expiry dates and the inline renewal target are observable
   // through the real component; existing tests only exercised the overflow menu.
   it('shows each account expiry and renews only the account clicked', async () => {

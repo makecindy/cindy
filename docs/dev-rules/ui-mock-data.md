@@ -97,7 +97,7 @@ pnpm mobile:sim:whoami -- --mock --json
 - 反馈确认：`cindy://sessions/visual-issue-confirm?deviceId=cindy-visual-mock-mac`，合成反馈草稿、署名与环境，覆盖预览、编辑和展开详情；不提交。Desktop 对应 `pnpm ui:check --page issue-confirm --case all --theme all`，两端均加载实际组件。
 - 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。
 
-- 群内执行：`cindy://companions/groups/execution-qa?deviceId=cindy-visual-mock-mac`；后缀 `-work`／`-talk` 查看长分工与讨论队列，`-member`／`-legacy` 查看普通成员与旧宿主的默认停止。仅合成内存回执，不访问真实权限或模型。
+- 群内执行：`cindy://companions/groups/execution-qa?deviceId=cindy-visual-mock-mac`；后缀 `-work`／`-talk` 查看长分工与讨论队列，`-member`／`-legacy` 查看普通成员与旧宿主的默认停止，`-peer` 查看无操作权限的群友仍可见的公共 Cindy 消息与两条独立执行。仅合成内存回执，不访问真实权限或模型。
 - 窄屏正文：`cindy://group-execution-preview?width=320&groupId=execution-qa`（`width` 可选 `393`）。复用真实群聊页，把正文容器限宽；设备窗口、系统安全区和原生导航栏仍取当前模拟器，不将它当作另一机型的整屏验收。
 
 ## 可复用的展示项目：Orbit Garden

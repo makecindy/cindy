@@ -900,7 +900,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
-        running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
+        canStop={group.round.canStop} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
       {Platform.OS === 'ios' ? <DockKeyboardBottomSpacer restingBottom={insets.bottom}

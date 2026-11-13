@@ -76,7 +76,12 @@ function deferred<T>() {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
-    i18n: { language: 'en', exists: (key: string) => key === 'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT' },
+    i18n: { language: 'en', exists: (key: string) => [
+      'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT',
+      'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE',
+      'chat.remoteError.REMOTE_AGENT_INVALID',
+      'chat.remoteError.REMOTE_AGENT_OFFLINE',
+    ].includes(key) },
   }),
 }));
 
@@ -95,6 +100,48 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 describe('ErrorBanner OpenAI connection recovery', () => {
+  // #10187: both live and restored tail errors keep the existing recovery action
+  // and hide unchanged retry, even when the failed input has a retryText (unit).
+  it.each(['live', 'tail'] as const)('offers a route change for %s rejected shared history', surface => {
+    const raw = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+    const recover = vi.fn();
+    const retry = vi.fn();
+    render(surface === 'live'
+      ? <ErrorBanner error={raw} agentKind="codex" agentDeviceId="share:one" retryText="original"
+          onRetry={retry} onChooseComputer={recover} />
+      : <ErrorTailErrorBanner errorText={raw} agentKind="codex" agentDeviceId="share:one"
+          onContinue={retry} onDismiss={vi.fn()} onChooseComputer={recover} />);
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'sharedTaskRecovery.choose' }));
+    expect(recover).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+  });
+  // #10187, unit: the real banner must replace communication/update guidance
+  // and suppress both original-input retry and hidden continuation for this refusal.
+  it.each([['original input', false], [null, false], ['original input', true], [null, true]] as const)(
+    'explains rejected guest resume with retry text %s (Pi refusal=%s)', (retryText, piRefusal) => {
+    const retry = vi.fn();
+    const continueAfterError = vi.fn();
+    const error = piRefusal
+      ? '[REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.'
+      : 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+    render(<ErrorBanner error={error} retryText={retryText} onRetry={retry}
+      onContinueAfterError={continueAfterError} agentKind="codex" agentDeviceId="shared-computer" />);
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE')).toBeTruthy();
+    expect(screen.queryByText('chat.remoteError.REMOTE_AGENT_INVALID')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    expect(retry).not.toHaveBeenCalled();
+    expect(continueAfterError).not.toHaveBeenCalled();
+  });
+  it.each([
+    '[REMOTE_AGENT_INVALID] invalid request',
+    '[REMOTE_AGENT_OFFLINE] connection timed out',
+  ])('keeps existing guidance and retry for %s', error => {
+    render(<ErrorBanner error={error} retryText="original input" onRetry={vi.fn()} />);
+    expect(screen.queryByText('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE')).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
   // #9855, unit/jsdom: startup details used to hide the only actionable cloud
   // file hint. Exercise the real ErrorBanner/ErrorNotice before expanding it.
   it.each(['', 'LAZY_CREATE_FAILED: ', "Error invoking remote method 'send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: "])(

@@ -67,6 +67,7 @@ import {
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
 import { BotProjectsSettings } from './BotProjectsSettings';
 import { BotAutomationsSettings } from './BotAutomationsSettings';
+import { BotProjectRepositorySettings } from './BotProjectRepositorySettings';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -707,7 +708,8 @@ export function BotSettings({
         ) : null}
         {page === 'advanced' ? (
           <div className="mt-4 flex flex-col gap-5 px-3">
-            <div className="flex items-center gap-3">
+            <BotProjectRepositorySettings key={bot.id} botId={bot.id} />
+            {!isRemote ? <div className="flex items-center gap-3">
               <FolderOpen size={16} className="shrink-0 text-[var(--text-tertiary)]" />
               <div className="min-w-0 flex-1">
                 <Button
@@ -733,7 +735,7 @@ export function BotSettings({
                   </p>
                 ) : null}
               </div>
-            </div>
+            </div> : null}
           </div>
         ) : null}
         {page === 'voice' ? (

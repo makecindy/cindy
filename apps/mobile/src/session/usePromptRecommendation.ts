@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { MobileAgentKind, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { ComposerDraftSource } from '@/session/composerDraftSource';
 import { composerDocumentQuotes } from '@/session/composerDocument';
+import { usePromptRecommendationPreference } from '@/session/promptRecommendationPreference';
 
 // Runtime-only consumption survives page remounts; owner/device/task are all part of the key.
 const consumedRevisions = new Map<string, number>();
@@ -26,6 +27,8 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
   queueEditing?: boolean;
   maker: Pick<MobileMakerTransport, 'predictNextPrompt'>;
 }) {
+  const preference = usePromptRecommendationPreference();
+  const enabled = preference.ready && preference.enabled;
   const scope = JSON.stringify([ownerId, deviceId, sessionId]);
   // Subscribe to occupancy, not the draft string: typing need not redraw the task.
   const hasComposerContent = useSyncExternalStore(composerSource?.subscribe ?? subscribeEmptyComposer, () => {
@@ -47,7 +50,8 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
   const connection = useRef({ available, connectionEpoch, generation: 0 });
   const paidRequest = useRef<{ scope: string; revision: number } | null>(null);
   const [settledAttempt, setSettledAttempt] = useState(0);
-  useEffect(() => () => { request.current = null; }, []);
+  const cancelPending = useRef<(() => void) | null>(null);
+  useEffect(() => () => { request.current = null; cancelPending.current?.(); }, []);
   const observed = useRef({
     scope,
     running: false,
@@ -55,8 +59,8 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
     revisionAtStart: 0,
     liveRevision: null as number | null,
   });
-  const current = useRef({ scope, revision, running, blocked, hasTerminalError, available });
-  current.current = { scope, revision, running, blocked, hasTerminalError, available };
+  const current = useRef({ scope, revision, running, blocked, hasTerminalError, available, enabled });
+  current.current = { scope, revision, running, blocked, hasTerminalError, available, enabled };
   const dismiss = useCallback(() => {
     if (revision) consumedRevisions.set(scope, revision);
     observed.current.sawRunning = false;
@@ -81,6 +85,16 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       setResult(null);
     }
     const run = observed.current;
+    // Loading only defers requests; a known opt-out discards the live run.
+    if (preference.ready && !enabled) {
+      cancelPending.current?.();
+      run.running = false;
+      run.sawRunning = false;
+      run.liveRevision = null;
+      request.current = null;
+      setResult(null);
+      return;
+    }
     if (running) {
       if (!run.running) {
         // A fresh running edge starts a new completion generation. A dismissal
@@ -113,7 +127,7 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       setResult(null);
       return;
     }
-    if (!available || blocked || (result?.scope === scope && result.revision === revision)) return;
+    if (!enabled || !available || blocked || (result?.scope === scope && result.revision === revision)) return;
     // Historical navigation only reuses a host result; it never starts a paid prediction.
     const cacheOnly = run.liveRevision !== revision;
     const previous = request.current;
@@ -133,7 +147,7 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
     const isCurrent = () => {
       const latest = current.current;
       return request.current === attempt && latest.scope === scope && latest.revision === revision
-        && !latest.running && !latest.hasTerminalError && consumedRevisions.get(scope) !== revision;
+        && latest.enabled && !latest.running && !latest.hasTerminalError && consumedRevisions.get(scope) !== revision;
     };
     const predict = () => {
       if (cancelled || (!started && current.current.blocked) || !isCurrent()) return;
@@ -164,6 +178,7 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
           setSettledAttempt((value) => value + 1);
         });
     };
+    cancelPending.current = () => { cancelled = true; clearTimeout(timer); };
     timer = setTimeout(predict, 500);
     return () => {
       // Once dispatched, keep the result even if editing hides the capsule.
@@ -176,10 +191,10 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       if (!started && request.current === attempt) request.current = null;
     };
   }, [scope, deviceId, sessionId, agentKind, revision, running, blocked, hasTerminalError, result,
-    available, connectionEpoch, settledAttempt]);
+    available, connectionEpoch, settledAttempt, enabled, preference.ready]);
 
   return {
-    prompt: !running && !displayBlocked && result?.scope === scope && result.revision === revision
+    prompt: enabled && !running && !displayBlocked && result?.scope === scope && result.revision === revision
       && consumedRevisions.get(scope) !== revision ? result.prompt : null,
     dismiss,
   };

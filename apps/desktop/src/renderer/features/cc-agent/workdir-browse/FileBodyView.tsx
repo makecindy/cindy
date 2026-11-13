@@ -56,6 +56,7 @@ import { useTranslation } from 'react-i18next';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { createFileTransferProgressValues } from '@/lib/fileTransferProgress';
 
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import {
   acquireFindInPage,
@@ -217,6 +218,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // 全部 per-file:relPath 变化时通过下方 effect 一次性清空,避免上一文件的 dirty
   // 错带到新文件里。
   const [editMode, setEditMode] = useState(false);
+  const [svgSource, setSvgSource] = useState(false);
+  const [svgDraft, setSvgDraft] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -312,6 +315,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
 
   useEffect(() => {
     setEditMode(false);
+    setSvgSource(false);
+    setSvgDraft(null);
     setDirty(false);
     setSaving(false);
     setSaveError(null);
@@ -332,6 +337,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     lastInitRelPathRef.current = null;
   }, [relPath, autosave]);
 
+  const isSvg = !!relPath && /\.svg$/i.test(relPath) && !isDrawioPath(relPath);
+  const showSvgPreview = isSvg && !svgSource;
   const isText = content.kind === 'text';
   const isTruncated = content.kind === 'text' && content.truncated;
   // 可编辑条件:文本 + 未截断 + 有 relPath。Truncated 文件保存会把后半段截掉,
@@ -558,6 +565,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     'find-in-page',
     () => {
       if (mermaidModalOpen() || getTextPreviewHost()) return false;
+      setSvgSource(true);
       setBarVisible(true);
       queueMicrotask(() => {
         searchInputRef.current?.focus();
@@ -713,6 +721,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     if (!relPath || content.kind !== 'text' || !jumpQuery) return;
     const jumpKey = `${relPath}|${jumpQuery}|${jumpLine ?? ''}`;
     if (lastJumpKeyRef.current === jumpKey) return;
+    setSvgSource(true);
 
     // 阶段 1: 把 query 灌进去, 等 runner 跑完。setSearchQuery 同值是 no-op
     // (React 优化), 只在真不同时才 setState。
@@ -988,6 +997,20 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         ) : null}
       </div>
 
+      {isSvg && !content.truncated && (
+        <div className="flex shrink-0 gap-2 px-4 py-2">
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={() => {
+              closeSearch();
+              setSvgSource((value) => !value);
+            }}
+          >
+            {t(svgSource ? 'attachmentPreview.rendered' : 'attachmentPreview.source')}
+          </Button>
+        </div>
+      )}
       {/* 保存错误 toast —— 出现在按钮组下方,主动重试或切文件后清掉。 */}
       {saveError && (
         <ErrorNotice
@@ -997,88 +1020,107 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         />
       )}
 
-      {
-        // PlaintextEditor 路径:
-        //   - 编辑模式(任意文件):同一套 CodeMirror,代码走 code 主题、
-        //                        markdown 走 markdown live-preview 主题、
-        //                        text 走 plain 主题。
-        //   - 不可编辑文本(如截断文件):readOnly=true,仍然走同一引擎。
-        // key 只包含 relPath —— editMode 切换走 PlaintextEditor 内部的 readOnly
-        // Compartment reconfigure,不重建 EditorView,这样代码文件 preview↔edit
-        // 时 scrollTop 不会被重置回顶部(用户拖到下面点编辑会"跳回顶上"的回归)。
-        // initialValue:编辑模式取 initialContentRef.current(enterEdit 时的快
-        // 照,作为 dirty 比对基准);预览模式取 content.content(磁盘最新)。
-        // 注意:不 remount 时 initialValue 只在首次 mount 生效 —— 这正是想要
-        // 的:用户编辑期间外部 onSaved 回调触发 content 刷新不会把编辑器内容
-        // 冲掉。文件切换(relPath 变)时 key 变化仍会 remount,无影响。
-        <div className="flex min-h-0 flex-1 flex-col">
-          {content.truncated && (
-            // editContainerCls 现在不带 px(为了让 cm-scroller 拉满到右边沿),
-            // 这里 banner 自己补 px-[30px] 让左右内边距和 .cm-content 对齐。
-            <div className="flex-none px-[30px] py-3">
-              <div
-                className={cn(
-                  'rounded-lg border px-3 py-2 text-xs',
-                  'border-[var(--cmd-palette-border)] bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]',
-                )}
-              >
-                {t('ccAgent.workdirBrowse.fileBody.truncatedNotice')}
-              </div>
-            </div>
-          )}
-          <div
-            className={editContainerCls}
-            onContextMenu={(e) => {
-              // 表格 widget 有自己的结构操作菜单;其它 Markdown 区域继续给
-              // 文档级"插入表格",非 Markdown 给"保存"。
-              if (!canEdit || !editMode) return;
-              const target = e.target;
-              if (
-                target instanceof HTMLElement &&
-                target.closest('.cm-md-table-widget')
-              ) {
-                return;
-              }
-              e.preventDefault();
-              menuInsertPointRef.current = { x: e.clientX, y: e.clientY };
-              setMenuPos(getContextMenuPosition(e.clientX, e.clientY));
-            }}
-          >
-            <PlaintextEditor
-              ref={editorRef}
-              key={relPath}
-              initialValue={editMode ? initialContentRef.current : content.content}
-              language={
-                renderable.kind === 'code'
-                  ? renderable.lang
-                  : renderable.kind === 'markdown'
-                    ? 'markdown'
-                    : undefined
-              }
-              readOnly={!editMode}
-              initialScrollTop={scrollAnchor?.top}
-              initialScrollLine={scrollAnchor?.line}
-              initialScrollOffset={scrollAnchor?.offset}
-              imageBaseDir={imageBaseDir}
-              onScroll={handleEditorScroll}
-              onChange={
-                editMode
-                  ? (val) => {
-                      // val 来自 CodeMirror,行尾恒为 LF;基准的归一化在
-                      // setBaseline 时一次性完成,这里每键只付一次原生比较。
-                      const hasChange = val !== initialContentNormalizedRef.current;
-                      setDirty(hasChange);
-                      if (isMarkdown) {
-                        if (hasChange) autosave.schedule();
-                        else autosave.cancel();
-                      }
-                    }
-                  : undefined
-              }
+      {/* Both views share a measured viewport. display:none makes CodeMirror's
+          initial scroll restoration observe zero and overwrite the saved anchor. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)]">
+        {showSvgPreview && !content.truncated && (
+          <div className="col-start-1 row-start-1 min-h-0">
+            <ImagePreview
+              workdir={workdir}
+              relPath={relPath}
+              size={content.size}
+              mtimeMs={content.mtimeMs}
+              sessionId={sessionId}
+              remote={!!remoteHostId || !!deviceId}
+              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(dirty && svgDraft !== null ? svgDraft : content.content)}`}
             />
           </div>
-        </div>
-      }
+        )}
+
+        {
+          // PlaintextEditor 路径:
+          //   - 编辑模式(任意文件):同一套 CodeMirror,代码走 code 主题、
+          //                        markdown 走 markdown live-preview 主题、
+          //                        text 走 plain 主题。
+          //   - 不可编辑文本(如截断文件):readOnly=true,仍然走同一引擎。
+          // key 只包含 relPath —— editMode 切换走 PlaintextEditor 内部的 readOnly
+          // Compartment reconfigure,不重建 EditorView,这样代码文件 preview↔edit
+          // 时 scrollTop 不会被重置回顶部(用户拖到下面点编辑会"跳回顶上"的回归)。
+          // initialValue:编辑模式取 initialContentRef.current(enterEdit 时的快
+          // 照,作为 dirty 比对基准);预览模式取 content.content(磁盘最新)。
+          // 注意:不 remount 时 initialValue 只在首次 mount 生效 —— 这正是想要
+          // 的:用户编辑期间外部 onSaved 回调触发 content 刷新不会把编辑器内容
+          // 冲掉。文件切换(relPath 变)时 key 变化仍会 remount,无影响。
+          <div className={cn('col-start-1 row-start-1 flex min-h-0 flex-col', showSvgPreview && !content.truncated && 'invisible')}>
+            {content.truncated && (
+              // editContainerCls 现在不带 px(为了让 cm-scroller 拉满到右边沿),
+              // 这里 banner 自己补 px-[30px] 让左右内边距和 .cm-content 对齐。
+              <div className="flex-none px-[30px] py-3">
+                <div
+                  className={cn(
+                    'rounded-lg border px-3 py-2 text-xs',
+                    'border-[var(--cmd-palette-border)] bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]',
+                  )}
+                >
+                  {t('ccAgent.workdirBrowse.fileBody.truncatedNotice')}
+                </div>
+              </div>
+            )}
+            <div
+              className={editContainerCls}
+              onContextMenu={(e) => {
+                // 表格 widget 有自己的结构操作菜单;其它 Markdown 区域继续给
+                // 文档级"插入表格",非 Markdown 给"保存"。
+                if (!canEdit || !editMode) return;
+                const target = e.target;
+                if (
+                  target instanceof HTMLElement &&
+                  target.closest('.cm-md-table-widget')
+                ) {
+                  return;
+                }
+                e.preventDefault();
+                menuInsertPointRef.current = { x: e.clientX, y: e.clientY };
+                setMenuPos(getContextMenuPosition(e.clientX, e.clientY));
+              }}
+            >
+              <PlaintextEditor
+                ref={editorRef}
+                key={relPath}
+                initialValue={editMode ? initialContentRef.current : content.content}
+                language={
+                  renderable.kind === 'code'
+                    ? renderable.lang
+                    : renderable.kind === 'markdown'
+                      ? 'markdown'
+                      : undefined
+                }
+                readOnly={!editMode}
+                initialScrollTop={scrollAnchor?.top}
+                initialScrollLine={scrollAnchor?.line}
+                initialScrollOffset={scrollAnchor?.offset}
+                imageBaseDir={imageBaseDir}
+                onScroll={handleEditorScroll}
+                onChange={
+                  editMode
+                    ? (val) => {
+                        // val 来自 CodeMirror,行尾恒为 LF;基准的归一化在
+                        // setBaseline 时一次性完成,这里每键只付一次原生比较。
+                        const hasChange = val !== initialContentNormalizedRef.current;
+                        setDirty(hasChange);
+                        if (isSvg) setSvgDraft(val);
+                        if (isMarkdown) {
+                          if (hasChange) autosave.schedule();
+                          else autosave.cancel();
+                        }
+                      }
+                    : undefined
+                }
+              />
+            </div>
+          </div>
+        }
+      </div>
 
       {/* 右键菜单(编辑态触发 → 直接锚到鼠标 client 坐标)。
           Markdown 文档只放插入类动作; 代码 / 普通文本保留保存入口。 */}
@@ -1348,6 +1390,19 @@ function CachedFileBody({
         </div>
         <OpenInSystemActions absPath={cachePath} className="shrink-0" />
       </div>
+    );
+  }
+  if (text !== null && /\.svg$/i.test(stat.relPath) && !isDrawioPath(stat.relPath)) {
+    return (
+      <FileBodyView
+        workdir={cacheDir}
+        relPath={cacheBase}
+        allowEdit={false}
+        content={{
+          kind: 'text', relPath: cacheBase, content: text,
+          size: stat.size, mtimeMs: stat.mtimeMs, truncated: textTruncated,
+        }}
+      />
     );
   }
   if (text !== null) {
