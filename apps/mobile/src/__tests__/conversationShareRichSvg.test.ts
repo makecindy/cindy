@@ -185,3 +185,13 @@ describe("structured share fallback", () => {
     expect(left!.y + left!.height).toBeLessThan(row.y + row.height);
   });
 });
+
+// #8603 / unit: compare final SVG text positions, not the parser alone.
+it("retains list hierarchy in shared reply images", () => {
+  const colors = { background: "white", surfaceElevated: "white", border: "gray", codeSurface: "gray", inlineCode: "black", surfaceChip: "gray", textPrimary: "black", textSecondary: "gray", textTertiary: "gray", syntax: {} };
+  const layout = layoutConversationShareRichBody({ clientId: "nested", kind: "assistant", body: "- A\n  - B\n    - C\n- D" }, colors, 20, 0, 240);
+  const positions = ["A", "B", "C", "D"].map(label => layout.textBlocks.find(t => t.lines.join('') === label)!.x);
+  expect(positions[1] - positions[0]).toBeGreaterThanOrEqual(17);
+  expect(positions[2] - positions[1]).toBe(17);
+  expect(positions[3]).toBe(positions[0]);
+});

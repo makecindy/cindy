@@ -7,6 +7,229 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Item 28, unit: the ordinary helper registry and public plugin entry must
+// expose the same read-only catalog, with no self-reported caller fields.
+it('discovers Host services through the common validated registry', async () => {
+  const list = vi.fn(() => ({ scope: 'local', services: [{ group: 'scheduler', available: false }] }));
+  const server = createXdtHelperMcpServer({ hostServices: { list } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    expect(server.hostTools.describe('host_services')).toMatchObject({ category: 'discovery' });
+    expect(parsePayload(await server.hostTools.call('host_services', {}))).toMatchObject({ ok: true, services: [{ available: false }] });
+    expect(parsePayload(await server.hostTools.call('host_services', { pluginId: 'someone-else' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(list).toHaveBeenCalledOnce();
+  } finally { await server.close(); }
+});
+// Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
+// interrupted imports. Existing task tests did not cover a plugin caller. The
+// real shared dispatcher must reject all three tools before any callback (and
+// therefore recovery or source scan) runs, while preserving Agent behavior.
+it('rejects plugin external-history imports without invoking recovery callbacks', async () => {
+  const job = { requestId: 'import-1', status: 'running', items: [] };
+  const sessionImport = {
+    scan: vi.fn(async () => ({ candidates: [], hiddenCounts: {}, sources: [], sourceErrors: [] })),
+    start: vi.fn(async () => job),
+    status: vi.fn(async () => job),
+  };
+  const calls = [
+    { tool: 'scan_importable_sessions', args: {} },
+    { tool: 'get_session_import_status', args: { request_id: job.requestId } },
+    { tool: 'import_sessions', args: { keys: ['codex:session'] } },
+  ];
+  const plugin = createXdtHelperMcpServer({ sessionImport }, { agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } });
+  try {
+    for (const { tool, args } of calls) {
+      expect(parsePayload(await plugin.hostTools.call(tool, args)))
+        .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    }
+    for (const callback of Object.values(sessionImport)) expect(callback).not.toHaveBeenCalled();
+  } finally { await plugin.close(); }
+  const agent = createXdtHelperMcpServer({ sessionImport }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  try {
+    for (const { tool, args } of calls) expect(parsePayload(await agent.hostTools.call(tool, args))).toMatchObject({ ok: true, scope: 'local' });
+    for (const callback of Object.values(sessionImport)) expect(callback).toHaveBeenCalledOnce();
+  } finally { await agent.close(); }
+});
+
+// Unit production dispatcher, parity #13: deletion was absent. An explicit target must
+// reach the same Host operation for task/plugin callers, while the current task stays protected.
+it('deletes an explicit target through the shared lifecycle handler and protects the caller', async () => {
+  const deleteSession = vi.fn(async ({ sessionId }: { sessionId: string }) => ({ ok: true as const, sessionId, status: 'deleted' as const }));
+  for (const context of [
+    { agentKind: 'codex' as const, workingDir: '', sessionId: 'ordinary' },
+    { agentKind: 'codex' as const, workingDir: '', hostCaller: { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } },
+  ]) {
+    const server = createXdtHelperMcpServer({ deleteSession } as Parameters<typeof createXdtHelperMcpServer>[0], context);
+    expect(parsePayload(await server.hostTools.call('delete_session', { session_id: TARGET_SESSION_ID }))).toMatchObject({ ok: true, status: 'deleted' });
+    expect(parsePayload(await server.hostTools.call('delete_session', {}))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    if (context.sessionId) expect(parsePayload(await server.hostTools.call('delete_session', { session_id: 'local::ordinary' }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    await server.close();
+  }
+  expect(deleteSession).toHaveBeenCalledTimes(2);
+});
+
+// Unit: the real MCP registry validates terminal parameters and resolves caller identity per call.
+// Existing helper tests cover history/control, not Host-managed commands (requirement 22).
+it('discovers and dispatches terminal jobs through the shared schema for tasks and plugins', async () => {
+  const caller = { kind: 'plugin' as const, pluginId: 'console', dataOwnerId: 'owner', ownerGeneration: 1 };
+  let context: LiziMcpSessionContext = { agentKind: 'codex', workingDir: '/task', sessionId: 'task' };
+  const call = vi.fn(async (_context: LiziMcpSessionContext, _method: string, _args: Record<string, unknown>, _signal?: AbortSignal) => ({ scope: 'local', jobs: [] }));
+  const server = createXdtHelperMcpServer({ terminal: { call } }, { agentKind: 'codex', workingDir: '', getSessionContext: () => context });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'terminal-test', version: '1' });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: {} })).categories)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'terminal' })]));
+    expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'terminal_start', args: { program: { command: '/bin/sh', args: ['-c', 'printf ready'] } } } }))).toMatchObject({ ok: true });
+    expect(call.mock.calls[0]).toMatchObject([context, 'terminal_start', { program: { command: '/bin/sh', args: ['-c', 'printf ready'] } }, expect.any(AbortSignal)]);
+    context = { agentKind: 'codex', workingDir: '', hostCaller: caller };
+    expect(parsePayload(await server.hostTools.call('terminal_list', {}))).toMatchObject({ ok: true, scope: 'local' });
+    expect(call.mock.calls[1][0]).toEqual(context);
+    expect(parsePayload(await server.hostTools.call('terminal_resize', { id: 'job', cols: 0, rows: 20 }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parsePayload(await server.hostTools.call('terminal_start', { owner: 'other' }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit: a managed-job admission failure must survive the shared MCP dispatcher;
+// earlier dispatch tests only returned success, losing actionable capacity data.
+it('returns the stable managed-job limit and capacity through the shared terminal tool', async () => {
+  const call = vi.fn(async () => { throw Object.assign(new Error('TERMINAL_JOB_LIMIT'), { current: 10, limit: 10 }); });
+  const server = createXdtHelperMcpServer({ terminal: { call } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    const result = await server.hostTools.call('terminal_start', {});
+    expect(result.isError).toBe(true);
+    expect(parsePayload(result)).toMatchObject({ ok: false, errorCode: 'TERMINAL_JOB_LIMIT', data: { current: 10, limit: 10 } });
+  } finally { await server.close(); }
+});
+
+// §21 unit: production registry discovery and schema validation were missing
+// for authorized directory IO. One plugin reference must be forwarded intact;
+// malformed operations must be rejected before the Host touches any files.
+it('discovers the shared files service and validates its opaque directory requests', async () => {
+  const context = { agentKind: 'codex' as const, workingDir: '', hostCaller: {
+    kind: 'plugin' as const, pluginId: 'files', dataOwnerId: 'owner', ownerGeneration: 1,
+  } };
+  const call = vi.fn(async () => ({ ok: true, op: 'read', content: 'selected' }));
+  const server = createXdtHelperMcpServer({ files: { call } }, context);
+  try {
+    expect(server.hostTools.describe('file_request')).toMatchObject({ category: 'files' });
+    expect(parsePayload(await server.hostTools.call('file_request', { op: 'read', directoryRef: 'selected', path: 'a.txt' })))
+      .toMatchObject({ ok: true, content: 'selected' });
+    expect(call).toHaveBeenCalledExactlyOnceWith(context, { op: 'read', directoryRef: 'selected', path: 'a.txt' }, undefined);
+    expect(parsePayload(await server.hostTools.call('file_request', { op: 'exec', directoryRef: 'selected' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledOnce();
+  } finally { await server.close(); }
+});
+
+// §27 unit: provider selection and explicit snapshot sharing must use the same
+// public registry. Existing directory tests do not cover storage providers.
+it('discovers storage providers through the public tool and rejects undeclared request shapes', async () => {
+  const call = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true, providers: [{ id: 'library' }] }));
+  const server = createXdtHelperMcpServer({ storage: { call } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    expect(server.hostTools.describe('storage_request')).toMatchObject({ category: 'storage' });
+    expect(parsePayload(await server.hostTools.call('storage_request', { op: 'providers' })))
+      .toMatchObject({ ok: true, providers: [{ id: 'library' }] });
+    expect(parsePayload(await server.hostTools.call('storage_request', { op: 'share', targetPluginId: 'other' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledOnce();
+    const file = { name: 'business.json', size: 3, sha256: 'a'.repeat(64) };
+    call.mockResolvedValueOnce({ ok: false, errorCode: 'SHARE_RESULT_UNKNOWN', targetPluginId: 'receiver', file });
+    const uncertain = await server.hostTools.call('storage_request', { op: 'share', targetPluginId: 'receiver', source: { provider: 'kv', key: 'record' } });
+    expect(uncertain.isError).toBe(true);
+    expect(parsePayload(uncertain)).toMatchObject({ ok: false, errorCode: 'SHARE_RESULT_UNKNOWN', targetPluginId: 'receiver', file });
+  } finally { await server.close(); }
+});
+
+it('validates attachment reads against the same history scope before host I/O', async () => {
+  let denied = false;
+  const readSessionAttachment = vi.fn(async () => ({ ok: true as const, base64: 'dGV4dA==', nextOffset: null }));
+  const history = { readSessionAttachment, resolveSessionScope: async () => ({ ok: true as const, sessionIds: denied ? [] : null }),
+    listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ history }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0, mediaHash: 'a'.repeat(64) })))
+    .toMatchObject({ ok: true, base64: 'dGV4dA==' });
+  expect(readSessionAttachment).toHaveBeenCalledWith(expect.objectContaining({ mediaHash: 'a'.repeat(64) }), expect.any(Object));
+  // Scope reduction: remote attachments must not enter any history/file transport.
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'device::target', message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0, mediaHash: 'invalid' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  denied = true;
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'HISTORY_SCOPE_DENIED' });
+  expect(readSessionAttachment).toHaveBeenCalledOnce();
+  await server.close();
+});
+
+// Unit: explicit remote targets need a plugin actor, never a fabricated dispatcher Session.
+it('sends a plugin message to an explicit remote task without borrowing a sender task', async () => {
+  const sendToRemoteSession = vi.fn(async () => ({ ok: true as const, agentKind: 'codex' as const, wakeKind: 'queued' as const, targetTitle: null, targetLastUserSendAt: null }));
+  const server = createXdtHelperMcpServer({ sendToRemoteSession, sendToSession: vi.fn() }, { agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 } });
+  expect(parsePayload(await server.hostTools.call('send_to_session', { target_session_id: 'device::task', message: 'Continue' }))).toMatchObject({ ok: true, wake_kind: 'queued' });
+  expect(sendToRemoteSession).toHaveBeenCalledWith({ deviceId: 'device', sessionId: 'task', message: 'Continue', dispatcherSessionId: undefined });
+  await server.close();
+});
+
+// Unit via real registry: parity #15 adds exact message boundaries; old task controls
+// cannot invoke fork/rewind. Plugins must name a target and never inherit a session.
+it.each(['fork_session', 'rewind_session'] as const)('routes %s to the existing Host history operation', async tool => {
+  const sessionHistory = vi.fn(async () => ({ ok: true as const, sessionId: 'result-task' }));
+  const server = createXdtHelperMcpServer({ sessionHistory } as Parameters<typeof createXdtHelperMcpServer>[0], {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  expect(parsePayload(await server.hostTools.call(tool, { session_id: 'target', message_client_id: 'boundary' })))
+    .toMatchObject({ ok: true, session_id: 'result-task' });
+  expect(sessionHistory).toHaveBeenCalledWith(expect.objectContaining({ kind: tool === 'fork_session' ? 'fork' : 'rewind', sessionId: 'target', messageClientId: 'boundary', callerSessionId: undefined }));
+  expect(parsePayload(await server.hostTools.call(tool, { message_client_id: 'boundary' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  await server.close();
+});
+
+// Unit, real shared handler: ordinary tasks and plugins need the account directory,
+// including paused/hidden companions and stored relationships, without a bot identity.
+it('discovers the complete teammate directory through history for task and plugin callers', async () => {
+  const listTeammates = vi.fn(async () => ({ ok: true as const, page: { items: [{ id: 'paused', status: 'paused', hiddenAt: 1 }],
+    hasMore: true, nextCursor: { createdAt: 0, id: 'paused' } } }));
+  const history = { listTeammates, listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ history }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  expect(server.hostTools.describe('list_teammates')).toMatchObject({ category: 'history' });
+  expect(parsePayload(await server.hostTools.call('list_teammates', {}))).toMatchObject({ ok: true,
+    teammates: [{ id: 'paused', status: 'paused', hiddenAt: 1 }], hasMore: true, nextCursor: expect.any(String) });
+  expect(listTeammates).toHaveBeenCalledWith({ limit: 100, cursor: null }, 'ordinary');
+  const result = parsePayload(await server.hostTools.call('list_teammates', { teammate_id: 'paused', limit: 1,
+    cursor: Buffer.from(JSON.stringify({ c: 0, i: 'routine', r: 7 })).toString('base64url') }));
+  expect(result).toMatchObject({ ok: true, teammateId: 'paused', relationships: expect.any(Array) });
+  expect(listTeammates).toHaveBeenLastCalledWith({ teammateId: 'paused', limit: 1,
+    cursor: { createdAt: 0, id: 'routine', rowid: 7 } }, 'ordinary');
+  expect(parsePayload(await server.hostTools.call('list_teammates', { limit: 1001 }))).toMatchObject({ ok: false });
+  await server.close();
+});
+
+// §1.2 Host tools: a plugin is a caller, never an impersonated Session. Native MCP and
+// in-process callers must execute the same schema, handler, result and authorization path.
+it('offers the same in-process handler to a plugin without borrowing a Session', async () => {
+  const setSessionsStatus = vi.fn(async ({ sessionIds, status }) => ({ ok: true as const,
+    changed: sessionIds.map((sessionId: string) => ({ sessionId, title: 'Task', workingDir: null, status })) }));
+  const server = createXdtHelperMcpServer({ setSessionsStatus }, {
+    agentKind: 'claude-code', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  expect(server.hostTools.describe('archive_sessions')).toMatchObject({ name: 'archive_sessions', category: 'control' });
+  expect(parsePayload(await server.hostTools.call('archive_sessions', { session_ids: [TARGET_SESSION_ID] })))
+    .toMatchObject({ ok: true, count: 1 });
+  expect(parsePayload(await server.hostTools.call('archive_sessions', { sessionIds: [TARGET_SESSION_ID] })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(setSessionsStatus).toHaveBeenCalledOnce();
+  expect(server.hostTools.describe('request_input_handoff')).toBeUndefined();
+  await server.close();
+});
+
 // Unit, real MCP wire: three harness contexts discover one shared capability.
 // A read must never dispatch an association write; shared guests cannot use it.
 it('exposes GitHub to all harnesses without implicit association', async () => {
@@ -1287,6 +1510,32 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
       expect(settings).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   }
+});
+
+// Unit, parity #7: plugins use the existing settings callbacks with no current task.
+// The task-only MCP case above would miss CAPABILITY_NOT_AVAILABLE for this caller.
+// Minimal input: list/get/update via Host handlers, with no sessionId in the context.
+it('reads and updates app settings through the shared handler for a plugin caller', async () => {
+  let state = { uiSize: 16, animation: true };
+  const settings = vi.fn(async (input: { callerSessionId?: string; operation: string; patch?: Record<string, unknown> }) => {
+    if (input.operation === 'update') state = { ...state, ...input.patch };
+    return input.operation === 'list' ? { sections: [{ id: 'appearance' }] } : { state: { ...state } };
+  });
+  const server = createXdtHelperMcpServer({ appSettings: { call: settings } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(server.hostTools.describe('update_app_settings')).toMatchObject({ category: 'settings' });
+    expect(parsePayload(await server.hostTools.call('list_app_settings', {}))).toMatchObject({ ok: true, sections: [{ id: 'appearance' }] });
+    expect(parsePayload(await server.hostTools.call('get_app_settings', { section: 'appearance' }))).toMatchObject({ ok: true, state });
+    expect(parsePayload(await server.hostTools.call('update_app_settings', { section: 'appearance', patch: { uiSize: 18 } })))
+      .toMatchObject({ ok: true, state: { uiSize: 18, animation: true } });
+    expect(settings).toHaveBeenLastCalledWith({ callerSessionId: undefined, operation: 'update', section: 'appearance', patch: { uiSize: 18 } });
+    expect(settings.mock.calls.every(([input]) => input.callerSessionId === undefined)).toBe(true);
+    expect(parsePayload(await server.hostTools.call('update_app_settings', { patch: { uiSize: 20 } })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(settings).toHaveBeenCalledTimes(3);
+  } finally { await server.close(); }
 });
 
 // #9276, unit real MCP: cancellation previously stopped the caller but left Main

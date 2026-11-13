@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   boundary: false,
   catalog: undefined as Catalog | undefined,
   oauthToken: vi.fn<() => string | null>(),
+  oauthRequestToken: vi.fn<() => Promise<string | null>>(),
   readKey: vi.fn<() => string | null>(),
 }));
 vi.mock('electron', () => ({
@@ -42,6 +43,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
 }));
 vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: h.oauthToken,
+  readGenericOAuthAccessToken: h.oauthRequestToken,
 }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({
   effectiveXdGatewayBaseUrl: () => 'https://gateway.test/v1',
@@ -69,6 +71,7 @@ vi.mock('../dialogue.js', () => ({ CompanionCallDialogue: class {
   async promote() { return true; }
 } }));
 
+import { createGenericOAuthService } from '../../maker-host/generic-oauth.js';
 import { normalizeVoiceInputSettings } from '../../../shared/voiceInputData.js';
 import { registerVoiceConversationIpc } from '../index.js';
 import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
@@ -84,6 +87,7 @@ beforeEach(() => {
   h.boundary = false;
   h.catalog = undefined;
   h.oauthToken.mockReset().mockReturnValue(null);
+  h.oauthRequestToken.mockReset().mockImplementation(async () => h.oauthToken());
   h.readKey.mockReset().mockReturnValue(null);
   setModelVisibilityMirror({});
   vi.mocked(outboundFetch).mockReset();
@@ -156,6 +160,7 @@ it('uses the saved OpenRouter OAuth connection without exposing its credential t
   for (const [, init] of vi.mocked(outboundFetch).mock.calls)
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fake-saved-oauth-key');
   expect(h.readKey).not.toHaveBeenCalled();
+  expect(h.oauthRequestToken).toHaveBeenCalledWith('xai', oauth);
   h.oauthToken.mockReturnValue(null);
   expect(await call('models')).toEqual([]);
   await expect(call('voices', selection)).rejects.toThrow('Voice conversation is unavailable');
@@ -449,4 +454,71 @@ it('bounds semantic exit IPC to trusted local call/final/generation references',
     throw new Error('untrusted frame');
   });
   await expect(call('classify-exit', 'call', '1', 0)).rejects.toThrow('untrusted frame');
+});
+
+// #7942 / review 4555210017. Unit: real IPC -> service -> speech/catalog transport
+// plus the production OAuth runner with an expired in-memory blob. Cache-only
+// wiring used to send the old Bearer; fake fetches observe every outbound header.
+it.each([
+  ...(['voices', 'preview', 'speak'] as const).flatMap(entry =>
+    (['refresh-success', 'refresh-failed', 'logout'] as const).map(outcome => ({ entry, outcome }))),
+  { entry: 'speak' as const, outcome: 'cancel' as const },
+  { entry: 'speak' as const, outcome: 'route-changed' as const },
+])('waits for OAuth before voice dispatch: $entry / $outcome', async ({ entry, outcome }) => {
+  const oauth = providerPresetOAuth('openrouter')!;
+  const modelId = 'elevenlabs/eleven-v3';
+  const provider = buildUserProvider({ id: 'voice-router', name: 'Router', auth: { method: 'oauth', oauth },
+    runtimes: { codex: { baseUrl: 'https://openrouter.ai/api/v1', models: [{ id: modelId, name: 'Speech', mode: 'audio_speech' }] } },
+  });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  let now = 1_000_000;
+  let blob: string | null = JSON.stringify({ access_token: 'fake-expired-voice', refresh_token: 'fake-refresh', expires_at: now - 1 });
+  let entered!: () => void;
+  const refreshing = new Promise<void>(resolve => { entered = resolve; });
+  let release!: (response: Response) => void;
+  const response = new Promise<Response>(resolve => { release = resolve; });
+  const refreshFetch = vi.fn<typeof fetch>(async () => { entered(); return response; });
+  const runner = createGenericOAuthService({ fetchImpl: refreshFetch });
+  runner.configureGenericOAuth({ now: () => now, storage: {
+    read: () => blob, readStrict: () => blob, write: (_id, value) => { blob = value; return true; },
+    remove: () => { blob = null; return true; },
+  } });
+  h.oauthToken.mockImplementation(() => runner.readCachedGenericOAuthAccessToken(provider.id, oauth));
+  h.oauthRequestToken.mockImplementation(() => runner.readGenericOAuthAccessToken(provider.id, oauth));
+  const selection = { providerId: provider.id, agent: 'codex', modelId, voice: 'sarah' };
+  vi.mocked(outboundFetch).mockImplementation(async () => entry === 'voices'
+    ? new Response(JSON.stringify({ data: [{ id: modelId, supported_voices: ['sarah'] }] }))
+    : new Response(new Uint8Array([1, 0]), { headers: { 'content-type': 'audio/pcm' } }));
+  expect(await call('models')).toHaveLength(1);
+  expect(refreshFetch).not.toHaveBeenCalled();
+  if (entry === 'speak') await call('start', { ...selection, callId: 'call', botId: 'bot', sessionId: 'canonical' });
+  const pending = Promise.resolve(entry === 'voices' ? call('voices', selection)
+    : entry === 'preview' ? call('preview', { ...selection, previewId: 'preview', botId: 'bot', sessionId: 'canonical', text: 'Hello' })
+    : call('speak', { callId: 'call', requestId: 'speech-1', text: 'Hello' }))
+    .then(value => ({ value, failed: false }), () => ({ failed: true }));
+  try {
+    expect(await Promise.race([refreshing.then(() => true), pending.then(() => false)])).toBe(true);
+    expect(outboundFetch).not.toHaveBeenCalled();
+    if (outcome === 'logout') runner.logoutGenericOAuth(provider.id);
+    if (outcome === 'cancel') await call('end', 'call');
+    if (outcome === 'route-changed') h.catalog = { ...h.catalog!, providers: [] };
+    release(outcome === 'refresh-failed' ? new Response('{}', { status: 503 })
+      : new Response(JSON.stringify({ access_token: 'fake-fresh-voice', expires_in: 3600 })));
+    expect((await pending).failed).toBe(outcome !== 'refresh-success');
+    expect(outboundFetch).toHaveBeenCalledTimes(outcome === 'refresh-success' ? 1 : 0);
+    if (outcome === 'refresh-success' && entry === 'speak') {
+      // A call can outlive a token; each subsequent utterance must prepare again.
+      now += 3_600_000;
+      refreshFetch.mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'fake-next-voice', expires_in: 3600 })));
+      await call('speak', { callId: 'call', requestId: 'speech-2', text: 'Again' });
+      expect(refreshFetch).toHaveBeenCalledTimes(2);
+      expect(new Headers(vi.mocked(outboundFetch).mock.calls.at(-1)![1]?.headers).get('authorization')).toBe('Bearer fake-next-voice');
+    }
+    for (const [, init] of vi.mocked(outboundFetch).mock.calls) {
+      expect(new Headers(init?.headers).get('authorization')).not.toBe('Bearer fake-expired-voice');
+    }
+  } finally {
+    release(new Response('{}', { status: 503 }));
+    await pending;
+  }
 });

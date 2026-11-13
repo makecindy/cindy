@@ -7,6 +7,8 @@ import {
   mcpAppSandboxDocument,
   mcpAppFrameUrlAllowed,
   HOST_APP_SDK_PATH,
+  CINDY_VIEW_STATE_SDK_PATH,
+  CINDY_VIEW_STATE_REACT_SDK_PATH,
   type McpAppDocument,
 } from '../../shared/mcpApps.js';
 import { mcpAppDirectSandboxDocument } from './sandboxBridge.js';
@@ -61,7 +63,11 @@ export function supplyMcpAppDocument(
   dispose?: () => void,
 ): void {
   documents.set(document.viewId, {
-    html: withHostAppSdk(document.html, 'cindy-mcp-app://' + document.viewId + '-view' + HOST_APP_SDK_PATH),
+    html: withHostAppSdk(document.html, 'cindy-mcp-app://' + document.viewId + '-view' + HOST_APP_SDK_PATH,
+      document.sdk?.addons?.['cindy/view-state'] ? {
+        coreUrl: 'cindy-mcp-app://' + document.viewId + '-view' + CINDY_VIEW_STATE_SDK_PATH,
+        reactUrl: 'cindy-mcp-app://' + document.viewId + '-view' + CINDY_VIEW_STATE_REACT_SDK_PATH,
+      } : undefined),
     fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, dispose,
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });
@@ -241,6 +247,10 @@ export function registerMcpAppProtocol(): void {
         'X-Content-Type-Options': 'nosniff',
       } });
     }
+    if (url.hostname === `${id}-view` && url.pathname === CINDY_VIEW_STATE_SDK_PATH && request.method === 'GET' && !url.search && !url.hash && doc.sdk?.addons?.['cindy/view-state'])
+      return new Response(doc.sdk.addons['cindy/view-state'].source, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    if (url.hostname === `${id}-view` && url.pathname === CINDY_VIEW_STATE_REACT_SDK_PATH && request.method === 'GET' && !url.search && !url.hash && doc.sdk?.addons?.['cindy/view-state'])
+      return new Response(doc.sdk.addons['cindy/view-state'].reactSource, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
     if (url.hostname === `${id}-view` && url.pathname.startsWith('/__cindy/files/')) {
       if (!fileReader || request.headers.get(frameHeader) !== entry.fileKey || url.search || url.hash)
         return new Response(null, { status: 404 });

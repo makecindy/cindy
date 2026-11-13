@@ -1426,7 +1426,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             const identity = isPlanCard ? organizer : member;
             const authorName = isPlanCard
               ? (organizer ? botGroupMemberDisplayName(organizer) : plan?.organizerName ?? '')
-              : (member && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
+              : (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
             const owned = !isPlanCard && message.authorKind === 'user' && message.isSelf === false
               ? botGroupOwnedBotNames(member, members).join(separator) : '';
             const isOpenPlanCard = isPlanCard && openPlan !== null && openPlan.id === message.planId;
@@ -1508,6 +1508,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           } : null}
           speakers={speakers}
           onStop={scope => void stopRound(scope)}
+          canStop={group.round.canStop}
           canStopAll={!!group.canStopAll && !!group.round.othersActive}
           stopping={stopping}
         />
@@ -1555,7 +1556,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
             members={group.members}
-            running={running}
+            running={running} canStop={group.round.canStop}
             planState={botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}

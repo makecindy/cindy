@@ -275,7 +275,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       }
       const restored = tryRestoreWithFallback(filePath);
       if (!restored) {
-        showFatalDialog('数据库损坏且无可用备份', message, 'DB_CORRUPT_NO_BACKUP');
+        showFatalDialog(localDbText('localDbFatal.corrupt.title'), message, 'DB_CORRUPT_NO_BACKUP');
         releaseSchemaLeasesAfterFailure();
         return { ready: false, error: { code: 'DB_CORRUPT_NO_BACKUP', message } };
       }
@@ -283,7 +283,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
         _db = openWithPragmas(filePath);
       } catch (reopenErr) {
         const reopenMsg = reopenErr instanceof Error ? reopenErr.message : String(reopenErr);
-        showFatalDialog('数据库恢复后仍无法打开', reopenMsg, 'DB_CORRUPT_NO_BACKUP');
+        showFatalDialog(localDbText('localDbFatal.corrupt.title'), reopenMsg, 'DB_CORRUPT_NO_BACKUP');
         releaseSchemaLeasesAfterFailure();
         return { ready: false, error: { code: 'DB_CORRUPT_NO_BACKUP', message: reopenMsg } };
       }
@@ -294,7 +294,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       };
       localDbHostUi().broadcast('local-db:corruption-restored', payload);
     } else {
-      showFatalDialog('无法初始化本地数据库', message, 'DB_INIT_FAILED');
+      showFatalDialog(localDbText('localDbFatal.initFailed.title'), message, 'DB_INIT_FAILED');
       releaseSchemaLeasesAfterFailure();
       return { ready: false, error: { code: 'DB_INIT_FAILED', message } };
     }
@@ -303,7 +303,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   const db = _db;
   if (!db) {
     const message = 'localDb connection missing after open';
-    showFatalDialog('无法初始化本地数据库', message, 'DB_INIT_FAILED');
+    showFatalDialog(localDbText('localDbFatal.initFailed.title'), message, 'DB_INIT_FAILED');
     releaseSchemaLeasesAfterFailure();
     return { ready: false, error: { code: 'DB_INIT_FAILED', message } };
   }

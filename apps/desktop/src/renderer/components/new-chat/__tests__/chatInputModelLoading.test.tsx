@@ -442,8 +442,11 @@ it('sends a remote-only Codex model when the controller has no connected provide
   h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
   const onSend = vi.fn().mockResolvedValue(true);
   const view = render(<ChatInput {...props} sessionId="ssh-send" deviceLinkDeviceId={null} remoteHostId="builder"
-    initialModel="remote-only" initialProviderId="openai" initialEffort="low" onSend={onSend} />);
-  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+    initialModel="remote-only" initialProviderId="openai" initialEffort="low" placeholder="Message" onSend={onSend} />);
+  // Unit, Windows real-device regression: the composer was a nameless Group,
+  // so UIA could not write it. Use the real editable's accessible role/name in
+  // this existing send test; native ValuePattern is verified on the device.
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy());
   await act(async () => { h.editor!.commands.setContent('<p>Hello remote</p>'); });
   const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
   expect(send.disabled).toBe(false);

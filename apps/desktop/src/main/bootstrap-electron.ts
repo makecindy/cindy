@@ -587,7 +587,7 @@ import {
 } from '@cindy/maker-core/pi-subagent-runs';
 
 import { onQuit, installQuitHandler } from './lifecycle';
-import { initStartupDiagnostics } from './startup-diagnostics';
+import { initStartupDiagnostics, noteSystemResume, noteSystemSuspend } from './startup-diagnostics';
 import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createStartupGateStallReporter } from './startupGateStallReport';
 import { STARTUP_GATE_STALL_CHANNEL } from '../shared/startupGateStall';
@@ -634,6 +634,7 @@ import {
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
   isTrustedCindyRendererWindow,
   isTrustedTopLevelCindyRendererEvent,
 } from './security/trustedAppRenderer.js';
@@ -887,7 +888,10 @@ import {
   setGoalStopObserver,
   setGoalAskAnswerObserver,
   withSendToSessionLock,
+  pendingRequestForAlert,
 } from './maker-ipc/register.js';
+import { buildPermissionAlert, buildQuestionAlert } from './device-link/mobileNotify.js';
+import { getPermissionAlertQuestion } from './sessionNotificationCopy.js';
 import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
 import {
   createLocalProjectFromTaskHandlers,
@@ -1192,6 +1196,7 @@ import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
+import { refreshHostToolProviderOwner } from './mcp-integrations/hostToolCaller.js';
 import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
@@ -1236,6 +1241,7 @@ import {
   resolveGhostControlPointPlugin,
   diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
+  pluginLiveScreenViews,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -1328,7 +1334,29 @@ function installHostClientMode(): boolean {
   // The host owns the profile's database too; a local open would be a second writer.
   setHostClientMode(true);
   const hostClient = createHostClient(delegation);
-  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain, assertTrusted: assertTrustedAppRendererEvent });
+  const pluginConfirmations = new Map<string, { window: BrowserWindow; channel: string }>();
+  const confirmationWindows = new WeakSet<BrowserWindow>();
+  const cancelWindowConfirmations = (window: BrowserWindow) => {
+    for (const [requestId, pending] of pluginConfirmations) {
+      if (pending.window !== window) continue;
+      pluginConfirmations.delete(requestId);
+      if (isTrustedAppRendererWindow(window)) window.webContents.send(
+        pending.channel === 'ghosts:confirm-request' ? 'ghosts:confirm-dismissed' : 'ghosts:install-consent:dismissed', { requestId });
+      void hostClient.request(pending.channel === 'ghosts:confirm-request' ? '/api/ghosts/confirm/resolve' : '/api/ghosts/install-consent/resolve',
+        { requestId, confirmed: false }).catch(() => {});
+    }
+  };
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain,
+    assertTrusted: assertTrustedAppRendererEvent,
+    authorizePluginApproval: (event, channel, args) => {
+      if (!isTrustedAppRendererEvent(event)) return false;
+      if (channel === 'ghosts:request-task-approval') return true;
+      const requestId = (args[0] as { requestId?: unknown } | null)?.requestId;
+      const pending = typeof requestId === 'string' ? pluginConfirmations.get(requestId) : undefined;
+      return !!pending && !pending.window.isDestroyed() && pending.window.webContents === event.sender
+        && pending.channel === (channel === 'ghosts:confirm:resolve' ? 'ghosts:confirm-request' : 'ghosts:install-consent:request');
+    },
+  });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
@@ -1404,6 +1432,43 @@ function installHostClientMode(): boolean {
     onConnectionState: (state) => {
       hostConnectionState = state;
       sendToAllWindows('host-client:connection', state);
+      if (state.status !== 'connected') {
+        for (const [requestId, pending] of pluginConfirmations) {
+          if (!pending.window.isDestroyed()) pending.window.webContents.send(
+            pending.channel === 'ghosts:confirm-request' ? 'ghosts:confirm-dismissed' : 'ghosts:install-consent:dismissed', { requestId });
+        }
+        pluginConfirmations.clear();
+      }
+    },
+    onPluginPush: (channel, payload) => {
+      if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(channel)) {
+        for (const win of BrowserWindow.getAllWindows())
+          if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
+        return;
+      }
+      const requestId = (payload as { requestId?: unknown } | null)?.requestId;
+      if (typeof requestId !== 'string') return;
+      if (channel === 'ghosts:confirm-dismissed' || channel === 'ghosts:install-consent:dismissed') {
+        const pending = pluginConfirmations.get(requestId); pluginConfirmations.delete(requestId);
+        if (pending && isTrustedAppRendererWindow(pending.window)) pending.window.webContents.send(channel, payload);
+      } else if (channel === 'ghosts:confirm-request' || channel === 'ghosts:install-consent:request') {
+        if (pluginConfirmations.has(requestId)) return;
+        const focused = BrowserWindow.getFocusedWindow();
+        const target = isTrustedAppRendererWindow(focused) ? focused : mainWindowRef;
+        if (target && isTrustedAppRendererWindow(target)) {
+          if (!confirmationWindows.has(target)) {
+            confirmationWindows.add(target);
+            target.once('closed', () => cancelWindowConfirmations(target));
+            target.webContents.on('did-start-navigation', () => cancelWindowConfirmations(target));
+            target.webContents.on('render-process-gone', () => cancelWindowConfirmations(target));
+          }
+          const pending = { window: target, channel }; pluginConfirmations.set(requestId, pending);
+          target.webContents.send(channel, payload);
+        } else {
+          void hostClient.request(channel === 'ghosts:confirm-request' ? '/api/ghosts/confirm/resolve' : '/api/ghosts/install-consent/resolve',
+            { requestId, confirmed: false }).catch(() => {});
+        }
+      }
     },
     onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
     onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
@@ -2796,15 +2861,17 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
-const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
-  isResourceUsageOpenSender({
-    sender,
-    mainWindow: mainWindowRef,
-    senderWindow: BrowserWindow.fromWebContents(sender),
-    isSecondaryAppWindow,
-  }),
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(
+  (sender) =>
+    isResourceUsageOpenSender({
+      sender,
+      mainWindow: mainWindowRef,
+      senderWindow: BrowserWindow.fromWebContents(sender),
+      isSecondaryAppWindow,
+    }),
+  (sender) => !!mainWindowRef && !mainWindowRef.isDestroyed() && mainWindowRef.webContents === sender,
 );
-remoteDesktopViewerWindows.register();
+remoteDesktopViewerWindows.register(pluginLiveScreenViews);
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
 registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);
@@ -2985,6 +3052,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
     const outcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
@@ -5042,6 +5110,13 @@ const registerIpcHandlers = () => {
   initNotificationService({
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
     shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
+    pendingInteractionAlert: (sessionId) => {
+      const request = pendingRequestForAlert(sessionId);
+      if (!request) return undefined;
+      const permission = buildPermissionAlert(request, getPermissionAlertQuestion);
+      const question = permission ? undefined : buildQuestionAlert(request);
+      return permission || question ? { ...(permission ? { permission } : {}), ...(question ? { question } : {}) } : undefined;
+    },
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
@@ -10574,6 +10649,10 @@ app.on('ready', async () => {
   // 睡醒白屏取证:suspend/resume/lock/unlock 全部落日志,给 renderer 侧
   // render-watchdog 的漂移/无帧日志提供时间锚点。
   installPowerEventDiagnostics({ powerMonitor });
+  // 睡眠状态写进 run marker:睡眠中被系统重启(如 Windows 更新)结束的进程,下次启动不报
+  // 「上次意外退出」(issue #10071)。
+  powerMonitor.on('suspend', noteSystemSuspend);
+  powerMonitor.on('resume', noteSystemResume);
 
   // 挂起/锁屏时通知 renderer 释放语音输入的保活麦克风(用户已离开,再占着采集
   // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。

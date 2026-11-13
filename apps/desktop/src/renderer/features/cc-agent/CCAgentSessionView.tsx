@@ -175,7 +175,7 @@ import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
-import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import { RunningTokenCount } from './RunningTokenCount';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
@@ -6448,9 +6448,9 @@ function CCAgentSessionContent({
                       <div className="flex min-w-0 items-center gap-1.5">
                         <AlertCircle
                           size={12}
-                          className="shrink-0 text-red-500 dark:text-red-400"
+                          className="shrink-0 text-[var(--error-fg)]"
                         />
-                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-red-500 dark:text-red-400">
+                        <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--error-fg)]">
                           {t('ccAgent.layout.worktreeFailed', 'Worktree 创建失败')}
                           {' — '}
                           {worktreeCreation.error}
@@ -6464,7 +6464,7 @@ function CCAgentSessionContent({
                           className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
                           aria-label={t('common.dismiss', 'Dismiss')}
                         >
-                          <X size={10} className="text-red-500/70 dark:text-red-400/70" />
+                          <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />
                         </button>
                       </div>
                     </Tip>
@@ -6940,12 +6940,10 @@ function RunningStatusBar({
     generationDurationMs,
   ]);
 
-  // Animate the token counter so live mid-turn updates feel like a smoothly-
-  // incrementing number. Rate does not use this: locally ticking the
-  // denominator would make a paused model look like decaying speed.
-  const animatedTokens = useAnimatedNumber(tokenUsage, 400);
+  // Keep authoritative text for the accessible popover label. Interpolation
+  // belongs to the displayed counter leaf, so rate-only/hidden rows do no RAF work.
   const tokenCountText = t('chat.runningStatus.tokenCount', {
-    tokens: formatRunningTokenCount(animatedTokens),
+    tokens: formatRunningTokenCount(tokenUsage),
   });
   // Host speed counts and times generation itself; usage counters stay the fallback.
   const rateOutputTokens = tokenSpeed?.tokens ?? outputTokens;
@@ -7093,6 +7091,7 @@ function RunningStatusBar({
                       : rateText
                 }
                 isTokenCount={usageMeta.kind === 'tokens'}
+                tokenUsage={tokenUsage}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
                 outputTokens={rateOutputTokens}
                 history={rateHistory}
@@ -7134,7 +7133,7 @@ function RunningStatusBar({
                     </span>
                     <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                      {tokenCountText}
+                      <RunningTokenCount tokenUsage={tokenUsage} />
                     </span>
                   </>
                 )}
