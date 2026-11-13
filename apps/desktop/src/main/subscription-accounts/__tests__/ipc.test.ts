@@ -83,12 +83,24 @@ vi.mock('../runtime.js', () => ({
   readSubscriptionSessionAccount: h.sessionRead,
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
+import { onSubscriptionAccountsChanged } from '../runtime.js';
+import { broadcast } from '../../device-link/index.js';
 import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
+
+// #10286 review: preserve the exact reset target through the real owner push
+// adapter; ordinary pool/load events retain their original payload.
+it('forwards scoped reset invalidation without marking ordinary pool changes', () => {
+  const listener = vi.mocked(onSubscriptionAccountsChanged).mock.calls[0][0];
+  listener('openai', 'second');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', resetAccountId: 'second' });
+  listener('openai');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai' });
+});
 beforeEach(() => {
   h.context = null;
   h.trusted = true;

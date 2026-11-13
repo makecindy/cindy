@@ -1307,14 +1307,13 @@ export function RemoteDesktopSession({
     if (
       connecting.current ||
       controlInFlight.current ||
+      (!canControl && controlRestoration.current !== null) ||
       settingInFlight.current ||
       pendingHostControl.current === false
     ) {
       foregroundRestorePending.current = true;
       return;
     }
-    pipPrepared.current = false;
-    foregroundRestorePending.current = false;
     send({
       type: "pipPolicy",
       enabled: pipEnabledRef.current && frameReady,
@@ -1323,14 +1322,30 @@ export function RemoteDesktopSession({
     if (!canControl) {
       // View-only hosts still need to leave background video/lease policy.
       // A new PiP entry must await this reply before authorizing background again.
+      // Until the host confirms, the existing heartbeat still owns recovery.
+      // Keep this lease's intent, but never clear a newer PiP transition's flags.
+      foregroundRestorePending.current = true;
+      const transition = presentationGeneration.current;
       const restoration = request({
         op: "presentation",
         lease: current.lease,
         enabled: false,
       })
-        .then(() => {})
+        .then(() => {
+          if (
+            active.current !== current ||
+            presentationGeneration.current !== transition
+          )
+            return;
+          pipPrepared.current = false;
+          foregroundRestorePending.current = false;
+        })
         .catch((cause) => {
-          if (active.current === current) fail(cause);
+          if (
+            active.current === current &&
+            controlFailureAction(cause) !== "ignore"
+          )
+            fail(cause);
         });
       controlRestoration.current = restoration;
       void restoration.finally(() => {
@@ -1339,6 +1354,8 @@ export function RemoteDesktopSession({
       });
       return;
     }
+    pipPrepared.current = false;
+    foregroundRestorePending.current = false;
     // Capable hosts retain foreground control; view only guards input locally.
     // A temporary release/refusal must not replace that intent. App/route/PiP
     // events restore immediately; heartbeats retry when a transition was busy
@@ -2768,8 +2785,15 @@ export function RemoteDesktopSession({
     settingInFlight.current = true;
     const startedAt = performance.now();
     const alreadyAuthorized = Boolean(
-      NativeRemoteDesktopView && pipPrepared.current && !restoration,
+      NativeRemoteDesktopView &&
+        pipPrepared.current &&
+        !restoration &&
+        !foregroundRestorePending.current,
     );
+    // The retained flag belongs to the PiP being restored. A new entry must
+    // obtain its own authorization after that request, within its own deadline.
+    if (restoration || foregroundRestorePending.current)
+      pipPrepared.current = false;
     const finishTransition = linkRef.current.beginBackgroundTransition?.();
     finishBackgroundTransition.current = finishTransition ?? null;
     presentationReturnedToActive.current = false;

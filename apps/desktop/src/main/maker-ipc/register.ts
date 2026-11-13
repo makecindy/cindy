@@ -1,4 +1,4 @@
-import { needsSubscriptionAccountHandoff } from '../subscription-accounts/runtime.js';
+import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { readLegacyCodexAccountId } from '../subscription-accounts/store.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
@@ -1986,6 +1986,10 @@ export async function hasRestoredCodexQuota(sessionId: string, expectedProvider:
   if (!kind) return false;
   const route = resolveSessionRuntimeRoute(sessionId, kind, row);
   const providerId = route.providerId ?? (kind === 'codex' ? 'openai' : null);
+  if (providerId === 'openai') {
+    const restored = await hasRestoredPooledCodexQuota(expectedProvider, sessionId, row.sdkSessionId, route.modelId);
+    if (restored !== null) return restored;
+  }
   if (providerId !== expectedProvider) return false;
   const limit = await readAccountUsageLimit(kind, route.providerId, route.modelId);
   return limit != null && !limit.limited;
