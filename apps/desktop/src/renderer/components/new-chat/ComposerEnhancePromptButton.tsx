@@ -6,7 +6,7 @@ import type { Editor, JSONContent } from '@tiptap/core';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { hasFocusMovedToInteractiveElement, hasNonCollapsedSelectionOutsideComposer } from './useComposerSendFocusRestore';
 import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../../../shared/composerPromptEnhance';
@@ -46,9 +46,12 @@ interface ComposerEnhancePromptButtonProps {
  *
  * Chrome follows the composer's bare toolbar tier (`docs/design-rules/
  * container-transform.md`): no outline or fill at rest, the pill appears on
- * hover only, like the `+` / permission / model triggers it sits next to. The
- * control keeps its slot while there is no draft, disabled, so typing the
- * first character does not shift the rest of the toolbar.
+ * hover only, like the `+` / permission / model triggers it sits next to. Both
+ * actions are square shared `Button`s (DESIGN §14.6), so the focus ring, the
+ * disabled state and the pressed feedback come from that primitive; only this
+ * tier's paint is set here. The control keeps its slot while there is no draft,
+ * disabled, so typing the first character does not shift the rest of the
+ * toolbar.
  *
  * Two rules keep the user's text safe:
  *
@@ -253,30 +256,25 @@ export function ComposerEnhancePromptButton({
 
   if (!editor) return null;
 
-  const controlClass = cn(
-    'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full',
-    // 裸态工具条(2026-07-22 用户定稿):默认无框无底,hover 才浮现胶囊外框。
-    // 与 +/权限/模型 同一档;右侧 voice/send 的常驻描边档不适用。
-    'border border-transparent bg-transparent text-[var(--composer-pill-icon)]',
-    'transition-[background-color,border-color,transform] duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]',
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--chat-input-bg)]',
-  );
-
-  const hoverClass =
-    'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)] dark:hover:bg-[var(--composer-pill-bg)] active:scale-[0.98]';
-
-  // The enhance and undo controls have separate eligibility, so they also have
-  // separate state styling: an undo that is available must not look disabled.
-  const enhanceControlClass = cn(
-    controlClass,
-    !enhanceUnavailableReason && !busy && hoverClass,
-    (enhanceUnavailableReason || busy) && 'cursor-not-allowed opacity-40',
-  );
-
-  const undoControlClass = cn(
-    controlClass,
-    !busy && !disabled && hoverClass,
-    (busy || disabled) && 'cursor-not-allowed opacity-40',
+  /**
+   * The composer toolbar's bare tier, expressed through the shared Button.
+   *
+   * DESIGN §14.6: a new icon-only action uses the square shared `Button`
+   * (frameless `variant="secondary"` `tone="quiet"`), so focus ring, disabled
+   * state and pressed feedback come from that primitive instead of a
+   * feature-local native button. What stays here is only this tier's paint:
+   * bare at rest, the pill appears on hover — same chrome as the `+` /
+   * permission / model triggers it sits next to
+   * (`docs/design-rules/container-transform.md`, "Composer toolbar: two chrome
+   * tiers").
+   */
+  const composerPillClass = cn(
+    'w-7 px-0',
+    '[--button-face-bg:transparent] [--button-face-border:transparent]',
+    'text-[var(--composer-pill-icon)]',
+    'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--composer-pill-bg)]',
+    'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--border-default)]',
+    'enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--composer-pill-bg)]',
   );
 
   const label = busy ? t('newChat.composerEnhance.working') : t('newChat.composerEnhance.enhance');
@@ -293,27 +291,32 @@ export function ComposerEnhancePromptButton({
   return (
     <div className="flex shrink-0 items-center gap-1">
       <Tip text={enhanceUnavailableReason ?? label} side="top">
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          tone="quiet"
+          size="sm"
+          className={composerPillClass}
           onClick={() => void enhance()}
-          disabled={Boolean(enhanceUnavailableReason) || busy}
+          disabled={Boolean(enhanceUnavailableReason)}
+          loading={busy}
           aria-label={label}
-          className={enhanceControlClass}
         >
-          {busy ? <Spinner size={14} /> : <Sparkles size={15} />}
-        </button>
+          <Sparkles size={15} />
+        </Button>
       </Tip>
       {undoState !== null && (
         <Tip text={undoUnavailableReason ?? t('newChat.composerEnhance.undo')} side="top">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            tone="quiet"
+            size="sm"
+            className={composerPillClass}
             onClick={undo}
             disabled={busy || disabled}
             aria-label={t('newChat.composerEnhance.undo')}
-            className={undoControlClass}
           >
             <Undo2 size={15} />
-          </button>
+          </Button>
         </Tip>
       )}
     </div>

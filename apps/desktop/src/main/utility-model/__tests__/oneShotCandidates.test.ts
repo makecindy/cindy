@@ -1043,6 +1043,104 @@ describe('utility one-shot candidates', () => {
       }
     });
 
+    /**
+     * Chat / Messages 网关也可能回 SSE。它们的失败帧与成功终态形状和 Responses
+     * 不同，而 `responseStructure()` 对这两条线路返回 null，所以严格模式必须
+     * 自己按 wire 扫事件，否则「先吐出正文、后报错」的流会被当成完整改写。
+     */
+    const sseRoute = (wireProtocol: 'openai-chat' | 'anthropic-messages') => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'tapsvc',
+          name: 'Tap Service',
+          source: 'user',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header', wireProtocol },
+          },
+          models: { codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }] },
+        }],
+      } as never);
+      readCustomKey.mockReturnValue('custom-secret');
+    };
+
+    const requestOverSse = (requireCompleteOutput: boolean) => requestUtilityText(makerMock(false), 'review', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'custom-mini',
+      maxTokens: 200,
+      ...(requireCompleteOutput ? { requireCompleteOutput: true } : {}),
+    });
+
+    it('开启后:Chat SSE 带 error 事件后跟正文 → 拒绝,不把半截正文当成功', async () => {
+      sseRoute('openai-chat');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"choices":[{"delta":{"content":"给这个页面加一个"}}]}\n'
+          + 'data: {"error":{"message":"rate limited","status":429}}\n'
+          + 'data: [DONE]\n',
+      } as never);
+
+      const result = await requestOverSse(true);
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:Messages SSE 带 overloaded_error 后跟正文 → 拒绝', async () => {
+      sseRoute('anthropic-messages');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"type":"content_block_delta","index":0,'
+          + '"delta":{"type":"text_delta","text":"给这个页面加一个"}}\n'
+          + 'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n',
+      } as never);
+
+      const result = await requestOverSse(true);
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:SSE 缺成功终态直接 EOF → 拒绝', async () => {
+      sseRoute('openai-chat');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"choices":[{"delta":{"content":"给这个页面加一个"}}]}\n',
+      } as never);
+
+      const result = await requestOverSse(true);
+
+      expect(result.ok).toBe(false);
+    });
+
+    it('开启后:带成功终态的 SSE 照常返回正文', async () => {
+      sseRoute('openai-chat');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"choices":[{"delta":{"content":"给这个页面加一个"}}]}\n'
+          + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n'
+          + 'data: [DONE]\n',
+      } as never);
+
+      const result = await requestOverSse(true);
+
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个' });
+    });
+
+    it('默认关闭:同一份失败流仍按旧行为返回正文(本次不扩大影响面)', async () => {
+      sseRoute('openai-chat');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"choices":[{"delta":{"content":"给这个页面加一个"}}]}\n'
+          + 'data: {"error":{"message":"rate limited","status":429}}\n'
+          + 'data: [DONE]\n',
+      } as never);
+
+      const result = await requestOverSse(false);
+
+      expect(result).toMatchObject({ ok: true, text: '给这个页面加一个' });
+    });
+
     it('开启后:default 链里的 codex profile 候选被跳过(profile 循环也要遵守严格模式)', async () => {
       // 默认自动链走 `runDefaultProfileCandidates`,它直接执行候选；严格模式若不在这条
       // 循环里生效，profile 引用会绕开「看不到终态就用」的限制。

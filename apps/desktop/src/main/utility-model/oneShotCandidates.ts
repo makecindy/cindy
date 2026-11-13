@@ -2136,7 +2136,7 @@ async function requestProviderHttpText(input: {
       && text
       && (answerIncompleteByProvider(step.wire, finalParsed)
         || streamEndedWithoutCompletion(step.wire, finalParsed)
-        || responsesStreamDidNotComplete(step.wire, raw))
+        || sseStreamDidNotComplete(step.wire, raw))
     ) {
       // The provider stopped early — at the output budget, or because it
       // filtered the content, or the stream reported a terminal failure:
@@ -2331,20 +2331,36 @@ function streamEndedWithoutCompletion(wire: ProviderWire, terminal: unknown): bo
 }
 
 /**
- * 严格模式下『这条 Responses SSE 流根本不完整』的判定。
+ * 严格模式下『这条 SSE 流根本不完整』的判定，覆盖所有 wire。
  *
  * 终态字段只在事件里带 `response` 对象时才看得到：`{type:"error"}` 事件没有，
  * 流也可能在 `response.created` 之后直接 EOF。调用方不消费增量时
  * `readUtilityTextStream` 也没机会做这些检查，所以严格模式自己扫一遍事件：
  * 出现错误事件，或者一路没有成功终态，都不当完整答案。
  * 非 SSE 的缓冲响应（JSON）不适用这条，直接放行。
+ *
+ * Chat 与 Messages 网关同样可能回 SSE，它们的失败帧与成功终态形状和
+ * Responses 不同，所以按 wire 分别认：
+ *
+ * - Chat 的失败帧是 `{"error":{...}}`（没有 type 字段，见
+ *   packages/responses-chat-bridge/src/handler.ts 按 `event.error` 判失败），
+ *   成功终态是 `[DONE]` 或带 `finish_reason` 的 choices；
+ * - Messages 的失败帧是 `{"type":"error","error":{"type":"overloaded_error"}}`，
+ *   成功终态是 `message_stop`。
  */
-function responsesStreamDidNotComplete(wire: ProviderWire, raw: string): boolean {
-  if (wire !== 'responses') return false;
+function sseStreamDidNotComplete(wire: ProviderWire, raw: string): boolean {
   const head = raw.trimStart();
   if (!head.startsWith('data:') && !head.startsWith('event:')) return false;
   let sawSuccessTerminal = false;
   for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith('event:')) {
+      // Some gateways only name the terminal in the event line. The data line
+      // that follows carries the same shape, but a stream may also end there.
+      const name = line.slice(6).trim();
+      if (name === 'error') return true;
+      if (SSE_SUCCESS_EVENT_NAMES.has(name)) sawSuccessTerminal = true;
+      continue;
+    }
     if (!line.startsWith('data:')) continue;
     const payload = line.slice(5).trim();
     if (!payload) continue;
@@ -2352,13 +2368,46 @@ function responsesStreamDidNotComplete(wire: ProviderWire, raw: string): boolean
       sawSuccessTerminal = true;
       continue;
     }
-    const event = safeJsonParse(payload) as { type?: unknown } | null;
-    if (event?.type === 'error') return true;
-    if (event?.type === 'response.completed' || event?.type === 'message_stop') {
-      sawSuccessTerminal = true;
-    }
+    const event = safeJsonParse(payload) as Record<string, unknown> | null;
+    if (!event || typeof event !== 'object') continue;
+    if (sseEventReportsFailure(event)) return true;
+    if (sseEventIsSuccessTerminal(wire, event)) sawSuccessTerminal = true;
   }
   return !sawSuccessTerminal;
+}
+
+/** Event names that mean "the stream ended successfully" on the wire. */
+const SSE_SUCCESS_EVENT_NAMES = new Set(['response.completed', 'message_stop', 'done']);
+
+/**
+ * A failure frame, in any of the shapes the supported wires use.
+ *
+ * `{"type":"error"}` is the Responses / Messages shape; `{"error":{...}}` is
+ * the Chat shape (the Chat bridge detects it the same way, see
+ * packages/responses-chat-bridge/src/handler.ts).
+ */
+function sseEventReportsFailure(event: Record<string, unknown>): boolean {
+  if (event.type === 'error') return true;
+  const error = event.error;
+  return typeof error === 'object' && error !== null;
+}
+
+/**
+ * A success terminal frame, in the shape this wire uses.
+ *
+ * Chat ends with `[DONE]` or with a choice that carries `finish_reason`;
+ * Messages ends with `message_stop`; Responses ends with `response.completed`.
+ */
+function sseEventIsSuccessTerminal(wire: ProviderWire, event: Record<string, unknown>): boolean {
+  const type = event.type;
+  if (type === 'response.completed' || type === 'message_stop') return true;
+  if (wire !== 'chat-completions') return false;
+  const choices = event.choices;
+  return Array.isArray(choices)
+    && choices.some((choice) => (
+      typeof choice === 'object' && choice !== null
+        && (choice as { finish_reason?: unknown }).finish_reason != null
+    ));
 }
 
 function outputBudgetExhausted(wire: ProviderWire, parsed: unknown): boolean {
