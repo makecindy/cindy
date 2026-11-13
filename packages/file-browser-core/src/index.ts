@@ -25,6 +25,7 @@ export {
   readFileChunk,
   FILE_CHUNK_MAX_LENGTH,
   writeFile,
+  writeFileBytes,
   createFile,
   createFolder,
   renameEntry,
