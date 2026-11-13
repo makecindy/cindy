@@ -457,6 +457,32 @@ describe("ConversationShareSvg", () => {
     }
   });
 
+  // Image splitting must not trim the serialized list prefix after redaction.
+  it.each([1, 2])("keeps nested text after a redacted image at depth %s", (depth) => {
+    const url = "cindy-media://list-image";
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["m"],
+      colors,
+      width: 280,
+      messages: [{
+        clientId: "m", kind: "assistant",
+        body: `${depth === 2 ? "- parent\n  - middle" : "- parent"} ![pic](${url})\n${"  ".repeat(depth)}- ${"子".repeat(60)}\n\npassword: private-secret`,
+        images: new Map([[url, { uri: "data:image/png;base64,aGVsbG8=", width: 40, height: 20 }]]),
+      }],
+    });
+    expect(layout.images).toHaveLength(1);
+    const blocks = layout.bubbles.flatMap(bubble => bubble.textBlocks);
+    const child = blocks.find(block => block.lines.some(line => line.includes("子")))!;
+    const childLines = child.lines.filter(line => line.includes("子"));
+    expect(childLines.length).toBeGreaterThan(1);
+    expect(childLines.every(line => line.startsWith("\u2003".repeat(depth)))).toBe(true);
+    expect(child.y).toBeGreaterThan(layout.images[0]!.y + layout.images[0]!.height);
+    expect(childLines.join("").match(/- /g)).toHaveLength(1);
+    const text = blocks.flatMap(block => block.lines).join("");
+    expect(text).toContain("[REDACTED]");
+    expect(text).not.toContain("private-secret");
+  });
+
   it("waits for both footer assets before allowing export", async () => {
     const gate = createConversationShareAssetGate(["character", "logo"]);
     let ready = false;

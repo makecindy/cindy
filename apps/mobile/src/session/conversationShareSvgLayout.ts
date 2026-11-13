@@ -394,7 +394,10 @@ function conversationShareBodyParts(
   }
   return safeParts.flatMap<ShareBodyPart>((part) => {
     if ("image" in part) return [part];
-    const text = part.text.replace(/\n{3,}/g, "\n\n").trim();
+    // Images split text parts; trim boundary whitespace without removing the
+    // U+2003 list indentation at the start of the next sanitized text part.
+    const text = part.text.replace(/\n{3,}/g, "\n\n")
+      .replace(/^[^\S\u2003]+/u, "").trimEnd();
     return text ? [{ text }] : [];
   });
 }
