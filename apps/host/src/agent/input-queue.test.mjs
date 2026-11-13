@@ -29,6 +29,7 @@ import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/messag
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_SOURCE_CONTENT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS } from '@cindy/maker-core';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
+import { GIT_SETTLEMENT_SEQUENCES } from '../../../desktop/src/main/maker-ipc/__tests__/gitBaselineSettlementSequences.ts';
 
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
 function createFakeMaker() {
@@ -1773,6 +1774,161 @@ test('a queued user turn opens its change record and Git baseline between the us
   assert.deepEqual(index.entries.map(entry => entry.anchorClientId), ['u-change']);
   assert.deepEqual(calls.map(call => call[0]), ['start', 'end']);
   await h.queue.dispose();
+});
+
+/**
+ * Git 基线按回合结算（评审二，m1-rc4）
+ * - Bug：已派发的回合以终止性 error 结束时不撤回基线；停止后 Host 先收尾、done 迟到时什么都不做。
+ *   悬空的基线会让同一任务下一轮的保存点记到旧消息上，并让同仓其他任务被判为并发。
+ * - 规则依据：桌面 sessionEventDelivery.ts（done → onTurnEnd，终止性 error → onTurnAbort，按事件各一次）；
+ *   三个引擎停止时都发 done；审核方定：停止由 Host 收尾时 Host 自己做一次 onTurnEnd 并关上本轮结算。
+ * - 最小失败输入：error 后没有 abort；error → done 少一次 end；停止后迟到的 done 或 error 再结算一次；
+ *   上一轮的终态在下一轮开始后取走下一轮的基线。
+ * - tier：unit（假引擎，真实的输入队列与回合执行，不调模型）。
+ */
+const gitSettlementFixture = async (t, id) => {
+  const f = await changeRecordFixture(t);
+  const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
+  await enqueue(h, id, { clientId: `${id}-1`, text: 'first' });
+  const session = h.maker.getSession(id);
+  const terminal = (type, generation = session.generation) => (type === 'done'
+    ? { type: 'done', data: {}, sessionTurnGeneration: generation }
+    : { type: 'error', data: { message: 'provider failed', isTerminal: true }, sessionTurnGeneration: generation });
+  const settled = async () => { await waitFor(() => !h.queue.projection(id).turnInProgress); await new Promise(resolve => setImmediate(resolve)); };
+  return { f, h, session, terminal, settled, git: () => f.calls.filter(call => call[0] !== 'closed').map(call => call[0]) };
+};
+
+test('a failed turn cancels its baseline once; an error followed by its done also takes the after-edit step, as on the desktop', async t => {
+  t = lifoCleanup(t);
+  const a = await gitSettlementFixture(t, 'git-error-done');
+  a.session.emit(a.terminal('error'));
+  a.session.emit(a.terminal('done'));
+  a.session.emit(a.terminal('error'));
+  a.session.emit(a.terminal('done'));
+  await a.settled();
+  assert.deepEqual(a.git(), ['start', 'abort', 'end']);
+  await a.h.queue.dispose().catch(() => {});
+  const b = await gitSettlementFixture(t, 'git-error-only');
+  b.session.emit(b.terminal('error'));
+  await b.settled();
+  assert.deepEqual(b.git(), ['start', 'abort']);
+  await b.h.queue.dispose().catch(() => {});
+});
+
+test('a stopped turn takes one after-edit step whether its done comes before or after the Host settles the stop', async t => {
+  t = lifoCleanup(t);
+  // The engine reports done while abort() is still settling.
+  const a = await gitSettlementFixture(t, 'git-stop-done-first');
+  a.session.abort = async () => { a.session.aborted += 1; a.session.emit(a.terminal('done')); };
+  await a.h.queue.stop('git-stop-done-first');
+  await a.settled();
+  assert.deepEqual(a.git(), ['start', 'end']);
+  await a.h.queue.dispose().catch(() => {});
+  // The engine is idle after abort() and reports nothing yet: the Host takes the step; the
+  // late done, a late error and a second done of the same turn take nothing more.
+  const b = await gitSettlementFixture(t, 'git-stop-host-first');
+  await b.h.queue.stop('git-stop-host-first');
+  await b.settled();
+  assert.deepEqual(b.git(), ['start', 'end']);
+  b.session.emit(b.terminal('error'));
+  b.session.emit(b.terminal('done'));
+  b.session.emit(b.terminal('done'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(b.git(), ['start', 'end']);
+  await b.h.queue.dispose().catch(() => {});
+});
+
+// The desktop event pipeline settles the same sequences (sessionEventPipeline.test.ts); the
+// table holds both columns and says why they differ where they do.
+for (const sequence of GIT_SETTLEMENT_SEQUENCES) {
+  test(`the Git baseline of ${sequence.name} is settled as the shared table says`, async t => {
+    t = lifoCleanup(t);
+    const id = `git-sequence-${GIT_SETTLEMENT_SEQUENCES.indexOf(sequence)}`;
+    const a = await gitSettlementFixture(t, id);
+    for (const step of sequence.steps) {
+      if (step === 'stop') await a.h.queue.stop(id);
+      else if (step === 'stop-with-done') {
+        a.session.abort = async () => { a.session.aborted += 1; a.session.emit(a.terminal('done')); };
+        await a.h.queue.stop(id);
+      } else if (step === 'continuation-done') a.session.emit({ ...a.terminal('done'), turnContinuationId: 0 });
+      else a.session.emit(a.terminal(step));
+    }
+    await a.settled();
+    assert.deepEqual(a.git().slice(1), sequence.host);
+    assert.equal(sequence.difference === undefined, JSON.stringify(sequence.host) === JSON.stringify(sequence.desktop));
+    await a.h.queue.dispose().catch(() => {});
+  });
+}
+
+test('terminals of a stopped turn that arrive once the next turn has started leave the next baseline alone', async t => {
+  t = lifoCleanup(t);
+  const a = await gitSettlementFixture(t, 'git-stop-next');
+  const stopped = a.session.generation;
+  await a.h.queue.stop('git-stop-next');
+  await a.settled();
+  // The old done and error arrive while the next turn opens its baseline, before it has a generation.
+  const start = a.f.gitSnapshot.onTurnStart;
+  a.f.gitSnapshot.onTurnStart = async id => {
+    await start(id);
+    a.session.emit(a.terminal('done', stopped));
+    a.session.emit(a.terminal('error', stopped));
+  };
+  await a.h.queue.enqueue('git-stop-next', { clientId: 'git-stop-next-2', text: 'second' });
+  await waitFor(() => a.session.sent.length === 2);
+  // And again once the next turn has its generation.
+  a.session.emit(a.terminal('done', stopped));
+  a.session.emit(a.terminal('error', stopped));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(a.git(), ['start', 'end', 'start']);
+  assert.equal(a.h.queue.projection('git-stop-next').turnInProgress, true, 'the next turn is still running');
+  a.session.emit(a.terminal('done'));
+  await a.settled();
+  assert.deepEqual(a.git(), ['start', 'end', 'start', 'end']);
+  await a.h.queue.dispose().catch(() => {});
+});
+
+// Same repository, two tasks: a failed turn of one leaves no baseline behind, so the other's
+// next turn is not taken for concurrent work and keeps its after-edit savepoint (the desktop
+// degrades a turn that overlapped another task's in the same repository to a rewind gap).
+test('a failed turn in one task leaves the next turn of another task in the same repository its savepoint', { timeout: 120_000 }, async t => {
+  t = lifoCleanup(t);
+  const { execFileSync } = await import('node:child_process');
+  const { realpathSync } = await import('node:fs');
+  const { createHostGitSnapshot } = await import('./git-snapshot.ts');
+  const { configureHostOwner } = await import('./claude-auth.mjs');
+  const { listShadowSavepoints } = await import('../../../desktop/src/main/git-snapshot/gitSnapshotService.ts');
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture',
+    GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } });
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-concurrent-profile-'));
+  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'cindy-host-concurrent-repo-')));
+  t.after(() => { rmSync(profile, { recursive: true, force: true }); rmSync(repo, { recursive: true, force: true }); });
+  configureHostOwner({ userDataDir: profile, ownerId: 'concurrent-git-owner' });
+  t.after(() => configureHostOwner({ userDataDir: profile, ownerId: null }));
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'init');
+  const snapshot = createHostGitSnapshot({ getSessionMeta: async () => ({ workDir: repo, agentKind: 'claude-code' }) },
+    { getLatestUserMessage: async () => ({ clientId: 'user-1', text: 'change a.txt' }) });
+  const h = createHarness({ getGitSnapshot: () => snapshot,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+      workingDir: repo, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  await enqueue(h, 'repo-task-a', { clientId: 'a-1', text: 'first' });
+  const a = h.maker.getSession('repo-task-a');
+  a.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true }, sessionTurnGeneration: a.generation });
+  await waitFor(() => !h.queue.projection('repo-task-a').turnInProgress);
+  await enqueue(h, 'repo-task-b', { clientId: 'b-1', text: 'second' });
+  writeFileSync(path.join(repo, 'a.txt'), 'two\n');
+  const b = h.maker.getSession('repo-task-b');
+  b.emit({ type: 'done', data: {}, sessionTurnGeneration: b.generation });
+  // onTurnEnd runs after the event is delivered; wait for its savepoint (git subprocesses).
+  let labels = [];
+  for (let attempt = 0; attempt < 500 && labels.length < 2; attempt += 1) {
+    labels = (await listShadowSavepoints(repo, 'repo-task-b')).entries.map(entry => entry.label);
+    if (labels.length < 2) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(labels, ['改动 a.txt', '本轮开始时的工作区基线']);
+  await h.queue.dispose().catch(() => {});
 });
 
 async function changeRecordFixture(t) {

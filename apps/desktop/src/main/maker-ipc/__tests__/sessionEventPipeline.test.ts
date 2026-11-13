@@ -31,6 +31,7 @@ import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/hel
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../gatewayProxyTokenRecovery.js';
 import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
 import { reportCindyGatewayKeyRejectedForCurrentKey } from '../../model-access/gatewayKeyRejection.js';
+import { GIT_SETTLEMENT_SEQUENCES } from './gitBaselineSettlementSequences.js';
 
 const effects = vi.hoisted(() => {
   const calls: string[] = [];
@@ -1065,6 +1066,21 @@ describe('production Session event pipeline', () => {
       // A synthetic Codex terminal carries no second copy of SDK usage.
       expect(effects.fn('recordTurnUsageOnMessage')).not.toHaveBeenCalled();
     }
+    await h.dispose();
+  });
+
+  // The Host settles the same sequences in its turn executor (apps/host input-queue.test.mjs).
+  it.each(GIT_SETTLEMENT_SEQUENCES)('settles the Git baseline of $name as the shared table says', async ({ steps, desktop }) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }));
+    effects.calls.length = 0;
+    for (const step of steps) {
+      if (step === 'stop') continue; // abort() returning is not an event the pipeline sees.
+      if (step === 'error') h.emit(event('error', { message: 'provider failed', isTerminal: true }));
+      else h.emit(event('done', {}, step === 'continuation-done' ? { turnContinuationId: 0 } : {}));
+    }
+    await microtasks();
+    expect(effects.calls.filter(call => call === 'git-end' || call === 'git-abort').map(call => call.slice(4))).toEqual(desktop);
     await h.dispose();
   });
 
