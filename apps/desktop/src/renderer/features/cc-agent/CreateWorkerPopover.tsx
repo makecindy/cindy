@@ -234,6 +234,7 @@ export function CreateWorkerPopover({
   const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi'>('codex');
   const [model, setModel] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.model);
   const [modelPickerOpenRequest, setModelPickerOpenRequest] = useState(0);
+  const modelPickerRequestSequence = useRef(0);
   const [effort, setEffort] = useState<Effort>(DEFAULT_WORKER_CREATION_PREFS.codex.effort);
   const [fast, setFast] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.fast);
   // 显式选定的模型来源(标准面板供应商分段);null = 未显式。device-link 远程创建
@@ -1421,6 +1422,7 @@ export function CreateWorkerPopover({
               ) : null}
               <ModelSelector
                 openRequest={modelPickerOpenRequest}
+                onOpenRequestConsumed={(request) => setModelPickerOpenRequest((pending) => pending === request ? 0 : pending)}
                 ariaContext={savedModelUnavailable ? t('orca.createWorker.savedModelUnavailable') : undefined}
                 fastModeConfigurable={['codex', 'pi']}
                 unifiedAgents={pickerAgents}
@@ -1501,7 +1503,7 @@ export function CreateWorkerPopover({
             role="status"
             message={t('orca.createWorker.savedModelUnavailable')}
             actions={(
-              <Button type="button" size="sm" onClick={() => setModelPickerOpenRequest((value) => value + 1)}>
+              <Button type="button" size="sm" onClick={() => setModelPickerOpenRequest(++modelPickerRequestSequence.current)}>
                 {t('orca.createWorker.reselectModel')}
               </Button>
             )}

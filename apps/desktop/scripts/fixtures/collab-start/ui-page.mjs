@@ -56,6 +56,15 @@ export default {
       const form = await page.evaluate(() => globalThis.collabStart.submitted());
       assert.equal(form.model, 'fixture-model');
       assert.equal(form.providerId, 'fixture-codex');
+      const dialog = page.getByRole('dialog', { name: await ui.t('orca.createWorker.enableCollabTitle'), exact: true });
+      await dialog.waitFor({ state: 'hidden' });
+      await page.getByRole('button', { name: 'Reopen', exact: true }).click();
+      await dialog.waitFor();
+      const modelTrigger = dialog.getByRole('button', { name: /Fixture Model/ });
+      assert.equal(await modelTrigger.getAttribute('aria-expanded'), 'false', 'a consumed request must not reopen the picker with the whole dialog');
+      assert.equal(await notice.count(), 0, 'the explicitly selected usable source stays valid');
+      assert.equal(await submit.isDisabled(), false);
+      await ui.capture('reopened-after-recovery');
       return;
     }
 
