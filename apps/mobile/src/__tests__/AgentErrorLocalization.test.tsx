@@ -143,7 +143,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
   it('explains guest resume rejection without offering the same failed send', async () => {
     await i18n.changeLanguage(locale);
     const error = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
-    const key = 'session.remoteError.REMOTE_AGENT_RESUME_REJECTED';
+    const key = 'session.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE';
     expect(i18n.exists(key)).toBe(true);
     const [historical] = normalizeRemoteMessages([row(error)]);
     expect(historical.errorSummaryKey).toBe(key);
@@ -347,4 +347,25 @@ it('localizes bound-account exhaustion and old ambiguous startup errors', async 
   expect(host.textContent).not.toContain('LAZY_CREATE_FAILED');
   expect(localizeUnclassifiedAgentError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset'))
     .toBe(i18n.t('chat.subscriptionAccountError.legacy'));
+});
+
+// #10187, unit: a wrapped guest resume failure has recovery guidance on both
+// surfaces, rather than repeating the same failed queue item or suggesting updates.
+it.each(['live', 'tail'] as const)('explains rejected shared history on mobile %s without unchanged retry', async surface => {
+  await i18n.changeLanguage('zh-CN');
+  const error = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+  const retry = vi.fn();
+  const state = resolveSessionTailBanner({ messages: [row(error)], session: null, projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
+  expect(state?.kind === 'error-tail' && state.retryable).toBe(false);
+  expect(requiresAgentErrorConfigurationChange(error)).toBe(true);
+  expect(unclassifiedAgentErrorI18nKey(error)).toBe('session.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE');
+  await act(async () => root.render(surface === 'live'
+    ? <InlineQueueSection projection={{ error, errorRetryText: 'original' } as InputProjection}
+        onRetryError={retry} onClearError={vi.fn()} onResume={vi.fn()} />
+    : <SessionTailBanner state={state!} onContinue={retry} onDismiss={vi.fn()} />));
+  expect(host.textContent).toContain(i18n.t('session.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'));
+  expect(host.textContent).not.toContain(i18n.t('session.remoteError.REMOTE_AGENT_INVALID'));
+  expect(host.querySelector('[data-testid="queue.inline.retryButton"]')).toBeNull();
+  expect([...host.querySelectorAll('button')].some(button => button.textContent === i18n.t('session.tail.retry'))).toBe(false);
+  expect(retry).not.toHaveBeenCalled();
 });

@@ -121,6 +121,9 @@ export function registerSessionImportTools(registry: XdtHelperToolRegistry, deps
       limit: z.number().int().min(1).max(MAX_LIST).optional().describe(`最多返回条数，默认 50，最多 ${MAX_LIST}`),
     },
     handler: async ({ source, project_dir, query, include_hidden, force, limit }) => {
+      if (deps.getSessionContext().hostCaller?.kind === 'plugin') {
+        return errorPayload('UNSUPPORTED_CAPABILITY', '插件不支持扫描其他 AI 工具的历史。');
+      }
       let scan: SessionImportScanView;
       try {
         scan = await deps.callbacks.scan({ force: force === true });
@@ -171,6 +174,9 @@ export function registerSessionImportTools(registry: XdtHelperToolRegistry, deps
         .describe('scan_importable_sessions 返回的 key'),
     },
     handler: async ({ keys }) => {
+      if (deps.getSessionContext().hostCaller?.kind === 'plugin') {
+        return errorPayload('UNSUPPORTED_CAPABILITY', '插件不支持导入其他 AI 工具的历史。');
+      }
       if (!deps.getSessionContext().sessionId) {
         return errorPayload('NO_SESSION_CONTEXT', `本次调用没有绑定 ${BRAND_NAME} 任务，无法导入。`);
       }
@@ -193,6 +199,9 @@ export function registerSessionImportTools(registry: XdtHelperToolRegistry, deps
       request_id: z.string().min(1).optional().describe('import_sessions 返回的 request_id'),
     },
     handler: async ({ request_id }) => {
+      if (deps.getSessionContext().hostCaller?.kind === 'plugin') {
+        return errorPayload('UNSUPPORTED_CAPABILITY', '插件不支持查询其他 AI 工具历史的导入状态。');
+      }
       try {
         const job = await deps.callbacks.status(request_id ?? null);
         if (!job) return errorPayload('NOT_FOUND', '没有找到这次导入（可能已超过 7 天被清理）。');
