@@ -260,7 +260,7 @@ async function pluginSecretKeys(localRoot: string): Promise<Set<string>> {
     const instanceKey = pluginInstallStoragePart(relId);
     keys.add(`ghost_alias_migration_${instanceKey}`);
     for (const secret of approval.receipt.manifest.network?.secrets ?? []) {
-      if (secret.source === 'oauth') continue;
+      if (secret.source !== undefined && secret.source !== 'user') continue;
       keys.add(ghostSecretStorageKey(instanceKey, secret.key));
       keys.add(ghostSecretHintStorageKey(instanceKey, secret.key));
     }
@@ -381,7 +381,7 @@ export async function adoptLocalProfileAssets(
               }
             }
           }
-          const pluginKeys = adoptPlugins ? await pluginSecretKeys(localRoot) : new Set<string>();
+          const pluginKeys = adoptPlugins ? await pluginSecretKeys(pluginStage) : new Set<string>();
           // A pre-existing, unrelated cloud DB did not adopt local provider rows.
           // Do not attach local credentials to its same-named providers. A prior
           // successful DB adoption is tied to the published file's identity.

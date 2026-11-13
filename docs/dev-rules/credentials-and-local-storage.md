@@ -18,7 +18,7 @@
 `localProfileAssetsMigration.ts` 只接受 `localProfileDataMigration` 已持久提交的首个
 cloud owner，在账号切换隔离区内、旧插件运行已停止后交接；后续账号不能继承。
 自定义 Provider API key 与 headers 仅在目标数据库尚不存在或有真实本地库采用证明时复制。
-插件只带走原批准清单声明的非 OAuth 静态凭证和对应 hint；登录令牌、OAuth 账号及刷新令牌、
+插件只带走原批准清单声明的用户填写静态凭证和对应 hint；登录令牌、OAuth 账号及刷新令牌、
 动态连接授权、Library 绑定、目录授权均不在此交接范围。不得扩大为整个保险库复制。
 
 同机交接只复制现有 `safeStorage` 密文，不解密、不输出内容，不覆盖目标已有值，保留
