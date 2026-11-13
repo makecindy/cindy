@@ -597,6 +597,7 @@ describe('plugin hint review regressions', () => {
       return h.invoke(id, channel, args, options);
     };
     const reads = createPluginPromptReads(invoke, () => true);
+    const release = reads.retain('host-1'); // This retry fixture represents a visible consumer.
     const result = reads.read('host-1').catch(error => error);
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toBe(1);
@@ -607,6 +608,7 @@ describe('plugin hint review regressions', () => {
     expect(await result).toMatchObject(queued && !retryFails ? { capability: 'supported' } : { message: 'READ_FAILED' });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls).toBe(queued ? 2 : 1);
+    release();
   });
   it('consumes distinct notifications received inside the same debounce window', async () => {
     vi.useFakeTimers();
@@ -659,4 +661,40 @@ describe('plugin hint review regressions', () => {
       } else expect(notice?.actions).toHaveLength(2);
     },
   );
+});
+
+// R7: display refreshes must not erase full facts used by begin/answer guards.
+// Unit: real controller/client, delayed full read and actual lightweight response.
+it.each(['begin', 'answer'] as const)('keeps full authorization facts when a hint wins during %s', async stage => {
+  vi.useFakeTimers();
+  const pending = deferred<unknown>(); let fullReads = 0;
+  const h = host(() => stage === 'answer' ? confirmation() : receipt('succeeded'));
+  h.setFacts({ ...snapshot(), uiCapabilityApproval: true });
+  const item = { instanceKey: plugin.instanceKey, name: plugin.manifest.name,
+    approvalToken: 'approved:12345678-1234-4123-8123-123456789abc' };
+  const invoke: PluginManagementInvoke = async (id, channel, args, opts) => {
+    opts?.preSend?.();
+    const action = (args?.[0] as Envelope)?.actionId;
+    if (channel.endsWith(':manifest')) return { collections: [{ id: 'plugins', actions: [
+      { id: 'management:snapshot' }, { id: 'management:ui-consent' },
+    ] }] } as never;
+    if (action === 'management:ui-consent') return { result: { version: 1, uiCapabilityApproval: true, item } } as never;
+    if (action === 'management:snapshot' && ++fullReads === (stage === 'begin' ? 1 : 2)) return await pending.promise as never;
+    return h.invoke(id, channel, args, opts);
+  };
+  const reads = createPluginPromptReads(invoke, () => true);
+  const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }), {
+    readDisplay: () => reads.read('host-1'), createOperationId: () => 'operation-1',
+  });
+  controllers.push(c); await c.refresh();
+  if (stage === 'answer') await c.approveUiFromConsent(item);
+  const operation = stage === 'begin' ? c.approveUiFromConsent(item) : c.answer(true);
+  await vi.advanceTimersByTimeAsync(0);
+  reads.invalidate('host-1', {}); const refreshed = c.refresh();
+  await vi.advanceTimersByTimeAsync(250); await refreshed;
+  expect(c.getState().snapshot).toBeNull();
+  pending.resolve({ result: { ...snapshot(), uiCapabilityApproval: true } });
+  await operation;
+  expect(h.requests.filter(r => r.actionId === `management:${stage}`)).toHaveLength(1);
+  expect(c.getState().errorCode).toBeNull();
 });

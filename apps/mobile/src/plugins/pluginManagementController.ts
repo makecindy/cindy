@@ -35,6 +35,8 @@ export function createPluginManagementController(client: PluginManagementClient,
   let state: PluginManagementState = { capability: 'unknown', snapshot: null, uiConsent: null, receipt: null,
     operationId: null, busy: false, online: options.online ?? true, outcome: 'idle', errorCode: null };
   let disposed = false, epoch = 0, refreshSequence = 0, snapshotSequence = 0;
+  // Display reads cannot erase the full Host facts used for queued write guards.
+  let facts: PluginManagementSnapshot | null = null, factsSequence = 0;
   let pendingDisplay: { token: number; sequence: number; promise: Promise<PluginPromptDisplay> } | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let receiver: ManagedPlugin | undefined;
@@ -65,7 +67,9 @@ export function createPluginManagementController(client: PluginManagementClient,
   }
   async function readSnapshot(token: number) {
     const sequence = ++snapshotSequence;
+    const factsToken = ++factsSequence;
     const snapshot = await client.snapshot();
+    if (current(token) && factsToken === factsSequence) facts = snapshot;
     // Both display reads and full snapshots share this sequence. A current full
     // read replaces the older hint; a later lightweight read can replace it again.
     if (current(token) && sequence === snapshotSequence) publish({ snapshot, uiConsent: null });
@@ -132,7 +136,9 @@ export function createPluginManagementController(client: PluginManagementClient,
       publish({ capability, uiConsent: null, errorCode: null, ...(capability === 'unsupported' ? { snapshot: null } : {}) });
       if (capability === 'supported') {
         const snapshotToken = ++snapshotSequence;
+        const factsToken = ++factsSequence;
         const snapshot = await client.snapshot();
+        if (current(token) && factsToken === factsSequence) facts = snapshot;
         if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ snapshot });
       }
     } catch (error) {
@@ -177,7 +183,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       began = true;
       await acceptReceipt(await client.begin({ ...request, operationId,
         ...(snapshot.uiCapabilityApproval ? { uiConsentVersion: 1 } : {}) }, () => current(token)
-        && state.online && !!state.snapshot && receiverCurrent(state.snapshot)), token);
+        && state.online && !!facts && receiverCurrent(facts)), token);
     } catch (error) {
       if (!current(token)) return;
       const unknown = began && (!(error instanceof PluginManagementRequestError) || error.outcomeUnknown);
@@ -211,7 +217,7 @@ export function createPluginManagementController(client: PluginManagementClient,
         if (!receiverCurrent(snapshot)) throw new PluginManagementRequestError('PLUGIN_INSTALL_CHANGED');
       }
       if (current(token)) await acceptReceipt(await client.answer(receipt.operationId, receipt.consent.requestId, confirmed,
-        () => current(token) && state.online && (!confirmed || (!!state.snapshot && receiverCurrent(state.snapshot)))), token);
+        () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts)))), token);
     } catch (error) {
       if (current(token)) publish({ busy: false, outcome: 'unknown', errorCode: pluginManagementErrorCode(error) });
     }

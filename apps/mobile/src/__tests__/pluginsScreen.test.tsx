@@ -10,6 +10,7 @@ import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
 
 const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
+  appStateListeners: new Set<(state: string) => void>(),
   promptReads: null as ReturnType<typeof createPluginPromptReads> | null,
   realManagement: false,
   accountGeneration: 0,
@@ -69,7 +70,9 @@ vi.mock("react-native", async () => {
   const view = ({ children }: any) =>
     React.createElement("div", null, children);
   return {
-    AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
+    AppState: { currentState: "active", addEventListener: (_event: string, listener: (state: string) => void) => {
+      fixture.appStateListeners.add(listener); return { remove: () => fixture.appStateListeners.delete(listener) };
+    } },
     ActivityIndicator: view,
     Alert: { alert: fixture.alert },
     BackHandler: { addEventListener: () => ({ remove() {} }) },
@@ -1492,4 +1495,53 @@ it('keeps compact consent actionable when the Host adds manifest and unknown ite
     } });
     expect(fixture.props.get('observedManagement').state.outcome).toBe('succeeded');
   } finally { act(() => localRoot.unmount()); fixture.promptReads = null; vi.restoreAllMocks(); vi.useRealTimers(); }
+});
+
+// R7 unit: real visible-consumer effects + shared reader; global invalidations
+// continue while screens are hidden. One visible consumer keeps refresh alive,
+// zero consumers stop follow-ups and retain dirty state for the next visible read.
+it.each(['hidden', 'background'] as const)('stops shared hint follow-ups with no active consumers (%s)', async mode => {
+  vi.useFakeTimers();
+  lightweightPromptHost('approve-ui');
+  const normal = fixture.wire.getMockImplementation()!;
+  const releases: Array<() => void> = [];
+  let stateReads = 0, manifests = 0;
+  fixture.wire.mockImplementation(async (id, channel, args, opts) => {
+    if (channel.endsWith(':manifest')) manifests++;
+    const response = await normal(id, channel, args, opts);
+    if (args?.[0]?.actionId === 'management:ui-consent' && ++stateReads <= 2)
+      await new Promise<void>(resolve => releases.push(resolve));
+    return response;
+  });
+  const first = createRoot(document.createElement('div')), second = createRoot(document.createElement('div'));
+  const prompt = (active: boolean) => createElement(PluginUiEnablePrompt, { deviceId: 'mac', deviceName: 'Mac', online: true, active });
+  try {
+    await act(async () => { first.render(prompt(true)); second.render(prompt(true)); await vi.advanceTimersByTimeAsync(0); });
+    expect(stateReads).toBe(1);
+    await act(async () => first.render(prompt(false)));
+    fixture.promptReads!.invalidate('mac', {});
+    await act(async () => { releases[0](); await vi.advanceTimersByTimeAsync(250); });
+    expect(stateReads).toBe(2); // The second visible consumer still needs the queued refresh.
+    fixture.promptReads!.invalidate('mac', {});
+    if (mode === 'background') {
+      // Leave during the already-scheduled follow-up debounce, before it sends.
+      await act(async () => { releases[1](); await vi.advanceTimersByTimeAsync(0); });
+    }
+    await act(async () => {
+      if (mode === 'hidden') second.render(prompt(false));
+      else fixture.appStateListeners.forEach(listener => listener('background'));
+    });
+    fixture.promptReads!.invalidate('mac', {});
+    await act(async () => { releases[1](); await vi.advanceTimersByTimeAsync(1000); });
+    expect(stateReads).toBe(2);
+    expect(manifests).toBe(2);
+    await act(async () => {
+      if (mode === 'hidden') second.render(prompt(true));
+      else fixture.appStateListeners.forEach(listener => listener('active'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(stateReads).toBe(3);
+    expect(manifests).toBe(3);
+  } finally { act(() => { first.unmount(); second.unmount(); }); fixture.promptReads = null; vi.useRealTimers(); }
 });

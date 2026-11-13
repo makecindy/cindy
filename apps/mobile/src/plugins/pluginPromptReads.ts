@@ -17,7 +17,18 @@ export function createPluginPromptReads(invoke: PluginManagementInvoke, isCurren
   const subscriptions = new Map<string, number | null>();
   const completedAt = new Map<string, number>();
   const invalidations = new Map<string, unknown>();
+  const consumers = new Map<string, number>();
   return {
+    retain(deviceId: string) {
+      consumers.set(deviceId, (consumers.get(deviceId) ?? 0) + 1);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const remaining = (consumers.get(deviceId) ?? 1) - 1;
+        if (remaining) consumers.set(deviceId, remaining); else consumers.delete(deviceId);
+      };
+    },
     invalidate(deviceId?: string, event?: unknown) {
       if (!deviceId) { for (const id of reads.keys()) dirty.set(id, true); reads.clear(); loading.clear(); invalidations.clear(); completedAt.clear(); subscriptions.clear(); return; }
       if (event !== undefined && invalidations.get(deviceId) === event) return;
@@ -42,8 +53,14 @@ export function createPluginPromptReads(invoke: PluginManagementInvoke, isCurren
         try {
           if (waitForBurst) await new Promise(resolve => setTimeout(resolve, 250));
           let result!: PluginPromptDisplay;
+          let followUp = false;
+          let failed: { error: unknown } | undefined;
           for (;;) {
             if (!isCurrent() || reads.get(deviceId) !== read) throw new Error('PLUGIN_MANAGEMENT_STALE');
+            if (followUp && !consumers.has(deviceId)) {
+              if (failed) throw failed.error;
+              break;
+            }
             // Notifications received during the debounce window are covered by this read.
             dirty.delete(deviceId);
             try {
@@ -57,18 +74,21 @@ export function createPluginPromptReads(invoke: PluginManagementInvoke, isCurren
                 ghosts: snapshot.ghosts.filter(plugin => pluginNeedsUiApproval(plugin) && !plugin.uiPromptSuppressed),
                 market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
               } : null };
+              failed = undefined;
             } catch (error) {
               if (!client.isCurrent()) throw error;
+              failed = { error };
               const refreshQueued = dirty.get(deviceId) === true;
               dirty.set(deviceId, true);
               // A queued notification earns one follow-up; failure alone never retries.
-              if (!refreshQueued) throw error;
+              if (!refreshQueued || !consumers.has(deviceId)) throw error;
             }
             if (!dirty.get(deviceId)) break;
-            dirty.delete(deviceId);
+            if (!consumers.has(deviceId)) break;
+            followUp = true;
             await new Promise(resolve => setTimeout(resolve, 250));
           }
-          completedAt.set(deviceId, Date.now());
+          if (!dirty.get(deviceId)) completedAt.set(deviceId, Date.now());
           return result;
         } finally { if (reads.get(deviceId) === read) loading.delete(deviceId); }
       });
