@@ -25,14 +25,14 @@ import { lifoCleanup } from '../test-support/cleanup.mjs';
 const TEST_TIMEOUT_MS = 120_000;
 
 const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-invalidation-home-'));
-const originalHome = process.env.HOME;
-// Child processes get HOME through the environment; in-process reads go through os.homedir(),
-// which reads USERPROFILE on Windows, so it is mocked as well.
-process.env.HOME = emptyHome;
+const originalHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+// Child processes get HOME and USERPROFILE (what os.homedir() reads on Windows) through the
+// environment; in-process reads go through os.homedir(), which is mocked as well.
+process.env.HOME = process.env.USERPROFILE = emptyHome;
 test.mock.method(os, 'homedir', () => emptyHome);
 test.after(() => {
   test.mock.restoreAll();
-  process.env.HOME = originalHome;
+  for (const [key, value] of Object.entries(originalHome)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   fs.rmSync(emptyHome, { recursive: true, force: true });
 });
 
@@ -276,10 +276,13 @@ test('without a system login path, a codex-home linked to ~/.codex keeps ~/.code
   t = lifoCleanup(t);
   const p = profile(t);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-fake-home-'));
-  const savedHome = process.env.HOME;
-  process.env.HOME = home;
+  const savedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = process.env.USERPROFILE = home;
   t.mock.method(os, 'homedir', () => home);
-  t.after(() => { process.env.HOME = savedHome; fs.rmSync(home, { recursive: true, force: true }); });
+  t.after(() => {
+    for (const [key, value] of Object.entries(savedHome)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
   const systemDir = path.join(home, '.codex');
   fs.mkdirSync(systemDir);
   const systemAuth = path.join(systemDir, 'auth.json');

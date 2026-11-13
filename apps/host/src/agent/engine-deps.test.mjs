@@ -152,12 +152,12 @@ test('Pi reads the user\'s own global context from the home the desktop uses', {
   const graph = buildGraph(t, 'engine-deps-pi-context');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-home-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const saved = { HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
   t.after(() => {
-    process.env.HOME = saved.HOME;
+    for (const key of ['HOME', 'USERPROFILE']) if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
     if (saved.PI_CODING_AGENT_DIR === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved.PI_CODING_AGENT_DIR;
   });
-  process.env.HOME = home;
+  process.env.HOME = process.env.USERPROFILE = home;
   // In-process reads go through os.homedir(), which reads USERPROFILE on Windows.
   t.mock.method(os, 'homedir', () => home);
   delete process.env.PI_CODING_AGENT_DIR;

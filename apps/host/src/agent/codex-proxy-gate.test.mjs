@@ -75,7 +75,7 @@ test('every Codex proxy of the Host runtime admits only its token and never forw
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const savedEnv = { ...process.env };
   t.after(() => { for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key]; Object.assign(process.env, savedEnv); });
-  process.env.HOME = path.join(root, 'home');
+  process.env.HOME = process.env.USERPROFILE = path.join(root, 'home');
   // In-process reads go through os.homedir(), which reads USERPROFILE on Windows.
   const fixtureHome = process.env.HOME;
   t.mock.method(os, 'homedir', () => fixtureHome);

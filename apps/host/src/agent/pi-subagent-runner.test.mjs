@@ -35,7 +35,7 @@ setInterval(() => {}, 1000);
   fs.writeFileSync(path.join(runDir, 'config.json'), '{}');
   return { runDir, status, request: {
     runId, runDir, runnerFile: path.join(runDir, 'runner.cjs'), configFile: path.join(runDir, 'config.json'),
-    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home') },
+    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home') },
   } };
 }
 
@@ -139,7 +139,7 @@ setInterval(() => {}, 1000);
   }));
   return { piPids, request: {
     runId, runDir, runnerFile: path.join(runDir, 'runner.cjs'), configFile: path.join(runDir, 'config.json'),
-    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home') },
+    cwd: root, env: { PATH: process.env.PATH ?? '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home') },
   } };
 }
 const readPids = file => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number) : []);
