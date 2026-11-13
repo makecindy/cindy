@@ -290,7 +290,10 @@ export class MakerMemoryStore {
     await this.init();
     this.searchFingerprint = '';
     // 防呆: 不允许把 target 写到正要被删的 source 里 (否则会自删)
-    const targetFilename = buildFilename(opts.target.type, opts.target.name);
+    const targetFilename = await this.storage.resolveFilename(
+      opts.target.type,
+      opts.target.name,
+    );
     const sourcesToDelete = opts.sources.filter((s) => s !== targetFilename);
 
     // 写新的 (撞名时走 update)
@@ -311,6 +314,9 @@ export class MakerMemoryStore {
     // 文件; 后置复核无法撤销, 必须在每个删除动作前拦截。
     const deleted: string[] = [];
     for (const src of sourcesToDelete) {
+      // write 内部会重新解析地址, 并发下可能与上面的预解析不同 (Greptile P1);
+      // 用实际落盘名排除, 否则合并结果可能被当成源删掉。
+      if (src === writeRes.filename) continue;
       try {
         this.assertScopeOk();
         await this.storage.delete(src);
