@@ -386,6 +386,11 @@ function watchPiPackageChangeTokenDirectory(): void {
       // Atomic writes rename `<token>.<uuid>.tmp` into place; some platforms
       // report only one side of the rename, so match the token prefix.
       if (name && !CHANGE_TOKEN_FILE_NAMES.some((token) => name.startsWith(token))) return;
+      // A queued token event can belong to the replaced directory. Rebind
+      // before observing its successor's token, not only on a directory-name
+      // event or the fallback poll, so the following peer edge is watched too.
+      detachReplacedChangeTokenDirectoryWatcher();
+      watchPiPackageChangeTokenDirectory();
       void observePiPackageChangeToken();
     });
   } catch {

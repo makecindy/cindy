@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import path from 'node:path';
-import { app } from 'electron';
+import { getUserDataDir } from '../userDataPath.js';
 import { piSubagentLaunchFenceArtifact, piSubagentRunRoot } from '@cindy/maker-core/pi-subagent-runs';
 
 import { createLogger } from '../logger';
@@ -38,7 +38,7 @@ async function directoryUnchanged(directory: string, before: DirectorySnapshot):
  */
 export async function readPiSubagentWorktreeReferences(): Promise<ReadonlyMap<string, readonly string[]> | null> {
   try {
-    const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+    const agentHome = path.join(getUserDataDir(), 'pi-agent-home');
     const root = path.dirname(piSubagentRunRoot(agentHome, 'worktree-reference-probe'));
     const ancestorStats = new Map<string, Stats>();
     for (const directory of [agentHome, path.dirname(root), root]) {

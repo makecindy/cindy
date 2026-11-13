@@ -2404,6 +2404,14 @@ export async function patchSessionMetaInDb(
         }
         await finalizeSharedTaskClosure(dbClient, prepared);
       }
+    } else if (patch.status === 'active' && typeof dbClient.tx === 'function') {
+      // Restore through the same transaction as batch actions, including the
+      // group receiver fence for archived rows written by older versions.
+      const { status: _status, ...nonStatusPatch } = setObj;
+      await writeSessionPatch(db, sessionId, nonStatusPatch, undefined);
+      options.beforeWrite?.();
+      if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+      await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active' });
     } else {
       // All asynchronous preparation has finished. Once this write is issued,
       // cancellation does not roll back a committed lifecycle transition.
@@ -2463,9 +2471,9 @@ export async function patchSessionMetaInDb(
 }
 
 /**
- * Routine and channel lanes are listed with ordinary tasks (`ordinaryTaskListFilter`)
+ * Routine, channel and group lanes are listed with ordinary tasks (`ordinaryTaskListFilter`)
  * and hold no Profile pointer, so they archive, restore and delete like ordinary tasks.
- * Their next trigger resumes an archived lane (`ensureBotOwnedLaneSession`).
+ * IM/routine triggers resume archived lanes; group triggers create a fresh active lane.
  */
 async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: string): Promise<boolean> {
   const [link] = await db
@@ -2473,7 +2481,7 @@ async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: string): Pr
     .from(botSessionLinks)
     .where(and(
       eq(botSessionLinks.sessionId, sessionId),
-      inArray(botSessionLinks.role, ['routine', 'channel']),
+      inArray(botSessionLinks.role, ['routine', 'channel', 'group']),
     ))
     .limit(1);
   return !!link;

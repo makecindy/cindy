@@ -71,6 +71,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getRemoteClaudeEnv } from './claude-env.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
+import { getCodexCliAuthPath } from '../maker-host/codex-shared-auth.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import { piManagerKill, piManagerList, runPiManagerUpgrade } from '../maker-host/pi-manager-client.js';
 import { ensurePiManagerDaemon } from '@cindy/maker-remote-ssh';
@@ -2416,8 +2417,10 @@ export async function startAutoConnectHostsBackground(): Promise<void> {
  * Find the local Codex auth.json. Preference order:
  *   1. xdt-maker's own copy at userData/codex-home/auth.json — what xdt-maker
  *      uses for its own Codex sessions, kept in sync via the reconcile path.
- *   2. System Codex CLI default at ~/.codex/auth.json — if the user only ever
- *      ran `codex login` outside xdt-maker, this is where the token lives.
+ *   2. System Codex CLI login — `CODEX_HOME/auth.json` when the user set an
+ *      absolute CODEX_HOME, otherwise `~/.codex/auth.json` (#8258). This is
+ *      where the token lives if the user only ever ran `codex login` outside
+ *      xdt-maker.
  *
  * Returns null if neither exists. Callers should surface a "log in first"
  * error rather than pushing nothing.
@@ -2425,7 +2428,7 @@ export async function startAutoConnectHostsBackground(): Promise<void> {
 async function resolveLocalCodexAuthPath(): Promise<string | null> {
   const candidates = [
     path.join(app.getPath('userData'), 'codex-home', 'auth.json'),
-    path.join(os.homedir(), '.codex', 'auth.json'),
+    getCodexCliAuthPath(),
   ];
   for (const candidate of candidates) {
     try {

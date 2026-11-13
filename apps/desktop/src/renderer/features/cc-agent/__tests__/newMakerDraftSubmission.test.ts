@@ -3,7 +3,8 @@ import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { buildUserProvider, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, chatEligibleSourcesForModel, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { isDeviceModelVisible } from '@/lib/providerModels';
 import { createWorkerLabel } from '../workerLabel';
 import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
@@ -23,6 +24,8 @@ import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../d
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
+import { recallAgentDeviceSelection } from '../agentDeviceDraftMemory';
+import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../../../../shared/draftModelCalibration';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
 
@@ -42,10 +45,8 @@ function visit(node: ts.Node) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
-    const name = ts.isIdentifier(node.name) ? node.name.text
-      : ts.isObjectBindingPattern(node.name) && node.name.elements.some(e => e.name.getText(source) === 'draftInitialEffort')
-        ? 'draftInitialSelection' : '';
-    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftInitialSelection'].includes(name)) {
+    const name = ts.isIdentifier(node.name) ? node.name.text : '';
+    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
@@ -218,14 +219,14 @@ async function submit(options: {
     proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
   }));
   const environment = {
-    deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
+    deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
     activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
     resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
     bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
-    ...draftEffort, getModel, window,
+    ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
     sshDraftSelection: { model: selectedModel, effort: options.effort ?? 'medium', fastMode: false },
@@ -238,6 +239,9 @@ async function submit(options: {
     effectiveCollab: options.collab ?? { enabled: !!options.worktreeSkillsAfterCollab },
     collabPolicy: { enabled: true }, collabPolicyEligible: true,
     usesDeviceCatalog: !!options.agentDeviceId || !!options.deviceId, deviceLinkInitial: null,
+    // 这份 harness 不演「用户为这个目标明确选过某一家来源」的场景;显式选择的场景在
+    // newMakerDraftTargetCatalog.test.ts 里。
+    explicitDraftProviderId: null,
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
     isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: options.remoteModelListStatus ?? 'ready', remoteDraftState: { status: 'ready' },
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
@@ -245,7 +249,8 @@ async function submit(options: {
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
     catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
-    agentCatalogProviders: providers, deviceProvidersLoading: false,
+    agentCatalogProviders: providers, deviceProvidersLoading: false, deviceProvidersUnsupported: false,
+    deviceModelVisibilityOverrides: undefined, isModelSelectableForNewRoute, isDeviceModelVisible,
     matchNavigationCommandName: () => null,
     wtRef: { current: hasWorktree
       ? { enabled: true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
@@ -302,7 +307,24 @@ async function submit(options: {
     });
   }
   const localDraftEffort = runInNewContext(executable('localDraftEffort'), environment)();
-  const selection = runInNewContext(executable('draftInitialSelection'), { ...environment, localDraftEffort })();
+  // 目标目录里可选的型号清单(按新路由准入 + 被控端自己的显示/隐藏过滤)。
+  const targetSelectableProviders = runInNewContext(
+    executable('targetSelectableProviders'), environment)();
+  // The route resolves the seeded pair and the effort of the final provider/model
+  // in two steps; compose them the way the route does.
+  const seeded = runInNewContext(executable('draftSeedSelection'), {
+    ...environment, targetSelectableProviders, filterHealthyDraftProviders, resolveDraftProviderForModel,
+  })();
+  const selection = {
+    model: seeded?.model ?? environment.calibratedDraftModel,
+    effort: runInNewContext(executable('draftInitialEffort'), {
+      ...environment, localDraftEffort, draftSeedSelection: seeded, targetSelectableProviders,
+      draftInitialModel: seeded?.model ?? environment.calibratedDraftModel,
+      // 这份 harness 不演「被控端快照里记着档位」的场景;档位相关场景在
+      // newMakerDraftTargetCatalog.test.ts 的 effortOf 里。
+      deviceDraftDefaults: null,
+    })(),
+  };
   Object.assign(environment, { draftInitialModel: selection.model, draftInitialEffort: selection.effort });
   const callback = runInNewContext(executable(options.entry === 'goal' ? 'handleCreateGoal' : 'handleSend'), environment);
   try {
@@ -563,6 +585,20 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(kept.ipcCreate).not.toHaveBeenCalled();
     if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
     else expect(String(kept.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');
+  });
+  // #10084 / unit：输入框为模型组、插件模型让出了「原模型没有已连接来源」的检查；选路沿用原模型时，
+  // 发送与新建目标都要补上它：不建任务、提示先连接，输入保留。选路选到别处时不受原模型来源影响。
+  // PR #10193 review：新建目标一开始漏了这道检查。Tier: unit。
+  describe.each(['send', 'goal'] as const)('%s', (entry) => {
+    it.each([
+      ['model group', { modelGroupRoute: { outcome: 'unavailable', groupName: 'G', trace: [] } as ModelGroupResolveResult }],
+      ['plugin model', { pluginRoute: async () => ({ outcome: 'kept', pluginName: 'Router', why: 'no-opinion', modelName: modelId }) as GhostStartTaskRouteResult }],
+    ] as const)('stops a %s that keeps a draft model without a connected source', async (_name, router) => {
+      const kept = await submit({ entry, ...router, providers: [] });
+      expect(kept.ipcCreate).not.toHaveBeenCalled();
+      if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.noProvider.description');
+      else expect(String(kept.errors.at(-1))).toContain('newChat.noProvider.description');
+    });
   });
   // PR #8460 / unit: a source reachable only through task computer B must keep B in
   // the readiness catalog key. Existing fixtures always allowed readiness regardless

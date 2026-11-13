@@ -230,16 +230,22 @@ describe('complete selection commit boundaries', () => {
   // Unit #10271: after the first fire migrates the task to account B, the saved
   // alias still pins account A. Exercise two real lease acquisitions and prove
   // the second fire never reapplies the alias, locally or on the same remote host.
-  it.each([null, 'executor'] as const)('retains an already migrated task on the next fire (%s)', async device => {
-    const saved = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old',
+  it.each([
+    [null, 'openai', 'openai-old'], ['executor', 'openai', 'openai-old'],
+    [null, 'openai-sub-target', 'openai-old'], ['executor', 'openai-sub-target', 'openai-old'],
+    [null, 'openai-sub-target', 'openai-sub-original'], ['executor', 'openai-sub-target', 'openai-sub-original'],
+  ] as const)('retains an already migrated task on the next fire (%s, %s, %s)', async (device, target, original) => {
+    const saved = { agentKind: 'codex', model: 'gpt-5', providerId: original,
       effort: 'high', fastMode: false, agentDeviceId: device } as ScheduledModelSelection;
     let row = { ...saved };
     const applied: string[] = [];
     const resolveExecution = compile(scheduledExecutionSelection, {
       getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
-      isProviderShareAgentDeviceId: () => false, readLegacyCodexAccountId: () => 'account-a',
+      isProviderShareAgentDeviceId: () => false, readMergedProviderAccount: () => 'account-a',
+      resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }), accountProviderId: () => target,
       legacyCodexAccountCanRun: () => true, findCatalogModel, isModelSelectableForNewRoute,
-      readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: true,
+      readDeviceProviderViews: async () => [{ id: original, subscriptionPoolAlias: true,
+        ...(target === 'openai' ? {} : { subscriptionPoolTarget: target }),
         models: { codex: [{ id: 'gpt-5', mode: 'chat' }] } }], remoteBackgroundInvoke: vi.fn(),
     });
     const applyProfile = async (_id: string, choice: ScheduledModelSelection) => {
@@ -263,31 +269,37 @@ describe('complete selection commit boundaries', () => {
       applyScheduledProfile: applyProfile,
       prepareUnhealthySessionForSend: async () => {
         if (applied.length !== 1) return false;
-        row = { ...row, providerId: 'openai' }; return true;
+        row = { ...row, providerId: target }; return true;
       },
     });
     for (let fire = 0; fire < 2; fire++) {
       const lease = await adapter('scheduled-repeat', undefined, saved);
-      try { expect(lease.selection.providerId).toBe('openai'); }
+      try { expect(lease.selection.providerId).toBe(target); }
       finally { lease.release(); }
     }
-    expect(applied).toEqual(['openai-old', 'openai']);
+    expect(applied).toEqual([original, target]);
     await scope.restore('scheduled-repeat');
     expect(baseline).toBeNull();
-    expect(row).toMatchObject({ ...saved, providerId: 'openai' });
-    expect(applied).toEqual(['openai-old', 'openai', 'openai']);
-    expect(saved.providerId).toBe('openai-old');
+    expect(row).toMatchObject({ ...saved, providerId: target });
+    expect(applied).toEqual([original, target, target]);
+    expect(saved.providerId).toBe(original);
   });
 
-  it.each(['local-model-disabled', 'remote-model-revoked', 'remote-not-alias'] as const)(
+  // 2026-11-13 (subscription-account-pools.md 合并与拿出由用户决定): a connection restored to its own
+  // account is an ordinary provider again, so the saved choice runs there instead of on OpenAI.
+  it.each(['local-model-disabled', 'local-restored', 'local-wrong-target', 'remote-model-revoked', 'remote-not-alias', 'remote-wrong-target', 'remote-missing-target'] as const)(
     'retains original admission when a saved alias cannot follow the migrated task (%s)', async mode => {
-      const device = mode === 'local-model-disabled' ? null : 'executor';
+      const device = mode.startsWith('local-') ? null : 'executor';
       const selection = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old', agentDeviceId: device };
       const resolve = compile(scheduledExecutionSelection, {
-        getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai' }),
+        getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai-sub-target' }),
         dbToMakerAgentKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
-        readLegacyCodexAccountId: () => 'account-a', legacyCodexAccountCanRun: () => false,
+        readMergedProviderAccount: () => (mode === 'local-restored' ? undefined : 'account-a'),
+        resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }),
+        accountProviderId: () => mode === 'local-wrong-target' ? 'different-target' : 'openai-sub-target',
+        legacyCodexAccountCanRun: () => mode !== 'local-model-disabled',
         readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: mode !== 'remote-not-alias',
+          subscriptionPoolTarget: mode === 'remote-missing-target' ? undefined : mode === 'remote-wrong-target' ? 'different-target' : 'openai-sub-target',
           models: { codex: mode === 'remote-model-revoked' ? [] : [{ id: 'gpt-5', mode: 'chat' }] } }],
         remoteBackgroundInvoke: vi.fn(), findCatalogModel, isModelSelectableForNewRoute,
       });

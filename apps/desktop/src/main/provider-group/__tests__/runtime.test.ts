@@ -684,13 +684,15 @@ describe('provider group runtime quota account selection', () => {
 
   // #9833, unit: run the owner runtime → directory → router with a remote
   // account-pool reply. Legacy aggregate quota cannot prove model availability.
-  it.each(['healthy', 'exhausted', 'old-peer', 'wrong-model', 'owner-change'] as const)(
+  it.each(['healthy', 'legacy-target', 'exhausted', 'old-peer', 'wrong-model', 'owner-change'] as const)(
     'recovers remote model cooling only from a current matching pool reply (%s)', async (reply) => {
-      const h = harness('anthropic');
+      const providerId = reply === 'legacy-target' ? 'anthropic-target' : 'anthropic';
+      const healthy = reply === 'healthy' || reply === 'legacy-target';
+      const h = harness(providerId);
       const model = 'claude-sonnet-5-5';
       h.config.members = h.config.members.slice(1);
       io.group.mockReturnValue(h.config);
-      io.catalog.mockResolvedValue([{ id: 'anthropic', connected: true, agents: ['claude-code'],
+      io.catalog.mockResolvedValue([{ id: providerId, connected: true, agents: ['claude-code'], subscriptionAccountPool: 'anthropic',
         auth: { method: 'oauth', native: 'claude' },
         models: { 'claude-code': [{ id: model, name: model, efforts: [], defaultEffort: null }] },
         routing: { 'claude-code': {} },
@@ -699,11 +701,11 @@ describe('provider group runtime quota account selection', () => {
       io.invoke.mockImplementation(async (_device, channel, args, options) => {
         expect(channel).toBe('maker:subscription-pool:quota');
         if (args.length === 1 || reply === 'old-peer')
-          return { ok: true, result: { providerId: 'anthropic', pooled: true, usage: { claudeUsage: usage() } } };
+          return { ok: true, result: { providerId, pooled: true, usage: { claudeUsage: usage() } } };
         preSend = options.preSend;
         preSend();
         if (reply === 'owner-change') owner = 'changed-during-model-read';
-        return { ok: true, result: { providerId: 'anthropic', model: reply === 'wrong-model' ? 'opus' : model,
+        return { ok: true, result: { providerId, model: reply === 'wrong-model' ? 'opus' : model,
           available: reply !== 'exhausted' } };
       });
       const router = getProviderGroupOwnerScope().router;
@@ -711,11 +713,11 @@ describe('provider group runtime quota account selection', () => {
       const until = Date.now() + 1_800_000;
       router.markCooling(h.localId, member.key, until, model);
       const pick = await router.pick({ providerId: h.localId, model, agentKind: 'claude-code' });
-      expect(pick.kind).toBe(reply === 'healthy' ? 'member' : 'unavailable');
-      expect(router.coolingUntil(h.localId, member.key, model)).toBe(reply === 'healthy' ? null : until);
+      expect(pick.kind).toBe(healthy ? 'member' : 'unavailable');
+      expect(router.coolingUntil(h.localId, member.key, model)).toBe(healthy ? null : until);
       expect(io.invoke.mock.calls.filter(([, , args]) => args.length === 2)).toHaveLength(1);
       if (reply === 'owner-change') expect(() => preSend()).toThrow('provider group account changed');
-      if (reply === 'healthy') {
+      if (healthy) {
         expect((await router.pick({ providerId: h.localId, model, agentKind: 'claude-code' })).kind).toBe('member');
         expect(io.invoke.mock.calls.filter(([, , args]) => args.length === 2)).toHaveLength(1);
       }
@@ -758,13 +760,15 @@ describe('provider group runtime quota account selection', () => {
   });
 
   // PR review: pooled native quota must survive both remote parsing and source merging for bridge engines.
-  it('uses remote pool buckets for Pi and Claude Code while retaining model-specific capacity', async () => {
-    const h = harness('openai', 'codex');
+  it.each(['openai', 'legacy-target'])('uses %s remote pool buckets for Pi and Claude Code while retaining model-specific capacity', async providerId => {
+    const h = harness(providerId, 'codex');
+    io.catalog.mockResolvedValue([{ id: providerId, connected: true, subscriptionAccountPool: 'openai',
+      auth: { method: 'oauth', native: 'codex' } } as ProviderView]);
     const bucket = (limitName: string, usedPercent: number) => ({ limitName, updatedAt: Date.now(),
       primary: { usedPercent, windowMinutes: 300, resetsAt: Date.now() / 1000 + 7200 } });
     io.invoke.mockImplementation(async (_device, channel) => {
       if (channel !== 'maker:subscription-pool:quota') throw new Error('Unexpected legacy quota fallback');
-      return { ok: true, result: { providerId: 'openai', pooled: true, usage: { codexUsage: {
+      return { ok: true, result: { providerId, pooled: true, usage: { codexUsage: {
         nativeAccountPool: true, webSnapshot: null,
         appServerBuckets: { codex: bucket('Codex', 100), special: bucket('special-model', 20) },
       } } } };

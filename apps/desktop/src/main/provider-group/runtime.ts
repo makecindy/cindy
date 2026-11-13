@@ -11,6 +11,7 @@ import { createLocalAgentLoadRegistry } from '../local-agent/load.js';
 import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
 import { app } from 'electron';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
+import type { ProviderView } from '@cindy/model-providers';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -73,9 +74,19 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const owner = activeOwnerScopeKey();
   if (current?.owner === owner) return current;
   type PoolQuota = Awaited<ReturnType<typeof readSubscriptionPoolUsage>>;
+  // Use the owning computer's provider metadata: a named subscription may own a pool,
+  // while an unregistered legacy connection still uses its existing single-account reader.
+  const poolProviders = new Map<string, Set<string>>();
+  const rememberPools = (deviceId: string, providers: ProviderView[]) => {
+    poolProviders.set(deviceId, new Set(providers.filter(provider =>
+      provider.subscriptionPool || provider.subscriptionAccountPool).map(provider => provider.id)));
+    return providers;
+  };
+  const hasPool = (providerId: string, deviceId = '') =>
+    isSubscriptionProvider(providerId) || poolProviders.get(deviceId)?.has(providerId) === true;
   const poolQuotaReads = new Map<string, { at: number; result: Promise<PoolQuota> }>();
   const readPoolQuota = async (providerId: string, deviceId?: string) => {
-    if (!isSubscriptionProvider(providerId)) return undefined;
+    if (!hasPool(providerId, deviceId)) return undefined;
     if (!deviceId) return readSubscriptionPoolUsage(providerId);
     const key = `${deviceId}:${providerId}`;
     const cached = poolQuotaReads.get(key);
@@ -167,12 +178,17 @@ function runtimeForActiveOwner(): OwnerRuntime {
     });
   };
   const directory = createProviderGroupDirectory({
-    listLocalProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+    listLocalProviders: async () => rememberPools('', await getDesktopProviderService().listProviders({ allowSideEffects: false })),
     localDeviceName: () => deviceName(),
     localAppVersion: () => app.getVersion(),
     listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
-    readDeviceProviders: (agentDeviceId, options) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live }),
-    readDeviceProviderCatalog: (agentDeviceId, options) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live }),
+    readDeviceProviders: async (agentDeviceId, options) => rememberPools(agentDeviceId,
+      await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live })),
+    readDeviceProviderCatalog: async (agentDeviceId, options) => {
+      const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live });
+      rememberPools(agentDeviceId, catalog.views);
+      return catalog;
+    },
     listReceivedShares: () => getReceivedShares(),
     isMobilePlatform: (platform) => isMobilePlatform(platform),
     localRunning: async (providerId) => (await readProviderRunningTurnsByProvider())?.get(providerId) ?? null,
@@ -191,7 +207,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const router = createProviderGroupRouter({
     directory,
     readPoolModelAvailability: async (member, model, options) => {
-      if (activeOwnerScopeKey() !== owner || !isSubscriptionProvider(member.providerId)) return null;
+      if (activeOwnerScopeKey() !== owner || !hasPool(member.providerId, member.agentDeviceId ?? '')) return null;
       if (member.kind === 'local') return readSubscriptionPoolModelAvailability(member.providerId, model, options);
       if (member.kind !== 'device' || !member.agentDeviceId) return null;
       const result = await remoteBackgroundInvoke(member.agentDeviceId, 'maker:subscription-pool:quota', [member.providerId, model], {

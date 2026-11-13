@@ -67,6 +67,7 @@ import {
   type BotGroupSpeakingMode,
   type BotGroupSummary,
 } from '../../shared/botGroupChat.js';
+import type { GroupRepository } from '../../shared/botGroupChat.js';
 
 /** docs/product-rules/bot-group-chat.md §4.2 — enforced here, never by prompt. */
 const MAX_CIRCLES_PER_ROUND = 3;
@@ -203,16 +204,18 @@ export interface BotGroupChatServiceDeps {
    * A task this computer runs, for its group card: title, state and recorded pull request; null
    * when the task is gone (bot-group-chat.md §10).
    */
-  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string } | null>;
+  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
   /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */
   readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
-  /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
-  findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
+  /** Registered project folders on this computer that are checkouts of this repository (any remote). */
+  findProjectDirsForRepo?: (repository: GroupRepository) => Promise<string[]>;
+  /** Repositories a folder's git remotes point at, best guess first (`folderRepositories`). */
+  repositoriesOfFolder?: (dir: string) => Promise<GroupRepository[]>;
   /**
    * Cindy's own checkouts of a group's GitHub repository (`groupProjectCheckout.ts`): cloned on
    * first need when no registered project is that repository, fast-forwarded when clean.
    */
-  groupCheckouts?: Pick<import('./groupProjectCheckout.js').GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged'>;
+  groupCheckouts?: Pick<import('./groupProjectCheckout.js').GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged' | 'dirOf'>;
   /**
    * A 分工 step stopped for the user: finished (继续, or the whole plan is done) or not
    * finished (重试). Phones are notified from here (bot-group-chat.md §8.3).
@@ -513,9 +516,11 @@ export function resolveGroupMentions(
     });
     if (!match) continue;
     if (!match.botId) all = true;
-    // Same-named members are indistinguishable in text: address them all, as the composer's parser does.
-    else for (const twin of labels) {
-      if (twin.botId && twin.label.toLocaleLowerCase() === match.label.toLocaleLowerCase() && !ordered.includes(twin.botId)) ordered.push(twin.botId);
+    else {
+      // Same-named members are indistinguishable in text: one @ names one identity, so a shared
+      // name names nobody (as the composer's parser does); only a pick can tell them apart.
+      const twins = labels.filter((twin) => twin.botId && twin.label.toLocaleLowerCase() === match.label.toLocaleLowerCase());
+      if (twins.length === 1 && !ordered.includes(match.botId)) ordered.push(match.botId);
     }
   }
   return { all, botIds: structured.length > 0 ? structured : ordered };

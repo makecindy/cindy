@@ -83,7 +83,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 模型目录 | `configure_model_provider` 的 `rediscover`：内置供应商复用设置页真实刷新，等待发现完成后返回目录 | 有（2026-11-10；Claude 订阅通过内置 CLI 的 SDK 发现） | 在执行电脑的任务中调用；同账号远控 UI 复用原有刷新 IPC |
 | 模型供应商 | `configure_model_connection`：查询预设、读取／添加／编辑／删除 API 与免密本机连接、安全填写或更换密钥、发现与设置型号、验证连接 | 有（2026-11-07；复用设置页事务，保存、目录获取与推理验证分别报告） | 在执行电脑的任务中调用；手机及同账号电脑沿原有加密代输入卡填写密钥，不支持指定另一台电脑或 SSH |
 | 媒体模型 | `configure_model_connection` 声明 mode/modalities；`manage_media_guide` 按需 get、validate、save 自定义调用说明；`media` prepare/request/poll 使用指定连接 | 有（未发布；沿用任务权限，保存或校验不等于真实出片，错误原因与后备由 Agent 判断） | 在媒体连接所在电脑的本机任务执行；不新增跨电脑 Guide 同步或 SSH 管理 |
-| 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略 | 有（Claude / Codex，同供应商内多账号） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC |
+| 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略；2026-11-13 起另含登录为单独供应商（`create`）或加入指定供应商（`add`）、移动／拿出（`place`）、整体并入（`merge`）、删除新建的订阅供应商（`remove-provider`），与设置页共用校验和执行服务 | 有（Claude / Codex；任意同类供应商，每个供应商只用自己的账号） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC，执行电脑版本过旧时拒绝新操作 |
 | 任务     | 列出、搜索、读聊天记录、发现电脑                           | 有   | 有               |
 | 任务与伙伴 | `list_sessions` 返回隐藏状态；`list_teammates` 分页枚举含隐藏、暂停、归档的伙伴，传 `teammate_id` 分页读取已保存的任务关系（默认100、最多1000） | 有（history 组，普通任务与插件共用） | 有（同账号历史查询；旧端不支持时明确返回未覆盖） |
 | 任务附件 | `read_session_attachment` 只读已有宿主授权的 Cindy 媒体与 grant / deposit / handoff 引用，分块字节与 SHA-256；历史 JSON 文件路径不构成授权，返回 `UNSUPPORTED_CAPABILITY`，不返回宿主路径 | 有（history 组，受上述限制） | 暂不支持，返回 `UNSUPPORTED_CAPABILITY` |
@@ -91,6 +91,9 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |
 | 机器     | 看账号下的电脑与 SSH 主机及实时资源（`list_machines`，[规则](cindy-machines.md)） | 有（含 SSH 普通任务） | 有（2026-11-02） |
+| 终端与后台进程 | `terminal_start/list/read/write/resize/stop/forget`，复用界面 PTY 与宿主作业注册表，当前调用方归属及独立游标 | 有（仅执行电脑本机；SSH 工作区明确拒绝本机代跑） | 尚无独立指定另一台电脑的参数；重连执行电脑后可续读同一作业 |
+| 授权目录文件操作 | `file_request`，复用文件浏览器与 FsSlot；普通任务使用真实工作目录，插件使用亲选引用 | 有（仅执行电脑本机；SSH 目录不在控制端代操作） | 原生选择器授权插件目录；手机、远程页与 Node Host 当前不能建立新引用，watcher 以执行宿主实际装配为准 |
+| 宿主服务发现 | `host_services`，Agent 与插件共用当前 provider 目录；插件另有本实例的声明与批准事实 | 有（discovery 组；只读，不管理其他插件） | 仅查询执行宿主本机；未接入或已关闭的服务明确不可用，不代查其他电脑 |
 | 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |

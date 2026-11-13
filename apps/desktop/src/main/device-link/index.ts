@@ -18,6 +18,7 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
  */
 
 import os from 'node:os';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 import { createTaskActivityPublisher, projectHostTaskActivity } from './taskActivity.js';
 import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
@@ -49,6 +50,9 @@ import {
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   MAKER_EVENT_BATCH_CHANNEL,
   expandMakerEventBatchPayload,
   RETIRED_CONTACTS_SYNC_CHANNEL,
@@ -129,6 +133,7 @@ import {
 import {
   clearControllerPlatforms,
   getControllerPlatform,
+  getControllerApp,
   isMobilePlatform,
   setControllerPlatform,
 } from './controllerPlatform';
@@ -172,7 +177,7 @@ import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime, authorizeSharedTaskTransportRequest } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
 import { refreshProviderShareHost, ownedProviderShareGuestAccess } from './providerShareHost.js';
-import { providerShareGuestPeer } from '@cindy/device-link';
+import { providerShareGuestPeer, shortDeviceRef } from '@cindy/device-link';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
 import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied } from './providerMetadataContinuity.js';
 import { retireControlOffRetention } from './controlOffRetention.js';
@@ -337,15 +342,19 @@ export function applyControllerPresenceListSnapshot(
     forgetOnline: (deviceId) => { if (!hasOfflineDirectPath(deviceId)) presenceOnlineByDevice.delete(deviceId); },
     setPlatform: setControllerPlatform,
     setName: (deviceId, name) => presenceNameByDevice.set(deviceId, name),
-    shouldNotifyPeerOnline: ({ deviceId, online, platform }) =>
-      online &&
-      !isDeviceRevoked(deviceId) &&
-      (isMobilePlatform(platform) ||
-        shouldExchangeDictionaryWith({
-          online,
-          platform,
-          revoked: false,
-        })),
+    shouldNotifyPeerOnline: ({ deviceId, online, platform, app }) => {
+      const controllerApp = app ?? getControllerApp(deviceId);
+      return online &&
+        isCindyApp(controllerApp) &&
+        !isDeviceRevoked(deviceId) &&
+        (isMobilePlatform(platform) ||
+          shouldExchangeDictionaryWith({
+            online,
+            platform,
+            app: controllerApp,
+            revoked: false,
+          }));
+    },
     onPeerControlEnabled: (deviceId) => {
       client?.noteRemoteControlEnabled(deviceId);
       presenceOnlineByDevice.set(deviceId, true);
@@ -577,7 +586,7 @@ function retriggerReopenForControlledDevices(): void {
     seen.add(deviceId);
     if (client.isLinkReady(deviceId)) continue;
     if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) continue;
-    log.info(`re-opening control link for ${deviceId.slice(0, 8)} after ownership takeover`);
+    log.info(`re-opening control link for ${shortDeviceRef(deviceId)} after ownership takeover`);
     transportTimeoutReopen.trigger(deviceId);
   }
 }
@@ -632,6 +641,15 @@ const CONTROLLER_CAPABILITIES = [
   // 手机(review P1)。拆包在 main 完成(见 onFrame 的批分支),renderer 的既有
   // maker:event 订阅者零改动。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  // renderer 只用 resolvedContent 显示工具结果(makerChatStore tool_result / tool_result_full),
+  // 事件里的 data.fullText / summary 是同一正文的重复副本,被控端对声明者省掉。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  // 订阅重放后重读仍在显示的远程任务的最新页(useRemoteSessionSync);被控端因此把重连前
+  // 已读且折叠的任务保持折叠到重读完成,离线积压不留历史详情。
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  // 展开运行中的组时，超过 256 KB 的普通工具结果只收开头加截断标记(用户能看出的变化，
+  // 结束后本来也只剩落库的 8 KB)。卡片、媒体、过程媒体、MCP App 与非详情工具照旧收全文。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   // 供应商分享：受邀者连分享者电脑时声明，分享者只接受声明了它的控制端。
   PROVIDER_SHARE_RELAY_CAPABILITY,
 ] as const;
@@ -715,6 +733,7 @@ function isDeviceRevoked(deviceId: string): boolean {
 
 const remoteControlConsent = new RemoteControlConsent({
   scope: activeOwnerScopeKey,
+  app: getControllerApp,
   eligible: peer => !!client && client.getStatus() === 'online' && !isAppSessionBoundaryPending() &&
     !isScopedPeer(peer) && peer !== client.getSelfDeviceId() && !isDeviceRevoked(peer) && !revokedByRemote.has(peer) &&
     presenceOnlineByDevice.get(peer) === true && !isMobilePlatform(getControllerPlatform(peer)),
@@ -937,6 +956,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY, PROVIDER_SHARE_AVAILABILITY_CAPABILITY],
     deviceName: deviceName(),
     platform: process.platform,
+    app: 'cindy',
     appVersion: app.getVersion(),
     remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled,
     deviceInfo: buildDeviceInfo(),
@@ -1087,7 +1107,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // 不重放的话 push 驱动的列表 / 会话镜像会一直缺流,直到用户手动重试。
       // linkTornDown 闸:teardown 的 resetAll 也会触发本回调,那时不能再发订阅。
       if (recovered && !linkTornDown && client?.connectionFor(deviceId).getStatus() === 'online') {
-        replayActiveSubscriptions(`responsiveness-recovered:${deviceId.slice(0, 8)}`, deviceId);
+        replayActiveSubscriptions(`responsiveness-recovered:${shortDeviceRef(deviceId)}`, deviceId);
       }
     },
     // 探测只在熔断器已经放行 half-open 单飞席位后到达这里；presence 的未知态
@@ -1252,12 +1272,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (!hasOutboundControlIntent(deviceId)) return false;
     if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return false;
     log.info(
-      `re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`,
+      `re-opening control link for ${shortDeviceRef(deviceId)} after before-link reliable frame`,
     );
     transportTimeoutReopen.trigger(deviceId);
     return true;
   });
-  client.onPresenceChanged((snap: PresenceSnapshot) => {
+  client.onPresenceChanged((received: PresenceSnapshot) => {
+    const snap = { ...received, app: received.app ?? getControllerApp(received.deviceId) };
     markControllerPresenceFresh(controllerPresenceFreshness, snap.deviceId);
     if (snap.online === true && snap.remoteControlEnabled === false) {
       presenceControlDisabledByDevice.add(snap.deviceId);
@@ -1279,7 +1300,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // presence 不可用又让探测永久不合格,「无响应」会一直遮蔽真实离线/禁用态
     // (review P2)。翻转判据统一为「观察到进入某状态(含从未知)即触发一次」。
     if (!available && wasAvailable !== false) responsivenessTracker?.clearDevice(snap.deviceId);
-    setControllerPlatform(snap.deviceId, snap.platform);
+    setControllerPlatform(snap.deviceId, snap.platform, snap.app);
     applyControllerDisplayNamePresence({
       deviceId: snap.deviceId,
       name: snap.deviceName,
@@ -1307,7 +1328,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 在线时 ws-online 重放已先行,这里多发的一次 subscribe 幂等(重放代次翻代
     // 收敛)。
     if (available && wasAvailable !== true) {
-      replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);
+      replayActiveSubscriptions(`presence-online:${shortDeviceRef(snap.deviceId)}`, snap.deviceId);
     }
     // 词典同步不看「允许被控」开关(push 帧不是控制类帧,这是自己设备之间的数据
     // 流动),但撤销过的设备必须排除 —— 判定统一走 shouldExchangeDictionaryWith,
@@ -1317,6 +1338,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       shouldExchangeDictionaryWith({
         online: snap.online,
         platform: snap.platform,
+        app: snap.app,
         revoked: isDeviceRevoked(snap.deviceId),
       })
     ) {
@@ -1327,6 +1349,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (
       wasOnline !== true &&
       snap.online &&
+      isCindyApp(snap.app) &&
       isMobilePlatform(snap.platform) &&
       !isDeviceRevoked(snap.deviceId)
     ) {
@@ -1356,7 +1379,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   setOrdinaryPeerLinkAcceptedListener((deviceId) => {
     broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId });
     // 同账号互控共用双向链路；对端先开链也可能恢复本端传输，但不会触发出站 accept。
-    replayActiveSubscriptions(`inbound-link-accepted:${deviceId.slice(0, 8)}`, deviceId);
+    replayActiveSubscriptions(`inbound-link-accepted:${shortDeviceRef(deviceId)}`, deviceId);
   });
   wireInboundDispatch(client);
   // outbox flush 的 presence 显式离线门禁(运行期接线,模块顶层会撞 import 环 TDZ)
@@ -1375,7 +1398,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 订阅按既有契约幂等,重放经调度器按 peer 串行去重;无订阅快照的 peer 是 no-op;
     // provider-share guest 只轮询不订阅,排除在外。
     if (!isProviderSharePeer(peer)) {
-      replayActiveSubscriptions(`link-accepted:${peer.slice(0, 8)}`, peer);
+      replayActiveSubscriptions(`link-accepted:${shortDeviceRef(peer)}`, peer);
     }
     if (parseSharedTaskPeer(peer)?.role !== 'host' || sharedHostStreams.get(peer)?.streamId === streamId) return;
     sharedHostStreams.set(peer, { streamId, epoch: ++sharedHostSourceEpoch });
@@ -1437,6 +1460,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         shouldExchangeDictionaryWith({
           online: true,
           platform: getControllerPlatform(env.src),
+          app: getControllerApp(env.src),
           revoked: isDeviceRevoked(env.src),
         })
       ) {
@@ -1487,6 +1511,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
           shouldExchangeDictionaryWith({
             online,
             platform: getControllerPlatform(deviceId),
+            app: getControllerApp(deviceId),
             revoked: isDeviceRevoked(deviceId),
           }),
         )
@@ -1499,6 +1524,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         .filter(
           ([deviceId, online]) =>
             online &&
+            isCindyApp(getControllerApp(deviceId)) &&
             isMobilePlatform(getControllerPlatform(deviceId)) &&
             !isDeviceRevoked(deviceId),
         )
@@ -1973,7 +1999,7 @@ export async function revokeController(deviceId: string): Promise<void> {
     try {
       client?.closeLink(deviceId, 'revoked', 'inbound');
     } catch (err) {
-      log.warn(`closeLink failed while revoking ${deviceId.slice(0, 8)}: ${String(err)}`);
+      log.warn(`closeLink failed while revoking ${shortDeviceRef(deviceId)}: ${String(err)}`);
     }
     forgetControllerInvokeState(deviceId);
     // 踢掉它的订阅 registry + 重算转发/横幅(复用对等下线的单设备清理路径)。
@@ -1984,7 +2010,7 @@ export async function revokeController(deviceId: string): Promise<void> {
     // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
     // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
     pollExternalSettingsChange();
-    log.info(`access revoked for controller ${deviceId.slice(0, 8)}`);
+    log.info(`access revoked for controller ${shortDeviceRef(deviceId)}`);
   } finally {
     releaseRevocation();
   }
@@ -2011,7 +2037,7 @@ export async function restoreController(deviceId: string): Promise<void> {
   // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
-  log.info(`access restored for controller ${deviceId.slice(0, 8)}`);
+  log.info(`access restored for controller ${shortDeviceRef(deviceId)}`);
 }
 
 /**
@@ -2025,7 +2051,7 @@ export async function setControllerModelUse(deviceId: string, allowed: boolean):
     : latest.includes(deviceId) ? latest : [...latest, deviceId]);
   if (allowed) notifyControllerModelUseRestored(deviceId);
   else await revokeControllerModelUse(deviceId);
-  log.info(`model use ${allowed ? 'restored' : 'revoked'} for controller ${deviceId.slice(0, 8)}`);
+  log.info(`model use ${allowed ? 'restored' : 'revoked'} for controller ${shortDeviceRef(deviceId)}`);
 }
 
 // ─── busy presence(被控端把「本机有 turn 在跑」上报,供控制端设备列表显示)──
@@ -2094,14 +2120,14 @@ function pollExternalSettingsChange(): void {
       client.closeLink(deviceId, 'revoked', 'inbound');
     } catch (err) {
       log.warn(
-        `closeLink failed while applying external revoke for ${deviceId.slice(0, 8)}: ${String(err)}`,
+        `closeLink failed while applying external revoke for ${shortDeviceRef(deviceId)}: ${String(err)}`,
       );
     }
     forgetControllerInvokeState(deviceId);
     handleControllerOffline(deviceId);
     remoteControlConsent.peerGone(deviceId);
     purgeRevokedController(deviceId);
-    log.info(`access revoked for controller ${deviceId.slice(0, 8)} (external settings change)`);
+    log.info(`access revoked for controller ${shortDeviceRef(deviceId)} (external settings change)`);
   }
 
   const restored = prev.revokedControllers.filter((id) => !revokedControllers.includes(id));

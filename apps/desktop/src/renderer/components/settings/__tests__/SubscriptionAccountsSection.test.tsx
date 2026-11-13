@@ -59,6 +59,8 @@ beforeEach(() => {
       command: vi.fn(async () => view),
       onChanged: vi.fn(() => () => undefined),
     },
+    // Providers an account may move to (2026-11-13); none of the same kind unless a test adds them.
+    maker: { listProviders: vi.fn(async () => ({ providers: [] })) },
   };
 });
 
@@ -76,7 +78,7 @@ describe('SubscriptionAccountsSection usage', () => {
     const setCodexResetAutoUse = vi.fn(async () => ({ ...snapshot, autoUse: {
       ...autoUse, settings: { ...autoUse.settings, enabled: true }, customized: true,
     } }));
-    Object.assign(window.electronAPI, { maker: { usage: { getCodexRateLimits, setCodexResetAutoUse } } });
+    Object.assign(window.electronAPI.maker, { usage: { getCodexRateLimits, setCodexResetAutoUse } });
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, providerId: 'openai', accounts: [
       view.accounts[0], { ...view.accounts[1], codexResetProviderId: scope, usage: hasQuota ? { codex: { credits: null, buckets: {
         codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
