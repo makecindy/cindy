@@ -19141,6 +19141,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "Modo de permisos",
       "noAvailableModels": "No hay ningún modelo de {{agent}} disponible. Revisa la conexión del proveedor y las credenciales en Configuración.",
+      "savedModelUnavailable": "El modelo guardado o su fuente no están disponibles.",
+      "reselectModel": "Elegir un modelo",
       "effortLabel": "Intensidad de razonamiento",
       "initialTaskLabel": "Tarea inicial",
       "initialTaskPlaceholder": "Escribe lo primero que quieres encargarle o déjalo en blanco para que el Lead reparta el trabajo",
