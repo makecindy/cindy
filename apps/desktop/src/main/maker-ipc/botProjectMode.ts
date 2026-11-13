@@ -17,6 +17,8 @@ import path from 'node:path';
 import { BrowserWindow } from 'electron';
 
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
+import { getDbPathForUser } from '../localDb/index.js';
+import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { MEMORY_STORAGE_MIGRATION_RECEIPT, parseFilename } from '@cindy/maker-core';
 import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAliases.js';
@@ -37,7 +39,7 @@ import {
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate } from './botProjectTemplate.js';
 import { routeModelFields } from './botV2Carryover.js';
-import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
+import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import type { BotProjectRepositoryStatus } from '../../shared/botProjectMode.js';
@@ -455,16 +457,14 @@ export async function ensureBotProjectAutomations(input: {
   const current = existing?.find((config) => config.id === BOT_PROJECT_MEMORY_REVIEW_ID);
   if (!current && input.addMissing === false) return false;
   const suppliedHook = current?.preRunHook?.command === MEMORY_REVIEW_HOOK_COMMAND;
-  if (current && !suppliedHook && (current.preRunHook || !current.prompt?.startsWith('Look back at ')
+  const legacyHook = current?.preRunHook?.command === LEGACY_MEMORY_REVIEW_HOOK_COMMAND;
+  if (current && !suppliedHook && !legacyHook && (current.preRunHook || !current.prompt?.startsWith('Look back at ')
     || !current.prompt.endsWith(`'s conversations from the last day (teammate id ${input.botId}) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly.`))) return false;
-  const [{ getDbPathForUser }, { getCurrentDbClientUserId }] = await Promise.all([
-    import('../localDb/index.js'), import('../localDb/client/current.js'),
-  ]);
   const userId = getCurrentDbClientUserId();
   if (!userId) throw new Error('Memory review requires the active account database');
   const databasePath = getDbPathForUser(userId);
-  const preRunHook = await ensureMemoryReviewHook({ ...input, databasePath });
-  if (suppliedHook) return false;
+  const preRunHook = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
+  if (suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) return false;
   // An existing file that cannot be read whole is kept: the upgrade fails and retries next start.
   const defaults = botProjectMemoryReview({
     ...input,
@@ -472,7 +472,8 @@ export async function ensureBotProjectAutomations(input: {
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
   });
   await loader.upsertSchedule(input.workingDir, {
-    ...defaults, ...current, prompt: defaults.prompt, preRunHook,
+    ...defaults, ...current, prompt: legacyHook ? current!.prompt : defaults.prompt,
+    preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
   }, { keepUnreadable: true });
   return true;
 }

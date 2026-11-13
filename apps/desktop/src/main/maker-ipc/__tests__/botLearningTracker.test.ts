@@ -34,6 +34,13 @@ describe('teammate learning receipt ownership', () => {
       tracker.observe('s', 'i:1', publish);
       await writeFile(path.join(dir, 'user_tea.md'), shard('sencha'));
       await writeFile(path.join(dir, 'user_new.md'), shard('jasmine'));
+      // Another queued input rehydrates unchanged resources while this turn is still busy.
+      // It must neither scan nor replace the pre-write reader used for this reply.
+      const queuedReader = vi.fn(() => createProjectMemoryReceipts(root));
+      await tracker.prepareProjectTeammate('s', queuedReader);
+      expect(queuedReader).not.toHaveBeenCalled();
+      // Even a direct later registration cannot change an already-observed turn's reader.
+      tracker.markProjectTeammate('s', await createProjectMemoryReceipts(root));
       await writeFile(path.join(dir, 'user_partial.md'), '---\ntitle: unfinished');
       await writeFile(path.join(dir, 'README.md'), 'maintenance');
       expect(publish).not.toHaveBeenCalled();
@@ -45,6 +52,7 @@ describe('teammate learning receipt ownership', () => {
         { kind: 'memory', key: 'user_tea.md', title: 'Tea', action: 'updated' },
       ]);
       publish.mockClear();
+      tracker.markProjectTeammate('s', read);
       tracker.observe('s', 'i:2', publish);
       // Pi compaction writes an internal digest during an otherwise read-only turn.
       // It is hidden by the memory settings, so it must not create a curated-save receipt.

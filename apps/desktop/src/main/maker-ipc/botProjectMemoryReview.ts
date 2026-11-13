@@ -3,7 +3,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 
-export const MEMORY_REVIEW_HOOK_COMMAND = 'xdt-node "../.memory-review-check-v1.cjs"';
+export const LEGACY_MEMORY_REVIEW_HOOK_COMMAND = 'xdt-node "../.memory-review-check-v1.cjs"';
+export const MEMORY_REVIEW_HOOK_COMMAND = 'cindy-node-script "../.memory-review-check-v1.cjs"';
 
 /** The bundled check lives beside the workspace, not in its Git history: its database path is
  * local account data. Memory itself remains ordinary portable project files. No model or new
@@ -12,12 +13,15 @@ export async function ensureMemoryReviewHook(input: {
   workingDir: string;
   botId: string;
   databasePath: string;
+  previousCommand?: string;
 }): Promise<{ command: string; timeoutMs: number }> {
   const filename = '.memory-review-check-v1.cjs';
   const check = String.raw`
-const fs = require('node:fs');
+(async () => {
 const { DatabaseSync } = require('node:sqlite');
-const event = JSON.parse(fs.readFileSync(0, 'utf8'));
+let input = '';
+for await (const chunk of process.stdin) input += chunk;
+const event = JSON.parse(input);
 if (event.event !== 'schedule-pre-run' || !Number.isFinite(event.firedAt)) {
   throw new Error('Missing schedule pre-run event');
 }
@@ -60,6 +64,8 @@ try {
 } finally {
   db.close();
 }
+process.stdout.write('', () => process.exit(process.exitCode || 0));
+})().catch(error => { console.error(error); process.stderr.write('', () => process.exit(1)); });
 `;
   const source = `const source = ${JSON.stringify({ databasePath: input.databasePath, botId: input.botId, syntheticPrefix: UI_ACTION_TRIGGER_PREFIX })};\n` + check;
   // Preserve an owner's edits to the supplied check. A missing database or broken check fails
@@ -76,7 +82,12 @@ try {
     const oldCheck = old.slice(old.indexOf('\n') + 1);
     // Exact previous bundled body from 788b938c; owner-edited checks stay untouched.
     const previousBundled = createHash('sha256').update(oldCheck).digest('hex')
-      === '32dd10c0fb4c51e5fde92f0e57b80d6a4391c35d7fc134f847ac6496c76ef47c';
+      === '32dd10c0fb4c51e5fde92f0e57b80d6a4391c35d7fc134f847ac6496c76ef47c'
+      || createHash('sha256').update(oldCheck).digest('hex')
+        === '4765ed7d8092d3c2a594e965966db40a88336ddb0b858309b4b19febba64097f';
+    if (oldCheck !== check && !previousBundled && input.previousCommand) {
+      return { command: input.previousCommand, timeoutMs: 10_000 };
+    }
     if (old !== source && old.startsWith('const source = {') && (oldCheck === check || previousBundled)) {
       const temp = `${file}.${process.pid}.tmp`;
       await fs.writeFile(temp, source, { flag: 'wx' });

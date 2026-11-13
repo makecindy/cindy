@@ -631,8 +631,8 @@ export async function hydrateBotProfileRuntime(
   // by the teammate's own memory setting rather than the global one.
   // Every V2 lane (group and plan lanes too, wherever they run) shares that one project memory.
   const projectMode = !!workspaceDir && readBotProjectMode(config);
-  if (projectMode && opts.id) botLearningTracker.markProjectTeammate(opts.id,
-    fullLane && config.memory !== false ? await createProjectMemoryReceipts(workspaceDir) : undefined);
+  if (projectMode && opts.id) await botLearningTracker.prepareProjectTeammate(opts.id,
+    fullLane && config.memory !== false ? () => createProjectMemoryReceipts(workspaceDir) : undefined);
   // V2 (2026-11-10, owner): one capability set in every session of the teammate — its own chats,
   // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Its Skills
   // are the project's own; lanes still never take the owner's personal Skills, and a chat-only
