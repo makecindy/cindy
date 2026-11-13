@@ -268,7 +268,8 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   不新增服务端协议或要求配套发布。
 - 自定义 Guide 的唯一写入者是模型配置域，按账号及实际 provider/runtime/model 保存；
   保存需核对旧 revision 和当前任务权限，失败保留原定义。官方默认不复制进本地覆盖。
-  Guide 可不注入 body model，URL 用 `{model}` 引用型号；没有官方 URL 的资料如实记录 evidence。
+  Guide 可不注入 body model，URL 用 `{model}` 引用型号；资料来源只以 `evidence.kind` 记录
+  `documentation/curl/prompt` 类型，不保存资料原文或凭据，不伪造 `officialDocs`。
 - 原生 HTTP 执行复用现有提交、轮询、结果保存及下载入仓流程。请求 path 相对实际连接基址，
   原样拼接，不自动删除前缀、去重路径或转换参数；不适配时由 Agent 根据资料补本地 Guide。
   Guide 不能改 host 或凭证。

@@ -1267,6 +1267,30 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
   }
 });
 
+// Real MCP wire: evidence describes a source type; raw examples (which may
+// contain credentials) must be rejected before the settings callback runs.
+it.each(['codex', 'claude-code', 'pi'] as const)('accepts kind-only media evidence and rejects raw references in %s', async agentKind => {
+  const models = vi.fn(async () => ({ ok: true as const, saved: true }));
+  const server = createXdtHelperMcpServer({ modelSettings: { call: models } },
+    { agentKind, workingDir: '/fixture', sessionId: 'guide-evidence-owner' });
+  const client = new Client({ name: 'guide-evidence-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const target = { providerId: 'relay', agent: 'pi', modelId: 'new-image' };
+    const change = { action: 'save', guide: {}, expectedRevision: null, evidence: { kind: 'curl' } };
+    const call = (value: typeof change) => client.callTool({ name: 'call_tool', arguments: {
+      name: 'manage_media_guide', args: { target, change: value },
+    } });
+    const evidence = { kind: 'curl', reference: "curl -H 'Authorization: Bearer invalid-test-mcp-evidence-key' https://example.test/render" };
+    expect((await call({ ...change, evidence })).isError).toBe(true);
+    expect(models).not.toHaveBeenCalled();
+    expect(parsePayload(await call(change))).toMatchObject({ ok: true, saved: true });
+    expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'guide-evidence-owner',
+      operation: 'mediaGuide', target, change }, expect.any(AbortSignal));
+  } finally { await client.close(); await server.close(); }
+});
+
 // #9276, unit real MCP: cancellation previously stopped the caller but left Main
 // waiting for a key. Existing discovery tests never cancelled an in-flight call.
 it('forwards connection tool cancellation to the host in all three harnesses', async () => {

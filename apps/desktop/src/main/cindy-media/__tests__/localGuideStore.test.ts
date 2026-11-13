@@ -21,9 +21,41 @@ describe('local media Guides', () => {
     const store = createLocalGuideStore(() => file);
     expect(store.read(target, 'endpoint-1')).toBeNull();
     expect(fs.existsSync(file)).toBe(false);
-    const saved = store.save(target, 'endpoint-1', guide, null, { kind: 'prompt', reference: 'User supplied example' });
+    const saved = store.save(target, 'endpoint-1', guide, null, { kind: 'prompt' });
     expect(store.read(target, 'endpoint-1')).toEqual(saved);
     expect(saved.guide.revision).not.toBe('draft');
+  });
+  // Real disk boundary: source examples may contain credentials. Neither first
+  // saves nor replacements may persist anything beyond the declared source kind.
+  it.each(['documentation', 'curl', 'prompt'] as const)('persists only the %s evidence kind on create and update', kind => {
+    const file = path.join(folder, 'guides.json');
+    const store = createLocalGuideStore(() => file);
+    const secret = 'invalid-test-media-evidence-key';
+    const evidence = { kind, reference: `curl -H 'Authorization: Bearer ${secret}' https://example.test/render`,
+      rawRequest: { headers: { Authorization: secret } } };
+    let revision: string | null = null;
+    for (let write = 0; write < 2; write++) {
+      const saved = store.save(target, 'endpoint-1', guide, revision, evidence);
+      const encoded = fs.readFileSync(file, 'utf8');
+      const entries = Object.values(JSON.parse(encoded).guides);
+      expect(entries).toEqual([{ ...saved, evidence: { kind } }]);
+      expect(saved.evidence).toEqual({ kind });
+      expect(store.read(target, 'endpoint-1')?.evidence).toEqual({ kind });
+      expect(encoded).not.toContain(secret);
+      expect(encoded).not.toContain(evidence.reference);
+      revision = saved.guide.revision;
+    }
+  });
+  it('rejects unknown evidence kinds before creating or replacing a file', () => {
+    const file = path.join(folder, 'guides.json');
+    const store = createLocalGuideStore(() => file);
+    const evidence = { kind: 'invalid-test-evidence-kind' } as unknown as NonNullable<Parameters<typeof store.save>[4]>;
+    expect(() => store.save(target, 'endpoint-1', guide, null, evidence)).toThrow('GUIDE_EVIDENCE_INVALID');
+    expect(fs.existsSync(file)).toBe(false);
+    const saved = store.save(target, 'endpoint-1', guide, null);
+    const original = fs.readFileSync(file, 'utf8');
+    expect(() => store.save(target, 'endpoint-1', guide, saved.guide.revision, evidence)).toThrow('GUIDE_EVIDENCE_INVALID');
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
   });
   it('rejects stale or invalid saves without replacing the existing definition', () => {
     const store = createLocalGuideStore(() => path.join(folder, 'guides.json'));

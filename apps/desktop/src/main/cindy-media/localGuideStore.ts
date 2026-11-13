@@ -5,7 +5,7 @@ import { parseMediaInvocationGuide, type MediaInvocationGuide } from '../../shar
 import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
 export interface MediaGuideTarget { providerId: string; agent: AgentKind; modelId: string; }
-export interface MediaGuideEvidence { kind: 'documentation' | 'curl' | 'prompt'; reference: string; }
+export interface MediaGuideEvidence { kind: 'documentation' | 'curl' | 'prompt'; }
 export interface LocalMediaGuide {
   target: MediaGuideTarget;
   connectionScope: string;
@@ -48,11 +48,12 @@ export function createLocalGuideStore(filePath: () => string) {
       expectedRevision: string | null, evidence?: MediaGuideEvidence): LocalMediaGuide {
       const parsed = parseMediaInvocationGuide(candidate);
       if (!parsed.ok) throw new Error(`GUIDE_INVALID: ${parsed.error}`);
+      if (evidence && !['documentation', 'curl', 'prompt'].includes(evidence.kind)) throw new Error('GUIDE_EVIDENCE_INVALID');
       const guides = readAll();
       const key = keyOf(target);
       if ((guides[key]?.guide.revision ?? null) !== expectedRevision) throw new Error('GUIDE_REVISION_CONFLICT');
       if (!Object.hasOwn(guides, key) && Object.keys(guides).length >= 128) throw new Error('GUIDE_STORE_FULL');
-      const entry: LocalMediaGuide = { target, connectionScope, guide: { ...parsed.value, revision: randomUUID() }, ...(evidence ? { evidence } : {}) };
+      const entry: LocalMediaGuide = { target, connectionScope, guide: { ...parsed.value, revision: randomUUID() }, ...(evidence ? { evidence: { kind: evidence.kind } } : {}) };
       const encoded = JSON.stringify({ version: 1, guides: { ...guides, [key]: entry } });
       if (Buffer.byteLength(encoded) > MAX_BYTES) throw new Error('GUIDE_STORE_TOO_LARGE');
       atomicWriteFileSync(filePath(), encoded);

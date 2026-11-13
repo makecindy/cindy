@@ -87,11 +87,26 @@ describe('media Guide settings operations', () => {
     expect(fs.readdirSync(state.root)).toEqual([]);
     expect(await manageAppModels({ ...request, change: { action: 'validate', guide } }, guard)).toMatchObject({ valid: true });
     const saved = await manageAppModels({ ...request, change: { action: 'save', guide, expectedRevision: null,
-      evidence: { kind: 'prompt', reference: 'User provided API example' } } }, guard);
+      evidence: { kind: 'prompt' } } }, guard);
     expect(saved).toMatchObject({ saved: true, verification: 'not_called' });
     fetch.mockClear();
     const result = await manageAppModels({ ...request, change: { action: 'get' } }, guard);
     expect(result).toMatchObject({ status: 'available', source: 'custom', guide: { revision: saved.customRevision } });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  // Real settings -> store boundary, including an internal caller whose extra
+  // fields are outside the MCP schema: raw source text must never reach disk.
+  it('saves only the evidence kind when an internal caller includes a credential-bearing example', async () => {
+    const secret = 'invalid-test-settings-evidence-key';
+    const evidence = { kind: 'curl' as const,
+      reference: `curl -H 'Authorization: Bearer ${secret}' https://example.test/render`,
+      rawRequest: { headers: { Authorization: secret } } };
+    const saved = await manageAppModels({ ...request, change: { action: 'save', guide, expectedRevision: null, evidence } }, async () => {});
+    expect(saved).toMatchObject({ saved: true, verification: 'not_called' });
+    const encoded = fs.readFileSync(path.join(state.root, 'media-guides.json'), 'utf8');
+    expect(Object.values(JSON.parse(encoded).guides)).toEqual([expect.objectContaining({ evidence: { kind: 'curl' } })]);
+    expect(encoded).not.toContain(secret);
+    expect(encoded).not.toContain(evidence.reference);
     expect(fetch).not.toHaveBeenCalled();
   });
   it('rejects a stale write and preserves the latest Guide', async () => {
