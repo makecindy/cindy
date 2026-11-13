@@ -22,8 +22,12 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
-vi.mock('../../appSessionState.js', () => ({
-  ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
+vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
+  ownerScopedPath: (name: string) => path.join(tmpDir, owner.current, name),
+  // 上游的 store 按会话代次分文件（账号切换换文件），测试里给一个固定代次。
+  ownerGeneration: () => owner.generation,
+  hasCommittedOwner: () => true,
 }));
 
 const {
