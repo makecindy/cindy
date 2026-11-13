@@ -268,6 +268,7 @@ import {
   markPiHostTurnStartPending,
   rollbackPiHostAbortRequest,
   rollbackPiHostTurnStart,
+  setPiTranslateModel,
   translatePiEvent,
   usageSnapshotOf,
   piTurnUsageOf,
@@ -4226,7 +4227,7 @@ export class PiAgent extends BaseAgent {
         return accepted;
       };
     }
-    const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
+    const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger, { model: initialWireModel });
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
@@ -7655,6 +7656,7 @@ export class PiAgent extends BaseAgent {
       mutableModel = model;
       pendingCurrentDescriptorRefresh = false;
       mutableWireModel = wireModel;
+      setPiTranslateModel(ctx, wireModel);
       mutablePiProviderId = provider;
       activeEffortSnapshot = nextEffortSnapshot;
       mutableProviderId = effectiveProviderId;
