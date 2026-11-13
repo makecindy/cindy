@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   home: '',
   realHome: '',
   reads: [] as string[],
+  actualReads: [] as string[],
   userData: '',
   customs: [] as unknown[],
   builtins: [] as string[],
@@ -53,7 +54,10 @@ vi.mock('../mcp-duplicate-detection.js', async (importActual) => {
     ...actual,
     readMcpJson: async (file: string) => {
       h.reads.push(file);
-      if (h.root && (file === h.root || file.startsWith(`${h.root}${path.sep}`))) return actual.readMcpJson(file);
+      if (h.root && (file === h.root || file.startsWith(`${h.root}${path.sep}`))) {
+        h.actualReads.push(file);
+        return actual.readMcpJson(file);
+      }
       h.outside.push(file);
       return {};
     },
@@ -77,7 +81,8 @@ describe('Host MCP duplicate choices match the desktop', () => {
   let host: ReturnType<HostModule['createHostMcpDuplicateChoices']>;
 
   beforeAll(async () => {
-    h.root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mcp-duplicate-parity-')));
+    h.root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mcp-duplicate-parity-')));
+    h.realHome = fs.realpathSync.native(h.realHome);
     home = path.join(h.root, 'home');
     h.home = home;
     workingDir = path.join(h.root, 'project');
@@ -139,6 +144,22 @@ describe('Host MCP duplicate choices match the desktop', () => {
     expect(answers['cindy-gh:null']).toEqual({ skipHostServers: [], denyNativeServers: ['docs-native'], nativeServersToKeep: [] });
   });
 
+  // Windows regression: the project's physical path must pass the fixture read
+  // boundary too; otherwise only user config is tested and project masking is lost.
+  it('reads project overrides and masks the user connection on both sides', async () => {
+    const file = path.join(workingDir, '.mcp.json');
+    fs.writeFileSync(file, JSON.stringify({ mcpServers: { 'gh-native': { type: 'http', url: 'https://project.example.test/mcp' } } }));
+    try {
+      const report = await listMcpDuplicates({ env: { HOME: home }, workingDir });
+      expect(report.complete).toBe(true);
+      expect(report.connections.map(pair => pair.cindyId)).toEqual(['cindy-docs']);
+      expect(h.actualReads, JSON.stringify({ root: h.root, file })).toContain(file);
+      const result = await both();
+      expect(result.host).toEqual(result.desktop);
+      expect(result.desktop).toEqual({ skipHostServers: [], denyNativeServers: ['docs-native'], nativeServersToKeep: [] });
+    } finally { fs.rmSync(file); }
+  });
+
   it('keeps an unreadable preferences file and answers both sides the same, as without choices', async () => {
     const file = ownerScopedUserDataPath('mcp-duplicate-preferences.json');
     const unreadable = '{"choices": {not-json';
@@ -154,15 +175,16 @@ describe('Host MCP duplicate choices match the desktop', () => {
     expect(h.outside.length).toBeGreaterThan(0);
     for (const file of h.outside) {
       expect(['.mcp.json', 'settings.json', 'settings.local.json']).toContain(path.basename(file));
-      expect(h.root.startsWith(path.dirname(path.basename(file) === '.mcp.json' ? file : path.dirname(file)))).toBe(true);
+      expect(h.root.startsWith(path.dirname(path.basename(file) === '.mcp.json' ? file : path.dirname(file))),
+        JSON.stringify({ root: h.root, candidate: file })).toBe(true);
     }
     expect(Object.keys(host)).toEqual(['resolveLocalMcpDuplicateChoices']);
   });
 
   it('read the user-level configuration from the fixture home, never from the real one', () => {
     expect(h.reads).toContain(path.join(home, '.claude.json'));
-    if (!h.root.startsWith(`${h.realHome}${path.sep}`)) {
-      expect(h.reads.filter((file) => file.startsWith(`${h.realHome}${path.sep}`))).toEqual([]);
-    }
+    for (const file of h.actualReads) expect(file.startsWith(`${h.root}${path.sep}`),
+      JSON.stringify({ root: h.root, actualRead: file })).toBe(true);
+    expect(h.reads).not.toContain(path.join(h.realHome, '.claude.json'));
   });
 });

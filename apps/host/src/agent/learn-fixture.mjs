@@ -52,7 +52,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 }
 
 export async function learnFixture(t, { publish = true } = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-learn-capture-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-learn-capture-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
   t.after(() => { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
@@ -119,5 +119,5 @@ export async function learnFixture(t, { publish = true } = {}) {
 }
 
 export const learnDescriptor = (f) => builtInSkillDescriptors(f.profile, f.appData).find(d => d.name === 'learn');
-export const inside = (root, file) => fs.realpathSync(file).startsWith(`${root}${path.sep}`);
+export const inside = (root, file) => fs.realpathSync.native(file).startsWith(`${fs.realpathSync.native(root)}${path.sep}`);
 

@@ -48,7 +48,7 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 type Session = { id: string; instanceId: string; agentKind: AgentKind; workDir: string; remoteHostId: string | null; getStatus?(): 'active' | 'closed' };
 type Capture = (session: Session, persisted: unknown, dispatched: string) => Promise<unknown>;
 
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-learn-capture-parity-')));
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-learn-capture-parity-')));
 const home = path.join(root, 'home');
 h.home = home;
 const project = path.join(root, 'project');
@@ -139,7 +139,8 @@ async function both(name: string, session: Session, persisted: string, dispatche
   expect(calls, `${name}: Skill listing arguments`).toEqual(desktopCalls);
   // Every Claude configuration directory either side asked about is inside the fixture.
   for (const [, , opts] of calls as Array<[string, AgentKind, { runtimeConfigDir?: string }]>) {
-    if (opts.runtimeConfigDir !== undefined) expect(opts.runtimeConfigDir.startsWith(`${root}${path.sep}`), name).toBe(true);
+    if (opts.runtimeConfigDir !== undefined) expect(opts.runtimeConfigDir.startsWith(`${root}${path.sep}`),
+      `${name}: root=${root}; file=${opts.runtimeConfigDir}`).toBe(true);
   }
   return d;
 }

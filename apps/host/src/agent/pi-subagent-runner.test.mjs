@@ -75,7 +75,10 @@ test('the runner is ready once, loses its IPC channel before loading, and stops 
     assert.ok(pid && alive(pid));
     const exited = new Promise(resolve => runner.once('exit', (code, signal) => resolve({ code, signal })));
     assert.equal(runner.kill('SIGTERM'), true);
-    assert.deepEqual(await exited, { code: null, signal: 'SIGTERM' });
+    // Node reports TerminateProcess on Windows as exit code 1, without a signal.
+    // PiAgent confirms a requested exit from the exit/close event, not this shape.
+    assert.deepEqual(await exited, process.platform === 'win32'
+      ? { code: 1, signal: null } : { code: null, signal: 'SIGTERM' });
     assert.equal(runner.killed, true);
     assert.equal(alive(pid), false);
     assert.deepEqual(fs.readdirSync(path.join(root, 'home')), []);
