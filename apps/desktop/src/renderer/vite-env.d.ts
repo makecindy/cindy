@@ -3195,6 +3195,8 @@ interface ElectronAPI {
       surfaceId: string;
       bounds: import('../shared/rsbNativePopup').RsbNativePopupBounds;
       visible: boolean;
+      /** One-shot restoration after the native view has been shown. */
+      focus?: boolean;
     }) => Promise<{ ok: true }>;
     command: (
       input: { surfaceId: string } & import('../shared/rsbNativePopup').RsbNativePopupCommand,

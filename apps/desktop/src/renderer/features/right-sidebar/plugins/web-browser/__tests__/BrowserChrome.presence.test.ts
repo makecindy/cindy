@@ -97,10 +97,11 @@ it('keeps external focus when the browser returns before its More exit animation
 it('keeps page input focus for toolbar clicks and restores it after a pointer menu action', async () => {
   const user = userEvent.setup();
   const capture = vi.fn();
+  const restoreNative = vi.fn();
   const copy = vi.fn();
   render(createElement('div', null,
     createElement('input', { 'aria-label': 'page input' }),
-    createElement(BrowserChrome, { ...props, onCaptureScreenshot: capture, onCopyLink: copy }),
+    createElement(BrowserChrome, { ...props, onCaptureScreenshot: capture, onCopyLink: copy, onRestorePageFocus: restoreNative }),
   ));
   const input = screen.getByRole('textbox', { name: 'page input' });
   await user.click(input);
@@ -115,4 +116,31 @@ it('keeps page input focus for toolbar clicks and restores it after a pointer me
   await waitFor(() => expect(document.activeElement).toBe(input));
   await user.keyboard('continued');
   expect((input as HTMLInputElement).value).toBe('continued');
+  expect(restoreNative).not.toHaveBeenCalled();
+});
+
+// Native guest focus is represented by the host body, not a DOM webview.
+// Regression #10449: pointer menu dismissal must use the native restoration
+// boundary; keyboard dismissal and a hidden host must never request it. Unit.
+it('restores a native page only after pointer dismissal while its host remains visible', async () => {
+  const user = userEvent.setup();
+  const restore = vi.fn();
+  const view = render(createElement(BrowserChrome, { ...props, onRestorePageFocus: restore }));
+  const trigger = screen.getByRole('button', { name: 'rightSidebar.browser.moreTools' });
+  await user.click(trigger);
+  await user.click(await screen.findByRole('menuitem', { name: 'rightSidebar.browser.copyLink' }));
+  await waitFor(() => expect(restore).toHaveBeenCalledOnce());
+  restore.mockClear();
+  act(() => trigger.focus());
+  await user.keyboard('{Enter}');
+  await screen.findByRole('menu');
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  expect(restore).not.toHaveBeenCalled();
+  act(() => trigger.blur());
+  await user.click(trigger);
+  await screen.findByRole('menu');
+  view.rerender(createElement(BrowserChrome, { ...props, visible: false, onRestorePageFocus: restore }));
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  expect(restore).not.toHaveBeenCalled();
 });

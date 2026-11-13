@@ -90,6 +90,8 @@ export interface BrowserChromeProps {
   onCopyLink: () => void;
   /** 原生 popup view 必须在 renderer portal 打开时暂时让出层叠空间。 */
   onOverlayOpenChange?: (open: boolean) => void;
+  /** Restore a native guest, which has no focusable element in the host DOM. */
+  onRestorePageFocus?: () => void;
 }
 
 /** Imperative ref —— 父组件(BrowserTabBody)用 keydown 监听 Cmd/Ctrl+L,调
@@ -119,6 +121,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
       onOpenInSystemBrowser,
       onCopyLink,
       onOverlayOpenChange,
+      onRestorePageFocus,
     },
     ref,
   ) {
@@ -380,7 +383,11 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
                 // Pointer tools return to the page (including its webview), while
                 // keyboard-opened menus retain Radix's normal trigger focus.
                 event.preventDefault();
-                previousFocus.focus({ preventScroll: true });
+                if (previousFocus === document.body && onRestorePageFocus) {
+                  onRestorePageFocus();
+                } else {
+                  previousFocus.focus({ preventScroll: true });
+                }
               }
             }}
           >
