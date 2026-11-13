@@ -59,6 +59,8 @@ vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
 
 vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: vi.fn(),
+  readGenericOAuthAccessToken: vi.fn(),
+  getGenericOAuthLoginGeneration: vi.fn(() => 0),
 }));
 
 vi.mock('../../maker-host/active-catalog.js', () => ({
@@ -113,7 +115,7 @@ import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../../maker-host/anthropic-responses-bridge-host.js';
 import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.desktop.js';
-import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.desktop.js';
+import { readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken } from '../../maker-host/generic-oauth.desktop.js';
 import {
   getActiveCatalog,
   isXdGatewayPaymentRequiredRoute,
@@ -184,6 +186,7 @@ describe('utility one-shot candidates', () => {
     readGrokToken.mockRejectedValue(new Error('not authenticated'));
     grokCredentialGeneration.mockReturnValue(0);
     readGenericOAuthToken.mockReturnValue(null);
+    vi.mocked(readGenericOAuthAccessToken).mockImplementation(async (...args) => readGenericOAuthToken(...args));
     providerRouteMutationInProgress.mockReturnValue(false);
     providerRouteCredentialRevision.mockReturnValue(0);
     readCustomKey.mockReturnValue(null);
@@ -2250,7 +2253,7 @@ describe('utility one-shot candidates', () => {
     expect(init.headers['X-Tenant']).toBe('tenant-a');
   });
 
-  it('uses a generic OAuth token for a custom Codex provider', async () => {
+  it.each([true, false])('waits for a generic OAuth token for a custom Codex provider (refresh succeeds=%s)', async succeeds => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'codex-oauth',
@@ -2279,16 +2282,32 @@ describe('utility one-shot candidates', () => {
       }],
     } as never);
     readGenericOAuthToken.mockReturnValue('oauth-access-token');
+    let release!: (token: string) => void;
+    let fail!: (error: Error) => void;
+    vi.mocked(readGenericOAuthAccessToken).mockReturnValue(new Promise<string>((resolve, reject) => {
+      release = resolve;
+      fail = reject;
+    }));
     fetchMock.mockResolvedValueOnce({
       ok: true,
       text: async () => 'data: {"type":"response.output_text.delta","delta":"script"}\ndata: [DONE]\n',
     } as never);
 
-    const result = await requestUtilityText(makerMock(false), 'generate', {
+    const pending = requestUtilityText(makerMock(false), 'generate', {
       providerId: 'codex-oauth',
       agentKind: 'codex',
       model: 'codex-oauth-5-5',
     });
+    await vi.waitFor(() => expect(readGenericOAuthAccessToken).toHaveBeenCalled());
+    expect(fetchMock).not.toHaveBeenCalled();
+    if (!succeeds) {
+      fail(new Error('provider_oauth_refresh_failed'));
+      expect(await pending).toMatchObject({ ok: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+      return;
+    }
+    release('oauth-access-token');
+    const result = await pending;
 
     expect(result).toMatchObject({ ok: true, providerId: 'codex-oauth' });
     const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };

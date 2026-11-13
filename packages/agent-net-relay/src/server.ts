@@ -25,6 +25,10 @@ export class AgentNetError extends Error {
   constructor(readonly status: number, readonly code: string, message = code) { super(message); }
 }
 const fail = (status: number, code: string): never => { throw new AgentNetError(status, code); };
+// React Native checks the public package's types with numeric timer handles.
+function unrefTimer(timer: number | { unref(): void }): void {
+  if (typeof timer !== 'number') timer.unref();
+}
 const record = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : fail(400, 'BAD_REQUEST');
 const own = <T>(values: Record<string, T>, key: string): T | undefined => Object.hasOwn(values, key) ? values[key] : undefined;
 const string = (value: unknown, limit = 128): string => typeof value === 'string' && value.length > 0 && value.length <= limit ? value : fail(400, 'BAD_REQUEST');
@@ -915,7 +919,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       }).catch(() => logger.error({}, 'agent-net state cleanup failed')).finally(() => { sweeping = false; });
     }
   }, 30_000);
-  sweep.unref();
+  unrefTimer(sweep);
   const address = server.address() as AddressInfo;
   const publicHost = address.address === '::' ? '[::1]' : address.address === '0.0.0.0' ? '127.0.0.1' : isIP(address.address) === 6 ? '[' + address.address + ']' : address.address;
   let closeOperation: Promise<void> | undefined;

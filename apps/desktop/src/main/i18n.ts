@@ -6,7 +6,10 @@ import ptBRCommon from '../renderer/i18n/locales/pt-BR/common.json';
 import lzhCommon from '../renderer/i18n/locales/zh-Hant-x-lzh/common.json';
 import lzhHansCommon from '../renderer/i18n/locales/zh-Hans-x-lzh/common.json';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
-import { DEFAULT_CLASSICAL_REPLY_STYLE, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import {
+  defaultClassicalReplyStyleFor,
+  type ClassicalReplyStyleId,
+} from '@cindy/maker-shared/classical-reply';
 
 import {
   DEFAULT_LOCALE,
@@ -21,9 +24,9 @@ import jaCommon from '../renderer/i18n/locales/ja/common.json';
 import koCommon from '../renderer/i18n/locales/ko/common.json';
 
 const resources: Record<SupportedLocale, Record<string, unknown>> = {
-  'es': esCommon as Record<string, unknown>,
-  'fr': frCommon as Record<string, unknown>,
-  'de': deCommon as Record<string, unknown>,
+  es: esCommon as Record<string, unknown>,
+  fr: frCommon as Record<string, unknown>,
+  de: deCommon as Record<string, unknown>,
   'pt-PT': ptPTCommon as Record<string, unknown>,
   'pt-BR': ptBRCommon as Record<string, unknown>,
   'zh-Hant-x-lzh': lzhCommon as Record<string, unknown>,
@@ -40,9 +43,9 @@ const resources: Record<SupportedLocale, Record<string, unknown>> = {
  * 链尾统一由 t() 落回 key 本身。
  */
 const FALLBACK_CHAIN: Record<SupportedLocale, readonly SupportedLocale[]> = {
-  'es': ['es', 'en'],
-  'fr': ['fr', 'en'],
-  'de': ['de', 'en'],
+  es: ['es', 'en'],
+  fr: ['fr', 'en'],
+  de: ['de', 'en'],
   'pt-PT': ['pt-PT', 'en'],
   'pt-BR': ['pt-BR', 'en'],
   // 文言版缺 key 先落其现代底本，再落英文。
@@ -57,147 +60,163 @@ const FALLBACK_CHAIN: Record<SupportedLocale, readonly SupportedLocale[]> = {
 
 /** Shared locale and fallback rules. Only system language discovery is platform specific. */
 export function createMainI18n(resolveSystemLanguages: () => string[]) {
-let cachedLocale: SupportedLocale | null = null;
+  let cachedLocale: SupportedLocale | null = null;
 
-function resolveOsLocale(): SupportedLocale {
-  let languages: string[] = [];
-  try { languages = resolveSystemLanguages(); } catch { /* platform not ready */ }
-  return languages.length ? resolvePreferredSystemLocale(languages) : DEFAULT_LOCALE;
-}
-
-function getMainLocale(): SupportedLocale {
-  if (cachedLocale) return cachedLocale;
-  cachedLocale = resolveOsLocale();
-  return cachedLocale;
-}
-
-/**
- * Keep main-process native surfaces in sync with the renderer language
- * preference after the renderer has mounted.
- */
-function setMainLocale(locale: SupportedLocale): void {
-  cachedLocale = locale;
-}
-
-let classicalStyle: ClassicalReplyStyleId = DEFAULT_CLASSICAL_REPLY_STYLE;
-
-/**
- * This computer's classical output style, mirrored from the renderer next to the
- * language. Remote clients send their own with each turn.
- */
-function setMainClassicalStyle(style: ClassicalReplyStyleId): void {
-  classicalStyle = style;
-}
-
-function getMainClassicalStyle(): ClassicalReplyStyleId {
-  return classicalStyle;
-}
-
-/**
- * Resolved main-side locale (renderer preference after sync, OS fallback
- * before). learn-host 用它决定蒸馏自述的语言(跟随系统语言配置,规则 9:
- * 用代码注入确定性语言,不靠模型从请求里猜)。
- */
-function getResolvedMainLocale(): SupportedLocale {
-  return getMainLocale();
-}
-
-function lookup(bundle: Record<string, unknown>, key: string): string | null {
-  let cur: unknown = bundle;
-  for (const part of key.split('.')) {
-    if (typeof cur !== 'object' || cur === null) return null;
-    cur = (cur as Record<string, unknown>)[part];
-  }
-  return typeof cur === 'string' ? cur : null;
-}
-
-/**
- * Translate a dot-path key (e.g. 'update.moveToApplications.title') using
- * the OS-resolved main-side locale, walking the locale's FALLBACK_CHAIN
- * (zh-TW → zh-CN → en; others → en), then falling back to the key itself.
- *
- * 与 renderer i18next 的 interpolation.defaultVariables 对齐:locale 文案里的
- * {{appName}} 由品牌常量注入(本迷你 i18n 不支持其它变量,main 消费的 key 若
- * 需要更多插值,应像 bootstrap 菜单那样在调用点自行 replace)。
- */
-function t(key: string, locale?: SupportedLocale): string {
-  const loc = locale ?? getMainLocale();
-  let raw: string | null = null;
-  for (const chainLocale of FALLBACK_CHAIN[loc]) {
-    raw = lookup(resources[chainLocale], key);
-    if (raw !== null) break;
-  }
-  raw ??= lookup(resources[DEFAULT_LOCALE], key) ?? key;
-  return raw.replaceAll('{{appName}}', BRAND_NAME);
-}
-
-/**
- * Plural form of `key` for `count`, i18next-style: picks `<key>_<plural category>` for the
- * locale (falling back to `<key>_other`) and fills `{{count}}`.
- */
-function tCount(key: string, count: number, locale?: SupportedLocale): string {
-  const loc = locale ?? getMainLocale();
-  let category = 'other';
-  try {
-    category = new Intl.PluralRules(loc).select(count);
-  } catch {
-    // Unknown tag: `other` is always present.
-  }
-  const raw = rawMainString(`${key}_${category}`, loc) ?? rawMainString(`${key}_other`, loc) ?? key;
-  return raw.replaceAll('{{count}}', String(count));
-}
-
-/**
- * 测试专用:用注入的资源表跑同一条 fallback 链(i18nFallback.test.ts 用人为
- * 删 key 的隔离负 fixture 验证 zh-TW → zh-CN → en → key,不污染真实资源)。
- */
-function lookupWithFallbackForTest(
-  bundles: Partial<Record<SupportedLocale, Record<string, unknown>>>,
-  locale: SupportedLocale,
-  key: string,
-): string {
-  for (const chainLocale of FALLBACK_CHAIN[locale]) {
-    const bundle = bundles[chainLocale];
-    if (!bundle) continue;
-    const raw = lookup(bundle, key);
-    if (raw !== null) return raw;
-  }
-  const fallbackBundle = bundles[DEFAULT_LOCALE];
-  return (fallbackBundle ? lookup(fallbackBundle, key) : null) ?? key;
-}
-
-/**
- * Raw template for `key` (no interpolation) walking the same fallback chain as t(), or null
- * when no locale has it. For native surfaces that fill their own placeholders.
- */
-function rawMainString(key: string, locale?: SupportedLocale): string | null {
-  const loc = locale ?? getMainLocale();
-  for (const chainLocale of FALLBACK_CHAIN[loc]) {
-    const raw = lookup(resources[chainLocale], key);
-    if (raw !== null) return raw.replaceAll('{{appName}}', BRAND_NAME);
-  }
-  return null;
-}
-
-/** Leaf keys under `prefix` in the default locale, relative to `prefix` (dot-separated). */
-function mainStringKeysUnder(prefix: string): string[] {
-  let cur: unknown = resources[DEFAULT_LOCALE];
-  for (const part of prefix.split('.')) {
-    if (typeof cur !== 'object' || cur === null) return [];
-    cur = (cur as Record<string, unknown>)[part];
-  }
-  const keys: string[] = [];
-  const walk = (node: unknown, path: string): void => {
-    if (typeof node === 'string') {
-      keys.push(path);
-      return;
+  function resolveOsLocale(): SupportedLocale {
+    let languages: string[] = [];
+    try {
+      languages = resolveSystemLanguages();
+    } catch {
+      /* platform not ready */
     }
-    if (typeof node !== 'object' || node === null) return;
-    for (const [key, value] of Object.entries(node)) walk(value, path ? `${path}.${key}` : key);
-  };
-  walk(cur, '');
-  return keys;
-}
+    return languages.length ? resolvePreferredSystemLocale(languages) : DEFAULT_LOCALE;
+  }
 
-return { setMainLocale, setMainClassicalStyle, getMainClassicalStyle, getResolvedMainLocale, t, tCount, lookupWithFallbackForTest, rawMainString, mainStringKeysUnder };
+  function getMainLocale(): SupportedLocale {
+    if (cachedLocale) return cachedLocale;
+    cachedLocale = resolveOsLocale();
+    return cachedLocale;
+  }
+
+  /**
+   * Keep main-process native surfaces in sync with the renderer language
+   * preference after the renderer has mounted.
+   */
+  function setMainLocale(locale: SupportedLocale): void {
+    cachedLocale = locale;
+  }
+
+  let classicalStyle: ClassicalReplyStyleId | null = null;
+
+  /**
+   * This computer's classical output style, mirrored from the renderer next to the
+   * language. Remote clients send their own with each turn. Until the renderer reports
+   * one, the interface language decides (see defaultClassicalReplyStyleFor).
+   */
+  function setMainClassicalStyle(style: ClassicalReplyStyleId): void {
+    classicalStyle = style;
+  }
+
+  function getMainClassicalStyle(): ClassicalReplyStyleId {
+    return classicalStyle ?? defaultClassicalReplyStyleFor(getMainLocale());
+  }
+
+  /**
+   * Resolved main-side locale (renderer preference after sync, OS fallback
+   * before). learn-host 用它决定蒸馏自述的语言(跟随系统语言配置,规则 9:
+   * 用代码注入确定性语言,不靠模型从请求里猜)。
+   */
+  function getResolvedMainLocale(): SupportedLocale {
+    return getMainLocale();
+  }
+
+  function lookup(bundle: Record<string, unknown>, key: string): string | null {
+    let cur: unknown = bundle;
+    for (const part of key.split('.')) {
+      if (typeof cur !== 'object' || cur === null) return null;
+      cur = (cur as Record<string, unknown>)[part];
+    }
+    return typeof cur === 'string' ? cur : null;
+  }
+
+  /**
+   * Translate a dot-path key (e.g. 'update.moveToApplications.title') using
+   * the OS-resolved main-side locale, walking the locale's FALLBACK_CHAIN
+   * (zh-TW → zh-CN → en; others → en), then falling back to the key itself.
+   *
+   * 与 renderer i18next 的 interpolation.defaultVariables 对齐:locale 文案里的
+   * {{appName}} 由品牌常量注入(本迷你 i18n 不支持其它变量,main 消费的 key 若
+   * 需要更多插值,应像 bootstrap 菜单那样在调用点自行 replace)。
+   */
+  function t(key: string, locale?: SupportedLocale): string {
+    const loc = locale ?? getMainLocale();
+    let raw: string | null = null;
+    for (const chainLocale of FALLBACK_CHAIN[loc]) {
+      raw = lookup(resources[chainLocale], key);
+      if (raw !== null) break;
+    }
+    raw ??= lookup(resources[DEFAULT_LOCALE], key) ?? key;
+    return raw.replaceAll('{{appName}}', BRAND_NAME);
+  }
+
+  /**
+   * Plural form of `key` for `count`, i18next-style: picks `<key>_<plural category>` for the
+   * locale (falling back to `<key>_other`) and fills `{{count}}`.
+   */
+  function tCount(key: string, count: number, locale?: SupportedLocale): string {
+    const loc = locale ?? getMainLocale();
+    let category = 'other';
+    try {
+      category = new Intl.PluralRules(loc).select(count);
+    } catch {
+      // Unknown tag: `other` is always present.
+    }
+    const raw =
+      rawMainString(`${key}_${category}`, loc) ?? rawMainString(`${key}_other`, loc) ?? key;
+    return raw.replaceAll('{{count}}', String(count));
+  }
+
+  /**
+   * 测试专用:用注入的资源表跑同一条 fallback 链(i18nFallback.test.ts 用人为
+   * 删 key 的隔离负 fixture 验证 zh-TW → zh-CN → en → key,不污染真实资源)。
+   */
+  function lookupWithFallbackForTest(
+    bundles: Partial<Record<SupportedLocale, Record<string, unknown>>>,
+    locale: SupportedLocale,
+    key: string,
+  ): string {
+    for (const chainLocale of FALLBACK_CHAIN[locale]) {
+      const bundle = bundles[chainLocale];
+      if (!bundle) continue;
+      const raw = lookup(bundle, key);
+      if (raw !== null) return raw;
+    }
+    const fallbackBundle = bundles[DEFAULT_LOCALE];
+    return (fallbackBundle ? lookup(fallbackBundle, key) : null) ?? key;
+  }
+
+  /**
+   * Raw template for `key` (no interpolation) walking the same fallback chain as t(), or null
+   * when no locale has it. For native surfaces that fill their own placeholders.
+   */
+  function rawMainString(key: string, locale?: SupportedLocale): string | null {
+    const loc = locale ?? getMainLocale();
+    for (const chainLocale of FALLBACK_CHAIN[loc]) {
+      const raw = lookup(resources[chainLocale], key);
+      if (raw !== null) return raw.replaceAll('{{appName}}', BRAND_NAME);
+    }
+    return null;
+  }
+
+  /** Leaf keys under `prefix` in the default locale, relative to `prefix` (dot-separated). */
+  function mainStringKeysUnder(prefix: string): string[] {
+    let cur: unknown = resources[DEFAULT_LOCALE];
+    for (const part of prefix.split('.')) {
+      if (typeof cur !== 'object' || cur === null) return [];
+      cur = (cur as Record<string, unknown>)[part];
+    }
+    const keys: string[] = [];
+    const walk = (node: unknown, path: string): void => {
+      if (typeof node === 'string') {
+        keys.push(path);
+        return;
+      }
+      if (typeof node !== 'object' || node === null) return;
+      for (const [key, value] of Object.entries(node)) walk(value, path ? `${path}.${key}` : key);
+    };
+    walk(cur, '');
+    return keys;
+  }
+
+  return {
+    setMainLocale,
+    setMainClassicalStyle,
+    getMainClassicalStyle,
+    getResolvedMainLocale,
+    t,
+    tCount,
+    lookupWithFallbackForTest,
+    rawMainString,
+    mainStringKeysUnder,
+  };
 }

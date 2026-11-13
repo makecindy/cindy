@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
+import type { ProvidersSnapshot } from '@/lib/providersSnapshotStore';
 
 const mocks = vi.hoisted(() => ({
   beginCapabilities: vi.fn(),
@@ -136,6 +137,125 @@ describe('local catalog recovery lifecycle', () => {
       expect(getLocalCatalogFailure()).toBeNull();
       expect(vi.getTimerCount()).toBe(0);
     } finally { prefs.__resetForTest(); }
+  });
+
+  // Unit, restart/read-failure regression: a successful catalog can still contain
+  // a disconnected native provider after a CLI failure. Existing recovery only
+  // covered rejected IPC/storage reads. Returning to the window must re-read it,
+  // publish the recovered connection, and leave no polling after unmount.
+  it.each(['focus', 'online', 'visibilitychange'])('rechecks a disconnected native provider on %s even after a successful catalog read', async signal => {
+    const disconnected = { ...snapshot, providers: [{ id: 'openai', connected: false, subscriptionReadUnavailable: true } as ProviderView] };
+    const recovered = { ...snapshot, providers: [{ id: 'openai', connected: true } as ProviderView] };
+    mocks.cachedProviders.mockReturnValue(disconnected);
+    mocks.loadProviders.mockResolvedValue(recovered);
+    mocks.initializeVisibility.mockResolvedValue(true);
+    (signal === 'visibilitychange' ? document : events).dispatchEvent(new Event(signal));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.commitProviders).toHaveBeenCalledWith(1, recovered);
+    expect(getLocalCatalogFailure()).toBeNull();
+    stop();
+    stop = () => {};
+    mocks.loadProviders.mockClear();
+    events.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.loadProviders).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Unit, PR #10223 review: the account activity stream includes every lease and
+  // quota update. Configuration already has App's onProvidersChanged path.
+  it('does not subscribe catalog recovery to ordinary account activity', async () => {
+    stop();
+    const onChanged = vi.fn();
+    Object.assign(events, { electronAPI: { subscriptionAccounts: { onChanged } } });
+    stop = startLocalCatalogRecovery();
+    mocks.initializeVisibility.mockResolvedValue(true);
+    mocks.cachedProviders.mockReturnValue(snapshot);
+    events.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.loadProviders).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+    stop();
+    stop = () => {};
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The old connected=false trigger could not distinguish an intentional
+  // disconnect from a failed CLI read. Only the latter may start recovery.
+  it.each(['openai', 'anthropic'])('leaves a deliberately disconnected %s idle', async id => {
+    mocks.cachedProviders.mockReturnValue({ ...snapshot, providers: [{ id, connected: false }] });
+    for (const signal of ['focus', 'online', 'visibilitychange']) {
+      (signal === 'visibilitychange' ? document : events).dispatchEvent(new Event(signal));
+    }
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(mocks.loadProviders).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Minimum regression: startup commits a successful catalog containing an
+  // unreadable pool; no user/online/account event follows. Use the existing
+  // bounded timer and fake time to prove recovery after the 3-second CLI cache.
+  it('recovers a transient pool read without another foreground event', async () => {
+    const unreadable = { ...snapshot, providers: [{ id: 'openai', connected: false, subscriptionReadUnavailable: true } as ProviderView] };
+    const recovered = { ...snapshot, providers: [{ id: 'openai', connected: true } as ProviderView] };
+    mocks.initializeVisibility.mockResolvedValue(true);
+    mocks.loadProviders.mockResolvedValueOnce(unreadable).mockResolvedValueOnce(unreadable).mockResolvedValue(recovered);
+    await refreshLocalCatalogSnapshot();
+    expect(getLocalCatalogFailure()).toBeNull();
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(mocks.commitProviders).toHaveBeenLastCalledWith(1, recovered);
+    expect(mocks.loadProviders).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('recovers a transient catalog preloaded before the lifecycle mounted', async () => {
+    stop();
+    mocks.cachedProviders.mockReturnValue({ ...snapshot, providers: [{ id: 'openai', connected: false, subscriptionReadUnavailable: true } as ProviderView] });
+    mocks.initializeVisibility.mockResolvedValue(true);
+    stop = startLocalCatalogRecovery();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.commitProviders).toHaveBeenCalledWith(1, snapshot);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['hidden', 'owner-changed', 'unmounted'] as const)('stops transient pool recovery when %s', async end => {
+    const unreadable = { ...snapshot, providers: [{ id: 'openai', connected: false, subscriptionReadUnavailable: true } as ProviderView] };
+    mocks.initializeVisibility.mockResolvedValue(true);
+    mocks.loadProviders.mockResolvedValue(unreadable);
+    mocks.cachedProviders.mockReturnValue(unreadable);
+    await refreshLocalCatalogSnapshot();
+    mocks.loadProviders.mockClear();
+    if (end === 'hidden') {
+      Object.assign(document, { visibilityState: 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+      events.dispatchEvent(new Event('online'));
+      events.dispatchEvent(new Event('focus'));
+    } else if (end === 'owner-changed') {
+      setDataOwnerGeneration('owner-b', 8);
+    } else {
+      stop(); stop = () => {};
+    }
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(mocks.loadProviders).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    if (end === 'hidden') {
+      Object.assign(document, { visibilityState: 'visible' });
+      mocks.loadProviders.mockResolvedValue(snapshot);
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.loadProviders).toHaveBeenCalledOnce();
+      expect(mocks.commitProviders).toHaveBeenLastCalledWith(1, snapshot);
+    }
+  });
+
+  it('bounds retries of an unreadable pool without failing the whole catalog', async () => {
+    mocks.initializeVisibility.mockResolvedValue(true);
+    mocks.loadProviders.mockResolvedValue({ ...snapshot, providers: [{ id: 'openai', connected: false, subscriptionReadUnavailable: true } as ProviderView] });
+    await refreshLocalCatalogSnapshot();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(mocks.loadProviders).toHaveBeenCalledTimes(6);
+    expect(getLocalCatalogFailure()).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('bounds automatic retries and recovers when the user returns after fixing storage', async () => {
@@ -286,9 +406,12 @@ describe('refreshLocalCatalogSnapshot', () => {
   });
 
   it('coalesces repeated invalidations into one trailing read and never commits the stale round', async () => {
-    const oldProviders = deferred<unknown[]>();
+    const oldProviders = deferred<ProvidersSnapshot>();
     const oldCapabilities = deferred<unknown[]>();
-    const newProviders = deferred<unknown[]>();
+    const newProviders = deferred<ProvidersSnapshot>();
+    const providerSnapshot = (id: string): ProvidersSnapshot => ({
+      dataOwnerId: 'owner-a', ownerGeneration: 7, providers: [{ id } as ProviderView], providerOrder: [id],
+    });
     const newCapabilities = deferred<unknown[]>();
     mocks.loadProviders
       .mockReturnValueOnce(oldProviders.promise)
@@ -302,11 +425,11 @@ describe('refreshLocalCatalogSnapshot', () => {
     const duplicates = Array.from({ length: 20 }, () => refreshLocalCatalogSnapshot());
     const newRefresh = refreshLocalCatalogSnapshot();
     expect(mocks.loadProviders).toHaveBeenCalledTimes(1);
-    oldProviders.resolve([{ id: 'old-provider' }]);
+    oldProviders.resolve(providerSnapshot('old-provider'));
     oldCapabilities.resolve([['codex', { availableModels: [{ id: 'old-model' }] }]]);
     await vi.waitFor(() => expect(mocks.loadProviders).toHaveBeenCalledTimes(2));
     expect(mocks.commitProviders).not.toHaveBeenCalled();
-    newProviders.resolve([{ id: 'new-provider' }]);
+    newProviders.resolve(providerSnapshot('new-provider'));
     newCapabilities.resolve([['codex', { availableModels: [{ id: 'new-model' }] }]]);
     await expect(newRefresh).resolves.toBe(true);
 
@@ -315,7 +438,7 @@ describe('refreshLocalCatalogSnapshot', () => {
     expect(mocks.loadCapabilities).toHaveBeenCalledTimes(2);
 
     expect(mocks.commitProviders).toHaveBeenCalledTimes(1);
-    expect(mocks.commitProviders.mock.calls[0]?.[1]).toEqual([{ id: 'new-provider' }]);
+    expect(mocks.commitProviders.mock.calls[0]?.[1]).toEqual(providerSnapshot('new-provider'));
     expect(mocks.commitCapabilities).toHaveBeenCalledTimes(1);
   });
 

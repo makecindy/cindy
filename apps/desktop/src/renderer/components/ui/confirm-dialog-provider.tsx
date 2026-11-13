@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
+import { useTranslation } from 'react-i18next';
+
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export interface ConfirmOptions {
@@ -117,6 +119,7 @@ function clearStaleSkipsOnce(): void {
 }
 
 export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   // 模块初始化时跑一次性清理,放进 useRef 兜底防止 React StrictMode 双跑(虽然
   // 内部 sentinel 已经够防,这里 ref 只是让闭包语义更清晰)。
   const cleanupOnceRef = useRef(false);
@@ -296,7 +299,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           contentSelectable={currentItem.options.contentSelectable}
           dontShowAgainLabel={
             currentItem.options.dontShowAgainKey
-              ? currentItem.options.dontShowAgainLabel ?? '下次不再提示'
+              ? currentItem.options.dontShowAgainLabel ?? t('commonUi.confirmDialog.dontShowAgain')
               : currentItem.options.checkboxLabel
           }
           checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}

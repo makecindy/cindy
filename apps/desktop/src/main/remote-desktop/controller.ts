@@ -175,7 +175,7 @@ export interface DesktopControllerDeps {
    */
   liveScreens?: {
     list(): Promise<RemoteLiveScreen[]>;
-    open(plugin: string, id: string, ended: () => void): Promise<DesktopLiveScreen>;
+    open(plugin: string, id: string, ended: () => void, identity?: string): Promise<DesktopLiveScreen>;
     close(): void;
   };
   input(events: DesktopInput[]): void;
@@ -1113,7 +1113,7 @@ export class RemoteDesktopController {
       const leaseId = randomUUID();
       const opened = await this.deps.liveScreens.open(target.plugin, target.id, () => {
         if (this.active?.lease === leaseId) void this.stop(undefined, false, 'screen-ended');
-      });
+      }, target.pluginIdentity);
       if (!current() || this.active) {
         this.deps.liveScreens.close();
         throw new Error('DESKTOP_LEASE_EXPIRED');

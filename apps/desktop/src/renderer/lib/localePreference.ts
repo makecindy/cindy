@@ -1,6 +1,7 @@
 import {
-  DEFAULT_CLASSICAL_REPLY_STYLE,
+  classicalReplyStyleContextOf,
   isClassicalReplyStyle,
+  type ClassicalReplyStyleContext,
   type ClassicalReplyStyleId,
 } from '@cindy/maker-shared/classical-reply';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type LocalePreference, type SupportedLocale } from '../../shared/locale';
@@ -45,22 +46,35 @@ export function getEffectiveLocale(): SupportedLocale {
   return effectiveOf(readStoredLocale());
 }
 
-const CLASSICAL_STYLE_STORAGE_KEY = 'classicalReplyStyle';
+const CLASSICAL_STYLE_STORAGE_KEYS = {
+  classical: 'classicalReplyStyle',
+  modern: 'classicalReplyStyle.modern',
+} as const satisfies Record<ClassicalReplyStyleContext, string>;
 
-/** Output style of AI replies while a classical edition (文言) is shown. */
-export function readStoredClassicalStyle(): ClassicalReplyStyleId {
+/**
+ * Stored reply style for one context (classical interface / modern Chinese interface),
+ * or null when the user never chose one there; each context starts from
+ * defaultClassicalReplyStyleFor. The classical key keeps its historical name so
+ * existing installs keep their choice.
+ */
+export function readStoredClassicalStyle(
+  context: ClassicalReplyStyleContext,
+): ClassicalReplyStyleId | null {
   try {
-    const raw = localStorage.getItem(CLASSICAL_STYLE_STORAGE_KEY);
+    const raw = localStorage.getItem(CLASSICAL_STYLE_STORAGE_KEYS[context]);
     if (isClassicalReplyStyle(raw)) return raw;
   } catch {
     // Storage may be unavailable in sandboxed windows.
   }
-  return DEFAULT_CLASSICAL_REPLY_STYLE;
+  return null;
 }
 
-export function writeStoredClassicalStyle(style: ClassicalReplyStyleId): void {
+export function writeStoredClassicalStyle(
+  context: ClassicalReplyStyleContext,
+  style: ClassicalReplyStyleId,
+): void {
   try {
-    localStorage.setItem(CLASSICAL_STYLE_STORAGE_KEY, style);
+    localStorage.setItem(CLASSICAL_STYLE_STORAGE_KEYS[context], style);
   } catch {
     // A blocked write keeps the in-memory choice for this window.
   }

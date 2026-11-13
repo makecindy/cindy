@@ -88,4 +88,4 @@ export * from "./machineStatus.js";
 export * from "./agentNetSwitch.js";
 export * from "./pluginPages.js";
 
-export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from './stallDiagnostics.js';
+export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef } from './stallDiagnostics.js';

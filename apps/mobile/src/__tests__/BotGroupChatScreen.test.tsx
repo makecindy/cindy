@@ -589,7 +589,9 @@ describe('group timeline', () => {
     [true, 'fr', 'Tous', undefined], [false, 'fr', 'Tous', undefined],
     [true, 'de', 'Al', 'Alle Teammitglieder'],
     [true, 'fr', 'Tous', 'Tous les coéquipiers'],
-    [true, 'es', 'Todos', 'Todos los compañeros'],
+    // #10063: 'Todos' is the current humans-only broadcast label. Keep a
+    // word-boundary prefix of the legacy bot broadcast without using that reserved label.
+    [true, 'es', 'Todos los', 'Todos los compañeros'],
     [true, 'pt-PT', 'Tod', 'Todos os colegas'],
     [true, 'pt-BR', 'Tod', 'Todos os colegas'],
     [true, 'zh-Hans-x-lzh', '诸', '诸同僚'],
@@ -1493,6 +1495,17 @@ describe('group timeline', () => {
 });
 
 describe('group composer', () => {
+  // Unit regression: an unrelated public execution must not turn send into stop.
+  it('keeps the send affordance when public work cannot be stopped by this account', async () => {
+    await act(async () => root.render(el(BotGroupComposer, {
+      members: group().members, identityFor: (botId, name) => ({ botId, name: name ?? botId }),
+      deviceId: 'mac', online: true, running: true, canStop: false, planState: null,
+      attachmentsSupported: false, onSend: async () => {}, onStop: async () => {},
+    })));
+    expect(byId('botGroup.composer.stop')).toBeNull();
+    expect(byId('botGroup.composer.send')).not.toBeNull();
+  });
+
   // Unit regression: topic and maskIndicator each used to force an idle composer open.
   // The ordinary draft test below cannot catch either branch. Render the production composer
   // with only that distinguishing input; its toolbar/resize affordance must wait for focus.
@@ -3098,7 +3111,7 @@ describe('mobile group threads', () => {
     expect(byId(`botGroup.thread.context.${rootId}.action.quote`)).not.toBeNull();
     await click(`botGroup.thread.more.${rootId}`);
     expect(byId(`botGroup.thread.context.${rootId}.sheet`)?.textContent)
-      .toContain(new Date(rootMessage().createdAt).toLocaleString());
+      .toContain(new Date(rootMessage().createdAt).toLocaleString('zh-CN'));
   });
 
   it.each(['root', 'shared'] as const)('restores the retained group viewport without scrolling or marking it read after opening a %s topic entry', async entry => {
