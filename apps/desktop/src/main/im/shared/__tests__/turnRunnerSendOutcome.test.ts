@@ -3,6 +3,11 @@
  * 工厂化改写)— 断言逐条保留, 用 feishu 真实文案包 + 假 adapter 注入, 行为契约
  * 与重构前一致(characterization)。
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -2158,10 +2163,15 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     },
   );
 
-  it.each(['rich-card', 'chunked-text', 'chunked-final-error'] as const)(
-    'cancels stopped input waiting for the send lock with %s output', async (outputKind) => {
+  // Regression #10202/r4558852222: stop during runtime recycling must finish the
+  // same reply stream as stop at the earlier send lock. Unit, deferred IO only.
+  it.each(['send-lock', 'runtime-recycle'].flatMap((waitPhase) =>
+    (['rich-card', 'chunked-text', 'chunked-final-error'] as const).map((outputKind) => ({ waitPhase, outputKind })),
+  ))('cancels stopped input during $waitPhase with $outputKind output', async ({ waitPhase, outputKind }) => {
     const previousOutput = fakeAdapter.output;
-    const beginReply = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const settle = vi.fn(async () => undefined);
+    const beginReply = vi.fn(async (_userId: string, _options?: { turnId: string }) => ({ replace: vi.fn(), close, settle }));
     const commitFinal = vi.fn(async () => undefined);
     if (outputKind !== 'rich-card') {
       fakeAdapter.output = {
@@ -2175,9 +2185,10 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const lockEntered = deferred<void>();
     const releaseRefresh = deferred<void>();
     const releaseLock = vi.fn();
+    const recycle = vi.fn(async () => false);
     mocks.getMaker.mockReturnValue({
       createSession: vi.fn(async () => oldSession.session),
-      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
+      recyclePiRuntimeIfResourcesDrifted: recycle,
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -2187,7 +2198,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       }),
     });
     const acquirePendingAgentSwitch = vi.fn(async () => releaseLock);
-    acquirePendingAgentSwitch.mockImplementationOnce(async () => {
+    const waitForRefresh = async () => {
       live = undefined;
       emitMakerEvent({
         type: 'session:closed', sessionId: 'feishu-session',
@@ -2195,8 +2206,18 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       });
       lockEntered.resolve(undefined);
       await releaseRefresh.promise;
-      return releaseLock;
-    });
+    };
+    if (waitPhase === 'send-lock') {
+      acquirePendingAgentSwitch.mockImplementationOnce(async () => {
+        await waitForRefresh();
+        return releaseLock;
+      });
+    } else {
+      recycle.mockImplementationOnce(async () => {
+        await waitForRefresh();
+        return true;
+      });
+    }
     const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
       acquirePendingAgentSwitch,
     });
@@ -2221,10 +2242,16 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(releaseLock).toHaveBeenCalledOnce();
       if (outputKind !== 'rich-card') {
         expect(beginReply).toHaveBeenCalledOnce();
+        // 逐轮身份(turnId)是持久出箱的幂等键与过程面隔离依据, 必须由 runner 盖章。
+        expect(beginReply).toHaveBeenCalledWith('ou_user', { turnId: expect.any(String) });
         expect(commitFinal).toHaveBeenCalledExactlyOnceWith({
           userId: 'ou_user', text: fakeAdapter.ui.agent.stopDone(0),
           terminal: 'aborted', threadTs: undefined,
+          turnId: beginReply.mock.calls[0]?.[1]?.turnId,
         });
+        expect(close).toHaveBeenCalledOnce();
+        expect(close.mock.invocationCallOrder[0]).toBeLessThan(commitFinal.mock.invocationCallOrder[0]!);
+        expect(settle).toHaveBeenCalledWith({ delivered: outputKind !== 'chunked-final-error', terminal: 'aborted' });
       } else {
         expect(commitFinal).not.toHaveBeenCalled();
       }
@@ -3291,6 +3318,193 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  // 真机缺陷(2026-11-12): 回答里的相对文件链接只被投影成纯文本, 对方什么也收不到。
+  // 宿主必须在**任务工作目录**下解析并校验后交给文件通道, 不能要求模型改用 xdt-file。
+  // PR #10202: image materialization must not erase a sibling file link before collection.
+  it.each([false, true])('resolves relative local file links into host-approved file attachments (image=%s)', async (withImage) => {
+    const workDir = mkdtempSync(path.join(tmpdir(), 'cindy-turn-files-'));
+    const outsideDir = mkdtempSync(path.join(tmpdir(), 'cindy-turn-outside-'));
+    writeFileSync(path.join(workDir, 'imbot-live.txt'), 'IMBOT-FILE-OK');
+    writeFileSync(path.join(outsideDir, 'secret.txt'), 'secret');
+    if (withImage) mocks.materializeLocalMarkdownImages.mockImplementation(async ({ text }) => ({
+      absPaths: [], text: text.replace('![图](chart.png)', '图'),
+    }));
+    // 让本轮拿到的会话行使用临时工作目录: 相对文件链接必须以它(而不是进程 cwd)
+    // 为基准。三条取行路径都指向同一行, 不依赖具体路由分支。
+    const tempRow = {
+      id: 'feishu-session',
+      agentKind: 'claude-code' as const,
+      workingDir: workDir,
+      model: 'claude-opus-4-7',
+      effort: 'xhigh' as const,
+      permissionMode: 'bypassPermissions' as const,
+      fastMode: false,
+      sdkSessionId: null,
+      providerId: null,
+    };
+    // 这些替身是模块级共享的: 本用例结束后必须全部还原, 否则会污染后续用例。
+    const previousPrepare = vi.mocked(fakeRepo.prepareNewSession).getMockImplementation();
+    const previousFind = mocks.findActiveSession.getMockImplementation();
+    const previousPeek = mocks.peekSessionById.getMockImplementation();
+    vi.mocked(fakeRepo.prepareNewSession).mockResolvedValue(tempRow);
+    mocks.findActiveSession.mockResolvedValue(tempRow);
+    mocks.peekSessionById.mockResolvedValue(tempRow);
+    const previousOutput = fakeAdapter.output;
+    const commitFinal = vi.fn(
+      async (_output: {
+        text: string;
+        fileAbsPaths?: string[];
+        terminal?: string;
+      }): Promise<{ status: 'sent'; unresolved: number; retrying: number }> => ({
+        status: 'sent',
+        unresolved: 0,
+        retrying: 0,
+      }),
+    );
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      beginReply: vi.fn(async () => undefined),
+      commitFinal,
+    };
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const { turnPromise } = await startDefaultTurn();
+      await turnPromise;
+      h.emit({
+        type: 'text',
+        data: {
+          text: [
+            '已创建文件，内容为 IMBOT-FILE-OK。',
+            '[下载 imbot-live.txt](imbot-live.txt)',
+            '[越界](../../' + path.basename(outsideDir) + '/secret.txt)',
+            '[外部文档](https://example.com/report.pdf)',
+            ...(withImage ? ['![图](chart.png)'] : []),
+          ].join('\n'),
+          isFinal: true,
+        },
+      });
+      h.emit({ type: 'done', data: {} });
+      // 终稿前会做一次真实的文件解析(realpath), 不能只等微任务。
+      await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledTimes(1));
+      const payload = commitFinal.mock.calls[0]![0];
+      // 只有工作目录内、真实存在的文件成为附件; 越界与外部 URL 不是附件。
+      // The production resolver uses fs.promises.realpath. On Windows its
+      // expanded path differs from realpathSync's preserved 8.3 spelling.
+      expect(payload.fileAbsPaths).toEqual([await realpath(path.join(workDir, 'imbot-live.txt'))]);
+      // 正文保留用户能看懂的文件说明, 但不再把本机链接目标发给对方。
+      expect(payload.text).toContain('下载 imbot-live.txt');
+      expect(payload.text).not.toContain('](imbot-live.txt)');
+      if (withImage) expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledOnce();
+    } finally {
+      fakeAdapter.output = previousOutput;
+      if (previousPrepare) {
+        vi.mocked(fakeRepo.prepareNewSession).mockImplementation(previousPrepare);
+      }
+      if (previousFind) mocks.findActiveSession.mockImplementation(previousFind);
+      else mocks.findActiveSession.mockReset();
+      if (previousPeek) mocks.peekSessionById.mockImplementation(previousPeek);
+      else mocks.peekSessionById.mockReset();
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  // PR #10202: the optional public progress surface must not expose attachment
+  // targets before final delivery; rich-card tests do not exercise this driver.
+  it('keeps local and managed attachment targets out of chunked public progress', async () => {
+    const previousOutput = fakeAdapter.output;
+    const replace = vi.fn();
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      beginReply: vi.fn(async () => ({ replace, close: vi.fn(async () => {}) })),
+      commitFinal: vi.fn(async () => undefined),
+    };
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn();
+      h.emit({ type: 'text', data: {
+        text: '预览 ![图](/private/project/chart.png) [报告](xdt-file:///private/project/report.pdf) ![托管图](cindy-media://images/demo.png) [网站](https://example.com)',
+        isFinal: false,
+      } });
+      await waitForAssertion(() => expect(replace).toHaveBeenCalledWith(expect.objectContaining({
+        body: '预览 图 报告 托管图 [网站](https://example.com)',
+      })));
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+    } finally {
+      fakeAdapter.output = previousOutput;
+    }
+  });
+
+  // 终稿里的每个出箱出口都必须带同一份授权根：渠道的 prepare 会用它再校验一次，
+  // 漏传会把合法附件全拒掉（降级出口曾经漏过）。
+  it('passes the approved file roots with host-resolved file attachments', async () => {
+    const workDir = mkdtempSync(path.join(tmpdir(), 'cindy-turn-roots-'));
+    writeFileSync(path.join(workDir, 'imbot-live.txt'), 'IMBOT-FILE-OK');
+    const tempRow = {
+      id: 'feishu-session',
+      agentKind: 'claude-code' as const,
+      workingDir: workDir,
+      model: 'claude-opus-4-7',
+      effort: 'xhigh' as const,
+      permissionMode: 'bypassPermissions' as const,
+      fastMode: false,
+      sdkSessionId: null,
+      providerId: null,
+    };
+    const previousPrepare = vi.mocked(fakeRepo.prepareNewSession).getMockImplementation();
+    const previousFind = mocks.findActiveSession.getMockImplementation();
+    const previousPeek = mocks.peekSessionById.getMockImplementation();
+    vi.mocked(fakeRepo.prepareNewSession).mockResolvedValue(tempRow);
+    mocks.findActiveSession.mockResolvedValue(tempRow);
+    mocks.peekSessionById.mockResolvedValue(tempRow);
+    const previousOutput = fakeAdapter.output;
+    const commitFinal = vi.fn(
+      async (_output: {
+        text: string;
+        fileAbsPaths?: string[];
+        allowedFileRoots?: string[];
+      }): Promise<{ status: 'sent'; unresolved: number; retrying: number }> => ({
+        status: 'sent',
+        unresolved: 0,
+        retrying: 0,
+      }),
+    );
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      beginReply: vi.fn(async () => undefined),
+      commitFinal,
+    };
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const { turnPromise } = await startDefaultTurn();
+      await turnPromise;
+      h.emit({
+        type: 'text',
+        data: { text: '已创建。\n[下载 imbot-live.txt](imbot-live.txt)', isFinal: true },
+      });
+      h.emit({ type: 'done', data: {} });
+      await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledTimes(1));
+      const payload = commitFinal.mock.calls[0]![0];
+      expect(payload.fileAbsPaths).toEqual([await realpath(path.join(workDir, 'imbot-live.txt'))]);
+      // 渠道侧会拿这份根再校验一次文件步; 必须与正常 finalize 一致。
+      expect(payload.allowedFileRoots).toEqual([workDir]);
+    } finally {
+      fakeAdapter.output = previousOutput;
+      if (previousPrepare) {
+        vi.mocked(fakeRepo.prepareNewSession).mockImplementation(previousPrepare);
+      }
+      if (previousFind) mocks.findActiveSession.mockImplementation(previousFind);
+      else mocks.findActiveSession.mockReset();
+      if (previousPeek) mocks.peekSessionById.mockImplementation(previousPeek);
+      else mocks.peekSessionById.mockReset();
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it('commits one terminal payload for a chunked-text output driver', async () => {
     const previousOutput = fakeAdapter.output;
     const beginReply = vi.fn(async () => undefined);
@@ -3318,7 +3532,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
       expect(mocks.feishuIm.startStreamingText).not.toHaveBeenCalled();
       expect(beginReply).toHaveBeenCalledOnce();
-      expect(beginReply).toHaveBeenCalledWith('ou_user');
+      expect(beginReply).toHaveBeenCalledWith('ou_user', { turnId: expect.any(String) });
       expect(commitFinal).toHaveBeenCalledTimes(1);
       expect(commitFinal).toHaveBeenCalledWith({
         userId: 'ou_user',
@@ -3326,7 +3540,60 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         terminal: 'done',
         threadTs: undefined,
         allowedFileRoots: ['F:\\XDMaker'],
+        turnId: expect.any(String),
       });
+    } finally {
+      fakeAdapter.output = previousOutput;
+    }
+  });
+
+  // 终稿交付边界: "已受理但没送达" 既不能报成 Agent 执行失败, 也不能报成已送达。
+  // 用户必须看得见一句可观察的提示, 且 turn 本身仍按正常收口。
+  it.each([
+    {
+      label: 'durable with retry',
+      outcome: { status: 'durable' as const, unresolved: 1, retrying: 1 },
+      expected: /尚未确认送达，会在网络恢复后自动补发/,
+    },
+    {
+      label: 'durable without retry',
+      outcome: { status: 'durable' as const, unresolved: 2, retrying: 0 },
+      expected: /不会自动重发/,
+    },
+    {
+      label: 'failed',
+      outcome: { status: 'failed' as const, unresolved: 1, retrying: 0 },
+      expected: /本轮输出未能送达/,
+    },
+  ])('tells the user when the terminal output was not confirmed ($label)', async ({ outcome, expected }) => {
+    const previousOutput = fakeAdapter.output;
+    const commitFinal = vi.fn(async () => outcome);
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      beginReply: vi.fn(async () => undefined),
+      commitFinal,
+    };
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const { turnPromise } = await startDefaultTurn();
+      await turnPromise;
+      h.emit({ type: 'text', data: { text: 'part of it', isFinal: true } });
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+
+      expect(commitFinal).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.sendMarkdownText).toHaveBeenCalledWith(
+        'ou_user',
+        expect.stringMatching(expected),
+        expect.anything(),
+      );
+      // 交付未确认不等于 Agent 执行失败: 不额外发 runtimeError。
+      expect(mocks.feishuIm.sendText).not.toHaveBeenCalledWith(
+        'ou_user',
+        expect.stringContaining('Agent 执行失败'),
+        expect.anything(),
+      );
     } finally {
       fakeAdapter.output = previousOutput;
     }
@@ -3357,11 +3624,12 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         },
       });
       h.emit({ type: 'done', data: {} });
-      await flushMicrotasks();
-
-      expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({
-        text: 'PR 技能、a.ts、[文档](https://example.com)、[报告](xdt-file:///tmp/r.pdf)、`[x](/tmp/x)`',
-      }));
+      // 含本机链接的终稿会多一次文件解析(realpath), 等它落地再断言文本投影。
+      await vi.waitFor(() =>
+        expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({
+          text: 'PR 技能、a.ts、[文档](https://example.com)、[报告](xdt-file:///tmp/r.pdf)、`[x](/tmp/x)`',
+        })),
+      );
     } finally {
       fakeAdapter.output = previousOutput;
     }
@@ -3415,6 +3683,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         threadTs: undefined,
         mediaAbsPaths: ['C:\\cindy-media\\generated.png'],
         allowedFileRoots: ['F:\\XDMaker'],
+        turnId: expect.any(String),
       });
     } finally {
       fakeAdapter.output = previousOutput;

@@ -12899,6 +12899,19 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "publicProgress": {
+          "working": "⚙️ 正在处理 · {{elapsed}}",
+          "workingSteps_one": "⚙️ 正在处理 · 已进行 {{count}} 步 · {{elapsed}}",
+          "workingSteps_other": "⚙️ 正在处理 · 已进行 {{count}} 步 · {{elapsed}}",
+          "writing": "✍️ 正在整理回答…"
+        },
+        "delivery": {
+          "failed": "⚠️ 本轮输出未能送达，请稍后重试。",
+          "retrying_one": "⚠️ 有 {{count}} 项内容尚未确认送达，会在网络恢复后自动补发。",
+          "retrying_other": "⚠️ 有 {{count}} 项内容尚未确认送达，会在网络恢复后自动补发。",
+          "uncertain_one": "⚠️ 有 {{count}} 项内容未确认送达，不会自动重发；若未收到请重新发送。",
+          "uncertain_other": "⚠️ 有 {{count}} 项内容未确认送达，不会自动重发；若未收到请重新发送。"
         }
       },
       "hook": {
@@ -13040,7 +13053,21 @@
           "planFooter": "回复“{{approve}}”继续，或回复“{{deny}}”取消。",
           "askNoQuestion": "Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。",
           "askIntro": "Agent 需要你的回答：",
-          "askFooter": "请回复选项序号，或直接输入你的回答。"
+          "askFooter": "请回复选项序号，或直接输入你的回答。",
+          "confirmCard": {
+            "planTitle": "计划待批准",
+            "planBody": "Agent 提交了一份执行计划，需要你决定是否继续。",
+            "permissionTitle": "需要确认操作",
+            "permissionBody": "需要确认工具「{{toolName}}」的这次操作。",
+            "permissionFallback": "需要你确认这次操作。",
+            "allowOnce": "允许本次操作",
+            "denyOnce": "拒绝本次操作",
+            "approvePlan": "批准计划",
+            "rejectPlan": "拒绝计划"
+          },
+          "planApproved": "✅ 已批准计划",
+          "planRejected": "❌ 已拒绝计划",
+          "planExpired": "⌛ 本次计划确认已失效"
         }
       },
       "dingtalk": {

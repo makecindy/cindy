@@ -44,3 +44,20 @@ describe('WeCom UI text follows the interface language', () => {
     expect(ui.agent.stopDone(2)).toBe('⏹ 已中止当前任务，并移除 2 条排队消息。');
   });
 });
+
+// #10202/r4558852226: delivery receipts must distinguish retrying from uncertain
+// delivery in the owner's language. Unit, production ui.agent entry, no IO.
+it('localizes delivery failures and preserves the automatic retry boundary', () => {
+  setMainLocale('en');
+  expect(ui.agent.deliveryNotice({ status: 'failed', unresolved: 1, retrying: 0 }))
+    .toContain('could not be delivered');
+  expect(ui.agent.deliveryNotice({ status: 'durable', unresolved: 1, retrying: 1 }))
+    .toContain('1 item has not been confirmed');
+  expect(ui.agent.deliveryNotice({ status: 'durable', unresolved: 2, retrying: 1 }))
+    .toContain('will retry automatically');
+  expect(ui.agent.deliveryNotice({ status: 'durable', unresolved: 2, retrying: 0 }))
+    .toContain('will not be resent automatically');
+  setMainLocale('de');
+  expect(ui.agent.deliveryNotice({ status: 'durable', unresolved: 2, retrying: 0 }))
+    .toContain('nicht automatisch erneut gesendet');
+});

@@ -12899,6 +12899,19 @@
           "allow": "허용",
           "deny": "거부",
           "approve": "승인"
+        },
+        "publicProgress": {
+          "working": "⚙️ 처리 중 · {{elapsed}}",
+          "workingSteps_one": "⚙️ 처리 중 · {{count}}단계 완료 · {{elapsed}}",
+          "workingSteps_other": "⚙️ 처리 중 · {{count}}단계 완료 · {{elapsed}}",
+          "writing": "✍️ 답변을 정리하고 있습니다…"
+        },
+        "delivery": {
+          "failed": "⚠️ 출력을 전달하지 못했습니다. 나중에 다시 시도하세요.",
+          "retrying_one": "⚠️ {{count}}개 항목의 전달이 확인되지 않았습니다. 네트워크가 복구되면 자동으로 다시 전송합니다.",
+          "retrying_other": "⚠️ {{count}}개 항목의 전달이 확인되지 않았습니다. 네트워크가 복구되면 자동으로 다시 전송합니다.",
+          "uncertain_one": "⚠️ {{count}}개 항목의 전달이 확인되지 않았습니다. 자동으로 재전송하지 않으므로 받지 못했다면 요청을 다시 보내세요.",
+          "uncertain_other": "⚠️ {{count}}개 항목의 전달이 확인되지 않았습니다. 자동으로 재전송하지 않으므로 받지 못했다면 요청을 다시 보내세요."
         }
       },
       "hook": {
@@ -13040,7 +13053,21 @@
           "planFooter": "계속하려면 ‘{{approve}}’, 취소하려면 ‘{{deny}}’라고 답장하세요.",
           "askNoQuestion": "Agent가 답변을 기다리고 있지만 표시할 질문이 없습니다. ‘계속’이라고 답장하세요.",
           "askIntro": "Agent에 답변이 필요합니다:",
-          "askFooter": "선택지 번호로 답장하거나 답변을 직접 입력하세요."
+          "askFooter": "선택지 번호로 답장하거나 답변을 직접 입력하세요.",
+          "confirmCard": {
+            "planTitle": "계획 승인 대기 중",
+            "planBody": "Agent가 실행 계획을 제출했습니다. 계속할지 결정하세요.",
+            "permissionTitle": "작업 확인 필요",
+            "permissionBody": "“{{toolName}}” 도구의 이번 작업을 확인하세요.",
+            "permissionFallback": "이번 작업은 확인이 필요합니다.",
+            "allowOnce": "이번만 허용",
+            "denyOnce": "작업 거부",
+            "approvePlan": "계획 승인",
+            "rejectPlan": "계획 거부"
+          },
+          "planApproved": "✅ 계획이 승인되었습니다",
+          "planRejected": "❌ 계획이 거부되었습니다",
+          "planExpired": "⌛ 이번 계획 확인은 만료되었습니다"
         }
       },
       "dingtalk": {

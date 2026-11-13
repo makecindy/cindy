@@ -12899,6 +12899,19 @@
           "allow": "允許",
           "deny": "拒絕",
           "approve": "批准"
+        },
+        "publicProgress": {
+          "working": "⚙️ 正在處理 · {{elapsed}}",
+          "workingSteps_one": "⚙️ 正在處理 · 已進行 {{count}} 步 · {{elapsed}}",
+          "workingSteps_other": "⚙️ 正在處理 · 已進行 {{count}} 步 · {{elapsed}}",
+          "writing": "✍️ 正在整理回答…"
+        },
+        "delivery": {
+          "failed": "⚠️ 本輪輸出未能送達，請稍後重試。",
+          "retrying_one": "⚠️ 有 {{count}} 項內容尚未確認送達，會在網路恢復後自動補發。",
+          "retrying_other": "⚠️ 有 {{count}} 項內容尚未確認送達，會在網路恢復後自動補發。",
+          "uncertain_one": "⚠️ 有 {{count}} 項內容未確認送達，不會自動重發；若未收到請重新傳送。",
+          "uncertain_other": "⚠️ 有 {{count}} 項內容未確認送達，不會自動重發；若未收到請重新傳送。"
         }
       },
       "hook": {
@@ -13040,7 +13053,21 @@
           "planFooter": "回覆「{{approve}}」繼續，或回覆「{{deny}}」取消。",
           "askNoQuestion": "Agent 正在等待你的回答，但沒有可顯示的問題。請回覆「繼續」。",
           "askIntro": "Agent 需要你的回答：",
-          "askFooter": "請回覆選項編號，或直接輸入你的回答。"
+          "askFooter": "請回覆選項編號，或直接輸入你的回答。",
+          "confirmCard": {
+            "planTitle": "計畫待批准",
+            "planBody": "Agent 提交了一份執行計畫，需要你決定是否繼續。",
+            "permissionTitle": "需要確認操作",
+            "permissionBody": "需要確認工具「{{toolName}}」的這次操作。",
+            "permissionFallback": "需要你確認這次操作。",
+            "allowOnce": "允許本次操作",
+            "denyOnce": "拒絕本次操作",
+            "approvePlan": "批准計畫",
+            "rejectPlan": "拒絕計畫"
+          },
+          "planApproved": "✅ 已批准計畫",
+          "planRejected": "❌ 已拒絕計畫",
+          "planExpired": "⌛ 本次計畫確認已失效"
         }
       },
       "dingtalk": {

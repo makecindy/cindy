@@ -392,6 +392,18 @@ export interface ImUiTextPack {
     stopIdle: string;
     /** 远程控制时转播自动任务(scheduler)turn 的卡片头。name 为空时用通用文案。 */
     scheduledTaskHeader: (name: string | null) => string;
+    /**
+     * 终稿交付边界提示(可选): 部分内容未确认送达时发给用户的一句话。
+     *
+     * `durable` 表示已被持久出箱受理(是否重试看 retrying), `failed` 表示未完整
+     * 送达且无持久补发保障，可能已有部分送达。
+     * 不能把“已受理”说成“已送达”，也不是 Agent 执行失败。
+     */
+    deliveryNotice?: (args: {
+      status: 'durable' | 'failed';
+      unresolved: number;
+      retrying: number;
+    }) => string;
     unsupportedOnly: (entries: IMUnsupportedEntry[]) => string;
     unsupportedNotice: (entries: IMUnsupportedEntry[]) => string;
     /** 伙伴当前不能接消息(暂停 / 归档等)时的渠道提示。缺省用 runtimeError 包一层。 */

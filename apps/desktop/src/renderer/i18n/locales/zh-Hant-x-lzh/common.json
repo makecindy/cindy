@@ -12899,6 +12899,19 @@
           "allow": "允許",
           "deny": "拒絕",
           "approve": "批准"
+        },
+        "publicProgress": {
+          "working": "⚙️ 正處理 · {{elapsed}}",
+          "workingSteps_one": "⚙️ 正處理 · 已行 {{count}} 步 · {{elapsed}}",
+          "workingSteps_other": "⚙️ 正處理 · 已行 {{count}} 步 · {{elapsed}}",
+          "writing": "✍️ 正理答覆…"
+        },
+        "delivery": {
+          "failed": "⚠️ 此番輸出未達，請稍後重試。",
+          "retrying_one": "⚠️ 尚有 {{count}} 項未確認送達，網路復通後將自動補發。",
+          "retrying_other": "⚠️ 尚有 {{count}} 項未確認送達，網路復通後將自動補發。",
+          "uncertain_one": "⚠️ 尚有 {{count}} 項未確認送達，不自動重發；若未收到，請重發所請。",
+          "uncertain_other": "⚠️ 尚有 {{count}} 項未確認送達，不自動重發；若未收到，請重發所請。"
         }
       },
       "hook": {
@@ -13040,7 +13053,21 @@
           "planFooter": "覆「{{approve}}」則續，覆「{{deny}}」則罷。",
           "askNoQuestion": "Agent 待君之答，然無可示之問。請覆「繼續」。",
           "askIntro": "Agent 待君之答：",
-          "askFooter": "請覆選項之序號，或徑書君之答。"
+          "askFooter": "請覆選項之序號，或徑書君之答。",
+          "confirmCard": {
+            "planTitle": "計畫待允",
+            "planBody": "Agent 已呈計畫，請定是否續行。",
+            "permissionTitle": "操作待確認",
+            "permissionBody": "請確認工具「{{toolName}}」此次操作。",
+            "permissionFallback": "請確認此次操作。",
+            "allowOnce": "允此次操作",
+            "denyOnce": "拒此次操作",
+            "approvePlan": "批准計畫",
+            "rejectPlan": "拒絕計畫"
+          },
+          "planApproved": "✅ 計畫已允",
+          "planRejected": "❌ 計畫已拒",
+          "planExpired": "⌛ 此次計畫確認已失效"
         }
       },
       "dingtalk": {

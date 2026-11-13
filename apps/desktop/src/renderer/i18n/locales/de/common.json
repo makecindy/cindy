@@ -12952,6 +12952,19 @@
           "allow": "erlauben",
           "deny": "ablehnen",
           "approve": "genehmigen"
+        },
+        "publicProgress": {
+          "working": "⚙️ In Bearbeitung · {{elapsed}}",
+          "workingSteps_one": "⚙️ In Bearbeitung · {{count}} Schritt abgeschlossen · {{elapsed}}",
+          "workingSteps_other": "⚙️ In Bearbeitung · {{count}} Schritte abgeschlossen · {{elapsed}}",
+          "writing": "✍️ Antwort wird vorbereitet…"
+        },
+        "delivery": {
+          "failed": "⚠️ Die Ausgabe konnte nicht zugestellt werden. Versuche es später erneut.",
+          "retrying_one": "⚠️ Die Zustellung von {{count}} Element ist nicht bestätigt. Sobald das Netzwerk wieder verfügbar ist, wird der Versand automatisch erneut versucht.",
+          "retrying_other": "⚠️ Die Zustellung von {{count}} Elementen ist nicht bestätigt. Sobald das Netzwerk wieder verfügbar ist, wird der Versand automatisch erneut versucht.",
+          "uncertain_one": "⚠️ Die Zustellung von {{count}} Element ist nicht bestätigt. Es wird nicht automatisch erneut gesendet. Sende deine Anfrage erneut, falls du es nicht erhalten hast.",
+          "uncertain_other": "⚠️ Die Zustellung von {{count}} Elementen ist nicht bestätigt. Sie werden nicht automatisch erneut gesendet. Sende deine Anfrage erneut, falls du sie nicht erhalten hast."
         }
       },
       "hook": {
@@ -13094,7 +13107,21 @@
           "planFooter": "Antworte mit „{{approve}}“, um fortzufahren, oder mit „{{deny}}“, um abzubrechen.",
           "askNoQuestion": "Der Agent wartet auf deine Antwort, aber es gibt keine Frage zum Anzeigen. Antworte mit „weiter“.",
           "askIntro": "Der Agent braucht deine Antwort:",
-          "askFooter": "Antworte mit der Nummer einer Option oder gib deine Antwort direkt ein."
+          "askFooter": "Antworte mit der Nummer einer Option oder gib deine Antwort direkt ein.",
+          "confirmCard": {
+            "planTitle": "Plan wartet auf Genehmigung",
+            "planBody": "Der Agent hat einen Plan vorgelegt. Entscheide, ob es weitergehen soll.",
+            "permissionTitle": "Aktion muss bestätigt werden",
+            "permissionBody": "Bestätige diese Aktion des Tools „{{toolName}“.",
+            "permissionFallback": "Diese Aktion benötigt deine Bestätigung.",
+            "allowOnce": "Einmal erlauben",
+            "denyOnce": "Aktion ablehnen",
+            "approvePlan": "Plan genehmigen",
+            "rejectPlan": "Plan ablehnen"
+          },
+          "planApproved": "✅ Plan genehmigt",
+          "planRejected": "❌ Plan abgelehnt",
+          "planExpired": "⌛ Diese Planbestätigung ist abgelaufen"
         }
       },
       "dingtalk": {

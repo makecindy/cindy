@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   WSClient,
   type BaseMessage,
+  type EventMessage,
   type FileMessage,
   type ImageMessage,
   type MixedMessage,
@@ -15,14 +16,23 @@ import {
 
 import { classifyInboundAttachment } from "../inboundKind.js";
 import { BaseIM } from "../BaseIM.js";
-import type { ImFinalOutput, TextChannelIM } from "../channelIM.js";
+import type {
+  ImFinalCommitOutcome,
+  ImFinalDeliveryPlan,
+  ImFinalDeliveryResult,
+  ImFinalOutput,
+  ImProgressHandle,
+  TextChannelIM,
+} from "../channelIM.js";
 import type { Logger } from "../logger.js";
 import type {
   IMAttachment,
+  IMCardActionEvent,
   IMHost,
   IMMessageEvent,
   IMStatus,
   IMUnsupportedEntry,
+  InteractiveCardSpec,
   SendFileResult,
 } from "../types.js";
 import {
@@ -32,11 +42,17 @@ import {
   stripXdtImageLinks,
 } from "../xdtRefs.js";
 import {
+  buildWecomTemplateCard,
+  parseTemplateCardEvent,
+  type WecomLiveCard,
+} from "./cards.js";
+import {
   chunkWecomMarkdown,
   decodeWecomLane,
   encodeWecomGroupLane,
   escapeWecomMarkdown,
 } from "./codec.js";
+import { deliverWecomFinal, prepareWecomFinal } from "./finalDelivery.js";
 import {
   MAX_MEDIA_BYTES,
   mimeTypeForFilename,
@@ -45,6 +61,7 @@ import {
   resolveAllowedWecomOutboundFile,
   safeWecomFilename,
 } from "./media.js";
+import { createWecomProgress } from "./progress.js";
 import { tt } from "../transportText.js";
 
 const BOT_ID_SECRET_KEY = "wecom-bot-id";
@@ -81,7 +98,14 @@ interface PendingResponse {
   streamId: string;
   startedAt: number;
   passiveStarted: boolean;
+  /** 终稿已交付(或本轮收口): 之后任何迟到的进度帧都必须丢弃。 */
+  closed: boolean;
+  /** 属于哪一轮: 终稿按它精确领取回调窗口, 不能按 FIFO 偷别人的。 */
+  turnId?: string;
 }
+
+/** 确认卡的生命周期上限, 与文字交互的等待上限无关(卡片只等点击)。 */
+const CARD_TTL_MS = 30 * 60_000;
 
 export interface WecomIMOptions {
   clientFactory?: (options: WSClientOptions) => WSClient;
@@ -120,6 +144,9 @@ export class WecomIM extends BaseIM implements TextChannelIM {
   private readonly pendingResponses = new Map<string, PendingResponse[]>();
   private readonly inboundTails = new Map<string, Promise<void>>();
   private readonly seenMessageIds = new Set<string>();
+  /** 已发出的确认卡(token → 语义值 / 点击帧)。 */
+  private readonly liveCards = new Map<string, WecomLiveCard>();
+  private readonly cardActionHandlers = new Set<(event: IMCardActionEvent) => void>();
   private readonly now: () => number;
   private client: WSClient | null = null;
   private status: IMStatus = { kind: "idle" };
@@ -153,6 +180,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     this.generation += 1;
     this.pendingFrames.clear();
     this.pendingResponses.clear();
+    this.liveCards.clear();
     this.inboundTails.clear();
     this.seenMessageIds.clear();
     this.client?.disconnect();
@@ -253,6 +281,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     this.client = null;
     this.pendingFrames.clear();
     this.pendingResponses.clear();
+    this.liveCards.clear();
     this.inboundTails.clear();
     this.seenMessageIds.clear();
     this.host.secrets.remove(this.key(BOT_ID_SECRET_KEY));
@@ -308,6 +337,22 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     return () => this.statusHandlers.delete(handler);
   }
 
+  /** 确认卡按钮点击(只认当前主人; 回调不需要等模型)。 */
+  onCardAction(handler: (event: IMCardActionEvent) => void): () => void {
+    this.cardActionHandlers.add(handler);
+    return () => this.cardActionHandlers.delete(handler);
+  }
+
+  /** 企业微信智能机器人长连接支持模板卡片(无需额外模板配置)。 */
+  get supportsTemplateCards(): boolean {
+    return true;
+  }
+
+  /** 当前长连接是否可用(持久出箱据此区分“离线”与“投递失败”)。 */
+  isConnected(): boolean {
+    return Boolean(this.client?.isConnected && this.isCurrent(this.client, this.generation));
+  }
+
   onTextMessageIntercept(handler: TextInterceptor): () => void {
     this.textInterceptors.add(handler);
     return () => this.textInterceptors.delete(handler);
@@ -338,25 +383,26 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     let uploaded = false;
     try {
       const client = this.requireConnectedClient();
+      const generation = this.generation;
       const local = await readWecomOutboundFile(absPath, displayName);
+      if (!this.isCurrent(client, generation) || !client.isConnected)
+        return { ok: false, reason: "NOT_CONNECTED" };
       const result = await client.uploadMedia(local.buffer, {
         type: local.mediaType,
         filename: local.filename,
       });
       uploaded = true;
+      // Upload is not delivery: unlinking/switching accounts while it awaits
+      // must prevent the old operation from issuing a new message.
+      if (!this.isCurrent(client, generation) || !client.isConnected)
+        return { ok: false, reason: "NOT_CONNECTED" };
       const lane = decodeWecomLane(userId);
       const frame =
         opts?.usePendingFrame === false ? null : this.claimNewestFrame(userId);
       if (frame) {
-        try {
-          await client.replyMedia(frame, local.mediaType, result.media_id);
-          return { ok: true, messageId: randomUUID() };
-        } catch (error) {
-          this.log.warn(
-            "passive media reply failed; using active send",
-            safeError(error),
-          );
-        }
+        // A lost ACK does not prove the attachment was not delivered.
+        await client.replyMedia(frame, local.mediaType, result.media_id);
+        return { ok: true, messageId: randomUUID() };
       }
       await client.sendMediaMessage(
         lane.targetId,
@@ -373,7 +419,8 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       if (code === "WECOM_FILE_TOO_LARGE")
         return { ok: false, reason: "TOO_LARGE" };
       if (error instanceof Error && error.message === "WECOM_NOT_CONNECTED") {
-        return { ok: false, reason: "SEND_FAIL" };
+        // 一个字节也没发: 确定失败, 不是“结果不明”。
+        return { ok: false, reason: "NOT_CONNECTED" };
       }
       this.log.warn("failed to send media", safeError(error));
       return { ok: false, reason: uploaded ? "SEND_FAIL" : "UPLOAD_FAIL" };
@@ -384,17 +431,27 @@ export class WecomIM extends BaseIM implements TextChannelIM {
    * Preserve the callback reply window before the Agent starts. The final
    * response reuses this stream id; after the safe window it falls back to an
    * active markdown message.
+   *
+   * 返回这一轮的过程反馈面: 真正用同一个 streamId 原地刷新公开进度, 终稿
+   * (`commitFinal`) 用 `finish=true` 收口同一消息。没有可用回调窗口时返回 null
+   * (终稿改走主动发送)。
    */
-  async beginReply(userId: string): Promise<void> {
+  async beginReply(
+    userId: string,
+    opts?: { turnId?: string },
+  ): Promise<ImProgressHandle | null> {
     const client = this.requireConnectedClient();
+    const generation = this.generation;
     const response: PendingResponse = {
       frame: this.claimOldestFrame(userId),
       streamId: randomUUID(),
       startedAt: this.now(),
       passiveStarted: false,
+      closed: false,
+      ...(opts?.turnId ? { turnId: opts.turnId } : {}),
     };
     this.enqueueResponse(userId, response);
-    if (!response.frame) return;
+    if (!response.frame) return null;
     try {
       await client.replyStream(response.frame, response.streamId, " ", false);
       response.passiveStarted = true;
@@ -403,101 +460,86 @@ export class WecomIM extends BaseIM implements TextChannelIM {
         "failed to start passive stream; final reply will use active send",
         safeError(error),
       );
+      response.closed = true;
+      return null;
     }
+    if (this.client !== client || this.generation !== generation) {
+      response.closed = true;
+      return null;
+    }
+    const frame = response.frame;
+    const progressClient = client;
+    return createWecomProgress({
+      userId,
+      ...(opts?.turnId ? { turnId: opts.turnId } : {}),
+      streamId: response.streamId,
+      now: this.now,
+      shouldContinue: () =>
+        !response.closed && this.isCurrent(progressClient, generation),
+      replyStream: async (streamId, content) => {
+        // 非阻塞版: 上一帧未 ack 时 SDK 直接跳过, 避免中间帧排队堆积。
+        const sender =
+          typeof progressClient.replyStreamNonBlocking === "function"
+            ? progressClient.replyStreamNonBlocking.bind(progressClient)
+            : progressClient.replyStream.bind(progressClient);
+        await sender(frame, streamId, content, false);
+      },
+      log: this.log,
+    });
   }
 
-  async commitFinal(output: ImFinalOutput): Promise<void> {
-    const fileLinks = collectXdtFileLinks(output.text);
-    const imageUrls = collectXdtImageUrls(output.text);
-    const attachments: Array<{ absPath: string; displayName?: string }> = [];
-    const seenPaths = new Set<string>();
-    const addAttachment = (absPath: string, displayName?: string) => {
-      if (seenPaths.has(absPath)) return;
-      seenPaths.add(absPath);
-      attachments.push({
-        absPath,
-        ...(displayName ? { displayName } : {}),
-      });
-    };
-    let rejectedFileCount = 0;
-    let unresolvedImageCount = 0;
-    for (const link of fileLinks) {
-      const resolved = await resolveAllowedWecomOutboundFile(
-        link.absPath,
-        output.allowedFileRoots ?? [],
-      );
-      if (!resolved) {
-        rejectedFileCount += 1;
-        this.log.warn("skipped terminal file attachment outside allowed roots");
-        continue;
-      }
-      addAttachment(resolved, link.alt || undefined);
-    }
-    for (const url of imageUrls) {
-      const absPath = this.host.media?.resolveMediaUrl(url) ?? null;
-      if (absPath) {
-        addAttachment(absPath);
-      } else {
-        unresolvedImageCount += 1;
-        this.log.warn("failed to resolve terminal managed image", { url });
-      }
-    }
-    for (const absPath of output.mediaAbsPaths ?? []) addAttachment(absPath);
+  /** cindy-media 地址 → 本机绝对路径(出箱补发时重新解析媒体)。 */
+  resolveOutboundMediaUrl(url: string): string | null {
+    return this.host.media?.resolveMediaUrl?.(url) ?? null;
+  }
 
-    const omittedAttachmentCount = Math.max(
-      0,
-      attachments.length - MAX_TERMINAL_ATTACHMENTS,
+  /** 把终稿拆成「正文 + 逐项附件」的可重放计划(持久出箱用)。 */
+  prepareFinal(output: ImFinalOutput): Promise<ImFinalDeliveryPlan> {
+    return prepareWecomFinal(output, {
+      resolveMediaUrl: (url) => this.resolveOutboundMediaUrl(url),
+      log: this.log,
+    });
+  }
+
+  /** 按计划逐项投递, 每一项返回独立结果。 */
+  deliverFinal(
+    output: ImFinalOutput,
+    plan: ImFinalDeliveryPlan,
+    opts?: { onlySteps?: string[] },
+  ): Promise<ImFinalDeliveryResult> {
+    const client = this.client;
+    const generation = this.generation;
+    return deliverWecomFinal(
+      {
+        userId: output.userId,
+        isConnected: () => Boolean(client?.isConnected && this.isCurrent(client, generation)),
+        sendTextChunk: (index, text) =>
+          this.sendFinalChunk(output.userId, index, text, output.turnId),
+        sendFile: (absPath, displayName) =>
+          this.sendFile(output.userId, absPath, displayName, {
+            usePendingFrame: false,
+          }),
+        log: this.log,
+      },
+      plan,
+      opts,
     );
-    const attachmentNotice = omittedAttachmentCount
-      ? tt(
-          "imBot.text.transport.wecom.attachmentsOmitted",
-          "⚠️ 另有 {{count}} 个附件未发送（企业微信单次最多发送 {{max}} 个）。",
-          { count: omittedAttachmentCount, max: MAX_TERMINAL_ATTACHMENTS },
-        )
-      : "";
-    const rejectedFileNotice = rejectedFileCount
-      ? tt(
-          "imBot.text.transport.wecom.filesRejected",
-          "⚠️ 有 {{count}} 个文件附件未发送（不在当前工作目录内或无法验证）。",
-          { count: rejectedFileCount },
-        )
-      : "";
-    const unresolvedImageNotice = unresolvedImageCount
-      ? tt(
-          "imBot.text.transport.wecom.imagesUnresolved",
-          "⚠️ 有 {{count}} 张图片未发送（图片已不存在或无法读取）。",
-          { count: unresolvedImageCount },
-        )
-      : "";
-    const visibleText = [
-      stripXdtFileLinks(stripXdtImageLinks(output.text)).trim(),
-      attachmentNotice,
-      rejectedFileNotice,
-      unresolvedImageNotice,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-    const chunks = chunkWecomMarkdown(
-      visibleText ||
-        (attachments.length > 0 ? tt("imBot.text.transport.wecom.attachmentsBelow", "📎 附件如下") : ""),
-    );
-    await this.sendFinalChunks(output.userId, chunks);
-    let failedAttachmentCount = 0;
-    for (const attachment of attachments.slice(0, MAX_TERMINAL_ATTACHMENTS)) {
-      const result = await this.sendFile(
-        output.userId,
-        attachment.absPath,
-        attachment.displayName,
-        { usePendingFrame: false },
-      );
-      if (!result.ok) {
-        failedAttachmentCount += 1;
-        this.log.warn("failed to send terminal attachment", {
-          reason: result.reason,
-        });
-      }
+  }
+
+  async commitFinal(output: ImFinalOutput): Promise<ImFinalCommitOutcome> {
+    const client = this.client;
+    const generation = this.generation;
+    const plan = await this.prepareFinal(output);
+    if (!client || !this.isCurrent(client, generation)) {
+      return { status: "failed", unresolved: plan.steps.length, retrying: 0 };
     }
-    if (failedAttachmentCount > 0) {
+    const result = await this.deliverFinal(output, plan);
+    const unresolved = result.states.filter((state) => state !== "sent").length;
+    const retrying = 0;
+    const failed = plan.steps.filter(
+      (step, index) => step.kind !== "text" && result.states[index] === "failed",
+    ).length;
+    if (failed > 0 && this.isCurrent(client, generation)) {
       try {
         await this.sendChunks(
           output.userId,
@@ -505,16 +547,158 @@ export class WecomIM extends BaseIM implements TextChannelIM {
             tt(
               "imBot.text.transport.wecom.attachmentsFailed",
               "⚠️ 有 {{count}} 个附件发送失败，请稍后重试。",
-              { count: failedAttachmentCount },
+              { count: failed },
             ),
           ),
           "none",
         );
-      } catch (error) {
-        this.log.warn(
-          "failed to report terminal attachment delivery failure",
-          safeError(error),
-        );
+      } catch {
+        this.log.warn("failed to report terminal attachment delivery failure");
+      }
+    }
+    // 这条路径没有持久出箱, 所以不能声称“稍后自动补发”。
+    return { status: unresolved === 0 ? "sent" : "failed", unresolved, retrying };
+  }
+
+  // ── 确认卡 ────────────────────────────────────────────────────────────────
+
+  /**
+   * 发一张确认卡(模板卡片 button_interaction)。按钮点击只回流一个选择, 不唤醒
+   * 模型; 无可用回调窗口时用主动发送把卡片推到会话里。
+   */
+  async sendInteractiveCard(
+    userId: string,
+    spec: InteractiveCardSpec,
+    options?: { onRegistered?: (messageId: string) => void },
+  ): Promise<{ messageId: string }> {
+    const client = this.requireConnectedClient();
+    if (!this.ownerUserId) throw new Error("WECOM_CARD_OWNER_REQUIRED");
+    this.pruneCards();
+    const lane = decodeWecomLane(userId);
+    const taskId = `cindy-${randomUUID().replace(/-/g, "")}`.slice(0, 128);
+    const cardId = randomUUID();
+    const actions = new Map<string, { value: string; label: string }>();
+    const buttons = spec.buttons.slice(0, 6).map((button) => {
+      const token = randomUUID();
+      actions.set(token, {
+        value: typeof button.payload?.value === "string" ? button.payload.value : button.id,
+        label: button.label,
+      });
+      return { token, label: button.label, ...(button.type ? { type: button.type } : {}) };
+    });
+    const card: WecomLiveCard = {
+      id: cardId,
+      lane: userId,
+      taskId,
+      title: spec.title ?? "Cindy",
+      body: spec.body,
+      actions,
+      answered: false,
+      createdAt: this.now(),
+      expiresAt: this.now() + CARD_TTL_MS,
+    };
+    const templateCard = buildWecomTemplateCard({
+      taskId,
+      title: card.title,
+      body: card.body,
+      buttons,
+    });
+    // Register before IO: 点击事件可能比 HTTP 响应更早到。
+    this.liveCards.set(cardId, card);
+    try {
+      // Let the host bind the request before any network callback can arrive.
+      options?.onRegistered?.(cardId);
+      const frame = this.claimNewestFrame(userId);
+      if (frame) {
+        await client.replyTemplateCard(frame, templateCard);
+      } else {
+        await client.sendMessage(lane.targetId, {
+          msgtype: "template_card",
+          template_card: templateCard,
+        });
+      }
+      return { messageId: cardId };
+    } catch (error) {
+      this.liveCards.delete(cardId);
+      throw error;
+    }
+  }
+
+  /**
+   * 作废一张确认卡。
+   *
+   * **只做本地失效, 不调用平台更新**: 平台要求 `update_template_card` 带完整合法的
+   * 卡片结构 —— 空按钮的 `button_interaction` 被拒(40016), 无跳转的 `text_notice`
+   * 也被拒(42045 `card_action Missing or Invalid`, 官方社区确认该卡型更新只接受
+   * 跳转 1/2)。我们不编造跳转、不伪造点击帧, 也不试其它卡型, 因此远端按钮可能短暂
+   * 仍可见; 但卡片已移出活卡表, 迟到/重复点击不会再产成交互事件, 结果由调用方另发
+   * 文字告知。
+   *
+   * 仍然接受 `spec.buttons` 非空的调用(用于将来拿到合规结构时更新); 当前没有调用方
+   * 走这条路径, 因此也不会产生无效网络请求。
+   */
+  async updateInteractiveCard(
+    messageId: string,
+    spec: InteractiveCardSpec,
+  ): Promise<void> {
+    const card = this.liveCards.get(messageId);
+    if (!card) return;
+    if (!spec.buttons.length) {
+      // 本地失效: 撤 token、标已答、移出活卡。此后点击一律忽略。
+      card.actions.clear();
+      card.answered = true;
+      this.liveCards.delete(messageId);
+      return;
+    }
+    // 有按钮的原地更新暂时没有生产用途, 也不猜平台结构: 保持卡片原样。
+    void spec;
+  }
+
+  private pruneCards(): void {
+    const now = this.now();
+    for (const [id, card] of this.liveCards) {
+      if (card.expiresAt <= now) this.liveCards.delete(id);
+    }
+  }
+
+  /** 模板卡片点击: 只接受当前主人, 且必须命中未过期的活卡片 token。 */
+  private acceptTemplateCardEvent(
+    frame: WsFrame<EventMessage>,
+    client: WSClient,
+    generation: number,
+  ): void {
+    if (!this.isCurrent(client, generation)) return;
+    const parsed = parseTemplateCardEvent(frame.body);
+    if (!parsed) return;
+    const sender = frame.body?.from?.userid?.trim() ?? "";
+    if (!this.ownerUserId || sender !== this.ownerUserId) return;
+    this.pruneCards();
+    const card = [...this.liveCards.values()].find((item) => item.taskId === parsed.taskId);
+    if (!card) return;
+    const action = card.actions.get(parsed.eventKey);
+    if (!action) return;
+    if (card.answered) {
+      // 重复点击: 卡片早已本地作废, 不再提交第二份选择。
+      return;
+    }
+    card.answered = true;
+    card.actions.clear();
+    const lane = card.lane;
+    const event: IMCardActionEvent = {
+      channelName: this.name,
+      senderId: lane,
+      chatId: frame.body?.chatid || sender,
+      messageId: card.id,
+      buttonId: parsed.eventKey,
+      payload: { value: action.value, label: action.label },
+    };
+    // 先把卡片本地作废再交给业务层: 回执不等待任何模型; 不调用平台更新。
+    this.liveCards.delete(card.id);
+    for (const handler of this.cardActionHandlers) {
+      try {
+        handler(event);
+      } catch {
+        this.log.warn("wecom card action handler failed");
       }
     }
   }
@@ -528,6 +712,9 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     this.pendingFrames.clear();
     this.pendingResponses.clear();
     this.lastAuthFailureReason = "";
+    // Tokens belong to the connection that issued them, even if bot/owner stay
+    // the same across a credential reload.
+    this.liveCards.clear();
     this.setStatus({ kind: "connecting" });
 
     const clientFactory =
@@ -577,6 +764,13 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       if (!this.isCurrent(client, generation)) return;
       serverConflict = true;
       this.setStatus({ kind: "conflict", appId: botId });
+    });
+    client.on("event.template_card_event", (frame) => {
+      try {
+        this.acceptTemplateCardEvent(frame, client, generation);
+      } catch (error) {
+        this.log.warn("wecom card callback handler failed", safeError(error));
+      }
     });
     client.on("message.text", (frame) =>
       this.queueInbound(frame, () =>
@@ -1049,13 +1243,40 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     return { messageId: firstId };
   }
 
+  /**
+   * 发第 index 段终稿正文。index=0 可以复用本轮流式消息(并把它 finish 掉);
+   * 之后的段是独立的 markdown 消息。空正文的第 0 段只负责把流式消息收敛掉。
+   */
+  private async sendFinalChunk(
+    userId: string,
+    index: number,
+    text: string,
+    turnId?: string,
+  ): Promise<void> {
+    if (index === 0) {
+      await this.sendFinalChunks(userId, text ? [text] : [], turnId);
+      return;
+    }
+    const client = this.requireConnectedClient();
+    const lane = decodeWecomLane(userId);
+    await client.sendMessage(lane.targetId, {
+      msgtype: "markdown",
+      markdown: { content: text },
+    });
+  }
+
   private async sendFinalChunks(
     userId: string,
     chunks: string[],
+    turnId?: string,
   ): Promise<{ messageId: string }> {
     const client = this.requireConnectedClient();
     const lane = decodeWecomLane(userId);
-    const response = this.claimOldestResponse(userId);
+    // 只领取**本轮**的回调窗口: 上一轮留下的窗口(断开、失败、迟到补发)不能挪用,
+    // 否则两轮交错时正文会写进对方的 req。
+    const response = this.claimResponse(userId, turnId);
+    // 终稿一旦开始交付, 本轮的过程面就作废 —— 任何迟到进度不得覆盖终稿。
+    if (response) response.closed = true;
     const messageId = response?.streamId ?? randomUUID();
     let start = 0;
 
@@ -1064,20 +1285,15 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       response.passiveStarted &&
       this.now() - response.startedAt < STREAM_SAFE_TIMEOUT_MS
     ) {
-      try {
-        await client.replyStream(
-          response.frame,
-          response.streamId,
-          chunks[0] ?? " ",
-          true,
-        );
-        start = 1;
-      } catch (error) {
-        this.log.warn(
-          "passive stream finalization failed; using active send",
-          safeError(error),
-        );
-      }
+      // Once attempted, an ACK failure is uncertain: let the outbox record it
+      // instead of issuing a second message that may duplicate the final.
+      await client.replyStream(
+        response.frame,
+        response.streamId,
+        chunks[0] ?? " ",
+        true,
+      );
+      start = 1;
     }
 
     for (let index = start; index < chunks.length; index += 1) {
@@ -1090,7 +1306,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
   }
 
   private requireConnectedClient(): WSClient {
-    if (!this.client || !this.client.isConnected)
+    if (!this.client || !this.isConnected())
       throw new Error("WECOM_NOT_CONNECTED");
     return this.client;
   }
@@ -1134,12 +1350,37 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     this.pendingResponses.set(lane, queue);
   }
 
-  private claimOldestResponse(lane: string): PendingResponse | null {
-    const queue = this.pendingResponses.get(lane) ?? [];
-    const found = queue.shift() ?? null;
+  /** 只取仍可用的响应窗口(超过安全期的窗口已经无法被动回复)。 */
+  private liveResponses(lane: string): PendingResponse[] {
+    const minimum = this.now() - STREAM_SAFE_TIMEOUT_MS;
+    return (this.pendingResponses.get(lane) ?? []).filter(
+      (item) => item.startedAt >= minimum,
+    );
+  }
+
+  private updateResponseQueue(lane: string, queue: PendingResponse[]): void {
     if (queue.length) this.pendingResponses.set(lane, queue);
     else this.pendingResponses.delete(lane);
-    return found;
+  }
+
+  /**
+   * 领取本轮的回调窗口。
+   *
+   * - 有 `turnId`(正常路径): 只认同一轮的窗口; 没有就返回 null → 走主动发送。
+   * - 无 `turnId`(旧调用): 只取**同样没有身份**的最早窗口, 绝不挪用带身份的窗口。
+   */
+  private claimResponse(lane: string, turnId: string | undefined): PendingResponse | null {
+    const queue = this.liveResponses(lane);
+    const index = turnId
+      ? queue.findIndex((item) => item.turnId === turnId)
+      : queue.findIndex((item) => item.turnId === undefined);
+    if (index < 0) {
+      this.updateResponseQueue(lane, queue);
+      return null;
+    }
+    const [found] = queue.splice(index, 1);
+    this.updateResponseQueue(lane, queue);
+    return found ?? null;
   }
 
   private claimNewestFrame(lane: string): WecomFrame | null {

@@ -13063,6 +13063,22 @@
           "allow": "autoriser",
           "deny": "refuser",
           "approve": "approuver"
+        },
+        "publicProgress": {
+          "working": "⚙️ Traitement en cours · {{elapsed}}",
+          "workingSteps_one": "⚙️ Traitement en cours · {{count}} étape terminée · {{elapsed}}",
+          "workingSteps_other": "⚙️ Traitement en cours · {{count}} étapes terminées · {{elapsed}}",
+          "writing": "✍️ Préparation de la réponse…",
+          "workingSteps_many": "⚙️ Traitement en cours · {{count}} étapes terminées · {{elapsed}}"
+        },
+        "delivery": {
+          "failed": "⚠️ Le résultat n’a pas pu être transmis. Réessayez plus tard.",
+          "retrying_one": "⚠️ La réception de {{count}} élément n’est pas confirmée. L’envoi sera réessayé automatiquement lorsque le réseau sera rétabli.",
+          "retrying_other": "⚠️ La réception de {{count}} éléments n’est pas confirmée. L’envoi sera réessayé automatiquement lorsque le réseau sera rétabli.",
+          "uncertain_one": "⚠️ La réception de {{count}} élément n’est pas confirmée. Il ne sera pas renvoyé automatiquement ; renvoyez votre demande si vous ne l’avez pas reçu.",
+          "uncertain_other": "⚠️ La réception de {{count}} éléments n’est pas confirmée. Ils ne seront pas renvoyés automatiquement ; renvoyez votre demande si vous ne les avez pas reçus.",
+          "retrying_many": "⚠️ La réception de {{count}} éléments n’est pas confirmée. L’envoi sera réessayé automatiquement lorsque le réseau sera rétabli.",
+          "uncertain_many": "⚠️ La réception de {{count}} éléments n’est pas confirmée. Ils ne seront pas renvoyés automatiquement ; renvoyez votre demande si vous ne les avez pas reçus."
         }
       },
       "hook": {
@@ -13206,7 +13222,21 @@
           "planFooter": "Répondez « {{approve}} » pour continuer, ou « {{deny}} » pour annuler.",
           "askNoQuestion": "L'Agent attend votre réponse, mais aucune question n'est à afficher. Répondez « continuer ».",
           "askIntro": "L'Agent a besoin de votre réponse :",
-          "askFooter": "Répondez avec le numéro d'une option, ou saisissez votre réponse."
+          "askFooter": "Répondez avec le numéro d'une option, ou saisissez votre réponse.",
+          "confirmCard": {
+            "planTitle": "Plan en attente d’approbation",
+            "planBody": "L’Agent a soumis un plan. Décidez si vous souhaitez continuer.",
+            "permissionTitle": "Action à confirmer",
+            "permissionBody": "Confirmez cette action de l’outil « {{toolName}} ».",
+            "permissionFallback": "Cette action nécessite votre confirmation.",
+            "allowOnce": "Autoriser une fois",
+            "denyOnce": "Refuser l’action",
+            "approvePlan": "Approuver le plan",
+            "rejectPlan": "Refuser le plan"
+          },
+          "planApproved": "✅ Plan approuvé",
+          "planRejected": "❌ Plan refusé",
+          "planExpired": "⌛ Cette confirmation du plan a expiré"
         }
       },
       "dingtalk": {

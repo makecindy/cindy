@@ -3,13 +3,14 @@
  * 群消息与机器人终稿入 Telegram 同一张本地群窗口表, 并在下次群里 @ 时拼成背景前缀。
  */
 import fs from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { IMMessageEvent, WecomIM } from '@cindy/im';
+import type { IMMessageEvent, ImFinalDeliveryPlan, ImFinalOutput, IMStatus, WecomIM } from '@cindy/im';
 import { encodeWecomGroupLane } from '@cindy/im';
 
 const holder = vi.hoisted(() => ({ drizzle: null as unknown }));
@@ -20,8 +21,11 @@ vi.mock('../../../localDb/client/current', () => ({
 }));
 
 import { buildWecomAdapter } from '../adapter';
+import { buildImChannelNote } from '../../shared/channelNote';
 import type { WecomTextInteractions } from '../textInteractions';
 import { WECOM_PERSONAL_GROUP_WINDOW } from '../../shared/channelGroupWindow';
+import * as appSessionState from '../../../appSessionState';
+import * as ownerScopedStorage from '../../ownerScopedStorage';
 
 const CONFIG = {
   agentKind: 'claude-code' as const,
@@ -48,6 +52,48 @@ describe('wecom teammate-owned connection', () => {
       companionBotId: 'bot-mia',
     });
     expect(unbound.companionLane?.('zhangsan')).toEqual({ kind: 'guest-dm', userId: 'zhangsan' });
+  });
+});
+
+describe('wecom channel note', () => {
+  it('tells the model that the host auto-delivers linked files (without promising delivery)', async () => {
+    const im = { getOwnerUserId: () => 'zhangsan' } as unknown as WecomIM;
+    const adapter = buildWecomAdapter(im, interactions, CONFIG);
+
+    const direct = await adapter.channelNoteSourceFor?.({
+      channelName: 'wecom',
+      senderId: 'zhangsan',
+      chatId: 'zhangsan',
+      contextId: 'bot-1',
+      messageId: 'm-1',
+      text: 'hi',
+      attachments: [],
+      unsupported: [],
+    });
+    expect(direct?.chatKind).toBe('direct');
+    expect(direct?.toolsHint).toContain('自动投递附件');
+    const note = buildImChannelNote('wecom', direct!);
+    // 事实: 不需要工具、宿主自动发; 同时不得替平台承诺送达或让模型声称缺少能力。
+    expect(note).toContain('不需要调用工具');
+    expect(note).toContain('不要保证一定送达');
+    expect(note).toContain('不要声称自己缺少发送能力');
+
+    // 群里仍然保留群与发言人的来源事实。
+    const group = await adapter.channelNoteSourceFor?.({
+      channelName: 'wecom',
+      senderId: encodeWecomGroupLane('chat-1'),
+      chatId: 'chat-1',
+      contextId: 'bot-1',
+      messageId: 'm-2',
+      text: '@bot hi',
+      invoked: true,
+      speaker: { id: 'zhangsan', name: '张三', isOwner: true },
+      attachments: [],
+      unsupported: [],
+    });
+    expect(group?.chatKind).toBe('group');
+    expect(group?.chatId).toBe('chat-1');
+    expect(group?.toolsHint).toContain('自动投递附件');
   });
 });
 
@@ -103,6 +149,9 @@ describe('wecom group window', () => {
     await first?.commit?.();
     await adapter.output.commitFinal({ userId: lane, text: '部署已回滚', terminal: 'done' });
     expect(commitFinal).toHaveBeenCalledTimes(1);
+    // Legacy direct replies must keep the original response-window identity;
+    // a synthetic turnId would prevent claiming the pending unscoped reply.
+    expect(commitFinal).toHaveBeenCalledWith({ userId: lane, text: '部署已回滚', terminal: 'done' });
 
     const rows = sqlite
       .prepare('SELECT provider, chat_id, author, is_bot, text FROM hook_group_messages ORDER BY id')
@@ -119,6 +168,81 @@ describe('wecom group window', () => {
     expect(second?.agentText).not.toContain('昨天的部署怎么样');
     expect(second?.agentText.endsWith('那今天再试一次')).toBe(true);
   });
+
+  // PR #10202 discussion_r4551978560: the existing test only covers direct
+  // success. Real adapter + disk outbox + SQLite must record a durable reply
+  // after reconnect/restart, once, and expose it to the next group question.
+  // Unit tier: isolated temp storage, fake clock, in-process transport/SQLite.
+  it.each(['reconnect', 'restart'] as const)(
+    'records a retried group answer once after %s',
+    async (resume) => {
+      const root = fs.mkdtempSync(path.join(tmpdir(), 'wecom-group-replay-'));
+      const session = appSessionState.getActiveAppSession();
+      const scope = vi.spyOn(appSessionState, 'getActiveAppSession').mockReturnValue({
+        ...session, dataOwnerId: 'outbox-test-owner',
+      });
+      const storage = vi.spyOn(ownerScopedStorage, 'ownerScopedImUserDataPath')
+        .mockImplementation((...parts) => path.join(root, ...parts));
+      vi.useFakeTimers();
+      try {
+        let status: IMStatus = { kind: 'connected', appId: 'aibot-1' };
+        let delivered = false;
+        const handlers = new Set<(value: IMStatus) => void>();
+        const deliverFinal = vi.fn(async (_output: ImFinalOutput, plan: ImFinalDeliveryPlan) => ({
+          states: plan.steps.map(() => delivered ? 'sent' as const : 'failed' as const),
+        }));
+        const im = {
+          getOwnerUserId: () => 'zhangsan',
+          getStatus: () => status,
+          getConfigState: () => ({ botId: 'aibot-1' }),
+          isConnected: () => status.kind === 'connected',
+          onStatusChange: (handler: (value: IMStatus) => void) => {
+            handlers.add(handler);
+            return () => { handlers.delete(handler); };
+          },
+          prepareFinal: async (output: ImFinalOutput) => ({
+            steps: [{ id: 'text:0', kind: 'text' as const, text: output.text }],
+          }),
+          deliverFinal,
+        } as unknown as WecomIM;
+        let adapter = buildWecomAdapter(im, interactions, CONFIG);
+        if (adapter.output.kind !== 'chunked-text') throw new Error('expected chunked-text output');
+        const output: ImFinalOutput = {
+          userId: lane, text: '部署已回滚', terminal: 'done', turnId: ' replayed-turn ',
+        };
+        expect(await adapter.output.commitFinal(output)).toMatchObject({ status: 'durable' });
+        expect(sqlite.prepare('SELECT COUNT(*) AS n FROM hook_group_messages').get()).toEqual({ n: 0 });
+        status = { kind: 'idle' };
+        for (const handler of handlers) handler(status);
+        if (resume === 'restart') {
+          // Old process timers/listeners disappear; disk state survives.
+          vi.clearAllTimers();
+          handlers.clear();
+          adapter = buildWecomAdapter(im, interactions, CONFIG);
+        }
+        vi.setSystemTime(Date.now() + 20_000);
+        delivered = true;
+        status = { kind: 'connected', appId: 'aibot-1' };
+        for (const handler of handlers) handler(status);
+        await vi.waitFor(() => {
+          expect(sqlite.prepare('SELECT text FROM hook_group_messages').all())
+            .toEqual([{ text: '部署已回滚' }]);
+        });
+        if (adapter.output.kind !== 'chunked-text') throw new Error('expected chunked-text output');
+        await adapter.output.commitFinal(output);
+        expect(deliverFinal).toHaveBeenCalledTimes(2);
+        expect(sqlite.prepare('SELECT COUNT(*) AS n FROM hook_group_messages').get()).toEqual({ n: 1 });
+        const next = await adapter.prepareAgentTurnText?.(groupEvent('m-next', '那今天再试一次'));
+        expect(next?.agentText).toContain('部署已回滚');
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+        scope.mockRestore();
+        storage.mockRestore();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('keeps the quoted-reply block for direct messages without touching the window', async () => {
     const im = { getOwnerUserId: () => 'zhangsan' } as unknown as WecomIM;
