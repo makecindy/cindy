@@ -2309,7 +2309,7 @@ function getCindyGhostsMcpDeps(
           }, hostDeps.getLiveSessionGrantState),
         });
       }
-      const downloadContext = (request.action === 'request' || request.action === 'poll' || request.action === 'recover') && sessionId && sessionContext?.sessionInstanceId
+      const downloadContext = (request.action === 'request' || request.action === 'poll' || (request.action === 'prepare' && request.sourceInvocationId)) && sessionId && sessionContext?.sessionInstanceId
         ? hostDeps.createMediaDownloadContext?.(sessionId, sessionContext.sessionInstanceId)
         : undefined;
       let result: Record<string, unknown>;

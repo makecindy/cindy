@@ -332,10 +332,10 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
   {
     key: 'ai-art',
     title: 'AI 绘画 / 视频生成(media 工具)',
-    oneLiner: 'agent 通过 cindy 网关的 media 工具做文生图、改图、文生视频、图生视频,也用它把已有图片交付给用户。',
+    oneLiner: 'agent 通过 Cindy Core 的 media 工具调用 Cindy AI 或用户自带连接做文生图、改图、文生视频、图生视频,也用它交付已有图片。',
     detail: [
-      '旧 lizi_art 的 image_generate / video_generate 等工具已不再提供。现在统一走 cindy 网关的 media 工具:list_models 查当前账号可用的生图 / 视频模型(能力 image.generate / image.edit / video.generate / video.image_to_video),prepare → request 发起生成,异步任务按 recommended_poll_after_ms 调 poll。',
-      '可用模型取决于当前账号的模型权限,不要猜模型名;prepare 返回的 invocation_id 是一次性付费令牌,超时或结果未知时不要自动重提以免重复扣费。',
+      '旧 lizi_art 的 image_generate / video_generate 等工具已不再提供。统一走 Cindy Core 的 media 工具:list_models 查当前连接已声明的生图 / 视频模型(能力 image.generate / image.edit / video.generate / video.image_to_video),prepare → request 发起生成,异步任务按 recommended_poll_after_ms 调 poll。自带模型不要求开启 Cindy AI；空清单时先核对供应商停用状态及实际 runtime 的媒体声明，缺 Guide 时通过 manage_media_guide 补齐。',
+      '不要猜模型名或实际连接；prepare 固定 Guide 快照。原调用已付费但 Guide 解析不适配时，补好 Guide，重新 prepare 并传 source_invocation_id 复用原回执，随后直接 request/poll；所有配置、调用和文件交接仍走当前任务权限，不得自动重新生成。',
       '结果是 cindy-media:// / xdt-image:// / xdt-video:// 受管地址,在回复里直接嵌入展示一次即可,手机端也能看;把已有截图或本地图片发给用户用 import_image。生成结果不自动附图给模型,是否查看图片或视频由 Agent 按任务需要决定。需要查看、抽帧或分析媒体时可主动用 resolve_local_path 按当前权限取得 Host 本机路径,再自行选择已有工具;无需用户先问存储位置,也不要把 Host 路径当作 SSH 工作区路径。',
     ].join(' '),
   },

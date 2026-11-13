@@ -3,7 +3,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
-import { countMediaInvocations, getMediaInvocation, pruneMediaInvocations, transitionMediaInvocation } from '../mediaInvocationStore.js';
+import { countMediaInvocations, createMediaInvocation, getMediaInvocation, pruneMediaInvocations, transitionMediaInvocation } from '../mediaInvocationStore.js';
 
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: vi.fn() }));
 
@@ -60,7 +60,8 @@ describe('saved generation responses', () => {
         { guideId: 'cindy-provider-xai-video-v1', revision: '1:original', connection: { providerId: 'relay' } },
         { guideId: 'opaque-server-id', revision: 'server-revision', binding },
       ];
-      const db = { queryOne: async (sql: string, args: unknown[]) => raw.prepare(sql).get(...args) } as unknown as DbClient;
+      const db = { queryOne: async (sql: string, args: unknown[]) => raw.prepare(sql).get(...args),
+        exec: async (sql: string, args: unknown[]) => raw.prepare(sql).run(...args) } as unknown as DbClient;
       for (const [index, snapshot] of snapshots.entries()) {
         const id = `paid-${index}`;
         const json = JSON.stringify({ schemaVersion: 1, modelId: 'private-video', ...operation, ...snapshot });
@@ -74,6 +75,17 @@ describe('saved generation responses', () => {
         });
         expect(raw.prepare('SELECT guide_json FROM media_invocations WHERE id = ?').get(id)).toEqual({ guide_json: json });
       }
+      // Preparing against a paid receipt must persist pending atomically, so a
+      // later request cannot claim it as a new paid generation after a restart.
+      const guide = (await getMediaInvocation('paid-1', 'owner', db))!.guide;
+      await createMediaInvocation({ id: 'continued', owner: 'owner', guide, createdAt: 2,
+        receipt: { taskId: 'original-task', responseJson: '{"job":"original-task"}' } }, db);
+      expect(await getMediaInvocation('continued', 'owner', db)).toMatchObject({
+        state: 'pending', taskId: 'original-task', responseJson: '{"job":"original-task"}', guide,
+      });
+      expect(await transitionMediaInvocation({ id: 'continued', owner: 'owner', from: 'prepared', to: 'submitting' }, db)).toBe(false);
+      await createMediaInvocation({ id: 'new', owner: 'owner', guide, createdAt: 2 }, db);
+      expect(await getMediaInvocation('new', 'owner', db)).toMatchObject({ state: 'prepared' });
     } finally { raw.close(); }
   });
 

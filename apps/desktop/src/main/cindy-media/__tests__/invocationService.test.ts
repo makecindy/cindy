@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
 import type { MediaCapability } from '@cindy/model-providers';
-import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocation.js';
+import { parseMediaInvocationGuide, parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocation.js';
 
 interface MockPreparedGuide extends Record<string, unknown> {
   modelId: string;
@@ -169,11 +169,13 @@ vi.mock('../mediaInvocationStore.js', async (importOriginal) => ({
     owner,
     guide,
     createdAt,
+    receipt,
   }: {
     id: string;
     owner: string;
     guide: MockPreparedGuide;
     createdAt: number;
+    receipt?: { taskId?: string; responseJson: string };
   }) => {
     mocks.rows.set(id, {
       id,
@@ -182,7 +184,8 @@ vi.mock('../mediaInvocationStore.js', async (importOriginal) => ({
       capability: guide.capability,
       guideRevision: guide.revision,
       guide,
-      state: 'prepared',
+      state: receipt ? 'pending' : 'prepared',
+      ...(receipt ? { taskId: receipt.taskId, responseJson: receipt.responseJson } : {}),
       createdAt,
       updatedAt: createdAt,
     });
@@ -242,7 +245,7 @@ function operation(response: Record<string, unknown>, path = '/images/generation
     },
     response,
     instructions: '按协议组装请求',
-    exampleBody: { prompt: 'hello' },
+    exampleBody: { prompt: 'hello' } as Record<string, unknown>,
     inputSchema: { type: 'object' },
     officialDocs: 'https://docs.example.com/images',
   };
@@ -436,6 +439,54 @@ describe('Cindy Core media invocation state and security boundary', () => {
       capability: 'video.generate' };
   }
 
+  // #10137: an empty media catalog must lead to connection/declaration repair,
+  // rather than asking the user to enable Cindy AI or abandon their own model.
+  it('guides an empty local catalog back to the selected provider configuration', async () => {
+    mocks.localMode = true;
+    mocks.executableModels.mockResolvedValue({ models: [], unavailable: [], candidateCount: 0 });
+    expect(await callCindyMedia({ action: 'list_models', capability: 'image.generate' })).toMatchObject({
+      ok: false, errorCode: 'CAPABILITY_NOT_SUPPORTED',
+      allowedActions: expect.arrayContaining(['inspect_model_connection_and_media_declaration']),
+      guidance: expect.stringContaining('list_model_providers'),
+    });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+
+  // #9371: the MiniMax V2 contract is a real POST -> task_id -> query -> CDN
+  // download. No legacy videoApi enum or Cindy AI channel is used here.
+  it.each(['video.generate', 'video.image_to_video'] as const)('executes a declared MiniMax-H3 %s Guide through the selected relay', async capability => {
+    mocks.localMode = true;
+    const body = { content: [{ type: 'text', text: 'An ocean wave' }, ...(capability === 'video.image_to_video'
+      ? [{ type: 'image_url', image_url: { url: 'https://images.example/first.png' }, role: 'first_frame' }] : [])],
+      resolution: '768P', duration: 5, ratio: '16:9' };
+    const op = { ...operation({ mode: 'async', taskIdPath: ['task_id'], poll: {
+      method: 'GET', path: '/v2/query/video_generation/{taskId}', statusPath: ['task', 'status'],
+      successValues: ['succeeded'], failureValues: ['failed'], recommendedIntervalMs: 1000,
+      timeoutMs: 1000, maxResponseBytes: 1048576,
+      media: [{ path: ['task', 'content', 'url'], encoding: 'url', kind: 'video', allowedUrlHosts: ['cdn.hailuoai.com'] }],
+    } }, '/v2/video_generation'), capability, exampleBody: body,
+      inputSchema: { type: 'object', required: ['content', 'resolution', 'duration'], properties: {
+        content: { type: 'array' }, resolution: { type: 'string' }, duration: { type: 'integer' }, ratio: { type: 'string' },
+      } } };
+    const { model, connection, value } = setupGuideDriven(op);
+    expect(parseMediaInvocationGuide(value)).toMatchObject({ ok: true });
+    model.id = 'MiniMax-H3';
+    connection.baseUrl = 'https://relay.example';
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ task_id: 'original-h3-task' }))
+      .mockResolvedValueOnce(Response.json({ task: { status: 'succeeded', content: { url: 'https://cdn.hailuoai.com/result.mp4' } } }))
+      .mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, sourceAgent: 'pi', modelId: model.id, capability });
+    expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body })).toMatchObject({ ok: true, status: 'pending' });
+    expect(await callCindyMedia({ action: 'poll', invocationId: String(prepared.invocation_id) }))
+      .toMatchObject({ ok: true, xdt_video_urls: expect.arrayContaining([expect.stringMatching(/^cindy-media:/)]) });
+    expect(mocks.outboundFetch.mock.calls.map(call => call[0])).toEqual([
+      'https://relay.example/v2/video_generation', 'https://relay.example/v2/query/video_generation/original-h3-task', 'https://cdn.hailuoai.com/result.mp4',
+    ]);
+    expect(JSON.parse(String(mocks.outboundFetch.mock.calls[0]![1].body))).toEqual({ ...body, model: 'MiniMax-H3' });
+    expect(mocks.videoConnection).not.toHaveBeenCalled();
+    expect(mocks.guide).not.toHaveBeenCalled();
+  });
+
   // Unit integration: repair the Guide through a new prepare and resume the
   // original paid receipt; neither recovery nor a repeated request may pay again.
   it('recovers a paid image response with a newly prepared Guide and leaves the original snapshot fixed', async () => {
@@ -446,9 +497,8 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } })).toMatchObject({ ok: false });
     mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-image',
       operations: [operation({ mode: 'sync', media: [{ path: ['image'], encoding: 'base64', kind: 'image' }] })] } });
-    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
-    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
-      .toMatchObject({ ok: true, invocation_id: next.invocation_id, next_action: 'request' });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate', sourceInvocationId: String(first.invocation_id) });
+    expect(next).toMatchObject({ ok: true, status: 'pending', next_action: 'request', guide_revision: 'fixed-image' });
     expect(await callCindyMedia({ action: 'request', invocationId: String(next.invocation_id), body: {} })).toMatchObject({ ok: true });
     expect(mocks.rows.get(String(first.invocation_id))!.guide).toEqual(originalGuide);
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
@@ -460,9 +510,8 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'original-task', wrongId: 'incorrect-task' }));
     await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
     mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-task', operations: [recoveryVideoOperation()] } });
-    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
-    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
-      .toMatchObject({ ok: true, next_action: 'poll' });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate', sourceInvocationId: String(first.invocation_id) });
+    expect(next).toMatchObject({ ok: true, status: 'pending', next_action: 'poll' });
     expect(await callCindyMedia({ action: 'request', invocationId: String(next.invocation_id), body: { prompt: 'cat' } }))
       .toMatchObject({ ok: false, errorCode: 'INVOCATION_ALREADY_USED' });
     mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
@@ -480,23 +529,21 @@ describe('Cindy Core media invocation state and security boundary', () => {
     await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
     await callCindyMedia({ action: 'poll', invocationId: String(first.invocation_id) });
     mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-result', operations: [recoveryVideoOperation()] } });
-    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
-    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
-      .toMatchObject({ ok: true });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate', sourceInvocationId: String(first.invocation_id) });
+    expect(next).toMatchObject({ ok: true, status: 'pending', next_action: 'poll' });
     expect(await callCindyMedia({ action: 'poll', invocationId: String(next.invocation_id) })).toMatchObject({ ok: true });
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
   });
 
-  it('rejects recovery across changed connections and leaves the new prepare unused', async () => {
+  it('rejects preparing a paid receipt across changed connections without creating a new invocation', async () => {
     const { model, connection } = setupGuideDriven();
     const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
     mocks.outboundFetch.mockResolvedValueOnce(Response.json({ wrong: PNG.toString('base64') }));
     await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
     mocks.httpConnection.mockReturnValue({ ...connection, revision: 'another-connection' });
-    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
-    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
+    expect(await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate', sourceInvocationId: String(first.invocation_id) }))
       .toMatchObject({ ok: false, errorCode: 'RECOVERY_TARGET_MISMATCH' });
-    expect(mocks.rows.get(String(next.invocation_id))?.state).toBe('prepared');
+    expect(mocks.rows.size).toBe(1);
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -509,22 +556,20 @@ describe('Cindy Core media invocation state and security boundary', () => {
       .toMatchObject({ ok: false, errorCode: 'SUBMISSION_OUTCOME_UNKNOWN' });
     expect(mocks.rows.get(String(first.invocation_id))).toMatchObject({ state: 'unknown', responseJson: expect.stringContaining('original-task') });
     mocks.failTransitionTo = null;
-    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
-    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
-      .toMatchObject({ ok: true, next_action: 'poll' });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate', sourceInvocationId: String(first.invocation_id) });
+    expect(next).toMatchObject({ ok: true, status: 'pending', next_action: 'poll' });
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('does not consume a recovery prepare after task permission revocation', async () => {
+  it('does not prepare a paid receipt after task permission revocation', async () => {
     const { model } = setupGuideDriven();
     const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
     mocks.outboundFetch.mockResolvedValueOnce(Response.json({ wrong: PNG.toString('base64') }));
     await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
-    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
-    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }, {
+    expect(await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate', sourceInvocationId: String(first.invocation_id) }, {
       assertActive: () => { throw new Error('task permission revoked'); }, confirm: mocks.confirm, approvals: new Set(),
     })).toMatchObject({ ok: false });
-    expect(mocks.rows.get(String(next.invocation_id))?.state).toBe('prepared');
+    expect(mocks.rows.size).toBe(1);
     expect(mocks.ingestMedia).not.toHaveBeenCalled();
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
   });
@@ -537,10 +582,9 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.currentUserId = 'other-owner';
     mocks.dbOwnerId = 'other-owner';
     mocks.ownerGeneration += 1;
-    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
-    expect(await callCindyMedia({ action: 'recover', invocationId: String(next.invocation_id), sourceInvocationId: String(first.invocation_id) }))
+    expect(await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate', sourceInvocationId: String(first.invocation_id) }))
       .toMatchObject({ ok: false, errorCode: 'INVOCATION_NOT_FOUND' });
-    expect(mocks.rows.get(String(next.invocation_id))?.state).toBe('prepared');
+    expect(mocks.rows.size).toBe(1);
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
   });
 

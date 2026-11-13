@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildUserProvider, runtimeCustomProviderId, type CustomProviderConfig } from '@cindy/model-providers';
 const state = vi.hoisted(() => ({ root: '', generation: 1 }));
 const fetch = vi.hoisted(() => vi.fn());
 vi.mock('../preferences.js', () => ({ manageAppPreferences: vi.fn() }));
@@ -37,6 +38,32 @@ describe('media Guide settings operations', () => {
     } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
   });
   afterEach(() => fs.rmSync(state.root, { force: true, recursive: true }));
+  // #10147: exercise setRuntime -> saved configuration -> safe read/catalog,
+  // including the reported duplicate owners, without SQLite edits or rename.
+  it('persists thirteen image declarations through the supported connection entry and keeps duplicate owners', async () => {
+    const baseUrl = 'https://relay.example/v1';
+    let config: CustomProviderConfig = { id: 'issue-relay', name: 'Issue relay', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl, wireProtocol: 'openai-chat', models: [] }, codex: { baseUrl, wireProtocol: 'openai-chat', models: [] } } };
+    const providerId = runtimeCustomProviderId(config.id);
+    configureModelSettingsActions({ owner: () => ({ dataOwnerId: 'owner', ownerGeneration: state.generation }),
+      connections: { get: async () => config, checkHostChange: () => null,
+        update: async (_old: CustomProviderConfig, _keys: unknown, guard: () => Promise<void>, mutate: (current: CustomProviderConfig) => CustomProviderConfig) => {
+          await guard(); config = mutate(config); return { ok: true };
+        } },
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+    const models = Array.from({ length: 13 }, (_, i) => ({ id: `draw-${i}`, mode: 'image_generation' as const,
+      modalities: { input: ['text' as const, 'image' as const], output: ['image' as const] } }));
+    for (const agent of ['pi', 'codex'] as const) {
+      expect(await manageAppModels({ operation: 'connection', change: { action: 'setRuntime', providerId, agent,
+        runtime: { baseUrl, wireProtocol: 'openai-chat', imageApi: 'openai-images', models } } }, async () => {}))
+        .toMatchObject({ saved: true });
+    }
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'read', providerId } }, async () => {}))
+      .toMatchObject({ runtimes: { pi: { imageApi: 'openai-images', models: expect.arrayContaining([expect.objectContaining(models[0]!)]) } } });
+    const projected = buildUserProvider(config);
+    expect(projected.imageModels).toHaveLength(13);
+    expect(projected.imageModels?.every(model => model.sourceAgents?.includes('pi') && model.sourceAgents.includes('codex'))).toBe(true);
+  });
   // Public definitions are returned unchanged through the pre-existing endpoint;
   // an incompatible path is for the agent to diagnose and override locally.
   it('reads an existing public Guide without requesting a new protocol or rewriting paths', async () => {

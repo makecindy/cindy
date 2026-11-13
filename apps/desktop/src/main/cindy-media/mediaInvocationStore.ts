@@ -147,14 +147,15 @@ export async function createMediaInvocation(
     owner: string;
     guide: PreparedMediaInvocationGuide;
     createdAt: number;
+    receipt?: { taskId?: string; responseJson: string };
   },
   db: DbClient = getDbClient(),
 ): Promise<void> {
   await db.exec(
     `INSERT INTO media_invocations (
        id, owner, model_id, capability, guide_revision, guide_json,
-       state, task_id, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)`,
+       state, task_id, response_json, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.id,
       input.owner,
@@ -162,6 +163,9 @@ export async function createMediaInvocation(
       input.guide.capability,
       input.guide.revision,
       JSON.stringify(input.guide),
+      input.receipt ? 'pending' : 'prepared',
+      input.receipt?.taskId ?? null,
+      input.receipt?.responseJson ?? null,
       input.createdAt,
       input.createdAt,
     ],

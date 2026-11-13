@@ -1219,8 +1219,10 @@ async function prepareInvocation(
   capability: MediaCapability,
   sourceAgent?: AgentKind,
   guideSource: 'auto' | 'official' = 'auto',
+  sourceInvocationId?: string,
+  context?: MediaDownloadContext,
 ): Promise<Record<string, unknown>> {
-  const scope = currentAuthScope();
+  const scope = currentAuthScope(context);
   const owner = scope.owner;
   const db = captureMediaDb(scope);
   await ensureOwnerRecovered(scope, db);
@@ -1364,6 +1366,7 @@ async function prepareInvocation(
   };
   await pruneInvocations(owner, db);
   assertAuthScope(scope);
+  const receipt = sourceInvocationId ? await preparePaidReceipt(preparedGuide, sourceInvocationId, scope, db) : undefined;
   if ((await countMediaInvocations(owner, db)) >= MAX_INVOCATIONS) {
     return failure('TOO_MANY_INVOCATIONS', '媒体任务数量已达上限，请等待现有任务完成后重试');
   }
@@ -1376,13 +1379,14 @@ async function prepareInvocation(
       owner,
       guide: preparedGuide,
       createdAt,
+      receipt,
     },
     db,
   );
   assertAuthScope(scope);
   return {
     ok: true,
-    status: 'prepared',
+    status: receipt ? 'pending' : 'prepared',
     invocation_id: id,
     provider_id: model.providerId,
     model_id: resolvedModelId,
@@ -1395,7 +1399,10 @@ async function prepareInvocation(
     input_schema: preparedGuide.inputSchema,
     example_body: preparedGuide.exampleBody,
     official_docs: preparedGuide.officialDocs,
-    guidance: '按 instructions/input_schema 组装 body。调用和附件交接须走当前任务权限；不要添加 model、endpoint、headers 或凭证。Guide 已固定，换说明必须重新 prepare；pending、结果未知或已生成未交付时恢复原 invocation，不要重复生成。',
+    ...(receipt ? { source_invocation_id: sourceInvocationId, next_action: preparedGuide.response.mode === 'sync' ? 'request' : 'poll' } : {}),
+    guidance: receipt
+      ? '原付费回执已绑定到本次固定 Guide。直接按 next_action 调 request（body={}）或 poll，走现有权限与交付流程，不会再次提交生成。'
+      : '按 instructions/input_schema 组装 body。调用和附件交接须走当前任务权限；不要添加 model、endpoint、headers 或凭证。Guide 已固定，换说明必须重新 prepare；pending、结果未知或已生成未交付时继续原 invocation，不要重复生成。',
   };
 }
 
@@ -1414,56 +1421,42 @@ async function requireInvocation(id: string): Promise<StoredMediaInvocation> {
   return invocation;
 }
 
-/** A new prepare owns the repaired Guide. Only copy an existing paid receipt;
- * consuming the prepare as pending makes a later request unable to submit again. */
-async function recoverInvocation(invocation: StoredMediaInvocation, sourceId: string, context?: MediaDownloadContext): Promise<Record<string, unknown>> {
-  const scope = currentAuthScope(context);
-  assertAuthScope(scope, invocation.owner);
-  const db = captureMediaDb(scope);
-  if (invocation.state !== 'prepared') return failure('INVOCATION_ALREADY_USED', '恢复必须使用新的 prepare；不要重新生成');
-  if (Date.now() - invocation.createdAt > PREPARED_INVOCATION_TTL_MS) return failure('INVOCATION_EXPIRED', '恢复准备已过期，请重新 prepare');
-  if (activeInvocations.has(`${invocation.owner}:${sourceId}`)) return failure('MEDIA_INVOCATION_BUSY', '原调用仍在进行，请等待后恢复');
-  const source = await getMediaInvocation(sourceId, invocation.owner, db);
-  assertAuthScope(scope, invocation.owner);
-  if (!source) return failure('INVOCATION_NOT_FOUND', '原调用不存在或不属于当前账号');
-  const targetBinding = invocation.guide.binding;
+/** Bind paid facts during prepare; the new snapshot starts pending so request
+ * cannot submit another generation. The original Guide remains immutable. */
+async function preparePaidReceipt(guide: PreparedMediaInvocationGuide, sourceId: string, scope: MediaAuthScope, db: DbClient): Promise<{ taskId?: string; responseJson: string }> {
+  if (activeInvocations.has(`${scope.owner}:${sourceId}`)) throw new MediaInvocationError('MEDIA_INVOCATION_BUSY', '原调用仍在进行，请等待后 prepare');
+  const source = await getMediaInvocation(sourceId, scope.owner, db);
+  assertAuthScope(scope);
+  if (!source) throw new MediaInvocationError('INVOCATION_NOT_FOUND', '原调用不存在或不属于当前账号');
+  const targetBinding = guide.binding;
   const sourceBinding = source.guide.binding;
-  if (source.modelId !== invocation.modelId || source.capability !== invocation.capability ||
+  if (source.modelId !== guide.modelId || source.capability !== guide.capability ||
       sourceBinding.executor !== 'provider-http' || targetBinding.executor !== 'provider-http' ||
       sourceBinding.providerId !== targetBinding.providerId || sourceBinding.sourceAgent !== targetBinding.sourceAgent ||
       sourceBinding.connectionRevision !== targetBinding.connectionRevision) {
-    return failure('RECOVERY_TARGET_MISMATCH', '恢复必须保持原 provider、模型、能力和实际连接；请恢复原连接后重新 prepare');
+    throw new MediaInvocationError('RECOVERY_TARGET_MISMATCH', '复用回执必须保持原 provider、模型、能力和实际连接；请恢复原连接后重新 prepare');
   }
-  if (!['pending', 'unknown', 'failed'].includes(source.state)) return failure('RECOVERY_NOT_AVAILABLE', '原调用尚未提交或已经交付；请继续原调用');
-  const connection = await resolveInvocationConnection(invocation);
-  assertAuthScope(scope, invocation.owner);
-  connection.assertCurrent?.();
+  if (!['pending', 'unknown', 'failed'].includes(source.state)) throw new MediaInvocationError('RECOVERY_NOT_AVAILABLE', '原调用尚未提交或已经交付；请继续原调用');
   const receipt = readMediaInvocationReceipt(source.responseJson);
   let taskId: string | undefined;
   let responseJson: string;
-  if (invocation.guide.response.mode === 'sync') {
+  if (guide.response.mode === 'sync') {
     const result = receipt.result ?? receipt.poll ?? receipt.submission;
-    if (result === undefined) return failure('RECOVERY_NOT_AVAILABLE', '没有已保存的上游回执，无法恢复；不要重新生成');
+    if (result === undefined) throw new MediaInvocationError('RECOVERY_NOT_AVAILABLE', '没有已保存的上游回执，无法恢复；不要重新生成');
     responseJson = JSON.stringify(result);
   } else {
     const submission = receipt.submission !== undefined ? receipt.submission
       : source.guide.response.mode === 'sync' ? receipt.result : undefined;
     taskId = submission !== undefined
-      ? valuesAtPath(submission, invocation.guide.response.taskIdPath).find((value): value is string => typeof value === 'string' && value.length > 0)
+      ? valuesAtPath(submission, guide.response.taskIdPath).find((value): value is string => typeof value === 'string' && value.length > 0)
       : source.taskId;
-    if (!taskId) return failure('RECOVERY_NOT_AVAILABLE', '修正后的 Guide 仍未从原回执取得任务编号，请继续补齐 Guide；不要重新生成');
+    if (!taskId) throw new MediaInvocationError('RECOVERY_NOT_AVAILABLE', '修正后的 Guide 仍未从原回执取得任务编号，请继续补齐 Guide；不要重新生成');
     const poll = receipt.result ?? receipt.poll;
-    const status = valuesAtPath(poll, invocation.guide.response.poll.statusPath)[0];
-    const result = typeof status === 'string' && invocation.guide.response.poll.successValues.includes(status) ? poll : undefined;
+    const status = valuesAtPath(poll, guide.response.poll.statusPath)[0];
+    const result = typeof status === 'string' && guide.response.poll.successValues.includes(status) ? poll : undefined;
     responseJson = serializeMediaInvocationReceipt({ submission, poll: result === undefined ? poll : undefined, result });
   }
-  const restored = await transitionMediaInvocation({ id: invocation.id, owner: invocation.owner,
-    from: 'prepared', to: 'pending', taskId, responseJson }, db);
-  assertAuthScope(scope, invocation.owner);
-  if (!restored) return failure('INVOCATION_ALREADY_USED', '这个 prepare 已被使用，请继续其原调用；不要重新生成');
-  return { ok: true, status: 'pending', invocation_id: invocation.id, source_invocation_id: source.id,
-    next_action: invocation.guide.response.mode === 'sync' ? 'request' : 'poll',
-    guidance: '已复用原付费回执；按 next_action 继续查询或交付，不会再次提交生成。' };
+  return { taskId, responseJson };
 }
 
 async function submitInvocation(
@@ -2039,7 +2032,8 @@ export async function callCindyMedia(
             'CAPABILITY_NOT_SUPPORTED',
             '当前没有已启用模型声明支持该媒体能力',
             false,
-            { outcomeKnown: true, allowedActions: ['use_another_tool'] },
+            { outcomeKnown: true, allowedActions: ['inspect_model_connection_and_media_declaration', 'use_another_tool'],
+              guidance: '先通过 cindy_helper.list_model_providers 核对目标供应商是否停用、实际 runtime 的媒体 mode/modalities 是否声明；需要时用 configure_model_connection 补齐，再查模型和 Guide。不要仅为出现候选而开启 Cindy AI，也不要据空清单断言上游模型不能生成媒体。' },
           );
         }
         const upgradeRequired = availability.unavailable.some(
@@ -2088,6 +2082,8 @@ export async function callCindyMedia(
         request.capability as MediaCapability,
         request.sourceAgent,
         request.guideSource,
+        request.sourceInvocationId,
+        context,
       );
     }
     const invocation = await requireInvocation(request.invocationId);
@@ -2097,7 +2093,6 @@ export async function callCindyMedia(
     }
     activeInvocations.add(operationKey);
     try {
-      if (request.action === 'recover') return await recoverInvocation(invocation, request.sourceInvocationId, context);
       return await (request.action === 'request'
         ? submitInvocation(invocation, request.body, context, sessionId, observeResponse)
         : pollInvocation(invocation, context, false, observeResponse));

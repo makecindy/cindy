@@ -1193,15 +1193,15 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
-  it('requires both Host-created invocation IDs for receipt recovery', async () => {
+  it('binds an original paid invocation during prepare without an extra tool action', async () => {
     const callMedia = vi.fn(async () => ({ ok: true, status: 'pending', next_action: 'poll' }));
     const deps = fakeDeps({ callMedia });
-    expect(parsePayload(await handleMedia(deps, { action: 'recover', invocation_id: 'new-prepare' })))
+    expect(parsePayload(await handleMedia(deps, { action: 'prepare', source_invocation_id: 'paid-source' })))
       .toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
     expect(callMedia).not.toHaveBeenCalled();
-    expect(parsePayload(await handleMedia(deps, { action: 'recover', invocation_id: 'new-prepare', source_invocation_id: 'paid-source' })))
+    expect(parsePayload(await handleMedia(deps, { action: 'prepare', provider_id: 'relay', model_id: 'video', capability: 'video.generate', source_invocation_id: 'paid-source' })))
       .toMatchObject({ ok: true, next_action: 'poll' });
-    expect(callMedia).toHaveBeenCalledExactlyOnceWith({ action: 'recover', invocationId: 'new-prepare', sourceInvocationId: 'paid-source' });
+    expect(callMedia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: 'prepare', providerId: 'relay', modelId: 'video', capability: 'video.generate', sourceInvocationId: 'paid-source' }));
   });
   it("imports existing screenshots without requiring a model or plugin", async () => {
     const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));

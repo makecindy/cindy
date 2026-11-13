@@ -361,11 +361,12 @@ export type CindyMediaToolRequest =
       providerId?: string;
       sourceAgent?: 'claude-code' | 'codex' | 'pi';
       guideSource?: 'auto' | 'official';
+      /** 修正 Guide 时复用原付费调用，prepare 后直接 request/poll。 */
+      sourceInvocationId?: string;
       modelId: string;
       capability: CindyMediaCapability;
     }
   | { action: 'request'; invocationId: string; body: Record<string, unknown> }
-  | { action: 'recover'; invocationId: string; sourceInvocationId: string }
   | { action: 'poll'; invocationId: string };
 
 /** Host-owned connections: Grok login, or a messaging platform a teammate connects to itself. */

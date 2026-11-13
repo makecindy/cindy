@@ -252,10 +252,11 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   协议版本，自定义 HTTP 绑定同时保存 Guide 来源与 sourceAgent；视频/HTTP 的
   `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
   变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
-- HTTP Guide 提错任务编号、状态或结果字段时，先补齐 Guide 并重新 `prepare`，再用 `recover`
-  将原付费调用的回执交给新快照；原 `guide_json` 不变。恢复要求同账号、provider、模型、能力、
-  sourceAgent 与连接摘要，且原 request/poll 当前不在执行；新 prepare 只转为已有结果/任务的 pending，不能再次生成。
-  `recover` 不访问上游，后续依 `next_action` 走现有 request/poll、权限和入仓流程。
+- HTTP Guide 提错任务编号、状态或结果字段时，补齐 Guide 并重新 `prepare`，传入
+  `source_invocation_id` 将原付费调用的回执绑定新快照；原 `guide_json` 不变。要求同账号、
+  provider、模型、能力、sourceAgent 与连接摘要，且原 request/poll 当前不在执行。
+  prepare 原子保存为已有结果/任务的 pending，不能再次生成；不访问上游，返回后直接
+  依 `next_action` 走现有 request/poll、权限和入仓流程，没有独立恢复动作。
   原回执缺失时说明无法恢复，不自动重提。Guide 不能提供凭证；Google/Anthropic 鉴权头复用实际连接
   （含型号覆盖）的协议与所选 runtime 的托管 Key。
 - 声明式 HTTP 的提交回执和最近轮询回执保存在账号数据库已有的 `response_json`，以
